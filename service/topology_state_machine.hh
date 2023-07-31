@@ -73,14 +73,7 @@ struct topology {
         publish_cdc_generation,
         write_both_read_old,
         write_both_read_new,
-
-        // Tablet migration steps
-        tablet_allow_write_both_read_old,
-        tablet_write_both_read_old,
-        tablet_write_both_read_new,
-        tablet_streaming,
-        tablet_use_new,
-        tablet_cleanup,
+        tablet_migration,
     };
 
     std::optional<transition_state> tstate;

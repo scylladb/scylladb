@@ -6,6 +6,7 @@
 
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import inject_error_one_shot
+from test.pylib.rest_client import inject_error
 from test.pylib.util import wait_for_cql_and_get_hosts
 
 import pytest
@@ -19,6 +20,11 @@ logger = logging.getLogger(__name__)
 
 async def inject_error_one_shot_on(manager, error_name, servers):
     errs = [inject_error_one_shot(manager.api, s.ip_addr, error_name) for s in servers]
+    await asyncio.gather(*errs)
+
+
+async def inject_error_on(manager, error_name, servers):
+    errs = [manager.api.enable_injection(s.ip_addr, error_name, False) for s in servers]
     await asyncio.gather(*errs)
 
 
@@ -132,6 +138,8 @@ async def test_bootstrap(manager: ManagerClient):
         assert len(rows) == len(keys)
         for r in rows:
             assert r.c == r.pk
+
+    await inject_error_on(manager, "tablet_allocator_shuffle", servers)
 
     logger.info("Adding new server")
     await manager.server_add()

@@ -75,6 +75,34 @@ tablet_transition_info::tablet_transition_info(tablet_transition_stage stage, ta
     , reads(get_selector_for_reads(stage))
 { }
 
+tablet_migration_streaming_info get_migration_streaming_info(const tablet_info& tinfo, const tablet_transition_info& trinfo) {
+    tablet_migration_streaming_info result = {
+        .read_from = std::unordered_set<tablet_replica>(tinfo.replicas.begin(), tinfo.replicas.end()),
+        .written_to = std::unordered_set<tablet_replica>(trinfo.next.begin(), trinfo.next.end())
+    };
+    for (auto&& r : trinfo.next) {
+        result.read_from.erase(r);
+    }
+    for (auto&& r : tinfo.replicas) {
+        result.written_to.erase(r);
+    }
+    return result;
+}
+
+tablet_replica get_leaving_replica(const tablet_info& tinfo, const tablet_transition_info& trinfo) {
+    std::unordered_set<tablet_replica> leaving(tinfo.replicas.begin(), tinfo.replicas.end());
+    for (auto&& r : trinfo.next) {
+        leaving.erase(r);
+    }
+    if (leaving.empty()) {
+        throw std::runtime_error(format("No leaving replicas"));
+    }
+    if (leaving.size() > 1) {
+        throw std::runtime_error(format("More than one leaving replica"));
+    }
+    return *leaving.begin();
+}
+
 const tablet_map& tablet_metadata::get_tablet_map(table_id id) const {
     try {
         return _tablets.at(id);
@@ -160,6 +188,10 @@ future<> tablet_map::for_each_tablet(seastar::noncopyable_function<void(tablet_i
         func(*tid, ti);
         tid = next_tablet(*tid);
     }
+}
+
+void tablet_map::clear_transitions() {
+    _transitions.clear();
 }
 
 std::optional<shard_id> tablet_map::get_shard(tablet_id tid, host_id host) const {

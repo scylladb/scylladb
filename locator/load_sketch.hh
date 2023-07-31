@@ -57,6 +57,13 @@ class load_sketch {
     };
     std::unordered_map<host_id, node_load> _nodes;
     token_metadata_ptr _tm;
+private:
+    tablet_replica_set get_replicas_for_tablet_load(const tablet_info& ti, const tablet_transition_info* trinfo) const {
+        // We reflect migrations in the load as if they already happened,
+        // optimistically assuming that they will succeed.
+        return trinfo ? trinfo->next : ti.replicas;
+    }
+
 public:
     load_sketch(token_metadata_ptr tm)
         : _tm(std::move(tm)) {
@@ -65,10 +72,10 @@ public:
     future<> populate(std::optional<host_id> host = std::nullopt) {
         const topology& topo = _tm->get_topology();
         co_await utils::clear_gently(_nodes);
-        for (auto&& [table, tmap] : _tm->tablets().all_tables()) {
-            for (const tablet_info& ti : tmap.tablets()) {
-                co_await coroutine::maybe_yield();
-                for (auto&& replica : ti.replicas) {
+        for (auto&& [table, tmap_] : _tm->tablets().all_tables()) {
+            auto& tmap = tmap_;
+            co_await tmap.for_each_tablet([&] (tablet_id tid, const tablet_info& ti) {
+                for (auto&& replica : get_replicas_for_tablet_load(ti, tmap.get_tablet_transition_info(tid))) {
                     if (host && *host != replica.host) {
                         continue;
                     }
@@ -80,7 +87,7 @@ public:
                         n._shards[replica.shard].load += 1;
                     }
                 }
-            }
+            });
         }
         for (auto&& n : _nodes) {
             std::make_heap(n.second._shards.begin(), n.second._shards.end(), shard_load_cmp());

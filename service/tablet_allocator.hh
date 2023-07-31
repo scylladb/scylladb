@@ -41,6 +41,13 @@ using migration_plan = utils::chunked_vector<tablet_migration_info>;
 ///        co_await execute(plan);
 ///    }
 ///
+/// It is ok to invoke the algorithm with already active tablet migrations. The algorithm will take them into account
+/// when balancing the load as if they already succeeded. This means that applying a series of migration plans
+/// produced by this function will give the same result regardless of whether applying they are fully executed or
+/// only initiated by creating corresponding transitions in tablet metadata.
+///
+/// The algorithm takes care of limiting the streaming load on the system, also by taking active migrations into account.
+///
 future<migration_plan> balance_tablets(locator::token_metadata_ptr);
 
 class tablet_allocator_impl;
@@ -61,3 +68,8 @@ public:
 };
 
 }
+
+template <>
+struct fmt::formatter<service::tablet_migration_info> : fmt::formatter<std::string_view> {
+    auto format(const service::tablet_migration_info&, fmt::format_context& ctx) const -> decltype(ctx.out());
+};

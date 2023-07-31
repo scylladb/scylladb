@@ -45,21 +45,6 @@ struct tablet_id {
     bool operator<=>(const tablet_id&) const = default;
 };
 
-}
-
-namespace std {
-
-template<>
-struct hash<locator::tablet_id> {
-    size_t operator()(const locator::tablet_id& id) const {
-        return std::hash<size_t>()(id.value());
-    }
-};
-
-}
-
-namespace locator {
-
 /// Identifies tablet (not be confused with tablet replica) in the scope of the whole cluster.
 struct global_tablet_id {
     table_id table;
@@ -79,6 +64,39 @@ std::ostream& operator<<(std::ostream&, tablet_id);
 std::ostream& operator<<(std::ostream&, const tablet_replica&);
 
 using tablet_replica_set = utils::small_vector<tablet_replica, 3>;
+
+}
+
+namespace std {
+
+template<>
+struct hash<locator::tablet_id> {
+    size_t operator()(const locator::tablet_id& id) const {
+        return std::hash<size_t>()(id.value());
+    }
+};
+
+template<>
+struct hash<locator::tablet_replica> {
+    size_t operator()(const locator::tablet_replica& r) const {
+        return utils::hash_combine(
+                std::hash<locator::host_id>()(r.host),
+                std::hash<shard_id>()(r.shard));
+    }
+};
+
+template<>
+struct hash<locator::global_tablet_id> {
+    size_t operator()(const locator::global_tablet_id& id) const {
+        return utils::hash_combine(
+                std::hash<table_id>()(id.table),
+                std::hash<locator::tablet_id>()(id.tablet));
+    }
+};
+
+}
+
+namespace locator {
 
 /// Creates a new replica set with old_replica replaced by new_replica.
 /// If there is no old_replica, the set is returned unchanged.
@@ -149,6 +167,17 @@ struct tablet_transition_info {
 
     bool operator==(const tablet_transition_info&) const = default;
 };
+
+// Returns the leaving replica for a given transition.
+tablet_replica get_leaving_replica(const tablet_info&, const tablet_transition_info&);
+
+/// Describes streaming required for a given tablet transition.
+struct tablet_migration_streaming_info {
+    std::unordered_set<tablet_replica> read_from;
+    std::unordered_set<tablet_replica> written_to;
+};
+
+tablet_migration_streaming_info get_migration_streaming_info(const tablet_info&, const tablet_transition_info&);
 
 /// Stores information about tablets of a single table.
 ///
@@ -264,6 +293,7 @@ public:
 public:
     void set_tablet(tablet_id, tablet_info);
     void set_tablet_transition_info(tablet_id, tablet_transition_info);
+    void clear_transitions();
 
     // Destroys gently.
     // The tablet map is not usable after this call and should be destroyed.
@@ -297,6 +327,7 @@ private:
 public:
     const tablet_map& get_tablet_map(table_id id) const;
     const table_to_tablet_map& all_tables() const { return _tablets; }
+    table_to_tablet_map& all_tables() { return _tablets; }
     size_t external_memory_usage() const;
 public:
     void set_tablet_map(table_id, tablet_map);
@@ -305,28 +336,6 @@ public:
 public:
     bool operator==(const tablet_metadata&) const = default;
     friend std::ostream& operator<<(std::ostream&, const tablet_metadata&);
-};
-
-}
-
-namespace std {
-
-template<>
-struct hash<locator::tablet_replica> {
-    size_t operator()(const locator::tablet_replica& r) const {
-        return utils::hash_combine(
-                std::hash<locator::host_id>()(r.host),
-                std::hash<shard_id>()(r.shard));
-    }
-};
-
-template<>
-struct hash<locator::global_tablet_id> {
-    size_t operator()(const locator::global_tablet_id& id) const {
-        return utils::hash_combine(
-                std::hash<table_id>()(id.table),
-                std::hash<locator::tablet_id>()(id.tablet));
-    }
 };
 
 }
