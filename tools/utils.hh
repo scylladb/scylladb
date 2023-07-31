@@ -67,20 +67,28 @@ class operation {
     std::string _name;
     std::string _summary;
     std::string _description;
-    std::vector<std::string> _available_options;
+    std::vector<operation_option> _options;
+    std::vector<app_template::positional_option> _positional_options;
 
 public:
-    operation(std::string name, std::string summary, std::string description)
-        : _name(std::move(name)), _summary(std::move(summary)), _description(std::move(description)) {
-    }
-    operation(std::string name, std::string summary, std::string description, std::vector<std::string> available_options)
-        : _name(std::move(name)), _summary(std::move(summary)), _description(std::move(description)), _available_options(std::move(available_options)) {
+    operation(
+            std::string name,
+            std::string summary,
+            std::string description,
+            std::vector<operation_option> options = {},
+            std::vector<app_template::positional_option> positional_options = {})
+        : _name(std::move(name))
+        , _summary(std::move(summary))
+        , _description(std::move(description))
+        , _options(std::move(options))
+        , _positional_options(std::move(positional_options)) {
     }
 
     const std::string& name() const { return _name; }
     const std::string& summary() const { return _summary; }
     const std::string& description() const { return _description; }
-    const std::vector<std::string>& available_options() const { return _available_options; }
+    const std::vector<operation_option>& options() const { return _options; }
+    const std::vector<app_template::positional_option>& positional_options() const { return _positional_options; }
 };
 
 inline bool operator<(const operation& a, const operation& b) {
@@ -97,8 +105,6 @@ public:
         std::vector<operation> operations;
         const std::vector<operation_option>* global_options = nullptr;
         const std::vector<app_template::positional_option>* global_positional_options = nullptr;
-        const std::vector<operation_option>* operation_options = nullptr;
-        const std::vector<app_template::positional_option>* operation_positional_options = nullptr;
     };
 
 private:

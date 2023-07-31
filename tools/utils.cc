@@ -108,26 +108,13 @@ int tool_app_template::run_async(int argc, char** argv, noncopyable_function<int
 
     if (found_op) {
         boost::program_options::options_description op_desc(found_op->name());
-        size_t options_added = 0;
-        for (const auto& opt_name : found_op->available_options()) {
-            if (_cfg.operation_options) {
-                auto it = std::ranges::find_if(*_cfg.operation_options, [&] (const operation_option& opt) { return opt.name() == opt_name; });
-                if (it != _cfg.operation_options->end()) {
-                    it->add_option(op_desc);
-                    ++options_added;
-                    continue;
-                }
-            }
-            if (_cfg.operation_positional_options) {
-                auto it = std::ranges::find_if(*_cfg.operation_positional_options, [&] (const app_template::positional_option& opt) { return opt.name == opt_name; });
-                if (it != _cfg.operation_positional_options->end()) {
-                    app.add_positional_options({*it});
-                    continue;
-                }
-            }
-            std::abort(); // failed to look-up option
+        for (const auto& opt : found_op->options()) {
+            opt.add_option(op_desc);
         }
-        if (options_added) {
+        for (const auto& opt : found_op->positional_options()) {
+            app.add_positional_options({opt});
+        }
+        if (!found_op->options().empty()) {
             app.get_options_description().add(op_desc);
         }
     }
