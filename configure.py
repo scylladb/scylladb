@@ -409,6 +409,7 @@ scylla_tests = set([
     'test/boost/limiting_data_source_test',
     'test/boost/linearizing_input_stream_test',
     'test/boost/loading_cache_test',
+    'test/boost/locator_topology_test',
     'test/boost/log_heap_test',
     'test/boost/estimated_histogram_test',
     'test/boost/summary_test',
