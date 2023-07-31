@@ -28,24 +28,19 @@ const operation& get_selected_operation(int& ac, char**& av, const std::vector<o
         exit(1);
     }
 
-    const operation* found_operation = nullptr;
-    for (const auto& op : operations) {
-        if (av[1] == op.name()) {
-            found_operation = &op;
-            break;
-        }
-    }
-    if (found_operation) {
+    const char* op_name = av[1];
+    if (auto found = std::ranges::find_if(operations, [op_name] (auto& op) {
+                         return op.name() == op_name;
+        });
+        found != operations.end()) {
+        std::shift_left(av + 1, av + ac, 1);
         --ac;
-        for (int i = 1; i < ac; ++i) {
-            std::swap(av[i], av[i + 1]);
-        }
-        return *found_operation;
+        return *found;
     }
 
     const auto all_operation_names = boost::algorithm::join(operations | boost::adaptors::transformed([] (const operation op) { return op.name(); } ), ", ");
 
-    fmt::print(std::cerr, "error: unrecognized {} argument: expected one of ({}), got {}\n", alias, all_operation_names, av[1]);
+    fmt::print(std::cerr, "error: unrecognized {} argument: expected one of ({}), got {}\n", alias, all_operation_names, op_name);
     exit(1);
 }
 
