@@ -24,32 +24,6 @@ struct tablet_migration_info {
 
 using migration_plan = utils::chunked_vector<tablet_migration_info>;
 
-/// Returns a tablet migration plan that aims to achieve better load balance in the whole cluster.
-/// The plan is computed based on information in the given token_metadata snapshot
-/// and thus should be executed and reflected, at least as pending tablet transitions, in token_metadata
-/// before this is called again.
-///
-/// For any given global_tablet_id there is at most one tablet_migration_info in the returned plan.
-///
-/// To achieve full balance, do:
-///
-///    while (true) {
-///        auto plan = co_await balance_tablets(get_token_metadata());
-///        if (plan.empty()) {
-///            break;
-///        }
-///        co_await execute(plan);
-///    }
-///
-/// It is ok to invoke the algorithm with already active tablet migrations. The algorithm will take them into account
-/// when balancing the load as if they already succeeded. This means that applying a series of migration plans
-/// produced by this function will give the same result regardless of whether applying they are fully executed or
-/// only initiated by creating corresponding transitions in tablet metadata.
-///
-/// The algorithm takes care of limiting the streaming load on the system, also by taking active migrations into account.
-///
-future<migration_plan> balance_tablets(locator::token_metadata_ptr);
-
 class tablet_allocator_impl;
 
 class tablet_allocator {
@@ -65,6 +39,32 @@ public:
     tablet_allocator(service::migration_notifier& mn, replica::database& db);
 public:
     future<> stop();
+
+    /// Returns a tablet migration plan that aims to achieve better load balance in the whole cluster.
+    /// The plan is computed based on information in the given token_metadata snapshot
+    /// and thus should be executed and reflected, at least as pending tablet transitions, in token_metadata
+    /// before this is called again.
+    ///
+    /// For any given global_tablet_id there is at most one tablet_migration_info in the returned plan.
+    ///
+    /// To achieve full balance, do:
+    ///
+    ///    while (true) {
+    ///        auto plan = co_await balance_tablets(get_token_metadata());
+    ///        if (plan.empty()) {
+    ///            break;
+    ///        }
+    ///        co_await execute(plan);
+    ///    }
+    ///
+    /// It is ok to invoke the algorithm with already active tablet migrations. The algorithm will take them into account
+    /// when balancing the load as if they already succeeded. This means that applying a series of migration plans
+    /// produced by this function will give the same result regardless of whether applying means they are fully executed or
+    /// only initiated by creating corresponding transitions in tablet metadata.
+    ///
+    /// The algorithm takes care of limiting the streaming load on the system, also by taking active migrations into account.
+    ///
+    future<migration_plan> balance_tablets(locator::token_metadata_ptr);
 };
 
 }

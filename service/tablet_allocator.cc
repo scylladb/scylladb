@@ -542,11 +542,6 @@ public:
     }
 };
 
-future<migration_plan> balance_tablets(token_metadata_ptr tm) {
-    load_balancer lb(tm);
-    co_return co_await lb.make_plan();
-}
-
 class tablet_allocator_impl : public tablet_allocator::impl
                             , public service::migration_listener::empty_listener {
     service::migration_notifier& _migration_notifier;
@@ -570,6 +565,11 @@ public:
     future<> stop() {
         co_await _migration_notifier.unregister_listener(this);
         _stopped = true;
+    }
+
+    future<migration_plan> balance_tablets(token_metadata_ptr tm) {
+        load_balancer lb(tm);
+        co_return co_await lb.make_plan();
     }
 
     void on_before_create_column_family(const schema& s, std::vector<mutation>& muts, api::timestamp_type ts) override {
@@ -612,6 +612,10 @@ tablet_allocator::tablet_allocator(service::migration_notifier& mn, replica::dat
 
 future<> tablet_allocator::stop() {
     return impl().stop();
+}
+
+future<migration_plan> tablet_allocator::balance_tablets(locator::token_metadata_ptr tm) {
+    return impl().balance_tablets(tm);
 }
 
 tablet_allocator_impl& tablet_allocator::impl() {

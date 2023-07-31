@@ -800,6 +800,8 @@ class topology_coordinator {
 
     raft_topology_cmd_handler_type _raft_topology_cmd_handler;
 
+    tablet_allocator& _tablet_allocator;
+
     std::chrono::milliseconds _ring_delay;
 
     using drop_guard_and_retake = bool_class<class retake_guard_tag>;
@@ -1412,7 +1414,7 @@ class topology_coordinator {
         auto [preempt, new_guard] = should_preempt_balancing(std::move(guard));
         guard = std::move(new_guard);
         if (!preempt) {
-            auto plan = co_await balance_tablets(get_token_metadata_ptr());
+            auto plan = co_await _tablet_allocator.balance_tablets(get_token_metadata_ptr());
             co_await generate_migration_updates(updates, guard, plan);
         }
 
@@ -1912,11 +1914,13 @@ public:
             db::system_keyspace& sys_ks, replica::database& db, service::raft_group0& group0,
             service::topology_state_machine& topo_sm, abort_source& as, raft::server& raft_server,
             raft_topology_cmd_handler_type raft_topology_cmd_handler,
+            tablet_allocator& tablet_allocator,
             std::chrono::milliseconds ring_delay)
         : _sys_dist_ks(sys_dist_ks), _messaging(messaging), _shared_tm(shared_tm), _sys_ks(sys_ks), _db(db)
         , _group0(group0), _address_map(_group0.address_map()), _topo_sm(topo_sm), _as(as)
         , _raft(raft_server), _term(raft_server.get_current_term())
         , _raft_topology_cmd_handler(std::move(raft_topology_cmd_handler))
+        , _tablet_allocator(tablet_allocator)
         , _ring_delay(ring_delay)
     {}
 
@@ -1927,7 +1931,7 @@ future<bool> topology_coordinator::maybe_start_tablet_migration(group0_guard gua
     slogger.debug("raft topology: Evaluating tablet balance");
 
     auto tm = get_token_metadata_ptr();
-    auto plan = co_await balance_tablets(tm);
+    auto plan = co_await _tablet_allocator.balance_tablets(tm);
     if (plan.empty()) {
         slogger.debug("raft topology: Tablets are balanced");
         co_return false;
@@ -2012,7 +2016,9 @@ future<> storage_service::raft_state_monitor_fiber(raft::server& raft, cdc::gene
                 std::make_unique<topology_coordinator>(
                     sys_dist_ks, _messaging.local(), _shared_token_metadata,
                     _sys_ks.local(), _db.local(), *_group0, _topology_state_machine, *as, raft,
-                    std::bind_front(&storage_service::raft_topology_cmd_handler, this), get_ring_delay()),
+                    std::bind_front(&storage_service::raft_topology_cmd_handler, this),
+                    _tablet_allocator.local(),
+                    get_ring_delay()),
                 [] (std::unique_ptr<topology_coordinator>& coordinator) { return coordinator->run(); });
         }
     } catch (...) {
