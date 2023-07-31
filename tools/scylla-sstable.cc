@@ -2742,7 +2742,7 @@ for more information on this operation, including the API documentation.
 namespace tools {
 
 int scylla_sstable_main(int argc, char** argv) {
-    const auto description_template =
+    constexpr auto description_template =
 R"(scylla-sstable - a multifunctional command-line tool to examine the content of sstables.
 
 Usage: scylla sstable {{operation}} [--option1] [--option2] ... [{{sstable_path1}}] [{{sstable_path2}}] ...
