@@ -216,7 +216,7 @@ SEASTAR_THREAD_TEST_CASE(test_remove_endpoint) {
     topo.remove_endpoint(ep1);
     BOOST_REQUIRE_EQUAL(topo.get_datacenter_endpoints(), (dc_endpoints_t{}));
     BOOST_REQUIRE_EQUAL(topo.get_datacenter_racks(), (dc_racks_t{}));
-    BOOST_REQUIRE_EQUAL(topo.get_datacenters(), (dcs_t{"dc1"}));
+    BOOST_REQUIRE_EQUAL(topo.get_datacenters(), (dcs_t{}));
 }
 
 SEASTAR_THREAD_TEST_CASE(test_load_sketch) {
