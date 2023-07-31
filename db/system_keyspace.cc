@@ -1665,7 +1665,7 @@ template <typename T>
 future<> system_keyspace::set_scylla_local_param_as(const sstring& key, const T& value) {
     sstring req = format("UPDATE system.{} SET value = ? WHERE key = ?", system_keyspace::SCYLLA_LOCAL);
     auto type = data_type_for<T>();
-    co_await qctx->execute_cql(req, type->to_string_impl(data_value(value)), key).discard_result();
+    co_await execute_cql(req, type->to_string_impl(data_value(value)), key).discard_result();
     // Flush the table so that the value is available on boot before commitlog replay.
     // database::maybe_init_schema_commitlog() depends on it.
     co_await container().invoke_on_all([] (auto& sys_ks) -> future<> {
@@ -1676,7 +1676,7 @@ future<> system_keyspace::set_scylla_local_param_as(const sstring& key, const T&
 template <typename T>
 future<std::optional<T>> system_keyspace::get_scylla_local_param_as(const sstring& key) {
     sstring req = format("SELECT value FROM system.{} WHERE key = ?", system_keyspace::SCYLLA_LOCAL);
-    return qctx->execute_cql(req, key).then([] (::shared_ptr<cql3::untyped_result_set> res)
+    return execute_cql(req, key).then([] (::shared_ptr<cql3::untyped_result_set> res)
             -> future<std::optional<T>> {
         if (res->empty() || !res->one().has("value")) {
             return make_ready_future<std::optional<T>>(std::optional<T>());
