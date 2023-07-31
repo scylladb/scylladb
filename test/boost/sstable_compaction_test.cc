@@ -173,8 +173,11 @@ SEASTAR_TEST_CASE(compaction_manager_basic_test) {
 
     BOOST_REQUIRE(cf->sstables_count() == idx.size());
     cf->trigger_compaction();
-    // wait for submitted job to finish.
-    do_until([&cm] { return cm.get_stats().completed_tasks > 0; }, [] {
+    // wait for submitted job to finish and there is no pending tasks
+    do_until([&cm] {
+        return (cm.get_stats().completed_tasks > 0 &&
+                cm.get_stats().pending_tasks == 0);
+    }, [] {
         return sleep(std::chrono::milliseconds(100));
     }).wait();
     // test no more running compactions
