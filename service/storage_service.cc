@@ -112,7 +112,8 @@ storage_service::storage_service(abort_source& abort_source,
     sharded<streaming::stream_manager>& stream_manager,
     endpoint_lifecycle_notifier& elc_notif,
     sharded<db::batchlog_manager>& bm,
-    sharded<locator::snitch_ptr>& snitch)
+    sharded<locator::snitch_ptr>& snitch,
+    sharded<service::tablet_allocator>& tablet_allocator)
         : _abort_source(abort_source)
         , _feature_service(feature_service)
         , _db(db)
@@ -133,6 +134,7 @@ storage_service::storage_service(abort_source& abort_source,
                 return ss.snitch_reconfigured();
             });
         })
+        , _tablet_allocator(tablet_allocator)
 {
     register_metrics();
 

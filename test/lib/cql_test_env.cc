@@ -847,7 +847,8 @@ public:
                 std::ref(stream_manager),
                 std::ref(elc_notif),
                 std::ref(bm),
-                std::ref(snitch)).get();
+                std::ref(snitch),
+                std::ref(the_tablet_allocator)).get();
             auto stop_storage_service = defer([&ss] { ss.stop().get(); });
 
             ss.invoke_on_all([&] (service::storage_service& ss) {
