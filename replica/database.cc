@@ -835,7 +835,7 @@ future<> database::parse_system_tables(distributed<service::storage_proxy>& prox
             auto s = t.second;
             // Recreate missing column mapping entries in case
             // we failed to persist them for some reason after a schema change
-            bool cm_exists = co_await db::schema_tables::column_mapping_exists(s->id(), s->version());
+            bool cm_exists = co_await db::schema_tables::column_mapping_exists(sys_ks.local(), s->id(), s->version());
             if (cm_exists) {
                 co_return;
             }

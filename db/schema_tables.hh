@@ -299,11 +299,11 @@ std::optional<std::map<K, V>> get_map(const query::result_set_row& row, const ss
 /// overwriting an existing column mapping to garbage collect obsolete entries.
 future<> store_column_mapping(distributed<service::storage_proxy>& proxy, schema_ptr s, bool with_ttl);
 /// Query column mapping for a given version of the table locally.
-future<column_mapping> get_column_mapping(table_id table_id, table_schema_version version);
+future<column_mapping> get_column_mapping(db::system_keyspace& sys_ks, table_id table_id, table_schema_version version);
 /// Check that column mapping exists for a given version of the table
-future<bool> column_mapping_exists(table_id table_id, table_schema_version version);
+future<bool> column_mapping_exists(db::system_keyspace& sys_ks, table_id table_id, table_schema_version version);
 /// Delete matching column mapping entries from the `system.scylla_table_schema_history` table
-future<> drop_column_mapping(table_id table_id, table_schema_version version);
+future<> drop_column_mapping(db::system_keyspace& sys_ks, table_id table_id, table_schema_version version);
 
 } // namespace schema_tables
 } // namespace db

@@ -244,6 +244,6 @@ public:
     void set_concurrent_ddl_retries(size_t);
 };
 
-future<column_mapping> get_column_mapping(table_id, table_schema_version v);
+future<column_mapping> get_column_mapping(db::system_keyspace& sys_ks, table_id, table_schema_version v);
 
 }
