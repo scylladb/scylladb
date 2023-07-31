@@ -265,8 +265,8 @@ public:
 
     future<> remove_endpoint(gms::inet_address ep);
 
-    static future<> set_scylla_local_param(const sstring& key, const sstring& value);
-    static future<std::optional<sstring>> get_scylla_local_param(const sstring& key);
+    future<> set_scylla_local_param(const sstring& key, const sstring& value);
+    future<std::optional<sstring>> get_scylla_local_param(const sstring& key);
 
     static std::vector<schema_ptr> all_tables(const db::config& cfg);
     future<> make(
