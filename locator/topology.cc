@@ -360,6 +360,7 @@ void topology::unindex_node(const node* node) {
                     _dc_rack_nodes.erase(dc);
                     _dc_racks.erase(dc);
                     _dc_endpoints.erase(dit);
+                    _datacenters.erase(dc);
                 } else {
                     _dc_rack_nodes[dc][rack].erase(node);
                     auto& racks = _dc_racks[dc];
