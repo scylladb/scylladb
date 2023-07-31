@@ -39,12 +39,16 @@ public:
         std::set<fs::path> _paths;
     };
 
+    using recursive = bool_class<struct recursive_tag>;
+
     directories(bool developer_mode);
     future<> create_and_verify(set dir_set);
-    static future<> verify_owner_and_mode(std::filesystem::path path);
+    static future<> verify_owner_and_mode(std::filesystem::path path, recursive r = recursive::yes);
 private:
     bool _developer_mode;
     std::vector<file_lock> _locks;
+
+    static future<> do_verify_owner_and_mode(std::filesystem::path path, recursive, int level);
 };
 
 } // namespace utils
