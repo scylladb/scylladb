@@ -2793,13 +2793,37 @@ public:
     api::timestamp_type min_memtable_timestamp() const override {
         return _cg.min_memtable_timestamp();
     }
+    future<> maybe_mark_commitlog_watershed() {
+        // Fixes #14870 (at least partially)
+        // When doing a compaction with potential GC of tombstones
+        // put an entry into truncation table, corresponding to the last RP flushed to sstable
+        // (note - does not even have to be related to what we compacted here, only a value 
+        // such that we _know_ that data younger that this is already on disk, or potentially
+        // handled by this compation). This will prevent any replay of mutations younger than
+        // this, and ensure nothing we GC:d tombstones for gets resurrected.
+        // TODO: maybe move this to separate table, or rename it to avoid confusion.
+        // NOTE: the timestamp here does not matter, nor does the fact that we don't sync it
+        // across shards, since this is run inside a compaction, i.e. real truncation is 
+        // locked out, so said "real" records, where timestamp might matter, will be 
+        // done either before or after this. We use the "actual" timestamp as cached in 
+        // table object (this will somewhat break if ignore_truncation_record is true, but
+        // so will truncation)
+        if (tombstone_gc_enabled() && schema()->ks_name() != db::schema_tables::NAME) {
+            auto sys_ks = _t._compaction_manager.system_keyspace();
+            if (sys_ks) {
+                co_await sys_ks->save_truncation_record(_t.schema()->id(), _t.get_truncation_record(), _t._flush_rp);
+            }
+        }
+    }
     future<> on_compaction_completion(sstables::compaction_completion_desc desc, sstables::offstrategy offstrategy) override {
         if (offstrategy) {
             co_await _cg.update_sstable_lists_on_off_strategy_completion(std::move(desc));
+            co_await maybe_mark_commitlog_watershed();
             _cg.trigger_compaction();
             co_return;
         }
         co_await _cg.update_main_sstable_list_on_compaction_completion(std::move(desc));
+        co_await maybe_mark_commitlog_watershed();
     }
     bool is_auto_compaction_disabled_by_user() const noexcept override {
         return _t.is_auto_compaction_disabled_by_user();

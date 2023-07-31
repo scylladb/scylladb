@@ -271,6 +271,10 @@ public:
         return _cfg.throughput_mb_per_sec.get();
     }
 
+    seastar::shared_ptr<db::system_keyspace> system_keyspace() const {
+        return _sys_ks;
+    }
+
     void register_metrics();
 
     // enable the compaction manager.
