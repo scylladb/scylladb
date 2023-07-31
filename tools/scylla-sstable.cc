@@ -2487,23 +2487,6 @@ const std::vector<app_template::positional_option> global_positional_options{
     {"sstables", bpo::value<std::vector<sstring>>(), "sstable(s) to process for operations that have sstable inputs, can also be provided as positional arguments", -1},
 };
 
-const std::vector<operation_option> operation_options {
-    typed_option<std::vector<sstring>>("partition", "partition(s) to filter for, partitions are expected to be in the hex format"),
-    typed_option<sstring>("partitions-file", "file containing partition(s) to filter for, partitions are expected to be in the hex format"),
-    typed_option<>("merge", "merge all sstables into a single mutation fragment stream (use a combining reader over all sstable readers)"),
-    typed_option<>("no-skips", "don't use skips to skip to next partition when the partition filter rejects one, this is slower but works with corrupt index"),
-    typed_option<std::string>("bucket", "months", "the unit of time to use as bucket, one of (years, months, weeks, days, hours)"),
-    typed_option<std::string>("output-format", "json", "the output-format, one of (text, json)"),
-    typed_option<std::string>("input-file", "the file containing the input"),
-    typed_option<std::string>("output-dir", ".", "directory to place the output files to"),
-    typed_option<sstables::generation_type::int_t>("generation", "generation of generated sstable"),
-    typed_option<std::string>("validation-level", "clustering_key", "degree of validation on the output, one of (partition_region, token, partition_key, clustering_key)"),
-    typed_option<std::string>("script-file", "script file to load and execute"),
-    typed_option<program_options::string_map>("script-arg", {}, "parameter(s) for the script"),
-    typed_option<std::string>("scrub-mode", "scrub mode to use, one of (abort, skip, segregate, validate)"),
-    typed_option<>("unsafe-accept-nonempty-output-dir", "allow the operation to write into a non-empty output directory, acknowledging the risk that this may result in sstable clash"),
-};
-
 const std::map<operation, operation_func> operations_with_func{
 /* dump-data */
     {{"dump-data",
@@ -2523,7 +2506,13 @@ printers, which are also used when logging mutation-related data structures.
 See https://docs.scylladb.com/operating-scylla/admin-tools/scylla-sstable#dump-data
 for more information on this operation, including the schema of the JSON output.
 )",
-            {"partition", "partitions-file", "merge", "no-skips", "output-format"}},
+            {
+                    typed_option<std::vector<sstring>>("partition", "partition(s) to filter for, partitions are expected to be in the hex format"),
+                    typed_option<sstring>("partitions-file", "file containing partition(s) to filter for, partitions are expected to be in the hex format"),
+                    typed_option<>("merge", "merge all sstables into a single mutation fragment stream (use a combining reader over all sstable readers)"),
+                    typed_option<>("no-skips", "don't use skips to skip to next partition when the partition filter rejects one, this is slower but works with corrupt index"),
+                    typed_option<std::string>("output-format", "json", "the output-format, one of (text, json)"),
+            }},
             sstable_consumer_operation<dumping_consumer>},
 /* dump-index */
     {{"dump-index",
@@ -2633,7 +2622,7 @@ following example python script:
 
      plt.show()
 )",
-            {"bucket"}},
+            {typed_option<std::string>("bucket", "months", "the unit of time to use as bucket, one of (years, months, weeks, days, hours)")}},
             sstable_consumer_operation<writetime_histogram_collecting_consumer>},
 /* validate */
     {{"validate",
@@ -2668,7 +2657,11 @@ pre-existing sstables in the directory.
 See https://docs.scylladb.com/operating-scylla/admin-tools/scylla-sstable#scrub
 for more information on this operation, including what the different modes do.
 )",
-            {"scrub-mode", "output-dir", "unsafe-accept-nonempty-output-dir"}},
+            {
+                    typed_option<std::string>("scrub-mode", "scrub mode to use, one of (abort, skip, segregate, validate)"),
+                    typed_option<std::string>("output-dir", ".", "directory to place the scrubbed sstables to"),
+                    typed_option<>("unsafe-accept-nonempty-output-dir", "allow the operation to write into a non-empty output directory, acknowledging the risk that this may result in sstable clash"),
+            }},
             scrub_operation},
 /* validate-checksums */
     {{"validate-checksums",
@@ -2721,7 +2714,12 @@ output sstable clashes with an existing sstable, the write will fail.
 See https://docs.scylladb.com/operating-scylla/admin-tools/scylla-sstable#write
 for more information on this operation, including the schema of the JSON input.
 )",
-            {"input-file", "output-dir", "generation", "validation-level"}},
+            {
+                    typed_option<std::string>("input-file", "the file containing the input"),
+                    typed_option<std::string>("output-dir", ".", "directory to place the output sstable(s) to"),
+                    typed_option<sstables::generation_type::int_t>("generation", "generation of generated sstable"),
+                    typed_option<std::string>("validation-level", "clustering_key", "degree of validation on the output, one of (partition_region, token, partition_key, clustering_key)"),
+            }},
             write_operation},
 /* script */
     {{"script",
@@ -2733,7 +2731,11 @@ specified by `--script-file`. Currently only Lua scripts are supported.
 See https://docs.scylladb.com/operating-scylla/admin-tools/scylla-sstable#script
 for more information on this operation, including the API documentation.
 )",
-            {"merge", "script-file", "script-arg"}},
+            {
+                typed_option<>("merge", "merge all sstables into a single mutation fragment stream (use a combining reader over all sstable readers)"),
+                typed_option<std::string>("script-file", "script file to load and execute"),
+                typed_option<program_options::string_map>("script-arg", {}, "parameter(s) for the script"),
+            }},
             script_operation},
 };
 
@@ -2840,8 +2842,7 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
             .lsa_segment_pool_backend_size_mb = 100,
             .operations = std::move(operations),
             .global_options = &global_options,
-            .global_positional_options = &global_positional_options,
-            .operation_options = &operation_options};
+            .global_positional_options = &global_positional_options};
     tool_app_template app(std::move(app_cfg));
 
     return app.run_async(argc, argv, [] (const operation& operation, const bpo::variables_map& app_config) {
