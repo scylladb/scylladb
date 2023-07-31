@@ -47,9 +47,12 @@ public:
 
     enum class state {
         none = 0,
-        joining,    // while bootstrapping, replacing
+        bootstrapping,  // (joining)
+        replacing,      // (joining)
         normal,
-        leaving,    // while decommissioned, removed, replaced
+        being_decommissioned, // (leaving)
+        being_removed,        // (leaving)
+        being_replaced,       // (leaving)
         left        // after decommissioned, removed, replaced
     };
 
@@ -101,6 +104,35 @@ public:
     idx_type idx() const noexcept { return _idx; }
 
     state get_state() const noexcept { return _state; }
+
+    bool is_joining() const noexcept {
+        switch (_state) {
+        case state::bootstrapping:
+        case state::replacing:
+            return true;
+        default:
+            return false;
+        }
+    }
+
+    bool is_normal() const noexcept {
+        return _state == state::normal;
+    }
+
+    bool is_leaving() const noexcept {
+        switch (_state) {
+        case state::being_decommissioned:
+        case state::being_removed:
+        case state::being_replaced:
+            return true;
+        default:
+            return false;
+        }
+    }
+
+    bool left() const noexcept {
+        return _state == state::left;
+    }
 
     shard_id get_shard_count() const noexcept { return _shard_count; }
 

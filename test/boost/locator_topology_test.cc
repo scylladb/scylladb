@@ -144,15 +144,15 @@ SEASTAR_THREAD_TEST_CASE(test_update_node) {
     BOOST_REQUIRE(topo.get_location(id1) == dc_rack2);
     BOOST_REQUIRE(topo.get_location(ep1) == dc_rack2);
 
-    BOOST_REQUIRE_NE(node->get_state(), locator::node::state::leaving);
-    node = topo.update_node(mutable_node, std::nullopt, std::nullopt, std::nullopt, locator::node::state::leaving);
+    BOOST_REQUIRE_NE(node->get_state(), locator::node::state::being_decommissioned);
+    node = topo.update_node(mutable_node, std::nullopt, std::nullopt, std::nullopt, locator::node::state::being_decommissioned);
     mutable_node = const_cast<locator::node*>(node);
-    BOOST_REQUIRE_EQUAL(node->get_state(), locator::node::state::leaving);
+    BOOST_REQUIRE_EQUAL(node->get_state(), locator::node::state::being_decommissioned);
 
     auto dc_rack3 = endpoint_dc_rack{"DC3", "RACK3"};
     // Note: engage state option, but keep node::state value the same
     // to reproduce #13502
-    node = topo.update_node(mutable_node, std::nullopt, ep3, dc_rack3, locator::node::state::leaving);
+    node = topo.update_node(mutable_node, std::nullopt, ep3, dc_rack3, locator::node::state::being_decommissioned);
     mutable_node = const_cast<locator::node*>(node);
     BOOST_REQUIRE_EQUAL(topo.find_node(id1), node);
     BOOST_REQUIRE_EQUAL(topo.find_node(ep1), nullptr);
@@ -161,7 +161,7 @@ SEASTAR_THREAD_TEST_CASE(test_update_node) {
     BOOST_REQUIRE(topo.get_location(id1) == dc_rack3);
     BOOST_REQUIRE(topo.get_location(ep2) == endpoint_dc_rack::default_location);
     BOOST_REQUIRE(topo.get_location(ep3) == dc_rack3);
-    BOOST_REQUIRE_EQUAL(node->get_state(), locator::node::state::leaving);
+    BOOST_REQUIRE_EQUAL(node->get_state(), locator::node::state::being_decommissioned);
 
     // In state::left the ndoe will remain indexed only by its host_id
     node = topo.update_node(mutable_node, std::nullopt, std::nullopt, std::nullopt, locator::node::state::left);
