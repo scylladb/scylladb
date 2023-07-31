@@ -1662,7 +1662,7 @@ template future<> system_keyspace::update_peer_info<utils::UUID>(gms::inet_addre
 template future<> system_keyspace::update_peer_info<net::inet_address>(gms::inet_address ep, sstring column_name, net::inet_address);
 
 template <typename T>
-future<> set_scylla_local_param_as(const sstring& key, const T& value) {
+future<> system_keyspace::set_scylla_local_param_as(const sstring& key, const T& value) {
     sstring req = format("UPDATE system.{} SET value = ? WHERE key = ?", system_keyspace::SCYLLA_LOCAL);
     auto type = data_type_for<T>();
     co_await qctx->execute_cql(req, type->to_string_impl(data_value(value)), key).discard_result();
@@ -1674,7 +1674,7 @@ future<> set_scylla_local_param_as(const sstring& key, const T& value) {
 }
 
 template <typename T>
-future<std::optional<T>> get_scylla_local_param_as(const sstring& key) {
+future<std::optional<T>> system_keyspace::get_scylla_local_param_as(const sstring& key) {
     sstring req = format("SELECT value FROM system.{} WHERE key = ?", system_keyspace::SCYLLA_LOCAL);
     return qctx->execute_cql(req, key).then([] (::shared_ptr<cql3::untyped_result_set> res)
             -> future<std::optional<T>> {
