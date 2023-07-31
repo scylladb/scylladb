@@ -126,8 +126,7 @@ future<> db::commitlog_replayer::impl::init() {
         }
     }, [this](replica::database& db) {
         return do_with(shard_rpm_map{}, [this, &db](shard_rpm_map& map) {
-            return parallel_for_each(db.get_column_families(), [this, &map](auto& cfp) {
-                auto uuid = cfp.first;
+            return db.get_tables_metadata().parallel_for_each_table([this, &map] (table_id uuid, lw_shared_ptr<replica::table>) {
                 // We do this on each cpu, for each CF, which technically is a little wasteful, but the values are
                 // cached, this is only startup, and it makes the code easier.
                 // Get all truncation records for the CF and initialize max rps if
@@ -156,13 +155,13 @@ future<> db::commitlog_replayer::impl::init() {
         // existing sstables-per-shard.
         // So, go through all CF:s and check, if a shard mapping does not
         // have data for it, assume we must set global pos to zero.
-        for (auto&p : _db.local().get_column_families()) {
+        _db.local().get_tables_metadata().for_each_table([&] (table_id id, lw_shared_ptr<replica::table>) {
             for (auto&p1 : _rpm) { // for each shard
-                if (!p1.second.contains(p.first)) {
+                if (!p1.second.contains(id)) {
                     _min_pos[p1.first] = replay_position();
                 }
             }
-        }
+        });
         for (auto&p : _min_pos) {
             rlogger.debug("minimum position for shard {}: {}", p.first, p.second);
         }

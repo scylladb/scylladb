@@ -144,7 +144,7 @@ public:
 };
 
 const boost::container::static_vector<std::pair<size_t, boost::container::static_vector<table*, 16>>, 10>
-phased_barrier_top_10_counts(const std::unordered_map<table_id, lw_shared_ptr<column_family>>& tables, std::function<size_t(table&)> op_count_getter) {
+phased_barrier_top_10_counts(const database::tables_metadata& tables_metadata, std::function<size_t(table&)> op_count_getter) {
     using table_list = boost::container::static_vector<table*, 16>;
     using count_and_tables = std::pair<size_t, table_list>;
     const auto less = [] (const count_and_tables& a, const count_and_tables& b) {
@@ -154,20 +154,20 @@ phased_barrier_top_10_counts(const std::unordered_map<table_id, lw_shared_ptr<co
     boost::container::static_vector<count_and_tables, 10> res;
     count_and_tables* min_element = nullptr;
 
-    for (const auto& [tid, table] : tables) {
+    tables_metadata.for_each_table([&] (table_id tid, lw_shared_ptr<table> table) {
         const auto count = op_count_getter(*table);
         if (!count) {
-            continue;
+            return;
         }
         if (res.size() < res.capacity()) {
             auto& elem = res.emplace_back(count, table_list({table.get()}));
             if (!min_element || min_element->first > count) {
                 min_element = &elem;
             }
-            continue;
+            return;
         }
         if (min_element->first > count) {
-            continue;
+            return;
         }
 
         auto it = boost::find_if(res, [count] (const count_and_tables& x) {
@@ -175,13 +175,13 @@ phased_barrier_top_10_counts(const std::unordered_map<table_id, lw_shared_ptr<co
         });
         if (it != res.end()) {
             it->second.push_back(table.get());
-            continue;
+            return;
         }
 
         // If we are here, min_element->first < count
         *min_element = {count, table_list({table.get()})};
         min_element = &*boost::min_element(res, less);
-    }
+    });
 
     boost::sort(res, less);
 
@@ -272,7 +272,7 @@ void database::setup_scylla_memory_diagnostics_producer() {
         for (const auto& [name, op_count_getter] : phased_barriers) {
             writeln("    {} (top 10):\n", name);
             auto total = 0;
-            for (const auto& [count, table_list] : phased_barrier_top_10_counts(_column_families, op_count_getter)) {
+            for (const auto& [count, table_list] : phased_barrier_top_10_counts(_tables_metadata, op_count_getter)) {
                 total += count;
                 writeln("      {}", count);
                 if (table_list.empty()) {
@@ -869,13 +869,13 @@ database::init_commitlog() {
     return db::commitlog::create_commitlog(db::commitlog::config::from_db_config(_cfg, _dbcfg.commitlog_scheduling_group, _dbcfg.available_memory)).then([this](db::commitlog&& log) {
         _commitlog = std::make_unique<db::commitlog>(std::move(log));
         _commitlog->add_flush_handler([this](db::cf_id_type id, db::replay_position pos) {
-            if (!_column_families.contains(id)) {
+            if (!_tables_metadata.contains(id)) {
                 // the CF has been removed.
                 _commitlog->discard_completed_segments(id);
                 return;
             }
             // Initiate a background flush. Waited upon in `stop()`.
-            (void)_column_families[id]->flush(pos);
+            (void)_tables_metadata.get_table(id).flush(pos);
         }).release(); // we have longer life time than CL. Ignore reg anchor
     });
 }
@@ -965,13 +965,13 @@ void database::maybe_init_schema_commitlog() {
 
     _schema_commitlog = std::make_unique<db::commitlog>(db::commitlog::create_commitlog(std::move(c)).get0());
     _schema_commitlog->add_flush_handler([this] (db::cf_id_type id, db::replay_position pos) {
-        if (!_column_families.contains(id)) {
+        if (!_tables_metadata.contains(id)) {
             // the CF has been removed.
             _schema_commitlog->discard_completed_segments(id);
             return;
         }
         // Initiate a background flush. Waited upon in `stop()`.
-        (void)_column_families[id]->flush(pos);
+        (void)_tables_metadata.get_table(id).flush(pos);
 
     }).release();
 }
@@ -996,10 +996,10 @@ future<> database::create_local_system_table(
         cfg.memtable_scheduling_group = default_scheduling_group();
         cfg.memtable_to_cache_scheduling_group = default_scheduling_group();
     }
-    add_column_family(ks, table, std::move(cfg));
+    co_await add_column_family(ks, table, std::move(cfg));
 }
 
-void database::add_column_family(keyspace& ks, schema_ptr schema, column_family::config cfg) {
+future<> database::add_column_family(keyspace& ks, schema_ptr schema, column_family::config cfg) {
     schema = local_schema_registry().learn(schema);
     schema->registry_entry()->mark_synced();
     auto&& rs = ks.get_replication_strategy();
@@ -1023,18 +1023,17 @@ void database::add_column_family(keyspace& ks, schema_ptr schema, column_family:
     cf->set_durable_writes(ks.metadata()->durable_writes());
 
     auto uuid = schema->id();
-    if (_column_families.contains(uuid)) {
+    if (_tables_metadata.contains(uuid)) {
         throw std::invalid_argument("UUID " + uuid.to_sstring() + " already mapped");
     }
     auto kscf = std::make_pair(schema->ks_name(), schema->cf_name());
-    if (_ks_cf_to_uuid.contains(kscf)) {
+    if (_tables_metadata.contains(kscf)) {
         throw std::invalid_argument("Column family " + schema->cf_name() + " exists");
     }
     ks.add_or_update_column_family(schema);
     cf->start();
     schema->registry_entry()->set_table(cf->weak_from_this());
-    _column_families.emplace(uuid, std::move(cf));
-    _ks_cf_to_uuid.emplace(std::move(kscf), uuid);
+    co_await _tables_metadata.add_table(schema);
     if (schema->is_view()) {
         find_column_family(schema->view_info()->base_id()).add_or_update_view(view_ptr(schema));
     }
@@ -1042,10 +1041,10 @@ void database::add_column_family(keyspace& ks, schema_ptr schema, column_family:
 
 future<> database::add_column_family_and_make_directory(schema_ptr schema) {
     auto& ks = find_keyspace(schema->ks_name());
-    add_column_family(ks, schema, ks.make_column_family_config(*schema, *this));
+    co_await add_column_family(ks, schema, ks.make_column_family_config(*schema, *this));
     auto& cf = find_column_family(schema);
     cf.get_index_manager().reload();
-    return cf.init_storage();
+    co_await cf.init_storage();
 }
 
 bool database::update_column_family(schema_ptr new_schema) {
@@ -1066,13 +1065,12 @@ bool database::update_column_family(schema_ptr new_schema) {
     return columns_changed;
 }
 
-void database::remove(table& cf) noexcept {
+future<> database::remove(table& cf) noexcept {
     auto s = cf.schema();
     auto& ks = find_keyspace(s->ks_name());
     cf.deregister_metrics();
-    _column_families.erase(s->id());
+    co_await _tables_metadata.remove_table(s);
     ks.metadata()->remove_column_family(s);
-    _ks_cf_to_uuid.erase(std::make_pair(s->ks_name(), s->cf_name()));
     if (s->is_view()) {
         try {
             find_column_family(s->view_info()->base_id()).remove_view(view_ptr(s));
@@ -1084,7 +1082,7 @@ void database::remove(table& cf) noexcept {
 
 future<> database::detach_column_family(table& cf) {
     auto uuid = cf.schema()->id();
-    remove(cf);
+    co_await remove(cf);
     cf.clear_views();
     co_await cf.await_pending_ops();
     for (auto* sem : {&_read_concurrency_sem, &_streaming_concurrency_sem, &_compaction_concurrency_sem, &_system_read_concurrency_sem}) {
@@ -1152,15 +1150,15 @@ future<> database::drop_table_on_all_shards(sharded<database>& sharded_db, shard
     co_await table_shards->destroy_storage();
 }
 
-const table_id& database::find_uuid(std::string_view ks, std::string_view cf) const {
+table_id database::find_uuid(std::string_view ks, std::string_view cf) const {
     try {
-        return _ks_cf_to_uuid.at(std::make_pair(ks, cf));
+        return _tables_metadata.get_table_id(std::make_pair(ks, cf));
     } catch (std::out_of_range&) {
         throw no_such_column_family(ks, cf);
     }
 }
 
-const table_id& database::find_uuid(const schema_ptr& schema) const {
+table_id database::find_uuid(const schema_ptr& schema) const {
     return find_uuid(schema->ks_name(), schema->cf_name());
 }
 
@@ -1250,11 +1248,9 @@ std::unordered_map<sstring, locator::vnode_effective_replication_map_ptr> databa
 
 std::vector<lw_shared_ptr<column_family>> database::get_non_system_column_families() const {
     return boost::copy_range<std::vector<lw_shared_ptr<column_family>>>(
-        get_column_families()
-            | boost::adaptors::map_values
-            | boost::adaptors::filtered([](const lw_shared_ptr<column_family>& cf) {
-                return !is_system_keyspace(cf->schema()->ks_name());
-            }));
+        get_tables_metadata().filter([] (auto uuid_and_cf) {
+            return !is_system_keyspace(uuid_and_cf.second->schema()->ks_name());
+        }) | boost::adaptors::map_values);
 }
 
 column_family& database::find_column_family(std::string_view ks_name, std::string_view cf_name) {
@@ -1277,7 +1273,7 @@ const column_family& database::find_column_family(std::string_view ks_name, std:
 
 column_family& database::find_column_family(const table_id& uuid) {
     try {
-        return *_column_families.at(uuid);
+        return _tables_metadata.get_table(uuid);
     } catch (...) {
         throw no_such_column_family(uuid);
     }
@@ -1285,14 +1281,14 @@ column_family& database::find_column_family(const table_id& uuid) {
 
 const column_family& database::find_column_family(const table_id& uuid) const {
     try {
-        return *_column_families.at(uuid);
+        return _tables_metadata.get_table(uuid);
     } catch (...) {
         throw no_such_column_family(uuid);
     }
 }
 
 bool database::column_family_exists(const table_id& uuid) const {
-    return _column_families.contains(uuid);
+    return _tables_metadata.contains(uuid);
 }
 
 future<>
@@ -1419,7 +1415,7 @@ schema_ptr database::find_schema(const table_id& uuid) const {
 }
 
 bool database::has_schema(std::string_view ks_name, std::string_view cf_name) const {
-    return _ks_cf_to_uuid.contains(std::make_pair(ks_name, cf_name));
+    return _tables_metadata.contains(std::make_pair(ks_name, cf_name));
 }
 
 std::vector<view_ptr> database::get_views() const {
@@ -1464,11 +1460,10 @@ future<> database::create_keyspace_on_all_shards(sharded<database>& sharded_db, 
 
 future<>
 database::drop_caches() const {
-    std::unordered_map<table_id, lw_shared_ptr<column_family>> tables = get_column_families();
+    std::unordered_map<table_id, lw_shared_ptr<column_family>> tables = get_tables_metadata().get_column_families_copy();
     for (auto&& e : tables) {
         table& t = *e.second;
         co_await t.get_row_cache().invalidate(row_cache::external_updater([] {}));
-
         auto sstables = t.get_sstables();
         for (sstables::shared_sstable sst : *sstables) {
             co_await sst->drop_caches();
@@ -1825,10 +1820,10 @@ std::ostream& operator<<(std::ostream& out, const column_family& cf) {
 
 std::ostream& operator<<(std::ostream& out, const database& db) {
     out << "{\n";
-    for (auto&& e : db._column_families) {
-        auto&& cf = *e.second;
-        out << "(" << e.first.to_sstring() << ", " << cf.schema()->cf_name() << ", " << cf.schema()->ks_name() << "): " << cf << "\n";
-    }
+    db._tables_metadata.for_each_table([&] (table_id id, const lw_shared_ptr<table> tp) {
+        auto&& cf = *tp;
+        out << "(" << id.to_sstring() << ", " << cf.schema()->cf_name() << ", " << cf.schema()->ks_name() << "): " << cf << "\n";
+    });
     out << "}";
     return out;
 }
@@ -2333,13 +2328,13 @@ schema_ptr database::find_indexed_table(const sstring& ks_name, const sstring& i
 
 future<> database::close_tables(table_kind kind_to_close) {
     auto b = defer([this] { _stop_barrier.abort(); });
-    co_await coroutine::parallel_for_each(_column_families, [this, kind_to_close](auto& val_pair) -> future<> {
-        auto& s = val_pair.second->schema();
+    co_await _tables_metadata.parallel_for_each_table(coroutine::lambda([this, kind_to_close] (table_id, lw_shared_ptr<table> table) -> future<> {
+        auto& s = table->schema();
         table_kind k = is_system_table(*s) || _cfg.extensions().is_extension_internal_keyspace(s->ks_name()) ? table_kind::system : table_kind::user;
         if (k == kind_to_close) {
-            co_await val_pair.second->stop();
+            co_await table->stop();
         }
-    });
+    }));
     co_await _stop_barrier.arrive_and_wait();
     b.cancel();
 }
@@ -2422,8 +2417,8 @@ future<> database::stop() {
 }
 
 future<> database::flush_all_memtables() {
-    return parallel_for_each(_column_families, [] (auto& cfp) {
-        return cfp.second->flush();
+    return _tables_metadata.parallel_for_each_table([] (table_id, lw_shared_ptr<table> table) {
+        return table->flush();
     });
 }
 
@@ -2811,8 +2806,8 @@ future<> database::clear_snapshot(sstring tag, std::vector<sstring> keyspace_nam
                     // and has no remaining snapshots
                     if (!has_snapshots) {
                         auto [cf_name, cf_uuid] = extract_cf_name_and_uuid(table_ent->name);
-                        const auto& it = _ks_cf_to_uuid.find(std::make_pair(ks_name, cf_name));
-                        auto dropped = (it == _ks_cf_to_uuid.cend()) || (cf_uuid != it->second);
+                        auto id_opt = _tables_metadata.get_table_id_if_exists(std::make_pair(ks_name, cf_name));
+                        auto dropped = !id_opt || (cf_uuid != id_opt);
                         if (dropped) {
                             dblog.info("Removing dropped table dir {}", table_dir);
                             sstables::remove_table_directory_if_has_no_snapshots(table_dir).get();
@@ -2825,7 +2820,7 @@ future<> database::clear_snapshot(sstring tag, std::vector<sstring> keyspace_nam
 }
 
 future<> database::flush_non_system_column_families() {
-    auto non_system_cfs = get_column_families() | boost::adaptors::filtered([this] (auto& uuid_and_cf) {
+    auto non_system_cfs = get_tables_metadata().filter([this] (auto uuid_and_cf) {
         auto cf = uuid_and_cf.second;
         auto& ks = cf->schema()->ks_name();
         return !is_system_keyspace(ks) && !_cfg.extensions().is_extension_internal_keyspace(ks);
@@ -2847,7 +2842,7 @@ future<> database::flush_non_system_column_families() {
 }
 
 future<> database::flush_system_column_families() {
-    auto system_cfs = get_column_families() | boost::adaptors::filtered([this] (auto& uuid_and_cf) {
+    auto system_cfs = get_tables_metadata().filter([this] (auto uuid_and_cf) {
         auto cf = uuid_and_cf.second;
         auto& ks = cf->schema()->ks_name();
         return is_system_keyspace(ks) || _cfg.extensions().is_extension_internal_keyspace(ks);
@@ -2878,6 +2873,94 @@ future<> database::drain() {
         co_await _schema_commitlog->shutdown();
     }
     b.cancel();
+}
+
+size_t database::tables_metadata::size() const noexcept {
+    return _column_families.size();
+}
+
+future<> database::tables_metadata::add_table(schema_ptr schema) {
+    auto holder = co_await _cf_lock.hold_write_lock();
+    auto id = schema->id();
+    auto kscf = std::make_pair(schema->ks_name(), schema->cf_name());
+    try {
+        _column_families.emplace(id, schema->table().shared_from_this());
+        _ks_cf_to_uuid.emplace(kscf, id);
+    } catch (...) {
+        _ks_cf_to_uuid.erase(std::move(kscf));
+        _column_families.erase(id);
+        throw;
+    }
+}
+
+future<> database::tables_metadata::remove_table(schema_ptr schema) noexcept {
+    try {
+        auto holder = co_await _cf_lock.hold_write_lock();
+        _column_families.erase(schema->id());
+        _ks_cf_to_uuid.erase(std::make_pair(schema->ks_name(), schema->cf_name()));
+    } catch (...) {
+        on_fatal_internal_error(dblog, format("tables_metadata::remove_cf: {}", std::current_exception()));
+    }
+}
+
+table& database::tables_metadata::get_table(table_id id) const {
+    return *_column_families.at(id);
+}
+
+table_id database::tables_metadata::get_table_id(const std::pair<std::string_view, std::string_view>& kscf) const {
+    return _ks_cf_to_uuid.at(kscf);
+}
+
+lw_shared_ptr<table> database::tables_metadata::get_table_if_exists(table_id id) const {
+    if (auto it = _column_families.find(id); it != _column_families.end()) {
+        return it->second;
+    }
+    return nullptr;
+}
+
+table_id database::tables_metadata::get_table_id_if_exists(const std::pair<std::string_view, std::string_view>& kscf) const {
+    if (auto it = _ks_cf_to_uuid.find(kscf); it != _ks_cf_to_uuid.end()) {
+        return it->second;
+    }
+    return table_id::create_null_id();
+}
+
+bool database::tables_metadata::contains(table_id id) const {
+    return _column_families.contains(id);
+}
+
+bool database::tables_metadata::contains(std::pair<std::string_view, std::string_view> kscf) const {
+    return _ks_cf_to_uuid.contains(kscf);
+}
+
+void database::tables_metadata::for_each_table(std::function<void(table_id, lw_shared_ptr<table>)> f) const {
+    for (auto& [id, table]: _column_families) {
+        f(id, table);
+    }
+}
+
+void database::tables_metadata::for_each_table_id(std::function<void(const ks_cf_t&, table_id)> f) const {
+    for (auto& [kscf, id]: _ks_cf_to_uuid) {
+        f(kscf, id);
+    }
+}
+
+future<> database::tables_metadata::for_each_table_gently(std::function<future<>(table_id, lw_shared_ptr<table>)> f) {
+    auto holder = co_await _cf_lock.hold_read_lock();
+    for (auto& [id, table]: _column_families) {
+        co_await f(id, table);
+    }
+}
+
+future<> database::tables_metadata::parallel_for_each_table(std::function<future<>(table_id, lw_shared_ptr<table>)> f) {
+    auto holder = co_await _cf_lock.hold_read_lock();
+    co_await coroutine::parallel_for_each(_column_families, [f = std::move(f)] (auto& table) {
+        return f(table.first, table.second);
+    });
+}
+
+const std::unordered_map<table_id, lw_shared_ptr<table>> database::tables_metadata::get_column_families_copy() const {
+    return _column_families;
 }
 
 data_dictionary::database

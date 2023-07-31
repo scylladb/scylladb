@@ -23,7 +23,7 @@ namespace api {
 void set_column_family(http_context& ctx, httpd::routes& r, sharded<db::system_keyspace>& sys_ks);
 void unset_column_family(http_context& ctx, httpd::routes& r);
 
-const table_id& get_uuid(const sstring& name, const replica::database& db);
+table_id get_uuid(const sstring& name, const replica::database& db);
 future<> foreach_column_family(http_context& ctx, const sstring& name, std::function<void(replica::column_family&)> f);
 
 
@@ -68,9 +68,10 @@ struct map_reduce_column_families_locally {
     std::function<std::unique_ptr<std::any>(std::unique_ptr<std::any>, std::unique_ptr<std::any>)> reducer;
     future<std::unique_ptr<std::any>> operator()(replica::database& db) const {
         auto res = seastar::make_lw_shared<std::unique_ptr<std::any>>(std::make_unique<std::any>(init));
-        return do_for_each(db.get_column_families(), [res, this](const std::pair<table_id, seastar::lw_shared_ptr<replica::table>>& i) {
-            *res = reducer(std::move(*res), mapper(*i.second.get()));
-        }).then([res] {
+        return db.get_tables_metadata().for_each_table_gently([res, this] (table_id, seastar::lw_shared_ptr<replica::table> table) {
+            *res = reducer(std::move(*res), mapper(*table.get()));
+            return make_ready_future();
+        }).then([res] () {
             return std::move(*res);
         });
     }

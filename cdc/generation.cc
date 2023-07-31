@@ -641,21 +641,21 @@ future<> generation_service::maybe_rewrite_streams_descriptions() {
 
     // For each CDC log table get the TTL setting (from CDC options) and the table's creation time
     std::vector<time_and_ttl> times_and_ttls;
-    for (auto& [_, cf] : _db.get_column_families()) {
-        auto& s = *cf->schema();
+    _db.get_tables_metadata().for_each_table([&] (table_id, lw_shared_ptr<replica::table> t) {
+        auto& s = *t->schema();
         auto base = cdc::get_base_table(_db, s.ks_name(), s.cf_name());
         if (!base) {
             // Not a CDC log table.
-            continue;
+            return;
         }
         auto& cdc_opts = base->cdc_options();
         if (!cdc_opts.enabled()) {
             // This table is named like a CDC log table but it's not one.
-            continue;
+            return;
         }
 
         times_and_ttls.push_back(time_and_ttl{as_timepoint(s.id().uuid()), cdc_opts.ttl()});
-    }
+    });
 
     if (times_and_ttls.empty()) {
         // There's no point in rewriting old generations' streams (they don't contain any data).

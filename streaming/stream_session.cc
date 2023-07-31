@@ -464,15 +464,15 @@ std::vector<replica::column_family*> stream_session::get_column_family_stores(co
     std::vector<replica::column_family*> stores;
     auto& db = manager().db();
     if (column_families.empty()) {
-        for (auto& x : db.get_column_families()) {
-            replica::column_family& cf = *(x.second);
+        db.get_tables_metadata().for_each_table([&] (table_id, lw_shared_ptr<replica::table> tp) {
+            replica::column_family& cf = *tp;
             auto cf_name = cf.schema()->cf_name();
             auto ks_name = cf.schema()->ks_name();
             if (ks_name == keyspace) {
                 sslog.debug("Find ks={} cf={}", ks_name, cf_name);
                 stores.push_back(&cf);
             }
-        }
+        });
     } else {
         // TODO: We can move this to database class and use shared_ptr<column_family> instead
         for (auto& cf_name : column_families) {

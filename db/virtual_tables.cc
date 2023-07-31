@@ -283,13 +283,13 @@ public:
             const auto snapshots_by_tables = co_await _db.map_reduce(snapshot_reducer(), [ks_name_ = ks_data.name] (replica::database& db) mutable -> future<snapshots_by_tables_map> {
                 auto ks_name = std::move(ks_name_);
                 snapshots_by_tables_map snapshots_by_tables;
-                for (auto& [_, table] : db.get_column_families()) {
+                co_await db.get_tables_metadata().for_each_table_gently(coroutine::lambda([&] (table_id, lw_shared_ptr<replica::table> table) -> future<> {
                     if (table->schema()->ks_name() != ks_name) {
-                        continue;
+                        co_return;
                     }
                     const auto unordered_snapshots = co_await table->get_snapshot_details();
                     snapshots_by_tables.emplace(table->schema()->cf_name(), std::map<sstring, replica::table::snapshot_details>(unordered_snapshots.begin(), unordered_snapshots.end()));
-                }
+                }));
                 co_return snapshots_by_tables;
             });
 
@@ -433,9 +433,9 @@ private:
         };
         co_return co_await _db.map_reduce(shard_reducer(reduce), [map, reduce] (replica::database& db) {
             T val = {};
-            for (auto& [_, table] : db.get_column_families()) {
+            db.get_tables_metadata().for_each_table([&] (table_id, lw_shared_ptr<replica::table> table) {
                val = reduce(val, map(*table));
-            }
+            });
             return val;
         });
     }
@@ -560,13 +560,13 @@ public:
                 res.total = occupancy.total_space();
                 res.free = occupancy.free_space();
                 res.entries = db.row_cache_tracker().partitions();
-                for (const auto& [_, t] : db.get_column_families()) {
+                db.get_tables_metadata().for_each_table([&] (table_id id, lw_shared_ptr<replica::table> t) {
                     auto& cache_stats = t->get_row_cache().stats();
                     res.hits += cache_stats.hits.count();
                     res.misses += cache_stats.misses.count();
                     res.hits_moving_average += cache_stats.hits.rate();
                     res.requests_moving_average += (cache_stats.hits.rate() + cache_stats.misses.rate());
-                }
+                });
                 return res;
             }, stats{}, stats::reduce).then([] (stats s) {
                 return std::vector<std::pair<sstring, sstring>>{

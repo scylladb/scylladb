@@ -78,9 +78,9 @@ void load_broadcaster::start_broadcasting() {
         llogger.debug("Disseminating load info ...");
         _done = _db.map_reduce0([](replica::database& db) {
             int64_t res = 0;
-            for (auto i : db.get_column_families()) {
-                res += i.second->get_stats().live_disk_space_used;
-            }
+            db.get_tables_metadata().for_each_table([&] (table_id, lw_shared_ptr<replica::table> table) {
+                res += table->get_stats().live_disk_space_used;
+            });
             return res;
         }, int64_t(0), std::plus<int64_t>()).then([this] (int64_t size) {
             return _gossiper.add_local_application_state(gms::application_state::LOAD,
@@ -137,7 +137,7 @@ future<lowres_clock::duration> cache_hitrate_calculator::recalculate_hitrates() 
     };
 
     auto cf_to_cache_hit_stats = [non_system_filter] (replica::database& db) {
-        return boost::copy_range<std::unordered_map<table_id, stat>>(db.get_column_families() | boost::adaptors::filtered(non_system_filter) |
+        return boost::copy_range<std::unordered_map<table_id, stat>>(db.get_tables_metadata().filter(non_system_filter) |
                 boost::adaptors::transformed([]  (const std::pair<table_id, lw_shared_ptr<replica::column_family>>& cf) {
             auto& stats = cf.second->get_row_cache().stats();
             return std::make_pair(cf.first, stat{float(stats.reads_with_no_misses.rate().rates[0]), float(stats.reads_with_misses.rate().rates[0])});
@@ -159,11 +159,11 @@ future<lowres_clock::duration> cache_hitrate_calculator::recalculate_hitrates() 
         // set calculated rates on all shards
         return _db.invoke_on_all([this, cpuid = this_shard_id()] (replica::database& db) {
             return do_for_each(_rates, [this, cpuid, &db] (auto&& r) mutable {
-                auto it = db.get_column_families().find(r.first);
-                if (it == db.get_column_families().end()) { // a table may be added before map/reduce completes and this code runs
+                auto cf_opt = db.get_tables_metadata().get_table_if_exists(r.first);
+                if (!cf_opt) { // a table may be added before map/reduce completes and this code runs
                     return;
                 }
-                auto& cf = *it;
+                auto& cf = cf_opt;
                 stat& s = r.second;
                 float rate = 0;
                 if (s.h) {
@@ -171,10 +171,10 @@ future<lowres_clock::duration> cache_hitrate_calculator::recalculate_hitrates() 
                 }
                 if (this_shard_id() == cpuid) {
                     // calculate max difference between old rate and new one for all cfs
-                    _diff = std::max(_diff, std::abs(float(cf.second->get_global_cache_hit_rate()) - rate));
-                    _gstate += format("{}.{}:{:0.6f};", cf.second->schema()->ks_name(), cf.second->schema()->cf_name(), rate);
+                    _diff = std::max(_diff, std::abs(float(cf->get_global_cache_hit_rate()) - rate));
+                    _gstate += format("{}.{}:{:0.6f};", cf->schema()->ks_name(), cf->schema()->cf_name(), rate);
                 }
-                cf.second->set_global_cache_hit_rate(cache_temperature(rate));
+                cf->set_global_cache_hit_rate(cache_temperature(rate));
             });
         });
     }).then([this] {

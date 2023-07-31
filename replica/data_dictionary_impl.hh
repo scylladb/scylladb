@@ -66,11 +66,11 @@ public:
     }
     virtual std::vector<data_dictionary::table> get_tables(data_dictionary::database db) const override {
         std::vector<data_dictionary::table> ret;
-        auto&& tables = unwrap(db).get_column_families();
-        ret.reserve(tables.size());
-        for (auto&& [uuid, cf] : tables) {
-            ret.push_back(wrap(*cf));
-        }
+        auto& tmd = unwrap(db).get_tables_metadata();
+        ret.reserve(tmd.size());
+        tmd.for_each_table([&] (table_id, const lw_shared_ptr<table> table) {
+            ret.push_back(wrap(*table));
+        });
         return ret;
     }
     virtual std::optional<data_dictionary::table> try_find_table(data_dictionary::database db, std::string_view ks, std::string_view table) const override {
