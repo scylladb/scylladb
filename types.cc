@@ -1516,6 +1516,9 @@ struct validate_visitor {
     void operator()(const reversed_type_impl& t) {
         visit(*t.underlying_type(), validate_visitor<View>{v});
     }
+    void operator()(const counter_type_impl&) {
+        visit(*long_type, validate_visitor<View>{v});
+    }
     void operator()(const abstract_type&) {}
     template <typename T> void operator()(const integer_type_impl<T>& t) {
         if (v.empty()) {
@@ -1766,6 +1769,7 @@ struct serialize_visitor {
     bytes::iterator& out;
     ;
     void operator()(const reversed_type_impl& t, const void* v) { return serialize(*t.underlying_type(), v, out); }
+    void operator()(const counter_type_impl& t, const void* v) { return serialize(*long_type, v, out); }
     template <typename T>
     void operator()(const integer_type_impl<T>& t, const typename integer_type_impl<T>::native_type* v1) {
         if (v1->empty()) {
@@ -1876,7 +1880,6 @@ struct serialize_visitor {
         out = std::copy_n(reinterpret_cast<const char*>(&u), sizeof(int32_t), out);
         serialize_varint(out, bd.unscaled_value());
     }
-    void operator()(const counter_type_impl& t, const void*) { fail(unimplemented::cause::COUNTERS); }
     void operator()(const duration_type_impl& t, const duration_type_impl::native_type* m) {
         if (m->empty()) {
             return;
@@ -2409,6 +2412,7 @@ size_t abstract_type::hash(managed_bytes_view v) const {
     struct visitor {
         managed_bytes_view v;
         size_t operator()(const reversed_type_impl& t) { return t.underlying_type()->hash(v); }
+        size_t operator()(const counter_type_impl&) { return long_type->hash(v); }
         size_t operator()(const abstract_type& t) { return std::hash<managed_bytes_view>()(v); }
         size_t operator()(const tuple_type_impl& t) {
             auto apply_hash = [] (auto&& type_value) {
@@ -2426,7 +2430,6 @@ size_t abstract_type::hash(managed_bytes_view v) const {
         size_t operator()(const decimal_type_impl& t) {
             return std::hash<sstring>()(with_linearized(v, [&] (bytes_view bv) { return t.to_string(bv); }));
         }
-        size_t operator()(const counter_type_impl&) { fail(unimplemented::cause::COUNTERS); }
         size_t operator()(const empty_type_impl&) { return 0; }
     };
     return visit(*this, visitor{v});
@@ -2494,6 +2497,7 @@ static size_t serialized_size(const abstract_type& t, const void* value);
 namespace {
 struct serialized_size_visitor {
     size_t operator()(const reversed_type_impl& t, const void* v) { return serialized_size(*t.underlying_type(), v); }
+    size_t operator()(const counter_type_impl&, const void* v) { return serialized_size(*long_type, v); }
     size_t operator()(const empty_type_impl&, const void*) { return 0; }
     template <typename T>
     size_t operator()(const concrete_type<T>& t, const typename concrete_type<T>::native_type* v) {
@@ -2502,7 +2506,6 @@ struct serialized_size_visitor {
         }
         return concrete_serialized_size(*v);
     }
-    size_t operator()(const counter_type_impl&, const void*) { fail(unimplemented::cause::COUNTERS); }
     size_t operator()(const map_type_impl& t, const map_type_impl::native_type* v) { return map_serialized_size(v); }
     size_t operator()(const concrete_type<std::vector<data_value>, listlike_collection_type_impl>& t,
             const std::vector<data_value>* v) {
@@ -2555,6 +2558,7 @@ namespace {
 struct from_string_visitor {
     sstring_view s;
     bytes operator()(const reversed_type_impl& r) { return r.underlying_type()->from_string(s); }
+    bytes operator()(const counter_type_impl&) { return long_type->from_string(s); }
     template <typename T> bytes operator()(const integer_type_impl<T>& t) { return decompose_value(parse_int(t, s)); }
     bytes operator()(const ascii_type_impl&) {
         auto bv = bytes_view(reinterpret_cast<const int8_t*>(s.begin()), s.size());
@@ -2644,10 +2648,6 @@ struct from_string_visitor {
         } catch (...) {
             throw marshal_exception(format("unable to make BigDecimal from '{}'", s));
         }
-    }
-    bytes operator()(const counter_type_impl&) {
-        fail(unimplemented::cause::COUNTERS);
-        return bytes();
     }
     bytes operator()(const duration_type_impl& t) {
         if (s.empty()) {
@@ -2739,7 +2739,6 @@ struct to_string_impl_visitor {
     sstring operator()(const boolean_type_impl& b, const boolean_type_impl::native_type* v) {
         return format_if_not_empty(b, v, boolean_to_string);
     }
-    sstring operator()(const counter_type_impl& c, const void*) { fail(unimplemented::cause::COUNTERS); }
     sstring operator()(const timestamp_date_base_class& d, const timestamp_date_base_class::native_type* v) {
         return format_if_not_empty(d, v, [] (const db_clock::time_point& v) { return time_point_to_string(v); });
     }
@@ -2765,6 +2764,7 @@ struct to_string_impl_visitor {
                 m, v, [&m] (const map_type_impl::native_type& v) { return map_to_string(v, !m.is_multi_cell()); });
     }
     sstring operator()(const reversed_type_impl& r, const void* v) { return to_string_impl(*r.underlying_type(), v); }
+    sstring operator()(const counter_type_impl& c, const void* v) { return to_string_impl(*long_type, v); }
     sstring operator()(const simple_date_type_impl& s, const simple_date_type_impl::native_type* v) {
         return format_if_not_empty(s, v, simple_date_to_string);
     }
@@ -2923,11 +2923,13 @@ struct native_value_clone_visitor {
     void* operator()(const reversed_type_impl& t) {
         return visit(*t.underlying_type(), native_value_clone_visitor{from});
     }
+    void* operator()(const counter_type_impl& t) {
+        return visit(*long_type, native_value_clone_visitor{from});
+    }
     template <typename N, typename A> void* operator()(const concrete_type<N, A>&) {
         using nt = typename concrete_type<N, A>::native_type;
         return new nt(*reinterpret_cast<const nt*>(from));
     }
-    void* operator()(const counter_type_impl&) { fail(unimplemented::cause::COUNTERS); }
     void* operator()(const empty_type_impl&) {
         // Can't happen
         abort();
@@ -2948,7 +2950,9 @@ struct native_value_delete_visitor {
     void operator()(const reversed_type_impl& t) {
         return visit(*t.underlying_type(), native_value_delete_visitor{object});
     }
-    void operator()(const counter_type_impl&) { fail(unimplemented::cause::COUNTERS); }
+    void operator()(const counter_type_impl& t) {
+        return visit(*long_type, native_value_delete_visitor{object});
+    }
     void operator()(const empty_type_impl&) {
         // Can't happen
         abort();
@@ -2968,7 +2972,9 @@ struct native_typeid_visitor {
     const std::type_info& operator()(const reversed_type_impl& t) {
         return visit(*t.underlying_type(), native_typeid_visitor{});
     }
-    const std::type_info& operator()(const counter_type_impl&) { fail(unimplemented::cause::COUNTERS); }
+    const std::type_info& operator()(const counter_type_impl& t) {
+        return visit(*long_type, native_typeid_visitor{});
+    }
     const std::type_info& operator()(const empty_type_impl&) {
         // Can't happen
         abort();
