@@ -1700,7 +1700,6 @@ class topology_coordinator {
                 case node_state::bootstrapping: {
                     topology_mutation_builder builder(node.guard.write_timestamp());
                     builder.del_transition_state()
-                           .set_version(_topo_sm._topology.version + 1)
                            .with_node(node.id)
                            .set("node_state", node_state::normal);
                     co_await update_topology_state(take_guard(std::move(node)), {builder.build()},
