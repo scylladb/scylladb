@@ -244,7 +244,7 @@ def testCastsWithReverseOrder(cql, test_keyspace):
                 #assertRows(execute(cql, table, "SELECT CAST(" + f + "(CAST(b AS int)) AS text) FROM %s"),
         #           row("2.0"))
 
-@pytest.mark.xfail(reason="issue #14501")
+# Reproduces #14501:
 def testCounterCastsInSelectionClause(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int primary key, b counter)") as table:
         execute(cql, table, "UPDATE %s SET b = b + 2 WHERE a = 1")
