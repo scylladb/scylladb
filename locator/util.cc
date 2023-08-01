@@ -94,6 +94,16 @@ get_range_to_address_map(locator::effective_replication_map_ptr erm) {
     return get_range_to_address_map(erm, erm->get_token_metadata_ptr()->sorted_tokens());
 }
 
+// Workaround for a clang bug. The fmt::to_string() call inside coroutine
+// frame gets miscompiled on ARM.
+// The workaround is to move the call out of the coroutine.
+//
+// See scylladb/scylladb#14412 for details.
+[[gnu::noinline]]
+static std::string format_host(const gms::inet_address& addr) {
+    return fmt::to_string(addr);
+}
+
 future<std::vector<dht::token_range_endpoints>>
 describe_ring(const replica::database& db, const gms::gossiper& gossiper, const sstring& keyspace, bool include_only_local_dc) {
     std::vector<dht::token_range_endpoints> ranges;
@@ -123,7 +133,7 @@ describe_ring(const replica::database& db, const gms::gossiper& gossiper, const 
             details._datacenter = topology.get_datacenter(endpoint);
             details._rack = topology.get_rack(endpoint);
             tr._rpc_endpoints.push_back(gossiper.get_rpc_address(endpoint));
-            tr._endpoints.push_back(fmt::to_string(details._host));
+            tr._endpoints.push_back(format_host(details._host));
             tr._endpoint_details.push_back(details);
         }
         ranges.push_back(tr);
