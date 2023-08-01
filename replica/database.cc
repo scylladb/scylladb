@@ -2482,15 +2482,32 @@ future<> database::flush_table_on_all_shards(sharded<database>& sharded_db, std:
 }
 
 future<> database::flush_tables_on_all_shards(sharded<database>& sharded_db, std::string_view ks_name, std::vector<sstring> table_names) {
-    return parallel_for_each(table_names, [&, ks_name] (const auto& table_name) {
-        return flush_table_on_all_shards(sharded_db, ks_name, table_name);
+    /**
+     * #14870 
+     * To ensure tests which use nodetool flush to force data
+     * to sstables and do things post this get what they expect,
+     * we do an extra call here and below, asking commitlog
+     * to discard the currently active segment, This ensures we get 
+     * as sstable-ish a universe as we can, as soon as we can.
+    */
+    return sharded_db.invoke_on_all([] (replica::database& db) {
+        return db._commitlog->force_new_active_segment();
+    }).then([&, ks_name, table_names = std::move(table_names)] {
+        return parallel_for_each(table_names, [&, ks_name] (const auto& table_name) {
+            return flush_table_on_all_shards(sharded_db, ks_name, table_name);
+        });
     });
 }
 
 future<> database::flush_keyspace_on_all_shards(sharded<database>& sharded_db, std::string_view ks_name) {
-    auto& ks = sharded_db.local().find_keyspace(ks_name);
-    return parallel_for_each(ks.metadata()->cf_meta_data(), [&] (auto& pair) {
-        return flush_table_on_all_shards(sharded_db, pair.second->id());
+    // see above
+    return sharded_db.invoke_on_all([] (replica::database& db) {
+        return db._commitlog->force_new_active_segment();
+    }).then([&, ks_name] {
+        auto& ks = sharded_db.local().find_keyspace(ks_name);
+        return parallel_for_each(ks.metadata()->cf_meta_data(), [&] (auto& pair) {
+            return flush_table_on_all_shards(sharded_db, pair.second->id());
+        });
     });
 }
 
