@@ -470,7 +470,8 @@ protected:
     state _state = state::none;
 
 private:
-    shared_future<compaction_manager::compaction_stats_opt> _compaction_done = make_ready_future<compaction_manager::compaction_stats_opt>();
+    promise<compaction_manager::compaction_stats_opt> _compaction_done_promise;
+    shared_future<compaction_manager::compaction_stats_opt> _compaction_done = _compaction_done_promise.get_future();
     exponential_backoff_retry _compaction_retry = exponential_backoff_retry(std::chrono::seconds(5), std::chrono::seconds(300));
     sstables::compaction_type _type;
     sstables::run_id _output_run_identifier;
@@ -524,6 +525,8 @@ protected:
         return ct == sstables::compaction_type::Compaction;
     }
 public:
+    void fail_exceptionally(std::exception_ptr ex) noexcept;
+
     future<compaction_manager::compaction_stats_opt> run_compaction() noexcept;
 
     const ::compaction::table_state* compacting_table() const noexcept {

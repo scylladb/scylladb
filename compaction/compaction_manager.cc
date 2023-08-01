@@ -547,21 +547,26 @@ requires (compaction_manager& cm, Args&&... args) {
 }
 future<compaction_manager::compaction_stats_opt> compaction_manager::perform_compaction(throw_if_stopping do_throw_if_stopping, std::optional<tasks::task_info> parent_info, Args&&... args) {
     auto task_executor = seastar::make_shared<TaskExecutor>(*this, std::forward<Args>(args)...);
-    gate::holder gate_holder = task_executor->_compaction_state.gate.hold();
-    _tasks.push_back(task_executor);
-    auto unregister_task = defer([this, task_executor] {
-        _tasks.remove(task_executor);
-        task_executor->switch_state(compaction_task_executor::state::none);
-        task_executor->release_resources();
-    });
+    try {
+        gate::holder gate_holder = task_executor->_compaction_state.gate.hold();
+        _tasks.push_back(task_executor);
+        auto unregister_task = defer([this, task_executor] {
+            _tasks.remove(task_executor);
+            task_executor->switch_state(compaction_task_executor::state::none);
+            task_executor->release_resources();
+        });
 
-    if (parent_info) {
-        auto task = co_await get_task_manager_module().make_task(task_executor, parent_info.value());
-        task->start();
-        // We do not need to wait for the task to be done as compaction_task_executor side will take care of that.
+        if (parent_info) {
+            auto task = co_await get_task_manager_module().make_task(task_executor, parent_info.value());
+            task->start();
+            // We do not need to wait for the task to be done as compaction_task_executor side will take care of that.
+        }
+
+        co_return co_await perform_task(task_executor, do_throw_if_stopping);
+    } catch (...) {
+        task_executor->fail_exceptionally(std::current_exception());
+        throw;
     }
-
-    co_return co_await perform_task(std::move(task_executor), do_throw_if_stopping);
 }
 
 future<> compaction_manager::perform_major_compaction(table_state& t, std::optional<tasks::task_info> info) {
@@ -726,9 +731,15 @@ void sstables_task_executor::release_resources() noexcept {
     compaction_task_executor::release_resources();
 }
 
+void compaction_task_executor::fail_exceptionally(std::exception_ptr ex) noexcept {
+    if (!_compaction_done.available()) {
+        _compaction_done_promise.set_exception(std::move(ex));
+    }
+}
+
 future<compaction_manager::compaction_stats_opt> compaction_task_executor::run_compaction() noexcept {
     try {
-        _compaction_done = do_run();
+        do_run().forward_to(std::move(_compaction_done_promise));
         return compaction_done();
     } catch (...) {
         return current_exception_as_future<compaction_manager::compaction_stats_opt>();
