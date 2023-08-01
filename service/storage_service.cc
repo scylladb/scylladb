@@ -1032,6 +1032,20 @@ class topology_coordinator {
         slogger.info("raft topology: node {} removed from group 0 configuration", id);
     }
 
+    future<> step_down_as_nonvoter() {
+        // Become a nonvoter which triggers a leader stepdown.
+        co_await _group0.become_nonvoter();
+        if (_raft.is_leader()) {
+            co_await _raft.wait_for_state_change(&_as);
+        }
+
+        // throw term_changed_error so we leave the coordinator loop instead of trying another
+        // read_barrier which may fail with an (harmless, but unnecessary and annoying) error
+        // telling us we're not in the configuration anymore (we'll get removed by the new
+        // coordinator)
+        throw term_changed_error{};
+    }
+
     struct bootstrapping_info {
         const std::unordered_set<token>& bootstrap_tokens;
         const replica_state& rs;
@@ -1672,17 +1686,7 @@ class topology_coordinator {
                     // Someone else needs to coordinate the rest of the decommission process,
                     // because the decommissioning node is going to shut down in the middle of this state.
                     slogger.info("raft topology: coordinator is decommissioning; giving up leadership");
-                    // Become a nonvoter which triggers a leader stepdown.
-                    co_await _group0.become_nonvoter();
-                    if (_raft.is_leader()) {
-                        co_await _raft.wait_for_state_change(&_as);
-                    }
-
-                    // throw term_changed_error so we leave the coordinator loop instead of trying another
-                    // read_barrier which may fail with an (harmless, but unnecessary and annoying) error
-                    // telling us we're not in the configuration anymore (we'll get removed by the new
-                    // coordinator)
-                    throw term_changed_error{};
+                    co_await step_down_as_nonvoter();
 
                     // Note: if we restart after this point and become a voter
                     // and then a coordinator again, it's fine - we'll just repeat this step.
