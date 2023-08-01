@@ -949,33 +949,32 @@ future<> repair::shard_repair_task_impl::do_repair_ranges() {
         // repair all the ranges in limited parallelism
         rlogger.info("repair[{}]: Started to repair {} out of {} tables in keyspace={}, table={}, table_id={}, repair_reason={}",
                 global_repair_id.uuid(), idx + 1, table_ids.size(), _status.keyspace, table_name, table_id, _reason);
-        co_await coroutine::parallel_for_each(ranges, [this, table_id] (auto&& range) {
-            return with_semaphore(rs.get_repair_module().range_parallelism_semaphore(), 1, [this, &range, table_id] {
-                return repair_range(range, table_id).then([this] {
-                    if (_reason == streaming::stream_reason::bootstrap) {
-                        rs.get_metrics().bootstrap_finished_ranges++;
-                    } else if (_reason == streaming::stream_reason::replace) {
-                        rs.get_metrics().replace_finished_ranges++;
-                    } else if (_reason == streaming::stream_reason::rebuild) {
-                        rs.get_metrics().rebuild_finished_ranges++;
-                    } else if (_reason == streaming::stream_reason::decommission) {
-                        rs.get_metrics().decommission_finished_ranges++;
-                    } else if (_reason == streaming::stream_reason::removenode) {
-                        rs.get_metrics().removenode_finished_ranges++;
-                    } else if (_reason == streaming::stream_reason::repair) {
-                        rs.get_metrics().repair_finished_ranges_sum++;
-                        nr_ranges_finished++;
-                    }
-                    rlogger.debug("repair[{}]: node ops progress bootstrap={}, replace={}, rebuild={}, decommission={}, removenode={}, repair={}",
-                        global_repair_id.uuid(),
-                        rs.get_metrics().bootstrap_finished_percentage(),
-                        rs.get_metrics().replace_finished_percentage(),
-                        rs.get_metrics().rebuild_finished_percentage(),
-                        rs.get_metrics().decommission_finished_percentage(),
-                        rs.get_metrics().removenode_finished_percentage(),
-                        rs.get_metrics().repair_finished_percentage());
-                });
-            });
+        co_await coroutine::parallel_for_each(ranges, [this, table_id] (auto&& range) -> future<> {
+            // Get the system range parallelism
+            auto permit = co_await seastar::get_units(rs.get_repair_module().range_parallelism_semaphore(), 1);
+            co_await repair_range(range, table_id);
+            if (_reason == streaming::stream_reason::bootstrap) {
+                rs.get_metrics().bootstrap_finished_ranges++;
+            } else if (_reason == streaming::stream_reason::replace) {
+                rs.get_metrics().replace_finished_ranges++;
+            } else if (_reason == streaming::stream_reason::rebuild) {
+                rs.get_metrics().rebuild_finished_ranges++;
+            } else if (_reason == streaming::stream_reason::decommission) {
+                rs.get_metrics().decommission_finished_ranges++;
+            } else if (_reason == streaming::stream_reason::removenode) {
+                rs.get_metrics().removenode_finished_ranges++;
+            } else if (_reason == streaming::stream_reason::repair) {
+                rs.get_metrics().repair_finished_ranges_sum++;
+                nr_ranges_finished++;
+            }
+            rlogger.debug("repair[{}]: node ops progress bootstrap={}, replace={}, rebuild={}, decommission={}, removenode={}, repair={}",
+                global_repair_id.uuid(),
+                rs.get_metrics().bootstrap_finished_percentage(),
+                rs.get_metrics().replace_finished_percentage(),
+                rs.get_metrics().rebuild_finished_percentage(),
+                rs.get_metrics().decommission_finished_percentage(),
+                rs.get_metrics().removenode_finished_percentage(),
+                rs.get_metrics().repair_finished_percentage());
         });
 
         if (_reason != streaming::stream_reason::repair) {
