@@ -3,8 +3,8 @@ import sys
 # Use the util.py library from ../cql-pytest:
 sys.path.insert(1, sys.path[0] + '/../cql-pytest')
 from util import new_test_table, new_test_keyspace
-from rest_util import set_tmp_task_ttl
-from task_manager_utils import wait_for_task, list_tasks, check_child_parent_relationship, drain_module_tasks
+from rest_util import set_tmp_task_ttl, scylla_inject_error
+from task_manager_utils import wait_for_task, list_tasks, check_child_parent_relationship, drain_module_tasks, abort_task
 
 module_name = "compaction"
 long_time = 1000000000
@@ -87,4 +87,35 @@ def test_regular_compaction_task(cql, this_dc, rest_api):
 
                 failed = [status["task_id"] for status in statuses if status["state"] != "done"]
                 assert not failed, f"Regular compaction tasks with ids = {failed} failed"
+    drain_module_tasks(rest_api, module_name)
+
+def test_running_compaction_task_abort(cql, this_dc, rest_api):
+    drain_module_tasks(rest_api, module_name)
+    with set_tmp_task_ttl(rest_api, long_time):
+        with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 1 }}") as keyspace:
+            schema = 'p int, v text, primary key (p)'
+            with new_test_table(cql, keyspace, schema) as t0:
+                stmt = cql.prepare(f"INSERT INTO {t0} (p, v) VALUES (?, ?)")
+                cql.execute(stmt, [0, 'hello'])
+                cql.execute(stmt, [1, 'world'])
+
+                injection = "compaction_regular_compaction_task_executor_do_run"
+                with scylla_inject_error(rest_api, injection, True):
+                    [_, table] = t0.split(".")
+                    resp = rest_api.send("POST", f"column_family/autocompaction/{keyspace}:{table}")
+                    resp.raise_for_status()
+
+                    tasks = [task for task in list_tasks(rest_api, module_name, False, keyspace, table) if task["type"] == "regular compaction"]
+                    assert tasks, "Compaction task was not created"
+
+                    for task in tasks:
+                        abort_task(rest_api, task["task_id"])
+
+                    resp = rest_api.send("POST", f"v2/error_injection/injection/{injection}/message")
+                    resp.raise_for_status()
+
+                    statuses = [wait_for_task(rest_api, task["task_id"]) for task in tasks]
+                    aborted = [status for status in statuses if "abort requested" in status["error"]]
+                    assert aborted, "Task wasn't aborted by user"
+                    assert all([status["state"] == "failed" for status in aborted]), "Task finished successfully"
     drain_module_tasks(rest_api, module_name)
