@@ -789,6 +789,8 @@ class topology_coordinator {
 
     std::chrono::milliseconds _ring_delay;
 
+    using drop_guard_and_retake = bool_class<class retake_guard_tag>;
+
     const locator::token_metadata& get_token_metadata() const noexcept {
         return *_shared_tm.get();
     }
@@ -992,27 +994,31 @@ class topology_coordinator {
 
     future<group0_guard> exec_global_command(
             group0_guard guard, const raft_topology_cmd& cmd,
-            const utils::small_vector<raft::server_id, 2>& exclude_nodes) {
+            const utils::small_vector<raft::server_id, 2>& exclude_nodes,
+            drop_guard_and_retake drop_and_retake = drop_guard_and_retake::yes) {
         auto nodes = _topo_sm._topology.normal_nodes | boost::adaptors::filtered(
                 [&exclude_nodes] (const std::pair<const raft::server_id, replica_state>& n) {
                     return std::none_of(exclude_nodes.begin(), exclude_nodes.end(),
                             [&n] (const raft::server_id& m) { return n.first == m; });
                 }) | boost::adaptors::map_keys;
-        {
-            // release guard
-            auto _ = std::move(guard);
+        if (drop_and_retake) {
+            release_guard(std::move(guard));
         }
         co_await exec_global_command_helper(std::move(nodes), cmd);
-        co_return co_await start_operation();
+        if (drop_and_retake) {
+            guard = co_await start_operation();
+        }
+        co_return guard;
     }
 
     future<node_to_work_on> exec_global_command(
-            node_to_work_on&& node, const raft_topology_cmd& cmd, bool include_local) {
+            node_to_work_on&& node, const raft_topology_cmd& cmd, bool include_local,
+            drop_guard_and_retake do_retake = drop_guard_and_retake::yes) {
         utils::small_vector<raft::server_id, 2> exclude_nodes{parse_replaced_node(node)};
         if (!include_local) {
             exclude_nodes.push_back(_raft.id());
         }
-        auto guard = co_await exec_global_command(std::move(node.guard), cmd, exclude_nodes);
+        auto guard = co_await exec_global_command(std::move(node.guard), cmd, exclude_nodes, do_retake);
         co_return retake_node(std::move(guard), node.id);
     };
 
