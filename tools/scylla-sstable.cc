@@ -853,7 +853,7 @@ public:
     virtual bool tombstone_gc_enabled() const noexcept override { return false; }
     virtual const tombstone_gc_state& get_tombstone_gc_state() const noexcept override { return _tombstone_gc_state; }
     virtual compaction_backlog_tracker& get_backlog_tracker() override { return _backlog_tracker; }
-    virtual const std::string& get_group_id() const noexcept override { return _group_id; }
+    virtual const std::string get_group_id() const noexcept override { return _group_id; }
     virtual seastar::condition_variable& get_staging_done_condition() noexcept override { return _staging_done_condition; }
 };
 
