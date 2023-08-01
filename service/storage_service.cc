@@ -487,7 +487,7 @@ future<> storage_service::topology_transition(cdc::generation_service& cdc_gen_s
     assert(this_shard_id() == 0);
     co_await topology_state_load(cdc_gen_svc); // reload new state
 
-    _topology_state_machine.event.signal();
+    _topology_state_machine.event.broadcast();
 }
 
 future<> storage_service::merge_topology_snapshot(raft_topology_snapshot snp) {
@@ -1141,9 +1141,13 @@ class topology_coordinator {
             guard = std::move(guard_);
 
             topology_mutation_builder builder(guard.write_timestamp());
+            // We don't delete the request now, but only after the generation is committed. If we deleted
+            // the request now and received another new_cdc_generation request later, but before committing
+            // the new generation, the second request would also create a new generation. Deleting requests
+            // after the generation is committed prevents this from happening. The second request would have
+            // no effect - it would just overwrite the first request.
             builder.set_transition_state(topology::transition_state::commit_cdc_generation)
-                   .set_new_cdc_generation_data_uuid(gen_uuid)
-                   .del_global_topology_request();
+                   .set_new_cdc_generation_data_uuid(gen_uuid);
             auto reason = ::format(
                 "insert CDC generation data (UUID: {})", gen_uuid);
             co_await update_topology_state(std::move(guard), {std::move(mutation), builder.build()}, reason);
@@ -1486,6 +1490,9 @@ class topology_coordinator {
                 builder.set_transition_state(topology::transition_state::publish_cdc_generation)
                        .set_current_cdc_generation_id(cdc_gen_id)
                        .set_version(_topo_sm._topology.version + 1);
+                if (_topo_sm._topology.global_request == global_topology_request::new_cdc_generation) {
+                    builder.del_global_topology_request();
+                }
                 auto str = ::format("committed new CDC generation, ID: {}", cdc_gen_id);
                 co_await update_topology_state(std::move(guard), {builder.build()}, std::move(str));
             }
@@ -1870,7 +1877,7 @@ future<> topology_coordinator::run() {
     slogger.info("raft topology: start topology coordinator fiber");
 
     auto abort = _as.subscribe([this] () noexcept {
-        _topo_sm.event.signal();
+        _topo_sm.event.broadcast();
     });
 
     while (!_as.abort_requested()) {
@@ -4929,8 +4936,16 @@ future<> storage_service::raft_check_and_repair_cdc_streams() {
         }
 
         curr_gen = _topology_state_machine._topology.current_cdc_generation_id;
-
-        // FIXME: check if the current generation is optimal, don't request new one if it isn't
+        if (!curr_gen) {
+            slogger.error("check_and_repair_cdc_streams: no current CDC generation, requesting a new one.");
+        } else {
+            auto gen = co_await _sys_ks.local().read_cdc_generation(curr_gen->id);
+            if (cdc::is_cdc_generation_optimal(gen, get_token_metadata())) {
+                cdc_log.info("CDC generation {} does not need repair", curr_gen);
+                co_return;
+            }
+            cdc_log.info("CDC generation {} needs repair, requesting a new one", curr_gen);
+        }
 
         topology_mutation_builder builder(guard.write_timestamp());
         builder.set_global_topology_request(global_topology_request::new_cdc_generation);
@@ -4947,7 +4962,6 @@ future<> storage_service::raft_check_and_repair_cdc_streams() {
     }
 
     // Wait until the current CDC generation changes.
-    // This might happen due to a different reason than our request but we don't care.
     co_await _topology_state_machine.event.when([this, &curr_gen] {
         return curr_gen != _topology_state_machine._topology.current_cdc_generation_id;
     });
