@@ -2805,7 +2805,53 @@ public:
         return _t.is_auto_compaction_disabled_by_user();
     }
     bool tombstone_gc_enabled() const noexcept override {
-        return _t._tombstone_gc_enabled;
+        /**
+         * #14870 - block our GC iff there is potential data
+         * left in commitlog that could cause resurrections
+         * on crash+replay.
+         * 
+         * We take a pessimistic approach and check for lowest
+         * rp still left in CL, and if any sstable we process 
+         * has high RP higher or equal than this, we must 
+         * block GC for now.
+         * 
+         * Note: this messes with several tests for compaction
+         * that expect a flush + compaction + check for data to
+         * have done GC already. See database.cc for workaround
+         * for this. 
+        */
+        if (!_t._tombstone_gc_enabled) {
+            return false;
+        }
+        auto cl = _t.commitlog();
+        if (!cl) {
+            return true;
+        }
+        auto lowrp = cl->lowest_active_table_rp(schema()->id());
+        if (!lowrp) {
+            return true;
+        }
+        bool ok = true;
+        auto check = [&](const shared_sstable& s) {
+            if (*lowrp <= s->get_stats_metadata().position) {
+                if (tlogger.is_enabled(log_level::debug)) {
+                    auto active = cl->active_cf_ids();
+                    tlogger.debug("GC blocked for {}:{} ({}). SSTable rp {} <= CL low mark {}",
+                        schema()->ks_name(), schema()->cf_name(), schema()->id(),
+                        s->get_stats_metadata().position, *lowrp
+                    );
+                    tlogger.debug("Active IDs (blocking): {}", active);
+                }
+
+                ok = false;
+                return stop_iteration::yes;
+            }
+            return stop_iteration::no;
+        };
+        if (main_sstable_set().for_each_sstable_until(check) == stop_iteration::no) {
+            maintenance_sstable_set().for_each_sstable_until(check);
+        }
+        return ok;
     }
     const tombstone_gc_state& get_tombstone_gc_state() const noexcept override {
         return _t.get_compaction_manager().get_tombstone_gc_state();
