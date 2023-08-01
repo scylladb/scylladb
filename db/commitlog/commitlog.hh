@@ -357,6 +357,10 @@ public:
     future<std::vector<sstring>> list_existing_segments() const;
     future<std::vector<sstring>> list_existing_segments(const sstring& dir) const;
 
+    std::optional<replay_position> lowest_active_table_rp(const cf_id_type&) const;
+    // debug only function
+    std::unordered_set<cf_id_type> active_cf_ids() const;
+
     typedef std::function<future<>(buffer_and_replay_position)> commit_load_reader_func;
 
     class segment_error : public std::exception {};

@@ -475,6 +475,9 @@ public:
     uint64_t get_num_dirty_segments() const;
     uint64_t get_num_active_segments() const;
 
+    std::optional<replay_position> lowest_active_table_rp(const cf_id_type& id) const;
+    std::unordered_set<cf_id_type> active_cf_ids() const;
+
     using buffer_type = fragmented_temporary_buffer;
 
     buffer_type acquire_buffer(size_t s, size_t align);
@@ -692,6 +695,7 @@ class db::commitlog::segment : public enable_shared_from_this<segment>, public c
     buffer_type _buffer;
     fragmented_temporary_buffer::ostream _buffer_ostream;
     std::unordered_map<cf_id_type, uint64_t> _cf_dirty;
+    std::unordered_set<cf_id_type> _cf_clean;
     time_point _sync_time;
     utils::flush_queue<replay_position, std::less<replay_position>, clock_type> _pending_ops;
 
@@ -1270,13 +1274,18 @@ public:
             i->second -= count;
             if (i->second == 0) {
                 _cf_dirty.erase(i);
+                _cf_clean.emplace(id);
             }
         }
     }
     void mark_clean(const cf_id_type& id) noexcept {
         _cf_dirty.erase(id);
+        _cf_clean.emplace(id);
     }
     void mark_clean() noexcept {
+        for (auto& p : _cf_dirty) {
+            _cf_clean.emplace(p.first);
+        }
         _cf_dirty.clear();
     }
     bool is_still_allocating() const noexcept {
@@ -1296,6 +1305,17 @@ public:
     }
     bool contains(const replay_position& pos) const noexcept {
         return pos.id == _desc.id;
+    }
+    std::optional<db::replay_position> lowest_active_table_rp(const cf_id_type& id) const {
+        if (_cf_dirty.count(id) || _cf_clean.count(id)) {
+            return replay_position(_desc.id);
+        }
+        return std::nullopt;
+    }
+    void add_active(std::unordered_set<cf_id_type>& dst) const {
+        for (auto& [id, ignore] : _cf_dirty) {
+            dst.emplace(id);
+        }
     }
     sstring get_segment_name() const {
         return _desc.filename();
@@ -2315,6 +2335,25 @@ uint64_t db::commitlog::segment_manager::get_num_active_segments() const {
     });
 }
 
+std::optional<db::replay_position> db::commitlog::segment_manager::lowest_active_table_rp(const cf_id_type& id) const {
+    std::optional<db::replay_position> res;
+    for (auto& s : _segments) {
+        auto pos = s->lowest_active_table_rp(id);
+        if (pos) {
+            res = std::min(res.value_or(*pos), *pos);
+        }
+    }
+    return res;
+}
+
+std::unordered_set<db::cf_id_type> db::commitlog::segment_manager::active_cf_ids() const {
+    std::unordered_set<cf_id_type> res;
+    for (auto& s : _segments) {
+        s->add_active(res);
+    }
+    return res;
+}
+
 temporary_buffer<char> db::commitlog::segment_manager::allocate_single_buffer(size_t s, size_t alignment) {
     return temporary_buffer<char>::aligned(alignment, s);
 }
@@ -2985,6 +3024,14 @@ future<std::vector<sstring>> db::commitlog::list_existing_segments(const sstring
         });
         return make_ready_future<std::vector<sstring>>(std::move(paths));
     });
+}
+
+std::optional<db::replay_position> db::commitlog::lowest_active_table_rp(const cf_id_type& id) const {
+    return _segment_manager->lowest_active_table_rp(id);
+}
+
+std::unordered_set<db::cf_id_type> db::commitlog::active_cf_ids() const {
+    return _segment_manager->active_cf_ids();
 }
 
 future<std::vector<sstring>> db::commitlog::get_segments_to_replay() const {
