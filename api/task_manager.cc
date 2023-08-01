@@ -176,7 +176,9 @@ void set_task_manager(http_context& ctx, routes& r) {
         auto task = co_await tasks::task_manager::invoke_on_task(ctx.tm, id, std::function([] (tasks::task_manager::task_ptr task) {
             return task->done().then_wrapped([task] (auto f) {
                 task->unregister_task();
-                f.get();
+                // done() is called only because we want the task to be complete before getting its status.
+                // The future should be ignored here as the result does not matter.
+                f.ignore_ready_future();
                 return make_foreign(task);
             });
         }));
