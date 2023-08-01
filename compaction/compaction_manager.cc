@@ -434,6 +434,9 @@ future<> compaction_manager::get_compaction_history(compaction_history_consumer&
     return _sys_ks->get_compaction_history(std::move(f)).finally([s = _sys_ks] {});
 }
 
+template<std::derived_from<compaction::compaction_task_executor> Executor>
+struct fmt::formatter<Executor> : fmt::formatter<compaction::compaction_task_executor> {};
+
 namespace compaction {
 
 class sstables_task_executor : public compaction_task_executor {
@@ -634,28 +637,38 @@ compaction_manager::run_with_compaction_disabled(table_state& t, std::function<f
     co_await func();
 }
 
-std::string_view compaction_task_executor::to_string(state s) {
+auto fmt::formatter<compaction::compaction_task_executor::state>::format(compaction::compaction_task_executor::state s,
+                                                                         fmt::format_context& ctx) const -> decltype(ctx.out()) {
+    std::string_view name;
     switch (s) {
-    case state::none: return "none";
-    case state::pending: return "pending";
-    case state::active: return "active";
-    case state::done: return "done";
-    case state::postponed: return "postponed";
-    case state::failed: return "failed";
+    using enum compaction::compaction_task_executor::state;
+    case none:
+        name = "none";
+        break;
+    case pending:
+        name = "pending";
+        break;
+    case active:
+        name = "active";
+        break;
+    case done:
+        name = "done";
+        break;
+    case postponed:
+        name = "postponed";
+        break;
+    case failed:
+        name = "failed";
+        break;
     }
-    __builtin_unreachable();
+    return fmt::format_to(ctx.out(), "{}", name);
 }
 
-namespace compaction {
-
-std::ostream& operator<<(std::ostream& os, compaction_task_executor::state s) {
-    return os << compaction_task_executor::to_string(s);
-}
-
-std::ostream& operator<<(std::ostream& os, const compaction_task_executor& task) {
-    return os << task.describe();
-}
-
+auto fmt::formatter<compaction::compaction_task_executor>::format(const compaction::compaction_task_executor& ex,
+                                                                  fmt::format_context& ctx) const -> decltype(ctx.out()) {
+    auto* t = ex._compacting_table;
+    return fmt::format_to(ctx.out(), "{} task {} for table {} [{}]",
+                          ex._description, fmt::ptr(&ex), *t, fmt::ptr(t));
 }
 
 inline compaction_controller make_compaction_controller(const compaction_manager::scheduling_group& csg, uint64_t static_shares, std::function<double()> fn) {
@@ -664,11 +677,6 @@ inline compaction_controller make_compaction_controller(const compaction_manager
 
 compaction::compaction_state::~compaction_state() {
     compaction_done.broken();
-}
-
-std::string compaction_task_executor::describe() const {
-    auto* t = _compacting_table;
-    return fmt::format("{} task {} for table {} [{}]", _description, fmt::ptr(this), *t, fmt::ptr(t));
 }
 
 sstables_task_executor::~sstables_task_executor() {
