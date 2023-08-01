@@ -22,6 +22,7 @@
 #include "sstables/exceptions.hh"
 #include "sstables/sstable_directory.hh"
 #include "locator/abstract_replication_strategy.hh"
+#include "utils/error_injection.hh"
 #include "utils/fb_utilities.hh"
 #include "utils/UUID_gen.hh"
 #include "db/system_keyspace.hh"
@@ -1188,6 +1189,9 @@ protected:
     }
 
     virtual future<compaction_manager::compaction_stats_opt> do_run() override {
+        co_await utils::get_local_injector().inject_with_handler("compaction_regular_compaction_task_executor_do_run",
+            [] (auto& handler) { return handler.wait_for_message(db::timeout_clock::now() + 10s); });
+
         co_await coroutine::switch_to(_cm.compaction_sg());
 
         for (;;) {
