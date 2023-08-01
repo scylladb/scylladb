@@ -454,7 +454,6 @@ public:
         failed,     // task failed (may transition only to state::none)
                     // counted in compaction_manager::stats::errors
     };
-    static std::string_view to_string(state);
 protected:
     compaction_manager& _cm;
     ::compaction::table_state* _compacting_table = nullptr;
@@ -563,15 +562,23 @@ public:
 
     sstables::compaction_stopped_exception make_compaction_stopped_exception() const;
 
-    std::string describe() const;
-
     friend future<compaction_manager::compaction_stats_opt> compaction_manager::perform_task(shared_ptr<compaction_task_executor> task);
+    friend fmt::formatter<compaction_task_executor>;
 };
 
-std::ostream& operator<<(std::ostream& os, compaction::compaction_task_executor::state s);
-std::ostream& operator<<(std::ostream& os, const compaction::compaction_task_executor& task);
-
 }
+
+template <>
+struct fmt::formatter<compaction::compaction_task_executor::state> {
+    constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
+    auto format(compaction::compaction_task_executor::state c, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
+
+template <>
+struct fmt::formatter<compaction::compaction_task_executor> {
+    constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
+    auto format(const compaction::compaction_task_executor& ex, fmt::format_context& ctx) const  -> decltype(ctx.out());
+};
 
 bool needs_cleanup(const sstables::shared_sstable& sst, const dht::token_range_vector& owned_ranges);
 
