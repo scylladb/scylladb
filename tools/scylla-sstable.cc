@@ -850,7 +850,7 @@ public:
     virtual api::timestamp_type min_memtable_timestamp() const override { return api::min_timestamp; }
     virtual future<> on_compaction_completion(sstables::compaction_completion_desc desc, sstables::offstrategy offstrategy) override { return make_ready_future<>(); }
     virtual bool is_auto_compaction_disabled_by_user() const noexcept override { return false; }
-    virtual bool tombstone_gc_enabled() const noexcept override { return false; }
+    virtual bool tombstone_gc_enabled(const std::vector<sstables::shared_sstable>&) const noexcept override { return false; }
     virtual const tombstone_gc_state& get_tombstone_gc_state() const noexcept override { return _tombstone_gc_state; }
     virtual compaction_backlog_tracker& get_backlog_tracker() override { return _backlog_tracker; }
     virtual const std::string& get_group_id() const noexcept override { return _group_id; }

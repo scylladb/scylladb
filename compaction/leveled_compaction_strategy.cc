@@ -37,7 +37,7 @@ compaction_descriptor leveled_compaction_strategy::get_sstables_for_compaction(t
         return candidate;
     }
 
-    if (!table_s.tombstone_gc_enabled()) {
+    if (!table_s.tombstone_gc_enabled(candidate.sstables)) {
         return compaction_descriptor();
     }
 

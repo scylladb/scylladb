@@ -164,7 +164,7 @@ size_tiered_compaction_strategy::get_sstables_for_compaction(table_state& table_
         return sstables::compaction_descriptor(std::move(most_interesting));
     }
 
-    if (!table_s.tombstone_gc_enabled()) {
+    if (!table_s.tombstone_gc_enabled(candidates)) {
         return compaction_descriptor();
     }
 

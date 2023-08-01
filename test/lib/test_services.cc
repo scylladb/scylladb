@@ -116,7 +116,7 @@ public:
     bool is_auto_compaction_disabled_by_user() const noexcept override {
         return table().is_auto_compaction_disabled_by_user();
     }
-    bool tombstone_gc_enabled() const noexcept override {
+    bool tombstone_gc_enabled(const std::vector<sstables::shared_sstable>&) const noexcept override {
         return table().tombstone_gc_enabled();
     }
     const tombstone_gc_state& get_tombstone_gc_state() const noexcept override {

@@ -2804,7 +2804,7 @@ public:
     bool is_auto_compaction_disabled_by_user() const noexcept override {
         return _t.is_auto_compaction_disabled_by_user();
     }
-    bool tombstone_gc_enabled() const noexcept override {
+    bool tombstone_gc_enabled(const std::vector<sstables::shared_sstable>& tables) const noexcept override {
         /**
          * #14870 - block our GC iff there is potential data
          * left in commitlog that could cause resurrections
@@ -2848,8 +2848,12 @@ public:
             }
             return stop_iteration::no;
         };
-        if (main_sstable_set().for_each_sstable_until(check) == stop_iteration::no) {
-            maintenance_sstable_set().for_each_sstable_until(check);
+        if (!tables.empty()) {
+            std::any_of(tables.begin(), tables.end(), check);
+        } else {
+            if (main_sstable_set().for_each_sstable_until(check) == stop_iteration::no) {
+                maintenance_sstable_set().for_each_sstable_until(check);
+            }
         }
         return ok;
     }

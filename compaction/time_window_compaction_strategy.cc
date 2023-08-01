@@ -284,7 +284,7 @@ time_window_compaction_strategy::get_next_non_expired_sstables(table_state& tabl
         return most_interesting;
     }
 
-    if (!table_s.tombstone_gc_enabled()) {
+    if (!table_s.tombstone_gc_enabled(non_expiring_sstables)) {
         return {};
     }
 

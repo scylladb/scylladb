@@ -145,7 +145,7 @@ std::ostream& operator<<(std::ostream& os, compaction_type_options::scrub::quara
 
 static api::timestamp_type get_max_purgeable_timestamp(const table_state& table_s, sstable_set::incremental_selector& selector,
         const std::unordered_set<shared_sstable>& compacting_set, const dht::decorated_key& dk, uint64_t& bloom_filter_checks) {
-    if (!table_s.tombstone_gc_enabled()) [[unlikely]] {
+    if (!table_s.tombstone_gc_enabled({compacting_set.begin(), compacting_set.end()})) [[unlikely]] {
         return api::min_timestamp;
     }
 
