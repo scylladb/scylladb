@@ -229,6 +229,13 @@ public:
     void discard_completed_segments(const cf_id_type&);
 
     /**
+     * Forces active segment switch.
+     * Called from API calls to help tests that need predictable
+     * compaction behaviour.
+    */
+    future<> force_new_active_segment() noexcept;
+
+    /**
      * A 'flush_handler' is invoked when the CL determines that size on disk has
      * exceeded allowable threshold. It is called once for every currently active
      * CF id with the highest replay_position which we would prefer to free "until".
