@@ -121,7 +121,7 @@ const sstring& drop_type_statement::keyspace() const
 }
 
 future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>>
-drop_type_statement::prepare_schema_mutations(query_processor& qp, service::migration_manager& mm, api::timestamp_type ts) const {
+drop_type_statement::prepare_schema_mutations(query_processor& qp, api::timestamp_type ts) const {
     validate_while_executing(qp);
 
     data_dictionary::database db = qp.db();
@@ -137,7 +137,7 @@ drop_type_statement::prepare_schema_mutations(query_processor& qp, service::migr
 
     // Can happen with if_exists
     if (to_drop != all_types.end()) {
-        m = co_await mm.prepare_type_drop_announcement(to_drop->second, ts);
+        m = co_await service::prepare_type_drop_announcement(qp.proxy(), to_drop->second, ts);
 
         using namespace cql_transport;
         ret = ::make_shared<event::schema_change>(

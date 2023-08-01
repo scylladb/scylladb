@@ -35,7 +35,7 @@ public:
     virtual const sstring& keyspace() const override;
 
 
-    future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>> prepare_schema_mutations(query_processor& qp, service::migration_manager& mm, api::timestamp_type) const override;
+    future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>> prepare_schema_mutations(query_processor& qp, api::timestamp_type) const override;
 
     class add_or_alter;
     class renames;
@@ -48,7 +48,7 @@ private:
         virtual future<> operator()(schema_ptr cfm, bool from_thrift, std::vector<view_ptr>&& view_updates, std::optional<api::timestamp_type> ts_opt) = 0;
     };
 
-    future<std::vector<mutation>> prepare_announcement_mutations(data_dictionary::database db, service::migration_manager& mm, api::timestamp_type) const;
+    future<std::vector<mutation>> prepare_announcement_mutations(service::storage_proxy& sp, api::timestamp_type) const;
 };
 
 class alter_type_statement::add_or_alter : public alter_type_statement {

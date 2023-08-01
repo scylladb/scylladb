@@ -1001,7 +1001,7 @@ SEASTAR_TEST_CASE(sstable_compaction_does_not_resurrect_data) {
             .build();
         auto group0_guard = mm.start_group0_operation().get();
         auto ts = group0_guard.write_timestamp();
-        mm.announce(mm.prepare_new_column_family_announcement(s, ts).get(), std::move(group0_guard)).get();
+        mm.announce(service::prepare_new_column_family_announcement(mm.get_storage_proxy(), s, ts).get(), std::move(group0_guard)).get();
 
         replica::table& t = db.find_column_family(ks_name, table_name);
 
@@ -1066,7 +1066,7 @@ SEASTAR_TEST_CASE(failed_flush_prevents_writes) {
         schema_ptr s = ss.schema();
         auto group0_guard = mm.start_group0_operation().get();
         auto ts = group0_guard.write_timestamp();
-        mm.announce(mm.prepare_new_column_family_announcement(s, ts).get(), std::move(group0_guard)).get();
+        mm.announce(service::prepare_new_column_family_announcement(mm.get_storage_proxy(), s, ts).get(), std::move(group0_guard)).get();
 
         replica::table& t = db.find_column_family("ks", "cf");
         auto memtables = t.active_memtables();
@@ -1134,7 +1134,7 @@ SEASTAR_TEST_CASE(flushing_rate_is_reduced_if_compaction_doesnt_keep_up) {
                 return env.migration_manager().invoke_on(0, [s = global_schema_ptr(std::move(s))] (service::migration_manager& mm) -> future<> {
                     auto group0_guard = co_await mm.start_group0_operation();
                     auto ts = group0_guard.write_timestamp();
-                    auto announcement = co_await mm.prepare_new_column_family_announcement(s, ts);
+                    auto announcement = co_await service::prepare_new_column_family_announcement(mm.get_storage_proxy(), s, ts);
                     co_await mm.announce(std::move(announcement), std::move(group0_guard));
                 });
             }
@@ -1143,7 +1143,7 @@ SEASTAR_TEST_CASE(flushing_rate_is_reduced_if_compaction_doesnt_keep_up) {
                 return env.migration_manager().invoke_on(0, [shard = this_shard_id()] (service::migration_manager& mm) -> future<> {
                     auto group0_guard = co_await mm.start_group0_operation();
                     auto ts = group0_guard.write_timestamp();
-                    auto announcement = co_await mm.prepare_column_family_drop_announcement(ks_name(), cf_name(shard), ts);
+                    auto announcement = co_await service::prepare_column_family_drop_announcement(mm.get_storage_proxy(), ks_name(), cf_name(shard), ts);
                     co_await mm.announce(std::move(announcement), std::move(group0_guard));
                 });
             }

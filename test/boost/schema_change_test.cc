@@ -47,7 +47,7 @@ SEASTAR_TEST_CASE(test_new_schema_with_no_structural_change_is_propagated) {
             {
                 auto group0_guard = mm.start_group0_operation().get();
                 auto ts = group0_guard.write_timestamp();
-                mm.announce(mm.prepare_new_column_family_announcement(old_schema, ts).get(), std::move(group0_guard)).get();
+                mm.announce(service::prepare_new_column_family_announcement(mm.get_storage_proxy(), old_schema, ts).get(), std::move(group0_guard)).get();
             }
 
             auto old_table_version = e.db().local().find_schema(old_schema->id())->version();
@@ -58,7 +58,8 @@ SEASTAR_TEST_CASE(test_new_schema_with_no_structural_change_is_propagated) {
 
             auto group0_guard = mm.start_group0_operation().get();
             auto ts = group0_guard.write_timestamp();
-            mm.announce(mm.prepare_column_family_update_announcement(new_schema, false, std::vector<view_ptr>(), ts).get(), std::move(group0_guard)).get();
+            mm.announce(service::prepare_column_family_update_announcement(mm.get_storage_proxy(),
+                    new_schema, false, std::vector<view_ptr>(), ts).get(), std::move(group0_guard)).get();
 
             BOOST_REQUIRE_NE(e.db().local().find_schema(old_schema->id())->version(), old_table_version);
             BOOST_REQUIRE_NE(e.db().local().get_version(), old_node_version);
@@ -81,7 +82,7 @@ SEASTAR_TEST_CASE(test_schema_is_updated_in_keyspace) {
             {
                 auto group0_guard = mm.start_group0_operation().get();
                 auto ts = group0_guard.write_timestamp();
-                mm.announce(mm.prepare_new_column_family_announcement(old_schema, ts).get(), std::move(group0_guard)).get();
+                mm.announce(service::prepare_new_column_family_announcement(mm.get_storage_proxy(), old_schema, ts).get(), std::move(group0_guard)).get();
             }
 
             auto s = e.local_db().find_schema(old_schema->id());
@@ -94,7 +95,8 @@ SEASTAR_TEST_CASE(test_schema_is_updated_in_keyspace) {
 
             auto group0_guard = mm.start_group0_operation().get();
             auto ts = group0_guard.write_timestamp();
-            mm.announce(mm.prepare_column_family_update_announcement(new_schema, false, std::vector<view_ptr>(), ts).get(), std::move(group0_guard)).get();
+            mm.announce(service::prepare_column_family_update_announcement(mm.get_storage_proxy(),
+                    new_schema, false, std::vector<view_ptr>(), ts).get(), std::move(group0_guard)).get();
 
             s = e.local_db().find_schema(old_schema->id());
             BOOST_REQUIRE_NE(*old_schema, *s);
@@ -118,7 +120,7 @@ SEASTAR_TEST_CASE(test_tombstones_are_ignored_in_version_calculation) {
             auto& mm = e.migration_manager().local();
             auto group0_guard = mm.start_group0_operation().get();
             auto ts = group0_guard.write_timestamp();
-            mm.announce(mm.prepare_new_column_family_announcement(table_schema, ts).get(), std::move(group0_guard)).get();
+            mm.announce(service::prepare_new_column_family_announcement(mm.get_storage_proxy(), table_schema, ts).get(), std::move(group0_guard)).get();
 
             auto old_table_version = e.db().local().find_schema(table_schema->id())->version();
             auto old_node_version = e.db().local().get_version();
@@ -169,7 +171,7 @@ SEASTAR_TEST_CASE(test_concurrent_column_addition) {
             {
                 auto group0_guard = mm.start_group0_operation().get();
                 auto ts = group0_guard.write_timestamp();
-                mm.announce(mm.prepare_new_column_family_announcement(s1, ts).get(), std::move(group0_guard)).get();
+                mm.announce(service::prepare_new_column_family_announcement(mm.get_storage_proxy(), s1, ts).get(), std::move(group0_guard)).get();
             }
             auto old_version = e.db().local().find_schema(s1->id())->version();
 
@@ -320,7 +322,7 @@ SEASTAR_TEST_CASE(test_combined_column_add_and_drop) {
             {
                 auto group0_guard = mm.start_group0_operation().get();
                 auto ts = group0_guard.write_timestamp();
-                mm.announce(mm.prepare_new_column_family_announcement(s1, ts).get(), std::move(group0_guard)).get();
+                mm.announce(service::prepare_new_column_family_announcement(mm.get_storage_proxy(), s1, ts).get(), std::move(group0_guard)).get();
             }
 
             auto&& keyspace = e.db().local().find_keyspace(s1->ks_name()).metadata();
@@ -386,8 +388,8 @@ SEASTAR_TEST_CASE(test_concurrent_table_creation_with_different_schema) {
                     .with_column("v1", bytes_type)
                     .build();
 
-            auto ann1 = mm.prepare_new_column_family_announcement(s1, api::new_timestamp()).get();
-            auto ann2 = mm.prepare_new_column_family_announcement(s2, api::new_timestamp()).get();
+            auto ann1 = service::prepare_new_column_family_announcement(mm.get_storage_proxy(), s1, api::new_timestamp()).get();
+            auto ann2 = service::prepare_new_column_family_announcement(mm.get_storage_proxy(), s2, api::new_timestamp()).get();
 
             {
                 auto group0_guard = mm.start_group0_operation().get();
@@ -477,7 +479,7 @@ SEASTAR_TEST_CASE(test_merging_creates_a_table_even_if_keyspace_was_recreated) {
             {
                 auto group0_guard = mm.start_group0_operation().get();
                 const auto ts = group0_guard.write_timestamp();
-                auto muts = e.migration_manager().local().prepare_keyspace_drop_announcement("ks", ts).get0();
+                auto muts = service::prepare_keyspace_drop_announcement(e.local_db(), "ks", ts).get0();
                 boost::copy(muts, std::back_inserter(all_muts));
                 mm.announce(muts, std::move(group0_guard)).get();
             }
@@ -487,7 +489,7 @@ SEASTAR_TEST_CASE(test_merging_creates_a_table_even_if_keyspace_was_recreated) {
                 const auto ts = group0_guard.write_timestamp();
 
                 // all_muts contains keyspace drop.
-                auto muts = e.migration_manager().local().prepare_new_keyspace_announcement(keyspace, ts);
+                auto muts = service::prepare_new_keyspace_announcement(e.db().local(), keyspace, ts);
                 boost::copy(muts, std::back_inserter(all_muts));
                 mm.announce(muts, std::move(group0_guard)).get();
             }
@@ -496,7 +498,7 @@ SEASTAR_TEST_CASE(test_merging_creates_a_table_even_if_keyspace_was_recreated) {
                 auto group0_guard = mm.start_group0_operation().get();
                 const auto ts = group0_guard.write_timestamp();
 
-                auto muts = e.migration_manager().local().prepare_new_column_family_announcement(s0, ts).get0();
+                auto muts = service::prepare_new_column_family_announcement(mm.get_storage_proxy(), s0, ts).get0();
                 boost::copy(muts, std::back_inserter(all_muts));
 
                 mm.announce(all_muts, std::move(group0_guard)).get();
