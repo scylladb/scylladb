@@ -1068,6 +1068,7 @@ class ScyllaClusterManager:
         add_get('/cluster/server/{server_id}/get_config', self._server_get_config)
         add_put('/cluster/server/{server_id}/update_config', self._server_update_config)
         add_put('/cluster/server/{server_id}/change_ip', self._server_change_ip)
+        add_get('/cluster/server/{server_id}/get_log_filename', self._server_get_log_filename)
 
     async def _manager_up(self, _request) -> aiohttp.web.Response:
         return aiohttp.web.Response(text=f"{self.is_running}")
@@ -1277,6 +1278,14 @@ class ScyllaClusterManager:
         server_id = ServerNum(int(request.match_info["server_id"]))
         ip_addr = await self.cluster.change_ip(server_id)
         return aiohttp.web.json_response({"ip_addr": ip_addr})
+
+    async def _server_get_log_filename(self, request: aiohttp.web.Request) -> aiohttp.web.Response:
+        assert self.cluster
+        server_id = ServerNum(int(request.match_info["server_id"]))
+        server = self.cluster.servers[server_id]
+        if not server:
+            return aiohttp.web.Response(status=404, text=f"Server {server_id} unknown")
+        return aiohttp.web.Response(text=f"{server.log_filename}")
 
 
 @asynccontextmanager
