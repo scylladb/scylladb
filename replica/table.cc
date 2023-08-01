@@ -542,8 +542,8 @@ void table::enable_off_strategy_trigger() {
     do_update_off_strategy_trigger();
 }
 
-std::vector<std::unique_ptr<compaction_group>> table::make_compaction_groups() {
-    std::vector<std::unique_ptr<compaction_group>> ret;
+compaction_group_vector table::make_compaction_groups() {
+    compaction_group_vector ret;
     auto&& ranges = dht::split_token_range_msb(_x_log2_compaction_groups);
     ret.reserve(ranges.size());
     tlogger.debug("Created {} compaction groups for {}.{}", ranges.size(), _schema->ks_name(), _schema->cf_name());
@@ -584,7 +584,7 @@ compaction_group& table::compaction_group_for_sstable(const sstables::shared_sst
     return compaction_group_for_token(sst->get_first_decorated_key().token());
 }
 
-const std::vector<std::unique_ptr<compaction_group>>& table::compaction_groups() const noexcept {
+const compaction_group_vector& table::compaction_groups() const noexcept {
     return _compaction_groups;
 }
 
