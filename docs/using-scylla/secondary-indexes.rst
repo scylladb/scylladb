@@ -4,6 +4,8 @@ Global Secondary Indexes
 
 Test.
 
+Test.
+
 Global Secondary Indexes is available as a production ready feature in Scylla Open Source and Scylla Enterprise (all supported versions).
 
 The data model in Scylla partitions data between cluster nodes using a partition key, which is defined in the database schema. This is an efficient way to look up rows because you can find the node hosting the row by hashing the partition key.
