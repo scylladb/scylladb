@@ -1114,6 +1114,14 @@
                      "allowMultiple":false,
                      "type":"string",
                      "paramType":"query"
+                  },
+                  {
+                     "name":"ranges_parallelism",
+                     "description":"An integer specifying the number of ranges to repair in parallel by user request. If this number is bigger than the max_repair_ranges_in_parallel calculated by Scylla core, the smaller one will be used.",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
                   }
                ]
             },
