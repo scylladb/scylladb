@@ -460,6 +460,9 @@ public:
     void discard_unused_segments() noexcept;
     void discard_completed_segments(const cf_id_type&) noexcept;
     void discard_completed_segments(const cf_id_type&, const rp_set&) noexcept;
+    
+    future<> force_new_active_segment() noexcept;
+
     void on_timer();
     void sync();
     void arm(uint32_t extra = 0) {
@@ -1899,6 +1902,18 @@ void db::commitlog::segment_manager::discard_completed_segments(const cf_id_type
     discard_unused_segments();
 }
 
+future<> db::commitlog::segment_manager::force_new_active_segment() noexcept {
+    if (_segments.empty() || !_segments.back()->is_still_allocating()) {
+        co_return;
+    }
+
+    auto& s = _segments.back();
+    if (s->position()) { // check used.
+        co_await s->close();
+        discard_unused_segments();
+    }
+}
+
 namespace db {
 
 std::ostream& operator<<(std::ostream& out, const db::commitlog::segment& s) {
@@ -2515,6 +2530,10 @@ void db::commitlog::discard_completed_segments(const cf_id_type& id, const rp_se
 
 void db::commitlog::discard_completed_segments(const cf_id_type& id) {
     _segment_manager->discard_completed_segments(id);
+}
+
+future<> db::commitlog::force_new_active_segment() noexcept {
+    co_await _segment_manager->force_new_active_segment();
 }
 
 future<> db::commitlog::sync_all_segments() {
