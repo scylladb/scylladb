@@ -1433,6 +1433,17 @@ class topology_coordinator {
                     node = std::move(f).get();
                 }
 
+                if (_group0.is_member(node.id, true)) {
+                    // If we remove a node, we make it a non-voter early to improve availability in some situations.
+                    // There is no downside to it because the removed node is already considered dead by us.
+                    //
+                    // FIXME: removenode may be aborted and the already dead node can be resurrected. We should consider
+                    // restoring its voter state on the recovery path.
+                    if (node.rs->state == node_state::removing) {
+                        co_await _group0.make_nonvoter(node.id);
+                    }
+                }
+
                 raft_topology_cmd cmd{raft_topology_cmd::command::stream_ranges};
                 if (node.rs->state == node_state::removing) {
                     // tell all nodes to stream data of the removed node to new range owners
