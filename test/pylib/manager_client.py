@@ -9,9 +9,11 @@
    Manages driver refresh when cluster is cycled.
 """
 
+from concurrent.futures import ThreadPoolExecutor
 from typing import List, Optional, Callable, Any
 from time import time
 import logging
+from test.pylib.log_browsing import ScyllaLogFile
 from test.pylib.rest_client import UnixRESTClient, ScyllaRESTAPIClient, ScyllaMetricsClient
 from test.pylib.util import wait_for
 from test.pylib.internal_types import ServerNum, IPAddress, HostID, ServerInfo
@@ -44,6 +46,7 @@ class ManagerClient():
         self.client = UnixRESTClient(sock_path)
         self.api = ScyllaRESTAPIClient()
         self.metrics = ScyllaMetricsClient()
+        self.thread_pool = ThreadPoolExecutor()
 
     async def stop(self):
         """Close driver"""
@@ -302,3 +305,8 @@ class ManagerClient():
             if not other_ip in alive_nodes:
                 return True
         await wait_for(_not_sees_another_server, time() + interval, period=.5)
+
+    async def server_open_log(self, server_id: ServerNum) -> ScyllaLogFile:
+        logger.debug("ManagerClient getting log filename for %s", server_id)
+        log_filename = await self.client.get_text(f"/cluster/server/{server_id}/get_log_filename")
+        return ScyllaLogFile(self.thread_pool, log_filename)
