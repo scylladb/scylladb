@@ -371,6 +371,9 @@ future<> raft_group0::abort() {
     });
     co_await _shutdown_gate.close();
 
+    _leadership_monitor_as.request_abort();
+    co_await std::move(_leadership_monitor);
+
     co_await stop_group0();
 }
 
@@ -389,6 +392,27 @@ future<> raft_group0::start_server_for_group0(raft::group_id group0_id, service:
     group0_log.info("Server {} is starting group 0 with id {}", my_id, group0_id);
     co_await _raft_gr.start_server_for_group(create_server_for_group0(group0_id, my_id, ss, qp, mm, cdc_gen_service));
     _group0.emplace<raft::group_id>(group0_id);
+}
+
+future<> raft_group0::leadership_monitor_fiber() {
+    try {
+        auto sub = _abort_source.subscribe([&] () noexcept {
+            if (!_leadership_monitor_as.abort_requested()) {
+                _leadership_monitor_as.request_abort();
+            }
+        });
+
+        while (true) {
+            while (!group0_server().is_leader()) {
+                co_await group0_server().wait_for_state_change(&_leadership_monitor_as);
+            }
+            group0_log.info("gaining leadership");
+            co_await group0_server().wait_for_state_change(&_leadership_monitor_as);
+            group0_log.info("losing leadership");
+        }
+    } catch (...) {
+        group0_log.debug("leadership_monitor_fiber aborted with {}", std::current_exception());
+    }
 }
 
 future<> raft_group0::join_group0(std::vector<gms::inet_address> seeds, bool as_voter, service::storage_service& ss, cql3::query_processor& qp, service::migration_manager& mm,
@@ -612,6 +636,9 @@ future<> raft_group0::setup_group0(
     group0_log.info("setup_group0: joining group 0...");
     co_await join_group0(std::move(seeds), false /* non-voter */, ss, qp, mm, cdc_gen_service, sys_ks);
     group0_log.info("setup_group0: successfully joined group 0.");
+
+    // Start group 0 leadership monitor fiber.
+    _leadership_monitor = leadership_monitor_fiber();
 
     utils::get_local_injector().inject("stop_after_joining_group0", [&] {
         throw std::runtime_error{"injection: stop_after_joining_group0"};

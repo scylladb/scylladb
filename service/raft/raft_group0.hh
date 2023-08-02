@@ -96,6 +96,11 @@ class raft_group0 {
         aborted = 2
     } _status_for_monitoring;
 
+    // Fiber monitoring and logging gaining/losing leadership events in group 0.
+    future<> leadership_monitor_fiber();
+    future<> _leadership_monitor = make_ready_future<>();
+    abort_source _leadership_monitor_as;
+
 public:
     // Passed to `setup_group0` when replacing a node.
     struct replace_info {
