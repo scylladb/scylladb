@@ -1912,8 +1912,8 @@ static seastar::future<shared_ptr<cql3::functions::user_function>> create_func(r
                 std::move(body), language, std::move(return_type),
                 row.get_nonnull<bool>("called_on_null_input"), std::move(ctx));
     } else if (language == "wasm") {
-        wasm::context ctx(qctx->qp().wasm(), name.name, db.get_config().wasm_udf_yield_fuel(), db.get_config().wasm_udf_total_fuel());
-        co_await qctx->qp().wasm().precompile(ctx, arg_names, body);
+        wasm::context ctx(db.wasm(), name.name, db.get_config().wasm_udf_yield_fuel(), db.get_config().wasm_udf_total_fuel());
+        co_await db.wasm().precompile(ctx, arg_names, body);
         co_return ::make_shared<cql3::functions::user_function>(std::move(name), std::move(arg_types), std::move(arg_names),
                 std::move(body), language, std::move(return_type),
                 row.get_nonnull<bool>("called_on_null_input"), std::move(ctx));
@@ -1981,7 +1981,7 @@ static void drop_cached_func(replica::database& db, const query::result_set_row&
         cql3::functions::function_name name{
             row.get_nonnull<sstring>("keyspace_name"), row.get_nonnull<sstring>("function_name")};
         auto arg_types = read_arg_types(db, row, name.keyspace);
-        qctx->qp().wasm().remove(name, arg_types);
+        db.wasm().remove(name, arg_types);
     }
 }
 
