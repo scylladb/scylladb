@@ -1981,7 +1981,7 @@ static void drop_cached_func(replica::database& db, const query::result_set_row&
         cql3::functions::function_name name{
             row.get_nonnull<sstring>("keyspace_name"), row.get_nonnull<sstring>("function_name")};
         auto arg_types = read_arg_types(db, row, name.keyspace);
-        qctx->qp().wasm_instance_cache().remove(name, arg_types);
+        qctx->qp().wasm().remove(name, arg_types);
     }
 }
 

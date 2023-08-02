@@ -59,6 +59,9 @@ public:
     friend class cql3::query_processor;
     future<> stop();
     seastar::future<> precompile(context& ctx, const std::vector<sstring>& arg_names, std::string script);
+    void remove(const db::functions::function_name& name, const std::vector<data_type>& arg_types) noexcept {
+        _instance_cache->remove(name, arg_types);
+    }
 };
 
 struct context {
