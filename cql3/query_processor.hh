@@ -166,14 +166,6 @@ public:
         return _cql_stats;
     }
 
-    wasmtime::Engine& wasm_engine() {
-        return **_wasm._engine;
-    }
-
-    wasm::instance_cache& wasm_instance_cache() {
-        return *_wasm._instance_cache;
-    }
-
     wasm::manager& wasm() { return _wasm; }
 
     statements::prepared_statement::checked_weak_ptr get_prepared(const std::optional<auth::authenticated_user>& user, const prepared_cache_key_type& key) {

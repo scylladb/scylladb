@@ -18,10 +18,6 @@
 #include "db/config.hh"
 #include "replica/database.hh"
 
-namespace cql3 {
-class query_processor;
-}
-
 namespace wasm {
 
 class instance_cache;
@@ -56,7 +52,7 @@ class manager {
 
 public:
     manager(const std::optional<wasm::startup_context>&);
-    friend class cql3::query_processor;
+    friend context;
     future<> stop();
     seastar::future<> precompile(context& ctx, const std::vector<sstring>& arg_names, std::string script);
     void remove(const db::functions::function_name& name, const std::vector<data_type>& arg_types) noexcept {
@@ -73,6 +69,7 @@ struct context {
     uint64_t total_fuel;
 
     context(wasmtime::Engine& engine_ptr, std::string name, instance_cache& cache, uint64_t yield_fuel, uint64_t total_fuel);
+    context(manager&, std::string name, uint64_t yield_fuel, uint64_t total_fuel);
 };
 
 seastar::future<> precompile(alien_thread_runner& alien_runner, context& ctx, const std::vector<sstring>& arg_names, std::string script);

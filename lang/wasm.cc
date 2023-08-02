@@ -55,6 +55,10 @@ context::context(wasmtime::Engine& engine_ptr, std::string name, instance_cache&
     , total_fuel(total_fuel) {
 }
 
+context::context(manager& manager, std::string name, uint64_t yield_fuel, uint64_t total_fuel)
+    : context(**manager._engine, std::move(name), *manager._instance_cache, yield_fuel, total_fuel)
+{ }
+
 static constexpr size_t WASM_PAGE_SIZE = 64 * 1024;
 
 static void init_abstract_arg(const abstract_type& t, const bytes_opt& param, wasmtime::ValVec& argv, wasmtime::Store& store, wasmtime::Instance& instance) {
