@@ -961,6 +961,16 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 sstm.stop().get();
             });
 
+            std::optional<wasm::startup_context> wasm_ctx;
+            if (cfg->enable_user_defined_functions() && cfg->check_experimental(db::experimental_features_t::feature::UDF)) {
+                wasm_ctx.emplace(*cfg, dbcfg);
+            }
+
+            static sharded<wasm::manager> wasm;
+            wasm.start(std::ref(wasm_ctx)).get();
+            // don't stop for real until query_processor stops
+            auto stop_wasm = defer_verbose_shutdown("wasm", [] { wasm.invoke_on_all(&wasm::manager::stop).get(); });
+
             supervisor::notify("starting database");
             debug::the_database = &db;
             db.start(std::ref(*cfg), dbcfg, std::ref(mm_notifier), std::ref(feature_service), std::ref(token_metadata),
@@ -1028,16 +1038,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             auth_prep_cache_config.expiry = std::min(std::chrono::milliseconds(cfg->permissions_validity_in_ms()),
                                                      std::chrono::duration_cast<std::chrono::milliseconds>(cql3::prepared_statements_cache::entry_expiry));
             auth_prep_cache_config.refresh = std::chrono::milliseconds(cfg->permissions_update_interval_in_ms());
-
-            std::optional<wasm::startup_context> wasm_ctx;
-            if (cfg->enable_user_defined_functions() && cfg->check_experimental(db::experimental_features_t::feature::UDF)) {
-                wasm_ctx.emplace(*cfg, dbcfg);
-            }
-
-            static sharded<wasm::manager> wasm;
-            wasm.start(std::ref(wasm_ctx)).get();
-            // don't stop for real until query_processor stops
-            auto stop_wasm = defer_verbose_shutdown("wasm", [] { wasm.invoke_on_all(&wasm::manager::stop).get(); });
 
             qp.start(std::ref(proxy), std::move(local_data_dict), std::ref(mm_notifier), qp_mcfg, std::ref(cql_config), std::move(auth_prep_cache_config), std::ref(wasm)).get();
 

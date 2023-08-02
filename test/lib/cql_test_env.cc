@@ -650,6 +650,16 @@ public:
             sstm.start(std::ref(*cfg)).get();
             auto stop_sstm = deferred_stop(sstm);
 
+            std::optional<wasm::startup_context> wasm_ctx;
+            if (cfg->enable_user_defined_functions() && cfg->check_experimental(db::experimental_features_t::feature::UDF)) {
+                wasm_ctx.emplace(*cfg, dbcfg);
+            }
+
+            sharded<wasm::manager> wasm;
+            wasm.start(std::ref(wasm_ctx)).get();
+            auto stop_wasm = defer([&wasm] { wasm.stop().get(); });
+
+
             db.start(std::ref(*cfg), dbcfg, std::ref(mm_notif), std::ref(feature_service), std::ref(token_metadata), std::ref(cm), std::ref(sstm), std::ref(sst_dir_semaphore), utils::cross_shard_barrier()).get();
             auto stop_db = defer([&db] {
                 db.stop().get();
@@ -688,15 +698,6 @@ public:
             auth_prep_cache_config.expiry = std::min(std::chrono::milliseconds(cfg->permissions_validity_in_ms()),
                                                      std::chrono::duration_cast<std::chrono::milliseconds>(cql3::prepared_statements_cache::entry_expiry));
             auth_prep_cache_config.refresh = std::chrono::milliseconds(cfg->permissions_update_interval_in_ms());
-
-            std::optional<wasm::startup_context> wasm_ctx;
-            if (cfg->enable_user_defined_functions() && cfg->check_experimental(db::experimental_features_t::feature::UDF)) {
-                wasm_ctx.emplace(*cfg, dbcfg);
-            }
-
-            sharded<wasm::manager> wasm;
-            wasm.start(std::ref(wasm_ctx)).get();
-            auto stop_wasm = defer([&wasm] { wasm.stop().get(); });
 
             qp.start(std::ref(proxy), std::move(local_data_dict), std::ref(mm_notif), qp_mcfg, std::ref(cql_config), auth_prep_cache_config, std::ref(wasm)).get();
             auto stop_qp = defer([&qp] { qp.stop().get(); });
