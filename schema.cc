@@ -766,15 +766,6 @@ static bool is_index(replica::database& db, const table_id& id, const schema& s)
     return  db.find_column_family(id).get_index_manager().is_index(s);
 }
 
-static bool is_update_synchronously_view(const schema& s) {
-    auto tag_opt = db::find_tag(s, db::SYNCHRONOUS_VIEW_UPDATES_TAG_KEY);
-    if (!tag_opt.has_value()) {
-        return false;
-    }
-
-    return *tag_opt == "true";
-}
-
 sstring schema::element_type(replica::database& db) const {
     if (is_view()) {
         if (is_index(db, view_info()->base_id(), *this)) {
@@ -929,7 +920,10 @@ std::ostream& schema::describe(replica::database& db, std::ostream& os, bool wit
         os << "\n    AND cdc = " << cdc_options().to_sstring();
     }
     if (is_view() && !is_index(db, view_info()->base_id(), *this)) {
-        os << "\n    AND synchronous_updates = " << std::boolalpha << is_update_synchronously_view(*this);
+        auto is_sync_update = db::find_tag(*this, db::SYNCHRONOUS_VIEW_UPDATES_TAG_KEY);
+        if (is_sync_update.has_value()) {
+            os << "\n    AND synchronous_updates = " << *is_sync_update;
+        }
     }
     os << ";\n";
 

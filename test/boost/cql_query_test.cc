@@ -4336,8 +4336,7 @@ SEASTAR_TEST_CASE(test_describe_view_schema) {
               "    AND read_repair_chance = 0\n"
               "    AND speculative_retry = '99.0PERCENTILE'\n"
               "    AND paxos_grace_seconds = 43200\n"
-              "    AND tombstone_gc = {'mode':'timeout','propagation_delay_in_seconds':'3600'}\n"
-              "    AND synchronous_updates = false;\n"},
+              "    AND tombstone_gc = {'mode':'timeout','propagation_delay_in_seconds':'3600'};\n"},
           {"cf_index_index", "CREATE INDEX cf_index ON \"KS\".\"cF\"(col2);"},
           {"cf_index1_index", "CREATE INDEX cf_index1 ON \"KS\".\"cF\"(pk);"},
           {"cf_index2_index", "CREATE INDEX cf_index2 ON \"KS\".\"cF\"(pk1);"},
