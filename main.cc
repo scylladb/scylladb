@@ -1036,7 +1036,8 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             static sharded<wasm::manager> wasm;
             wasm.start(std::ref(wasm_ctx)).get();
-            // don't stop until query_processor stops
+            // don't stop for real until query_processor stops
+            auto stop_wasm = defer_verbose_shutdown("wasm", [] { wasm.invoke_on_all(&wasm::manager::stop).get(); });
 
             qp.start(std::ref(proxy), std::move(local_data_dict), std::ref(mm_notifier), qp_mcfg, std::ref(cql_config), std::move(auth_prep_cache_config), std::ref(wasm)).get();
 

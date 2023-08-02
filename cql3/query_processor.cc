@@ -481,8 +481,6 @@ future<> query_processor::stop_remote() {
 future<> query_processor::stop() {
     return _mnotifier.unregister_listener(_migration_subscriber.get()).then([this] {
         return _authorized_prepared_cache.stop().finally([this] { return _prepared_cache.stop(); });
-    }).then([this] {
-        return _wasm._instance_cache ? _wasm._instance_cache->stop() : make_ready_future<>();
     });
 }
 

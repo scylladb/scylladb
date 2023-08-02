@@ -41,6 +41,12 @@ manager::manager(const std::optional<wasm::startup_context>& ctx)
         , _alien_runner(ctx ? ctx->alien_runner : nullptr)
 {}
 
+future<> manager::stop() {
+    if (_instance_cache) {
+        co_await _instance_cache->stop();
+    }
+}
+
 context::context(wasmtime::Engine& engine_ptr, std::string name, instance_cache& cache, uint64_t yield_fuel, uint64_t total_fuel)
     : engine_ptr(engine_ptr)
     , function_name(name)
