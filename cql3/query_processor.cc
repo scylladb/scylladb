@@ -58,13 +58,7 @@ static service::query_state query_state_for_internal_call() {
     return {service::client_state::for_internal_calls(), empty_service_permit()};
 }
 
-wasm_context::wasm_context(std::optional<wasm::startup_context>& ctx)
-        : _engine(ctx ? std::move(ctx->engine) : nullptr)
-        , _instance_cache(ctx ? std::make_optional<wasm::instance_cache>(ctx->cache_size, ctx->instance_size, ctx->timer_period) : std::nullopt)
-        , _alien_runner(ctx ? std::move(ctx->alien_runner) : nullptr)
-{}
-
-query_processor::query_processor(service::storage_proxy& proxy, data_dictionary::database db, service::migration_notifier& mn, query_processor::memory_config mcfg, cql_config& cql_cfg, utils::loading_cache_config auth_prep_cache_cfg, std::optional<wasm::startup_context> wasm_ctx)
+query_processor::query_processor(service::storage_proxy& proxy, data_dictionary::database db, service::migration_notifier& mn, query_processor::memory_config mcfg, cql_config& cql_cfg, utils::loading_cache_config auth_prep_cache_cfg, wasm::manager& wasm)
         : _migration_subscriber{std::make_unique<migration_subscriber>(this)}
         , _proxy(proxy)
         , _db(db)
@@ -77,7 +71,7 @@ query_processor::query_processor(service::storage_proxy& proxy, data_dictionary:
         , _authorized_prepared_cache_config_action([this] { update_authorized_prepared_cache_config(); return make_ready_future<>(); })
         , _authorized_prepared_cache_update_interval_in_ms_observer(_db.get_config().permissions_update_interval_in_ms.observe(_auth_prepared_cache_cfg_cb))
         , _authorized_prepared_cache_validity_in_ms_observer(_db.get_config().permissions_validity_in_ms.observe(_auth_prepared_cache_cfg_cb))
-        , _wasm(wasm_ctx)
+        , _wasm(wasm)
         {
     namespace sm = seastar::metrics;
     namespace stm = statements;

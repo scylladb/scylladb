@@ -13,9 +13,14 @@
 #include <seastar/core/future.hh>
 #include "db/functions/function_name.hh"
 #include "rust/wasmtime_bindings.hh"
+#include "lang/wasm_instance_cache.hh"
 #include "lang/wasm_alien_thread_runner.hh"
 #include "db/config.hh"
 #include "replica/database.hh"
+
+namespace cql3 {
+class query_processor;
+}
 
 namespace wasm {
 
@@ -42,6 +47,16 @@ struct startup_context {
     seastar::lowres_clock::duration timer_period;
 
     startup_context(db::config& cfg, replica::database_config& dbcfg);
+};
+
+class manager {
+    std::shared_ptr<rust::Box<wasmtime::Engine>> _engine;
+    std::optional<wasm::instance_cache> _instance_cache;
+    std::shared_ptr<wasm::alien_thread_runner> _alien_runner;
+
+public:
+    manager(const std::optional<wasm::startup_context>&);
+    friend class cql3::query_processor;
 };
 
 struct context {

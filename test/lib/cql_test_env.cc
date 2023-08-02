@@ -694,7 +694,11 @@ public:
                 wasm_ctx.emplace(*cfg, dbcfg);
             }
 
-            qp.start(std::ref(proxy), std::move(local_data_dict), std::ref(mm_notif), qp_mcfg, std::ref(cql_config), auth_prep_cache_config, wasm_ctx).get();
+            sharded<wasm::manager> wasm;
+            wasm.start(std::ref(wasm_ctx)).get();
+            auto stop_wasm = defer([&wasm] { wasm.stop().get(); });
+
+            qp.start(std::ref(proxy), std::move(local_data_dict), std::ref(mm_notif), qp_mcfg, std::ref(cql_config), auth_prep_cache_config, std::ref(wasm)).get();
             auto stop_qp = defer([&qp] { qp.stop().get(); });
 
             sharded<service::endpoint_lifecycle_notifier> elc_notif;
