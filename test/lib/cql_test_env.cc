@@ -939,7 +939,10 @@ public:
                 group0_service.abort().get();
             });
 
-            ss.local().set_group0(group0_service);
+            const bool raft_topology_change_enabled = group0_service.is_raft_enabled()
+                    && cfg->check_experimental(db::experimental_features_t::feature::CONSISTENT_TOPOLOGY_CHANGES);
+
+            ss.local().set_group0(group0_service, raft_topology_change_enabled);
 
             try {
                 ss.local().join_cluster(cdc_generation_service.local(), sys_dist_ks, proxy, qp.local()).get();

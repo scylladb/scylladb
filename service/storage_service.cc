@@ -311,6 +311,15 @@ future<> storage_service::topology_state_load(cdc::generation_service& cdc_gen_s
     // read topology state from disk and recreate token_metadata from it
     _topology_state_machine._topology = co_await _sys_ks.local().load_topology_state();
 
+    co_await _feature_service.container().invoke_on_all([&] (gms::feature_service& fs) {
+        return fs.enable(boost::copy_range<std::set<std::string_view>>(_topology_state_machine._topology.enabled_features));
+    });
+
+    // Update the legacy `enabled_features` key in `system.scylla_local`.
+    // It's OK to update it after enabling features because `system.topology` now
+    // is the source of truth about enabled features.
+    co_await _sys_ks.local().save_local_enabled_features(_topology_state_machine._topology.enabled_features);
+
     const auto& am = _group0->address_map();
     auto id2ip = [this, &am] (raft::server_id id) -> future<gms::inet_address> {
         auto ip = am.find(id);
@@ -789,6 +798,8 @@ class topology_coordinator {
 
     std::chrono::milliseconds _ring_delay;
 
+    using drop_guard_and_retake = bool_class<class retake_guard_tag>;
+
     const locator::token_metadata& get_token_metadata() const noexcept {
         return *_shared_tm.get();
     }
@@ -992,27 +1003,31 @@ class topology_coordinator {
 
     future<group0_guard> exec_global_command(
             group0_guard guard, const raft_topology_cmd& cmd,
-            const utils::small_vector<raft::server_id, 2>& exclude_nodes) {
+            const utils::small_vector<raft::server_id, 2>& exclude_nodes,
+            drop_guard_and_retake drop_and_retake = drop_guard_and_retake::yes) {
         auto nodes = _topo_sm._topology.normal_nodes | boost::adaptors::filtered(
                 [&exclude_nodes] (const std::pair<const raft::server_id, replica_state>& n) {
                     return std::none_of(exclude_nodes.begin(), exclude_nodes.end(),
                             [&n] (const raft::server_id& m) { return n.first == m; });
                 }) | boost::adaptors::map_keys;
-        {
-            // release guard
-            auto _ = std::move(guard);
+        if (drop_and_retake) {
+            release_guard(std::move(guard));
         }
         co_await exec_global_command_helper(std::move(nodes), cmd);
-        co_return co_await start_operation();
+        if (drop_and_retake) {
+            guard = co_await start_operation();
+        }
+        co_return guard;
     }
 
     future<node_to_work_on> exec_global_command(
-            node_to_work_on&& node, const raft_topology_cmd& cmd, bool include_local) {
+            node_to_work_on&& node, const raft_topology_cmd& cmd, bool include_local,
+            drop_guard_and_retake do_retake = drop_guard_and_retake::yes) {
         utils::small_vector<raft::server_id, 2> exclude_nodes{parse_replaced_node(node)};
         if (!include_local) {
             exclude_nodes.push_back(_raft.id());
         }
-        auto guard = co_await exec_global_command(std::move(node.guard), cmd, exclude_nodes);
+        auto guard = co_await exec_global_command(std::move(node.guard), cmd, exclude_nodes, do_retake);
         co_return retake_node(std::move(guard), node.id);
     };
 
@@ -1154,6 +1169,56 @@ class topology_coordinator {
         }
             break;
         }
+    }
+
+    // Preconditions:
+    // - There are no nodes that are trying to join and there are no topology
+    //   operations in progress
+    // - `features_to_enable` represents a set of features that are currently
+    //   marked as supported by all normal nodes and it is not empty
+    future<> enable_features(group0_guard guard, std::set<sstring> features_to_enable) {
+        if (!_topo_sm._topology.new_nodes.empty() || !_topo_sm._topology.transition_nodes.empty()) {
+            on_internal_error(slogger,
+                    "topology coordinator attempted to enable features even though there are"
+                    " joining nodes or topology operations in progress");
+        }
+
+        if (utils::get_local_injector().enter("raft_topology_suppress_enabling_features")) {
+            // Prevent enabling features while the injection is enabled.
+            // The topology coordinator will detect in the next iteration
+            // that there are still some cluster features to enable and will
+            // reach this place again. In order not to spin in a loop, sleep
+            // for a short while.
+            co_await sleep(std::chrono::milliseconds(100));
+            co_return;
+        }
+
+        // If we are here, then we noticed that all nodes support some features
+        // that are not enabled yet. Perform a global barrier to make sure that:
+        //
+        // 1. All nodes saw (and persisted) a view of the system.topology table
+        //    that is equal to what the topology coordinator sees (or newer,
+        //    but in that case updating the topology state will fail),
+        // 2. None of the nodes is restarting at the moment and trying to
+        //    update its corresponding `supported_features` column (that's why
+        //    we use `barrier_after_feature_update` instead of regular `barrier`).
+        //
+        // After we get a successful confirmation from each node, we have
+        // a guarantee that they won't attempt to revoke support for those
+        // features. That's because we do not allow nodes to boot without
+        // a feature that is supported by all nodes in the cluster, even if
+        // the feature is not enabled yet.
+        guard = co_await exec_global_command(std::move(guard),
+                raft_topology_cmd{raft_topology_cmd::command::barrier_after_feature_update},
+                {_raft.id()},
+                drop_guard_and_retake::no);
+
+        topology_mutation_builder builder(guard.write_timestamp());
+        builder.add_enabled_features(features_to_enable);
+        auto reason = ::format("enabling features: {}", features_to_enable);
+        co_await update_topology_state(std::move(guard), {builder.build()}, reason);
+
+        slogger.info("raft topology: enabled features: {}", features_to_enable);
     }
 
     future<node_to_work_on> global_token_metadata_barrier(node_to_work_on&& node) {
@@ -1409,11 +1474,16 @@ class topology_coordinator {
                 co_await handle_global_request(std::move(guard));
                 co_return true;
             }
+
+            if (auto feats = _topo_sm._topology.calculate_not_yet_enabled_features(); !feats.empty()) {
+                co_await enable_features(std::move(guard), std::move(feats));
+                co_return true;
+            }
+            
             // If there is no other work, evaluate load and start tablet migration if there is imbalance.
             if (co_await maybe_start_tablet_migration(std::move(guard))) {
                 co_return true;
             }
-
             co_return false;
         }
 
@@ -2020,6 +2090,18 @@ future<> storage_service::raft_bootstrap(raft::server& raft_server) {
                .set("shard_count", smp::count)
                .set("ignore_msb", _db.local().get_config().murmur3_partitioner_ignore_msb_bits())
                .set("supported_features", _feature_service.supported_feature_set());
+        if (_topology_state_machine._topology.is_empty()) {
+            // We see ourselves as the first node. Try to immediately enable
+            // the set of features that we currently support.
+            //
+            // After this entry is successfully applied, the features will be
+            // implicitly enabled.
+            //
+            // This is a temporary workaround until we have a proper feature check
+            // using the upcoming JOIN_NODE handshake, which will also explicitly
+            // enable features.
+            builder.add_enabled_features(_feature_service.supported_feature_set());
+        }
         topology_change change{{builder.build()}};
         group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard, "bootstrap: add myself to topology");
         try {
@@ -2031,6 +2113,11 @@ future<> storage_service::raft_bootstrap(raft::server& raft_server) {
 }
 
 future<> storage_service::update_topology_with_local_metadata(raft::server& raft_server) {
+    co_await do_update_topology_with_local_metadata(raft_server);
+    _topology_updated_with_local_metadata = true;
+}
+
+future<> storage_service::do_update_topology_with_local_metadata(raft::server& raft_server) {
     // TODO: include more metadata here
     auto local_shard_count = smp::count;
     auto local_ignore_msb = _db.local().get_config().murmur3_partitioner_ignore_msb_bits();
@@ -2348,7 +2435,10 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
     });
     _listeners.emplace_back(make_lw_shared(std::move(schema_change_announce)));
     co_await _gossiper.wait_for_gossip_to_settle();
-    co_await _feature_service.enable_features_on_join(_gossiper, _sys_ks.local());
+    // TODO: Look at the group 0 upgrade state and use it to decide whether to attach or not
+    if (!_raft_topology_change_enabled) {
+        co_await _feature_service.enable_features_on_join(_gossiper, _sys_ks.local());
+    }
 
     set_mode(mode::JOINING);
 
@@ -3267,9 +3357,9 @@ future<> storage_service::uninit_messaging_service_part() {
     return container().invoke_on_all(&service::storage_service::uninit_messaging_service);
 }
 
-void storage_service::set_group0(raft_group0& group0) {
+void storage_service::set_group0(raft_group0& group0, bool raft_topology_change_enabled) {
     _group0 = &group0;
-    _raft_topology_change_enabled = _group0->is_raft_enabled() && _db.local().get_config().check_experimental(db::experimental_features_t::feature::CONSISTENT_TOPOLOGY_CHANGES);
+    _raft_topology_change_enabled = raft_topology_change_enabled;
 }
 
 future<> storage_service::join_cluster(cdc::generation_service& cdc_gen_service,
@@ -5477,6 +5567,17 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(shar
         switch (cmd.cmd) {
             case raft_topology_cmd::command::barrier:
                 // we already did read barrier above
+                result.status = raft_topology_cmd_result::command_status::success;
+            break;
+            case raft_topology_cmd::command::barrier_after_feature_update:
+                // we already did the barrier, but we need to check
+                // whether the node has updated its supported_features column
+                // after start
+                if (!_topology_updated_with_local_metadata) {
+                    co_await coroutine::return_exception(std::runtime_error(
+                            "raft topology: command::barrier_after_feature_update, node might not have updated "
+                            "its supported features column yet"));
+                }
                 result.status = raft_topology_cmd_result::command_status::success;
             break;
             case raft_topology_cmd::command::barrier_and_drain: {

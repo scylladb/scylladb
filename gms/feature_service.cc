@@ -248,10 +248,20 @@ future<> feature_service::enable_features_on_join(gossiper& g, db::system_keyspa
     return enabler->enable_features();
 }
 
-future<> feature_service::enable_features_on_startup(db::system_keyspace& sys_ks) {
+future<> feature_service::enable_features_on_startup(db::system_keyspace& sys_ks, bool use_raft_cluster_features) {
     std::set<sstring> features_to_enable;
-    const auto persisted_features = co_await sys_ks.load_local_enabled_features();
-    if (persisted_features.empty()) {
+    std::set<sstring> persisted_features;
+    std::set<sstring> persisted_unsafe_to_disable_features;
+
+    if (!use_raft_cluster_features) {
+        persisted_features = co_await sys_ks.load_local_enabled_features();
+    } else {
+        auto topo = co_await sys_ks.load_topology_state();
+        persisted_unsafe_to_disable_features = topo.calculate_not_yet_enabled_features();
+        persisted_features = std::move(topo.enabled_features);
+    }
+
+    if (persisted_features.empty() && persisted_unsafe_to_disable_features.empty()) {
         co_return;
     }
 
@@ -276,6 +286,26 @@ future<> feature_service::enable_features_on_startup(db::system_keyspace& sys_ks
         // If a feature is not in `registered_features` but still in `known_features` list
         // that means the feature name is used for backward compatibility and should be implicitly
         // enabled in the code by default, so just skip it.
+    }
+
+    // With raft cluster features, it is also unsafe to disable support for features
+    // that are supported by everybody but not enabled yet. There is a possibility
+    // that the feature became enabled and this node didn't notice it.
+    for (auto&& f : persisted_unsafe_to_disable_features) {
+        const bool is_registered_feat = _registered_features.contains(sstring(f));
+        if (!known_features.contains(f)) {
+            if (is_registered_feat) {
+                throw std::runtime_error(format(
+                    "Feature '{}' was previously supported by all nodes in the cluster. It is unknown whether "
+                    "the feature became enabled or not, therefore it is not safe for this node to boot. "
+                    "Set the corresponding configuration option to enable the support for the feature.", f));
+            } else {
+                throw std::runtime_error(format(
+                    "Unknown feature '{}' was previously supported by all nodes in the cluster. "
+                    "That means this node is performing a prohibited downgrade procedure "
+                    "and should not be allowed to boot.", f));
+            }
+        }
     }
 
     co_await container().invoke_on_all([&features_to_enable] (auto& srv) -> future<> {

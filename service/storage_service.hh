@@ -335,7 +335,7 @@ public:
     future<> join_cluster(cdc::generation_service& cdc_gen_service,
             sharded<db::system_distributed_keyspace>& sys_dist_ks, sharded<service::storage_proxy>& proxy, cql3::query_processor& qp);
 
-    void set_group0(service::raft_group0&);
+    void set_group0(service::raft_group0&, bool raft_topology_change_enabled);
 
     future<> drain_on_shutdown();
 
@@ -780,6 +780,10 @@ private:
     future<> raft_rebuild(sstring source_dc);
     future<> raft_check_and_repair_cdc_streams();
     future<> update_topology_with_local_metadata(raft::server&);
+    future<> do_update_topology_with_local_metadata(raft::server&);
+
+    // Set to true after successful `update_topology_with_local_metadata` call
+    bool _topology_updated_with_local_metadata = false;
 
     // This is called on all nodes for each new command received through raft
     // raft_group0_client::_read_apply_mutex must be held
