@@ -71,6 +71,7 @@ struct ack_msg_pending {
 struct gossip_config {
     seastar::scheduling_group gossip_scheduling_group = seastar::scheduling_group();
     sstring cluster_name;
+    utils::UUID group0_id;
     std::set<inet_address> seeds;
     sstring partitioner;
     uint32_t ring_delay_ms = 30 * 1000;
@@ -135,6 +136,8 @@ public:
     // Only respond echo message listed in nodes with the generation number
     future<> advertise_to_nodes(generation_for_nodes advertise_to_nodes = {});
     const sstring& get_cluster_name() const noexcept;
+    void set_group0_id(utils::UUID group0_id);
+    const utils::UUID& get_group0_id() const noexcept;
 
     const sstring& get_partitioner_name() const noexcept {
         return _gcfg.partitioner;

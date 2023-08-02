@@ -14,6 +14,7 @@
 #include "utils/serialization.hh"
 #include "gms/gossip_digest.hh"
 #include "utils/chunked_vector.hh"
+#include "utils/UUID.hh"
 
 namespace gms {
 
@@ -26,18 +27,24 @@ private:
     sstring _cluster_id;
     sstring _partioner;
     utils::chunked_vector<gossip_digest> _digests;
+    utils::UUID _group0_id;
 public:
     gossip_digest_syn() {
     }
 
-    gossip_digest_syn(sstring id, sstring p, utils::chunked_vector<gossip_digest> digests)
+    gossip_digest_syn(sstring id, sstring p, utils::chunked_vector<gossip_digest> digests, utils::UUID group0_id)
         : _cluster_id(std::move(id))
         , _partioner(std::move(p))
-        , _digests(std::move(digests)) {
+        , _digests(std::move(digests))
+        , _group0_id(std::move(group0_id)) {
     }
 
     sstring cluster_id() const {
         return _cluster_id;
+    }
+
+    utils::UUID group0_id() const {
+        return _group0_id;
     }
 
     sstring partioner() const {
@@ -46,6 +53,10 @@ public:
 
     sstring get_cluster_id() const {
         return cluster_id();
+    }
+
+    utils::UUID get_group0_id() const {
+        return group0_id();
     }
 
     sstring get_partioner() const {

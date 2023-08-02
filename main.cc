@@ -1210,6 +1210,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 gcfg.cluster_name = "Test Cluster";
                 startlog.warn("Using default cluster name is not recommended. Using a unique cluster name will reduce the chance of adding nodes to the wrong cluster by mistake");
             }
+            gcfg.group0_id = sys_ks.local().get_raft_group0_id().get();
 
             debug::the_gossiper = &gossiper;
             gossiper.start(std::ref(stop_signal.as_sharded_abort_source()), std::ref(token_metadata), std::ref(messaging), std::ref(*cfg), std::ref(gcfg)).get();

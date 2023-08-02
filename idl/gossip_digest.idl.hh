@@ -56,6 +56,7 @@ class gossip_digest_syn {
     sstring get_cluster_id();
     sstring get_partioner();
     utils::chunked_vector<gms::gossip_digest> get_gossip_digests();
+    utils::UUID get_group0_id()[[version 5.4]];
 };
 
 class gossip_digest_ack {

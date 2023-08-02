@@ -42,6 +42,7 @@
 #include <utility>
 #include "gms/generation-number.hh"
 #include "locator/token_metadata.hh"
+#include "seastar/core/on_internal_error.hh"
 #include "utils/exceptions.hh"
 
 namespace gms {
@@ -60,6 +61,17 @@ netw::msg_addr gossiper::get_msg_addr(inet_address to) const noexcept {
 
 const sstring& gossiper::get_cluster_name() const noexcept {
     return _gcfg.cluster_name;
+}
+
+void gossiper::set_group0_id(utils::UUID group0_id) {
+    if (_gcfg.group0_id) {
+        on_internal_error(logger, "group0_id is already set");
+    }
+    _gcfg.group0_id = std::move(group0_id);
+}
+
+const utils::UUID& gossiper::get_group0_id() const noexcept {
+    return _gcfg.group0_id;
 }
 
 const std::set<inet_address>& gossiper::get_seeds() const noexcept {
@@ -153,8 +165,8 @@ void gossiper::do_sort(utils::chunked_vector<gossip_digest>& g_digest_list) {
 // Depends on
 // - no external dependency
 future<> gossiper::handle_syn_msg(msg_addr from, gossip_digest_syn syn_msg) {
-    logger.trace("handle_syn_msg():from={},cluster_name:peer={},local={},partitioner_name:peer={},local={}",
-        from, syn_msg.cluster_id(), get_cluster_name(), syn_msg.partioner(), get_partitioner_name());
+    logger.trace("handle_syn_msg():from={},cluster_name:peer={},local={},group0_id:peer={},local={},partitioner_name:peer={},local={}",
+        from, syn_msg.cluster_id(), get_cluster_name(), syn_msg.group0_id(), get_group0_id(), syn_msg.partioner(), get_partitioner_name());
     if (!this->is_enabled()) {
         return make_ready_future<>();
     }
@@ -162,6 +174,12 @@ future<> gossiper::handle_syn_msg(msg_addr from, gossip_digest_syn syn_msg) {
     /* If the message is from a different cluster throw it away. */
     if (syn_msg.cluster_id() != get_cluster_name()) {
         logger.warn("ClusterName mismatch from {} {}!={}", from.addr, syn_msg.cluster_id(), get_cluster_name());
+        return make_ready_future<>();
+    }
+
+    /* If the message is from a node with a different group0 id throw it away. */
+    if (syn_msg.group0_id() && get_group0_id() && syn_msg.group0_id() != get_group0_id()) {
+        logger.warn("Group0Id mismatch from {} {} != {}", from.addr, syn_msg.group0_id(), get_group0_id());
         return make_ready_future<>();
     }
 
@@ -1006,7 +1024,7 @@ void gossiper::run() {
             this->make_random_gossip_digest(g_digests);
 
             if (g_digests.size() > 0) {
-                gossip_digest_syn message(get_cluster_name(), get_partitioner_name(), g_digests);
+                gossip_digest_syn message(get_cluster_name(), get_partitioner_name(), g_digests, get_group0_id());
 
                 if (_endpoints_to_talk_with.empty()) {
                     auto live_endpoints = boost::copy_range<std::vector<inet_address>>(_live_endpoints);
@@ -2027,7 +2045,7 @@ future<> gossiper::do_shadow_round(std::unordered_set<gms::inet_address> nodes) 
                 // send a completely empty syn
                 for (const auto& node : nodes) {
                     utils::chunked_vector<gossip_digest> digests;
-                    gossip_digest_syn message(get_cluster_name(), get_partitioner_name(), digests);
+                    gossip_digest_syn message(get_cluster_name(), get_partitioner_name(), digests, get_group0_id());
                     auto id = get_msg_addr(node);
                     logger.trace("Sending a GossipDigestSyn (ShadowRound) to {} ...", id);
                     // Do it in the background.

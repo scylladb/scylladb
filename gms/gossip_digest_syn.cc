@@ -14,7 +14,7 @@
 namespace gms {
 
 std::ostream& operator<<(std::ostream& os, const gossip_digest_syn& syn) {
-    os << "cluster_id:" << syn._cluster_id << ",partioner:" << syn._partioner << ",";
+    os << "cluster_id:" << syn._cluster_id << ",partioner:" << syn._partioner << ",group0_id:" << syn._group0_id << ",";
     os << "digests:{";
     for (auto& d : syn._digests) {
         os << d << " ";
