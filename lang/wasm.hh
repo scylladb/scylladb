@@ -58,6 +58,7 @@ public:
     manager(const std::optional<wasm::startup_context>&);
     friend class cql3::query_processor;
     future<> stop();
+    seastar::future<> precompile(context& ctx, const std::vector<sstring>& arg_names, std::string script);
 };
 
 struct context {

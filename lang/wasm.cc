@@ -239,6 +239,10 @@ struct from_val_visitor {
     }
 };
 
+seastar::future<> manager::precompile(context& ctx, const std::vector<sstring>& arg_names, std::string script) {
+    return ::wasm::precompile(*_alien_runner, ctx, arg_names, std::move(script));
+}
+
 seastar::future<> precompile(alien_thread_runner& alien_runner, context& ctx, const std::vector<sstring>& arg_names, std::string script) {
     seastar::promise<rust::Box<wasmtime::Module>> done;
     alien_runner.submit(done, [&engine_ptr = ctx.engine_ptr, script = std::move(script)] {

@@ -174,9 +174,7 @@ public:
         return *_wasm._instance_cache;
     }
 
-    wasm::alien_thread_runner& alien_runner() {
-        return *_wasm._alien_runner;
-    }
+    wasm::manager& wasm() { return _wasm; }
 
     statements::prepared_statement::checked_weak_ptr get_prepared(const std::optional<auth::authenticated_user>& user, const prepared_cache_key_type& key) {
         if (user) {
