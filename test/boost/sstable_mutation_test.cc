@@ -22,7 +22,6 @@
 #include "replica/database.hh"
 #include "timestamp.hh"
 #include "schema/schema_builder.hh"
-#include "test/lib/mutation_source_test.hh"
 #include "partition_slice_builder.hh"
 #include "readers/combined.hh"
 #include "replica/memtable-sstable.hh"

@@ -17,7 +17,6 @@
 
 #include "sstables/generation_type.hh"
 #include "sstables/sstables.hh"
-#include "compaction/compaction_manager.hh"
 #include "sstables/key.hh"
 #include "test/lib/sstable_utils.hh"
 #include "test/lib/reader_concurrency_semaphore.hh"
@@ -30,8 +29,6 @@
 #include "test/boost/sstable_test.hh"
 #include "test/lib/tmpdir.hh"
 #include "partition_slice_builder.hh"
-#include "test/lib/test_services.hh"
-#include "cell_locking.hh"
 #include "sstables/sstable_mutation_reader.hh"
 
 #include <boost/range/combine.hpp>

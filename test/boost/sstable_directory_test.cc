@@ -19,10 +19,9 @@
 #include "test/lib/tmpdir.hh"
 #include "test/lib/key_utils.hh"
 #include "test/lib/test_utils.hh"
-#include "db/config.hh"
 #include "utils/lister.hh"
 
-#include "fmt/format.h"
+#include <fmt/core.h>
 
 class distributed_loader_for_tests {
 public:

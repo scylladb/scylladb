@@ -36,12 +36,9 @@
 #include "types/user.hh"
 #include "partition_slice_builder.hh"
 #include "schema/schema.hh"
-#include "utils/UUID_gen.hh"
 #include "encoding_stats.hh"
-#include "sstables/mx/writer.hh"
 #include "test/lib/simple_schema.hh"
 #include "test/lib/exception_utils.hh"
-#include "db/config.hh"
 #include "db/large_data_handler.hh"
 #include "readers/combined.hh"
 
