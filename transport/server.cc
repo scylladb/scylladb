@@ -183,6 +183,8 @@ event::event_type parse_event_type(const sstring& value)
         return event::event_type::STATUS_CHANGE;
     } else if (value == "SCHEMA_CHANGE") {
         return event::event_type::SCHEMA_CHANGE;
+    } else if (value == "TABLET_CHANGE") {
+        return event::event_type::TABLET_CHANGE;
     } else {
         throw exceptions::protocol_exception(format("Invalid value '{}' for Event.Type", value));
     }
@@ -1570,6 +1572,14 @@ cql_server::connection::make_schema_change_event(const event::schema_change& eve
     auto response = std::make_unique<cql_server::response>(-1, cql_binary_opcode::EVENT, tracing::trace_state_ptr());
     response->write_string("SCHEMA_CHANGE");
     response->serialize(event, _version);
+    return response;
+}
+
+std::unique_ptr<cql_server::response>
+cql_server::connection::make_tablet_change_event(const event::tablet_change& event) const
+{
+    auto response = std::make_unique<cql_server::response>(-1, cql_binary_opcode::EVENT, tracing::trace_state_ptr());
+    response->write_string("TABLET_CHANGE");
     return response;
 }
 

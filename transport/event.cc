@@ -71,4 +71,8 @@ event::schema_change::schema_change(change_type change, target_type target, sstr
         break;
     }
 }
+
+event::tablet_change::tablet_change()
+    : event{event_type::TABLET_CHANGE}
+{ }
 }

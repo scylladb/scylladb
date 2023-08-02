@@ -22,7 +22,7 @@ namespace cql_transport {
 
 class event {
 public:
-    enum class event_type { TOPOLOGY_CHANGE, STATUS_CHANGE, SCHEMA_CHANGE };
+    enum class event_type { TOPOLOGY_CHANGE, STATUS_CHANGE, SCHEMA_CHANGE, TABLET_CHANGE };
 
     const event_type type;
 private:
@@ -31,6 +31,7 @@ public:
     class topology_change;
     class status_change;
     class schema_change;
+    class tablet_change;
 };
 
 class event::topology_change : public event {
@@ -80,6 +81,11 @@ public:
     template <typename... Ts>
     schema_change(change_type change, target_type target, sstring keyspace, Ts... arguments)
         : schema_change(change, target, keyspace, std::vector<sstring>{std::move(arguments)...}) {}
+};
+
+class event::tablet_change : public event {
+public:
+    tablet_change();
 };
 
 }

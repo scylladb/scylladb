@@ -28,6 +28,9 @@ void cql_server::event_notifier::register_event(event::event_type et, cql_server
     case event::event_type::SCHEMA_CHANGE:
         _schema_change_listeners.emplace(conn);
         break;
+    case event::event_type::TABLET_CHANGE:
+        _tablet_change_listeners.emplace(conn);
+        break;
     }
 }
 
@@ -36,6 +39,7 @@ void cql_server::event_notifier::unregister_connection(cql_server::connection* c
     _topology_change_listeners.erase(conn);
     _status_change_listeners.erase(conn);
     _schema_change_listeners.erase(conn);
+    _tablet_change_listeners.erase(conn);
 }
 
 void cql_server::event_notifier::on_create_keyspace(const sstring& ks_name)
@@ -156,7 +160,14 @@ void cql_server::event_notifier::on_update_aggregate(const sstring& ks_name, con
     elogger.warn("%s event ignored", __func__);
 }
 
-void cql_server::event_notifier::on_update_tablet_metadata() {}
+void cql_server::event_notifier::on_update_tablet_metadata() {
+    for (auto && conn : _tablet_change_listeners) {
+        using namespace cql_transport;
+        if (!conn->_pending_requests_gate.is_closed()) {
+            conn->write_response(conn->make_tablet_change_event(event::tablet_change{}));
+        };
+    }
+}
 
 void cql_server::event_notifier::on_drop_keyspace(const sstring& ks_name)
 {
