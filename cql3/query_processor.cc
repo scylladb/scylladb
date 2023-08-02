@@ -58,6 +58,12 @@ static service::query_state query_state_for_internal_call() {
     return {service::client_state::for_internal_calls(), empty_service_permit()};
 }
 
+wasm_context::wasm_context(std::optional<wasm::startup_context>& ctx)
+        : _engine(ctx ? std::move(ctx->engine) : nullptr)
+        , _instance_cache(ctx ? std::make_optional<wasm::instance_cache>(ctx->cache_size, ctx->instance_size, ctx->timer_period) : std::nullopt)
+        , _alien_runner(ctx ? std::move(ctx->alien_runner) : nullptr)
+{}
+
 query_processor::query_processor(service::storage_proxy& proxy, data_dictionary::database db, service::migration_notifier& mn, query_processor::memory_config mcfg, cql_config& cql_cfg, utils::loading_cache_config auth_prep_cache_cfg, std::optional<wasm::startup_context> wasm_ctx)
         : _migration_subscriber{std::make_unique<migration_subscriber>(this)}
         , _proxy(proxy)
@@ -71,9 +77,7 @@ query_processor::query_processor(service::storage_proxy& proxy, data_dictionary:
         , _authorized_prepared_cache_config_action([this] { update_authorized_prepared_cache_config(); return make_ready_future<>(); })
         , _authorized_prepared_cache_update_interval_in_ms_observer(_db.get_config().permissions_update_interval_in_ms.observe(_auth_prepared_cache_cfg_cb))
         , _authorized_prepared_cache_validity_in_ms_observer(_db.get_config().permissions_validity_in_ms.observe(_auth_prepared_cache_cfg_cb))
-        , _wasm_engine(wasm_ctx ? std::move(wasm_ctx->engine) : nullptr)
-        , _wasm_instance_cache(wasm_ctx ? std::make_optional<wasm::instance_cache>(wasm_ctx->cache_size, wasm_ctx->instance_size, wasm_ctx->timer_period) : std::nullopt)
-        , _alien_runner(wasm_ctx ? std::move(wasm_ctx->alien_runner) : nullptr)
+        , _wasm(wasm_ctx)
         {
     namespace sm = seastar::metrics;
     namespace stm = statements;
@@ -484,7 +488,7 @@ future<> query_processor::stop() {
     return _mnotifier.unregister_listener(_migration_subscriber.get()).then([this] {
         return _authorized_prepared_cache.stop().finally([this] { return _prepared_cache.stop(); });
     }).then([this] {
-        return _wasm_instance_cache ? _wasm_instance_cache->stop() : make_ready_future<>();
+        return _wasm._instance_cache ? _wasm._instance_cache->stop() : make_ready_future<>();
     });
 }
 

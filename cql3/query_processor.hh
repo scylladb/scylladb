@@ -88,6 +88,17 @@ public:
 class cql_config;
 class query_options;
 class cql_statement;
+class query_processor;
+
+class wasm_context {
+    std::shared_ptr<rust::Box<wasmtime::Engine>> _engine;
+    std::optional<wasm::instance_cache> _instance_cache;
+    std::shared_ptr<wasm::alien_thread_runner> _alien_runner;
+
+public:
+    wasm_context(std::optional<wasm::startup_context>&);
+    friend class query_processor;
+};
 
 class query_processor : public seastar::peering_sharded_service<query_processor> {
 public:
@@ -129,9 +140,7 @@ private:
     // don't bother with expiration on those.
     std::unordered_map<sstring, std::unique_ptr<statements::prepared_statement>> _internal_statements;
 
-    std::shared_ptr<rust::Box<wasmtime::Engine>> _wasm_engine;
-    std::optional<wasm::instance_cache> _wasm_instance_cache;
-    std::shared_ptr<wasm::alien_thread_runner> _alien_runner;
+    wasm_context _wasm;
 public:
     static const sstring CQL_VERSION;
 
@@ -170,15 +179,15 @@ public:
     }
 
     wasmtime::Engine& wasm_engine() {
-        return **_wasm_engine;
+        return **_wasm._engine;
     }
 
     wasm::instance_cache& wasm_instance_cache() {
-        return *_wasm_instance_cache;
+        return *_wasm._instance_cache;
     }
 
     wasm::alien_thread_runner& alien_runner() {
-        return *_alien_runner;
+        return *_wasm._alien_runner;
     }
 
     statements::prepared_statement::checked_weak_ptr get_prepared(const std::optional<auth::authenticated_user>& user, const prepared_cache_key_type& key) {
