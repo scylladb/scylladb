@@ -106,7 +106,7 @@ void verification_error(fs::path path, const char* fstr, Args&&... args) {
 // Verify that all files and directories are owned by current uid
 // and that files can be read and directories can be read, written, and looked up (execute)
 // No other file types may exist.
-future<> directories::verify_owner_and_mode(fs::path path) {
+future<> directories::do_verify_owner_and_mode(fs::path path, recursive recurse, int level) {
     auto sd = co_await file_stat(path.string(), follow_symlink::no);
     // Under docker, we run with euid 0 and there is no reasonable way to enforce that the
     // in-container uid will have the same uid as files mounted from outside the container. So
@@ -128,8 +128,11 @@ future<> directories::verify_owner_and_mode(fs::path path) {
         if (!can_access) {
             verification_error(std::move(path), "Directory cannot be accessed for read, write, and execute");
         }
-        co_await lister::scan_dir(path, {}, [] (fs::path dir, directory_entry de) -> future<> {
-            co_await verify_owner_and_mode(dir / de.name);
+        if (level && !recurse) {
+            co_return;
+        }
+        co_await lister::scan_dir(path, {}, [recurse, level = level + 1] (fs::path dir, directory_entry de) -> future<> {
+            co_await do_verify_owner_and_mode(dir / de.name, recurse, level);
         });
         break;
     }
@@ -137,5 +140,9 @@ future<> directories::verify_owner_and_mode(fs::path path) {
         verification_error(std::move(path), "Must be either a regular file or a directory (type={})", static_cast<int>(sd.type));
     }
 };
+
+future<> directories::verify_owner_and_mode(fs::path path, recursive recursive) {
+    return do_verify_owner_and_mode(std::move(path), recursive, 0);
+}
 
 } // namespace utils
