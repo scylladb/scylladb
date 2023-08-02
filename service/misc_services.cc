@@ -266,7 +266,7 @@ future<> view_update_backlog_broker::stop() {
     });
 }
 
-future<> view_update_backlog_broker::on_change(gms::inet_address endpoint, gms::application_state state, const gms::versioned_value& value) {
+future<> view_update_backlog_broker::on_change(gms::inet_address endpoint, gms::application_state state, const gms::versioned_value& value, gms::permit_id) {
     if (state == gms::application_state::VIEW_BACKLOG) {
         size_t current;
         size_t max;
@@ -296,7 +296,7 @@ future<> view_update_backlog_broker::on_change(gms::inet_address endpoint, gms::
     return make_ready_future();
 }
 
-future<> view_update_backlog_broker::on_remove(gms::inet_address endpoint) {
+future<> view_update_backlog_broker::on_remove(gms::inet_address endpoint, gms::permit_id) {
     _sp.local()._view_update_backlogs.erase(endpoint);
     return make_ready_future();
 }

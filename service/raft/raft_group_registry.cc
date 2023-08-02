@@ -97,7 +97,7 @@ public:
     {}
 
     virtual future<>
-    on_join(gms::inet_address endpoint, gms::endpoint_state ep_state) override {
+    on_join(gms::inet_address endpoint, gms::endpoint_state ep_state, gms::permit_id) override {
         return on_endpoint_change(endpoint, ep_state);
     }
 
@@ -111,13 +111,13 @@ public:
 
     virtual future<>
     on_change(gms::inet_address endpoint,
-        gms::application_state state, const gms::versioned_value& value) override {
+        gms::application_state state, const gms::versioned_value& value, gms::permit_id) override {
         // Raft server ID never changes - do nothing
         return make_ready_future<>();
     }
 
     virtual future<>
-    on_alive(gms::inet_address endpoint, gms::endpoint_state ep_state) override {
+    on_alive(gms::inet_address endpoint, gms::endpoint_state ep_state, gms::permit_id) override {
         co_await utils::get_local_injector().inject_with_handler("raft_group_registry::on_alive", [endpoint, &ep_state] (auto& handler) -> future<> {
             auto app_state_ptr = ep_state.get_application_state_ptr(gms::application_state::HOST_ID);
             if (!app_state_ptr) {
@@ -139,12 +139,12 @@ public:
     }
 
     virtual future<>
-    on_dead(gms::inet_address endpoint, gms::endpoint_state state) override {
+    on_dead(gms::inet_address endpoint, gms::endpoint_state state, gms::permit_id) override {
         return make_ready_future<>();
     }
 
     virtual future<>
-    on_remove(gms::inet_address endpoint) override {
+    on_remove(gms::inet_address endpoint, gms::permit_id) override {
         // The mapping is removed when the server is removed from
         // Raft configuration, not when it's dead or alive, or
         // removed
@@ -152,7 +152,7 @@ public:
     }
 
     virtual future<>
-    on_restart(gms::inet_address endpoint, gms::endpoint_state ep_state) override {
+    on_restart(gms::inet_address endpoint, gms::endpoint_state ep_state, gms::permit_id) override {
         return on_endpoint_change(endpoint, ep_state);
     }
 };

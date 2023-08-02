@@ -117,7 +117,7 @@ public:
     }
 };
 
-inline UUID null_uuid() noexcept {
+inline constexpr UUID null_uuid() noexcept {
     return UUID();
 }
 
@@ -210,9 +210,9 @@ struct tagged_uuid {
         return bool(id);
     }
     static tagged_uuid create_random_id() noexcept { return tagged_uuid{utils::make_random_uuid()}; }
-    static tagged_uuid create_null_id() noexcept { return tagged_uuid{utils::null_uuid()}; }
+    static constexpr tagged_uuid create_null_id() noexcept { return tagged_uuid{}; }
     explicit tagged_uuid(const utils::UUID& uuid) noexcept : id(uuid) {}
-    tagged_uuid() = default;
+    constexpr tagged_uuid() = default;
 
     const utils::UUID& uuid() const noexcept {
         return id;
