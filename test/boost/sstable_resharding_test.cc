@@ -6,21 +6,17 @@
 #include <seastar/core/future-util.hh>
 #include <seastar/core/do_with.hh>
 #include <seastar/core/distributed.hh>
-#include "types/map.hh"
 #include "sstables/sstables.hh"
 #include "test/lib/scylla_test_case.hh"
 #include "schema/schema.hh"
 #include "replica/database.hh"
-#include "dht/murmur3_partitioner.hh"
 #include "compaction/compaction_manager.hh"
 #include "test/boost/sstable_test.hh"
-#include "cell_locking.hh"
 #include "test/lib/flat_mutation_reader_assertions.hh"
 #include "test/lib/key_utils.hh"
 #include "test/lib/sstable_utils.hh"
 #include "test/lib/test_services.hh"
 #include "test/lib/test_utils.hh"
-#include "service/storage_proxy.hh"
 #include "db/config.hh"
 
 using namespace sstables;

@@ -15,7 +15,6 @@
 #include <seastar/core/coroutine.hh>
 
 #include "sstables/sstables.hh"
-#include "sstables/key.hh"
 #include "sstables/compress.hh"
 #include "compaction/compaction.hh"
 #include "test/lib/scylla_test_case.hh"
@@ -33,10 +32,8 @@
 #include "compaction/compaction_manager.hh"
 #include "test/lib/tmpdir.hh"
 #include "dht/i_partitioner.hh"
-#include "dht/murmur3_partitioner.hh"
 #include "range.hh"
 #include "partition_slice_builder.hh"
-#include "compaction/compaction_strategy_impl.hh"
 #include "compaction/time_window_compaction_strategy.hh"
 #include "compaction/leveled_compaction_strategy.hh"
 #include "test/lib/mutation_assertions.hh"
@@ -44,11 +41,8 @@
 #include "cell_locking.hh"
 #include "test/lib/simple_schema.hh"
 #include "replica/memtable-sstable.hh"
-#include "test/lib/index_reader_assertions.hh"
 #include "test/lib/flat_mutation_reader_assertions.hh"
-#include "test/lib/make_random_string.hh"
 #include "test/lib/sstable_run_based_compaction_strategy_for_tests.hh"
-#include "compatible_ring_position.hh"
 #include "mutation/mutation_compactor.hh"
 #include "db/config.hh"
 #include "mutation_writer/partition_based_splitting_writer.hh"
@@ -62,6 +56,7 @@
 #include <boost/algorithm/cxx11/all_of.hpp>
 #include <boost/algorithm/cxx11/is_sorted.hpp>
 #include <boost/icl/interval_map.hpp>
+#include <seastar/testing/test_case.hh>
 #include "test/lib/test_services.hh"
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/reader_concurrency_semaphore.hh"
