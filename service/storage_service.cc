@@ -6078,7 +6078,7 @@ storage_service::get_all_ranges(const std::vector<token>& sorted_tokens) const {
         co_return dht::token_range_vector();
     int size = sorted_tokens.size();
     dht::token_range_vector ranges;
-    ranges.reserve(size);
+    ranges.reserve(size + 1);
     ranges.push_back(dht::token_range::make_ending_with(range_bound<token>(sorted_tokens[0], true)));
     co_await coroutine::maybe_yield();
     for (int i = 1; i < size; ++i) {
