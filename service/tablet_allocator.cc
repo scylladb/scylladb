@@ -701,6 +701,10 @@ public:
         }
     }
 
+    void on_leadership_lost() {
+        _load_balancer_stats.unregister();
+    }
+
     // FIXME: Handle materialized views.
 };
 
@@ -718,6 +722,10 @@ future<migration_plan> tablet_allocator::balance_tablets(locator::token_metadata
 
 tablet_allocator_impl& tablet_allocator::impl() {
     return static_cast<tablet_allocator_impl&>(*_impl);
+}
+
+void tablet_allocator::on_leadership_lost() {
+    impl().on_leadership_lost();
 }
 
 }

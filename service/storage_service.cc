@@ -2007,6 +2007,11 @@ future<> storage_service::raft_state_monitor_fiber(raft::server& raft, cdc::gene
                     as->request_abort(); // we are no longer a leader, so abort the coordinator
                     co_await std::exchange(_topology_change_coordinator, make_ready_future<>());
                     as = std::nullopt;
+                    try {
+                        _tablet_allocator.local().on_leadership_lost();
+                    } catch (...) {
+                        slogger.error("tablet_allocator::on_leadership_lost() failed: {}", std::current_exception());
+                    }
                 }
             }
             // We are the leader now but that can change any time!

@@ -65,6 +65,9 @@ public:
     /// The algorithm takes care of limiting the streaming load on the system, also by taking active migrations into account.
     ///
     future<migration_plan> balance_tablets(locator::token_metadata_ptr);
+
+    /// Should be called when the node is no longer a leader.
+    void on_leadership_lost();
 };
 
 }
