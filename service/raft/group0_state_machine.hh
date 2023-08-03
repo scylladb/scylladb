@@ -8,7 +8,9 @@
 #pragma once
 
 #include <seastar/core/gate.hh>
+#include <seastar/core/abort_source.hh>
 
+#include "seastar/core/abort_source.hh"
 #include "service/broadcast_tables/experimental/lang.hh"
 #include "raft/raft.hh"
 #include "utils/UUID_gen.hh"
@@ -88,6 +90,7 @@ class group0_state_machine : public raft_state_machine {
     storage_service& _ss;
     cdc::generation_service& _cdc_gen_svc;
     seastar::gate _gate;
+    abort_source _abort_source;
 
     future<> merge_and_apply(group0_state_machine_merger& merger);
 public:

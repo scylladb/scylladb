@@ -492,6 +492,8 @@ public:
     future<> unregister_migration_request();
     future<rpc::tuple<std::vector<frozen_mutation>, rpc::optional<std::vector<canonical_mutation>>>> send_migration_request(msg_addr id,
             schema_pull_options options);
+    future<rpc::tuple<std::vector<frozen_mutation>, rpc::optional<std::vector<canonical_mutation>>>> send_migration_request(msg_addr id,
+            abort_source& as, schema_pull_options options);
 
     // Wrapper for GET_SCHEMA_VERSION
     void register_get_schema_version(std::function<future<frozen_schema>(unsigned, table_schema_version)>&& func);
