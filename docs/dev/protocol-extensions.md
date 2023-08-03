@@ -180,3 +180,7 @@ The string map in the SUPPORTED response will contain the following parameters:
 
   - `ERROR_CODE`: a 32-bit signed decimal integer which Scylla
     will use as the error code for the rate limit exception.
+
+## Tablet change event
+
+When the tablet table changes, there is an event notification sent (`cql_transport::event::event_type::TABLET_CHANGE`). Currently it only informs that something changed without specifying details. The body of the message is empty (except the event type).
