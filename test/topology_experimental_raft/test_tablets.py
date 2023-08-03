@@ -118,6 +118,25 @@ async def test_scans(manager: ManagerClient):
 
 
 @pytest.mark.asyncio
+async def test_table_drop_with_auto_snapshot(manager: ManagerClient):
+    logger.info("Bootstrapping cluster")
+    cfg = { 'auto_snapshot': True }
+    servers = [await manager.server_add(config = cfg),
+               await manager.server_add(config = cfg),
+               await manager.server_add(config = cfg)]
+
+    cql = manager.get_cql()
+
+    for i in range(3):
+        await cql.run_async("DROP KEYSPACE IF EXISTS test;")
+        await cql.run_async("CREATE KEYSPACE IF NOT EXISTS test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1, 'initial_tablets': 8 };")
+        await cql.run_async("CREATE TABLE IF NOT EXISTS test.tbl_sample_kv (id int, value text, PRIMARY KEY (id));")
+        await cql.run_async("INSERT INTO test.tbl_sample_kv (id, value) VALUES (1, 'ala');")
+
+    await cql.run_async("DROP KEYSPACE test;")
+
+
+@pytest.mark.asyncio
 async def test_bootstrap(manager: ManagerClient):
     logger.info("Bootstrapping cluster")
     servers = [await manager.server_add(), await manager.server_add(), await manager.server_add()]
