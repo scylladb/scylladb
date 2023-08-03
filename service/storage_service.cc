@@ -6605,6 +6605,7 @@ future<> storage_service::stream_tablet(locator::global_tablet_id tablet) {
         auto streamer = make_lw_shared<dht::range_streamer>(_db, _stream_manager, std::move(tm), guard.get_abort_source(),
                get_broadcast_address(), _snitch.local()->get_location(),
                "Tablet migration", streaming::stream_reason::tablet_migration, topo_guard, std::move(tables));
+        tm = nullptr;
         streamer->add_source_filter(std::make_unique<dht::range_streamer::failure_detector_source_filter>(
                 _gossiper.get_unreachable_members()));
 

@@ -245,6 +245,7 @@ future<> range_streamer::add_ranges(const sstring& keyspace_name, locator::vnode
 future<> range_streamer::stream_async() {
     _nr_ranges_remaining = nr_ranges_to_stream();
     _nr_total_ranges = _nr_ranges_remaining;
+    _token_metadata_ptr = nullptr;
     logger.info("{} starts, nr_ranges_remaining={}", _description, _nr_ranges_remaining);
     auto start = lowres_clock::now();
     return do_for_each(_to_stream, [this, description = _description] (auto& stream) {

@@ -144,6 +144,7 @@ private:
     }
 #endif
 
+    // Can be called only before stream_async().
     const token_metadata& get_token_metadata() {
         return *_token_metadata_ptr;
     }
@@ -153,7 +154,7 @@ public:
 private:
     distributed<replica::database>& _db;
     sharded<streaming::stream_manager>& _stream_manager;
-    const token_metadata_ptr _token_metadata_ptr;
+    token_metadata_ptr _token_metadata_ptr;
     abort_source& _abort_source;
     std::unordered_set<token> _tokens;
     inet_address _address;
