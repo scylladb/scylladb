@@ -35,20 +35,6 @@ namespace sstables {
 class sstables_manager;
 bool manifest_json_filter(const std::filesystem::path&, const directory_entry& entry);
 
-class directory_semaphore {
-    unsigned _concurrency;
-    semaphore _sem;
-public:
-    directory_semaphore(unsigned concurrency)
-            : _concurrency(concurrency)
-            , _sem(concurrency)
-    {
-    }
-
-    friend class sstable_directory;
-    friend class ::replica::table; // FIXME table snapshots should switch to sstable_directory
-};
-
 // Handles a directory containing SSTables. It could be an auxiliary directory (like upload),
 // or the main directory.
 class sstable_directory {
@@ -167,9 +153,6 @@ private:
     future<sstables::shared_sstable> load_sstable(sstables::entry_descriptor desc, sstables::sstable_open_config cfg = {}) const;
     future<sstables::shared_sstable> load_sstable(sstables::entry_descriptor desc, process_flags flags) const;
 
-    template <std::ranges::range Container, typename Func>
-    requires std::is_invocable_r_v<future<>, Func, typename std::ranges::range_value_t<Container>&>
-    future<> parallel_for_each_restricted(Container& C, Func func);
     future<> load_foreign_sstables(sstable_entry_descriptor_vector info_vec);
 
     // Sort the sstable according to owner

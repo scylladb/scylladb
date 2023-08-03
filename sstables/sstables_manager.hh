@@ -39,11 +39,24 @@ namespace gms { class feature_service; }
 
 namespace sstables {
 
-class directory_semaphore;
 using schema_ptr = lw_shared_ptr<const schema>;
 using shareable_components_ptr = lw_shared_ptr<shareable_components>;
 
 static constexpr size_t default_sstable_buffer_size = 128 * 1024;
+
+class directory_semaphore {
+    unsigned _concurrency;
+    semaphore _sem;
+public:
+    directory_semaphore(unsigned concurrency)
+            : _concurrency(concurrency)
+            , _sem(concurrency)
+    {
+    }
+
+    friend class sstables_manager;
+    friend class ::replica::table; // FIXME table snapshots should switch to sstable_directory
+};
 
 class storage_manager : public peering_sharded_service<storage_manager> {
     struct config_updater {
@@ -141,7 +154,6 @@ public:
     // Note that close() will not complete until all references to all
     // sstables have been destroyed.
     future<> close();
-    directory_semaphore& dir_semaphore() noexcept { return _dir_semaphore; }
 
     void plug_system_keyspace(db::system_keyspace& sys_ks) noexcept;
     void unplug_system_keyspace() noexcept;
@@ -153,6 +165,15 @@ public:
     }
 
     future<> delete_atomically(std::vector<shared_sstable> ssts);
+
+    template <std::ranges::range Container, typename Func>
+    requires std::is_invocable_r_v<future<>, Func, typename std::ranges::range_value_t<Container>&>
+    future<> parallel_for_each_restricted(Container& c, Func func) {
+        co_await max_concurrent_for_each(c, _dir_semaphore._concurrency, [&] (auto& el) -> future<>{
+            auto units = co_await get_units(_dir_semaphore._sem, 1);
+            co_await func(el);
+        });
+    }
 
 private:
     void add(sstable* sst);
