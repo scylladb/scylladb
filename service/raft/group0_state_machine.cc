@@ -179,6 +179,8 @@ future<> group0_state_machine::transfer_snapshot(gms::inet_address from, raft::s
     // log, so some raft entries may be double applied, but since the state
     // machine is idempotent it is not a problem.
 
+    auto holder = _gate.hold();
+
     slogger.trace("transfer snapshot from {} index {} snp id {}", from, snp.idx, snp.id);
     netw::messaging_service::msg_addr addr{from, 0};
     // (Ab)use MIGRATION_REQUEST to also transfer group0 history table mutation besides schema tables mutations.
@@ -207,7 +209,7 @@ future<> group0_state_machine::transfer_snapshot(gms::inet_address from, raft::s
 }
 
 future<> group0_state_machine::abort() {
-    return make_ready_future<>();
+    return _gate.close();
 }
 
 } // end of namespace service
