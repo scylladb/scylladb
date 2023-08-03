@@ -2483,9 +2483,12 @@ const std::vector<operation_option> global_options {
     typed_option<sstring>("scylla-data-dir", "path to the scylla data dir (usually /var/lib/scylla/data), to read the schema tables from"),
 };
 
-const std::vector<app_template::positional_option> global_positional_options{
-    {"sstables", bpo::value<std::vector<sstring>>(), "sstable(s) to process for operations that have sstable inputs, can also be provided as positional arguments", -1},
-};
+static auto get_global_positional_options() {
+    static const std::vector<app_template::positional_option> options = {
+        {"sstables", bpo::value<std::vector<sstring>>(), "sstable(s) to process for operations that have sstable inputs, can also be provided as positional arguments", -1},
+    };
+    return &options;
+}
 
 const std::map<operation, operation_func> operations_with_func{
 /* dump-data */
@@ -2842,7 +2845,7 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
             .lsa_segment_pool_backend_size_mb = 100,
             .operations = std::move(operations),
             .global_options = &global_options,
-            .global_positional_options = &global_positional_options};
+            .global_positional_options = get_global_positional_options()};
     tool_app_template app(std::move(app_cfg));
 
     return app.run_async(argc, argv, [] (const operation& operation, const bpo::variables_map& app_config) {
