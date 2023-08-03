@@ -5060,7 +5060,8 @@ future<> storage_service::stream_tablet(locator::global_tablet_id tablet) {
         if (!trinfo->session_id) {
             throw std::runtime_error(format("Tablet {} session is not set", tablet));
         }
-        if (trinfo->pending_replica.host != tm->get_my_id()) {
+        auto pending_replica = trinfo->pending_replica;
+        if (pending_replica.host != tm->get_my_id()) {
             throw std::runtime_error(format("Tablet {} has pending replica different than this one", tablet));
         }
 
@@ -5087,13 +5088,14 @@ future<> storage_service::stream_tablet(locator::global_tablet_id tablet) {
 
         auto& table = _db.local().find_column_family(tablet.table);
         std::vector<sstring> tables = {table.schema()->cf_name()};
-        auto streamer = make_lw_shared<dht::range_streamer>(_db, _stream_manager, tm,
+        auto streamer = make_lw_shared<dht::range_streamer>(_db, _stream_manager, std::move(tm),
                                                             guard.get_abort_source(),
                                                             tm->get_my_id(), _snitch.local()->get_location(),
                                                             format("Tablet {}", trinfo->transition),
                                                             reason,
                                                             topo_guard,
                                                             std::move(tables));
+        tm = nullptr;
         streamer->add_source_filter(std::make_unique<dht::range_streamer::failure_detector_source_filter>(
                 _gossiper.get_unreachable_members()));
 
@@ -5115,7 +5117,7 @@ future<> storage_service::stream_tablet(locator::global_tablet_id tablet) {
         //  participating in streaming anymore (which is true), so it could schedule more
         //  migrations. This way compaction would run in parallel with streaming which can
         //  reduce the delay.
-        co_await _db.invoke_on(trinfo->pending_replica.shard, [tablet] (replica::database& db) {
+        co_await _db.invoke_on(pending_replica.shard, [tablet] (replica::database& db) {
             auto& table = db.find_column_family(tablet.table);
             return table.maybe_split_compaction_group_of(tablet.tablet);
         });
