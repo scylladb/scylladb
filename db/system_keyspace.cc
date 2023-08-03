@@ -2531,9 +2531,8 @@ future<service::topology> system_keyspace::load_topology_state() {
             rebuild_option = row.get_as<sstring>("rebuild_option");
         }
 
-        std::set<sstring> supported_features;
-        if (row.has("supported_features")) {
-            supported_features = decode_features(deserialize_set_column(*topology(), row, "supported_features"));
+        if (row.has("supported_features") && nstate == service::node_state::normal) {
+            ret.features.normal_supported_features.emplace(host_id, decode_features(deserialize_set_column(*topology(), row, "supported_features")));
         }
 
         if (row.has("topology_request")) {
@@ -2602,7 +2601,7 @@ future<service::topology> system_keyspace::load_topology_state() {
         if (map) {
             map->emplace(host_id, service::replica_state{
                 nstate, std::move(datacenter), std::move(rack), std::move(release_version),
-                ring_slice, shard_count, ignore_msb, std::move(supported_features)});
+                ring_slice, shard_count, ignore_msb});
         }
     }
 
@@ -2677,7 +2676,7 @@ future<service::topology> system_keyspace::load_topology_state() {
         }
 
         if (some_row.has("enabled_features")) {
-            ret.enabled_features = decode_features(deserialize_set_column(*topology(), some_row, "enabled_features"));
+            ret.features.enabled_features = decode_features(deserialize_set_column(*topology(), some_row, "enabled_features"));
         }
     }
 

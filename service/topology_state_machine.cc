@@ -36,11 +36,11 @@ bool topology::contains(raft::server_id id) {
            left_nodes.contains(id);
 }
 
-std::set<sstring> topology::calculate_not_yet_enabled_features() const {
+std::set<sstring> topology_features::calculate_not_yet_enabled_features() const {
     std::set<sstring> to_enable;
     bool first = true;
 
-    for (const auto& [_, rs] : normal_nodes) {
+    for (const auto& [id, supported_features] : normal_supported_features) {
         if (!first && to_enable.empty()) {
             break;
         }
@@ -49,11 +49,13 @@ std::set<sstring> topology::calculate_not_yet_enabled_features() const {
             // This is the first node that we process.
             // Calculate the set of features that this node understands
             // but are not enabled yet.
-            std::ranges::set_difference(rs.supported_features, enabled_features, std::inserter(to_enable, to_enable.begin()));
+            std::ranges::set_difference(supported_features, enabled_features, std::inserter(to_enable, to_enable.begin()));
             first = false;
         } else {
             // Erase the elements that this node doesn't support
-            std::erase_if(to_enable, [&rs = rs] (const sstring& f) { return !rs.supported_features.contains(f); });
+            std::erase_if(to_enable, [&supported_features = supported_features] (const sstring& f) {
+                return !supported_features.contains(f);
+            });
         }
     }
 
