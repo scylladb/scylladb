@@ -6,50 +6,11 @@
 """
 Tests that are specific to the raft-based cluster feature implementation.
 """
-import logging
 import asyncio
 import time
-
 from test.pylib.manager_client import ManagerClient
-from test.pylib.rest_client import inject_error
 from test.pylib.util import wait_for_cql_and_get_hosts, wait_for_feature
-from test.topology import test_cluster_features
 import pytest
-
-
-@pytest.mark.asyncio
-async def test_rolling_upgrade_happy_path(manager: ManagerClient) -> None:
-    for _ in range(3):
-        await manager.server_add()
-    await test_cluster_features.test_rolling_upgrade_happy_path(manager)
-
-
-@pytest.mark.asyncio
-async def test_downgrade_after_partial_upgrade(manager: ManagerClient) -> None:
-    for _ in range(3):
-        await manager.server_add()
-    await test_cluster_features.test_downgrade_after_partial_upgrade(manager)
-
-
-@pytest.mark.asyncio
-async def test_joining_old_node_fails(manager: ManagerClient) -> None:
-    for _ in range(3):
-        await manager.server_add()
-    await test_cluster_features.test_joining_old_node_fails(manager)
-
-
-@pytest.mark.asyncio
-async def test_downgrade_after_successful_upgrade_fails(manager: ManagerClient) -> None:
-    for _ in range(3):
-        await manager.server_add()
-    await test_cluster_features.test_downgrade_after_successful_upgrade_fails(manager)
-
-
-@pytest.mark.asyncio
-async def test_partial_upgrade_can_be_finished_with_removenode(manager: ManagerClient) -> None:
-    for _ in range(3):
-        await manager.server_add()
-    await test_cluster_features.test_partial_upgrade_can_be_finished_with_removenode(manager)
 
 
 @pytest.mark.asyncio

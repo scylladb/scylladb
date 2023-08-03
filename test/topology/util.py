@@ -6,9 +6,11 @@
 """
 Test consistency of schema changes with topology changes.
 """
+import asyncio
 import logging
 import pytest
 import time
+from typing import Set, Optional, List
 from cassandra.cluster import Session  # type: ignore # pylint: disable=no-name-in-module
 from test.pylib.internal_types import ServerInfo
 from test.pylib.manager_client import ManagerClient
@@ -16,6 +18,11 @@ from test.pylib.util import wait_for, wait_for_cql_and_get_hosts, read_barrier
 
 
 logger = logging.getLogger(__name__)
+
+
+TEST_FEATURE_NAME = "TEST_ONLY_FEATURE"
+TEST_FEATURE_ENABLE_ERROR_INJECTION = "features_enable_test_feature"
+ERROR_INJECTIONS_AT_STARTUP_CONFIG_KEY = "error_injections_at_startup"
 
 
 async def reconnect_driver(manager: ManagerClient) -> Session:
@@ -92,3 +99,34 @@ async def wait_for_token_ring_and_group0_consistency(manager: ManagerClient, dea
                 return None
             return True
         await wait_for(token_ring_matches, deadline, period=.5)
+
+
+async def get_error_injections_enabled_at_startup(manager: ManagerClient, srv: ServerInfo) -> Set[str]:
+    # TODO: An "error injection enabled at startup" might not be a string, but a dictionary
+    #       with some options. The tests in this module only use strings, but it's worth
+    #       keeping that in mind here in case dicts start being used.
+    config = await manager.server_get_config(srv.server_id)
+    injections = config.get(ERROR_INJECTIONS_AT_STARTUP_CONFIG_KEY) or []
+    assert isinstance(injections, list)
+    assert all(isinstance(inj, str) for inj in injections)
+    return set(injections)
+
+
+async def change_support_for_test_feature_and_restart(manager: ManagerClient, srvs: List[ServerInfo], enable: bool, expected_error: Optional[str] = None) -> None:
+    """Stops all provided nodes, changes their support for test-only feature
+       and restarts them.
+    """
+    logging.info(f"Reconfiguring and restarting nodes {srvs} to {'enable' if enable else 'disable'} support for {TEST_FEATURE_NAME}")
+
+    async def adjust_feature_in_config(manager: ManagerClient, srv: ServerInfo, enable: bool):
+        injections = await get_error_injections_enabled_at_startup(manager, srv)
+        if enable:
+            injections.add(TEST_FEATURE_ENABLE_ERROR_INJECTION)
+        else:
+            injections.remove(TEST_FEATURE_ENABLE_ERROR_INJECTION)
+        await manager.server_update_config(srv.server_id, ERROR_INJECTIONS_AT_STARTUP_CONFIG_KEY, list(injections))
+
+    await asyncio.gather(*(manager.server_stop_gracefully(srv.server_id) for srv in srvs))
+    await asyncio.gather(*(adjust_feature_in_config(manager, srv, enable) for srv in srvs))
+    await asyncio.gather(*(manager.server_start(srv.server_id, expected_error) for srv in srvs))
+
