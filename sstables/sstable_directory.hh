@@ -249,7 +249,7 @@ public:
     // until all shards agree it can be deleted.
     //
     // This function only solves the second problem for now.
-    static future<> delete_with_pending_deletion_log(std::vector<shared_sstable> ssts);
+    static future<> delete_with_pending_deletion_log(sstables_manager&, std::vector<shared_sstable> ssts);
 
     static bool compare_sstable_storage_prefix(const sstring& a, const sstring& b) noexcept;
     future<> garbage_collect();

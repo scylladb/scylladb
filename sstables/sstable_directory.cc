@@ -460,8 +460,8 @@ bool sstable_directory::compare_sstable_storage_prefix(const sstring& prefix_a, 
     return size_a == size_b && sstring::traits_type::compare(prefix_a.begin(), prefix_b.begin(), size_a) == 0;
 }
 
-future<> sstable_directory::delete_with_pending_deletion_log(std::vector<shared_sstable> ssts) {
-    return seastar::async([ssts = std::move(ssts)] {
+future<> sstable_directory::delete_with_pending_deletion_log(sstables_manager& manager, std::vector<shared_sstable> ssts) {
+    return seastar::async([&manager, ssts = std::move(ssts)] {
         shared_sstable first = nullptr;
         min_max_tracker<generation_type> gen_tracker;
 
@@ -516,7 +516,7 @@ future<> sstable_directory::delete_with_pending_deletion_log(std::vector<shared_
             sstlog.warn("Error while writing {}: {}. Ignoring.", pending_delete_log, std::current_exception());
         }
 
-        parallel_for_each(ssts, [] (shared_sstable sst) {
+        manager.parallel_for_each_restricted(ssts, [] (shared_sstable sst) {
             return sst->unlink();
         }).get();
 
