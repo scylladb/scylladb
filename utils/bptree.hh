@@ -720,9 +720,8 @@ public:
                      * If we're already on the left-most leaf -- just insert, as
                      * there's no separatio key above it.
                      */
-                    if (!strict_separation_key) {
-                        assert(false && "Not implemented");
-                    }
+                    static_assert(strict_separation_key);
+
                     leaf = leaf->get_prev();
                     i = leaf->_num_keys;
                 }
