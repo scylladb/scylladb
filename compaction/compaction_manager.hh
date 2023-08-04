@@ -217,7 +217,7 @@ private:
     // similar-sized compaction.
     void postpone_compaction_for_table(compaction::table_state* t);
 
-    future<compaction_stats_opt> perform_sstable_scrub_validate_mode(compaction::table_state& t);
+    future<compaction_stats_opt> perform_sstable_scrub_validate_mode(compaction::table_state& t, std::optional<tasks::task_info> info);
     future<> update_static_shares(float shares);
 
     using get_candidates_func = std::function<future<std::vector<sstables::shared_sstable>>()>;
@@ -225,10 +225,11 @@ private:
     // Guarantees that a maintenance task, e.g. cleanup, will be performed on all files available at the time
     // by retrieving set of candidates only after all compactions for table T were stopped, if any.
     template<typename TaskType, typename... Args>
-    requires std::derived_from<TaskType, compaction::compaction_task_executor>
-    future<compaction_stats_opt> perform_task_on_all_files(compaction::table_state& t, sstables::compaction_type_options options, owned_ranges_ptr, get_candidates_func, Args... args);
+    requires std::derived_from<TaskType, compaction_task_executor> &&
+            std::derived_from<TaskType, compaction_task_impl>
+    future<compaction_manager::compaction_stats_opt> perform_task_on_all_files(std::optional<tasks::task_info> info, table_state& t, sstables::compaction_type_options options, owned_ranges_ptr owned_ranges_ptr, get_candidates_func get_func, Args... args);
 
-    future<compaction_stats_opt> rewrite_sstables(compaction::table_state& t, sstables::compaction_type_options options, owned_ranges_ptr, get_candidates_func, can_purge_tombstones can_purge = can_purge_tombstones::yes);
+    future<compaction_stats_opt> rewrite_sstables(compaction::table_state& t, sstables::compaction_type_options options, owned_ranges_ptr, get_candidates_func, std::optional<tasks::task_info> info, can_purge_tombstones can_purge = can_purge_tombstones::yes);
 
     // Stop all fibers, without waiting. Safe to be called multiple times.
     void do_stop() noexcept;
@@ -300,7 +301,7 @@ public:
 
     // Submit a table to be off-strategy compacted.
     // Returns true iff off-strategy compaction was required and performed.
-    future<bool> perform_offstrategy(compaction::table_state& t);
+    future<bool> perform_offstrategy(compaction::table_state& t, std::optional<tasks::task_info> info);
 
     // Submit a table to be cleaned up and wait for its termination.
     //
@@ -309,21 +310,21 @@ public:
     // Cleanup is about discarding keys that are no longer relevant for a
     // given sstable, e.g. after node loses part of its token range because
     // of a newly added node.
-    future<> perform_cleanup(owned_ranges_ptr sorted_owned_ranges, compaction::table_state& t);
+    future<> perform_cleanup(owned_ranges_ptr sorted_owned_ranges, compaction::table_state& t, std::optional<tasks::task_info> info);
 private:
-    future<> try_perform_cleanup(owned_ranges_ptr sorted_owned_ranges, compaction::table_state& t);
+    future<> try_perform_cleanup(owned_ranges_ptr sorted_owned_ranges, compaction::table_state& t, std::optional<tasks::task_info> info);
 
     // Add sst to or remove it from the respective compaction_state.sstables_requiring_cleanup set.
     bool update_sstable_cleanup_state(table_state& t, const sstables::shared_sstable& sst, const dht::token_range_vector& sorted_owned_ranges);
 public:
     // Submit a table to be upgraded and wait for its termination.
-    future<> perform_sstable_upgrade(owned_ranges_ptr sorted_owned_ranges, compaction::table_state& t, bool exclude_current_version);
+    future<> perform_sstable_upgrade(owned_ranges_ptr sorted_owned_ranges, compaction::table_state& t, bool exclude_current_version, std::optional<tasks::task_info> info = std::nullopt);
 
     // Submit a table to be scrubbed and wait for its termination.
-    future<compaction_stats_opt> perform_sstable_scrub(compaction::table_state& t, sstables::compaction_type_options::scrub opts);
+    future<compaction_stats_opt> perform_sstable_scrub(compaction::table_state& t, sstables::compaction_type_options::scrub opts, std::optional<tasks::task_info> info = std::nullopt);
 
     // Submit a table for major compaction.
-    future<> perform_major_compaction(compaction::table_state& t, tasks::task_info info = {});
+    future<> perform_major_compaction(compaction::table_state& t, std::optional<tasks::task_info> info = std::nullopt);
 
 
     // Run a custom job for a given table, defined by a function
@@ -333,7 +334,7 @@ public:
     // parameter type is the compaction type the operation can most closely be
     //      associated with, use compaction_type::Compaction, if none apply.
     // parameter job is a function that will carry the operation
-    future<> run_custom_job(compaction::table_state& s, sstables::compaction_type type, const char *desc, noncopyable_function<future<>(sstables::compaction_data&)> job);
+    future<> run_custom_job(compaction::table_state& s, sstables::compaction_type type, const char *desc, noncopyable_function<future<>(sstables::compaction_data&)> job, std::optional<tasks::task_info> info);
 
     class compaction_reenabler {
         compaction_manager& _cm;

@@ -1264,7 +1264,7 @@ compaction_group::update_main_sstable_list_on_compaction_completion(sstables::co
 }
 
 future<>
-table::compact_all_sstables(tasks::task_info info) {
+table::compact_all_sstables(std::optional<tasks::task_info> info) {
     co_await flush();
     co_await parallel_foreach_compaction_group([this, info] (compaction_group& cg) {
         return _compaction_manager.perform_major_compaction(cg.as_table_state(), info);
@@ -1300,7 +1300,7 @@ void table::trigger_offstrategy_compaction() {
     // Run in background.
     // This is safe since the the compaction task is tracked
     // by the compaction_manager until stop()
-    (void)perform_offstrategy_compaction().then_wrapped([this] (future<bool> f) {
+    (void)perform_offstrategy_compaction(tasks::task_info{}).then_wrapped([this] (future<bool> f) {
         if (f.failed()) {
             auto ex = f.get_exception();
             tlogger.warn("Offstrategy compaction of {}.{} failed: {}, ignoring", schema()->ks_name(), schema()->cf_name(), ex);
@@ -1308,23 +1308,23 @@ void table::trigger_offstrategy_compaction() {
     });
 }
 
-future<bool> table::perform_offstrategy_compaction() {
+future<bool> table::perform_offstrategy_compaction(std::optional<tasks::task_info> info) {
     // If the user calls trigger_offstrategy_compaction() to trigger
     // off-strategy explicitly, cancel the timeout based automatic trigger.
     _off_strategy_trigger.cancel();
     bool performed = false;
-    co_await parallel_foreach_compaction_group([this, &performed] (compaction_group& cg) -> future<> {
-        performed |= co_await _compaction_manager.perform_offstrategy(cg.as_table_state());
+    co_await parallel_foreach_compaction_group([this, &performed, info] (compaction_group& cg) -> future<> {
+        performed |= co_await _compaction_manager.perform_offstrategy(cg.as_table_state(), info);
     });
     co_return performed;
 }
 
-future<> table::perform_cleanup_compaction(compaction::owned_ranges_ptr sorted_owned_ranges) {
+future<> table::perform_cleanup_compaction(compaction::owned_ranges_ptr sorted_owned_ranges, std::optional<tasks::task_info> info) {
     co_await flush();
 
     if (_compaction_groups.size() == 1) {
         auto& cg = *_compaction_groups[0];
-        co_return co_await get_compaction_manager().perform_cleanup(std::move(sorted_owned_ranges), cg.as_table_state());
+        co_return co_await get_compaction_manager().perform_cleanup(std::move(sorted_owned_ranges), cg.as_table_state(), info);
     }
 
     // candidate ranges for the next compaction_group
@@ -1359,7 +1359,7 @@ future<> table::perform_cleanup_compaction(compaction::owned_ranges_ptr sorted_o
     }
     co_await parallel_foreach_compaction_group([&] (compaction_group& cg) {
         auto&& cg_ranges = std::move(cg_ranges_map.at(cg.token_range()));
-        return get_compaction_manager().perform_cleanup(std::move(cg_ranges), cg.as_table_state());
+        return get_compaction_manager().perform_cleanup(std::move(cg_ranges), cg.as_table_state(), info);
     });
 }
 

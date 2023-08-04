@@ -126,7 +126,7 @@ distribute_reshard_jobs(sstables::sstable_directory::sstable_open_info_vector so
 // A creator function must be passed that will create an SSTable object in the correct shard,
 // and an I/O priority must be specified.
 future<> reshard(sstables::sstable_directory& dir, sstables::sstable_directory::sstable_open_info_vector shared_info, replica::table& table,
-                           sstables::compaction_sstable_creator_fn creator, compaction::owned_ranges_ptr owned_ranges_ptr)
+                           sstables::compaction_sstable_creator_fn creator, compaction::owned_ranges_ptr owned_ranges_ptr, std::optional<tasks::task_info> parent_info)
 {
     // Resharding doesn't like empty sstable sets, so bail early. There is nothing
     // to reshard in this shard.
@@ -169,7 +169,7 @@ future<> reshard(sstables::sstable_directory& dir, sstables::sstable_directory::
             // input sstables are moved, to guarantee their resources are released once we're done
             // resharding them.
             co_await when_all_succeed(dir.collect_output_unshared_sstables(std::move(result.new_sstables), sstables::sstable_directory::can_be_remote::yes), dir.remove_sstables(std::move(sstlist))).discard_result();
-        });
+        }, parent_info);
     });
 }
 
@@ -323,7 +323,7 @@ future<> table_cleanup_keyspace_compaction_task_impl::run() {
     co_await wait_for_your_turn(_cv, _current_task, _status.id);
     auto owned_ranges_ptr = compaction::make_owned_ranges_ptr(_db.get_keyspace_local_ranges(_status.keyspace));
     co_await run_on_table("force_keyspace_cleanup", _db, _status.keyspace, _ti, [&] (replica::table& t) {
-        return t.perform_cleanup_compaction(owned_ranges_ptr);
+        return t.perform_cleanup_compaction(owned_ranges_ptr, tasks::task_info{_status.id, _status.shard});
     });
 }
 
@@ -360,8 +360,9 @@ tasks::is_internal table_offstrategy_keyspace_compaction_task_impl::is_internal(
 
 future<> table_offstrategy_keyspace_compaction_task_impl::run() {
     co_await wait_for_your_turn(_cv, _current_task, _status.id);
-    co_await run_on_table("perform_keyspace_offstrategy_compaction", _db, _status.keyspace, _ti, [this] (replica::table& t) -> future<> {
-        _needed |= co_await t.perform_offstrategy_compaction();
+    tasks::task_info info{_status.id, _status.shard};
+    co_await run_on_table("perform_keyspace_offstrategy_compaction", _db, _status.keyspace, _ti, [this, info] (replica::table& t) -> future<> {
+        _needed |= co_await t.perform_offstrategy_compaction(info);
     });
 }
 
@@ -397,9 +398,10 @@ tasks::is_internal table_upgrade_sstables_compaction_task_impl::is_internal() co
 future<> table_upgrade_sstables_compaction_task_impl::run() {
     co_await wait_for_your_turn(_cv, _current_task, _status.id);
     auto owned_ranges_ptr = compaction::make_owned_ranges_ptr(_db.get_keyspace_local_ranges(_status.keyspace));
+    tasks::task_info info{_status.id, _status.shard};
     co_await run_on_table("upgrade_sstables", _db, _status.keyspace, _ti, [&] (replica::table& t) -> future<> {
         return t.parallel_foreach_table_state([&] (compaction::table_state& ts) -> future<> {
-            return t.get_compaction_manager().perform_sstable_upgrade(owned_ranges_ptr, ts, _exclude_current_version);
+            return t.get_compaction_manager().perform_sstable_upgrade(owned_ranges_ptr, ts, _exclude_current_version, info);
         });
     });
 }
@@ -437,8 +439,9 @@ tasks::is_internal table_scrub_sstables_compaction_task_impl::is_internal() cons
 future<> table_scrub_sstables_compaction_task_impl::run() {
     auto& cm = _db.get_compaction_manager();
     auto& cf = _db.find_column_family(_status.keyspace, _status.table);
+    tasks::task_info info{_status.id, _status.shard};
     co_await cf.parallel_foreach_table_state([&] (compaction::table_state& ts) mutable -> future<> {
-        auto r = co_await cm.perform_sstable_scrub(ts, _opts);
+        auto r = co_await cm.perform_sstable_scrub(ts, _opts, info);
         _stats += r.value_or(sstables::compaction_stats{});
     });
 }
@@ -467,6 +470,7 @@ tasks::is_internal shard_reshaping_compaction_task_impl::is_internal() const noe
 future<> shard_reshaping_compaction_task_impl::run() {
     auto& table = _db.local().find_column_family(_status.keyspace, _status.table);
     uint64_t reshaped_size = 0;
+    tasks::task_info info{_status.id, _status.shard};
 
     while (true) {
         auto reshape_candidates = boost::copy_range<std::vector<sstables::shared_sstable>>(_dir.get_unshared_local_sstables()
@@ -496,7 +500,7 @@ future<> shard_reshaping_compaction_task_impl::run() {
                 sstables::compaction_result result = co_await sstables::compact_sstables(std::move(desc), info, table.as_table_state());
                 co_await dir.remove_unshared_sstables(std::move(sstlist));
                 co_await dir.collect_output_unshared_sstables(std::move(result.new_sstables), sstables::sstable_directory::can_be_remote::no);
-            });
+            }, info);
         } catch (...) {
             ex = std::current_exception();
         }
@@ -554,7 +558,8 @@ tasks::is_internal shard_resharding_compaction_task_impl::is_internal() const no
 future<> shard_resharding_compaction_task_impl::run() {
     auto& table = _db.find_column_family(_status.keyspace, _status.table);
     auto info_vec = std::move(_destinations[this_shard_id()].info_vec);
-    co_await reshard(_dir.local(), std::move(info_vec), table, _creator, std::move(_local_owned_ranges_ptr));
+    tasks::task_info info{_status.id, _status.shard};
+    co_await reshard(_dir.local(), std::move(info_vec), table, _creator, std::move(_local_owned_ranges_ptr), info);
     co_await _dir.local().move_foreign_sstables(_dir);
 }
 
