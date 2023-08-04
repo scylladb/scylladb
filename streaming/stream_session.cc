@@ -16,6 +16,7 @@
 #include "streaming/stream_result_future.hh"
 #include "streaming/stream_manager.hh"
 #include "dht/i_partitioner.hh"
+#include "dht/auto_refreshing_sharder.hh"
 #include "utils/fb_utilities.hh"
 #include "streaming/stream_plan.hh"
 #include <seastar/core/sleep.hh>
@@ -176,14 +177,15 @@ void stream_manager::init_messaging_service_handler(abort_source& as) {
             // Make sure the table with cf_id is still present at this point.
             // Close the sink in case the table is dropped.
             auto& table = _db.local().find_column_family(cf_id);
-            auto erm = table.get_effective_replication_map();
             auto op = table.stream_in_progress();
+            auto sharder_ptr = std::make_unique<dht::auto_refreshing_sharder>(table.shared_from_this());
+            auto& sharder = *sharder_ptr;
             //FIXME: discarded future.
-            (void)mutation_writer::distribute_reader_and_consume_on_shards(s, erm->get_sharder(*s),
+            (void)mutation_writer::distribute_reader_and_consume_on_shards(s, sharder,
                 make_generating_reader_v1(s, permit, std::move(get_next_mutation_fragment)),
                 make_streaming_consumer("streaming", _db, _sys_dist_ks, _view_update_generator, estimated_partitions, reason, is_offstrategy_supported(reason), topo_guard),
                 std::move(op)
-            ).then_wrapped([s, plan_id, from, sink, estimated_partitions, erm] (future<uint64_t> f) mutable {
+            ).then_wrapped([s, plan_id, from, sink, estimated_partitions, sh_ptr = std::move(sharder_ptr)] (future<uint64_t> f) mutable {
                 int32_t status = 0;
                 uint64_t received_partitions = 0;
                 if (f.failed()) {
