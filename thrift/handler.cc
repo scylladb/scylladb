@@ -871,9 +871,9 @@ public:
         });
     }
 
-    future<std::string> execute_schema_command(std::function<future<std::vector<mutation>>(data_dictionary::database, api::timestamp_type)> ddl) {
-        return _query_processor.invoke_on(0, [ddl = std::move(ddl)] (cql3::query_processor& qp) mutable {
-            return qp.execute_thrift_schema_command(std::move(ddl));
+    future<std::string> execute_schema_command(std::function<future<std::vector<mutation>>(data_dictionary::database, api::timestamp_type)> ddl, std::string_view description) {
+        return _query_processor.invoke_on(0, [ddl = std::move(ddl), description = std::move(description)] (cql3::query_processor& qp) mutable {
+            return qp.execute_thrift_schema_command(std::move(ddl), std::move(description));
         });
     }
 
@@ -895,7 +895,7 @@ public:
 
                 auto s = schema_from_thrift(cf_def, cf_def.keyspace);
                 co_return co_await service::prepare_new_column_family_announcement(p, std::move(s), ts);
-            });
+            }, format("thrift: create column family {}", cf_def.name));
         });
     }
     void system_drop_column_family(thrift_fn::function<void(std::string const& _return)> cob, thrift_fn::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& column_family) {
@@ -916,7 +916,7 @@ public:
                 }
 
                 co_return co_await service::prepare_column_family_drop_announcement(p, current_keyspace, column_family, ts);
-            });
+            }, format("thrift: drop column family {}", column_family));
         });
     }
 
@@ -930,7 +930,7 @@ public:
 
             co_return co_await t.execute_schema_command([&ks_def] (data_dictionary::database db, api::timestamp_type ts) -> future<std::vector<mutation>> {
                 co_return service::prepare_new_keyspace_announcement(db.real_database(), keyspace_from_thrift(ks_def), ts);
-            });
+            }, format("thrift: add {} keyspace", ks_def.name));
         });
     }
 
@@ -949,7 +949,7 @@ public:
                 }
 
                 co_return co_await service::prepare_keyspace_drop_announcement(db.real_database(), keyspace, ts);
-            });
+            }, format("thrift: drop {} keyspace", keyspace));
         });
     }
 
@@ -972,7 +972,7 @@ public:
 
                 auto ksm = keyspace_from_thrift(ks_def);
                 co_return service::prepare_keyspace_update_announcement(db.real_database(), std::move(ksm), ts);
-            });
+            }, format("thrift: update {} keyspace", ks_def.name));
         });
     }
 
@@ -1007,7 +1007,7 @@ public:
                     fail(unimplemented::cause::MIXED_CF);
                 }
                 co_return co_await service::prepare_column_family_update_announcement(p, std::move(s), true, std::vector<view_ptr>(), ts);
-            });
+            }, format("thrift: update column family {}", cf_def.name));
         });
     }
 

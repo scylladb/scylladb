@@ -394,9 +394,8 @@ public:
 
     future<std::string>
     execute_thrift_schema_command(
-            std::function<future<std::vector<mutation>>(
-                data_dictionary::database, api::timestamp_type)
-            > prepare_schema_mutations);
+            std::function<future<std::vector<mutation>>(data_dictionary::database, api::timestamp_type)> prepare_schema_mutations,
+            std::string_view description);
 
     std::unique_ptr<statements::prepared_statement> get_statement(
             const std::string_view& query,

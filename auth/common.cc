@@ -71,7 +71,8 @@ static future<> create_metadata_table_if_missing_impl(
         auto group0_guard = co_await mm.start_group0_operation();
         auto ts = group0_guard.write_timestamp();
         try {
-            co_return co_await mm.announce(co_await ::service::prepare_new_column_family_announcement(qp.proxy(), table, ts), std::move(group0_guard));
+            co_return co_await mm.announce(co_await ::service::prepare_new_column_family_announcement(qp.proxy(), table, ts),
+                    std::move(group0_guard), format("auth: create {} metadata table", table->cf_name()));
         } catch (exceptions::already_exists_exception&) {}
     }
 }
