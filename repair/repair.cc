@@ -346,7 +346,7 @@ static future<std::list<gms::inet_address>> get_hosts_participating_in_repair(
 }
 
 float node_ops_metrics::repair_finished_percentage() {
-    return _module->report_progress(streaming::stream_reason::repair);
+    return _module->report_progress();
 }
 
 repair::task_manager_module::task_manager_module(tasks::task_manager& tm, repair_service& rs, size_t max_repair_memory) noexcept
@@ -474,14 +474,14 @@ void repair::task_manager_module::abort_all_repairs() {
     rlogger.info0("Started to abort repair jobs={}, nr_jobs={}", _aborted_pending_repairs, _aborted_pending_repairs.size());
 }
 
-float repair::task_manager_module::report_progress(streaming::stream_reason reason) {
+float repair::task_manager_module::report_progress() {
     uint64_t nr_ranges_finished = 0;
     uint64_t nr_ranges_total = 0;
     for (auto& x : _repairs) {
         auto it = _tasks.find(x.second);
         if (it != _tasks.end()) {
             auto& impl = dynamic_cast<repair::shard_repair_task_impl&>(*it->second->_impl);
-            if (impl.reason() == reason) {
+            if (impl.reason() == streaming::stream_reason::repair) {
                 nr_ranges_total += impl.ranges_size();
                 nr_ranges_finished += impl.nr_ranges_finished;
             }
@@ -570,8 +570,6 @@ repair::shard_repair_task_impl::shard_repair_task_impl(tasks::task_manager::modu
     , rs(repair)
     , db(repair.get_db())
     , messaging(repair.get_messaging().container())
-    , sys_dist_ks(repair.get_sys_dist_ks())
-    , view_update_generator(repair.get_view_update_generator())
     , mm(repair.get_migration_manager())
     , gossiper(repair.get_gossiper())
     , sharder(get_sharder_for_tables(db, keyspace, table_ids_))
@@ -584,7 +582,6 @@ repair::shard_repair_task_impl::shard_repair_task_impl(tasks::task_manager::modu
     , hosts(hosts_)
     , ignore_nodes(ignore_nodes_)
     , total_rf(erm->get_replication_factor())
-    , nr_ranges_total(ranges.size())
     , _hints_batchlog_flushed(std::move(hints_batchlog_flushed))
     , _user_ranges_parallelism(ranges_parallelism ? std::optional<semaphore>(semaphore(*ranges_parallelism)) : std::nullopt)
 {
