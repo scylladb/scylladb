@@ -12,6 +12,7 @@
 #include "dht/token.hh"
 #include "message/messaging_service.hh"
 #include "mutation/canonical_mutation.hh"
+#include "seastar/core/abort_source.hh"
 #include "seastar/core/on_internal_error.hh"
 #include "service/broadcast_tables/experimental/query_result.hh"
 #include "schema_mutations.hh"
@@ -175,27 +176,32 @@ future<> group0_state_machine::load_snapshot(raft::snapshot_id id) {
 }
 
 future<> group0_state_machine::transfer_snapshot(gms::inet_address from, raft::snapshot_descriptor snp) {
+  try {
     // Note that this may bring newer state than the group0 state machine raft's
     // log, so some raft entries may be double applied, but since the state
     // machine is idempotent it is not a problem.
 
+    auto holder = _gate.hold();
+
     slogger.trace("transfer snapshot from {} index {} snp id {}", from, snp.idx, snp.id);
     netw::messaging_service::msg_addr addr{from, 0};
+    auto& as = _abort_source;
+
     // (Ab)use MIGRATION_REQUEST to also transfer group0 history table mutation besides schema tables mutations.
-    auto [_, cm] = co_await _mm._messaging.send_migration_request(addr, netw::schema_pull_options { .group0_snapshot_transfer = true });
+    auto [_, cm] = co_await _mm._messaging.send_migration_request(addr, as, netw::schema_pull_options { .group0_snapshot_transfer = true });
     if (!cm) {
         // If we're running this code then remote supports Raft group 0, so it should also support canonical mutations
         // (which were introduced a long time ago).
         on_internal_error(slogger, "Expected MIGRATION_REQUEST to return canonical mutations");
     }
 
-    auto topology_snp = co_await ser::storage_service_rpc_verbs::send_raft_pull_topology_snapshot(&_mm._messaging, addr, service::raft_topology_pull_params{});
+    auto topology_snp = co_await ser::storage_service_rpc_verbs::send_raft_pull_topology_snapshot(&_mm._messaging, addr, as, service::raft_topology_pull_params{});
 
     auto history_mut = extract_history_mutation(*cm, _sp.data_dictionary());
 
     // TODO ensure atomicity of snapshot application in presence of crashes (see TODO in `apply`)
 
-    auto read_apply_mutex_holder = co_await _client.hold_read_apply_mutex();
+    auto read_apply_mutex_holder = co_await _client.hold_read_apply_mutex(as);
 
     co_await _mm.merge_schema_from(addr, std::move(*cm));
 
@@ -204,10 +210,14 @@ future<> group0_state_machine::transfer_snapshot(gms::inet_address from, raft::s
     }
 
     co_await _sp.mutate_locally({std::move(history_mut)}, nullptr);
+  } catch (const abort_requested_exception&) {
+    throw raft::request_aborted();
+  }
 }
 
 future<> group0_state_machine::abort() {
-    return make_ready_future<>();
+    _abort_source.request_abort();
+    return _gate.close();
 }
 
 } // end of namespace service

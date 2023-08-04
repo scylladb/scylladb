@@ -1224,6 +1224,11 @@ future<rpc::tuple<std::vector<frozen_mutation>, rpc::optional<std::vector<canoni
     return send_message<future<rpc::tuple<std::vector<frozen_mutation>, rpc::optional<std::vector<canonical_mutation>>>>>(this, messaging_verb::MIGRATION_REQUEST,
             std::move(id), options);
 }
+future<rpc::tuple<std::vector<frozen_mutation>, rpc::optional<std::vector<canonical_mutation>>>> messaging_service::send_migration_request(msg_addr id,
+        abort_source& as, schema_pull_options options) {
+    return send_message_cancellable<future<rpc::tuple<std::vector<frozen_mutation>, rpc::optional<std::vector<canonical_mutation>>>>>(this, messaging_verb::MIGRATION_REQUEST,
+            std::move(id), as, options);
+}
 
 void messaging_service::register_get_schema_version(std::function<future<frozen_schema>(unsigned, table_schema_version)>&& func) {
     register_handler(this, netw::messaging_verb::GET_SCHEMA_VERSION, std::move(func));
