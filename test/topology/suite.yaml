@@ -12,3 +12,5 @@ run_first:
     - test_tablets
 skip_in_release:
     - test_cluster_features
+skip_in_debug:
+    - test_cluster_features

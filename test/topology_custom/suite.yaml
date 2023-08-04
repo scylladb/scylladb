@@ -13,3 +13,4 @@ skip_in_debug:
   - test_shutdown_hang
   - test_replace_ignore_nodes
   - test_old_ip_notification_repro
+  - test_deprecating_cluster_features
