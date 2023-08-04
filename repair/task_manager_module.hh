@@ -97,8 +97,6 @@ public:
     repair_service& rs;
     seastar::sharded<replica::database>& db;
     seastar::sharded<netw::messaging_service>& messaging;
-    sharded<db::system_distributed_keyspace>& sys_dist_ks;
-    sharded<db::view::view_update_generator>& view_update_generator;
     service::migration_manager& mm;
     gms::gossiper& gossiper;
     const dht::sharder& sharder;
@@ -113,7 +111,6 @@ public:
     std::unordered_map<dht::token_range, repair_neighbors> neighbors;
     size_t total_rf;
     uint64_t nr_ranges_finished = 0;
-    uint64_t nr_ranges_total;
     size_t nr_failed_ranges = 0;
     int ranges_index = 0;
     repair_stats _stats;

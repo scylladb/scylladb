@@ -569,8 +569,6 @@ repair::shard_repair_task_impl::shard_repair_task_impl(tasks::task_manager::modu
     , rs(repair)
     , db(repair.get_db())
     , messaging(repair.get_messaging().container())
-    , sys_dist_ks(repair.get_sys_dist_ks())
-    , view_update_generator(repair.get_view_update_generator())
     , mm(repair.get_migration_manager())
     , gossiper(repair.get_gossiper())
     , sharder(get_sharder_for_tables(db, keyspace, table_ids_))
@@ -583,7 +581,6 @@ repair::shard_repair_task_impl::shard_repair_task_impl(tasks::task_manager::modu
     , hosts(hosts_)
     , ignore_nodes(ignore_nodes_)
     , total_rf(erm->get_replication_factor())
-    , nr_ranges_total(ranges.size())
     , _hints_batchlog_flushed(std::move(hints_batchlog_flushed))
 { }
 
