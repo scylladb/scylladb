@@ -314,13 +314,13 @@ future<> storage_service::topology_state_load(cdc::generation_service& cdc_gen_s
     _topology_state_machine._topology = co_await _sys_ks.local().load_topology_state();
 
     co_await _feature_service.container().invoke_on_all([&] (gms::feature_service& fs) {
-        return fs.enable(boost::copy_range<std::set<std::string_view>>(_topology_state_machine._topology.enabled_features));
+        return fs.enable(boost::copy_range<std::set<std::string_view>>(_topology_state_machine._topology.features.enabled_features));
     });
 
     // Update the legacy `enabled_features` key in `system.scylla_local`.
     // It's OK to update it after enabling features because `system.topology` now
     // is the source of truth about enabled features.
-    co_await _sys_ks.local().save_local_enabled_features(_topology_state_machine._topology.enabled_features);
+    co_await _sys_ks.local().save_local_enabled_features(_topology_state_machine._topology.features.enabled_features);
 
     const auto& am = _group0->address_map();
     auto id2ip = [this, &am] (raft::server_id id) -> future<gms::inet_address> {
@@ -1477,7 +1477,7 @@ class topology_coordinator {
                 co_return true;
             }
 
-            if (auto feats = _topo_sm._topology.calculate_not_yet_enabled_features(); !feats.empty()) {
+            if (auto feats = _topo_sm._topology.features.calculate_not_yet_enabled_features(); !feats.empty()) {
                 co_await enable_features(std::move(guard), std::move(feats));
                 co_return true;
             }
@@ -2133,11 +2133,12 @@ future<> storage_service::do_update_topology_with_local_metadata(raft::server& r
         }
 
         auto& replica_state = it->second;
+        const auto& replica_supported_features = _topology_state_machine._topology.features.normal_supported_features[raft_server.id()];
 
         return replica_state.shard_count == local_shard_count
             && replica_state.ignore_msb == local_ignore_msb
             && replica_state.release_version == local_release_version
-            && replica_state.supported_features == local_supported_features;
+            && replica_supported_features == local_supported_features;
     };
 
     // We avoid performing a read barrier if we're sure that our metadata stored in topology

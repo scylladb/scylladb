@@ -16,6 +16,20 @@
 #include "cql3/column_identifier.hh"
 #include "transport/messages/result_message.hh"
 
+struct missing_column : public std::bad_variant_access {
+private:
+    sstring _msg;
+public:
+    missing_column(std::string_view column_name)
+            : bad_variant_access()
+            , _msg(format("missing column: {}", column_name))
+    {}
+
+    const char* what() const noexcept override {
+        return _msg.c_str();
+    }
+};
+
 cql3::untyped_result_set_row::untyped_result_set_row(const index_map& index, const cql3::metadata& metadata, data_views data)
     : _name_to_index(index)
     , _metadata(metadata)
@@ -38,7 +52,7 @@ bool cql3::untyped_result_set_row::has(std::string_view name) const {
 cql3::untyped_result_set_row::view_type cql3::untyped_result_set_row::get_view(std::string_view name) const {
     auto& data = _data.at(index(name));
     if (!data) {
-        throw std::bad_variant_access();
+        throw missing_column(name);
     }
     return *data;
 }

@@ -35,6 +35,7 @@ namespace service {
 class storage_service;
 class raft_group_registry;
 struct topology;
+struct topology_features;
 
 namespace paxos {
     class paxos_state;
@@ -475,6 +476,7 @@ public:
     future<bool> group0_history_contains(utils::UUID state_id);
 
     future<service::topology> load_topology_state();
+    future<service::topology_features> load_topology_features_state();
     future<int64_t> get_topology_fence_version();
     future<> update_topology_fence_version(int64_t value);
 
@@ -508,6 +510,11 @@ public:
 
     future<bool> get_must_synchronize_topology();
     future<> set_must_synchronize_topology(bool);
+
+private:
+    static service::topology_features decode_topology_features_state(::shared_ptr<cql3::untyped_result_set> rs);
+
+public:
 
     system_keyspace(cql3::query_processor& qp, replica::database& db, const locator::snitch_ptr&) noexcept;
     ~system_keyspace();

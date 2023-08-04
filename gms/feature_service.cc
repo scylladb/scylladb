@@ -256,9 +256,9 @@ future<> feature_service::enable_features_on_startup(db::system_keyspace& sys_ks
     if (!use_raft_cluster_features) {
         persisted_features = co_await sys_ks.load_local_enabled_features();
     } else {
-        auto topo = co_await sys_ks.load_topology_state();
-        persisted_unsafe_to_disable_features = topo.calculate_not_yet_enabled_features();
-        persisted_features = std::move(topo.enabled_features);
+        auto topo_features = co_await sys_ks.load_topology_features_state();
+        persisted_unsafe_to_disable_features = topo_features.calculate_not_yet_enabled_features();
+        persisted_features = std::move(topo_features.enabled_features);
     }
 
     if (persisted_features.empty() && persisted_unsafe_to_disable_features.empty()) {

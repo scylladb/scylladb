@@ -2531,11 +2531,6 @@ future<service::topology> system_keyspace::load_topology_state() {
             rebuild_option = row.get_as<sstring>("rebuild_option");
         }
 
-        std::set<sstring> supported_features;
-        if (row.has("supported_features")) {
-            supported_features = decode_features(deserialize_set_column(*topology(), row, "supported_features"));
-        }
-
         if (row.has("topology_request")) {
             auto req = service::topology_request_from_string(row.get_as<sstring>("topology_request"));
             ret.requests.emplace(host_id, req);
@@ -2602,7 +2597,7 @@ future<service::topology> system_keyspace::load_topology_state() {
         if (map) {
             map->emplace(host_id, service::replica_state{
                 nstate, std::move(datacenter), std::move(rack), std::move(release_version),
-                ring_slice, shard_count, ignore_msb, std::move(supported_features)});
+                ring_slice, shard_count, ignore_msb});
         }
     }
 
@@ -2675,13 +2670,42 @@ future<service::topology> system_keyspace::load_topology_state() {
                     some_row.get_as<sstring>("global_topology_request"));
             ret.global_request.emplace(req);
         }
+    }
 
-        if (some_row.has("enabled_features")) {
-            ret.enabled_features = decode_features(deserialize_set_column(*topology(), some_row, "enabled_features"));
+    ret.features = decode_topology_features_state(std::move(rs));
+
+    co_return ret;
+}
+
+future<service::topology_features> system_keyspace::load_topology_features_state() {
+    auto rs = co_await execute_cql(
+        format("SELECT host_id, node_state, supported_features, enabled_features FROM system.{} WHERE key = '{}'", TOPOLOGY, TOPOLOGY));
+    assert(rs);
+
+    co_return decode_topology_features_state(std::move(rs));
+}
+
+service::topology_features system_keyspace::decode_topology_features_state(::shared_ptr<cql3::untyped_result_set> rs) {
+    service::topology_features ret;
+
+    if (rs->empty()) {
+        return ret;
+    }
+
+    for (auto& row : *rs) {
+        raft::server_id host_id{row.get_as<utils::UUID>("host_id")};
+        service::node_state nstate = service::node_state_from_string(row.get_as<sstring>("node_state"));
+        if (row.has("supported_features") && nstate == service::node_state::normal) {
+            ret.normal_supported_features.emplace(host_id, decode_features(deserialize_set_column(*topology(), row, "supported_features")));
         }
     }
 
-    co_return ret;
+    auto& some_row = *rs->begin();
+    if (some_row.has("enabled_features")) {
+        ret.enabled_features = decode_features(deserialize_set_column(*topology(), some_row, "enabled_features"));
+    }
+
+    return ret;
 }
 
 future<int64_t> system_keyspace::get_topology_fence_version() {
