@@ -145,7 +145,7 @@ public:
 
     // Apply a group 0 change.
     // The future resolves after the change is applied locally.
-    future<> announce(std::vector<mutation> schema, group0_guard, std::string_view description = "");
+    future<> announce(std::vector<mutation> schema, group0_guard, std::string_view description);
 
     void passive_announce(table_schema_version version);
 
