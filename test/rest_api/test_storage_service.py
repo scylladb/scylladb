@@ -5,13 +5,12 @@
 import pytest
 import sys
 import requests
-import threading
 import time
 
 # Use the util.py library from ../cql-pytest:
 sys.path.insert(1, sys.path[0] + '/../cql-pytest')
 from util import unique_name, new_test_table, new_test_keyspace, new_materialized_view, new_secondary_index
-from rest_util import new_test_snapshot, scylla_inject_error
+from rest_util import new_test_snapshot, scylla_inject_error, ThreadWrapper
 
 # "keyspace" function: Creates and returns a temporary keyspace to be
 # used in tests that need a keyspace. The keyspace is created with RF=1,
@@ -204,22 +203,6 @@ def test_storage_service_keyspace_bad_param(cql, this_dc, rest_api):
         # Unknown parameter (See https://github.com/scylladb/scylla/pull/10090)
         resp = rest_api.send("GET", f"storage_service/keyspace_scrub/{keyspace}", { "foo": "bar" })
         assert resp.status_code == requests.codes.bad_request
-
-# Unfortunately by default Python threads print their exceptions
-# (e.g., assertion failures) but don't propagate them to the join(),
-# so the overall test doesn't fail. The following Thread wrapper
-# causes join() to rethrow the exception, so the test will fail.
-class ThreadWrapper(threading.Thread):
-    def run(self):
-        try:
-            self.ret = self._target(*self._args, **self._kwargs)
-        except BaseException as e:
-            self.exception = e
-    def join(self, timeout=None):
-        super().join(timeout)
-        if hasattr(self, 'exception'):
-            raise self.exception
-        return self.ret
 
 # Reproduce issue #9061, where if we have a partition key with characters
 # that need escaping in JSON, the toppartitions response failed to escape

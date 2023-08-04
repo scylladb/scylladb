@@ -1,5 +1,6 @@
 import time
 import pytest
+import threading
 
 from contextlib import contextmanager
 
@@ -80,3 +81,19 @@ def set_tmp_task_ttl(rest_api, seconds):
     finally:
         resp = rest_api.send("POST", "task_manager/ttl", { "ttl" : old_ttl })
         resp.raise_for_status()
+
+# Unfortunately by default Python threads print their exceptions
+# (e.g., assertion failures) but don't propagate them to the join(),
+# so the overall test doesn't fail. The following Thread wrapper
+# causes join() to rethrow the exception, so the test will fail.
+class ThreadWrapper(threading.Thread):
+    def run(self):
+        try:
+            self.ret = self._target(*self._args, **self._kwargs)
+        except BaseException as e:
+            self.exception = e
+    def join(self, timeout=None):
+        super().join(timeout)
+        if hasattr(self, 'exception'):
+            raise self.exception
+        return self.ret
