@@ -1030,12 +1030,34 @@ future<> database::add_column_family(keyspace& ks, schema_ptr schema, column_fam
     if (_tables_metadata.contains(kscf)) {
         throw std::invalid_argument("Column family " + schema->cf_name() + " exists");
     }
-    ks.add_or_update_column_family(schema);
     cf->start();
-    schema->registry_entry()->set_table(cf->weak_from_this());
-    co_await _tables_metadata.add_table(schema);
-    if (schema->is_view()) {
-        find_column_family(schema->view_info()->base_id()).add_or_update_view(view_ptr(schema));
+    std::exception_ptr ex = nullptr;
+    try {
+        ks.add_or_update_column_family(schema);
+        schema->registry_entry()->set_table(cf->weak_from_this());
+        co_await _tables_metadata.add_table(schema);
+        if (schema->is_view()) {
+            find_column_family(schema->view_info()->base_id()).add_or_update_view(view_ptr(schema));
+        }
+    } catch (...) {
+        ex = std::current_exception();
+    }
+    if (ex) {
+        // Wrap in noexcept lambda to shutdown on failure.
+        auto revert_changes = [&] () noexcept -> future<> {
+            if (schema->is_view()) {
+                try {
+                    find_column_family(schema->view_info()->base_id()).remove_view(view_ptr(schema));
+                } catch (no_such_column_family&) {
+                    // Accept that a table is dropped, continue reverting changes.
+                }
+            }
+            co_await _tables_metadata.remove_table(schema);
+            ks.metadata()->remove_column_family(schema);
+            co_await cf->stop();
+        };
+        co_await revert_changes();
+        co_await coroutine::return_exception_ptr(std::move(ex));
     }
 }
 
