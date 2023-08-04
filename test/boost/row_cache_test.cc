@@ -4169,7 +4169,8 @@ SEASTAR_TEST_CASE(row_cache_is_populated_using_compacting_sstable_reader) {
             .build();
         mm.announce(
             service::prepare_new_column_family_announcement(mm.get_storage_proxy(), s, api::new_timestamp()).get(),
-            mm.start_group0_operation().get()
+            mm.start_group0_operation().get(),
+            ""
         ).get();
 
         replica::table& t = db.find_column_family(ks_name, table_name);
