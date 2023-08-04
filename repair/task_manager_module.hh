@@ -214,7 +214,7 @@ public:
     named_semaphore& range_parallelism_semaphore();
     future<> run(repair_uniq_id id, std::function<void ()> func);
     future<repair_status> repair_await_completion(int id, std::chrono::steady_clock::time_point timeout);
-    float report_progress(streaming::stream_reason reason);
+    float report_progress();
     bool is_aborted(const tasks::task_id& uuid);
 };
 
