@@ -9,6 +9,7 @@
 
 import os
 import argparse
+import distutils.util
 import pwd
 import grp
 import sys
@@ -37,10 +38,13 @@ if __name__ == '__main__':
                         help='force constructing RAID when only one disk is specified')
     parser.add_argument('--raid-level', default='0',
                         help='specify RAID level')
-    parser.add_argument('--online-discard', default=True,
+    parser.add_argument('--online-discard', default="True",
                         help='Enable XFS online discard (trim SSD cells after file deletion)')
 
     args = parser.parse_args()
+
+    # Allow args.online_discard to be used as a boolean value
+    args.online_discard = distutils.util.strtobool(args.online_discard)
 
     root = args.root.rstrip('/')
     if args.volume_role == 'all':
