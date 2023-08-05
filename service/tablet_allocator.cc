@@ -14,6 +14,7 @@
 #include "service/tablet_allocator.hh"
 #include "utils/error_injection.hh"
 #include "utils/stall_free.hh"
+#include "db/config.hh"
 #include "locator/load_sketch.hh"
 #include "utils/div_ceil.hh"
 
@@ -555,7 +556,9 @@ public:
     tablet_allocator_impl(service::migration_notifier& mn, replica::database& db)
             : _migration_notifier(mn)
             , _db(db) {
-        _migration_notifier.register_listener(this);
+        if (db.get_config().check_experimental(db::experimental_features_t::feature::TABLETS)) {
+            _migration_notifier.register_listener(this);
+        }
     }
 
     tablet_allocator_impl(tablet_allocator_impl&&) = delete; // "this" captured.
