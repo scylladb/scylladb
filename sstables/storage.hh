@@ -48,13 +48,14 @@ public:
     virtual ~storage() {}
 
     using absolute_path = bool_class<class absolute_path_tag>; // FIXME -- should go away eventually
+    using sync_dir = bool_class<struct sync_dir_tag>; // meaningful only to filesystem storage
 
     virtual future<> seal(const sstable& sst) = 0;
     virtual future<> snapshot(const sstable& sst, sstring dir, absolute_path abs) const = 0;
     virtual future<> change_state(const sstable& sst, sstring to, generation_type generation, delayed_commit_changes* delay) = 0;
     // runs in async context
     virtual void open(sstable& sst) = 0;
-    virtual future<> wipe(const sstable& sst) noexcept = 0;
+    virtual future<> wipe(const sstable& sst, sync_dir) noexcept = 0;
     virtual future<file> open_component(const sstable& sst, component_type type, open_flags flags, file_open_options options, bool check_integrity) = 0;
     virtual future<data_sink> make_data_or_index_sink(sstable& sst, component_type type) = 0;
     virtual future<data_sink> make_component_sink(sstable& sst, component_type type, open_flags oflags, file_output_stream_options options) = 0;

@@ -2609,7 +2609,7 @@ std::optional<std::pair<uint64_t, uint64_t>> sstable::get_sample_indexes_for_ran
     return std::nullopt;
 }
 
-future<> remove_by_toc_name(sstring sstable_toc_name) {
+future<> remove_by_toc_name(sstring sstable_toc_name, storage::sync_dir sync) {
     sstring prefix = sstable_toc_name.substr(0, sstable_toc_name.size() - sstable_version_constants::TOC_SUFFIX.size());
     sstring new_toc_name = prefix + sstable_version_constants::TEMPORARY_TOC_SUFFIX;
 
@@ -2617,7 +2617,9 @@ future<> remove_by_toc_name(sstring sstable_toc_name) {
     if (co_await sstable_io_check(sstable_write_error_handler, file_exists, sstable_toc_name)) {
         // If new_toc_name exists it will be atomically replaced.  See rename(2)
         co_await sstable_io_check(sstable_write_error_handler, rename_file, sstable_toc_name, new_toc_name);
-        co_await sstable_io_check(sstable_write_error_handler, sync_directory, parent_path(new_toc_name));
+        if (sync) {
+            co_await sstable_io_check(sstable_write_error_handler, sync_directory, parent_path(new_toc_name));
+        }
     } else {
         if (!co_await sstable_io_check(sstable_write_error_handler, file_exists, new_toc_name)) {
             sstlog.warn("Unable to delete {} because it doesn't exist.", sstable_toc_name);
@@ -2653,7 +2655,9 @@ future<> remove_by_toc_name(sstring sstable_toc_name) {
             sstlog.debug("Forgiving ENOENT when deleting file {}", fname);
         }
     });
-    co_await sstable_io_check(sstable_write_error_handler, sync_directory, parent_path(new_toc_name));
+    if (sync) {
+        co_await sstable_io_check(sstable_write_error_handler, sync_directory, parent_path(new_toc_name));
+    }
     co_await sstable_io_check(sstable_write_error_handler, remove_file, new_toc_name);
 }
 
@@ -2791,8 +2795,8 @@ utils::hashed_key sstable::make_hashed_key(const schema& s, const partition_key&
 }
 
 future<>
-sstable::unlink() noexcept {
-    auto remove_fut = _storage->wipe(*this);
+sstable::unlink(storage::sync_dir sync) noexcept {
+    auto remove_fut = _storage->wipe(*this, sync);
 
     try {
         co_await get_large_data_handler().maybe_delete_large_data_entries(shared_from_this());

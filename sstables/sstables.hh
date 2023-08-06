@@ -388,7 +388,9 @@ public:
 
     // Delete the sstable by unlinking all sstable files
     // Ignores all errors.
-    future<> unlink() noexcept;
+    // Caller may pass sync_dir::no for batching multiple deletes in the same directory,
+    // and make sure the directory is sync'ed on or after the last call.
+    future<> unlink(storage::sync_dir sync = storage::sync_dir::yes) noexcept;
 
     db::large_data_handler& get_large_data_handler() {
         return _large_data_handler;
@@ -958,6 +960,8 @@ public:
 future<> remove_table_directory_if_has_no_snapshots(fs::path table_dir);
 
 // similar to sstable::unlink, but works on a TOC file name
-future<> remove_by_toc_name(sstring sstable_toc_name);
+// Caller may pass sync_dir::no for batching multiple deletes in the same directory,
+// and make sure the directory is sync'ed on or after the last call.
+future<> remove_by_toc_name(sstring sstable_toc_name, storage::sync_dir sync = storage::sync_dir::yes);
 
 } // namespace sstables
