@@ -409,6 +409,7 @@ class repair_writer_impl : public repair_writer::impl {
     sharded<db::view::view_update_generator>& _view_update_generator;
     streaming::stream_reason _reason;
     flat_mutation_reader_v2 _queue_reader;
+    sstables::run_id _run_id;
 public:
     repair_writer_impl(
         schema_ptr schema,
@@ -418,7 +419,8 @@ public:
         sharded<db::view::view_update_generator>& view_update_generator,
         streaming::stream_reason reason,
         mutation_fragment_queue queue,
-        flat_mutation_reader_v2 queue_reader)
+        flat_mutation_reader_v2 queue_reader,
+        sstables::run_id run_id)
         : _schema(std::move(schema))
         , _permit(std::move(permit))
         , _mq(std::move(queue))
@@ -427,6 +429,7 @@ public:
         , _view_update_generator(view_update_generator)
         , _reason(reason)
         , _queue_reader(std::move(queue_reader))
+        , _run_id(run_id)
     {}
 
     virtual void create_writer(lw_shared_ptr<repair_writer> writer) override;
@@ -515,10 +518,11 @@ lw_shared_ptr<repair_writer> make_repair_writer(
             streaming::stream_reason reason,
             sharded<replica::database>& db,
             sharded<db::system_distributed_keyspace>& sys_dist_ks,
-            sharded<db::view::view_update_generator>& view_update_generator) {
+            sharded<db::view::view_update_generator>& view_update_generator,
+            sstables::run_id run_id) {
     auto [queue_reader, queue_handle] = make_queue_reader_v2(schema, permit);
     auto queue = make_mutation_fragment_queue(schema, permit, std::move(queue_handle));
-    auto i = std::make_unique<repair_writer_impl>(schema, permit, db, sys_dist_ks, view_update_generator, reason, std::move(queue), std::move(queue_reader));
+    auto i = std::make_unique<repair_writer_impl>(schema, permit, db, sys_dist_ks, view_update_generator, reason, std::move(queue), std::move(queue_reader), run_id);
     return make_lw_shared<repair_writer>(schema, permit, std::move(i));
 }
 
@@ -823,7 +827,7 @@ public:
             , _remote_sharder(make_remote_sharder())
             , _same_sharding_config(is_same_sharding_config())
             , _nr_peer_nodes(nr_peer_nodes)
-            , _repair_writer(make_repair_writer(_schema, _permit, _reason, _db, _sys_dist_ks, _view_update_generator))
+            , _repair_writer(make_repair_writer(_schema, _permit, _reason, _db, _sys_dist_ks, _view_update_generator, _run_id))
             , _sink_source_for_get_full_row_hashes(_repair_meta_id, _nr_peer_nodes,
                     [&rs] (uint32_t repair_meta_id, netw::messaging_service::msg_addr addr) {
                         return rs.get_messaging().make_sink_and_source_for_repair_get_full_row_hashes_with_rpc_stream(repair_meta_id, addr);
