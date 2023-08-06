@@ -8,6 +8,7 @@
 
 #include <exception>
 #include <seastar/util/defer.hh>
+#include "dht/token.hh"
 #include "repair/repair.hh"
 #include "message/messaging_service.hh"
 #include "repair/task_manager_module.hh"
@@ -17,6 +18,7 @@
 #include "mutation_writer/multishard_writer.hh"
 #include "dht/i_partitioner.hh"
 #include "dht/sharder.hh"
+#include "sstables/types_fwd.hh"
 #include "utils/to_string.hh"
 #include "utils/xx_hasher.hh"
 #include "utils/UUID.hh"
@@ -696,6 +698,7 @@ private:
     repair_master _repair_master;
     gms::inet_address _myip;
     uint32_t _repair_meta_id;
+    sstables::run_id _run_id;
     streaming::stream_reason _reason;
     // Repair master's sharding configuration
     shard_config _master_node_shard_config;
@@ -762,6 +765,9 @@ public:
     uint32_t repair_meta_id() const {
         return _repair_meta_id;
     }
+    const sstables::run_id& run_id() const noexcept {
+        return _run_id;
+    }
     const std::optional<repair_sync_boundary>& current_sync_boundary() const {
         return _current_sync_boundary;
     }
@@ -788,6 +794,7 @@ public:
             uint64_t seed,
             repair_master master,
             uint32_t repair_meta_id,
+            sstables::run_id run_id,
             streaming::stream_reason reason,
             shard_config master_node_shard_config,
             inet_address_vector_replica_set all_live_peer_nodes,
@@ -810,6 +817,7 @@ public:
             , _repair_master(master)
             , _myip(utils::fb_utilities::get_broadcast_address())
             , _repair_meta_id(repair_meta_id)
+            , _run_id(run_id)
             , _reason(reason)
             , _master_node_shard_config(std::move(master_node_shard_config))
             , _remote_sharder(make_remote_sharder())
@@ -841,6 +849,7 @@ public:
         for (auto& node : all_live_peer_nodes) {
             _all_node_states.push_back(repair_node_state(node));
         }
+        rlogger.debug("Created repair_meta: repair_meta_id={} range={} run_id={}", _repair_meta_id, _range, _run_id);
     }
 
     // follower constructor
@@ -855,11 +864,12 @@ public:
             uint64_t seed,
             repair_master master,
             uint32_t repair_meta_id,
+            sstables::run_id run_id,
             streaming::stream_reason reason,
             shard_config master_node_shard_config,
             inet_address_vector_replica_set all_live_peer_nodes,
             gc_clock::time_point compaction_time)
-        : repair_meta(rs, cf, std::move(s), std::move(permit), std::move(range), algo, max_row_buf_size, seed, master, repair_meta_id, reason,
+        : repair_meta(rs, cf, std::move(s), std::move(permit), std::move(range), algo, max_row_buf_size, seed, master, repair_meta_id, run_id, reason,
                 std::move(master_node_shard_config), std::move(all_live_peer_nodes), 1, nullptr, compaction_time)
     {
     }
@@ -2845,6 +2855,7 @@ public:
                     _seed,
                     repair_master::yes,
                     repair_meta_id,
+                    sstables::run_id{},
                     _shard_task.reason(),
                     std::move(master_node_shard_config),
                     _all_live_peer_nodes,
@@ -3127,6 +3138,52 @@ repair_meta_ptr repair_service::get_repair_meta(gms::inet_address from, uint32_t
     }
 }
 
+void repair_service::range_tracker::insert_range(table_id range_tid, const dht::token_range& range) {
+    bool start_open = range.start() && !range.start()->is_inclusive();
+    bool end_open = range.end() && !range.end()->is_inclusive();
+    boost::icl::interval_bounds interval_bounds;
+    switch (start_open | (end_open << 1)) {
+    case 0: interval_bounds = boost::icl::interval_bounds::closed(); break;
+    case 1: interval_bounds = boost::icl::interval_bounds::left_open(); break;
+    case 2: interval_bounds = boost::icl::interval_bounds::right_open(); break;
+    case 3: interval_bounds = boost::icl::interval_bounds::open(); break;
+    }
+    auto interval = interval_type(
+        range.start() ? range.start()->value() : dht::minimum_token(),
+        range.end() ? range.end()->value() : dht::maximum_token(),
+        interval_bounds
+    );
+
+    if (range_tid != tid) {
+        tid = range_tid;
+        ranges.clear();
+        run_id = sstables::run_id::create_random_id();
+        rlogger.debug("range_tracker: new table_id={} range={} interval={}: generated new run_id={}", tid, range, interval, run_id);
+        if (!boost::icl::is_empty(interval)) {
+            ranges.insert(interval);
+        }
+        return;
+    }
+
+    if (boost::icl::is_empty(interval)) {
+        ranges.clear();
+        run_id = sstables::run_id::create_random_id();
+        rlogger.debug("range_tracker: table_id={} range={} interval={} is empty: generated new run_id={}", tid, range, interval, run_id);
+        return;
+    }
+
+    rlogger.trace("range_tracker: table_id={} range={} interval={}", tid, range, interval);
+    if (ranges.empty()) {
+        run_id = sstables::run_id::create_random_id();
+        rlogger.debug("range_tracker: table_id={} generated new run_id={} for range={}", tid, run_id, range);
+    } else if (auto it = ranges.find(interval); it != ranges.end()) {
+        run_id = sstables::run_id::create_random_id();
+        rlogger.debug("range_tracker: table_id={}: detected overlap between new range={} and repaired range={}: generated new run_id={}", tid, range, *it, run_id);
+        ranges.clear();
+    }
+    ranges.insert(interval);
+}
+
 future<>
 repair_service::insert_repair_meta(
         const gms::inet_address& from,
@@ -3166,6 +3223,10 @@ repair_service::insert_repair_meta(
                 reason,
                 compaction_time] (reader_permit permit) mutable {
         node_repair_meta_id id{from, repair_meta_id};
+        sstables::run_id run_id;
+        auto [it, _] = repair_ranges_map().try_emplace(from, range_tracker{});
+        it->second.insert_range(s->id(), range);
+        run_id = it->second.run_id;
         auto rm = seastar::make_shared<repair_meta>(*this,
                 cf,
                 s,
@@ -3176,6 +3237,7 @@ repair_service::insert_repair_meta(
                 seed,
                 repair_master::no,
                 repair_meta_id,
+                run_id,
                 reason,
                 std::move(master_node_shard_config),
                 inet_address_vector_replica_set{from},
@@ -3183,11 +3245,11 @@ repair_service::insert_repair_meta(
         rm->set_repair_state_for_local_node(repair_state::row_level_start_started);
         bool insertion = repair_meta_map().emplace(id, rm).second;
         if (!insertion) {
-            rlogger.warn("insert_repair_meta: repair_meta_id {} for node {} already exists, replace existing one", id.repair_meta_id, id.ip);
+            rlogger.warn("insert_repair_meta: repair_meta_id {} for node {} already exists, replace existing one run_id={}", id.repair_meta_id, id.ip, run_id);
             repair_meta_map()[id] = rm;
             rm->set_repair_state_for_local_node(repair_state::row_level_start_finished);
         } else {
-            rlogger.debug("insert_repair_meta: Inserted repair_meta_id {} for node {}", id.repair_meta_id, id.ip);
+            rlogger.debug("insert_repair_meta: Inserted repair_meta_id {} for node {}, run_id={}", id.repair_meta_id, id.ip, run_id);
         }
         });
     });
