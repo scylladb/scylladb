@@ -2551,6 +2551,82 @@ canonical_mutation storage_service::build_mutation_from_join_params(const join_n
     return builder.build();
 }
 
+class join_node_rpc_handshaker : public service::group0_handshaker {
+private:
+    service::storage_service& _ss;
+    const join_node_request_params& _req;
+
+public:
+    join_node_rpc_handshaker(service::storage_service& ss, const join_node_request_params& req)
+            : _ss(ss)
+            , _req(req)
+    {}
+
+    future<> pre_server_start(const group0_info& g0_info) override {
+        slogger.info("raft topology: join: sending the join request to {}", g0_info.ip_addr);
+
+        auto result = co_await ser::join_node_rpc_verbs::send_join_node_request(
+                &_ss._messaging.local(), netw::msg_addr(g0_info.ip_addr), g0_info.id, _req);
+        std::visit(overloaded_functor {
+            [this] (const join_node_request_result::ok&) {
+                slogger.info("raft topology: join: request to join placed, waiting"
+                             " for the response from the topology coordinator");
+
+                _ss._join_node_request_done.set_value();
+            },
+            [] (const join_node_request_result::rejected& rej) {
+                throw std::runtime_error(
+                        format("the topology coordinator rejected request to join the cluster: {}", rej.reason));
+            },
+        }, result.result);
+
+        co_return;
+    }
+
+    future<bool> post_server_start(const group0_info& g0_info) override {
+        // Group 0 has been started. Allow the join_node_response to be handled.
+        _ss._join_node_group0_started.set_value();
+
+        // Processing of the response is done in `join_node_response_handler`.
+        // Wait for it to complete.
+        co_await _ss._join_node_response_done.get_shared_future(lowres_clock::now() + std::chrono::seconds(30));
+        slogger.info("raft topology: join: success");
+        co_return true;
+    }
+};
+
+future<> storage_service::raft_initialize_discovery_leader(raft::server& raft_server, const join_node_request_params& params) {
+    if (_topology_state_machine._topology.is_empty()) {
+        co_await raft_server.read_barrier(&_abort_source);
+    }
+
+    while (_topology_state_machine._topology.is_empty()) {
+        if (params.replaced_id.has_value()) {
+            throw std::runtime_error(::format("Cannot perform a replace operation because this is the first node in the cluster"));
+        }
+
+        slogger.info("raft topology: adding myself as the first node to the topology");
+        auto guard = co_await _group0->client().start_operation(&_abort_source);
+
+        auto insert_join_request_mutation = build_mutation_from_join_params(params, guard);
+
+        // We are the first node and we define the cluster.
+        // Set the enabled_features field to our features.
+        topology_mutation_builder builder(guard.write_timestamp());
+        builder.add_enabled_features(boost::copy_range<std::set<sstring>>(params.supported_features));
+        auto enable_features_mutation = builder.build();
+
+        topology_change change{{std::move(enable_features_mutation), std::move(insert_join_request_mutation)}};
+        group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard,
+                "bootstrap: adding myself as the first node to the topology");
+        try {
+            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), &_abort_source);
+        } catch (group0_concurrent_modification&) {
+            slogger.info("raft topology: bootstrap: concurrent operation is detected, retrying.");
+        }
+    }
+}
+
 future<> storage_service::raft_replace(raft::server& raft_server, raft::server_id replaced_id, gms::inet_address replaced_ip) {
     auto ignore_nodes_strs = utils::split_comma_separated_list(_db.local().get_config().ignore_dead_nodes_for_replace());
     std::list<locator::host_id_or_endpoint> ignore_nodes_params;
@@ -2964,8 +3040,29 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
     }
 
     assert(_group0);
+
+    join_node_request_params join_params {
+        .host_id = _group0->load_my_id(),
+        .cluster_name = _db.local().get_config().cluster_name(),
+        .snitch_name = _db.local().get_snitch_name(),
+        .datacenter = _snitch.local()->get_datacenter(),
+        .rack = _snitch.local()->get_rack(),
+        .release_version = version::release(),
+        .num_tokens = _db.local().get_config().num_tokens(),
+        .shard_count = smp::count,
+        .ignore_msb =  _db.local().get_config().murmur3_partitioner_ignore_msb_bits(),
+        .supported_features = boost::copy_range<std::vector<sstring>>(_feature_service.supported_feature_set()),
+    };
+
+    if (raft_replace_info) {
+        join_params.replaced_id = raft_replace_info->raft_id;
+        join_params.ignore_nodes = utils::split_comma_separated_list(_db.local().get_config().ignore_dead_nodes_for_replace());
+    }
+
     // if the node is bootstrapped the functin will do nothing since we already created group0 in main.cc
-    ::shared_ptr<group0_handshaker> handshaker = _group0->make_legacy_handshaker(false);
+    ::shared_ptr<group0_handshaker> handshaker = _raft_topology_change_enabled
+            ? ::make_shared<join_node_rpc_handshaker>(*this, join_params)
+            : _group0->make_legacy_handshaker(false);
     co_await _group0->setup_group0(_sys_ks.local(), initial_contact_nodes, std::move(handshaker),
             raft_replace_info, *this, *_qp, _migration_manager.local());
 
@@ -3003,12 +3100,11 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
         supervisor::notify("starting system distributed keyspace");
         co_await sys_dist_ks.invoke_on_all(&db::system_distributed_keyspace::start);
 
-        if (is_replacing()) {
-            assert(raft_replace_info);
-            co_await raft_replace(*raft_server, raft_replace_info->raft_id, raft_replace_info->ip_addr);
-        } else {
-            co_await raft_bootstrap(*raft_server);
-        }
+        // Nodes that are not discovery leaders have their join request inserted
+        // on their behalf by an existing node in the cluster during the handshake.
+        // Discovery leaders on the other need to insert the join request themselves,
+        // we do that here.
+        co_await raft_initialize_discovery_leader(*raft_server, join_params);
 
         // Wait until we enter one of the final states
         co_await _topology_state_machine.event.when([this, raft_server] {

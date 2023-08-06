@@ -88,6 +88,7 @@ class storage_service;
 class storage_proxy;
 class migration_manager;
 class raft_group0;
+class group0_info;
 
 struct join_node_request_params;
 struct join_node_request_result;
@@ -799,6 +800,7 @@ private:
 
     future<raft_topology_cmd_result> raft_topology_cmd_handler(sharded<db::system_distributed_keyspace>& sys_dist_ks, raft::term_t term, uint64_t cmd_index, const raft_topology_cmd& cmd);
 
+    future<> raft_initialize_discovery_leader(raft::server&, const join_node_request_params& params);
     future<> raft_bootstrap(raft::server&);
     future<> raft_decomission();
     future<> raft_removenode(locator::host_id host_id, std::list<locator::host_id_or_endpoint> ignore_nodes_params);
