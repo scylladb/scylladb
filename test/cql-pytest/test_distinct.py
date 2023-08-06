@@ -43,7 +43,6 @@ def test_distinct_in_partition_group_by(cql, table1):
 
 # "select distinct p" with "group by p,c" doesn't makes sense (we always
 # have one value for p, we can't split it per c), and should not be allowed.
-@pytest.mark.xfail(reason="issue #12479")
 def test_distinct_in_partition_group_by_c(cql, table1):
     p = unique_key_int()
     stmt = cql.prepare(f"insert into {table1} (p, c, v) values (?, ?, ?)")
