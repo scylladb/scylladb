@@ -83,6 +83,8 @@
 #include "idl/storage_service.dist.hh"
 #include "service/storage_proxy.hh"
 #include "service/raft/raft_address_map.hh"
+#include "service/raft/join_node.hh"
+#include "idl/join_node.dist.hh"
 #include "protocol_server.hh"
 #include "types/set.hh"
 #include "node_ops/node_ops_ctl.hh"
@@ -2387,6 +2389,38 @@ std::unordered_set<raft::server_id> storage_service::find_raft_nodes_from_hoeps(
         ids.insert(*id);
     }
     return ids;
+}
+
+canonical_mutation storage_service::build_mutation_from_join_params(const join_node_request_params& params, service::group0_guard& guard) {
+    topology_mutation_builder builder(guard.write_timestamp());
+    auto& node_builder = builder.with_node(params.host_id)
+        .set("node_state", node_state::none)
+        .set("datacenter", params.datacenter)
+        .set("rack", params.rack)
+        .set("release_version", params.release_version)
+        .set("num_tokens", params.num_tokens)
+        .set("shard_count", params.shard_count)
+        .set("ignore_msb", params.ignore_msb)
+        .set("supported_features", boost::copy_range<std::set<sstring>>(params.supported_features));
+
+    if (params.replaced_id) {
+        std::list<locator::host_id_or_endpoint> ignore_nodes_params;
+        for (const auto& n : params.ignore_nodes) {
+            ignore_nodes_params.emplace_back(n);
+        }
+
+        auto ignored_ids = find_raft_nodes_from_hoeps(ignore_nodes_params);
+
+        node_builder
+            .set("topology_request", topology_request::replace)
+            .set("replaced_id", *params.replaced_id)
+            .set("ignore_nodes", ignored_ids);
+    } else {
+        node_builder
+            .set("topology_request", topology_request::join);
+    }
+
+    return builder.build();
 }
 
 future<> storage_service::raft_replace(raft::server& raft_server, raft::server_id replaced_id, gms::inet_address replaced_ip) {
@@ -6190,6 +6224,260 @@ future<> storage_service::cleanup_tablet(locator::global_tablet_id tablet) {
     });
 }
 
+future<join_node_request_result> storage_service::join_node_request_handler(join_node_request_params params) {
+    join_node_request_result result;
+    slogger.info("raft topology: received request to join from host_id: {}", params.host_id);
+
+    if (params.cluster_name != _db.local().get_config().cluster_name()) {
+        result.result = join_node_request_result::rejected{
+            .reason = ::format("Cluster name check failed. This node cannot join the cluster "
+                                "because it expected cluster name \"{}\" and not \"{}\"",
+                                params.cluster_name,
+                                _db.local().get_config().cluster_name()),
+        };
+        co_return result;
+    }
+
+    if (params.snitch_name != _db.local().get_snitch_name()) {
+        result.result = join_node_request_result::rejected{
+            .reason = ::format("Snitch name check failed. This node cannot join the cluster "
+                                "because it uses \"{}\" and not \"{}\"",
+                                params.snitch_name,
+                                _db.local().get_snitch_name()),
+        };
+        co_return result;
+    }
+
+    co_await _topology_state_machine.event.when([this] {
+        // The first node defines the cluster and inserts its entry to the
+        // `system.topology` without checking anything. It is unlikely but
+        // possible that the `join_node_request_handler` fires before the first
+        // node inserts its entry, therefore we might need to wait
+        // until that happens, here.
+        return !_topology_state_machine._topology.is_empty();
+    });
+
+    auto& g0_server = _group0->group0_server();
+    if (params.replaced_id && *params.replaced_id == g0_server.current_leader()) {
+        // There is a peculiar case that can happen if the leader is killed
+        // and then replaced very quickly:
+        //
+        // - Cluster with nodes `A`, `B`, `C` - `A` is the topology
+        //   coordinator/group0 leader,
+        // - `A` is killed,
+        // - New node `D` attempts to replace `A` with the same IP as `A`,
+        //   sends `join_node_request` rpc to node `B`,
+        // - Node `B` handles the RPC and wants to perform group0 operation
+        //   and wants to perform a barrier - still thinks that `A`
+        //   is the leader and is alive, sends an RPC to its IP,
+        // - `D` accidentally receives the request that was meant to `A`
+        //   but throws an exception because of host_id mismatch,
+        // - Failure is propagated back to `B`, and then to `D` - and `D`
+        //   fails the replace operation.
+        //
+        // We can try to detect if this failure might happen: if the new node
+        // is going to replace but the ID of the replaced node is the same
+        // as the leader, wait for a short while until a reelection happens.
+        // If replaced ID == leader ID, then this indicates either the situation
+        // above or an operator error (actually trying to replace a live node).
+
+        const auto timeout = std::chrono::seconds(10);
+
+        slogger.warn("raft topology: the node {} which was requested to be"
+                " replaced has the same ID as the current group 0 leader ({});"
+                " this looks like an attempt to join a node with the same IP"
+                " as a leader which might have just crashed; waiting for"
+                " a reelection",
+                params.host_id, g0_server.current_leader());
+
+        abort_source as;
+        timer<lowres_clock> t;
+        t.set_callback([&as] {
+            as.request_abort();
+        });
+        t.arm(timeout);
+
+        try {
+            while (!g0_server.current_leader() || *params.replaced_id == g0_server.current_leader()) {
+                // FIXME: Wait for the next term instead of sleeping in a loop
+                // Waiting for state change is not enough because a new leader
+                // might be chosen without us going through the candidate state.
+                co_await sleep_abortable(std::chrono::milliseconds(100), as);
+            }
+        } catch (abort_requested_exception&) {
+            slogger.warn("raft topology: the node {} tries to replace the"
+                    " current leader {} but the leader didn't change within"
+                    " {}s. Rejecting the node",
+                    params.host_id,
+                    *params.replaced_id,
+                    std::chrono::duration_cast<std::chrono::seconds>(timeout).count());
+
+            result.result = join_node_request_result::rejected{
+                .reason = format(
+                        "It is only allowed to replace dead nodes, however the"
+                        " node that was requested to be replaced is still seen"
+                        " as the group0 leader after {}s, which indicates that"
+                        " it might be still alive. You are either trying to replace"
+                        " a live node or trying to replace a node very quickly"
+                        " after it went down and reelection didn't happen within"
+                        " the timeout. Refusing to continue",
+                        std::chrono::duration_cast<std::chrono::seconds>(timeout).count()),
+            };
+            co_return result;
+        }
+    }
+
+    while (true) {
+        auto guard = co_await _group0->client().start_operation(&_abort_source);
+
+        if (const auto *p = _topology_state_machine._topology.find(params.host_id)) {
+            const auto& rs = p->second;
+            if (rs.state == node_state::left) {
+                slogger.warn("raft topology: the node {} attempted to join",
+                        " but it was removed from the cluster. Rejecting"
+                        " the node",
+                        params.host_id);
+                result.result = join_node_request_result::rejected{
+                    .reason = "The node has already been removed from the cluster",
+                };
+            } else {
+                slogger.warn("raft topology: the node {} attempted to join",
+                        " again after an unfinished attempt but it is no longer"
+                        " allowed to do so. Rejecting the node",
+                        params.host_id);
+                result.result = join_node_request_result::rejected{
+                    .reason = "The node requested to join before but didn't finish the procedure. "
+                              "Please clear the data directory and restart.",
+                };
+            }
+            co_return result;
+        }
+
+        auto mutation = build_mutation_from_join_params(params, guard);
+
+        topology_change change{{std::move(mutation)}};
+        group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard,
+                format("raft topology: placing join request for {}", params.host_id));
+        try {
+            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), &_abort_source);
+            break;
+        } catch (group0_concurrent_modification&) {
+            slogger.info("raft topology: join_node_request: concurrent operation is detected, retrying.");
+        }
+    }
+
+    slogger.info("raft topology: placed join request for {}", params.host_id);
+
+    // Success
+    result.result = join_node_request_result::ok {};
+    co_return result;
+}
+
+future<join_node_response_result> storage_service::join_node_response_handler(join_node_response_params params) {
+    assert(this_shard_id() == 0);
+
+    // Usually this handler will only run once, but there are some cases where we might get more than one RPC,
+    // possibly happening at the same time, e.g.:
+    //
+    // - Another node becomes the topology coordinator while the old one waits for the RPC,
+    // - Topology coordinator finished the RPC but failed to update the group 0 state.
+
+    // Serialize handling the responses.
+    auto lock = co_await get_units(_join_node_response_handler_mutex, 1);
+
+    // Wait until we sent and completed the join_node_request RPC
+    co_await _join_node_request_done.get_shared_future(_abort_source);
+
+    if (_join_node_response_done.available()) {
+        // We already handled this RPC. No need to retry it. Return immediately for idempotence.
+        slogger.info("raft topology: the node got join_node_response RPC for the second time, ignoring");
+        co_return join_node_response_result{};
+    }
+
+    co_return co_await std::visit(overloaded_functor {
+        [&] (const join_node_response_params::accepted& acc) -> future<join_node_response_result> {
+            // Do a read barrier to read/initialize the topology state
+            auto& raft_server = _group0->group0_server();
+            co_await raft_server.read_barrier(&_abort_source);
+
+            // Calculate nodes to ignore
+            // TODO: ignore_dead_nodes setting for bootstrap
+            std::unordered_set<raft::server_id> ignored_ids;
+            auto my_request_it =
+                    _topology_state_machine._topology.req_param.find(_group0->load_my_id());
+            if (my_request_it != _topology_state_machine._topology.req_param.end()) {
+                if (auto* replace = std::get_if<service::replace_param>(&my_request_it->second)) {
+                    ignored_ids = replace->ignored_ids;
+                    ignored_ids.insert(replace->replaced_id);
+                }
+            }
+
+            // After this RPC finishes, repair or streaming will be run, and
+            // both of them require this node to see the normal nodes as UP.
+            // This condition might not be true yet as this information is
+            // propagated through gossip. In order to reduce the chance of
+            // repair/streaming failure, wait here until we see normal nodes
+            // as UP (or the timeout elapses).
+            const auto& amap = _group0->address_map();
+            std::vector<gms::inet_address> sync_nodes;
+            // FIXME: https://github.com/scylladb/scylladb/issues/12279
+            // Keep trying to translate host IDs to IPs until all are available in gossip
+            // Ultimately, we should take this information from token_metadata
+            const auto sync_nodes_resolve_deadline = lowres_clock::now() + wait_for_live_nodes_timeout;
+            while (true) {
+                sync_nodes.clear();
+                std::vector<raft::server_id> untranslated_ids;
+                for (const auto& [id, _] : _topology_state_machine._topology.normal_nodes) {
+                    if (ignored_ids.contains(id)) {
+                        continue;
+                    }
+                    if (auto ip = amap.find(id)) {
+                        sync_nodes.push_back(*ip);
+                    } else {
+                        untranslated_ids.push_back(id);
+                    }
+                }
+
+                if (!untranslated_ids.empty()) {
+                    if (lowres_clock::now() > sync_nodes_resolve_deadline) {
+                        throw std::runtime_error(format(
+                                "Failed to obtain IP addresses of nodes that should be seen"
+                                " as alive within {}s",
+                                std::chrono::duration_cast<std::chrono::seconds>(wait_for_live_nodes_timeout).count()));
+                    }
+
+                    static logger::rate_limit rate_limit{std::chrono::seconds(1)};
+                    slogger.log(log_level::warn, rate_limit, "raft topology: cannot map nodes {} to ips, retrying.",
+                            untranslated_ids);
+
+                    co_await sleep_abortable(std::chrono::milliseconds(5), _abort_source);
+                } else {
+                    break;
+                }
+            }
+
+            slogger.info("raft topology: coordinator accepted request to join, "
+                    "waiting for nodes {} to be alive before responding and continuing",
+                    sync_nodes);
+            co_await _gossiper.wait_alive(sync_nodes, wait_for_live_nodes_timeout);
+            slogger.info("raft topology: nodes {} are alive", sync_nodes);
+
+            // Unblock waiting join_node_rpc_handshaker::post_server_start,
+            // which will start the raft server and continue
+            _join_node_response_done.set_value();
+
+            co_return join_node_response_result{};
+        },
+        [&] (const join_node_response_params::rejected& rej) -> future<join_node_response_result> {
+            auto eptr = std::make_exception_ptr(std::runtime_error(
+                    format("the topology coordinator rejected request to join the cluster: {}", rej.reason)));
+            _join_node_response_done.set_exception(std::move(eptr));
+
+            co_return join_node_response_result{};
+        },
+    }, params.response);
+}
+
 void storage_service::init_messaging_service(sharded<db::system_distributed_keyspace>& sys_dist_ks, bool raft_topology_change_enabled) {
     _messaging.local().register_node_ops_cmd([this] (const rpc::client_info& cinfo, node_ops_cmd_request req) {
         auto coordinator = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
@@ -6272,12 +6560,29 @@ void storage_service::init_messaging_service(sharded<db::system_distributed_keys
             return ss.cleanup_tablet(tablet);
         });
     });
+    if (raft_topology_change_enabled) {
+        ser::join_node_rpc_verbs::register_join_node_request(&_messaging.local(), [handle_raft_rpc] (raft::server_id dst_id, service::join_node_request_params params) {
+            return handle_raft_rpc(dst_id, [params = std::move(params)] (auto& ss) mutable {
+                return ss.join_node_request_handler(std::move(params));
+            });
+        });
+        ser::join_node_rpc_verbs::register_join_node_response(&_messaging.local(), [this] (raft::server_id dst_id, service::join_node_response_params params) {
+            return container().invoke_on(0, [dst_id, params = std::move(params)] (auto& ss) mutable -> future<join_node_response_result> {
+                co_await ss._join_node_group0_started.get_shared_future(ss._abort_source);
+                if (ss._group0->load_my_id() != dst_id) {
+                    throw raft_destination_id_not_correct(ss._group0->load_my_id(), dst_id);
+                }
+                co_return co_await ss.join_node_response_handler(std::move(params));
+            });
+        });
+    }
 }
 
 future<> storage_service::uninit_messaging_service() {
     return when_all_succeed(
         _messaging.local().unregister_node_ops_cmd(),
-        ser::storage_service_rpc_verbs::unregister(&_messaging.local())
+        ser::storage_service_rpc_verbs::unregister(&_messaging.local()),
+        ser::join_node_rpc_verbs::unregister(&_messaging.local())
     ).discard_result();
 }
 
