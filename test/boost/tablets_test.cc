@@ -620,9 +620,9 @@ void apply_plan_as_in_progress(token_metadata& tm, const migration_plan& plan) {
 }
 
 static
-void rebalance_tablets(shared_token_metadata& stm) {
+void rebalance_tablets(tablet_allocator& talloc, shared_token_metadata& stm) {
     while (true) {
-        auto plan = balance_tablets(stm.get()).get0();
+        auto plan = talloc.balance_tablets(stm.get()).get0();
         if (plan.empty()) {
             break;
         }
@@ -634,9 +634,9 @@ void rebalance_tablets(shared_token_metadata& stm) {
 }
 
 static
-void rebalance_tablets_as_in_progress(shared_token_metadata& stm) {
+void rebalance_tablets_as_in_progress(tablet_allocator& talloc, shared_token_metadata& stm) {
     while (true) {
-        auto plan = balance_tablets(stm.get()).get0();
+        auto plan = talloc.balance_tablets(stm.get()).get0();
         if (plan.empty()) {
             break;
         }
@@ -665,6 +665,7 @@ void execute_transitions(shared_token_metadata& stm) {
 }
 
 SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_empty_node) {
+  do_with_cql_env_thread([] (auto& e) {
     // Tests the scenario of bootstrapping a single node
     // Verifies that load balancer sees it and moves tablets to that node.
 
@@ -743,7 +744,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_empty_node) {
         BOOST_REQUIRE_EQUAL(load.get_avg_shard_load(host3), 0);
     }
 
-    rebalance_tablets(stm);
+    rebalance_tablets(e.get_tablet_allocator().local(), stm);
 
     {
         load_sketch load(stm.get());
@@ -757,9 +758,11 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_empty_node) {
             BOOST_REQUIRE(load.get_avg_shard_load(h) > 0);
         }
     }
+  }).get();
 }
 
 SEASTAR_THREAD_TEST_CASE(test_load_balancing_works_with_in_progress_transitions) {
+  do_with_cql_env_thread([] (auto& e) {
     // Tests the scenario of bootstrapping a single node.
     // Verifies that the load balancer balances tablets on that node
     // even though there is already an active migration.
@@ -818,7 +821,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_works_with_in_progress_transitions)
         return make_ready_future<>();
     }).get();
 
-    rebalance_tablets_as_in_progress(stm);
+    rebalance_tablets_as_in_progress(e.get_tablet_allocator().local(), stm);
     execute_transitions(stm);
 
     {
@@ -830,10 +833,12 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_works_with_in_progress_transitions)
             BOOST_REQUIRE(load.get_avg_shard_load(h) == 2);
         }
     }
+  }).get();
 }
 
 #ifdef SCYLLA_ENABLE_ERROR_INJECTION
 SEASTAR_THREAD_TEST_CASE(test_load_balancer_shuffle_mode) {
+  do_with_cql_env_thread([] (auto& e) {
     inet_address ip1("192.168.0.1");
     inet_address ip2("192.168.0.2");
     inet_address ip3("192.168.0.3");
@@ -877,20 +882,22 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancer_shuffle_mode) {
         return make_ready_future<>();
     }).get();
 
-    rebalance_tablets(stm);
+    rebalance_tablets(e.get_tablet_allocator().local(), stm);
 
-    BOOST_REQUIRE(balance_tablets(stm.get()).get0().empty());
+    BOOST_REQUIRE(e.get_tablet_allocator().local().balance_tablets(stm.get()).get0().empty());
 
     utils::get_local_injector().enable("tablet_allocator_shuffle");
     auto disable_injection = seastar::defer([&] {
         utils::get_local_injector().disable("tablet_allocator_shuffle");
     });
 
-    BOOST_REQUIRE(!balance_tablets(stm.get()).get0().empty());
+    BOOST_REQUIRE(!e.get_tablet_allocator().local().balance_tablets(stm.get()).get0().empty());
+  }).get();
 }
 #endif
 
 SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_two_empty_nodes) {
+  do_with_cql_env_thread([] (auto& e) {
     inet_address ip1("192.168.0.1");
     inet_address ip2("192.168.0.2");
     inet_address ip3("192.168.0.3");
@@ -938,7 +945,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_two_empty_nodes) {
         return make_ready_future<>();
     }).get();
 
-    rebalance_tablets(stm);
+    rebalance_tablets(e.get_tablet_allocator().local(), stm);
 
     {
         load_sketch load(stm.get());
@@ -949,9 +956,11 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_two_empty_nodes) {
             BOOST_REQUIRE(load.get_avg_shard_load(h) == 4);
         }
     }
+  }).get();
 }
 
 SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_random_load) {
+  do_with_cql_env_thread([] (auto& e) {
     const int n_hosts = 6;
 
     std::vector<host_id> hosts;
@@ -1032,7 +1041,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_random_load) {
         testlog.debug("tablet metadata: {}", stm.get()->tablets());
         testlog.info("Total tablet count: {}, hosts: {}", total_tablet_count, hosts.size());
 
-        rebalance_tablets(stm);
+        rebalance_tablets(e.get_tablet_allocator().local(), stm);
 
         {
             load_sketch load(stm.get());
@@ -1056,4 +1065,5 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_random_load) {
 //          BOOST_REQUIRE(min_max_load.max() - min_max_load.min() <= 1);
         }
     }
+  }).get();
 }

@@ -24,6 +24,7 @@
 #include "cql3/query_processor.hh"
 #include "bytes.hh"
 #include "schema/schema.hh"
+#include "service/tablet_allocator.hh"
 #include "test/lib/eventually.hh"
 
 namespace replica {
@@ -176,6 +177,8 @@ public:
     virtual sharded<service::raft_group_registry>& get_raft_group_registry() = 0;
 
     virtual sharded<db::system_keyspace>& get_system_keyspace() = 0;
+
+    virtual sharded<service::tablet_allocator>& get_tablet_allocator() = 0;
 
     virtual sharded<service::storage_proxy>& get_storage_proxy() = 0;
 
