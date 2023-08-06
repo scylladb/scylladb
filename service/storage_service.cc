@@ -1786,6 +1786,7 @@ class topology_coordinator {
         switch (*tstate) {
             case topology::transition_state::join_group0: {
                 auto node = get_node_to_work_on(std::move(guard));
+                node = co_await finish_accepting_node(std::move(node));
                 switch (node.rs->state) {
                     case node_state::bootstrapping: {
                         assert(node.rs->ring);
@@ -2072,8 +2073,47 @@ class topology_coordinator {
         slogger.info("raft topology: coordinator fiber found a node to work on id={} state={}", node.id, node.rs->state);
 
         switch (node.rs->state) {
-            case node_state::normal:
             case node_state::none: {
+                if (_topo_sm._topology.normal_nodes.empty()) {
+                    slogger.info("raft topology: skipping join node handshake for the first node in the cluster");
+                } else {
+                    auto validation_result = validate_joining_node(node);
+                    if (auto* reject = std::get_if<join_node_response_params::rejected>(&validation_result)) {
+                        // Transition to left
+                        topology_mutation_builder builder(node.guard.write_timestamp());
+                        builder.with_node(node.id)
+                               .del("topology_request")
+                               .set("node_state", node_state::left);
+                        auto reason = ::format("bootstrap: node rejected");
+                        co_await update_topology_state(std::move(node.guard), {builder.build()}, reason);
+
+                        slogger.info("raft topology: rejected node moved to left state {}", node.id);
+
+                        // Keep trying to send the rejection to the node, give up after some time.
+                        const auto send_reject_deadline = lowres_clock::now() + std::chrono::seconds(30);
+                        while (true) {
+                            try {
+                                co_await respond_to_joining_node(node.id, join_node_response_params{
+                                    .response = std::move(validation_result),
+                                });
+                                break;
+                            } catch (const std::runtime_error& e) {
+                                slogger.warn("raft topology: attempt to send rejection response to {} failed: {}.", node.id, e.what());
+                            }
+                            if (lowres_clock::now() > send_reject_deadline) {
+                                co_await sleep_abortable(std::chrono::seconds(1), _as);
+                            } else {
+                                slogger.warn("raft topology: failed to deliver rejection response to {} within {}s. Will not retry.", node.id, 30);
+                                break;
+                            }
+                        }
+
+                        break;
+                    }
+                }
+            }
+            [[fallthrough]];
+            case node_state::normal: {
                 // if the state is none there have to be either 'join' or 'replace' request
                 // if the state is normal there have to be either 'leave', 'remove' or 'rebuild' request
                 topology_mutation_builder builder(node.guard.write_timestamp());
@@ -2232,6 +2272,59 @@ class topology_coordinator {
                 break;
         }
     };
+
+    std::variant<join_node_response_params::accepted, join_node_response_params::rejected>
+    validate_joining_node(const node_to_work_on& node) {
+        if (node.rs->state == node_state::replacing) {
+            auto replaced_id = std::get<replace_param>(node.req_param.value()).replaced_id;
+            if (!_topo_sm._topology.normal_nodes.contains(replaced_id)) {
+                return join_node_response_params::rejected {
+                    .reason = ::format("Cannot replace node {} because it is not in the 'normal' state", replaced_id),
+                };
+            }
+        }
+
+        std::vector<sstring> unsupported_features;
+        const auto& supported_features = node.rs->supported_features;
+        std::ranges::set_difference(node.topology->enabled_features, supported_features, std::back_inserter(unsupported_features));
+        if (!unsupported_features.empty()) {
+            slogger.warn("raft topology: node {} does not understand some features: {}", node.id, unsupported_features);
+            return join_node_response_params::rejected{
+                .reason = format("Feature check failed. The node does not support some features that are enabled by the cluster: {}",
+                        unsupported_features),
+            };
+        }
+
+        return join_node_response_params::accepted {};
+    }
+
+    future<node_to_work_on> finish_accepting_node(node_to_work_on&& node) {
+        if (_topo_sm._topology.normal_nodes.empty()) {
+            // This is the first node, it joins without the handshake.
+            co_return std::move(node);
+        }
+
+        auto id = node.id;
+
+        assert(!_topo_sm._topology.transition_nodes.empty());
+        if (!_raft.get_configuration().contains(id)) {
+            co_await _raft.modify_config({raft::config_member({id, {}}, {})}, {});
+        }
+
+        release_node(std::move(node));
+        co_await respond_to_joining_node(id, join_node_response_params{
+            .response = join_node_response_params::accepted{},
+        });
+        co_return retake_node(co_await start_operation(), id);
+    }
+
+    future<> respond_to_joining_node(raft::server_id id, join_node_response_params&& params) {
+        auto ip = id2ip(locator::host_id(id.uuid()));
+        co_await ser::join_node_rpc_verbs::send_join_node_response(
+            &_messaging, netw::msg_addr(ip), id,
+            std::move(params)
+        );
+    }
 
     // Returns true if the state machine was transitioned into tablet migration path.
     future<bool> maybe_start_tablet_migration(group0_guard);
