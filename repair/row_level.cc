@@ -832,15 +832,15 @@ public:
             , _repair_hasher(_seed, _schema)
             , _compaction_time(compaction_time)
             {
-            if (master) {
-                add_to_repair_meta_for_masters(*this);
-            } else {
-                add_to_repair_meta_for_followers(*this);
-            }
-            _all_node_states.push_back(repair_node_state(utils::fb_utilities::get_broadcast_address()));
-            for (auto& node : all_live_peer_nodes) {
-                _all_node_states.push_back(repair_node_state(node));
-            }
+        if (master) {
+            add_to_repair_meta_for_masters(*this);
+        } else {
+            add_to_repair_meta_for_followers(*this);
+        }
+        _all_node_states.push_back(repair_node_state(utils::fb_utilities::get_broadcast_address()));
+        for (auto& node : all_live_peer_nodes) {
+            _all_node_states.push_back(repair_node_state(node));
+        }
     }
 
     // follower constructor
