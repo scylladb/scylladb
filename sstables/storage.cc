@@ -62,7 +62,7 @@ public:
     virtual future<> change_state(const sstable& sst, sstring to, generation_type generation, delayed_commit_changes* delay) override;
     // runs in async context
     virtual void open(sstable& sst) override;
-    virtual future<> wipe(const sstable& sst) noexcept override;
+    virtual future<> wipe(const sstable& sst, sync_dir) noexcept override;
     virtual future<file> open_component(const sstable& sst, component_type type, open_flags flags, file_open_options options, bool check_integrity) override;
     virtual future<data_sink> make_data_or_index_sink(sstable& sst, component_type type) override;
     virtual future<data_sink> make_component_sink(sstable& sst, component_type type, open_flags oflags, file_output_stream_options options) override;
@@ -387,7 +387,7 @@ future<> filesystem_storage::change_state(const sstable& sst, sstring to, genera
     co_await move(sst, path.native(), std::move(new_generation), delay_commit);
 }
 
-future<> filesystem_storage::wipe(const sstable& sst) noexcept {
+future<> filesystem_storage::wipe(const sstable& sst, sync_dir sync) noexcept {
     // We must be able to generate toc_filename()
     // in order to delete the sstable.
     // Running out of memory here will terminate.
@@ -397,7 +397,7 @@ future<> filesystem_storage::wipe(const sstable& sst) noexcept {
     }();
 
     try {
-        co_await remove_by_toc_name(name);
+        co_await remove_by_toc_name(name, sync);
     } catch (...) {
         // Log and ignore the failure since there is nothing much we can do about it at this point.
         // a. Compaction will retry deleting the sstable in the next pass, and
@@ -446,7 +446,7 @@ public:
     virtual future<> change_state(const sstable& sst, sstring to, generation_type generation, delayed_commit_changes* delay) override;
     // runs in async context
     virtual void open(sstable& sst) override;
-    virtual future<> wipe(const sstable& sst) noexcept override;
+    virtual future<> wipe(const sstable& sst, sync_dir) noexcept override;
     virtual future<file> open_component(const sstable& sst, component_type type, open_flags flags, file_open_options options, bool check_integrity) override;
     virtual future<data_sink> make_data_or_index_sink(sstable& sst, component_type type) override;
     virtual future<data_sink> make_component_sink(sstable& sst, component_type type, open_flags oflags, file_output_stream_options options) override;
@@ -518,7 +518,7 @@ future<> s3_storage::change_state(const sstable& sst, sstring to, generation_typ
     co_await coroutine::return_exception(std::runtime_error("Moving S3 objects not implemented"));
 }
 
-future<> s3_storage::wipe(const sstable& sst) noexcept {
+future<> s3_storage::wipe(const sstable& sst, sync_dir) noexcept {
     auto& sys_ks = sst.manager().system_keyspace();
 
     co_await sys_ks.sstables_registry_update_entry_status(_location, sst.generation(), status_removing);

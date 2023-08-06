@@ -527,8 +527,10 @@ future<> sstable_directory::delete_with_pending_deletion_log(std::vector<shared_
         }
 
         parallel_for_each(ssts, [] (shared_sstable sst) {
-            return sst->unlink();
+            return sst->unlink(sstables::storage::sync_dir::no);
         }).get();
+
+        sync_directory(first->_storage->prefix()).get();
 
         // Once all sstables are deleted, the log file can be removed.
         // Note: the log file will be removed also if unlink failed to remove
