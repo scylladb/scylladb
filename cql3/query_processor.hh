@@ -21,14 +21,13 @@
 #include "cql3/authorized_prepared_statements_cache.hh"
 #include "cql3/statements/prepared_statement.hh"
 #include "exceptions/exceptions.hh"
-#include "lang/wasm_instance_cache.hh"
 #include "service/migration_listener.hh"
 #include "transport/messages/result_message.hh"
 #include "service/qos/service_level_controller.hh"
 #include "service/client_state.hh"
 #include "service/broadcast_tables/experimental/query_result.hh"
 #include "utils/observable.hh"
-#include "lang/wasm_alien_thread_runner.hh"
+#include "lang/wasm.hh"
 
 
 namespace service {
@@ -129,9 +128,7 @@ private:
     // don't bother with expiration on those.
     std::unordered_map<sstring, std::unique_ptr<statements::prepared_statement>> _internal_statements;
 
-    std::shared_ptr<rust::Box<wasmtime::Engine>> _wasm_engine;
-    std::optional<wasm::instance_cache> _wasm_instance_cache;
-    std::shared_ptr<wasm::alien_thread_runner> _alien_runner;
+    wasm::manager& _wasm;
 public:
     static const sstring CQL_VERSION;
 
@@ -146,7 +143,7 @@ public:
     static std::unique_ptr<statements::raw::parsed_statement> parse_statement(const std::string_view& query);
     static std::vector<std::unique_ptr<statements::raw::parsed_statement>> parse_statements(std::string_view queries);
 
-    query_processor(service::storage_proxy& proxy, data_dictionary::database db, service::migration_notifier& mn, memory_config mcfg, cql_config& cql_cfg, utils::loading_cache_config auth_prep_cache_cfg, std::optional<wasm::startup_context> wasm_ctx);
+    query_processor(service::storage_proxy& proxy, data_dictionary::database db, service::migration_notifier& mn, memory_config mcfg, cql_config& cql_cfg, utils::loading_cache_config auth_prep_cache_cfg, wasm::manager& wasm);
 
     ~query_processor();
 
@@ -169,17 +166,7 @@ public:
         return _cql_stats;
     }
 
-    wasmtime::Engine& wasm_engine() {
-        return **_wasm_engine;
-    }
-
-    wasm::instance_cache& wasm_instance_cache() {
-        return *_wasm_instance_cache;
-    }
-
-    wasm::alien_thread_runner& alien_runner() {
-        return *_alien_runner;
-    }
+    wasm::manager& wasm() { return _wasm; }
 
     statements::prepared_statement::checked_weak_ptr get_prepared(const std::optional<auth::authenticated_user>& user, const prepared_cache_key_type& key) {
         if (user) {

@@ -49,9 +49,9 @@ seastar::future<shared_ptr<functions::function>> create_function_statement::crea
             std::move(return_type), _called_on_null_input, std::move(ctx));
     } else if (_language == "wasm") {
        // FIXME: need better way to test wasm compilation without real_database()
-       wasm::context ctx{qp.wasm_engine(), _name.name, qp.wasm_instance_cache(), db.get_config().wasm_udf_yield_fuel(), db.get_config().wasm_udf_total_fuel()};
+       wasm::context ctx(qp.wasm(), _name.name, db.get_config().wasm_udf_yield_fuel(), db.get_config().wasm_udf_total_fuel());
        try {
-            co_await wasm::precompile(qp.alien_runner(), ctx, arg_names, _body);
+            co_await qp.wasm().precompile(ctx, arg_names, _body);
             co_return ::make_shared<functions::user_function>(_name, _arg_types, std::move(arg_names), _body, _language,
                 std::move(return_type), _called_on_null_input, std::move(ctx));
        } catch (const wasm::exception& we) {
