@@ -1877,6 +1877,14 @@ select_statement::maybe_jsonize_select_clause(std::vector<selection::prepared_se
     return prepared_selectors;
 }
 
+static
+bool
+group_by_references_clustering_keys(const selection::selection& sel, const std::vector<size_t>& group_by_cell_indices) {
+    return boost::algorithm::any_of(group_by_cell_indices, [&] (size_t idx) {
+        return sel.get_columns()[idx]->kind == column_kind::clustering_key;
+    });
+}
+
 std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::database db, cql_stats& stats, bool for_view) {
     schema_ptr underlying_schema = validation::validate_column_family(db, keyspace(), column_family());
     schema_ptr schema = _parameters->is_mutation_fragments() ? mutation_fragments_select_statement::generate_output_schema(underlying_schema) : underlying_schema;
@@ -1934,6 +1942,11 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
     check_needs_filtering(*restrictions, db.get_config().strict_allow_filtering(), warnings);
     ensure_filtering_columns_retrieval(db, *selection, *restrictions);
     auto group_by_cell_indices = ::make_shared<std::vector<size_t>>(prepare_group_by(*schema, *selection));
+
+    if (_parameters->is_distinct() && group_by_references_clustering_keys(*selection, *group_by_cell_indices)) {
+        throw exceptions::invalid_request_exception(
+                "Grouping on clustering columns is not allowed for SELECT DISTINCT queries");
+    }
 
     ::shared_ptr<cql3::statements::select_statement> stmt;
     auto prepared_attrs = _attrs->prepare(db, keyspace(), column_family());
