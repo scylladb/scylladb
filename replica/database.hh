@@ -322,6 +322,7 @@ using column_family_stats = table_stats;
 
 class database_sstable_write_monitor;
 class compaction_group;
+class compaction_group_manager;
 using compaction_group_vector = utils::chunked_vector<std::unique_ptr<compaction_group>>;
 
 using enable_backlog_tracker = bool_class<class enable_backlog_tracker_tag>;
@@ -419,12 +420,9 @@ private:
     lw_shared_ptr<memtable_list> make_memory_only_memtable_list();
     lw_shared_ptr<memtable_list> make_memtable_list(compaction_group& cg);
 
-    // The value of the parameter controls the number of compaction groups in this table.
-    // 0 (default) means 1 compaction group. 3 means 8 compaction groups.
-    const unsigned _x_log2_compaction_groups = 0;
-
     compaction_manager& _compaction_manager;
     sstables::compaction_strategy _compaction_strategy;
+    std::unique_ptr<compaction_group_manager> _cg_manager;
     compaction_group_vector _compaction_groups;
     // Compound SSTable set for all the compaction groups, which is useful for operations spanning all of them.
     lw_shared_ptr<sstables::sstable_set> _sstables;
@@ -544,7 +542,7 @@ public:
 
 private:
     using compaction_group_ptr = std::unique_ptr<compaction_group>;
-    compaction_group_vector make_compaction_groups();
+    std::unique_ptr<compaction_group_manager> make_compaction_group_manager();
     // Return compaction group if table owns a single one. Otherwise, null is returned.
     compaction_group* single_compaction_group_if_available() const noexcept;
     // Select a compaction group from a given token.
@@ -790,6 +788,7 @@ public:
     db::commitlog* commitlog() { return _commitlog; }
     const locator::effective_replication_map_ptr& get_effective_replication_map() const { return _erm; }
     void update_effective_replication_map(locator::effective_replication_map_ptr);
+    [[gnu::always_inline]] bool uses_tablets() const;
     future<const_mutation_partition_ptr> find_partition(schema_ptr, reader_permit permit, const dht::decorated_key& key) const;
     future<const_mutation_partition_ptr> find_partition_slow(schema_ptr, reader_permit permit, const partition_key& key) const;
     future<const_row_ptr> find_row(schema_ptr, reader_permit permit, const dht::decorated_key& partition_key, clustering_key clustering_key) const;

@@ -48,6 +48,7 @@
 #include "dht/token.hh"
 #include "dht/i_partitioner.hh"
 #include "replica/global_table_ptr.hh"
+#include "locator/tablets.hh"
 
 #include <boost/range/algorithm/remove_if.hpp>
 #include <boost/range/algorithm.hpp>
@@ -542,16 +543,79 @@ void table::enable_off_strategy_trigger() {
     do_update_off_strategy_trigger();
 }
 
-compaction_group_vector table::make_compaction_groups() {
-    compaction_group_vector ret;
-    auto&& ranges = dht::split_token_range_msb(_x_log2_compaction_groups);
-    ret.reserve(ranges.size());
-    tlogger.debug("Created {} compaction groups for {}.{}", ranges.size(), _schema->ks_name(), _schema->cf_name());
-    size_t i = 0;
-    for (auto&& range : ranges) {
-        ret.emplace_back(std::make_unique<compaction_group>(*this, i++, std::move(range)));
+class single_compaction_group_manager final : public compaction_group_manager {
+    replica::table& _t;
+public:
+    single_compaction_group_manager(replica::table& t) : _t(t) {}
+
+    compaction_group_vector make_compaction_groups() const override {
+        compaction_group_vector r;
+        r.push_back(std::make_unique<compaction_group>(_t, size_t(0), dht::token_range::make_open_ended_both_sides()));
+        return r;
     }
-    return ret;
+    size_t compaction_group_of(dht::token) const override {
+        return 0;
+    }
+    size_t log2_compaction_groups() const override {
+        return 0;
+    }
+};
+
+class tablet_compaction_group_manager final : public compaction_group_manager {
+    replica::table& _t;
+private:
+    const locator::effective_replication_map_ptr& erm() const {
+        return _t.get_effective_replication_map();
+    }
+
+    const schema_ptr& schema() const {
+        return _t.schema();
+    }
+
+    const locator::tablet_map& tablet_map() const {
+        // FIXME: cheaper way to retrieve tablet_map than looking up every time in tablet_metadata's map.
+        auto& tm = erm()->get_token_metadata();
+        return tm.tablets().get_tablet_map(schema()->id());
+    }
+public:
+    tablet_compaction_group_manager(replica::table& t) : _t(t) {}
+
+    compaction_group_vector make_compaction_groups() const override {
+        compaction_group_vector ret;
+
+        auto& tmap = tablet_map();
+        auto& tm = erm()->get_token_metadata();
+        ret.reserve(tmap.tablet_count());
+
+        for (auto tid : tmap.tablet_ids()) {
+            auto range = tmap.get_token_range(tid);
+
+            auto shard = tmap.get_shard(tid, tm.get_my_id());
+            if (shard && *shard == this_shard_id()) {
+                tlogger.debug("Tablet with id {} present for {}.{}", tid, schema()->ks_name(), schema()->cf_name());
+            }
+            // FIXME: don't allocate compaction groups for tablets that aren't present in this shard.
+            ret.emplace_back(std::make_unique<compaction_group>(_t, tid.value(), std::move(range)));
+        }
+        return ret;
+    }
+    size_t compaction_group_of(dht::token t) const override {
+        return tablet_map().get_tablet_id(t).value();
+    }
+    size_t log2_compaction_groups() const override {
+        return log2ceil(tablet_map().tablet_count());
+    }
+};
+
+bool table::uses_tablets() const {
+    return _erm && _erm->get_replication_strategy().uses_tablets();
+}
+
+std::unique_ptr<compaction_group_manager> table::make_compaction_group_manager() {
+    if (uses_tablets()) {
+        return std::make_unique<tablet_compaction_group_manager>(*this);
+    }
+    return std::make_unique<single_compaction_group_manager>(*this);
 }
 
 compaction_group* table::single_compaction_group_if_available() const noexcept {
@@ -559,9 +623,10 @@ compaction_group* table::single_compaction_group_if_available() const noexcept {
 }
 
 compaction_group& table::compaction_group_for_token(dht::token token) const noexcept {
-    auto idx = dht::compaction_group_of(_x_log2_compaction_groups, token);
+    auto idx = _cg_manager->compaction_group_of(token);
     if (idx >= _compaction_groups.size()) {
-        on_fatal_internal_error(tlogger, format("compaction_group_for_token: index out of range: idx={} size_log2={} size={} token={}", idx, _x_log2_compaction_groups, _compaction_groups.size(), token));
+        on_fatal_internal_error(tlogger, format("compaction_group_for_token: index out of range: idx={} size_log2={} size={} token={}",
+                                                idx, _cg_manager->log2_compaction_groups(), _compaction_groups.size(), token));
     }
     auto& ret = *_compaction_groups[idx];
     if (!ret.token_range().contains(token, dht::token_comparator())) {
@@ -1555,10 +1620,6 @@ void set_minimum_x_log2_compaction_groups(unsigned x_log2_compaction_groups) {
     minimum_x_log2_compaction_groups.store(x_log2_compaction_groups, std::memory_order_relaxed);
 }
 
-static inline unsigned get_x_log2_compaction_groups(unsigned x_log2_compaction_groups) {
-    return std::max(x_log2_compaction_groups, minimum_x_log2_compaction_groups.load(std::memory_order_relaxed));
-}
-
 table::table(schema_ptr schema, config config, lw_shared_ptr<const storage_options> sopts, db::commitlog* cl, compaction_manager& compaction_manager,
         sstables::sstables_manager& sst_manager, cell_locker_stats& cl_stats, cache_tracker& row_cache_tracker,
         locator::effective_replication_map_ptr erm)
@@ -1570,10 +1631,10 @@ table::table(schema_ptr schema, config config, lw_shared_ptr<const storage_optio
                          keyspace_label(_schema->ks_name()),
                          column_family_label(_schema->cf_name())
                         )
-    , _x_log2_compaction_groups(get_x_log2_compaction_groups(_config.x_log2_compaction_groups))
     , _compaction_manager(compaction_manager)
     , _compaction_strategy(make_compaction_strategy(_schema->compaction_strategy(), _schema->compaction_strategy_options()))
-    , _compaction_groups(make_compaction_groups())
+    , _cg_manager(make_compaction_group_manager())
+    , _compaction_groups(_cg_manager->make_compaction_groups())
     , _sstables(make_compound_sstable_set())
     , _cache(_schema, sstables_as_snapshot_source(), row_cache_tracker, is_continuous::yes)
     , _commitlog(cl)

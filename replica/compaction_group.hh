@@ -135,6 +135,16 @@ public:
     }
 };
 
+using compaction_group_vector = utils::chunked_vector<std::unique_ptr<compaction_group>>;
+
+class compaction_group_manager {
+public:
+    virtual ~compaction_group_manager() {}
+    virtual compaction_group_vector make_compaction_groups() const = 0;
+    virtual size_t compaction_group_of(dht::token) const = 0;
+    virtual size_t log2_compaction_groups() const = 0;
+};
+
 // Used by the tests to increase the default number of compaction groups by increasing the minimum to X.
 void set_minimum_x_log2_compaction_groups(unsigned x_log2_compaction_groups);
 
