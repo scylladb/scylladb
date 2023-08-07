@@ -1,0 +1,23 @@
+.. -*- mode: rst -*-
+
+.. list-table::
+   :widths: 20 80
+   :header-rows: 1
+
+   * - Name
+     - Description
+{% for item in data %}
+
+   * - .. _config_{{ item.name }}:
+
+          ``{{ item.name }}``
+     - **Default value:** ``{{ item.default }}``
+       
+       **Value status:** {{ item.value_status }}
+       
+       **Liveness:** {{ item.liveness }}
+
+       .. raw:: html
+
+          <p>{{item.description}}</p>
+{% endfor %}
