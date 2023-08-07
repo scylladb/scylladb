@@ -782,7 +782,9 @@ gossiper::endpoint_lock_entry::endpoint_lock_entry() noexcept
 {}
 
 future<gossiper::endpoint_permit> gossiper::lock_endpoint(inet_address ep, permit_id pid, seastar::compat::source_location l) {
-    assert(this_shard_id() == 0);
+    if (this_shard_id() != 0) {
+        on_internal_error(logger, "lock_endpoint must be called on shard 0");
+    }
     std::string caller = l.function_name();
     auto eptr = co_await _endpoint_locks.get_or_load(ep, [] (const inet_address& ep) { return endpoint_lock_entry(); });
     if (pid) {
