@@ -48,6 +48,7 @@ pristine: clean
 .PHONY: clean
 clean:
 	rm -rf $(BUILDDIR)/*
+	rm -rf _data/*
 	rm -f poetry.lock
 
 # Generate output commands
@@ -87,7 +88,6 @@ redirects: setup
 	@echo
 	@echo "Build finished. The HTML pages are in $(BUILDDIR)/dirhtml."
 
-
 # Preview commands
 .PHONY: preview
 preview: setup
@@ -107,3 +107,4 @@ test: setup
 .PHONY: linkcheck
 linkcheck: setup
 	$(SPHINXBUILD) -b linkcheck $(SOURCEDIR) $(BUILDDIR)/linkcheck
+

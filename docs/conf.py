@@ -7,6 +7,7 @@ from datetime import date
 from sphinx_scylladb_theme.utils import multiversion_regex_builder
 from recommonmark.transform import AutoStructify
 
+sys.path.insert(0, os.path.abspath('./_ext'))
 sys.path.insert(0, os.path.abspath(".."))
 
 # -- Global variables
@@ -36,6 +37,8 @@ extensions = [
     "sphinx_scylladb_theme",
     "sphinx_multiversion",  # optional
     "recommonmark",  # optional
+    "sphinxcontrib.datatemplates",
+    "scylladb_cc_properties",
 ]
 
 # The suffix(es) of source filenames.
@@ -95,6 +98,7 @@ smv_outputdir_format = "{ref.name}"
 
 # The theme to use for pages.
 html_theme = "sphinx_scylladb_theme"
+templates_path = ['_templates', ]
 
 # These folders are copied to the documentation's HTML output
 html_static_path = ['_static']
@@ -137,7 +141,6 @@ html_baseurl = BASE_URL
 
 # Dictionary of values to pass into the template engine’s context for all pages
 html_context = {"html_baseurl": html_baseurl}
-
 
 # -- Initialize Sphinx ----------------------------------------------
 def setup(sphinx):
