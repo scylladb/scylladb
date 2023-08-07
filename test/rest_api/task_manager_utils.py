@@ -30,9 +30,6 @@ def wait_for_task(rest_api, task_id):
     resp.raise_for_status()
     return resp.json()
 
-async def wait_for_task_async(rest_api, task_id):
-    rest_api.send("GET", f"task_manager/wait_task/{task_id}")
-
 def get_task_status_recursively(rest_api, task_id):
     resp = rest_api.send("GET", f"task_manager/task_status_recursive/{task_id}")
     resp.raise_for_status()
