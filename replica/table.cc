@@ -1614,12 +1614,6 @@ void compaction_group::clear_sstables() {
     _maintenance_sstables = _t.make_maintenance_sstable_set();
 }
 
-static std::atomic<unsigned> minimum_x_log2_compaction_groups{0};
-
-void set_minimum_x_log2_compaction_groups(unsigned x_log2_compaction_groups) {
-    minimum_x_log2_compaction_groups.store(x_log2_compaction_groups, std::memory_order_relaxed);
-}
-
 table::table(schema_ptr schema, config config, lw_shared_ptr<const storage_options> sopts, db::commitlog* cl, compaction_manager& compaction_manager,
         sstables::sstables_manager& sst_manager, cell_locker_stats& cl_stats, cache_tracker& row_cache_tracker,
         locator::effective_replication_map_ptr erm)

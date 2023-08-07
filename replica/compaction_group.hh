@@ -145,7 +145,4 @@ public:
     virtual size_t log2_compaction_groups() const = 0;
 };
 
-// Used by the tests to increase the default number of compaction groups by increasing the minimum to X.
-void set_minimum_x_log2_compaction_groups(unsigned x_log2_compaction_groups);
-
 }

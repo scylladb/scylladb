@@ -81,12 +81,12 @@ future<> do_with_cql_env_and_compaction_groups_cgs(unsigned cgs, std::function<v
         co_await recursive_remove_directory(fs::path(cfg.db_config->data_file_directories()[0]));
         co_await recursive_touch_directory(cfg.db_config->data_file_directories()[0]);
     }
-    cfg.db_config->x_log2_compaction_groups(cgs);
+    // TODO: perhaps map log2_compaction_groups into initial_tablets when creating the testing keyspace.
     co_await do_with_cql_env_thread(func, cfg, thread_attr);
 }
 
 future<> do_with_cql_env_and_compaction_groups(std::function<void(cql_test_env&)> func, cql_test_config cfg = {}, thread_attributes thread_attr = {}) {
-    std::vector<unsigned> x_log2_compaction_group_values = { 0 /* 1 CG */, 1 /* 2 CGs */ };
+    std::vector<unsigned> x_log2_compaction_group_values = { 0 /* 1 CG */ };
     for (auto x_log2_compaction_groups : x_log2_compaction_group_values) {
         co_await do_with_cql_env_and_compaction_groups_cgs(x_log2_compaction_groups, func, cfg, thread_attr);
     }

@@ -375,8 +375,6 @@ class PythonTestSuite(TestSuite):
             if type(cmdline_options) == str:
                 cmdline_options = [cmdline_options]
             cmdline_options = merge_cmdline_options(cmdline_options, create_cfg.cmdline_from_test)
-            if options.x_log2_compaction_groups:
-                cmdline_options = merge_cmdline_options(cmdline_options, [ '--x-log2-compaction-groups={}'.format(options.x_log2_compaction_groups) ])
 
             # There are multiple sources of config options, with increasing priority
             # (if two sources provide the same config option, the higher priority one wins):
