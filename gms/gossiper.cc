@@ -792,8 +792,8 @@ future<gossiper::endpoint_permit> gossiper::lock_endpoint(inet_address ep, permi
             // Already locked with the same permit
             co_return endpoint_permit(std::move(eptr), std::move(ep), std::move(caller));
         } else {
-            // the endpoint lock must not have been released fir the permit_id
-            // maybe we're passed a permit_id that was acquired for a different endpoint
+            // permit_id mismatch means either that the endpoint lock was released,
+            // or maybe we're passed a permit_id that was acquired for a different endpoint.
             on_internal_error_noexcept(logger, fmt::format("{}: lock_endpoint {}: permit_id={}: endpoint_lock_entry has mismatching permit_id={}", caller, ep, pid, eptr->pid));
         }
     }
