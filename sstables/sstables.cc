@@ -100,7 +100,7 @@ namespace sstables {
 // This flag is intended to be a temporary hack. The goal is to eventually
 // solve index caching problems via a smart cache replacement policy.
 //
-thread_local utils::updateable_value<bool> global_cache_index_pages(false);
+thread_local utils::updateable_value<bool> global_cache_index_pages(true);
 
 logging::logger sstlog("sstable");
 
