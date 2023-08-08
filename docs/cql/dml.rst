@@ -404,6 +404,29 @@ FILTERING`` and so the following query is valid::
 
     SELECT * FROM users WHERE birth_year = 1981 AND country = 'FR' ALLOW FILTERING;
 
+.. _eval-order:
+
+Evaluation order of SELECT statement clauses
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+This section explains the relative priority among the various clauses
+of the SELECT statement.
+
+ - All rows of the table named in the FROM clause are considered as candidates.
+ - Rows are ordered in token order first, then partition key order, then clustering key order.
+ - If ORDER BY is specified, then the clustering key order can be reversed.
+ - The WHERE clause predicate is applied.
+ - GROUP BY is then applied to create groups.
+ - Aggregate functions in the SELECT clause are applied to groups, or to the entire query if GROUP BY was not specified.
+ - If there are selectors that are not aggregate functions, then the first value in the group is selected.
+ - If specified, PER PARTITION LIMIT is applied to each partition.
+ - If specified, LIMIT is applied to the entire query result.
+
+.. note:: The server may use a different execution plan, as long as it arrives at the same result. For
+  example, conditions in the WHERE clause will limit the candidate row set first by looking up the
+  primary index or a secondary index.
+
+
 .. _bypass-cache:
 
 Bypass Cache
