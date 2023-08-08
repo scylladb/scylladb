@@ -746,6 +746,45 @@ private:
         return consumer(make_compacting_reader(setup_sstable_reader(), compaction_time, max_purgeable_func(), gc_state));
     }
 
+    // when compacting a run of mutation fragments, the producer reads the
+    // mutations from sstables (or yet another reader). and the consumer
+    // processes the mutations, by either compacting them, or segregates them
+    // into chunks. each chunk of the fragments stream can be either piped to
+    // a sstable writer or yet another consumer. the consumers and writers can
+    // be created on demand.
+    //
+    //   def sstable_reader(sstables):
+    //       for sstable in sstables:
+    //           for frag in read(sstable):
+    //               yield frag
+    //
+    //   def compacting_reader(frag_gen):
+    //       for frag in compact(frag_gen):
+    //           yield frag
+    //
+    //   def interposer_consumer(frag_gen):
+    //       for frag in segregate(frag_gen):
+    //           yield frag
+    //
+    //   def end_consumer(do_compact):
+    //       def consumer(frag_gen):
+    //           maybe_compact = identity
+    //           if do_compact:
+    //               maybe_compact = mutation_compaction
+    //           for chunk in as_chunks(maybe_compact(frag_gen)):
+    //               writer = SSTableWriter()
+    //               writer(chunk)
+    //
+    // regarding where the compaction is performed, there are two cases:
+    //
+    // * compacts (through compacting reader) before interposer consumer,
+    //   using the shell pipeline syntax:
+    //
+    //   sstables | sstable_reader | compacting_reader | interposer_consumer | end_consumer(False)
+    //
+    // * compacts after interposer consumer
+    //
+    //   sstables | sstable_reader | interposer-consumer | interposer | end_consumer(True)
     future<> consume() {
         auto now = gc_clock::now();
         // consume_without_gc_writer(), which uses compacting_reader, is ~3% slower.
