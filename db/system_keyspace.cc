@@ -1711,14 +1711,13 @@ future<> system_keyspace::remove_endpoint(gms::inet_address ep) {
 
 future<> system_keyspace::update_tokens(const std::unordered_set<dht::token>& tokens) {
     if (tokens.empty()) {
-        return make_exception_future<>(std::invalid_argument("remove_endpoint should be used instead"));
+        throw std::invalid_argument("remove_endpoint should be used instead");
     }
 
     sstring req = format("INSERT INTO system.{} (key, tokens) VALUES (?, ?)", LOCAL);
     auto set_type = set_type_impl::get_instance(utf8_type, true);
-    return execute_cql(req, sstring(LOCAL), make_set_value(set_type, prepare_tokens(tokens))).discard_result().then([] {
-        return force_blocking_flush(LOCAL);
-    });
+    co_await execute_cql(req, sstring(LOCAL), make_set_value(set_type, prepare_tokens(tokens)));
+    co_await force_blocking_flush(LOCAL);
 }
 
 future<> system_keyspace::force_blocking_flush(sstring cfname) {
