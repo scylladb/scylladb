@@ -18,7 +18,6 @@
 #include "thrift/server.hh"
 #include "exceptions/exceptions.hh"
 #include "cql3/query_processor.hh"
-#include "query_context.hh"
 #include "partition_slice_builder.hh"
 #include "db/config.hh"
 #include "gms/feature_service.hh"

@@ -41,7 +41,6 @@
 #include "service/migration_manager.hh"
 #include <boost/regex.hpp>
 #include "gms/feature.hh"
-#include "db/query_context.hh"
 #include "service/qos/qos_common.hh"
 #include "utils/UUID_gen.hh"
 #include "tombstone_gc_extension.hh"

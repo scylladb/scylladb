@@ -38,7 +38,6 @@
 #include <seastar/json/json_elements.hh>
 #include <boost/algorithm/cxx11/any_of.hpp>
 #include "collection_mutation.hh"
-#include "db/query_context.hh"
 #include "schema/schema.hh"
 #include "db/tags/extension.hh"
 #include "db/tags/utils.hh"

@@ -15,7 +15,6 @@
 #include "partition_slice_builder.hh"
 #include "dht/i_partitioner.hh"
 #include "system_keyspace.hh"
-#include "query_context.hh"
 #include "query-result-set.hh"
 #include "query-result-writer.hh"
 #include "schema/schema_builder.hh"
@@ -28,6 +27,7 @@
 #include "mutation_query.hh"
 #include "system_keyspace.hh"
 #include "system_distributed_keyspace.hh"
+#include "cql3/query_processor.hh"
 #include "cql3/cql3_type.hh"
 #include "cql3/functions/functions.hh"
 #include "cql3/functions/user_function.hh"
@@ -66,7 +66,6 @@
 #include "index/target_parser.hh"
 #include "lang/lua.hh"
 
-#include "db/query_context.hh"
 #include "idl/mutation.dist.hh"
 #include "idl/mutation.dist.impl.hh"
 #include "db/system_keyspace.hh"

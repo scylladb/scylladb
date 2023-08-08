@@ -16,7 +16,6 @@
 #include <seastar/core/future.hh>
 #include <memory>
 #include "log.hh"
-#include "db/query_context.hh"
 #include "auth/service.hh"
 #include "service/migration_manager.hh"
 #include "service/storage_proxy.hh"
