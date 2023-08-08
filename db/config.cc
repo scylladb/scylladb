@@ -1147,8 +1147,11 @@ db::fs::path db::config::get_conf_sub(db::fs::path sub) {
 }
 
 bool db::config::check_experimental(experimental_features_t::feature f) const {
-    const auto& optval = experimental_features();
-    return find(begin(optval), end(optval), enum_option<experimental_features_t>{f}) != end(optval);
+    enum_option<experimental_features_t> to_check{f};
+    return std::ranges::any_of(experimental_features(),
+                               [to_check](auto& enabled) {
+                                   return to_check == enabled;
+                               });
 }
 
 namespace bpo = boost::program_options;
