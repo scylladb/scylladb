@@ -126,7 +126,7 @@ future<> db::commitlog_replayer::impl::init() {
         }
     }, [this](replica::database& db) {
         return do_with(shard_rpm_map{}, [this, &db](shard_rpm_map& map) {
-            return db.get_tables_metadata().parallel_for_each_table([this, &map] (table_id uuid, lw_shared_ptr<replica::table>) {
+            return db.get_tables_metadata().parallel_for_each_table([this, &map] (table_id uuid, lw_shared_ptr<replica::table> table) {
                 // We do this on each cpu, for each CF, which technically is a little wasteful, but the values are
                 // cached, this is only startup, and it makes the code easier.
                 // Get all truncation records for the CF and initialize max rps if
@@ -135,6 +135,15 @@ future<> db::commitlog_replayer::impl::init() {
                 return _sys_ks.local().get_truncated_position(uuid).then([&map, uuid](std::vector<db::replay_position> tpps) {
                     for (auto& p : tpps) {
                         rlogger.trace("CF {} truncated at {}", uuid, p);
+                        auto& pp = map[p.shard_id()][uuid];
+                        pp = std::max(pp, p);
+                    }
+                }).then([table, uuid, &map] {
+                    // See comment in compaction.cc: compaction::setup()
+                    auto sstables = table->get_sstables();
+                    for (auto& sst : *sstables) {
+                        auto& stats = sst->get_stats_metadata();
+                        auto& p = stats.position;
                         auto& pp = map[p.shard_id()][uuid];
                         pp = std::max(pp, p);
                     }

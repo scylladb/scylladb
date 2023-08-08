@@ -685,6 +685,9 @@ private:
         min_max_tracker<api::timestamp_type> timestamp_tracker;
 
         _input_sstable_generations.reserve(_sstables.size());
+
+        auto cpu_id = this_shard_id();
+
         for (auto& sst : _sstables) {
             co_await coroutine::maybe_yield();
             auto& sst_stats = sst->get_stats_metadata();
@@ -710,14 +713,29 @@ private:
             // for a better estimate for the number of partitions in the merged
             // sstable than just adding up the lengths of individual sstables.
             _estimated_partitions += sst->get_estimated_key_count();
-            // TODO:
-            // Note that this is not fully correct. Since we might be merging sstables that originated on
-            // another shard (#cpu changed), we might be comparing RP:s with differing shard ids,
-            // which might vary in "comparable" size quite a bit. However, since the worst that happens
-            // is that we might miss a high water mark for the commit log replayer,
-            // this is kind of ok, esp. since we will hopefully not be trying to recover based on
-            // compacted sstables anyway (CL should be clean by then).
-            _rp = std::max(_rp, sst_stats.position);
+
+            /**
+             * Retain replay position info. This has two purposes:
+             *   a.) Ensure we eliminate the right sstables on truncate (all tables with RP <= position at truncate)
+             *   b.) Watershed for commitlog replay on crash recover.
+             *
+             * The latter requires us to _only_ include positions originating on same shard as
+             * that for which we build the sstable (i.e. our shard), since otherwise the ordering
+             * (largest RP) does not work. But also because any RP from sstable from other shard
+             * (resharding) does not matter here. We never compact until _after_ a restart replay,
+             * so sstables coming to us from resharding are always already handled w.r. replay thresholds.
+             *
+             * In fact, we only really need to keep track of "current" session in general (for both truncation
+             * and watershedding), since by definition, sstables older than this will always be caught/bypassed
+             * when comparing RP:s by simple wallclock time, so even if we reshard on every restart, as long
+             * as the restart is clean all is ok, and if not, only sstables created either by flush or here
+             * will be counted, and in both cases the metadata RP:s will be correct for thresholding in either
+             * direction (truncate or replay watershed)
+             *
+             */
+            if (sst_stats.position.shard_id() == cpu_id) {
+                _rp = std::max(_rp, sst_stats.position);
+            }
         }
         log_info("{} {}", report_start_desc(), formatted_msg);
         if (ssts->size() < _sstables.size()) {
