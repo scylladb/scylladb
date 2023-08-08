@@ -782,6 +782,22 @@ private:
         return consumer(setup_sstable_reader());
     }
 
+    // based on the specified policies, the `compaction` base class designates
+    // an `end_consumer` which:
+    //
+    //  1. consumes the mutations read from the producer (i.e., reader) and
+    //  2. optionally performs the compaction, then
+    //  3. segregates the mutation stream into multiple chunks, i.e., sstables.
+    //
+    // but the derived compaction classes are allowed to further customize the
+    // the way how segregation is performed with its own rule by interposing this
+    // process. typically, it creates yet another consumer with the same interface
+    // wrapping around the given end consumer. the former consumer acts like a
+    // decorator of the latter.
+    //
+    // if the derived compaction wants to opt in for this behavior, in addition
+    // to overriding `make_interposer_consumer()`, it would have to override
+    // `use_interposer_consumer()` so it returns true.
     virtual reader_consumer_v2 make_interposer_consumer(reader_consumer_v2 end_consumer) {
         return _table_s.get_compaction_strategy().make_interposer_consumer(_ms_metadata, std::move(end_consumer));
     }
