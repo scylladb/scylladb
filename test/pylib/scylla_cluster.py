@@ -71,8 +71,12 @@ def make_scylla_conf(workdir: pathlib.Path, host_addr: str, seed_addrs: List[str
         # Allow testing experimental features. Following issue #9467, we need
         # to add here specific experimental features as they are introduced.
         'enable_user_defined_functions': True,
-        'experimental': True,
-        'experimental_features': ['udf', 'consistent-topology-changes'],
+        'experimental_features': ['udf',
+                                  'alternator-streams',
+                                  'consistent-topology-changes',
+                                  'broadcast-tables',
+                                  'keyspace-storage-options',
+                                  'tablets'],
 
         'consistent_cluster_management': True,
 
