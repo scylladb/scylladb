@@ -15,7 +15,7 @@ async def test_sticky_coordinator_enforced(manager: ManagerClient) -> None:
     s1 = await manager.server_add(cmdline=['--logger-log-level', 'paging=trace'])
     s2 = await manager.server_add(cmdline=['--logger-log-level', 'paging=trace'])
 
-    await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
+    await wait_for_token_ring_and_group0_consistency(manager)
 
     cql = manager.get_cql()
 

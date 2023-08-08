@@ -74,13 +74,14 @@ async def check_token_ring_and_group0_consistency(manager: ManagerClient) -> Non
         assert token_ring_ids == group0_ids
 
 
-async def wait_for_token_ring_and_group0_consistency(manager: ManagerClient, deadline: float) -> None:
+async def wait_for_token_ring_and_group0_consistency(manager: ManagerClient, timeout: int = 30) -> None:
     """Weaker version of the above check; the token ring is not immediately updated after
     bootstrap/replace/decommission - the normal tokens of the new node propagate through gossip.
     Take this into account and wait for the equality condition to hold, with a timeout.
     """
     servers = await manager.running_servers()
     for srv in servers:
+        deadline = time.time() + timeout
         group0_members = await get_current_group0_config(manager, srv)
         group0_ids = {m[0] for m in group0_members}
         async def token_ring_matches():

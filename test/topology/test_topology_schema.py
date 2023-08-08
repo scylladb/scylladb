@@ -24,7 +24,7 @@ async def test_topology_schema_changes(manager, random_tables):
 
     # Test add column after adding a server
     await manager.server_add()
-    await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
+    await wait_for_token_ring_and_group0_consistency(manager)
     await table.add_column()
     await random_tables.verify_schema()
 

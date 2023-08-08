@@ -20,7 +20,7 @@ async def test_new_table(manager, random_tables):
     # Before performing data queries, make sure that the token ring
     # has converged (we're using ring_delay = 0).
     # Otherwise the queries may pick wrong replicas.
-    await wait_for_token_ring_and_group0_consistency(manager, time.time() + 60)
+    await wait_for_token_ring_and_group0_consistency(manager, 60)
     await cql.run_async(f"INSERT INTO {table} ({','.join(c.name for c in table.columns)})" \
                         f"VALUES ({', '.join(['%s'] * len(table.columns))})",
                         parameters=[c.val(1) for c in table.columns])
