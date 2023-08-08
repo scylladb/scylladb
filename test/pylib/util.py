@@ -42,10 +42,10 @@ async def wait_for(
         pred: Callable[[], Awaitable[Optional[T]]],
         deadline: float, period: float = 1) -> T:
     while True:
-        assert(time.time() < deadline), "Deadline exceeded, failing test."
         res = await pred()
         if res is not None:
             return res
+        assert(time.time() < deadline), "Deadline exceeded, failing test."
         await asyncio.sleep(period)
 
 
