@@ -26,6 +26,7 @@
 #include <seastar/core/sleep.hh>
 #include <seastar/core/thread.hh>
 #include <seastar/core/metrics.hh>
+#include <seastar/core/on_internal_error.hh>
 #include <seastar/util/defer.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
@@ -818,9 +819,16 @@ future<> gossiper::update_live_endpoints_version() {
     });
 }
 
+future<semaphore_units<>> gossiper::lock_endpoint_update_semaphore() {
+    if (this_shard_id() != 0) {
+        on_internal_error(logger, "must be called on shard 0");
+    }
+    return get_units(_endpoint_update_semaphore, 1);
+}
+
 future<std::set<inet_address>> gossiper::get_live_members_synchronized() {
     return container().invoke_on(0, [] (gms::gossiper& g) -> future<std::set<inet_address>> {
-        auto lock = co_await get_units(g._endpoint_update_semaphore, 1);
+        auto lock = co_await g.lock_endpoint_update_semaphore();
         std::set<inet_address> live_members = g.get_live_members();
         co_await g.replicate_live_endpoints_on_change();
         co_return live_members;
@@ -1049,7 +1057,7 @@ void gossiper::run() {
             }
 
             {
-                auto lock = get_units(_endpoint_update_semaphore, 1).get();
+                auto lock = lock_endpoint_update_semaphore().get();
                 replicate_live_endpoints_on_change().get();
             }
 
