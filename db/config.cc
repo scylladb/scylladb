@@ -1154,8 +1154,6 @@ bool db::config::check_experimental(experimental_features_t::feature f) const {
                                });
 }
 
-namespace bpo = boost::program_options;
-
 logging::settings db::config::logging_settings(const log_cli::options& opts) const {
     auto value = [&](auto& v, const auto& opt) {
         if (opt.defaulted() && v.is_set()) {
