@@ -887,7 +887,6 @@ public:
 
             group0_client.init().get();
             auto stop_system_keyspace = defer([&sys_ks] {
-                db::qctx = {};
                 sys_ks.invoke_on_all(&db::system_keyspace::shutdown).get();
             });
 

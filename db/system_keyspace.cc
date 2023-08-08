@@ -102,8 +102,6 @@ namespace {
     });
 }
 
-std::unique_ptr<query_context> qctx = {};
-
 static logging::logger slogger("system_keyspace");
 static const api::timestamp_type creation_timestamp = api::new_timestamp();
 
@@ -1721,7 +1719,6 @@ future<> system_keyspace::update_tokens(const std::unordered_set<dht::token>& to
 }
 
 future<> system_keyspace::force_blocking_flush(sstring cfname) {
-    assert(qctx);
     return container().invoke_on_all([cfname = std::move(cfname)] (db::system_keyspace& sys_ks) {
         // if (!Boolean.getBoolean("cassandra.unsafesystem"))
         return sys_ks._db.flush(NAME, cfname);
@@ -2809,10 +2806,6 @@ system_keyspace::system_keyspace(
     , _db(db)
     , _cache(std::make_unique<local_cache>())
 {
-    if (this_shard_id() == 0) {
-        qctx = std::make_unique<query_context>(_qp.container());
-    }
-
     _db.plug_system_keyspace(*this);
 
     // FIXME
