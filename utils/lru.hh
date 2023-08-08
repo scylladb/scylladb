@@ -20,8 +20,16 @@ class evictable {
     // and we do NOT rely on automatic unlinking in _lru_link's destructor.
     // It's the programmer's responsibility. to call lru::remove on the evictable before its destruction.
     // Failure to do so is a bug, and it will trigger an assertion in the destructor.
-    using lru_link_type = boost::intrusive::list_member_hook<
-        boost::intrusive::link_mode<boost::intrusive::auto_unlink>>;
+protected:
+    using link_base = boost::intrusive::list_member_hook<boost::intrusive::link_mode<boost::intrusive::auto_unlink>>;
+    struct lru_link_type : link_base {
+        lru_link_type() noexcept = default;
+        lru_link_type(lru_link_type&& o) noexcept {
+            swap_nodes(o);
+        }
+    };
+    static_assert(std::is_nothrow_constructible_v<lru_link_type, lru_link_type&&>);
+private:
     lru_link_type _lru_link;
 protected:
     // Prevent destruction via evictable pointer. LRU is not aware of allocation strategy.
@@ -31,11 +39,9 @@ protected:
     ~evictable() {
         assert(!_lru_link.is_linked());
     }
-public:
     evictable() = default;
-    evictable(evictable&& o) noexcept;
-    evictable& operator=(evictable&&) noexcept = default;
-
+    evictable(evictable&&) noexcept = default;
+public:
     virtual void on_evicted() noexcept = 0;
 
     // Used for testing to avoid cascading eviction of the containing object.
@@ -52,7 +58,6 @@ public:
 
 class lru {
 private:
-    friend class evictable;
     using lru_type = boost::intrusive::list<evictable,
         boost::intrusive::member_hook<evictable, evictable::lru_link_type, &evictable::_lru_link>,
         boost::intrusive::constant_time_size<false>>; // we need this to have bi::auto_unlink on hooks.
@@ -117,12 +122,3 @@ public:
         while (evict() == reclaiming_result::reclaimed_something) {}
     }
 };
-
-inline
-evictable::evictable(evictable&& o) noexcept {
-    if (o._lru_link.is_linked()) {
-        auto prev = o._lru_link.prev_;
-        o._lru_link.unlink();
-        lru::lru_type::node_algorithms::link_after(prev, _lru_link.this_ptr());
-    }
-}
