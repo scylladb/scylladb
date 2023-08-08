@@ -404,7 +404,8 @@ public:
     const versioned_value* get_application_state_ptr(inet_address endpoint, application_state appstate) const noexcept;
     sstring get_application_state_value(inet_address endpoint, application_state appstate) const;
 
-    // removes ALL endpoint states; should only be called after shadow gossip
+    // removes ALL endpoint states; should only be called after shadow gossip.
+    // Must be called on shard 0
     future<> reset_endpoint_state_map();
 
     const std::unordered_map<inet_address, endpoint_state>& get_endpoint_states() const noexcept;
@@ -637,6 +638,7 @@ public:
 private:
     future<> failure_detector_loop();
     future<> failure_detector_loop_for_node(gms::inet_address node, generation_type gossip_generation, uint64_t live_endpoints_version);
+    // Must be called on shard 0
     future<> update_live_endpoints_version();
 };
 
