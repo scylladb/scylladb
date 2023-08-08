@@ -25,7 +25,8 @@ async def test_replace_ignore_nodes(manager: ManagerClient) -> None:
        we don't want to run it in debug mode.
        Preferably run it only in one mode e.g. dev.
     """
-    cfg = {'experimental_features': list[str]()}
+    cfg = {'enable_user_defined_functions': False,
+           'experimental_features': list[str]()}
     logger.info(f"Booting initial cluster")
     servers = [await manager.server_add(config=cfg) for _ in range(7)]
     s2_id = await manager.get_host_id(servers[2].server_id)
