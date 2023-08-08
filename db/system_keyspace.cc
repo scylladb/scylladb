@@ -1722,7 +1722,7 @@ future<> system_keyspace::update_tokens(const std::unordered_set<dht::token>& to
 
 future<> system_keyspace::force_blocking_flush(sstring cfname) {
     assert(qctx);
-    return qctx->_qp.invoke_on_all([cfname = std::move(cfname)] (cql3::query_processor& qp) {
+    return _qp.container().invoke_on_all([cfname = std::move(cfname)] (cql3::query_processor& qp) {
         // if (!Boolean.getBoolean("cassandra.unsafesystem"))
         return qp.db().real_database().flush(NAME, cfname); // FIXME: get real database in another way
     });

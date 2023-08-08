@@ -128,7 +128,7 @@ class system_keyspace : public seastar::peering_sharded_service<system_keyspace>
     static schema_ptr scylla_local();
     future<> setup_version(sharded<netw::messaging_service>& ms);
     future<> check_health();
-    static future<> force_blocking_flush(sstring cfname);
+    future<> force_blocking_flush(sstring cfname);
     future<> build_bootstrap_info();
     future<> cache_truncation_record();
     template <typename Value>
