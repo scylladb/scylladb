@@ -4045,7 +4045,7 @@ SEASTAR_TEST_CASE(test_view_with_two_regular_base_columns_in_key) {
         auto& mm = e.migration_manager().local();
         auto group0_guard = mm.start_group0_operation().get();
         auto ts = group0_guard.write_timestamp();
-        mm.announce(service::prepare_new_view_announcement(mm.get_storage_proxy(), view_ptr(view_schema), ts).get(), std::move(group0_guard)).get();
+        mm.announce(service::prepare_new_view_announcement(mm.get_storage_proxy(), view_ptr(view_schema), ts).get(), std::move(group0_guard), "").get();
 
         // Verify that deleting and restoring columns behaves as expected - i.e. the row is deleted and regenerated
         cquery_nofail(e, "INSERT INTO t (p, c, v1, v2) VALUES (1, 2, 3, 4)");

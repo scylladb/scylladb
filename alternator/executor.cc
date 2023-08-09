@@ -577,7 +577,7 @@ future<executor::request_return_type> executor::delete_table(client_state& clien
 
         std::move(m2.begin(), m2.end(), std::back_inserter(m));
 
-        co_await mm.announce(std::move(m), std::move(group0_guard));
+        co_await mm.announce(std::move(m), std::move(group0_guard), format("alternator-executor: delete {} table", table_name));
     });
 
     rjson::value response = rjson::empty_object();
@@ -1142,7 +1142,7 @@ static future<executor::request_return_type> create_table_on_shard0(tracing::tra
         db::schema_tables::add_table_or_view_to_schema_mutation(
             view_ptr(view_builder.build()), ts, true, schema_mutations);
     }
-    co_await mm.announce(std::move(schema_mutations), std::move(group0_guard));
+    co_await mm.announce(std::move(schema_mutations), std::move(group0_guard), format("alternator-executor: create {} table", table_name));
 
     co_await mm.wait_for_schema_agreement(sp.local_db(), db::timeout_clock::now() + 10s, nullptr);
     rjson::value status = rjson::empty_object();
@@ -1209,7 +1209,7 @@ future<executor::request_return_type> executor::update_table(client_state& clien
 
         auto m = co_await service::prepare_column_family_update_announcement(p.local(), schema, false,  std::vector<view_ptr>(), group0_guard.write_timestamp());
 
-        co_await mm.announce(std::move(m), std::move(group0_guard));
+        co_await mm.announce(std::move(m), std::move(group0_guard), format("alternator-executor: update {} table", tab->cf_name()));
 
         co_await mm.wait_for_schema_agreement(p.local().local_db(), db::timeout_clock::now() + 10s, nullptr);
 

@@ -924,9 +924,8 @@ query_processor::execute_schema_statement(const statements::schema_altering_stat
 
 future<std::string>
 query_processor::execute_thrift_schema_command(
-        std::function<future<std::vector<mutation>>(
-            data_dictionary::database, api::timestamp_type)
-        > prepare_schema_mutations) {
+        std::function<future<std::vector<mutation>>(data_dictionary::database, api::timestamp_type)> prepare_schema_mutations,
+        std::string_view description) {
     assert(this_shard_id() == 0);
 
     auto [remote_, holder] = remote();
@@ -934,7 +933,7 @@ query_processor::execute_thrift_schema_command(
     auto group0_guard = co_await mm.start_group0_operation();
     auto ts = group0_guard.write_timestamp();
 
-    co_await mm.announce(co_await prepare_schema_mutations(db(), ts), std::move(group0_guard));
+    co_await mm.announce(co_await prepare_schema_mutations(db(), ts), std::move(group0_guard), description);
 
     co_return std::string(db().get_version().to_sstring());
 }
