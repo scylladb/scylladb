@@ -1068,7 +1068,7 @@ void compaction_manager::submit(compaction::table_state& t) {
 
     // OK to drop future.
     // waited via task->stop()
-    (void)perform_task(make_shared<regular_compaction_task>(*this, t));
+    (void)perform_task(make_shared<regular_compaction_task>(*this, t)).then_wrapped([] (auto f) { f.ignore_ready_future(); });
 }
 
 bool compaction_manager::can_perform_regular_compaction(compaction::table_state& t) {
