@@ -128,11 +128,29 @@ class MinioServer:
         return {'Statement': statement,
                 'Version': '2012-10-17'}
 
+    async def _is_port_available(self, port: int) -> bool:
+        try:
+            _, writer = await asyncio.open_connection('localhost', port)
+            writer.close()
+            await writer.wait_closed()
+            return False
+        except OSError:
+            # likely connection refused
+            return True
+
+    async def _find_available_port(self, min_port: int, max_port: int) -> int:
+        assert min_port < max_port
+        for port in range(min_port, max_port):
+            if await self._is_port_available(port):
+                return port
+        raise RuntimeError(f'failed to find available port in [{min_port}, {max_port})')
+
     async def start(self):
         if self.srv_exe is None:
             self.logger.info("Minio not installed, get it from https://dl.minio.io/server/minio/release/linux-amd64/minio and put into PATH")
             return
 
+        self.port = await self._find_available_port(self.port, self.port + 1000)
         self.address = await self.hosts.lease_host()
         self.log_file = self.log_filename.open("wb")
         os.environ['S3_SERVER_ADDRESS_FOR_TEST'] = f'{self.address}'
