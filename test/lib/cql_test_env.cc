@@ -44,7 +44,6 @@
 #include "db/batchlog_manager.hh"
 #include "schema/schema_builder.hh"
 #include "test/lib/tmpdir.hh"
-#include "db/query_context.hh"
 #include "test/lib/test_services.hh"
 #include "test/lib/log.hh"
 #include "unit_test_service_levels_accessor.hh"
@@ -887,7 +886,6 @@ public:
 
             group0_client.init().get();
             auto stop_system_keyspace = defer([&sys_ks] {
-                db::qctx = {};
                 sys_ks.invoke_on_all(&db::system_keyspace::shutdown).get();
             });
 

@@ -13,7 +13,6 @@
 #include "gms/feature.hh"
 #include "gms/feature_service.hh"
 #include "db/system_keyspace.hh"
-#include "db/query_context.hh"
 #include "utils/to_string.hh"
 #include <boost/algorithm/string/classification.hpp>
 #include <boost/algorithm/string/split.hpp>

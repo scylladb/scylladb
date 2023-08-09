@@ -18,7 +18,6 @@
 #include "thrift/server.hh"
 #include "exceptions/exceptions.hh"
 #include "cql3/query_processor.hh"
-#include "query_context.hh"
 #include "partition_slice_builder.hh"
 #include "db/config.hh"
 #include "gms/feature_service.hh"
@@ -101,8 +100,6 @@ namespace {
         }
     });
 }
-
-std::unique_ptr<query_context> qctx = {};
 
 static logging::logger slogger("system_keyspace");
 static const api::timestamp_type creation_timestamp = api::new_timestamp();
@@ -1504,9 +1501,8 @@ future<> system_keyspace::cache_truncation_record() {
 
 future<> system_keyspace::save_truncation_record(table_id id, db_clock::time_point truncated_at, db::replay_position rp) {
     sstring req = format("INSERT INTO system.{} (table_uuid, shard, position, segment_id, truncated_at) VALUES(?,?,?,?,?)", TRUNCATED);
-    return _qp.execute_internal(req, {id.uuid(), int32_t(rp.shard_id()), int32_t(rp.pos), int64_t(rp.base_id()), truncated_at}, cql3::query_processor::cache_internal::yes).discard_result().then([] {
-        return force_blocking_flush(TRUNCATED);
-    });
+    co_await _qp.execute_internal(req, {id.uuid(), int32_t(rp.shard_id()), int32_t(rp.pos), int64_t(rp.base_id()), truncated_at}, cql3::query_processor::cache_internal::yes);
+    co_await force_blocking_flush(TRUNCATED);
 }
 
 future<> system_keyspace::save_truncation_record(const replica::column_family& cf, db_clock::time_point truncated_at, db::replay_position rp) {
@@ -1712,21 +1708,19 @@ future<> system_keyspace::remove_endpoint(gms::inet_address ep) {
 
 future<> system_keyspace::update_tokens(const std::unordered_set<dht::token>& tokens) {
     if (tokens.empty()) {
-        return make_exception_future<>(std::invalid_argument("remove_endpoint should be used instead"));
+        throw std::invalid_argument("remove_endpoint should be used instead");
     }
 
     sstring req = format("INSERT INTO system.{} (key, tokens) VALUES (?, ?)", LOCAL);
     auto set_type = set_type_impl::get_instance(utf8_type, true);
-    return execute_cql(req, sstring(LOCAL), make_set_value(set_type, prepare_tokens(tokens))).discard_result().then([] {
-        return force_blocking_flush(LOCAL);
-    });
+    co_await execute_cql(req, sstring(LOCAL), make_set_value(set_type, prepare_tokens(tokens)));
+    co_await force_blocking_flush(LOCAL);
 }
 
 future<> system_keyspace::force_blocking_flush(sstring cfname) {
-    assert(qctx);
-    return qctx->_qp.invoke_on_all([cfname = std::move(cfname)] (cql3::query_processor& qp) {
+    return container().invoke_on_all([cfname = std::move(cfname)] (db::system_keyspace& sys_ks) {
         // if (!Boolean.getBoolean("cassandra.unsafesystem"))
-        return qp.db().real_database().flush(NAME, cfname); // FIXME: get real database in another way
+        return sys_ks._db.flush(NAME, cfname);
     });
 }
 
@@ -2811,10 +2805,6 @@ system_keyspace::system_keyspace(
     , _db(db)
     , _cache(std::make_unique<local_cache>())
 {
-    if (this_shard_id() == 0) {
-        qctx = std::make_unique<query_context>(_qp.container());
-    }
-
     _db.plug_system_keyspace(*this);
 
     // FIXME
