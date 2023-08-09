@@ -21,7 +21,7 @@ add_compile_options(
 set(Seastar_DEFINITIONS_RELEASE
   SCYLLA_BUILD_MODE=release)
 
-set(CMAKE_STATIC_LINKER_FLAGS_RELEASE
+set(CMAKE_EXE_LINKER_FLAGS_RELEASE
   "-Wl,--gc-sections")
 
 set(stack_usage_threshold_in_KB 13)
