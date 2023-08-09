@@ -1129,14 +1129,15 @@ int64_t gossiper::get_endpoint_downtime(inet_address ep) const noexcept {
 // - on_dead callbacks
 // It is called from failure_detector
 future<> gossiper::convict(inet_address endpoint) {
+    auto permit = co_await lock_endpoint(endpoint, null_permit_id);
     auto* state = get_endpoint_state_for_endpoint_ptr(endpoint);
     if (!state || !state->is_alive()) {
         co_return;
     }
     if (is_shutdown(endpoint)) {
-        co_await mark_as_shutdown(endpoint, null_permit_id);
+        co_await mark_as_shutdown(endpoint, permit.id());
     } else {
-        co_await mark_dead(endpoint, *state, null_permit_id);
+        co_await mark_dead(endpoint, *state, permit.id());
     }
 }
 
