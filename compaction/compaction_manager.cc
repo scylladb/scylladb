@@ -315,12 +315,6 @@ compaction_task_executor::compaction_task_executor(compaction_manager& mgr, tabl
 {}
 
 future<compaction_manager::compaction_stats_opt> compaction_manager::perform_task(shared_ptr<compaction_task_executor> task) {
-    gate::holder gate_holder = task->_compaction_state.gate.hold();
-    _tasks.push_back(task);
-    auto unregister_task = defer([this, task] {
-        _tasks.remove(task);
-        task->switch_state(compaction_task_executor::state::none);
-    });
     cmlog.debug("{}: started", *task);
 
     try {
@@ -530,6 +524,13 @@ requires (compaction_manager& cm, Args&&... args) {
 }
 future<compaction_manager::compaction_stats_opt> compaction_manager::perform_compaction(std::optional<tasks::task_info> parent_info, Args&&... args) {
     auto task_executor = seastar::make_shared<TaskExecutor>(*this, std::forward<Args>(args)...);
+    gate::holder gate_holder = task_executor->_compaction_state.gate.hold();
+    _tasks.push_back(task_executor);
+    auto unregister_task = defer([this, task_executor] {
+        _tasks.remove(task_executor);
+        task_executor->switch_state(compaction_task_executor::state::none);
+    });
+
     if (parent_info) {
         auto task = co_await get_task_manager_module().make_task(task_executor, parent_info.value());
         task->start();
