@@ -12,10 +12,7 @@ from contextlib import contextmanager
 # use minio_server
 sys.path.insert(1, sys.path[0] + '/../..')
 from test.pylib.minio_server import MinioServer
-from test.pylib.host_registry import HostRegistry
 from test.pylib.cql_repl import conftest
-
-hosts = HostRegistry()
 
 
 def pytest_addoption(parser):
@@ -92,7 +89,7 @@ async def s3_server(pytestconfig, tmpdir):
     else:
         tempdir = tmpdir.strpath
         server = MinioServer(tempdir,
-                             hosts,
+                             '127.0.0.1',
                              logging.getLogger('minio'))
     await server.start()
     try:

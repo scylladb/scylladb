@@ -25,10 +25,9 @@ from io import BufferedWriter
 class MinioServer:
     log_file: BufferedWriter
 
-    def __init__(self, tempdir_base, hosts, logger):
-        self.hosts = hosts
+    def __init__(self, tempdir_base, address, logger):
         self.srv_exe = shutil.which('minio')
-        self.address = None
+        self.address = address
         self.port = 9000
         tempdir = tempfile.mkdtemp(dir=tempdir_base, prefix="minio-")
         self.tempdir = pathlib.Path(tempdir)
@@ -128,12 +127,29 @@ class MinioServer:
         return {'Statement': statement,
                 'Version': '2012-10-17'}
 
+    async def _is_port_available(self, port: int) -> bool:
+        try:
+            _, writer = await asyncio.open_connection('localhost', port)
+            writer.close()
+            await writer.wait_closed()
+            return False
+        except OSError:
+            # likely connection refused
+            return True
+
+    async def _find_available_port(self, min_port: int, max_port: int) -> int:
+        assert min_port < max_port
+        for port in range(min_port, max_port):
+            if await self._is_port_available(port):
+                return port
+        raise RuntimeError(f'failed to find available port in [{min_port}, {max_port})')
+
     async def start(self):
         if self.srv_exe is None:
             self.logger.info("Minio not installed, get it from https://dl.minio.io/server/minio/release/linux-amd64/minio and put into PATH")
             return
 
-        self.address = await self.hosts.lease_host()
+        self.port = await self._find_available_port(self.port, self.port + 1000)
         self.log_file = self.log_filename.open("wb")
         os.environ['S3_SERVER_ADDRESS_FOR_TEST'] = f'{self.address}'
         os.environ['S3_SERVER_PORT_FOR_TEST'] = f'{self.port}'
@@ -194,31 +210,15 @@ class MinioServer:
             shutil.rmtree(self.tempdir)
 
 
-class HostRegistry:
-    def __init__(self, host: str) -> None:
-        self._host = host
-
-    async def lease_host(self) -> str:
-        assert self._host is not None
-        host = self._host
-        self._host = None
-        return host
-
-    async def release_host(self, host: str) -> None:
-        assert self._host is None
-        self._host = host
-
-
 async def main():
     parser = argparse.ArgumentParser(description="Start a MinIO server")
     parser.add_argument('--tempdir')
     parser.add_argument('--host', default='127.0.0.1')
     args = parser.parse_args()
-    host_registry = HostRegistry(args.host)
     with tempfile.TemporaryDirectory(suffix='-minio', dir=args.tempdir) as tempdir:
         if args.tempdir is None:
             print(f'{tempdir=}')
-        server = MinioServer(tempdir, host_registry, logging.getLogger('minio'))
+        server = MinioServer(tempdir, args.host, logging.getLogger('minio'))
         await server.start()
         print(f'export S3_SERVER_ADDRESS_FOR_TEST={server.address}')
         print(f'export S3_SERVER_PORT_FOR_TEST={server.port}')

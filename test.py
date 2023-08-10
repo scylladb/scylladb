@@ -1269,7 +1269,7 @@ async def run_all_tests(signaled: asyncio.Event, options: argparse.Namespace) ->
                 continue    # skip signaled task result
             console.print_progress(result)
 
-    ms = MinioServer(options.tmpdir, TestSuite.hosts, LogPrefixAdapter(logging.getLogger('minio'), {'prefix': 'minio'}))
+    ms = MinioServer(options.tmpdir, '127.0.0.1', LogPrefixAdapter(logging.getLogger('minio'), {'prefix': 'minio'}))
     await ms.start()
     TestSuite.artifacts.add_exit_artifact(None, ms.stop)
 
