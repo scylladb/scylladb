@@ -250,6 +250,19 @@ private:
     // Must be called on shard 0.
     future<semaphore_units<>> lock_endpoint_update_semaphore();
 
+    // Must be called on shard 0.
+    // Update _live_endpoints and/or _unreachable_endpoints
+    // on shard 0, after acquiring `lock_endpoint_update_semaphore`.
+    // replicate_live_endpoints_on_change is called to replicate the changes to
+    // all shards and _live_endpoints_version is bumped unconditionally.
+    //
+    // FIXME: The function is not exception safe so some shards
+    // may be left with stale _live_endpoints or _unreachable_endpoints.
+    // In this case, the _live_endpoints_version on that shard will not be updated.
+    // That can be examined under the endpoint_update_semaphore to make sure
+    // they all shards are consistent with each other.
+    future<> mutate_live_and_unreachable_endpoints(std::function<void(gossiper&)>);
+
     // replicate shard 0 live endpoints across all other shards.
     // _endpoint_update_semaphore must be held for the whole duration
     future<> replicate_live_endpoints_on_change();

@@ -826,6 +826,19 @@ future<semaphore_units<>> gossiper::lock_endpoint_update_semaphore() {
     return get_units(_endpoint_update_semaphore, 1);
 }
 
+future<> gossiper::mutate_live_and_unreachable_endpoints(std::function<void(gossiper&)> func) {
+    auto lock = co_await lock_endpoint_update_semaphore();
+    func(*this);
+
+    // Bump the _live_endpoints_version unconditionally,
+    // even if only _unreachable_endpoints changed.
+    // It will trigger a new round in the failure_detector_loop
+    // but that's not too bad as changing _unreachable_endpoints
+    // is rare enough.
+    _live_endpoints_version++;
+    co_await replicate_live_endpoints_on_change();
+}
+
 future<std::set<inet_address>> gossiper::get_live_members_synchronized() {
     return container().invoke_on(0, [] (gms::gossiper& g) -> future<std::set<inet_address>> {
         auto lock = co_await g.lock_endpoint_update_semaphore();
@@ -973,6 +986,8 @@ future<> gossiper::replicate_live_endpoints_on_change() {
                 for (auto&& e : es) {
                     local_gossiper._endpoint_state_map[e.first].set_alive(e.second.is_alive());
                 }
+
+                local_gossiper._live_endpoints_version = _live_endpoints_version;
             }
         });
     }
