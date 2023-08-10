@@ -1169,6 +1169,7 @@ future<> gossiper::evict_from_membership(inet_address endpoint, permit_id pid) {
     verify_permit(endpoint, pid);
     co_await mutate_live_and_unreachable_endpoints([endpoint] (gossiper& g) {
         g._unreachable_endpoints.erase(endpoint);
+        g._live_endpoints.erase(endpoint);
     });
     co_await container().invoke_on_all([endpoint] (auto& g) {
         g._endpoint_state_map.erase(endpoint);
