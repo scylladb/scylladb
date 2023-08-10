@@ -173,6 +173,13 @@ public:
     future<endpoint_permit> lock_endpoint(inet_address, permit_id pid, seastar::compat::source_location l = seastar::compat::source_location::current());
 
 private:
+    void permit_internal_error(const inet_address& addr, permit_id pid);
+    void verify_permit(const inet_address& addr, permit_id pid) {
+        if (!pid) {
+            permit_internal_error(addr, pid);
+        }
+    }
+
     /* map where key is the endpoint and value is the state associated with the endpoint */
     std::unordered_map<inet_address, endpoint_state> _endpoint_state_map;
     // Used for serializing changes to _endpoint_state_map and running of associated change listeners.
@@ -247,6 +254,7 @@ private:
     void run();
     // Replicates given endpoint_state to all other shards.
     // The state state doesn't have to be kept alive around until completes.
+    // Must be called under lock_endpoint.
     future<> replicate(inet_address, const endpoint_state&, permit_id);
 public:
     explicit gossiper(abort_source& as, const locator::shared_token_metadata& stm, netw::messaging_service& ms, const db::config& cfg, gossip_config gcfg);
@@ -300,6 +308,8 @@ private:
      * Removes the endpoint from gossip completely
      *
      * @param endpoint endpoint to be removed from the current membership.
+     *
+     * Must be called under lock_endpoint.
      */
     future<> evict_from_membership(inet_address endpoint, permit_id);
 public:
@@ -424,8 +434,10 @@ private:
 
     future<> real_mark_alive(inet_address addr);
 
+    // Must be called under lock_endpoint.
     future<> mark_dead(inet_address addr, endpoint_state& local_state, permit_id);
 
+    // Must be called under lock_endpoint.
     future<> mark_as_shutdown(const inet_address& endpoint, permit_id);
 
     /**
@@ -433,6 +445,8 @@ private:
      *
      * @param ep      endpoint
      * @param ep_state EndpointState for the endpoint
+     *
+     * Must be called under lock_endpoint.
      */
     future<> handle_major_state_change(inet_address ep, const endpoint_state& eps, permit_id);
 
@@ -454,12 +468,15 @@ private:
     future<> do_apply_state_locally(gms::inet_address node, const endpoint_state& remote_state, bool listener_notification);
     future<> apply_state_locally_without_listener_notification(std::unordered_map<inet_address, endpoint_state> map);
 
+    // Must be called under lock_endpoint.
     future<> apply_new_states(inet_address addr, endpoint_state& local_state, const endpoint_state& remote_state, permit_id);
 
     // notify that a local application state is going to change (doesn't get triggered for remote changes)
+    // Must be called under lock_endpoint.
     future<> do_before_change_notifications(inet_address addr, const endpoint_state& ep_state, const application_state& ap_state, const versioned_value& new_value);
 
     // notify that an application state has changed
+    // Must be called under lock_endpoint.
     future<> do_on_change_notifications(inet_address addr, const application_state& state, const versioned_value& value, permit_id);
     /* Request all the state for the endpoint in the g_digest */
 
