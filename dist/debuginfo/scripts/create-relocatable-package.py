@@ -9,13 +9,10 @@
 #
 
 import argparse
-import io
 import os
 import subprocess
 import tarfile
-import pathlib
-import shutil
-
+import tempfile
 
 RELOC_PREFIX='scylla-debuginfo'
 def reloc_add(self, name, arcname=None, recursive=True, *, filter=None):
@@ -56,14 +53,10 @@ gzip_process = subprocess.Popen("pigz > "+output, shell=True, stdin=subprocess.P
 
 ar = tarfile.open(fileobj=gzip_process.stdin, mode='w|')
 # relocatable package format version = 2.1
-try:
-    shutil.rmtree(f'build/{SCYLLA_DIR}')
-except FileNotFoundError:
-    pass
-os.makedirs(f'build/{SCYLLA_DIR}')
-with open(f'build/{SCYLLA_DIR}/.relocatable_package_version', 'w') as f:
-    f.write('2.1\n')
-ar.add(f'build/{SCYLLA_DIR}/.relocatable_package_version', arcname='.relocatable_package_version')
+with tempfile.NamedTemporaryFile('w+t') as version_file:
+    version_file.write('2.1\n')
+    version_file.flush()
+    ar.add(version_file.name, arcname='.relocatable_package_version')
 
 for exe in executables_scylla:
     basename = os.path.basename(exe)
