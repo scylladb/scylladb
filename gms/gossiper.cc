@@ -2311,6 +2311,10 @@ future<> gossiper::wait_alive(std::vector<gms::inet_address> nodes, std::chrono:
 }
 
 future<> gossiper::wait_for_live_nodes_to_show_up(size_t n) {
+    if (this_shard_id() != 0) {
+        // _pending_mark_alive_endpoints is managed only on shard 0
+        on_internal_error(logger, "gossiper::wait_for_live_nodes_to_show_up must be called on shard 0");
+    }
     logger::rate_limit rate_limit{std::chrono::seconds{5}};
 #ifdef SEASTAR_DEBUG
     // Account for debug slowness. 3 minutes is probably overkill but we don't want flaky tests.
@@ -2319,11 +2323,22 @@ future<> gossiper::wait_for_live_nodes_to_show_up(size_t n) {
     constexpr auto timeout_delay = std::chrono::seconds{30};
 #endif
     auto timeout = gossiper::clk::now() + timeout_delay;
+    auto max_timeout = gossiper::clk::now() + std::chrono::minutes{6};
+    std::unordered_set<inet_address> pending_mark_alive_endpoints = _pending_mark_alive_endpoints;
     while (get_live_members().size() < n) {
-        if (timeout <= gossiper::clk::now()) {
+        auto now = gossiper::clk::now();
+        if (timeout <= now) {
+          // Extend the initial timeout up to `max_timeout`
+          // as long as activity is detected in _pending_mark_alive_endpoints
+          if (_pending_mark_alive_endpoints != pending_mark_alive_endpoints && max_timeout > now) {
+            logger.info("pending_mark_alive_endpoints changed while waiting for live nodes: {}", _pending_mark_alive_endpoints);
+            pending_mark_alive_endpoints = _pending_mark_alive_endpoints;
+            timeout += timeout_delay;
+          } else {
             auto err = ::format("Timed out waiting for {} live nodes to show up in gossip", n);
             logger.error("{}", err);
             throw std::runtime_error{std::move(err)};
+          }
         }
 
         logger.log(log_level::info, rate_limit,
