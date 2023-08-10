@@ -805,6 +805,10 @@ future<gossiper::endpoint_permit> gossiper::lock_endpoint(inet_address ep, permi
     co_return endpoint_permit(std::move(eptr), std::move(ep), std::move(caller));
 }
 
+void gossiper::permit_internal_error(const inet_address& addr, permit_id pid) {
+    on_internal_error(logger, fmt::format("Must be called under lock_endpoint for node {}", addr));
+}
+
 future<> gossiper::update_live_endpoints_version() {
     auto version = _live_endpoints_version + 1;
     return container().invoke_on_all([version] (gms::gossiper& g) {
@@ -1129,14 +1133,15 @@ int64_t gossiper::get_endpoint_downtime(inet_address ep) const noexcept {
 // - on_dead callbacks
 // It is called from failure_detector
 future<> gossiper::convict(inet_address endpoint) {
+    auto permit = co_await lock_endpoint(endpoint, null_permit_id);
     auto* state = get_endpoint_state_for_endpoint_ptr(endpoint);
     if (!state || !state->is_alive()) {
         co_return;
     }
     if (is_shutdown(endpoint)) {
-        co_await mark_as_shutdown(endpoint, null_permit_id);
+        co_await mark_as_shutdown(endpoint, permit.id());
     } else {
-        co_await mark_dead(endpoint, *state, null_permit_id);
+        co_await mark_dead(endpoint, *state, permit.id());
     }
 }
 
@@ -1158,7 +1163,7 @@ version_type gossiper::get_max_endpoint_state_version(endpoint_state state) cons
 }
 
 future<> gossiper::evict_from_membership(inet_address endpoint, permit_id pid) {
-    auto permit = co_await lock_endpoint(endpoint, pid);
+    verify_permit(endpoint, pid);
     _unreachable_endpoints.erase(endpoint);
     co_await container().invoke_on_all([endpoint] (auto& g) {
         g._endpoint_state_map.erase(endpoint);
@@ -1209,9 +1214,7 @@ void gossiper::make_random_gossip_digest(utils::chunked_vector<gossip_digest>& g
 }
 
 future<> gossiper::replicate(inet_address ep, const endpoint_state& es, permit_id pid) {
-    if (!pid) {
-        on_internal_error_noexcept(logger, fmt::format("replicate {} called with null permit", ep));
-    }
+    verify_permit(ep, pid);
     return container().invoke_on_all([ep, es, orig = this_shard_id(), self = shared_from_this()] (gossiper& g) {
         if (this_shard_id() != orig) {
             g._endpoint_state_map[ep].add_application_state(es);
@@ -1610,6 +1613,7 @@ future<> gossiper::real_mark_alive(inet_address addr) {
 
 future<> gossiper::mark_dead(inet_address addr, endpoint_state& local_state, permit_id pid) {
     logger.trace("marking as down {}", addr);
+    verify_permit(addr, pid);
     local_state.mark_dead();
     endpoint_state state = local_state;
     _live_endpoints.resize(std::distance(_live_endpoints.begin(), std::remove(_live_endpoints.begin(), _live_endpoints.end(), addr)));
@@ -1623,6 +1627,8 @@ future<> gossiper::mark_dead(inet_address addr, endpoint_state& local_state, per
 }
 
 future<> gossiper::handle_major_state_change(inet_address ep, const endpoint_state& eps, permit_id pid) {
+    verify_permit(ep, pid);
+
     std::optional<endpoint_state> eps_old;
     if (auto* p = get_endpoint_state_for_endpoint_ptr(ep); p) {
         eps_old = *p;
@@ -1717,6 +1723,8 @@ bool gossiper::is_silent_shutdown_state(const endpoint_state& ep_state) const{
 future<> gossiper::apply_new_states(inet_address addr, endpoint_state& local_state, const endpoint_state& remote_state, permit_id pid) {
     // don't assert here, since if the node restarts the version will go back to zero
     //int oldVersion = local_state.get_heart_beat_state().get_heart_beat_version();
+
+    verify_permit(addr, pid);
 
     local_state.set_heart_beat_state_and_update_timestamp(remote_state.get_heart_beat_state());
     // if (logger.isTraceEnabled()) {
@@ -2345,8 +2353,7 @@ sstring gossiper::get_application_state_value(inet_address endpoint, application
  * @param endpoint endpoint that has shut itself down
  */
 future<> gossiper::mark_as_shutdown(const inet_address& endpoint, permit_id pid) {
-    auto permit = co_await lock_endpoint(endpoint, pid);
-    pid = permit.id();
+    verify_permit(endpoint, pid);
     auto es = get_endpoint_state_for_endpoint_ptr(endpoint);
     if (es) {
         auto& ep_state = *es;
