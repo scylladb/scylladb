@@ -90,6 +90,11 @@ public:
         }
     }
 
+    void release_all() noexcept {
+        _cm.deregister_compacting_sstables(_compacting);
+        _compacting = {};
+    }
+
     class update_me : public compaction_task_executor::on_replacement {
         compacting_sstable_registration& _registration;
         public:
@@ -462,8 +467,9 @@ public:
         set_sstables(std::move(sstables));
     }
 
-    virtual ~sstables_task_executor();
+    virtual ~sstables_task_executor() = default;
 
+    virtual void release_resources() noexcept override;
 
     virtual tasks::is_internal is_internal() const noexcept override {
         return tasks::is_internal::yes;
@@ -543,6 +549,7 @@ future<compaction_manager::compaction_stats_opt> compaction_manager::perform_com
     auto unregister_task = defer([this, task_executor] {
         _tasks.remove(task_executor);
         task_executor->switch_state(compaction_task_executor::state::none);
+        task_executor->release_resources();
     });
 
     if (parent_info) {
@@ -710,8 +717,10 @@ compaction::compaction_state::~compaction_state() {
     compaction_done.broken();
 }
 
-sstables_task_executor::~sstables_task_executor() {
+void sstables_task_executor::release_resources() noexcept {
     _cm._stats.pending_tasks -= _sstables.size() - (_state == state::pending);
+    _sstables = {};
+    compaction_task_executor::release_resources();
 }
 
 future<compaction_manager::compaction_stats_opt> compaction_task_executor::run_compaction() noexcept {
@@ -1427,6 +1436,12 @@ public:
         , _can_purge(can_purge)
     {}
 
+    virtual void release_resources() noexcept override {
+        _compacting.release_all();
+        _owned_ranges_ptr = nullptr;
+        sstables_task_executor::release_resources();
+    }
+
 protected:
     virtual future<compaction_manager::compaction_stats_opt> do_run() override {
         sstables::compaction_stats stats{};
@@ -1615,8 +1630,14 @@ public:
         _cm._stats.pending_tasks += _pending_cleanup_jobs.size();
     }
 
-    virtual ~cleanup_sstables_compaction_task_executor() {
+    virtual ~cleanup_sstables_compaction_task_executor() = default;
+
+    virtual void release_resources() noexcept override {
         _cm._stats.pending_tasks -= _pending_cleanup_jobs.size();
+        _pending_cleanup_jobs = {};
+        _compacting.release_all();
+        _owned_ranges_ptr = nullptr;
+        compaction_task_executor::release_resources();
     }
 
     virtual tasks::is_internal is_internal() const noexcept override {
