@@ -51,7 +51,7 @@ public:
     virtual seastar::shared_ptr<const metadata> get_result_metadata() const override;
 
     virtual seastar::future<seastar::shared_ptr<cql_transport::messages::result_message>>
-    execute(cql3::query_processor& qp, service::query_state& state, const query_options& options) const override;
+    execute(cql3::query_processor& qp, service::query_state& state, const query_options& options, std::optional<service::group0_guard> guard) const override;
 };
 
 class cluster_describe_statement : public describe_statement {

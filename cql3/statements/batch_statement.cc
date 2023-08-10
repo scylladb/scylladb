@@ -234,13 +234,13 @@ static thread_local inheriting_concrete_execution_stage<
         api::timestamp_type> batch_stage{"cql3_batch", batch_statement_executor::get()};
 
 future<shared_ptr<cql_transport::messages::result_message>> batch_statement::execute(
-        query_processor& qp, service::query_state& state, const query_options& options) const {
-    return execute_without_checking_exception_message(qp, state, options)
+        query_processor& qp, service::query_state& state, const query_options& options, std::optional<service::group0_guard> guard) const {
+    return execute_without_checking_exception_message(qp, state, options, std::move(guard))
             .then(cql_transport::messages::propagate_exception_as_future<shared_ptr<cql_transport::messages::result_message>>);
 }
 
 future<shared_ptr<cql_transport::messages::result_message>> batch_statement::execute_without_checking_exception_message(
-        query_processor& qp, service::query_state& state, const query_options& options) const {
+        query_processor& qp, service::query_state& state, const query_options& options, std::optional<service::group0_guard> guard) const {
     cql3::util::validate_timestamp(qp.db().get_config(), options, _attrs);
     return batch_stage(this, seastar::ref(qp), seastar::ref(state),
                        seastar::cref(options), false, options.get_timestamp(state));

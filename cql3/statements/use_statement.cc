@@ -55,7 +55,7 @@ future<> use_statement::check_access(query_processor& qp, const service::client_
 }
 
 future<::shared_ptr<cql_transport::messages::result_message>>
-use_statement::execute(query_processor& qp, service::query_state& state, const query_options& options) const {
+use_statement::execute(query_processor& qp, service::query_state& state, const query_options& options, std::optional<service::group0_guard> guard) const {
     state.get_client_state().set_keyspace(qp.db().real_database(), _keyspace);
     auto result =::make_shared<cql_transport::messages::result_message::set_keyspace>(_keyspace);
     return make_ready_future<::shared_ptr<cql_transport::messages::result_message>>(result);

@@ -328,16 +328,18 @@ static thread_local inheriting_concrete_execution_stage<
 future<shared_ptr<cql_transport::messages::result_message>>
 select_statement::execute(query_processor& qp,
                              service::query_state& state,
-                             const query_options& options) const
+                             const query_options& options,
+                             std::optional<service::group0_guard> guard) const
 {
-    return execute_without_checking_exception_message(qp, state, options)
+    return execute_without_checking_exception_message(qp, state, options, std::move(guard))
             .then(cql_transport::messages::propagate_exception_as_future<shared_ptr<cql_transport::messages::result_message>>);
 }
 
 future<shared_ptr<cql_transport::messages::result_message>>
 select_statement::execute_without_checking_exception_message(query_processor& qp,
                              service::query_state& state,
-                             const query_options& options) const
+                             const query_options& options,
+                             std::optional<service::group0_guard> guard) const
 {
     return select_stage(this, seastar::ref(qp), seastar::ref(state), seastar::cref(options));
 }

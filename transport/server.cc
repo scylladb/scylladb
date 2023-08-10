@@ -1129,7 +1129,7 @@ process_execute_internal(service::client_state& client_state, distributed<cql3::
     }
 
     tracing::trace(trace_state, "Processing a statement");
-    return qp.local().execute_prepared_without_checking_exception_message(std::move(prepared), std::move(cache_key), query_state, options, needs_authorization)
+    return qp.local().execute_prepared_without_checking_exception_message(query_state, std::move(stmt), options, std::move(prepared), std::move(cache_key), needs_authorization)
             .then([trace_state = query_state.get_trace_state(), skip_metadata, q_state = std::move(q_state), stream, version] (auto msg) {
         if (msg->move_to_shard()) {
             return process_fn_return_type(dynamic_pointer_cast<messages::result_message::bounce_to_shard>(msg));

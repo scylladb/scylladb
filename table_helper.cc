@@ -111,7 +111,7 @@ future<> table_helper::insert(cql3::query_processor& qp, service::migration_mana
     return cache_table_info(qp, mm, qs).then([this, &qp, &qs, opt_maker = std::move(opt_maker)] () mutable {
         return do_with(opt_maker(), [this, &qp, &qs] (auto& opts) {
             opts.prepare(_prepared_stmt->bound_names);
-            return _insert_stmt->execute(qp, qs, opts);
+            return _insert_stmt->execute(qp, qs, opts, std::nullopt);
         });
     }).discard_result();
 }
