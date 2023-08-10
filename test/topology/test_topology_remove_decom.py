@@ -131,3 +131,10 @@ async def test_remove_node_with_concurrent_ddl(manager: ManagerClient, random_ta
         stopped = True
         await ddl_task
         logger.debug("ddl fiber done, finished")
+
+@pytest.mark.asyncio
+async def test_rebuild_node(manager: ManagerClient, random_tables: RandomTables):
+    """rebuild a node"""
+    servers = await manager.running_servers()
+    await manager.rebuild_node(servers[0].server_id)
+    await check_token_ring_and_group0_consistency(manager)
