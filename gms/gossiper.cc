@@ -782,7 +782,9 @@ gossiper::endpoint_lock_entry::endpoint_lock_entry() noexcept
 {}
 
 future<gossiper::endpoint_permit> gossiper::lock_endpoint(inet_address ep, permit_id pid, seastar::compat::source_location l) {
-    assert(this_shard_id() == 0);
+    if (this_shard_id() != 0) {
+        on_internal_error(logger, "lock_endpoint must be called on shard 0");
+    }
     std::string caller = l.function_name();
     auto eptr = co_await _endpoint_locks.get_or_load(ep, [] (const inet_address& ep) { return endpoint_lock_entry(); });
     if (pid) {
@@ -790,8 +792,8 @@ future<gossiper::endpoint_permit> gossiper::lock_endpoint(inet_address ep, permi
             // Already locked with the same permit
             co_return endpoint_permit(std::move(eptr), std::move(ep), std::move(caller));
         } else {
-            // the endpoint lock must not have been released fir the permit_id
-            // maybe we're passed a permit_id that was acquired for a different endpoint
+            // permit_id mismatch means either that the endpoint lock was released,
+            // or maybe we're passed a permit_id that was acquired for a different endpoint.
             on_internal_error_noexcept(logger, fmt::format("{}: lock_endpoint {}: permit_id={}: endpoint_lock_entry has mismatching permit_id={}", caller, ep, pid, eptr->pid));
         }
     }
