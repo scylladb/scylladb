@@ -1400,6 +1400,8 @@ future<> gossiper::reset_endpoint_state_map() {
         g._unreachable_endpoints.clear();
         g._live_endpoints.clear();
         g._live_endpoints_version = version;
+        g._shadow_unreachable_endpoints.clear();
+        g._shadow_live_endpoints.clear();
         g._endpoint_state_map.clear();
     });
 }
