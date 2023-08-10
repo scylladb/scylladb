@@ -1681,6 +1681,9 @@ class topology_coordinator {
                 }
                     break;
                 case node_state::replacing: {
+                    auto replaced_node_id = parse_replaced_node(node);
+                    co_await remove_from_group0(replaced_node_id);
+
                     topology_mutation_builder builder1(node.guard.write_timestamp());
                     // Move new node to 'normal'
                     builder1.del_transition_state()
@@ -1690,7 +1693,7 @@ class topology_coordinator {
 
                     // Move old node to 'left'
                     topology_mutation_builder builder2(node.guard.write_timestamp());
-                    builder2.with_node(parse_replaced_node(node))
+                    builder2.with_node(replaced_node_id)
                             .del("tokens")
                             .set("node_state", node_state::left);
                     co_await update_topology_state(take_guard(std::move(node)), {builder1.build(), builder2.build()},
