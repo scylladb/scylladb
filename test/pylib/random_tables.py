@@ -91,6 +91,14 @@ class UUIDType(ValueType):
         return uuid.UUID(f"{{00000000-0000-0000-0000-{seed:012}}}")
 
 
+class CounterType(ValueType):
+    def __init__(self):
+        self.name: str = 'counter'
+
+    def val(self, seed: int) -> int:
+        return seed
+
+
 class Column():
     """A column definition.
        If no value type specified it picks a random one.
