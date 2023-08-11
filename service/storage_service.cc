@@ -1649,6 +1649,13 @@ class topology_coordinator {
                         }
                     }
                 }
+                if (node.rs->state == node_state::replacing) {
+                    // We make a replaced node a non-voter early, just like a removed node.
+                    auto replaced_node_id = parse_replaced_node(node);
+                    if (_group0.is_member(replaced_node_id, true)) {
+                        co_await _group0.make_nonvoter(replaced_node_id);
+                    }
+                }
 
                 raft_topology_cmd cmd{raft_topology_cmd::command::stream_ranges};
                 if (node.rs->state == node_state::removing) {
