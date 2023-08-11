@@ -352,6 +352,10 @@ public:
         co_await populate_subdir(sstables::staging_dir, allow_offstrategy_compaction::no);
         co_await populate_subdir(sstables::quarantine_dir, allow_offstrategy_compaction::no, must_exist::no);
         co_await populate_subdir("", allow_offstrategy_compaction::yes);
+
+        co_await smp::invoke_on_all([this] {
+            _global_table->mark_ready_for_writes();
+        });
     }
 
     future<> stop() {
@@ -547,25 +551,6 @@ future<> distributed_loader::init_system_keyspace(sharded<db::system_keyspace>& 
                 }
             }
         }
-
-        db.invoke_on_all([] (replica::database& db) {
-            for (auto ksname : system_keyspaces) {
-                if (!db.has_keyspace(ksname)) {
-                    continue;
-                }
-                auto& ks = db.find_keyspace(ksname);
-                for (auto& pair : ks.metadata()->cf_meta_data()) {
-                    auto cfm = pair.second;
-                    auto& cf = db.find_column_family(cfm);
-                    // During phase2 some tables may have already been
-                    // marked as 'ready for writes' at phase1.
-                    if (!cf.is_ready_for_writes()) {
-                        cf.mark_ready_for_writes();
-                    }
-                }
-            }
-            return make_ready_future<>();
-        }).get();
     });
 }
 
@@ -622,14 +607,6 @@ future<> distributed_loader::init_non_system_keyspaces(distributed<replica::data
 
             when_all_succeed(futures.begin(), futures.end()).discard_result().get();
         }
-
-        db.invoke_on_all([] (replica::database& db) {
-            return parallel_for_each(db.get_non_system_column_families(), [] (lw_shared_ptr<replica::table> table) {
-                // Make sure this is called even if the table is empty
-                table->mark_ready_for_writes();
-                return make_ready_future<>();
-            });
-        }).get();
     });
 }
 
