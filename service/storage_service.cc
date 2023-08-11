@@ -564,6 +564,7 @@ public:
     topology_node_mutation_builder& set(const char* cell, topology_request value);
     topology_node_mutation_builder& set(const char* cell, const sstring& value);
     topology_node_mutation_builder& set(const char* cell, const raft::server_id& value);
+    topology_node_mutation_builder& set(const char* cell, const std::unordered_set<raft::server_id>& nodes_ids);
     topology_node_mutation_builder& set(const char* cell, const std::unordered_set<dht::token>& value);
     template<typename S>
     requires std::constructible_from<sstring, S>
@@ -707,6 +708,10 @@ topology_node_mutation_builder& topology_node_mutation_builder::set(
 
 topology_node_mutation_builder& topology_node_mutation_builder::del(const char* cell) {
     return builder_base::del(cell);
+}
+
+topology_node_mutation_builder& topology_node_mutation_builder::set(const char* cell, const std::unordered_set<raft::server_id>& nodes_ids) {
+    return apply_set(cell, collection_apply_mode::overwrite, nodes_ids | boost::adaptors::transformed([] (const auto& node_id) { return node_id.id; }));
 }
 
 topology_node_mutation_builder& topology_node_mutation_builder::set(const char* cell, const std::unordered_set<dht::token>& tokens) {
@@ -2079,6 +2084,20 @@ future<> storage_service::raft_state_monitor_fiber(raft::server& raft, cdc::gene
 
 
 future<> storage_service::raft_replace(raft::server& raft_server, raft::server_id replaced_id, gms::inet_address replaced_ip) {
+    auto ignore_nodes_strs = utils::split_comma_separated_list(_db.local().get_config().ignore_dead_nodes_for_replace());
+    std::unordered_set<raft::server_id> ignored_ids;
+    for (const sstring& n : ignore_nodes_strs) {
+        raft::server_id ignored_id;
+        // FIXME: IPs should be supported, but the current implementation of raft_address_map doesn't allow this.
+        // We can also deprecate the use of IPs with consistent topology.
+        try {
+            ignored_id = raft::server_id{utils::UUID(n)};
+        } catch (const std::exception&) {
+            throw std::invalid_argument(::format("invalid host ID of the ignored node {}", n));
+        }
+        ignored_ids.insert(ignored_id);
+    }
+
     // Read barrier to access the latest topology. Quorum of nodes has to be alive.
     co_await raft_server.read_barrier(&_abort_source);
 
@@ -2089,12 +2108,18 @@ future<> storage_service::raft_replace(raft::server& raft_server, raft::server_i
 
     // add myself to topology with request to replace
     while (!_topology_state_machine._topology.contains(raft_server.id())) {
-        slogger.info("raft topology: adding myself to topology for replace: {} replacing {}", raft_server.id(), replaced_id);
+        slogger.info("raft topology: adding myself to topology for replace: {} replacing {}, ignored nodes: {}", raft_server.id(), replaced_id, ignored_ids);
         auto guard = co_await _group0->client().start_operation(&_abort_source);
 
         auto it = _topology_state_machine._topology.normal_nodes.find(replaced_id);
         if (it == _topology_state_machine._topology.normal_nodes.end()) {
             throw std::runtime_error(::format("Cannot replace node {}/{} because it is not in the 'normal' state", replaced_ip, replaced_id));
+        }
+
+        for (const auto& ignored_id : ignored_ids) {
+            if (!_topology_state_machine._topology.find(ignored_id)) {
+                throw std::runtime_error(::format("ignored node {} is not found in the cluster", ignored_id));
+            }
         }
 
         auto& rs = it->second;
@@ -2106,6 +2131,7 @@ future<> storage_service::raft_replace(raft::server& raft_server, raft::server_i
                .set("release_version", version::release())
                .set("topology_request", topology_request::replace)
                .set("replaced_id", replaced_id)
+               .set("ignore_nodes", ignored_ids)
                .set("num_tokens", _db.local().get_config().num_tokens())
                .set("shard_count", smp::count)
                .set("ignore_msb", _db.local().get_config().murmur3_partitioner_ignore_msb_bits())
@@ -4480,8 +4506,18 @@ void storage_service::run_replace_ops(std::unordered_set<token>& bootstrap_token
     }
 }
 
-future<> storage_service::raft_removenode(locator::host_id host_id) {
+future<> storage_service::raft_removenode(locator::host_id host_id, std::list<locator::host_id_or_endpoint> ignore_nodes_params) {
     auto id = raft::server_id{host_id.uuid()};
+    std::unordered_set<raft::server_id> ignored_ids;
+    for (const auto& hoep : ignore_nodes_params) {
+        // FIXME: IPs should be supported, but the current implementation of raft_address_map doesn't allow this.
+        // We can also deprecate the use of IPs with consistent topology.
+        if (hoep.has_endpoint()) {
+            throw std::invalid_argument("--ignore-dead-nodes does not support IPs, use host IDs instead");
+        }
+        ignored_ids.insert(raft::server_id{hoep.id.uuid()});
+    }
+
     while (true) {
         auto guard = co_await _group0->client().start_operation(&_abort_source);
 
@@ -4512,9 +4548,16 @@ future<> storage_service::raft_removenode(locator::host_id host_id) {
             throw std::runtime_error(message);
         }
 
-        slogger.info("raft topology: request removenode for: {}", id);
+        for (const auto& ignored_id : ignored_ids) {
+            if (!_topology_state_machine._topology.find(ignored_id)) {
+                throw std::runtime_error(::format("ignored node {} is not found in the cluster", ignored_id));
+            }
+        }
+
+        slogger.info("raft topology: request removenode for: {}, ignored nodes: {}", id, ignored_ids);
         topology_mutation_builder builder(guard.write_timestamp());
         builder.with_node(id)
+               .set("ignore_nodes", ignored_ids)
                .set("topology_request", topology_request::remove);
         topology_change change{{builder.build()}};
         group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard, ::format("removenode: request remove for {}", id));
@@ -4545,7 +4588,7 @@ future<> storage_service::removenode(locator::host_id host_id, std::list<locator
     return run_with_api_lock(sstring("removenode"), [host_id, ignore_nodes_params = std::move(ignore_nodes_params)] (storage_service& ss) mutable {
         return seastar::async([&ss, host_id, ignore_nodes_params = std::move(ignore_nodes_params)] () mutable {
             if (ss._raft_topology_change_enabled) {
-                ss.raft_removenode(host_id).get();
+                ss.raft_removenode(host_id, std::move(ignore_nodes_params)).get();
                 return;
             }
             node_ops_ctl ctl(ss, node_ops_cmd::removenode_prepare, host_id, gms::inet_address());
