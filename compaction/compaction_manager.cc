@@ -1194,7 +1194,7 @@ void compaction_manager::submit(table_state& t) {
     }
 
     // OK to drop future.
-    // waited via task->stop()
+    // waited via compaction_task_executor::compaction_done()
     (void)perform_compaction<regular_compaction_task_executor>(tasks::task_info{}, t).discard_result();
 }
 
