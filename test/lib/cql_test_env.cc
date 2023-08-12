@@ -315,7 +315,7 @@ public:
         auto exp = expected.type()->decompose(expected);
         auto dk = dht::decorate_key(*schema, pkey);
         auto shard = cf.get_effective_replication_map()->shard_of(*schema, dk._token);
-        return _db.invoke_on(shard, [pkey = std::move(pkey),
+        return _db.invoke_on(shard, [dk = std::move(dk),
                                       ckey = std::move(ckey),
                                       ks_name = std::move(ks_name),
                                       column_name = std::move(column_name),
@@ -324,10 +324,7 @@ public:
           auto& cf = db.find_column_family(ks_name, table_name);
           auto schema = cf.schema();
           auto permit = db.get_reader_concurrency_semaphore().make_tracking_only_permit(schema.get(), "require_column_has_value()", db::no_timeout, {});
-          return cf.find_partition_slow(schema, permit, pkey)
-                  .then([schema, ckey, column_name, exp] (replica::column_family::const_mutation_partition_ptr p) {
-            assert(p != nullptr);
-            auto row = p->find_row(*schema, ckey);
+          return cf.find_row(schema, permit, dk, ckey).then([schema, column_name, exp] (auto row) {
             assert(row != nullptr);
             auto col_def = schema->get_column_definition(utf8_type->decompose(column_name));
             assert(col_def != nullptr);
