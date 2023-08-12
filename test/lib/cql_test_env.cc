@@ -554,6 +554,8 @@ public:
             sharded<service::direct_fd_pinger> fd_pinger;
             sharded<cdc::cdc_service> cdc;
 
+            single_node_cql_env env(db, feature_service, sstm, proxy, qp, auth_service, view_builder, view_update_generator, mm_notif, mm, std::ref(sl_controller), bm, gossiper, raft_gr, sys_ks, the_tablet_allocator);
+
             debug::the_database = &db;
             auto reset_db_ptr = defer([] {
                 debug::the_database = nullptr;
@@ -1010,7 +1012,6 @@ public:
 
             notify_set.notify_all(configurable::system_state::started).get();
 
-            single_node_cql_env env(db, feature_service, sstm, proxy, qp, auth_service, view_builder, view_update_generator, mm_notif, mm, std::ref(sl_controller), bm, gossiper, raft_gr, sys_ks, the_tablet_allocator);
             env._group0_client = &group0_client;
 
             env.start().get();
