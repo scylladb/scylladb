@@ -130,22 +130,22 @@ public:
     static constexpr std::string_view ks_name = "ks";
     static std::atomic<bool> active;
 private:
-    sharded<replica::database>& _db;
-    sharded<gms::feature_service>& _feature_service;
-    sharded<sstables::storage_manager>& _sstm;
-    sharded<service::storage_proxy>& _proxy;
-    sharded<cql3::query_processor>& _qp;
-    sharded<auth::service>& _auth_service;
-    sharded<db::view::view_builder>& _view_builder;
-    sharded<db::view::view_update_generator>& _view_update_generator;
-    sharded<service::migration_notifier>& _mnotifier;
-    sharded<qos::service_level_controller>& _sl_controller;
-    sharded<service::migration_manager>& _mm;
-    sharded<db::batchlog_manager>& _batchlog_manager;
-    sharded<gms::gossiper>& _gossiper;
-    sharded<service::raft_group_registry>& _group0_registry;
-    sharded<db::system_keyspace>& _sys_ks;
-    sharded<service::tablet_allocator>& _tablet_allocator;
+    sharded<replica::database> _db;
+    sharded<gms::feature_service> _feature_service;
+    sharded<sstables::storage_manager> _sstm;
+    sharded<service::storage_proxy> _proxy;
+    sharded<cql3::query_processor> _qp;
+    sharded<auth::service> _auth_service;
+    sharded<db::view::view_builder> _view_builder;
+    sharded<db::view::view_update_generator> _view_update_generator;
+    sharded<service::migration_notifier> _mnotifier;
+    sharded<qos::service_level_controller> _sl_controller;
+    sharded<service::migration_manager> _mm;
+    sharded<db::batchlog_manager> _batchlog_manager;
+    sharded<gms::gossiper> _gossiper;
+    sharded<service::raft_group_registry> _group0_registry;
+    sharded<db::system_keyspace> _sys_ks;
+    sharded<service::tablet_allocator> _tablet_allocator;
     service::raft_group0_client* _group0_client;
 
 private:
@@ -187,39 +187,7 @@ private:
         }
     }
 public:
-    single_node_cql_env(
-            sharded<replica::database>& db,
-            sharded<gms::feature_service>& feature_service,
-            sharded<sstables::storage_manager>& sstm,
-            sharded<service::storage_proxy>& proxy,
-            sharded<cql3::query_processor>& qp,
-            sharded<auth::service>& auth_service,
-            sharded<db::view::view_builder>& view_builder,
-            sharded<db::view::view_update_generator>& view_update_generator,
-            sharded<service::migration_notifier>& mnotifier,
-            sharded<service::migration_manager>& mm,
-            sharded<qos::service_level_controller> &sl_controller,
-            sharded<db::batchlog_manager>& batchlog_manager,
-            sharded<gms::gossiper>& gossiper,
-            sharded<service::raft_group_registry>& group0_registry,
-            sharded<db::system_keyspace>& sys_ks,
-            sharded<service::tablet_allocator>& tablet_allocator)
-            : _db(db)
-            , _feature_service(feature_service)
-            , _sstm(sstm)
-            , _proxy(proxy)
-            , _qp(qp)
-            , _auth_service(auth_service)
-            , _view_builder(view_builder)
-            , _view_update_generator(view_update_generator)
-            , _mnotifier(mnotifier)
-            , _sl_controller(sl_controller)
-            , _mm(mm)
-            , _batchlog_manager(batchlog_manager)
-            , _gossiper(gossiper)
-            , _group0_registry(group0_registry)
-            , _sys_ks(sys_ks)
-            , _tablet_allocator(tablet_allocator)
+    single_node_cql_env()
     {
         adjust_rlimit();
     }
@@ -516,23 +484,6 @@ public:
             // FIXME: handle signals (SIGINT, SIGTERM) - request aborts
             auto stop_abort_sources = defer([&] { abort_sources.stop().get(); });
 
-            sharded<replica::database> db;
-            sharded<gms::feature_service> feature_service;
-            sharded<sstables::storage_manager> sstm;
-            sharded<service::storage_proxy> proxy;
-            sharded<cql3::query_processor> qp;
-            sharded<auth::service> auth_service;
-            sharded<db::view::view_builder> view_builder;
-            sharded<db::view::view_update_generator> view_update_generator;
-            sharded<service::migration_notifier> mm_notif;
-            sharded<service::migration_manager> mm;
-            sharded<qos::service_level_controller> sl_controller;
-            sharded<db::batchlog_manager> bm;
-            sharded<gms::gossiper> gossiper;
-            sharded<service::raft_group_registry> raft_gr;
-            sharded<db::system_keyspace> sys_ks;
-            sharded<service::tablet_allocator> the_tablet_allocator;
-
             sharded<db::system_distributed_keyspace> sys_dist_ks;
             sharded<locator::snitch_ptr> snitch;
             sharded<compaction_manager> cm;
@@ -554,7 +505,24 @@ public:
             sharded<service::direct_fd_pinger> fd_pinger;
             sharded<cdc::cdc_service> cdc;
 
-            single_node_cql_env env(db, feature_service, sstm, proxy, qp, auth_service, view_builder, view_update_generator, mm_notif, mm, std::ref(sl_controller), bm, gossiper, raft_gr, sys_ks, the_tablet_allocator);
+            single_node_cql_env env;
+
+            auto& db = env._db;
+            auto& feature_service = env._feature_service;
+            auto& sstm = env._sstm;
+            auto& proxy = env._proxy;
+            auto& qp = env._qp;
+            auto& auth_service = env._auth_service;
+            auto& view_builder = env._view_builder;
+            auto& view_update_generator = env._view_update_generator;
+            auto& mm_notif = env._mnotifier;
+            auto& mm = env._mm;
+            auto& sl_controller = env._sl_controller;
+            auto& bm = env._batchlog_manager;
+            auto& gossiper = env._gossiper;
+            auto& raft_gr = env._group0_registry;
+            auto& sys_ks = env._sys_ks;
+            auto& the_tablet_allocator = env._tablet_allocator;
 
             debug::the_database = &db;
             auto reset_db_ptr = defer([] {
