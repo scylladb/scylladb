@@ -504,8 +504,6 @@ private:
             // FIXME: handle signals (SIGINT, SIGTERM) - request aborts
             auto stop_abort_sources = defer([&] { abort_sources.stop().get(); });
 
-            auto& env = *this;
-
             debug::the_database = &_db;
             auto reset_db_ptr = defer([] {
                 debug::the_database = nullptr;
@@ -962,17 +960,17 @@ private:
 
             notify_set.notify_all(configurable::system_state::started).get();
 
-            env._group0_client = &group0_client;
+            _group0_client = &group0_client;
 
-            env._core_local.start(std::ref(_auth_service), std::ref(_sl_controller)).get();
-            auto stop_core_local = defer([&env] { env._core_local.stop().get(); });
+            _core_local.start(std::ref(_auth_service), std::ref(_sl_controller)).get();
+            auto stop_core_local = defer([this] { _core_local.stop().get(); });
 
-            if (!env.local_db().has_keyspace(ks_name)) {
-                env.create_keyspace(ks_name).get();
+            if (!local_db().has_keyspace(ks_name)) {
+                create_keyspace(ks_name).get();
             }
 
-            with_scheduling_group(dbcfg.statement_scheduling_group, [&func, &env] {
-                return func(env);
+            with_scheduling_group(dbcfg.statement_scheduling_group, [&func, this] {
+                return func(*this);
             }).get();
     }
 
