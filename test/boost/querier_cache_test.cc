@@ -632,7 +632,7 @@ SEASTAR_THREAD_TEST_CASE(test_resources_based_cache_eviction) {
         env.execute_cql("CREATE KEYSPACE querier_cache WITH REPLICATION = {'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1};").get();
         env.execute_cql("CREATE TABLE querier_cache.test (pk int, ck int, value int, primary key (pk, ck));").get();
 
-        env.require_table_exists("querier_cache", "test").get();
+        BOOST_REQUIRE(env.local_db().has_schema("querier_cache", "test"));
 
         auto insert_id = env.prepare("INSERT INTO querier_cache.test (pk, ck, value) VALUES (?, ?, ?);").get0();
         auto pk = cql3::raw_value::make_value(serialized(0));
@@ -641,7 +641,7 @@ SEASTAR_THREAD_TEST_CASE(test_resources_based_cache_eviction) {
             env.execute_prepared(insert_id, {{pk, ck, ck}}).get();
         }
 
-        env.require_table_exists("querier_cache", "test").get();
+        BOOST_REQUIRE(env.local_db().has_schema("querier_cache", "test"));
 
         auto& cf = db.find_column_family("querier_cache", "test");
         auto s = cf.schema();
