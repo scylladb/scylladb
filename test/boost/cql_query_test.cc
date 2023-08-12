@@ -586,11 +586,11 @@ SEASTAR_TEST_CASE(test_insert_statement) {
         return e.execute_cql("create table cf (p1 varchar, c1 int, r1 int, PRIMARY KEY (p1, c1));").discard_result().then([&e] {
             return e.execute_cql("insert into cf (p1, c1, r1) values ('key1', 1, 100);").discard_result();
         }).then([&e] {
-            return e.require_column_has_value("cf", {sstring("key1")}, {1}, "r1", 100);
+            return require_column_has_value(e, "cf", {sstring("key1")}, {1}, "r1", 100);
         }).then([&e] {
             return e.execute_cql("update cf set r1 = 66 where p1 = 'key1' and c1 = 1;").discard_result();
         }).then([&e] {
-            return e.require_column_has_value("cf", {sstring("key1")}, {1}, "r1", 66);
+            return require_column_has_value(e, "cf", {sstring("key1")}, {1}, "r1", 66);
         });
     });
 }
@@ -1317,12 +1317,12 @@ SEASTAR_TEST_CASE(test_map_insert_update) {
         }).then([&e] {
             return e.execute_cql("insert into cf (p1, map1) values ('key1', { 1001: 2001 });").discard_result();
         }).then([&e, my_map_type] {
-            return e.require_column_has_value("cf", {sstring("key1")}, {},
+            return require_column_has_value(e, "cf", {sstring("key1")}, {},
                                               "map1", make_map_value(my_map_type, map_type_impl::native_type({{1001, 2001}})));
         }).then([&e] {
             return e.execute_cql("update cf set map1[1002] = 2002 where p1 = 'key1';").discard_result();
         }).then([&e, my_map_type] {
-            return e.require_column_has_value("cf", {sstring("key1")}, {},
+            return require_column_has_value(e, "cf", {sstring("key1")}, {},
                                               "map1", make_map_value(my_map_type,
                                                        map_type_impl::native_type({{1001, 2001},
                                                                                   {1002, 2002}})));
@@ -1330,7 +1330,7 @@ SEASTAR_TEST_CASE(test_map_insert_update) {
             // overwrite an element
             return e.execute_cql("update cf set map1[1001] = 3001 where p1 = 'key1';").discard_result();
         }).then([&e, my_map_type] {
-            return e.require_column_has_value("cf", {sstring("key1")}, {},
+            return require_column_has_value(e, "cf", {sstring("key1")}, {},
                                               "map1", make_map_value(my_map_type,
                                                        map_type_impl::native_type({{1001, 3001},
                                                                                   {1002, 2002}})));
@@ -1338,7 +1338,7 @@ SEASTAR_TEST_CASE(test_map_insert_update) {
             // overwrite whole map
             return e.execute_cql("update cf set map1 = {1003: 4003} where p1 = 'key1';").discard_result();
         }).then([&e, my_map_type] {
-            return e.require_column_has_value("cf", {sstring("key1")}, {},
+            return require_column_has_value(e, "cf", {sstring("key1")}, {},
                                               "map1", make_map_value(my_map_type,
                                                           map_type_impl::native_type({{1003, 4003}})));
         }).then([&e] {
@@ -1351,7 +1351,7 @@ SEASTAR_TEST_CASE(test_map_insert_update) {
             return e.execute_cql(
                 "update cf set map1 = {1001: 5001, 1002: 5002, 1003: 5003} where p1 = 'key1';").discard_result();
         }).then([&e, my_map_type] {
-            return e.require_column_has_value("cf", {sstring("key1")}, {},
+            return require_column_has_value(e, "cf", {sstring("key1")}, {},
                                               "map1", make_map_value(my_map_type,
                                                        map_type_impl::native_type({{1001, 5001},
                                                                                   {1002, 5002},
@@ -1360,7 +1360,7 @@ SEASTAR_TEST_CASE(test_map_insert_update) {
             // discard some keys
             return e.execute_cql("update cf set map1 = map1 - {1001, 1003, 1005} where p1 = 'key1';").discard_result();
         }).then([&e, my_map_type] {
-            return e.require_column_has_value("cf", {sstring("key1")}, {},
+            return require_column_has_value(e, "cf", {sstring("key1")}, {},
                                               "map1", make_map_value(my_map_type,
                                                           map_type_impl::native_type({{{1002, 5002}}})));
         }).then([&e, my_map_type] {
@@ -1379,13 +1379,13 @@ SEASTAR_TEST_CASE(test_map_insert_update) {
             // delete a key
             return e.execute_cql("delete map1[1002] from cf where p1 = 'key1';").discard_result();
         }).then([&e, my_map_type] {
-            return e.require_column_has_value("cf", {sstring("key1")}, {},
+            return require_column_has_value(e, "cf", {sstring("key1")}, {},
                                               "map1", make_map_value(my_map_type,
                                                       map_type_impl::native_type({{{1009, 5009}}})));
         }).then([&e] {
             return e.execute_cql("insert into cf (p1, map1) values ('key1', null);").discard_result();
         }).then([&e, my_map_type] {
-            return e.require_column_has_value("cf", {sstring("key1")}, {},
+            return require_column_has_value(e, "cf", {sstring("key1")}, {},
                     "map1", make_map_value(my_map_type, map_type_impl::native_type({})));
         });
     });
@@ -1404,30 +1404,30 @@ SEASTAR_TEST_CASE(test_set_insert_update) {
         }).then([&e] {
             return e.execute_cql("insert into cf (p1, set1) values ('key1', { 1001 });").discard_result();
         }).then([&e, my_set_type] {
-            return e.require_column_has_value("cf", {sstring("key1")}, {},
+            return require_column_has_value(e, "cf", {sstring("key1")}, {},
                                             "set1", make_set_value(my_set_type, set_type_impl::native_type({{1001}})));
         }).then([&e] {
             return e.execute_cql("update cf set set1 = set1 + { 1002 } where p1 = 'key1';").discard_result();
         }).then([&e, my_set_type] {
-            return e.require_column_has_value("cf", {sstring("key1")}, {},
+            return require_column_has_value(e, "cf", {sstring("key1")}, {},
                                             "set1", make_set_value(my_set_type, set_type_impl::native_type({1001, 1002})));
         }).then([&e] {
             // overwrite an element
             return e.execute_cql("update cf set set1 = set1 + { 1001 } where p1 = 'key1';").discard_result();
         }).then([&e, my_set_type] {
-            return e.require_column_has_value("cf", {sstring("key1")}, {},
+            return require_column_has_value(e, "cf", {sstring("key1")}, {},
                                             "set1", make_set_value(my_set_type, set_type_impl::native_type({1001, 1002})));
         }).then([&e] {
             // overwrite entire set
             return e.execute_cql("update cf set set1 = { 1007, 1019 } where p1 = 'key1';").discard_result();
         }).then([&e, my_set_type] {
-            return e.require_column_has_value("cf", {sstring("key1")}, {},
+            return require_column_has_value(e, "cf", {sstring("key1")}, {},
                                             "set1", make_set_value(my_set_type, set_type_impl::native_type({1007, 1019})));
         }).then([&e] {
             // discard keys
             return e.execute_cql("update cf set set1 = set1 - { 1007, 1008 } where p1 = 'key1';").discard_result();
         }).then([&e, my_set_type] {
-            return e.require_column_has_value("cf", {sstring("key1")}, {},
+            return require_column_has_value(e, "cf", {sstring("key1")}, {},
                                             "set1", make_set_value(my_set_type, set_type_impl::native_type({{1019}})));
         }).then([&e, my_set_type] {
             return e.execute_cql("select * from cf where p1 = 'key1';").then([my_set_type](shared_ptr<cql_transport::messages::result_message> msg) {
@@ -1443,18 +1443,18 @@ SEASTAR_TEST_CASE(test_set_insert_update) {
         }).then([&e] {
             return e.execute_cql("delete set1[1019] from cf where p1 = 'key1';").discard_result();
         }).then([&e, my_set_type] {
-            return e.require_column_has_value("cf", {sstring("key1")}, {},
+            return require_column_has_value(e, "cf", {sstring("key1")}, {},
                                             "set1", make_set_value(my_set_type, set_type_impl::native_type({{1009}})));
         }).then([&e] {
             return e.execute_cql("insert into cf (p1, set1) values ('key1', null);").discard_result();
         }).then([&e, my_set_type] {
-            return e.require_column_has_value("cf", {sstring("key1")}, {},
+            return require_column_has_value(e, "cf", {sstring("key1")}, {},
                     "set1", make_set_value(my_set_type, set_type_impl::native_type({})));
         }).then([&e] {
             return e.execute_cql("insert into cf (p1, set1) values ('key1', {});").discard_result();
         }).then([&e, my_set_type] {
             // Empty non-frozen set is indistinguishable from NULL
-            return e.require_column_has_value("cf", {sstring("key1")}, {},
+            return require_column_has_value(e, "cf", {sstring("key1")}, {},
                     "set1", make_set_value(my_set_type, set_type_impl::native_type({})));
         });
     });
@@ -1466,22 +1466,22 @@ SEASTAR_TEST_CASE(test_list_insert_update) {
         return e.execute_cql("create table cf (p1 varchar primary key, list1 list<int>);").discard_result().then([&e] {
             return e.execute_cql("insert into cf (p1, list1) values ('key1', [ 1001 ]);").discard_result();
         }).then([&e, my_list_type] {
-            return e.require_column_has_value("cf", {sstring("key1")}, {},
+            return require_column_has_value(e, "cf", {sstring("key1")}, {},
                     "list1", make_list_value(my_list_type, list_type_impl::native_type({{1001}})));
         }).then([&e] {
             return e.execute_cql("update cf set list1 = [ 1002, 1003 ] where p1 = 'key1';").discard_result();
         }).then([&e, my_list_type] {
-            return e.require_column_has_value("cf", {sstring("key1")}, {},
+            return require_column_has_value(e, "cf", {sstring("key1")}, {},
                     "list1", make_list_value(my_list_type, list_type_impl::native_type({1002, 1003})));
         }).then([&e] {
             return e.execute_cql("update cf set list1[1] = 2003 where p1 = 'key1';").discard_result();
         }).then([&e, my_list_type] {
-            return e.require_column_has_value("cf", {sstring("key1")}, {},
+            return require_column_has_value(e, "cf", {sstring("key1")}, {},
                     "list1", make_list_value(my_list_type, list_type_impl::native_type({1002, 2003})));
         }).then([&e] {
             return e.execute_cql("update cf set list1 = list1 - [1002, 2004] where p1 = 'key1';").discard_result();
         }).then([&e, my_list_type] {
-            return e.require_column_has_value("cf", {sstring("key1")}, {},
+            return require_column_has_value(e, "cf", {sstring("key1")}, {},
                     "list1", make_list_value(my_list_type, list_type_impl::native_type({{2003}})));
         }).then([&e, my_list_type] {
             return e.execute_cql("select * from cf where p1 = 'key1';").then([my_list_type] (shared_ptr<cql_transport::messages::result_message> msg) {
@@ -1497,28 +1497,28 @@ SEASTAR_TEST_CASE(test_list_insert_update) {
         }).then([&e] {
             return e.execute_cql("delete list1[1] from cf where p1 = 'key1';").discard_result();
         }).then([&e, my_list_type] {
-            return e.require_column_has_value("cf", {sstring("key1")}, {},
+            return require_column_has_value(e, "cf", {sstring("key1")}, {},
                     "list1", make_list_value(my_list_type, list_type_impl::native_type({2008, 2010})));
         }).then([&e] {
             return e.execute_cql("update cf set list1 = list1 + [2012, 2019] where p1 = 'key1';").discard_result();
         }).then([&e, my_list_type] {
-            return e.require_column_has_value("cf", {sstring("key1")}, {},
+            return require_column_has_value(e, "cf", {sstring("key1")}, {},
                     "list1", make_list_value(my_list_type, list_type_impl::native_type({2008, 2010, 2012, 2019})));
         }).then([&e] {
             return e.execute_cql("update cf set list1 = [2001, 2002] + list1 where p1 = 'key1';").discard_result();
         }).then([&e, my_list_type] {
-            return e.require_column_has_value("cf", {sstring("key1")}, {},
+            return require_column_has_value(e, "cf", {sstring("key1")}, {},
                     "list1", make_list_value(my_list_type, list_type_impl::native_type({2001, 2002, 2008, 2010, 2012, 2019})));
         }).then([&e] {
             return e.execute_cql("insert into cf (p1, list1) values ('key1', null);").discard_result();
         }).then([&e, my_list_type] {
-            return e.require_column_has_value("cf", {sstring("key1")}, {},
+            return require_column_has_value(e, "cf", {sstring("key1")}, {},
                     "list1", make_list_value(my_list_type, list_type_impl::native_type({})));
         }).then([&e] {
             return e.execute_cql("insert into cf (p1, list1) values ('key1', []);").discard_result();
         }).then([&e, my_list_type] {
             // Empty non-frozen list is indistinguishable from NULL
-            return e.require_column_has_value("cf", {sstring("key1")}, {},
+            return require_column_has_value(e, "cf", {sstring("key1")}, {},
                     "list1", make_list_value(my_list_type, list_type_impl::native_type({})));
         });
     });
@@ -1571,7 +1571,7 @@ SEASTAR_TEST_CASE(test_time_overflow_with_default_ttl) {
         e.execute_cql(cr).get();
         auto q = format("insert into cf (p1, i) values ('key1', 1);");
         e.execute_cql(q).get();
-        e.require_column_has_value("cf", {sstring("key1")}, {}, "i", 1).get();
+        require_column_has_value(e, "cf", {sstring("key1")}, {}, "i", 1).get();
         verify(1, false).get();
         verify(1, true).get();
         e.execute_cql("update cf set i = 2 where p1 = 'key1';").get();
@@ -1597,14 +1597,14 @@ SEASTAR_TEST_CASE(test_time_overflow_using_ttl) {
         e.execute_cql(cr).get();
         auto q = format("insert into cf (p1, i) values ('key1', 1) using ttl {:d};", max_ttl.count());
         e.execute_cql(q).get();
-        e.require_column_has_value("cf", {sstring("key1")}, {}, "i", 1).get();
+        require_column_has_value(e, "cf", {sstring("key1")}, {}, "i", 1).get();
         verify(1, true).get();
         verify(1, false).get();
         q = format("insert into cf (p1, i) values ('key2', 0);");
         e.execute_cql(q).get();
         q = format("update cf using ttl {:d} set i = 2 where p1 = 'key2';", max_ttl.count());
         e.execute_cql(q).get();
-        e.require_column_has_value("cf", {sstring("key2")}, {}, "i", 2).get();
+        require_column_has_value(e, "cf", {sstring("key2")}, {}, "i", 2).get();
         verify(1, false).get();
         verify(1, true).get();
     });
@@ -1620,9 +1620,9 @@ SEASTAR_TEST_CASE(test_batch) {
                     "apply batch;"
                     ).discard_result();
         }).then([&e] {
-            return e.require_column_has_value("cf", {sstring("key1")}, {1}, "r1", 100);
+            return require_column_has_value(e, "cf", {sstring("key1")}, {1}, "r1", 100);
         }).then([&e] {
-            return e.require_column_has_value("cf", {sstring("key1")}, {2}, "r1", 200);
+            return require_column_has_value(e, "cf", {sstring("key1")}, {2}, "r1", 200);
         });
     });
 }
@@ -2515,9 +2515,9 @@ APPLY BATCH;)"
             ).discard_result();
 
         }).then([&e] {
-            return e.require_column_has_value("cf", {sstring("key1")}, {1}, "r1", 66);
+            return require_column_has_value(e, "cf", {sstring("key1")}, {1}, "r1", 66);
         }).then([&e] {
-            return e.require_column_has_value("cf", {sstring("key2")}, {2}, "r1", 33);
+            return require_column_has_value(e, "cf", {sstring("key2")}, {2}, "r1", 33);
         });
     });
 }
@@ -2629,9 +2629,9 @@ SEASTAR_TEST_CASE(test_compact_storage) {
         e.execute_cql("create table tcs (p1 int, c1 int, r1 int, PRIMARY KEY (p1, c1)) with compact storage;").get();
         BOOST_REQUIRE(e.local_db().has_schema("ks", "tcs"));
         e.execute_cql("insert into tcs (p1, c1, r1) values (1, 2, 3);").get();
-        e.require_column_has_value("tcs", {1}, {2}, "r1", 3).get();
+        require_column_has_value(e, "tcs", {1}, {2}, "r1", 3).get();
         e.execute_cql("update tcs set r1 = 4 where p1 = 1 and c1 = 2;").get();
-        e.require_column_has_value("tcs", {1}, {2}, "r1", 4).get();
+        require_column_has_value(e, "tcs", {1}, {2}, "r1", 4).get();
         auto msg = e.execute_cql("select * from tcs where p1 = 1;").get0();
         assert_that(msg).is_rows().with_rows({
             { int32_type->decompose(1), int32_type->decompose(2), int32_type->decompose(4) },
@@ -2690,7 +2690,7 @@ SEASTAR_TEST_CASE(test_collections_of_collections) {
         return e.execute_cql("create table cf_sos (p1 int PRIMARY KEY, v set<frozen<set<int>>>);").discard_result().then([&e] {
             return e.execute_cql("insert into cf_sos (p1, v) values (1, {{1, 2}, {3, 4}, {5, 6}});").discard_result();
         }).then([&e, set_of_sets, set_of_ints] {
-            return e.require_column_has_value("cf_sos", {1}, {},
+            return require_column_has_value(e, "cf_sos", {1}, {},
                 "v", make_set_value(set_of_sets, set_type_impl::native_type({
                     make_set_value(set_of_ints, set_type_impl::native_type({1, 2})),
                     make_set_value(set_of_ints, set_type_impl::native_type({3, 4})),
@@ -2699,7 +2699,7 @@ SEASTAR_TEST_CASE(test_collections_of_collections) {
         }).then([&e, set_of_sets, set_of_ints] {
             return e.execute_cql("delete v[{3, 4}] from cf_sos where p1 = 1;").discard_result();
         }).then([&e, set_of_sets, set_of_ints] {
-            return e.require_column_has_value("cf_sos", {1}, {},
+            return require_column_has_value(e, "cf_sos", {1}, {},
                 "v", make_set_value(set_of_sets, set_type_impl::native_type({
                     make_set_value(set_of_ints, set_type_impl::native_type({1, 2})),
                     make_set_value(set_of_ints, set_type_impl::native_type({5, 6})),
@@ -2707,7 +2707,7 @@ SEASTAR_TEST_CASE(test_collections_of_collections) {
         }).then([&e, set_of_sets, set_of_ints] {
             return e.execute_cql("update cf_sos set v = v - {{1, 2}, {5}} where p1 = 1;").discard_result();
         }).then([&e, set_of_sets, set_of_ints] {
-            return e.require_column_has_value("cf_sos", {1}, {},
+            return require_column_has_value(e, "cf_sos", {1}, {},
                 "v", make_set_value(set_of_sets, set_type_impl::native_type({
                     make_set_value(set_of_ints, set_type_impl::native_type({5, 6})),
                 })));
@@ -2716,7 +2716,7 @@ SEASTAR_TEST_CASE(test_collections_of_collections) {
         }).then([&e, map_of_sets, set_of_ints] {
             return e.execute_cql("insert into cf_mos (p1, v) values (1, {{1, 2}: 7, {3, 4}: 8, {5, 6}: 9});").discard_result();
         }).then([&e, map_of_sets, set_of_ints] {
-            return e.require_column_has_value("cf_mos", {1}, {},
+            return require_column_has_value(e, "cf_mos", {1}, {},
                 "v", make_map_value(map_of_sets, map_type_impl::native_type({
                     { make_set_value(set_of_ints, set_type_impl::native_type({1, 2})), 7 },
                     { make_set_value(set_of_ints, set_type_impl::native_type({3, 4})), 8 },
@@ -2725,7 +2725,7 @@ SEASTAR_TEST_CASE(test_collections_of_collections) {
         }).then([&e, map_of_sets, set_of_ints] {
             return e.execute_cql("delete v[{3, 4}] from cf_mos where p1 = 1;").discard_result();
         }).then([&e, map_of_sets, set_of_ints] {
-            return e.require_column_has_value("cf_mos", {1}, {},
+            return require_column_has_value(e, "cf_mos", {1}, {},
                 "v", make_map_value(map_of_sets, map_type_impl::native_type({
                     { make_set_value(set_of_ints, set_type_impl::native_type({1, 2})), 7 },
                     { make_set_value(set_of_ints, set_type_impl::native_type({5, 6})), 9 },
@@ -2733,7 +2733,7 @@ SEASTAR_TEST_CASE(test_collections_of_collections) {
         }).then([&e, map_of_sets, set_of_ints] {
             return e.execute_cql("update cf_mos set v = v - {{1, 2}, {5}} where p1 = 1;").discard_result();
         }).then([&e, map_of_sets, set_of_ints] {
-            return e.require_column_has_value("cf_mos", {1}, {},
+            return require_column_has_value(e, "cf_mos", {1}, {},
                 "v", make_map_value(map_of_sets, map_type_impl::native_type({
                     { make_set_value(set_of_ints, set_type_impl::native_type({5, 6})), 9 },
                 })));

@@ -94,3 +94,7 @@ void require_rows(cql_test_env& e,
                   const std::vector<cql3::raw_value>& values,
                   const std::vector<std::vector<bytes_opt>>& expected,
                   const seastar::compat::source_location& loc = seastar::compat::source_location::current());
+
+/// Asserts that a cell at the given table.partition.row.column position contains expected data
+future<> require_column_has_value(cql_test_env&, const sstring& table_name,
+        std::vector<data_value> pk, std::vector<data_value> ck, const sstring& column_name, data_value expected);

@@ -131,13 +131,6 @@ public:
 
     virtual future<> create_table(std::function<schema(std::string_view)> schema_maker) = 0;
 
-    virtual future<> require_column_has_value(
-        const sstring& table_name,
-        std::vector<data_value> pk,
-        std::vector<data_value> ck,
-        const sstring& column_name,
-        data_value expected) = 0;
-
     virtual service::client_state& local_client_state() = 0;
 
     virtual replica::database& local_db() = 0;

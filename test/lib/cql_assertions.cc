@@ -238,3 +238,44 @@ void require_rows(cql_test_env& e,
                           e.what(), loc.file_name(), loc.line()));
     }
 }
+
+future<> require_column_has_value(cql_test_env& e, const sstring& table_name,
+        std::vector<data_value> pk, std::vector<data_value> ck,
+        const sstring& column_name, data_value expected) {
+    auto& db = e.local_db();
+    auto& cf = db.find_column_family("ks", table_name);
+    auto schema = cf.schema();
+    auto pkey = partition_key::from_deeply_exploded(*schema, pk);
+    auto ckey = clustering_key::from_deeply_exploded(*schema, ck);
+    auto exp = expected.type()->decompose(expected);
+    auto dk = dht::decorate_key(*schema, pkey);
+    auto shard = cf.get_effective_replication_map()->shard_of(*schema, dk._token);
+    return e.db().invoke_on(shard, [dk = std::move(dk),
+                                  ckey = std::move(ckey),
+                                  column_name = std::move(column_name),
+                                  exp = std::move(exp),
+                                  table_name = std::move(table_name)] (replica::database& db) mutable {
+      auto& cf = db.find_column_family("ks", table_name);
+      auto schema = cf.schema();
+      auto permit = db.get_reader_concurrency_semaphore().make_tracking_only_permit(schema.get(), "require_column_has_value()", db::no_timeout, {});
+      return cf.find_row(schema, permit, dk, ckey).then([schema, column_name, exp] (auto row) {
+        assert(row != nullptr);
+        auto col_def = schema->get_column_definition(utf8_type->decompose(column_name));
+        assert(col_def != nullptr);
+        const atomic_cell_or_collection* cell = row->find_cell(col_def->id);
+        if (!cell) {
+            assert(((void)"column not set", 0));
+        }
+        bytes actual;
+        if (!col_def->type->is_multi_cell()) {
+            auto c = cell->as_atomic_cell(*col_def);
+            assert(c.is_live());
+            actual = c.value().linearize();
+        } else {
+            actual = linearized(serialize_for_cql(*col_def->type,
+                    cell->as_collection_mutation()));
+        }
+        assert(col_def->type->equal(actual, exp));
+      });
+    });
+}
