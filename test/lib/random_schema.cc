@@ -1100,8 +1100,6 @@ future<> random_schema::create_with_cql(cql_test_env& env) {
         _schema->describe(db, ss, false);
 
         env.execute_cql(ss.str()).get();
-
-        env.require_table_exists(ks_name, tbl_name).get();
         auto& tbl = db.find_column_family(ks_name, tbl_name);
 
         _schema = tbl.schema();
