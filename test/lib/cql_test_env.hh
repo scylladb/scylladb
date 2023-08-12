@@ -144,8 +144,6 @@ public:
         const sstring& column_name,
         data_value expected) = 0;
 
-    virtual future<> stop() = 0;
-
     virtual service::client_state& local_client_state() = 0;
 
     virtual replica::database& local_db() = 0;

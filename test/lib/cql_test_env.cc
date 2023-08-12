@@ -456,14 +456,6 @@ public:
         });
     }
 
-    future<> start() {
-        return _core_local.start(std::ref(_auth_service), std::ref(_sl_controller));
-    }
-
-    future<> stop() override {
-        return _core_local.stop();
-    }
-
     future<> create_keyspace(std::string_view name) {
         auto query = format("create keyspace {} with replication = {{ 'class' : 'org.apache.cassandra.locator.NetworkTopologyStrategy', 'replication_factor' : 1 }};", name);
         return execute_cql(query).discard_result();
@@ -1002,8 +994,8 @@ public:
 
             env._group0_client = &group0_client;
 
-            env.start().get();
-            auto stop_env = defer([&env] { env.stop().get(); });
+            env._core_local.start(std::ref(auth_service), std::ref(sl_controller)).get();
+            auto stop_core_local = defer([&env] { env._core_local.stop().get(); });
 
             if (!env.local_db().has_keyspace(ks_name)) {
                 env.create_keyspace(ks_name).get();
