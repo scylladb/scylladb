@@ -148,7 +148,7 @@ SEASTAR_THREAD_TEST_CASE(test_with_cdc_parameter) {
             BOOST_REQUIRE_EQUAL(exp.enabled,
                     e.local_db().find_schema("ks", "tbl")->cdc_options().enabled());
             if (exp.enabled) {
-                e.require_table_exists("ks", cdc::log_name("tbl")).get();
+                BOOST_REQUIRE(e.local_db().has_schema("ks", cdc::log_name("tbl")));
             }
             BOOST_REQUIRE_EQUAL(exp.preimage,
                     e.local_db().find_schema("ks", "tbl")->cdc_options().preimage());
@@ -171,7 +171,7 @@ SEASTAR_THREAD_TEST_CASE(test_with_cdc_parameter) {
             e.execute_cql(format("ALTER TABLE ks.tbl WITH cdc = {}", alter2_prop)).get();
             assert_cdc(alter2_expected);
             e.execute_cql("DROP TABLE ks.tbl").get();
-            e.require_table_does_not_exist("ks", cdc::log_name("tbl")).get();
+            BOOST_REQUIRE(!e.local_db().has_schema("ks", cdc::log_name("tbl")));
         };
 
         test("", "{'enabled':'true'}", "{'enabled':'false'}", {false}, {true}, {false});
@@ -187,11 +187,11 @@ SEASTAR_THREAD_TEST_CASE(test_detecting_conflict_of_cdc_log_table_with_existing_
         // Conflict on CREATE which enables cdc log
         e.execute_cql("CREATE TABLE ks.tbl_scylla_cdc_log (a int PRIMARY KEY)").get();
         BOOST_REQUIRE_THROW(e.execute_cql("CREATE TABLE ks.tbl (a int PRIMARY KEY) WITH cdc = {'enabled': true}").get(), exceptions::invalid_request_exception);
-        e.require_table_does_not_exist("ks", "tbl").get();
+        BOOST_REQUIRE(!e.local_db().has_schema("ks", "tbl"));
 
         // Conflict on ALTER which enables cdc log
         e.execute_cql("CREATE TABLE ks.tbl (a int PRIMARY KEY)").get();
-        e.require_table_exists("ks", "tbl").get();
+        BOOST_REQUIRE(e.local_db().has_schema("ks", "tbl"));
         BOOST_REQUIRE_THROW(e.execute_cql("ALTER TABLE ks.tbl WITH cdc = {'enabled': true}").get(), exceptions::invalid_request_exception);
     }).get();
 }
@@ -204,7 +204,7 @@ SEASTAR_THREAD_TEST_CASE(test_permissions_of_cdc_log_table) {
         };
 
         e.execute_cql("CREATE TABLE ks.tbl (a int PRIMARY KEY) WITH cdc = {'enabled': true}").get();
-        e.require_table_exists("ks", "tbl").get();
+        BOOST_REQUIRE(e.local_db().has_schema("ks", "tbl"));
 
         // Allow MODIFY, SELECT, ALTER
         auto log_table = "ks." + cdc::log_name("tbl");
@@ -233,10 +233,10 @@ SEASTAR_THREAD_TEST_CASE(test_permissions_of_cdc_log_table) {
 SEASTAR_THREAD_TEST_CASE(test_disallow_cdc_on_materialized_view) {
     do_with_cql_env_thread([] (cql_test_env& e) {
         e.execute_cql("CREATE TABLE ks.tbl (a int PRIMARY KEY)").get();
-        e.require_table_exists("ks", "tbl").get();
+        BOOST_REQUIRE(e.local_db().has_schema("ks", "tbl"));
 
         BOOST_REQUIRE_THROW(e.execute_cql("CREATE MATERIALIZED VIEW ks.mv AS SELECT a FROM ks.tbl PRIMARY KEY (a) WITH cdc = {'enabled': true}").get(), exceptions::invalid_request_exception);
-        e.require_table_does_not_exist("ks", "mv").get();
+        BOOST_REQUIRE(!e.local_db().has_schema("ks", "mv"));
     }).get();
 }
 
@@ -252,7 +252,9 @@ SEASTAR_THREAD_TEST_CASE(test_permissions_of_cdc_description) {
         const std::string timestamps = "system_distributed.cdc_generation_timestamps";
 
         for (auto& t : {generations_v2, streams, timestamps}) {
-            e.require_table_exists(t).get();
+            auto dot_pos = t.find_first_of('.');
+            assert(dot_pos != std::string_view::npos && dot_pos != 0 && dot_pos != t.size() - 1);
+            BOOST_REQUIRE(e.local_db().has_schema(t.substr(0, dot_pos), t.substr(dot_pos + 1)));
 
             // Disallow DROP
             assert_unauthorized(format("DROP TABLE {}", t));

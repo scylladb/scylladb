@@ -54,22 +54,18 @@
 using namespace std::literals::chrono_literals;
 
 SEASTAR_TEST_CASE(test_create_keyspace_statement) {
-    return do_with_cql_env([] (cql_test_env& e) {
-        return e.execute_cql("create keyspace ks2 with replication = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 };").discard_result().then([&e] {
-            return e.require_keyspace_exists("ks2");
-        });
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("create keyspace ks2 with replication = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 };").get();
+        BOOST_REQUIRE(e.local_db().has_keyspace("ks2"));
     });
 }
 
 SEASTAR_TEST_CASE(test_create_table_statement) {
-    return do_with_cql_env([] (cql_test_env& e) {
-        return e.execute_cql("create table users (user_name varchar PRIMARY KEY, birth_year bigint);").discard_result().then([&e] {
-            return e.require_table_exists("ks", "users");
-        }).then([&e] {
-            return e.execute_cql("create table cf (id int primary key, m map<int, int>, s set<text>, l list<uuid>);").discard_result();
-        }).then([&e] {
-            return e.require_table_exists("ks", "cf");
-        });
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("create table users (user_name varchar PRIMARY KEY, birth_year bigint);").get();
+        BOOST_REQUIRE(e.local_db().has_schema("ks", "users"));
+        e.execute_cql("create table cf (id int primary key, m map<int, int>, s set<text>, l list<uuid>);").get();
+        BOOST_REQUIRE(e.local_db().has_schema("ks", "cf"));
     });
 }
 
@@ -104,7 +100,7 @@ SEASTAR_TEST_CASE(test_create_twcs_table_no_ttl) {
         e.execute_cql("CREATE TABLE tbl (a int, b int, PRIMARY KEY (a)) WITH "
                       "compaction = {'class': 'TimeWindowCompactionStrategy', "
                       "'compaction_window_size': '1', 'compaction_window_unit': 'MINUTES'};").get();
-        e.require_table_exists("ks", "tbl").get();
+        BOOST_REQUIRE(e.local_db().has_schema("ks", "tbl"));
         // Ensure ALTER TABLE works
         e.execute_cql("ALTER TABLE tbl WITH default_time_to_live=60;").get();
         // LiveUpdate and enforce TTL to be defined
@@ -116,7 +112,7 @@ SEASTAR_TEST_CASE(test_create_twcs_table_no_ttl) {
                       "compaction = {'class': 'TimeWindowCompactionStrategy', "
                       "'compaction_window_size': '1', 'compaction_window_unit': 'MINUTES'} AND "
                       "default_time_to_live=60").get();
-        e.require_table_exists("ks", "tbl2").get();
+        BOOST_REQUIRE(e.local_db().has_schema("ks", "tbl2"));
         assert_that_failed(e.execute_cql("ALTER TABLE tbl WITH default_time_to_live=0;"));
         // LiveUpdate and disable the check, then try table creation again
         e.execute_cql("UPDATE system.config SET value='false' WHERE name='restrict_twcs_without_default_ttl';").get();
@@ -127,7 +123,7 @@ SEASTAR_TEST_CASE(test_create_twcs_table_no_ttl) {
         e.execute_cql("UPDATE system.config SET value='true' WHERE name='restrict_twcs_without_default_ttl';").get();
         e.execute_cql("ALTER TABLE tbl3 WITH gc_grace_seconds=0;").get();
 
-        e.require_table_exists("ks", "tbl3").get();
+        BOOST_REQUIRE(e.local_db().has_schema("ks", "tbl3"));
     });
 }
 
@@ -145,14 +141,14 @@ SEASTAR_TEST_CASE(test_twcs_max_window) {
                       "compaction = {'class': 'TimeWindowCompactionStrategy', "
                       "'compaction_window_size': '1', 'compaction_window_unit': 'HOURS'} "
                       "AND default_time_to_live=36000;").get();
-        e.require_table_exists("ks", "tbl").get();
+        BOOST_REQUIRE(e.local_db().has_schema("ks", "tbl"));
         // LiveUpdate - Disable check
         e.execute_cql("UPDATE system.config SET value='0' WHERE name='twcs_max_window_count';").get();
         e.execute_cql("CREATE TABLE tbl2 (a int, b int, PRIMARY KEY (a)) WITH "
                       "compaction = {'class': 'TimeWindowCompactionStrategy', "
                       "'compaction_window_size': '1', 'compaction_window_unit': 'HOURS'} "
                       "AND default_time_to_live=864000000;").get();
-        e.require_table_exists("ks", "tbl2").get();
+        BOOST_REQUIRE(e.local_db().has_schema("ks", "tbl2"));
     });
 }
 
@@ -164,28 +160,28 @@ SEASTAR_TEST_CASE(test_twcs_restrictions_mixed) {
         // Cenario 1: STCS->TWCS with no TTL defined
         e.execute_cql("CREATE TABLE tbl (a int PRIMARY KEY, b int);").get();
         e.execute_cql("ALTER TABLE tbl WITH compaction = {'class': 'TimeWindowCompactionStrategy'};").get();
-        e.require_table_exists("ks", "tbl").get();
+        BOOST_REQUIRE(e.local_db().has_schema("ks", "tbl"));
 
         // Cenario 2: STCS->TWCS with small TTL. Note: TWCS default window size is 1 day (86400s)
         e.execute_cql("CREATE TABLE tbl2 (a int PRIMARY KEY, b int) WITH default_time_to_live = 60;").get();
         e.execute_cql("ALTER TABLE tbl2 WITH compaction = {'class': 'TimeWindowCompactionStrategy'};").get();
-        e.require_table_exists("ks", "tbl2").get();
+        BOOST_REQUIRE(e.local_db().has_schema("ks", "tbl2"));
 
         // Cenario 3: STCS->TWCS with large TTL value
         e.execute_cql("CREATE TABLE tbl3 (a int PRIMARY KEY, b int) WITH default_time_to_live = 8640000;").get();
-        e.require_table_exists("ks", "tbl3").get();
+        BOOST_REQUIRE(e.local_db().has_schema("ks", "tbl3"));
         assert_that_failed(e.execute_cql("ALTER TABLE tbl3 WITH compaction = {'class': 'TimeWindowCompactionStrategy'};"));
 
         // Cenario 4: TWCS table with small to large TTL
         e.execute_cql("CREATE TABLE tbl4 (a int PRIMARY KEY, b int) WITH compaction = "
                       "{'class': 'TimeWindowCompactionStrategy'} AND default_time_to_live = 60;").get();
-        e.require_table_exists("ks", "tbl4").get();
+        BOOST_REQUIRE(e.local_db().has_schema("ks", "tbl4"));
         assert_that_failed(e.execute_cql("ALTER TABLE tbl4 WITH default_time_to_live = 86400000;"));
 
         // Cenario 5: No TTL TWCS to large TTL and then small TTL
         e.execute_cql("CREATE TABLE tbl5 (a int PRIMARY KEY, b int) WITH compaction = "
                       "{'class': 'TimeWindowCompactionStrategy'}").get();
-        e.require_table_exists("ks", "tbl5").get();
+        BOOST_REQUIRE(e.local_db().has_schema("ks", "tbl5"));
         assert_that_failed(e.execute_cql("ALTER TABLE tbl5 WITH default_time_to_live = 86400000;"));
         e.execute_cql("ALTER TABLE tbl5 WITH default_time_to_live = 60;").get();
 
@@ -193,7 +189,7 @@ SEASTAR_TEST_CASE(test_twcs_restrictions_mixed) {
         e.execute_cql("UPDATE system.config SET value='0' WHERE name='twcs_max_window_count';").get();
         e.execute_cql("CREATE TABLE tbl6 (a int PRIMARY KEY, b int) WITH compaction = "
                       "{'class': 'TimeWindowCompactionStrategy'} AND default_time_to_live = 86400000;").get();
-        e.require_table_exists("ks", "tbl6").get();
+        BOOST_REQUIRE(e.local_db().has_schema("ks", "tbl6"));
         e.execute_cql("UPDATE system.config SET value='50' WHERE name='twcs_max_window_count';").get();
         e.execute_cql("ALTER TABLE tbl6 WITH default_time_to_live = 60;").get();
 
@@ -201,27 +197,27 @@ SEASTAR_TEST_CASE(test_twcs_restrictions_mixed) {
         e.execute_cql("UPDATE system.config SET value='0' WHERE name='twcs_max_window_count';").get();
         e.execute_cql("CREATE TABLE tbl7 (a int PRIMARY KEY, b int) WITH compaction = "
                       "{'class': 'TimeWindowCompactionStrategy'} AND default_time_to_live = 86400000;").get();
-        e.require_table_exists("ks", "tbl7").get();
+        BOOST_REQUIRE(e.local_db().has_schema("ks", "tbl7"));
         e.execute_cql("UPDATE system.config SET value='50' WHERE name='twcs_max_window_count';").get();
         e.execute_cql("ALTER TABLE tbl7 WITH compaction = {'class': 'SizeTieredCompactionStrategy'}").get();
 
         // Cenario 8: No TTL TWCS table to STCS
         e.execute_cql("CREATE TABLE tbl8 (a int PRIMARY KEY, b int) WITH compaction = "
                       "{'class': 'TimeWindowCompactionStrategy'};").get();
-        e.require_table_exists("ks", "tbl8").get();
+        BOOST_REQUIRE(e.local_db().has_schema("ks" ,"tbl8"));
         e.execute_cql("ALTER TABLE tbl8 WITH compaction = {'class': 'SizeTieredCompactionStrategy'};").get();
 
         // Cenario 9: Large TTL TWCS table, modify attribute other than compaction and default_time_to_live
         e.execute_cql("UPDATE system.config SET value='0' WHERE name='twcs_max_window_count';").get();
         e.execute_cql("CREATE TABLE tbl9 (a int PRIMARY KEY, b int) WITH compaction = "
                       "{'class': 'TimeWindowCompactionStrategy'} AND default_time_to_live = 86400000;").get();
-        e.require_table_exists("ks", "tbl9").get();
+        BOOST_REQUIRE(e.local_db().has_schema("ks", "tbl9"));
         e.execute_cql("UPDATE system.config SET value='50' WHERE name='twcs_max_window_count';").get();
         e.execute_cql("ALTER TABLE tbl9 WITH gc_grace_seconds = 0;").get();
 
         // Cenario 10: Large TTL STCS table, fail to switch to TWCS with no TTL
         e.execute_cql("CREATE TABLE tbl10 (a int PRIMARY KEY, b int) WITH default_time_to_live = 8640000;").get();
-        e.require_table_exists("ks", "tbl10").get();
+        BOOST_REQUIRE(e.local_db().has_schema("ks", "tbl10"));
         assert_that_failed(e.execute_cql("ALTER TABLE tbl10 WITH compaction = {'class': 'TimeWindowCompactionStrategy'};"));
         e.execute_cql("ALTER TABLE tbl10 WITH compaction = {'class': 'TimeWindowCompactionStrategy'} AND default_time_to_live = 0;").get();
 
@@ -229,7 +225,7 @@ SEASTAR_TEST_CASE(test_twcs_restrictions_mixed) {
         e.execute_cql("CREATE TABLE tbl11 (a int PRIMARY KEY, b int) WITH compaction = "
                       "{'class': 'TimeWindowCompactionStrategy', 'compaction_window_size': '1', "
                       "'compaction_window_unit': 'MINUTES'} AND default_time_to_live=3000;").get();
-       e.require_table_exists("ks", "tbl11").get();
+        BOOST_REQUIRE(e.local_db().has_schema("ks", "tbl11"));
        assert_that_failed(e.execute_cql("ALTER TABLE tbl11 WITH default_time_to_live=3600;"));
        e.execute_cql("ALTER TABLE tbl11 WITH compaction = {'class': 'TimeWindowCompactionStrategy', "
                      "'compaction_window_size': '2', 'compaction_window_unit': 'MINUTES'};").get();
@@ -242,7 +238,7 @@ SEASTAR_TEST_CASE(test_twcs_restrictions_mixed) {
                           "{'class': 'TimeWindowCompactionStrategy', 'compaction_window_size': -65535};"));
        e.execute_cql("CREATE TABLE tbl12 (a int PRIMARY KEY, b int) WITH compaction = "
                      "{'class': 'TimeWindowCompactionStrategy', 'compaction_window_size': 1};").get();
-       e.require_table_exists("ks", "tbl12").get();
+       BOOST_REQUIRE(e.local_db().has_schema("ks", "tbl12"));
        assert_that_failed(e.execute_cql("ALTER TABLE tbl12 WITH compaction = {'class': 'TimeWindowCompactionStrategy', "
                           "'compaction_window_size': 0};"));
     });
@@ -1849,11 +1845,11 @@ SEASTAR_TEST_CASE(test_validate_table) {
 SEASTAR_TEST_CASE(test_table_compression) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         e.execute_cql("create table tb1 (foo text PRIMARY KEY, bar text) with compression = { };").get();
-        e.require_table_exists("ks", "tb1").get();
+        BOOST_REQUIRE(e.local_db().has_schema("ks", "tb1"));
         BOOST_REQUIRE(e.local_db().find_schema("ks", "tb1")->get_compressor_params().get_compressor() == nullptr);
 
         e.execute_cql("create table tb5 (foo text PRIMARY KEY, bar text) with compression = { 'sstable_compression' : '' };").get();
-        e.require_table_exists("ks", "tb5").get();
+        BOOST_REQUIRE(e.local_db().has_schema("ks", "tb5"));
         BOOST_REQUIRE(e.local_db().find_schema("ks", "tb5")->get_compressor_params().get_compressor() == nullptr);
 
         BOOST_REQUIRE_THROW(e.execute_cql(
@@ -1867,20 +1863,20 @@ SEASTAR_TEST_CASE(test_table_compression) {
                 std::exception);
 
         e.execute_cql("create table tb2 (foo text PRIMARY KEY, bar text) with compression = { 'sstable_compression' : 'LZ4Compressor', 'chunk_length_kb' : 2 };").get();
-        e.require_table_exists("ks", "tb2").get();
+        BOOST_REQUIRE(e.local_db().has_schema("ks", "tb2"));
         BOOST_REQUIRE(e.local_db().find_schema("ks", "tb2")->get_compressor_params().get_compressor() == compressor::lz4);
         BOOST_REQUIRE(e.local_db().find_schema("ks", "tb2")->get_compressor_params().chunk_length() == 2 * 1024);
 
         e.execute_cql("create table tb3 (foo text PRIMARY KEY, bar text) with compression = { 'sstable_compression' : 'DeflateCompressor' };").get();
-        e.require_table_exists("ks", "tb3").get();
+        BOOST_REQUIRE(e.local_db().has_schema("ks", "tb3"));
         BOOST_REQUIRE(e.local_db().find_schema("ks", "tb3")->get_compressor_params().get_compressor() == compressor::deflate);
 
         e.execute_cql("create table tb4 (foo text PRIMARY KEY, bar text) with compression = { 'sstable_compression' : 'org.apache.cassandra.io.compress.DeflateCompressor' };").get();
-        e.require_table_exists("ks", "tb4").get();
+        BOOST_REQUIRE(e.local_db().has_schema("ks", "tb4"));
         BOOST_REQUIRE(e.local_db().find_schema("ks", "tb4")->get_compressor_params().get_compressor() == compressor::deflate);
 
         e.execute_cql("create table tb6 (foo text PRIMARY KEY, bar text);").get();
-        e.require_table_exists("ks", "tb6").get();
+        BOOST_REQUIRE(e.local_db().has_schema("ks", "tb6"));
         BOOST_REQUIRE(e.local_db().find_schema("ks", "tb6")->get_compressor_params().get_compressor() == compressor::lz4);
     });
 }
@@ -2028,7 +2024,7 @@ SEASTAR_TEST_CASE(test_types) {
                 "    s time,"
                 "    u duration,"
                 ");").get();
-        e.require_table_exists("ks", "all_types").get();
+        BOOST_REQUIRE(e.local_db().has_schema("ks", "all_types"));
 
         e.execute_cql(
             "INSERT INTO all_types (a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p, q, r, s, u) VALUES ("
@@ -2144,7 +2140,7 @@ SEASTAR_TEST_CASE(test_types) {
 SEASTAR_TEST_CASE(test_order_by) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         e.execute_cql("create table torder (p1 int, c1 int, c2 int, r1 int, r2 int, PRIMARY KEY(p1, c1, c2));").discard_result().get();
-        e.require_table_exists("ks", "torder").get();
+        BOOST_REQUIRE(e.local_db().has_schema("ks", "torder"));
 
         e.execute_cql("insert into torder (p1, c1, c2, r1) values (0, 1, 2, 3);").get();
         e.execute_cql("insert into torder (p1, c1, c2, r1) values (0, 2, 1, 0);").get();
@@ -2316,7 +2312,7 @@ SEASTAR_TEST_CASE(test_order_by_validate) {
 SEASTAR_TEST_CASE(test_multi_column_restrictions) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         e.execute_cql("create table tmcr (p1 int, c1 int, c2 int, c3 int, r1 int, PRIMARY KEY (p1, c1, c2, c3));").get();
-        e.require_table_exists("ks", "tmcr").get();
+        BOOST_REQUIRE(e.local_db().has_schema("ks", "tmcr"));
         e.execute_cql("insert into tmcr (p1, c1, c2, c3, r1) values (0, 0, 0, 0, 0);").get();
         e.execute_cql("insert into tmcr (p1, c1, c2, c3, r1) values (0, 0, 0, 1, 1);").get();
         e.execute_cql("insert into tmcr (p1, c1, c2, c3, r1) values (0, 0, 1, 0, 2);").get();
@@ -2390,7 +2386,7 @@ SEASTAR_TEST_CASE(test_multi_column_restrictions) {
 SEASTAR_TEST_CASE(test_select_distinct) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         e.execute_cql("create table tsd (p1 int, c1 int, r1 int, PRIMARY KEY (p1, c1));").get();
-        e.require_table_exists("ks", "tsd").get();
+        BOOST_REQUIRE(e.local_db().has_schema("ks", "tsd"));
         e.execute_cql("insert into tsd (p1, c1, r1) values (0, 0, 0);").get();
         e.execute_cql("insert into tsd (p1, c1, r1) values (1, 1, 1);").get();
         e.execute_cql("insert into tsd (p1, c1, r1) values (1, 1, 2);").get();
@@ -2412,7 +2408,7 @@ SEASTAR_TEST_CASE(test_select_distinct) {
         }
 
         e.execute_cql("create table tsd2 (p1 int, p2 int, c1 int, r1 int, PRIMARY KEY ((p1, p2), c1));").get();
-        e.require_table_exists("ks", "tsd2").get();
+        BOOST_REQUIRE(e.local_db().has_schema("ks", "tsd2"));
         e.execute_cql("insert into tsd2 (p1, p2, c1, r1) values (0, 0, 0, 0);").get();
         e.execute_cql("insert into tsd2 (p1, p2, c1, r1) values (0, 0, 1, 1);").get();
         e.execute_cql("insert into tsd2 (p1, p2, c1, r1) values (1, 1, 0, 0);").get();
@@ -2529,7 +2525,7 @@ APPLY BATCH;)"
 SEASTAR_TEST_CASE(test_in_restriction) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         e.execute_cql("create table tir (p1 int, c1 int, r1 int, PRIMARY KEY (p1, c1));").get();
-        e.require_table_exists("ks", "tir").get();
+        BOOST_REQUIRE(e.local_db().has_schema("ks", "tir"));
         e.execute_cql("insert into tir (p1, c1, r1) values (0, 0, 0);").get();
         e.execute_cql("insert into tir (p1, c1, r1) values (1, 0, 1);").get();
         e.execute_cql("insert into tir (p1, c1, r1) values (1, 1, 2);").get();
@@ -2587,7 +2583,7 @@ SEASTAR_TEST_CASE(test_in_restriction) {
         }
 
         e.execute_cql("create table tir2 (p1 int, c1 int, r1 int, PRIMARY KEY (p1, c1,r1));").get();
-        e.require_table_exists("ks", "tir2").get();
+        BOOST_REQUIRE(e.local_db().has_schema("ks", "tir2"));
         e.execute_cql("insert into tir2 (p1, c1, r1) values (0, 0, 0);").get();
         e.execute_cql("insert into tir2 (p1, c1, r1) values (1, 0, 1);").get();
         e.execute_cql("insert into tir2 (p1, c1, r1) values (1, 1, 2);").get();
@@ -2629,87 +2625,60 @@ SEASTAR_TEST_CASE(test_in_restriction) {
 }
 
 SEASTAR_TEST_CASE(test_compact_storage) {
-    return do_with_cql_env([] (cql_test_env& e) {
-        return e.execute_cql("create table tcs (p1 int, c1 int, r1 int, PRIMARY KEY (p1, c1)) with compact storage;").discard_result().then([&e] {
-            return e.require_table_exists("ks", "tcs");
-        }).then([&e] {
-            return e.execute_cql("insert into tcs (p1, c1, r1) values (1, 2, 3);").discard_result();
-        }).then([&e] {
-            return e.require_column_has_value("tcs", {1}, {2}, "r1", 3);
-        }).then([&e] {
-            return e.execute_cql("update tcs set r1 = 4 where p1 = 1 and c1 = 2;").discard_result();
-        }).then([&e] {
-            return e.require_column_has_value("tcs", {1}, {2}, "r1", 4);
-        }).then([&e] {
-            return e.execute_cql("select * from tcs where p1 = 1;");
-        }).then([&e] (shared_ptr<cql_transport::messages::result_message> msg) {
-            assert_that(msg).is_rows().with_rows({
-                { int32_type->decompose(1), int32_type->decompose(2), int32_type->decompose(4) },
-            });
-            return e.execute_cql("create table tcs2 (p1 int, c1 int, PRIMARY KEY (p1, c1)) with compact storage;").discard_result();
-        }).then([&e] {
-            return e.require_table_exists("ks", "tcs2");
-        }).then([&e] {
-            return e.execute_cql("insert into tcs2 (p1, c1) values (1, 2);").discard_result();
-        }).then([&e] {
-            return e.execute_cql("select * from tcs2 where p1 = 1;");
-        }).then([&e] (shared_ptr<cql_transport::messages::result_message> msg) {
-            assert_that(msg).is_rows().with_rows({
-                { int32_type->decompose(1), int32_type->decompose(2) },
-            });
-            return e.execute_cql("create table tcs3 (p1 int, c1 int, c2 int, r1 int, PRIMARY KEY (p1, c1, c2)) with compact storage;").discard_result();
-        }).then([&e] {
-            return e.execute_cql("insert into tcs3 (p1, c1, c2, r1) values (1, 2, 3, 4);").discard_result();
-        }).then([&e] {
-            return e.execute_cql("insert into tcs3 (p1, c1, r1) values (1, 2, 5);").discard_result();
-        }).then([&e] {
-            return e.execute_cql("insert into tcs3 (p1, c1, r1) values (1, 3, 6);").discard_result();
-        }).then([&e] {
-            return e.execute_cql("insert into tcs3 (p1, c1, c2, r1) values (1, 3, 5, 7);").discard_result();
-        }).then([&e] {
-            return e.execute_cql("insert into tcs3 (p1, c1, c2, r1) values (1, 3, blobasint(0x), 8);").discard_result();
-        }).then([&e] {
-            return e.execute_cql("select * from tcs3 where p1 = 1;");
-        }).then([&e] (shared_ptr<cql_transport::messages::result_message> msg) {
-            assert_that(msg).is_rows().with_rows({
-                { int32_type->decompose(1), int32_type->decompose(2), {}, int32_type->decompose(5) },
-                { int32_type->decompose(1), int32_type->decompose(2), int32_type->decompose(3), int32_type->decompose(4) },
-                { int32_type->decompose(1), int32_type->decompose(3), {}, int32_type->decompose(6) },
-                { int32_type->decompose(1), int32_type->decompose(3), bytes(), int32_type->decompose(8) },
-                { int32_type->decompose(1), int32_type->decompose(3), int32_type->decompose(5), int32_type->decompose(7) },
-            });
-            return e.execute_cql("delete from tcs3 where p1 = 1 and c1 = 2;").discard_result();
-        }).then([&e] {
-            return e.execute_cql("select * from tcs3 where p1 = 1;");
-        }).then([&e] (shared_ptr<cql_transport::messages::result_message> msg) {
-            assert_that(msg).is_rows().with_rows({
-                { int32_type->decompose(1), int32_type->decompose(3), {}, int32_type->decompose(6) },
-                { int32_type->decompose(1), int32_type->decompose(3), bytes(), int32_type->decompose(8) },
-                { int32_type->decompose(1), int32_type->decompose(3), int32_type->decompose(5), int32_type->decompose(7) },
-            });
-            return e.execute_cql("delete from tcs3 where p1 = 1 and c1 = 3 and c2 = 5;").discard_result();
-        }).then([&e] {
-            return e.execute_cql("select * from tcs3 where p1 = 1;");
-        }).then([&e] (shared_ptr<cql_transport::messages::result_message> msg) {
-            assert_that(msg).is_rows().with_rows({
-                { int32_type->decompose(1), int32_type->decompose(3), {}, int32_type->decompose(6) },
-                { int32_type->decompose(1), int32_type->decompose(3), bytes(), int32_type->decompose(8) },
-            });
-            return e.execute_cql("delete from tcs3 where p1 = 1 and c1 = 3 and c2 = blobasint(0x);").discard_result();
-        }).then([&e] {
-            return e.execute_cql("select * from tcs3 where p1 = 1;");
-        }).then([&e] (shared_ptr<cql_transport::messages::result_message> msg) {
-            assert_that(msg).is_rows().with_rows({
-                { int32_type->decompose(1), int32_type->decompose(3), {}, int32_type->decompose(6) },
-            });
-            return e.execute_cql("create table tcs4 (p1 int PRIMARY KEY, c1 int, c2 int) with compact storage;").discard_result();
-        }).then([&e] {
-            return e.execute_cql("insert into tcs4 (p1) values (1);").discard_result();
-        }).then([&e] {
-            return e.execute_cql("select * from tcs4;");
-        }).then([] (shared_ptr<cql_transport::messages::result_message> msg) {
-            assert_that(msg).is_rows().with_rows({ });
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("create table tcs (p1 int, c1 int, r1 int, PRIMARY KEY (p1, c1)) with compact storage;").get();
+        BOOST_REQUIRE(e.local_db().has_schema("ks", "tcs"));
+        e.execute_cql("insert into tcs (p1, c1, r1) values (1, 2, 3);").get();
+        e.require_column_has_value("tcs", {1}, {2}, "r1", 3).get();
+        e.execute_cql("update tcs set r1 = 4 where p1 = 1 and c1 = 2;").get();
+        e.require_column_has_value("tcs", {1}, {2}, "r1", 4).get();
+        auto msg = e.execute_cql("select * from tcs where p1 = 1;").get0();
+        assert_that(msg).is_rows().with_rows({
+            { int32_type->decompose(1), int32_type->decompose(2), int32_type->decompose(4) },
         });
+        e.execute_cql("create table tcs2 (p1 int, c1 int, PRIMARY KEY (p1, c1)) with compact storage;").get();
+        BOOST_REQUIRE(e.local_db().has_schema("ks", "tcs2"));
+        e.execute_cql("insert into tcs2 (p1, c1) values (1, 2);").get();
+        msg = e.execute_cql("select * from tcs2 where p1 = 1;").get0();
+        assert_that(msg).is_rows().with_rows({
+            { int32_type->decompose(1), int32_type->decompose(2) },
+        });
+        e.execute_cql("create table tcs3 (p1 int, c1 int, c2 int, r1 int, PRIMARY KEY (p1, c1, c2)) with compact storage;").get();
+        e.execute_cql("insert into tcs3 (p1, c1, c2, r1) values (1, 2, 3, 4);").get();
+        e.execute_cql("insert into tcs3 (p1, c1, r1) values (1, 2, 5);").get();
+        e.execute_cql("insert into tcs3 (p1, c1, r1) values (1, 3, 6);").get();
+        e.execute_cql("insert into tcs3 (p1, c1, c2, r1) values (1, 3, 5, 7);").get();
+        e.execute_cql("insert into tcs3 (p1, c1, c2, r1) values (1, 3, blobasint(0x), 8);").get();
+        msg = e.execute_cql("select * from tcs3 where p1 = 1;").get0();
+        assert_that(msg).is_rows().with_rows({
+            { int32_type->decompose(1), int32_type->decompose(2), {}, int32_type->decompose(5) },
+            { int32_type->decompose(1), int32_type->decompose(2), int32_type->decompose(3), int32_type->decompose(4) },
+            { int32_type->decompose(1), int32_type->decompose(3), {}, int32_type->decompose(6) },
+            { int32_type->decompose(1), int32_type->decompose(3), bytes(), int32_type->decompose(8) },
+            { int32_type->decompose(1), int32_type->decompose(3), int32_type->decompose(5), int32_type->decompose(7) },
+        });
+        e.execute_cql("delete from tcs3 where p1 = 1 and c1 = 2;").get();
+        msg = e.execute_cql("select * from tcs3 where p1 = 1;").get0();
+        assert_that(msg).is_rows().with_rows({
+            { int32_type->decompose(1), int32_type->decompose(3), {}, int32_type->decompose(6) },
+            { int32_type->decompose(1), int32_type->decompose(3), bytes(), int32_type->decompose(8) },
+            { int32_type->decompose(1), int32_type->decompose(3), int32_type->decompose(5), int32_type->decompose(7) },
+        });
+        e.execute_cql("delete from tcs3 where p1 = 1 and c1 = 3 and c2 = 5;").get();
+        msg = e.execute_cql("select * from tcs3 where p1 = 1;").get0();
+        assert_that(msg).is_rows().with_rows({
+            { int32_type->decompose(1), int32_type->decompose(3), {}, int32_type->decompose(6) },
+            { int32_type->decompose(1), int32_type->decompose(3), bytes(), int32_type->decompose(8) },
+        });
+        e.execute_cql("delete from tcs3 where p1 = 1 and c1 = 3 and c2 = blobasint(0x);").get();
+        msg = e.execute_cql("select * from tcs3 where p1 = 1;").get0();
+        assert_that(msg).is_rows().with_rows({
+            { int32_type->decompose(1), int32_type->decompose(3), {}, int32_type->decompose(6) },
+        });
+        e.execute_cql("create table tcs4 (p1 int PRIMARY KEY, c1 int, c2 int) with compact storage;").get();
+        e.execute_cql("insert into tcs4 (p1) values (1);").discard_result().get();
+        msg = e.execute_cql("select * from tcs4;").get0();
+        assert_that(msg).is_rows().with_rows({ });
     });
 }
 
@@ -3153,7 +3122,7 @@ SEASTAR_TEST_CASE(test_pg_style_string_literal) {
 SEASTAR_TEST_CASE(test_long_text_value) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         auto prepared = e.execute_cql("CREATE TABLE t (id int PRIMARY KEY, v text, v2 varchar)").get();
-        e.require_table_exists("ks", "t").get();
+        BOOST_REQUIRE(e.local_db().has_schema("ks", "t"));
         sstring big_one(17324, 'x');
         sstring bigger_one(29123, 'y');
         e.execute_cql(format("INSERT INTO t (id, v, v2) values (1, '{}', '{}')", big_one, big_one)).get();
@@ -3169,7 +3138,7 @@ SEASTAR_TEST_CASE(test_time_conversions) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         auto prepared = e.execute_cql(
             "CREATE TABLE time_data (id timeuuid PRIMARY KEY, d date, ts timestamp);").get();
-        e.require_table_exists("ks", "time_data").get();
+        BOOST_REQUIRE(e.local_db().has_schema("ks", "time_data"));
 
         e.execute_cql("INSERT INTO time_data (id, d, ts) VALUES (f4e30f80-6958-11e8-96d6-000000000000, '2017-06-11', '2018-06-05 00:00:00+0000');").get();
 
@@ -3222,7 +3191,7 @@ SEASTAR_TEST_CASE(test_empty_partition_range_scan) {
 SEASTAR_TEST_CASE(test_allow_filtering_contains) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         e.execute_cql("CREATE TABLE t (p frozen<map<text, text>>, c1 frozen<list<int>>, c2 frozen<set<int>>, v map<text, text>, PRIMARY KEY(p, c1, c2));").get();
-        e.require_table_exists("ks", "t").get();
+        BOOST_REQUIRE(e.local_db().has_schema("ks", "t"));
 
         e.execute_cql("INSERT INTO t (p, c1, c2, v) VALUES ({'a':'a'}, [1,2,3], {1, 5}, {'x':'xyz', 'y1':'abc'});").get();
         e.execute_cql("INSERT INTO t (p, c1, c2, v) VALUES ({'b':'b'}, [2,3,4], {3, 4}, {'d':'def', 'y1':'abc'});").get();
@@ -3270,7 +3239,7 @@ SEASTAR_TEST_CASE(test_allow_filtering_contains) {
 SEASTAR_TEST_CASE(test_in_restriction_on_not_last_partition_key) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         e.execute_cql("CREATE TABLE t (a int,b int,c int,d int,PRIMARY KEY ((a, b), c));").get();
-        e.require_table_exists("ks", "t").get();
+        BOOST_REQUIRE(e.local_db().has_schema("ks", "t"));
 
         e.execute_cql("INSERT INTO t (a,b,c,d) VALUES (1,1,1,100); ").get();
         e.execute_cql("INSERT INTO t (a,b,c,d) VALUES (1,1,2,200); ").get();
@@ -3615,7 +3584,7 @@ SEASTAR_TEST_CASE(test_select_with_mixed_order_table) {
         std::string select_query_template = "SELECT f FROM foo WHERE a=0 AND {};";
         std::vector<std::string> column_names = { "b", "c", "d", "e" };
         e.execute_cql("CREATE TABLE foo (a int, b int, c int,d int,e int,f int, PRIMARY KEY (a, b, c, d, e)) WITH CLUSTERING ORDER BY (b DESC, c ASC, d DESC,e ASC);").get();
-        e.require_table_exists("ks", "foo").get();
+        BOOST_REQUIRE(e.local_db().has_schema("ks", "foo"));
 
         // We convert the range 0-> max mapped integers to the mapped tuple,
         // this will create a table satisfying the slice_testcase assumption.

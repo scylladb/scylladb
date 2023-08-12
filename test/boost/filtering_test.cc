@@ -33,7 +33,7 @@ using namespace std::literals::chrono_literals;
 SEASTAR_TEST_CASE(test_allow_filtering_check) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         e.execute_cql("CREATE TABLE t (p int, c int, v int, PRIMARY KEY(p, c));").get();
-        e.require_table_exists("ks", "t").get();
+        BOOST_REQUIRE(e.local_db().has_schema("ks", "t"));
 
         for (int i = 0; i < 3; ++i) {
             for (int j = 0; j <3; ++j) {
@@ -53,7 +53,7 @@ SEASTAR_TEST_CASE(test_allow_filtering_check) {
         }
 
         e.execute_cql("CREATE TABLE t2 (p int PRIMARY KEY, a int, b int);").get();
-        e.require_table_exists("ks", "t2").get();
+        BOOST_REQUIRE(e.local_db().has_schema("ks", "t2"));
         e.execute_cql("CREATE INDEX ON t2(a)").get();
         for (int i = 0; i < 5; ++i) {
             e.execute_cql(format("INSERT INTO t2 (p, a, b) VALUES ({}, {}, {})", i, i * 10, i * 100)).get();
@@ -83,7 +83,7 @@ SEASTAR_TEST_CASE(test_allow_filtering_check) {
 SEASTAR_TEST_CASE(test_allow_filtering_pk_ck) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         e.execute_cql("CREATE TABLE t (a int, b int, c int, d int, e int, PRIMARY KEY ((a, b), c, d));").get();
-        e.require_table_exists("ks", "t").get();
+        BOOST_REQUIRE(e.local_db().has_schema("ks", "t"));
         e.execute_cql("INSERT INTO t (a,b,c,d,e) VALUES (11, 12, 13, 14, 15)").get();
         e.execute_cql("INSERT INTO t (a,b,c,d,e) VALUES (11, 15, 16, 17, 18)").get();
         e.execute_cql("INSERT INTO t (a,b,c,d,e) VALUES (21, 22, 23, 24, 25)").get();
@@ -179,7 +179,7 @@ SEASTAR_TEST_CASE(test_allow_filtering_pk_ck) {
 SEASTAR_TEST_CASE(test_allow_filtering_multi_column) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         e.execute_cql("CREATE TABLE t (a int, b int, c int, d int, e int, PRIMARY KEY ((a, b), c, d));").get();
-        e.require_table_exists("ks", "t").get();
+        BOOST_REQUIRE(e.local_db().has_schema("ks", "t"));
         e.execute_cql("INSERT INTO t (a,b,c,d,e) VALUES (1, 1, 1, 1, 15)").get();
         e.execute_cql("INSERT INTO t (a,b,c,d,e) VALUES (1, 1, 1, 2, 18)").get();
         e.execute_cql("INSERT INTO t (a,b,c,d,e) VALUES (1, 2, 1, 2, 25)").get();
@@ -287,7 +287,7 @@ SEASTAR_TEST_CASE(test_allow_filtering_multi_column) {
 SEASTAR_TEST_CASE(test_allow_filtering_clustering_column) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         e.execute_cql("CREATE TABLE t (k int, c int, v int, PRIMARY KEY (k, c));").get();
-        e.require_table_exists("ks", "t").get();
+        BOOST_REQUIRE(e.local_db().has_schema("ks", "t"));
 
         e.execute_cql("INSERT INTO t (k, c, v) VALUES (1, 2, 1)").get();
         e.execute_cql("INSERT INTO t (k, c, v) VALUES (1, 3, 2)").get();
@@ -401,7 +401,7 @@ SEASTAR_TEST_CASE(test_allow_filtering_two_clustering_columns) {
 SEASTAR_TEST_CASE(test_allow_filtering_static_column) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         e.execute_cql("CREATE TABLE t (a int, b int, c int, s int static, PRIMARY KEY(a, b));").get();
-        e.require_table_exists("ks", "t").get();
+        BOOST_REQUIRE(e.local_db().has_schema("ks", "t"));
         e.execute_cql("CREATE INDEX ON t(c)").get();
 
         e.execute_cql("INSERT INTO t (a, b, c, s) VALUES (1, 1, 1, 1)").get();
@@ -442,7 +442,7 @@ SEASTAR_TEST_CASE(test_allow_filtering_static_column) {
 SEASTAR_TEST_CASE(test_allow_filtering_multiple_regular) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         e.execute_cql("CREATE TABLE t (a int, b int, c int, d int, e int, f list<int>, g set<int>, h map<int, text>, PRIMARY KEY(a, b));").get();
-        e.require_table_exists("ks", "t").get();
+        BOOST_REQUIRE(e.local_db().has_schema("ks", "t"));
 
         e.execute_cql("INSERT INTO t (a, b, c, d, e, f, g) VALUES (1, 1, 1, 1, 1, [1], {})").get();
         e.execute_cql("INSERT INTO t (a, b, c, d, e, f, g) VALUES (1, 2, 3, 4, 5, [1, 2], {1, 2, 3})").get();
@@ -581,7 +581,7 @@ SEASTAR_TEST_CASE(test_allow_filtering_multiple_regular) {
 SEASTAR_TEST_CASE(test_allow_filtering_desc) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         e.execute_cql("CREATE TABLE t (a int, b int, c int, d int, e int, PRIMARY KEY((a, b), c, d)) WITH CLUSTERING ORDER BY (c DESC);").get();
-        e.require_table_exists("ks", "t").get();
+        BOOST_REQUIRE(e.local_db().has_schema("ks", "t"));
 
         e.execute_cql("INSERT INTO t (a, b, c, d, e) VALUES (1, 2, 1, 1, 1)").get();
         e.execute_cql("INSERT INTO t (a, b, c, d, e) VALUES (1, 2, 3, 4, 5)").get();
@@ -632,7 +632,7 @@ SEASTAR_TEST_CASE(test_allow_filtering_desc) {
 SEASTAR_TEST_CASE(test_allow_filtering_with_secondary_index) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         e.execute_cql("CREATE TABLE t (a int, b int, c int, d int, e int, PRIMARY KEY(a, b));").get();
-        e.require_table_exists("ks", "t").get();
+        BOOST_REQUIRE(e.local_db().has_schema("ks", "t"));
         e.execute_cql("CREATE INDEX ON t(c)").get();
 
         e.execute_cql("INSERT INTO t (a, b, c, d, e) VALUES (1, 1, 1, 1, 1)").get();
@@ -1012,7 +1012,7 @@ SEASTAR_TEST_CASE(test_allow_filtering_per_partition_limit) {
 SEASTAR_TEST_CASE(test_allow_filtering_with_in_on_regular_column) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         e.execute_cql("CREATE TABLE t (k int, c int, v int, PRIMARY KEY (k, c));").get();
-        e.require_table_exists("ks", "t").get();
+        BOOST_REQUIRE(e.local_db().has_schema("ks", "t"));
 
         e.execute_cql("INSERT INTO t (k, c, v) VALUES (1, 2, 1)").get();
         e.execute_cql("INSERT INTO t (k, c, v) VALUES (1, 3, 2)").get();

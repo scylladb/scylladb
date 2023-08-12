@@ -1311,7 +1311,7 @@ memory_limit_table create_memory_limit_table(cql_test_env& env, uint64_t target_
 
     env.execute_cql("CREATE TABLE ks.tbl (pk int, ck int, value text, primary key (pk, ck)) WITH compaction = {'class': 'NullCompactionStrategy'};").get();
 
-    env.require_table_exists("ks", "tbl").get();
+    BOOST_REQUIRE(env.local_db().has_schema("ks", "tbl"));
 
     auto& tbl = db.find_column_family("ks", "tbl");
     auto s = tbl.schema();

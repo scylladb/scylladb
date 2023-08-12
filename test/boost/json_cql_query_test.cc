@@ -57,7 +57,7 @@ SEASTAR_TEST_CASE(test_select_json_types) {
                 "    w int,"
                 ");").get();
 
-        e.require_table_exists("ks", "all_types").get();
+        BOOST_REQUIRE(e.local_db().has_schema("ks", "all_types"));
         e.execute_cql(
             "INSERT INTO all_types (a, b, c, d, e, f, \"G\", \"H\", \"I\", j, k, l, m, n, o, p, q, r, s, u) VALUES ("
                 "    'ascii',"
@@ -156,7 +156,7 @@ SEASTAR_TEST_CASE(test_select_json_collections) {
                 "    d list<frozen<list<tinyint>>>"
                 ");").get();
 
-        e.require_table_exists("ks", "collections").get();
+        BOOST_REQUIRE(e.local_db().has_schema("ks", "collections"));
 
         e.execute_cql(
             "INSERT INTO collections (a, b, c, d) VALUES ("
@@ -225,7 +225,7 @@ SEASTAR_TEST_CASE(test_insert_json_types) {
                 "    u duration,"
                 ");").get();
 
-        e.require_table_exists("ks", "all_types").get();
+        BOOST_REQUIRE(e.local_db().has_schema("ks", "all_types"));
         e.execute_cql(
             "INSERT INTO all_types JSON '"
                 "{\"a\": \"ascii\", "
@@ -336,7 +336,7 @@ SEASTAR_TEST_CASE(test_insert_json_types) {
         )").get(), marshal_exception);
 
         e.execute_cql("CREATE TABLE multi_column_pk_table (p1 int, p2 int, p3 int, c1 int, c2 int, v int, PRIMARY KEY((p1, p2, p3), c1, c2));").get();
-        e.require_table_exists("ks", "multi_column_pk_table").get();
+        BOOST_REQUIRE(e.local_db().has_schema("ks", "multi_column_pk_table"));
 
         e.execute_cql("INSERT INTO multi_column_pk_table JSON '"
                 "{\"p1\": 1, "
@@ -371,7 +371,7 @@ SEASTAR_TEST_CASE(test_insert_json_collections) {
                 "    d list<frozen<list<tinyint>>>"
                 ");").get();
 
-        e.require_table_exists("ks", "collections").get();
+        BOOST_REQUIRE(e.local_db().has_schema("ks", "collections"));
 
         e.execute_cql(
             "INSERT INTO collections JSON '"
@@ -421,7 +421,7 @@ SEASTAR_TEST_CASE(test_insert_json_null_frozen_collections) {
                 "    u frozen<ut>"
                 ");").get();
 
-        e.require_table_exists("ks", "collections").get();
+        BOOST_REQUIRE(e.local_db().has_schema("ks", "collections"));
 
         e.execute_cql("INSERT INTO collections JSON '{\"k\": 0}'").get();
         e.execute_cql("INSERT INTO collections JSON '{\"k\": 1, \"m\": null, \"s\": null, \"l\": null, \"u\": null}'").get();
@@ -571,7 +571,7 @@ SEASTAR_TEST_CASE(test_prepared_json) {
                 "    d list<float>"
                 ");").get();
 
-        e.require_table_exists("ks", "json_data").get();
+        BOOST_REQUIRE(e.local_db().has_schema("ks", "json_data"));
 
         cql3::prepared_cache_key_type prepared_id = e.prepare(
             "begin batch \n"
@@ -627,7 +627,7 @@ SEASTAR_TEST_CASE(test_json_default_unset) {
                 "    d int,"
                 "PRIMARY KEY (a, b));").get();
 
-        e.require_table_exists("ks", "json_data").get();
+        BOOST_REQUIRE(e.local_db().has_schema("ks", "json_data"));
 
         e.execute_cql("INSERT INTO json_data JSON '{\"a\": \"abc\", \"b\": 2, \"c\": 1}'").get();
 
