@@ -171,7 +171,7 @@ SEASTAR_THREAD_TEST_CASE(test_with_cdc_parameter) {
             e.execute_cql(format("ALTER TABLE ks.tbl WITH cdc = {}", alter2_prop)).get();
             assert_cdc(alter2_expected);
             e.execute_cql("DROP TABLE ks.tbl").get();
-            e.require_table_does_not_exist("ks", cdc::log_name("tbl")).get();
+            BOOST_REQUIRE(!e.local_db().has_schema("ks", cdc::log_name("tbl")));
         };
 
         test("", "{'enabled':'true'}", "{'enabled':'false'}", {false}, {true}, {false});
@@ -187,7 +187,7 @@ SEASTAR_THREAD_TEST_CASE(test_detecting_conflict_of_cdc_log_table_with_existing_
         // Conflict on CREATE which enables cdc log
         e.execute_cql("CREATE TABLE ks.tbl_scylla_cdc_log (a int PRIMARY KEY)").get();
         BOOST_REQUIRE_THROW(e.execute_cql("CREATE TABLE ks.tbl (a int PRIMARY KEY) WITH cdc = {'enabled': true}").get(), exceptions::invalid_request_exception);
-        e.require_table_does_not_exist("ks", "tbl").get();
+        BOOST_REQUIRE(!e.local_db().has_schema("ks", "tbl"));
 
         // Conflict on ALTER which enables cdc log
         e.execute_cql("CREATE TABLE ks.tbl (a int PRIMARY KEY)").get();
@@ -236,7 +236,7 @@ SEASTAR_THREAD_TEST_CASE(test_disallow_cdc_on_materialized_view) {
         BOOST_REQUIRE(e.local_db().has_schema("ks", "tbl"));
 
         BOOST_REQUIRE_THROW(e.execute_cql("CREATE MATERIALIZED VIEW ks.mv AS SELECT a FROM ks.tbl PRIMARY KEY (a) WITH cdc = {'enabled': true}").get(), exceptions::invalid_request_exception);
-        e.require_table_does_not_exist("ks", "mv").get();
+        BOOST_REQUIRE(!e.local_db().has_schema("ks", "mv"));
     }).get();
 }
 
