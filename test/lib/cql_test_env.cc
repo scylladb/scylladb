@@ -462,15 +462,7 @@ public:
     }
 
     static future<> do_with(std::function<future<>(cql_test_env&)> func, cql_test_config cfg_in, std::optional<cql_test_init_configurables> init_configurables) {
-        using namespace std::filesystem;
-
         return seastar::async([cfg_in = std::move(cfg_in), init_configurables = std::move(init_configurables), func] {
-            // disable reactor stall detection during startup
-            auto blocked_reactor_notify_ms = engine().get_blocked_reactor_notify_ms();
-            smp::invoke_on_all([] {
-                engine().update_blocked_reactor_notify_ms(std::chrono::milliseconds(1000000));
-            }).get();
-
             logalloc::prime_segment_pool(memory::stats().total_memory(), memory::min_free_memory()).get();
             bool old_active = false;
             if (!active.compare_exchange_strong(old_active, true)) {
@@ -492,13 +484,27 @@ public:
             utils::fb_utilities::set_broadcast_address(gms::inet_address("localhost"));
             utils::fb_utilities::set_broadcast_rpc_address(gms::inet_address("localhost"));
 
+            single_node_cql_env env;
+            env.run_in_thread(std::move(func), std::move(cfg_in), std::move(init_configurables));
+        });
+    }
+
+private:
+    void run_in_thread(std::function<future<>(cql_test_env&)> func, cql_test_config cfg_in, std::optional<cql_test_init_configurables> init_configurables) {
+            using namespace std::filesystem;
+
+            // disable reactor stall detection during startup
+            auto blocked_reactor_notify_ms = engine().get_blocked_reactor_notify_ms();
+            smp::invoke_on_all([] {
+                engine().update_blocked_reactor_notify_ms(std::chrono::milliseconds(1000000));
+            }).get();
+
             sharded<abort_source> abort_sources;
             abort_sources.start().get();
             // FIXME: handle signals (SIGINT, SIGTERM) - request aborts
             auto stop_abort_sources = defer([&] { abort_sources.stop().get(); });
 
-            single_node_cql_env env;
-
+            auto& env = *this;
             auto& db = env._db;
             auto& feature_service = env._feature_service;
             auto& sstm = env._sstm;
@@ -1004,9 +1010,9 @@ public:
             with_scheduling_group(dbcfg.statement_scheduling_group, [&func, &env] {
                 return func(env);
             }).get();
-        });
     }
 
+public:
     future<::shared_ptr<cql_transport::messages::result_message>> execute_batch(
         const std::vector<sstring_view>& queries, std::unique_ptr<cql3::query_options> qo) override {
         using cql3::statements::batch_statement;
