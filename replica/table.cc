@@ -155,11 +155,6 @@ table::find_partition(schema_ptr s, reader_permit permit, const dht::decorated_k
     });
 }
 
-future<table::const_mutation_partition_ptr>
-table::find_partition_slow(schema_ptr s, reader_permit permit, const partition_key& key) const {
-    return find_partition(s, std::move(permit), dht::decorate_key(*s, key));
-}
-
 future<table::const_row_ptr>
 table::find_row(schema_ptr s, reader_permit permit, const dht::decorated_key& partition_key, clustering_key clustering_key) const {
     return find_partition(s, std::move(permit), partition_key).then([clustering_key = std::move(clustering_key), s] (const_mutation_partition_ptr p) {
