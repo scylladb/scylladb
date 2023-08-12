@@ -515,10 +515,45 @@ public:
             abort_sources.start().get();
             // FIXME: handle signals (SIGINT, SIGTERM) - request aborts
             auto stop_abort_sources = defer([&] { abort_sources.stop().get(); });
-            sharded<compaction_manager> cm;
-            sharded<sstables::storage_manager> sstm;
-            sharded<tasks::task_manager> task_manager;
+
             sharded<replica::database> db;
+            sharded<gms::feature_service> feature_service;
+            sharded<sstables::storage_manager> sstm;
+            sharded<service::storage_proxy> proxy;
+            sharded<cql3::query_processor> qp;
+            sharded<auth::service> auth_service;
+            sharded<db::view::view_builder> view_builder;
+            sharded<db::view::view_update_generator> view_update_generator;
+            sharded<service::migration_notifier> mm_notif;
+            sharded<service::migration_manager> mm;
+            sharded<qos::service_level_controller> sl_controller;
+            sharded<db::batchlog_manager> bm;
+            sharded<gms::gossiper> gossiper;
+            sharded<service::raft_group_registry> raft_gr;
+            sharded<db::system_keyspace> sys_ks;
+            sharded<service::tablet_allocator> the_tablet_allocator;
+
+            sharded<db::system_distributed_keyspace> sys_dist_ks;
+            sharded<locator::snitch_ptr> snitch;
+            sharded<compaction_manager> cm;
+            sharded<tasks::task_manager> task_manager;
+            sharded<netw::messaging_service> ms;
+            sharded<service::storage_service> ss;
+            sharded<locator::shared_token_metadata> token_metadata;
+            sharded<locator::effective_replication_map_factory> erm_factory;
+            sharded<sstables::directory_semaphore> sst_dir_semaphore;
+            sharded<wasm::manager> wasm;
+            sharded<cql3::cql_config> cql_config;
+            sharded<service::endpoint_lifecycle_notifier> elc_notif;
+            sharded<cdc::generation_service> cdc_generation_service;
+            sharded<repair_service> repair;
+            sharded<streaming::stream_manager> stream_manager;
+            sharded<service::forward_service> forward_service;
+            sharded<direct_failure_detector::failure_detector> fd;
+            sharded<service::raft_address_map> raft_address_map;
+            static sharded<service::direct_fd_pinger> fd_pinger;
+            sharded<cdc::cdc_service> cdc;
+
             debug::the_database = &db;
             auto reset_db_ptr = defer([] {
                 debug::the_database = nullptr;
@@ -564,14 +599,6 @@ public:
 
             auto scheduling_groups = get_scheduling_groups().get();
 
-            sharded<cql3::query_processor> qp;
-            sharded<gms::feature_service> feature_service;
-            sharded<netw::messaging_service> ms;
-            distributed<service::migration_manager> mm;
-            sharded<service::storage_service> ss;
-            distributed<db::batchlog_manager> bm;
-            sharded<service::storage_proxy> proxy;
-
             auto notify_set = init_configurables
                 ? configurable::init_all(*cfg, init_configurables->extensions, service_set(
                     db, ss, mm, proxy, feature_service, ms, qp, bm
@@ -585,27 +612,22 @@ public:
             feature_service.start(fcfg).get();
             auto stop_feature_service = defer([&] { feature_service.stop().get(); });
 
-            sharded<locator::snitch_ptr> snitch;
             snitch.start(locator::snitch_config{}).get();
             auto stop_snitch = defer([&snitch] { snitch.stop().get(); });
             snitch.invoke_on_all(&locator::snitch_ptr::start).get();
 
-            sharded<locator::shared_token_metadata> token_metadata;
             locator::token_metadata::config tm_cfg;
             tm_cfg.topo_cfg.this_endpoint = utils::fb_utilities::get_broadcast_address();
             tm_cfg.topo_cfg.local_dc_rack = { snitch.local()->get_datacenter(), snitch.local()->get_rack() };
             token_metadata.start([] () noexcept { return db::schema_tables::hold_merge_lock(); }, tm_cfg).get();
             auto stop_token_metadata = defer([&token_metadata] { token_metadata.stop().get(); });
 
-            sharded<locator::effective_replication_map_factory> erm_factory;
             erm_factory.start().get();
             auto stop_erm_factory = deferred_stop(erm_factory);
 
-            sharded<service::migration_notifier> mm_notif;
             mm_notif.start().get();
             auto stop_mm_notify = defer([&mm_notif] { mm_notif.stop().get(); });
 
-            sharded<sstables::directory_semaphore> sst_dir_semaphore;
             sst_dir_semaphore.start(cfg->initial_sstable_loading_concurrency()).get();
             auto stop_sst_dir_sem = defer([&sst_dir_semaphore] {
                 sst_dir_semaphore.stop().get();
@@ -659,7 +681,6 @@ public:
                 wasm_ctx.emplace(*cfg, dbcfg);
             }
 
-            sharded<wasm::manager> wasm;
             wasm.start(std::ref(wasm_ctx)).get();
             auto stop_wasm = defer([&wasm] { wasm.stop().get(); });
 
@@ -685,7 +706,6 @@ public:
             proxy.start(std::ref(db), spcfg, std::ref(b), scheduling_group_key_create(sg_conf).get0(), std::ref(feature_service), std::ref(token_metadata), std::ref(erm_factory)).get();
             auto stop_proxy = defer([&proxy] { proxy.stop().get(); });
 
-            sharded<cql3::cql_config> cql_config;
             cql_config.start(cql3::cql_config::default_tag{}).get();
             auto stop_cql_config = defer([&] { cql_config.stop().get(); });
 
@@ -706,21 +726,15 @@ public:
             qp.start(std::ref(proxy), std::move(local_data_dict), std::ref(mm_notif), qp_mcfg, std::ref(cql_config), auth_prep_cache_config, std::ref(wasm)).get();
             auto stop_qp = defer([&qp] { qp.stop().get(); });
 
-            sharded<service::endpoint_lifecycle_notifier> elc_notif;
             elc_notif.start().get();
             auto stop_elc_notif = defer([&elc_notif] { elc_notif.stop().get(); });
 
-            sharded<auth::service> auth_service;
-
             set_abort_on_internal_error(true);
             const gms::inet_address listen("127.0.0.1");
-            auto sys_dist_ks = seastar::sharded<db::system_distributed_keyspace>();
-            auto sl_controller = sharded<qos::service_level_controller>();
             sl_controller.start(std::ref(auth_service), qos::service_level_options{}).get();
             auto stop_sl_controller = defer([&sl_controller] { sl_controller.stop().get(); });
             sl_controller.invoke_on_all(&qos::service_level_controller::start).get();
 
-            auto sys_ks = seastar::sharded<db::system_keyspace>();
             sys_ks.start(std::ref(qp), std::ref(db), std::ref(snitch)).get();
             auto stop_sys_kd = defer([&sys_ks] { sys_ks.stop().get(); });
             for (const auto p: all_system_table_load_phases) {
@@ -743,8 +757,6 @@ public:
             });
 
             auto stop_sys_dist_ks = defer([&sys_dist_ks] { sys_dist_ks.stop().get(); });
-
-            sharded<gms::gossiper> gossiper;
 
             // Init gossiper
             std::set<gms::inet_address> seeds;
@@ -772,22 +784,11 @@ public:
             });
             gossiper.invoke_on_all(&gms::gossiper::start).get();
 
-            sharded<db::view::view_update_generator> view_update_generator;
-            sharded<cdc::generation_service> cdc_generation_service;
-            sharded<repair_service> repair;
-            sharded<service::raft_group_registry> raft_gr;
-            sharded<streaming::stream_manager> stream_manager;
-            sharded<service::forward_service> forward_service;
-            sharded<direct_failure_detector::failure_detector> fd;
-            sharded<service::raft_address_map> raft_address_map;
-
             raft_address_map.start().get();
             auto stop_address_map = defer([&raft_address_map] {
                 raft_address_map.stop().get();
             });
 
-
-            static sharded<service::direct_fd_pinger> fd_pinger;
             fd_pinger.start(std::ref(ms), std::ref(raft_address_map)).get();
             auto stop_fd_pinger = defer([] { fd_pinger.stop().get(); });
 
@@ -822,7 +823,6 @@ public:
             mm.start(std::ref(mm_notif), std::ref(feature_service), std::ref(ms), std::ref(proxy), std::ref(gossiper), std::ref(group0_client), std::ref(sys_ks)).get();
             auto stop_mm = defer([&mm] { mm.stop().get(); });
 
-            distributed<service::tablet_allocator> the_tablet_allocator;
             the_tablet_allocator.start(std::ref(mm_notif), std::ref(db)).get();
             auto stop_tablet_allocator = defer([&] {
                 the_tablet_allocator.stop().get();
@@ -936,7 +936,6 @@ public:
                 cdc_generation_service.stop().get();
             });
 
-            sharded<cdc::cdc_service> cdc;
             auto get_cdc_metadata = [] (cdc::generation_service& svc) { return std::ref(svc.get_cdc_metadata()); };
             cdc.start(std::ref(proxy), sharded_parameter(get_cdc_metadata, std::ref(cdc_generation_service)), std::ref(mm_notif)).get();
             auto stop_cdc_service = defer([&] {
@@ -986,7 +985,6 @@ public:
                 auth_service.stop().get();
             });
 
-            sharded<db::view::view_builder> view_builder;
             view_builder.start(std::ref(db), std::ref(sys_ks), std::ref(sys_dist_ks), std::ref(mm_notif), std::ref(view_update_generator)).get();
             view_builder.invoke_on_all([&mm] (db::view::view_builder& vb) {
                 return vb.start(mm.local());
