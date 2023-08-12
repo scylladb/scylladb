@@ -54,22 +54,18 @@
 using namespace std::literals::chrono_literals;
 
 SEASTAR_TEST_CASE(test_create_keyspace_statement) {
-    return do_with_cql_env([] (cql_test_env& e) {
-        return e.execute_cql("create keyspace ks2 with replication = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 };").discard_result().then([&e] {
-            return e.require_keyspace_exists("ks2");
-        });
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("create keyspace ks2 with replication = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 };").get();
+        e.require_keyspace_exists("ks2").get();
     });
 }
 
 SEASTAR_TEST_CASE(test_create_table_statement) {
-    return do_with_cql_env([] (cql_test_env& e) {
-        return e.execute_cql("create table users (user_name varchar PRIMARY KEY, birth_year bigint);").discard_result().then([&e] {
-            return e.require_table_exists("ks", "users");
-        }).then([&e] {
-            return e.execute_cql("create table cf (id int primary key, m map<int, int>, s set<text>, l list<uuid>);").discard_result();
-        }).then([&e] {
-            return e.require_table_exists("ks", "cf");
-        });
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("create table users (user_name varchar PRIMARY KEY, birth_year bigint);").get();
+        e.require_table_exists("ks", "users").get();
+        e.execute_cql("create table cf (id int primary key, m map<int, int>, s set<text>, l list<uuid>);").get();
+        e.require_table_exists("ks", "cf").get();
     });
 }
 
