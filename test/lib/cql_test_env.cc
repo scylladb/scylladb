@@ -551,7 +551,7 @@ public:
             sharded<service::forward_service> forward_service;
             sharded<direct_failure_detector::failure_detector> fd;
             sharded<service::raft_address_map> raft_address_map;
-            static sharded<service::direct_fd_pinger> fd_pinger;
+            sharded<service::direct_fd_pinger> fd_pinger;
             sharded<cdc::cdc_service> cdc;
 
             debug::the_database = &db;
@@ -790,7 +790,7 @@ public:
             });
 
             fd_pinger.start(std::ref(ms), std::ref(raft_address_map)).get();
-            auto stop_fd_pinger = defer([] { fd_pinger.stop().get(); });
+            auto stop_fd_pinger = defer([&fd_pinger] { fd_pinger.stop().get(); });
 
             service::direct_fd_clock fd_clock;
             fd.start(
