@@ -2625,87 +2625,60 @@ SEASTAR_TEST_CASE(test_in_restriction) {
 }
 
 SEASTAR_TEST_CASE(test_compact_storage) {
-    return do_with_cql_env([] (cql_test_env& e) {
-        return e.execute_cql("create table tcs (p1 int, c1 int, r1 int, PRIMARY KEY (p1, c1)) with compact storage;").discard_result().then([&e] {
-            return e.require_table_exists("ks", "tcs");
-        }).then([&e] {
-            return e.execute_cql("insert into tcs (p1, c1, r1) values (1, 2, 3);").discard_result();
-        }).then([&e] {
-            return e.require_column_has_value("tcs", {1}, {2}, "r1", 3);
-        }).then([&e] {
-            return e.execute_cql("update tcs set r1 = 4 where p1 = 1 and c1 = 2;").discard_result();
-        }).then([&e] {
-            return e.require_column_has_value("tcs", {1}, {2}, "r1", 4);
-        }).then([&e] {
-            return e.execute_cql("select * from tcs where p1 = 1;");
-        }).then([&e] (shared_ptr<cql_transport::messages::result_message> msg) {
-            assert_that(msg).is_rows().with_rows({
-                { int32_type->decompose(1), int32_type->decompose(2), int32_type->decompose(4) },
-            });
-            return e.execute_cql("create table tcs2 (p1 int, c1 int, PRIMARY KEY (p1, c1)) with compact storage;").discard_result();
-        }).then([&e] {
-            return e.require_table_exists("ks", "tcs2");
-        }).then([&e] {
-            return e.execute_cql("insert into tcs2 (p1, c1) values (1, 2);").discard_result();
-        }).then([&e] {
-            return e.execute_cql("select * from tcs2 where p1 = 1;");
-        }).then([&e] (shared_ptr<cql_transport::messages::result_message> msg) {
-            assert_that(msg).is_rows().with_rows({
-                { int32_type->decompose(1), int32_type->decompose(2) },
-            });
-            return e.execute_cql("create table tcs3 (p1 int, c1 int, c2 int, r1 int, PRIMARY KEY (p1, c1, c2)) with compact storage;").discard_result();
-        }).then([&e] {
-            return e.execute_cql("insert into tcs3 (p1, c1, c2, r1) values (1, 2, 3, 4);").discard_result();
-        }).then([&e] {
-            return e.execute_cql("insert into tcs3 (p1, c1, r1) values (1, 2, 5);").discard_result();
-        }).then([&e] {
-            return e.execute_cql("insert into tcs3 (p1, c1, r1) values (1, 3, 6);").discard_result();
-        }).then([&e] {
-            return e.execute_cql("insert into tcs3 (p1, c1, c2, r1) values (1, 3, 5, 7);").discard_result();
-        }).then([&e] {
-            return e.execute_cql("insert into tcs3 (p1, c1, c2, r1) values (1, 3, blobasint(0x), 8);").discard_result();
-        }).then([&e] {
-            return e.execute_cql("select * from tcs3 where p1 = 1;");
-        }).then([&e] (shared_ptr<cql_transport::messages::result_message> msg) {
-            assert_that(msg).is_rows().with_rows({
-                { int32_type->decompose(1), int32_type->decompose(2), {}, int32_type->decompose(5) },
-                { int32_type->decompose(1), int32_type->decompose(2), int32_type->decompose(3), int32_type->decompose(4) },
-                { int32_type->decompose(1), int32_type->decompose(3), {}, int32_type->decompose(6) },
-                { int32_type->decompose(1), int32_type->decompose(3), bytes(), int32_type->decompose(8) },
-                { int32_type->decompose(1), int32_type->decompose(3), int32_type->decompose(5), int32_type->decompose(7) },
-            });
-            return e.execute_cql("delete from tcs3 where p1 = 1 and c1 = 2;").discard_result();
-        }).then([&e] {
-            return e.execute_cql("select * from tcs3 where p1 = 1;");
-        }).then([&e] (shared_ptr<cql_transport::messages::result_message> msg) {
-            assert_that(msg).is_rows().with_rows({
-                { int32_type->decompose(1), int32_type->decompose(3), {}, int32_type->decompose(6) },
-                { int32_type->decompose(1), int32_type->decompose(3), bytes(), int32_type->decompose(8) },
-                { int32_type->decompose(1), int32_type->decompose(3), int32_type->decompose(5), int32_type->decompose(7) },
-            });
-            return e.execute_cql("delete from tcs3 where p1 = 1 and c1 = 3 and c2 = 5;").discard_result();
-        }).then([&e] {
-            return e.execute_cql("select * from tcs3 where p1 = 1;");
-        }).then([&e] (shared_ptr<cql_transport::messages::result_message> msg) {
-            assert_that(msg).is_rows().with_rows({
-                { int32_type->decompose(1), int32_type->decompose(3), {}, int32_type->decompose(6) },
-                { int32_type->decompose(1), int32_type->decompose(3), bytes(), int32_type->decompose(8) },
-            });
-            return e.execute_cql("delete from tcs3 where p1 = 1 and c1 = 3 and c2 = blobasint(0x);").discard_result();
-        }).then([&e] {
-            return e.execute_cql("select * from tcs3 where p1 = 1;");
-        }).then([&e] (shared_ptr<cql_transport::messages::result_message> msg) {
-            assert_that(msg).is_rows().with_rows({
-                { int32_type->decompose(1), int32_type->decompose(3), {}, int32_type->decompose(6) },
-            });
-            return e.execute_cql("create table tcs4 (p1 int PRIMARY KEY, c1 int, c2 int) with compact storage;").discard_result();
-        }).then([&e] {
-            return e.execute_cql("insert into tcs4 (p1) values (1);").discard_result();
-        }).then([&e] {
-            return e.execute_cql("select * from tcs4;");
-        }).then([] (shared_ptr<cql_transport::messages::result_message> msg) {
-            assert_that(msg).is_rows().with_rows({ });
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("create table tcs (p1 int, c1 int, r1 int, PRIMARY KEY (p1, c1)) with compact storage;").get();
+        e.require_table_exists("ks", "tcs").get();
+        e.execute_cql("insert into tcs (p1, c1, r1) values (1, 2, 3);").get();
+        e.require_column_has_value("tcs", {1}, {2}, "r1", 3).get();
+        e.execute_cql("update tcs set r1 = 4 where p1 = 1 and c1 = 2;").get();
+        e.require_column_has_value("tcs", {1}, {2}, "r1", 4).get();
+        auto msg = e.execute_cql("select * from tcs where p1 = 1;").get0();
+        assert_that(msg).is_rows().with_rows({
+            { int32_type->decompose(1), int32_type->decompose(2), int32_type->decompose(4) },
         });
+        e.execute_cql("create table tcs2 (p1 int, c1 int, PRIMARY KEY (p1, c1)) with compact storage;").get();
+        e.require_table_exists("ks", "tcs2").get();
+        e.execute_cql("insert into tcs2 (p1, c1) values (1, 2);").get();
+        msg = e.execute_cql("select * from tcs2 where p1 = 1;").get0();
+        assert_that(msg).is_rows().with_rows({
+            { int32_type->decompose(1), int32_type->decompose(2) },
+        });
+        e.execute_cql("create table tcs3 (p1 int, c1 int, c2 int, r1 int, PRIMARY KEY (p1, c1, c2)) with compact storage;").get();
+        e.execute_cql("insert into tcs3 (p1, c1, c2, r1) values (1, 2, 3, 4);").get();
+        e.execute_cql("insert into tcs3 (p1, c1, r1) values (1, 2, 5);").get();
+        e.execute_cql("insert into tcs3 (p1, c1, r1) values (1, 3, 6);").get();
+        e.execute_cql("insert into tcs3 (p1, c1, c2, r1) values (1, 3, 5, 7);").get();
+        e.execute_cql("insert into tcs3 (p1, c1, c2, r1) values (1, 3, blobasint(0x), 8);").get();
+        msg = e.execute_cql("select * from tcs3 where p1 = 1;").get0();
+        assert_that(msg).is_rows().with_rows({
+            { int32_type->decompose(1), int32_type->decompose(2), {}, int32_type->decompose(5) },
+            { int32_type->decompose(1), int32_type->decompose(2), int32_type->decompose(3), int32_type->decompose(4) },
+            { int32_type->decompose(1), int32_type->decompose(3), {}, int32_type->decompose(6) },
+            { int32_type->decompose(1), int32_type->decompose(3), bytes(), int32_type->decompose(8) },
+            { int32_type->decompose(1), int32_type->decompose(3), int32_type->decompose(5), int32_type->decompose(7) },
+        });
+        e.execute_cql("delete from tcs3 where p1 = 1 and c1 = 2;").get();
+        msg = e.execute_cql("select * from tcs3 where p1 = 1;").get0();
+        assert_that(msg).is_rows().with_rows({
+            { int32_type->decompose(1), int32_type->decompose(3), {}, int32_type->decompose(6) },
+            { int32_type->decompose(1), int32_type->decompose(3), bytes(), int32_type->decompose(8) },
+            { int32_type->decompose(1), int32_type->decompose(3), int32_type->decompose(5), int32_type->decompose(7) },
+        });
+        e.execute_cql("delete from tcs3 where p1 = 1 and c1 = 3 and c2 = 5;").get();
+        msg = e.execute_cql("select * from tcs3 where p1 = 1;").get0();
+        assert_that(msg).is_rows().with_rows({
+            { int32_type->decompose(1), int32_type->decompose(3), {}, int32_type->decompose(6) },
+            { int32_type->decompose(1), int32_type->decompose(3), bytes(), int32_type->decompose(8) },
+        });
+        e.execute_cql("delete from tcs3 where p1 = 1 and c1 = 3 and c2 = blobasint(0x);").get();
+        msg = e.execute_cql("select * from tcs3 where p1 = 1;").get0();
+        assert_that(msg).is_rows().with_rows({
+            { int32_type->decompose(1), int32_type->decompose(3), {}, int32_type->decompose(6) },
+        });
+        e.execute_cql("create table tcs4 (p1 int PRIMARY KEY, c1 int, c2 int) with compact storage;").get();
+        e.execute_cql("insert into tcs4 (p1) values (1);").discard_result().get();
+        msg = e.execute_cql("select * from tcs4;").get0();
+        assert_that(msg).is_rows().with_rows({ });
     });
 }
 
