@@ -3250,15 +3250,15 @@ SEASTAR_TEST_CASE(incremental_compaction_data_resurrection_test) {
 
         // since we use compacting_reader expired tombstones shouldn't be read from sstables
         // so we just check there are no live (resurrected for this test) rows in partition
-        auto is_partition_dead = [&s, &cf, &env] (const partition_key& pkey) {
-            replica::column_family::const_mutation_partition_ptr mp = cf->find_partition_slow(s, env.make_reader_permit(), pkey).get0();
+        auto is_partition_dead = [&s, &cf, &env] (const dht::decorated_key& key) {
+            replica::column_family::const_mutation_partition_ptr mp = cf->find_partition(s, env.make_reader_permit(), key).get0();
             return mp && mp->live_row_count(*s, gc_clock::time_point::max()) == 0;
         };
 
         cf->add_sstable_and_update_cache(non_expired_sst).get();
-        BOOST_REQUIRE(!is_partition_dead(alpha.key()));
+        BOOST_REQUIRE(!is_partition_dead(alpha));
         cf->add_sstable_and_update_cache(expired_sst).get();
-        BOOST_REQUIRE(is_partition_dead(alpha.key()));
+        BOOST_REQUIRE(is_partition_dead(alpha));
 
         auto replacer = [&] (sstables::compaction_completion_desc desc) {
             auto old_sstables = std::move(desc.old_sstables);
@@ -3298,7 +3298,7 @@ SEASTAR_TEST_CASE(incremental_compaction_data_resurrection_test) {
         }
         BOOST_REQUIRE(swallowed);
         // check there's no data resurrection
-        BOOST_REQUIRE(is_partition_dead(alpha.key()));
+        BOOST_REQUIRE(is_partition_dead(alpha));
     });
 }
 
