@@ -56,7 +56,7 @@ using namespace std::literals::chrono_literals;
 SEASTAR_TEST_CASE(test_create_keyspace_statement) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         e.execute_cql("create keyspace ks2 with replication = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 };").get();
-        e.require_keyspace_exists("ks2").get();
+        BOOST_REQUIRE(e.local_db().has_keyspace("ks2"));
     });
 }
 
