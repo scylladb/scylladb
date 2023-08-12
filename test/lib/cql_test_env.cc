@@ -143,10 +143,10 @@ private:
     sharded<service::migration_manager>& _mm;
     sharded<db::batchlog_manager>& _batchlog_manager;
     sharded<gms::gossiper>& _gossiper;
-    service::raft_group0_client& _group0_client;
     sharded<service::raft_group_registry>& _group0_registry;
     sharded<db::system_keyspace>& _sys_ks;
     sharded<service::tablet_allocator>& _tablet_allocator;
+    service::raft_group0_client* _group0_client;
 
 private:
     struct core_local_state {
@@ -201,7 +201,6 @@ public:
             sharded<qos::service_level_controller> &sl_controller,
             sharded<db::batchlog_manager>& batchlog_manager,
             sharded<gms::gossiper>& gossiper,
-            service::raft_group0_client& client,
             sharded<service::raft_group_registry>& group0_registry,
             sharded<db::system_keyspace>& sys_ks,
             sharded<service::tablet_allocator>& tablet_allocator)
@@ -218,7 +217,6 @@ public:
             , _mm(mm)
             , _batchlog_manager(batchlog_manager)
             , _gossiper(gossiper)
-            , _group0_client(client)
             , _group0_registry(group0_registry)
             , _sys_ks(sys_ks)
             , _tablet_allocator(tablet_allocator)
@@ -436,7 +434,7 @@ public:
     }
 
     virtual service::raft_group0_client& get_raft_group0_client() override {
-        return _group0_client;
+        return *_group0_client;
     }
 
     virtual sharded<service::raft_group_registry>& get_raft_group_registry() override {
@@ -1014,7 +1012,9 @@ public:
 
             notify_set.notify_all(configurable::system_state::started).get();
 
-            single_node_cql_env env(db, feature_service, sstm, proxy, qp, auth_service, view_builder, view_update_generator, mm_notif, mm, std::ref(sl_controller), bm, gossiper, group0_client, raft_gr, sys_ks, the_tablet_allocator);
+            single_node_cql_env env(db, feature_service, sstm, proxy, qp, auth_service, view_builder, view_update_generator, mm_notif, mm, std::ref(sl_controller), bm, gossiper, raft_gr, sys_ks, the_tablet_allocator);
+            env._group0_client = &group0_client;
+
             env.start().get();
             auto stop_env = defer([&env] { env.stop().get(); });
 
