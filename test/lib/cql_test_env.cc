@@ -146,6 +146,27 @@ private:
     sharded<service::raft_group_registry> _group0_registry;
     sharded<db::system_keyspace> _sys_ks;
     sharded<service::tablet_allocator> _tablet_allocator;
+    sharded<db::system_distributed_keyspace> _sys_dist_ks;
+    sharded<locator::snitch_ptr> _snitch;
+    sharded<compaction_manager> _cm;
+    sharded<tasks::task_manager> _task_manager;
+    sharded<netw::messaging_service> _ms;
+    sharded<service::storage_service> _ss;
+    sharded<locator::shared_token_metadata> _token_metadata;
+    sharded<locator::effective_replication_map_factory> _erm_factory;
+    sharded<sstables::directory_semaphore> _sst_dir_semaphore;
+    sharded<wasm::manager> _wasm;
+    sharded<cql3::cql_config> _cql_config;
+    sharded<service::endpoint_lifecycle_notifier> _elc_notif;
+    sharded<cdc::generation_service> _cdc_generation_service;
+    sharded<repair_service> _repair;
+    sharded<streaming::stream_manager> _stream_manager;
+    sharded<service::forward_service> _forward_service;
+    sharded<direct_failure_detector::failure_detector> _fd;
+    sharded<service::raft_address_map> _raft_address_map;
+    sharded<service::direct_fd_pinger> _fd_pinger;
+    sharded<cdc::cdc_service> _cdc;
+
     service::raft_group0_client* _group0_client;
 
 private:
@@ -484,27 +505,6 @@ public:
             // FIXME: handle signals (SIGINT, SIGTERM) - request aborts
             auto stop_abort_sources = defer([&] { abort_sources.stop().get(); });
 
-            sharded<db::system_distributed_keyspace> sys_dist_ks;
-            sharded<locator::snitch_ptr> snitch;
-            sharded<compaction_manager> cm;
-            sharded<tasks::task_manager> task_manager;
-            sharded<netw::messaging_service> ms;
-            sharded<service::storage_service> ss;
-            sharded<locator::shared_token_metadata> token_metadata;
-            sharded<locator::effective_replication_map_factory> erm_factory;
-            sharded<sstables::directory_semaphore> sst_dir_semaphore;
-            sharded<wasm::manager> wasm;
-            sharded<cql3::cql_config> cql_config;
-            sharded<service::endpoint_lifecycle_notifier> elc_notif;
-            sharded<cdc::generation_service> cdc_generation_service;
-            sharded<repair_service> repair;
-            sharded<streaming::stream_manager> stream_manager;
-            sharded<service::forward_service> forward_service;
-            sharded<direct_failure_detector::failure_detector> fd;
-            sharded<service::raft_address_map> raft_address_map;
-            sharded<service::direct_fd_pinger> fd_pinger;
-            sharded<cdc::cdc_service> cdc;
-
             single_node_cql_env env;
 
             auto& db = env._db;
@@ -523,6 +523,26 @@ public:
             auto& raft_gr = env._group0_registry;
             auto& sys_ks = env._sys_ks;
             auto& the_tablet_allocator = env._tablet_allocator;
+            auto& sys_dist_ks = env._sys_dist_ks;
+            auto& snitch = env._snitch;
+            auto& cm = env._cm;
+            auto& task_manager = env._task_manager;
+            auto& ms = env._ms;
+            auto& ss = env._ss;
+            auto& token_metadata = env._token_metadata;
+            auto& erm_factory = env._erm_factory;
+            auto& sst_dir_semaphore = env._sst_dir_semaphore;
+            auto& wasm = env._wasm;
+            auto& cql_config = env._cql_config;
+            auto& elc_notif = env._elc_notif;
+            auto& cdc_generation_service = env._cdc_generation_service;
+            auto& repair = env._repair;
+            auto& stream_manager = env._stream_manager;
+            auto& forward_service = env._forward_service;
+            auto& fd = env._fd;
+            auto& raft_address_map = env._raft_address_map;
+            auto& fd_pinger = env._fd_pinger;
+            auto& cdc = env._cdc;
 
             debug::the_database = &db;
             auto reset_db_ptr = defer([] {
