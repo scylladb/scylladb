@@ -106,7 +106,7 @@ public:
 
     uint64_t adjust_partition_estimate(const mutation_source_metadata& ms_meta, uint64_t partition_estimate) const;
 
-    reader_consumer_v2 make_interposer_consumer(const mutation_source_metadata& ms_meta, reader_consumer_v2 end_consumer) const;
+    reader_consumer_v2 make_consumer(const mutation_source_metadata& ms_meta, reader_consumer_v2 end_consumer) const;
 
     // Returns whether or not interposer consumer is used by a given strategy.
     bool use_interposer_consumer() const;

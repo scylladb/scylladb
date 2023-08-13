@@ -735,7 +735,7 @@ private:
     // compacting_reader. It's useful for allowing data from different buckets
     // to be compacted together.
     future<> compact_on_reader() {
-        auto consumer = make_interposer_consumer([this] (flat_mutation_reader_v2 reader) mutable {
+        auto consumer = make_consumer([this] (flat_mutation_reader_v2 reader) mutable {
             return seastar::async([this, reader = std::move(reader)] () mutable {
                 auto close_reader = deferred_close(reader);
                 auto cfc = get_compacted_fragments_writer();
@@ -762,7 +762,7 @@ private:
     template<bool WithGC>
     future<> compact_on_writer() {
         auto now = gc_clock::now();
-        auto consumer = make_interposer_consumer([this, now] (flat_mutation_reader_v2 reader) mutable {
+        auto consumer = make_consumer([this, now] (flat_mutation_reader_v2 reader) mutable {
             return seastar::async([this, now, reader = std::move(reader)] () mutable {
                 auto close_reader = deferred_close(reader);
                 auto gc_consumer = get_gc_consumer<WithGC>();
@@ -795,13 +795,14 @@ private:
         }
     }
 
-    virtual reader_consumer_v2 make_interposer_consumer(reader_consumer_v2 end_consumer) {
-        return _table_s.get_compaction_strategy().make_interposer_consumer(_ms_metadata, std::move(end_consumer));
+    virtual reader_consumer_v2 make_consumer(reader_consumer_v2 end_consumer) {
+        return _table_s.get_compaction_strategy().make_consumer(_ms_metadata, std::move(end_consumer));
     }
 
     virtual bool use_interposer_consumer() const {
         return _table_s.get_compaction_strategy().use_interposer_consumer();
     }
+
 protected:
     virtual compaction_result finish(std::chrono::time_point<db_clock> started_at, std::chrono::time_point<db_clock> ended_at) {
         compaction_result ret {
@@ -1534,7 +1535,7 @@ public:
         }
     }
 
-    reader_consumer_v2 make_interposer_consumer(reader_consumer_v2 end_consumer) override {
+    reader_consumer_v2 make_consumer(reader_consumer_v2 end_consumer) override {
         if (!use_interposer_consumer()) {
             return end_consumer;
         }
@@ -1628,7 +1629,7 @@ public:
 
     }
 
-    reader_consumer_v2 make_interposer_consumer(reader_consumer_v2 end_consumer) override {
+    reader_consumer_v2 make_consumer(reader_consumer_v2 end_consumer) override {
         return [end_consumer = std::move(end_consumer)] (flat_mutation_reader_v2 reader) mutable -> future<> {
             return mutation_writer::segregate_by_shard(std::move(reader), std::move(end_consumer));
         };

@@ -39,7 +39,7 @@ std::function<future<> (flat_mutation_reader_v2)> make_streaming_consumer(sstrin
                 if (offstrategy) {
                     return end_consumer;
                 }
-                return cs.make_interposer_consumer(ms_meta, std::move(end_consumer));
+                return cs.make_consumer(ms_meta, std::move(end_consumer));
             };
 
             auto consumer = make_interposer_consumer(metadata,
