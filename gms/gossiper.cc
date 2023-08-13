@@ -2328,17 +2328,17 @@ future<> gossiper::wait_for_live_nodes_to_show_up(size_t n) {
     while (get_live_members().size() < n) {
         auto now = gossiper::clk::now();
         if (timeout <= now) {
-          // Extend the initial timeout up to `max_timeout`
-          // as long as activity is detected in _pending_mark_alive_endpoints
-          if (_pending_mark_alive_endpoints != pending_mark_alive_endpoints && max_timeout > now) {
-            logger.info("pending_mark_alive_endpoints changed while waiting for live nodes: {}", _pending_mark_alive_endpoints);
-            pending_mark_alive_endpoints = _pending_mark_alive_endpoints;
-            timeout += timeout_delay;
-          } else {
-            auto err = ::format("Timed out waiting for {} live nodes to show up in gossip", n);
-            logger.error("{}", err);
-            throw std::runtime_error{std::move(err)};
-          }
+            // Extend the initial timeout up to `max_timeout`
+            // as long as activity is detected in _pending_mark_alive_endpoints
+            if (_pending_mark_alive_endpoints != pending_mark_alive_endpoints && max_timeout > now) {
+                logger.info("pending_mark_alive_endpoints changed while waiting for live nodes: {}", _pending_mark_alive_endpoints);
+                pending_mark_alive_endpoints = _pending_mark_alive_endpoints;
+                timeout += timeout_delay;
+            } else {
+                auto err = ::format("Timed out waiting for {} live nodes to show up in gossip", n);
+                logger.error("{}", err);
+                throw std::runtime_error{std::move(err)};
+            }
         }
 
         logger.log(log_level::info, rate_limit,
