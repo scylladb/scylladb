@@ -1841,11 +1841,19 @@ future<> view_builder::start(service::migration_manager& mm) {
             (void)_build_step.trigger();
             return make_ready_future<>();
         });
-    }).handle_exception_type([] (const seastar::sleep_aborted& e) {
-        vlogger.debug("start aborted: {}", e.what());
-    }).handle_exception([] (std::exception_ptr eptr) {
-        vlogger.error("start failed: {}", eptr);
-        return make_ready_future<>();
+    }).then_wrapped([] (future<> f) {
+        if (f.failed()) {
+            auto ex = f.get_exception();
+            auto ll = log_level::error;
+            try {
+                std::rethrow_exception(ex);
+            } catch (const seastar::sleep_aborted& e) {
+                ll = log_level::debug;
+            } catch (const seastar::abort_requested_exception& e) {
+                ll = log_level::debug;
+            }
+            vlogger.log(ll, "start aborted: {}", ex);
+        }
     });
     return make_ready_future<>();
 }
