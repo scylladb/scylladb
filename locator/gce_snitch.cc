@@ -40,7 +40,7 @@ future<> gce_snitch::load_config() {
             meta_server_url = _meta_server_url;
         }
 
-        return gce_api_call(std::move(meta_server_url), ZONE_NAME_QUERY_REQ).then([this, meta_server_url] (sstring az) {
+        return gce_api_call(meta_server_url, ZONE_NAME_QUERY_REQ).then([this, meta_server_url] (sstring az) {
             if (az.empty()) {
                 return make_exception_future(std::runtime_error(format("Got an empty zone name from the GCE meta server {}", meta_server_url)));
             }
