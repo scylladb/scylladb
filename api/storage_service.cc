@@ -465,7 +465,7 @@ static future<json::json_return_type> describe_ring_as_json(sharded<service::sto
     co_return json::json_return_type(stream_range_as_array(co_await ss.local().describe_ring(keyspace), token_range_endpoints_to_json));
 }
 
-void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_service>& ss, gms::gossiper& g, sharded<cdc::generation_service>& cdc_gs, sharded<db::system_keyspace>& sys_ks) {
+void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_service>& ss, gms::gossiper& g, sharded<db::system_keyspace>& sys_ks) {
     ss::local_hostid.set(r, [&ctx](std::unique_ptr<http::request> req) {
         auto id = ctx.db.local().get_config().host_id;
         return make_ready_future<json::json_return_type>(id.to_sstring());
@@ -664,13 +664,9 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
                 req.get_query_param("key")));
     });
 
-    ss::cdc_streams_check_and_repair.set(r, [&cdc_gs, &ss] (std::unique_ptr<http::request> req) {
-        return ss.invoke_on(0, [&cdc_gs] (service::storage_service& ss) {
-            if (!cdc_gs.local_is_initialized()) {
-                throw std::runtime_error("CDC generation service not initialized yet");
-            }
-
-            return ss.check_and_repair_cdc_streams(cdc_gs.local());
+    ss::cdc_streams_check_and_repair.set(r, [&ss] (std::unique_ptr<http::request> req) {
+        return ss.invoke_on(0, [] (service::storage_service& ss) {
+            return ss.check_and_repair_cdc_streams();
         }).then([] {
             return make_ready_future<json::json_return_type>(json_void());
         });

@@ -691,7 +691,7 @@ public:
     future<std::map<gms::inet_address, float>> effective_ownership(sstring keyspace_name);
 
     // Must run on shard 0.
-    future<> check_and_repair_cdc_streams(cdc::generation_service&);
+    future<> check_and_repair_cdc_streams();
 
 private:
     promise<> _drain_finished;

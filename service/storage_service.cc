@@ -4758,14 +4758,18 @@ future<> storage_service::removenode(locator::host_id host_id, std::list<locator
     });
 }
 
-future<> storage_service::check_and_repair_cdc_streams(cdc::generation_service& cdc_gen_svc) {
+future<> storage_service::check_and_repair_cdc_streams() {
     assert(this_shard_id() == 0);
+
+    if (!_cdc_gens.local_is_initialized()) {
+        return make_exception_future<>(std::runtime_error("CDC generation service not initialized yet"));
+    }
 
     if (_raft_topology_change_enabled) {
         return raft_check_and_repair_cdc_streams();
     }
 
-    return cdc_gen_svc.check_and_repair_cdc_streams();
+    return _cdc_gens.local().check_and_repair_cdc_streams();
 }
 
 class node_ops_meta_data {
