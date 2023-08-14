@@ -253,7 +253,7 @@ const std::vector<sstables::shared_sstable> load_sstables(schema_ptr schema, sst
             }
         }
 
-        const auto dir_path = std::filesystem::path(sst_path).remove_filename();
+        const auto dir_path = sst_path.parent_path();
         const auto sst_filename = sst_path.filename();
 
         auto ed = sstables::entry_descriptor::make_descriptor(dir_path.c_str(), sst_filename.c_str(), schema->ks_name(), schema->cf_name());
