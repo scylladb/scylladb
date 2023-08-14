@@ -83,6 +83,9 @@ void manager::register_metrics(const sstring& group_name) {
         sm::make_counter("discarded", _stats.discarded,
                         sm::description("Number of hints that were discarded during sending (too old, schema changed, etc.).")),
 
+        sm::make_counter("send_errors", _stats.send_errors,
+            sm::description("Number of unexpected errors during sending, sending will be retried later")),
+
         sm::make_counter("corrupted_files", _stats.corrupted_files,
                         sm::description("Number of hints files that were discarded during sending because the file was corrupted.")),
 
@@ -880,6 +883,7 @@ future<> manager::end_point_hints_manager::sender::send_one_hint(lw_shared_ptr<s
                     ++this->shard_stats().sent;
                 }).handle_exception([this, ctx_ptr] (auto eptr) {
                     manager_logger.trace("send_one_hint(): failed to send to {}: {}", end_point_key(), eptr);
+                    ++this->shard_stats().send_errors;
                     return make_exception_future<>(std::move(eptr));
                 });
 
@@ -896,6 +900,7 @@ future<> manager::end_point_hints_manager::sender::send_one_hint(lw_shared_ptr<s
             } catch (...) {
                 auto eptr = std::current_exception();
                 manager_logger.debug("send_hints(): unexpected error in file {} at {}: {}", fname, rp, eptr);
+                ++this->shard_stats().send_errors;
                 return make_exception_future<>(std::move(eptr));
             }
             return make_ready_future<>();
