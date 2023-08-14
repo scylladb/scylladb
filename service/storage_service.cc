@@ -5423,6 +5423,7 @@ future<> storage_service::excise(std::unordered_set<token> tokens, inet_address 
 }
 
 future<> storage_service::leave_ring() {
+    co_await _cdc_gens.local().leave_ring();
     co_await _sys_ks.local().set_bootstrap_state(db::system_keyspace::bootstrap_state::NEEDS_BOOTSTRAP);
     co_await mutate_token_metadata([this] (mutable_token_metadata_ptr tmptr) {
         auto endpoint = get_broadcast_address();
