@@ -1659,7 +1659,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             }).get();
 
             with_scheduling_group(maintenance_scheduling_group, [&] {
-                return ss.local().join_cluster(cdc_generation_service.local(), sys_dist_ks, proxy, qp.local());
+                return ss.local().join_cluster(sys_dist_ks, proxy, qp.local());
             }).get();
 
             sl_controller.invoke_on_all([&lifecycle_notifier] (qos::service_level_controller& controller) {

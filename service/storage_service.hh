@@ -335,8 +335,7 @@ public:
      *
      * \see init_messaging_service_part
      */
-    future<> join_cluster(cdc::generation_service& cdc_gen_service,
-            sharded<db::system_distributed_keyspace>& sys_dist_ks, sharded<service::storage_proxy>& proxy, cql3::query_processor& qp);
+    future<> join_cluster(sharded<db::system_distributed_keyspace>& sys_dist_ks, sharded<service::storage_proxy>& proxy, cql3::query_processor& qp);
 
     void set_group0(service::raft_group0&, bool raft_topology_change_enabled);
 
@@ -348,8 +347,7 @@ private:
     bool should_bootstrap();
     bool is_replacing();
     bool is_first_node();
-    future<> join_token_ring(cdc::generation_service& cdc_gen_service,
-            sharded<db::system_distributed_keyspace>& sys_dist_ks,
+    future<> join_token_ring(sharded<db::system_distributed_keyspace>& sys_dist_ks,
             sharded<service::storage_proxy>& proxy,
             std::unordered_set<gms::inet_address> initial_contact_nodes,
             std::unordered_set<gms::inet_address> loaded_endpoints,
@@ -368,7 +366,7 @@ private:
     // Stream data for which we become a new replica.
     // Before that, if we're not replacing another node, inform other nodes about our chosen tokens
     // and wait for RING_DELAY ms so that we receive new writes from coordinators during streaming.
-    future<> bootstrap(cdc::generation_service& cdc_gen_service, std::unordered_set<token>& bootstrap_tokens, std::optional<cdc::generation_id>& cdc_gen_id, const std::optional<replacement_info>& replacement_info);
+    future<> bootstrap(std::unordered_set<token>& bootstrap_tokens, std::optional<cdc::generation_id>& cdc_gen_id, const std::optional<replacement_info>& replacement_info);
 
 public:
 

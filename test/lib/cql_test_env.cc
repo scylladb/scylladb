@@ -888,7 +888,7 @@ private:
             _ss.local().set_group0(group0_service, raft_topology_change_enabled);
 
             try {
-                _ss.local().join_cluster(_cdc_generation_service.local(), _sys_dist_ks, _proxy, _qp.local()).get();
+                _ss.local().join_cluster(_sys_dist_ks, _proxy, _qp.local()).get();
             } catch (std::exception& e) {
                 // if any of the defers crashes too, we'll never see
                 // the error

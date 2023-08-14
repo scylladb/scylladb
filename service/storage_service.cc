@@ -2317,8 +2317,7 @@ future<> storage_service::do_update_topology_with_local_metadata(raft::server& r
     co_await _sys_ks.local().set_must_synchronize_topology(false);
 }
 
-future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_service,
-        sharded<db::system_distributed_keyspace>& sys_dist_ks,
+future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspace>& sys_dist_ks,
         sharded<service::storage_proxy>& proxy,
         std::unordered_set<gms::inet_address> initial_contact_nodes,
         std::unordered_set<gms::inet_address> loaded_endpoints,
@@ -2687,7 +2686,7 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
         co_await sys_dist_ks.invoke_on_all(&db::system_distributed_keyspace::start);
         co_await mark_existing_views_as_built(sys_dist_ks);
         co_await _sys_ks.local().update_tokens(bootstrap_tokens);
-        co_await bootstrap(cdc_gen_service, bootstrap_tokens, cdc_gen_id, ri);
+        co_await bootstrap(bootstrap_tokens, cdc_gen_id, ri);
     } else {
         supervisor::notify("starting system distributed keyspace");
         co_await sys_dist_ks.invoke_on_all(&db::system_distributed_keyspace::start);
@@ -2741,7 +2740,7 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
                 && (!_sys_ks.local().bootstrap_complete()
                     || cdc::should_propose_first_generation(get_broadcast_address(), _gossiper))) {
             try {
-                cdc_gen_id = co_await cdc_gen_service.legacy_make_new_generation(bootstrap_tokens, !is_first_node());
+                cdc_gen_id = co_await _cdc_gens.local().legacy_make_new_generation(bootstrap_tokens, !is_first_node());
             } catch (...) {
                 cdc_log.warn(
                     "Could not create a new CDC generation: {}. This may make it impossible to use CDC or cause performance problems."
@@ -2773,7 +2772,7 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
 
     assert(_group0);
     co_await _group0->finish_setup_after_join(*this, qp, _migration_manager.local());
-    co_await cdc_gen_service.after_join(std::move(cdc_gen_id));
+    co_await _cdc_gens.local().after_join(std::move(cdc_gen_id));
 }
 
 future<> storage_service::mark_existing_views_as_built(sharded<db::system_distributed_keyspace>& sys_dist_ks) {
@@ -2800,8 +2799,8 @@ std::unordered_set<gms::inet_address> storage_service::parse_node_list(sstring c
 }
 
 // Runs inside seastar::async context
-future<> storage_service::bootstrap(cdc::generation_service& cdc_gen_service, std::unordered_set<token>& bootstrap_tokens, std::optional<cdc::generation_id>& cdc_gen_id, const std::optional<replacement_info>& replacement_info) {
-    return seastar::async([this, &bootstrap_tokens, &cdc_gen_id, &cdc_gen_service, &replacement_info] {
+future<> storage_service::bootstrap(std::unordered_set<token>& bootstrap_tokens, std::optional<cdc::generation_id>& cdc_gen_id, const std::optional<replacement_info>& replacement_info) {
+    return seastar::async([this, &bootstrap_tokens, &cdc_gen_id, &replacement_info] {
         auto bootstrap_rbno = is_repair_based_node_ops_enabled(streaming::stream_reason::bootstrap);
 
         set_mode(mode::BOOTSTRAP);
@@ -2859,7 +2858,7 @@ future<> storage_service::bootstrap(cdc::generation_service& cdc_gen_service, st
             // We don't do any other generation switches (unless we crash before complecting bootstrap).
             assert(!cdc_gen_id);
 
-            cdc_gen_id = cdc_gen_service.legacy_make_new_generation(bootstrap_tokens, !is_first_node()).get0();
+            cdc_gen_id = _cdc_gens.local().legacy_make_new_generation(bootstrap_tokens, !is_first_node()).get0();
 
             if (!bootstrap_rbno) {
                 // When is_repair_based_node_ops_enabled is true, the bootstrap node
@@ -3487,8 +3486,7 @@ void storage_service::set_group0(raft_group0& group0, bool raft_topology_change_
     _raft_topology_change_enabled = raft_topology_change_enabled;
 }
 
-future<> storage_service::join_cluster(cdc::generation_service& cdc_gen_service,
-        sharded<db::system_distributed_keyspace>& sys_dist_ks, sharded<service::storage_proxy>& proxy, cql3::query_processor& qp) {
+future<> storage_service::join_cluster(sharded<db::system_distributed_keyspace>& sys_dist_ks, sharded<service::storage_proxy>& proxy, cql3::query_processor& qp) {
     assert(this_shard_id() == 0);
 
     set_mode(mode::STARTING);
@@ -3553,7 +3551,7 @@ future<> storage_service::join_cluster(cdc::generation_service& cdc_gen_service,
     for (auto& x : loaded_peer_features) {
         slogger.info("peer={}, supported_features={}", x.first, x.second);
     }
-    co_return co_await join_token_ring(cdc_gen_service, sys_dist_ks, proxy, std::move(initial_contact_nodes), std::move(loaded_endpoints), std::move(loaded_peer_features), get_ring_delay(), qp);
+    co_return co_await join_token_ring(sys_dist_ks, proxy, std::move(initial_contact_nodes), std::move(loaded_endpoints), std::move(loaded_peer_features), get_ring_delay(), qp);
 }
 
 future<> storage_service::replicate_to_all_cores(mutable_token_metadata_ptr tmptr) noexcept {
