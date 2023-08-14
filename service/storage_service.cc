@@ -87,7 +87,6 @@
 
 #include <boost/algorithm/string/split.hpp>
 #include <boost/algorithm/string/classification.hpp>
-#include <boost/algorithm/string/trim_all.hpp>
 #include <boost/algorithm/string/join.hpp>
 
 using token = dht::token;
@@ -2714,18 +2713,12 @@ future<> storage_service::mark_existing_views_as_built(sharded<db::system_distri
 }
 
 std::unordered_set<gms::inet_address> storage_service::parse_node_list(sstring comma_separated_list, const token_metadata& tm) {
-    std::vector<sstring> ignore_nodes_strs;
+    std::vector<sstring> ignore_nodes_strs = utils::split_comma_separated_list(std::move(comma_separated_list));
     std::unordered_set<gms::inet_address> ignore_nodes;
-    boost::split(ignore_nodes_strs, comma_separated_list, boost::is_any_of(","));
-    for (std::string n : ignore_nodes_strs) {
+    for (const sstring& n : ignore_nodes_strs) {
         try {
-            std::replace(n.begin(), n.end(), '\"', ' ');
-            std::replace(n.begin(), n.end(), '\'', ' ');
-            boost::trim_all(n);
-            if (!n.empty()) {
-                auto ep_and_id = tm.parse_host_id_and_endpoint(n);
-                ignore_nodes.insert(ep_and_id.endpoint);
-            }
+            auto ep_and_id = tm.parse_host_id_and_endpoint(n);
+            ignore_nodes.insert(ep_and_id.endpoint);
         } catch (...) {
             throw std::runtime_error(::format("Failed to parse node list: {}: invalid node={}: {}", ignore_nodes_strs, n, std::current_exception()));
         }
@@ -6322,22 +6315,16 @@ bool storage_service::is_repair_based_node_ops_enabled(streaming::stream_reason 
         {"removenode", streaming::stream_reason::removenode},
         {"rebuild", streaming::stream_reason::rebuild},
     };
-    std::vector<sstring> enabled_list;
-    std::unordered_set<streaming::stream_reason> enabled_set;
     auto enabled_list_str = _db.local().get_config().allowed_repair_based_node_ops();
-    boost::trim_all(enabled_list_str);
-    std::replace(enabled_list_str.begin(), enabled_list_str.end(), '\"', ' ');
-    std::replace(enabled_list_str.begin(), enabled_list_str.end(), '\'', ' ');
-    boost::split(enabled_list, enabled_list_str, boost::is_any_of(","));
-    for (sstring op : enabled_list) {
+    std::vector<sstring> enabled_list = utils::split_comma_separated_list(std::move(enabled_list_str));
+    std::unordered_set<streaming::stream_reason> enabled_set;
+    for (const sstring& op : enabled_list) {
         try {
-            if (!op.empty()) {
-                auto it = reason_map.find(op);
-                if (it != reason_map.end()) {
-                    enabled_set.insert(it->second);
-                } else {
-                    throw std::invalid_argument(::format("unsupported operation name: {}", op));
-                }
+            auto it = reason_map.find(op);
+            if (it != reason_map.end()) {
+                enabled_set.insert(it->second);
+            } else {
+                throw std::invalid_argument(::format("unsupported operation name: {}", op));
             }
         } catch (...) {
             throw std::invalid_argument(::format("Failed to parse allowed_repair_based_node_ops parameter [{}]: {}",

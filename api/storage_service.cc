@@ -780,21 +780,16 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
 
     ss::remove_node.set(r, [&ss](std::unique_ptr<http::request> req) {
         auto host_id = validate_host_id(req->get_query_param("host_id"));
-        std::vector<sstring> ignore_nodes_strs= split(req->get_query_param("ignore_nodes"), ",");
+        std::vector<sstring> ignore_nodes_strs = utils::split_comma_separated_list(req->get_query_param("ignore_nodes"));
         apilog.info("remove_node: host_id={} ignore_nodes={}", host_id, ignore_nodes_strs);
         auto ignore_nodes = std::list<locator::host_id_or_endpoint>();
-        for (std::string n : ignore_nodes_strs) {
+        for (const sstring& n : ignore_nodes_strs) {
             try {
-                std::replace(n.begin(), n.end(), '\"', ' ');
-                std::replace(n.begin(), n.end(), '\'', ' ');
-                boost::trim_all(n);
-                if (!n.empty()) {
-                    auto hoep = locator::host_id_or_endpoint(n);
-                    if (!ignore_nodes.empty() && hoep.has_host_id() != ignore_nodes.front().has_host_id()) {
-                        throw std::runtime_error("All nodes should be identified using the same method: either Host IDs or ip addresses.");
-                    }
-                    ignore_nodes.push_back(std::move(hoep));
+                auto hoep = locator::host_id_or_endpoint(n);
+                if (!ignore_nodes.empty() && hoep.has_host_id() != ignore_nodes.front().has_host_id()) {
+                    throw std::runtime_error("All nodes should be identified using the same method: either Host IDs or ip addresses.");
                 }
+                ignore_nodes.push_back(std::move(hoep));
             } catch (...) {
                 throw std::runtime_error(format("Failed to parse ignore_nodes parameter: ignore_nodes={}, node={}: {}", ignore_nodes_strs, n, std::current_exception()));
             }

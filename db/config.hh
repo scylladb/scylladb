@@ -513,4 +513,7 @@ future<gms::inet_address> resolve(const config_file::named_value<sstring>&, gms:
  * Will throw an exception if there is a conflict with the metrics names
  */
 future<> update_relabel_config_from_file(const std::string& name);
+
+std::vector<sstring> split_comma_separated_list(sstring comma_separated_list);
+
 }
