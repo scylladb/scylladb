@@ -1202,6 +1202,7 @@ private:
 
         std::exception_ptr err;
         while (auto desc = get_next_job()) {
+            desc->owned_ranges = _compaction_state.owned_ranges_ptr;
             auto compacting = compacting_sstable_registration(_cm, _cm.get_compaction_state(&t), desc->sstables);
             auto on_replace = compacting.update_on_sstable_replacement();
 
