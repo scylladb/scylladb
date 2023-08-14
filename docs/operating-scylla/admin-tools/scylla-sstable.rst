@@ -329,6 +329,8 @@ The content is dumped in JSON, using the following schema:
         "offsets": [Uint64, ...]
     }
 
+.. _scylla sstable dump-summary:
+
 dump-summary
 ^^^^^^^^^^^^
 
@@ -373,6 +375,8 @@ The content is dumped in JSON, using the following schema:
         "raw": String, // hexadecimal representation of the raw binary
         "value": String
     }
+
+.. _scylla sstable dump-statistics:
 
 dump-statistics
 ^^^^^^^^^^^^^^^

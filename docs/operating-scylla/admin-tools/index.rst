@@ -15,6 +15,7 @@ Admin Tools
    cassandra-stress </operating-scylla/admin-tools/cassandra-stress/>
    sstabledump
    sstable2json
+   sstablemetadata
    Scylla Logs </getting-started/logging/>
    perftune
    Virtual Tables </operating-scylla/admin-tools/virtual-tables/>
