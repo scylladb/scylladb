@@ -8,8 +8,8 @@
 * :doc:`cassandra-stress </operating-scylla/admin-tools/cassandra-stress/>` A tool for benchmarking and load testing a Scylla and Cassandra clusters.
 * :doc:`SSTabledump - Scylla 3.0, Scylla Enterprise 2019.1 and newer versions </operating-scylla/admin-tools/sstabledump>`
 * :doc:`SSTable2JSON - Scylla 2.3 and older </operating-scylla/admin-tools/sstable2json>`
+* :doc:`SSTableMetadata - Scylla 3.0, Scylla Enterprise 2019.1 and newer versions </operating-scylla/admin-tools/sstablemetadata>`
 * sstablelevelreset - Reset level to 0 on a selected set of SSTables that use LeveledCompactionStrategy (LCS).
-* sstablemetadata - Prints metadata about a specified SSTable.
 * sstablerepairedset - Mark specific SSTables as repaired or unrepaired.
 * `scyllatop <https://www.scylladb.com/2016/03/22/scyllatop/>`_ - A terminal base top-like tool for scylladb collectd/prometheus metrics.
 * :doc:`scylla_dev_mode_setup</getting-started/installation-common/dev-mod>` - run Scylla in Developer Mode.
