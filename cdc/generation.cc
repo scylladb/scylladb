@@ -776,7 +776,6 @@ generation_service::~generation_service() {
 
 future<> generation_service::after_join(std::optional<cdc::generation_id>&& startup_gen_id) {
     assert_shard_zero(__PRETTY_FUNCTION__);
-    assert(_sys_ks.local().bootstrap_complete());
 
     _gen_id = std::move(startup_gen_id);
     _gossiper.register_(shared_from_this());
