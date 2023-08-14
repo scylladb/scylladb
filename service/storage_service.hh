@@ -793,10 +793,10 @@ private:
     // This is called on all nodes for each new command received through raft
     // raft_group0_client::_read_apply_mutex must be held
     // Precondition: the topology mutations were already written to disk; the function only transitions the in-memory state machine.
-    future<> topology_transition(cdc::generation_service&);
+    future<> topology_transition();
     // load topology state machine snapshot into memory
     // raft_group0_client::_read_apply_mutex must be held
-    future<> topology_state_load(cdc::generation_service&);
+    future<> topology_state_load();
     // Applies received raft snapshot to local state machine persistent storage
     // raft_group0_client::_read_apply_mutex must be held
     future<> merge_topology_snapshot(raft_topology_snapshot snp);

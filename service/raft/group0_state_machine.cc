@@ -101,7 +101,7 @@ future<> group0_state_machine::merge_and_apply(group0_state_machine_merger& merg
     },
     [&] (topology_change& chng) -> future<> {
         co_await write_mutations_to_database(_sp, cmd.creator_addr, std::move(chng.mutations));
-        co_await _ss.topology_transition(_cdc_gen_svc);
+        co_await _ss.topology_transition();
     },
     [&] (write_mutations& muts) -> future<> {
         return write_mutations_to_database(_sp, cmd.creator_addr, std::move(muts.mutations));
@@ -171,7 +171,7 @@ future<> group0_state_machine::load_snapshot(raft::snapshot_id id) {
     // topology_state_load applies persisted state machine state into
     // memory and thus needs to be protected with apply mutex
     auto read_apply_mutex_holder = co_await _client.hold_read_apply_mutex();
-    co_await _ss.topology_state_load(_cdc_gen_svc);
+    co_await _ss.topology_state_load();
     _ss._topology_state_machine.event.broadcast();
 }
 

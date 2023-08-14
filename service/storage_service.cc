@@ -298,7 +298,7 @@ future<> storage_service::wait_for_ring_to_settle() {
     slogger.info("Checking bootstrapping/leaving nodes: ok");
 }
 
-future<> storage_service::topology_state_load(cdc::generation_service& cdc_gen_svc) {
+future<> storage_service::topology_state_load() {
 #ifdef SEASTAR_DEBUG
     static bool running = false;
     assert(!running); // The function is not re-entrant
@@ -493,13 +493,13 @@ future<> storage_service::topology_state_load(cdc::generation_service& cdc_gen_s
 
     if (auto gen_id = _topology_state_machine._topology.current_cdc_generation_id) {
         slogger.debug("topology_state_load: current CDC generation ID: {}", *gen_id);
-        co_await cdc_gen_svc.handle_cdc_generation(*gen_id);
+        co_await _cdc_gens.local().handle_cdc_generation(*gen_id);
     }
 }
 
-future<> storage_service::topology_transition(cdc::generation_service& cdc_gen_svc) {
+future<> storage_service::topology_transition() {
     assert(this_shard_id() == 0);
-    co_await topology_state_load(cdc_gen_svc); // reload new state
+    co_await topology_state_load(); // reload new state
 
     _topology_state_machine.event.broadcast();
 }
