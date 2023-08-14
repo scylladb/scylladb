@@ -112,7 +112,8 @@ storage_service::storage_service(abort_source& abort_source,
     endpoint_lifecycle_notifier& elc_notif,
     sharded<db::batchlog_manager>& bm,
     sharded<locator::snitch_ptr>& snitch,
-    sharded<service::tablet_allocator>& tablet_allocator)
+    sharded<service::tablet_allocator>& tablet_allocator,
+    sharded<cdc::generation_service>& cdc_gens)
         : _abort_source(abort_source)
         , _feature_service(feature_service)
         , _db(db)
@@ -134,6 +135,7 @@ storage_service::storage_service(abort_source& abort_source,
             });
         })
         , _tablet_allocator(tablet_allocator)
+        , _cdc_gens(cdc_gens)
 {
     register_metrics();
 

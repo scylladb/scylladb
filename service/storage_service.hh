@@ -163,7 +163,8 @@ public:
         endpoint_lifecycle_notifier& elc_notif,
         sharded<db::batchlog_manager>& bm,
         sharded<locator::snitch_ptr>& snitch,
-        sharded<service::tablet_allocator>& tablet_allocator);
+        sharded<service::tablet_allocator>& tablet_allocator,
+        sharded<cdc::generation_service>& cdc_gs);
 
     // Needed by distributed<>
     future<> stop();
@@ -488,6 +489,7 @@ private:
     sharded<db::system_keyspace>& _sys_ks;
     locator::snitch_signal_slot_t _snitch_reconfigure;
     sharded<service::tablet_allocator>& _tablet_allocator;
+    sharded<cdc::generation_service>& _cdc_gens;
 private:
     /**
      * Handle node bootstrap
