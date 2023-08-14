@@ -1308,6 +1308,7 @@ private:
                 new_unused_sstables.insert(sst);
                 return sst;
             };
+            desc->owned_ranges = _compaction_state.owned_ranges_ptr;
             auto input = boost::copy_range<std::unordered_set<sstables::shared_sstable>>(desc->sstables);
 
             sstables::compaction_result ret;
