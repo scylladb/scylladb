@@ -226,6 +226,7 @@ schema_ptr system_keyspace::topology() {
             .with_column("release_version", utf8_type)
             .with_column("topology_request", utf8_type)
             .with_column("replaced_id", uuid_type)
+            .with_column("ignore_nodes", set_type_impl::get_instance(uuid_type, true))
             .with_column("rebuild_option", utf8_type)
             .with_column("num_tokens", int32_type)
             .with_column("shard_count", int32_type)

@@ -181,6 +181,7 @@ CREATE TABLE system.topology (
     rebuild_option text,
     release_version text,
     replaced_id uuid,
+    ignore_nodes set<uuid>,
     shard_count int,
     tokens set<text>,
     topology_request text,
@@ -205,6 +206,7 @@ Each node has a clustering row in the table where its `host_id` is the clusterin
 - `topology_request`   -  if set contains one of the supported node-specific topology requests
 - `tokens`             -  if set contains a list of tokens that belongs to the node
 - `replaced_id`        -  if the node replacing or replaced another node here will be the id of that node
+- `ignore_nodes`       -  if set contains a list of ids of nodes ignored during the remove or replace operation
 - `rebuild_option`     -  if the node is being rebuild contains datacenter name that is used as a rebuild source
 - `num_tokens`         -  the requested number of tokens when the node bootstraps
 
