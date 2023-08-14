@@ -441,7 +441,7 @@ seastar::shared_ptr<const metadata> describe_statement::get_result_metadata() co
 }
 
 seastar::future<seastar::shared_ptr<cql_transport::messages::result_message>>
-describe_statement::execute(cql3::query_processor& qp, service::query_state& state, const query_options& options,  std::optional<service::group0_guard> guard) const {
+describe_statement::execute(cql3::query_processor& qp, service::query_state& state, const query_options& options) const {
     auto& client_state = state.get_client_state();
 
     auto descriptions = co_await describe(qp, client_state);

@@ -266,7 +266,7 @@ future<size_t> raft_sys_table_storage::do_store_log_entries_one_batch(const std:
         cql3::attributes::none(),
         _qp.get_cql_stats());
 
-    co_await batch.execute(_qp, _dummy_query_state, batch_options, std::nullopt);
+    co_await batch.execute(_qp, _dummy_query_state, batch_options);
 
     if (idx != entries_size) {
         co_return idx;

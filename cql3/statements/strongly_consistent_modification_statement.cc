@@ -45,8 +45,8 @@ strongly_consistent_modification_statement::strongly_consistent_modification_sta
 { }
 
 future<::shared_ptr<cql_transport::messages::result_message>>
-strongly_consistent_modification_statement::execute(query_processor& qp, service::query_state& qs, const query_options& options, std::optional<service::group0_guard> guard) const {
-    return execute_without_checking_exception_message(qp, qs, options, std::move(guard))
+strongly_consistent_modification_statement::execute(query_processor& qp, service::query_state& qs, const query_options& options) const {
+    return execute_without_checking_exception_message(qp, qs, options)
             .then(cql_transport::messages::propagate_exception_as_future<shared_ptr<cql_transport::messages::result_message>>);
 }
 
@@ -65,7 +65,7 @@ evaluate_prepared(
 }
 
 future<::shared_ptr<cql_transport::messages::result_message>>
-strongly_consistent_modification_statement::execute_without_checking_exception_message(query_processor& qp, service::query_state& qs, const query_options& options, std::optional<service::group0_guard> guard) const {
+strongly_consistent_modification_statement::execute_without_checking_exception_message(query_processor& qp, service::query_state& qs, const query_options& options) const {
     if (this_shard_id() != 0) {
         co_return ::make_shared<cql_transport::messages::result_message::bounce_to_shard>(0, cql3::computed_function_values{});
     }

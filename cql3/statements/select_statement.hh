@@ -116,10 +116,10 @@ public:
     virtual bool depends_on(std::string_view ks_name, std::optional<std::string_view> cf_name) const override;
 
     virtual future<::shared_ptr<cql_transport::messages::result_message>> execute(query_processor& qp,
-        service::query_state& state, const query_options& options, std::optional<service::group0_guard> guard) const override;
+        service::query_state& state, const query_options& options) const override;
 
     virtual future<::shared_ptr<cql_transport::messages::result_message>>
-        execute_without_checking_exception_message(query_processor& qp, service::query_state& qs, const query_options& options, std::optional<service::group0_guard> guard) const override;
+        execute_without_checking_exception_message(query_processor& qp, service::query_state& qs, const query_options& options) const override;
 
     future<::shared_ptr<cql_transport::messages::result_message>> execute_non_aggregate_unpaged(query_processor& qp,
         lw_shared_ptr<query::read_command> cmd, dht::partition_range_vector&& partition_ranges, service::query_state& state,

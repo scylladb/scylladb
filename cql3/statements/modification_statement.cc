@@ -250,13 +250,13 @@ static thread_local inheriting_concrete_execution_stage<
         const query_options&> modify_stage{"cql3_modification", modification_statement_executor::get()};
 
 future<::shared_ptr<cql_transport::messages::result_message>>
-modification_statement::execute(query_processor& qp, service::query_state& qs, const query_options& options, std::optional<service::group0_guard> guard) const {
-    return execute_without_checking_exception_message(qp, qs, options, std::move(guard))
+modification_statement::execute(query_processor& qp, service::query_state& qs, const query_options& options) const {
+    return execute_without_checking_exception_message(qp, qs, options)
             .then(cql_transport::messages::propagate_exception_as_future<shared_ptr<cql_transport::messages::result_message>>);
 }
 
 future<::shared_ptr<cql_transport::messages::result_message>>
-modification_statement::execute_without_checking_exception_message(query_processor& qp, service::query_state& qs, const query_options& options, std::optional<service::group0_guard> guard) const {
+modification_statement::execute_without_checking_exception_message(query_processor& qp, service::query_state& qs, const query_options& options) const {
     cql3::util::validate_timestamp(qp.db().get_config(), options, attrs);
     return modify_stage(this, seastar::ref(qp), seastar::ref(qs), seastar::cref(options));
 }

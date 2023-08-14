@@ -34,8 +34,7 @@ future<> drop_service_level_statement::check_access(query_processor& qp, const s
 future<::shared_ptr<cql_transport::messages::result_message>>
 drop_service_level_statement::execute(query_processor& qp,
         service::query_state &state,
-        const query_options &,
-        std::optional<service::group0_guard> guard) const {
+        const query_options &) const {
     return state.get_service_level_controller().drop_distributed_service_level(_service_level, _if_exists).then([] {
         using void_result_msg = cql_transport::messages::result_message::void_message;
         using result_msg = cql_transport::messages::result_message;

@@ -37,7 +37,7 @@ public:
     virtual future<> check_access(query_processor& qp, const service::client_state&) const override;
 
     virtual future<::shared_ptr<cql_transport::messages::result_message>>
-    execute(query_processor&, service::query_state&, const query_options&, std::optional<service::group0_guard> guard) const override;
+    execute(query_processor&, service::query_state&, const query_options&) const override;
 };
 
 }

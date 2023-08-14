@@ -90,7 +90,7 @@ void truncate_statement::validate(query_processor&, const service::client_state&
 }
 
 future<::shared_ptr<cql_transport::messages::result_message>>
-truncate_statement::execute(query_processor& qp, service::query_state& state, const query_options& options, std::optional<service::group0_guard> guard) const
+truncate_statement::execute(query_processor& qp, service::query_state& state, const query_options& options) const
 {
     if (qp.db().find_schema(keyspace(), column_family())->is_view()) {
         throw exceptions::invalid_request_exception("Cannot TRUNCATE materialized view directly; must truncate base table instead");
