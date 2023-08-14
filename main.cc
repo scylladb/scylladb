@@ -1103,6 +1103,15 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             replica::distributed_loader::init_system_keyspace(sys_ks, erm_factory, db, *cfg, system_table_load_phase::phase1).get();
             cfg->host_id = sys_ks.local().load_local_host_id().get0();
 
+          shared_token_metadata::mutate_on_all_shards(token_metadata, [hostid = cfg->host_id, endpoint = utils::fb_utilities::get_broadcast_address()] (locator::token_metadata& tm) {
+              // Makes local host id available in topology cfg as soon as possible.
+              // Raft topology discard the endpoint-to-id map, so the local id can
+              // still be found in the config.
+              tm.get_topology().set_host_id_cfg(hostid);
+              tm.get_topology().add_or_update_endpoint(endpoint, hostid);
+              return make_ready_future<>();
+          }).get();
+
             netw::messaging_service::config mscfg;
 
             mscfg.id = cfg->host_id;
@@ -1290,11 +1299,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // #293 - do not stop anything
             // engine().at_exit([&qp] { return qp.stop(); });
             sstables::init_metrics().get();
-
-            shared_token_metadata::mutate_on_all_shards(token_metadata, [hostid = cfg->host_id, endpoint = utils::fb_utilities::get_broadcast_address()] (locator::token_metadata& tm) {
-                tm.get_topology().add_or_update_endpoint(endpoint, hostid);
-                return make_ready_future<>();
-            }).get();
 
             supervisor::notify("initializing batchlog manager");
             db::batchlog_manager_config bm_cfg;

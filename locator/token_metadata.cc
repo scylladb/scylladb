@@ -334,7 +334,7 @@ token_metadata::tokens_iterator& token_metadata::tokens_iterator::operator++() {
 }
 
 host_id token_metadata::get_my_id() const {
-    return get_host_id(utils::fb_utilities::get_broadcast_address());
+    return get_topology().get_config().this_host_id;
 }
 
 inline
