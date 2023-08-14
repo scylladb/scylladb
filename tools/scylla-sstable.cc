@@ -1214,7 +1214,9 @@ private:
             else { throw std::invalid_argument("invalid field offset"); }
         });
 
+        _writer.StartObject();
         const_cast<sstables::serialization_header::column_desc&>(val).describe_type(_version, std::ref(*this));
+        _writer.EndObject();
 
         _name_resolver = std::move(prev_name_resolver);
     }
