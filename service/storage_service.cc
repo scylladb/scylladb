@@ -2548,7 +2548,7 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
 
     assert(_group0);
     // if the node is bootstrapped the functin will do nothing since we already created group0 in main.cc
-    co_await _group0->setup_group0(_sys_ks.local(), initial_contact_nodes, raft_replace_info, *this, qp, _migration_manager.local(), cdc_gen_service);
+    co_await _group0->setup_group0(_sys_ks.local(), initial_contact_nodes, raft_replace_info, *this, qp, _migration_manager.local());
 
     raft::server* raft_server = co_await [this] () -> future<raft::server*> {
         if (!_raft_topology_change_enabled) {
@@ -2614,7 +2614,7 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
             throw std::runtime_error(err);
         }
 
-        co_await _group0->finish_setup_after_join(*this, qp, _migration_manager.local(), cdc_gen_service);
+        co_await _group0->finish_setup_after_join(*this, qp, _migration_manager.local());
         co_return;
     }
 
@@ -2772,7 +2772,7 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
     }
 
     assert(_group0);
-    co_await _group0->finish_setup_after_join(*this, qp, _migration_manager.local(), cdc_gen_service);
+    co_await _group0->finish_setup_after_join(*this, qp, _migration_manager.local());
     co_await cdc_gen_service.after_join(std::move(cdc_gen_id));
 }
 
