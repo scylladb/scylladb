@@ -2087,7 +2087,7 @@ future<> topology_coordinator::run() {
     co_await _async_gate.close();
 }
 
-future<> storage_service::raft_state_monitor_fiber(raft::server& raft, cdc::generation_service& cdc_gen_svc, sharded<db::system_distributed_keyspace>& sys_dist_ks) {
+future<> storage_service::raft_state_monitor_fiber(raft::server& raft, sharded<db::system_distributed_keyspace>& sys_dist_ks) {
     std::optional<abort_source> as;
     try {
         while (!_abort_source.abort_requested()) {
@@ -2577,7 +2577,7 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
         slogger.info("topology changes are using raft");
 
         // start topology coordinator fiber
-        _raft_state_monitor = raft_state_monitor_fiber(*raft_server, cdc_gen_service, sys_dist_ks);
+        _raft_state_monitor = raft_state_monitor_fiber(*raft_server, sys_dist_ks);
 
         // Need to start system_distributed_keyspace before bootstrap because bootstraping
         // process may access those tables.
