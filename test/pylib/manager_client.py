@@ -12,7 +12,7 @@
 from typing import List, Optional, Callable, Any
 from time import time
 import logging
-from test.pylib.rest_client import UnixRESTClient, ScyllaRESTAPIClient
+from test.pylib.rest_client import UnixRESTClient, ScyllaRESTAPIClient, ScyllaMetricsClient
 from test.pylib.util import wait_for
 from test.pylib.internal_types import ServerNum, IPAddress, HostID, ServerInfo
 from test.pylib.scylla_cluster import ReplaceConfig, ScyllaServer
@@ -43,6 +43,7 @@ class ManagerClient():
         # A client for communicating with ScyllaClusterManager (server)
         self.client = UnixRESTClient(sock_path)
         self.api = ScyllaRESTAPIClient()
+        self.metrics = ScyllaMetricsClient()
 
     async def stop(self):
         """Close driver"""

@@ -226,6 +226,58 @@ class ScyllaRESTAPIClient():
         await self.client.post(f"/system/logger/{logger}?level={level}", host=node_ip)
 
 
+class ScyllaMetrics:
+    def __init__(self, lines: list[str]):
+        self.lines: list[str] = lines
+
+    def lines_by_prefix(self, prefix: str):
+        """Returns all metrics whose name starts with a prefix, e.g.
+           metrics.lines_by_prefix('scylla_hints_manager_')
+        """
+        return [l for l in self.lines if l.startswith(prefix)]
+
+    def get(self, name: str, labels = None, shard: str ='total'):
+        """Get the metric value by name. Allows to specify additional labels filter, e.g.
+           metrics.get('scylla_transport_cql_errors_total', {'type': 'protocol_error'}).
+           If shard is not set, returns the sum of metric values across all shards,
+           otherwise returns the metric value from the specified shard.
+        """
+        result = None
+        for l in self.lines:
+            if not l.startswith(name):
+                continue
+            labels_start = l.find('{')
+            labels_finish = l.find('}')
+            if labels_start == -1 or labels_finish == -1:
+                raise ValueError(f'invalid metric format [{l}]')
+            def match_kv(kv):
+                key, val = kv.split('=')
+                val = val.strip('"')
+                return shard == 'total' or val == shard if key == 'shard' \
+                    else labels is None or labels.get(key, None) == val
+            match = all(match_kv(kv) for kv in l[labels_start + 1:labels_finish].split(','))
+            if match:
+                value = float(l[labels_finish + 2:])
+                if result is None:
+                    result = value
+                else:
+                    result += value
+                if shard != 'total':
+                    break
+        return result
+
+
+class ScyllaMetricsClient:
+    """Async Scylla Metrics API client"""
+
+    def __init__(self, port: int = 9180):
+        self.client = TCPRESTClient(port)
+
+    async def query(self, server_ip: IPAddress) -> ScyllaMetrics:
+        data = await self.client.get_text('/metrics', host=server_ip)
+        return ScyllaMetrics(data.split('\n'))
+
+
 class InjectionHandler():
     """An async client for communicating with injected code by REST API"""
     def __init__(self, api: ScyllaRESTAPIClient, injection: str, node_ip: str):
