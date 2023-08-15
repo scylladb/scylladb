@@ -18,6 +18,7 @@
 #include "replay_position.hh"
 #include "commitlog_entry.hh"
 #include "db/timeout_clock.hh"
+#include "gc_clock.hh"
 #include "utils/fragmented_temporary_buffer.hh"
 
 namespace seastar { class file; }
@@ -356,6 +357,8 @@ public:
 
     future<std::vector<sstring>> list_existing_segments() const;
     future<std::vector<sstring>> list_existing_segments(const sstring& dir) const;
+
+    gc_clock::time_point min_gc_time(const cf_id_type&) const;
 
     typedef std::function<future<>(buffer_and_replay_position)> commit_load_reader_func;
 

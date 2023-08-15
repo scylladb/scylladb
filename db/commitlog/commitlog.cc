@@ -483,6 +483,8 @@ public:
     future<std::vector<descriptor>> list_descriptors(sstring dir) const;
     future<std::vector<sstring>> get_segments_to_replay() const;
 
+    gc_clock::time_point min_gc_time(const cf_id_type&) const;
+
     flush_handler_id add_flush_handler(flush_handler h) {
         auto id = ++_flush_ids;
         _flush_handlers[id] = std::move(h);
@@ -692,6 +694,7 @@ class db::commitlog::segment : public enable_shared_from_this<segment>, public c
     buffer_type _buffer;
     fragmented_temporary_buffer::ostream _buffer_ostream;
     std::unordered_map<cf_id_type, uint64_t> _cf_dirty;
+    std::unordered_map<cf_id_type, gc_clock::time_point> _cf_min_time;
     time_point _sync_time;
     utils::flush_queue<replay_position, std::less<replay_position>, clock_type> _pending_ops;
 
@@ -1197,6 +1200,7 @@ public:
             auto es = entry_size + entry_overhead_size;
 
             _cf_dirty[id]++; // increase use count for cf.
+            _cf_min_time.emplace(id, gc_clock::now()); // if value already exists this does nothing.
 
             rp_handle h(static_pointer_cast<cf_holder>(shared_from_this()), std::move(id), rp);
 
@@ -1299,6 +1303,10 @@ public:
     }
     sstring get_segment_name() const {
         return _desc.filename();
+    }
+    gc_clock::time_point min_time(const cf_id_type& id) const {
+        auto i = _cf_min_time.find(id);
+        return i == _cf_min_time.end() ? gc_clock::time_point::max() : i->second;
     }
 };
 
@@ -1484,6 +1492,14 @@ future<std::vector<sstring>> db::commitlog::segment_manager::get_segments_to_rep
         }
     }
     co_return segments_to_replay;
+}
+
+gc_clock::time_point db::commitlog::segment_manager::min_gc_time(const cf_id_type& id) const {
+    auto res = gc_clock::time_point::max();
+    for (auto& s : _segments) {
+        res = std::min(res, s->min_time(id));
+    }
+    return res;
 }
 
 future<> db::commitlog::segment_manager::init() {
@@ -2985,6 +3001,10 @@ future<std::vector<sstring>> db::commitlog::list_existing_segments(const sstring
         });
         return make_ready_future<std::vector<sstring>>(std::move(paths));
     });
+}
+
+gc_clock::time_point db::commitlog::min_gc_time(const cf_id_type& id) const {
+    return _segment_manager->min_gc_time(id);
 }
 
 future<std::vector<sstring>> db::commitlog::get_segments_to_replay() const {
