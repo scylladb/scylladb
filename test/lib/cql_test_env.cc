@@ -750,6 +750,24 @@ private:
                 return db::initialize_virtual_tables(_db, _ss, _gossiper, _group0_registry, _sys_ks, *cfg);
             }).get();
 
+            _cm.invoke_on_all([&](compaction_manager& cm) {
+                auto cl = _db.local().commitlog();
+                auto scl = _db.local().schema_commitlog();
+                if (cl && scl) {
+                    cm.get_tombstone_gc_state().set_gc_time_min_source([cl, scl](const table_id& id) {
+                        return std::min(cl->min_gc_time(id), scl->min_gc_time(id));
+                    });
+                } else if (cl) {
+                    cm.get_tombstone_gc_state().set_gc_time_min_source([cl](const table_id& id) {
+                        return cl->min_gc_time(id);
+                    });
+                } else if (scl) {
+                    cm.get_tombstone_gc_state().set_gc_time_min_source([scl](const table_id& id) {
+                        return scl->min_gc_time(id);
+                    });
+                }
+            }).get();
+
             replica::distributed_loader::init_non_system_keyspaces(_db, _proxy, _sys_ks).get();
 
             _db.invoke_on_all([] (replica::database& db) {
