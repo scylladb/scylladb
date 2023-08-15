@@ -60,7 +60,14 @@ using sstable_predicate = noncopyable_function<bool(const sstable&)>;
 const sstable_predicate& default_sstable_predicate();
 
 class sstable_set_impl {
+protected:
+    uint64_t _bytes_on_disk = 0;
+
+    // for cloning
+    explicit sstable_set_impl(uint64_t bytes_on_disk) noexcept : _bytes_on_disk(bytes_on_disk) {}
 public:
+    sstable_set_impl() = default;
+    sstable_set_impl(const sstable_set_impl&) = default;
     virtual ~sstable_set_impl() {}
     virtual std::unique_ptr<sstable_set_impl> clone() const = 0;
     virtual std::vector<shared_sstable> select(const dht::partition_range& range) const = 0;
@@ -68,9 +75,20 @@ public:
     virtual lw_shared_ptr<const sstable_list> all() const = 0;
     virtual stop_iteration for_each_sstable_until(std::function<stop_iteration(const shared_sstable&)> func) const = 0;
     virtual future<stop_iteration> for_each_sstable_gently_until(std::function<future<stop_iteration>(const shared_sstable&)> func) const = 0;
-    virtual void insert(shared_sstable sst) = 0;
-    virtual void erase(shared_sstable sst) = 0;
+    // Return true iff sst was inserted
+    virtual bool insert(shared_sstable sst) = 0;
+    // Return true iff sst was erased
+    virtual bool erase(shared_sstable sst) = 0;
     virtual size_t size() const noexcept = 0;
+    virtual uint64_t bytes_on_disk() const noexcept {
+        return _bytes_on_disk;
+    }
+    uint64_t add_bytes_on_disk(uint64_t delta) noexcept {
+        return _bytes_on_disk += delta;
+    }
+    uint64_t sub_bytes_on_disk(uint64_t delta) noexcept {
+        return _bytes_on_disk -= delta;
+    }
     virtual std::unique_ptr<incremental_selector_impl> make_incremental_selector() const = 0;
 
     virtual flat_mutation_reader_v2 create_single_key_sstable_reader(
@@ -123,9 +141,12 @@ public:
             return futurator::invoke(func, sst);
         });
     }
-    void insert(shared_sstable sst);
-    void erase(shared_sstable sst);
+    // Return true iff sst was inserted
+    bool insert(shared_sstable sst);
+    // Return true iff sst was erase
+    bool erase(shared_sstable sst);
     size_t size() const noexcept;
+    uint64_t bytes_on_disk() const noexcept;
 
     // Used to incrementally select sstables from sstable set using ring-position.
     // sstable set must be alive during the lifetime of the selector.

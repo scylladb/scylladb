@@ -483,9 +483,7 @@ compaction_group::do_add_sstable(lw_shared_ptr<sstables::sstable_set> sstables, 
 }
 
 void compaction_group::add_sstable(sstables::shared_sstable sstable) {
-    auto sstable_size = sstable->bytes_on_disk();
     _main_sstables = do_add_sstable(_main_sstables, std::move(sstable), enable_backlog_tracker::yes);
-    _main_set_disk_space_used += sstable_size;
 }
 
 const lw_shared_ptr<sstables::sstable_set>& compaction_group::main_sstables() const noexcept {
@@ -494,13 +492,10 @@ const lw_shared_ptr<sstables::sstable_set>& compaction_group::main_sstables() co
 
 void compaction_group::set_main_sstables(lw_shared_ptr<sstables::sstable_set> new_main_sstables) {
     _main_sstables = std::move(new_main_sstables);
-    _main_set_disk_space_used = calculate_disk_space_used_for(*_main_sstables);
 }
 
 void compaction_group::add_maintenance_sstable(sstables::shared_sstable sst) {
-    auto sstable_size = sst->bytes_on_disk();
     _maintenance_sstables = do_add_sstable(_maintenance_sstables, std::move(sst), enable_backlog_tracker::no);
-    _maintenance_set_disk_space_used += sstable_size;
 }
 
 const lw_shared_ptr<sstables::sstable_set>& compaction_group::maintenance_sstables() const noexcept {
@@ -509,7 +504,6 @@ const lw_shared_ptr<sstables::sstable_set>& compaction_group::maintenance_sstabl
 
 void compaction_group::set_maintenance_sstables(lw_shared_ptr<sstables::sstable_set> new_maintenance_sstables) {
     _maintenance_sstables = std::move(new_maintenance_sstables);
-    _maintenance_set_disk_space_used = calculate_disk_space_used_for(*_maintenance_sstables);
 }
 
 void table::add_sstable(compaction_group& cg, sstables::shared_sstable sstable) {
@@ -1070,7 +1064,7 @@ size_t compaction_group::live_sstable_count() const noexcept {
 }
 
 uint64_t compaction_group::live_disk_space_used() const noexcept {
-    return _main_set_disk_space_used + _maintenance_set_disk_space_used;
+    return _main_sstables->bytes_on_disk() + _maintenance_sstables->bytes_on_disk();
 }
 
 uint64_t compaction_group::total_disk_space_used() const noexcept {

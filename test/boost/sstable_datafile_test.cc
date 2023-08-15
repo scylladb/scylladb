@@ -467,7 +467,7 @@ SEASTAR_TEST_CASE(test_counter_write) {
 static shared_sstable sstable_for_overlapping_test(test_env& env, const schema_ptr& schema,
         const partition_key& first_key, const partition_key& last_key, uint32_t level = 0) {
     auto sst = env.make_sstable(schema);
-    sstables::test(sst).set_values_for_leveled_strategy(0, level, 0, first_key, last_key);
+    sstables::test(sst).set_values_for_leveled_strategy(1 /* data_size */, level, 0 /* max_timestamp */, first_key, last_key);
     return sst;
 }
 

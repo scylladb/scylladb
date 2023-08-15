@@ -99,3 +99,71 @@ SEASTAR_TEST_CASE(test_time_series_sstable_set_read_modify_write) {
         BOOST_REQUIRE(lookup_sst(sst2));
     });
 }
+
+SEASTAR_TEST_CASE(test_time_series_sstable_set_bytes_on_disk) {
+    return test_env::do_with_async([] (test_env& env) {
+        simple_schema ss;
+        auto s = ss.schema();
+
+        auto pk = tests::generate_partition_key(s);
+        auto mut = mutation(s, pk);
+        ss.add_row(mut, ss.make_ckey(0), "val");
+        sstable_writer_config cfg = env.manager().configure_writer("");
+
+        auto mr = make_flat_mutation_reader_from_mutations_v2(s, env.make_reader_permit(), mut);
+        auto sst1 = make_sstable_easy(env, std::move(mr), cfg);
+        auto size1 = sst1->bytes_on_disk();
+
+        auto ss1 = make_lw_shared<sstable_set>(std::make_unique<time_series_sstable_set>(ss.schema(), true), ss.schema());
+        ss1->insert(sst1);
+        BOOST_REQUIRE_EQUAL(ss1->bytes_on_disk(), size1);
+
+        // Test that a random sstable_origin is stored and retrieved properly.
+        mr = make_flat_mutation_reader_from_mutations_v2(s, env.make_reader_permit(), mut);
+        auto sst2 = make_sstable_easy(env, std::move(mr), cfg);
+        auto size2 = sst2->bytes_on_disk();
+
+        auto ss2 = make_lw_shared<sstable_set>(*ss1);
+        BOOST_REQUIRE_EQUAL(ss2->bytes_on_disk(), ss1->bytes_on_disk());
+        ss2->insert(sst2);
+        BOOST_REQUIRE_EQUAL(ss2->bytes_on_disk(), size1 + size2);
+
+        std::vector<lw_shared_ptr<sstable_set>> sets = {ss1, ss2};
+        auto sst_set = make_lw_shared<sstable_set>(std::make_unique<compound_sstable_set>(s, std::move(sets)), ss.schema());
+        BOOST_REQUIRE_EQUAL(sst_set->bytes_on_disk(), ss1->bytes_on_disk() + ss2->bytes_on_disk());
+    });
+}
+
+SEASTAR_TEST_CASE(test_partitioned_sstable_set_bytes_on_disk) {
+    return test_env::do_with_async([] (test_env& env) {
+        simple_schema ss;
+        auto s = ss.schema();
+
+        auto pk = tests::generate_partition_key(s);
+        auto mut = mutation(s, pk);
+        ss.add_row(mut, ss.make_ckey(0), "val");
+        sstable_writer_config cfg = env.manager().configure_writer("");
+
+        auto mr = make_flat_mutation_reader_from_mutations_v2(s, env.make_reader_permit(), mut);
+        auto sst1 = make_sstable_easy(env, std::move(mr), cfg);
+        auto size1 = sst1->bytes_on_disk();
+
+        auto ss1 = make_lw_shared<sstable_set>(std::make_unique<partitioned_sstable_set>(ss.schema(), true), ss.schema());
+        ss1->insert(sst1);
+        BOOST_REQUIRE_EQUAL(ss1->bytes_on_disk(), size1);
+
+        // Test that a random sstable_origin is stored and retrieved properly.
+        mr = make_flat_mutation_reader_from_mutations_v2(s, env.make_reader_permit(), mut);
+        auto sst2 = make_sstable_easy(env, std::move(mr), cfg);
+        auto size2 = sst2->bytes_on_disk();
+
+        auto ss2 = make_lw_shared<sstable_set>(*ss1);
+        BOOST_REQUIRE_EQUAL(ss2->bytes_on_disk(), ss1->bytes_on_disk());
+        ss2->insert(sst2);
+        BOOST_REQUIRE_EQUAL(ss2->bytes_on_disk(), size1 + size2);
+
+        std::vector<lw_shared_ptr<sstable_set>> sets = {ss1, ss2};
+        auto sst_set = make_lw_shared<sstable_set>(std::make_unique<compound_sstable_set>(s, std::move(sets)), ss.schema());
+        BOOST_REQUIRE_EQUAL(sst_set->bytes_on_disk(), ss1->bytes_on_disk() + ss2->bytes_on_disk());
+    });
+}
