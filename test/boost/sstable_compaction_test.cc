@@ -3379,11 +3379,11 @@ SEASTAR_TEST_CASE(autocompaction_control_test) {
         // trigger background compaction
         cf->trigger_compaction();
         // wait until compaction finished
-        do_until([&cm] { return cm.get_stats().completed_tasks > 0; }, [] {
-            return sleep(std::chrono::milliseconds(100));
+        do_until([&ss] { return ss.completed_tasks > 0 && ss.pending_tasks == 0; }, [] {
+            return sleep(std::chrono::milliseconds(1));
         }).wait();
         // test no more running compactions
-        BOOST_REQUIRE(ss.pending_tasks == 0 && ss.active_tasks == 0);
+        BOOST_REQUIRE(ss.active_tasks == 0);
         // test compaction successfully finished
         BOOST_REQUIRE(ss.errors == 0);
         BOOST_REQUIRE(ss.completed_tasks == 1);
