@@ -1,0 +1,15 @@
+#!/usr/bin/env python3
+#
+# Copyright 2023-present ScyllaDB
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+
+import signal
+import sys
+
+print(f"argv: {sys.argv}")
+print(f"init - Scylla version dummy initialization completed.")
+sys.stdout.flush()
+
+signal.pause()

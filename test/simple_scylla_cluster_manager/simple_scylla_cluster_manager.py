@@ -1,0 +1,1 @@
+../../scripts/simple_scylla_cluster_manager.py
