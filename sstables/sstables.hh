@@ -134,6 +134,35 @@ constexpr auto table_subdirectories = std::to_array({
     pending_delete_dir,
 });
 
+enum class sstable_state {
+    normal,
+    staging,
+    quarantine,
+    upload,
+};
+
+inline sstring state_to_dir(sstable_state state) {
+    switch (state) {
+    case sstable_state::normal:
+        return normal_dir;
+    case sstable_state::staging:
+        return staging_dir;
+    case sstable_state::quarantine:
+        return quarantine_dir;
+    case sstable_state::upload:
+        return upload_dir;
+    }
+}
+
+// FIXME -- temporary, move to fs storage after patching the rest
+inline fs::path make_path(std::string_view table_dir, sstable_state state) {
+    fs::path ret(table_dir);
+    if (state != sstable_state::normal) {
+        ret /= state_to_dir(state).c_str();
+    }
+    return ret;
+}
+
 constexpr const char* repair_origin = "repair";
 
 class delayed_commit_changes {
@@ -151,9 +180,10 @@ public:
     using manager_link_type = bi::list_member_hook<bi::link_mode<bi::auto_unlink>>;
 public:
     sstable(schema_ptr schema,
+            sstring table_dir,
             const data_dictionary::storage_options& storage,
-            sstring dir,
             generation_type generation,
+            sstable_state state,
             version_types v,
             format_types f,
             db::large_data_handler& large_data_handler,
@@ -214,11 +244,11 @@ public:
     //
     // Known states are normal, staging, upload and quarantine.
     // It's up to the storage driver how to implement this.
-    future<> change_state(sstring to, delayed_commit_changes* delay = nullptr);
+    future<> change_state(sstable_state to, delayed_commit_changes* delay = nullptr);
 
     // Filesystem-specific call to grab an sstable from upload dir and
     // put it into the desired destination assigning the given generation
-    future<> pick_up_from_upload(sstring to, generation_type new_generation);
+    future<> pick_up_from_upload(sstable_state to, generation_type new_generation);
 
     generation_type generation() const {
         return _generation;
@@ -376,11 +406,11 @@ public:
         return filename(component_type::Index);
     }
 
-    bool requires_view_building() const;
+    bool requires_view_building() const noexcept { return _state == sstable_state::staging; }
 
-    bool is_quarantined() const noexcept;
+    bool is_quarantined() const noexcept { return _state == sstable_state::quarantine; }
 
-    bool is_uploaded() const noexcept;
+    bool is_uploaded() const noexcept { return _state == sstable_state::upload; }
 
     std::vector<std::pair<component_type, sstring>> all_components() const;
 
@@ -469,10 +499,7 @@ public:
 
 private:
     sstring filename(component_type f) const {
-        return filename(_storage->prefix(), f);
-    }
-
-    sstring filename(const sstring& dir, component_type f) const {
+        auto dir = _storage->prefix();
         return filename(dir, _schema->ks_name(), _schema->cf_name(), _version, _generation, _format, f);
     }
 
@@ -515,6 +542,7 @@ private:
 
     schema_ptr _schema;
     generation_type _generation{0};
+    sstable_state _state;
 
     std::unique_ptr<storage> _storage;
 

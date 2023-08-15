@@ -258,7 +258,7 @@ const std::vector<sstables::shared_sstable> load_sstables(schema_ptr schema, sst
 
         auto ed = sstables::entry_descriptor::make_descriptor(dir_path.c_str(), sst_filename.c_str(), schema->ks_name(), schema->cf_name());
         data_dictionary::storage_options local;
-        auto sst = sst_man.make_sstable(schema, local, dir_path.c_str(), ed.generation, ed.version, ed.format);
+        auto sst = sst_man.make_sstable(schema, dir_path.c_str(), local, ed.generation, sstables::sstable_state::normal, ed.version, ed.format);
 
         co_await sst->load(schema->get_sharder(), sstables::sstable_open_config{.load_first_and_last_position_metadata = false});
 
@@ -813,7 +813,7 @@ private:
             throw std::runtime_error(fmt::format("cannot create output sstable {}, file already exists", sst_name));
         }
         data_dictionary::storage_options local;
-        return _sst_man.make_sstable(_schema, local, _output_dir, generation, version, format);
+        return _sst_man.make_sstable(_schema, _output_dir, local, generation, sstables::sstable_state::normal, version, format);
     }
     sstables::sstable_writer_config do_configure_writer(sstring origin) const {
         return _sst_man.configure_writer(std::move(origin));
@@ -2433,7 +2433,7 @@ void write_operation(schema_ptr schema, reader_permit permit, const std::vector<
     auto writer_cfg = manager.configure_writer("scylla-sstable");
     writer_cfg.validation_level = validation_level;
     data_dictionary::storage_options local;
-    auto sst = manager.make_sstable(schema, local, output_dir, generation, version, format);
+    auto sst = manager.make_sstable(schema, output_dir, local, generation, sstables::sstable_state::normal, version, format);
 
     sst->write_components(std::move(reader), 1, schema, writer_cfg, encoding_stats{}).get();
 }

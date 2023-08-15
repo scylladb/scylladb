@@ -20,6 +20,7 @@
 #include "sstable_directory.hh"
 #include "utils/lister.hh"
 #include "utils/overloaded_functor.hh"
+#include "utils/directories.hh"
 #include "replica/database.hh"
 #include "db/system_keyspace.hh"
 
@@ -64,12 +65,15 @@ sstable_directory::sstable_directory(sstables_manager& manager,
         schema_ptr schema,
         const dht::sharder& sharder,
         lw_shared_ptr<const data_dictionary::storage_options> storage_opts,
-        fs::path sstable_dir,
+        sstring table_dir,
+        sstable_state state,
         io_error_handler_gen error_handler_gen)
     : _manager(manager)
     , _schema(std::move(schema))
     , _storage_opts(std::move(storage_opts))
-    , _sstable_dir(std::move(sstable_dir))
+    , _table_dir(std::move(table_dir))
+    , _state(state)
+    , _sstable_dir(make_path(_table_dir, _state))
     , _error_handler_gen(error_handler_gen)
     , _lister(make_components_lister())
     , _sharder(sharder)
@@ -126,7 +130,7 @@ void sstable_directory::validate(sstables::shared_sstable sst, process_flags fla
 }
 
 future<sstables::shared_sstable> sstable_directory::load_sstable(sstables::entry_descriptor desc, sstables::sstable_open_config cfg) const {
-    auto sst = _manager.make_sstable(_schema, *_storage_opts, _sstable_dir.native(), desc.generation, desc.version, desc.format, gc_clock::now(), _error_handler_gen);
+    auto sst = _manager.make_sstable(_schema, _table_dir, *_storage_opts, desc.generation, _state, desc.version, desc.format, gc_clock::now(), _error_handler_gen);
     co_await sst->load(_sharder, cfg);
     co_return sst;
 }
@@ -156,7 +160,7 @@ sstable_directory::process_descriptor(sstables::entry_descriptor desc, process_f
 }
 
 future<std::vector<shard_id>> sstable_directory::get_shards_for_this_sstable(const sstables::entry_descriptor& desc, process_flags flags) const {
-    auto sst = _manager.make_sstable(_schema, *_storage_opts, _sstable_dir.native(), desc.generation, desc.version, desc.format, gc_clock::now(), _error_handler_gen);
+    auto sst = _manager.make_sstable(_schema, _table_dir, *_storage_opts, desc.generation, _state, desc.version, desc.format, gc_clock::now(), _error_handler_gen);
     co_await sst->load_owner_shards(_sharder);
     validate(sst, flags);
     co_return sst->get_shards_for_this_sstable();
@@ -196,6 +200,22 @@ sstable_directory::highest_generation_seen() const {
 sstables::sstable_version_types
 sstable_directory::highest_version_seen() const {
     return _max_version_seen;
+}
+
+future<> sstable_directory::prepare(process_flags flags) {
+    // verify owner and mode on the sstables directory
+    // and all its subdirectories, except for "snapshots"
+    // as there could be a race with scylla-manager that might
+    // delete snapshots concurrently
+    co_await utils::directories::verify_owner_and_mode(_sstable_dir, utils::directories::recursive::no);
+    co_await lister::scan_dir(_sstable_dir, lister::dir_entry_types::of<directory_entry_type::directory>(), [] (fs::path dir, directory_entry de) -> future<> {
+        if (de.name != sstables::snapshots_dir) {
+            co_await utils::directories::verify_owner_and_mode(dir / de.name, utils::directories::recursive::yes);
+        }
+    });
+    if (flags.garbage_collect) {
+        co_await garbage_collect();
+    }
 }
 
 future<> sstable_directory::process_sstable_dir(process_flags flags) {
@@ -342,7 +362,7 @@ sstable_directory::move_foreign_sstables(sharded<sstable_directory>& source_dire
 }
 
 future<shared_sstable> sstable_directory::load_foreign_sstable(foreign_sstable_open_info& info) {
-    auto sst = _manager.make_sstable(_schema, *_storage_opts, _sstable_dir.native(), info.generation, info.version, info.format, gc_clock::now(), _error_handler_gen);
+    auto sst = _manager.make_sstable(_schema, _table_dir, *_storage_opts, info.generation, _state, info.version, info.format, gc_clock::now(), _error_handler_gen);
     co_await sst->load(std::move(info));
     co_return sst;
 }

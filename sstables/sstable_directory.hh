@@ -32,6 +32,7 @@ namespace db { class system_keyspace; }
 
 namespace sstables {
 
+enum class sstable_state;
 class sstables_manager;
 bool manifest_json_filter(const std::filesystem::path&, const directory_entry& entry);
 
@@ -133,7 +134,9 @@ private:
     sstables_manager& _manager;
     schema_ptr _schema;
     lw_shared_ptr<const data_dictionary::storage_options> _storage_opts;
-    std::filesystem::path _sstable_dir;
+    sstring _table_dir;
+    sstable_state _state;
+    std::filesystem::path _sstable_dir; // FIXME -- remove eventually
     io_error_handler_gen _error_handler_gen;
     std::unique_ptr<components_lister> _lister;
     const dht::sharder& _sharder;
@@ -188,7 +191,8 @@ public:
             schema_ptr schema,
             const dht::sharder& sharder,
             lw_shared_ptr<const data_dictionary::storage_options> storage_opts,
-            std::filesystem::path sstable_dir,
+            sstring table_dir,
+            sstable_state state,
             io_error_handler_gen error_handler_gen);
 
     std::vector<sstables::shared_sstable>& get_unsorted_sstables() {
@@ -205,6 +209,8 @@ public:
 
     // returns what is the highest version seen in this directory.
     sstables::sstable_version_types highest_version_seen() const;
+
+    future<> prepare(process_flags flags);
 
     // scans a directory containing SSTables. Every generation that is believed to belong to this
     // shard is processed, the ones that are not are skipped. Potential pertinence is decided as
@@ -249,10 +255,6 @@ public:
 
     using can_be_remote = bool_class<struct can_be_remote_tag>;
     future<> collect_output_unshared_sstables(std::vector<sstables::shared_sstable> resharded_sstables, can_be_remote);
-
-    std::filesystem::path sstable_dir() const noexcept {
-        return _sstable_dir;
-    }
 
     // When we compact sstables, we have to atomically instantiate the new
     // sstable and delete the old ones.  Otherwise, if we compact A+B into C,

@@ -72,7 +72,6 @@
 #include "sstables/partition_index_cache.hh"
 #include "utils/UUID_gen.hh"
 #include "sstables_manager.hh"
-#include <boost/algorithm/string/predicate.hpp>
 #include "tracing/traced_file.hh"
 #include "kl/reader.hh"
 #include "mx/reader.hh"
@@ -1976,18 +1975,6 @@ std::vector<sstring> sstable::component_filenames() const {
     return res;
 }
 
-bool sstable::requires_view_building() const {
-    return boost::algorithm::ends_with(_storage->prefix(), staging_dir);
-}
-
-bool sstable::is_quarantined() const noexcept {
-    return boost::algorithm::ends_with(_storage->prefix(), quarantine_dir);
-}
-
-bool sstable::is_uploaded() const noexcept {
-    return boost::algorithm::ends_with(_storage->prefix(), upload_dir);
-}
-
 sstring sstable::component_basename(const sstring& ks, const sstring& cf, version_types version, generation_type generation,
                                     format_types format, sstring component) {
     sstring v = fmt::to_string(version);
@@ -2038,13 +2025,15 @@ future<> sstable::snapshot(const sstring& dir) const {
     return _storage->snapshot(*this, dir, storage::absolute_path::yes);
 }
 
-future<> sstable::change_state(sstring to, delayed_commit_changes* delay_commit) {
+future<> sstable::change_state(sstable_state to, delayed_commit_changes* delay_commit) {
     co_await _storage->change_state(*this, to, _generation, delay_commit);
+    _state = to;
 }
 
-future<> sstable::pick_up_from_upload(sstring to, generation_type new_generation) {
+future<> sstable::pick_up_from_upload(sstable_state to, generation_type new_generation) {
     co_await _storage->change_state(*this, to, new_generation, nullptr);
     _generation = std::move(new_generation);
+    _state = to;
 }
 
 future<> delayed_commit_changes::commit() {
@@ -2943,9 +2932,10 @@ mutation_source sstable::as_mutation_source() {
 }
 
 sstable::sstable(schema_ptr schema,
+        sstring table_dir,
         const data_dictionary::storage_options& storage,
-        sstring dir,
         generation_type generation,
+        sstable_state state,
         version_types v,
         format_types f,
         db::large_data_handler& large_data_handler,
@@ -2956,7 +2946,8 @@ sstable::sstable(schema_ptr schema,
     : sstable_buffer_size(buffer_size)
     , _schema(std::move(schema))
     , _generation(generation)
-    , _storage(make_storage(manager, storage, std::move(dir)))
+    , _state(state)
+    , _storage(make_storage(manager, storage, std::move(table_dir), _state))
     , _version(v)
     , _format(f)
     , _index_cache(std::make_unique<partition_index_cache>(

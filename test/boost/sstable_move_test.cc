@@ -63,8 +63,8 @@ SEASTAR_THREAD_TEST_CASE(test_sstable_move_idempotent) {
     auto [ sst, cur_dir ] = copy_sst_to_tmpdir(tmp.path(), env, uncompressed_schema(), fs::path(uncompressed_dir()), gen_generator());
     sstring old_path = sst->get_storage().prefix();
     touch_directory(format("{}/{}", old_path, sstables::staging_dir)).get();
-    sst->change_state(sstables::staging_dir).get();
-    sst->change_state(sstables::normal_dir).get();
+    sst->change_state(sstables::sstable_state::staging).get();
+    sst->change_state(sstables::sstable_state::normal).get();
     BOOST_REQUIRE(sstable_directory::compare_sstable_storage_prefix(old_path, sst->get_storage().prefix()));
 
     sst->close_files().get();

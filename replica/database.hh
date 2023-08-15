@@ -92,6 +92,7 @@ class feature_service;
 
 namespace sstables {
 
+enum class sstable_state;
 class sstable;
 class compaction_descriptor;
 class compaction_completion_desc;
@@ -499,7 +500,7 @@ private:
     db_clock::time_point _truncated_at = db_clock::time_point::min();
 
     bool _is_bootstrap_or_replace = false;
-    sstables::shared_sstable make_sstable(sstring dir);
+    sstables::shared_sstable make_sstable(sstables::sstable_state state);
 
 public:
     void deregister_metrics();
@@ -717,7 +718,7 @@ public:
     flat_mutation_reader_v2 make_nonpopulating_cache_reader(schema_ptr schema, reader_permit permit, const dht::partition_range& range,
             const query::partition_slice& slice, tracing::trace_state_ptr ts);
 
-    sstables::shared_sstable make_streaming_sstable_for_write(std::optional<sstring> subdir = {});
+    sstables::shared_sstable make_streaming_sstable_for_write();
     sstables::shared_sstable make_streaming_staging_sstable();
 
     mutation_source as_mutation_source() const;

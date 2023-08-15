@@ -278,18 +278,16 @@ table::make_reader_v2(schema_ptr s,
     return rd;
 }
 
-sstables::shared_sstable table::make_streaming_sstable_for_write(std::optional<sstring> subdir) {
-    sstring dir = _config.datadir;
-    if (subdir) {
-        dir += "/" + *subdir;
-    }
-    auto newtab = make_sstable(dir);
-    tlogger.debug("Created sstable for streaming: ks={}, cf={}, dir={}", schema()->ks_name(), schema()->cf_name(), dir);
+sstables::shared_sstable table::make_streaming_sstable_for_write() {
+    auto newtab = make_sstable(sstables::sstable_state::normal);
+    tlogger.debug("Created sstable for streaming: ks={}, cf={}", schema()->ks_name(), schema()->cf_name());
     return newtab;
 }
 
 sstables::shared_sstable table::make_streaming_staging_sstable() {
-    return make_streaming_sstable_for_write(sstables::staging_dir);
+    auto newtab = make_sstable(sstables::sstable_state::staging);
+    tlogger.debug("Created staging sstable for streaming: ks={}, cf={}", schema()->ks_name(), schema()->cf_name());
+    return newtab;
 }
 
 static flat_mutation_reader_v2 maybe_compact_for_streaming(flat_mutation_reader_v2 underlying, const compaction_manager& cm, gc_clock::time_point compaction_time, bool compaction_enabled) {
@@ -436,13 +434,13 @@ static bool belongs_to_other_shard(const std::vector<shard_id>& shards) {
     return shards.size() != size_t(belongs_to_current_shard(shards));
 }
 
-sstables::shared_sstable table::make_sstable(sstring dir) {
+sstables::shared_sstable table::make_sstable(sstables::sstable_state state) {
     auto& sstm = get_sstables_manager();
-    return sstm.make_sstable(_schema, *_storage_opts, dir, calculate_generation_for_new_table(), sstm.get_highest_supported_format(), sstables::sstable::format_types::big);
+    return sstm.make_sstable(_schema, _config.datadir, *_storage_opts, calculate_generation_for_new_table(), state, sstm.get_highest_supported_format(), sstables::sstable::format_types::big);
 }
 
 sstables::shared_sstable table::make_sstable() {
-    return make_sstable(_config.datadir);
+    return make_sstable(sstables::sstable_state::normal);
 }
 
 void table::notify_bootstrap_or_replace_start() {
@@ -2587,7 +2585,7 @@ future<> table::move_sstables_from_staging(std::vector<sstables::shared_sstable>
             // completed first.
             // The _sstable_deletion_sem prevents list update on off-strategy completion and move_sstables_from_staging()
             // from stepping on each other's toe.
-            co_await sst->change_state(sstables::normal_dir, &delay_commit);
+            co_await sst->change_state(sstables::sstable_state::normal, &delay_commit);
             auto& cg = compaction_group_for_sstable(sst);
             if (get_compaction_manager().requires_cleanup(cg.as_table_state(), sst)) {
                 compaction_groups_to_notify.insert(&cg);

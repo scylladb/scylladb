@@ -104,11 +104,10 @@ public:
     explicit sstables_manager(db::large_data_handler& large_data_handler, const db::config& dbcfg, gms::feature_service& feat, cache_tracker&, size_t available_memory, directory_semaphore& dir_sem, storage_manager* shared = nullptr);
     virtual ~sstables_manager();
 
-    // Constructs a shared sstable
-    shared_sstable make_sstable(schema_ptr schema,
-            const data_dictionary::storage_options& storage, // FIXME -- move dir on options
-            sstring dir,
+    shared_sstable make_sstable(schema_ptr schema, sstring table_dir,
+            const data_dictionary::storage_options& storage,
             generation_type generation,
+            sstable_state state = sstable_state::normal,
             sstable_version_types v = get_highest_sstable_version(),
             sstable_format_types f = sstable_format_types::big,
             gc_clock::time_point now = gc_clock::now(),
