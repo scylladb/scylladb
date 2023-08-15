@@ -37,10 +37,10 @@ public:
     strongly_consistent_modification_statement(uint32_t bound_terms, schema_ptr schema, broadcast_tables::prepared_update query);
 
     virtual future<::shared_ptr<cql_transport::messages::result_message>>
-    execute(query_processor& qp, service::query_state& qs, const query_options& options) const override;
+    execute(query_processor& qp, service::query_state& qs, const query_options& options, std::optional<service::group0_guard> guard) const override;
 
     virtual future<::shared_ptr<cql_transport::messages::result_message>>
-    execute_without_checking_exception_message(query_processor& qp, service::query_state& qs, const query_options& options) const override;
+    execute_without_checking_exception_message(query_processor& qp, service::query_state& qs, const query_options& options, std::optional<service::group0_guard> guard) const override;
 
     virtual uint32_t get_bound_terms() const override;
 

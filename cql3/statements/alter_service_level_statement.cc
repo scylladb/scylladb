@@ -36,7 +36,7 @@ future<> alter_service_level_statement::check_access(query_processor& qp, const 
 future<::shared_ptr<cql_transport::messages::result_message>>
 alter_service_level_statement::execute(query_processor& qp,
         service::query_state &state,
-        const query_options &) const {
+        const query_options &, std::optional<service::group0_guard> guard) const {
     qos::service_level& sl = state.get_service_level_controller().get_service_level(_service_level);
     qos::service_level_options slo = _slo.replace_defaults(sl.slo);
     return state.get_service_level_controller().alter_distributed_service_level(_service_level, slo).then([] {

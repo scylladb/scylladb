@@ -39,7 +39,8 @@ future<> list_service_level_attachments_statement::check_access(query_processor&
 future<::shared_ptr<cql_transport::messages::result_message>>
 list_service_level_attachments_statement::execute(query_processor& qp,
         service::query_state &state,
-        const query_options &) const {
+        const query_options &,
+        std::optional<service::group0_guard> guard) const {
 
     static auto make_column = [] (sstring name, const shared_ptr<const abstract_type> type) {
         return make_lw_shared<column_specification>(

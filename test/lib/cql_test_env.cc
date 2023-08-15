@@ -274,7 +274,7 @@ public:
 
         auto qs = make_query_state();
         auto& lqo = *qo;
-        return local_qp().execute_prepared_without_checking_exception_message(std::move(prepared), std::move(id), *qs, lqo, true)
+        return local_qp().execute_prepared_without_checking_exception_message(*qs, std::move(stmt), lqo, std::move(prepared), std::move(id), true)
             .then([qs, qo = std::move(qo)] (auto msg) {
                 return cql_transport::messages::propagate_exception_as_future(std::move(msg));
             });
