@@ -22,7 +22,8 @@ import util
 @pytest.fixture(scope="module")
 def test_table(cql, test_keyspace):
     """ Prepares a table for the mutation dump tests to work with."""
-    with util.new_test_table(cql, test_keyspace, 'pk1 int, pk2 int, ck1 int, ck2 int, v text, s text static, PRIMARY KEY ((pk1, pk2), ck1, ck2)') as table:
+    with util.new_test_table(cql, test_keyspace, 'pk1 int, pk2 int, ck1 int, ck2 int, v text, s text static, PRIMARY KEY ((pk1, pk2), ck1, ck2)',
+                             "WITH compaction = {'class':'NullCompactionStrategy'}") as table:
         yield table
 
 
@@ -117,21 +118,19 @@ def test_mutation_dump_range_tombstone_changes(cql, test_table, scylla_only):
     This doesn't seem to happen in practice, but this test still tries to produce
     such range tombstone and checks that they are handled correctly.
     """
-    ks, _ = test_table.split(".")
     pk1 = util.unique_key_int()
     pk2 = util.unique_key_int()
     cql.execute(f"INSERT INTO {test_table} (pk1, pk2, ck1, ck2, v) VALUES ({pk1}, {pk2}, 0, 0, 'vv')")
 
     rts = 4
 
-    with nodetool.no_autocompaction_context(cql, ks):
-        for ck in range(44, 44 - rts, -1):
-            cql.execute(f"DELETE FROM {test_table} WHERE pk1={pk1} AND pk2={pk2} AND ck1=0 AND ck2>30 AND ck2<{ck}")
-            nodetool.flush(cql, f"{test_table}")
+    for ck in range(44, 44 - rts, -1):
+        cql.execute(f"DELETE FROM {test_table} WHERE pk1={pk1} AND pk2={pk2} AND ck1=0 AND ck2>30 AND ck2<{ck}")
+        nodetool.flush(cql, f"{test_table}")
 
-        res = list(cql.execute(f"SELECT * FROM MUTATION_FRAGMENTS({test_table}) WHERE pk1 = {pk1} AND pk2 = {pk2} AND mutation_source > 'sstable' AND mutation_source < 'sstable;' AND partition_region = 2 ALLOW FILTERING"))
-        # row + 2 * range-tombstone-change
-        assert len(res) == 2 * rts + 1
+    res = list(cql.execute(f"SELECT * FROM MUTATION_FRAGMENTS({test_table}) WHERE pk1 = {pk1} AND pk2 = {pk2} AND mutation_source > 'sstable' AND mutation_source < 'sstable;' AND partition_region = 2 ALLOW FILTERING"))
+    # row + 2 * range-tombstone-change
+    assert len(res) == 2 * rts + 1
 
 
 def test_count(cql, test_table, scylla_only):
@@ -387,38 +386,35 @@ def test_ck_in_query(cql, test_table):
     nodetool.flush(cql, f"{test_table}")
     cql.execute(f"INSERT INTO {test_table} (pk1, pk2, ck1, ck2, v) VALUES ({pk1}, {pk2}, 0, 0, 'vv')")
 
-    ks, _ = test_table.split(".")
+    sources_res = list(cql.execute(f"SELECT * FROM MUTATION_FRAGMENTS({test_table}) WHERE pk1 = {pk1} AND pk2 = {pk2}"))
 
-    with nodetool.no_autocompaction_context(cql, ks):
-        sources_res = list(cql.execute(f"SELECT * FROM MUTATION_FRAGMENTS({test_table}) WHERE pk1 = {pk1} AND pk2 = {pk2}"))
+    sources = {r.mutation_source.split(":")[0]: r.mutation_source for r in sources_res}
+    assert len(sources) == 3
+    assert "memtable" in sources
+    assert "row-cache" in sources
+    assert "sstable" in sources
 
-        sources = {r.mutation_source.split(":")[0]: r.mutation_source for r in sources_res}
-        assert len(sources) == 3
-        assert "memtable" in sources
-        assert "row-cache" in sources
-        assert "sstable" in sources
+    res = list(cql.execute(f"""SELECT * FROM MUTATION_FRAGMENTS({test_table})
+        WHERE
+            pk1 = {pk1} AND
+            pk2 = {pk2} AND
+            (mutation_source, partition_region, ck1, ck2, position_weight) IN (
+                ('{sources["memtable"]}', 2, 0, 0, 0),
+                ('{sources["row-cache"]}', 2, 0, 0, 0),
+                ('{sources["sstable"]}', 2, 0, 0, 0),
+                ('{sources["sstable"]}', 2, 1, 1, 0))
+        """))
 
-        res = list(cql.execute(f"""SELECT * FROM MUTATION_FRAGMENTS({test_table})
-            WHERE
-                pk1 = {pk1} AND
-                pk2 = {pk2} AND
-                (mutation_source, partition_region, ck1, ck2, position_weight) IN (
-                    ('{sources["memtable"]}', 2, 0, 0, 0),
-                    ('{sources["row-cache"]}', 2, 0, 0, 0),
-                    ('{sources["sstable"]}', 2, 0, 0, 0),
-                    ('{sources["sstable"]}', 2, 1, 1, 0))
-            """))
+    columns = ("mutation_source", "partition_region", "ck1", "ck2", "position_weight")
+    expected_results = [
+            (sources["memtable"], 2, 0, 0, 0),
+            (sources["row-cache"], 2, 0, 0, 0),
+            (sources["sstable"], 2, 0, 0, 0),
+            (sources["sstable"], 2, 1, 1, 0),
+    ]
 
-        columns = ("mutation_source", "partition_region", "ck1", "ck2", "position_weight")
-        expected_results = [
-                (sources["memtable"], 2, 0, 0, 0),
-                (sources["row-cache"], 2, 0, 0, 0),
-                (sources["sstable"], 2, 0, 0, 0),
-                (sources["sstable"], 2, 1, 1, 0),
-        ]
-
-        assert len(res) == len(expected_results)
-        for row, expected_row in zip(res, expected_results):
-            for col_name, expected_value in zip(columns, expected_row):
-                assert hasattr(row, col_name)
-                assert getattr(row, col_name) == expected_value
+    assert len(res) == len(expected_results)
+    for row, expected_row in zip(res, expected_results):
+        for col_name, expected_value in zip(columns, expected_row):
+            assert hasattr(row, col_name)
+            assert getattr(row, col_name) == expected_value
