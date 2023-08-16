@@ -52,6 +52,8 @@ public:
 };
 
 namespace compaction {
+using throw_if_stopping = bool_class<struct throw_if_stopping_tag>;
+
 class compaction_task_executor;
 class sstables_task_executor;
 class major_compaction_task_executor;
@@ -160,7 +162,7 @@ private:
     tombstone_gc_state _tombstone_gc_state;
 private:
     // Requires task->_compaction_state.gate to be held and task to be registered in _tasks.
-    future<compaction_stats_opt> perform_task(shared_ptr<compaction::compaction_task_executor> task);
+    future<compaction_stats_opt> perform_task(shared_ptr<compaction::compaction_task_executor> task, throw_if_stopping do_throw_if_stopping);
 
     // parent_info set to std::nullopt means that task manager should not register this task executor.
     // To create a task manager task with no parent, parent_info argument should contain empty task_info.
@@ -170,7 +172,7 @@ private:
     requires (compaction_manager& cm, Args&&... args) {
         {TaskExecutor(cm, std::forward<Args>(args)...)} -> std::same_as<TaskExecutor>;
     }
-    future<compaction_manager::compaction_stats_opt> perform_compaction(std::optional<tasks::task_info> parent_info, Args&&... args);
+    future<compaction_manager::compaction_stats_opt> perform_compaction(throw_if_stopping do_throw_if_stopping, std::optional<tasks::task_info> parent_info, Args&&... args);
 
     future<> stop_tasks(std::vector<shared_ptr<compaction::compaction_task_executor>> tasks, sstring reason);
     future<> update_throughput(uint32_t value_mbs);
@@ -337,7 +339,7 @@ public:
     // parameter type is the compaction type the operation can most closely be
     //      associated with, use compaction_type::Compaction, if none apply.
     // parameter job is a function that will carry the operation
-    future<> run_custom_job(compaction::table_state& s, sstables::compaction_type type, const char *desc, noncopyable_function<future<>(sstables::compaction_data&)> job, std::optional<tasks::task_info> info);
+    future<> run_custom_job(compaction::table_state& s, sstables::compaction_type type, const char *desc, noncopyable_function<future<>(sstables::compaction_data&)> job, std::optional<tasks::task_info> info, throw_if_stopping do_throw_if_stopping);
 
     class compaction_reenabler {
         compaction_manager& _cm;
@@ -496,8 +498,6 @@ public:
 protected:
     virtual future<compaction_manager::compaction_stats_opt> do_run() = 0;
 
-    using throw_if_stopping = bool_class<struct throw_if_stopping_tag>;
-
     state switch_state(state new_state);
 
     future<semaphore_units<named_semaphore_exception_factory>> acquire_semaphore(named_semaphore& sem, size_t units = 1);
@@ -574,8 +574,8 @@ public:
     requires (compaction_manager& cm, Args&&... args) {
         {TaskExecutor(cm, std::forward<Args>(args)...)} -> std::same_as<TaskExecutor>;
     }
-    friend future<compaction_manager::compaction_stats_opt> compaction_manager::perform_compaction(std::optional<tasks::task_info> parent_info, Args&&... args);
-    friend future<compaction_manager::compaction_stats_opt> compaction_manager::perform_task(shared_ptr<compaction_task_executor> task);
+    friend future<compaction_manager::compaction_stats_opt> compaction_manager::perform_compaction(throw_if_stopping do_throw_if_stopping, std::optional<tasks::task_info> parent_info, Args&&... args);
+    friend future<compaction_manager::compaction_stats_opt> compaction_manager::perform_task(shared_ptr<compaction_task_executor> task, throw_if_stopping do_throw_if_stopping);
     friend fmt::formatter<compaction_task_executor>;
 };
 

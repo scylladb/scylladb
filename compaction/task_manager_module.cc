@@ -169,7 +169,7 @@ future<> reshard(sstables::sstable_directory& dir, sstables::sstable_directory::
             // input sstables are moved, to guarantee their resources are released once we're done
             // resharding them.
             co_await when_all_succeed(dir.collect_output_unshared_sstables(std::move(result.new_sstables), sstables::sstable_directory::can_be_remote::yes), dir.remove_sstables(std::move(sstlist))).discard_result();
-        }, parent_info);
+        }, parent_info, throw_if_stopping::no);
     });
 }
 
@@ -500,7 +500,7 @@ future<> shard_reshaping_compaction_task_impl::run() {
                 sstables::compaction_result result = co_await sstables::compact_sstables(std::move(desc), info, table.as_table_state());
                 co_await dir.remove_unshared_sstables(std::move(sstlist));
                 co_await dir.collect_output_unshared_sstables(std::move(result.new_sstables), sstables::sstable_directory::can_be_remote::no);
-            }, info);
+            }, info, throw_if_stopping::yes);
         } catch (...) {
             ex = std::current_exception();
         }
