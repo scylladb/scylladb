@@ -21,9 +21,12 @@ import shutil
 import time
 import tempfile
 import socket
+import yaml
 from io import BufferedWriter
 
 class MinioServer:
+    ENV_CONFFILE = 'S3_CONFFILE_FOR_TEST'
+
     log_file: BufferedWriter
 
     def __init__(self, tempdir_base, address, logger):
@@ -33,6 +36,7 @@ class MinioServer:
         tempdir = tempfile.mkdtemp(dir=tempdir_base, prefix="minio-")
         self.tempdir = pathlib.Path(tempdir)
         self.rootdir = self.tempdir / 'minio_root'
+        self.config_file = self.tempdir / 'object-storage.yaml'
         self.mcdir = self.tempdir / 'mc'
         self.logger = logger
         self.cmd: Optional[Process] = None
@@ -134,6 +138,13 @@ class MinioServer:
         for _ in range(num_ports):
             yield random.randint(min_port, max_port)
 
+    @staticmethod
+    def create_conf_file(address: str, port: int, path: str):
+        with open(path, 'w', encoding='ascii') as config_file:
+            endpoint = {'name': address,
+                        'port': port}
+            yaml.dump({'endpoints': [endpoint]}, config_file)
+
     async def _run_server(self, port):
         self.logger.info(f'Starting minio server at {self.address}:{port}')
         cmd = await asyncio.create_subprocess_exec(
@@ -179,6 +190,8 @@ class MinioServer:
             self.logger.info("Failed to start Minio server")
             return
 
+        self.create_conf_file(self.address, self.port, self.config_file)
+        os.environ[self.ENV_CONFFILE] = f'{self.config_file}'
         os.environ['S3_SERVER_ADDRESS_FOR_TEST'] = f'{self.address}'
         os.environ['S3_SERVER_PORT_FOR_TEST'] = f'{self.port}'
         os.environ['S3_PUBLIC_BUCKET_FOR_TEST'] = f'{self.bucket_name}'
@@ -230,6 +243,7 @@ async def main():
         print(f'export S3_SERVER_ADDRESS_FOR_TEST={server.address}')
         print(f'export S3_SERVER_PORT_FOR_TEST={server.port}')
         print(f'export S3_PUBLIC_BUCKET_FOR_TEST={server.bucket_name}')
+        print(f'Please run scylla with: --object-storage-config-file {server.config_file}')
         try:
             _ = input('server started. press any key to stop: ')
         except KeyboardInterrupt:

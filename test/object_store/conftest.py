@@ -6,8 +6,6 @@ import logging
 import pytest
 import shutil
 import tempfile
-from dataclasses import dataclass
-from contextlib import contextmanager
 
 # use minio_server
 sys.path.insert(1, sys.path[0] + '/../..')
@@ -24,11 +22,24 @@ def pytest_addoption(parser):
     s3_options.addoption('--s3-server-bucket')
 
 
-@dataclass
 class S3_Server:
-    address: str
-    port: int
-    bucket_name: str
+    def __init__(self, tempdir: str, address: str, port: int, bucket_name):
+        self.tempdir = tempdir
+        self.address = address
+        self.port = port
+        self.bucket_name = bucket_name
+        self.config_file = self._get_config_file()
+
+    def _get_config_file(self):
+        # if the test is started by test.py, minio_server.py should set this
+        # env variable for us, but if the test is started manually, there are
+        # chances that this env variable is not set, we would have to create it
+        # by ourselves, so the tests can consume it.
+        conffile = os.environ.get(MinioServer.ENV_CONFFILE)
+        if conffile is None:
+            conffile = os.path.join(self.tempdir, 'object-storage.yaml')
+            MinioServer.create_conf_file(self.address, self.port, conffile)
+        return conffile
 
     async def start(self):
         pass
@@ -78,16 +89,18 @@ async def s3_server(pytestconfig, tmpdir):
     default_port = os.environ.get('S3_SERVER_PORT_FOR_TEST')
     default_bucket = os.environ.get('S3_PUBLIC_BUCKET_FOR_TEST')
 
+    tempdir = tmpdir.strpath
     if s3_server_address:
-        server = S3_Server(s3_server_address,
+        server = S3_Server(tempdir,
+                           s3_server_address,
                            s3_server_port,
                            s3_server_bucket)
     elif default_address:
-        server = S3_Server(default_address,
+        server = S3_Server(tempdir,
+                           default_address,
                            int(default_port),
                            default_bucket)
     else:
-        tempdir = tmpdir.strpath
         server = MinioServer(tempdir,
                              '127.0.0.1',
                              logging.getLogger('minio'))
