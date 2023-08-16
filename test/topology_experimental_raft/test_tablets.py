@@ -127,6 +127,9 @@ async def test_table_drop_with_auto_snapshot(manager: ManagerClient):
 
     cql = manager.get_cql()
 
+    # Increases the chance of tablet migration concurrent with schema change
+    await inject_error_on(manager, "tablet_allocator_shuffle", servers)
+
     for i in range(3):
         await cql.run_async("DROP KEYSPACE IF EXISTS test;")
         await cql.run_async("CREATE KEYSPACE IF NOT EXISTS test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1, 'initial_tablets': 8 };")

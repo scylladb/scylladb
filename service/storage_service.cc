@@ -1275,6 +1275,7 @@ class topology_coordinator {
     // Next migration of the same tablet is guaranteed to use a different instance.
     struct tablet_migration_state {
         background_action_holder streaming;
+        std::unordered_map<locator::tablet_transition_stage, background_action_holder> barriers;
     };
 
     std::unordered_map<locator::global_tablet_id, tablet_migration_state> _tablets;
@@ -1358,6 +1359,13 @@ class topology_coordinator {
         bool needs_barrier = false;
         bool has_transitions = false;
 
+        shared_promise barrier;
+        auto fail_barrier = seastar::defer([&] {
+            if (needs_barrier) {
+                barrier.set_exception(seastar::broken_promise());
+            }
+        });
+
         _tablets_ready = false;
         co_await for_each_tablet_transition([&] (const locator::tablet_map& tmap,
                                                  schema_ptr s,
@@ -1377,8 +1385,12 @@ class topology_coordinator {
             };
 
             auto transition_to_with_barrier = [&] (locator::tablet_transition_stage stage) {
-                needs_barrier = true;
-                transition_to(stage);
+                if (advance_in_background(gid, tablet_state.barriers[stage], "barrier", [&] {
+                    needs_barrier = true;
+                    return barrier.get_shared_future();
+                })) {
+                    transition_to(stage);
+                }
             };
 
             switch (trinfo.stage) {
@@ -1419,29 +1431,47 @@ class topology_coordinator {
             }
         });
 
-        if (needs_barrier) {
-            guard = co_await global_tablet_token_metadata_barrier(std::move(guard));
-        }
-
         // In order to keep the cluster saturated, ask the load balancer for more transitions.
         // Unless there is a pending topology change operation.
+        auto ts = guard.write_timestamp();
         auto [preempt, new_guard] = should_preempt_balancing(std::move(guard));
         guard = std::move(new_guard);
+        if (ts != guard.write_timestamp()) {
+            // We rely on the fact that should_preempt_balancing() does not release the guard
+            // so that tablet metadata reading and updates are atomic.
+            on_internal_error(slogger, "should_preempt_balancing() retook the guard");
+        }
         if (!preempt) {
             auto plan = co_await _tablet_allocator.balance_tablets(get_token_metadata_ptr());
             co_await generate_migration_updates(updates, guard, plan);
         }
 
-        // It's ok to execute planned updates after retaking the guard because as long
-        // as topology is in tablet_migration state only this coordinator has a right
-        // to advance the state machine of tablets.
-
-        if (!updates.empty()) {
+        // The updates have to be executed under the same guard which was used to read tablet metadata
+        // to ensure that we don't reinsert tablet rows which were concurrently deleted by schema change
+        // which happens outside the topology coordinator.
+        bool has_updates = !updates.empty();
+        if (has_updates) {
             updates.emplace_back(
                 topology_mutation_builder(guard.write_timestamp())
                     .set_version(_topo_sm._topology.version + 1)
                     .build());
             co_await update_topology_state(std::move(guard), std::move(updates), format("Tablet migration"));
+        }
+
+        if (needs_barrier) {
+            // If has_updates is true then we have dropped the guard and need to re-obtain it.
+            // It's fine to start an independent operation here. The barrier doesn't have to be executed
+            // atomically with the read which set needs_barrier, because it's fine if the global barrier
+            // works with a more recent set of nodes and it's fine if it propagates a more recent topology.
+            if (!guard) {
+                guard = co_await start_operation();
+            }
+            guard = co_await global_tablet_token_metadata_barrier(std::move(guard));
+            barrier.set_value();
+            fail_barrier.cancel();
+        }
+
+        if (has_updates) {
             co_return;
         }
 
@@ -1463,6 +1493,9 @@ class topology_coordinator {
         co_await update_topology_state(std::move(guard), std::move(updates), "Finished tablet migration");
     }
 
+    // This function must not release and reacquire the guard, callers rely
+    // on the fact that the block which calls this is atomic.
+    // FIXME: Don't take the ownership of the guard to make the above guarantee explicit.
     std::pair<bool, group0_guard> should_preempt_balancing(group0_guard guard) {
         auto node_or_guard = get_node_to_work_on_opt(std::move(guard));
         if (auto* node = std::get_if<node_to_work_on>(&node_or_guard)) {

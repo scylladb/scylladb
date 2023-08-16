@@ -53,6 +53,8 @@ public:
     // Until the upgrade procedure finishes, we will perform operations such as schema changes using the old way,
     // but still pass the guard around to synchronize operations with the upgrade procedure.
     bool with_raft() const;
+
+    explicit operator bool() const { return bool(_impl); }
 };
 
 void release_guard(group0_guard guard);
