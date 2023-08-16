@@ -319,7 +319,7 @@ compaction_task_executor::compaction_task_executor(compaction_manager& mgr, tabl
     , _description(std::move(desc))
 {}
 
-future<compaction_manager::compaction_stats_opt> compaction_manager::perform_task(shared_ptr<compaction_task_executor> task) {
+future<compaction_manager::compaction_stats_opt> compaction_manager::perform_task(shared_ptr<compaction_task_executor> task, throw_if_stopping do_throw_if_stopping) {
     cmlog.debug("{}: started", *task);
 
     try {
@@ -328,6 +328,9 @@ future<compaction_manager::compaction_stats_opt> compaction_manager::perform_tas
         co_return res;
     } catch (sstables::compaction_stopped_exception& e) {
         cmlog.info("{}: stopped, reason: {}", *task, e.what());
+        if (do_throw_if_stopping) {
+            throw;
+        }
     } catch (sstables::compaction_aborted_exception& e) {
         cmlog.error("{}: aborted, reason: {}", *task, e.what());
         _stats.errors++;
@@ -542,7 +545,7 @@ requires std::is_base_of_v<compaction_task_executor, TaskExecutor> &&
 requires (compaction_manager& cm, Args&&... args) {
     {TaskExecutor(cm, std::forward<Args>(args)...)} -> std::same_as<TaskExecutor>;
 }
-future<compaction_manager::compaction_stats_opt> compaction_manager::perform_compaction(std::optional<tasks::task_info> parent_info, Args&&... args) {
+future<compaction_manager::compaction_stats_opt> compaction_manager::perform_compaction(throw_if_stopping do_throw_if_stopping, std::optional<tasks::task_info> parent_info, Args&&... args) {
     auto task_executor = seastar::make_shared<TaskExecutor>(*this, std::forward<Args>(args)...);
     gate::holder gate_holder = task_executor->_compaction_state.gate.hold();
     _tasks.push_back(task_executor);
@@ -558,7 +561,7 @@ future<compaction_manager::compaction_stats_opt> compaction_manager::perform_com
         // We do not need to wait for the task to be done as compaction_task_executor side will take care of that.
     }
 
-    co_return co_await perform_task(std::move(task_executor));
+    co_return co_await perform_task(std::move(task_executor), do_throw_if_stopping);
 }
 
 future<> compaction_manager::perform_major_compaction(table_state& t, std::optional<tasks::task_info> info) {
@@ -566,7 +569,7 @@ future<> compaction_manager::perform_major_compaction(table_state& t, std::optio
         co_return;
     }
 
-    co_await perform_compaction<major_compaction_task_executor>(info, &t, info.value_or(tasks::task_info{}).id).discard_result();
+    co_await perform_compaction<major_compaction_task_executor>(throw_if_stopping::no, info, &t, info.value_or(tasks::task_info{}).id).discard_result();
 }
 
 namespace compaction {
@@ -617,12 +620,12 @@ protected:
 
 }
 
-future<> compaction_manager::run_custom_job(table_state& t, sstables::compaction_type type, const char* desc, noncopyable_function<future<>(sstables::compaction_data&)> job, std::optional<tasks::task_info> info) {
+future<> compaction_manager::run_custom_job(table_state& t, sstables::compaction_type type, const char* desc, noncopyable_function<future<>(sstables::compaction_data&)> job, std::optional<tasks::task_info> info, throw_if_stopping do_throw_if_stopping) {
     if (_state != state::enabled) {
         return make_ready_future<>();
     }
 
-    return perform_compaction<custom_compaction_task_executor>(info, &t, info.value_or(tasks::task_info{}).id, type, desc, std::move(job)).discard_result();
+    return perform_compaction<custom_compaction_task_executor>(do_throw_if_stopping, info, &t, info.value_or(tasks::task_info{}).id, type, desc, std::move(job)).discard_result();
 }
 
 future<> compaction_manager::update_static_shares(float static_shares) {
@@ -1204,7 +1207,7 @@ void compaction_manager::submit(table_state& t) {
 
     // OK to drop future.
     // waited via compaction_task_executor::compaction_done()
-    (void)perform_compaction<regular_compaction_task_executor>(tasks::task_info{}, t).then_wrapped([] (auto f) { f.ignore_ready_future(); });
+    (void)perform_compaction<regular_compaction_task_executor>(throw_if_stopping::no, tasks::task_info{}, t).then_wrapped([] (auto f) { f.ignore_ready_future(); });
 }
 
 bool compaction_manager::can_perform_regular_compaction(table_state& t) {
@@ -1413,7 +1416,7 @@ future<bool> compaction_manager::perform_offstrategy(table_state& t, std::option
     }
 
     bool performed;
-    co_await perform_compaction<offstrategy_compaction_task_executor>(info, &t, info.value_or(tasks::task_info{}).id, performed);
+    co_await perform_compaction<offstrategy_compaction_task_executor>(throw_if_stopping::no, info, &t, info.value_or(tasks::task_info{}).id, performed);
     co_return performed;
 }
 
@@ -1527,7 +1530,7 @@ future<compaction_manager::compaction_stats_opt> compaction_manager::perform_tas
             return a->data_size() > b->data_size();
         });
     });
-    co_return co_await perform_compaction<TaskType>(info, &t, info.value_or(tasks::task_info{}).id, std::move(options), std::move(owned_ranges_ptr), std::move(sstables), std::move(compacting), std::forward<Args>(args)...);
+    co_return co_await perform_compaction<TaskType>(throw_if_stopping::no, info, &t, info.value_or(tasks::task_info{}).id, std::move(options), std::move(owned_ranges_ptr), std::move(sstables), std::move(compacting), std::forward<Args>(args)...);
 }
 
 future<compaction_manager::compaction_stats_opt> compaction_manager::rewrite_sstables(table_state& t, sstables::compaction_type_options options, owned_ranges_ptr owned_ranges_ptr, get_candidates_func get_func, std::optional<tasks::task_info> info, can_purge_tombstones can_purge) {
@@ -1604,7 +1607,7 @@ future<compaction_manager::compaction_stats_opt> compaction_manager::perform_sst
     }
     // All sstables must be included, even the ones being compacted, such that everything in table is validated.
     auto all_sstables = get_all_sstables(t);
-    return perform_compaction<validate_sstables_compaction_task_executor>(info, &t, info.value_or(tasks::task_info{}).id, std::move(all_sstables));
+    return perform_compaction<validate_sstables_compaction_task_executor>(throw_if_stopping::no, info, &t, info.value_or(tasks::task_info{}).id, std::move(all_sstables));
 }
 
 namespace compaction {
