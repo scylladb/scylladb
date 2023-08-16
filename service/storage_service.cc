@@ -449,7 +449,7 @@ future<> storage_service::topology_state_load(cdc::generation_service& cdc_gen_s
                 break;
             case node_state::replacing: {
                 assert(_topology_state_machine._topology.req_param.contains(id));
-                auto replaced_id = std::get<raft::server_id>(_topology_state_machine._topology.req_param[id]);
+                auto replaced_id = std::get<replace_param>(_topology_state_machine._topology.req_param[id]).replaced_id;
                 auto existing_ip = am.find(replaced_id);
                 if (!existing_ip) {
                     // FIXME: What if not known?
@@ -955,7 +955,7 @@ class topology_coordinator {
 
     raft::server_id parse_replaced_node(const node_to_work_on& node) {
         if (node.rs->state == node_state::replacing) {
-            return std::get<raft::server_id>(node.req_param.value());
+            return std::get<replace_param>(node.req_param.value()).replaced_id;
         }
         return {};
     }
@@ -1833,7 +1833,7 @@ class topology_coordinator {
                         break;
                     case topology_request::replace: {
                         assert(!node.rs->ring);
-                        auto replaced_id = std::get<raft::server_id>(node.req_param.value());
+                        auto replaced_id = std::get<replace_param>(node.req_param.value()).replaced_id;
                         auto it = _topo_sm._topology.normal_nodes.find(replaced_id);
                         assert(it != _topo_sm._topology.normal_nodes.end());
                         assert(it->second.ring && it->second.state == node_state::normal);
@@ -5744,7 +5744,7 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(shar
                                 dht::boot_strapper bs(_db, _stream_manager, _abort_source, get_broadcast_address(),
                                                       locator::endpoint_dc_rack{rs.datacenter, rs.rack}, rs.ring.value().tokens, get_token_metadata_ptr());
                                 assert(_topology_state_machine._topology.req_param.contains(raft_server.id()));
-                                auto replaced_id = std::get<raft::server_id>(_topology_state_machine._topology.req_param[raft_server.id()]);
+                                auto replaced_id = std::get<replace_param>(_topology_state_machine._topology.req_param[raft_server.id()]).replaced_id;
                                 auto existing_ip = _group0->address_map().find(replaced_id);
                                 assert(existing_ip);
                                 co_await bs.bootstrap(streaming::stream_reason::replace, _gossiper, *existing_ip);

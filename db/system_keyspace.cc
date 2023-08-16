@@ -1547,6 +1547,15 @@ std::unordered_set<dht::token> decode_tokens(const set_type_impl::native_type& t
     return tset;
 }
 
+static std::unordered_set<raft::server_id> decode_nodes_ids(const set_type_impl::native_type& nodes_ids) {
+    std::unordered_set<raft::server_id> ids_set;
+    for (auto& id: nodes_ids) {
+        auto uuid = value_cast<utils::UUID>(id);
+        ids_set.insert(raft::server_id{uuid});
+    }
+    return ids_set;
+}
+
 future<> system_keyspace::update_tokens(gms::inet_address ep, const std::unordered_set<dht::token>& tokens)
 {
     if (ep == utils::fb_utilities::get_broadcast_address()) {
@@ -2526,6 +2535,11 @@ future<service::topology> system_keyspace::load_topology_state() {
             rebuild_option = row.get_as<sstring>("rebuild_option");
         }
 
+        std::unordered_set<raft::server_id> ignored_ids;
+        if (row.has("ignore_nodes")) {
+            ignored_ids = decode_nodes_ids(deserialize_set_column(*topology(), row, "ignore_nodes"));
+        }
+
         if (row.has("topology_request")) {
             auto req = service::topology_request_from_string(row.get_as<sstring>("topology_request"));
             ret.requests.emplace(host_id, req);
@@ -2534,7 +2548,7 @@ future<service::topology> system_keyspace::load_topology_state() {
                 if (!replaced_id) {
                     on_internal_error(slogger, fmt::format("replaced_id is missing for a node {}", host_id));
                 }
-                ret.req_param.emplace(host_id, *replaced_id);
+                ret.req_param.emplace(host_id, service::replace_param{*replaced_id, std::move(ignored_ids)});
                 break;
             case service::topology_request::rebuild:
                 if (!rebuild_option) {
@@ -2551,12 +2565,16 @@ future<service::topology> system_keyspace::load_topology_state() {
             }
         } else {
             switch (nstate) {
+            case service::node_state::removing:
+                // If a node is removing we need to know which nodes are ignored
+                ret.req_param.emplace(host_id, service::removenode_param{std::move(ignored_ids)});
+                break;
             case service::node_state::replacing:
-               // If a node is replacing abother node we need to know which node it is replacing
+                // If a node is replacing we need to know which node it is replacing and which nodes are ignored
                 if (!replaced_id) {
                     on_internal_error(slogger, fmt::format("replaced_id is missing for a node {}", host_id));
                 }
-                ret.req_param.emplace(host_id, *replaced_id);
+                ret.req_param.emplace(host_id, service::replace_param{*replaced_id, std::move(ignored_ids)});
                 break;
             case service::node_state::rebuilding:
                 // If a node is rebuilding it needs to know the parameter for the operation
