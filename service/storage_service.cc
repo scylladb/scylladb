@@ -960,6 +960,16 @@ class topology_coordinator {
         return {};
     }
 
+    std::unordered_set<raft::server_id> parse_ignore_nodes(const node_to_work_on& node) {
+        if (node.rs->state == node_state::removing) {
+            return std::get<removenode_param>(node.req_param.value()).ignored_ids;
+        }
+        if (node.rs->state == node_state::replacing) {
+            return std::get<replace_param>(node.req_param.value()).ignored_ids;
+        }
+        return {};
+    }
+
     inet_address id2ip(locator::host_id id) {
         auto ip = _address_map.find(raft::server_id(id.uuid()));
         if (!ip) {
@@ -1033,7 +1043,8 @@ class topology_coordinator {
     future<node_to_work_on> exec_global_command(
             node_to_work_on&& node, const raft_topology_cmd& cmd, bool include_local,
             drop_guard_and_retake do_retake = drop_guard_and_retake::yes) {
-        std::unordered_set<raft::server_id> exclude_nodes{parse_replaced_node(node)};
+        std::unordered_set<raft::server_id> exclude_nodes = parse_ignore_nodes(node);
+        exclude_nodes.insert(parse_replaced_node(node));
         if (!include_local) {
             exclude_nodes.insert(_raft.id());
         }
