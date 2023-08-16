@@ -876,7 +876,10 @@ future<> manager::end_point_hints_manager::sender::send_one_hint(lw_shared_ptr<s
                 //
                 // Files are aggregated for at most manager::hints_timer_period therefore the oldest hint there is
                 // (last_modification - manager::hints_timer_period) old.
-                if (gc_clock::now().time_since_epoch() - secs_since_file_mod > gc_grace_sec - manager::hints_flush_period) {
+                if (const auto now = gc_clock::now().time_since_epoch(); now - secs_since_file_mod > gc_grace_sec - manager::hints_flush_period) {
+                    manager_logger.debug("send_hints(): the hint is too old, skipping it, "
+                        "secs since file last modification {}, gc_grace_sec {}, hints_flush_period {}",
+                        now - secs_since_file_mod, gc_grace_sec, manager::hints_flush_period);
                     return make_ready_future<>();
                 }
 
