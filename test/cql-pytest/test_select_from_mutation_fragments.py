@@ -19,7 +19,7 @@ import subprocess
 import util
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="function")
 def test_table(cql, test_keyspace):
     """ Prepares a table for the mutation dump tests to work with."""
     with util.new_test_table(cql, test_keyspace, 'pk1 int, pk2 int, ck1 int, ck2 int, v text, s text static, PRIMARY KEY ((pk1, pk2), ck1, ck2)') as table:
@@ -92,23 +92,25 @@ def test_mutation_source(cql, test_table, scylla_only):
             else:
                 assert len(rows) == 0
 
-    cql.execute(f"INSERT INTO {test_table} (pk1, pk2, ck1, ck2, v) VALUES ({pk1}, {pk2}, 0, 0, 'vv')")
-    expect_sources('memtable')
+    ks, _ = test_table.split(".")
+    with nodetool.no_autocompaction_context(cql, ks):
+        cql.execute(f"INSERT INTO {test_table} (pk1, pk2, ck1, ck2, v) VALUES ({pk1}, {pk2}, 0, 0, 'vv')")
+        expect_sources('memtable')
 
-    nodetool.flush(cql, f"{test_table}")
-    expect_sources('row-cache', 'sstable')
+        nodetool.flush(cql, f"{test_table}")
+        expect_sources('row-cache', 'sstable')
 
-    requests.post(f'{nodetool.rest_api_url(cql)}/system/drop_sstable_caches')
-    expect_sources('sstable')
+        requests.post(f'{nodetool.rest_api_url(cql)}/system/drop_sstable_caches')
+        expect_sources('sstable')
 
-    assert list(cql.execute(f"SELECT v FROM {test_table} WHERE pk1={pk1} AND pk2={pk2} BYPASS CACHE"))[0].v == 'vv'
-    expect_sources('sstable')
+        assert list(cql.execute(f"SELECT v FROM {test_table} WHERE pk1={pk1} AND pk2={pk2} BYPASS CACHE"))[0].v == 'vv'
+        expect_sources('sstable')
 
-    assert list(cql.execute(f"SELECT v FROM {test_table} WHERE pk1={pk1} AND pk2={pk2}"))[0].v == 'vv'
-    expect_sources('row-cache', 'sstable')
+        assert list(cql.execute(f"SELECT v FROM {test_table} WHERE pk1={pk1} AND pk2={pk2}"))[0].v == 'vv'
+        expect_sources('row-cache', 'sstable')
 
-    cql.execute(f"INSERT INTO {test_table} (pk1, pk2, ck1, ck2, v) VALUES ({pk1}, {pk2}, 0, 0, 'vv')")
-    expect_sources('memtable', 'row-cache', 'sstable')
+        cql.execute(f"INSERT INTO {test_table} (pk1, pk2, ck1, ck2, v) VALUES ({pk1}, {pk2}, 0, 0, 'vv')")
+        expect_sources('memtable', 'row-cache', 'sstable')
 
 
 def test_mutation_dump_range_tombstone_changes(cql, test_table, scylla_only):
@@ -382,14 +384,14 @@ def test_ck_in_query(cql, test_table):
     pk1 = util.unique_key_int()
     pk2 = util.unique_key_int()
 
-    cql.execute(f"INSERT INTO {test_table} (pk1, pk2, ck1, ck2, v) VALUES ({pk1}, {pk2}, 0, 0, 'vv')")
-    cql.execute(f"INSERT INTO {test_table} (pk1, pk2, ck1, ck2, v) VALUES ({pk1}, {pk2}, 1, 1, 'vv')")
-    nodetool.flush(cql, f"{test_table}")
-    cql.execute(f"INSERT INTO {test_table} (pk1, pk2, ck1, ck2, v) VALUES ({pk1}, {pk2}, 0, 0, 'vv')")
-
     ks, _ = test_table.split(".")
 
     with nodetool.no_autocompaction_context(cql, ks):
+        cql.execute(f"INSERT INTO {test_table} (pk1, pk2, ck1, ck2, v) VALUES ({pk1}, {pk2}, 0, 0, 'vv')")
+        cql.execute(f"INSERT INTO {test_table} (pk1, pk2, ck1, ck2, v) VALUES ({pk1}, {pk2}, 1, 1, 'vv')")
+        nodetool.flush(cql, f"{test_table}")
+        cql.execute(f"INSERT INTO {test_table} (pk1, pk2, ck1, ck2, v) VALUES ({pk1}, {pk2}, 0, 0, 'vv')")
+
         sources_res = list(cql.execute(f"SELECT * FROM MUTATION_FRAGMENTS({test_table}) WHERE pk1 = {pk1} AND pk2 = {pk2}"))
 
         sources = {r.mutation_source.split(":")[0]: r.mutation_source for r in sources_res}
