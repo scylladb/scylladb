@@ -47,7 +47,7 @@ def _remove_all_but(tempdir, to_preserve):
     # orig_fn does not exist
     if not os.path.exists(orig_fn):
         # it's fine if tempdir does not exist
-        shutil.rmtree(tempdir=True)
+        shutil.rmtree(tempdir, ignore_errors=True)
         return
 
     with tempfile.TemporaryDirectory() as backup_tempdir:
