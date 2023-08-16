@@ -860,7 +860,8 @@ future<> manager::end_point_hints_manager::sender::send_one_hint(lw_shared_ptr<s
         ctx_ptr->mark_hint_as_in_progress(rp);
 
         // Future is waited on indirectly in `send_one_file()` (via `ctx_ptr->file_send_gate`).
-        (void)with_gate(ctx_ptr->file_send_gate, [this, secs_since_file_mod, &fname, buf = std::move(buf), rp, ctx_ptr] () mutable {
+        auto h = ctx_ptr->file_send_gate.hold();
+        (void)std::invoke([this, secs_since_file_mod, &fname, buf = std::move(buf), rp, ctx_ptr] () mutable {
             try {
                 auto m = this->get_mutation(ctx_ptr, buf);
                 gc_clock::duration gc_grace_sec = m.s->gc_grace_seconds();
@@ -896,7 +897,7 @@ future<> manager::end_point_hints_manager::sender::send_one_hint(lw_shared_ptr<s
                 return make_exception_future<>(std::move(eptr));
             }
             return make_ready_future<>();
-        }).then_wrapped([this, units = std::move(units), rp, ctx_ptr] (future<>&& f) {
+        }).then_wrapped([this, units = std::move(units), rp, ctx_ptr, h = std::move(h)] (future<>&& f) {
             // Information about the error was already printed somewhere higher.
             // We just need to account in the ctx that sending of this hint has failed.
             if (!f.failed()) {
