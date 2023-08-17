@@ -75,7 +75,12 @@ void storage_manager::update_config(const db::config& cfg) {
 }
 
 shared_ptr<s3::client> storage_manager::get_endpoint_client(sstring endpoint) {
-    auto& ep = _s3_endpoints.at(endpoint);
+    auto found = _s3_endpoints.find(endpoint);
+    if (found == _s3_endpoints.end()) {
+        smlogger.error("unable to find {} in configured object-storage endpoints", endpoint);
+        throw std::invalid_argument(format("endpoint {} not found", endpoint));
+    }
+    auto& ep = found->second;
     if (ep.client == nullptr) {
         ep.client = s3::client::make(endpoint, ep.cfg, [ &ct = container() ] (std::string ep) {
             return ct.local().get_endpoint_client(ep);
