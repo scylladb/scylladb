@@ -4212,6 +4212,11 @@ class scylla_gms(gdb.Command):
             gossiper = sharded(gdb.parse_and_eval('gms::_the_gossiper')).local()
             state_map = gossiper['endpoint_state_map']
         for (endpoint, state) in unordered_map(state_map):
+            try:
+                state_ptr = seastar_lw_shared_ptr(state)
+                state = state_ptr.get().dereference()
+            except Exception:
+                pass
             ip = ip_to_str(int(get_ip(endpoint)), byteorder=sys.byteorder)
             gdb.write('%s: (gms::endpoint_state*) %s (%s)\n' % (ip, state.address, state['_heart_beat_state']))
             for app_state, vv in std_map(state['_application_state']):

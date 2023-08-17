@@ -233,7 +233,7 @@ bool migration_manager::have_schema_agreement() {
             return stop_iteration::no;
         }
         mlogger.debug("Checking schema state for {}.", endpoint);
-        auto* schema = eps.get_application_state_ptr(gms::application_state::SCHEMA);
+        auto schema = eps.get_application_state_ptr(gms::application_state::SCHEMA);
         if (!schema) {
             mlogger.debug("Schema state not yet available for {}.", endpoint);
             match = false;
@@ -289,7 +289,7 @@ future<> migration_manager::maybe_schedule_schema_pull(const table_schema_versio
         // pushed out simultaneously. See CASSANDRA-5025
         return sleep_abortable(migration_delay, _as).then([this, &db, endpoint] {
             // grab the latest version of the schema since it may have changed again since the initial scheduling
-            auto* ep_state = _gossiper.get_endpoint_state_for_endpoint_ptr(endpoint);
+            auto ep_state = _gossiper.get_endpoint_state_ptr(endpoint);
             if (!ep_state) {
                 mlogger.debug("epState vanished for {}, not submitting migration task", endpoint);
                 return make_ready_future<>();
@@ -1206,7 +1206,7 @@ future<> migration_manager::on_join(gms::inet_address endpoint, gms::endpoint_st
 
 future<> migration_manager::on_change(gms::inet_address endpoint, gms::application_state state, const gms::versioned_value& value, gms::permit_id) {
     if (state == gms::application_state::SCHEMA) {
-        auto* ep_state = _gossiper.get_endpoint_state_for_endpoint_ptr(endpoint);
+        auto ep_state = _gossiper.get_endpoint_state_ptr(endpoint);
         if (!ep_state || _gossiper.is_dead_state(*ep_state)) {
             mlogger.debug("Ignoring state change for dead or unknown endpoint: {}", endpoint);
             return make_ready_future();

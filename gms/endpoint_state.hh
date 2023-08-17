@@ -151,6 +151,16 @@ public:
     friend std::ostream& operator<<(std::ostream& os, const endpoint_state& x);
 };
 
+using endpoint_state_ptr = lw_shared_ptr<const endpoint_state>;
+
+inline endpoint_state_ptr make_endpoint_state_ptr(const endpoint_state& eps) {
+    return make_lw_shared<endpoint_state>(eps);
+}
+
+inline endpoint_state_ptr make_endpoint_state_ptr(endpoint_state&& eps) {
+    return make_lw_shared<endpoint_state>(std::move(eps));
+}
+
 // The endpoint state is protected with an endpoint lock
 // acquired in the gossiper using gossiper::lock_endpoint.
 //
