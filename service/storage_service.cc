@@ -5749,12 +5749,23 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(shar
                         // Bootstrap did not complete yet, but streaming did
                     } else {
                         co_await retrier(_bootstrap_result, coroutine::lambda([&] () ->future<> {
+                            if (!_topology_state_machine._topology.req_param.contains(raft_server.id())) {
+                                on_internal_error(slogger, ::format("Cannot find request_param for node id {}", raft_server.id()));
+                            }
                             if (is_repair_based_node_ops_enabled(streaming::stream_reason::replace)) {
-                                co_await _repair.local().replace_with_repair(get_token_metadata_ptr(), rs.ring.value().tokens, {});
+                                // FIXME: we should not need to translate ids to IPs here. See #6403.
+                                std::unordered_set<gms::inet_address> ignored_ips;
+                                for (const auto& id : std::get<replace_param>(_topology_state_machine._topology.req_param[raft_server.id()]).ignored_ids) {
+                                    auto ip = _group0->address_map().find(id);
+                                    if (!ip) {
+                                        on_fatal_internal_error(slogger, ::format("Cannot find a mapping from node id {} to its ip", id));
+                                    }
+                                    ignored_ips.insert(*ip);
+                                }
+                                co_await _repair.local().replace_with_repair(get_token_metadata_ptr(), rs.ring.value().tokens, std::move(ignored_ips));
                             } else {
                                 dht::boot_strapper bs(_db, _stream_manager, _abort_source, get_broadcast_address(),
                                                       locator::endpoint_dc_rack{rs.datacenter, rs.rack}, rs.ring.value().tokens, get_token_metadata_ptr());
-                                assert(_topology_state_machine._topology.req_param.contains(raft_server.id()));
                                 auto replaced_id = std::get<replace_param>(_topology_state_machine._topology.req_param[raft_server.id()]).replaced_id;
                                 auto existing_ip = _group0->address_map().find(replaced_id);
                                 assert(existing_ip);
@@ -5782,11 +5793,12 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(shar
                         slogger.warn("raft topology: got stream_ranges request while my state is normal but cannot find a node that is been removed");
                         break;
                     }
-                    slogger.debug("raft topology: streaming to remove node {}", it->first);
+                    auto id = it->first;
+                    slogger.debug("raft topology: streaming to remove node {}", id);
                     const auto& am = _group0->address_map();
-                    auto ip = am.find(it->first); // map node id to ip
+                    auto ip = am.find(id); // map node id to ip
                     assert (ip); // what to do if address is unknown?
-                    co_await retrier(_remove_result[it->first], coroutine::lambda([&] () {
+                    co_await retrier(_remove_result[id], coroutine::lambda([&] () {
                         auto as = make_shared<abort_source>();
                         auto sub = _abort_source.subscribe([as] () noexcept {
                             if (!as->abort_requested()) {
@@ -5794,8 +5806,19 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(shar
                             }
                         });
                         if (is_repair_based_node_ops_enabled(streaming::stream_reason::removenode)) {
-                            auto ops = seastar::make_shared<node_ops_info>(node_ops_id::create_random_id(), as, std::list<gms::inet_address>());
-                            // FIXME: ignore node list support
+                            if (!_topology_state_machine._topology.req_param.contains(id)) {
+                                on_internal_error(slogger, ::format("Cannot find request_param for node id {}", id));
+                            }
+                            // FIXME: we should not need to translate ids to IPs here. See #6403.
+                            std::list<gms::inet_address> ignored_ips;
+                            for (const auto& ignored_id : std::get<removenode_param>(_topology_state_machine._topology.req_param[id]).ignored_ids) {
+                                auto ip = _group0->address_map().find(ignored_id);
+                                if (!ip) {
+                                    on_fatal_internal_error(slogger, ::format("Cannot find a mapping from node id {} to its ip", ignored_id));
+                                }
+                                ignored_ips.push_back(*ip);
+                            }
+                            auto ops = seastar::make_shared<node_ops_info>(node_ops_id::create_random_id(), as, std::move(ignored_ips));
                             return _repair.local().removenode_with_repair(get_token_metadata_ptr(), *ip, ops);
                         } else {
                             return removenode_with_stream(*ip, as);
