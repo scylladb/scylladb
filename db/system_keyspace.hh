@@ -126,8 +126,6 @@ class system_keyspace : public seastar::peering_sharded_service<system_keyspace>
     static schema_ptr large_rows();
     static schema_ptr large_cells();
     static schema_ptr scylla_local();
-    future<> setup_version(sharded<netw::messaging_service>& ms);
-    future<> check_health();
     future<> force_blocking_flush(sstring cfname);
     future<> build_bootstrap_info();
     future<> cache_truncation_record();
@@ -405,16 +403,15 @@ public:
     bool was_decommissioned() const;
     future<> set_bootstrap_state(bootstrap_state state);
 
-    /**
-     * Read the host ID from the system keyspace, creating (and storing) one if
-     * none exists.
-     */
-    future<locator::host_id> load_local_host_id();
+    struct local_info {
+        locator::host_id host_id;
+        sstring cluster_name;
+        gms::inet_address listen_address;
+    };
+
+    future<local_info> load_local_info();
+    future<> save_local_info(local_info);
 private:
-    /**
-     * Sets the local host ID explicitly.  Used only internally when intializing the host_id
-     */
-    future<locator::host_id> set_local_random_host_id();
     future<truncation_record> get_truncation_record(table_id cf_id);
 
 public:

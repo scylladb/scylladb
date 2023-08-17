@@ -1357,12 +1357,31 @@ schema_ptr system_keyspace::legacy::aggregates() {
     return schema;
 }
 
-future<> system_keyspace::setup_version(sharded<netw::messaging_service>& ms) {
+future<system_keyspace::local_info> system_keyspace::load_local_info() {
+    auto msg = co_await execute_cql(format("SELECT host_id, cluster_name FROM system.{} WHERE key=?", LOCAL), sstring(LOCAL));
+
+    local_info ret;
+    if (!msg->empty()) {
+        auto& row = msg->one();
+        if (row.has("host_id")) {
+            ret.host_id = locator::host_id(row.get_as<utils::UUID>("host_id"));
+        }
+        if (row.has("cluster_name")) {
+            ret.cluster_name = row.get_as<sstring>("cluster_name");
+        }
+    }
+
+    co_return ret;
+}
+
+future<> system_keyspace::save_local_info(local_info sysinfo) {
     auto& cfg = _db.get_config();
-    sstring req = fmt::format("INSERT INTO system.{} (key, release_version, cql_version, thrift_version, native_protocol_version, data_center, rack, partitioner, rpc_address, broadcast_address, listen_address) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    sstring req = fmt::format("INSERT INTO system.{} (key, host_id, cluster_name, release_version, cql_version, thrift_version, native_protocol_version, data_center, rack, partitioner, rpc_address, broadcast_address, listen_address) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
                     , db::system_keyspace::LOCAL);
 
     return execute_cql(req, sstring(db::system_keyspace::LOCAL),
+                            sysinfo.host_id.uuid(),
+                            sysinfo.cluster_name,
                             version::release(),
                             cql3::query_processor::CQL_VERSION,
                             ::cassandra::thrift_version,
@@ -1372,7 +1391,7 @@ future<> system_keyspace::setup_version(sharded<netw::messaging_service>& ms) {
                             sstring(cfg.partitioner()),
                             utils::fb_utilities::get_broadcast_rpc_address().addr(),
                             utils::fb_utilities::get_broadcast_address().addr(),
-                            ms.local().listen_address().addr()
+                            sysinfo.listen_address.addr()
     ).discard_result();
 }
 
@@ -1433,9 +1452,7 @@ future<> system_keyspace::build_bootstrap_info() {
 future<> system_keyspace::setup(sharded<netw::messaging_service>& ms) {
     assert(this_shard_id() == 0);
 
-    co_await setup_version(ms);
     co_await build_bootstrap_info();
-    co_await check_health();
     co_await db::schema_tables::save_system_keyspace_schema(_qp);
     // #2514 - make sure "system" is written to system_schema.keyspaces.
     co_await db::schema_tables::save_system_schema(_qp, NAME);
@@ -1724,34 +1741,6 @@ future<> system_keyspace::force_blocking_flush(sstring cfname) {
     });
 }
 
-/**
- * One of three things will happen if you try to read the system keyspace:
- * 1. files are present and you can read them: great
- * 2. no files are there: great (new node is assumed)
- * 3. files are present but you can't read them: bad
- */
-future<> system_keyspace::check_health() {
-    using namespace cql_transport::messages;
-    sstring req = format("SELECT cluster_name FROM system.{} WHERE key=?", LOCAL);
-    return execute_cql(req, sstring(LOCAL)).then([this] (::shared_ptr<cql3::untyped_result_set> msg) {
-        if (msg->empty() || !msg->one().has("cluster_name")) {
-            // this is a brand new node
-            sstring ins_req = format("INSERT INTO system.{} (key, cluster_name) VALUES (?, ?)", LOCAL);
-            auto cluster_name = _db.get_config().cluster_name();
-            return execute_cql(ins_req, sstring(LOCAL), cluster_name).discard_result();
-        } else {
-            auto cluster_name = _db.get_config().cluster_name();
-            auto saved_cluster_name = msg->one().get_as<sstring>("cluster_name");
-
-            if (cluster_name != saved_cluster_name) {
-                throw exceptions::configuration_exception("Saved cluster name " + saved_cluster_name + " != configured name " + cluster_name);
-            }
-
-            return make_ready_future<>();
-        }
-    });
-}
-
 future<std::unordered_set<dht::token>> system_keyspace::get_saved_tokens() {
     sstring req = format("SELECT tokens FROM system.{} WHERE key = ?", LOCAL);
     return execute_cql(req, sstring(LOCAL)).then([] (auto msg) {
@@ -1951,28 +1940,6 @@ future<> system_keyspace::initialize_virtual_tables(
     }
 
     install_virtual_readers(*this, db);
-}
-
-future<locator::host_id> system_keyspace::load_local_host_id() {
-    sstring req = format("SELECT host_id FROM system.{} WHERE key=?", LOCAL);
-    auto msg = co_await execute_cql(req, sstring(LOCAL));
-    if (msg->empty() || !msg->one().has("host_id")) {
-        co_return co_await set_local_random_host_id();
-    } else {
-        auto host_id = locator::host_id(msg->one().get_as<utils::UUID>("host_id"));
-        slogger.info("Loaded local host id: {}", host_id);
-        co_return host_id;
-    }
-}
-
-future<locator::host_id> system_keyspace::set_local_random_host_id() {
-    auto host_id = locator::host_id::create_random_id();
-    slogger.info("Setting local host id to {}", host_id);
-
-    sstring req = format("INSERT INTO system.{} (key, host_id) VALUES (?, ?)", LOCAL);
-    co_await execute_cql(req, sstring(LOCAL), host_id.uuid());
-    co_await force_blocking_flush(LOCAL);
-    co_return host_id;
 }
 
 locator::endpoint_dc_rack system_keyspace::local_dc_rack() const {

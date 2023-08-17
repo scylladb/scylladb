@@ -667,7 +667,12 @@ private:
             }
 
             if (!cfg->host_id) {
-                cfg->host_id = _sys_ks.local().load_local_host_id().get0();
+                auto linfo = _sys_ks.local().load_local_info().get0();
+                if (!linfo.host_id) {
+                    linfo.host_id = locator::host_id::create_random_id();
+                }
+                cfg->host_id = linfo.host_id;
+                _sys_ks.local().save_local_info(std::move(linfo)).get();
             }
 
             // don't start listening so tests can be run in parallel
