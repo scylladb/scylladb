@@ -1746,6 +1746,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 api::unset_server_snapshot(ctx).get();
             });
 
+            api::set_server_tasks_compaction_module(ctx, ss, snapshot_ctl).get();
+            auto stop_tasks_api = defer_verbose_shutdown("tasks API", [&ctx] {
+                api::unset_server_tasks_compaction_module(ctx).get();
+            });
+
             supervisor::notify("starting batchlog manager");
             db::batchlog_manager_config bm_cfg;
             bm_cfg.write_request_timeout = cfg->write_request_timeout_in_ms() * 1ms;

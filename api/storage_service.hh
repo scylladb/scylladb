@@ -57,6 +57,16 @@ std::vector<sstring> parse_tables(const sstring& ks_name, http_context& ctx, con
 // if the parameter is not found or is empty, returns a list of all table infos in the keyspace.
 std::vector<table_info> parse_table_infos(const sstring& ks_name, http_context& ctx, const std::unordered_map<sstring, sstring>& query_params, sstring param_name);
 
+std::vector<table_info> parse_table_infos(const sstring& ks_name, http_context& ctx, sstring value);
+
+struct scrub_info {
+    sstables::compaction_type_options::scrub opts;
+    sstring keyspace;
+    std::vector<sstring> column_families;
+};
+
+future<scrub_info> parse_scrub_options(http_context& ctx, sharded<db::snapshot_ctl>& snap_ctl, std::unique_ptr<http::request> req);
+
 void set_storage_service(http_context& ctx, httpd::routes& r, sharded<service::storage_service>& ss, service::raft_group0_client&);
 void unset_storage_service(http_context& ctx, httpd::routes& r);
 void set_sstables_loader(http_context& ctx, httpd::routes& r, sharded<sstables_loader>& sst_loader);

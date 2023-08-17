@@ -19,6 +19,7 @@ set(swagger_files
   api-doc/storage_service.json
   api-doc/stream_manager.json
   api-doc/system.json
+  api-doc/tasks.json
   api-doc/task_manager.json
   api-doc/task_manager_test.json
   api-doc/utils.json)
@@ -56,6 +57,7 @@ target_sources(api
     storage_service.cc
     stream_manager.cc
     system.cc
+    tasks.cc
     task_manager.cc
     task_manager_test.cc
     token_metadata.cc
