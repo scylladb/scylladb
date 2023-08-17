@@ -1174,6 +1174,7 @@ logging::settings db::config::logging_settings(const log_cli::options& opts) con
         .default_level = value(default_log_level, opts.default_log_level),
         .stdout_enabled = value(log_to_stdout, opts.log_to_stdout),
         .syslog_enabled = value(log_to_syslog, opts.log_to_syslog),
+        .with_color = opts.log_with_color.get_value(),
         .stdout_timestamp_style =  opts.logger_stdout_timestamps.get_value(),
         .logger_ostream = opts.logger_ostream_type.get_value(),
     };
