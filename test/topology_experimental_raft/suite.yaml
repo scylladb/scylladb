@@ -10,3 +10,6 @@ extra_scylla_config_options:
 skip_in_release:
   - test_blocked_bootstrap
   - test_raft_cluster_features
+  - test_raft_ignore_nodes
+skip_in_debug:
+  - test_raft_ignore_nodes
