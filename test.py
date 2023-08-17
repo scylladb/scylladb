@@ -853,7 +853,8 @@ class PythonTest(Test):
             "--log-level=DEBUG",   # Capture logs
             "-o",
             "junit_family=xunit2",
-            "--junit-xml={}".format(self.xmlout)]
+            "--junit-xml={}".format(self.xmlout),
+            "-rs"]
         if options.markers:
             self.args.append(f"-m={options.markers}")
 
