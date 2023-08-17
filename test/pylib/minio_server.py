@@ -26,6 +26,9 @@ from io import BufferedWriter
 
 class MinioServer:
     ENV_CONFFILE = 'S3_CONFFILE_FOR_TEST'
+    ENV_ADDRESS = 'S3_SERVER_ADDRESS_FOR_TEST'
+    ENV_PORT = 'S3_SERVER_PORT_FOR_TEST'
+    ENV_BUCKET = 'S3_PUBLIC_BUCKET_FOR_TEST'
 
     log_file: BufferedWriter
 
@@ -192,9 +195,9 @@ class MinioServer:
 
         self.create_conf_file(self.address, self.port, self.config_file)
         os.environ[self.ENV_CONFFILE] = f'{self.config_file}'
-        os.environ['S3_SERVER_ADDRESS_FOR_TEST'] = f'{self.address}'
-        os.environ['S3_SERVER_PORT_FOR_TEST'] = f'{self.port}'
-        os.environ['S3_PUBLIC_BUCKET_FOR_TEST'] = f'{self.bucket_name}'
+        os.environ[self.ENV_ADDRESS] = f'{self.address}'
+        os.environ[self.ENV_PORT] = f'{self.port}'
+        os.environ[self.ENV_BUCKET] = f'{self.bucket_name}'
 
         try:
             alias = 'local'

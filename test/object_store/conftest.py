@@ -85,9 +85,9 @@ async def s3_server(pytestconfig, tmpdir):
     s3_server_port = pytestconfig.getoption('--s3-server-port')
     s3_server_bucket = pytestconfig.getoption('--s3-server-bucket')
 
-    default_address = os.environ.get('S3_SERVER_ADDRESS_FOR_TEST')
-    default_port = os.environ.get('S3_SERVER_PORT_FOR_TEST')
-    default_bucket = os.environ.get('S3_PUBLIC_BUCKET_FOR_TEST')
+    default_address = os.environ.get(MinioServer.ENV_ADDRESS)
+    default_port = os.environ.get(MinioServer.ENV_PORT)
+    default_bucket = os.environ.get(MinioServer.ENV_BUCKET)
 
     tempdir = tmpdir.strpath
     if s3_server_address:
