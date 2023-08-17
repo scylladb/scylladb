@@ -35,6 +35,8 @@ print(f"Driver name {DRIVER_NAME}, version {DRIVER_VERSION}")
 def pytest_addoption(parser):
     parser.addoption('--manager-api', action='store', required=True,
                      help='Manager unix socket path')
+    parser.addoption('--mode', action='store', required=True,
+                     help='Scylla build mode. Tests can use it to adjust their behavior.')
     parser.addoption('--host', action='store', default='localhost',
                      help='CQL server host to connect to')
     parser.addoption('--port', action='store', default='9042',
@@ -190,3 +192,7 @@ async def random_tables(request, manager):
     failed = request.node.stash[FAILED_KEY]
     if not failed and not await manager.is_dirty():
         tables.drop_all()
+
+@pytest.fixture(scope="function")
+def mode(request):
+    return request.config.getoption('mode')
