@@ -499,7 +499,7 @@ private:
      *
      * Must be called under lock_endpoint.
      */
-    future<> handle_major_state_change(inet_address ep, const endpoint_state& eps, permit_id);
+    future<> handle_major_state_change(inet_address ep, endpoint_state eps, permit_id);
 
 public:
     bool is_alive(inet_address ep) const;
@@ -519,11 +519,11 @@ public:
     future<> apply_state_locally(std::map<inet_address, endpoint_state> map);
 
 private:
-    future<> do_apply_state_locally(gms::inet_address node, const endpoint_state& remote_state, bool listener_notification);
+    future<> do_apply_state_locally(gms::inet_address node, endpoint_state remote_state, bool listener_notification);
     future<> apply_state_locally_without_listener_notification(std::unordered_map<inet_address, endpoint_state> map);
 
     // Must be called under lock_endpoint.
-    future<> apply_new_states(inet_address addr, endpoint_state& local_state, const endpoint_state& remote_state, permit_id);
+    future<> apply_new_states(inet_address addr, endpoint_state local_state, const endpoint_state& remote_state, permit_id);
 
     // notify that a local application state is going to change (doesn't get triggered for remote changes)
     // Must be called under lock_endpoint.
