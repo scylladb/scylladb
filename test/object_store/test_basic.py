@@ -13,7 +13,7 @@ import pytest
 
 from contextlib import contextmanager
 
-def get_scylla_with_s3_cmd(tempdir, ssl, s3_server):
+def get_scylla_with_s3_cmd(ssl, s3_server):
     '''return a function which in turn returns the command for running scylla'''
     scylla = run.find_scylla()
     print('Scylla under test:', scylla)
@@ -24,12 +24,7 @@ def get_scylla_with_s3_cmd(tempdir, ssl, s3_server):
         else:
             cmd, env = run.run_scylla_cmd(pid, d)
 
-        os_conf_path = os.path.join(tempdir, 'object_storage.yaml')
-        with open(os_conf_path, 'w', encoding='utf-8') as os_config_file:
-            s3_endpoint = {'name': s3_server.address,
-                           'port': s3_server.port}
-            yaml.dump({'endpoints': [s3_endpoint]}, os_config_file)
-        cmd += ['--object-storage-config-file', os_conf_path]
+        cmd += ['--object-storage-config-file', s3_server.config_file]
         return cmd, env
     return make_run_cmd
 
@@ -86,7 +81,7 @@ def managed_cluster(run_dir, ssl, s3_server):
     # object storage backend, it yields an instance of cassandra.Cluster
     # referencing this cluster. before this function returns, the cluster is
     # teared down.
-    run_scylla_cmd = get_scylla_with_s3_cmd(run_dir, ssl, s3_server)
+    run_scylla_cmd = get_scylla_with_s3_cmd(ssl, s3_server)
     pid = run_with_dir(run_scylla_cmd, run_dir)
     ip = run.pid_to_ip(pid)
     run.wait_for_services(pid, [check_with_cql(ip, ssl)])
