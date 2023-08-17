@@ -123,7 +123,7 @@ using tri_mode_restriction = enum_option<tri_mode_restriction_t>;
 
 constexpr unsigned default_murmur3_partitioner_ignore_msb_bits = 12;
 
-class config : public utils::config_file {
+class config final : public utils::config_file {
 public:
     config();
     config(std::shared_ptr<db::extensions>);
