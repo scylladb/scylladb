@@ -24,7 +24,8 @@ async def test_remove_garbage_group0_members(manager: ManagerClient):
     even though the node is no longer a token ring member. Does not apply to Raft-topology mode.
     """
     # 4 servers, one dead
-    cfg = {'experimental_features': list[str]()}
+    cfg = {'enable_user_defined_functions': False,
+           'experimental_features': list[str]()}
     servers = [await manager.server_add(config=cfg) for _ in range(4)]
     removed_host_id = await manager.get_host_id(servers[0].server_id)
     await manager.server_stop_gracefully(servers[0].server_id)

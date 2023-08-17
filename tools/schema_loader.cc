@@ -564,7 +564,6 @@ future<schema_ptr> load_one_schema_from_file(std::filesystem::path path) {
 
 schema_ptr load_system_schema(std::string_view keyspace, std::string_view table) {
     db::config cfg;
-    cfg.experimental.set(true);
     cfg.experimental_features.set(db::experimental_features_t::all());
     const std::unordered_map<std::string_view, std::vector<schema_ptr>> schemas{
         {db::schema_tables::NAME, db::schema_tables::all_tables(db::schema_features::full())},

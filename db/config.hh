@@ -97,8 +97,6 @@ namespace db {
 
 /// Enumeration of all valid values for the `experimental` config entry.
 struct experimental_features_t {
-    // NOTE: CONSISTENT_TOPOLOGY_CHANGES and BROADCAST_TABLES features are not enabled via `experimental` umbrella flag.
-    // These options should be enabled explicitly.
     enum class feature {
         UNUSED,
         UDF,
