@@ -196,3 +196,16 @@ async def random_tables(request, manager):
 @pytest.fixture(scope="function")
 def mode(request):
     return request.config.getoption('mode')
+
+skipped_funcs = {}
+def skip_mode(mode: str, reason: str):
+    def wrap(func):
+        skipped_funcs[(func, mode)] = reason
+        return func
+    return wrap
+
+@pytest.fixture(scope="function", autouse=True)
+def skip_mode_fixture(request, mode):
+    skip_reason = skipped_funcs.get((request.function, mode))
+    if skip_reason is not None:
+        pytest.skip(f'{request.node.name} skipped, reason: {skip_reason}')
