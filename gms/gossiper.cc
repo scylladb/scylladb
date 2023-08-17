@@ -945,7 +945,7 @@ future<> gossiper::failure_detector_loop() {
             }
             auto nodes = boost::copy_range<std::vector<inet_address>>(_live_endpoints);
             auto live_endpoints_version = _live_endpoints_version;
-            auto generation_number = _endpoint_state_map[get_broadcast_address()].get_heart_beat_state().get_generation();
+            auto generation_number = my_endpoint_state().get_heart_beat_state().get_generation();
             co_await coroutine::parallel_for_each(boost::irange(size_t(0), nodes.size()), [this, generation_number, live_endpoints_version, &nodes] (size_t idx) {
                 const auto& node = nodes[idx];
                 auto shard = idx % smp::count;
@@ -1026,11 +1026,10 @@ void gossiper::run() {
             // MessagingService.instance().waitUntilListening();
 
             /* Update the local heartbeat counter. */
-            auto br_addr = get_broadcast_address();
-            heart_beat_state& hbs = _endpoint_state_map[br_addr].get_heart_beat_state();
+            heart_beat_state& hbs = my_endpoint_state().get_heart_beat_state();
             hbs.update_heart_beat();
 
-            logger.trace("My heartbeat is now {}", _endpoint_state_map[br_addr].get_heart_beat_state().get_heart_beat_version());
+            logger.trace("My heartbeat is now {}", hbs.get_heart_beat_version());
             utils::chunked_vector<gossip_digest> g_digests;
             this->make_random_gossip_digest(g_digests);
 
@@ -1424,6 +1423,16 @@ endpoint_state& gossiper::get_endpoint_state(inet_address ep) {
     return *ptr;
 }
 
+endpoint_state& gossiper::get_or_create_endpoint_state(inet_address ep) {
+    auto it = _endpoint_state_map.find(ep);
+    if (it == _endpoint_state_map.end()) {
+        auto eps = endpoint_state();
+        eps.add_application_state(application_state::RPC_ADDRESS, versioned_value::rpcaddress(ep));
+        it = _endpoint_state_map.emplace(ep, std::move(eps)).first;
+    }
+    return it->second;
+}
+
 future<> gossiper::reset_endpoint_state_map() {
     logger.debug("Resetting endpoint state map");
     auto lock = lock_endpoint_update_semaphore();
@@ -1590,7 +1599,7 @@ void gossiper::mark_alive(inet_address addr) {
     });
 
     msg_addr id = get_msg_addr(addr);
-    auto generation = _endpoint_state_map[get_broadcast_address()].get_heart_beat_state().get_generation();
+    auto generation = my_endpoint_state().get_heart_beat_state().get_generation();
     // Enter the _background_msg gate so stop() would wait on it
     auto gh = _background_msg.hold();
     logger.debug("Sending a EchoMessage to {}, with generation_number={}", id, generation);
@@ -1954,7 +1963,7 @@ future<> gossiper::start_gossiping(gms::generation_type generation_nbr, std::map
         generation_nbr = gms::generation_type(_force_gossip_generation());
         logger.warn("Use the generation number provided by user: generation = {}", generation_nbr);
     }
-    endpoint_state& local_state = _endpoint_state_map[get_broadcast_address()];
+    endpoint_state& local_state = my_endpoint_state();
     local_state.set_heart_beat_state_and_update_timestamp(heart_beat_state(generation_nbr));
     for (auto& entry : preload_local_states) {
         local_state.add_application_state(entry.first, entry.second);
@@ -2426,10 +2435,8 @@ future<> gossiper::mark_as_shutdown(const inet_address& endpoint, permit_id pid)
 }
 
 void gossiper::force_newer_generation() {
-    auto es = get_endpoint_state_for_endpoint_ptr(get_broadcast_address());
-    if (es) {
-        es->get_heart_beat_state().force_newer_generation_unsafe();
-    }
+    auto& eps = my_endpoint_state();
+    eps.get_heart_beat_state().force_newer_generation_unsafe();
 }
 
 static std::string_view do_get_gossip_status(const gms::versioned_value* app_state) noexcept {

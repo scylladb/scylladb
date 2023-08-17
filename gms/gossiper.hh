@@ -448,6 +448,12 @@ public:
      */
     sstring get_rpc_address(const inet_address& endpoint) const;
 private:
+    // Gets or creates endpoint_state for this node
+    endpoint_state& get_or_create_endpoint_state(inet_address ep);
+    endpoint_state& my_endpoint_state() {
+        return get_or_create_endpoint_state(get_broadcast_address());
+    }
+
     void update_timestamp_for_nodes(const std::map<inet_address, endpoint_state>& map);
 
     void mark_alive(inet_address addr);
