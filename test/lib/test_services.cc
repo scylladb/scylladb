@@ -125,7 +125,7 @@ public:
     compaction_backlog_tracker& get_backlog_tracker() override {
         return _backlog_tracker;
     }
-    const std::string& get_group_id() const noexcept override {
+    const std::string get_group_id() const noexcept override {
         return _group_id;
     }
     seastar::condition_variable& get_staging_done_condition() noexcept override {
@@ -303,7 +303,7 @@ std::pair<int, char**> scylla_tests_cmdline_options_processor::process_cmdline_o
     unsigned x_log2_compaction_groups = vm["x-log2-compaction-groups"].as<unsigned>();
     if (x_log2_compaction_groups) {
         std::cout << "Setting x_log2_compaction_groups to " << x_log2_compaction_groups << std::endl;
-        replica::set_minimum_x_log2_compaction_groups(x_log2_compaction_groups);
+        // TODO: perhaps we can later map it into initial_tablets.
         auto [_new_argc, _new_argv] = rebuild_arg_list_without(argc, argv, "--x-log2-compaction-groups", true);
         return std::make_pair(_new_argc, _new_argv);
     }

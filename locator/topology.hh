@@ -161,6 +161,7 @@ class topology {
 public:
     struct config {
         inet_address this_endpoint;
+        host_id this_host_id;
         endpoint_dc_rack local_dc_rack;
         bool disable_proximity_sorting = false;
 
@@ -176,6 +177,10 @@ public:
 
 public:
     const config& get_config() const noexcept { return _cfg; }
+
+    void set_host_id_cfg(host_id this_host_id) {
+        _cfg.this_host_id = this_host_id;
+    }
 
     const node* this_node() const noexcept {
         return _this_node;

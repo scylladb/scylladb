@@ -33,7 +33,7 @@ class compaction_group {
     table& _t;
     class table_state;
     std::unique_ptr<table_state> _table_state;
-    std::string _group_id;
+    const size_t _group_id;
     // Tokens included in this compaction_groups
     dht::token_range _token_range;
     compaction::compaction_strategy_state _compaction_strategy_state;
@@ -64,9 +64,9 @@ private:
 
     future<> delete_sstables_atomically(std::vector<sstables::shared_sstable> sstables_to_remove);
 public:
-    compaction_group(table& t, std::string gid, dht::token_range token_range);
+    compaction_group(table& t, size_t gid, dht::token_range token_range);
 
-    const std::string& get_group_id() const noexcept {
+    size_t group_id() const noexcept {
         return _group_id;
     }
 
@@ -133,7 +133,14 @@ public:
     }
 };
 
-// Used by the tests to increase the default number of compaction groups by increasing the minimum to X.
-void set_minimum_x_log2_compaction_groups(unsigned x_log2_compaction_groups);
+using compaction_group_vector = utils::chunked_vector<std::unique_ptr<compaction_group>>;
+
+class compaction_group_manager {
+public:
+    virtual ~compaction_group_manager() {}
+    virtual compaction_group_vector make_compaction_groups() const = 0;
+    virtual size_t compaction_group_of(dht::token) const = 0;
+    virtual size_t log2_compaction_groups() const = 0;
+};
 
 }

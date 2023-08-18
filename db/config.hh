@@ -425,8 +425,6 @@ public:
 
     named_value<bool> cache_index_pages;
 
-    named_value<unsigned> x_log2_compaction_groups;
-
     named_value<bool> consistent_cluster_management;
 
     named_value<double> wasm_cache_memory_fraction;
