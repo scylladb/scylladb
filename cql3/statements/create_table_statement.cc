@@ -514,11 +514,6 @@ std::optional<sstring> check_restricted_table_properties(
     return std::nullopt;
 }
 
-future<::shared_ptr<messages::result_message>>
-create_table_statement::execute(query_processor& qp, service::query_state& state, const query_options& options) const {
-    return schema_altering_statement::execute(qp, state, options);
-}
-
 }
 
 }
