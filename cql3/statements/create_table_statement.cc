@@ -422,7 +422,7 @@ void create_table_statement::raw_statement::add_column_alias(::shared_ptr<column
 // legal but restricted by the configuration. Checks for other of errors
 // in the table's options are done elsewhere.
 std::optional<sstring> check_restricted_table_properties(
-    query_processor& qp,
+    data_dictionary::database db,
     std::optional<schema_ptr> schema,
     const sstring& keyspace, const sstring& table,
     const cf_prop_defs& cfprops)
@@ -453,7 +453,7 @@ std::optional<sstring> check_restricted_table_properties(
         std::map<sstring, sstring> options = (strategy) ? cfprops.get_compaction_type_options() : (*schema)->compaction_strategy_options();
         sstables::time_window_compaction_strategy_options twcs_options(options);
         long ttl = (cfprops.has_property(cf_prop_defs::KW_DEFAULT_TIME_TO_LIVE)) ? cfprops.get_default_time_to_live() : current_ttl.count();
-        auto max_windows = qp.db().get_config().twcs_max_window_count();
+        auto max_windows = db.get_config().twcs_max_window_count();
 
         // It may happen that an user tries to update an unrelated table property. Allow the request through.
         if (!cfprops.has_property(cf_prop_defs::KW_DEFAULT_TIME_TO_LIVE) && !strategy) {
@@ -473,7 +473,7 @@ std::optional<sstring> check_restricted_table_properties(
                                                    "highly discouraged.", ttl, twcs_options.get_sstable_window_size().count(), window_count, max_windows));
             }
         } else {
-              switch (qp.db().get_config().restrict_twcs_without_default_ttl()) {
+              switch (db.get_config().restrict_twcs_without_default_ttl()) {
               case db::tri_mode_restriction_t::mode::TRUE:
                   throw exceptions::configuration_exception(
                       "TimeWindowCompactionStrategy tables without a strict default_time_to_live setting "
@@ -494,7 +494,7 @@ std::optional<sstring> check_restricted_table_properties(
 
 future<::shared_ptr<messages::result_message>>
 create_table_statement::execute(query_processor& qp, service::query_state& state, const query_options& options, std::optional<service::group0_guard> guard) const {
-    std::optional<sstring> warning = check_restricted_table_properties(qp, std::nullopt, keyspace(), column_family(), *_properties);
+    std::optional<sstring> warning = check_restricted_table_properties(qp.db(), std::nullopt, keyspace(), column_family(), *_properties);
     return schema_altering_statement::execute(qp, state, options, std::move(guard)).then([warning = std::move(warning)] (::shared_ptr<messages::result_message> msg) {
         if (warning) {
             msg->add_warning(*warning);

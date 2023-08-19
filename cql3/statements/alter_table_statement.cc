@@ -404,7 +404,7 @@ cql3::statements::alter_table_statement::prepare(data_dictionary::database db, c
 future<::shared_ptr<messages::result_message>>
 alter_table_statement::execute(query_processor& qp, service::query_state& state, const query_options& options, std::optional<service::group0_guard> guard) const {
     auto s = validation::validate_column_family(qp.db(), keyspace(), column_family());
-    std::optional<sstring> warning = check_restricted_table_properties(qp, s, keyspace(), column_family(), *_properties);
+    std::optional<sstring> warning = check_restricted_table_properties(qp.db(), s, keyspace(), column_family(), *_properties);
     return schema_altering_statement::execute(qp, state, options, std::move(guard)).then([warning = std::move(warning)] (::shared_ptr<messages::result_message> msg) {
         if (warning) {
             msg->add_warning(*warning);
