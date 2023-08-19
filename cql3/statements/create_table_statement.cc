@@ -181,6 +181,10 @@ std::unique_ptr<prepared_statement> create_table_statement::raw_statement::prepa
     if (_properties.properties()->get_synchronous_updates_flag()) {
         throw exceptions::invalid_request_exception(format("The synchronous_updates option is only applicable to materialized views, not to base tables"));
     }
+    std::optional<sstring> warning = check_restricted_table_properties(db, std::nullopt, keyspace(), column_family(), *_properties.properties());
+    if (warning) {
+        mylogger.warn("{}", *warning);
+    }
     const bool has_default_ttl = _properties.properties()->get_default_time_to_live() > 0;
 
     auto stmt = ::make_shared<create_table_statement>(*_cf_name, _properties.properties(), _if_not_exists, _static_columns, _properties.properties()->get_id());
@@ -494,14 +498,7 @@ std::optional<sstring> check_restricted_table_properties(
 
 future<::shared_ptr<messages::result_message>>
 create_table_statement::execute(query_processor& qp, service::query_state& state, const query_options& options, std::optional<service::group0_guard> guard) const {
-    std::optional<sstring> warning = check_restricted_table_properties(qp.db(), std::nullopt, keyspace(), column_family(), *_properties);
-    return schema_altering_statement::execute(qp, state, options, std::move(guard)).then([warning = std::move(warning)] (::shared_ptr<messages::result_message> msg) {
-        if (warning) {
-            msg->add_warning(*warning);
-            mylogger.warn("{}", *warning);
-        }
-        return msg;
-    });
+    return schema_altering_statement::execute(qp, state, options, std::move(guard));
 }
 
 }
