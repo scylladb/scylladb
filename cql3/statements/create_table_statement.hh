@@ -77,9 +77,6 @@ public:
 
     virtual future<> grant_permissions_to_creator(const service::client_state&) const override;
 
-    virtual future<::shared_ptr<messages::result_message>>
-    execute(query_processor& qp, service::query_state& state, const query_options& options, std::optional<service::group0_guard> guard) const override;
-
     schema_ptr get_cf_meta_data(const data_dictionary::database) const;
 
     class raw_statement;
