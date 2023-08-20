@@ -391,7 +391,7 @@ future<> migration_notifier::on_schema_change(std::function<void(migration_liste
     });
 }
 
-future<> migration_notifier::create_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm) {
+future<> migration_notifier::create_keyspace(lw_shared_ptr<keyspace_metadata> ksm) {
     const auto& name = ksm->name();
     co_await on_schema_change([&] (migration_listener* listener) {
         listener->on_create_keyspace(name);
@@ -400,7 +400,7 @@ future<> migration_notifier::create_keyspace(const lw_shared_ptr<keyspace_metada
     });
 }
 
-future<> migration_notifier::create_column_family(const schema_ptr& cfm) {
+future<> migration_notifier::create_column_family(schema_ptr cfm) {
     const auto& ks_name = cfm->ks_name();
     const auto& cf_name = cfm->cf_name();
     co_await on_schema_change([&] (migration_listener* listener) {
@@ -410,7 +410,7 @@ future<> migration_notifier::create_column_family(const schema_ptr& cfm) {
     });
 }
 
-future<> migration_notifier::create_user_type(const user_type& type) {
+future<> migration_notifier::create_user_type(user_type type) {
     const auto& ks_name = type->_keyspace;
     const auto& type_name = type->get_name_as_string();
     co_await on_schema_change([&] (migration_listener* listener) {
@@ -420,7 +420,7 @@ future<> migration_notifier::create_user_type(const user_type& type) {
     });
 }
 
-future<> migration_notifier::create_view(const view_ptr& view) {
+future<> migration_notifier::create_view(view_ptr view) {
     const auto& ks_name = view->ks_name();
     const auto& view_name = view->cf_name();
     co_await on_schema_change([&] (migration_listener* listener) {
@@ -444,7 +444,7 @@ public void notifyCreateAggregate(UDAggregate udf)
 }
 #endif
 
-future<> migration_notifier::update_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm) {
+future<> migration_notifier::update_keyspace(lw_shared_ptr<keyspace_metadata> ksm) {
     const auto& name = ksm->name();
     co_await on_schema_change([&] (migration_listener* listener) {
         listener->on_update_keyspace(name);
@@ -453,7 +453,7 @@ future<> migration_notifier::update_keyspace(const lw_shared_ptr<keyspace_metada
     });
 }
 
-future<> migration_notifier::update_column_family(const schema_ptr& cfm, bool columns_changed) {
+future<> migration_notifier::update_column_family(schema_ptr cfm, bool columns_changed) {
     const auto& ks_name = cfm->ks_name();
     const auto& cf_name = cfm->cf_name();
     co_await on_schema_change([&] (migration_listener* listener) {
@@ -463,7 +463,7 @@ future<> migration_notifier::update_column_family(const schema_ptr& cfm, bool co
     });
 }
 
-future<> migration_notifier::update_user_type(const user_type& type) {
+future<> migration_notifier::update_user_type(user_type type) {
     const auto& ks_name = type->_keyspace;
     const auto& type_name = type->get_name_as_string();
     co_await on_schema_change([&] (migration_listener* listener) {
@@ -473,7 +473,7 @@ future<> migration_notifier::update_user_type(const user_type& type) {
     });
 }
 
-future<> migration_notifier::update_view(const view_ptr& view, bool columns_changed) {
+future<> migration_notifier::update_view(view_ptr view, bool columns_changed) {
     const auto& ks_name = view->ks_name();
     const auto& view_name = view->cf_name();
     co_await on_schema_change([&] (migration_listener* listener) {
@@ -497,7 +497,7 @@ public void notifyUpdateAggregate(UDAggregate udf)
 }
 #endif
 
-future<> migration_notifier::drop_keyspace(const sstring& ks_name) {
+future<> migration_notifier::drop_keyspace(sstring ks_name) {
     co_await on_schema_change([&] (migration_listener* listener) {
         listener->on_drop_keyspace(ks_name);
     }, [&] (std::exception_ptr ex) {
@@ -505,7 +505,7 @@ future<> migration_notifier::drop_keyspace(const sstring& ks_name) {
     });
 }
 
-future<> migration_notifier::drop_column_family(const schema_ptr& cfm) {
+future<> migration_notifier::drop_column_family(schema_ptr cfm) {
     const auto& ks_name = cfm->ks_name();
     const auto& cf_name = cfm->cf_name();
     co_await on_schema_change([&] (migration_listener* listener) {
@@ -515,7 +515,7 @@ future<> migration_notifier::drop_column_family(const schema_ptr& cfm) {
     });
 }
 
-future<> migration_notifier::drop_user_type(const user_type& type) {
+future<> migration_notifier::drop_user_type(user_type type) {
     const auto& ks_name = type->_keyspace;
     const auto& type_name = type->get_name_as_string();
     co_await on_schema_change([&] (migration_listener* listener) {
@@ -525,7 +525,7 @@ future<> migration_notifier::drop_user_type(const user_type& type) {
     });
 }
 
-future<> migration_notifier::drop_view(const view_ptr& view) {
+future<> migration_notifier::drop_view(view_ptr view) {
     const auto& ks_name = view->ks_name();
     const auto& view_name = view->cf_name();
     co_await on_schema_change([&] (migration_listener* listener) {

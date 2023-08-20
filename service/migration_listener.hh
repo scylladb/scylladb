@@ -115,18 +115,18 @@ public:
     /// Unregister a migration listener on current shard.
     future<> unregister_listener(migration_listener* listener);
 
-    future<> create_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm);
-    future<> create_column_family(const schema_ptr& cfm);
-    future<> create_user_type(const user_type& type);
-    future<> create_view(const view_ptr& view);
-    future<> update_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm);
-    future<> update_column_family(const schema_ptr& cfm, bool columns_changed);
-    future<> update_user_type(const user_type& type);
-    future<> update_view(const view_ptr& view, bool columns_changed);
-    future<> drop_keyspace(const sstring& ks_name);
-    future<> drop_column_family(const schema_ptr& cfm);
-    future<> drop_user_type(const user_type& type);
-    future<> drop_view(const view_ptr& view);
+    future<> create_keyspace(lw_shared_ptr<keyspace_metadata> ksm);
+    future<> create_column_family(schema_ptr cfm);
+    future<> create_user_type(user_type type);
+    future<> create_view(view_ptr view);
+    future<> update_keyspace(lw_shared_ptr<keyspace_metadata> ksm);
+    future<> update_column_family(schema_ptr cfm, bool columns_changed);
+    future<> update_user_type(user_type type);
+    future<> update_view(view_ptr view, bool columns_changed);
+    future<> drop_keyspace(sstring ks_name);
+    future<> drop_column_family(schema_ptr cfm);
+    future<> drop_user_type(user_type type);
+    future<> drop_view(view_ptr view);
 
     void before_create_column_family(const schema&, std::vector<mutation>&, api::timestamp_type);
     void before_update_column_family(const schema& new_schema, const schema& old_schema, std::vector<mutation>&, api::timestamp_type);
