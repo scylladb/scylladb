@@ -1064,6 +1064,7 @@ class ScyllaClusterManager:
         add_put('/cluster/addserver', self._cluster_server_add)
         add_put('/cluster/remove-node/{initiator}', self._cluster_remove_node)
         add_get('/cluster/decommission-node/{server_id}', self._cluster_decommission_node)
+        add_get('/cluster/rebuild-node/{server_id}', self._cluster_rebuild_node)
         add_get('/cluster/server/{server_id}/get_config', self._server_get_config)
         add_put('/cluster/server/{server_id}/update_config', self._server_update_config)
         add_put('/cluster/server/{server_id}/change_ip', self._server_change_ip)
@@ -1215,7 +1216,7 @@ class ScyllaClusterManager:
         return aiohttp.web.Response(text="OK")
 
     async def _cluster_decommission_node(self, request) -> aiohttp.web.Response:
-        """Run remove node on Scylla REST API for a specified server"""
+        """Run decommission node on Scylla REST API for a specified server"""
         assert self.cluster
         server_id = ServerNum(int(request.match_info["server_id"]))
         self.logger.info("_cluster_decommission_node %s", server_id)
@@ -1230,6 +1231,23 @@ class ScyllaClusterManager:
                           server.log_filename)
             return aiohttp.web.Response(status=500,
                                         text=f"Error decommissioning {server}: {exc}")
+        await self.cluster.server_stop(server_id, gracefully=True)
+        return aiohttp.web.Response(text="OK")
+
+    async def _cluster_rebuild_node(self, request) -> aiohttp.web.Response:
+        """Run rebuild node on Scylla REST API for a specified server"""
+        assert self.cluster
+        server_id = ServerNum(int(request.match_info["server_id"]))
+        self.logger.info("_cluster_rebuild_node %s", server_id)
+        assert server_id in self.cluster.running, "Can't rebuild not running node"
+        server = self.cluster.running[server_id]
+        try:
+            await self.cluster.api.rebuild_node(server.ip_addr, timeout=ScyllaServer.TOPOLOGY_TIMEOUT)
+        except RuntimeError as exc:
+            self.logger.error("_cluster_rebuild_node %s, check log at %s", server,
+                          server.log_filename)
+            return aiohttp.web.Response(status=500,
+                                        text=f"Error rebuilding {server}: {exc}")
         await self.cluster.server_stop(server_id, gracefully=True)
         return aiohttp.web.Response(text="OK")
 

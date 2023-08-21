@@ -177,6 +177,13 @@ class ScyllaRESTAPIClient():
                                timeout = timeout)
         logger.debug("decommission_node %s finished", host_ip)
 
+    async def rebuild_node(self, host_ip: str, timeout: float) -> None:
+        """Initiate rebuild of a node with host_ip"""
+        logger.debug("rebuild_node %s", host_ip)
+        await self.client.post("/storage_service/rebuild", host = host_ip,
+                               timeout = timeout)
+        logger.debug("rebuild_node %s finished", host_ip)
+
     async def get_gossip_generation_number(self, node_ip: str, target_ip: str) -> int:
         """Get the current generation number of `target_ip` observed by `node_ip`."""
         data = await self.client.get_json(f"/gossiper/generation_number/{target_ip}",
