@@ -1784,7 +1784,12 @@ future<> gossiper::apply_new_states(inet_address addr, endpoint_state& local_sta
             co_await do_on_change_notifications(addr, key, remote_map.at(key), pid);
         }
     } catch (...) {
-        on_fatal_internal_error(logger, format("Gossip change listener failed: {}", std::current_exception()));
+        auto msg = format("Gossip change listener failed: {}", std::current_exception());
+        if (_abort_source.abort_requested()) {
+            logger.warn("{}. Ignored", msg);
+        } else {
+            on_fatal_internal_error(logger, msg);
+        }
     }
 
     maybe_rethrow_exception(std::move(ep));
