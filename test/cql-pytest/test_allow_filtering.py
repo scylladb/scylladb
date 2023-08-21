@@ -191,6 +191,19 @@ def wait_for_index(cql, table, column, everything):
 
     pytest.fail('Timeout waiting for index to become up to date.')
 
+# Similar to wait_for_index(), just for a local secondary index
+def wait_for_local_index(cql, table, pk, column, everything):
+    start_time = time.time()
+    while time.time() < start_time + 10:
+        column_values = {(getattr(row, pk), getattr(row, column)) for row in everything}
+        results = []
+        for p, v in column_values:
+            results.extend(list(cql.execute(f'SELECT * FROM {table} WHERE {pk}={p} AND {column}={v}')))
+        if sorted(results) == sorted(everything):
+            return
+        time.sleep(0.1)
+    pytest.fail('Timeout waiting for index to become up to date.')
+
 @pytest.fixture(scope="module")
 def table2(cql, test_keyspace):
     table = test_keyspace + "." + unique_name()
@@ -294,12 +307,33 @@ def test_allow_filtering_prefix(cql, table3):
 # doesn't work at all (not without ALLOW FILTERING and not with it); Scylla
 # does support this use case with ALLOW FILTERING, but refuses to do it
 # without ALLOW FILTERING. The test test_allow_filtering_index_in()
-# reproduces issue #5545.
+# reproduces issue #5545 / #13533
 def test_allow_filtering_pk_in(cql, table1):
     check_af_optional(cql, table1, 'k IN (1,2)', lambda row: row.k in {1,2})
-@pytest.mark.xfail(reason="issue #5545: Scylla supports IN on indexed column, but only with ALLOW FILTERING")
+@pytest.mark.xfail(reason="issue #5545, #13533: Scylla supports IN on indexed column, but only with ALLOW FILTERING")
 def test_allow_filtering_index_in(cql, table2):
     check_af_optional(cql, table2, 'a IN (1,2)', lambda row: row.a in {1,2})
+
+# Exactly the same bug #13533 as tested above in
+# test_allow_filtering_index_in, also exists for *local* secondary
+# indexes, and reproduced by the following test. Local secondary indexes
+# are a Scylla-only feature, so the test is marked as scylla_only.
+@pytest.fixture(scope="module")
+def table2local(cql, test_keyspace):
+    table = test_keyspace + "." + unique_name()
+    cql.execute("CREATE TABLE " + table +
+        "(k int, a int, b int, PRIMARY KEY (k))")
+    cql.execute("CREATE INDEX ON " + table + "((k), a)")
+    for i in range(0, 5):
+        cql.execute("INSERT INTO {} (k, a, b) VALUES ({}, {}, {})".format(
+                table, i//2, i*10, i*100))
+    everything = list(cql.execute('SELECT * FROM ' + table))
+    wait_for_local_index(cql, table, 'k', 'a', everything)
+    yield (table, everything)
+    cql.execute("DROP TABLE " + table)
+@pytest.mark.xfail(reason="issue #13533: Scylla supports IN on indexed column, but only with ALLOW FILTERING")
+def test_allow_filtering_local_index_in(cql, table2local, scylla_only):
+    check_af_optional(cql, table2local, 'k = 0 AND a IN (1,2)', lambda row: row.a in {1,2})
 
 # The following test Reproduces bug #7888 in CONTAINS/CONTAINS KEY relations
 # on frozen collection clustering columns when the query is restricted to a
