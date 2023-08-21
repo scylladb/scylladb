@@ -199,8 +199,8 @@ CREATE TABLE system.tablets (
     keyspace_name text,
     table_id uuid,
     last_token bigint,
-    new_replicas frozen<set<frozen<tuple<uuid, int>>>>,
-    replicas frozen<set<frozen<tuple<uuid, int>>>>,
+    new_replicas frozen<list<frozen<tuple<uuid, int>>>>,
+    replicas frozen<list<frozen<tuple<uuid, int>>>>,
     stage text,
     table_name text static,
     tablet_count int static,
@@ -223,7 +223,7 @@ Only tables which use tablet-based replication strategy have an entry here.
 ```
 
 Each tablet is represented by a single row. `replicas` holds the set of shard-replicas of the tablet.
-It's a set of tuples where the first element is `host_id` of the replica and the second element is the `shard_id` of the replica.
+It's a list of tuples where the first element is `host_id` of the replica and the second element is the `shard_id` of the replica.
 
 During tablet migration, the columns `new_replicas` and `stage` are set to represent the transition. The
 `new_replicas` column holds what will be put in `replicas` after transition is done.

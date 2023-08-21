@@ -8,7 +8,7 @@
 
 #include "types/types.hh"
 #include "types/tuple.hh"
-#include "types/set.hh"
+#include "types/list.hh"
 #include "db/system_keyspace.hh"
 #include "schema/schema_builder.hh"
 #include "cql3/query_processor.hh"
@@ -22,12 +22,12 @@ namespace replica {
 using namespace locator;
 
 static thread_local auto replica_type = tuple_type_impl::get_instance({uuid_type, int32_type});
-static thread_local auto replica_set_type = set_type_impl::get_instance(replica_type, false);
+static thread_local auto replica_set_type = list_type_impl::get_instance(replica_type, false);
 
 schema_ptr make_tablets_schema() {
     // FIXME: Allow UDTs in system keyspace:
     // CREATE TYPE tablet_replica (replica_id uuid, shard int);
-    // replica_set_type = frozen<set<tablet_replica>>
+    // replica_set_type = frozen<list<tablet_replica>>
     auto id = generate_legacy_id(db::system_keyspace::NAME, db::system_keyspace::TABLETS);
     return schema_builder(db::system_keyspace::NAME, db::system_keyspace::TABLETS, id)
             .with_column("keyspace_name", utf8_type, column_kind::partition_key)
@@ -74,10 +74,10 @@ tablet_map_to_mutation(const tablet_map& tablets, table_id id, const sstring& ke
     for (auto&& tablet : tablets.tablets()) {
         auto last_token = tablets.get_last_token(tid);
         auto ck = clustering_key::from_single_value(*s, data_value(dht::token::to_int64(last_token)).serialize_nonnull());
-        m.set_clustered_cell(ck, "replicas", make_set_value(replica_set_type, replicas_to_data_value(tablet.replicas)), ts);
+        m.set_clustered_cell(ck, "replicas", make_list_value(replica_set_type, replicas_to_data_value(tablet.replicas)), ts);
         if (auto tr_info = tablets.get_tablet_transition_info(tid)) {
             m.set_clustered_cell(ck, "stage", tablet_transition_stage_to_string(tr_info->stage), ts);
-            m.set_clustered_cell(ck, "new_replicas", make_set_value(replica_set_type, replicas_to_data_value(tr_info->next)), ts);
+            m.set_clustered_cell(ck, "new_replicas", make_list_value(replica_set_type, replicas_to_data_value(tr_info->next)), ts);
         }
         tid = *tablets.next_tablet(tid);
         co_await coroutine::maybe_yield();
@@ -87,13 +87,13 @@ tablet_map_to_mutation(const tablet_map& tablets, table_id id, const sstring& ke
 
 tablet_mutation_builder&
 tablet_mutation_builder::set_new_replicas(dht::token last_token, locator::tablet_replica_set replicas) {
-    _m.set_clustered_cell(get_ck(last_token), "new_replicas", make_set_value(replica_set_type, replicas_to_data_value(replicas)), _ts);
+    _m.set_clustered_cell(get_ck(last_token), "new_replicas", make_list_value(replica_set_type, replicas_to_data_value(replicas)), _ts);
     return *this;
 }
 
 tablet_mutation_builder&
 tablet_mutation_builder::set_replicas(dht::token last_token, locator::tablet_replica_set replicas) {
-    _m.set_clustered_cell(get_ck(last_token), "replicas", make_set_value(replica_set_type, replicas_to_data_value(replicas)), _ts);
+    _m.set_clustered_cell(get_ck(last_token), "replicas", make_list_value(replica_set_type, replicas_to_data_value(replicas)), _ts);
     return *this;
 }
 
@@ -126,7 +126,7 @@ mutation make_drop_tablet_map_mutation(const sstring& keyspace_name, table_id id
 static
 tablet_replica_set deserialize_replica_set(cql3::untyped_result_set_row::view_type raw_value) {
     tablet_replica_set result;
-    auto v = value_cast<set_type_impl::native_type>(
+    auto v = value_cast<list_type_impl::native_type>(
             replica_set_type->deserialize_value(raw_value));
     result.reserve(v.size());
     for (const data_value& replica_v : v) {
