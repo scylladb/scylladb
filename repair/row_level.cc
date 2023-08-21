@@ -11,6 +11,7 @@
 #include "repair/repair.hh"
 #include "message/messaging_service.hh"
 #include "repair/task_manager_module.hh"
+#include "seastar/coroutine/exception.hh"
 #include "sstables/sstables.hh"
 #include "sstables/sstables_manager.hh"
 #include "mutation/mutation_fragment.hh"
@@ -591,6 +592,8 @@ static void add_to_repair_meta_for_followers(repair_meta& rm);
 
 future<std::list<repair_row>> to_repair_rows_list(repair_rows_on_wire rows, schema_ptr s, uint64_t seed, repair_master is_master, reader_permit permit, repair_hasher hasher) {
     std::list<repair_row> row_list;
+    std::exception_ptr ex;
+  try {
     lw_shared_ptr<const decorated_key_with_hash> dk_ptr;
     lw_shared_ptr<mutation_fragment> last_mf;
     position_in_partition::tri_compare cmp(*s);
@@ -647,6 +650,14 @@ future<std::list<repair_row>> to_repair_rows_list(repair_rows_on_wire rows, sche
             }
         }
         co_await coroutine::maybe_yield();
+    }
+  } catch (...) {
+    ex = std::current_exception();
+  }
+    if (ex) {
+        co_await utils::clear_gently(rows);
+        co_await utils::clear_gently(row_list);
+        co_await coroutine::return_exception_ptr(std::move(ex));
     }
     co_return std::move(row_list);
 }
