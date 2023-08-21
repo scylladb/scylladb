@@ -17,6 +17,7 @@ import pytest
 from cassandra.cluster import Session, ResponseFuture                    # type: ignore # pylint: disable=no-name-in-module
 from cassandra.cluster import Cluster, ConsistencyLevel                  # type: ignore # pylint: disable=no-name-in-module
 from cassandra.cluster import ExecutionProfile, EXEC_PROFILE_DEFAULT     # type: ignore # pylint: disable=no-name-in-module
+from cassandra.policies import ExponentialReconnectionPolicy             # type: ignore
 from cassandra.policies import RoundRobinPolicy                          # type: ignore
 from cassandra.policies import TokenAwarePolicy                          # type: ignore
 from cassandra.policies import WhiteListRoundRobinPolicy                 # type: ignore
@@ -161,6 +162,12 @@ def cluster_con(hosts: List[IPAddress], port: int, use_ssl: bool):
                    # else the driver can't handle a server being down
                    max_schema_agreement_wait=20,
                    idle_heartbeat_timeout=200,
+                   # The default reconnection policy has a large maximum interval
+                   # between retries (600 seconds). In tests that restart/replace nodes,
+                   # where a node can be unavailable for an extended period of time,
+                   # this can cause the reconnection retry interval to get very large,
+                   # longer than a test timeout.
+                   reconnection_policy = ExponentialReconnectionPolicy(1.0, 4.0)
                    )
 
 
