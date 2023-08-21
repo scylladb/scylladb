@@ -2913,9 +2913,9 @@ future<> init_metrics() {
             sm::description("Number of rows read")),
 
         sm::make_counter("capped_local_deletion_time", [] { return sstables_stats::get_shard_stats().capped_local_deletion_time; },
-            sm::description("Was local deletion time capped at maximum allowed value in Statistics")),
+            sm::description("Number of SStables with tombstones whose local deletion time was capped at the maximum allowed value in Statistics")),
         sm::make_counter("capped_tombstone_deletion_time", [] { return sstables_stats::get_shard_stats().capped_tombstone_deletion_time; },
-            sm::description("Was partition tombstone deletion time capped at maximum allowed value")),
+            sm::description("Number of tombstones whose local deletion time was capped at the maximum allowed value")),
 
         sm::make_counter("total_open_for_reading", [] { return sstables_stats::get_shard_stats().open_for_reading; },
             sm::description("Counter of sstables open for reading")),
