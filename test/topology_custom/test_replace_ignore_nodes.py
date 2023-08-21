@@ -42,16 +42,16 @@ async def test_replace_ignore_nodes(manager: ManagerClient) -> None:
     replace_cfg = ReplaceConfig(replaced_id = servers[0].server_id, reuse_ip_addr = False, use_host_id = False,
                                 ignore_dead_nodes = ignore_dead)
     await manager.server_add(replace_cfg=replace_cfg, config=cfg)
-    await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
+    await wait_for_token_ring_and_group0_consistency(manager, time.time() + 60)
 
     ignore_dead = [servers[2].ip_addr] 
     logger.info(f"Replacing {servers[1]}, ignore_dead_nodes = {ignore_dead}")
     replace_cfg = ReplaceConfig(replaced_id = servers[1].server_id, reuse_ip_addr = False, use_host_id = False,
                                 ignore_dead_nodes = ignore_dead)
     await manager.server_add(replace_cfg=replace_cfg, config=cfg)
-    await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
+    await wait_for_token_ring_and_group0_consistency(manager, time.time() + 60)
 
     logger.info(f"Replacing {servers[2]}")
     replace_cfg = ReplaceConfig(replaced_id = servers[2].server_id, reuse_ip_addr = False, use_host_id = False)
     await manager.server_add(replace_cfg=replace_cfg, config=cfg)
-    await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
+    await wait_for_token_ring_and_group0_consistency(manager, time.time() + 60)

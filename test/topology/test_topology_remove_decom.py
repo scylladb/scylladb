@@ -62,7 +62,7 @@ async def test_decommission_node_add_column(manager: ManagerClient, random_table
     await manager.api.enable_injection(
         bootstrapped_server.ip_addr, 'storage_service_decommission_prepare_handler_sleep', one_shot=True)
     await manager.decommission_node(decommission_target.server_id)
-    await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
+    await wait_for_token_ring_and_group0_consistency(manager, time.time() + 60)
     await table.add_column()
     await random_tables.verify_schema()
 

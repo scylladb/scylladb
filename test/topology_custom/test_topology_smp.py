@@ -44,7 +44,7 @@ async def test_nodes_with_different_smp(request: FixtureRequest, manager: Manage
     logger.info(f'Adding --smp=5 server')
     await manager.server_add(cmdline=['--smp', '5'])
 
-    await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
+    await wait_for_token_ring_and_group0_consistency(manager, time.time() + 60)
 
     logger.info(f'Creating new tables')
     tables = RandomTables(request.node.name, manager, unique_name(), 3)

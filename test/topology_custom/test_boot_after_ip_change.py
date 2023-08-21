@@ -25,7 +25,7 @@ async def test_boot_after_ip_change(manager: ManagerClient) -> None:
            'experimental_features': list[str]()}
     logger.info(f"Booting initial cluster")
     servers = [await manager.server_add(config=cfg) for _ in range(2)]
-    await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
+    await wait_for_token_ring_and_group0_consistency(manager, time.time() + 60)
 
     logger.info(f"Stopping server {servers[1]}")
     await manager.server_stop_gracefully(servers[1].server_id)

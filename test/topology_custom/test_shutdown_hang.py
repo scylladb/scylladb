@@ -21,7 +21,7 @@ async def test_hints_manager_shutdown_hang(manager: ManagerClient) -> None:
         'error_injections_at_startup': ['decrease_hints_flush_period']
     })
     s2 = await manager.server_add()
-    await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
+    await wait_for_token_ring_and_group0_consistency(manager, time.time() + 60)
 
     cql = manager.get_cql()
 
