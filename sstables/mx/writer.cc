@@ -668,6 +668,7 @@ private:
             int32_t ldt = adjusted_local_deletion_time(t.deletion_time, capped);
             if (capped) {
                 slogger.warn("Capping tombstone local_deletion_time {} to max {}", t.deletion_time.time_since_epoch().count(), ldt);
+                slogger.warn("Capping tombstone in sstable = {}, partition_key = {}", _sst.get_filename(), _partition_key->to_partition_key(_schema));
                 _sst.get_stats().on_capped_tombstone_deletion_time();
             }
             dt.local_deletion_time = ldt;
