@@ -27,11 +27,12 @@
 using namespace sstables;
 using namespace std::chrono_literals;
 
+using validate = bool_class<struct validate_tag>;
 // Must be called in a seastar thread.
 sstables::shared_sstable make_sstable_containing(std::function<sstables::shared_sstable()> sst_factory, lw_shared_ptr<replica::memtable> mt);
 sstables::shared_sstable make_sstable_containing(sstables::shared_sstable sst, lw_shared_ptr<replica::memtable> mt);
-sstables::shared_sstable make_sstable_containing(std::function<sstables::shared_sstable()> sst_factory, std::vector<mutation> muts);
-sstables::shared_sstable make_sstable_containing(sstables::shared_sstable sst, std::vector<mutation> muts);
+sstables::shared_sstable make_sstable_containing(std::function<sstables::shared_sstable()> sst_factory, std::vector<mutation> muts, validate do_validate = validate::yes);
+sstables::shared_sstable make_sstable_containing(sstables::shared_sstable sst, std::vector<mutation> muts, validate do_validate = validate::yes);
 
 inline future<> write_memtable_to_sstable_for_test(replica::memtable& mt, sstables::shared_sstable sst) {
     return write_memtable_to_sstable(mt, sst, sst->manager().configure_writer("memtable"));

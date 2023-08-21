@@ -52,11 +52,11 @@ sstables::shared_sstable make_sstable_containing(sstables::shared_sstable sst, l
     return sst;
 }
 
-sstables::shared_sstable make_sstable_containing(std::function<sstables::shared_sstable()> sst_factory, std::vector<mutation> muts) {
-    return make_sstable_containing(sst_factory(), std::move(muts));
+sstables::shared_sstable make_sstable_containing(std::function<sstables::shared_sstable()> sst_factory, std::vector<mutation> muts, validate do_validate) {
+    return make_sstable_containing(sst_factory(), std::move(muts), do_validate);
 }
 
-sstables::shared_sstable make_sstable_containing(sstables::shared_sstable sst, std::vector<mutation> muts) {
+sstables::shared_sstable make_sstable_containing(sstables::shared_sstable sst, std::vector<mutation> muts, validate do_validate) {
     tests::reader_concurrency_semaphore_wrapper semaphore;
 
     schema_ptr s = muts[0].schema();
@@ -74,13 +74,14 @@ sstables::shared_sstable make_sstable_containing(sstables::shared_sstable sst, s
         }
     }
 
-    // validate the sstable
-    auto rd = assert_that(sst->as_mutation_source().make_reader_v2(s, semaphore.make_permit()));
-    for (auto&& m : merged) {
-        rd.produces(m);
+    if (do_validate) {
+        // validate the sstable
+        auto rd = assert_that(sst->as_mutation_source().make_reader_v2(s, semaphore.make_permit()));
+        for (auto&& m : merged) {
+            rd.produces(m);
+        }
+        rd.produces_end_of_stream();
     }
-    rd.produces_end_of_stream();
-
     return sst;
 }
 
