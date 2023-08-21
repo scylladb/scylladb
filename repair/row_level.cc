@@ -594,13 +594,23 @@ future<std::list<repair_row>> to_repair_rows_list(repair_rows_on_wire rows, sche
     lw_shared_ptr<const decorated_key_with_hash> dk_ptr;
     lw_shared_ptr<mutation_fragment> last_mf;
     position_in_partition::tri_compare cmp(*s);
-    for (partition_key_and_mutation_fragments& x : rows) {
+
+    // Consume the rows and mutation_fragment:s below incrementally
+    // as it interleaves frees with allocation, reducing memory pressure,
+    // and to prevent reactor stalls when freeing a large repair_rows_on_wire
+    // object in one shot when the function returns.
+    for (auto it = rows.begin(); it != rows.end(); it = rows.erase(it)) {
+        auto x = std::move(*it);
+
         dht::decorated_key dk = dht::decorate_key(*s, x.get_key());
         if (!(dk_ptr && dk_ptr->dk.equal(*s, dk))) {
             dk_ptr = make_lw_shared<const decorated_key_with_hash>(*s, dk, seed);
         }
+        auto& mutation_fragments = x.get_mutation_fragments();
         if (is_master) {
-            for (frozen_mutation_fragment& fmf : x.get_mutation_fragments()) {
+            for (auto fmfit = mutation_fragments.begin(); fmfit != mutation_fragments.end(); fmfit = mutation_fragments.erase(fmfit)) {
+                auto fmf = std::move(*fmfit);
+
                 _metrics.rx_row_nr += 1;
                 _metrics.rx_row_bytes += fmf.representation().size();
                 // Keep the mutation_fragment in repair_row as an
@@ -615,7 +625,9 @@ future<std::list<repair_row>> to_repair_rows_list(repair_rows_on_wire rows, sche
             }
         } else {
             last_mf = {};
-            for (frozen_mutation_fragment& fmf : x.get_mutation_fragments()) {
+            for (auto fmfit = mutation_fragments.begin(); fmfit != mutation_fragments.end(); fmfit = mutation_fragments.erase(fmfit)) {
+                auto fmf = std::move(*fmfit);
+
                 _metrics.rx_row_nr += 1;
                 _metrics.rx_row_bytes += fmf.representation().size();
                 auto mf = make_lw_shared<mutation_fragment>(fmf.unfreeze(*s, permit));
