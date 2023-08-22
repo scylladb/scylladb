@@ -1507,6 +1507,10 @@ class topology_coordinator {
             return std::make_pair(true, std::move(guard));
         }
 
+        if (!_topo_sm._topology.features.calculate_not_yet_enabled_features().empty()) {
+            return std::make_pair(true, std::move(guard));
+        }
+
         return std::make_pair(false, std::move(guard));
     }
 
