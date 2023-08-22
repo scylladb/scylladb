@@ -10,6 +10,7 @@
 #include <stdexcept>
 #include <string>
 #include <sys/stat.h>
+#include <unistd.h>
 #include <malloc.h>
 #include <boost/regex.hpp>
 #include <filesystem>
@@ -592,6 +593,8 @@ private:
     void do_periodic_syncs() noexcept;
     void do_periodic_flush_callbacks() noexcept;
 
+    bool maybe_merge_request(write_request& wr);
+
     size_t max_request_controller_units() const;
     segment_id_type _ids = 0, _low_id = 0;
     std::vector<sseg_ptr> _segments;
@@ -1086,10 +1089,32 @@ public:
 
         std::exception_ptr ep;
 
+        auto max_align = _file.disk_write_dma_alignment();
+
         try {
             while (!view.empty()) {
                 auto current = *view.begin();
-                auto bytes = co_await _file.dma_write(off, current.data(), current.size());
+                size_t bytes = 0;
+
+                // See reactor.cc: We cannot writev stuff less than
+                // actual write align (not overwrite align). So
+                // if we end up with a smallish tail or whatnot
+                // we need to write that separately.
+                if (current.size() < size && size >= max_align) {
+                    // more than one fragment.
+                    std::vector<iovec> iov;
+                    iov.reserve(10);
+
+                    for (auto& v : view) {
+                        iov.emplace_back(iovec{const_cast<int8_t*>(v.data()), v.size()});
+                        if (iov.size() == IOV_MAX) {
+                            break; // no point adding more
+                        }
+                    }
+                    bytes = co_await _file.dma_write(off, std::move(iov));
+                } else {
+                    bytes = co_await _file.dma_write(off, current.data(), current.size());
+                }
                 _segment_manager->totals.bytes_written += bytes;
                 _segment_manager->totals.active_size_on_disk += bytes;
                 ++_segment_manager->totals.cycle_count;
@@ -1604,12 +1629,48 @@ future<> db::commitlog::segment_manager::message_loop() {
     co_await do_pending_deletes();    
 }
 
+bool db::commitlog::segment_manager::maybe_merge_request(write_request& wr) {
+    if (!_write_queue.empty()) {
+        auto& nwr = _write_queue.front();
+        if (nwr.segment == wr.segment && nwr.file_offset == (wr.file_offset + wr.size)) {
+            assert(!wr.termination);
+            if (nwr.size != 0) {
+                if (wr.size != 0) {
+                    wr.buffer.remove_suffix(wr.buffer.size_bytes() - wr.size);
+                }
+                nwr.buffer.remove_suffix(nwr.buffer.size_bytes() - nwr.size);
+
+                auto v1 = std::move(wr.buffer).release();
+                auto v2 = std::move(nwr.buffer).release();
+                v1.reserve(v1.size() + v2.size());
+                for (auto&& e : v2) {
+                    v1.emplace_back(std::move(e));
+                }
+                wr.buffer = buffer_type(std::move(v1), wr.size + nwr.size);
+                wr.size += nwr.size;
+            }
+
+            wr.flush |= nwr.flush;
+            wr.termination = nwr.termination;
+
+            _write_queue.pop();
+
+            return true;
+        }
+    }
+    return false;
+}
+
 future<> db::commitlog::segment_manager::handle_writes() noexcept {
     while (!_write_queue.closed() || !_write_queue.empty()) {
         co_await _write_queue.wait();
 
         while (!_write_queue.empty()) {
             auto wr = _write_queue.pop();
+
+            while (maybe_merge_request(wr)) 
+            {}
+
             auto s = wr.segment;
             try {
                 co_await s->perform_write_request(wr);
