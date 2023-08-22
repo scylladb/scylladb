@@ -384,7 +384,7 @@ future<uint64_t> sstable_directory::reshape(compaction_manager& cm, replica::tab
                         return collect_output_sstables_from_reshaping(std::move(new_sstables));
                     });
                 });
-            }).then_wrapped([&table] (future<> f) {
+            }, throw_if_stopping::yes).then_wrapped([&table] (future<> f) {
                 try {
                     f.get();
                 } catch (sstables::compaction_stopped_exception& e) {
@@ -443,7 +443,7 @@ sstable_directory::reshard(sstable_info_vector shared_info, compaction_manager& 
                         // resharding them.
                         return when_all_succeed(collect_output_sstables_from_resharding(std::move(result.new_sstables)), remove_input_sstables_from_resharding(std::move(sstlist))).discard_result();
                     });
-                });
+                }, throw_if_stopping::no);
             });
         });
     });
