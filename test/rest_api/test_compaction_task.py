@@ -39,6 +39,26 @@ def check_compaction_task(cql, this_dc, rest_api, run_compaction, compaction_typ
                     check_child_parent_relationship(rest_api, top_level_task, depth, allow_no_children)
     drain_module_tasks(rest_api, module_name)
 
+def checkout_async_task(cql, this_dc, rest_api, run_compaction_async, compaction_type):
+    drain_module_tasks(rest_api, module_name)
+    with set_tmp_task_ttl(rest_api, long_time):
+        with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 1 }}") as keyspace:
+            schema = 'p int, v text, primary key (p)'
+            with new_test_table(cql, keyspace, schema) as t0:
+                stmt = cql.prepare(f"INSERT INTO {t0} (p, v) VALUES (?, ?)")
+                cql.execute(stmt, [0, 'hello'])
+                cql.execute(stmt, [1, 'world'])
+
+                resp = run_compaction_async(keyspace)
+                resp.raise_for_status()
+                task_id = resp.json()
+
+                # Use task_id in task manager api.
+                status = wait_for_task(rest_api, task_id)
+                assert status["type"] == compaction_type, "Task has an invalid type"
+                assert status["state"] == "done", "Compaction failed"
+    drain_module_tasks(rest_api, module_name)
+
 def test_global_major_keyspace_compaction_task(cql, this_dc, rest_api):
     task_tree_depth = 4
     # global major compaction
@@ -180,3 +200,18 @@ def test_not_created_compaction_task_abort(cql, this_dc, rest_api):
                         assert all("children" not in child for child in children), "Some child tasks spawned new tasks even though they were aborted"
                     x.join()
     drain_module_tasks(rest_api, module_name)
+
+def test_major_keyspace_compaction_task_async(cql, this_dc, rest_api):
+    checkout_async_task(cql, this_dc, rest_api, lambda keyspace: rest_api.send("POST", f"tasks/compaction/keyspace_compaction/{keyspace}"), "major compaction")
+
+def test_cleanup_keyspace_compaction_task_async(cql, this_dc, rest_api):
+    checkout_async_task(cql, this_dc, rest_api, lambda keyspace: rest_api.send("POST", f"tasks/compaction/keyspace_cleanup/{keyspace}"), "cleanup compaction")
+
+def test_offstrategy_keyspace_compaction_task_async(cql, this_dc, rest_api):
+    checkout_async_task(cql, this_dc, rest_api, lambda keyspace: rest_api.send("POST", f"tasks/compaction/keyspace_offstrategy_compaction/{keyspace}"), "offstrategy compaction")
+
+def test_rewrite_sstables_keyspace_compaction_task_async(cql, this_dc, rest_api):
+    # upgrade sstables compaction
+    checkout_async_task(cql, this_dc, rest_api, lambda keyspace: rest_api.send("GET", f"tasks/compaction/keyspace_upgrade_sstables/{keyspace}"), "upgrade sstables compaction")
+    # scrub sstables compaction
+    checkout_async_task(cql, this_dc, rest_api, lambda keyspace: rest_api.send("GET", f"tasks/compaction/keyspace_scrub/{keyspace}"), "scrub sstables compaction")
