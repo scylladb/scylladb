@@ -851,7 +851,8 @@ class PythonTest(Test):
             "--log-level=DEBUG",   # Capture logs
             "-o",
             "junit_family=xunit2",
-            "--junit-xml={}".format(self.xmlout)]
+            "--junit-xml={}".format(self.xmlout),
+            "-rs"]
         if options.markers:
             self.args.append(f"-m={options.markers}")
 
@@ -926,6 +927,7 @@ class TopologyTest(PythonTest):
 
         test_path = os.path.join(self.suite.options.tmpdir, self.mode)
         async with get_cluster_manager(self.mode + '/' + self.uname, self.suite.clusters, test_path) as manager:
+            self.args.insert(0, "--mode={}".format(self.mode))
             self.args.insert(0, "--manager-api={}".format(manager.sock_path))
 
             try:

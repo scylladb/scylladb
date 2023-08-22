@@ -83,6 +83,9 @@ void manager::register_metrics(const sstring& group_name) {
         sm::make_counter("discarded", _stats.discarded,
                         sm::description("Number of hints that were discarded during sending (too old, schema changed, etc.).")),
 
+        sm::make_counter("send_errors", _stats.send_errors,
+            sm::description("Number of unexpected errors during sending, sending will be retried later")),
+
         sm::make_counter("corrupted_files", _stats.corrupted_files,
                         sm::description("Number of hints files that were discarded during sending because the file was corrupted.")),
 
@@ -863,7 +866,8 @@ future<> manager::end_point_hints_manager::sender::send_one_hint(lw_shared_ptr<s
         ctx_ptr->mark_hint_as_in_progress(rp);
 
         // Future is waited on indirectly in `send_one_file()` (via `ctx_ptr->file_send_gate`).
-        (void)with_gate(ctx_ptr->file_send_gate, [this, secs_since_file_mod, &fname, buf = std::move(buf), rp, ctx_ptr] () mutable {
+        auto h = ctx_ptr->file_send_gate.hold();
+        (void)std::invoke([this, secs_since_file_mod, &fname, buf = std::move(buf), rp, ctx_ptr] () mutable {
             try {
                 auto m = this->get_mutation(ctx_ptr, buf);
                 gc_clock::duration gc_grace_sec = m.s->gc_grace_seconds();
@@ -872,7 +876,10 @@ future<> manager::end_point_hints_manager::sender::send_one_hint(lw_shared_ptr<s
                 //
                 // Files are aggregated for at most manager::hints_timer_period therefore the oldest hint there is
                 // (last_modification - manager::hints_timer_period) old.
-                if (gc_clock::now().time_since_epoch() - secs_since_file_mod > gc_grace_sec - manager::hints_flush_period) {
+                if (const auto now = gc_clock::now().time_since_epoch(); now - secs_since_file_mod > gc_grace_sec - manager::hints_flush_period) {
+                    manager_logger.debug("send_hints(): the hint is too old, skipping it, "
+                        "secs since file last modification {}, gc_grace_sec {}, hints_flush_period {}",
+                        now - secs_since_file_mod, gc_grace_sec, manager::hints_flush_period);
                     return make_ready_future<>();
                 }
 
@@ -880,6 +887,7 @@ future<> manager::end_point_hints_manager::sender::send_one_hint(lw_shared_ptr<s
                     ++this->shard_stats().sent;
                 }).handle_exception([this, ctx_ptr] (auto eptr) {
                     manager_logger.trace("send_one_hint(): failed to send to {}: {}", end_point_key(), eptr);
+                    ++this->shard_stats().send_errors;
                     return make_exception_future<>(std::move(eptr));
                 });
 
@@ -896,10 +904,11 @@ future<> manager::end_point_hints_manager::sender::send_one_hint(lw_shared_ptr<s
             } catch (...) {
                 auto eptr = std::current_exception();
                 manager_logger.debug("send_hints(): unexpected error in file {} at {}: {}", fname, rp, eptr);
+                ++this->shard_stats().send_errors;
                 return make_exception_future<>(std::move(eptr));
             }
             return make_ready_future<>();
-        }).then_wrapped([this, units = std::move(units), rp, ctx_ptr] (future<>&& f) {
+        }).then_wrapped([this, units = std::move(units), rp, ctx_ptr, h = std::move(h)] (future<>&& f) {
             // Information about the error was already printed somewhere higher.
             // We just need to account in the ctx that sending of this hint has failed.
             if (!f.failed()) {

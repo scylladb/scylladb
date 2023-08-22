@@ -1193,6 +1193,7 @@ void shared_token_metadata::set(mutable_token_metadata_ptr tmptr) noexcept {
 
     _shared = std::move(tmptr);
     _shared->set_version_tracker(_versions_barrier.start());
+    tlogger.debug("new token_metadata is set, version {}", _shared->get_version());
 }
 
 void shared_token_metadata::update_fence_version(token_metadata::version_t version) {
@@ -1215,6 +1216,7 @@ void shared_token_metadata::update_fence_version(token_metadata::version_t versi
                 _fence_version, version));
     }
     _fence_version = version;
+    tlogger.debug("new fence_version is set, version {}", _fence_version);
 }
 
 future<> shared_token_metadata::mutate_token_metadata(seastar::noncopyable_function<future<> (token_metadata&)> func) {
