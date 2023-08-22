@@ -1207,11 +1207,17 @@ def find_dbs():
 
 
 def for_each_table(db=None):
+    """Returns pointers to table objects which exist on current shard"""
     if not db:
         db = find_db()
-    cfs = db['_tables_metadata']['_column_families']
-    for (key, value) in unordered_map(cfs):
-        yield value['_p'].reinterpret_cast(lookup_type(['replica::table', 'column_family'])[1].pointer()).dereference()  # it's a lw_shared_ptr
+
+    try:
+        tables = unordered_map(db['_tables_metadata']['_column_families'])
+    except gdb.error:
+        tables = unordered_map(db['_column_families'])
+
+    for (key, value) in tables:
+        yield seastar_lw_shared_ptr(value).get().dereference()
 
 
 def lookup_type(type_names):
@@ -1510,17 +1516,15 @@ class scylla_tables(gdb.Command):
             shards = [current_shard()]
 
         for shard in shards:
-            db = find_db(shard)
-            cfs = db['_tables_metadata']['_column_families']
-            for (key, value) in unordered_map(cfs):
-                value = seastar_lw_shared_ptr(value).get().dereference()
+            for value in for_each_table():
                 schema = schema_ptr(value['_schema'])
                 if args.user and schema.is_system():
                     continue
                 if args.keyspace and schema.ks_name != args.keyspace:
                     continue
+                schema_id = str(schema['_raw']['_id'])
                 schema_version = str(schema['_raw']['_version'])
-                gdb.write('{:5} {} v={} {:45} (replica::table*){}\n'.format(shard, key, schema_version, schema.table_name(), value.address))
+                gdb.write('{:5} {} v={} {:45} (replica::table*){}\n'.format(shard, schema_id, schema_version, schema.table_name(), value.address))
 
 
 class scylla_table(gdb.Command):
@@ -1532,10 +1536,7 @@ class scylla_table(gdb.Command):
         gdb.Command.__init__(self, 'scylla table', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND)
 
     def _find_table(self, ks, cf):
-        db = find_db()
-        cfs = db['_tables_metadata']['_column_families']
-        for (key, value) in unordered_map(cfs):
-            value = seastar_lw_shared_ptr(value).get().dereference()
+        for value in for_each_table():
             schema = schema_ptr(value['_schema'])
             if schema.ks_name == ks and schema.cf_name == cf:
                 return value, schema
@@ -1895,13 +1896,6 @@ class seastar_lw_shared_ptr():
             return self.ref['_p'].cast(self.elem_type.pointer())
         else:
             return self.ref['_p'].cast(self._no_esft_type())['_value'].address
-
-
-def all_tables(db):
-    """Returns pointers to table objects which exist on current shard"""
-
-    for (key, value) in unordered_map(db['_tables_metadata']['_column_families']):
-        yield seastar_lw_shared_ptr(value).get()
 
 
 class lsa_region():
@@ -4252,8 +4246,7 @@ class scylla_cache(gdb.Command):
 
 
 def find_sstables_attached_to_tables():
-    db = find_db(current_shard())
-    for table in all_tables(db):
+    for table in for_each_table():
         for sst_ptr in std_unordered_set(seastar_lw_shared_ptr(seastar_lw_shared_ptr(table['_sstables']).get()['_all']).get().dereference()):
             yield seastar_lw_shared_ptr(sst_ptr).get()
 
@@ -4406,8 +4399,7 @@ class scylla_memtables(gdb.Command):
         scylla_memtables.dump_memtable_list(seastar_lw_shared_ptr(compaction_group['_memtables']).get())
 
     def invoke(self, arg, from_tty):
-        db = find_db()
-        for table in all_tables(db):
+        for table in for_each_table():
             gdb.write('table %s:\n' % schema_ptr(table['_schema']).table_name())
             try:
                 for cg_ptr in chunked_vector(table["_compaction_groups"]):
