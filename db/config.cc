@@ -10,6 +10,8 @@
 #include <unordered_map>
 #include <sstream>
 
+#include <boost/algorithm/string/split.hpp>
+#include <boost/algorithm/string/trim_all.hpp>
 #include <boost/any.hpp>
 #include <boost/program_options.hpp>
 #include <yaml-cpp/yaml.h>
@@ -1335,6 +1337,20 @@ future<> update_relabel_config_from_file(const std::string& name) {
         throw std::runtime_error("conflicts found during relabeling");
     }
     co_return;
+}
+
+std::vector<sstring> split_comma_separated_list(sstring comma_separated_list) {
+    std::vector<sstring> strs, trimmed_strs;
+    boost::split(strs, std::move(comma_separated_list), boost::is_any_of(","));
+    for (sstring n : strs) {
+        std::replace(n.begin(), n.end(), '\"', ' ');
+        std::replace(n.begin(), n.end(), '\'', ' ');
+        boost::trim_all(n);
+        if (!n.empty()) {
+            trimmed_strs.push_back(n);
+        }
+    }
+    return trimmed_strs;
 }
 
 }

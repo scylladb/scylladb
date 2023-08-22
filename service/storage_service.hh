@@ -778,7 +778,7 @@ private:
 
     future<> raft_bootstrap(raft::server&);
     future<> raft_decomission();
-    future<> raft_removenode(locator::host_id host_id);
+    future<> raft_removenode(locator::host_id host_id, std::list<locator::host_id_or_endpoint> ignore_nodes_params);
     future<> raft_replace(raft::server&, raft::server_id, gms::inet_address);
     future<> raft_rebuild(sstring source_dc);
     future<> raft_check_and_repair_cdc_streams();
