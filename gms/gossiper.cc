@@ -1064,12 +1064,6 @@ void gossiper::run() {
 
                 do_status_check().get();
             }
-
-            {
-                auto lock = lock_endpoint_update_semaphore().get();
-                replicate_live_endpoints_on_change().get();
-            }
-
     }).then_wrapped([this] (auto&& f) {
         try {
             f.get();
