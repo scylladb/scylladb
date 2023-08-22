@@ -696,18 +696,26 @@ class TestScyllaSsstableSchemaLoading:
 
 
 @pytest.fixture(scope="module")
-def scrub_schema_file():
-    """Create a schema.cql for the scrub tests"""
-    with tempfile.NamedTemporaryFile("w+t") as f:
-        f.write("CREATE TABLE ks.tbl (pk int, ck int, v text, PRIMARY KEY (pk, ck))")
-        f.flush()
-        yield f.name
+def scrub_workdir():
+    """A root temporary directory to be shared by all the scrub tests"""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        yield tmp_dir
 
 
 @pytest.fixture(scope="module")
-def scrub_good_sstable(scylla_path, scrub_schema_file):
+def scrub_schema_file(scrub_workdir):
+    """Create a schema.cql for the scrub tests"""
+    fname = os.path.join(scrub_workdir, "schema.cql")
+    with open(fname, "w") as f:
+        f.write("CREATE TABLE ks.tbl (pk int, ck int, v text, PRIMARY KEY (pk, ck))")
+        f.flush()
+    yield fname
+
+
+@pytest.fixture(scope="module")
+def scrub_good_sstable(scylla_path, scrub_workdir, scrub_schema_file):
     """A good sstable used by the scrub tests."""
-    with tempfile.TemporaryDirectory() as tmp_dir:
+    with tempfile.TemporaryDirectory(prefix="good-sstable", dir=scrub_workdir) as tmp_dir:
         sst_json_path = os.path.join(tmp_dir, "sst.json")
         with open(sst_json_path, "w") as f:
             sst_json = [
@@ -726,9 +734,9 @@ def scrub_good_sstable(scylla_path, scrub_schema_file):
 
 
 @pytest.fixture(scope="module")
-def scrub_bad_sstable(scylla_path, scrub_schema_file):
+def scrub_bad_sstable(scylla_path, scrub_workdir, scrub_schema_file):
     """A bad sstable (out-of-order rows) used by the scrub tests."""
-    with tempfile.TemporaryDirectory() as tmp_dir:
+    with tempfile.TemporaryDirectory(prefix="bad-sstable", dir=scrub_workdir) as tmp_dir:
         sst_json_path = os.path.join(tmp_dir, "sst.json")
         with open(sst_json_path, "w") as f:
             # rows are out-of-order
@@ -764,16 +772,16 @@ def test_scrub_no_sstables(scylla_path, scrub_schema_file):
     subprocess_check_error([scylla_path, "sstable", "scrub", "--schema-file", scrub_schema_file, "--scrub-mode", "validate"], "error processing arguments: no sstables specified on the command line")
 
 
-def test_scrub_missing_scrub_mode_cli_arg(scylla_path, scrub_schema_file, scrub_bad_sstable, scrub_good_sstable):
+def test_scrub_missing_scrub_mode_cli_arg(scylla_path, scrub_workdir, scrub_schema_file, scrub_good_sstable):
     subprocess_check_error([scylla_path, "sstable", "scrub", "--schema-file", scrub_schema_file, scrub_good_sstable], "error processing arguments: missing mandatory command-line argument --scrub-mode")
 
 
-def test_scrub_output_dir(scylla_path, scrub_schema_file, scrub_good_sstable):
-    with tempfile.TemporaryDirectory() as tmp_dir:
+def test_scrub_output_dir(scylla_path, scrub_workdir, scrub_schema_file, scrub_good_sstable):
+    with tempfile.TemporaryDirectory(prefix="test_scrub_output_dir", dir=scrub_workdir) as tmp_dir:
         # Empty output directory is accepted.
         subprocess.check_call([scylla_path, "sstable", "scrub", "--schema-file", scrub_schema_file, "--scrub-mode", "abort", "--output-dir", tmp_dir, scrub_good_sstable])
 
-    with tempfile.TemporaryDirectory() as tmp_dir:
+    with tempfile.TemporaryDirectory(prefix="test_scrub_output_dir", dir=scrub_workdir) as tmp_dir:
         with open(os.path.join(tmp_dir, "dummy.txt"), "w") as f:
             f.write("dummy")
             f.flush()
@@ -788,45 +796,45 @@ def test_scrub_output_dir(scylla_path, scrub_schema_file, scrub_good_sstable):
         subprocess.check_call([scylla_path, "sstable", "scrub", "--schema-file", scrub_schema_file, "--scrub-mode", "abort", "--output-dir", tmp_dir, "--unsafe-accept-nonempty-output-dir", scrub_good_sstable])
 
 
-def test_scrub_output_dir_sstable_clash(scylla_path, scrub_schema_file, scrub_good_sstable):
-    with tempfile.TemporaryDirectory() as tmp_dir:
+def test_scrub_output_dir_sstable_clash(scylla_path, scrub_workdir, scrub_schema_file, scrub_good_sstable):
+    with tempfile.TemporaryDirectory(prefix="test_scrub_output_dir_sstable_clash", dir=scrub_workdir) as tmp_dir:
         subprocess.check_call([scylla_path, "sstable", "scrub", "--schema-file", scrub_schema_file, "--scrub-mode", "abort", "--output-dir", tmp_dir, "--unsafe-accept-nonempty-output-dir", scrub_good_sstable])
         check_scrub_output_dir(tmp_dir, 1)
         subprocess_check_error([scylla_path, "sstable", "scrub", "--schema-file", scrub_schema_file, "--scrub-mode", "abort", "--output-dir", tmp_dir, "--unsafe-accept-nonempty-output-dir", scrub_good_sstable], "cannot create output sstable .*, file already exists")
 
 
-def test_scrub_abort_mode(scylla_path, scrub_schema_file, scrub_good_sstable, scrub_bad_sstable):
-    with tempfile.TemporaryDirectory() as tmp_dir:
+def test_scrub_abort_mode(scylla_path, scrub_workdir, scrub_schema_file, scrub_good_sstable, scrub_bad_sstable):
+    with tempfile.TemporaryDirectory(prefix="test_scrub_abort_mode", dir=scrub_workdir) as tmp_dir:
         subprocess.check_call([scylla_path, "sstable", "scrub", "--schema-file", scrub_schema_file, "--scrub-mode", "abort", "--output-dir", tmp_dir, scrub_good_sstable])
         check_scrub_output_dir(tmp_dir, 1)
 
-    with tempfile.TemporaryDirectory() as tmp_dir:
+    with tempfile.TemporaryDirectory(prefix="test_scrub_abort_mode", dir=scrub_workdir) as tmp_dir:
         subprocess_check_error([scylla_path, "sstable", "scrub", "--schema-file", scrub_schema_file, "--scrub-mode", "abort", "--output-dir", tmp_dir, scrub_bad_sstable], "compaction_aborted_exception \\(Compaction for ks/tbl was aborted due to: scrub compaction found invalid data\\)")
         check_scrub_output_dir(tmp_dir, 0)
 
 
-def test_scrub_skip_mode(scylla_path, scrub_schema_file, scrub_good_sstable, scrub_bad_sstable):
-    with tempfile.TemporaryDirectory() as tmp_dir:
+def test_scrub_skip_mode(scylla_path, scrub_workdir, scrub_schema_file, scrub_good_sstable, scrub_bad_sstable):
+    with tempfile.TemporaryDirectory(prefix="test_scrub_skip_mode", dir=scrub_workdir) as tmp_dir:
         subprocess.check_call([scylla_path, "sstable", "scrub", "--schema-file", scrub_schema_file, "--scrub-mode", "skip", "--output-dir", tmp_dir, scrub_good_sstable])
         check_scrub_output_dir(tmp_dir, 1)
 
-    with tempfile.TemporaryDirectory() as tmp_dir:
+    with tempfile.TemporaryDirectory(prefix="test_scrub_skip_mode", dir=scrub_workdir) as tmp_dir:
         subprocess.check_call([scylla_path, "sstable", "scrub", "--schema-file", scrub_schema_file, "--scrub-mode", "skip", "--output-dir", tmp_dir, scrub_bad_sstable])
         check_scrub_output_dir(tmp_dir, 1)
 
 
-def test_scrub_segregate_mode(scylla_path, scrub_schema_file, scrub_good_sstable, scrub_bad_sstable):
-    with tempfile.TemporaryDirectory() as tmp_dir:
+def test_scrub_segregate_mode(scylla_path, scrub_workdir, scrub_schema_file, scrub_good_sstable, scrub_bad_sstable):
+    with tempfile.TemporaryDirectory(prefix="test_scrub_segregate_mode", dir=scrub_workdir) as tmp_dir:
         subprocess.check_call([scylla_path, "sstable", "scrub", "--schema-file", scrub_schema_file, "--scrub-mode", "segregate", "--output-dir", tmp_dir, scrub_good_sstable])
         check_scrub_output_dir(tmp_dir, 1)
 
-    with tempfile.TemporaryDirectory() as tmp_dir:
+    with tempfile.TemporaryDirectory(prefix="test_scrub_segregate_mode", dir=scrub_workdir) as tmp_dir:
         subprocess.check_call([scylla_path, "sstable", "scrub", "--schema-file", scrub_schema_file, "--scrub-mode", "segregate", "--output-dir", tmp_dir, scrub_bad_sstable])
         check_scrub_output_dir(tmp_dir, 2)
 
 
-def test_scrub_validate_mode(scylla_path, scrub_schema_file, scrub_good_sstable, scrub_bad_sstable):
-    with tempfile.TemporaryDirectory() as tmp_dir:
+def test_scrub_validate_mode(scylla_path, scrub_workdir, scrub_schema_file, scrub_good_sstable, scrub_bad_sstable):
+    with tempfile.TemporaryDirectory(prefix="test_scrub_validate_mode", dir=scrub_workdir) as tmp_dir:
         subprocess.check_call([scylla_path, "sstable", "scrub", "--schema-file", scrub_schema_file, "--scrub-mode", "validate", "--output-dir", tmp_dir, scrub_good_sstable])
         check_scrub_output_dir(tmp_dir, 0)
 
