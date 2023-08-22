@@ -64,3 +64,35 @@ def test_missing_row_with_static(cql, table1):
     # If we SELECT row c=1 (which doesn't exist), we get nothing - not even
     # the static column
     assert list(cql.execute(f'SELECT p, s, c, r FROM {table1} WHERE p={p} AND c=1')) == []
+
+# Verify that if a partition has a static column set, filtering it (with
+# ALLOW FILTERING) based on regular columns will need to find clustering
+# rows which actually match this filter - and can't return only a static
+# row (which doesn't match the filter). This is similar to the previous test
+# (test_missing_row_with_static) except that the filter here is on a regular
+# column, not a clustering column.
+def test_filter_with_static(cql, table1):
+    p = unique_key_int()
+    # Insert into partition p just static column and one clustering row
+    # with its regular column r set to 3:
+    cql.execute(f'INSERT INTO {table1}(p, s, c, r) values ({p}, 1, 2, 3)')
+    # If we filter for r=3, we expect to get the clustering row and the
+    # static column:
+    assert list(cql.execute(f'SELECT p, s, c, r FROM {table1} WHERE p={p} AND r=3 ALLOW FILTERING')) == [(p, 1, 2, 3)]
+    # If we filter for r=4, we expect to get nothing - not even the static
+    # column. Getting back just the static row, with r=null, would be wrong
+    # because it does *not* match the filter r=4.
+    assert list(cql.execute(f'SELECT p, s, c, r FROM {table1} WHERE p={p} AND r=4 ALLOW FILTERING')) == []
+
+# Reproduce issue #10357. The query is identical to the one in the above
+# test (test_filter_with_static), but here the partition has only a static
+# column value, and no clustering row at all. We expect to get back nothing
+# when using a filtering on a regular column.
+@pytest.mark.xfail(reason="issue #10357")
+def test_filter_with_only_static(cql, table1):
+    p = unique_key_int()
+    cql.execute(f'INSERT INTO {table1}(p, s) values ({p}, 1)')
+    # There are no clustering rows or r column set for anything, so filtering
+    # for r=4 should return nothing. But issue #10357 caused Scylla to wrongly
+    # return a row with only the static value - which doesn't match the filter.
+    assert list(cql.execute(f'SELECT p, s, c, r FROM {table1} WHERE p={p} AND r=4 ALLOW FILTERING')) == []
