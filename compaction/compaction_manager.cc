@@ -296,7 +296,7 @@ compaction_manager::task::task(compaction_manager& mgr, compaction::table_state*
     , _description(std::move(desc))
 {}
 
-future<compaction_manager::compaction_stats_opt> compaction_manager::perform_task(shared_ptr<compaction_manager::task> task) {
+future<compaction_manager::compaction_stats_opt> compaction_manager::perform_task(shared_ptr<compaction_manager::task> task, throw_if_stopping do_throw_if_stopping) {
     _tasks.push_back(task);
     auto unregister_task = defer([this, task] {
         _tasks.remove(task);
@@ -309,6 +309,9 @@ future<compaction_manager::compaction_stats_opt> compaction_manager::perform_tas
         co_return res;
     } catch (sstables::compaction_stopped_exception& e) {
         cmlog.info("{}: stopped, reason: {}", *task, e.what());
+        if (do_throw_if_stopping) {
+            throw;
+        }
     } catch (sstables::compaction_aborted_exception& e) {
         cmlog.error("{}: aborted, reason: {}", *task, e.what());
         _stats.errors++;
@@ -466,12 +469,12 @@ protected:
     }
 };
 
-future<> compaction_manager::run_custom_job(compaction::table_state& t, sstables::compaction_type type, const char* desc, noncopyable_function<future<>(sstables::compaction_data&)> job) {
+future<> compaction_manager::run_custom_job(compaction::table_state& t, sstables::compaction_type type, const char* desc, noncopyable_function<future<>(sstables::compaction_data&)> job, throw_if_stopping do_throw_if_stopping) {
     if (_state != state::enabled) {
         return make_ready_future<>();
     }
 
-    return perform_task(make_shared<custom_compaction_task>(*this, &t, type, desc, std::move(job))).discard_result();
+    return perform_task(make_shared<custom_compaction_task>(*this, &t, type, desc, std::move(job)), do_throw_if_stopping).discard_result();
 }
 
 future<> compaction_manager::update_static_shares(float static_shares) {

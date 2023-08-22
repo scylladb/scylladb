@@ -37,6 +37,8 @@
 
 class compacting_sstable_registration;
 
+using throw_if_stopping = bool_class<struct throw_if_stopping_tag>;
+
 // Compaction manager provides facilities to submit and track compaction jobs on
 // behalf of existing tables.
 class compaction_manager {
@@ -136,8 +138,6 @@ public:
 
     protected:
         virtual future<compaction_stats_opt> do_run() = 0;
-
-        using throw_if_stopping = bool_class<struct throw_if_stopping_tag>;
 
         state switch_state(state new_state);
 
@@ -305,7 +305,7 @@ private:
     class strategy_control;
     std::unique_ptr<strategy_control> _strategy_control;
 private:
-    future<compaction_stats_opt> perform_task(shared_ptr<task>);
+    future<compaction_stats_opt> perform_task(shared_ptr<task>, throw_if_stopping do_throw_if_stopping = throw_if_stopping::no);
 
     future<> stop_tasks(std::vector<shared_ptr<task>> tasks, sstring reason);
     future<> update_throughput(uint32_t value_mbs);
@@ -450,7 +450,7 @@ public:
     // parameter type is the compaction type the operation can most closely be
     //      associated with, use compaction_type::Compaction, if none apply.
     // parameter job is a function that will carry the operation
-    future<> run_custom_job(compaction::table_state& s, sstables::compaction_type type, const char *desc, noncopyable_function<future<>(sstables::compaction_data&)> job);
+    future<> run_custom_job(compaction::table_state& s, sstables::compaction_type type, const char *desc, noncopyable_function<future<>(sstables::compaction_data&)> job, throw_if_stopping do_throw_if_stopping);
 
     class compaction_reenabler {
         compaction_manager& _cm;
