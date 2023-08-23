@@ -5677,9 +5677,39 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(shar
         const auto version = _topology_state_machine._topology.version;
 
         switch (cmd.cmd) {
-            case raft_topology_cmd::command::barrier:
+            case raft_topology_cmd::command::barrier: {
+                // This barrier might have been issued by the topology coordinator
+                // as a step in enabling a feature, i.e. it noticed that all
+                // nodes support some feature, then issue the barrier to make
+                // sure that all nodes observed this fact in their local state
+                // (a node cannot revoke support for a feature after that), and
+                // after receiving a confirmation from all nodes it will mark
+                // the feature as enabled.
+                //
+                // However, it might happen that the node handles this request
+                // early in the boot process, before it did the second feature
+                // check that happens when the node updates its metadata
+                // in `system.topology`. The node might have committed a command
+                // that advertises support for a feature as the last node
+                // to do so, crashed and now it doesn't support it. This should
+                // be rare, but it can happen and we can detect it right here.
+                std::exception_ptr ex;
+                try {
+                    const auto& enabled_features = _topology_state_machine._topology.features.enabled_features;
+                    const auto unsafe_to_disable_features = _topology_state_machine._topology.features.calculate_not_yet_enabled_features();
+                    _feature_service.check_features(enabled_features, unsafe_to_disable_features);
+                } catch (const gms::unsupported_feature_exception&) {
+                    ex = std::current_exception();
+                }
+                if (ex) {
+                    slogger.error("raft topology: feature check during barrier failed: {}", ex);
+                    co_await drain();
+                    break;
+                }
+
                 // we already did read barrier above
                 result.status = raft_topology_cmd_result::command_status::success;
+            }
             break;
             case raft_topology_cmd::command::barrier_after_feature_update:
                 // we already did the barrier, but we need to check
