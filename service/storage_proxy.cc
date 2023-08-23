@@ -1216,6 +1216,10 @@ public:
     // this is called with an id of a replica that replied to learn request
     // adn returns true when quorum of such requests are accumulated
     bool learned(gms::inet_address ep);
+
+    const locator::effective_replication_map_ptr& get_effective_replication_map() const noexcept {
+        return _effective_replication_map_ptr;
+    }
 };
 
 thread_local uint64_t paxos_response_handler::next_id = 0;
@@ -1862,8 +1866,8 @@ paxos_response_handler::begin_and_repair_paxos(client_state& cs, unsigned& conte
         if (missing_mrc.size() > 0) {
             paxos::paxos_state::logger.debug("CAS[{}] Repairing replicas that missed the most recent commit", _id);
             tracing::trace(tr_state, "Repairing replicas that missed the most recent commit");
-            std::array<std::tuple<lw_shared_ptr<paxos::proposal>, schema_ptr, dht::token, inet_address_vector_replica_set>, 1>
-                m{std::make_tuple(make_lw_shared<paxos::proposal>(std::move(*summary.most_recent_commit)), _schema, _key.token(), std::move(missing_mrc))};
+            std::array<std::tuple<lw_shared_ptr<paxos::proposal>, schema_ptr, shared_ptr<paxos_response_handler>, dht::token, inet_address_vector_replica_set>, 1>
+                m{std::make_tuple(make_lw_shared<paxos::proposal>(std::move(*summary.most_recent_commit)), _schema, shared_from_this(), _key.token(), std::move(missing_mrc))};
             // create_write_response_handler is overloaded for paxos::proposal and will
             // create cas_mutation holder, which consequently will ensure paxos::learn is
             // used.
@@ -3115,16 +3119,14 @@ storage_proxy::create_write_response_handler(const std::tuple<lw_shared_ptr<paxo
 }
 
 result<storage_proxy::response_id_type>
-storage_proxy::create_write_response_handler(const std::tuple<lw_shared_ptr<paxos::proposal>, schema_ptr, dht::token, inet_address_vector_replica_set>& meta,
+storage_proxy::create_write_response_handler(const std::tuple<lw_shared_ptr<paxos::proposal>, schema_ptr, shared_ptr<paxos_response_handler>, dht::token, inet_address_vector_replica_set>& meta,
         db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit) {
-    auto& [commit, s, token, endpoints] = meta;
+    auto& [commit, s, paxos_handler, token, endpoints] = meta;
 
     slogger.trace("creating write handler for paxos repair token: {} endpoint: {}", token, endpoints);
     tracing::trace(tr_state, "Creating write handler for paxos repair token: {} endpoint: {}", token, endpoints);
 
-    auto keyspace_name = s->ks_name();
-    replica::table& table = _db.local().find_column_family(s->id());
-    auto ermp = table.get_effective_replication_map();
+    auto ermp = paxos_handler->get_effective_replication_map();
 
     // No rate limiting for paxos (yet)
     return create_write_response_handler(std::move(ermp), cl, db::write_type::CAS, std::make_unique<cas_mutation>(std::move(commit), s, nullptr), std::move(endpoints),
