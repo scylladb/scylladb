@@ -445,6 +445,12 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
         app_states.emplace(s.first, std::move(s.second));
     }
 
+    auto schema_change_announce = _db.local().observable_schema_version().observe([this] (table_schema_version schema_version) mutable {
+        _migration_manager.local().passive_announce(std::move(schema_version));
+    });
+
+    _listeners.emplace_back(make_lw_shared(std::move(schema_change_announce)));
+
     slogger.info("Starting up server gossip");
 
     auto generation_number = co_await db::system_keyspace::increment_and_get_generation();
@@ -454,10 +460,6 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
     assert(_group0);
     co_await _group0->setup_group0(_sys_ks.local(), initial_contact_nodes, raft_replace_info);
 
-    auto schema_change_announce = _db.local().observable_schema_version().observe([this] (table_schema_version schema_version) mutable {
-        _migration_manager.local().passive_announce(std::move(schema_version));
-    });
-    _listeners.emplace_back(make_lw_shared(std::move(schema_change_announce)));
     co_await _gossiper.wait_for_gossip_to_settle();
 
     set_mode(mode::JOINING);
