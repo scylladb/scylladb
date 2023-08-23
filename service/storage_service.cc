@@ -1826,7 +1826,7 @@ class topology_coordinator {
                 switch (node.request.value()) {
                     case topology_request::join: {
                         assert(!node.rs->ring);
-                        auto num_tokens = std::get<uint32_t>(node.req_param.value());
+                        auto num_tokens = std::get<join_param>(node.req_param.value()).num_tokens;
                         // A node just joined and does not have tokens assigned yet
                         // Need to assign random tokens to the node
                         auto tmptr = get_token_metadata_ptr();
@@ -5860,7 +5860,7 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(shar
                 }
                 break;
                 case node_state::rebuilding: {
-                    auto source_dc = std::get<sstring>(_topology_state_machine._topology.req_param[raft_server.id()]);
+                    auto source_dc = std::get<rebuild_param>(_topology_state_machine._topology.req_param[raft_server.id()]).source_dc;
                     slogger.info("raft topology: rebuild from dc: {}", source_dc == "" ? "(any dc)" : source_dc);
                     co_await retrier(_rebuild_result, [&] () -> future<> {
                         auto tmptr = get_token_metadata_ptr();
