@@ -220,7 +220,7 @@ private:
     std::list<std::vector<inet_address>> _endpoints_to_talk_with;
 
     /* live member set */
-    utils::chunked_vector<inet_address> _live_endpoints;
+    std::unordered_set<inet_address> _live_endpoints;
     uint64_t _live_endpoints_version = 0;
 
     /* nodes are being marked as alive */
@@ -244,10 +244,26 @@ private:
 
     bool _in_shadow_round = false;
 
-    std::unordered_map<inet_address, clk::time_point> _shadow_unreachable_endpoints;
-    utils::chunked_vector<inet_address> _shadow_live_endpoints;
+    uint64_t _shadow_live_endpoints_version = 0;
+    uint64_t _shadow_unreachable_endpoints_version = 0;
 
-    // replicate shard 0 live endpoints across all other shards.
+    // Must be called on shard 0.
+    future<semaphore_units<>> lock_endpoint_update_semaphore();
+
+    // Must be called on shard 0.
+    // Update _live_endpoints and/or _unreachable_endpoints
+    // on shard 0, after acquiring `lock_endpoint_update_semaphore`.
+    // replicate_live_endpoints_on_change is called to replicate the changes to
+    // all shards and _live_endpoints_version is bumped unconditionally.
+    //
+    // FIXME: The function is not exception safe so some shards
+    // may be left with stale _live_endpoints or _unreachable_endpoints.
+    // In this case, the _live_endpoints_version on that shard will not be updated.
+    // That can be examined under the endpoint_update_semaphore to make sure
+    // they all shards are consistent with each other.
+    future<> mutate_live_and_unreachable_endpoints(std::function<void(gossiper&)>);
+
+    // replicate shard 0 live and unreachable endpoints sets across all other shards.
     // _endpoint_update_semaphore must be held for the whole duration
     future<> replicate_live_endpoints_on_change();
 
@@ -401,7 +417,8 @@ public:
     const versioned_value* get_application_state_ptr(inet_address endpoint, application_state appstate) const noexcept;
     sstring get_application_state_value(inet_address endpoint, application_state appstate) const;
 
-    // removes ALL endpoint states; should only be called after shadow gossip
+    // removes ALL endpoint states; should only be called after shadow gossip.
+    // Must be called on shard 0
     future<> reset_endpoint_state_map();
 
     const std::unordered_map<inet_address, endpoint_state>& get_endpoint_states() const noexcept;
@@ -430,7 +447,7 @@ public:
 private:
     void update_timestamp_for_nodes(const std::map<inet_address, endpoint_state>& map);
 
-    void mark_alive(inet_address addr, endpoint_state& local_state);
+    void mark_alive(inet_address addr);
 
     future<> real_mark_alive(inet_address addr);
 
@@ -634,7 +651,6 @@ public:
 private:
     future<> failure_detector_loop();
     future<> failure_detector_loop_for_node(gms::inet_address node, generation_type gossip_generation, uint64_t live_endpoints_version);
-    future<> update_live_endpoints_version();
 };
 
 

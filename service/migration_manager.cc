@@ -232,7 +232,7 @@ bool migration_manager::have_schema_agreement() {
     for (auto& x : known_endpoints) {
         auto& endpoint = x.first;
         auto& eps = x.second;
-        if (endpoint == utils::fb_utilities::get_broadcast_address() || !eps.is_alive()) {
+        if (endpoint == utils::fb_utilities::get_broadcast_address() || !_gossiper.is_alive(endpoint)) {
             continue;
         }
         mlogger.debug("Checking schema state for {}.", endpoint);

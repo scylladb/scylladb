@@ -3341,7 +3341,7 @@ future<> storage_service::on_dead(gms::inet_address endpoint, gms::endpoint_stat
 future<> storage_service::on_restart(gms::inet_address endpoint, gms::endpoint_state state, gms::permit_id pid) {
     slogger.debug("endpoint={} on_restart: permit_id={}", endpoint, pid);
     // If we have restarted before the node was even marked down, we need to reset the connection pool
-    if (state.is_alive()) {
+    if (endpoint != get_broadcast_address() && _gossiper.is_alive(endpoint)) {
         return on_dead(endpoint, state, pid);
     }
     return make_ready_future();

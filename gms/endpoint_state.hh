@@ -31,28 +31,26 @@ private:
     std::map<application_state, versioned_value> _application_state;
     /* fields below do not get serialized */
     clk::time_point _update_timestamp;
-    bool _is_alive;
     bool _is_normal = false;
 
 public:
     bool operator==(const endpoint_state& other) const {
         return _heart_beat_state  == other._heart_beat_state &&
                _application_state == other._application_state &&
-               _update_timestamp  == other._update_timestamp &&
-               _is_alive          == other._is_alive;
+               _update_timestamp  == other._update_timestamp;
     }
 
     endpoint_state() noexcept
         : _heart_beat_state()
         , _update_timestamp(clk::now())
-        , _is_alive(true) {
+    {
         update_is_normal();
     }
 
     endpoint_state(heart_beat_state initial_hb_state) noexcept
         : _heart_beat_state(initial_hb_state)
         , _update_timestamp(clk::now())
-        , _is_alive(true) {
+    {
         update_is_normal();
     }
 
@@ -61,7 +59,7 @@ public:
         : _heart_beat_state(std::move(initial_hb_state))
         , _application_state(application_state)
         , _update_timestamp(clk::now())
-        , _is_alive(true) {
+    {
         update_is_normal();
     }
 
@@ -118,22 +116,7 @@ public:
         _update_timestamp = clk::now();
     }
 
-    bool is_alive() const noexcept {
-        return _is_alive;
-    }
-
-    void set_alive(bool alive) noexcept {
-        _is_alive = alive;
-    }
-
-    void mark_alive() noexcept {
-        set_alive(true);
-    }
-
-    void mark_dead() noexcept {
-        set_alive(false);
-    }
-
+public:
     std::string_view get_status() const noexcept {
         constexpr std::string_view empty = "";
         auto* app_state = get_application_state_ptr(application_state::STATUS);
