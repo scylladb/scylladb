@@ -1220,8 +1220,7 @@ class topology_coordinator {
         //    that is equal to what the topology coordinator sees (or newer,
         //    but in that case updating the topology state will fail),
         // 2. None of the nodes is restarting at the moment and trying to
-        //    update its corresponding `supported_features` column (that's why
-        //    we use `barrier_after_feature_update` instead of regular `barrier`).
+        //    downgrade (this is done by a special check in the barrier handler).
         //
         // After we get a successful confirmation from each node, we have
         // a guarantee that they won't attempt to revoke support for those
@@ -1229,7 +1228,7 @@ class topology_coordinator {
         // a feature that is supported by all nodes in the cluster, even if
         // the feature is not enabled yet.
         guard = co_await exec_global_command(std::move(guard),
-                raft_topology_cmd{raft_topology_cmd::command::barrier_after_feature_update},
+                raft_topology_cmd{raft_topology_cmd::command::barrier},
                 {_raft.id()},
                 drop_guard_and_retake::no);
 
@@ -5710,17 +5709,6 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(shar
                 // we already did read barrier above
                 result.status = raft_topology_cmd_result::command_status::success;
             }
-            break;
-            case raft_topology_cmd::command::barrier_after_feature_update:
-                // we already did the barrier, but we need to check
-                // whether the node has updated its supported_features column
-                // after start
-                if (!_topology_updated_with_local_metadata) {
-                    co_await coroutine::return_exception(std::runtime_error(
-                            "raft topology: command::barrier_after_feature_update, node might not have updated "
-                            "its supported features column yet"));
-                }
-                result.status = raft_topology_cmd_result::command_status::success;
             break;
             case raft_topology_cmd::command::barrier_and_drain: {
                 co_await container().invoke_on_all([version] (storage_service& ss) -> future<> {
