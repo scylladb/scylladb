@@ -3920,6 +3920,15 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
 
         for(auto dest: handler.get_targets()) {
             auto node = topology.find_node(dest);
+            if (!node) {
+                // The caller is supposed to pick target nodes from the topology
+                // contained in the effective_replication_map that is kept in the handler.
+                // If the e_r_m is not in sync with the topology used to pick the targets
+                // endpoints may be missing here and we better off returning an error
+                // (or aborting in testing) rather than segfaulting here
+                // (See https://github.com/scylladb/scylladb/issues/15138)
+                on_internal_error(slogger, fmt::format("Node {} was not found in topology", dest));
+            }
             const auto& dc = node->dc_rack().dc;
             // read repair writes do not go through coordinator since mutations are per destination
             if (handler.read_repair_write() || dc == local_dc) {
