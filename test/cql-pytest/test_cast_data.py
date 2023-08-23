@@ -22,6 +22,7 @@ import pytest
 import math
 from util import new_test_table, unique_key_int
 from cassandra.protocol import InvalidRequest
+from ctypes import c_float
 
 @pytest.fixture(scope="module")
 def table1(cql, test_keyspace):
@@ -150,5 +151,54 @@ def test_cast_to_counter(cql, table3):
     for col in ['i', 'a', 'bi', 'b', 'bool', 'd', 'dec', 'db', 'dur', 'f', 'addr', 'si', 't', 'tim', 'ts', 'tu', 'ti', 'u', 'vc', 'vi']:
         with pytest.raises(InvalidRequest, match='cannot be cast'):
             cql.execute(f"SELECT CAST({col} AS counter) FROM {table3} WHERE p={p}")
+
+# Test casting 32-bit floating-point to text. The output string should have
+# enough digits to faithfully reproduce the original floating-point value
+# when read back. We don't check in this test whether maybe it outputs too
+# many digits that don't make any difference when read back.
+# Reproduces issue #15127.
+def test_cast_float_to_text(cql, table3):
+    p = unique_key_int()
+    # The numbers below (based on pi) have excessive precision, they are
+    # truncated to Python's 64-bit precision, and later further truncated
+    # to 32-bit floats when assigned to a Scylla "float" column.
+    numbers = [ 3.141592653589793238462643383279502884197,
+               -3.141592653589793238462643383279502884197,
+               -31415926535897932384.62643383279502884197,
+               0.00003141592653589793238462643383279502884197]
+    for n in numbers:
+        cql.execute(f'INSERT INTO {table3} (p, f) VALUES ({p}, {n})')
+        # Sanity check: If we read "f" back, we get n truncated to 32-bit
+        # precision. We use c_float to truncate n to 32-bit precision.
+        expected_f = c_float(n)
+        read_f = c_float(list(cql.execute(f"SELECT f FROM {table3} WHERE p={p}"))[0][0])
+        assert expected_f.value == read_f.value  # that's how to compare c_float objects
+        # Finally test CAST(f AS text): test that the resulting textual
+        # representation has enough digits to restore f without loss of
+        # precision. If we ask Scylla to cast f to text, and then convert
+        # this text back to c_float, the result should be equal again to
+        # expected_f. If the cast printed too few digits, it would not be
+        # equal.
+        ftext = list(cql.execute(f"SELECT CAST(f AS text) FROM {table3} WHERE p={p}"))[0][0]
+        read_f = c_float(float(ftext))
+        assert expected_f.value == read_f.value
+
+# Same test as test_cast_float_to_text() above, just for 64-bit floats.
+# Reproduces issue #15127.
+def test_cast_double_to_text(cql, table3):
+    p = unique_key_int()
+    numbers = [ 3.141592653589793238462643383279502884197,
+               -3.141592653589793238462643383279502884197,
+               -31415926535897932384.62643383279502884197,
+               0.00003141592653589793238462643383279502884197]
+    for n in numbers:
+        cql.execute(f'INSERT INTO {table3} (p, db) VALUES ({p}, {n})')
+        # If we read "db" back, we get n truncated to 64-bit precision.
+        assert n == list(cql.execute(f"SELECT db FROM {table3} WHERE p={p}"))[0][0]
+        # If we ask Scylla to cast db to text, and then convert this text back
+        # to 64-bit float, the result should be equal again to n. If the cast
+        # printed too few digits, it would not be equal.
+        ftext = list(cql.execute(f"SELECT CAST(db AS text) FROM {table3} WHERE p={p}"))[0][0]
+        assert n == float(ftext)
 
 # TODO: test casts from more types.
