@@ -72,6 +72,12 @@ public:
             only, // scrub only quarantined sstables
         };
         quarantine_mode quarantine_operation_mode = quarantine_mode::include;
+
+        using quarantine_invalid_sstables = bool_class<class quarantine_invalid_sstables_tag>;
+
+        // Should invalid sstables be moved into quarantine.
+        // Only applies to validate-mode.
+        quarantine_invalid_sstables quarantine_sstables = quarantine_invalid_sstables::yes;
     };
     struct reshard {
     };
@@ -108,13 +114,18 @@ public:
         return compaction_type_options(upgrade{});
     }
 
-    static compaction_type_options make_scrub(scrub::mode mode) {
-        return compaction_type_options(scrub{mode});
+    static compaction_type_options make_scrub(scrub::mode mode, scrub::quarantine_invalid_sstables quarantine_sstables = scrub::quarantine_invalid_sstables::yes) {
+        return compaction_type_options(scrub{.operation_mode = mode, .quarantine_sstables = quarantine_sstables});
     }
 
     template <typename... Visitor>
     auto visit(Visitor&&... visitor) const {
         return std::visit(std::forward<Visitor>(visitor)..., _options);
+    }
+
+    template <typename OptionType>
+    const auto& as() const {
+        return std::get<OptionType>(_options);
     }
 
     const options_variant& options() const { return _options; }
