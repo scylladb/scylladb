@@ -976,9 +976,9 @@ SEASTAR_TEST_CASE(tombstone_purge_test) {
             return m;
         };
 
-        auto make_delete = [&] (partition_key key) {
+        auto make_delete = [&] (partition_key key, gc_clock::time_point deletion_time = gc_clock::now()) {
             mutation m(s, key);
-            tombstone tomb(next_timestamp(), gc_clock::now());
+            tombstone tomb(next_timestamp(), deletion_time);
             m.partition().apply(tomb);
             return m;
         };
@@ -1128,6 +1128,34 @@ SEASTAR_TEST_CASE(tombstone_purge_test) {
             assert_that(sstable_reader(result[0], s, env.make_reader_permit()))
                     .produces(mut3)
                     .produces_end_of_stream();
+        }
+        {
+            // We use int32_t for representing a timestamp in seconds since the
+            // UNIX epoch. This timestamp "local_deletion_time" (ldt for short)
+            // notes the time at which a tombstone was created. It is used for
+            // purging the tombstone after gc_grace_seconds.
+            //
+            // If ldt is greater than INT32_MAX (2147483647), then it cannot be
+            // represented using a int32_t. probably more importantly, it
+            // represents a time point too far in the future -- after 19 Jan 2028.
+            // so the tombstone would practically live with us forever. so, the
+            // sstable writer just caps it to INT32_MAX - 1 when reading a
+            // tombstone with a TTL after this timepoint. and we also consider
+            // it as the indication of a problem and report it using the metrics
+            // named "scylla_sstables_capped_tombstone_deletion_time" which
+            // notes the total number of tombstones whose deletion_time breaches
+            // the limit.
+            //
+            // This test verifies that the metrics reflecting the number of
+            // tombstones with far-into-the-future ldts by inserting tombstones
+            // with a ldt greater than the date.
+            auto deletion_time = gc_clock::from_time_t(sstables::max_deletion_time + 1);
+            auto sst1 = make_sstable_containing(sst_gen,
+                                                {make_insert(alpha),
+                                                 make_delete(alpha, deletion_time)},
+                                                validate::no);
+            auto result = compact({sst1}, {sst1});
+            BOOST_CHECK_EQUAL(1, sstables_stats::get_shard_stats().capped_tombstone_deletion_time);
         }
     });
 }
