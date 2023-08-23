@@ -275,7 +275,6 @@ public:
     future<> set_scylla_local_param(const sstring& key, const sstring& value, bool visible_before_cl_replay);
     future<std::optional<sstring>> get_scylla_local_param(const sstring& key);
 
-private:
     // Saves the key-value pair into system.scylla_local table.
     // Pass visible_before_cl_replay = true iff the data should be available before
     // schema commitlog replay. We do table.flush in this case, so it's rather slow and heavyweight.
@@ -284,7 +283,6 @@ private:
     template <typename T>
     future<std::optional<T>> get_scylla_local_param_as(const sstring& key);
 
-public:
     static std::vector<schema_ptr> all_tables(const db::config& cfg);
     future<> make(
             locator::effective_replication_map_factory&,
