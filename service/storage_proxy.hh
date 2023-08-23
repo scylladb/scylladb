@@ -421,6 +421,7 @@ private:
 
     future<> send_to_endpoint(
             std::unique_ptr<mutation_holder> m,
+            locator::effective_replication_map_ptr ermp,
             gms::inet_address target,
             inet_address_vector_topology_change pending_endpoints,
             db::write_type type,
@@ -586,15 +587,15 @@ public:
     // Inspired by Cassandra's StorageProxy.sendToHintedEndpoints but without
     // hinted handoff support, and just one target. See also
     // send_to_live_endpoints() - another take on the same original function.
-    future<> send_to_endpoint(frozen_mutation_and_schema fm_a_s, gms::inet_address target, inet_address_vector_topology_change pending_endpoints, db::write_type type,
+    future<> send_to_endpoint(frozen_mutation_and_schema fm_a_s, locator::effective_replication_map_ptr ermp, gms::inet_address target, inet_address_vector_topology_change pending_endpoints, db::write_type type,
             tracing::trace_state_ptr tr_state, write_stats& stats, allow_hints, is_cancellable);
-    future<> send_to_endpoint(frozen_mutation_and_schema fm_a_s, gms::inet_address target, inet_address_vector_topology_change pending_endpoints, db::write_type type,
+    future<> send_to_endpoint(frozen_mutation_and_schema fm_a_s, locator::effective_replication_map_ptr ermp, gms::inet_address target, inet_address_vector_topology_change pending_endpoints, db::write_type type,
             tracing::trace_state_ptr tr_state, allow_hints, is_cancellable);
 
     // Send a mutation to a specific remote target as a hint.
     // Unlike regular mutations during write operations, hints are sent on the streaming connection
     // and use different RPC verb.
-    future<> send_hint_to_endpoint(frozen_mutation_and_schema fm_a_s, gms::inet_address target);
+    future<> send_hint_to_endpoint(frozen_mutation_and_schema fm_a_s, locator::effective_replication_map_ptr ermp, gms::inet_address target);
 
     /**
      * Performs the truncate operatoin, which effectively deletes all data from

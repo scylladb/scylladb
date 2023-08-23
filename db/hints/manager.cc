@@ -538,13 +538,13 @@ future<timespec> manager::end_point_hints_manager::sender::get_last_file_modific
     });
 }
 
-future<> manager::end_point_hints_manager::sender::do_send_one_mutation(frozen_mutation_and_schema m, const inet_address_vector_replica_set& natural_endpoints) noexcept {
-    return futurize_invoke([this, m = std::move(m), &natural_endpoints] () mutable -> future<> {
+future<> manager::end_point_hints_manager::sender::do_send_one_mutation(frozen_mutation_and_schema m, locator::effective_replication_map_ptr ermp, const inet_address_vector_replica_set& natural_endpoints) noexcept {
+    return futurize_invoke([this, m = std::move(m), ermp = std::move(ermp), &natural_endpoints] () mutable -> future<> {
         // The fact that we send with CL::ALL in both cases below ensures that new hints are not going
         // to be generated as a result of hints sending.
         if (boost::range::find(natural_endpoints, end_point_key()) != natural_endpoints.end()) {
             manager_logger.trace("Sending directly to {}", end_point_key());
-            return _proxy.send_hint_to_endpoint(std::move(m), end_point_key());
+            return _proxy.send_hint_to_endpoint(std::move(m), std::move(ermp), end_point_key());
         } else {
             manager_logger.trace("Endpoints set has changed and {} is no longer a replica. Mutating from scratch...", end_point_key());
             return _proxy.send_hint_to_all_replicas(std::move(m));
@@ -857,7 +857,7 @@ future<> manager::end_point_hints_manager::sender::send_one_mutation(frozen_muta
     auto token = dht::get_token(*m.s, m.fm.key());
     inet_address_vector_replica_set natural_endpoints = erm->get_natural_endpoints(std::move(token));
 
-    return do_send_one_mutation(std::move(m), natural_endpoints);
+    return do_send_one_mutation(std::move(m), std::move(erm), std::move(natural_endpoints));
 }
 
 future<> manager::end_point_hints_manager::sender::send_one_hint(lw_shared_ptr<send_one_file_ctx> ctx_ptr, fragmented_temporary_buffer buf, db::replay_position rp, gc_clock::duration secs_since_file_mod, const sstring& fname) {
