@@ -3764,6 +3764,7 @@ bool storage_proxy::cannot_hint(const Range& targets, db::write_type type) const
 
 future<> storage_proxy::send_to_endpoint(
         std::unique_ptr<mutation_holder> m,
+        locator::effective_replication_map_ptr ermp,
         gms::inet_address target,
         inet_address_vector_topology_change pending_endpoints,
         db::write_type type,
@@ -3782,7 +3783,7 @@ future<> storage_proxy::send_to_endpoint(
         timeout = clock_type::now() + 5min;
     }
     return mutate_prepare(std::array{std::move(m)}, cl, type, /* does view building should hold a real permit */ empty_service_permit(),
-            [this, tr_state, target = std::array{target}, pending_endpoints = std::move(pending_endpoints), &stats, cancellable] (
+            [this, tr_state, erm = std::move(ermp), target = std::array{target}, pending_endpoints = std::move(pending_endpoints), &stats, cancellable] (
                 std::unique_ptr<mutation_holder>& m,
                 db::consistency_level cl,
                 db::write_type type, service_permit permit) mutable {
@@ -3794,8 +3795,6 @@ future<> storage_proxy::send_to_endpoint(
                 std::inserter(targets, targets.begin()),
                 std::back_inserter(dead_endpoints),
                 std::bind_front(&storage_proxy::is_alive, this));
-        auto& table = _db.local().find_column_family(m->schema()->id());
-        auto erm = table.get_effective_replication_map();
         slogger.trace("Creating write handler with live: {}; dead: {}", targets, dead_endpoints);
         db::assure_sufficient_live_nodes(cl, *erm, targets, pending_endpoints);
         return create_write_response_handler(
@@ -3820,6 +3819,7 @@ future<> storage_proxy::send_to_endpoint(
 
 future<> storage_proxy::send_to_endpoint(
         frozen_mutation_and_schema fm_a_s,
+        locator::effective_replication_map_ptr ermp,
         gms::inet_address target,
         inet_address_vector_topology_change pending_endpoints,
         db::write_type type,
@@ -3828,6 +3828,7 @@ future<> storage_proxy::send_to_endpoint(
         is_cancellable cancellable) {
     return send_to_endpoint(
             std::make_unique<shared_mutation>(std::move(fm_a_s)),
+            std::move(ermp),
             std::move(target),
             std::move(pending_endpoints),
             type,
@@ -3839,6 +3840,7 @@ future<> storage_proxy::send_to_endpoint(
 
 future<> storage_proxy::send_to_endpoint(
         frozen_mutation_and_schema fm_a_s,
+        locator::effective_replication_map_ptr ermp,
         gms::inet_address target,
         inet_address_vector_topology_change pending_endpoints,
         db::write_type type,
@@ -3848,6 +3850,7 @@ future<> storage_proxy::send_to_endpoint(
         is_cancellable cancellable) {
     return send_to_endpoint(
             std::make_unique<shared_mutation>(std::move(fm_a_s)),
+            std::move(ermp),
             std::move(target),
             std::move(pending_endpoints),
             type,
@@ -3857,10 +3860,11 @@ future<> storage_proxy::send_to_endpoint(
             cancellable);
 }
 
-future<> storage_proxy::send_hint_to_endpoint(frozen_mutation_and_schema fm_a_s, gms::inet_address target) {
+future<> storage_proxy::send_hint_to_endpoint(frozen_mutation_and_schema fm_a_s, locator::effective_replication_map_ptr ermp, gms::inet_address target) {
     if (!_features.hinted_handoff_separate_connection) {
         return send_to_endpoint(
                 std::make_unique<shared_mutation>(std::move(fm_a_s)),
+                std::move(ermp),
                 std::move(target),
                 { },
                 db::write_type::SIMPLE,
@@ -3872,6 +3876,7 @@ future<> storage_proxy::send_hint_to_endpoint(frozen_mutation_and_schema fm_a_s,
 
     return send_to_endpoint(
             std::make_unique<hint_mutation>(std::move(fm_a_s)),
+            std::move(ermp),
             std::move(target),
             { },
             db::write_type::SIMPLE,

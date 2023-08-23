@@ -27,6 +27,7 @@
 #include "db/hints/resource_manager.hh"
 #include "db/hints/host_filter.hh"
 #include "db/hints/sync_point.hh"
+#include "locator/abstract_replication_strategy.hh"
 
 class fragmented_temporary_buffer;
 
@@ -276,9 +277,10 @@ public:
             /// to it, otherwise execute the mutation "from scratch" with CL=ALL.
             ///
             /// \param m mutation to send
+            /// \param ermp points to the effective_replication_map used to obtain \c natural_endpoints
             /// \param natural_endpoints current replicas for the given mutation
             /// \return future that resolves when the operation is complete
-            future<> do_send_one_mutation(frozen_mutation_and_schema m, const inet_address_vector_replica_set& natural_endpoints) noexcept;
+            future<> do_send_one_mutation(frozen_mutation_and_schema m, locator::effective_replication_map_ptr ermp, const inet_address_vector_replica_set& natural_endpoints) noexcept;
 
             /// \brief Send one mutation out.
             ///
