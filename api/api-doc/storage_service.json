@@ -465,7 +465,7 @@
          "operations":[
             {
                "method":"GET",
-               "summary":"Retrieve the mapping of endpoint to host ID",
+               "summary":"Retrieve the mapping of endpoint to host ID of all nodes that own tokens",
                "type":"array",
                "items":{
                   "type":"mapper"

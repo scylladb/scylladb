@@ -561,7 +561,15 @@ std::unordered_map<inet_address, host_id> token_metadata_impl::get_endpoint_to_h
     std::unordered_map<inet_address, host_id> map;
     map.reserve(nodes.size());
     for (const auto& [endpoint, node] : nodes) {
-        map[endpoint] = node->host_id();
+        // Restrict to token-owners
+        if (!(node->is_normal() || node->is_leaving())) {
+            continue;
+        }
+        if (const auto& host_id = node->host_id()) {
+            map[endpoint] = host_id;
+        } else {
+            on_internal_error_noexcept(tlogger, fmt::format("get_endpoint_to_host_id_map_for_reading: endpoint {} has null host_id", endpoint));
+        }
     }
     return map;
 }
