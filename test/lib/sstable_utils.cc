@@ -165,7 +165,7 @@ class compaction_manager_test_task : public compaction::compaction_task_executor
 
 public:
     compaction_manager_test_task(compaction_manager& cm, table_state& table_s, sstables::run_id run_id, noncopyable_function<future<> (sstables::compaction_data&)> job)
-        : compaction::compaction_task_executor(cm, &table_s, sstables::compaction_type::Compaction, "Test compaction")
+        : compaction::compaction_task_executor(cm, throw_if_stopping::no, &table_s, sstables::compaction_type::Compaction, "Test compaction")
         , _run_id(run_id)
         , _job(std::move(job))
     { }

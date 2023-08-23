@@ -311,10 +311,11 @@ compaction::compaction_state& compaction_manager::get_compaction_state(table_sta
     }
 }
 
-compaction_task_executor::compaction_task_executor(compaction_manager& mgr, table_state* t, sstables::compaction_type type, sstring desc)
+compaction_task_executor::compaction_task_executor(compaction_manager& mgr, throw_if_stopping do_throw_if_stopping, table_state* t, sstables::compaction_type type, sstring desc)
     : _cm(mgr)
     , _compacting_table(t)
     , _compaction_state(_cm.get_compaction_state(t))
+    , _do_throw_if_stopping(do_throw_if_stopping)
     , _type(type)
     , _description(std::move(desc))
 {}
@@ -463,8 +464,8 @@ protected:
     sstables::shared_sstable consume_sstable();
 
 public:
-    explicit sstables_task_executor(compaction_manager& mgr, table_state* t, sstables::compaction_type compaction_type, sstring desc, std::vector<sstables::shared_sstable> sstables, tasks::task_id parent_id, sstring entity = "")
-        : compaction_task_executor(mgr, t, compaction_type, std::move(desc))
+    explicit sstables_task_executor(compaction_manager& mgr, throw_if_stopping do_throw_if_stopping, table_state* t, sstables::compaction_type compaction_type, sstring desc, std::vector<sstables::shared_sstable> sstables, tasks::task_id parent_id, sstring entity = "")
+        : compaction_task_executor(mgr, do_throw_if_stopping, t, compaction_type, std::move(desc))
         , sstables_compaction_task_impl(mgr._task_manager_module, tasks::task_id::create_random_id(), 0, "compaction group", t->schema()->ks_name(), t->schema()->cf_name(), std::move(entity), parent_id)
     {
         set_sstables(std::move(sstables));
@@ -486,9 +487,10 @@ protected:
 class major_compaction_task_executor : public compaction_task_executor, public major_compaction_task_impl {
 public:
     major_compaction_task_executor(compaction_manager& mgr,
+            throw_if_stopping do_throw_if_stopping,
             table_state* t,
             tasks::task_id parent_id)
-        : compaction_task_executor(mgr, t, sstables::compaction_type::Compaction, "Major compaction")
+        : compaction_task_executor(mgr, do_throw_if_stopping, t, sstables::compaction_type::Compaction, "Major compaction")
         , major_compaction_task_impl(mgr._task_manager_module, tasks::task_id::create_random_id(), 0, "compaction group", t->schema()->ks_name(), t->schema()->cf_name(), "", parent_id)
     {}
 
@@ -542,11 +544,11 @@ protected:
 template<typename TaskExecutor, typename... Args>
 requires std::is_base_of_v<compaction_task_executor, TaskExecutor> &&
         std::is_base_of_v<compaction_task_impl, TaskExecutor> &&
-requires (compaction_manager& cm, Args&&... args) {
-    {TaskExecutor(cm, std::forward<Args>(args)...)} -> std::same_as<TaskExecutor>;
+requires (compaction_manager& cm, throw_if_stopping do_throw_if_stopping, Args&&... args) {
+    {TaskExecutor(cm, do_throw_if_stopping, std::forward<Args>(args)...)} -> std::same_as<TaskExecutor>;
 }
 future<compaction_manager::compaction_stats_opt> compaction_manager::perform_compaction(throw_if_stopping do_throw_if_stopping, std::optional<tasks::task_info> parent_info, Args&&... args) {
-    auto task_executor = seastar::make_shared<TaskExecutor>(*this, std::forward<Args>(args)...);
+    auto task_executor = seastar::make_shared<TaskExecutor>(*this, do_throw_if_stopping, std::forward<Args>(args)...);
     _tasks.push_back(task_executor);
     auto unregister_task = defer([this, task_executor] {
         _tasks.remove(task_executor);
@@ -591,8 +593,8 @@ class custom_compaction_task_executor : public compaction_task_executor, public 
     noncopyable_function<future<>(sstables::compaction_data&)> _job;
 
 public:
-    custom_compaction_task_executor(compaction_manager& mgr, table_state* t, tasks::task_id parent_id, sstables::compaction_type type, sstring desc, noncopyable_function<future<>(sstables::compaction_data&)> job)
-        : compaction_task_executor(mgr, t, type, std::move(desc))
+    custom_compaction_task_executor(compaction_manager& mgr, throw_if_stopping do_throw_if_stopping, table_state* t, tasks::task_id parent_id, sstables::compaction_type type, sstring desc, noncopyable_function<future<>(sstables::compaction_data&)> job)
+        : compaction_task_executor(mgr, do_throw_if_stopping, t, type, std::move(desc))
         , compaction_task_impl(mgr._task_manager_module, tasks::task_id::create_random_id(), 0, "compaction group", t->schema()->ks_name(), t->schema()->cf_name(), "", parent_id)
         , _job(std::move(job))
     {}
@@ -1133,8 +1135,8 @@ namespace compaction {
 
 class regular_compaction_task_executor : public compaction_task_executor, public regular_compaction_task_impl {
 public:
-    regular_compaction_task_executor(compaction_manager& mgr, table_state& t)
-        : compaction_task_executor(mgr, &t, sstables::compaction_type::Compaction, "Compaction")
+    regular_compaction_task_executor(compaction_manager& mgr, throw_if_stopping do_throw_if_stopping, table_state& t)
+        : compaction_task_executor(mgr, do_throw_if_stopping, &t, sstables::compaction_type::Compaction, "Compaction")
         , regular_compaction_task_impl(mgr._task_manager_module, tasks::task_id::create_random_id(), mgr._task_manager_module->new_sequence_number(), t.schema()->ks_name(), t.schema()->cf_name(), "", tasks::task_id::create_null_id())
     {}
 protected:
@@ -1282,8 +1284,8 @@ namespace compaction {
 class offstrategy_compaction_task_executor : public compaction_task_executor, public offstrategy_compaction_task_impl {
     bool& _performed;
 public:
-    offstrategy_compaction_task_executor(compaction_manager& mgr, table_state* t, tasks::task_id parent_id, bool& performed)
-        : compaction_task_executor(mgr, t, sstables::compaction_type::Reshape, "Offstrategy compaction")
+    offstrategy_compaction_task_executor(compaction_manager& mgr, throw_if_stopping do_throw_if_stopping, table_state* t, tasks::task_id parent_id, bool& performed)
+        : compaction_task_executor(mgr, do_throw_if_stopping, t, sstables::compaction_type::Reshape, "Offstrategy compaction")
         , offstrategy_compaction_task_impl(mgr._task_manager_module, tasks::task_id::create_random_id(), parent_id ? 0 : mgr._task_manager_module->new_sequence_number(), "compaction group", t->schema()->ks_name(), t->schema()->cf_name(), "", parent_id)
         , _performed(performed)
     {
@@ -1454,10 +1456,10 @@ class rewrite_sstables_compaction_task_executor : public sstables_task_executor 
     compaction_manager::can_purge_tombstones _can_purge;
 
 public:
-    rewrite_sstables_compaction_task_executor(compaction_manager& mgr, table_state* t, tasks::task_id parent_id, sstables::compaction_type_options options, owned_ranges_ptr owned_ranges_ptr,
+    rewrite_sstables_compaction_task_executor(compaction_manager& mgr, throw_if_stopping do_throw_if_stopping, table_state* t, tasks::task_id parent_id, sstables::compaction_type_options options, owned_ranges_ptr owned_ranges_ptr,
                                      std::vector<sstables::shared_sstable> sstables, compacting_sstable_registration compacting,
                                      compaction_manager::can_purge_tombstones can_purge)
-        : sstables_task_executor(mgr, t, options.type(), sstring(sstables::to_string(options.type())), std::move(sstables), parent_id, options.type() == sstables::compaction_type::Scrub ? fmt::format("mode: {};\nquarantine_mode: {}\n", std::get<sstables::compaction_type_options::scrub>(options.options()).operation_mode, std::get<sstables::compaction_type_options::scrub>(options.options()).quarantine_operation_mode) : "")
+        : sstables_task_executor(mgr, do_throw_if_stopping, t, options.type(), sstring(sstables::to_string(options.type())), std::move(sstables), parent_id, options.type() == sstables::compaction_type::Scrub ? fmt::format("mode: {};\nquarantine_mode: {}\n", std::get<sstables::compaction_type_options::scrub>(options.options()).operation_mode, std::get<sstables::compaction_type_options::scrub>(options.options()).quarantine_operation_mode) : "")
         , _options(std::move(options))
         , _owned_ranges_ptr(std::move(owned_ranges_ptr))
         , _compacting(std::move(compacting))
@@ -1567,8 +1569,8 @@ namespace compaction {
 
 class validate_sstables_compaction_task_executor : public sstables_task_executor {
 public:
-    validate_sstables_compaction_task_executor(compaction_manager& mgr, table_state* t, tasks::task_id parent_id, std::vector<sstables::shared_sstable> sstables)
-        : sstables_task_executor(mgr, t, sstables::compaction_type::Scrub, "Scrub compaction in validate mode", std::move(sstables), parent_id)
+    validate_sstables_compaction_task_executor(compaction_manager& mgr, throw_if_stopping do_throw_if_stopping, table_state* t, tasks::task_id parent_id, std::vector<sstables::shared_sstable> sstables)
+        : sstables_task_executor(mgr, do_throw_if_stopping, t, sstables::compaction_type::Scrub, "Scrub compaction in validate mode", std::move(sstables), parent_id)
     {}
 
 protected:
@@ -1645,9 +1647,9 @@ class cleanup_sstables_compaction_task_executor : public compaction_task_executo
     compacting_sstable_registration _compacting;
     std::vector<sstables::compaction_descriptor> _pending_cleanup_jobs;
 public:
-    cleanup_sstables_compaction_task_executor(compaction_manager& mgr, table_state* t, tasks::task_id parent_id, sstables::compaction_type_options options, owned_ranges_ptr owned_ranges_ptr,
+    cleanup_sstables_compaction_task_executor(compaction_manager& mgr, throw_if_stopping do_throw_if_stopping, table_state* t, tasks::task_id parent_id, sstables::compaction_type_options options, owned_ranges_ptr owned_ranges_ptr,
                                      std::vector<sstables::shared_sstable> candidates, compacting_sstable_registration compacting)
-            : compaction_task_executor(mgr, t, options.type(), sstring(sstables::to_string(options.type())))
+            : compaction_task_executor(mgr, do_throw_if_stopping, t, options.type(), sstring(sstables::to_string(options.type())))
             , cleanup_compaction_task_impl(mgr._task_manager_module, tasks::task_id::create_random_id(), 0, "compaction group", t->schema()->ks_name(), t->schema()->cf_name(), "", parent_id)
             , _cleanup_options(std::move(options))
             , _owned_ranges_ptr(std::move(owned_ranges_ptr))
