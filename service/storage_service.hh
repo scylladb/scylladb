@@ -774,6 +774,8 @@ private:
         semaphore _operation_mutex{1};
     } _raft_topology_cmd_handler_state;
 
+    std::unordered_set<raft::server_id> find_raft_nodes_from_hoeps(const std::list<locator::host_id_or_endpoint>& hoeps);
+
     future<raft_topology_cmd_result> raft_topology_cmd_handler(sharded<db::system_distributed_keyspace>& sys_dist_ks, raft::term_t term, uint64_t cmd_index, const raft_topology_cmd& cmd);
 
     future<> raft_bootstrap(raft::server&);
