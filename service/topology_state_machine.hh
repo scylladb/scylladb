@@ -46,6 +46,14 @@ enum class topology_request: uint16_t {
     rebuild
 };
 
+struct join_param {
+    uint32_t num_tokens;
+};
+
+struct rebuild_param {
+    sstring source_dc;
+};
+
 struct removenode_param {
     std::unordered_set<raft::server_id> ignored_ids;
 };
@@ -55,7 +63,7 @@ struct replace_param {
     std::unordered_set<raft::server_id> ignored_ids;
 };
 
-using request_param = std::variant<sstring, uint32_t, removenode_param, replace_param>;
+using request_param = std::variant<join_param, rebuild_param, removenode_param, replace_param>;
 
 enum class global_topology_request: uint16_t {
     new_cdc_generation,

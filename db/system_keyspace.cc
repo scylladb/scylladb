@@ -2554,10 +2554,10 @@ future<service::topology> system_keyspace::load_topology_state() {
                 if (!rebuild_option) {
                     on_internal_error(slogger, fmt::format("rebuild_option is missing for a node {}", host_id));
                 }
-                ret.req_param.emplace(host_id, *rebuild_option);
+                ret.req_param.emplace(host_id, service::rebuild_param{*rebuild_option});
                 break;
             case service::topology_request::join:
-                ret.req_param.emplace(host_id, num_tokens);
+                ret.req_param.emplace(host_id, service::join_param{num_tokens});
                 break;
             default:
                 // no parameters for other requests
@@ -2581,7 +2581,7 @@ future<service::topology> system_keyspace::load_topology_state() {
                 if (!rebuild_option) {
                     on_internal_error(slogger, fmt::format("rebuild_option is missing for a node {}", host_id));
                 }
-                ret.req_param.emplace(host_id, *rebuild_option);
+                ret.req_param.emplace(host_id, service::rebuild_param{*rebuild_option});
                 break;
             default:
                 // no parameters for other operations
