@@ -200,6 +200,48 @@ SEASTAR_THREAD_TEST_CASE(test_raft_address_map_operations) {
         m.add_or_update_entry(id1, addr1, gms::generation_type(-1));
         BOOST_CHECK(m.find(id1) && *m.find(id1) == addr1);
     }
+    {
+        // Check the basic functionality of find_by_addr()
+        sharded<raft_address_map_t<manual_clock>> m_svc;
+        m_svc.start().get();
+        auto stop_map = defer([&m_svc] { m_svc.stop().get(); });
+        auto& m = m_svc.local();
+
+        BOOST_CHECK(!m.find_by_addr(addr1));
+
+        m.set_nonexpiring(id1);
+        BOOST_CHECK(!m.find_by_addr(addr1));
+
+        m.add_or_update_entry(id1, addr1);
+        BOOST_CHECK(m.find_by_addr(addr1) && *m.find_by_addr(addr1) == id1);
+    }
+    {
+        // Check that find_by_addr() properly updates timestamps of entries
+        sharded<raft_address_map_t<manual_clock>> m_svc;
+        m_svc.start().get();
+        auto stop_map = defer([&m_svc] { m_svc.stop().get(); });
+        auto& m = m_svc.local();
+
+        m.add_or_update_entry(id1, addr1);
+        manual_clock::advance(30min);
+        BOOST_CHECK(m.find_by_addr(addr1) && *m.find_by_addr(addr1) == id1);
+
+        manual_clock::advance(30min + 1s);
+        BOOST_CHECK(m.find_by_addr(addr1) && *m.find_by_addr(addr1) == id1);
+
+        manual_clock::advance(expiration_time);
+        BOOST_CHECK(!m.find_by_addr(addr1));
+    }
+    {
+        // Check that find_by_addr() throws when called without an actual IP address
+        sharded<raft_address_map_t<manual_clock>> m_svc;
+        m_svc.start().get();
+        auto stop_map = defer([&m_svc] { m_svc.stop().get(); });
+        auto& m = m_svc.local();
+
+        scoped_no_abort_on_internal_error abort_guard;
+        BOOST_CHECK_THROW(m.find_by_addr(gms::inet_address{}), std::runtime_error);
+    }
 }
 
 SEASTAR_THREAD_TEST_CASE(test_raft_address_map_replication) {

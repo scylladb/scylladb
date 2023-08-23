@@ -301,6 +301,30 @@ public:
         return entry._addr;
     }
 
+    // Find an id with a given mapping.
+    //
+    // If a mapping is expiring, the last access timestamp is updated automatically.
+    //
+    // The only purpose of this function is to allow passing IPs with the
+    // --ignore-dead-nodes parameter in raft_removenode and raft_replace. As this
+    // feature is deprecated, we should also remove this function when the
+    // deprecation period ends.
+    std::optional<raft::server_id> find_by_addr(gms::inet_address addr) const {
+        rslog.warn("Finding Raft nodes by IP addresses is deprecated. Please use Host IDs instead.");
+        if (addr == gms::inet_address{}) {
+            on_internal_error(rslog, "raft_address_map::find_by_addr: called with an empty address");
+        }
+        auto it = std::find_if(_map.begin(), _map.end(), [&](auto&& mapping) { return mapping.second._addr == addr; });
+        if (it == _map.end()) {
+            return std::nullopt;
+        }
+        auto& entry = it->second;
+        if (entry.expiring()) {
+            entry._lru_entry->touch();
+        }
+        return it->first;
+    }
+
     // Convert an expiring entry to a non-expiring one, or
     // insert a new non-expiring entry if the entry is missing.
     // Called on Raft configuration changes to mark the new
