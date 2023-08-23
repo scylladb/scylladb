@@ -480,7 +480,7 @@ public:
     }
 protected:
     virtual future<> run() override {
-        return compaction_done().discard_result();
+        return perform();
     }
 };
 
@@ -499,7 +499,7 @@ public:
     }
 protected:
     virtual future<> run() override {
-        return compaction_done().discard_result();
+        return perform();
     }
 
     // first take major compaction semaphore, then exclusely take compaction lock for table.
@@ -559,10 +559,11 @@ future<compaction_manager::compaction_stats_opt> compaction_manager::perform_com
     if (parent_info) {
         auto task = co_await get_task_manager_module().make_task(task_executor, parent_info.value());
         task->start();
-        // We do not need to wait for the task to be done as compaction_task_executor side will take care of that.
+        co_await task->done();
+        co_return task_executor->get_stats();
+    } else {
+        co_return co_await perform_task(std::move(task_executor), do_throw_if_stopping);
     }
-
-    co_return co_await perform_task(std::move(task_executor), do_throw_if_stopping);
 }
 
 std::optional<gate::holder> compaction_manager::start_compaction(table_state& t) {
@@ -608,7 +609,7 @@ public:
     }
 protected:
     virtual future<> run() override {
-        return compaction_done().discard_result();
+        return perform();
     }
 
     virtual future<compaction_manager::compaction_stats_opt> do_run() override {
@@ -1087,6 +1088,10 @@ inline bool compaction_manager::can_proceed(table_state* t) const {
     return (_state == state::enabled) && _compaction_state.contains(t) && !_compaction_state.at(t).compaction_disabled();
 }
 
+future<> compaction_task_executor::perform() {
+    _stats = co_await _cm.perform_task(shared_from_this(), _do_throw_if_stopping);
+}
+
 inline bool compaction_task_executor::can_proceed(throw_if_stopping do_throw_if_stopping) const {
     if (stopping()) {
         // Allow caller to know that task (e.g. reshape) was asked to stop while waiting for a chance to run.
@@ -1141,7 +1146,7 @@ public:
     {}
 protected:
     virtual future<> run() override {
-        return compaction_done().discard_result();
+        return perform();
     }
 
     virtual future<compaction_manager::compaction_stats_opt> do_run() override {
@@ -1301,7 +1306,7 @@ public:
     }
 protected:
     virtual future<> run() override {
-        return compaction_done().discard_result();
+        return perform();
     }
 private:
     future<> run_offstrategy_compaction(sstables::compaction_data& cdata) {
@@ -1677,7 +1682,7 @@ public:
     }
 protected:
     virtual future<> run() override {
-        return compaction_done().discard_result();
+        return perform();
     }
 
     virtual future<compaction_manager::compaction_stats_opt>  do_run() override {
