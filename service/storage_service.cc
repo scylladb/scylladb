@@ -2259,6 +2259,20 @@ future<> storage_service::do_update_topology_with_local_metadata(raft::server& r
             break;
         }
 
+        // It might happen that, in the previous run, the node commits a command
+        // that adds support for a feature, crashes before applying it and now
+        // it is not safe to disable support for it. If there is an attempt to
+        // downgrade the node then `enable_features_on_startup` called much
+        // earlier won't catch it, we only can do it here after performing
+        // a read barrier - so we repeat it here.
+        //
+        // Fortunately, there is no risk that this feature was marked as enabled
+        // because it requires that the current node responded to a barrier
+        // request - which will fail in this situation.
+        const auto& enabled_features = _topology_state_machine._topology.features.enabled_features;
+        const auto unsafe_to_disable_features = _topology_state_machine._topology.features.calculate_not_yet_enabled_features();
+        _feature_service.check_features(enabled_features, unsafe_to_disable_features);
+
         slogger.info("raft topology: updating topology with local metadata");
 
         co_await _sys_ks.local().set_must_synchronize_topology(true);
