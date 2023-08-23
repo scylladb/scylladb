@@ -168,6 +168,10 @@ public:
         return _out.put(std::move(buf));
     }
 
+    virtual future<> flush() override {
+        return _out.flush();
+    }
+
     virtual future<> close() override {
         // Nothing to do, because close at the file_stream level will call flush on us.
         return _out.close();
