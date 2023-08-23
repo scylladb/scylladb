@@ -4488,13 +4488,13 @@ future<> storage_service::raft_removenode(locator::host_id host_id) {
         auto it = _topology_state_machine._topology.find(id);
 
         if (!it) {
-            throw std::runtime_error(::format("raft topology removenode: host id {} is not found in the cluster", host_id));
+            throw std::runtime_error(::format("removenode: host id {} is not found in the cluster", host_id));
         }
 
         auto& rs = it->second; // not usable after yeild
 
         if (rs.state != node_state::normal) {
-            throw std::runtime_error(::format("raft topology removenode: node {} is in '{}' state. Wait for it to be in 'normal' state", id, rs.state));
+            throw std::runtime_error(::format("removenode: node {} is in '{}' state. Wait for it to be in 'normal' state", id, rs.state));
         }
         const auto& am = _group0->address_map();
         auto ip = am.find(id);
@@ -4505,10 +4505,10 @@ future<> storage_service::raft_removenode(locator::host_id host_id) {
 
         if (_gossiper.is_alive(*ip)) {
             const std::string message = ::format(
-                "raft topology removenode: Rejected removenode operation for node {} ip {} "
+                "removenode: Rejected removenode operation for node {} ip {} "
                 "the node being removed is alive, maybe you should use decommission instead?",
                 id, *ip);
-            slogger.warn(std::string_view(message));
+            slogger.warn("raft topology {}", std::string_view(message));
             throw std::runtime_error(message);
         }
 
