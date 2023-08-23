@@ -102,8 +102,18 @@ public:
 
 future<>
 distributed_loader::process_sstable_dir(sharded<sstables::sstable_directory>& dir, sstables::sstable_directory::process_flags flags) {
-    co_await dir.invoke_on(0, [] (const sstables::sstable_directory& d) {
-        return utils::directories::verify_owner_and_mode(d.sstable_dir());
+    // verify owner and mode on the sstables directory
+    // and all its subdirectories, except for "snapshots"
+    // as there could be a race with scylla-manager that might
+    // delete snapshots concurrently
+    co_await dir.invoke_on(0, [] (const sstables::sstable_directory& d) -> future<> {
+        fs::path sstable_dir = d.sstable_dir();
+        co_await utils::directories::verify_owner_and_mode(sstable_dir, utils::directories::recursive::no);
+        co_await lister::scan_dir(sstable_dir, lister::dir_entry_types::of<directory_entry_type::directory>(), [] (fs::path dir, directory_entry de) -> future<> {
+            if (de.name != sstables::snapshots_dir) {
+                co_await utils::directories::verify_owner_and_mode(dir / de.name, utils::directories::recursive::yes);
+            }
+        });
     });
 
     co_await dir.invoke_on_all([&dir, flags] (sstables::sstable_directory& d) -> future<> {
