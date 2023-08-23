@@ -950,7 +950,7 @@ future<> merge_schema(sharded<db::system_keyspace>& sys_ks, distributed<service:
     if (this_shard_id() != 0) {
         // mutations must be applied on the owning shard (0).
         co_await smp::submit_to(0, [&, fmuts = freeze(mutations)] () mutable -> future<> {
-            return merge_schema(sys_ks, proxy, feat, unfreeze(fmuts));
+            return merge_schema(sys_ks, proxy, feat, unfreeze(fmuts), reload);
         });
         co_return;
     }
