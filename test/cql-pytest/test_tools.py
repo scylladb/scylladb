@@ -832,3 +832,6 @@ def test_scrub_validate_mode(scylla_path, scrub_schema_file, scrub_good_sstable,
 
         subprocess.check_call([scylla_path, "sstable", "scrub", "--schema-file", scrub_schema_file, "--scrub-mode", "validate", "--output-dir", tmp_dir, scrub_bad_sstable])
         check_scrub_output_dir(tmp_dir, 0)
+
+        # Check that validate did not move the bad sstable into qurantine
+        assert os.path.exists(scrub_bad_sstable)

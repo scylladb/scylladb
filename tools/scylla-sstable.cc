@@ -916,7 +916,7 @@ void scrub_operation(schema_ptr schema, reader_permit permit, const std::vector<
     scylla_sstable_table_state table_state(schema, permit, sst_man, output_dir);
 
     auto compaction_descriptor = sstables::compaction_descriptor(std::move(sstables));
-    compaction_descriptor.options = sstables::compaction_type_options::make_scrub(scrub_mode);
+    compaction_descriptor.options = sstables::compaction_type_options::make_scrub(scrub_mode, sstables::compaction_type_options::scrub::quarantine_invalid_sstables::no);
     compaction_descriptor.creator = [&table_state] (shard_id) { return table_state.make_sstable(); };
     compaction_descriptor.replacer = [] (sstables::compaction_completion_desc) { };
 
