@@ -952,7 +952,7 @@ future<> migration_manager::push_schema_mutation(const gms::inet_address& endpoi
 future<> migration_manager::announce_with_raft(std::vector<mutation> schema, group0_guard guard, std::string_view description) {
     assert(this_shard_id() == 0);
     auto schema_features = _feat.cluster_schema_features();
-    auto adjusted_schema = db::schema_tables::adjust_schema_for_schema_features(schema, schema_features);
+    auto adjusted_schema = db::schema_tables::adjust_schema_for_schema_features(std::move(schema), schema_features);
 
     auto group0_cmd = _group0_client.prepare_command(
         schema_change{
