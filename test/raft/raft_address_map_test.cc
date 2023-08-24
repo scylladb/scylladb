@@ -152,8 +152,11 @@ SEASTAR_THREAD_TEST_CASE(test_raft_address_map_operations) {
         manual_clock::advance(expiration_time);
         // find() returns std::nullopt when an entry doesn't contain an address
         // or it is not present in the address map, so we have to update the
-        // inserted entry's address before checking if it is in the address map
+        // inserted entry's address and advance the clock by expiration_time
+        // before checking if the entry is in the address map. If set_nonexpiring()
+        // didn't add the entry, add_or_update_entry() would add a new expiring entry.
         m.add_or_update_entry(id1, addr1);
+        manual_clock::advance(expiration_time);
         BOOST_CHECK(m.find(id1) && *m.find(id1) == addr1);
     }
     {
