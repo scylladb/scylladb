@@ -4589,7 +4589,7 @@ future<> storage_service::raft_removenode(locator::host_id host_id, std::list<lo
                 "removenode: Rejected removenode operation for node {} ip {} "
                 "the node being removed is alive, maybe you should use decommission instead?",
                 id, *ip);
-            slogger.warn("raft topology {}", std::string_view(message));
+            slogger.warn("raft topology {}", message);
             throw std::runtime_error(message);
         }
 
