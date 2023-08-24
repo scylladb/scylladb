@@ -801,11 +801,12 @@ future<gossiper::endpoint_permit> gossiper::lock_endpoint(inet_address ep, permi
     }
     pid = permit_id::create_random_id();
     logger.debug("{}: lock_endpoint {}: waiting: permit_id={}", caller, ep, pid);
-    eptr->units = co_await get_units(eptr->sem, 1);
+    eptr->units = co_await get_units(eptr->sem, 1, _abort_source);
     eptr->pid = pid;
     if (eptr->holders) {
         on_internal_error_noexcept(logger, fmt::format("{}: lock_endpoint {}: newly held endpoint_lock_entry has {} holders", caller, ep, eptr->holders));
     }
+    _abort_source.check();
     co_return endpoint_permit(std::move(eptr), std::move(ep), std::move(caller));
 }
 
