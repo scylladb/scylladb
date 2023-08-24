@@ -42,6 +42,7 @@ public:
 protected:
     virtual future<> run() override = 0;
 
+    virtual future<tasks::task_manager::task::progress> get_progress() const override;
     future<tasks::task_manager::task::progress> get_progress(const sstables::compaction_data& cdata, const sstables::compaction_progress_monitor& progress_monitor) const;
 };
 
@@ -56,9 +57,7 @@ public:
             std::string entity,
             tasks::task_id parent_id) noexcept
         : compaction_task_impl(module, id, sequence_number, std::move(scope), std::move(keyspace), std::move(table), std::move(entity), parent_id)
-    {
-        // FIXME: add progress units
-    }
+    {}
 
     virtual std::string type() const override {
         return "major compaction";
@@ -79,9 +78,12 @@ public:
         : major_compaction_task_impl(module, tasks::task_id::create_random_id(), module->new_sequence_number(), "keyspace", std::move(keyspace), "", "", tasks::task_id::create_null_id())
         , _db(db)
         , _table_infos(std::move(table_infos))
-    {}
+    {
+        _status.progress_units = "percentage of workload of shard tasks";
+    }
 protected:
     virtual future<> run() override;
+    virtual std::optional<double> expected_children_number() const override;
 };
 
 class shard_major_keyspace_compaction_task_impl : public major_compaction_task_impl {
@@ -97,9 +99,12 @@ public:
         : major_compaction_task_impl(module, tasks::task_id::create_random_id(), 0, "shard", std::move(keyspace), "", "", parent_id)
         , _db(db)
         , _local_tables(std::move(local_tables))
-    {}
+    {
+        _status.progress_units = "percentage of workload of table tasks";
+    }
 protected:
     virtual future<> run() override;
+    virtual std::optional<double> expected_children_number() const override;
 };
 
 class table_major_keyspace_compaction_task_impl : public major_compaction_task_impl {
@@ -108,6 +113,7 @@ private:
     table_info _ti;
     seastar::condition_variable& _cv;
     tasks::task_manager::task_ptr& _current_task;
+    double _cg_count = 0.0;
 public:
     table_major_keyspace_compaction_task_impl(tasks::task_manager::module_ptr module,
             std::string keyspace,
@@ -122,9 +128,12 @@ public:
         , _ti(std::move(ti))
         , _cv(cv)
         , _current_task(current_task)
-    {}
+    {
+        _status.progress_units = "percentage of workload of compaction group tasks";
+    }
 protected:
     virtual future<> run() override;
+    virtual std::optional<double> expected_children_number() const override;
 };
 
 
@@ -139,9 +148,7 @@ public:
             std::string entity,
             tasks::task_id parent_id) noexcept
         : compaction_task_impl(module, id, sequence_number, std::move(scope), std::move(keyspace), std::move(table), std::move(entity), parent_id)
-    {
-        // FIXME: add progress units
-    }
+    {}
 
     virtual std::string type() const override {
         return "cleanup compaction";
@@ -162,9 +169,12 @@ public:
         : cleanup_compaction_task_impl(module, tasks::task_id::create_random_id(), module->new_sequence_number(), "keyspace", std::move(keyspace), "", "", tasks::task_id::create_null_id())
         , _db(db)
         , _table_infos(std::move(table_infos))
-    {}
+    {
+        _status.progress_units = "percentage of workload of shard tasks";
+    }
 protected:
     virtual future<> run() override;
+    virtual std::optional<double> expected_children_number() const override;
 };
 
 class shard_cleanup_keyspace_compaction_task_impl : public cleanup_compaction_task_impl {
@@ -180,9 +190,12 @@ public:
         : cleanup_compaction_task_impl(module, tasks::task_id::create_random_id(), 0, "shard", std::move(keyspace), "", "", parent_id)
         , _db(db)
         , _local_tables(std::move(local_tables))
-    {}
+    {
+        _status.progress_units = "percentage of workload of table tasks";
+    }
 protected:
     virtual future<> run() override;
+    virtual std::optional<double> expected_children_number() const override;
 };
 
 class table_cleanup_keyspace_compaction_task_impl : public cleanup_compaction_task_impl {
@@ -191,6 +204,7 @@ private:
     table_info _ti;
     seastar::condition_variable& _cv;
     tasks::task_manager::task_ptr& _current_task;
+    double _cg_count = 0.0;
 public:
     table_cleanup_keyspace_compaction_task_impl(tasks::task_manager::module_ptr module,
             std::string keyspace,
@@ -205,9 +219,12 @@ public:
         , _ti(std::move(ti))
         , _cv(cv)
         , _current_task(current_task)
-    {}
+    {
+        _status.progress_units = "percentage of workload of compaction group tasks";
+    }
 protected:
     virtual future<> run() override;
+    virtual std::optional<double> expected_children_number() const override;
 };
 
 class offstrategy_compaction_task_impl : public compaction_task_impl {
@@ -221,9 +238,7 @@ public:
             std::string entity,
             tasks::task_id parent_id) noexcept
         : compaction_task_impl(module, id, sequence_number, std::move(scope), std::move(keyspace), std::move(table), std::move(entity), parent_id)
-    {
-        // FIXME: add progress units
-    }
+    {}
 
     virtual std::string type() const override {
         return "offstrategy compaction";
@@ -247,9 +262,12 @@ public:
         , _db(db)
         , _table_infos(std::move(table_infos))
         , _needed(needed)
-    {}
+    {
+        _status.progress_units = "percentage of workload of shard tasks";
+    }
 protected:
     virtual future<> run() override;
+    virtual std::optional<double> expected_children_number() const override;
 };
 
 class shard_offstrategy_keyspace_compaction_task_impl : public offstrategy_compaction_task_impl {
@@ -268,9 +286,12 @@ public:
         , _db(db)
         , _table_infos(std::move(table_infos))
         , _needed(needed)
-    {}
+    {
+        _status.progress_units = "percentage of workload of table tasks";
+    }
 protected:
     virtual future<> run() override;
+    virtual std::optional<double> expected_children_number() const override;
 };
 
 class table_offstrategy_keyspace_compaction_task_impl : public offstrategy_compaction_task_impl {
@@ -280,6 +301,7 @@ private:
     seastar::condition_variable& _cv;
     tasks::task_manager::task_ptr& _current_task;
     bool& _needed;
+    double _cg_count = 0.0;
 public:
     table_offstrategy_keyspace_compaction_task_impl(tasks::task_manager::module_ptr module,
             std::string keyspace,
@@ -296,9 +318,12 @@ public:
         , _cv(cv)
         , _current_task(current_task)
         , _needed(needed)
-    {}
+    {
+        _status.progress_units = "percentage of workload of compaction group tasks";
+    }
 protected:
     virtual future<> run() override;
+    virtual std::optional<double> expected_children_number() const override;
 };
 
 class sstables_compaction_task_impl : public compaction_task_impl {
@@ -312,9 +337,7 @@ public:
             std::string entity,
             tasks::task_id parent_id) noexcept
         : compaction_task_impl(module, id, sequence_number, std::move(scope), std::move(keyspace), std::move(table), std::move(entity), parent_id)
-    {
-        // FIXME: add progress units
-    }
+    {}
 
     virtual std::string type() const override {
         return "sstables compaction";
@@ -338,13 +361,16 @@ public:
         , _db(db)
         , _table_infos(std::move(table_infos))
         , _exclude_current_version(exclude_current_version)
-    {}
+    {
+        _status.progress_units = "percentage of workload of shard tasks";
+    }
 
     virtual std::string type() const override {
         return "upgrade " + sstables_compaction_task_impl::type();
     }
 protected:
     virtual future<> run() override;
+    virtual std::optional<double> expected_children_number() const override;
 };
 
 class shard_upgrade_sstables_compaction_task_impl : public sstables_compaction_task_impl {
@@ -363,13 +389,16 @@ public:
         , _db(db)
         , _table_infos(std::move(table_infos))
         , _exclude_current_version(exclude_current_version)
-    {}
+    {
+        _status.progress_units = "percentage of workload of table tasks";
+    }
 
     virtual std::string type() const override {
         return "upgrade " + sstables_compaction_task_impl::type();
     }
 protected:
     virtual future<> run() override;
+    virtual std::optional<double> expected_children_number() const override;
 };
 
 class table_upgrade_sstables_compaction_task_impl : public sstables_compaction_task_impl {
@@ -379,6 +408,7 @@ private:
     seastar::condition_variable& _cv;
     tasks::task_manager::task_ptr& _current_task;
     bool _exclude_current_version;
+    double _cg_count = 0.0;
 public:
     table_upgrade_sstables_compaction_task_impl(tasks::task_manager::module_ptr module,
             std::string keyspace,
@@ -395,13 +425,16 @@ public:
         , _cv(cv)
         , _current_task(current_task)
         , _exclude_current_version(exclude_current_version)
-    {}
+    {
+        _status.progress_units = "percentage of workload of compaction group tasks";
+    }
 
     virtual std::string type() const override {
         return "upgrade " + sstables_compaction_task_impl::type();
     }
 protected:
     virtual future<> run() override;
+    virtual std::optional<double> expected_children_number() const override;
 };
 
 class scrub_sstables_compaction_task_impl : public sstables_compaction_task_impl {
@@ -422,13 +455,16 @@ public:
         , _column_families(std::move(column_families))
         , _opts(opts)
         , _stats(stats)
-    {}
+    {
+        _status.progress_units = "percentage of workload of shard tasks";
+    }
 
     virtual std::string type() const override {
         return "scrub " + sstables_compaction_task_impl::type();
     }
 protected:
     virtual future<> run() override;
+    virtual std::optional<double> expected_children_number() const override;
 };
 
 class shard_scrub_sstables_compaction_task_impl : public sstables_compaction_task_impl {
@@ -450,13 +486,16 @@ public:
         , _column_families(std::move(column_families))
         , _opts(opts)
         , _stats(stats)
-    {}
+    {
+        _status.progress_units = "percentage of workload of table tasks";
+    }
 
     virtual std::string type() const override {
         return "scrub " + sstables_compaction_task_impl::type();
     }
 protected:
     virtual future<> run() override;
+    virtual std::optional<double> expected_children_number() const override;
 };
 
 class table_scrub_sstables_compaction_task_impl : public sstables_compaction_task_impl {
@@ -464,6 +503,7 @@ private:
     replica::database& _db;
     sstables::compaction_type_options::scrub _opts;
     sstables::compaction_stats& _stats;
+    double _cg_count = 0.0;
 public:
     table_scrub_sstables_compaction_task_impl(tasks::task_manager::module_ptr module,
             std::string keyspace,
@@ -476,13 +516,16 @@ public:
         , _db(db)
         , _opts(opts)
         , _stats(stats)
-    {}
+    {
+        _status.progress_units = "percentage of workload of compaction group tasks";
+    }
 
     virtual std::string type() const override {
         return "scrub " + sstables_compaction_task_impl::type();
     }
 protected:
     virtual future<> run() override;
+    virtual std::optional<double> expected_children_number() const override;
 };
 
 class reshaping_compaction_task_impl : public compaction_task_impl {
@@ -577,9 +620,7 @@ public:
             std::string entity,
             tasks::task_id parent_id) noexcept
         : compaction_task_impl(module, id, sequence_number, std::move(scope), std::move(keyspace), std::move(table), std::move(entity), parent_id)
-    {
-        // FIXME: add progress units
-    }
+    {}
 
     virtual std::string type() const override {
         return "resharding compaction";
@@ -607,7 +648,9 @@ public:
         , _db(db)
         , _creator(std::move(creator))
         , _owned_ranges_ptr(std::move(owned_ranges_ptr))
-    {}
+    {
+        _status.progress_units = "percentage of workload of shard tasks";
+    }
 protected:
     virtual future<> run() override;
 };
@@ -619,6 +662,7 @@ private:
     sstables::compaction_sstable_creator_fn _creator;
     compaction::owned_ranges_ptr _local_owned_ranges_ptr;
     std::vector<replica::reshard_shard_descriptor>& _destinations;
+    double _buckets_count = 0.0;
 public:
     shard_resharding_compaction_task_impl(tasks::task_manager::module_ptr module,
             std::string keyspace,
@@ -635,9 +679,12 @@ public:
         , _creator(std::move(creator))
         , _local_owned_ranges_ptr(std::move(local_owned_ranges_ptr))
         , _destinations(destinations)
-    {}
+    {
+        _status.progress_units = "percentage of workload of compaction group tasks";
+    }
 protected:
     virtual future<> run() override;
+    virtual std::optional<double> expected_children_number() const override;
 };
 
 class task_manager_module : public tasks::task_manager::module {

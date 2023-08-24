@@ -538,6 +538,10 @@ void table::enable_off_strategy_trigger() {
     do_update_off_strategy_trigger();
 }
 
+size_t table::compaction_groups_size() const noexcept {
+    return _compaction_groups.size();
+}
+
 class single_compaction_group_manager final : public compaction_group_manager {
     replica::table& _t;
 public:

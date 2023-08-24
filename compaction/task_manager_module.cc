@@ -126,7 +126,7 @@ distribute_reshard_jobs(sstables::sstable_directory::sstable_open_info_vector so
 // A creator function must be passed that will create an SSTable object in the correct shard,
 // and an I/O priority must be specified.
 future<> reshard(sstables::sstable_directory& dir, sstables::sstable_directory::sstable_open_info_vector shared_info, replica::table& table,
-                           sstables::compaction_sstable_creator_fn creator, compaction::owned_ranges_ptr owned_ranges_ptr, std::optional<tasks::task_info> parent_info)
+                           sstables::compaction_sstable_creator_fn creator, compaction::owned_ranges_ptr owned_ranges_ptr, std::optional<tasks::task_info> parent_info, double& buckets_count)
 {
     // Resharding doesn't like empty sstable sets, so bail early. There is nothing
     // to reshard in this shard.
@@ -151,6 +151,7 @@ future<> reshard(sstables::sstable_directory& dir, sstables::sstable_directory::
         }
         buckets.back().push_back(std::move(sst));
     });
+    buckets_count = buckets.size();
     // There is a semaphore inside the compaction manager in run_resharding_jobs. So we
     // parallel_for_each so the statistics about pending jobs are updated to reflect all
     // jobs. But only one will run in parallel at a time
@@ -254,6 +255,35 @@ future<> run_table_tasks(replica::database& db, std::vector<table_tasks_info> ta
     }
 }
 
+future<tasks::task_manager::task::progress> compaction_task_impl::get_progress() const {
+    tasks::task_manager::task::progress progress{
+        .completed = 0.00,
+        .total = 100.00
+    };
+
+    auto children_num = expected_children_number().value_or(0);
+    if (!children_num) {
+        progress.completed = is_done() ? 100.00 : 0.00;
+        co_return progress;
+    }
+    // _children vector may be modified in the meantime. Do not use foreach loop as the iterators may get invalidated.
+    for (unsigned i = 0; i < _children.size(); ++i) {
+        auto& child = _children[i];
+        if (child->type() != type()) {
+            // Sometimes before the right compaction, another type of compaction is invoked based on some condition (e.g. cleanup invokes offstrategy).
+            // While it may be useful to represent it in a task tree, it progress shouldn't be considered.
+            continue;
+        }
+        auto child_progress = co_await smp::submit_to(child.get_owner_shard(), [&child] {
+            return child->get_progress();
+        });
+        progress.completed += 100.00 * child_progress.completed / child_progress.total;
+    }
+
+    progress.completed /= children_num; // Each child has an equal participation.
+    co_return progress;
+}
+
 future<tasks::task_manager::task::progress> compaction_task_impl::get_progress(const sstables::compaction_data& cdata, const sstables::compaction_progress_monitor& progress_monitor) const {
     if (cdata.compaction_size == 0) {
         co_return get_binary_progress();
@@ -274,6 +304,10 @@ future<> major_keyspace_compaction_task_impl::run() {
     });
 }
 
+std::optional<double> major_keyspace_compaction_task_impl::expected_children_number() const {
+    return smp::count;
+}
+
 future<> shard_major_keyspace_compaction_task_impl::run() {
     seastar::condition_variable cv;
     tasks::task_manager::task_ptr current_task;
@@ -286,12 +320,21 @@ future<> shard_major_keyspace_compaction_task_impl::run() {
     co_await run_table_tasks(_db, std::move(table_tasks), cv, current_task, true);
 }
 
+std::optional<double> shard_major_keyspace_compaction_task_impl::expected_children_number() const {
+    return _local_tables.size();
+}
+
 future<> table_major_keyspace_compaction_task_impl::run() {
     co_await wait_for_your_turn(_cv, _current_task, _status.id);
     tasks::task_info info{_status.id, _status.shard};
-    co_await run_on_table("force_keyspace_compaction", _db, _status.keyspace, _ti, [info] (replica::table& t) {
+    co_await run_on_table("force_keyspace_compaction", _db, _status.keyspace, _ti, [info, &cg_count = _cg_count] (replica::table& t) {
+        cg_count = t.compaction_groups_size();
         return t.compact_all_sstables(info);
     });
+}
+
+std::optional<double> table_major_keyspace_compaction_task_impl::expected_children_number() const {
+    return _cg_count ? std::make_optional(_cg_count) : std::nullopt;
 }
 
 future<> cleanup_keyspace_compaction_task_impl::run() {
@@ -300,6 +343,10 @@ future<> cleanup_keyspace_compaction_task_impl::run() {
         auto task = co_await module.make_and_start_task<shard_cleanup_keyspace_compaction_task_impl>({_status.id, _status.shard}, _status.keyspace, _status.id, db, _table_infos);
         co_await task->done();
     });
+}
+
+std::optional<double> cleanup_keyspace_compaction_task_impl::expected_children_number() const {
+    return smp::count;
 }
 
 future<> shard_cleanup_keyspace_compaction_task_impl::run() {
@@ -314,12 +361,21 @@ future<> shard_cleanup_keyspace_compaction_task_impl::run() {
     co_await run_table_tasks(_db, std::move(table_tasks), cv, current_task, true);
 }
 
+std::optional<double> shard_cleanup_keyspace_compaction_task_impl::expected_children_number() const {
+    return _local_tables.size();
+}
+
 future<> table_cleanup_keyspace_compaction_task_impl::run() {
     co_await wait_for_your_turn(_cv, _current_task, _status.id);
     auto owned_ranges_ptr = compaction::make_owned_ranges_ptr(_db.get_keyspace_local_ranges(_status.keyspace));
     co_await run_on_table("force_keyspace_cleanup", _db, _status.keyspace, _ti, [&] (replica::table& t) {
+        _cg_count = t.compaction_groups_size();
         return t.perform_cleanup_compaction(owned_ranges_ptr, tasks::task_info{_status.id, _status.shard});
     });
+}
+
+std::optional<double> table_cleanup_keyspace_compaction_task_impl::expected_children_number() const {
+    return _cg_count ? std::make_optional(_cg_count) : std::nullopt;
 }
 
 future<> offstrategy_keyspace_compaction_task_impl::run() {
@@ -331,6 +387,10 @@ future<> offstrategy_keyspace_compaction_task_impl::run() {
         co_await task->done();
         co_return needed;
     }, false, std::plus<bool>());
+}
+
+std::optional<double> offstrategy_keyspace_compaction_task_impl::expected_children_number() const {
+    return smp::count;
 }
 
 future<> shard_offstrategy_keyspace_compaction_task_impl::run() {
@@ -345,12 +405,21 @@ future<> shard_offstrategy_keyspace_compaction_task_impl::run() {
     co_await run_table_tasks(_db, std::move(table_tasks), cv, current_task, false);
 }
 
+std::optional<double> shard_offstrategy_keyspace_compaction_task_impl::expected_children_number() const {
+    return _table_infos.size();
+}
+
 future<> table_offstrategy_keyspace_compaction_task_impl::run() {
     co_await wait_for_your_turn(_cv, _current_task, _status.id);
     tasks::task_info info{_status.id, _status.shard};
     co_await run_on_table("perform_keyspace_offstrategy_compaction", _db, _status.keyspace, _ti, [this, info] (replica::table& t) -> future<> {
+        _cg_count = t.compaction_groups_size();
         _needed |= co_await t.perform_offstrategy_compaction(info);
     });
+}
+
+std::optional<double> table_offstrategy_keyspace_compaction_task_impl::expected_children_number() const {
+    return _cg_count ? std::make_optional(_cg_count) : std::nullopt;
 }
 
 future<> upgrade_sstables_compaction_task_impl::run() {
@@ -360,6 +429,10 @@ future<> upgrade_sstables_compaction_task_impl::run() {
         auto task = co_await compaction_module.make_and_start_task<shard_upgrade_sstables_compaction_task_impl>(parent_info, _status.keyspace, _status.id, db, _table_infos, _exclude_current_version);
         co_await task->done();
     });
+}
+
+std::optional<double> upgrade_sstables_compaction_task_impl::expected_children_number() const {
+    return smp::count;
 }
 
 future<> shard_upgrade_sstables_compaction_task_impl::run() {
@@ -374,15 +447,24 @@ future<> shard_upgrade_sstables_compaction_task_impl::run() {
     co_await run_table_tasks(_db, std::move(table_tasks), cv, current_task, false);
 }
 
+std::optional<double> shard_upgrade_sstables_compaction_task_impl::expected_children_number() const {
+    return _table_infos.size();
+}
+
 future<> table_upgrade_sstables_compaction_task_impl::run() {
     co_await wait_for_your_turn(_cv, _current_task, _status.id);
     auto owned_ranges_ptr = compaction::make_owned_ranges_ptr(_db.get_keyspace_local_ranges(_status.keyspace));
     tasks::task_info info{_status.id, _status.shard};
     co_await run_on_table("upgrade_sstables", _db, _status.keyspace, _ti, [&] (replica::table& t) -> future<> {
+        _cg_count = t.compaction_groups_size();
         return t.parallel_foreach_table_state([&] (compaction::table_state& ts) -> future<> {
             return t.get_compaction_manager().perform_sstable_upgrade(owned_ranges_ptr, ts, _exclude_current_version, info);
         });
     });
+}
+
+std::optional<double> table_upgrade_sstables_compaction_task_impl::expected_children_number() const {
+    return _cg_count ? std::make_optional(_cg_count) : std::nullopt;
 }
 
 future<> scrub_sstables_compaction_task_impl::run() {
@@ -396,6 +478,10 @@ future<> scrub_sstables_compaction_task_impl::run() {
     }, sstables::compaction_stats{}, std::plus<sstables::compaction_stats>());
 }
 
+std::optional<double> scrub_sstables_compaction_task_impl::expected_children_number() const {
+    return smp::count;
+}
+
 future<> shard_scrub_sstables_compaction_task_impl::run() {
     _stats = co_await map_reduce(_column_families, [&] (sstring cfname) -> future<sstables::compaction_stats> {
         sstables::compaction_stats stats{};
@@ -407,14 +493,23 @@ future<> shard_scrub_sstables_compaction_task_impl::run() {
     }, sstables::compaction_stats{}, std::plus<sstables::compaction_stats>());
 }
 
+std::optional<double> shard_scrub_sstables_compaction_task_impl::expected_children_number() const {
+    return _column_families.size();
+}
+
 future<> table_scrub_sstables_compaction_task_impl::run() {
     auto& cm = _db.get_compaction_manager();
     auto& cf = _db.find_column_family(_status.keyspace, _status.table);
+    _cg_count = cf.compaction_groups_size();
     tasks::task_info info{_status.id, _status.shard};
     co_await cf.parallel_foreach_table_state([&] (compaction::table_state& ts) mutable -> future<> {
         auto r = co_await cm.perform_sstable_scrub(ts, _opts, info);
         _stats += r.value_or(sstables::compaction_stats{});
     });
+}
+
+std::optional<double> table_scrub_sstables_compaction_task_impl::expected_children_number() const {
+    return _cg_count ? std::make_optional(_cg_count) : std::nullopt;
 }
 
 future<> table_reshaping_compaction_task_impl::run() {
@@ -522,8 +617,12 @@ future<> shard_resharding_compaction_task_impl::run() {
     auto& table = _db.find_column_family(_status.keyspace, _status.table);
     auto info_vec = std::move(_destinations[this_shard_id()].info_vec);
     tasks::task_info info{_status.id, _status.shard};
-    co_await reshard(_dir.local(), std::move(info_vec), table, _creator, std::move(_local_owned_ranges_ptr), info);
+    co_await reshard(_dir.local(), std::move(info_vec), table, _creator, std::move(_local_owned_ranges_ptr), info, _buckets_count);
     co_await _dir.local().move_foreign_sstables(_dir);
+}
+
+std::optional<double> shard_resharding_compaction_task_impl::expected_children_number() const {
+    return _buckets_count ? std::make_optional(_buckets_count) : std::nullopt;
 }
 
 }
