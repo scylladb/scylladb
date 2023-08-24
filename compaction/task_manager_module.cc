@@ -512,6 +512,24 @@ std::optional<double> table_scrub_sstables_compaction_task_impl::expected_childr
     return _cg_count ? std::make_optional(_cg_count) : std::nullopt;
 }
 
+future<tasks::task_manager::task::progress> reshaping_compaction_task_impl::get_progress() const {
+    tasks::task_manager::task::progress progress{
+        .completed = 0.00,
+        .total = 0.00
+    };
+
+    // _children vector may be modified in the meantime. Do not use foreach loop as the iterators may get invalidated.
+    for (unsigned i = 0; i < _children.size(); ++i) {
+        auto& child = _children[i];
+        progress += co_await smp::submit_to(child.get_owner_shard(), [&child] {
+            return child->get_progress();
+        });
+    }
+
+    progress.total = 0.00; // Workload size cannot be predicted.
+    co_return progress;
+}
+
 future<> table_reshaping_compaction_task_impl::run() {
     auto start = std::chrono::steady_clock::now();
     auto total_size = co_await _dir.map_reduce0([&] (sstables::sstable_directory& d) -> future<uint64_t> {
