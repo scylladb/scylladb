@@ -891,7 +891,7 @@ future<> gossiper::failure_detector_loop() {
         co_return;
     }
     logger.info("failure_detector_loop: Started main loop");
-    while (is_enabled() && !_abort_source.abort_requested()) {
+    while (is_enabled()) {
         try {
             while (_live_endpoints.empty() && is_enabled()) {
                 logger.debug("failure_detector_loop: Wait until live_nodes={} is not empty", _live_endpoints);
@@ -2168,7 +2168,10 @@ future<> gossiper::add_local_application_state(std::list<std::pair<application_s
 }
 
 future<> gossiper::do_stop_gossiping() {
-    if (!is_enabled()) {
+    // Don't rely on is_enabled() since it
+    // also considers _abort_source and return false
+    // before _enabled is set to false down below.
+    if (!_enabled) {
         logger.info("gossip is already stopped");
         return make_ready_future<>();
     }
@@ -2234,7 +2237,7 @@ future<> gossiper::stop() {
 }
 
 bool gossiper::is_enabled() const {
-    return _enabled;
+    return _enabled && !_abort_source.abort_requested();
 }
 
 void gossiper::goto_shadow_round() {
