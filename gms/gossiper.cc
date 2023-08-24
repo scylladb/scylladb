@@ -818,7 +818,7 @@ future<semaphore_units<>> gossiper::lock_endpoint_update_semaphore() {
     if (this_shard_id() != 0) {
         on_internal_error(logger, "must be called on shard 0");
     }
-    return get_units(_endpoint_update_semaphore, 1);
+    return get_units(_endpoint_update_semaphore, 1, _abort_source);
 }
 
 future<> gossiper::mutate_live_and_unreachable_endpoints(std::function<void(gossiper&)> func) {
