@@ -73,7 +73,7 @@ async def test_cannot_disable_cluster_feature_after_all_declare_support(manager:
 
     # Try to downgrade one node
     await manager.server_update_config(servers[0].server_id, 'error_injections_at_startup', [])
-    await manager.server_stop_gracefully(servers[0].server_id)
+    await manager.server_stop(servers[0].server_id)
     await manager.server_start(servers[0].server_id,
                                expected_error="Feature 'TEST_ONLY_FEATURE' was previously supported by all nodes in the cluster")
     

@@ -54,7 +54,7 @@ async def change_support_for_test_feature_and_restart(manager: ManagerClient, sr
             injections.remove(TEST_FEATURE_ENABLE_ERROR_INJECTION)
         await manager.server_update_config(srv.server_id, ERROR_INJECTIONS_AT_STARTUP_CONFIG_KEY, list(injections))
 
-    await asyncio.gather(*(manager.server_stop_gracefully(srv.server_id) for srv in srvs))
+    await asyncio.gather(*(manager.server_stop(srv.server_id) for srv in srvs))
     await asyncio.gather(*(adjust_feature_in_config(manager, srv, enable) for srv in srvs))
     await asyncio.gather(*(manager.server_start(srv.server_id, expected_error) for srv in srvs))
 
@@ -198,7 +198,7 @@ async def test_partial_upgrade_can_be_finished_with_removenode(manager: ManagerC
         assert TEST_FEATURE_NAME not in await get_enabled_features(cql, host)
 
     # Remove the last node
-    await manager.server_stop_gracefully(servers[-1].server_id)
+    await manager.server_stop(servers[-1].server_id)
     await manager.server_not_sees_other_server(servers[0].ip_addr, servers[-1].ip_addr)
     await manager.remove_node(servers[0].server_id, servers[-1].server_id)
 
