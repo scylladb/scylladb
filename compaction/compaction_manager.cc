@@ -726,7 +726,7 @@ auto fmt::formatter<compaction::compaction_task_executor>::format(const compacti
                           ex._description, fmt::ptr(&ex), *t, fmt::ptr(t));
 }
 
-inline compaction_controller make_compaction_controller(const compaction_manager::scheduling_group& csg, uint64_t static_shares, std::function<double()> fn) {
+static inline compaction_controller make_compaction_controller(const compaction_manager::scheduling_group& csg, float static_shares, std::function<double()> fn) {
     return compaction_controller(csg, static_shares, 250ms, std::move(fn));
 }
 
