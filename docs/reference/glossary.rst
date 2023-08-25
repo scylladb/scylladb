@@ -64,6 +64,10 @@ Glossary
     Leveled compaction strategy (LCS)
       :abbr:`LCS (Leveled compaction strategy)` uses small, fixed-size (by default 160 MB) SSTables divided into different levels. See :doc:`Compaction Strategies</architecture/compaction/compaction-strategies/>`.
 
+    Liveness
+      The ability to update a configuration property without restarting the node. Properties that support live updates can be updated via the ``system.config`` virtual table or the REST API.
+      The change will take effect without a node restart, changing the value in the config file, then sending ``SIGHUP`` to the scylla-process, triggering it to re-read its configuration.
+    
     Log-structured-merge (LSM)
       A technique of keeping sorted files and merging them. LSM is a data structure that maintains key-value pairs. See :doc:`Compaction </kb/compaction>`
 
