@@ -91,6 +91,20 @@ public:
         return scan_dir(std::move(dir), std::move(type), do_show_hidden, std::move(walker), [] (const fs::path& parent_dir, const directory_entry& entry) { return true; });
     }
 
+    /** Overloads accepting std::string_view as the first parameter */
+    static future<> scan_dir(std::string_view dir, dir_entry_types type, show_hidden do_show_hidden, walker_type walker, filter_type filter) {
+        return scan_dir(fs::path{dir}, std::move(type), do_show_hidden, std::move(walker), std::move(filter));
+    }
+    static future<> scan_dir(std::string_view dir, dir_entry_types type, walker_type walker, filter_type filter) {
+        return scan_dir(fs::path{dir}, std::move(type), show_hidden::no, std::move(walker), std::move(filter));
+    }
+    static future<> scan_dir(std::string_view dir, dir_entry_types type, walker_type walker) {
+        return scan_dir(fs::path{dir}, std::move(type), show_hidden::no, std::move(walker), [] (const fs::path& parent_dir, const directory_entry& entry) { return true; });
+    }
+    static future<> scan_dir(std::string_view dir, dir_entry_types type, show_hidden do_show_hidden, walker_type walker) {
+        return scan_dir(fs::path{dir}, std::move(type), do_show_hidden, std::move(walker), [] (const fs::path& parent_dir, const directory_entry& entry) { return true; });
+    }
+
     /** Overloads accepting sstring as the first parameter */
     static future<> scan_dir(sstring dir, dir_entry_types type, show_hidden do_show_hidden, walker_type walker, filter_type filter) {
         return scan_dir(fs::path(std::move(dir)), std::move(type), do_show_hidden, std::move(walker), std::move(filter));
