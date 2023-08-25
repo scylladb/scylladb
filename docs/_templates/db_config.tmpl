@@ -1,26 +1,18 @@
 .. -*- mode: rst -*-
 
-.. list-table::
-   :widths: 20 80
-   :header-rows: 1
-
-   * - Name
-     - Description
 {% for item in data %}
 {% if item.value_status == value_status %}
 
-   * - .. _config_{{ item.name }}:
+``{{ item.name }}``
+{{ '-' * (item.name|length + 4) }}
 
-          ``{{ item.name }}``
-     - {% if item.type %}**Type:** ``{{ item.type }}``{% endif %}
+   .. raw:: html
 
-       {% if item.default %}**Default value:** ``{{ item.default }}``{% endif %}
+      <p>{{item.description}}</p>
 
-       {% if item.liveness %}**Liveness** :term:`* <Liveness>` **:** ``{{ item.liveness }}``{% endif %}
-
-       .. raw:: html
-
-          <p>{{item.description}}</p>
+   {% if item.type %}* **Type:** ``{{ item.type }}``{% endif %}
+   {% if item.default %}* **Default value:** ``{{ item.default }}``{% endif %}
+   {% if item.liveness %}* **Liveness** :term:`* <Liveness>` **:** ``{{ item.liveness }}``{% endif %}
 
 {% endif %}
 {% endfor %}
