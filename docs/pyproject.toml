@@ -6,7 +6,7 @@ authors = ["ScyllaDB Contributors"]
 
 [tool.poetry.dependencies]
 python = "^3.7"
-pyyaml = "6.0"
+pyyaml = "6.0.1"
 pygments = "2.15.1"
 recommonmark = "0.7.1"
 sphinx-scylladb-theme = "~1.5.1"

@@ -7,17 +7,20 @@
    * - Name
      - Description
 {% for item in data %}
+{% if item.value_status == value_status %}
 
    * - .. _config_{{ item.name }}:
 
           ``{{ item.name }}``
-     - **Default value:** ``{{ item.default }}``
-       
-       **Value status:** {{ item.value_status }}
-       
-       **Liveness:** {{ item.liveness }}
+     - {% if item.type %}**Type:** ``{{ item.type }}``{% endif %}
+
+       {% if item.default %}**Default value:** ``{{ item.default }}``{% endif %}
+
+       {% if item.liveness %}**Liveness** :term:`* <Liveness>` **:** ``{{ item.liveness }}``{% endif %}
 
        .. raw:: html
 
           <p>{{item.description}}</p>
+
+{% endif %}
 {% endfor %}
