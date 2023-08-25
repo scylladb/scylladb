@@ -623,6 +623,9 @@ compaction_group& table::compaction_group_for_token(dht::token token) const noex
                                                 idx, _cg_manager->log2_compaction_groups(), _compaction_groups.size(), token));
     }
     auto& ret = *_compaction_groups[idx];
+    if (token.is_minimum() || token.is_maximum()) {
+        return ret;
+    }
     if (!ret.token_range().contains(token, dht::token_comparator())) {
         on_fatal_internal_error(tlogger, format("compaction_group_for_token: compaction_group idx={} range={} does not contain token={}",
                 idx, ret.token_range(), token));
