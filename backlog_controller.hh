@@ -128,11 +128,18 @@ public:
     static constexpr unsigned normalization_factor = 30;
     static constexpr float disable_backlog = std::numeric_limits<double>::infinity();
     static constexpr float backlog_disabled(float backlog) { return std::isinf(backlog); }
-    compaction_controller(backlog_controller::scheduling_group sg, float static_shares, std::chrono::milliseconds interval, std::function<float()> current_backlog)
-        : backlog_controller(std::move(sg), std::move(interval),
+
+    struct config {
+        backlog_controller::scheduling_group sg;
+        float static_shares;
+        std::chrono::milliseconds interval;
+    };
+
+    compaction_controller(config cfg, std::function<float()> current_backlog)
+        : backlog_controller(std::move(cfg.sg), std::move(cfg.interval),
           std::vector<backlog_controller::control_point>({{0.0, 50}, {1.5, 100} , {normalization_factor, 1000}}),
           std::move(current_backlog),
-          static_shares
+          cfg.static_shares
         )
     {}
 };
