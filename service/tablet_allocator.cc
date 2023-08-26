@@ -285,7 +285,7 @@ public:
         for (auto&& dc : topo.get_datacenters()) {
             auto dc_plan = co_await make_plan(dc);
             lblogger.info("Prepared {} migrations in DC {}", dc_plan.size(), dc);
-            std::move(dc_plan.begin(), dc_plan.end(), std::back_inserter(plan));
+            plan.merge(std::move(dc_plan));
         }
 
         lblogger.info("Prepared {} migrations", plan.size());
@@ -578,7 +578,7 @@ public:
                 src_node_info.shards[src_shard].streaming_read_load += 1;
                 lblogger.debug("Adding migration: {}", mig);
                 _stats.for_dc(dc).migrations_produced++;
-                plan.push_back(std::move(mig));
+                plan.add(std::move(mig));
             } else {
                 // Shards are overloaded with streaming. Do not include the migration in the plan, but
                 // continue as if it was in the hope that we will find a migration which can be executed without

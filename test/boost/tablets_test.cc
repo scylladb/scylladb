@@ -592,7 +592,7 @@ SEASTAR_THREAD_TEST_CASE(test_token_ownership_splitting) {
 // Reflects the plan in a given token metadata as if the migrations were fully executed.
 static
 void apply_plan(token_metadata& tm, const migration_plan& plan) {
-    for (auto&& mig : plan) {
+    for (auto&& mig : plan.migrations()) {
         tablet_map& tmap = tm.tablets().get_tablet_map(mig.tablet.table);
         auto tinfo = tmap.get_tablet_info(mig.tablet.tablet);
         tinfo.replicas = replace_replica(tinfo.replicas, mig.src, mig.dst);
@@ -612,7 +612,7 @@ tablet_transition_info migration_to_transition_info(const tablet_migration_info&
 // Reflects the plan in a given token metadata as if the migrations were started but not yet executed.
 static
 void apply_plan_as_in_progress(token_metadata& tm, const migration_plan& plan) {
-    for (auto&& mig : plan) {
+    for (auto&& mig : plan.migrations()) {
         tablet_map& tmap = tm.tablets().get_tablet_map(mig.tablet.table);
         auto tinfo = tmap.get_tablet_info(mig.tablet.tablet);
         tmap.set_tablet_transition_info(mig.tablet.tablet, migration_to_transition_info(mig, tinfo));

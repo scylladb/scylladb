@@ -22,7 +22,24 @@ struct tablet_migration_info {
     locator::tablet_replica dst;
 };
 
-using migration_plan = utils::chunked_vector<tablet_migration_info>;
+class migration_plan {
+public:
+    using migrations_vector = utils::chunked_vector<tablet_migration_info>;
+private:
+    migrations_vector _migrations;
+public:
+    const migrations_vector& migrations() const { return _migrations; }
+    bool empty() const { return _migrations.empty(); }
+    size_t size() const { return _migrations.size(); }
+
+    void add(tablet_migration_info info) {
+        _migrations.emplace_back(std::move(info));
+    }
+
+    void merge(migration_plan&& other) {
+        std::move(other._migrations.begin(), other._migrations.end(), std::back_inserter(_migrations));
+    }
+};
 
 class tablet_allocator_impl;
 
