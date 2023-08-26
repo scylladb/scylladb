@@ -566,7 +566,7 @@ repair::shard_repair_task_impl::shard_repair_task_impl(tasks::task_manager::modu
         streaming::stream_reason reason_,
         bool hints_batchlog_flushed,
         std::optional<int> ranges_parallelism)
-    : repair_task_impl(module, id, 0, keyspace, "", "", parent_id_.uuid(), reason_)
+    : repair_task_impl(module, id, 0, "shard", keyspace, "", "", parent_id_.uuid(), reason_)
     , rs(repair)
     , db(repair.get_db())
     , messaging(repair.get_messaging().container())
