@@ -407,6 +407,10 @@ private:
 
 void compaction_progress_monitor::set_generator(std::unique_ptr<read_monitor_generator> generator) {
     _generator = std::move(generator);
+    if (_iteration_number) {
+        ++(*_iteration_number);
+        _progress = 0;
+    }
 }
 
 void compaction_progress_monitor::reset_generator() {
@@ -421,6 +425,10 @@ uint64_t compaction_progress_monitor::get_progress() const {
         return dynamic_cast<compaction_read_monitor_generator&>(*_generator).compacted();
     }
     return _progress;
+}
+
+std::optional<uint64_t> compaction_progress_monitor::get_iteration_number() const noexcept {
+    return _iteration_number;
 }
 
 class formatted_sstables_list {

@@ -106,11 +106,17 @@ class read_monitor_generator;
 class compaction_progress_monitor {
     std::unique_ptr<read_monitor_generator> _generator = nullptr;
     uint64_t _progress = 0;
+    std::optional<uint64_t> _iteration_number;
 public:
+    compaction_progress_monitor(bool iterations = false)
+    : _iteration_number(iterations ? std::make_optional(0) : std::nullopt)
+    {}
+
     void set_generator(std::unique_ptr<read_monitor_generator> generator);
     void reset_generator();
     // Returns number of bytes processed with _generator.
     uint64_t get_progress() const;
+    std::optional<uint64_t> get_iteration_number() const noexcept;
 
     friend class compaction;
     friend future<compaction_result> scrub_sstables_validate_mode(sstables::compaction_descriptor, compaction_data&, table_state&, compaction_progress_monitor&);

@@ -319,11 +319,12 @@ compaction::compaction_state& compaction_manager::get_compaction_state(table_sta
     }
 }
 
-compaction_task_executor::compaction_task_executor(compaction_manager& mgr, throw_if_stopping do_throw_if_stopping, table_state* t, sstables::compaction_type type, sstring desc)
+compaction_task_executor::compaction_task_executor(compaction_manager& mgr, throw_if_stopping do_throw_if_stopping, table_state* t, sstables::compaction_type type, sstring desc, bool iterations)
     : _cm(mgr)
     , _compacting_table(t)
     , _compaction_state(_cm.get_compaction_state(t))
     , _do_throw_if_stopping(do_throw_if_stopping)
+    , _progress_monitor(iterations)
     , _type(type)
     , _description(std::move(desc))
 {}
@@ -1155,9 +1156,27 @@ namespace compaction {
 class regular_compaction_task_executor : public compaction_task_executor, public regular_compaction_task_impl {
 public:
     regular_compaction_task_executor(compaction_manager& mgr, throw_if_stopping do_throw_if_stopping, table_state& t)
-        : compaction_task_executor(mgr, do_throw_if_stopping, &t, sstables::compaction_type::Compaction, "Compaction")
+        : compaction_task_executor(mgr, do_throw_if_stopping, &t, sstables::compaction_type::Compaction, "Compaction", true)
         , regular_compaction_task_impl(mgr._task_manager_module, tasks::task_id::create_random_id(), mgr._task_manager_module->new_sequence_number(), t.schema()->ks_name(), t.schema()->cf_name(), "", tasks::task_id::create_null_id())
-    {}
+    {
+        _status.progress_units = "[number of complete jobs].[completion percentage of latest job] / [all jobs number].00";
+    }
+
+    virtual future<tasks::task_manager::task::progress> get_progress() const override {
+        double all_iterations = _progress_monitor.get_iteration_number().value_or(0.00);
+        if (!all_iterations) {
+            // Compaction monitor wasn't set yet.
+            co_return tasks::task_manager::task::progress{
+                .completed = is_complete() ? 1.00 : 0.00,
+                .total = 1.00
+            };
+        }
+        co_return tasks::task_manager::task::progress{
+            .completed = (all_iterations - 1.00) + _compaction_data.compaction_size == 0 ? 0.00
+                : static_cast<double>(_progress_monitor.get_progress()) / _compaction_data.compaction_size,
+            .total = all_iterations
+        };
+    }
 protected:
     virtual future<> run() override {
         return perform();
