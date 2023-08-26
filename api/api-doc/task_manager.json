@@ -224,6 +224,10 @@
                 "type":"string",
                 "description":"The description of the task"
              },
+             "scope":{
+                "type":"string",
+                "description":"The scope of the task"
+             },
              "keyspace":{
                 "type":"string",
                 "description":"The keyspace the task is working on (if applicable)"
@@ -253,6 +257,10 @@
              "type":{
                 "type":"string",
                 "description":"The description of the task"
+             },
+             "scope":{
+                "type":"string",
+                "description":"The scope of the task"
              },
              "state":{
                "type":"string",

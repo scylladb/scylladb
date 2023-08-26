@@ -98,6 +98,7 @@ public:
             std::string error;
             uint64_t sequence_number = 0;   // A running sequence number of the task.
             unsigned shard = 0;
+            std::string scope;
             std::string keyspace;
             std::string table;
             std::string entity;             // Additional entity specific for the given type of task.
@@ -114,7 +115,7 @@ public:
             seastar::abort_source _as;
             optimized_optional<seastar::abort_source::subscription> _shutdown_subscription;
         public:
-            impl(module_ptr module, task_id id, uint64_t sequence_number, std::string keyspace, std::string table, std::string entity, task_id parent_id) noexcept;
+            impl(module_ptr module, task_id id, uint64_t sequence_number, std::string scope, std::string keyspace, std::string table, std::string entity, task_id parent_id) noexcept;
             virtual ~impl() = default;
 
             virtual std::string type() const = 0;

@@ -15,12 +15,13 @@ namespace tasks {
 
 logging::logger tmlogger("task_manager");
 
-task_manager::task::impl::impl(module_ptr module, task_id id, uint64_t sequence_number, std::string keyspace, std::string table, std::string entity, task_id parent_id) noexcept
+task_manager::task::impl::impl(module_ptr module, task_id id, uint64_t sequence_number, std::string scope, std::string keyspace, std::string table, std::string entity, task_id parent_id) noexcept
     : _status({
         .id = id,
         .state = task_state::created,
         .sequence_number = sequence_number,
         .shard = this_shard_id(),
+        .scope = std::move(scope),
         .keyspace = std::move(keyspace),
         .table = std::move(table),
         .entity = std::move(entity)

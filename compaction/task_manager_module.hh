@@ -28,11 +28,12 @@ public:
     compaction_task_impl(tasks::task_manager::module_ptr module,
             tasks::task_id id,
             unsigned sequence_number,
+            std::string scope,
             std::string keyspace,
             std::string table,
             std::string entity,
             tasks::task_id parent_id) noexcept
-        : tasks::task_manager::task::impl(module, id, sequence_number, std::move(keyspace), std::move(table), std::move(entity), parent_id)
+        : tasks::task_manager::task::impl(module, id, sequence_number, std::move(scope), std::move(keyspace), std::move(table), std::move(entity), parent_id)
     {
         // FIXME: add progress units
     }
@@ -47,11 +48,12 @@ public:
     major_compaction_task_impl(tasks::task_manager::module_ptr module,
             tasks::task_id id,
             unsigned sequence_number,
+            std::string scope,
             std::string keyspace,
             std::string table,
             std::string entity,
             tasks::task_id parent_id) noexcept
-        : compaction_task_impl(module, id, sequence_number, std::move(keyspace), std::move(table), std::move(entity), parent_id)
+        : compaction_task_impl(module, id, sequence_number, std::move(scope), std::move(keyspace), std::move(table), std::move(entity), parent_id)
     {
         // FIXME: add progress units
     }
@@ -72,7 +74,7 @@ public:
             std::string keyspace,
             sharded<replica::database>& db,
             std::vector<table_info> table_infos) noexcept
-        : major_compaction_task_impl(module, tasks::task_id::create_random_id(), module->new_sequence_number(), std::move(keyspace), "", "", tasks::task_id::create_null_id())
+        : major_compaction_task_impl(module, tasks::task_id::create_random_id(), module->new_sequence_number(), "keyspace", std::move(keyspace), "", "", tasks::task_id::create_null_id())
         , _db(db)
         , _table_infos(std::move(table_infos))
     {}
@@ -90,7 +92,7 @@ public:
             tasks::task_id parent_id,
             replica::database& db,
             std::vector<table_info> local_tables) noexcept
-        : major_compaction_task_impl(module, tasks::task_id::create_random_id(), 0, std::move(keyspace), "", "", parent_id)
+        : major_compaction_task_impl(module, tasks::task_id::create_random_id(), 0, "shard", std::move(keyspace), "", "", parent_id)
         , _db(db)
         , _local_tables(std::move(local_tables))
     {}
@@ -115,7 +117,7 @@ public:
             table_info ti,
             seastar::condition_variable& cv,
             tasks::task_manager::task_ptr& current_task) noexcept
-        : major_compaction_task_impl(module, tasks::task_id::create_random_id(), 0, std::move(keyspace), std::move(table), "", parent_id)
+        : major_compaction_task_impl(module, tasks::task_id::create_random_id(), 0, "table", std::move(keyspace), std::move(table), "", parent_id)
         , _db(db)
         , _ti(std::move(ti))
         , _cv(cv)
@@ -133,11 +135,12 @@ public:
     cleanup_compaction_task_impl(tasks::task_manager::module_ptr module,
             tasks::task_id id,
             unsigned sequence_number,
+            std::string scope,
             std::string keyspace,
             std::string table,
             std::string entity,
             tasks::task_id parent_id) noexcept
-        : compaction_task_impl(module, id, sequence_number, std::move(keyspace), std::move(table), std::move(entity), parent_id)
+        : compaction_task_impl(module, id, sequence_number, std::move(scope), std::move(keyspace), std::move(table), std::move(entity), parent_id)
     {
         // FIXME: add progress units
     }
@@ -158,7 +161,7 @@ public:
             std::string keyspace,
             sharded<replica::database>& db,
             std::vector<table_info> table_infos) noexcept
-        : cleanup_compaction_task_impl(module, tasks::task_id::create_random_id(), module->new_sequence_number(), std::move(keyspace), "", "", tasks::task_id::create_null_id())
+        : cleanup_compaction_task_impl(module, tasks::task_id::create_random_id(), module->new_sequence_number(), "keyspace", std::move(keyspace), "", "", tasks::task_id::create_null_id())
         , _db(db)
         , _table_infos(std::move(table_infos))
     {}
@@ -176,7 +179,7 @@ public:
             tasks::task_id parent_id,
             replica::database& db,
             std::vector<table_info> local_tables) noexcept
-        : cleanup_compaction_task_impl(module, tasks::task_id::create_random_id(), 0, std::move(keyspace), "", "", parent_id)
+        : cleanup_compaction_task_impl(module, tasks::task_id::create_random_id(), 0, "shard", std::move(keyspace), "", "", parent_id)
         , _db(db)
         , _local_tables(std::move(local_tables))
     {}
@@ -201,7 +204,7 @@ public:
             table_info ti,
             seastar::condition_variable& cv,
             tasks::task_manager::task_ptr& current_task) noexcept
-        : cleanup_compaction_task_impl(module, tasks::task_id::create_random_id(), 0, std::move(keyspace), std::move(table), "", parent_id)
+        : cleanup_compaction_task_impl(module, tasks::task_id::create_random_id(), 0, "table", std::move(keyspace), std::move(table), "", parent_id)
         , _db(db)
         , _ti(std::move(ti))
         , _cv(cv)
@@ -218,11 +221,12 @@ public:
     offstrategy_compaction_task_impl(tasks::task_manager::module_ptr module,
             tasks::task_id id,
             unsigned sequence_number,
+            std::string scope,
             std::string keyspace,
             std::string table,
             std::string entity,
             tasks::task_id parent_id) noexcept
-        : compaction_task_impl(module, id, sequence_number, std::move(keyspace), std::move(table), std::move(entity), parent_id)
+        : compaction_task_impl(module, id, sequence_number, std::move(scope), std::move(keyspace), std::move(table), std::move(entity), parent_id)
     {
         // FIXME: add progress units
     }
@@ -245,7 +249,7 @@ public:
             sharded<replica::database>& db,
             std::vector<table_info> table_infos,
             bool& needed) noexcept
-        : offstrategy_compaction_task_impl(module, tasks::task_id::create_random_id(), module->new_sequence_number(), std::move(keyspace), "", "", tasks::task_id::create_null_id())
+        : offstrategy_compaction_task_impl(module, tasks::task_id::create_random_id(), module->new_sequence_number(), "keyspace", std::move(keyspace), "", "", tasks::task_id::create_null_id())
         , _db(db)
         , _table_infos(std::move(table_infos))
         , _needed(needed)
@@ -266,7 +270,7 @@ public:
             replica::database& db,
             std::vector<table_info> table_infos,
             bool& needed) noexcept
-        : offstrategy_compaction_task_impl(module, tasks::task_id::create_random_id(), 0, std::move(keyspace), "", "", parent_id)
+        : offstrategy_compaction_task_impl(module, tasks::task_id::create_random_id(), 0, "shard", std::move(keyspace), "", "", parent_id)
         , _db(db)
         , _table_infos(std::move(table_infos))
         , _needed(needed)
@@ -294,7 +298,7 @@ public:
             seastar::condition_variable& cv,
             tasks::task_manager::task_ptr& current_task,
             bool& needed) noexcept
-        : offstrategy_compaction_task_impl(module, tasks::task_id::create_random_id(), 0, std::move(keyspace), std::move(table), "", parent_id)
+        : offstrategy_compaction_task_impl(module, tasks::task_id::create_random_id(), 0, "table", std::move(keyspace), std::move(table), "", parent_id)
         , _db(db)
         , _ti(std::move(ti))
         , _cv(cv)
@@ -312,11 +316,12 @@ public:
     sstables_compaction_task_impl(tasks::task_manager::module_ptr module,
             tasks::task_id id,
             unsigned sequence_number,
+            std::string scope,
             std::string keyspace,
             std::string table,
             std::string entity,
             tasks::task_id parent_id) noexcept
-        : compaction_task_impl(module, id, sequence_number, std::move(keyspace), std::move(table), std::move(entity), parent_id)
+        : compaction_task_impl(module, id, sequence_number, std::move(scope), std::move(keyspace), std::move(table), std::move(entity), parent_id)
     {
         // FIXME: add progress units
     }
@@ -339,7 +344,7 @@ public:
             sharded<replica::database>& db,
             std::vector<table_info> table_infos,
             bool exclude_current_version) noexcept
-        : sstables_compaction_task_impl(module, tasks::task_id::create_random_id(), module->new_sequence_number(), std::move(keyspace), "", "", tasks::task_id::create_null_id())
+        : sstables_compaction_task_impl(module, tasks::task_id::create_random_id(), module->new_sequence_number(), "keyspace", std::move(keyspace), "", "", tasks::task_id::create_null_id())
         , _db(db)
         , _table_infos(std::move(table_infos))
         , _exclude_current_version(exclude_current_version)
@@ -364,7 +369,7 @@ public:
             replica::database& db,
             std::vector<table_info> table_infos,
             bool exclude_current_version) noexcept
-        : sstables_compaction_task_impl(module, tasks::task_id::create_random_id(), 0, std::move(keyspace), "", "", parent_id)
+        : sstables_compaction_task_impl(module, tasks::task_id::create_random_id(), 0, "shard", std::move(keyspace), "", "", parent_id)
         , _db(db)
         , _table_infos(std::move(table_infos))
         , _exclude_current_version(exclude_current_version)
@@ -396,7 +401,7 @@ public:
             seastar::condition_variable& cv,
             tasks::task_manager::task_ptr& current_task,
             bool exclude_current_version) noexcept
-        : sstables_compaction_task_impl(module, tasks::task_id::create_random_id(), 0, std::move(keyspace), std::move(table), "", parent_id)
+        : sstables_compaction_task_impl(module, tasks::task_id::create_random_id(), 0, "table", std::move(keyspace), std::move(table), "", parent_id)
         , _db(db)
         , _ti(std::move(ti))
         , _cv(cv)
@@ -426,7 +431,7 @@ public:
             std::vector<sstring> column_families,
             sstables::compaction_type_options::scrub opts,
             sstables::compaction_stats& stats) noexcept
-        : sstables_compaction_task_impl(module, tasks::task_id::create_random_id(), module->new_sequence_number(), std::move(keyspace), "", "", tasks::task_id::create_null_id())
+        : sstables_compaction_task_impl(module, tasks::task_id::create_random_id(), module->new_sequence_number(), "keyspace", std::move(keyspace), "", "", tasks::task_id::create_null_id())
         , _db(db)
         , _column_families(std::move(column_families))
         , _opts(opts)
@@ -454,7 +459,7 @@ public:
             std::vector<sstring> column_families,
             sstables::compaction_type_options::scrub opts,
             sstables::compaction_stats& stats) noexcept
-        : sstables_compaction_task_impl(module, tasks::task_id::create_random_id(), 0, std::move(keyspace), "", "", parent_id)
+        : sstables_compaction_task_impl(module, tasks::task_id::create_random_id(), 0, "shard", std::move(keyspace), "", "", parent_id)
         , _db(db)
         , _column_families(std::move(column_families))
         , _opts(opts)
@@ -483,7 +488,7 @@ public:
             replica::database& db,
             sstables::compaction_type_options::scrub opts,
             sstables::compaction_stats& stats) noexcept
-        : sstables_compaction_task_impl(module, tasks::task_id::create_random_id(), 0, std::move(keyspace), std::move(table), "", parent_id)
+        : sstables_compaction_task_impl(module, tasks::task_id::create_random_id(), 0, "table", std::move(keyspace), std::move(table), "", parent_id)
         , _db(db)
         , _opts(opts)
         , _stats(stats)
@@ -503,11 +508,12 @@ public:
     reshaping_compaction_task_impl(tasks::task_manager::module_ptr module,
             tasks::task_id id,
             unsigned sequence_number,
+            std::string scope,
             std::string keyspace,
             std::string table,
             std::string entity,
             tasks::task_id parent_id) noexcept
-        : compaction_task_impl(module, id, sequence_number, std::move(keyspace), std::move(table), std::move(entity), parent_id)
+        : compaction_task_impl(module, id, sequence_number, std::move(scope), std::move(keyspace), std::move(table), std::move(entity), parent_id)
     {
         // FIXME: add progress units
     }
@@ -535,7 +541,7 @@ public:
             sstables::reshape_mode mode,
             sstables::compaction_sstable_creator_fn creator,
             std::function<bool (const sstables::shared_sstable&)> filter) noexcept
-        : reshaping_compaction_task_impl(module, tasks::task_id::create_random_id(), module->new_sequence_number(), std::move(keyspace), std::move(table), "", tasks::task_id::create_null_id())
+        : reshaping_compaction_task_impl(module, tasks::task_id::create_random_id(), module->new_sequence_number(), "table", std::move(keyspace), std::move(table), "", tasks::task_id::create_null_id())
         , _dir(dir)
         , _db(db)
         , _mode(mode)
@@ -565,7 +571,7 @@ public:
             sstables::compaction_sstable_creator_fn creator,
             std::function<bool (const sstables::shared_sstable&)> filter,
             uint64_t& total_shard_size) noexcept
-        : reshaping_compaction_task_impl(module, tasks::task_id::create_random_id(), 0, std::move(keyspace), std::move(table), "", parent_id)
+        : reshaping_compaction_task_impl(module, tasks::task_id::create_random_id(), 0, "shard", std::move(keyspace), std::move(table), "", parent_id)
         , _dir(dir)
         , _db(db)
         , _mode(mode)
@@ -585,11 +591,12 @@ public:
     resharding_compaction_task_impl(tasks::task_manager::module_ptr module,
             tasks::task_id id,
             unsigned sequence_number,
+            std::string scope,
             std::string keyspace,
             std::string table,
             std::string entity,
             tasks::task_id parent_id) noexcept
-        : compaction_task_impl(module, id, sequence_number, std::move(keyspace), std::move(table), std::move(entity), parent_id)
+        : compaction_task_impl(module, id, sequence_number, std::move(scope), std::move(keyspace), std::move(table), std::move(entity), parent_id)
     {
         // FIXME: add progress units
     }
@@ -615,7 +622,7 @@ public:
             sharded<replica::database>& db,
             sstables::compaction_sstable_creator_fn creator,
             compaction::owned_ranges_ptr owned_ranges_ptr) noexcept
-        : resharding_compaction_task_impl(module, tasks::task_id::create_random_id(), module->new_sequence_number(), std::move(keyspace), std::move(table), "", tasks::task_id::create_null_id())
+        : resharding_compaction_task_impl(module, tasks::task_id::create_random_id(), module->new_sequence_number(), "table", std::move(keyspace), std::move(table), "", tasks::task_id::create_null_id())
         , _dir(dir)
         , _db(db)
         , _creator(std::move(creator))
@@ -642,7 +649,7 @@ public:
             sstables::compaction_sstable_creator_fn creator,
             compaction::owned_ranges_ptr local_owned_ranges_ptr,
             std::vector<replica::reshard_shard_descriptor>& destinations) noexcept
-        : resharding_compaction_task_impl(module, tasks::task_id::create_random_id(), 0, std::move(keyspace), std::move(table), "", parent_id)
+        : resharding_compaction_task_impl(module, tasks::task_id::create_random_id(), 0, "shard", std::move(keyspace), std::move(table), "", parent_id)
         , _dir(dir)
         , _db(db)
         , _creator(std::move(creator))
@@ -669,7 +676,7 @@ public:
             std::string table,
             std::string entity,
             tasks::task_id parent_id) noexcept
-        : compaction_task_impl(module, id, sequence_number, std::move(keyspace), std::move(table), std::move(entity), parent_id)
+        : compaction_task_impl(module, id, sequence_number, "compaction group", std::move(keyspace), std::move(table), std::move(entity), parent_id)
     {
         // FIXME: add progress units
     }

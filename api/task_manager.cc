@@ -44,6 +44,7 @@ struct task_stats {
         : task_id(task->id().to_sstring())
         , state(task->get_status().state)
         , type(task->type())
+        , scope(task->get_status().scope)
         , keyspace(task->get_status().keyspace)
         , table(task->get_status().table)
         , entity(task->get_status().entity)
@@ -53,6 +54,7 @@ struct task_stats {
     sstring task_id;
     tasks::task_manager::task_state state;
     std::string type;
+    std::string scope;
     std::string keyspace;
     std::string table;
     std::string entity;
@@ -69,6 +71,7 @@ tm::task_status make_status(full_task_status status) {
     tm::task_status res{};
     res.id = status.task_status.id.to_sstring();
     res.type = status.type;
+    res.scope = status.task_status.scope;
     res.state = status.task_status.state;
     res.is_abortable = bool(status.abortable);
     res.start_time = st;
