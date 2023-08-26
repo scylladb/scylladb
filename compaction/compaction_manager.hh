@@ -64,6 +64,15 @@ class rewrite_sstables_compaction_task_executor;
 class cleanup_sstables_compaction_task_executor;
 class validate_sstables_compaction_task_executor;
 }
+
+template<typename T>
+struct config_updater {
+    serialized_action action;
+    utils::observer<T> observer;
+
+    config_updater(utils::updateable_value<T>& cfg, std::function<future<>()> action);
+};
+
 // Compaction manager provides facilities to submit and track compaction jobs on
 // behalf of existing tables.
 class compaction_manager {
@@ -151,8 +160,7 @@ private:
     optimized_optional<abort_source::subscription> _early_abort_subscription;
     serialized_action _throughput_updater;
     std::optional<utils::observer<uint32_t>> _throughput_option_observer;
-    serialized_action _update_compaction_static_shares_action;
-    utils::observer<float> _compaction_static_shares_observer;
+    config_updater<float> _compaction_static_shares_updater;
     uint64_t _validation_errors = 0;
 
     class strategy_control;

@@ -841,6 +841,12 @@ sstables::compaction_stopped_exception compaction_task_executor::make_compaction
     return sstables::compaction_stopped_exception(s->ks_name(), s->cf_name(), _compaction_data.stop_requested);
 }
 
+template<typename T>
+config_updater<T>::config_updater(utils::updateable_value<T>& cfg, std::function<future<>()> fn)
+        : action(std::move(fn))
+        , observer(cfg.observe(action.make_observer())) {
+}
+
 compaction_manager::compaction_manager(config cfg, abort_source& as, tasks::task_manager& tm)
     : _task_manager_module(make_shared<task_manager_module>(tm))
     , _cfg(std::move(cfg))
@@ -862,8 +868,7 @@ compaction_manager::compaction_manager(config cfg, abort_source& as, tasks::task
         do_stop();
     }))
     , _throughput_updater(serialized_action([this] { return update_throughput(throughput_mbs()); }))
-    , _update_compaction_static_shares_action([this] { return update_static_shares(static_shares()); })
-    , _compaction_static_shares_observer(_cfg.static_shares.observe(_update_compaction_static_shares_action.make_observer()))
+    , _compaction_static_shares_updater(_cfg.static_shares, [this] { return update_static_shares(static_shares()); })
     , _strategy_control(std::make_unique<strategy_control>(*this))
     , _tombstone_gc_state(&_repair_history_maps)
 {
@@ -885,8 +890,7 @@ compaction_manager::compaction_manager(tasks::task_manager& tm)
     , _compaction_controller(make_compaction_controller(compaction_sg(), 1, [] () -> float { return 1.0; }))
     , _backlog_manager(_compaction_controller)
     , _throughput_updater(serialized_action([this] { return update_throughput(throughput_mbs()); }))
-    , _update_compaction_static_shares_action([] { return make_ready_future<>(); })
-    , _compaction_static_shares_observer(_cfg.static_shares.observe(_update_compaction_static_shares_action.make_observer()))
+    , _compaction_static_shares_updater(_cfg.static_shares, [] { return make_ready_future<>(); })
     , _strategy_control(std::make_unique<strategy_control>(*this))
     , _tombstone_gc_state(&_repair_history_maps)
 {
@@ -1068,7 +1072,7 @@ future<> compaction_manager::really_do_stop() {
     _compaction_submission_timer.cancel();
     co_await _compaction_controller.shutdown();
     co_await _throughput_updater.join();
-    co_await _update_compaction_static_shares_action.join();
+    co_await _compaction_static_shares_updater.action.join();
     cmlog.info("Stopped");
 }
 
