@@ -566,7 +566,7 @@ repair::shard_repair_task_impl::shard_repair_task_impl(tasks::task_manager::modu
         streaming::stream_reason reason_,
         bool hints_batchlog_flushed,
         std::optional<int> ranges_parallelism)
-    : repair_task_impl(module, id, 0, keyspace, "", "", parent_id_.uuid(), reason_)
+    : repair_task_impl(module, id, 0, keyspace, parent_id_.uuid(), reason_)
     , rs(repair)
     , db(repair.get_db())
     , messaging(repair.get_messaging().container())
@@ -1139,7 +1139,7 @@ future<int> repair_service::do_repair_start(sstring keyspace, std::unordered_map
     }
 
     auto ranges_parallelism = options.ranges_parallelism == -1 ? std::nullopt : std::optional<int>(options.ranges_parallelism);
-    auto task = co_await _repair_module->make_and_start_task<repair::user_requested_repair_task_impl>({}, id, std::move(keyspace), "", germs, std::move(cfs), std::move(ranges), std::move(options.hosts), std::move(options.data_centers), std::move(ignore_nodes), ranges_parallelism);
+    auto task = co_await _repair_module->make_and_start_task<repair::user_requested_repair_task_impl>({}, id, std::move(keyspace),  germs, std::move(cfs), std::move(ranges), std::move(options.hosts), std::move(options.data_centers), std::move(ignore_nodes), ranges_parallelism);
     co_return id.id;
 }
 
@@ -1325,7 +1325,7 @@ future<> repair_service::sync_data_using_repair(
     }
 
     assert(this_shard_id() == 0);
-    auto task = co_await _repair_module->make_and_start_task<repair::data_sync_repair_task_impl>({}, _repair_module->new_repair_uniq_id(), std::move(keyspace), "", std::move(ranges), std::move(neighbors), reason, ops_info);
+    auto task = co_await _repair_module->make_and_start_task<repair::data_sync_repair_task_impl>({}, _repair_module->new_repair_uniq_id(), std::move(keyspace), std::move(ranges), std::move(neighbors), reason, ops_info);
     co_await task->done();
 }
 

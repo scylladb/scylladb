@@ -489,7 +489,7 @@ public:
             table_state* t,
             tasks::task_id parent_id)
         : compaction_task_executor(mgr, t, sstables::compaction_type::Compaction, "Major compaction")
-        , major_compaction_task_impl(mgr._task_manager_module, tasks::task_id::create_random_id(), 0, t->schema()->ks_name(), t->schema()->cf_name(), "", parent_id)
+        , major_compaction_task_impl(mgr._task_manager_module, tasks::task_id::create_random_id(), 0, t->schema()->ks_name(), t->schema()->cf_name(), parent_id)
     {}
 
     virtual tasks::is_internal is_internal() const noexcept override {
@@ -1116,7 +1116,7 @@ class regular_compaction_task_executor : public compaction_task_executor, public
 public:
     regular_compaction_task_executor(compaction_manager& mgr, table_state& t)
         : compaction_task_executor(mgr, &t, sstables::compaction_type::Compaction, "Compaction")
-        , regular_compaction_task_impl(mgr._task_manager_module, tasks::task_id::create_random_id(), mgr._task_manager_module->new_sequence_number(), t.schema()->ks_name(), t.schema()->cf_name(), "", tasks::task_id::create_null_id())
+        , regular_compaction_task_impl(mgr._task_manager_module, tasks::task_id::create_random_id(), mgr._task_manager_module->new_sequence_number(), t.schema()->ks_name(), t.schema()->cf_name(), tasks::task_id::create_null_id())
     {}
 protected:
     virtual future<> run() override {
@@ -1260,7 +1260,7 @@ class offstrategy_compaction_task_executor : public compaction_task_executor, pu
 public:
     offstrategy_compaction_task_executor(compaction_manager& mgr, table_state* t, tasks::task_id parent_id, bool& performed)
         : compaction_task_executor(mgr, t, sstables::compaction_type::Reshape, "Offstrategy compaction")
-        , offstrategy_compaction_task_impl(mgr._task_manager_module, tasks::task_id::create_random_id(), parent_id ? 0 : mgr._task_manager_module->new_sequence_number(), t->schema()->ks_name(), t->schema()->cf_name(), "", parent_id)
+        , offstrategy_compaction_task_impl(mgr._task_manager_module, tasks::task_id::create_random_id(), parent_id ? 0 : mgr._task_manager_module->new_sequence_number(), t->schema()->ks_name(), t->schema()->cf_name(), parent_id)
         , _performed(performed)
     {
         _performed = false;
@@ -1621,7 +1621,7 @@ public:
     cleanup_sstables_compaction_task_executor(compaction_manager& mgr, table_state* t, tasks::task_id parent_id, sstables::compaction_type_options options, owned_ranges_ptr owned_ranges_ptr,
                                      std::vector<sstables::shared_sstable> candidates, compacting_sstable_registration compacting)
             : compaction_task_executor(mgr, t, options.type(), sstring(sstables::to_string(options.type())))
-            , cleanup_compaction_task_impl(mgr._task_manager_module, tasks::task_id::create_random_id(), 0, t->schema()->ks_name(), t->schema()->cf_name(), "", parent_id)
+            , cleanup_compaction_task_impl(mgr._task_manager_module, tasks::task_id::create_random_id(), 0, t->schema()->ks_name(), t->schema()->cf_name(), parent_id)
             , _cleanup_options(std::move(options))
             , _owned_ranges_ptr(std::move(owned_ranges_ptr))
             , _compacting(std::move(compacting))
