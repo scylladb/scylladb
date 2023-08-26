@@ -363,8 +363,9 @@ future<> storage_service::topology_state_load() {
 
         tmptr->set_version(_topology_state_machine._topology.version);
 
-        auto update_topology = [&] (inet_address ip, const replica_state& rs) {
+        auto update_topology = [&] (locator::host_id id, inet_address ip, const replica_state& rs) {
             tmptr->update_topology(ip, locator::endpoint_dc_rack{rs.datacenter, rs.rack}, std::nullopt, rs.shard_count);
+            tmptr->update_host_id(id, ip);
         };
 
         auto add_normal_node = [&] (raft::server_id id, const replica_state& rs) -> future<> {
@@ -391,9 +392,8 @@ future<> storage_service::topology_state_load() {
                 co_await _sys_ks.local().update_tokens(rs.ring.value().tokens);
                 co_await _gossiper.add_local_application_state({{ gms::application_state::STATUS, gms::versioned_value::normal(rs.ring.value().tokens) }});
             }
-            update_topology(ip, rs);
+            update_topology(host_id, ip, rs);
             co_await tmptr->update_normal_tokens(rs.ring.value().tokens, ip);
-            tmptr->update_host_id(host_id, ip);
         };
 
         for (const auto& [id, rs]: _topology_state_machine._topology.normal_nodes) {
@@ -431,7 +431,7 @@ future<> storage_service::topology_state_load() {
                     co_await _sys_ks.local().update_tokens(ip, {});
                     co_await _sys_ks.local().update_peer_info(ip, "host_id", id.uuid());
                 }
-                update_topology(ip, rs);
+                update_topology(host_id, ip, rs);
                 if (_topology_state_machine._topology.normal_nodes.empty()) {
                     // This is the first node in the cluster. Insert the tokens as normal to the token ring early
                     // so we can perform writes to regular 'distributed' tables during the bootstrap procedure
@@ -445,9 +445,8 @@ future<> storage_service::topology_state_load() {
                 break;
             case node_state::decommissioning:
             case node_state::removing:
-                update_topology(ip, rs);
+                update_topology(host_id, ip, rs);
                 co_await tmptr->update_normal_tokens(rs.ring.value().tokens, ip);
-                tmptr->update_host_id(host_id, ip);
                 tmptr->add_leaving_endpoint(ip);
                 co_await update_topology_change_info(tmptr, ::format("{} {}/{}", rs.state, id, ip));
                 break;
@@ -460,7 +459,10 @@ future<> storage_service::topology_state_load() {
                     on_fatal_internal_error(slogger, ::format("Cannot map id of a node being replaced {} to its ip", replaced_id));
                 }
                 assert(existing_ip);
-                update_topology(ip, rs);
+                // FIXME: Topology cannot hold two IPs with different host ids yet so
+                // when replacing we must advertise the replaced_id for the ip, otherwise
+                // topology will complain about host id of a local node changing and fail.
+                update_topology(ip == existing_ip ? locator::host_id(replaced_id.uuid()) : host_id, ip, rs);
                 tmptr->add_replacing_endpoint(*existing_ip, ip);
                 co_await update_topology_change_info(tmptr, ::format("replacing {}/{} by {}/{}", replaced_id, *existing_ip, id, ip));
             }
