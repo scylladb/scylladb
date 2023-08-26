@@ -473,6 +473,48 @@ void backlog_controller::update_controller(float shares) {
     _scheduling_group.set_shares(shares);
 }
 
+constexpr backlog_controller::control_point compaction_controller::middle_point() {
+    return { 1.5, 100 };
+}
+constexpr backlog_controller::control_point compaction_controller::base_last_point() {
+    return { base_normalization_factor, 1000 };
+}
+
+const float compaction_controller::minimum_effective_max_shares() {
+    return middle_point().output * 2;
+}
+const float compaction_controller::default_max_shares() {
+    return base_last_point().output;
+}
+
+backlog_controller::control_point compaction_controller::last_control_point(float max_shares) {
+    max_shares = std::max(max_shares, minimum_effective_max_shares());
+
+    auto base_slope = slope(middle_point(), base_last_point());
+
+    // To preserve the same slope with different max shares config,
+    // we rewrite the formula for finding slope
+    //      m = (y2 – y1) / (x2 – x1)
+    //  into
+    //      x2 = (y2 – y1) / m + x1
+    // For finding x2 (or normalization factor), we replace m by
+    // the constant slope with default max shares (1000).
+    float nf = (max_shares - middle_point().output) / base_slope + middle_point().input;
+
+    dblog.debug("compaction_controller: calculated normalization factor of {} for max shares of {}", nf, max_shares);
+
+    return control_point{ nf, max_shares };
+}
+
+compaction_controller::compaction_controller(config cfg, std::function<float()> current_backlog)
+    : backlog_controller(std::move(cfg.sg), std::move(cfg.interval),
+        std::vector<backlog_controller::control_point>({{0.0, 50},
+                                                        middle_point(),
+                                                        last_control_point(cfg.max_shares)}),
+        std::move(current_backlog),
+        cfg.static_shares)
+{
+}
 
 namespace replica {
 

@@ -25,6 +25,7 @@
 #include "cdc/cdc_extension.hh"
 #include "tombstone_gc_extension.hh"
 #include "db/per_partition_rate_limit_extension.hh"
+#include "backlog_controller.hh"
 #include "config.hh"
 #include "extensions.hh"
 #include "log.hh"
@@ -321,6 +322,12 @@ static std::string_view experimental_features_help_string() {
     return s;
 }
 
+static std::string_view compaction_max_shares_help_string() {
+    static sstring s = format("Controls the maximum amount of shares assigned for compaction. The default is {}. The minimum effective value is {}.",
+                              compaction_controller::default_max_shares(), compaction_controller::minimum_effective_max_shares());
+    return s;
+}
+
 db::config::config(std::shared_ptr<db::extensions> exts)
     : utils::config_file()
 
@@ -332,6 +339,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "If set to higher than 0, ignore the controller's output and set the memtable shares statically. Do not set this unless you know what you are doing and suspect a problem in the controller. This option will be retired when the controller reaches more maturity")
     , compaction_static_shares(this, "compaction_static_shares", liveness::LiveUpdate, value_status::Used, 0,
         "If set to higher than 0, ignore the controller's output and set the compaction shares statically. Do not set this unless you know what you are doing and suspect a problem in the controller. This option will be retired when the controller reaches more maturity")
+    , compaction_max_shares(this, "compaction_max_shares", liveness::LiveUpdate, value_status::Used, compaction_controller::default_max_shares(), compaction_max_shares_help_string())
     , compaction_enforce_min_threshold(this, "compaction_enforce_min_threshold", liveness::LiveUpdate, value_status::Used, false,
         "If set to true, enforce the min_threshold option for compactions strictly. If false (default), Scylla may decide to compact even if below min_threshold")
     /* Initialization properties */

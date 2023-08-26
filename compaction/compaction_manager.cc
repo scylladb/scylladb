@@ -647,6 +647,12 @@ future<> compaction_manager::update_static_shares(float static_shares) {
     return _compaction_controller.update_static_shares(static_shares);
 }
 
+future<> compaction_manager::update_max_shares(float max_shares) {
+    cmlog.info("Updating maximum shares to {}", max_shares);
+    _compaction_controller.update_max_shares(max_shares);
+    return make_ready_future<>();
+}
+
 compaction_manager::compaction_reenabler::compaction_reenabler(compaction_manager& cm, table_state& t)
     : _cm(cm)
     , _table(&t)
@@ -726,10 +732,12 @@ auto fmt::formatter<compaction::compaction_task_executor>::format(const compacti
                           ex._description, fmt::ptr(&ex), *t, fmt::ptr(t));
 }
 
-static inline compaction_controller make_compaction_controller(const compaction_manager::scheduling_group& csg, float static_shares, std::function<double()> fn) {
+static inline compaction_controller make_compaction_controller(const compaction_manager::scheduling_group& csg, float static_shares,
+                                                               float max_shares, std::function<double()> fn) {
     compaction_controller::config cfg{
         .sg = csg,
         .static_shares = static_shares,
+        .max_shares = max_shares,
         .interval = 250ms
     };
     return compaction_controller(cfg, std::move(fn));
@@ -851,7 +859,7 @@ compaction_manager::compaction_manager(config cfg, abort_source& as, tasks::task
     : _task_manager_module(make_shared<task_manager_module>(tm))
     , _cfg(std::move(cfg))
     , _compaction_submission_timer(compaction_sg(), compaction_submission_callback())
-    , _compaction_controller(make_compaction_controller(compaction_sg(), static_shares(), [this] () -> float {
+    , _compaction_controller(make_compaction_controller(compaction_sg(), static_shares(), max_shares(), [this] () -> float {
         _last_backlog = backlog();
         auto b = _last_backlog / available_memory();
         // This means we are using an unimplemented strategy
@@ -859,7 +867,7 @@ compaction_manager::compaction_manager(config cfg, abort_source& as, tasks::task
             // returning the normalization factor means that we'll return the maximum
             // output in the _control_points. We can get rid of this when we implement
             // all strategies.
-            return compaction_controller::normalization_factor;
+            return _compaction_controller.normalization_factor();
         }
         return b;
     }))
@@ -869,6 +877,7 @@ compaction_manager::compaction_manager(config cfg, abort_source& as, tasks::task
     }))
     , _throughput_updater(serialized_action([this] { return update_throughput(throughput_mbs()); }))
     , _compaction_static_shares_updater(_cfg.static_shares, [this] { return update_static_shares(static_shares()); })
+    , _compaction_max_shares_updater(_cfg.max_shares, [this] { return update_max_shares(max_shares()); })
     , _strategy_control(std::make_unique<strategy_control>(*this))
     , _tombstone_gc_state(&_repair_history_maps)
 {
@@ -887,10 +896,12 @@ compaction_manager::compaction_manager(tasks::task_manager& tm)
     : _task_manager_module(make_shared<task_manager_module>(tm))
     , _cfg(config{ .available_memory = 1 })
     , _compaction_submission_timer(compaction_sg(), compaction_submission_callback())
-    , _compaction_controller(make_compaction_controller(compaction_sg(), 1, [] () -> float { return 1.0; }))
+    , _compaction_controller(make_compaction_controller(compaction_sg(), 1, compaction_controller::default_max_shares(),
+                                                        [] () -> float { return 1.0; }))
     , _backlog_manager(_compaction_controller)
     , _throughput_updater(serialized_action([this] { return update_throughput(throughput_mbs()); }))
     , _compaction_static_shares_updater(_cfg.static_shares, [] { return make_ready_future<>(); })
+    , _compaction_max_shares_updater(_cfg.max_shares, [] { return make_ready_future<>(); })
     , _strategy_control(std::make_unique<strategy_control>(*this))
     , _tombstone_gc_state(&_repair_history_maps)
 {
@@ -1073,6 +1084,7 @@ future<> compaction_manager::really_do_stop() {
     co_await _compaction_controller.shutdown();
     co_await _throughput_updater.join();
     co_await _compaction_static_shares_updater.action.join();
+    co_await _compaction_max_shares_updater.action.join();
     cmlog.info("Stopped");
 }
 

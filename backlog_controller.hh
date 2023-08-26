@@ -126,22 +126,32 @@ public:
 };
 
 class compaction_controller : public backlog_controller {
+    static constexpr float base_normalization_factor = 30.0f;
+    static constexpr control_point middle_point();
+    static constexpr control_point base_last_point();
+    // Calculates the last control point for a given max shares configuration.
+    static control_point last_control_point(float max_shares);
 public:
-    static constexpr unsigned normalization_factor = 30;
+    static const float minimum_effective_max_shares();
+    static const float default_max_shares();
     static constexpr float disable_backlog = std::numeric_limits<double>::infinity();
     static constexpr float backlog_disabled(float backlog) { return std::isinf(backlog); }
 
     struct config {
         backlog_controller::scheduling_group sg;
         float static_shares;
+        float max_shares;
         std::chrono::milliseconds interval;
     };
 
-    compaction_controller(config cfg, std::function<float()> current_backlog)
-        : backlog_controller(std::move(cfg.sg), std::move(cfg.interval),
-          std::vector<backlog_controller::control_point>({{0.0, 50}, {1.5, 100} , {normalization_factor, 1000}}),
-          std::move(current_backlog),
-          cfg.static_shares
-        )
-    {}
+    void update_max_shares(float max_shares) {
+        assert(!_control_points.empty());
+        _control_points.back() = last_control_point(max_shares);
+    }
+
+    float normalization_factor() const noexcept {
+        return _control_points.size() ? _control_points.back().input : base_normalization_factor;
+    }
+
+    compaction_controller(config cfg, std::function<float()> current_backlog);
 };
