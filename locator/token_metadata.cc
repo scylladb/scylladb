@@ -568,7 +568,7 @@ std::unordered_map<inet_address, host_id> token_metadata_impl::get_endpoint_to_h
         if (const auto& host_id = node->host_id()) {
             map[endpoint] = host_id;
         } else {
-            on_internal_error_noexcept(tlogger, fmt::format("get_endpoint_to_host_id_map_for_reading: endpoint {} has null host_id", endpoint));
+            tlogger.info("get_endpoint_to_host_id_map_for_reading: endpoint {} has null host_id: state={}", endpoint, node->get_state());
         }
     }
     return map;
