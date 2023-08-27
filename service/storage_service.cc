@@ -302,6 +302,21 @@ future<> storage_service::wait_for_ring_to_settle() {
     slogger.info("Checking bootstrapping/leaving nodes: ok");
 }
 
+static locator::node::state to_topology_node_state(node_state ns) {
+    switch (ns) {
+        case node_state::bootstrapping: return locator::node::state::bootstrapping;
+        case node_state::decommissioning: return locator::node::state::being_decommissioned;
+        case node_state::removing: return locator::node::state::being_removed;
+        case node_state::normal: return locator::node::state::normal;
+        case node_state::left_token_ring: return locator::node::state::left;
+        case node_state::left: return locator::node::state::left;
+        case node_state::replacing: return locator::node::state::replacing;
+        case node_state::rebuilding: return locator::node::state::normal;
+        case node_state::none: return locator::node::state::none;
+    }
+    on_internal_error(slogger, format("unhandled node state: {}", ns));
+}
+
 future<> storage_service::topology_state_load() {
 #ifdef SEASTAR_DEBUG
     static bool running = false;
@@ -364,7 +379,8 @@ future<> storage_service::topology_state_load() {
         tmptr->set_version(_topology_state_machine._topology.version);
 
         auto update_topology = [&] (locator::host_id id, inet_address ip, const replica_state& rs) {
-            tmptr->update_topology(ip, locator::endpoint_dc_rack{rs.datacenter, rs.rack}, std::nullopt, rs.shard_count);
+            tmptr->update_topology(ip, locator::endpoint_dc_rack{rs.datacenter, rs.rack},
+                                   to_topology_node_state(rs.state), rs.shard_count);
             tmptr->update_host_id(id, ip);
         };
 
