@@ -428,6 +428,10 @@ public:
 
     std::vector<inet_address> get_endpoints() const;
 
+    size_t num_endpoints() const noexcept {
+        return _endpoint_state_map.size();
+    }
+
     bool uses_host_id(inet_address endpoint) const;
 
     locator::host_id get_host_id(inet_address endpoint) const;

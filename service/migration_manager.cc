@@ -222,11 +222,11 @@ void migration_manager::schedule_schema_pull(const gms::inet_address& endpoint, 
 }
 
 bool migration_manager::have_schema_agreement() {
-    const auto known_endpoints = _gossiper.get_endpoint_states();
-    if (known_endpoints.size() == 1) {
+    if (_gossiper.num_endpoints() == 1) {
         // Us.
         return true;
     }
+    const auto known_endpoints = _gossiper.get_endpoint_states();
     auto our_version = _storage_proxy.get_db().local().get_version();
     bool match = false;
     for (auto& x : known_endpoints) {

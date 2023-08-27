@@ -4469,7 +4469,7 @@ future<executor::request_return_type> executor::describe_continuous_backups(clie
 // manually create the keyspace to override this predefined behavior.
 static future<std::vector<mutation>> create_keyspace(std::string_view keyspace_name, service::storage_proxy& sp, gms::gossiper& gossiper, api::timestamp_type ts) {
     sstring keyspace_name_str(keyspace_name);
-    int endpoint_count = gossiper.get_endpoint_states().size();
+    int endpoint_count = gossiper.num_endpoints();
     int rf = 3;
     if (endpoint_count < rf) {
         rf = 1;
