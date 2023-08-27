@@ -19,6 +19,7 @@ namespace fd = httpd::failure_detector_json;
 void set_failure_detector(http_context& ctx, routes& r, gms::gossiper& g) {
     fd::get_all_endpoint_states.set(r, [&g](std::unique_ptr<request> req) {
         std::vector<fd::endpoint_state> res;
+        res.reserve(g.num_endpoints());
         g.for_each_endpoint_state([&] (const gms::inet_address& addr, const gms::endpoint_state& eps) {
             fd::endpoint_state val;
             val.addrs = fmt::to_string(addr);
@@ -26,16 +27,16 @@ void set_failure_detector(http_context& ctx, routes& r, gms::gossiper& g) {
             val.generation = eps.get_heart_beat_state().get_generation().value();
             val.version = eps.get_heart_beat_state().get_heart_beat_version().value();
             val.update_time = eps.get_update_timestamp().time_since_epoch().count();
-            for (auto a : eps.get_application_state_map()) {
+            for (const auto& [as_type, app_state] : eps.get_application_state_map()) {
                 fd::version_value version_val;
                 // We return the enum index and not it's name to stay compatible to origin
                 // method that the state index are static but the name can be changed.
-                version_val.application_state = static_cast<std::underlying_type<gms::application_state>::type>(a.first);
-                version_val.value = a.second.value();
-                version_val.version = a.second.version().value();
+                version_val.application_state = static_cast<std::underlying_type<gms::application_state>::type>(as_type);
+                version_val.value = app_state.value();
+                version_val.version = app_state.version().value();
                 val.application_state.push(version_val);
             }
-            res.push_back(val);
+            res.emplace_back(std::move(val));
         });
         return make_ready_future<json::json_return_type>(res);
     });
