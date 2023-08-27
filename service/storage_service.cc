@@ -438,7 +438,10 @@ future<> storage_service::topology_state_load() {
             auto ip = co_await id2ip(id);
 
             slogger.trace("raft topology: loading topology: raft id={} ip={} node state={} dc={} rack={} tokens state={} tokens={}",
-                          id, ip, rs.state, rs.datacenter, rs.rack, _topology_state_machine._topology.tstate, rs.ring->tokens);
+                          id, ip, rs.state, rs.datacenter, rs.rack, _topology_state_machine._topology.tstate,
+                          seastar::value_of([&] () -> sstring {
+                              return rs.ring ? ::format("{}", rs.ring->tokens) : sstring("null");
+                          }));
 
             switch (rs.state) {
             case node_state::bootstrapping:
