@@ -159,6 +159,7 @@ private:
                                  sstring op_name,
                                  std::function<future<>(locator::tablet_metadata_guard&)> op);
     future<> stream_tablet(locator::global_tablet_id);
+    future<> cleanup_tablet(locator::global_tablet_id);
     inet_address host2ip(locator::host_id);
 public:
     storage_service(abort_source& as, distributed<replica::database>& db,

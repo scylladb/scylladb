@@ -2964,4 +2964,9 @@ bool table::requires_cleanup(const sstables::sstable_set& set) const {
     }));
 }
 
+future<> table::cleanup_tablet(locator::tablet_id) {
+    co_await flush();
+    // FIXME: Remove sstables
+}
+
 } // namespace replica

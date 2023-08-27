@@ -1399,6 +1399,7 @@ class topology_coordinator {
     // Next migration of the same tablet is guaranteed to use a different instance.
     struct tablet_migration_state {
         background_action_holder streaming;
+        background_action_holder cleanup;
         std::unordered_map<locator::tablet_transition_stage, background_action_holder> barriers;
     };
 
@@ -1508,11 +1509,15 @@ class topology_coordinator {
                         .build());
             };
 
-            auto transition_to_with_barrier = [&] (locator::tablet_transition_stage stage) {
-                if (advance_in_background(gid, tablet_state.barriers[stage], "barrier", [&] {
+            auto do_barrier = [&] {
+                return advance_in_background(gid, tablet_state.barriers[trinfo.stage], "barrier", [&] {
                     needs_barrier = true;
                     return barrier.get_shared_future();
-                })) {
+                });
+            };
+
+            auto transition_to_with_barrier = [&] (locator::tablet_transition_stage stage) {
+                if (do_barrier()) {
                     transition_to(stage);
                 }
             };
@@ -1544,13 +1549,26 @@ class topology_coordinator {
                     transition_to_with_barrier(locator::tablet_transition_stage::cleanup);
                     break;
                 case locator::tablet_transition_stage::cleanup:
-                    // FIXME: Actually perform the cleanup. Block on integration with compaction groups.
-                    _tablets.erase(gid);
-                    updates.emplace_back(
-                        replica::tablet_mutation_builder(guard.write_timestamp(), s->ks_name(), table)
-                            .del_transition(last_token)
-                            .set_replicas(last_token, trinfo.next)
-                            .build());
+                    if (advance_in_background(gid, tablet_state.cleanup, "cleanup", [&] {
+                        locator::tablet_replica dst = locator::get_leaving_replica(tmap.get_tablet_info(gid.tablet), trinfo);
+                        slogger.info("raft topology: Initiating tablet cleanup of {} on {}", gid, dst);
+                        return ser::storage_service_rpc_verbs::send_tablet_cleanup(&_messaging,
+                                                                                   netw::msg_addr(id2ip(dst.host)), _as, gid);
+                    })) {
+                        transition_to(locator::tablet_transition_stage::end_migration);
+                    }
+                    break;
+                case locator::tablet_transition_stage::end_migration:
+                    // Need a separate stage and a barrier after cleanup RPC to cut off stale RPCs.
+                    // See do_tablet_operation() doc.
+                    if (do_barrier()) {
+                        _tablets.erase(gid);
+                        updates.emplace_back(
+                            replica::tablet_mutation_builder(guard.write_timestamp(), s->ks_name(), table)
+                                .del_transition(last_token)
+                                .set_replicas(last_token, trinfo.next)
+                                .build());
+                    }
                     break;
             }
         });
@@ -6208,6 +6226,42 @@ future<> storage_service::stream_tablet(locator::global_tablet_id tablet) {
     });
 }
 
+future<> storage_service::cleanup_tablet(locator::global_tablet_id tablet) {
+    return do_tablet_operation(tablet, "Cleanup", [this, tablet] (locator::tablet_metadata_guard& guard) {
+        shard_id shard;
+
+        {
+            auto tm = guard.get_token_metadata();
+            auto& tmap = guard.get_tablet_map();
+            auto *trinfo = tmap.get_tablet_transition_info(tablet.tablet);
+
+            // Check if the request is still valid.
+            // If there is mismatch, it means this cleanup was canceled and the coordinator moved on.
+            if (!trinfo) {
+                throw std::runtime_error(format("No transition info for tablet {}", tablet));
+            }
+            if (trinfo->stage != locator::tablet_transition_stage::cleanup) {
+                throw std::runtime_error(format("Tablet {} stage is not at cleanup", tablet));
+            }
+
+            auto& tinfo = tmap.get_tablet_info(tablet.tablet);
+            locator::tablet_replica leaving_replica = locator::get_leaving_replica(tinfo, *trinfo);
+            if (leaving_replica.host != tm->get_my_id()) {
+                throw std::runtime_error(format("Tablet {} has leaving replica different than this one", tablet));
+            }
+            auto shard_opt = tmap.get_shard(tablet.tablet, tm->get_my_id());
+            if (!shard_opt) {
+                on_internal_error(slogger, format("Tablet {} has no shard on this node", tablet));
+            }
+            shard = *shard_opt;
+        }
+        return _db.invoke_on(shard, [tablet] (replica::database& db) {
+            auto& table = db.find_column_family(tablet.table);
+            return table.cleanup_tablet(tablet.tablet);
+        });
+    });
+}
+
 void storage_service::init_messaging_service(sharded<service::storage_proxy>& proxy, sharded<db::system_distributed_keyspace>& sys_dist_ks) {
     _messaging.local().register_node_ops_cmd([this] (const rpc::client_info& cinfo, node_ops_cmd_request req) {
         auto coordinator = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
@@ -6275,6 +6329,9 @@ void storage_service::init_messaging_service(sharded<service::storage_proxy>& pr
         return container().invoke_on(0, [tablet] (auto& ss) -> future<> {
             return ss.stream_tablet(tablet);
         });
+    });
+    ser::storage_service_rpc_verbs::register_tablet_cleanup(&_messaging.local(), [this] (locator::global_tablet_id tablet) {
+        return cleanup_tablet(tablet);
     });
 }
 

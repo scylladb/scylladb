@@ -265,6 +265,8 @@ private:
                 return false;
             case tablet_transition_stage::cleanup:
                 return false;
+            case tablet_transition_stage::end_migration:
+                return false;
         }
         on_internal_error(lblogger, format("Invalid transition stage: {}", static_cast<int>(trinfo->stage)));
     }

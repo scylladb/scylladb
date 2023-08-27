@@ -45,6 +45,8 @@ write_replica_set_selector get_selector_for_writes(tablet_transition_stage stage
             return write_replica_set_selector::next;
         case tablet_transition_stage::cleanup:
             return write_replica_set_selector::next;
+        case tablet_transition_stage::end_migration:
+            return write_replica_set_selector::next;
     }
     on_internal_error(tablet_logger, format("Invalid tablet transition stage: {}", static_cast<int>(stage)));
 }
@@ -63,6 +65,8 @@ read_replica_set_selector get_selector_for_reads(tablet_transition_stage stage) 
         case tablet_transition_stage::use_new:
             return read_replica_set_selector::next;
         case tablet_transition_stage::cleanup:
+            return read_replica_set_selector::next;
+        case tablet_transition_stage::end_migration:
             return read_replica_set_selector::next;
     }
     on_internal_error(tablet_logger, format("Invalid tablet transition stage: {}", static_cast<int>(stage)));
@@ -232,6 +236,7 @@ static const std::unordered_map<tablet_transition_stage, sstring> tablet_transit
     {tablet_transition_stage::streaming, "streaming"},
     {tablet_transition_stage::use_new, "use_new"},
     {tablet_transition_stage::cleanup, "cleanup"},
+    {tablet_transition_stage::end_migration, "end_migration"},
 };
 
 static const std::unordered_map<sstring, tablet_transition_stage> tablet_transition_stage_from_name = std::invoke([] {
