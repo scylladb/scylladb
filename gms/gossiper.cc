@@ -681,14 +681,28 @@ future<> gossiper::remove_endpoint(inet_address endpoint, permit_id pid) {
         logger.info("removed {} from _seeds, updated _seeds list = {}", endpoint, _seeds);
     }
 
-    co_await mutate_live_and_unreachable_endpoints([endpoint] (gossiper& g) {
-        g._live_endpoints.erase(endpoint);
+    bool was_alive;
+    co_await mutate_live_and_unreachable_endpoints([endpoint, &was_alive] (gossiper& g) {
+        was_alive = g._live_endpoints.erase(endpoint);
         g._unreachable_endpoints.erase(endpoint);
     });
     _syn_handlers.erase(endpoint);
     _ack_handlers.erase(endpoint);
     quarantine_endpoint(endpoint);
-    logger.debug("removing endpoint {}", endpoint);
+    logger.info("Removed endpoint {}", endpoint);
+
+    if (was_alive) {
+        try {
+            auto state = get_endpoint_state(endpoint);
+            logger.info("InetAddress {} is now DOWN, status = {}", endpoint, get_gossip_status(state));
+            co_await _subscribers.for_each([endpoint, state, pid] (shared_ptr<i_endpoint_state_change_subscriber> subscriber) -> future<> {
+                co_await subscriber->on_dead(endpoint, state, pid);
+                logger.trace("Notified {}", fmt::ptr(subscriber.get()));
+            });
+        } catch (...) {
+            logger.warn("Fail to call on_dead callback: {}", std::current_exception());
+        }
+    }
 }
 
 future<> gossiper::do_status_check() {
