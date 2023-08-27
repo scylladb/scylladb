@@ -1903,6 +1903,7 @@ class topology_coordinator {
                 break;
             case topology::transition_state::tablet_migration:
                 co_await handle_tablet_migration(std::move(guard));
+                break;
         }
         co_return true;
     };
