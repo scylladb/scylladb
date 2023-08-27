@@ -13,6 +13,7 @@
 #include <seastar/core/sleep.hh>
 #include <seastar/core/coroutine.hh>
 
+#include "gms/endpoint_state.hh"
 #include "keys.hh"
 #include "schema/schema_builder.hh"
 #include "replica/database.hh"
@@ -256,11 +257,9 @@ public:
 
 bool should_propose_first_generation(const gms::inet_address& me, const gms::gossiper& g) {
     auto my_host_id = g.get_host_id(me);
-    auto& eps = g.get_endpoint_states();
-    return std::none_of(eps.begin(), eps.end(),
-            [&] (const std::pair<gms::inet_address, gms::endpoint_state>& ep) {
-        return my_host_id < g.get_host_id(ep.first);
-    });
+    return g.for_each_endpoint_state_until([&] (const gms::inet_address& node, const gms::endpoint_state& eps) {
+        return stop_iteration(my_host_id < g.get_host_id(node));
+    }) == stop_iteration::no;
 }
 
 bool is_cdc_generation_optimal(const cdc::topology_description& gen, const locator::token_metadata& tm) {
@@ -830,11 +829,10 @@ future<> generation_service::check_and_repair_cdc_streams() {
     }
 
     std::optional<cdc::generation_id> latest = _gen_id;
-    const auto& endpoint_states = _gossiper.get_endpoint_states();
-    for (const auto& [addr, state] : endpoint_states) {
+    _gossiper.for_each_endpoint_state([&] (const gms::inet_address& addr, const gms::endpoint_state& state) {
         if (_gossiper.is_left(addr)) {
             cdc_log.info("check_and_repair_cdc_streams ignored node {} because it is in LEFT state", addr);
-            continue;
+            return;
         }
         if (!_gossiper.is_normal(addr)) {
             throw std::runtime_error(format("All nodes must be in NORMAL or LEFT state while performing check_and_repair_cdc_streams"
@@ -845,7 +843,7 @@ future<> generation_service::check_and_repair_cdc_streams() {
         if (!latest || (gen_id && get_ts(*gen_id) > get_ts(*latest))) {
             latest = gen_id;
         }
-    }
+    });
 
     auto tmptr = _token_metadata.get();
     auto sys_dist_ks = get_sys_dist_ks();
@@ -1031,12 +1029,12 @@ future<> generation_service::legacy_scan_cdc_generations() {
     assert_shard_zero(__PRETTY_FUNCTION__);
 
     std::optional<cdc::generation_id> latest;
-    for (const auto& ep: _gossiper.get_endpoint_states()) {
-        auto gen_id = get_generation_id_for(ep.first, _gossiper);
+    _gossiper.for_each_endpoint_state([&] (const gms::inet_address& node, const gms::endpoint_state& eps) {
+        auto gen_id = get_generation_id_for(node, _gossiper);
         if (!latest || (gen_id && get_ts(*gen_id) > get_ts(*latest))) {
             latest = gen_id;
         }
-    }
+    });
 
     if (latest) {
         cdc_log.info("Latest generation seen during startup: {}", *latest);

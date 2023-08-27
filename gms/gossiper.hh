@@ -409,6 +409,8 @@ private:
 
     future<> do_status_check();
 
+    const std::unordered_map<inet_address, endpoint_state>& get_endpoint_states() const noexcept;
+
 public:
     clk::time_point get_expire_time_for_endpoint(inet_address endpoint) const noexcept;
 
@@ -424,13 +426,25 @@ public:
     // Must be called on shard 0
     future<> reset_endpoint_state_map();
 
-    const std::unordered_map<inet_address, endpoint_state>& get_endpoint_states() const noexcept;
-
     std::vector<inet_address> get_endpoints() const;
 
     size_t num_endpoints() const noexcept {
         return _endpoint_state_map.size();
     }
+
+    // Calls func for each endpoint_state.
+    // Called function must not yield
+    void for_each_endpoint_state(std::function<void(const inet_address&, const endpoint_state&)> func) const {
+        for_each_endpoint_state_until([func = std::move(func)] (const inet_address& node, const endpoint_state& eps) {
+            func(node, eps);
+            return stop_iteration::no;
+        });
+    }
+
+    // Calls func for each endpoint_state until it returns stop_iteration::yes
+    // Returns stop_iteration::yes iff `func` returns stop_iteration::yes.
+    // Called function must not yield
+    stop_iteration for_each_endpoint_state_until(std::function<stop_iteration(const inet_address&, const endpoint_state&)>) const;
 
     bool uses_host_id(inet_address endpoint) const;
 

@@ -19,14 +19,14 @@ namespace fd = httpd::failure_detector_json;
 void set_failure_detector(http_context& ctx, routes& r, gms::gossiper& g) {
     fd::get_all_endpoint_states.set(r, [&g](std::unique_ptr<request> req) {
         std::vector<fd::endpoint_state> res;
-        for (auto i : g.get_endpoint_states()) {
+        g.for_each_endpoint_state([&] (const gms::inet_address& addr, const gms::endpoint_state& eps) {
             fd::endpoint_state val;
-            val.addrs = fmt::to_string(i.first);
-            val.is_alive = g.is_alive(i.first);
-            val.generation = i.second.get_heart_beat_state().get_generation().value();
-            val.version = i.second.get_heart_beat_state().get_heart_beat_version().value();
-            val.update_time = i.second.get_update_timestamp().time_since_epoch().count();
-            for (auto a : i.second.get_application_state_map()) {
+            val.addrs = fmt::to_string(addr);
+            val.is_alive = g.is_alive(addr);
+            val.generation = eps.get_heart_beat_state().get_generation().value();
+            val.version = eps.get_heart_beat_state().get_heart_beat_version().value();
+            val.update_time = eps.get_update_timestamp().time_since_epoch().count();
+            for (auto a : eps.get_application_state_map()) {
                 fd::version_value version_val;
                 // We return the enum index and not it's name to stay compatible to origin
                 // method that the state index are static but the name can be changed.
@@ -36,7 +36,7 @@ void set_failure_detector(http_context& ctx, routes& r, gms::gossiper& g) {
                 val.application_state.push(version_val);
             }
             res.push_back(val);
-        }
+        });
         return make_ready_future<json::json_return_type>(res);
     });
 
@@ -56,9 +56,9 @@ void set_failure_detector(http_context& ctx, routes& r, gms::gossiper& g) {
 
     fd::get_simple_states.set(r, [&g] (std::unique_ptr<request> req) {
         std::map<sstring, sstring> nodes_status;
-        for (auto& entry : g.get_endpoint_states()) {
-            nodes_status.emplace(entry.first.to_sstring(), g.is_alive(entry.first) ? "UP" : "DOWN");
-        }
+        g.for_each_endpoint_state([&] (const gms::inet_address& node, const gms::endpoint_state&) {
+            nodes_status.emplace(node.to_sstring(), g.is_alive(node) ? "UP" : "DOWN");
+        });
         return make_ready_future<json::json_return_type>(map_to_key_value<fd::mapper>(nodes_status));
     });
 

@@ -1453,6 +1453,15 @@ std::vector<inet_address> gossiper::get_endpoints() const {
     return boost::copy_range<std::vector<inet_address>>(_endpoint_state_map | boost::adaptors::map_keys);
 }
 
+stop_iteration gossiper::for_each_endpoint_state_until(std::function<stop_iteration(const inet_address&, const endpoint_state&)> func) const {
+    for (const auto& [node, eps] : _endpoint_state_map) {
+        if (func(node, eps) == stop_iteration::yes) {
+            return stop_iteration::yes;
+        }
+    }
+    return stop_iteration::no;
+}
+
 bool gossiper::uses_host_id(inet_address endpoint) const {
     return _messaging.knows_version(endpoint) ||
             get_application_state_ptr(endpoint, application_state::NET_VERSION);
