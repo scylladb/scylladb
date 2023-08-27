@@ -1,0 +1,18 @@
+name: Delete docs-preview
+env:
+  AWS_EC2_METADATA_DISABLED: true
+
+on:
+  pull_request:
+    types:
+      - closed
+
+jobs:
+  delete:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete docs-preview Folder
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.DOCS_AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.DOCS_AWS_SECRET_ACCESS_KEY }}
+        run: aws s3 rm "s3://dev-docs.scylladb.com/$GITHUB_REPOSITORY/$PR_NUMBER" --recursive
