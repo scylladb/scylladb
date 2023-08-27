@@ -2332,12 +2332,8 @@ future<> gossiper::wait_alive(std::vector<gms::inet_address> nodes, std::chrono:
 
 future<> gossiper::wait_for_live_nodes_to_show_up(size_t n) {
     logger::rate_limit rate_limit{std::chrono::seconds{5}};
-#ifdef SEASTAR_DEBUG
-    // Account for debug slowness. 3 minutes is probably overkill but we don't want flaky tests.
+    // Account for gossip slowness. 3 minutes is probably overkill but we don't want flaky tests.
     constexpr auto timeout_delay = std::chrono::minutes{3};
-#else
-    constexpr auto timeout_delay = std::chrono::seconds{30};
-#endif
     auto timeout = gossiper::clk::now() + timeout_delay;
     while (get_live_members().size() < n) {
         if (timeout <= gossiper::clk::now()) {
