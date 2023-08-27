@@ -2,7 +2,7 @@
 Launch ScyllaDB on Azure
 ==========================
 
-This article will guide you through self-managed ScyllaDB deployment on Azure. For a fully-managed deployment of ScyllaDB 
+This is a test bla bla article will guide you through self-managed ScyllaDB deployment on Azure. For a fully-managed deployment of ScyllaDB
 as-a-service, see `ScyllaDB Cloud documentation <https://cloud.docs.scylladb.com/>`_.
 
 .. note::
