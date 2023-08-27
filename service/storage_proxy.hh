@@ -515,6 +515,8 @@ private:
     // Do the same when the future is resolved without exception.
     template <typename T>
     future<T> apply_fence(future<T> future, fencing_token fence, gms::inet_address caller_address) const;
+
+    mutation do_get_batchlog_mutation_for(schema_ptr schema, const std::vector<mutation>& mutations, const utils::UUID& id, int32_t version, db_clock::time_point now);
 public:
     // Applies mutation on this node.
     // Resolves with timed_out_error when timeout is reached.

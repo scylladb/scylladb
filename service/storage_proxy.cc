@@ -3609,7 +3609,8 @@ storage_proxy::mutate_atomically_result(std::vector<mutation> mutations, db::con
 
     class context {
         storage_proxy& _p;
-        const locator::token_metadata_ptr _tmptr;
+        schema_ptr _schema;
+        locator::effective_replication_map_ptr _ermp;
         std::vector<mutation> _mutations;
         lw_shared_ptr<cdc::operation_result_tracker> _cdc_tracker;
         db::consistency_level _cl;
@@ -3624,7 +3625,8 @@ storage_proxy::mutate_atomically_result(std::vector<mutation> mutations, db::con
     public:
         context(storage_proxy & p, std::vector<mutation>&& mutations, lw_shared_ptr<cdc::operation_result_tracker>&& cdc_tracker, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit)
                 : _p(p)
-                , _tmptr(p.get_token_metadata_ptr())
+                , _schema(_p.local_db().find_schema(db::system_keyspace::NAME, db::system_keyspace::BATCHLOG))
+                , _ermp(_p.local_db().find_column_family(_schema->id()).get_effective_replication_map())
                 , _mutations(std::move(mutations))
                 , _cdc_tracker(std::move(cdc_tracker))
                 , _cl(cl)
@@ -3636,7 +3638,7 @@ storage_proxy::mutate_atomically_result(std::vector<mutation> mutations, db::con
                 , _batchlog_endpoints(
                         [this]() -> inet_address_vector_replica_set {
                             auto local_addr = utils::fb_utilities::get_broadcast_address();
-                            auto& topology = _tmptr->get_topology();
+                            auto& topology = _ermp->get_topology();
                             auto local_dc = topology.get_datacenter();
                             auto& local_endpoints = topology.get_datacenter_racks().at(local_dc);
                             auto local_rack = topology.get_rack();
@@ -3657,26 +3659,23 @@ storage_proxy::mutate_atomically_result(std::vector<mutation> mutations, db::con
 
         future<result<>> send_batchlog_mutation(mutation m, db::consistency_level cl = db::consistency_level::ONE) {
             return _p.mutate_prepare<>(std::array<mutation, 1>{std::move(m)}, cl, db::write_type::BATCH_LOG, _permit, [this] (const mutation& m, db::consistency_level cl, db::write_type type, service_permit permit) {
-                auto& table = _p._db.local().find_column_family(m.schema()->id());
-                auto ermp = table.get_effective_replication_map();
-                return _p.create_write_response_handler(std::move(ermp), cl, type, std::make_unique<shared_mutation>(m), _batchlog_endpoints, {}, {}, _trace_state, _stats, std::move(permit), std::monostate(), is_cancellable::no);
+                return _p.create_write_response_handler(_ermp, cl, type, std::make_unique<shared_mutation>(m), _batchlog_endpoints, {}, {}, _trace_state, _stats, std::move(permit), std::monostate(), is_cancellable::no);
             }).then(utils::result_wrap([this, cl] (unique_response_handler_vector ids) {
                 _p.register_cdc_operation_result_tracker(ids, _cdc_tracker);
                 return _p.mutate_begin(std::move(ids), cl, _trace_state, _timeout);
             }));
         }
         future<result<>> sync_write_to_batchlog() {
-            auto m = _p.get_batchlog_mutation_for(_mutations, _batch_uuid, netw::messaging_service::current_version, db_clock::now());
+            auto m = _p.do_get_batchlog_mutation_for(_schema, _mutations, _batch_uuid, netw::messaging_service::current_version, db_clock::now());
             tracing::trace(_trace_state, "Sending a batchlog write mutation");
             return send_batchlog_mutation(std::move(m));
         };
         future<> async_remove_from_batchlog() {
             // delete batch
-            auto schema = _p._db.local().find_schema(db::system_keyspace::NAME, db::system_keyspace::BATCHLOG);
-            auto key = partition_key::from_exploded(*schema, {uuid_type->decompose(_batch_uuid)});
+            auto key = partition_key::from_exploded(*_schema, {uuid_type->decompose(_batch_uuid)});
             auto now = service::client_state(service::client_state::internal_tag()).get_timestamp();
-            mutation m(schema, key);
-            m.partition().apply_delete(*schema, clustering_key_prefix::make_empty(), tombstone(now, gc_clock::now()));
+            mutation m(_schema, key);
+            m.partition().apply_delete(*_schema, clustering_key_prefix::make_empty(), tombstone(now, gc_clock::now()));
 
             tracing::trace(_trace_state, "Sending a batchlog remove mutation");
             return send_batchlog_mutation(std::move(m), db::consistency_level::ANY).then_wrapped([] (future<result<>> f) {
@@ -3732,6 +3731,10 @@ storage_proxy::mutate_atomically_result(std::vector<mutation> mutations, db::con
 
 mutation storage_proxy::get_batchlog_mutation_for(const std::vector<mutation>& mutations, const utils::UUID& id, int32_t version, db_clock::time_point now) {
     auto schema = local_db().find_schema(db::system_keyspace::NAME, db::system_keyspace::BATCHLOG);
+    return do_get_batchlog_mutation_for(std::move(schema), mutations, id, version, now);
+}
+
+mutation storage_proxy::do_get_batchlog_mutation_for(schema_ptr schema, const std::vector<mutation>& mutations, const utils::UUID& id, int32_t version, db_clock::time_point now) {
     auto key = partition_key::from_singular(*schema, id);
     auto timestamp = api::new_timestamp();
     auto data = [&mutations] {
