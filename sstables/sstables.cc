@@ -2101,7 +2101,7 @@ sstable::make_crawling_reader(
     return kl::make_crawling_reader(shared_from_this(), std::move(schema), std::move(permit), std::move(trace_state), monitor);
 }
 
-static entry_descriptor make_entry_descriptor(sstring sstdir, sstring fname, sstring* const provided_ks, sstring* const provided_cf) {
+static entry_descriptor make_entry_descriptor(std::string_view sstdir, std::string_view fname, sstring* const provided_ks, sstring* const provided_cf) {
     static boost::regex la_mx("(la|m[cde])-([^-]+)-(\\w+)-(.*)");
     static boost::regex ka("(\\w+)-(\\w+)-ka-(\\d+)-(.*)");
 
@@ -2161,7 +2161,7 @@ entry_descriptor entry_descriptor::make_descriptor(const std::filesystem::path& 
 }
 
 entry_descriptor entry_descriptor::make_descriptor(sstring sstdir, sstring fname, sstring ks, sstring cf) {
-    return make_entry_descriptor(std::move(sstdir), std::move(fname), &ks, &cf);
+    return make_entry_descriptor(sstdir, fname, &ks, &cf);
 }
 
 sstable_version_types version_from_string(std::string_view s) {
