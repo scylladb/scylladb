@@ -188,9 +188,8 @@ schema_ptr try_load_schema_autodetect(const bpo::variables_map& app_config) {
     if (app_config.count("sstables")) {
         try {
             auto sst_path = std::filesystem::path(app_config["sstables"].as<std::vector<sstring>>().front());
+            auto ed = sstables::entry_descriptor::make_descriptor(sst_path);
             const auto sst_dir_path = std::filesystem::path(sst_path).remove_filename();
-            const auto sst_filename = sst_path.filename();
-            auto ed = sstables::entry_descriptor::make_descriptor(sst_dir_path.native(), sst_filename.native());
             std::filesystem::path data_dir_path;
             // Detect whether sstable is in root table directory, or in a sub-directory
             // The last component is "" due to the trailing "/" left by "remove_filename()" above.

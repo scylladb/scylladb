@@ -30,7 +30,7 @@ struct entry_descriptor {
     sstable_format_types format;
     component_type component;
 
-    static entry_descriptor make_descriptor(sstring sstdir, sstring fname);
+    static entry_descriptor make_descriptor(const std::filesystem::path& sst_path);
 
     // Use the given ks and cf and don't attempt to extract it from the dir path.
     // This allows loading sstables from any path, but the filename still has to be valid.
