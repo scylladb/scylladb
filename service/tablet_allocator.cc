@@ -179,7 +179,7 @@ class load_balancer {
     };
 
     struct node_load {
-        host_id node;
+        host_id id;
         uint64_t shard_count = 0;
         uint64_t tablet_count = 0;
 
@@ -310,6 +310,7 @@ public:
         topo.for_each_node([&] (const locator::node* node_ptr) {
             if (node_ptr->get_state() == locator::node::state::normal && node_ptr->dc_rack().dc == dc) {
                 node_load& load = nodes[node_ptr->host_id()];
+                load.id = node_ptr->host_id();
                 load.shard_count = node_ptr->get_shard_count();
                 load.shards.resize(load.shard_count);
                 if (!load.shard_count) {
