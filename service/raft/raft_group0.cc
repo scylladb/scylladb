@@ -597,6 +597,9 @@ future<> raft_group0::setup_group0_if_exist(db::system_keyspace& sys_ks, service
         group0_log.info("setup_group0: group 0 ID present. Starting existing Raft server.");
         co_await start_server_for_group0(group0_id, ss, qp, mm);
 
+        // Start group 0 leadership monitor fiber.
+        _leadership_monitor = leadership_monitor_fiber();
+
         // If we're not restarting in the middle of the Raft upgrade procedure, we must disable
         // migration_manager schema pulls.
         auto start_state = (co_await _client.get_group0_upgrade_state()).second;
@@ -1607,6 +1610,10 @@ future<> raft_group0::do_upgrade_to_group0(group0_upgrade_state start_state, ser
             "We're already a member of group 0."
             " Apparently we're restarting after a previous upgrade attempt failed.");
     }
+
+    // Start group 0 leadership monitor fiber.
+    _leadership_monitor = leadership_monitor_fiber();
+
     group0_members members0{_raft_gr.group0(), _raft_gr.address_map()};
 
     // After we joined, we shouldn't be removed from group 0 until the end of the procedure.
