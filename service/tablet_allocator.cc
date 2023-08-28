@@ -189,6 +189,16 @@ class load_balancer {
         std::vector<shard_id> shards_by_load; // heap which tracks most-loaded shards using shards_by_load_cmp().
         std::vector<shard_load> shards; // Indexed by shard_id to which a given shard_load corresponds.
 
+        std::optional<locator::load_sketch> target_load_sketch;
+
+        future<load_sketch&> get_load_sketch(const token_metadata_ptr& tm) {
+            if (!target_load_sketch) {
+                target_load_sketch.emplace(tm);
+                co_await target_load_sketch->populate(id);
+            }
+            co_return *target_load_sketch;
+        }
+
         // Call when tablet_count changes.
         void update() {
             avg_load = get_avg_load(tablet_count);
@@ -448,8 +458,6 @@ public:
 
         std::make_heap(nodes_by_load.begin(), nodes_by_load.end(), nodes_cmp);
 
-        locator::load_sketch target_load(_tm);
-        co_await target_load.populate(target);
         migration_plan plan;
         const tablet_metadata& tmeta = _tm->tablets();
         load_type max_off_candidate_load = 0; // max load among nodes which ran out of candidates.
@@ -570,7 +578,8 @@ public:
                 }
             }
 
-            auto dst = global_shard_id {target, target_load.next_shard(target)};
+            auto& target_load_sketch = co_await target_info.get_load_sketch(_tm);
+            auto dst = global_shard_id {target, target_load_sketch.next_shard(target)};
             auto mig = tablet_migration_info {source_tablet, src, dst};
 
             if (target_info.shards[dst.shard].streaming_write_load < max_write_streaming_load
