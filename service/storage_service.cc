@@ -427,6 +427,8 @@ future<> storage_service::topology_state_load() {
                     [[fallthrough]];
                 case topology::transition_state::commit_cdc_generation:
                     [[fallthrough]];
+                case topology::transition_state::tablet_draining:
+                    [[fallthrough]];
                 case topology::transition_state::write_both_read_old:
                     return read_new_t::no;
                 case topology::transition_state::write_both_read_new:
@@ -1473,7 +1475,11 @@ class topology_coordinator {
         }
     }
 
-    future<> handle_tablet_migration(group0_guard guard) {
+    // When "drain" is true, we migrate tablets only as long as there are nodes to drain
+    // and then change the transition state to write_both_read_old. Also, while draining,
+    // we ignore pending topology requests which normally interrupt load balancing.
+    // When "drain" is false, we do regular load balancing.
+    future<> handle_tablet_migration(group0_guard guard, bool drain) {
         // This step acts like a pump which advances state machines of individual tablets,
         // batching barriers and group0 updates.
         // If progress cannot be made, e.g. because all transitions are streaming, we block
@@ -1575,17 +1581,25 @@ class topology_coordinator {
 
         // In order to keep the cluster saturated, ask the load balancer for more transitions.
         // Unless there is a pending topology change operation.
-        auto ts = guard.write_timestamp();
-        auto [preempt, new_guard] = should_preempt_balancing(std::move(guard));
-        guard = std::move(new_guard);
-        if (ts != guard.write_timestamp()) {
-            // We rely on the fact that should_preempt_balancing() does not release the guard
-            // so that tablet metadata reading and updates are atomic.
-            on_internal_error(slogger, "should_preempt_balancing() retook the guard");
+        bool preempt = false;
+        if (!drain) {
+            // When draining, this method is invoked with an active node transition, which
+            // would normally cause preemption, which we don't want here.
+            auto ts = guard.write_timestamp();
+            auto [new_preempt, new_guard] = should_preempt_balancing(std::move(guard));
+            preempt = new_preempt;
+            guard = std::move(new_guard);
+            if (ts != guard.write_timestamp()) {
+                // We rely on the fact that should_preempt_balancing() does not release the guard
+                // so that tablet metadata reading and updates are atomic.
+                on_internal_error(slogger, "should_preempt_balancing() retook the guard");
+            }
         }
         if (!preempt) {
             auto plan = co_await _tablet_allocator.balance_tablets(get_token_metadata_ptr());
-            co_await generate_migration_updates(updates, guard, plan);
+            if (!drain || plan.has_nodes_to_drain()) {
+                co_await generate_migration_updates(updates, guard, plan);
+            }
         }
 
         // The updates have to be executed under the same guard which was used to read tablet metadata
@@ -1627,11 +1641,19 @@ class topology_coordinator {
             co_return;
         }
 
-        updates.emplace_back(
-            topology_mutation_builder(guard.write_timestamp())
-                .del_transition_state()
-                .set_version(_topo_sm._topology.version + 1)
-                .build());
+        if (drain) {
+            updates.emplace_back(
+                topology_mutation_builder(guard.write_timestamp())
+                    .set_transition_state(topology::transition_state::write_both_read_old)
+                    .set_version(_topo_sm._topology.version + 1)
+                    .build());
+        } else {
+            updates.emplace_back(
+                topology_mutation_builder(guard.write_timestamp())
+                    .del_transition_state()
+                    .set_version(_topo_sm._topology.version + 1)
+                    .build());
+        }
         co_await update_topology_state(std::move(guard), std::move(updates), "Finished tablet migration");
     }
 
@@ -1768,6 +1790,9 @@ class topology_coordinator {
                 auto str = ::format("committed new CDC generation, ID: {}", cdc_gen_id);
                 co_await update_topology_state(std::move(guard), {builder.build()}, std::move(str));
             }
+                break;
+            case topology::transition_state::tablet_draining:
+                co_await handle_tablet_migration(std::move(guard), true);
                 break;
             case topology::transition_state::write_both_read_old: {
                 auto node = get_node_to_work_on(std::move(guard));
@@ -1921,7 +1946,7 @@ class topology_coordinator {
             }
                 break;
             case topology::transition_state::tablet_migration:
-                co_await handle_tablet_migration(std::move(guard));
+                co_await handle_tablet_migration(std::move(guard), false);
                 break;
         }
         co_return true;
@@ -1969,7 +1994,7 @@ class topology_coordinator {
                         // start decommission and put tokens of decommissioning nodes into write_both_read_old state
                         // meaning that reads will go to the replica being decommissioned
                         // but writes will go to new owner as well
-                        builder.set_transition_state(topology::transition_state::write_both_read_old)
+                        builder.set_transition_state(topology::transition_state::tablet_draining)
                                .set_version(_topo_sm._topology.version + 1)
                                .with_node(node.id)
                                .set("node_state", node_state::decommissioning)
@@ -1979,10 +2004,7 @@ class topology_coordinator {
                         break;
                     case topology_request::remove:
                         assert(node.rs->ring);
-                        // start removing and put tokens of a node been removed into write_both_read_old state
-                        // meaning that reads will go to the replica being removed (it is dead though)
-                        // but writes will go to new owner as well
-                        builder.set_transition_state(topology::transition_state::write_both_read_old)
+                        builder.set_transition_state(topology::transition_state::tablet_draining)
                                .set_version(_topo_sm._topology.version + 1)
                                .with_node(node.id)
                                .set("node_state", node_state::removing)
@@ -1996,10 +2018,7 @@ class topology_coordinator {
                         auto it = _topo_sm._topology.normal_nodes.find(replaced_id);
                         assert(it != _topo_sm._topology.normal_nodes.end());
                         assert(it->second.ring && it->second.state == node_state::normal);
-                        // start replacing and take ownership of the tokens of a node been replaced
-                        // and put them into write_both_read_old state meaning that reads will go
-                        // to the replica being removed (it is dead though) but writes will go to new owner as well
-                        builder.set_transition_state(topology::transition_state::write_both_read_old)
+                        builder.set_transition_state(topology::transition_state::tablet_draining)
                                .set_version(_topo_sm._topology.version + 1)
                                .with_node(node.id)
                                .set("node_state", node_state::replacing)

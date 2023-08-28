@@ -761,6 +761,335 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_empty_node) {
   }).get();
 }
 
+SEASTAR_THREAD_TEST_CASE(test_decommission_rf_met) {
+    // Verifies that load balancer moves tablets out of the decommissioned node.
+    // The scenario is such that replication factor of tablets can be satisfied after decommission.
+    do_with_cql_env_thread([](auto& e) {
+        inet_address ip1("192.168.0.1");
+        inet_address ip2("192.168.0.2");
+        inet_address ip3("192.168.0.3");
+
+        auto host1 = host_id(next_uuid());
+        auto host2 = host_id(next_uuid());
+        auto host3 = host_id(next_uuid());
+
+        auto table1 = table_id(next_uuid());
+
+        semaphore sem(1);
+        shared_token_metadata stm([&sem]() noexcept { return get_units(sem, 1); }, locator::token_metadata::config {
+                locator::topology::config {
+                        .this_endpoint = ip1,
+                        .local_dc_rack = locator::endpoint_dc_rack::default_location
+                }
+        });
+
+        stm.mutate_token_metadata([&](auto& tm) {
+            const unsigned shard_count = 2;
+
+            tm.update_host_id(host1, ip1);
+            tm.update_host_id(host2, ip2);
+            tm.update_host_id(host3, ip3);
+            tm.update_topology(ip1, locator::endpoint_dc_rack::default_location, std::nullopt, shard_count);
+            tm.update_topology(ip2, locator::endpoint_dc_rack::default_location, std::nullopt, shard_count);
+            tm.update_topology(ip3, locator::endpoint_dc_rack::default_location, node::state::being_decommissioned,
+                               shard_count);
+
+            tablet_map tmap(4);
+            auto tid = tmap.first_tablet();
+            tmap.set_tablet(tid, tablet_info {
+                    tablet_replica_set {
+                            tablet_replica {host1, 0},
+                            tablet_replica {host2, 1},
+                    }
+            });
+            tid = *tmap.next_tablet(tid);
+            tmap.set_tablet(tid, tablet_info {
+                    tablet_replica_set {
+                            tablet_replica {host1, 0},
+                            tablet_replica {host2, 1},
+                    }
+            });
+            tid = *tmap.next_tablet(tid);
+            tmap.set_tablet(tid, tablet_info {
+                    tablet_replica_set {
+                            tablet_replica {host1, 0},
+                            tablet_replica {host3, 0},
+                    }
+            });
+            tid = *tmap.next_tablet(tid);
+            tmap.set_tablet(tid, tablet_info {
+                    tablet_replica_set {
+                            tablet_replica {host2, 1},
+                            tablet_replica {host3, 1},
+                    }
+            });
+            tablet_metadata tmeta;
+            tmeta.set_tablet_map(table1, std::move(tmap));
+            tm.set_tablets(std::move(tmeta));
+            return make_ready_future<>();
+        }).get();
+
+        rebalance_tablets(e.get_tablet_allocator().local(), stm);
+
+        {
+            load_sketch load(stm.get());
+            load.populate().get();
+            BOOST_REQUIRE(load.get_avg_shard_load(host1) == 2);
+            BOOST_REQUIRE(load.get_avg_shard_load(host2) == 2);
+            BOOST_REQUIRE(load.get_avg_shard_load(host3) == 0);
+        }
+
+        stm.mutate_token_metadata([&](auto& tm) {
+            tm.update_topology(ip3, locator::endpoint_dc_rack::default_location, node::state::left);
+            return make_ready_future<>();
+        }).get();
+
+        rebalance_tablets(e.get_tablet_allocator().local(), stm);
+
+        {
+            load_sketch load(stm.get());
+            load.populate().get();
+            BOOST_REQUIRE(load.get_avg_shard_load(host1) == 2);
+            BOOST_REQUIRE(load.get_avg_shard_load(host2) == 2);
+            BOOST_REQUIRE(load.get_avg_shard_load(host3) == 0);
+        }
+    }).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_decommission_two_racks) {
+    // Verifies that load balancer moves tablets out of the decommissioned node.
+    // The scenario is such that replication constraints of tablets can be satisfied after decommission.
+    do_with_cql_env_thread([](auto& e) {
+        inet_address ip1("192.168.0.1");
+        inet_address ip2("192.168.0.2");
+        inet_address ip3("192.168.0.3");
+        inet_address ip4("192.168.0.4");
+
+        auto host1 = host_id(next_uuid());
+        auto host2 = host_id(next_uuid());
+        auto host3 = host_id(next_uuid());
+        auto host4 = host_id(next_uuid());
+
+        std::vector<endpoint_dc_rack> racks = {
+                endpoint_dc_rack{ "dc1", "rack-1" },
+                endpoint_dc_rack{ "dc1", "rack-2" }
+        };
+
+        auto table1 = table_id(next_uuid());
+
+        semaphore sem(1);
+        shared_token_metadata stm([&sem]() noexcept { return get_units(sem, 1); }, locator::token_metadata::config {
+                locator::topology::config {
+                        .this_endpoint = ip1,
+                        .local_dc_rack = racks[0]
+                }
+        });
+
+        stm.mutate_token_metadata([&](auto& tm) {
+            const unsigned shard_count = 1;
+
+            tm.update_host_id(host1, ip1);
+            tm.update_host_id(host2, ip2);
+            tm.update_host_id(host3, ip3);
+            tm.update_host_id(host4, ip4);
+            tm.update_topology(ip1, racks[0], std::nullopt, shard_count);
+            tm.update_topology(ip2, racks[1], std::nullopt, shard_count);
+            tm.update_topology(ip3, racks[0], std::nullopt, shard_count);
+            tm.update_topology(ip4, racks[1], node::state::being_decommissioned,
+                               shard_count);
+
+            tablet_map tmap(4);
+            auto tid = tmap.first_tablet();
+            tmap.set_tablet(tid, tablet_info {
+                    tablet_replica_set {
+                            tablet_replica {host1, 0},
+                            tablet_replica {host2, 0},
+                    }
+            });
+            tid = *tmap.next_tablet(tid);
+            tmap.set_tablet(tid, tablet_info {
+                    tablet_replica_set {
+                            tablet_replica {host2, 0},
+                            tablet_replica {host3, 0},
+                    }
+            });
+            tid = *tmap.next_tablet(tid);
+            tmap.set_tablet(tid, tablet_info {
+                    tablet_replica_set {
+                            tablet_replica {host3, 0},
+                            tablet_replica {host4, 0},
+                    }
+            });
+            tid = *tmap.next_tablet(tid);
+            tmap.set_tablet(tid, tablet_info {
+                    tablet_replica_set {
+                            tablet_replica {host1, 0},
+                            tablet_replica {host2, 0},
+                    }
+            });
+            tablet_metadata tmeta;
+            tmeta.set_tablet_map(table1, std::move(tmap));
+            tm.set_tablets(std::move(tmeta));
+            return make_ready_future<>();
+        }).get();
+
+        rebalance_tablets(e.get_tablet_allocator().local(), stm);
+
+        {
+            load_sketch load(stm.get());
+            load.populate().get();
+            BOOST_REQUIRE(load.get_avg_shard_load(host1) >= 2);
+            BOOST_REQUIRE(load.get_avg_shard_load(host2) >= 2);
+            BOOST_REQUIRE(load.get_avg_shard_load(host3) >= 2);
+            BOOST_REQUIRE(load.get_avg_shard_load(host4) == 0);
+        }
+
+        // Verify replicas are not collocated on racks
+        {
+            auto tm = stm.get();
+            auto& tmap = tm->tablets().get_tablet_map(table1);
+            tmap.for_each_tablet([&](auto tid, auto& tinfo) {
+                auto rack1 = tm->get_topology().get_rack(tinfo.replicas[0].host);
+                auto rack2 = tm->get_topology().get_rack(tinfo.replicas[1].host);
+                BOOST_REQUIRE(rack1 != rack2);
+            }).get();
+        }
+    }).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_decommission_rack_load_failure) {
+    // Verifies that load balancer moves tablets out of the decommissioned node.
+    // The scenario is such that it is impossible to distribute replicas without violating rack uniqueness.
+    do_with_cql_env_thread([](auto& e) {
+        inet_address ip1("192.168.0.1");
+        inet_address ip2("192.168.0.2");
+        inet_address ip3("192.168.0.3");
+        inet_address ip4("192.168.0.4");
+
+        auto host1 = host_id(next_uuid());
+        auto host2 = host_id(next_uuid());
+        auto host3 = host_id(next_uuid());
+        auto host4 = host_id(next_uuid());
+
+        std::vector<endpoint_dc_rack> racks = {
+                endpoint_dc_rack{ "dc1", "rack-1" },
+                endpoint_dc_rack{ "dc1", "rack-2" }
+        };
+
+        auto table1 = table_id(next_uuid());
+
+        semaphore sem(1);
+        shared_token_metadata stm([&sem]() noexcept { return get_units(sem, 1); }, locator::token_metadata::config {
+                locator::topology::config {
+                        .this_endpoint = ip1,
+                        .local_dc_rack = racks[0]
+                }
+        });
+
+        stm.mutate_token_metadata([&](auto& tm) {
+            const unsigned shard_count = 1;
+
+            tm.update_host_id(host1, ip1);
+            tm.update_host_id(host2, ip2);
+            tm.update_host_id(host3, ip3);
+            tm.update_host_id(host4, ip4);
+            tm.update_topology(ip1, racks[0], std::nullopt, shard_count);
+            tm.update_topology(ip2, racks[0], std::nullopt, shard_count);
+            tm.update_topology(ip3, racks[0], std::nullopt, shard_count);
+            tm.update_topology(ip4, racks[1], node::state::being_decommissioned,
+                               shard_count);
+
+            tablet_map tmap(4);
+            auto tid = tmap.first_tablet();
+            tmap.set_tablet(tid, tablet_info {
+                    tablet_replica_set {
+                            tablet_replica {host1, 0},
+                            tablet_replica {host4, 0},
+                    }
+            });
+            tid = *tmap.next_tablet(tid);
+            tmap.set_tablet(tid, tablet_info {
+                    tablet_replica_set {
+                            tablet_replica {host2, 0},
+                            tablet_replica {host4, 0},
+                    }
+            });
+            tid = *tmap.next_tablet(tid);
+            tmap.set_tablet(tid, tablet_info {
+                    tablet_replica_set {
+                            tablet_replica {host3, 0},
+                            tablet_replica {host4, 0},
+                    }
+            });
+            tid = *tmap.next_tablet(tid);
+            tmap.set_tablet(tid, tablet_info {
+                    tablet_replica_set {
+                            tablet_replica {host1, 0},
+                            tablet_replica {host4, 0},
+                    }
+            });
+            tablet_metadata tmeta;
+            tmeta.set_tablet_map(table1, std::move(tmap));
+            tm.set_tablets(std::move(tmeta));
+            return make_ready_future<>();
+        }).get();
+
+        BOOST_REQUIRE_THROW(rebalance_tablets(e.get_tablet_allocator().local(), stm), std::runtime_error);
+    }).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_decommission_rf_not_met) {
+    // Verifies that load balancer moves tablets out of the decommissioned node.
+    // The scenario is such that replication factor of tablets can be satisfied after decommission.
+    do_with_cql_env_thread([](auto& e) {
+        inet_address ip1("192.168.0.1");
+        inet_address ip2("192.168.0.2");
+        inet_address ip3("192.168.0.3");
+
+        auto host1 = host_id(next_uuid());
+        auto host2 = host_id(next_uuid());
+        auto host3 = host_id(next_uuid());
+
+        auto table1 = table_id(next_uuid());
+
+        semaphore sem(1);
+        shared_token_metadata stm([&sem]() noexcept { return get_units(sem, 1); }, locator::token_metadata::config {
+                locator::topology::config {
+                        .this_endpoint = ip1,
+                        .local_dc_rack = locator::endpoint_dc_rack::default_location
+                }
+        });
+
+        stm.mutate_token_metadata([&](auto& tm) {
+            const unsigned shard_count = 2;
+
+            tm.update_host_id(host1, ip1);
+            tm.update_host_id(host2, ip2);
+            tm.update_host_id(host3, ip3);
+            tm.update_topology(ip1, locator::endpoint_dc_rack::default_location, std::nullopt, shard_count);
+            tm.update_topology(ip2, locator::endpoint_dc_rack::default_location, std::nullopt, shard_count);
+            tm.update_topology(ip3, locator::endpoint_dc_rack::default_location, node::state::being_decommissioned,
+                               shard_count);
+
+            tablet_map tmap(1);
+            auto tid = tmap.first_tablet();
+            tmap.set_tablet(tid, tablet_info {
+                    tablet_replica_set {
+                            tablet_replica {host1, 0},
+                            tablet_replica {host2, 0},
+                            tablet_replica {host3, 0},
+                    }
+            });
+            tablet_metadata tmeta;
+            tmeta.set_tablet_map(table1, std::move(tmap));
+            tm.set_tablets(std::move(tmeta));
+            return make_ready_future<>();
+        }).get();
+
+        BOOST_REQUIRE_THROW(rebalance_tablets(e.get_tablet_allocator().local(), stm), std::runtime_error);
+    }).get();
+}
+
 SEASTAR_THREAD_TEST_CASE(test_load_balancing_works_with_in_progress_transitions) {
   do_with_cql_env_thread([] (auto& e) {
     // Tests the scenario of bootstrapping a single node.

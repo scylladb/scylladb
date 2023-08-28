@@ -143,7 +143,7 @@ async def test_table_drop_with_auto_snapshot(manager: ManagerClient):
 
 
 @pytest.mark.asyncio
-async def test_bootstrap(manager: ManagerClient):
+async def test_topology_changes(manager: ManagerClient):
     logger.info("Bootstrapping cluster")
     servers = [await manager.server_add(), await manager.server_add(), await manager.server_add()]
 
@@ -176,6 +176,10 @@ async def test_bootstrap(manager: ManagerClient):
 
     await check()
     time.sleep(5) # Give load balancer some time to do work
+    await check()
+
+    await manager.decommission_node(servers[0].server_id)
+
     await check()
 
     await cql.run_async("DROP KEYSPACE test;")

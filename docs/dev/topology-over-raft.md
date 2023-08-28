@@ -76,7 +76,7 @@ such as `check_and_repair_cdc_streams`.
 If there is no work for the state machine, tablet load balancer is invoked to
 check if we need to rebalance. If so, it computes an incremental tablet migration
 plan, persists it by moving tablets into transitional states, and moves the state machine
-into the tablet migration track. All this happens atomically form the perspective
+into the tablet migration track. All this happens atomically from the perspective
 of group0 state machine.
 
 The tablet migration track also invokes the load balancer and starts new migrations
@@ -84,9 +84,9 @@ to keep the cluster saturated with streaming. The load balancer is invoked
 on transition of tablet stages, and also continuously as long as it generates
 new migrations.
 
-If there is a pending topology change request, the load balancer
-will not be invoked to allow for current migrations to drain, after which the
-state machine will exit the tablet migration track and allow pending topology
+If there is a pending topology change request during tablet migration track,
+the load balancer will not be invoked to allow for current migrations to drain,
+after which the state machine will exit the tablet migration track and allow pending topology
 operation to start.
 
 The tablet migration track excludes with other topology changes, so node operations
@@ -102,6 +102,12 @@ When the topology state machine is not in the tablet_migration track, it is guar
 that there are no tablet transitions in the system.
 
 Tablets are migrated in parallel and independently.
+
+There is a variant of tablet migration track called tablet draining track, which is invoked
+as a step of certain topology operations (e.g. decommission). Its goal is to readjust tablet replicas
+so that a given topology change can proceed. For example, when decommissioning a node, we
+need to migrate tablet replicas away from the node being decommissioned.
+Tablet draining happens before making changes to vnode-based replication.
 
 # Tablet migration
 
