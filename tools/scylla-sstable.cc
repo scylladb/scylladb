@@ -252,10 +252,9 @@ const std::vector<sstables::shared_sstable> load_sstables(schema_ptr schema, sst
             }
         }
 
-        const auto dir_path = sst_path.parent_path();
-        const auto sst_filename = sst_path.filename();
 
-        auto ed = sstables::entry_descriptor::make_descriptor(dir_path.c_str(), sst_filename.c_str(), schema->ks_name(), schema->cf_name());
+        auto ed = sstables::entry_descriptor::make_descriptor(sst_path, schema->ks_name(), schema->cf_name());
+        const auto dir_path = sst_path.parent_path();
         data_dictionary::storage_options local;
         auto sst = sst_man.make_sstable(schema, dir_path.c_str(), local, ed.generation, sstables::sstable_state::normal, ed.version, ed.format);
 

@@ -2160,8 +2160,8 @@ entry_descriptor entry_descriptor::make_descriptor(const std::filesystem::path& 
     return make_entry_descriptor(sst_path.parent_path().native(), sst_path.filename().native(), nullptr, nullptr);
 }
 
-entry_descriptor entry_descriptor::make_descriptor(sstring sstdir, sstring fname, sstring ks, sstring cf) {
-    return make_entry_descriptor(sstdir, fname, &ks, &cf);
+entry_descriptor entry_descriptor::make_descriptor(const std::filesystem::path& sst_path, sstring ks, sstring cf) {
+    return make_entry_descriptor(sst_path.parent_path().native(), sst_path.filename().native(), &ks, &cf);
 }
 
 sstable_version_types version_from_string(std::string_view s) {
