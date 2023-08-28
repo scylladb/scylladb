@@ -2102,6 +2102,10 @@ sstable::make_crawling_reader(
 }
 
 static entry_descriptor make_entry_descriptor(std::string_view sstdir, std::string_view fname, sstring* const provided_ks, sstring* const provided_cf) {
+    // examples of fname look like
+    //   la-42-big-Data.db
+    //   ka-42-big-Data.db
+    //   me-3g8w_00qf_4pbog2i7h2c7am0uoe-big-Data.db
     static boost::regex la_mx("(la|m[cde])-([^-]+)-(\\w+)-(.*)");
     static boost::regex ka("(\\w+)-(\\w+)-ka-(\\d+)-(.*)");
 
