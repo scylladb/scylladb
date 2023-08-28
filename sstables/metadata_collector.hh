@@ -72,20 +72,11 @@ struct column_stats {
     void update_local_deletion_time(int32_t value) {
         local_deletion_time_tracker.update(value);
     }
-    void update_local_deletion_time(gc_clock::time_point value) {
-        bool capped;
-        int32_t ldt = adjusted_local_deletion_time(value, capped);
-        update_local_deletion_time(ldt);
-        capped_local_deletion_time |= capped;
-    }
-    void update_local_deletion_time_and_tombstone_histogram(int32_t value) {
-        local_deletion_time_tracker.update(value);
-        tombstone_histogram.update(value);
-    }
     void update_local_deletion_time_and_tombstone_histogram(gc_clock::time_point value) {
         bool capped;
         int32_t ldt = adjusted_local_deletion_time(value, capped);
-        update_local_deletion_time_and_tombstone_histogram(ldt);
+        local_deletion_time_tracker.update(ldt);
+        tombstone_histogram.update(ldt);
         capped_local_deletion_time |= capped;
     }
     void update_ttl(int32_t value) {
@@ -93,11 +84,6 @@ struct column_stats {
     }
     void update_ttl(gc_clock::duration value) {
         ttl_tracker.update(gc_clock::as_int32(value));
-    }
-    void update(const deletion_time& dt) {
-        assert(!dt.live());
-        update_timestamp(dt.marked_for_delete_at);
-        update_local_deletion_time_and_tombstone_histogram(dt.local_deletion_time);
     }
     void do_update(const tombstone& t) {
         update_timestamp(t.timestamp);
