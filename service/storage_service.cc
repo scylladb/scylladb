@@ -2207,11 +2207,6 @@ future<> storage_service::raft_bootstrap(raft::server& raft_server) {
 }
 
 future<> storage_service::update_topology_with_local_metadata(raft::server& raft_server) {
-    co_await do_update_topology_with_local_metadata(raft_server);
-    _topology_updated_with_local_metadata = true;
-}
-
-future<> storage_service::do_update_topology_with_local_metadata(raft::server& raft_server) {
     // TODO: include more metadata here
     auto local_shard_count = smp::count;
     auto local_ignore_msb = _db.local().get_config().murmur3_partitioner_ignore_msb_bits();
