@@ -610,7 +610,7 @@ struct stop_execution_loop {
 }
 
 future<> reader_concurrency_semaphore::execution_loop() noexcept {
-    while (!_stopped) {
+    while (true) {
         try {
             co_await _ready_list.not_empty();
         } catch (stop_execution_loop) {
@@ -774,10 +774,8 @@ future<> reader_concurrency_semaphore::stop() noexcept {
     clear_inactive_reads();
     co_await _close_readers_gate.close();
     co_await _permit_gate.close();
+    _ready_list.abort(std::make_exception_ptr(stop_execution_loop{}));
     if (_execution_loop_future) {
-        if (_ready_list.has_blocked_consumer()) {
-            _ready_list.abort(std::make_exception_ptr(stop_execution_loop{}));
-        }
         co_await std::move(*_execution_loop_future);
     }
     broken(std::make_exception_ptr(stopped_exception()));
