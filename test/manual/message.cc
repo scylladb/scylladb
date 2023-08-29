@@ -8,6 +8,7 @@
  */
 
 #include <chrono>
+#include <optional>
 #include <seastar/core/reactor.hh>
 #include <seastar/core/app-template.hh>
 #include <seastar/core/sstring.hh>
@@ -18,6 +19,7 @@
 #include "gms/gossip_digest_ack2.hh"
 #include "gms/gossip_digest.hh"
 #include "api/api.hh"
+#include "utils/UUID.hh"
 #include "utils/fb_utilities.hh"
 
 using namespace std::chrono_literals;
@@ -119,7 +121,7 @@ public:
         utils::chunked_vector<gms::gossip_digest> digests;
         digests.push_back(gms::gossip_digest(ep1, gen++, ver++));
         digests.push_back(gms::gossip_digest(ep2, gen++, ver++));
-        gms::gossip_digest_syn syn("my_cluster", "my_partition", digests);
+        gms::gossip_digest_syn syn("my_cluster", "my_partition", digests, utils::null_uuid());
         return ms.send_gossip_digest_syn(id, std::move(syn)).then([this] {
             return digest_test_done.get_future();
         });

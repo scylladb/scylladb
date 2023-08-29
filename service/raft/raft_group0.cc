@@ -499,6 +499,12 @@ future<> raft_group0::join_group0(std::vector<gms::inet_address> seeds, bool as_
     // Allow peer_exchange() RPC to access group 0 only after group0_id is persisted.
 
     _group0 = group0_id;
+
+    co_await _gossiper.container().invoke_on_all([group0_id = group0_id.uuid()] (auto& gossiper) {
+        gossiper.set_group0_id(group0_id);
+        return make_ready_future<>();
+    });
+
     group0_log.info("server {} joined group 0 with group id {}", my_id, group0_id);
 }
 
