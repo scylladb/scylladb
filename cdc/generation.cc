@@ -763,8 +763,8 @@ future<> generation_service::stop() {
         cdc_log.error("CDC stream rewrite failed: ", std::current_exception());
     }
 
-    if (this_shard_id() == 0) {
-        co_await _gossiper.unregister_(shared_from_this());
+    if (_joined && (this_shard_id() == 0)) {
+        co_await leave_ring();
     }
 
     _stopped = true;
@@ -776,7 +776,6 @@ generation_service::~generation_service() {
 
 future<> generation_service::after_join(std::optional<cdc::generation_id>&& startup_gen_id) {
     assert_shard_zero(__PRETTY_FUNCTION__);
-    assert(_sys_ks.local().bootstrap_complete());
 
     _gen_id = std::move(startup_gen_id);
     _gossiper.register_(shared_from_this());
@@ -792,6 +791,12 @@ future<> generation_service::after_join(std::optional<cdc::generation_id>&& star
     // Since this depends on the entire cluster (and therefore we cannot guarantee
     // timely completion), run it in the background and wait for it in stop().
     _cdc_streams_rewrite_complete = maybe_rewrite_streams_descriptions();
+}
+
+future<> generation_service::leave_ring() {
+    assert_shard_zero(__PRETTY_FUNCTION__);
+    _joined = false;
+    co_await _gossiper.unregister_(shared_from_this());
 }
 
 future<> generation_service::on_join(gms::inet_address ep, gms::endpoint_state ep_state, gms::permit_id pid) {
@@ -957,16 +962,12 @@ future<> generation_service::legacy_handle_cdc_generation(std::optional<cdc::gen
         co_return;
     }
 
-    if (!_sys_ks.local().bootstrap_complete() || !_sys_dist_ks.local_is_initialized()
-            || !_sys_dist_ks.local().started()) {
-        // The service should not be listening for generation changes until after the node
-        // is bootstrapped. Therefore we would previously assume that this condition
-        // can never become true and call on_internal_error here, but it turns out that
-        // it may become true on decommission: the node enters NEEDS_BOOTSTRAP
-        // state before leaving the token ring, so bootstrap_complete() becomes false.
-        // In that case we can simply return.
-        co_return;
+    if (!_sys_dist_ks.local_is_initialized() || !_sys_dist_ks.local().started()) {
+        on_internal_error(cdc_log, "Legacy handle CDC generation with sys.dist.ks. down");
     }
+
+    // The service should not be listening for generation changes until after the node
+    // is bootstrapped and since the node leaves the ring on decommission
 
     if (co_await container().map_reduce(and_reducer(), [ts = get_ts(*gen_id)] (generation_service& svc) {
         return !svc._cdc_metadata.prepare(ts);

@@ -791,7 +791,8 @@ private:
                 std::ref(_elc_notif),
                 std::ref(_batchlog_manager),
                 std::ref(_snitch),
-                std::ref(_tablet_allocator)).get();
+                std::ref(_tablet_allocator),
+                std::ref(_cdc_generation_service)).get();
             auto stop_storage_service = defer([this] { _ss.stop().get(); });
 
             _ss.invoke_on_all([this] (service::storage_service& ss) {
@@ -887,7 +888,7 @@ private:
             _ss.local().set_group0(group0_service, raft_topology_change_enabled);
 
             try {
-                _ss.local().join_cluster(_cdc_generation_service.local(), _sys_dist_ks, _proxy, _qp.local()).get();
+                _ss.local().join_cluster(_sys_dist_ks, _proxy, _qp.local()).get();
             } catch (std::exception& e) {
                 // if any of the defers crashes too, we'll never see
                 // the error

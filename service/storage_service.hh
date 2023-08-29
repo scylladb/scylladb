@@ -163,7 +163,8 @@ public:
         endpoint_lifecycle_notifier& elc_notif,
         sharded<db::batchlog_manager>& bm,
         sharded<locator::snitch_ptr>& snitch,
-        sharded<service::tablet_allocator>& tablet_allocator);
+        sharded<service::tablet_allocator>& tablet_allocator,
+        sharded<cdc::generation_service>& cdc_gs);
 
     // Needed by distributed<>
     future<> stop();
@@ -334,8 +335,7 @@ public:
      *
      * \see init_messaging_service_part
      */
-    future<> join_cluster(cdc::generation_service& cdc_gen_service,
-            sharded<db::system_distributed_keyspace>& sys_dist_ks, sharded<service::storage_proxy>& proxy, cql3::query_processor& qp);
+    future<> join_cluster(sharded<db::system_distributed_keyspace>& sys_dist_ks, sharded<service::storage_proxy>& proxy, cql3::query_processor& qp);
 
     void set_group0(service::raft_group0&, bool raft_topology_change_enabled);
 
@@ -347,8 +347,7 @@ private:
     bool should_bootstrap();
     bool is_replacing();
     bool is_first_node();
-    future<> join_token_ring(cdc::generation_service& cdc_gen_service,
-            sharded<db::system_distributed_keyspace>& sys_dist_ks,
+    future<> join_token_ring(sharded<db::system_distributed_keyspace>& sys_dist_ks,
             sharded<service::storage_proxy>& proxy,
             std::unordered_set<gms::inet_address> initial_contact_nodes,
             std::unordered_set<gms::inet_address> loaded_endpoints,
@@ -367,7 +366,7 @@ private:
     // Stream data for which we become a new replica.
     // Before that, if we're not replacing another node, inform other nodes about our chosen tokens
     // and wait for RING_DELAY ms so that we receive new writes from coordinators during streaming.
-    future<> bootstrap(cdc::generation_service& cdc_gen_service, std::unordered_set<token>& bootstrap_tokens, std::optional<cdc::generation_id>& cdc_gen_id, const std::optional<replacement_info>& replacement_info);
+    future<> bootstrap(std::unordered_set<token>& bootstrap_tokens, std::optional<cdc::generation_id>& cdc_gen_id, const std::optional<replacement_info>& replacement_info);
 
 public:
 
@@ -488,6 +487,7 @@ private:
     sharded<db::system_keyspace>& _sys_ks;
     locator::snitch_signal_slot_t _snitch_reconfigure;
     sharded<service::tablet_allocator>& _tablet_allocator;
+    sharded<cdc::generation_service>& _cdc_gens;
 private:
     /**
      * Handle node bootstrap
@@ -691,7 +691,7 @@ public:
     future<std::map<gms::inet_address, float>> effective_ownership(sstring keyspace_name);
 
     // Must run on shard 0.
-    future<> check_and_repair_cdc_streams(cdc::generation_service&);
+    future<> check_and_repair_cdc_streams();
 
 private:
     promise<> _drain_finished;
@@ -752,7 +752,7 @@ private:
     future<> _raft_state_monitor = make_ready_future<>();
     // This fibers monitors raft state and start/stops the topology change
     // coordinator fiber
-    future<> raft_state_monitor_fiber(raft::server&, cdc::generation_service&, sharded<db::system_distributed_keyspace>& sys_dist_ks);
+    future<> raft_state_monitor_fiber(raft::server&, sharded<db::system_distributed_keyspace>& sys_dist_ks);
 
      // State machine that is responsible for topology change
     topology_state_machine _topology_state_machine;
@@ -791,10 +791,10 @@ private:
     // This is called on all nodes for each new command received through raft
     // raft_group0_client::_read_apply_mutex must be held
     // Precondition: the topology mutations were already written to disk; the function only transitions the in-memory state machine.
-    future<> topology_transition(cdc::generation_service&);
+    future<> topology_transition();
     // load topology state machine snapshot into memory
     // raft_group0_client::_read_apply_mutex must be held
-    future<> topology_state_load(cdc::generation_service&);
+    future<> topology_state_load();
     // Applies received raft snapshot to local state machine persistent storage
     // raft_group0_client::_read_apply_mutex must be held
     future<> merge_topology_snapshot(raft_topology_snapshot snp);

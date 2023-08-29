@@ -1275,7 +1275,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 std::ref(feature_service), std::ref(mm), std::ref(token_metadata), std::ref(erm_factory),
                 std::ref(messaging), std::ref(repair),
                 std::ref(stream_manager), std::ref(lifecycle_notifier), std::ref(bm), std::ref(snitch),
-                std::ref(tablet_allocator)).get();
+                std::ref(tablet_allocator), std::ref(cdc_generation_service)).get();
 
             auto stop_storage_service = defer_verbose_shutdown("storage_service", [&] {
                 ss.stop().get();
@@ -1577,7 +1577,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             auto stop_messaging_api = defer_verbose_shutdown("messaging service API", [&ctx] {
                 api::unset_server_messaging_service(ctx).get();
             });
-            api::set_server_storage_service(ctx, ss, gossiper, cdc_generation_service, sys_ks).get();
+            api::set_server_storage_service(ctx, ss, gossiper, sys_ks).get();
             api::set_server_repair(ctx, repair).get();
             auto stop_repair_api = defer_verbose_shutdown("repair API", [&ctx] {
                 api::unset_server_repair(ctx).get();
@@ -1643,7 +1643,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // Need to do it before allowing incomming messaging service connections since
             // storage proxy's and migration manager's verbs may access group0.
             // This will also disable migration manager schema pulls if needed.
-            group0_service.setup_group0_if_exist(sys_ks.local(), ss.local(), qp.local(), mm.local(), cdc_generation_service.local()).get();
+            group0_service.setup_group0_if_exist(sys_ks.local(), ss.local(), qp.local(), mm.local()).get();
 
             // It's essential to load fencing_version prior to starting the messaging service,
             // since incoming messages may require fencing.
@@ -1659,7 +1659,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             }).get();
 
             with_scheduling_group(maintenance_scheduling_group, [&] {
-                return ss.local().join_cluster(cdc_generation_service.local(), sys_dist_ks, proxy, qp.local());
+                return ss.local().join_cluster(sys_dist_ks, proxy, qp.local());
             }).get();
 
             sl_controller.invoke_on_all([&lifecycle_notifier] (qos::service_level_controller& controller) {

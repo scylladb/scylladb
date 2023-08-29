@@ -98,6 +98,7 @@ public:
      * Must be called on shard 0 - that's where the generation management happens.
      */
     future<> after_join(std::optional<cdc::generation_id>&& startup_gen_id);
+    future<> leave_ring();
 
     cdc::metadata& get_cdc_metadata() {
         return _cdc_metadata;
