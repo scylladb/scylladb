@@ -139,8 +139,10 @@ public:
         using task_impl_ptr = shared_ptr<impl>;
     protected:
         task_impl_ptr _impl;
+    private:
+        gate::holder _gate_holder;
     public:
-        task(task_impl_ptr&& impl) noexcept;
+        task(task_impl_ptr&& impl, gate::holder) noexcept;
 
         task_id id();
         std::string type() const;
