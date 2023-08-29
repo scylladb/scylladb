@@ -164,6 +164,9 @@ private:
     // Requires task->_compaction_state.gate to be held and task to be registered in _tasks.
     future<compaction_stats_opt> perform_task(shared_ptr<compaction::compaction_task_executor> task, throw_if_stopping do_throw_if_stopping);
 
+    // Return nullopt if compaction cannot be started
+    std::optional<gate::holder> start_compaction(table_state& t);
+
     // parent_info set to std::nullopt means that task manager should not register this task executor.
     // To create a task manager task with no parent, parent_info argument should contain empty task_info.
     template<typename TaskExecutor, typename... Args>
