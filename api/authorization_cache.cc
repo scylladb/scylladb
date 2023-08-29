@@ -11,6 +11,7 @@
 #include "api/authorization_cache.hh"
 #include "api/api.hh"
 #include "auth/common.hh"
+#include "auth/service.hh"
 
 namespace api {
 using namespace json;

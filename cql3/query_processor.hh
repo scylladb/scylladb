@@ -20,6 +20,7 @@
 #include "cql3/prepared_statements_cache.hh"
 #include "cql3/authorized_prepared_statements_cache.hh"
 #include "cql3/statements/prepared_statement.hh"
+#include "cql3/cql_statement.hh"
 #include "exceptions/exceptions.hh"
 #include "service/migration_listener.hh"
 #include "transport/messages/result_message.hh"
@@ -28,6 +29,7 @@
 #include "service/broadcast_tables/experimental/query_result.hh"
 #include "utils/observable.hh"
 #include "lang/wasm.hh"
+#include "service/raft/raft_group0_client.hh"
 
 
 namespace service {

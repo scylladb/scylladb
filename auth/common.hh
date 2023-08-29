@@ -22,7 +22,6 @@
 #include "log.hh"
 #include "seastarx.hh"
 #include "utils/exponential_backoff_retry.hh"
-#include "service/query_state.hh"
 
 using namespace std::chrono_literals;
 
@@ -32,6 +31,7 @@ class database;
 
 namespace service {
 class migration_manager;
+class query_state;
 }
 
 namespace cql3 {

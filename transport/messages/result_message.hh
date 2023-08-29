@@ -13,7 +13,6 @@
 
 #include "cql3/result_set.hh"
 #include "cql3/statements/prepared_statement.hh"
-#include "cql3/cql_statement.hh"
 #include "cql3/query_options.hh"
 
 #include "transport/messages/result_message_base.hh"
@@ -34,14 +33,7 @@ private:
     cql3::prepared_metadata _metadata;
     ::shared_ptr<const cql3::metadata> _result_metadata;
 protected:
-    prepared(cql3::statements::prepared_statement::checked_weak_ptr prepared, bool support_lwt_opt)
-        : _prepared(std::move(prepared))
-        , _metadata(
-            _prepared->bound_names,
-            _prepared->partition_key_bind_indices,
-            support_lwt_opt ? _prepared->statement->is_conditional() : false)
-        , _result_metadata{extract_result_metadata(_prepared->statement)}
-    { }
+    prepared(cql3::statements::prepared_statement::checked_weak_ptr prepared, bool support_lwt_opt);
 public:
     cql3::statements::prepared_statement::checked_weak_ptr& get_prepared() {
         return _prepared;
@@ -58,9 +50,7 @@ public:
     class cql;
     class thrift;
 private:
-    static ::shared_ptr<const cql3::metadata> extract_result_metadata(::shared_ptr<cql3::cql_statement> statement) {
-        return statement->get_result_metadata();
-    }
+    static ::shared_ptr<const cql3::metadata> extract_result_metadata(::shared_ptr<cql3::cql_statement> statement);
 };
 
 class result_message::visitor {
