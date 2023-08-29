@@ -287,11 +287,11 @@ void feature_service::check_features(const std::set<sstring>& enabled_features,
         const bool is_registered_feat = _registered_features.contains(sstring(f));
         if (!known_features.contains(f)) {
             if (is_registered_feat) {
-                throw std::runtime_error(format(
+                throw unsupported_feature_exception(format(
                     "Feature '{}' was previously enabled in the cluster but its support is disabled by this node. "
                     "Set the corresponding configuration option to enable the support for the feature.", f));
             } else {
-                throw std::runtime_error(format("Unknown feature '{}' was previously enabled in the cluster. "
+                throw unsupported_feature_exception(format("Unknown feature '{}' was previously enabled in the cluster. "
                     " That means this node is performing a prohibited downgrade procedure"
                     " and should not be allowed to boot.", f));
             }
@@ -308,12 +308,12 @@ void feature_service::check_features(const std::set<sstring>& enabled_features,
         const bool is_registered_feat = _registered_features.contains(sstring(f));
         if (!known_features.contains(f)) {
             if (is_registered_feat) {
-                throw std::runtime_error(format(
+                throw unsupported_feature_exception(format(
                     "Feature '{}' was previously supported by all nodes in the cluster. It is unknown whether "
                     "the feature became enabled or not, therefore it is not safe for this node to boot. "
                     "Set the corresponding configuration option to enable the support for the feature.", f));
             } else {
-                throw std::runtime_error(format(
+                throw unsupported_feature_exception(format(
                     "Unknown feature '{}' was previously supported by all nodes in the cluster. "
                     "That means this node is performing a prohibited downgrade procedure "
                     "and should not be allowed to boot.", f));
