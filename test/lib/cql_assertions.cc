@@ -250,15 +250,14 @@ future<> require_column_has_value(cql_test_env& e, const sstring& table_name,
     auto exp = expected.type()->decompose(expected);
     auto dk = dht::decorate_key(*schema, pkey);
     auto shard = cf.get_effective_replication_map()->shard_of(*schema, dk._token);
-    return e.db().invoke_on(shard, [dk = std::move(dk),
+    return e.db().invoke_on(shard, [&e, dk = std::move(dk),
                                   ckey = std::move(ckey),
                                   column_name = std::move(column_name),
                                   exp = std::move(exp),
                                   table_name = std::move(table_name)] (replica::database& db) mutable {
       auto& cf = db.find_column_family("ks", table_name);
       auto schema = cf.schema();
-      auto permit = db.get_reader_concurrency_semaphore().make_tracking_only_permit(schema.get(), "require_column_has_value()", db::no_timeout, {});
-      return cf.find_row(schema, permit, dk, ckey).then([schema, column_name, exp] (auto row) {
+      return cf.find_row(schema, make_reader_permit(e), dk, ckey).then([schema, column_name, exp] (auto row) {
         assert(row != nullptr);
         auto col_def = schema->get_column_definition(utf8_type->decompose(column_name));
         assert(col_def != nullptr);
