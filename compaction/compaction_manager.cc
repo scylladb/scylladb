@@ -1052,6 +1052,11 @@ future<> compaction_manager::really_do_stop() {
     // Reset the metrics registry
     _metrics.clear();
     co_await stop_ongoing_compactions("shutdown");
+    co_await coroutine::parallel_for_each(_compaction_state | boost::adaptors::map_values, [] (compaction_state& cs) -> future<> {
+        if (!cs.gate.is_closed()) {
+            co_await cs.gate.close();
+        }
+    });
     reevaluate_postponed_compactions();
     co_await std::move(_waiting_reevalution);
     _weight_tracker.clear();
@@ -1958,7 +1963,11 @@ future<> compaction_manager::remove(table_state& t) noexcept {
 
     // Wait for all compaction tasks running under gate to terminate
     // and prevent new tasks from entering the gate.
-    co_await seastar::when_all_succeed(stop_ongoing_compactions("table removal", &t), c_state.gate.close()).discard_result();
+    if (!c_state.gate.is_closed()) {
+        auto close_gate = c_state.gate.close();
+        co_await stop_ongoing_compactions("table removal", &t);
+        co_await std::move(close_gate);
+    }
 
     c_state.backlog_tracker.disable();
 
