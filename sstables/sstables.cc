@@ -1336,7 +1336,7 @@ future<> sstable::update_info_for_opened_data(sstable_open_config cfg) {
     _index_file_size = size;
     assert(!_cached_index_file);
     _cached_index_file = seastar::make_shared<cached_file>(_index_file,
-                                                            index_page_cache_metrics,
+                                                            _manager.get_cache_tracker().get_index_cached_file_stats(),
                                                             _manager.get_cache_tracker().get_lru(),
                                                             _manager.get_cache_tracker().region(),
                                                             _index_file_size);
@@ -2804,12 +2804,29 @@ sstable::unlink(storage::sync_dir sync) noexcept {
 
 thread_local sstables_stats::stats sstables_stats::_shard_stats;
 thread_local partition_index_cache::stats partition_index_cache::_shard_stats;
-thread_local cached_file::metrics index_page_cache_metrics;
 thread_local mc::cached_promoted_index::metrics promoted_index_cache_metrics;
 static thread_local seastar::metrics::metric_groups metrics;
 
 size_t space_used_by_index_cache() {
-    return partition_index_cache::shard_stats().used_bytes + index_page_cache_metrics.cached_bytes;
+    return partition_index_cache::shard_stats().used_bytes;
+}
+
+void register_index_page_cache_metrics(seastar::metrics::metric_groups& metrics, cached_file_stats& m) {
+    namespace sm = seastar::metrics;
+    metrics.add_group("sstables", {
+        sm::make_counter("index_page_cache_hits", [&m] { return m.page_hits; },
+            sm::description("Index page cache requests which were served from cache")),
+        sm::make_counter("index_page_cache_misses", [&m] { return m.page_misses; },
+            sm::description("Index page cache requests which had to perform I/O")),
+        sm::make_counter("index_page_cache_evictions", [&m] { return m.page_evictions; },
+            sm::description("Total number of index page cache pages which have been evicted")),
+        sm::make_counter("index_page_cache_populations", [&m] { return m.page_populations; },
+            sm::description("Total number of index page cache pages which were inserted into the cache")),
+        sm::make_gauge("index_page_cache_bytes", [&m] { return m.cached_bytes; },
+            sm::description("Total number of bytes cached in the index page cache")),
+        sm::make_gauge("index_page_cache_bytes_in_std", [&m] { return m.bytes_in_std; },
+            sm::description("Total number of bytes in temporary buffers which live in the std allocator")),
+    });
 }
 
 future<> init_metrics() {
@@ -2828,19 +2845,6 @@ future<> init_metrics() {
             sm::description("Index pages which got populated into memory")),
         sm::make_gauge("index_page_used_bytes", [] { return partition_index_cache::shard_stats().used_bytes; },
             sm::description("Amount of bytes used by index pages in memory")),
-
-        sm::make_counter("index_page_cache_hits", [] { return index_page_cache_metrics.page_hits; },
-            sm::description("Index page cache requests which were served from cache")),
-        sm::make_counter("index_page_cache_misses", [] { return index_page_cache_metrics.page_misses; },
-            sm::description("Index page cache requests which had to perform I/O")),
-        sm::make_counter("index_page_cache_evictions", [] { return index_page_cache_metrics.page_evictions; },
-            sm::description("Total number of index page cache pages which have been evicted")),
-        sm::make_counter("index_page_cache_populations", [] { return index_page_cache_metrics.page_populations; },
-            sm::description("Total number of index page cache pages which were inserted into the cache")),
-        sm::make_gauge("index_page_cache_bytes", [] { return index_page_cache_metrics.cached_bytes; },
-            sm::description("Total number of bytes cached in the index page cache")),
-        sm::make_gauge("index_page_cache_bytes_in_std", [] { return index_page_cache_metrics.bytes_in_std; },
-            sm::description("Total number of bytes in temporary buffers which live in the std allocator")),
 
         sm::make_counter("pi_cache_hits_l0", [] { return promoted_index_cache_metrics.hits_l0; },
             sm::description("Number of requests for promoted index block in state l0 which didn't have to go to the page cache")),

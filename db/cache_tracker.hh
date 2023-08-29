@@ -13,6 +13,7 @@
 #include "utils/updateable_value.hh"
 #include "mutation/partition_version.hh"
 #include "mutation/mutation_cleaner.hh"
+#include "utils/cached_file_stats.hh"
 
 #include <seastar/core/metrics_registration.hh>
 
@@ -78,6 +79,7 @@ public:
     };
 private:
     stats _stats{};
+    cached_file_stats _index_cached_file_stats{};
     seastar::metrics::metric_groups _metrics;
     logalloc::region _region;
     lru _lru;
@@ -133,6 +135,7 @@ public:
     stats& get_stats() noexcept { return _stats; }
     void set_compaction_scheduling_group(seastar::scheduling_group);
     lru& get_lru() { return _lru; }
+    cached_file_stats& get_index_cached_file_stats() { return _index_cached_file_stats; }
     seastar::memory::reclaiming_result evict_from_lru_shallow() noexcept;
 };
 

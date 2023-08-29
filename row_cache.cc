@@ -121,7 +121,7 @@ cache_tracker::cache_tracker(utils::updateable_value<double> index_cache_fractio
             //
             // Perhaps this logic should be encapsulated somewhere else, maybe in `class lru` itself.
             size_t total_cache_space = _region.occupancy().total_space();
-            size_t index_cache_space = sstables::space_used_by_index_cache();
+            size_t index_cache_space = sstables::space_used_by_index_cache() + _index_cached_file_stats.cached_bytes;
             bool should_evict_index = index_cache_space > total_cache_space * _index_cache_fraction.get();
 
             return _lru.evict(should_evict_index);
@@ -144,6 +144,10 @@ void cache_tracker::set_compaction_scheduling_group(seastar::scheduling_group sg
     _memtable_cleaner.set_scheduling_group(sg);
     _garbage.set_scheduling_group(sg);
 }
+
+namespace sstables {
+void register_index_page_cache_metrics(seastar::metrics::metric_groups&, cached_file_stats&);
+};
 
 void
 cache_tracker::setup_metrics() {
@@ -192,6 +196,7 @@ cache_tracker::setup_metrics() {
         sm::make_counter("rows_compacted_away", _stats.rows_compacted_away,
             sm::description("total amount of compacted and removed rows during read")),
     });
+    sstables::register_index_page_cache_metrics(_metrics, _index_cached_file_stats);
 }
 
 void cache_tracker::clear() {
