@@ -4454,12 +4454,14 @@ SEASTAR_TEST_CASE(simple_backlog_controller_test) {
         auto as = abort_source();
 
         auto task_manager = tasks::task_manager({}, as);
+        auto stop_task_manager = deferred_stop(task_manager);
         compaction_manager::config cfg = {
             .compaction_sched_group = { default_scheduling_group() },
             .maintenance_sched_group = { default_scheduling_group() },
             .available_memory = available_memory,
         };
         auto manager = compaction_manager(std::move(cfg), as, task_manager);
+        auto stop_manager = deferred_stop(manager);
 
         auto add_sstable = [&env] (table_for_tests& t, uint64_t data_size, int level) {
             auto sst = env.make_sstable(t.schema());
