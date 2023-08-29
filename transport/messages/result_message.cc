@@ -8,6 +8,7 @@
  */
 
 #include "result_message.hh"
+#include "cql3/cql_statement.hh"
 #include <seastar/core/print.hh>
 
 namespace cql_transport::messages {
@@ -91,6 +92,20 @@ std::ostream& operator<<(std::ostream& os, const result_message& msg) {
 
 void result_message::visitor_base::visit(const result_message::exception& ex) {
     ex.throw_me();
+}
+
+result_message::prepared::prepared(cql3::statements::prepared_statement::checked_weak_ptr prepared, bool support_lwt_opt)
+        : _prepared(std::move(prepared))
+        , _metadata(
+            _prepared->bound_names,
+            _prepared->partition_key_bind_indices,
+            support_lwt_opt ? _prepared->statement->is_conditional() : false)
+        , _result_metadata{extract_result_metadata(_prepared->statement)}
+{
+}
+
+::shared_ptr<const cql3::metadata> result_message::prepared::extract_result_metadata(::shared_ptr<cql3::cql_statement> statement) {
+    return statement->get_result_metadata();
 }
 
 }

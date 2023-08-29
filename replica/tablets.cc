@@ -13,6 +13,7 @@
 #include "schema/schema_builder.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/untyped_result_set.hh"
+#include "cql3/stats.hh"
 #include "replica/database.hh"
 #include "replica/tablets.hh"
 #include "replica/tablet_mutation_builder.hh"
