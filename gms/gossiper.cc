@@ -695,10 +695,7 @@ future<> gossiper::remove_endpoint(inet_address endpoint, permit_id pid) {
         try {
             auto state = get_endpoint_state(endpoint);
             logger.info("InetAddress {} is now DOWN, status = {}", endpoint, get_gossip_status(state));
-            co_await _subscribers.for_each([endpoint, state, pid] (shared_ptr<i_endpoint_state_change_subscriber> subscriber) -> future<> {
-                co_await subscriber->on_dead(endpoint, state, pid);
-                logger.trace("Notified {}", fmt::ptr(subscriber.get()));
-            });
+            co_await do_on_dead_notifications(endpoint, std::move(state), pid);
         } catch (...) {
             logger.warn("Fail to call on_dead callback: {}", std::current_exception());
         }
@@ -1642,10 +1639,7 @@ future<> gossiper::mark_dead(inet_address addr, endpoint_state& local_state, per
         g._unreachable_endpoints[addr] = now();
     });
     logger.info("InetAddress {} is now DOWN, status = {}", addr, get_gossip_status(state));
-    co_await _subscribers.for_each([addr, state, pid] (shared_ptr<i_endpoint_state_change_subscriber> subscriber) -> future<> {
-        co_await subscriber->on_dead(addr, state, pid);
-        logger.trace("Notified {}", fmt::ptr(subscriber.get()));
-    });
+    co_await do_on_dead_notifications(addr, std::move(state), pid);
 }
 
 future<> gossiper::handle_major_state_change(inet_address ep, const endpoint_state& eps, permit_id pid) {
@@ -1812,6 +1806,12 @@ future<> gossiper::do_before_change_notifications(inet_address addr, const endpo
 future<> gossiper::do_on_change_notifications(inet_address addr, const application_state& state, const versioned_value& value, permit_id pid) {
     co_await _subscribers.for_each([addr, state, value, pid] (shared_ptr<i_endpoint_state_change_subscriber> subscriber) {
         return subscriber->on_change(addr, state, value, pid);
+    });
+}
+
+future<> gossiper::do_on_dead_notifications(inet_address addr, endpoint_state state, permit_id pid) {
+    co_await _subscribers.for_each([addr, state = std::move(state), pid] (shared_ptr<i_endpoint_state_change_subscriber> subscriber) {
+        return subscriber->on_dead(addr, state, pid);
     });
 }
 
