@@ -766,6 +766,15 @@ future<std::set<inet_address>> gossiper::get_live_members_synchronized() {
     });
 }
 
+future<std::set<inet_address>> gossiper::get_unreachable_members_synchronized() {
+    return container().invoke_on(0, [] (gms::gossiper& g) -> future<std::set<inet_address>> {
+        auto lock = co_await get_units(g._endpoint_update_semaphore, 1);
+        std::set<inet_address> unreachable_members = g.get_unreachable_members();
+        co_await g.replicate_live_endpoints_on_change();
+        co_return unreachable_members;
+    });
+}
+
 future<> gossiper::failure_detector_loop_for_node(gms::inet_address node, int64_t gossip_generation, uint64_t live_endpoints_version) {
     auto last = gossiper::clk::now();
     auto diff = gossiper::clk::duration(0);

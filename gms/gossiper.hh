@@ -444,6 +444,9 @@ public:
     // Get live members synchronized to all shards
     future<std::set<inet_address>> get_live_members_synchronized();
 
+    // Get live members synchronized to all shards
+    future<std::set<inet_address>> get_unreachable_members_synchronized();
+
     future<> apply_state_locally(std::map<inet_address, endpoint_state> map);
 
 private:
