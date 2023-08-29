@@ -3679,7 +3679,6 @@ class scylla_io_queues(gdb.Command):
 
             for fg, fq in zip(f_groups, f_queues):
                 try:
-                    gdb.write("\tCost capacity:       {}\n".format(self.ticket(fg['_cost_capacity'])))
                     try:
                         gdb.write("\tCapacity tail:       {}\n".format(std_atomic(fg['_token_bucket']['_rovers']['tail']).get()))
                         gdb.write("\tCapacity head:       {}\n".format(std_atomic(fg['_token_bucket']['_rovers']['head']).get()))
