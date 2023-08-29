@@ -2803,13 +2803,8 @@ sstable::unlink(storage::sync_dir sync) noexcept {
 }
 
 thread_local sstables_stats::stats sstables_stats::_shard_stats;
-thread_local partition_index_cache::stats partition_index_cache::_shard_stats;
 thread_local mc::cached_promoted_index::metrics promoted_index_cache_metrics;
 static thread_local seastar::metrics::metric_groups metrics;
-
-size_t space_used_by_index_cache() {
-    return partition_index_cache::shard_stats().used_bytes;
-}
 
 void register_index_page_cache_metrics(seastar::metrics::metric_groups& metrics, cached_file_stats& m) {
     namespace sm = seastar::metrics;
@@ -2829,23 +2824,29 @@ void register_index_page_cache_metrics(seastar::metrics::metric_groups& metrics,
     });
 }
 
+void register_index_page_metrics(seastar::metrics::metric_groups& metrics, partition_index_cache_stats& m) {
+    namespace sm = seastar::metrics;
+    metrics.add_group("sstables", {
+        sm::make_counter("index_page_hits", [&m] { return m.hits; },
+            sm::description("Index page requests which could be satisfied without waiting")),
+        sm::make_counter("index_page_misses", [&m] { return m.misses; },
+            sm::description("Index page requests which initiated a read from disk")),
+        sm::make_counter("index_page_blocks", [&m] { return m.blocks; },
+            sm::description("Index page requests which needed to wait due to page not being loaded yet")),
+        sm::make_counter("index_page_evictions", [&m] { return m.evictions; },
+            sm::description("Index pages which got evicted from memory")),
+        sm::make_counter("index_page_populations", [&m] { return m.populations; },
+            sm::description("Index pages which got populated into memory")),
+        sm::make_gauge("index_page_used_bytes", [&m] { return m.used_bytes; },
+            sm::description("Amount of bytes used by index pages in memory")),
+
+    });
+}
+
 future<> init_metrics() {
   return seastar::smp::invoke_on_all([] {
     namespace sm = seastar::metrics;
     metrics.add_group("sstables", {
-        sm::make_counter("index_page_hits", [] { return partition_index_cache::shard_stats().hits; },
-            sm::description("Index page requests which could be satisfied without waiting")),
-        sm::make_counter("index_page_misses", [] { return partition_index_cache::shard_stats().misses; },
-            sm::description("Index page requests which initiated a read from disk")),
-        sm::make_counter("index_page_blocks", [] { return partition_index_cache::shard_stats().blocks; },
-            sm::description("Index page requests which needed to wait due to page not being loaded yet")),
-        sm::make_counter("index_page_evictions", [] { return partition_index_cache::shard_stats().evictions; },
-            sm::description("Index pages which got evicted from memory")),
-        sm::make_counter("index_page_populations", [] { return partition_index_cache::shard_stats().populations; },
-            sm::description("Index pages which got populated into memory")),
-        sm::make_gauge("index_page_used_bytes", [] { return partition_index_cache::shard_stats().used_bytes; },
-            sm::description("Amount of bytes used by index pages in memory")),
-
         sm::make_counter("pi_cache_hits_l0", [] { return promoted_index_cache_metrics.hits_l0; },
             sm::description("Number of requests for promoted index block in state l0 which didn't have to go to the page cache")),
         sm::make_counter("pi_cache_hits_l1", [] { return promoted_index_cache_metrics.hits_l1; },
@@ -2959,7 +2960,7 @@ sstable::sstable(schema_ptr schema,
     , _version(v)
     , _format(f)
     , _index_cache(std::make_unique<partition_index_cache>(
-            manager.get_cache_tracker().get_lru(), manager.get_cache_tracker().region()))
+            manager.get_cache_tracker().get_lru(), manager.get_cache_tracker().region(), manager.get_cache_tracker().get_partition_index_cache_stats()))
     , _now(now)
     , _read_error_handler(error_handler_gen(sstable_read_error))
     , _write_error_handler(error_handler_gen(sstable_write_error))

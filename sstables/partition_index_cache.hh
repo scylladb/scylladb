@@ -19,6 +19,7 @@
 #include "utils/bptree.hh"
 #include "utils/lru.hh"
 #include "utils/lsa/weak_ptr.hh"
+#include "sstables/partition_index_cache_stats.hh"
 
 namespace sstables {
 
@@ -76,15 +77,6 @@ private:
         key_type key() const { return _key; }
     };
 public:
-    static thread_local struct stats {
-        uint64_t hits = 0; // Number of times entry was found ready
-        uint64_t misses = 0; // Number of times entry was not found
-        uint64_t blocks = 0; // Number of times entry was not ready (>= misses)
-        uint64_t evictions = 0; // Number of times entry was evicted
-        uint64_t populations = 0; // Number of times entry was inserted
-        uint64_t used_bytes = 0; // Number of bytes entries occupy in memory
-    } _shard_stats;
-
     struct key_less_comparator {
         bool operator()(key_type lhs, key_type rhs) const noexcept {
             return lhs < rhs;
@@ -161,13 +153,15 @@ private:
     logalloc::region& _region;
     logalloc::allocating_section _as;
     lru& _lru;
+    partition_index_cache_stats& _stats;
 public:
 
     // Create a cache with a given LRU attached.
-    partition_index_cache(lru& lru_, logalloc::region& r)
+    partition_index_cache(lru& lru_, logalloc::region& r, partition_index_cache_stats& stats)
             : _cache(key_less_comparator())
             , _region(r)
             , _lru(lru_)
+            , _stats(stats)
     { }
 
     ~partition_index_cache() {
@@ -198,18 +192,18 @@ public:
             entry& cp = *i;
             auto ptr = share(cp);
             if (cp.ready()) {
-                ++_shard_stats.hits;
+                ++_stats.hits;
                 return make_ready_future<entry_ptr>(std::move(ptr));
             } else {
-                ++_shard_stats.blocks;
+                ++_stats.blocks;
                 return ptr.get_entry().promise()->get_shared_future().then([ptr] () mutable {
                     return std::move(ptr);
                 });
             }
         }
 
-        ++_shard_stats.misses;
-        ++_shard_stats.blocks;
+        ++_stats.misses;
+        ++_stats.blocks;
 
         entry_ptr ptr = _as(_region, [&] {
             return with_allocator(_region.allocator(), [&] {
@@ -233,8 +227,8 @@ public:
                 partition_index_page&& page = f.get0();
                 e.promise()->set_value();
                 e.set_page(std::move(page));
-                _shard_stats.used_bytes += e.size_in_allocator();
-                ++_shard_stats.populations;
+                _stats.used_bytes += e.size_in_allocator();
+                ++_stats.populations;
                 return ptr;
             } catch (...) {
                 e.promise()->set_exception(std::current_exception());
@@ -248,11 +242,9 @@ public:
     }
 
     void on_evicted(entry& p) {
-        _shard_stats.used_bytes -= p.size_in_allocator();
-        ++_shard_stats.evictions;
+        _stats.used_bytes -= p.size_in_allocator();
+        ++_stats.evictions;
     }
-
-    static const stats& shard_stats() { return _shard_stats; }
 
     // Evicts all unreferenced entries.
     future<> evict_gently() {

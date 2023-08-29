@@ -1240,8 +1240,8 @@ SEASTAR_TEST_CASE(test_no_index_reads_when_rows_fall_into_range_boundaries) {
 
             auto ms = make_sstable_mutation_source(env, s, {m1, m2}, version);
 
-            auto index_accesses = [] {
-                auto&& stats = sstables::partition_index_cache::shard_stats();
+            auto index_accesses = [&env] {
+                auto&& stats = env.manager().get_cache_tracker().get_partition_index_cache_stats();
                 return stats.hits + stats.misses + stats.blocks;
             };
 

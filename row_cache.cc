@@ -64,17 +64,6 @@ cache_tracker::cache_tracker(utils::updateable_value<double> index_cache_fractio
 
 static thread_local cache_tracker* current_tracker;
 
-// To implement memory partitioning between index cache and data cache,
-// we need at least a way to check how much memory is used by the index cache.
-// Currently we are relying on metrics for that.
-//
-// FIXME: relying on thread-local metrics for the algorithm is unclean.
-// It would be better to pass some accessor to these metrics as a parameter
-// to the tracker.
-namespace sstables {
-    size_t space_used_by_index_cache();
-}
-
 cache_tracker::cache_tracker(utils::updateable_value<double> index_cache_fraction, mutation_application_stats& app_stats, register_metrics with_metrics)
     : _garbage(_region, this, app_stats)
     , _memtable_cleaner(_region, nullptr, app_stats)
@@ -121,7 +110,7 @@ cache_tracker::cache_tracker(utils::updateable_value<double> index_cache_fractio
             //
             // Perhaps this logic should be encapsulated somewhere else, maybe in `class lru` itself.
             size_t total_cache_space = _region.occupancy().total_space();
-            size_t index_cache_space = sstables::space_used_by_index_cache() + _index_cached_file_stats.cached_bytes;
+            size_t index_cache_space = _partition_index_cache_stats.used_bytes + _index_cached_file_stats.cached_bytes;
             bool should_evict_index = index_cache_space > total_cache_space * _index_cache_fraction.get();
 
             return _lru.evict(should_evict_index);
@@ -147,6 +136,7 @@ void cache_tracker::set_compaction_scheduling_group(seastar::scheduling_group sg
 
 namespace sstables {
 void register_index_page_cache_metrics(seastar::metrics::metric_groups&, cached_file_stats&);
+void register_index_page_metrics(seastar::metrics::metric_groups&, partition_index_cache_stats&);
 };
 
 void
@@ -197,6 +187,7 @@ cache_tracker::setup_metrics() {
             sm::description("total amount of compacted and removed rows during read")),
     });
     sstables::register_index_page_cache_metrics(_metrics, _index_cached_file_stats);
+    sstables::register_index_page_metrics(_metrics, _partition_index_cache_stats);
 }
 
 void cache_tracker::clear() {
