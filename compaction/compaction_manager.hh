@@ -567,11 +567,12 @@ public:
     const sstring& description() const noexcept {
         return _description;
     }
-
+private:
+    // Before _compaction_done is set in compaction_task_executor::run_compaction(), compaction_done() returns ready future.
     future<compaction_manager::compaction_stats_opt> compaction_done() noexcept {
         return _compaction_done.get_future();
     }
-
+public:
     bool stopping() const noexcept {
         return _compaction_data.abort.abort_requested();
     }
@@ -589,6 +590,7 @@ public:
     friend future<compaction_manager::compaction_stats_opt> compaction_manager::perform_compaction(throw_if_stopping do_throw_if_stopping, std::optional<tasks::task_info> parent_info, Args&&... args);
     friend future<compaction_manager::compaction_stats_opt> compaction_manager::perform_task(shared_ptr<compaction_task_executor> task, throw_if_stopping do_throw_if_stopping);
     friend fmt::formatter<compaction_task_executor>;
+    friend future<> compaction_manager::stop_tasks(std::vector<shared_ptr<compaction_task_executor>> tasks, sstring reason);
 };
 
 }
