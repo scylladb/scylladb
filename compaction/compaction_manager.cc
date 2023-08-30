@@ -745,7 +745,8 @@ void sstables_task_executor::release_resources() noexcept {
 
 future<compaction_manager::compaction_stats_opt> compaction_task_executor::run_compaction() noexcept {
     try {
-        _compaction_done = do_run();
+        _compaction_done = stopping() ? make_exception_future<compaction_manager::compaction_stats_opt>(make_compaction_stopped_exception())
+            : do_run();
         return compaction_done();
     } catch (...) {
         return current_exception_as_future<compaction_manager::compaction_stats_opt>();
