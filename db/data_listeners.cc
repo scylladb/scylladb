@@ -17,6 +17,19 @@ extern logging::logger dblog;
 
 namespace db {
 
+bool data_listener::set_sampling_probability(double p) {
+    if (p < 0 || p > 1) {
+        return false;
+    }
+
+    _sampling_probability = p;
+    _normalized_sampling_probability = std::llround(_sampling_probability * (_gen.max() + 1));
+
+    dblog.info("Setting sampling probability to {} (normalized {})", _sampling_probability, _normalized_sampling_probability);
+
+    return true;
+}
+
 void data_listeners::install(data_listener* listener) {
     _listeners.emplace(listener);
     dblog.debug("data_listeners: install listener {}", fmt::ptr(listener));
@@ -34,14 +47,18 @@ bool data_listeners::exists(data_listener* listener) const {
 flat_mutation_reader_v2 data_listeners::on_read(const schema_ptr& s, const dht::partition_range& range,
         const query::partition_slice& slice, flat_mutation_reader_v2&& rd) {
     for (auto&& li : _listeners) {
-        rd = li->on_read(s, range, slice, std::move(rd));
+        if (li->sample_next_query()) {
+            rd = li->on_read(s, range, slice, std::move(rd));
+        }
     }
     return std::move(rd);
 }
 
 void data_listeners::on_write(const schema_ptr& s, const frozen_mutation& m) {
     for (auto&& li : _listeners) {
-        li->on_write(s, m);
+        if (li->sample_next_query()) {
+            li->on_write(s, m);
+        }
     }
 }
 
@@ -50,8 +67,8 @@ toppartitions_item_key::operator sstring() const {
 }
 
 toppartitions_data_listener::toppartitions_data_listener(replica::database& db, std::unordered_set<std::tuple<sstring, sstring>, utils::tuple_hash> table_filters,
-        std::unordered_set<sstring> keyspace_filters, size_t capacity) : _db(db), _table_filters(std::move(table_filters)), _keyspace_filters(std::move(keyspace_filters))
-                                                                       , _capacity(capacity), _top_k_read(capacity), _top_k_write(capacity) {
+        std::unordered_set<sstring> keyspace_filters, size_t capacity, double sampling_probability) : data_listener(sampling_probability), _db(db), _table_filters(std::move(table_filters)), _keyspace_filters(std::move(keyspace_filters))
+                                                                                                  , _capacity(capacity), _top_k_read(capacity), _top_k_write(capacity) {
     dblog.debug("toppartitions_data_listener: installing {}", fmt::ptr(this));
     _db.data_listeners().install(this);
 }

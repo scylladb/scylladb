@@ -27,6 +27,15 @@ class frozen_mutation;
 namespace db {
 
 class data_listener {
+protected:
+    double _sampling_probability;
+    uint64_t _normalized_sampling_probability;
+    std::ranlux48_base _gen;
+
+    data_listener(double sampling_probability) : _sampling_probability(sampling_probability), _gen(std::random_device()()) {
+        _sampling_probability = sampling_probability;
+        _normalized_sampling_probability = std::llround(_sampling_probability * (_gen.max() + 1));
+    }
 public:
     virtual ~data_listener() = default;
     // Invoked for each write, with partition granularity.
@@ -44,6 +53,16 @@ public:
     virtual flat_mutation_reader_v2 on_read(const schema_ptr& s, const dht::partition_range& range,
             const query::partition_slice& slice, flat_mutation_reader_v2&& rd) {
         return std::move(rd);
+    }
+
+    bool set_sampling_probability(double p);
+
+    double get_sampling_probability() const {
+        return _sampling_probability;
+    }
+
+    bool sample_next_query() {
+        return _normalized_sampling_probability != 0 && _gen() < _normalized_sampling_probability;
     }
 };
 
@@ -131,7 +150,7 @@ private:
     top_k _top_k_write;
 
 public:
-    toppartitions_data_listener(replica::database& db, std::unordered_set<std::tuple<sstring, sstring>, utils::tuple_hash> table_filters, std::unordered_set<sstring> keyspace_filters, size_t capacity);
+    toppartitions_data_listener(replica::database& db, std::unordered_set<std::tuple<sstring, sstring>, utils::tuple_hash> table_filters, std::unordered_set<sstring> keyspace_filters, size_t capacity, double sampling_probability = 1.0);
     ~toppartitions_data_listener();
 
     virtual flat_mutation_reader_v2 on_read(const schema_ptr& s, const dht::partition_range& range,

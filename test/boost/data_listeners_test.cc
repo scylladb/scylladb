@@ -23,7 +23,7 @@ class table_listener : public db::data_listener {
     sstring _cf_name;
 
 public:
-    table_listener(sstring cf_name) : _cf_name(cf_name) {}
+    table_listener(sstring cf_name, double sampling_probability) : data_listener(sampling_probability), _cf_name(cf_name) {}
 
     virtual flat_mutation_reader_v2 on_read(const schema_ptr& s, const dht::partition_range& range,
             const query::partition_slice& slice, flat_mutation_reader_v2&& rd) override {
@@ -60,7 +60,8 @@ results test_data_listeners(cql_test_env& e, sstring cf_name) {
     std::vector<std::unique_ptr<table_listener>> listeners;
 
     e.db().invoke_on_all([&listeners, &cf_name] (replica::database& db) {
-        auto listener = std::make_unique<table_listener>(cf_name);
+        double sampling_probability = 1;
+        auto listener = std::make_unique<table_listener>(cf_name, sampling_probability);
         db.data_listeners().install(&*listener);
         testlog.info("installed listener {}", fmt::ptr(&*listener));
         listeners.push_back(std::move(listener));
