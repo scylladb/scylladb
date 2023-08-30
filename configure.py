@@ -359,6 +359,7 @@ scylla_tests = set([
     'test/boost/big_decimal_test',
     'test/boost/broken_sstable_test',
     'test/boost/bytes_ostream_test',
+    'test/boost/cache_algorithm_test',
     'test/boost/cache_flat_mutation_reader_test',
     'test/boost/cached_file_test',
     'test/boost/caching_options_test',
