@@ -793,7 +793,6 @@ public:
     void update_effective_replication_map(locator::effective_replication_map_ptr);
     [[gnu::always_inline]] bool uses_tablets() const;
     future<const_mutation_partition_ptr> find_partition(schema_ptr, reader_permit permit, const dht::decorated_key& key) const;
-    future<const_mutation_partition_ptr> find_partition_slow(schema_ptr, reader_permit permit, const partition_key& key) const;
     future<const_row_ptr> find_row(schema_ptr, reader_permit permit, const dht::decorated_key& partition_key, clustering_key clustering_key) const;
     shard_id shard_of(const mutation& m) const {
         return shard_of(m.token());

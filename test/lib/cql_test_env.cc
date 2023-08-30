@@ -302,53 +302,6 @@ public:
         co_return co_await _mm.local().announce(co_await service::prepare_new_column_family_announcement(_proxy.local(), s, ts), std::move(group0_guard), "");
     }
 
-    virtual future<> require_column_has_value(const sstring& table_name,
-                                      std::vector<data_value> pk,
-                                      std::vector<data_value> ck,
-                                      const sstring& column_name,
-                                      data_value expected) override {
-        auto& db = _db.local();
-        auto& cf = db.find_column_family(ks_name, table_name);
-        auto schema = cf.schema();
-        auto pkey = partition_key::from_deeply_exploded(*schema, pk);
-        auto ckey = clustering_key::from_deeply_exploded(*schema, ck);
-        auto exp = expected.type()->decompose(expected);
-        auto dk = dht::decorate_key(*schema, pkey);
-        auto shard = cf.get_effective_replication_map()->shard_of(*schema, dk._token);
-        return _db.invoke_on(shard, [pkey = std::move(pkey),
-                                      ckey = std::move(ckey),
-                                      ks_name = std::move(ks_name),
-                                      column_name = std::move(column_name),
-                                      exp = std::move(exp),
-                                      table_name = std::move(table_name)] (replica::database& db) mutable {
-          auto& cf = db.find_column_family(ks_name, table_name);
-          auto schema = cf.schema();
-          auto permit = db.get_reader_concurrency_semaphore().make_tracking_only_permit(schema.get(), "require_column_has_value()", db::no_timeout, {});
-          return cf.find_partition_slow(schema, permit, pkey)
-                  .then([schema, ckey, column_name, exp] (replica::column_family::const_mutation_partition_ptr p) {
-            assert(p != nullptr);
-            auto row = p->find_row(*schema, ckey);
-            assert(row != nullptr);
-            auto col_def = schema->get_column_definition(utf8_type->decompose(column_name));
-            assert(col_def != nullptr);
-            const atomic_cell_or_collection* cell = row->find_cell(col_def->id);
-            if (!cell) {
-                assert(((void)"column not set", 0));
-            }
-            bytes actual;
-            if (!col_def->type->is_multi_cell()) {
-                auto c = cell->as_atomic_cell(*col_def);
-                assert(c.is_live());
-                actual = c.value().linearize();
-            } else {
-                actual = linearized(serialize_for_cql(*col_def->type,
-                        cell->as_collection_mutation()));
-            }
-            assert(col_def->type->equal(actual, exp));
-          });
-        });
-    }
-
     virtual service::client_state& local_client_state() override {
         return _core_local.local().client_state;
     }
