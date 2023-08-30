@@ -834,11 +834,12 @@ future<gossiper::endpoint_permit> gossiper::lock_endpoint(inet_address ep, permi
     }
     pid = permit_id::create_random_id();
     logger.debug("{}: lock_endpoint {}: waiting: permit_id={}", caller, ep, pid);
-    eptr->units = co_await get_units(eptr->sem, 1);
+    eptr->units = co_await get_units(eptr->sem, 1, _abort_source);
     eptr->pid = pid;
     if (eptr->holders) {
         on_internal_error_noexcept(logger, fmt::format("{}: lock_endpoint {}: newly held endpoint_lock_entry has {} holders", caller, ep, eptr->holders));
     }
+    _abort_source.check();
     co_return endpoint_permit(std::move(eptr), std::move(ep), std::move(caller));
 }
 
@@ -850,7 +851,7 @@ future<semaphore_units<>> gossiper::lock_endpoint_update_semaphore() {
     if (this_shard_id() != 0) {
         on_internal_error(logger, "must be called on shard 0");
     }
-    return get_units(_endpoint_update_semaphore, 1);
+    return get_units(_endpoint_update_semaphore, 1, _abort_source);
 }
 
 future<> gossiper::mutate_live_and_unreachable_endpoints(std::function<void(gossiper&)> func) {
@@ -933,7 +934,7 @@ future<> gossiper::failure_detector_loop() {
         co_return;
     }
     logger.info("failure_detector_loop: Started main loop");
-    while (is_enabled() && !_abort_source.abort_requested()) {
+    while (is_enabled()) {
         try {
             while (_live_endpoints.empty() && is_enabled()) {
                 logger.debug("failure_detector_loop: Wait until live_nodes={} is not empty", _live_endpoints);
@@ -1822,7 +1823,12 @@ future<> gossiper::apply_new_states(inet_address addr, endpoint_state& local_sta
             co_await do_on_change_notifications(addr, key, remote_map.at(key), pid);
         }
     } catch (...) {
-        on_fatal_internal_error(logger, format("Gossip change listener failed: {}", std::current_exception()));
+        auto msg = format("Gossip change listener failed: {}", std::current_exception());
+        if (_abort_source.abort_requested()) {
+            logger.warn("{}. Ignored", msg);
+        } else {
+            on_fatal_internal_error(logger, msg);
+        }
     }
 
     maybe_rethrow_exception(std::move(ep));
@@ -1835,7 +1841,10 @@ future<> gossiper::do_before_change_notifications(inet_address addr, const endpo
 }
 
 future<> gossiper::do_on_change_notifications(inet_address addr, const application_state& state, const versioned_value& value, permit_id pid) {
-    co_await _subscribers.for_each([addr, state, value, pid] (shared_ptr<i_endpoint_state_change_subscriber> subscriber) {
+    co_await _subscribers.for_each([this, addr, state, value, pid] (shared_ptr<i_endpoint_state_change_subscriber> subscriber) {
+        // Once _abort_source is aborted, don't attempt to process any further notifications
+        // because that would violate monotonicity due to partially failed notification.
+        _abort_source.check();
         return subscriber->on_change(addr, state, value, pid);
     });
 }
@@ -2213,7 +2222,10 @@ future<> gossiper::add_local_application_state(std::list<std::pair<application_s
 }
 
 future<> gossiper::do_stop_gossiping() {
-    if (!is_enabled()) {
+    // Don't rely on is_enabled() since it
+    // also considers _abort_source and return false
+    // before _enabled is set to false down below.
+    if (!_enabled) {
         logger.info("gossip is already stopped");
         return make_ready_future<>();
     }
@@ -2279,7 +2291,7 @@ future<> gossiper::stop() {
 }
 
 bool gossiper::is_enabled() const {
-    return _enabled;
+    return _enabled && !_abort_source.abort_requested();
 }
 
 void gossiper::goto_shadow_round() {
