@@ -1092,14 +1092,19 @@ void server_impl::send_snapshot(server_id dst, install_snapshot&& snp) {
 }
 
 future<snapshot_reply> server_impl::apply_snapshot(server_id from, install_snapshot snp) {
-    _fsm->step(from, std::move(snp));
-    // Only one snapshot can be received at a time from each node
-    assert(! _snapshot_application_done.contains(from));
     snapshot_reply reply{_fsm->get_current_term(), false};
-    try {
-        reply = co_await _snapshot_application_done[from].get_future();
-    } catch (...) {
-        logger.error("apply_snapshot[{}] failed with {}", _id, std::current_exception());
+    // Previous snapshot processing may still be running if a connection from the leader was broken
+    // after it sent install_snapshot but before it got a reply. It may case the snapshot to be resent
+    // and it may arrive before the previous one is processed. In this rare case we return error and the leader
+    // will try again later (or may be not if the snapshot that is been applied is recent enough)
+    if (!_snapshot_application_done.contains(from)) {
+        _fsm->step(from, std::move(snp));
+
+        try {
+            reply = co_await _snapshot_application_done[from].get_future();
+        } catch (...) {
+            logger.error("apply_snapshot[{}] failed with {}", _id, std::current_exception());
+        }
     }
     co_return reply;
 }
