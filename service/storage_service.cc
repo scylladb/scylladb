@@ -95,6 +95,10 @@ using inet_address = gms::inet_address;
 
 extern logging::logger cdc_log;
 
+namespace db {
+    extern thread_local data_type cdc_generation_id_v2_type;
+}
+
 namespace service {
 
 static logging::logger slogger("storage_service");
@@ -604,6 +608,7 @@ public:
     template<typename S>
     requires std::constructible_from<sstring, S>
     topology_mutation_builder& add_enabled_features(const std::set<S>& value);
+    topology_mutation_builder& add_unpublished_cdc_generation(const cdc::generation_id_v2& value);
     topology_mutation_builder& del_transition_state();
     topology_mutation_builder& del_global_topology_request();
     topology_node_mutation_builder& with_node(raft::server_id);
@@ -775,6 +780,11 @@ template<typename S>
 requires std::constructible_from<sstring, S>
 topology_mutation_builder& topology_mutation_builder::add_enabled_features(const std::set<S>& features) {
     return apply_set("enabled_features", collection_apply_mode::update, features | boost::adaptors::transformed([] (const auto& f) { return sstring(f); }));
+}
+
+topology_mutation_builder& topology_mutation_builder::add_unpublished_cdc_generation(const cdc::generation_id_v2& value) {
+    auto dv = make_tuple_value(db::cdc_generation_id_v2_type, tuple_type_impl::native_type({value.ts, value.id}));
+    return apply_set("unpublished_cdc_generations", collection_apply_mode::update, std::vector<data_value>{std::move(dv)});
 }
 
 topology_mutation_builder& topology_mutation_builder::del_global_topology_request() {
@@ -1632,6 +1642,7 @@ class topology_coordinator {
                 topology_mutation_builder builder(guard.write_timestamp());
                 builder.set_transition_state(topology::transition_state::publish_cdc_generation)
                        .set_current_cdc_generation_id(cdc_gen_id)
+                       .add_unpublished_cdc_generation(cdc_gen_id)
                        .set_version(_topo_sm._topology.version + 1);
                 if (_topo_sm._topology.global_request == global_topology_request::new_cdc_generation) {
                     builder.del_global_topology_request();
