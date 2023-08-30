@@ -15,19 +15,8 @@
 namespace tasks {
 
 class test_module : public task_manager::module {
-private:
-    seastar::abort_source _as;
 public:
     test_module(task_manager& tm) noexcept : module(tm, "test") {}
-
-    seastar::abort_source& abort_source() noexcept override {
-        return _as;
-    }
-
-    future<> stop() noexcept override {
-        _as.request_abort();
-        co_await task_manager::module::stop();
-    }
 };
 
 class test_task_impl : public task_manager::task::impl {

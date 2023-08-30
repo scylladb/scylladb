@@ -8,6 +8,8 @@
 
 #include <seastar/core/on_internal_error.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
+#include <seastar/core/abort_source.hh>
+
 #include "task_manager.hh"
 #include "test_module.hh"
 
@@ -248,7 +250,11 @@ bool task_manager::task::is_complete() const noexcept {
     return _impl->is_complete();
 }
 
-task_manager::module::module(task_manager& tm, std::string name) noexcept : _tm(tm), _name(std::move(name)) {}
+task_manager::module::module(task_manager& tm, std::string name) noexcept : _tm(tm), _name(std::move(name)) {
+    _abort_subscription = _tm.abort_source().subscribe([this] () noexcept {
+        abort_source().request_abort();
+    });
+}
 
 uint64_t task_manager::module::new_sequence_number() noexcept {
     return ++_sequence_number;
@@ -259,7 +265,7 @@ task_manager& task_manager::module::get_task_manager() noexcept {
 }
 
 abort_source& task_manager::module::abort_source() noexcept {
-    return _tm.abort_source();
+    return _as;
 }
 
 gate& task_manager::module::async_gate() noexcept {
@@ -295,6 +301,7 @@ void task_manager::module::unregister_task(task_id id) noexcept {
 
 future<> task_manager::module::stop() noexcept {
     tmlogger.info("Stopping module {}", _name);
+    abort_source().request_abort();
     co_await _gate.close();
     _tm.unregister_module(_name);
 }
