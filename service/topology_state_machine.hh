@@ -137,6 +137,9 @@ struct topology {
     // It's used as partition key in CDC_GENERATIONS_V3 table.
     std::optional<utils::UUID> new_cdc_generation_data_uuid;
 
+    // The IDs of the commited yet unpublished CDC generations sorted by timestamps.
+    std::vector<cdc::generation_id_v2> unpublished_cdc_generations;
+
     // Describes the state of the features of normal nodes
     topology_features features;
 
