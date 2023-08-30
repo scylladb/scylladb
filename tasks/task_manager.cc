@@ -295,6 +295,10 @@ void task_manager::module::unregister_task(task_id id) noexcept {
 
 future<> task_manager::module::stop() noexcept {
     tmlogger.info("Stopping module {}", _name);
+    auto& as = abort_source();
+    if (!as.abort_requested()) {
+        as.request_abort();
+    }
     co_await _gate.close();
     _tm.unregister_module(_name);
 }
