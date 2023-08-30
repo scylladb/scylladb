@@ -32,9 +32,7 @@ async def test_raft_replace_ignore_nodes(manager: ManagerClient) -> None:
     await manager.server_stop(servers[1].server_id)
     await manager.server_stop_gracefully(servers[2].server_id)
 
-    # TODO: Currently, raft_replace doesn't support IPs in the ignore_dead_nodes_for_replace parameter.
-    # After fixing it, we should change one of the host ids in ignore_dead to IP to check that it also works.
-    ignore_dead: list[IPAddress | HostID] = [s1_id, s2_id]
+    ignore_dead: list[IPAddress | HostID] = [s1_id, servers[2].ip_addr]
     logger.info(f"Replacing {servers[0]}, ignore_dead_nodes = {ignore_dead}")
     replace_cfg = ReplaceConfig(replaced_id = servers[0].server_id, reuse_ip_addr = False, use_host_id = True,
                                 ignore_dead_nodes = ignore_dead)
@@ -70,14 +68,12 @@ async def test_raft_remove_ignore_nodes(manager: ManagerClient) -> None:
     await manager.server_stop_gracefully(servers[1].server_id)
     await manager.server_stop_gracefully(servers[2].server_id)
 
-    # TODO: Currently, raft_removenode doesn't support IPs in the ignore_dead_nodes parameter. After fixing it,
-    # we should change one of the two ignore_dead assignments to the list of IPs to check that it also works.
     ignore_dead: list[IPAddress] | list[HostID] = [s1_id, s2_id]
     logger.info(f"Removing {servers[0]} initiated by {servers[3]}, ignore_dead_nodes = {ignore_dead}")
     await manager.remove_node(servers[3].server_id, servers[0].server_id, ignore_dead)
     await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
 
-    ignore_dead = [s2_id]
+    ignore_dead = [servers[2].ip_addr]
     logger.info(f"Removing {servers[1]} initiated by {servers[4]}, ignore_dead_nodes = {ignore_dead}")
     await manager.remove_node(servers[4].server_id, servers[1].server_id, ignore_dead)
     await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)

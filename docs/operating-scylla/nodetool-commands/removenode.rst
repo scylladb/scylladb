@@ -33,6 +33,10 @@ In such a case, to ensure that the operation succeeds, you must explicitly speci
 Use a comma-separated list to specify the Host IDs of all unavailable nodes in the cluster before specifying the node to remove.
 
 .. warning::
+    Instead of Host IDs, you can specify the IP addresses of all unavailable nodes. However, this feature is deprecated
+    with consistent topology updates enabled and will be removed in a future release. Using Host IDs is recommended.
+
+.. warning::
     Before you use the ``nodetool removenode --ignore-dead-nodes`` command, you must make sure that both the node you want
     to remove AND the nodes you want to ignore are permanently down and cannot be recovered. Ignoring a node that is running
     or a node that is temporarily down and could be later restored in the cluster may result in data loss.
@@ -41,7 +45,6 @@ Example:
 
 .. code-block:: console
 
-    nodetool removenode --ignore-dead-nodes 192.168.1.4,192.168.1.5 675ed9f4-6564-6dbd-can8-43fddce952gy
     nodetool removenode --ignore-dead-nodes 8d5ed9f4-7764-4dbd-bad8-43fddce94b7c,125ed9f4-7777-1dbn-mac8-43fddce9123e 675ed9f4-6564-6dbd-can8-43fddce952gy   
 
 .. include:: nodetool-index.rst
