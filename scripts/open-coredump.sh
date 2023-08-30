@@ -283,13 +283,15 @@ if ! [[ -d ${SCYLLA_REPO_PATH} ]]
 then
     log "Cloning ${PRODUCT}.git"
     git clone ${GIT_QUIET_FLAG} -b ${BRANCH} git@github.com:scylladb/${PRODUCT}.git ${SCYLLA_REPO_PATH}
+    REMOTE_REPO_NAME=origin
 else
     log "${PRODUCT}.git already cloned"
+    REMOTE_REPO_NAME=$(cd ${SCYLLA_REPO_PATH}; git remote -v | awk "/scylladb\/${PRODUCT}.*fetch/{ print \$1 }")
 fi
 
 # We do the checkout unconditionally, it is cheap anyway.
 pushd ${SCYLLA_REPO_PATH} > /dev/null
-git fetch -q origin ${BRANCH}
+git fetch -q ${REMOTE_REPO_NAME} ${BRANCH}
 git checkout -q ${COMMIT_HASH}
 # Skip the other submodules, they are not needed for debugging
 git submodule -q sync
@@ -310,7 +312,7 @@ then
         WORKDIR=$(pwd)
         cd ${SCYLLA_REPO_PATH}
         git checkout -q $MAIN_BRANCH
-        git pull -q --no-recurse-submodules origin $MAIN_BRANCH
+        git pull -q --no-recurse-submodules ${REMOTE_REPO_NAME} $MAIN_BRANCH
         log "Copying scylla-gdb.py from ${SCYLLA_REPO_PATH}"
         cp scylla-gdb.py ${WORKDIR}/scylla-gdb.py
         git checkout -q ${COMMIT_HASH}
