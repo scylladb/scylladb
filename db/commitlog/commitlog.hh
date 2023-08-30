@@ -187,9 +187,9 @@ public:
      * Resolves with timed_out_error when timeout is reached.
      * @param mu an invokable op that generates the serialized data. (Of size bytes)
      */
-    template<typename _MutationOp>
-    future<rp_handle> add_mutation(const cf_id_type& id, size_t size, db::timeout_clock::time_point timeout, force_sync sync, _MutationOp&& mu) {
-        return add(id, size, timeout, sync, [mu = std::forward<_MutationOp>(mu)](output& out) {
+    template<typename MutationOp>
+    future<rp_handle> add_mutation(const cf_id_type& id, size_t size, db::timeout_clock::time_point timeout, force_sync sync, MutationOp&& mu) {
+        return add(id, size, timeout, sync, [mu = std::forward<MutationOp>(mu)](output& out) {
             mu(out);
         });
     }
@@ -198,9 +198,9 @@ public:
      * Template version of add.
      * @param mu an invokable op that generates the serialized data. (Of size bytes)
      */
-    template<typename _MutationOp>
-    future<rp_handle> add_mutation(const cf_id_type& id, size_t size, force_sync sync, _MutationOp&& mu) {
-        return add_mutation(id, size, db::timeout_clock::time_point::max(), sync, std::forward<_MutationOp>(mu));
+    template<typename MutationOp>
+    future<rp_handle> add_mutation(const cf_id_type& id, size_t size, force_sync sync, MutationOp&& mu) {
+        return add_mutation(id, size, db::timeout_clock::time_point::max(), sync, std::forward<MutationOp>(mu));
     }
 
     /**
