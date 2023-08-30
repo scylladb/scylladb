@@ -74,6 +74,8 @@ protected:
         return _static_shares > 0;
     }
 
+    static float slope(const control_point cp1, const control_point& cp2);
+
     void adjust();
 
     backlog_controller(scheduling_group sg, std::chrono::milliseconds interval,

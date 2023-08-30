@@ -420,6 +420,10 @@ locator::vnode_effective_replication_map_ptr keyspace::get_effective_replication
 
 } // namespace replica
 
+float backlog_controller::slope(const control_point cp1, const control_point& cp2) {
+    return (cp2.output - cp1.output) / (cp2.input - cp1.input);
+}
+
 void backlog_controller::adjust() {
     if (controller_disabled()) {
         update_controller(_static_shares);
@@ -442,7 +446,7 @@ void backlog_controller::adjust() {
 
     control_point& cp = _control_points[idx];
     control_point& last = _control_points[idx - 1];
-    float result = last.output + (backlog - last.input) * (cp.output - last.output)/(cp.input - last.input);
+    float result = last.output + (backlog - last.input) * slope(last, cp);
     update_controller(result);
 }
 
