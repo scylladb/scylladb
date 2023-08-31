@@ -265,9 +265,17 @@ class TestSuite(ABC):
         """Tests which participate in a consolidated junit report"""
         return self.tests
 
+    def _filter_test_list(self, tests: List[str]) -> List[str]:
+        patterns = [tc.test_file for tc in self.options.names if tc.suite_name in [self.name, None]]
+        # If any of the patterns is wildcard (None), include all tests, else only specified tests
+        patterns = [""] if not patterns or None in patterns else patterns
+        tests = [test for test in tests if any(patt in test for patt in patterns)]
+        return tests
+
     def build_test_list(self) -> List[str]:
-        return [os.path.splitext(t.relative_to(self.suite_path))[0] for t in
+        tests = [os.path.splitext(t.relative_to(self.suite_path))[0] for t in
                 self.suite_path.glob(self.pattern)]
+        return self._filter_test_list(tests)
 
     async def _test_defs(self, test_list: List[str]) -> List[TestTaskDef]:
         """From a list of test names (files) of this suite, build a list of TestTaskDef definitions
@@ -515,7 +523,8 @@ class PythonTestSuite(TestSuite):
         """For pytest, search for directories recursively"""
         path = self.suite_path
         pytests = itertools.chain(path.rglob("*_test.py"), path.rglob("test_*.py"))
-        return [os.path.splitext(t.relative_to(self.suite_path))[0] for t in pytests]
+        tests = [os.path.splitext(t.relative_to(self.suite_path))[0] for t in pytests]
+        return self._filter_test_list(tests)
 
     @property
     def pattern(self) -> str:
