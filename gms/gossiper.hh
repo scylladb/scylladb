@@ -314,7 +314,7 @@ public:
      * @param ep_state
      * @return
      */
-    version_type get_max_endpoint_state_version(endpoint_state state) const noexcept;
+    version_type get_max_endpoint_state_version(const endpoint_state& state) const noexcept;
 
 
 private:

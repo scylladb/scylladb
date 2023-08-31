@@ -1193,7 +1193,7 @@ std::set<inet_address> gossiper::get_unreachable_members() const {
     return ret;
 }
 
-version_type gossiper::get_max_endpoint_state_version(endpoint_state state) const noexcept {
+version_type gossiper::get_max_endpoint_state_version(const endpoint_state& state) const noexcept {
     auto max_version = state.get_heart_beat_state().get_heart_beat_version();
     for (auto& entry : state.get_application_state_map()) {
         auto& value = entry.second;
