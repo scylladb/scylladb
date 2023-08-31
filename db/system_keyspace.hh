@@ -284,7 +284,6 @@ public:
     future<> make(
             locator::effective_replication_map_factory&,
             replica::database&,
-            db::config&,
             system_table_load_phase phase);
 
     future<> initialize_virtual_tables(

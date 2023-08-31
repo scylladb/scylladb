@@ -616,7 +616,7 @@ private:
             _sys_ks.start(std::ref(_qp), std::ref(_db)).get();
             auto stop_sys_kd = defer([this] { _sys_ks.stop().get(); });
             for (const auto p: all_system_table_load_phases) {
-                replica::distributed_loader::init_system_keyspace(_sys_ks, _erm_factory, _db, *cfg, p).get();
+                replica::distributed_loader::init_system_keyspace(_sys_ks, _erm_factory, _db, p).get();
             }
 
             auto host_id = cfg_in.host_id;

@@ -76,7 +76,7 @@ class distributed_loader {
     static future<> populate_keyspace(distributed<replica::database>& db, sstring datadir, sstring ks_name);
 
 public:
-    static future<> init_system_keyspace(sharded<db::system_keyspace>&, distributed<locator::effective_replication_map_factory>&, distributed<replica::database>&, db::config& cfg, system_table_load_phase phase);
+    static future<> init_system_keyspace(sharded<db::system_keyspace>&, distributed<locator::effective_replication_map_factory>&, distributed<replica::database>&, system_table_load_phase phase);
     static future<> init_non_system_keyspaces(distributed<replica::database>& db, distributed<service::storage_proxy>& proxy, sharded<db::system_keyspace>& sys_ks);
 
     /**

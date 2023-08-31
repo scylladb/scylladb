@@ -1121,7 +1121,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // done only by shard 0, so we'll no longer face race conditions as
             // described here: https://github.com/scylladb/scylla/issues/1014
             supervisor::notify("loading system sstables");
-            replica::distributed_loader::init_system_keyspace(sys_ks, erm_factory, db, *cfg, system_table_load_phase::phase1).get();
+            replica::distributed_loader::init_system_keyspace(sys_ks, erm_factory, db, system_table_load_phase::phase1).get();
 
             const auto listen_address = utils::resolve(cfg->listen_address, family).get0();
             const auto host_id = initialize_local_info_thread(sys_ks, snitch, listen_address, *cfg);
@@ -1345,7 +1345,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // because table construction consults enabled features.
             // Needs to be before system_keyspace::setup(), which writes to schema tables.
             supervisor::notify("loading system_schema sstables");
-            replica::distributed_loader::init_system_keyspace(sys_ks, erm_factory, db, *cfg, system_table_load_phase::phase2).get();
+            replica::distributed_loader::init_system_keyspace(sys_ks, erm_factory, db, system_table_load_phase::phase2).get();
 
             if (raft_gr.local().is_enabled()) {
                 if (!db.local().uses_schema_commitlog()) {

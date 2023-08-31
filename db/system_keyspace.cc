@@ -1928,7 +1928,7 @@ static bool maybe_write_in_user_memory(schema_ptr s) {
 
 future<> system_keyspace::make(
         locator::effective_replication_map_factory& erm_factory,
-        replica::database& db, db::config& cfg, system_table_load_phase phase) {
+        replica::database& db, system_table_load_phase phase) {
     for (auto&& table : system_keyspace::all_tables(db.get_config())) {
         if (table->static_props().load_phase != phase) {
             continue;
