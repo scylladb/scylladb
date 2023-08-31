@@ -5012,6 +5012,7 @@ protected:
                                || rr_opt->row_count() >= original_row_limit()
                                || data_resolver->live_partition_count() >= original_partition_limit())
                         && !data_resolver->any_partition_short_read()) {
+                    tracing::trace(_trace_state, "Read stage is done for read-repair");
                     mlogger.trace("reconciled: {}", rr_opt->pretty_printer(_schema));
                     auto result = ::make_foreign(::make_lw_shared<query::result>(
                             co_await to_data_query_result(std::move(*rr_opt), _schema, _cmd->slice, _cmd->get_row_limit(), cmd->partition_limit)));
@@ -5038,6 +5039,7 @@ protected:
                         on_read_resolved();
                     });
                 } else {
+                    tracing::trace(_trace_state, "Not enough data, need a retry for read-repair");
                     _proxy->get_stats().read_retries++;
                     _retry_cmd = make_lw_shared<query::read_command>(*cmd);
                     // We asked t (= cmd->get_row_limit()) live columns and got l (=data_resolver->total_live_count) ones.
@@ -5144,6 +5146,7 @@ public:
                             exec->_targets.erase(i, exec->_targets.end());
                         }
                     }
+                    tracing::trace(exec->_trace_state, "digest mismatch, starting read repair");
                     exec->reconcile(exec->_cl, timeout);
                     exec->_proxy->get_stats().read_repair_repaired_blocking++;
                 }
