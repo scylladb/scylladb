@@ -348,6 +348,20 @@ future<compaction_manager::compaction_stats_opt> compaction_manager::perform_tas
     co_return std::nullopt;
 }
 
+future<> compaction_manager::on_compaction_completion(table_state& t, sstables::compaction_completion_desc desc, sstables::offstrategy offstrategy) {
+    auto& cs = get_compaction_state(&t);
+    auto new_sstables = boost::copy_range<std::unordered_set<sstables::shared_sstable>>(desc.new_sstables);
+    for (const auto& sst : desc.old_sstables) {
+        if (!new_sstables.contains(sst)) {
+            cs.sstables_requiring_cleanup.erase(sst);
+        }
+    }
+    if (cs.sstables_requiring_cleanup.empty()) {
+        cs.owned_ranges_ptr = nullptr;
+    }
+    return t.on_compaction_completion(std::move(desc), offstrategy);
+}
+
 future<sstables::compaction_result> compaction_manager::task::compact_sstables_and_update_history(sstables::compaction_descriptor descriptor, sstables::compaction_data& cdata, on_replacement& on_replace, can_purge_tombstones can_purge) {
     if (!descriptor.sstables.size()) {
         // if there is nothing to compact, just return.
@@ -393,7 +407,7 @@ future<sstables::compaction_result> compaction_manager::task::compact_sstables(s
         // - are not being compacted.
         on_replace.on_addition(desc.new_sstables);
         auto old_sstables = desc.old_sstables;
-        t.on_compaction_completion(std::move(desc), offstrategy).get();
+        _cm.on_compaction_completion(t, std::move(desc), offstrategy).get();
         on_replace.on_removal(old_sstables);
     };
 
@@ -1214,7 +1228,7 @@ private:
                 .old_sstables = sstables, // removes from maintenance set.
                 .new_sstables = sstables, // adds into main set.
             };
-            co_await t.on_compaction_completion(std::move(completion_desc), sstables::offstrategy::yes);
+            co_await _cm.on_compaction_completion(t, std::move(completion_desc), sstables::offstrategy::yes);
         }
 
         if (err) {
@@ -1580,6 +1594,11 @@ bool compaction_manager::erase_sstable_cleanup_state(table_state& t, const sstab
 bool compaction_manager::requires_cleanup(table_state& t, const sstables::shared_sstable& sst) const {
     const auto& cs = get_compaction_state(&t);
     return cs.sstables_requiring_cleanup.contains(sst);
+}
+
+const std::unordered_set<sstables::shared_sstable>& compaction_manager::sstables_requiring_cleanup(table_state& t) const {
+    const auto& cs = get_compaction_state(&t);
+    return cs.sstables_requiring_cleanup;
 }
 
 future<> compaction_manager::perform_cleanup(owned_ranges_ptr sorted_owned_ranges, table_state& t) {

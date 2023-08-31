@@ -3036,6 +3036,8 @@ future<> sstable::filesystem_storage::wipe(const sstable& sst) noexcept {
 
 future<>
 sstable::unlink() noexcept {
+    _on_delete(*this);
+
     auto remove_fut = _storage.wipe(*this);
 
     try {

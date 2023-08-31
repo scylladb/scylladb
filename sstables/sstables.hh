@@ -426,6 +426,10 @@ public:
         return _on_closed.observe(on_closed_handler);
     }
 
+    utils::observer<sstable&> add_on_delete_handler(std::function<void (sstable&)> on_delete_handler) noexcept {
+        return _on_delete.observe(on_delete_handler);
+    }
+
     template<typename Func, typename... Args>
     requires std::is_nothrow_move_constructible_v<Func>
     auto sstable_write_io_check(Func&& func, Args&&... args) const noexcept {
@@ -544,6 +548,7 @@ private:
     std::optional<dht::decorated_key> _last;
     run_id _run_identifier;
     utils::observable<sstable&> _on_closed;
+    utils::observable<sstable&> _on_delete;
 
     lw_shared_ptr<file_input_stream_history> _single_partition_history = make_lw_shared<file_input_stream_history>();
     lw_shared_ptr<file_input_stream_history> _partition_range_history = make_lw_shared<file_input_stream_history>();
