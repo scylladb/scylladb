@@ -2130,6 +2130,17 @@ def write_build_file(f,
                 mode=mode,
             )
         )
+        compiler_training_artifacts=[]
+        if mode == 'dev':
+            compiler_training_artifacts.append(f'$builddir/{mode}/scylla')
+        elif mode == 'release' or mode == 'debug':
+            compiler_training_artifacts.append(f'$builddir/{mode}/service/storage_proxy.o')
+        f.write(
+            'build {mode}-compiler-training: phony {artifacts}\n'.format(
+                mode=mode,
+                artifacts=str.join(' ', compiler_training_artifacts)
+            )
+        )
 
         gen_dir = '$builddir/{}/gen'.format(mode)
         gen_headers = []
@@ -2268,6 +2279,9 @@ def write_build_file(f,
     )
     f.write(
             'build wasm: phony {}\n'.format(' '.join([f'$builddir/{binary}' for binary in sorted(wasms)]))
+    )
+    f.write(
+            'build compiler-training: phony {}\n'.format(' '.join(['{mode}-compiler-training'.format(mode=mode) for mode in default_modes]))
     )
 
     f.write(textwrap.dedent(f'''\
