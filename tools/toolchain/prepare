@@ -32,29 +32,95 @@ if reg digest $(<tools/toolchain/image) > /dev/null; then
     exit 1
 fi
 
-archs=(amd64 arm64)
-
 # docker arch has a diffrent spelling than uname arch
-declare -A arch_unames=(
-    [amd64]=x86_64
-    [arm64]=aarch64
+declare -A docker_arch=(
+    [x86_64]=amd64
+    [aarch64]=arm64
     [s390x]=s390x
 )
 
-for arch in "${archs[@]}"; do
-    # translate from docker arch to uname arch
-    arch_uname="${arch_unames[$arch]}"
-    if [[ "$(uname -m)" == "${arch_uname}" ]]; then
-        continue
-    fi
-    if [[ ! -f  /proc/sys/fs/binfmt_misc/qemu-"${arch_uname}" ]]; then
-        echo install qemu-user-static
-        exit 1
-    fi
+usage() {
+    cat <<EOF
+
+Options:
+  --clang-build-mode <mode> specify one of following build modes:
+                            SKIP: skip building optimized clang
+                            INSTALL: build and install an optimized clang compiler binary, and save it as a tarball.
+                            INSTALL_FROM: install optimized clang from a tarball.
+  --clang-archive <file>   specify optimized clang tarball path
+  --help                   this help snippet
+EOF
+}
+
+CLANG_BUILD="SKIP"
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        "--clang-build-mode")
+            if [[ -z "$2" ]]; then
+                usage
+                exit 1
+            fi
+            CLANG_BUILD="$2"
+            shift 2
+            ;;
+        "--clang-archive")
+            if [[ -z "$2" ]]; then
+                usage
+                exit 1
+            fi
+            CLANG_ARCHIVE="$(realpath -m --relative-to=. "$2")"
+            shift 2
+            ;;
+        "--help")
+            usage
+            exit 0
+            ;;
+        *)
+            usage
+            exit 1
+            ;;
+    esac
 done
 
-buildah bud "${archs[@]/#/--platform=linux/}" --jobs 0 --squash --no-cache --pull -f tools/toolchain/Dockerfile --manifest "$(<tools/toolchain/image)"
+case "${CLANG_BUILD}" in
+    "SKIP" | "INSTALL" | "INSTALL_FROM")
+        ;;
+    *)
+        echo "Invalid mode specified on CLANG_BUILD: ${CLANG_BUILD}"
+        exit 1
+        ;;
+esac
+
+# clang archive file need to be under scylla directory, since we only share
+# scylla directory with the container
+if [[ "${CLANG_ARCHIVE}" = "../"* ]]; then
+    echo "clang archive file need to be under scylla directory"
+    exit 1
+fi
+
+# set default archive path if not specified
+if [[ -z "${CLANG_ARCHIVE}" ]]; then
+    CURDIR="$(dirname "$0")"
+    LLVM_CLANG_TAG="$(sed -n -e 's/^LLVM_CLANG_TAG=\(.*\)/\1/p' "${CURDIR}"/optimized_clang.sh)"
+    IMAGE_ID="$(sed -e 's#docker.io/scylladb/scylla-toolchain:##' "${CURDIR}"/image)"
+    CLANG_ARCHIVE="clang_build/optimized_clang_${LLVM_CLANG_TAG}_${IMAGE_ID}.$(arch).tar.gz"
+fi
+
+if [[ "${CLANG_BUILD}" = "INSTALL_FROM" ]] && [[ ! -f "${CLANG_ARCHIVE}" ]]; then
+    echo "${CLANG_ARCHIVE}" does not exist.
+    echo "Please specify vaild file with --clang-archive"
+    exit 1
+fi
+
+buildah bud --platform="linux/${docker_arch[$(arch)]}" --jobs 0 --squash --no-cache --pull -f tools/toolchain/Dockerfile --manifest "$(<tools/toolchain/image)" -v "$(realpath ./):/mnt:Z" --build-arg CLANG_BUILD="${CLANG_BUILD}" --build-arg CLANG_ARCHIVE="${CLANG_ARCHIVE}"
 
 echo "Done building $(<tools/toolchain/image). You can now test it, and push with"
 echo ""
 echo "    podman manifest push --all $(<tools/toolchain/image) docker://$(<tools/toolchain/image)"
+if [[ "${CLANG_BUILD}" = "INSTALL" ]]; then
+    echo ""
+    echo "Optimized clang archive saved at:"
+    echo "    ${CLANG_ARCHIVE}"
+    echo "You can rebuild frozen toolchain without rebuilding optimized clang by:"
+    echo "    ./tools/toolchain/prepare --clang-build-mode INSTALL_FROM --clang-archive ${CLANG_ARCHIVE}"
+fi

@@ -85,45 +85,33 @@ there is a need to update a toolchain, the branch designation is added to
 the tag to avoid ambiguity.
 
 Publishing an image is complicated since multiple architectures are supported.
-There are two procedures, one using emulation (can run on any x86 machine) and
-another using native systems, which requires access to aarch64 and s390x machines.
 
 You will need credentials to push images. You either need to setup permanent
 credentials with `podman login`, or you can just append
 `--creds=yourname@scylladb.com` to the `podman manifest push` command and then
 type in your password.
 
-## Emulated publishing procedure (slow)
+## Publishing procedure
 
 1. Pick a new name for the image (in `tools/toolchain/image`) and
    commit it. The commit updating install-dependencies.sh should
    include the toolchain change, for atomicity. Do not push the commit
    to `next` yet.
-2. Run `tools/toolchain/prepare` and wait. It requires `buildah` and
-   `qemu-user-static` to be installed (and will complain if they are not).
-3. Publish the image using the instructions printed by the previous step.
-4. Push the `next` branch that refers to the new toolchain.
-
-## Native publishing procedure (complicated)
-
-1. Pick a new name for the image (in `tools/toolchain/image`) and
-   commit it. The commit updating install-dependencies.sh should
-   include the toolchain change, for atomicity. Do not push the commit
-   to `next` yet.
-2. Push the commit to a personal repository/branch.
-3. Perform the following on an x86 and an ARM machine:
+2. Run `tools/toolchain/prepare --clang-build-mode INSTALL` and wait. It requires `buildah` and to be installed (and will complain if they are not).
+3. Push the commit to a personal repository/branch.
+4. Perform the following on an x86 and an ARM machine:
     1. check out the branch containing the new toolchain name
     2. Run `git submodule update --init --recursive` to make sure
        all the submodules are synchronized
     3. Run `podman build --no-cache --pull --tag mytag-arch -f tools/toolchain/Dockerfile .`, where mytag-arch is a new, unique tag that is different for x86 and ARM.
     4. Push the resulting images to a personal docker repository.
-4. Now, create a multiarch image with the following:
+5. Now, create a multiarch image with the following:
     1. Pull the two images with `podman pull`. Let's call the two tags
        `mytag-x86` and `mytag-arm`.
     2. Create the new toolchain manifest with `podman manifest create $(<tools/toolchain/image)`
     3. Add each image with `podman manifest add --all $(<tools/toolchain/image) mytag-x86` and `podman manifest add --all $(<tools/toolchain/image) mytag-arm`
     4. Push the image with `podman manifest push --all $(<tools/toolchain/image) docker://$(<tools/toolchain/image)`
-5. Now push the commit that updated the toolchain with `git push`.
+6. Now push the commit that updated the toolchain with `git push`.
 
 ## Troubleshooting
 
