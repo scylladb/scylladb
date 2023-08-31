@@ -5352,6 +5352,7 @@ result<::shared_ptr<abstract_read_executor>> storage_proxy::get_read_executor(lw
     // Speculative retry is disabled *OR* there are simply no extra replicas to speculate.
     if (retry_type == speculative_retry::type::NONE || block_for == all_replicas.size()
             || (repair_decision == db::read_repair_decision::DC_LOCAL && is_datacenter_local(cl) && block_for == target_replicas.size())) {
+        tracing::trace(trace_state, "Creating never_speculating_read_executor - speculative retry is disabled or there are no extra replicas to speculate with");
         return ::make_shared<never_speculating_read_executor>(schema, cf, p, std::move(erm), cmd, std::move(pr), cl, std::move(target_replicas), std::move(trace_state), std::move(permit), rate_limit_info);
     }
 
@@ -5359,6 +5360,7 @@ result<::shared_ptr<abstract_read_executor>> storage_proxy::get_read_executor(lw
         // CL.ALL, RRD.GLOBAL or RRD.DC_LOCAL and a single-DC.
         // We are going to contact every node anyway, so ask for 2 full data requests instead of 1, for redundancy
         // (same amount of requests in total, but we turn 1 digest request into a full blown data request).
+        tracing::trace(trace_state, "always_speculating_read_executor (all targets)");
         return ::make_shared<always_speculating_read_executor>(schema, cf, p, std::move(erm), cmd, std::move(pr), cl, block_for, std::move(target_replicas), std::move(trace_state), std::move(permit), rate_limit_info);
     }
 
@@ -5367,16 +5369,20 @@ result<::shared_ptr<abstract_read_executor>> storage_proxy::get_read_executor(lw
         auto local_dc_filter = erm->get_topology().get_local_dc_filter();
         if (!extra_replica || (is_datacenter_local(cl) && !local_dc_filter(*extra_replica))) {
             slogger.trace("read executor no extra target to speculate");
+            tracing::trace(trace_state, "Creating never_speculating_read_executor - there are no extra replicas to speculate with");
             return ::make_shared<never_speculating_read_executor>(schema, cf, p, std::move(erm), cmd, std::move(pr), cl, std::move(target_replicas), std::move(trace_state), std::move(permit), rate_limit_info);
         } else {
             target_replicas.push_back(*extra_replica);
             slogger.trace("creating read executor with extra target {}", *extra_replica);
+            tracing::trace(trace_state, "Added extra target {} for speculative read", *extra_replica);
         }
     }
 
     if (retry_type == speculative_retry::type::ALWAYS) {
+        tracing::trace(trace_state, "Creating always_speculating_read_executor");
         return ::make_shared<always_speculating_read_executor>(schema, cf, p, std::move(erm), cmd, std::move(pr), cl, block_for, std::move(target_replicas), std::move(trace_state), std::move(permit), rate_limit_info);
     } else {// PERCENTILE or CUSTOM.
+        tracing::trace(trace_state, "Creating speculating_read_executor");
         return ::make_shared<speculating_read_executor>(schema, cf, p, std::move(erm), cmd, std::move(pr), cl, block_for, std::move(target_replicas), std::move(trace_state), std::move(permit), rate_limit_info);
     }
 }
