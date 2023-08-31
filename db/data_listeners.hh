@@ -116,6 +116,7 @@ class toppartitions_data_listener : public data_listener, public weakly_referenc
     replica::database& _db;
     std::unordered_set<std::tuple<sstring, sstring>, utils::tuple_hash> _table_filters;
     std::unordered_set<sstring> _keyspace_filters;
+    size_t _capacity;
 
 public:
     using top_k = utils::space_saving_top_k<toppartitions_item_key, toppartitions_item_key::hash, toppartitions_item_key::comp>;
@@ -128,13 +129,20 @@ private:
     top_k _top_k_write;
 
 public:
-    toppartitions_data_listener(replica::database& db, std::unordered_set<std::tuple<sstring, sstring>, utils::tuple_hash> table_filters, std::unordered_set<sstring> keyspace_filters);
+    toppartitions_data_listener(replica::database& db, std::unordered_set<std::tuple<sstring, sstring>, utils::tuple_hash> table_filters, std::unordered_set<sstring> keyspace_filters, size_t capacity);
     ~toppartitions_data_listener();
 
     virtual flat_mutation_reader_v2 on_read(const schema_ptr& s, const dht::partition_range& range,
             const query::partition_slice& slice, flat_mutation_reader_v2&& rd) override;
 
     virtual void on_write(const schema_ptr& s, const frozen_mutation& m) override;
+
+    void set_capacity(size_t capacity) {
+        _capacity = capacity;
+
+        _top_k_read = top_k(capacity);
+        _top_k_write = top_k(capacity);
+    }
 
     future<> stop();
 };
