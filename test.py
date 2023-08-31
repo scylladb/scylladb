@@ -1427,11 +1427,16 @@ def parse_cmd_line() -> argparse.Namespace:
 
 async def find_tests(options: argparse.Namespace) -> None:
 
-    for f in glob.glob(os.path.join("test", "*")):
-        if os.path.isdir(f) and os.path.isfile(os.path.join(f, "suite.yaml")):
-            for mode in options.modes:
-                suite = TestSuite.opt_create(f, options, mode)
-                await suite.add_test_list()
+    suite_names = [tc.suite_name for tc in options.names]
+    # If no patterns or any of the patterns is wildcard (None), include all suites
+    # else only specified suites
+    suites = ["*"] if not suite_names or None in suite_names else suite_names
+    suite_confs = [f for s in suites for f in glob.glob(os.path.join("test", s, "suite.yaml"))]
+    for cfg_file in suite_confs:
+        suite_dir = os.path.dirname(cfg_file)            # Suite directory
+        for mode in options.modes:
+            suite = TestSuite.opt_create(suite_dir, options, mode)
+            await suite.add_test_list()
 
     if not TestSuite.test_count():
         if len(options.names):
