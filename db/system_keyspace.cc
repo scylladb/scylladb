@@ -82,6 +82,7 @@ namespace {
             system_keyspace::DISCOVERY,
             system_keyspace::TABLETS,
             system_keyspace::LOCAL,
+            system_keyspace::PEERS,
         };
         if (ks_name == system_keyspace::NAME && tables.contains(cf_name)) {
             props.enable_schema_commitlog();
@@ -1575,7 +1576,6 @@ future<> system_keyspace::update_tokens(gms::inet_address ep, const std::unorder
     slogger.debug("INSERT INTO system.{} (peer, tokens) VALUES ({}, {})", PEERS, ep, tokens);
     auto set_type = set_type_impl::get_instance(utf8_type, true);
     co_await execute_cql(req, ep.addr(), make_set_value(set_type, prepare_tokens(tokens))).discard_result();
-    co_await force_blocking_flush(PEERS);
 }
 
 
@@ -1722,7 +1722,6 @@ future<> system_keyspace::remove_endpoint(gms::inet_address ep) {
     sstring req = format("DELETE FROM system.{} WHERE peer = ?", PEERS);
     slogger.debug("DELETE FROM system.{} WHERE peer = {}", PEERS, ep);
     co_await execute_cql(req, ep.addr()).discard_result();
-    co_await force_blocking_flush(PEERS);
 }
 
 future<> system_keyspace::update_tokens(const std::unordered_set<dht::token>& tokens) {
