@@ -154,10 +154,8 @@ if [ -z "$is_podman" ]; then
        --pids-limit -1
        )
 else
-    TMP_PASSWD=$(mktemp --tmpdir passwd.XXXXXX)
-    FULLNAME=$(getent passwd $USER | cut -d ':' -f 5)
-    echo "$USER:x:0:0:$FULLNAME:$HOME:/bin/bash" > "$TMP_PASSWD"
-    docker_common_args+=(-v "$TMP_PASSWD:/etc/passwd:ro")
+    docker_common_args+=(
+        --userns keep-id)
     # --pids-limit is not supported on podman with cgroupsv1
     # detection code from
     #   https://unix.stackexchange.com/questions/617764/how-do-i-check-if-system-is-using-cgroupv1
