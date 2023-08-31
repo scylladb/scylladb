@@ -81,6 +81,7 @@ namespace {
             system_keyspace::GROUP0_HISTORY,
             system_keyspace::DISCOVERY,
             system_keyspace::TABLETS,
+            system_keyspace::LOCAL,
         };
         if (ks_name == system_keyspace::NAME && tables.contains(cf_name)) {
             props.enable_schema_commitlog();
@@ -1732,7 +1733,6 @@ future<> system_keyspace::update_tokens(const std::unordered_set<dht::token>& to
     sstring req = format("INSERT INTO system.{} (key, tokens) VALUES (?, ?)", LOCAL);
     auto set_type = set_type_impl::get_instance(utf8_type, true);
     co_await execute_cql(req, sstring(LOCAL), make_set_value(set_type, prepare_tokens(tokens)));
-    co_await force_blocking_flush(LOCAL);
 }
 
 future<> system_keyspace::force_blocking_flush(sstring cfname) {
@@ -1861,7 +1861,6 @@ future<> system_keyspace::set_bootstrap_state(bootstrap_state state) {
 
     sstring req = format("INSERT INTO system.{} (key, bootstrapped) VALUES (?, ?)", LOCAL);
     co_await execute_cql(req, sstring(LOCAL), state_name).discard_result();
-    co_await force_blocking_flush(LOCAL);
     co_await container().invoke_on_all([state] (auto& sys_ks) {
         sys_ks._cache->_state = state;
     });
@@ -2059,7 +2058,6 @@ future<int> system_keyspace::increment_and_get_generation() {
     }
     req = format("INSERT INTO system.{} (key, gossip_generation) VALUES ('{}', ?)", LOCAL, LOCAL);
     co_await _qp.execute_internal(req, {generation.value()}, cql3::query_processor::cache_internal::yes);
-    co_await force_blocking_flush(LOCAL);
     co_return generation;
 }
 
