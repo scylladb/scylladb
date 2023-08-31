@@ -341,4 +341,4 @@ Good luck!
 EOF
 fi
 
-exec ${SCYLLA_REPO_PATH}/tools/toolchain/dbuild -it -v $(pwd):/workdir -v ${SCYLLA_REPO_PATH}:/src/scylla -v ${ARTIFACT_DIR}/scylla.package:/opt/scylladb -w /workdir -- bash -l
+exec ${SCYLLA_REPO_PATH}/tools/toolchain/dbuild -it -v $(pwd):/workdir -v ${SCYLLA_REPO_PATH}:/src/scylla -v ${ARTIFACT_DIR}/scylla.package:/opt/scylladb:Z -w /workdir -- bash -l
