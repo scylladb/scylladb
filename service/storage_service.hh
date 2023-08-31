@@ -335,7 +335,7 @@ public:
      *
      * \see init_messaging_service_part
      */
-    future<> join_cluster(sharded<db::system_distributed_keyspace>& sys_dist_ks, sharded<service::storage_proxy>& proxy, cql3::query_processor& qp);
+    future<> join_cluster(sharded<db::system_distributed_keyspace>& sys_dist_ks, sharded<service::storage_proxy>& proxy);
 
     void set_group0(service::raft_group0&, bool raft_topology_change_enabled);
 
@@ -352,7 +352,7 @@ private:
             std::unordered_set<gms::inet_address> initial_contact_nodes,
             std::unordered_set<gms::inet_address> loaded_endpoints,
             std::unordered_map<gms::inet_address, sstring> loaded_peer_features,
-            std::chrono::milliseconds, cql3::query_processor& qp);
+            std::chrono::milliseconds);
     future<> start_sys_dist_ks();
 public:
 
