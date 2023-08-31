@@ -345,6 +345,10 @@ fi
 
 TOP_SRCDIR=$(dirname $(dirname $0))
 IMAGE="${SCYLLA_REPO_PATH}/tools/toolchain/image"
-exec ${TOP_SRCDIR}/tools/toolchain/dbuild \
-    --image "$(<"$IMAGE")" \
-    -it -v $(pwd):/workdir -v ${SCYLLA_REPO_PATH}:/src/scylla -v ${ARTIFACT_DIR}/scylla.package:/opt/scylladb -w /workdir -- bash -l
+exec ${TOP_SRCDIR}/tools/toolchain/dbuild               \
+    --image "$(<"$IMAGE")"                              \
+    -it                                                 \
+    -v $(pwd):/workdir                                  \
+    -v ${SCYLLA_REPO_PATH}:/src/scylla                  \
+    -v ${ARTIFACT_DIR}/scylla.package:/opt/scylladb     \
+    -w /workdir -- bash -l
