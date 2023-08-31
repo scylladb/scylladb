@@ -31,7 +31,7 @@ task_manager::task::impl::impl(module_ptr module, task_id id, uint64_t sequence_
 {
     // Child tasks do not need to subscribe to abort source because they will be aborted recursively by their parents.
     if (!parent_id) {
-        _shutdown_subscription = module->get_task_manager()._as.subscribe([this] () noexcept {
+        _shutdown_subscription = module->abort_source().subscribe([this] () noexcept {
             (void)abort();
         });
     }
