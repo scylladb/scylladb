@@ -570,6 +570,9 @@ murmur3_partitioner_ignore_msb_bits: 12
 # may be lost if the node was not cleanly stopped.
 force_schema_commit_log: true
 
+# Time for which task manager task is kept in memory after it completes.
+task_ttl_in_seconds: 10
+
 # Use Raft to consistently manage schema information in the cluster.
 # Refer to https://docs.scylladb.com/master/architecture/raft.html for more details.
 # The 'Handling Failures' section is especially important.
