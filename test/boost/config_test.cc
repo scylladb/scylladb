@@ -1034,15 +1034,3 @@ SEASTAR_TEST_CASE(test_parse_experimental_features_invalid) {
                        });
     return make_ready_future();
 }
-
-SEASTAR_TEST_CASE(test_parse_experimental_false) {
-    auto cfg_ptr = std::make_unique<config>();
-    config& cfg = *cfg_ptr;
-    cfg.read_from_yaml("experimental: false", throw_on_error);
-    BOOST_CHECK(!cfg.check_experimental(ef::UNUSED));
-    BOOST_CHECK(!cfg.check_experimental(ef::UDF));
-    BOOST_CHECK(!cfg.check_experimental(ef::ALTERNATOR_STREAMS));
-    BOOST_CHECK(!cfg.check_experimental(ef::CONSISTENT_TOPOLOGY_CHANGES));
-    BOOST_CHECK(!cfg.check_experimental(ef::KEYSPACE_STORAGE_OPTIONS));
-    return make_ready_future();
-}
