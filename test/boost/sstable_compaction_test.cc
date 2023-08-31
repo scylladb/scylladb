@@ -5227,3 +5227,49 @@ SEASTAR_TEST_CASE(test_sstables_excluding_staging_correctness) {
         }
     });
 }
+
+SEASTAR_THREAD_TEST_CASE(test_compaction_controller_param_correctness) {
+    class compaction_controller_for_testing : public compaction_controller {
+    public:
+        compaction_controller_for_testing(compaction_controller::config cfg, std::function<float()> current_backlog)
+            : compaction_controller(std::move(cfg), std::move(current_backlog)) {}
+
+        float get_shares() {
+            adjust();
+            return _scheduling_group.get_shares();
+        }
+    };
+
+    auto sg = create_scheduling_group("sg1", 50).get0();
+    auto destroy_sg = seastar::defer([sg] {
+        destroy_scheduling_group(sg).get();
+    });
+
+    std::vector<float> max_shares_s = { 1, 200, 1000, 2000 };
+    std::vector<float> backlog_sensitivity_s = { 0, 0.1, 0.5, 1.0, 10 };
+
+    for (auto max_shares : max_shares_s) {
+        for (auto backlog_sensitivity : backlog_sensitivity_s) {
+            auto backlog = make_lw_shared<float>(0.0f);
+            auto current_backlog = [backlog] () -> float {
+                return *backlog;
+            };
+            compaction_controller::config cfg{
+                .sg = sg,
+                .static_shares = 0,
+                .max_shares = max_shares,
+                .backlog_sensitivity = backlog_sensitivity,
+                .interval = 0ms,
+            };
+            auto controller = compaction_controller_for_testing(cfg, std::move(current_backlog));
+
+            *backlog = controller.normalization_factor();
+            testlog.info("max_shares: {}, backlog_sensitivity: {}, backlog: {}, current_shares: {}", max_shares, backlog_sensitivity, *backlog, controller.get_shares());
+            auto expected_max_shares = std::max(compaction_controller::minimum_effective_max_shares(), cfg.max_shares);
+            BOOST_REQUIRE(controller.get_shares() == expected_max_shares);
+            *backlog = controller.normalization_factor() / 2;
+            testlog.info("max_shares: {}, backlog_sensitivity: {}, backlog: {}, current_shares: {}", max_shares, backlog_sensitivity, *backlog, controller.get_shares());
+            BOOST_REQUIRE(controller.get_shares() < expected_max_shares);
+        }
+    }
+}
