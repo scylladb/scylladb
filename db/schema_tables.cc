@@ -1122,14 +1122,27 @@ void feed_hash_for_schema_digest(hasher& h, const mutation& m, schema_features f
     }
 }
 
-// Applies deletion of the "version" column to a system_schema.scylla_tables mutation.
-static void delete_schema_version(mutation& m) {
+// Applies deletion of the "version" column to system_schema.scylla_tables mutation rows
+// which weren't committed by group 0.
+static void maybe_delete_schema_version(mutation& m) {
     if (m.column_family_id() != scylla_tables()->id()) {
         return;
     }
+    const column_definition& origin_col = *m.schema()->get_column_definition(to_bytes("committed_by_group0"));
     const column_definition& version_col = *m.schema()->get_column_definition(to_bytes("version"));
     for (auto&& row : m.partition().clustered_rows()) {
         auto&& cells = row.row().cells();
+        if (auto&& origin_cell = cells.find_cell(origin_col.id); origin_cell) {
+            auto&& ac = origin_cell->as_atomic_cell(origin_col);
+            if (ac.is_live()) {
+                auto dv = origin_col.type->deserialize(managed_bytes_view(ac.value()));
+                auto committed_by_group0 = value_cast<bool>(dv);
+                if (committed_by_group0) {
+                    // Don't delete "version" for this entry.
+                    continue;
+                }
+            }
+        }
         auto&& cell = cells.find_cell(version_col.id);
         api::timestamp_type t = api::new_timestamp();
         if (cell) {
@@ -1268,8 +1281,9 @@ static future<> do_merge_schema(distributed<service::storage_proxy>& proxy, shar
         keyspaces.emplace(std::move(keyspace_name));
         column_families.emplace(mutation.column_family_id());
         // We must force recalculation of schema version after the merge, since the resulting
-        // schema may be a mix of the old and new schemas.
-        delete_schema_version(mutation);
+        // schema may be a mix of the old and new schemas, with the exception of entries
+        // that originate from group 0.
+        maybe_delete_schema_version(mutation);
     }
 
     if (reload) {
