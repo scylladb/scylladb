@@ -230,7 +230,7 @@ class TestSuite(ABC):
                 continue
 
             t = os.path.join(self.name, shortname)
-            patterns = options.name if options.name else [t]
+            patterns = options.names if options.names else [t]
             if options.skip_pattern and options.skip_pattern in t:
                 continue
 
@@ -1182,7 +1182,7 @@ def parse_cmd_line() -> argparse.Namespace:
 
     parser = argparse.ArgumentParser(description="Scylla test runner")
     parser.add_argument(
-        "name",
+        "names",
         nargs="*",
         action="store",
         help="""Can be empty. List of test names, to look for in
@@ -1310,8 +1310,8 @@ async def find_tests(options: argparse.Namespace) -> None:
                 await suite.add_test_list()
 
     if not TestSuite.test_count():
-        if len(options.name):
-            print("Test {} not found".format(palette.path(options.name[0])))
+        if len(options.names):
+            print("Test {} not found".format(palette.path(options.names[0])))
             sys.exit(1)
         else:
             print(palette.warn("No tests found. Please enable tests in ./configure.py first."))
