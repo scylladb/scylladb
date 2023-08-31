@@ -21,7 +21,7 @@ namespace sstables {
 logging::logger smlogger("sstables_manager");
 
 sstables_manager::sstables_manager(
-    db::large_data_handler& large_data_handler, const db::config& dbcfg, gms::feature_service& feat, cache_tracker& ct, size_t available_memory, directory_semaphore& dir_sem, storage_manager* shared)
+    db::large_data_handler& large_data_handler, const db::config& dbcfg, gms::feature_service& feat, cache_tracker& ct, size_t available_memory, directory_semaphore& dir_sem, noncopyable_function<locator::host_id()>&& resolve_host_id, storage_manager* shared)
     : _storage(shared)
     , _large_data_handler(large_data_handler), _db_config(dbcfg), _features(feat), _cache_tracker(ct)
     , _sstable_metadata_concurrency_sem(
@@ -32,6 +32,7 @@ sstables_manager::sstables_manager(
         utils::updateable_value(std::numeric_limits<uint32_t>::max()),
         utils::updateable_value(std::numeric_limits<uint32_t>::max()))
     , _dir_semaphore(dir_sem)
+    , _resolve_host_id(std::move(resolve_host_id))
 {
 }
 
@@ -98,8 +99,8 @@ storage_manager::config_updater::config_updater(const db::config& cfg, storage_m
     , observer(cfg.object_storage_config.observe(action.make_observer()))
 {}
 
-const locator::host_id& sstables_manager::get_local_host_id() const {
-    return _db_config.host_id;
+locator::host_id sstables_manager::get_local_host_id() const {
+    return _resolve_host_id();
 }
 
 bool sstables_manager::uuid_sstable_identifiers() const {

@@ -619,21 +619,22 @@ private:
                 replica::distributed_loader::init_system_keyspace(_sys_ks, _erm_factory, _db, *cfg, p).get();
             }
 
-            if (!cfg->host_id) {
+            auto host_id = cfg_in.host_id;
+            if (!host_id) {
                 auto linfo = _sys_ks.local().load_local_info().get0();
                 if (!linfo.host_id) {
                     linfo.host_id = locator::host_id::create_random_id();
                 }
-                cfg->host_id = linfo.host_id;
+                host_id = linfo.host_id;
                 _sys_ks.local().save_local_info(std::move(linfo), _snitch.local()->get_location()).get();
             }
-            locator::shared_token_metadata::mutate_on_all_shards(_token_metadata, [hostid = cfg->host_id] (locator::token_metadata& tm) {
+            locator::shared_token_metadata::mutate_on_all_shards(_token_metadata, [hostid = host_id] (locator::token_metadata& tm) {
                 tm.get_topology().set_host_id_cfg(hostid);
                 return make_ready_future<>();
             }).get();
 
             // don't start listening so tests can be run in parallel
-            _ms.start(cfg->host_id, listen, std::move(7000)).get();
+            _ms.start(host_id, listen, std::move(7000)).get();
             auto stop_ms = defer([this] { _ms.stop().get(); });
 
             // Normally the auth server is already stopped in here,
@@ -689,7 +690,7 @@ private:
             });
 
             _group0_registry.start(cfg->consistent_cluster_management(),
-                raft::server_id{cfg->host_id.id},
+                raft::server_id{host_id.id},
                 std::ref(_raft_address_map),
                 std::ref(_ms), std::ref(_gossiper), std::ref(_fd)).get();
             auto stop_raft_gr = deferred_stop(_group0_registry);

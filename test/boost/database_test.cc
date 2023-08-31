@@ -1230,7 +1230,7 @@ SEASTAR_TEST_CASE(populate_from_quarantine_works) {
     // populate tmpdir_for_data and
     // move a random sstable to quarantine
     co_await do_with_some_data({"cf"}, [&host_id] (cql_test_env& e) -> future<> {
-        host_id = e.local_db().get_config().host_id;
+        host_id = e.local_db().get_token_metadata().get_my_id();
         auto& db = e.db();
         co_await db.invoke_on_all([] (replica::database& db) {
             auto& cf = db.find_column_family("ks", "cf");
@@ -1261,14 +1261,15 @@ SEASTAR_TEST_CASE(populate_from_quarantine_works) {
 
     // reload the table from tmpdir_for_data and
     // verify that all rows are still there
-    db_cfg_ptr->host_id = host_id;
     size_t row_count = 0;
+    cql_test_config test_config(db_cfg_ptr);
+    test_config.host_id = host_id;
     co_await do_with_cql_env([&row_count] (cql_test_env& e) -> future<> {
         auto res = co_await e.execute_cql("select * from ks.cf;");
         auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(res);
         BOOST_REQUIRE(rows);
         row_count = rows->rs().result_set().size();
-    }, std::move(db_cfg_ptr));
+    }, std::move(test_config));
     BOOST_REQUIRE_EQUAL(row_count, 6);
 }
 

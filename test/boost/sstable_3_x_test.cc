@@ -5168,7 +5168,6 @@ static void test_sstable_write_large_row_f(schema_ptr s, reader_permit permit, r
     large_row_handler handler(threshold, std::numeric_limits<uint64_t>::max(), std::numeric_limits<uint64_t>::max(), std::numeric_limits<uint64_t>::max(), f);
 
     sstables::test_env::do_with_async([&] (auto& env) {
-        env.db_config().host_id = locator::host_id::create_random_id();
         auto sst = env.make_sstable(s, version);
 
         // The test provides thresholds values for the large row handler. Whether the handler gets
@@ -5223,7 +5222,6 @@ static void test_sstable_write_large_cell_f(schema_ptr s, reader_permit permit, 
     large_row_handler handler(std::numeric_limits<uint64_t>::max(), std::numeric_limits<uint64_t>::max(), threshold, std::numeric_limits<uint64_t>::max(), f);
 
     sstables::test_env::do_with_async([&] (auto& env) {
-        env.db_config().host_id = locator::host_id::create_random_id();
         auto sst = env.make_sstable(s, version);
 
         // The test provides thresholds values for the large row handler. Whether the handler gets
@@ -5282,7 +5280,6 @@ static void test_sstable_log_too_many_rows_f(int rows, uint64_t threshold, bool 
     large_row_handler handler(std::numeric_limits<uint64_t>::max(), threshold, std::numeric_limits<uint64_t>::max(), std::numeric_limits<uint64_t>::max(), f);
 
     sstables::test_env::do_with_async([&] (auto& env) {
-        env.db_config().host_id = locator::host_id::create_random_id();
         auto sst = env.make_sstable(sc, version);
         sst->write_components(mt->make_flat_reader(sc, semaphore.make_permit()), 1, sc, env.manager().configure_writer("test"), encoding_stats{}).get();
 
@@ -5334,7 +5331,6 @@ static void test_sstable_too_many_collection_elements_f(int elements, uint64_t t
     large_row_handler handler(std::numeric_limits<uint64_t>::max(), std::numeric_limits<uint64_t>::max(), std::numeric_limits<uint64_t>::max(), threshold, f);
 
     sstables::test_env::do_with_async([&] (auto& env) {
-        env.db_config().host_id = locator::host_id::create_random_id();
         auto sst = env.make_sstable(sc, version);
         sst->write_components(mt->make_flat_reader(sc, semaphore.make_permit()), 1, sc, env.manager().configure_writer("test"), encoding_stats{}).get();
 

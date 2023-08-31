@@ -460,7 +460,6 @@ public:
 
     const db::extensions& extensions() const;
 
-    locator::host_id host_id;
     utils::updateable_value<std::unordered_map<sstring, s3::endpoint_config>> object_storage_config;
 
     named_value<std::vector<error_injection_at_startup>> error_injections_at_startup;

@@ -2486,7 +2486,7 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
         _gossiper.check_knows_remote_features(local_features, loaded_peer_features);
         _gossiper.check_snitch_name_matches(_snitch.local()->get_name());
         // Check if the node is already removed from the cluster
-        auto local_host_id = _db.local().get_config().host_id;
+        auto local_host_id = get_token_metadata().get_my_id();
         auto my_ip = get_broadcast_address();
         if (!_gossiper.is_safe_for_restart(my_ip, local_host_id)) {
             throw std::runtime_error(::format("The node {} with host_id {} is removed from the cluster. Can not restart the removed node to join the cluster again!",
@@ -2531,7 +2531,7 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
     // for bootstrap to get the load info it needs.
     // (we won't be part of the storage ring though until we add a counterId to our state, below.)
     // Seed the host ID-to-endpoint map with our own ID.
-    auto local_host_id = _db.local().get_config().host_id;
+    auto local_host_id = get_token_metadata().get_my_id();
     if (!replacing_a_node_with_diff_ip) {
         auto endpoint = get_broadcast_address();
         auto eps = _gossiper.get_endpoint_state_ptr(endpoint);
@@ -3906,7 +3906,7 @@ storage_service::prepare_replacement_info(std::unordered_set<gms::inet_address> 
     if (!replace_host_id) {
         replace_host_id = _gossiper.get_host_id(replace_address);
     }
-    slogger.info("Host {}/{} is replacing {}/{}", _db.local().get_config().host_id, get_broadcast_address(), replace_host_id, replace_address);
+    slogger.info("Host {}/{} is replacing {}/{}", get_token_metadata().get_my_id(), get_broadcast_address(), replace_host_id, replace_address);
     co_await _gossiper.reset_endpoint_state_map();
 
     co_return replacement_info {
@@ -4386,7 +4386,7 @@ future<> storage_service::decommission() {
                 bool left_token_ring = false;
                 auto uuid = node_ops_id::create_random_id();
                 auto& db = ss._db.local();
-                node_ops_ctl ctl(ss, node_ops_cmd::decommission_prepare, db.get_config().host_id, ss.get_broadcast_address());
+                node_ops_ctl ctl(ss, node_ops_cmd::decommission_prepare, ss.get_token_metadata().get_my_id(), ss.get_broadcast_address());
                 auto stop_ctl = deferred_stop(ctl);
 
                 // Step 1: Decide who needs to sync data
@@ -4531,8 +4531,7 @@ future<> storage_service::decommission() {
 
 // Runs inside seastar::async context
 void storage_service::run_bootstrap_ops(std::unordered_set<token>& bootstrap_tokens) {
-    auto& db = _db.local();
-    node_ops_ctl ctl(*this, node_ops_cmd::bootstrap_prepare, db.get_config().host_id, get_broadcast_address());
+    node_ops_ctl ctl(*this, node_ops_cmd::bootstrap_prepare, get_token_metadata().get_my_id(), get_broadcast_address());
     auto stop_ctl = deferred_stop(ctl);
     const auto& uuid = ctl.uuid();
 

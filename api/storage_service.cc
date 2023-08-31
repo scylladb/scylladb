@@ -467,7 +467,7 @@ static future<json::json_return_type> describe_ring_as_json(sharded<service::sto
 
 void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_service>& ss, gms::gossiper& g, sharded<db::system_keyspace>& sys_ks) {
     ss::local_hostid.set(r, [&ctx](std::unique_ptr<http::request> req) {
-        auto id = ctx.db.local().get_config().host_id;
+        auto id = ctx.db.local().get_token_metadata().get_my_id();
         return make_ready_future<json::json_return_type>(id.to_sstring());
     });
 
