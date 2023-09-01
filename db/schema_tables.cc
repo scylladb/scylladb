@@ -88,15 +88,9 @@ static logging::logger diff_logger("schema_diff");
 /** system.schema_* tables used to store keyspace/table/type attributes prior to C* 3.0 */
 namespace db {
 namespace {
-    const auto set_null_sharder = schema_builder::register_static_configurator([](const sstring& ks_name, const sstring& cf_name, schema_static_props& props) {
-        if (ks_name == schema_tables::NAME) {
-            props.use_null_sharder = true;
-        }
-    });
     const auto set_use_schema_commitlog = schema_builder::register_static_configurator([](const sstring& ks_name, const sstring& cf_name, schema_static_props& props) {
         if (ks_name == schema_tables::NAME) {
-            props.use_schema_commitlog = true;
-            props.load_phase = system_table_load_phase::phase2;
+            props.enable_schema_commitlog();
         }
     });
 }

@@ -573,6 +573,11 @@ struct schema_static_props {
     bool wait_for_sync_to_commitlog = false; // true if all writes using this schema have to be synced immediately by commitlog
     bool use_schema_commitlog = false;
     system_table_load_phase load_phase = system_table_load_phase::phase1;
+    void enable_schema_commitlog() {
+        use_schema_commitlog = true;
+        use_null_sharder = true; // schema commitlog lives only on the null shard
+        load_phase = system_table_load_phase::phase2;
+    }
 };
 
 /*

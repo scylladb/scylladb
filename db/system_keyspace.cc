@@ -54,15 +54,9 @@ namespace {
         // tables in the "system" keyspace which need to use null sharder
         static const std::unordered_set<sstring> tables = {
             schema_tables::SCYLLA_TABLE_SCHEMA_HISTORY,
-            system_keyspace::RAFT,
-            system_keyspace::RAFT_SNAPSHOTS,
-            system_keyspace::RAFT_SNAPSHOT_CONFIG,
-            system_keyspace::GROUP0_HISTORY,
-            system_keyspace::DISCOVERY,
             system_keyspace::BROADCAST_KV_STORE,
             system_keyspace::TOPOLOGY,
             system_keyspace::CDC_GENERATIONS_V3,
-            system_keyspace::TABLETS,
         };
         if (ks_name == system_keyspace::NAME && tables.contains(cf_name)) {
             props.use_null_sharder = true;
@@ -90,8 +84,7 @@ namespace {
             system_keyspace::TABLETS,
         };
         if (ks_name == system_keyspace::NAME && tables.contains(cf_name)) {
-            props.use_schema_commitlog = true;
-            props.load_phase = system_table_load_phase::phase2;
+            props.enable_schema_commitlog();
         }
     });
 }
