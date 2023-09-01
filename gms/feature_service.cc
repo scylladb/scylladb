@@ -260,27 +260,41 @@ future<> feature_service::enable_features_on_startup(db::system_keyspace& sys_ks
         persisted_features = std::move(topo_features.enabled_features);
     }
 
-    if (persisted_features.empty() && persisted_unsafe_to_disable_features.empty()) {
-        co_return;
+    check_features(persisted_features, persisted_unsafe_to_disable_features);
+
+    for (auto&& f : persisted_features) {
+        logger.debug("Enabling persisted feature '{}'", f);
+        if (_registered_features.contains(sstring(f))) {
+            features_to_enable.insert(std::move(f));
+        }
+    }
+
+    co_await container().invoke_on_all([&features_to_enable] (auto& srv) -> future<> {
+        std::set<std::string_view> feat = boost::copy_range<std::set<std::string_view>>(features_to_enable);
+        co_await srv.enable(std::move(feat));
+    });
+}
+
+void feature_service::check_features(const std::set<sstring>& enabled_features,
+            const std::set<sstring>& unsafe_to_disable_features) {
+
+    if (enabled_features.empty() && unsafe_to_disable_features.empty()) {
+        return;
     }
 
     const auto known_features = supported_feature_set();
-    for (auto&& f : persisted_features) {
-        logger.debug("Enabling persisted feature '{}'", f);
+    for (auto&& f : enabled_features) {
         const bool is_registered_feat = _registered_features.contains(sstring(f));
         if (!known_features.contains(f)) {
             if (is_registered_feat) {
-                throw std::runtime_error(format(
+                throw unsupported_feature_exception(format(
                     "Feature '{}' was previously enabled in the cluster but its support is disabled by this node. "
                     "Set the corresponding configuration option to enable the support for the feature.", f));
             } else {
-                throw std::runtime_error(format("Unknown feature '{}' was previously enabled in the cluster. "
+                throw unsupported_feature_exception(format("Unknown feature '{}' was previously enabled in the cluster. "
                     " That means this node is performing a prohibited downgrade procedure"
                     " and should not be allowed to boot.", f));
             }
-        }
-        if (is_registered_feat) {
-            features_to_enable.insert(std::move(f));
         }
         // If a feature is not in `registered_features` but still in `known_features` list
         // that means the feature name is used for backward compatibility and should be implicitly
@@ -290,27 +304,22 @@ future<> feature_service::enable_features_on_startup(db::system_keyspace& sys_ks
     // With raft cluster features, it is also unsafe to disable support for features
     // that are supported by everybody but not enabled yet. There is a possibility
     // that the feature became enabled and this node didn't notice it.
-    for (auto&& f : persisted_unsafe_to_disable_features) {
+    for (auto&& f : unsafe_to_disable_features) {
         const bool is_registered_feat = _registered_features.contains(sstring(f));
         if (!known_features.contains(f)) {
             if (is_registered_feat) {
-                throw std::runtime_error(format(
+                throw unsupported_feature_exception(format(
                     "Feature '{}' was previously supported by all nodes in the cluster. It is unknown whether "
                     "the feature became enabled or not, therefore it is not safe for this node to boot. "
                     "Set the corresponding configuration option to enable the support for the feature.", f));
             } else {
-                throw std::runtime_error(format(
+                throw unsupported_feature_exception(format(
                     "Unknown feature '{}' was previously supported by all nodes in the cluster. "
                     "That means this node is performing a prohibited downgrade procedure "
                     "and should not be allowed to boot.", f));
             }
         }
     }
-
-    co_await container().invoke_on_all([&features_to_enable] (auto& srv) -> future<> {
-        std::set<std::string_view> feat = boost::copy_range<std::set<std::string_view>>(features_to_enable);
-        co_await srv.enable(std::move(feat));
-    });
 }
 
 future<> persistent_feature_enabler::enable_features() {

@@ -14,6 +14,7 @@
 #include <seastar/core/sharded.hh>
 #include <unordered_map>
 #include <functional>
+#include <exception>
 #include <set>
 #include <any>
 #include "seastarx.hh"
@@ -41,6 +42,13 @@ private:
 };
 
 feature_config feature_config_from_db_config(const db::config& cfg, std::set<sstring> disabled = {});
+
+class unsupported_feature_exception : public std::runtime_error {
+public:
+    unsupported_feature_exception(std::string what)
+            : runtime_error(std::move(what))
+    {}
+};
 
 using namespace std::literals;
 
@@ -132,6 +140,12 @@ public:
     static std::set<sstring> to_feature_set(sstring features_string);
     future<> enable_features_on_startup(db::system_keyspace&, bool use_raft_cluster_features);
     future<> enable_features_on_join(gossiper&, db::system_keyspace&);
+
+    // Performs the feature check.
+    // Throws an unsupported_feature_exception if there is a feature either
+    // in `enabled_features` or `unsafe_to_disable_features` that is not being
+    // currently supported by this node.
+    void check_features(const std::set<sstring>& enabled_features, const std::set<sstring>& unsafe_to_disable_features);
 };
 
 } // namespace gms

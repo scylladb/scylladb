@@ -1237,8 +1237,7 @@ class topology_coordinator {
         //    that is equal to what the topology coordinator sees (or newer,
         //    but in that case updating the topology state will fail),
         // 2. None of the nodes is restarting at the moment and trying to
-        //    update its corresponding `supported_features` column (that's why
-        //    we use `barrier_after_feature_update` instead of regular `barrier`).
+        //    downgrade (this is done by a special check in the barrier handler).
         //
         // After we get a successful confirmation from each node, we have
         // a guarantee that they won't attempt to revoke support for those
@@ -1246,7 +1245,7 @@ class topology_coordinator {
         // a feature that is supported by all nodes in the cluster, even if
         // the feature is not enabled yet.
         guard = co_await exec_global_command(std::move(guard),
-                raft_topology_cmd{raft_topology_cmd::command::barrier_after_feature_update},
+                raft_topology_cmd{raft_topology_cmd::command::barrier},
                 {_raft.id()},
                 drop_guard_and_retake::no);
 
@@ -1521,6 +1520,10 @@ class topology_coordinator {
 
         guard = std::get<group0_guard>(std::move(node_or_guard));
         if (_topo_sm._topology.global_request) {
+            return std::make_pair(true, std::move(guard));
+        }
+
+        if (!_topo_sm._topology.features.calculate_not_yet_enabled_features().empty()) {
             return std::make_pair(true, std::move(guard));
         }
 
@@ -2248,11 +2251,6 @@ future<> storage_service::raft_bootstrap(raft::server& raft_server) {
 }
 
 future<> storage_service::update_topology_with_local_metadata(raft::server& raft_server) {
-    co_await do_update_topology_with_local_metadata(raft_server);
-    _topology_updated_with_local_metadata = true;
-}
-
-future<> storage_service::do_update_topology_with_local_metadata(raft::server& raft_server) {
     // TODO: include more metadata here
     auto local_shard_count = smp::count;
     auto local_ignore_msb = _db.local().get_config().murmur3_partitioner_ignore_msb_bits();
@@ -2298,6 +2296,20 @@ future<> storage_service::do_update_topology_with_local_metadata(raft::server& r
         if (synchronized()) {
             break;
         }
+
+        // It might happen that, in the previous run, the node commits a command
+        // that adds support for a feature, crashes before applying it and now
+        // it is not safe to disable support for it. If there is an attempt to
+        // downgrade the node then `enable_features_on_startup` called much
+        // earlier won't catch it, we only can do it here after performing
+        // a read barrier - so we repeat it here.
+        //
+        // Fortunately, there is no risk that this feature was marked as enabled
+        // because it requires that the current node responded to a barrier
+        // request - which will fail in this situation.
+        const auto& enabled_features = _topology_state_machine._topology.features.enabled_features;
+        const auto unsafe_to_disable_features = _topology_state_machine._topology.features.calculate_not_yet_enabled_features();
+        _feature_service.check_features(enabled_features, unsafe_to_disable_features);
 
         slogger.info("raft topology: updating topology with local metadata");
 
@@ -5706,20 +5718,39 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(shar
         const auto version = _topology_state_machine._topology.version;
 
         switch (cmd.cmd) {
-            case raft_topology_cmd::command::barrier:
+            case raft_topology_cmd::command::barrier: {
+                // This barrier might have been issued by the topology coordinator
+                // as a step in enabling a feature, i.e. it noticed that all
+                // nodes support some feature, then issue the barrier to make
+                // sure that all nodes observed this fact in their local state
+                // (a node cannot revoke support for a feature after that), and
+                // after receiving a confirmation from all nodes it will mark
+                // the feature as enabled.
+                //
+                // However, it might happen that the node handles this request
+                // early in the boot process, before it did the second feature
+                // check that happens when the node updates its metadata
+                // in `system.topology`. The node might have committed a command
+                // that advertises support for a feature as the last node
+                // to do so, crashed and now it doesn't support it. This should
+                // be rare, but it can happen and we can detect it right here.
+                std::exception_ptr ex;
+                try {
+                    const auto& enabled_features = _topology_state_machine._topology.features.enabled_features;
+                    const auto unsafe_to_disable_features = _topology_state_machine._topology.features.calculate_not_yet_enabled_features();
+                    _feature_service.check_features(enabled_features, unsafe_to_disable_features);
+                } catch (const gms::unsupported_feature_exception&) {
+                    ex = std::current_exception();
+                }
+                if (ex) {
+                    slogger.error("raft topology: feature check during barrier failed: {}", ex);
+                    co_await drain();
+                    break;
+                }
+
                 // we already did read barrier above
                 result.status = raft_topology_cmd_result::command_status::success;
-            break;
-            case raft_topology_cmd::command::barrier_after_feature_update:
-                // we already did the barrier, but we need to check
-                // whether the node has updated its supported_features column
-                // after start
-                if (!_topology_updated_with_local_metadata) {
-                    co_await coroutine::return_exception(std::runtime_error(
-                            "raft topology: command::barrier_after_feature_update, node might not have updated "
-                            "its supported features column yet"));
-                }
-                result.status = raft_topology_cmd_result::command_status::success;
+            }
             break;
             case raft_topology_cmd::command::barrier_and_drain: {
                 co_await container().invoke_on_all([version] (storage_service& ss) -> future<> {
