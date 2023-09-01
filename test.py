@@ -1432,11 +1432,19 @@ async def find_tests(options: argparse.Namespace) -> None:
     # else only specified suites
     suites = ["*"] if not suite_names or None in suite_names else suite_names
     suite_confs = [f for s in suites for f in glob.glob(os.path.join("test", s, "suite.yaml"))]
+    add_tests_tasks = set()
     for cfg_file in suite_confs:
         suite_dir = os.path.dirname(cfg_file)            # Suite directory
         for mode in options.modes:
             suite = TestSuite.opt_create(suite_dir, options, mode)
-            await suite.add_test_list()
+            add_tests_tasks.add(suite.add_test_list())
+    try:
+        await asyncio.gather(*add_tests_tasks)
+    except asyncio.CancelledError:
+        for task in add_tests_tasks:
+            task.cancel()
+        await asyncio.gather(*add_tests_tasks, return_exceptions=True)
+        raise
 
     if not TestSuite.test_count():
         if len(options.names):
