@@ -97,7 +97,6 @@ struct topology_features {
 struct topology {
     enum class transition_state: uint16_t {
         commit_cdc_generation,
-        publish_cdc_generation,
         write_both_read_old,
         write_both_read_new,
         tablet_migration,
