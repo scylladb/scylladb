@@ -39,6 +39,7 @@ extensions = [
     "recommonmark",  # optional
     "sphinxcontrib.datatemplates",
     "scylladb_cc_properties",
+    "scylladb_aws_images"
 ]
 
 # The suffix(es) of source filenames.
@@ -54,7 +55,7 @@ author = u"ScyllaDB Project Contributors"
 
 # List of patterns, relative to source directory, that match files and
 # directories to ignore when looking for source files.
-exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store', 'lib', 'lib64','**/_common/*', 'README.md', 'index.md', '.git', '.github', '_utils', 'rst_include', 'venv', 'dev']
+exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store', 'lib', 'lib64','**/_common/*', 'README.md', 'index.md', '.git', '.github', '_utils', 'rst_include', 'venv', 'dev', '_data/**']
 
 # The name of the Pygments (syntax highlighting) style to use.
 pygments_style = "sphinx"
@@ -141,6 +142,13 @@ html_baseurl = BASE_URL
 
 # Dictionary of values to pass into the template engine’s context for all pages
 html_context = {"html_baseurl": html_baseurl}
+
+# -- Options for scylladb_aws_images -----------------------------
+
+scylladb_aws_images_base_url = "https://s3.amazonaws.com/downloads.scylladb.com"
+scylladb_aws_images_ami_bucket_directory = "downloads/scylla/aws/ami/"
+scylladb_aws_images_ami_download_directory = "_data/opensource/aws/ami"
+scylladb_aws_images_cloudformation_bucket_directory = "downloads/scylla/aws/cloudformation/"
 
 # -- Initialize Sphinx ----------------------------------------------
 def setup(sphinx):
