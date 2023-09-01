@@ -72,14 +72,9 @@ namespace {
         static const std::unordered_set<sstring> extra_durable_tables = {
             system_keyspace::PAXOS,
             system_keyspace::SCYLLA_LOCAL,
-            system_keyspace::RAFT,
-            system_keyspace::RAFT_SNAPSHOTS,
-            system_keyspace::RAFT_SNAPSHOT_CONFIG,
-            system_keyspace::DISCOVERY,
             system_keyspace::BROADCAST_KV_STORE,
             system_keyspace::TOPOLOGY,
             system_keyspace::CDC_GENERATIONS_V3,
-            system_keyspace::TABLETS,
         };
         if (ks_name == system_keyspace::NAME && extra_durable_tables.contains(cf_name)) {
             props.wait_for_sync_to_commitlog = true;
