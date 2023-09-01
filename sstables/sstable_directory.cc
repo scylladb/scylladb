@@ -244,8 +244,9 @@ future<> sstable_directory::filesystem_components_lister::process(sstable_direct
             if (!de) {
                 break;
             }
-            auto comps = sstables::entry_descriptor::make_descriptor(_directory.native(), de->name);
-            handle(std::move(comps), _directory / de->name);
+            auto component_path = _directory / de->name;
+            auto comps = sstables::entry_descriptor::make_descriptor(component_path);
+            handle(std::move(comps), component_path);
         }
     } catch (...) {
         ex = std::current_exception();
@@ -405,7 +406,7 @@ sstable_directory::collect_output_unshared_sstables(std::vector<sstables::shared
         }
 
         dirlog.trace("Collected output SSTable {} is remote. Storing it", sst->get_filename());
-        _unshared_remote_sstables[shard].push_back(sstables::entry_descriptor::make_descriptor(_sstable_dir.native(), sst->component_basename(component_type::Data)));
+        _unshared_remote_sstables[shard].push_back(sstables::entry_descriptor::make_descriptor(_sstable_dir / sst->component_basename(component_type::Data)));
         return make_ready_future<>();
     });
 }

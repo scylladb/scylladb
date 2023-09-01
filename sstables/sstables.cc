@@ -2101,7 +2101,11 @@ sstable::make_crawling_reader(
     return kl::make_crawling_reader(shared_from_this(), std::move(schema), std::move(permit), std::move(trace_state), monitor);
 }
 
-static entry_descriptor make_entry_descriptor(sstring sstdir, sstring fname, sstring* const provided_ks, sstring* const provided_cf) {
+static entry_descriptor make_entry_descriptor(std::string_view sstdir, std::string_view fname, sstring* const provided_ks, sstring* const provided_cf) {
+    // examples of fname look like
+    //   la-42-big-Data.db
+    //   ka-42-big-Data.db
+    //   me-3g8w_00qf_4pbog2i7h2c7am0uoe-big-Data.db
     static boost::regex la_mx("(la|m[cde])-([^-]+)-(\\w+)-(.*)");
     static boost::regex ka("(\\w+)-(\\w+)-ka-(\\d+)-(.*)");
 
@@ -2156,12 +2160,12 @@ static entry_descriptor make_entry_descriptor(sstring sstdir, sstring fname, sst
     return entry_descriptor(sstdir, ks, cf, generation_type::from_string(generation), version, format_from_string(format), sstable::component_from_sstring(version, component));
 }
 
-entry_descriptor entry_descriptor::make_descriptor(sstring sstdir, sstring fname) {
-    return make_entry_descriptor(std::move(sstdir), std::move(fname), nullptr, nullptr);
+entry_descriptor entry_descriptor::make_descriptor(const std::filesystem::path& sst_path) {
+    return make_entry_descriptor(sst_path.parent_path().native(), sst_path.filename().native(), nullptr, nullptr);
 }
 
-entry_descriptor entry_descriptor::make_descriptor(sstring sstdir, sstring fname, sstring ks, sstring cf) {
-    return make_entry_descriptor(std::move(sstdir), std::move(fname), &ks, &cf);
+entry_descriptor entry_descriptor::make_descriptor(const std::filesystem::path& sst_path, sstring ks, sstring cf) {
+    return make_entry_descriptor(sst_path.parent_path().native(), sst_path.filename().native(), &ks, &cf);
 }
 
 sstable_version_types version_from_string(std::string_view s) {
