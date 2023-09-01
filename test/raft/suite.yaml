@@ -1,1 +1,9 @@
 type: boost
+# Tests with slow cases to run each case separately
+parallel_cases:
+    - many_test
+    - raft_sys_table_storage_test
+    - replication_test
+skip_in_debug:
+    - many_test::test_many_400
+    - many_test::test_many_1000

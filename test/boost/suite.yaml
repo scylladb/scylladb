@@ -20,11 +20,38 @@ run_first:
     - memtable_test::test_memtable_with_many_versions_conforms_to_mutation_source
     - memtable_test::flushing_rate_is_reduced_if_compaction_doesnt_keep_up
     - memtable_test::test_memtable_conforms_to_mutation_source
-# These test cannot work in case-by-case mode because
+# Tests with slow cases to run each case separately
+parallel_cases:
+    - cdc_test
+    - cql_functions_test
+    - cql_query_like_test
+    - cql_query_test
+    - database_test
+    - database_test.unpaged_mutation_read_global_limit
+    - index_with_paging_test
+    - memtable_test
+    - multishard_combining_reader_as_mutation_source_test
+    - mutation_fragment_test
+    - mutation_reader_test
+    - network_topology_strategy_test
+    - reader_concurrency_semaphore_test
+    - restrictions_test
+    - row_cache_test
+    - schema_change_test
+    - secondary_index_test
+    - sstable_3_x_test
+    - sstable_compaction_test
+    - sstable_conforms_to_mutation_source_test
+    - tablets_test
+    - user_function_test
+    - user_types_test
+    - view_complex_test
+    - view_schema_test
+    - virtual_reader_test
+# NOTE: These test cannot work in case-by-case mode because
 # some test-cases depend on each other
-no_parallel_cases:
-    - logalloc_test
-    - logalloc_standard_allocator_segment_pool_backend_test
+# logalloc_test, logalloc_standard_allocator_segment_pool_backend_test
+
 # Enable compaction groups on tests except on a few, listed below
 all_can_run_compaction_groups_except:
     - exceptions_optimized_test

@@ -14,3 +14,11 @@ skip_in_release:
     - test_cluster_features
 run_in_release:
     - test_gossiper
+# Tests with slow cases to run each case separately
+parallel_cases:
+    - test_cluster_features
+    - test_mutation_schema_change
+    - test_random_tables
+    - test_replace
+    - test_topology_remove_decom
+    - test_topology_schema

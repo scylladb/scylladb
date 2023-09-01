@@ -2,3 +2,26 @@ type: Python
 pool_size: 4
 dirties_cluster:
   - test_native_transport
+# Tests with slow cases to run each case separately
+parallel_cases:
+    - cassandra_tests/validation/entities/collections_test
+    - cassandra_tests/validation/entities/frozen_collections_test
+    - cassandra_tests/validation/entities/secondary_index_test
+    - cassandra_tests/validation/entities/uf_types_test
+    - cassandra_tests/validation/entities/user_types_test
+    - cassandra_tests/validation/operations/alter_test
+    - cassandra_tests/validation/operations/compact_storage_test
+    - cassandra_tests/validation/operations/delete_test
+    - cassandra_tests/validation/operations/insert_update_if_condition_collections_test
+    - cassandra_tests/validation/operations/select_limit_test
+    - cassandra_tests/validation/operations/select_multi_column_relation_test
+    - cassandra_tests/validation/operations/select_order_by_test
+    - cassandra_tests/validation/operations/select_single_column_relation_test
+    - test_describe
+    - test_keyspace
+    - test_permissions
+    - test_secondary_index
+    - test_sstable_validation
+    - test_tombstone_limit
+    - test_tools
+    - test_uda

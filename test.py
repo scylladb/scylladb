@@ -155,7 +155,7 @@ class TestSuite(ABC):
         self.n_failed = 0
 
         self.run_first_tests = set(cfg.get("run_first", []))
-        self.no_parallel_cases = set(cfg.get("no_parallel_cases", []))
+        self.parallel_cases = set(cfg.get("parallel_cases", []))
         # Skip tests disabled in suite.yaml
         self.disabled_tests = set(self.cfg.get("disable", []))
         # Skip tests disabled in specific mode.
@@ -409,9 +409,7 @@ class BoostTestSuite(UnitTestSuite):
         ret: List[TestTaskDef] = []
 
         for test_file_name in test_list:
-            if test_file_name in self.no_parallel_cases:
-                case_list: List[Optional[str]] = [None]
-            else:
+            if test_file_name in self.parallel_cases:
                 exe = os.path.join("build", self.mode, "test", self.name, test_file_name)
                 if not os.access(exe, os.X_OK):
                     print(palette.warn(f"Boost test executable {exe} not found."))
@@ -421,6 +419,8 @@ class BoostTestSuite(UnitTestSuite):
                 if fqname not in self._case_cache:
                     self._case_cache[fqname] = await self._exe_list_cases(exe)  # store in cache
                 case_list = self._case_cache[fqname]
+            else:
+                case_list = [None]            # no parallel cases
 
             ret.extend([TestTaskDef(self.name, test_file_name, case_name) for case_name in case_list])
 
@@ -548,14 +548,14 @@ class PythonTestSuite(TestSuite):
         return matches
 
     async def _create_test_cases(self, test_file_name: str) -> List[TestTaskDef]:
-        if test_file_name[:-3] in self.no_parallel_cases:
-            case_list: List[Optional[str]] = [None]
-        else:
+        if test_file_name[:-3] in self.parallel_cases:
             if test_file_name not in self._case_cache:
                 case_list = await self._pytest_list_cases(test_file_name)
                 self._case_cache[test_file_name] = case_list  # Assuming cache is thread-safe
             else:
                 case_list = self._case_cache[test_file_name]
+        else:
+            case_list = [None]      # no parallel cases
 
         return [TestTaskDef(self.name, test_file_name, case_name) for case_name in case_list]
 
