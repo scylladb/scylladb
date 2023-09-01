@@ -184,7 +184,7 @@ private:
     }
 
     /* map where key is the endpoint and value is the state associated with the endpoint */
-    std::unordered_map<inet_address, endpoint_state> _endpoint_state_map;
+    std::unordered_map<inet_address, endpoint_state_ptr> _endpoint_state_map;
     // Used for serializing changes to _endpoint_state_map and running of associated change listeners.
     endpoint_locks_map _endpoint_locks;
 
@@ -274,7 +274,7 @@ private:
     // Replicates given endpoint_state to all other shards.
     // The state state doesn't have to be kept alive around until completes.
     // Must be called under lock_endpoint.
-    future<> replicate(inet_address, const endpoint_state&, permit_id);
+    future<> replicate(inet_address, endpoint_state, permit_id);
 public:
     explicit gossiper(abort_source& as, const locator::shared_token_metadata& stm, netw::messaging_service& ms, const db::config& cfg, gossip_config gcfg);
 
@@ -314,7 +314,7 @@ public:
      * @param ep_state
      * @return
      */
-    version_type get_max_endpoint_state_version(endpoint_state state) const noexcept;
+    version_type get_max_endpoint_state_version(const endpoint_state& state) const noexcept;
 
 
 private:
@@ -409,13 +409,16 @@ private:
 
     future<> do_status_check();
 
+    const std::unordered_map<inet_address, endpoint_state_ptr>& get_endpoint_states() const noexcept;
+
 public:
     clk::time_point get_expire_time_for_endpoint(inet_address endpoint) const noexcept;
 
-    const endpoint_state* get_endpoint_state_for_endpoint_ptr(inet_address ep) const noexcept;
-    endpoint_state& get_endpoint_state(inet_address ep);
-
-    endpoint_state* get_endpoint_state_for_endpoint_ptr(inet_address ep) noexcept;
+    // Gets a shared pointer to the endpoint_state, if exists.
+    // Otherwise, returns a null ptr.
+    // The endpoint_state is immutable (except for its update_timestamp), guaranteed not to change while
+    // the endpoint_state_ptr is held.
+    endpoint_state_ptr get_endpoint_state_ptr(inet_address ep) const noexcept;
 
     const versioned_value* get_application_state_ptr(inet_address endpoint, application_state appstate) const noexcept;
     sstring get_application_state_value(inet_address endpoint, application_state appstate) const;
@@ -424,9 +427,25 @@ public:
     // Must be called on shard 0
     future<> reset_endpoint_state_map();
 
-    const std::unordered_map<inet_address, endpoint_state>& get_endpoint_states() const noexcept;
-
     std::vector<inet_address> get_endpoints() const;
+
+    size_t num_endpoints() const noexcept {
+        return _endpoint_state_map.size();
+    }
+
+    // Calls func for each endpoint_state.
+    // Called function must not yield
+    void for_each_endpoint_state(std::function<void(const inet_address&, const endpoint_state&)> func) const {
+        for_each_endpoint_state_until([func = std::move(func)] (const inet_address& node, const endpoint_state& eps) {
+            func(node, eps);
+            return stop_iteration::no;
+        });
+    }
+
+    // Calls func for each endpoint_state until it returns stop_iteration::yes
+    // Returns stop_iteration::yes iff `func` returns stop_iteration::yes.
+    // Called function must not yield
+    stop_iteration for_each_endpoint_state_until(std::function<stop_iteration(const inet_address&, const endpoint_state&)>) const;
 
     bool uses_host_id(inet_address endpoint) const;
 
@@ -448,6 +467,18 @@ public:
      */
     sstring get_rpc_address(const inet_address& endpoint) const;
 private:
+    // FIXME: for now, allow modifying the endpoint_state's heartbeat_state in place
+    // Gets or creates endpoint_state for this node
+    endpoint_state& get_or_create_endpoint_state(inet_address ep);
+    endpoint_state& my_endpoint_state() {
+        return get_or_create_endpoint_state(get_broadcast_address());
+    }
+
+    // Use with care, as the endpoint_state_ptr in the endpoint_state_map is considered
+    // immutable, with one exception - the update_timestamp.
+    void update_timestamp(const endpoint_state_ptr& eps) noexcept;
+    const endpoint_state& get_endpoint_state(inet_address ep) const;
+
     void update_timestamp_for_nodes(const std::map<inet_address, endpoint_state>& map);
 
     void mark_alive(inet_address addr);
@@ -455,7 +486,7 @@ private:
     future<> real_mark_alive(inet_address addr);
 
     // Must be called under lock_endpoint.
-    future<> mark_dead(inet_address addr, endpoint_state& local_state, permit_id);
+    future<> mark_dead(inet_address addr, endpoint_state_ptr local_state, permit_id);
 
     // Must be called under lock_endpoint.
     future<> mark_as_shutdown(const inet_address& endpoint, permit_id);
@@ -468,7 +499,7 @@ private:
      *
      * Must be called under lock_endpoint.
      */
-    future<> handle_major_state_change(inet_address ep, const endpoint_state& eps, permit_id);
+    future<> handle_major_state_change(inet_address ep, endpoint_state eps, permit_id);
 
 public:
     bool is_alive(inet_address ep) const;
@@ -488,15 +519,15 @@ public:
     future<> apply_state_locally(std::map<inet_address, endpoint_state> map);
 
 private:
-    future<> do_apply_state_locally(gms::inet_address node, const endpoint_state& remote_state, bool listener_notification);
+    future<> do_apply_state_locally(gms::inet_address node, endpoint_state remote_state, bool listener_notification);
     future<> apply_state_locally_without_listener_notification(std::unordered_map<inet_address, endpoint_state> map);
 
     // Must be called under lock_endpoint.
-    future<> apply_new_states(inet_address addr, endpoint_state& local_state, const endpoint_state& remote_state, permit_id);
+    future<> apply_new_states(inet_address addr, endpoint_state local_state, const endpoint_state& remote_state, permit_id);
 
     // notify that a local application state is going to change (doesn't get triggered for remote changes)
     // Must be called under lock_endpoint.
-    future<> do_before_change_notifications(inet_address addr, const endpoint_state& ep_state, const application_state& ap_state, const versioned_value& new_value);
+    future<> do_before_change_notifications(inet_address addr, endpoint_state_ptr ep_state, const application_state& ap_state, const versioned_value& new_value);
 
     // notify that an application state has changed
     // Must be called under lock_endpoint.
@@ -504,7 +535,7 @@ private:
 
     // notify that a node is DOWN (dead)
     // Must be called under lock_endpoint.
-    future<> do_on_dead_notifications(inet_address addr, endpoint_state state, permit_id);
+    future<> do_on_dead_notifications(inet_address addr, endpoint_state_ptr state, permit_id);
 
     /* Request all the state for the endpoint in the g_digest */
 

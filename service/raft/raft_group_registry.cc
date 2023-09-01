@@ -81,12 +81,12 @@ class gossiper_state_change_subscriber_proxy: public gms::i_endpoint_state_chang
     raft_address_map& _address_map;
 
     future<>
-    on_endpoint_change(gms::inet_address endpoint, gms::endpoint_state ep_state) {
-        auto app_state_ptr = ep_state.get_application_state_ptr(gms::application_state::HOST_ID);
+    on_endpoint_change(gms::inet_address endpoint, gms::endpoint_state_ptr ep_state) {
+        auto app_state_ptr = ep_state->get_application_state_ptr(gms::application_state::HOST_ID);
         if (app_state_ptr) {
             raft::server_id id(utils::UUID(app_state_ptr->value()));
             rslog.debug("gossiper_state_change_subscriber_proxy::on_endpoint_change() {} {}", endpoint, id);
-            _address_map.add_or_update_entry(id, endpoint, ep_state.get_heart_beat_state().get_generation());
+            _address_map.add_or_update_entry(id, endpoint, ep_state->get_heart_beat_state().get_generation());
         }
         return make_ready_future<>();
     }
@@ -97,13 +97,13 @@ public:
     {}
 
     virtual future<>
-    on_join(gms::inet_address endpoint, gms::endpoint_state ep_state, gms::permit_id) override {
+    on_join(gms::inet_address endpoint, gms::endpoint_state_ptr ep_state, gms::permit_id) override {
         return on_endpoint_change(endpoint, ep_state);
     }
 
     virtual future<>
     before_change(gms::inet_address endpoint,
-        gms::endpoint_state current_state, gms::application_state new_statekey,
+        gms::endpoint_state_ptr current_state, gms::application_state new_statekey,
         const gms::versioned_value& newvalue) override {
         // Raft server ID never changes - do nothing
         return make_ready_future<>();
@@ -117,9 +117,9 @@ public:
     }
 
     virtual future<>
-    on_alive(gms::inet_address endpoint, gms::endpoint_state ep_state, gms::permit_id) override {
-        co_await utils::get_local_injector().inject_with_handler("raft_group_registry::on_alive", [endpoint, &ep_state] (auto& handler) -> future<> {
-            auto app_state_ptr = ep_state.get_application_state_ptr(gms::application_state::HOST_ID);
+    on_alive(gms::inet_address endpoint, gms::endpoint_state_ptr ep_state, gms::permit_id) override {
+        co_await utils::get_local_injector().inject_with_handler("raft_group_registry::on_alive", [endpoint, ep_state] (auto& handler) -> future<> {
+            auto app_state_ptr = ep_state->get_application_state_ptr(gms::application_state::HOST_ID);
             if (!app_state_ptr) {
                 co_return;
             }
@@ -139,7 +139,7 @@ public:
     }
 
     virtual future<>
-    on_dead(gms::inet_address endpoint, gms::endpoint_state state, gms::permit_id) override {
+    on_dead(gms::inet_address endpoint, gms::endpoint_state_ptr state, gms::permit_id) override {
         return make_ready_future<>();
     }
 
@@ -152,7 +152,7 @@ public:
     }
 
     virtual future<>
-    on_restart(gms::inet_address endpoint, gms::endpoint_state ep_state, gms::permit_id) override {
+    on_restart(gms::inet_address endpoint, gms::endpoint_state_ptr ep_state, gms::permit_id) override {
         return on_endpoint_change(endpoint, ep_state);
     }
 };

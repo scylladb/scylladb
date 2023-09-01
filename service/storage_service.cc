@@ -486,7 +486,7 @@ future<> storage_service::topology_state_load() {
     // endpoints. We cannot rely on seeds alone, since it is not guaranteed that seeds
     // will be up to date and reachable at the time of restart.
     for (const auto& e: get_token_metadata_ptr()->get_all_endpoints()) {
-        if (!utils::fb_utilities::is_me(e) && !_gossiper.get_endpoint_state_for_endpoint_ptr(e)) {
+        if (!utils::fb_utilities::is_me(e) && !_gossiper.get_endpoint_state_ptr(e)) {
             co_await _gossiper.add_saved_endpoint(e);
         }
     }
@@ -2459,7 +2459,7 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
     auto local_host_id = _db.local().get_config().host_id;
     if (!replacing_a_node_with_diff_ip) {
         auto endpoint = get_broadcast_address();
-        auto eps = _gossiper.get_endpoint_state_for_endpoint_ptr(endpoint);
+        auto eps = _gossiper.get_endpoint_state_ptr(endpoint);
         if (eps) {
             auto replace_host_id = _gossiper.get_host_id(get_broadcast_address());
             slogger.info("Host {}/{} is replacing {}/{} using the same address", local_host_id, endpoint, replace_host_id, endpoint);
@@ -2687,7 +2687,7 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
                 for (auto token : bootstrap_tokens) {
                     auto existing = tmptr->get_endpoint(token);
                     if (existing) {
-                        auto* eps = _gossiper.get_endpoint_state_for_endpoint_ptr(*existing);
+                        auto eps = _gossiper.get_endpoint_state_ptr(*existing);
                         if (eps && eps->get_update_timestamp() > gms::gossiper::clk::now() - delay) {
                             throw std::runtime_error("Cannot replace a live node...");
                         }
@@ -3216,7 +3216,7 @@ future<> storage_service::handle_state_left(inet_address endpoint, std::vector<s
     auto tokens = get_tokens_for(endpoint);
     slogger.debug("Node {} state left, tokens {}", endpoint, tokens);
     if (tokens.empty()) {
-        auto eps = _gossiper.get_endpoint_state_for_endpoint_ptr(endpoint);
+        auto eps = _gossiper.get_endpoint_state_ptr(endpoint);
         if (eps) {
             slogger.warn("handle_state_left: Tokens for node={} are empty, endpoint_state={}", endpoint, *eps);
         } else {
@@ -3257,14 +3257,14 @@ future<> storage_service::handle_state_removed(inet_address endpoint, std::vecto
     }
 }
 
-future<> storage_service::on_join(gms::inet_address endpoint, gms::endpoint_state ep_state, gms::permit_id pid) {
+future<> storage_service::on_join(gms::inet_address endpoint, gms::endpoint_state_ptr ep_state, gms::permit_id pid) {
     slogger.debug("endpoint={} on_join: permit_id={}", endpoint, pid);
-    for (const auto& e : ep_state.get_application_state_map()) {
+    for (const auto& e : ep_state->get_application_state_map()) {
         co_await on_change(endpoint, e.first, e.second, pid);
     }
 }
 
-future<> storage_service::on_alive(gms::inet_address endpoint, gms::endpoint_state state, gms::permit_id pid) {
+future<> storage_service::on_alive(gms::inet_address endpoint, gms::endpoint_state_ptr state, gms::permit_id pid) {
     slogger.debug("endpoint={} on_alive: permit_id={}", endpoint, pid);
     bool is_normal_token_owner = get_token_metadata().is_normal_token_owner(endpoint);
     if (is_normal_token_owner) {
@@ -3277,7 +3277,7 @@ future<> storage_service::on_alive(gms::inet_address endpoint, gms::endpoint_sta
     }
 }
 
-future<> storage_service::before_change(gms::inet_address endpoint, gms::endpoint_state current_state, gms::application_state new_state_key, const gms::versioned_value& new_value) {
+future<> storage_service::before_change(gms::inet_address endpoint, gms::endpoint_state_ptr current_state, gms::application_state new_state_key, const gms::versioned_value& new_value) {
     slogger.debug("endpoint={} before_change: new app_state={}, new versioned_value={}", endpoint, new_state_key, new_value);
     return make_ready_future();
 }
@@ -3311,7 +3311,7 @@ future<> storage_service::on_change(inet_address endpoint, application_state sta
             co_return; // did nothing.
         }
     } else {
-        auto* ep_state = _gossiper.get_endpoint_state_for_endpoint_ptr(endpoint);
+        auto ep_state = _gossiper.get_endpoint_state_ptr(endpoint);
         if (!ep_state || _gossiper.is_dead_state(*ep_state)) {
             slogger.debug("Ignoring state change for dead or unknown endpoint: {}", endpoint);
             co_return;
@@ -3353,12 +3353,12 @@ future<> storage_service::on_remove(gms::inet_address endpoint, gms::permit_id p
     co_await replicate_to_all_cores(std::move(tmptr));
 }
 
-future<> storage_service::on_dead(gms::inet_address endpoint, gms::endpoint_state state, gms::permit_id pid) {
+future<> storage_service::on_dead(gms::inet_address endpoint, gms::endpoint_state_ptr state, gms::permit_id pid) {
     slogger.debug("endpoint={} on_dead: permit_id={}", endpoint, pid);
     return notify_down(endpoint);
 }
 
-future<> storage_service::on_restart(gms::inet_address endpoint, gms::endpoint_state state, gms::permit_id pid) {
+future<> storage_service::on_restart(gms::inet_address endpoint, gms::endpoint_state_ptr state, gms::permit_id pid) {
     slogger.debug("endpoint={} on_restart: permit_id={}", endpoint, pid);
     // If we have restarted before the node was even marked down, we need to reset the connection pool
     if (endpoint != get_broadcast_address() && _gossiper.is_alive(endpoint)) {
@@ -3416,7 +3416,7 @@ future<> storage_service::do_update_system_peers_table(gms::inet_address endpoin
 future<> storage_service::update_peer_info(gms::inet_address endpoint) {
     slogger.debug("Update peer info: endpoint={}", endpoint);
     using namespace gms;
-    auto* ep_state = _gossiper.get_endpoint_state_for_endpoint_ptr(endpoint);
+    auto ep_state = _gossiper.get_endpoint_state_ptr(endpoint);
     if (!ep_state) {
         co_return;
     }
@@ -3799,7 +3799,7 @@ storage_service::prepare_replacement_info(std::unordered_set<gms::inet_address> 
         replace_address = *nodes.begin();
     }
 
-    auto* state = _gossiper.get_endpoint_state_for_endpoint_ptr(replace_address);
+    auto state = _gossiper.get_endpoint_state_ptr(replace_address);
     if (!state) {
         throw std::runtime_error(::format("Cannot replace_address {} because it doesn't exist in gossip", replace_address));
     }
