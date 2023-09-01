@@ -304,13 +304,15 @@ def generate_compdb(compdb, buildfile, modes):
                                 ninja_compdb.name] + submodule_compdbs, stdout=combined_mode_specific_compdb)
 
     # make sure there is a valid compile_commands.json link in the source root
-    if not os.path.exists(compdb):
-        # sort modes by supposed indexing speed
-        for mode in ['dev', 'debug', 'release', 'sanitize']:
-            compdb_target = outdir + '/' + mode + '/' + compdb
-            if os.path.exists(compdb_target):
-                os.symlink(compdb_target, compdb)
-                break
+    if os.path.exists(compdb):
+        return
+
+    # sort modes by supposed indexing speed
+    for mode in ['dev', 'debug', 'release', 'sanitize']:
+        compdb_target = outdir + '/' + mode + '/' + compdb
+        if os.path.exists(compdb_target):
+            os.symlink(compdb_target, compdb)
+            return
 
 
 modes = {
