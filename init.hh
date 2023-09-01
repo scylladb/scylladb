@@ -45,7 +45,7 @@ public:
     service_set(seastar::sharded<Args>&... args) 
         : service_set()
     {
-        (void)std::initializer_list<int>{ (add(args), 0)...};
+        (..., add(args));
     }
     template<typename T>
     void add(seastar::sharded<T>& t) {
