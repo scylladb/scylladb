@@ -496,7 +496,7 @@ public:
             utils::UUID state_id, std::optional<gc_clock::duration> gc_older_than, std::string_view description);
 
     // Obtain the contents of the group 0 history table in mutation form.
-    // Assumes that the history table exists, i.e. Raft experimental feature is enabled.
+    // Assumes that the history table exists, i.e. Raft feature is enabled.
     static future<mutation> get_group0_history(distributed<replica::database>&);
 
     future<> sstables_registry_create_entry(sstring location, sstring status, sstables::sstable_state state, sstables::entry_descriptor desc);
