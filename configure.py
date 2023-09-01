@@ -280,6 +280,39 @@ def find_headers(repodir, excluded_dirs):
     return sorted(headers)
 
 
+def generate_compdb(compdb, buildfile, modes):
+    # per-mode compdbs are built by taking the relevant entries from the
+    # output of "ninja -t compdb" and combining them with the CMake-made
+    # compdbs for Seastar in the relevant mode.
+    #
+    # "ninja -t compdb" output has to be filtered because
+    # - it contains rules for all selected modes, and several entries for
+    #   the same source file usually confuse indexers
+    # - it contains lots of irrelevant entries (for linker invocations,
+    #   header-only compilations, etc.)
+    ensure_tmp_dir_exists()
+    with tempfile.NamedTemporaryFile() as ninja_compdb:
+        subprocess.run([ninja, '-f', buildfile, '-t', 'compdb'], stdout=ninja_compdb.file.fileno())
+        ninja_compdb.file.flush()
+
+        # build mode-specific compdbs
+        for mode in modes:
+            mode_out = outdir + '/' + mode
+            submodule_compdbs = [mode_out + '/' + submodule + '/' + compdb for submodule in ['seastar']]
+            with open(mode_out + '/' + compdb, 'w+b') as combined_mode_specific_compdb:
+                subprocess.run(['./scripts/merge-compdb.py', 'build/' + mode,
+                                ninja_compdb.name] + submodule_compdbs, stdout=combined_mode_specific_compdb)
+
+    # make sure there is a valid compile_commands.json link in the source root
+    if not os.path.exists(compdb):
+        # sort modes by supposed indexing speed
+        for mode in ['dev', 'debug', 'release', 'sanitize']:
+            compdb_target = outdir + '/' + mode + '/' + compdb
+            if os.path.exists(compdb_target):
+                os.symlink(compdb_target, compdb)
+                break
+
+
 modes = {
     'debug': {
         'cxxflags': '-DDEBUG -DSANITIZE -DDEBUG_LSA_SANITIZER -DSCYLLA_ENABLE_ERROR_INJECTION',
@@ -2312,34 +2345,4 @@ with open(buildfile, 'w') as f:
         build help: print_help | always
         ''').format(**globals()))
 
-compdb = 'compile_commands.json'
-# per-mode compdbs are built by taking the relevant entries from the
-# output of "ninja -t compdb" and combining them with the CMake-made
-# compdbs for Seastar in the relevant mode.
-#
-# "ninja -t compdb" output has to be filtered because
-# - it contains rules for all selected modes, and several entries for
-#   the same source file usually confuse indexers
-# - it contains lots of irrelevant entries (for linker invocations,
-#   header-only compilations, etc.)
-ensure_tmp_dir_exists()
-with tempfile.NamedTemporaryFile() as ninja_compdb:
-    subprocess.run([ninja, '-f', buildfile, '-t', 'compdb'], stdout=ninja_compdb.file.fileno())
-    ninja_compdb.file.flush()
-
-    # build mode-specific compdbs
-    for mode in selected_modes:
-        mode_out = outdir + '/' + mode
-        submodule_compdbs = [mode_out + '/' + submodule + '/' + compdb for submodule in ['seastar']]
-        with open(mode_out + '/' + compdb, 'w+b') as combined_mode_specific_compdb:
-            subprocess.run(['./scripts/merge-compdb.py', 'build/' + mode,
-                            ninja_compdb.name] + submodule_compdbs, stdout=combined_mode_specific_compdb)
-
-# make sure there is a valid compile_commands.json link in the source root
-if not os.path.exists(compdb):
-    # sort modes by supposed indexing speed
-    for mode in ['dev', 'debug', 'release', 'sanitize']:
-        compdb_target = outdir + '/' + mode + '/' + compdb
-        if os.path.exists(compdb_target):
-            os.symlink(compdb_target, compdb)
-            break
+generate_compdb('compile_commands.json', buildfile, selected_modes)
