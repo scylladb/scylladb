@@ -22,7 +22,6 @@
 namespace sstables {
 
 extern seastar::logger sstlog;
-extern thread_local cached_file::metrics index_page_cache_metrics;
 extern thread_local mc::cached_promoted_index::metrics promoted_index_cache_metrics;
 
 // Promoted index information produced by the parser.
@@ -337,7 +336,7 @@ std::unique_ptr<clustered_index_cursor> promoted_index::make_cursor(shared_sstab
         seastar::shared_ptr<cached_file> cached_file_ptr = caching
                 ? sst->_cached_index_file
                 : seastar::make_shared<cached_file>(make_tracked_index_file(*sst, permit, trace_state, caching),
-                                                    index_page_cache_metrics,
+                                                    sst->manager().get_cache_tracker().get_index_cached_file_stats(),
                                                     sst->manager().get_cache_tracker().get_lru(),
                                                     sst->manager().get_cache_tracker().region(),
                                                     sst->_index_file_size);
@@ -779,7 +778,8 @@ public:
         , _trace_state(std::move(trace_state))
         , _local_index_cache(caching ? nullptr
             : std::make_unique<partition_index_cache>(_sstable->manager().get_cache_tracker().get_lru(),
-                                                      _sstable->manager().get_cache_tracker().region()))
+                                                      _sstable->manager().get_cache_tracker().region(),
+                                                      _sstable->manager().get_cache_tracker().get_partition_index_cache_stats()))
         , _index_cache(caching ? *_sstable->_index_cache : *_local_index_cache)
         , _region(_sstable->manager().get_cache_tracker().region())
         , _use_caching(caching)

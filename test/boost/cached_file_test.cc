@@ -99,7 +99,7 @@ test_file make_test_file(size_t size) {
 
 SEASTAR_THREAD_TEST_CASE(test_file_wrapper) {
     auto page_size = cached_file::page_size;
-    cached_file::metrics metrics;
+    cached_file_stats metrics;
     test_file tf = make_test_file(page_size * 3);
     logalloc::region region;
     cached_file cf(tf.f, metrics, cf_lru, region, page_size * 3);
@@ -123,7 +123,7 @@ SEASTAR_THREAD_TEST_CASE(test_file_wrapper) {
 /* Reproducer for issue https://github.com/scylladb/scylladb/issues/14814 */
 SEASTAR_THREAD_TEST_CASE(test_no_crash_on_dtor_after_oom) {
     auto page_size = cached_file::page_size;
-    cached_file::metrics metrics;
+    cached_file_stats metrics;
     test_file tf = make_test_file(page_size * 32); // 128k.
     logalloc::region region;
     cached_file cf(tf.f, metrics, cf_lru, region, page_size * 32);
@@ -141,7 +141,7 @@ SEASTAR_THREAD_TEST_CASE(test_no_crash_on_dtor_after_oom) {
 
 SEASTAR_THREAD_TEST_CASE(test_concurrent_population) {
     auto page_size = cached_file::page_size;
-    cached_file::metrics metrics;
+    cached_file_stats metrics;
     test_file tf = make_test_file(page_size * 3);
     logalloc::region region;
     cached_file cf(tf.f, metrics, cf_lru, region, page_size * 3);
@@ -167,7 +167,7 @@ SEASTAR_THREAD_TEST_CASE(test_reading_from_small_file) {
     test_file tf = make_test_file(1024);
 
     {
-        cached_file::metrics metrics;
+        cached_file_stats metrics;
         logalloc::region region;
         cached_file cf(tf.f, metrics, cf_lru, region, tf.contents.size());
 
@@ -210,7 +210,7 @@ SEASTAR_THREAD_TEST_CASE(test_eviction_via_lru) {
     test_file tf = make_test_file(file_size);
 
     {
-        cached_file::metrics metrics;
+        cached_file_stats metrics;
         logalloc::region region;
         cached_file cf(tf.f, metrics, cf_lru, region, tf.contents.size());
 
@@ -322,7 +322,7 @@ SEASTAR_THREAD_TEST_CASE(test_stress_eviction) {
     auto file_size = page_size * n_pages;
     auto cached_size = 4'000'000;
 
-    cached_file::metrics metrics;
+    cached_file_stats metrics;
     logalloc::region region;
 
     auto f = file(make_shared<garbage_file_impl>());
@@ -367,7 +367,7 @@ SEASTAR_THREAD_TEST_CASE(test_invalidation) {
     auto page_size = cached_file::page_size;
     test_file tf = make_test_file(page_size * 2);
 
-    cached_file::metrics metrics;
+    cached_file_stats metrics;
     logalloc::region region;
     cached_file cf(tf.f, metrics, cf_lru, region, page_size * 2);
 

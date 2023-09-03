@@ -64,7 +64,8 @@ SEASTAR_THREAD_TEST_CASE(test_caching) {
     ::lru lru;
     simple_schema s;
     logalloc::region r;
-    partition_index_cache cache(lru, r);
+    partition_index_cache_stats stats;
+    partition_index_cache cache(lru, r, stats);
 
     auto page0_loader = [&] (partition_index_cache::key_type k) {
         return yield().then([&] {
@@ -72,14 +73,14 @@ SEASTAR_THREAD_TEST_CASE(test_caching) {
         });
     };
 
-    auto old_stats = cache.shard_stats();
+    auto old_stats = stats;
 
     auto f0 = cache.get_or_load(0, page0_loader);
     auto f1 = cache.get_or_load(0, page0_loader);
 
-    BOOST_REQUIRE_EQUAL(cache.shard_stats().hits, old_stats.hits);
-    BOOST_REQUIRE_EQUAL(cache.shard_stats().misses, old_stats.misses + 1);
-    BOOST_REQUIRE_EQUAL(cache.shard_stats().blocks, old_stats.blocks + 2);
+    BOOST_REQUIRE_EQUAL(stats.hits, old_stats.hits);
+    BOOST_REQUIRE_EQUAL(stats.misses, old_stats.misses + 1);
+    BOOST_REQUIRE_EQUAL(stats.blocks, old_stats.blocks + 2);
 
     r.full_compaction();
     with_allocator(r.allocator(), [&] {
@@ -94,9 +95,9 @@ SEASTAR_THREAD_TEST_CASE(test_caching) {
         lru.evict_all();
     });
 
-    BOOST_REQUIRE_EQUAL(cache.shard_stats().populations, old_stats.populations + 1);
-    BOOST_REQUIRE_EQUAL(cache.shard_stats().evictions, old_stats.evictions);
-    BOOST_REQUIRE(cache.shard_stats().used_bytes > 0);
+    BOOST_REQUIRE_EQUAL(stats.populations, old_stats.populations + 1);
+    BOOST_REQUIRE_EQUAL(stats.evictions, old_stats.evictions);
+    BOOST_REQUIRE(stats.used_bytes > 0);
 
     has_page0(ptr0);
     has_page0(ptr1);
@@ -116,7 +117,7 @@ SEASTAR_THREAD_TEST_CASE(test_caching) {
             lru.evict_all();
         });
         // ptr3 prevents page 0 evictions
-        BOOST_REQUIRE_EQUAL(cache.shard_stats().evictions, old_stats.evictions);
+        BOOST_REQUIRE_EQUAL(stats.evictions, old_stats.evictions);
 
         has_page0(ptr3);
 
@@ -125,16 +126,16 @@ SEASTAR_THREAD_TEST_CASE(test_caching) {
             lru.evict_all();
         });
 
-        BOOST_REQUIRE_EQUAL(cache.shard_stats().evictions, old_stats.evictions + 1);
-        BOOST_REQUIRE_EQUAL(cache.shard_stats().used_bytes, old_stats.used_bytes);
+        BOOST_REQUIRE_EQUAL(stats.evictions, old_stats.evictions + 1);
+        BOOST_REQUIRE_EQUAL(stats.used_bytes, old_stats.used_bytes);
     }
 
     {
         auto ptr4 = cache.get_or_load(0, page0_loader).get0();
         has_page0(ptr4);
 
-        BOOST_REQUIRE_EQUAL(cache.shard_stats().misses, old_stats.misses + 2);
-        BOOST_REQUIRE_EQUAL(cache.shard_stats().populations, old_stats.populations + 2);
+        BOOST_REQUIRE_EQUAL(stats.misses, old_stats.misses + 2);
+        BOOST_REQUIRE_EQUAL(stats.populations, old_stats.populations + 2);
     }
 }
 
@@ -153,7 +154,8 @@ SEASTAR_THREAD_TEST_CASE(test_exception_while_loading) {
     ::lru lru;
     simple_schema s;
     logalloc::region r;
-    partition_index_cache cache(lru, r);
+    partition_index_cache_stats stats;
+    partition_index_cache cache(lru, r, stats);
 
     auto clear_lru = defer([&] {
         with_allocator(r.allocator(), [&] {
@@ -183,43 +185,41 @@ SEASTAR_THREAD_TEST_CASE(test_auto_clear) {
     ::lru lru;
     simple_schema s;
     logalloc::region r;
-
-    partition_index_cache::stats old_stats;
+    partition_index_cache_stats stats;
+    partition_index_cache_stats old_stats;
 
     {
-        partition_index_cache cache(lru, r);
+        partition_index_cache cache(lru, r, stats);
 
         auto page0_loader = [&] (partition_index_cache::key_type k) {
             return make_page0(r, s);
         };
 
-        old_stats = cache.shard_stats();
-
+        old_stats = stats;
         cache.get_or_load(0, page0_loader).get();
         cache.get_or_load(1, page0_loader).get();
         cache.get_or_load(2, page0_loader).get();
     }
 
-    partition_index_cache cache2(lru, r); // to get stats
-    BOOST_REQUIRE_EQUAL(cache2.shard_stats().evictions, old_stats.evictions + 3);
-    BOOST_REQUIRE_EQUAL(cache2.shard_stats().used_bytes, old_stats.used_bytes);
-    BOOST_REQUIRE_EQUAL(cache2.shard_stats().populations, old_stats.populations + 3);
+    BOOST_REQUIRE_EQUAL(stats.evictions, old_stats.evictions + 3);
+    BOOST_REQUIRE_EQUAL(stats.used_bytes, old_stats.used_bytes);
+    BOOST_REQUIRE_EQUAL(stats.populations, old_stats.populations + 3);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_destroy) {
     ::lru lru;
     simple_schema s;
     logalloc::region r;
+    partition_index_cache_stats stats;
+    partition_index_cache_stats old_stats;
 
-    partition_index_cache::stats old_stats;
-
-    partition_index_cache cache(lru, r);
+    partition_index_cache cache(lru, r, stats);
 
     auto page0_loader = [&] (partition_index_cache::key_type k) {
         return make_page0(r, s);
     };
 
-    old_stats = cache.shard_stats();
+    old_stats = stats;
 
     cache.get_or_load(0, page0_loader).get();
     cache.get_or_load(1, page0_loader).get();
@@ -227,25 +227,25 @@ SEASTAR_THREAD_TEST_CASE(test_destroy) {
 
     cache.evict_gently().get();
 
-    BOOST_REQUIRE_EQUAL(cache.shard_stats().evictions, old_stats.evictions + 3);
-    BOOST_REQUIRE_EQUAL(cache.shard_stats().used_bytes, old_stats.used_bytes);
-    BOOST_REQUIRE_EQUAL(cache.shard_stats().populations, old_stats.populations + 3);
+    BOOST_REQUIRE_EQUAL(stats.evictions, old_stats.evictions + 3);
+    BOOST_REQUIRE_EQUAL(stats.used_bytes, old_stats.used_bytes);
+    BOOST_REQUIRE_EQUAL(stats.populations, old_stats.populations + 3);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_evict_gently) {
     ::lru lru;
     simple_schema s;
     logalloc::region r;
+    partition_index_cache_stats stats;
+    partition_index_cache_stats old_stats;
 
-    partition_index_cache::stats old_stats;
-
-    partition_index_cache cache(lru, r);
+    partition_index_cache cache(lru, r, stats);
 
     auto page0_loader = [&] (partition_index_cache::key_type k) {
         return make_page0(r, s);
     };
 
-    old_stats = cache.shard_stats();
+    old_stats = stats;
 
     cache.get_or_load(0, page0_loader).get();
     cache.get_or_load(1, page0_loader).get();
@@ -253,17 +253,17 @@ SEASTAR_THREAD_TEST_CASE(test_evict_gently) {
 
     cache.evict_gently().get();
 
-    BOOST_REQUIRE_EQUAL(cache.shard_stats().evictions, old_stats.evictions + 3);
-    BOOST_REQUIRE_EQUAL(cache.shard_stats().used_bytes, old_stats.used_bytes);
-    BOOST_REQUIRE_EQUAL(cache.shard_stats().populations, old_stats.populations + 3);
+    BOOST_REQUIRE_EQUAL(stats.evictions, old_stats.evictions + 3);
+    BOOST_REQUIRE_EQUAL(stats.used_bytes, old_stats.used_bytes);
+    BOOST_REQUIRE_EQUAL(stats.populations, old_stats.populations + 3);
 
     // kept alive around evict_gently()
     auto page = cache.get_or_load(1, page0_loader).get();
-    BOOST_REQUIRE_EQUAL(cache.shard_stats().populations, old_stats.populations + 4);
+    BOOST_REQUIRE_EQUAL(stats.populations, old_stats.populations + 4);
 
     cache.evict_gently().get();
 
-    BOOST_REQUIRE_EQUAL(cache.shard_stats().evictions, old_stats.evictions + 3);
+    BOOST_REQUIRE_EQUAL(stats.evictions, old_stats.evictions + 3);
 
     auto no_loader = [&] (partition_index_cache::key_type k) -> future<partition_index_page> {
         throw std::runtime_error("should not have been invoked");

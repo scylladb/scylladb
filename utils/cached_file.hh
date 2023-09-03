@@ -14,6 +14,7 @@
 #include "utils/lru.hh"
 #include "utils/error_injection.hh"
 #include "tracing/trace_state.hh"
+#include "utils/cached_file_stats.hh"
 
 #include <seastar/core/file.hh>
 #include <seastar/core/coroutine.hh>
@@ -47,16 +48,8 @@ public:
 
     using offset_type = uint64_t;
 
-    struct metrics {
-        uint64_t page_hits = 0;
-        uint64_t page_misses = 0;
-        uint64_t page_evictions = 0;
-        uint64_t page_populations = 0;
-        uint64_t cached_bytes = 0;
-        uint64_t bytes_in_std = 0; // memory used by active temporary_buffer:s
-    };
 private:
-    class cached_page : public evictable {
+    class cached_page final : public index_evictable {
     public:
         cached_file* parent;
         page_idx_type idx;
@@ -144,7 +137,7 @@ private:
 
     file _file;
     sstring _file_name; // for logging / tracing
-    metrics& _metrics;
+    cached_file_stats& _metrics;
     lru& _lru;
     logalloc::region& _region;
     logalloc::allocating_section _as;
@@ -353,7 +346,7 @@ public:
     /// \param m Metrics object which should be updated from operations on this object.
     ///          The metrics object can be shared by many cached_file instances, in which case it
     ///          will reflect the sum of operations on all cached_file instances.
-    cached_file(file f, cached_file::metrics& m, lru& l, logalloc::region& reg, offset_type size, sstring file_name = {})
+    cached_file(file f, cached_file_stats& m, lru& l, logalloc::region& reg, offset_type size, sstring file_name = {})
         : _file(std::move(f))
         , _file_name(std::move(file_name))
         , _metrics(m)

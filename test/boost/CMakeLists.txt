@@ -28,6 +28,8 @@ add_scylla_test(btree_test
   KIND SEASTAR)
 add_scylla_test(bytes_ostream_test
   KIND SEASTAR)
+add_scylla_test(cache_algorithm_test
+  KIND SEASTAR)
 add_scylla_test(cache_flat_mutation_reader_test
   KIND SEASTAR)
 add_scylla_test(cached_file_test

@@ -70,7 +70,7 @@ struct metrics_snapshot {
     reactor::io_stats io;
     reactor::sched_stats sched;
     memory::statistics mem;
-    sstables::partition_index_cache::stats index;
+    partition_index_cache_stats index;
     cache_tracker::stats cache;
     uint64_t instructions;
 
@@ -82,7 +82,7 @@ struct metrics_snapshot {
         busy_time = r.total_busy_time();
         idle_time = r.total_idle_time();
         hr_clock = std::chrono::high_resolution_clock::now();
-        index = sstables::partition_index_cache::shard_stats();
+        index = cql_env->local_db().row_cache_tracker().get_partition_index_cache_stats();
         cache = cql_env->local_db().row_cache_tracker().get_stats();
         instructions = the_instructions_counter.read();
     }

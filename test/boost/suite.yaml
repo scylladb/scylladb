@@ -40,5 +40,7 @@ custom_args:
         - '-c1 -m256M'
     multishard_mutation_query_test:
         - '-c2 -m3G'
+    cache_algorithm_test:
+        - '-c1 -m256M'
 run_in_debug:
     - logalloc_standard_allocator_segment_pool_backend_test

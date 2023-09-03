@@ -352,7 +352,7 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
             std::numeric_limits<size_t>::max(),
             utils::updateable_value(std::numeric_limits<uint32_t>::max()),
             utils::updateable_value(std::numeric_limits<uint32_t>::max()))
-    , _row_cache_tracker(cache_tracker::register_metrics::yes)
+    , _row_cache_tracker(_cfg.index_cache_fraction.operator utils::updateable_value<double>(), cache_tracker::register_metrics::yes)
     , _apply_stage("db_apply", &database::do_apply)
     , _version(empty_version)
     , _compaction_manager(cm)
