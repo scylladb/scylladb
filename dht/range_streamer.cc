@@ -291,8 +291,8 @@ future<> range_streamer::stream_async() {
                     for (auto it = range_vec.begin(); it < range_vec.end();) {
                         ranges_to_stream.push_back(*it);
                         ++it;
-                        auto percentage = _db.local().get_config().stream_plan_ranges_percentage();
-                        size_t nr_ranges_per_stream_plan = nr_ranges_total * percentage;
+                        auto fraction = _db.local().get_config().stream_plan_ranges_fraction();
+                        size_t nr_ranges_per_stream_plan = nr_ranges_total * fraction;
                         if (ranges_to_stream.size() < nr_ranges_per_stream_plan) {
                             continue;
                         } else {
