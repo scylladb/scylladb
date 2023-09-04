@@ -266,7 +266,7 @@ class TestSuite(ABC):
         return self.tests
 
     def _filter_test_list(self, tests: List[str]) -> List[str]:
-        patterns = [tc.test_file for tc in self.options.names if tc.suite_name in [self.name, None]]
+        patterns = [tc.test_file_name for tc in self.options.names if tc.suite_name in [self.name, None]]
         # If any of the patterns is wildcard (None), include all tests, else only specified tests
         patterns = [""] if not patterns or None in patterns else patterns
         tests = [test for test in tests if any(patt in test for patt in patterns)]
@@ -523,7 +523,7 @@ class PythonTestSuite(TestSuite):
         """For pytest, search for directories recursively"""
         path = self.suite_path
         pytests = itertools.chain(path.rglob("*_test.py"), path.rglob("test_*.py"))
-        tests = [os.path.splitext(t.relative_to(self.suite_path))[0] for t in pytests]
+        tests = [str(t.relative_to(self.suite_path)) for t in pytests]
         return self._filter_test_list(tests)
 
     @property
@@ -561,10 +561,6 @@ class TopologyTestSuite(PythonTestSuite):
        the lifecycle of clusters and bringing up new ones as needed. The cluster health checks
        are done per test case.
     """
-
-    def build_test_list(self) -> List[str]:
-        """Build list of Topology python tests"""
-        return TestSuite.build_test_list(self)
 
     async def add_test(self, test_def: TestTaskDef) -> None:
         """Add test to suite"""
@@ -643,10 +639,11 @@ class Test:
         self.suite = suite
         # Unique file name, which is also readable by human, as filename prefix
         # TODO: change inner '.' to '-' for a more conventional file naming
+        test_file_no_ext = test_def.test_file_name.split('.')[0]
         if test_def.case_name:
-            self.uname = f"{test_def.suite_name}.{test_def.test_file_name}.{test_def.case_name}.{self.id}"
+            self.uname = f"{test_def.suite_name}.{test_file_no_ext}.{test_def.case_name}.{self.id}"
         else:
-            self.uname = f"{test_def.suite_name}.{test_def.test_file_name}.{self.id}"
+            self.uname = f"{test_def.suite_name}.{test_file_no_ext}.{self.id}"
         self.log_filename = pathlib.Path(suite.options.tmpdir) / self.mode / (self.uname + ".log")
         self.log_filename.parent.mkdir(parents=True, exist_ok=True)
         if test_def.case_name is None:
@@ -977,7 +974,10 @@ class PythonTest(Test):
         assert test_def.case_name is None, "PythonTest does not support running specific test cases"
         super().__init__(test_no, test_def, suite)
         self.path = "pytest"
-        self.xmlout = os.path.join(self.suite.options.tmpdir, self.mode, "xml", self.uname + ".xunit.xml")
+        case_name = f".{self.test_def.case_name}" if self.test_def.case_name is not None else ""
+        assert self.test_def.test_file_name is not None
+        self.xmlout = os.path.join(self.suite.options.tmpdir, self.mode, "xml",
+                                   f"{self.test_def.test_file_name.split('.')[0]}{case_name}.xunit.xml")
         self.server_log: Optional[str] = None
         self.server_log_filename: Optional[pathlib.Path] = None
         PythonTest._reset(self)
@@ -997,7 +997,7 @@ class PythonTest(Test):
             no_tests_selected_exit_code = 5
             self.valid_exit_codes = [0, no_tests_selected_exit_code]
         assert self.test_def.test_file_name is not None
-        self.args.append(str(self.suite.suite_path / (self.test_def.test_file_name + ".py")))
+        self.args.append(str(self.suite.suite_path / self.test_def.test_file_name))
 
     def _reset(self) -> None:
         """Reset the test before a retry, if it is retried as flaky"""
