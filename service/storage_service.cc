@@ -1965,26 +1965,20 @@ class topology_coordinator {
                 }
 
                 raft_topology_cmd cmd{raft_topology_cmd::command::stream_ranges};
-                if (node.rs->state == node_state::removing) {
-                    // tell all nodes to stream data of the removed node to new range owners
-                    auto f = co_await coroutine::as_future(exec_global_command(std::move(node), cmd, true));
-                    if (f.failed()) {
-                        slogger.error("raft topology: send_raft_topology_cmd(stream_ranges) failed "
-                                      "during removenode, error {}", f.get_exception());
-                        break;
-                    }
-                    node = std::move(f).get();
-                } else {
-                    // Tell joining/leaving/replacing node to stream its ranges
-                    try {
+                try {
+                    if (node.rs->state == node_state::removing) {
+                        // tell all nodes to stream data of the removed node to new range owners
+                        node = co_await exec_global_command(std::move(node), cmd, true);
+                    } else {
+                        // Tell joining/leaving/replacing node to stream its ranges
                         node = co_await exec_direct_command(std::move(node), cmd);
-                    } catch (term_changed_error&) {
-                        throw;
-                    } catch (...) {
-                        slogger.error("raft topology: send_raft_topology_cmd(stream_ranges) failed with exception"
-                                      " (node state is {}): {}", node.rs->state, std::current_exception());
-                        break;
                     }
+                } catch (term_changed_error&) {
+                    throw;
+                } catch (...) {
+                    slogger.error("raft topology: send_raft_topology_cmd(stream_ranges) failed with exception"
+                                    " (node state is {}): {}", node.rs->state, std::current_exception());
+                    break;
                 }
                 // Streaming completed. We can now move tokens state to topology::transition_state::write_both_read_new
                 topology_mutation_builder builder(node.guard.write_timestamp());
