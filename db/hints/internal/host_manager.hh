@@ -58,23 +58,12 @@ class resource_manager;
 
 namespace internal {
 
-class hint_sender;
-
 class host_manager {
 private:
-    friend class hint_sender;
-private:
-    endpoint_id _key;
-    manager& _shard_manager;
-    hint_store_ptr _hint_store_anchor;
-    seastar::gate _store_gate;
-    lw_shared_ptr<seastar::shared_mutex> _file_update_mutex_ptr;
-    seastar::shared_mutex& _file_update_mutex;
-
     enum class state {
-        can_hint,               // hinting is currently allowed (used by the space_watchdog)
-        stopping,               // stopping is in progress (stop() method has been called)
-        stopped                 // stop() has completed
+        can_hint,   // hinting is currently allowed (used by the space_watchdog)
+        stopping,   // stopping is in progress (stop() method has been called)
+        stopped     // stop() has completed
     };
 
     using state_set = enum_set<super_enum<state,
@@ -82,6 +71,15 @@ private:
         state::stopping,
         state::stopped>>;
 
+    friend class hint_sender;
+
+private:
+    endpoint_id _key;
+    manager& _shard_manager;
+    hint_store_ptr _hint_store_anchor;
+    seastar::gate _store_gate;
+    lw_shared_ptr<seastar::shared_mutex> _file_update_mutex_ptr;
+    seastar::shared_mutex& _file_update_mutex;
     state_set _state;
     const fs::path _hints_dir;
     uint64_t _hints_in_progress = 0;
@@ -93,6 +91,7 @@ public:
     host_manager(host_manager&&);
     ~host_manager();
 
+public:
     const endpoint_id& end_point_key() const noexcept {
         return _key;
     }
