@@ -2628,12 +2628,20 @@ db::commitlog::read_log_file(sstring filename, sstring pfx, commit_load_reader_f
             return eof || next == pos;
         }
         future<> skip(size_t bytes) {
-            pos += bytes;
-            if (pos > file_size) {
+            auto n = std::min(file_size - pos, bytes);
+            pos += n;
+            if (pos == file_size) {
                 eof = true;
-                pos = file_size;
             }
-            return fin.skip(bytes);
+            if (n < bytes) {
+                // if we are trying to skip past end, we have at least
+                // the bytes skipped or the source from where we read 
+                // this corrupt. So add at least four bytes. This is
+                // inexact, but adding the full "bytes" is equally wrong
+                // since it could be complete garbled junk.
+                corrupt_size += std::max(n, sizeof(uint32_t));
+            }
+            return fin.skip(n);
         }
         void stop() {
             eof = true;
