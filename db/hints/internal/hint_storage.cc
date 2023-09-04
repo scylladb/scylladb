@@ -80,7 +80,7 @@ future<> scan_for_hint_dirs(const fs::path& hints_directory, Func&& func) {
 ///
 /// \param hint_directory directory to scan
 /// \return a map: ep -> map: shard -> segments (full paths)
-hint_segments_map get_current_hints_segments(const fs::path& hint_directory) {
+hint_segments_map get_current_hint_segments(const fs::path& hint_directory) {
     hint_segments_map current_hint_segments;
 
     // Shard level.
@@ -107,56 +107,61 @@ hint_segments_map get_current_hints_segments(const fs::path& hint_directory) {
 
 /// \brief Rebalance hints segments for a given (destination) end point
 ///
-/// This method is going to consume files from the \ref segments_to_move and distribute them between the present
-/// shards (taking into an account the \ref ep_segments state - there may be zero or more segments that belong to a
-/// particular shard in it) until we either achieve the requested \ref segments_per_shard level on each shard
-/// or until we are out of files to move.
+/// This method is going to consume files from the \ref segments_to_move and distribute them
+/// between the present shards (taking into an account the \ref ep_segments state -- there may be
+/// zero or more segments that belong to a particular shard in it) until we either achieve
+/// the requested \ref segments_per_shard level on each shard or until we are out of files to move.
 ///
-/// As a result (in addition to the actual state on the disk) both \ref ep_segments and \ref segments_to_move are going
-/// to be modified.
+/// As a result (in addition to the actual state on the disk) both \ref ep_segments
+/// and \ref segments_to_move are going to be modified.
 ///
-/// Complexity: O(N), where N is a total number of present hints' segments for the \ref ep end point (as a destination).
+/// Complexity: O(N), where N is a total number of present hints' segments
+///             for the \ref ep end point (as a destination).
 ///
 /// \note Should be called from a seastar::thread context.
 ///
 /// \param ep destination end point ID (a string with its IP address)
 /// \param segments_per_shard number of hints segments per-shard we want to achieve
-/// \param hints_directory a root hints directory
+/// \param hint_directory a root hints directory
 /// \param host_segments a map that was originally built by get_current_hints_segments() for this end point
 /// \param segments_to_move a list of segments we are allowed to move
-void rebalance_segments_for(
-        const sstring& ep,
-        size_t segments_per_shard,
-        const fs::path& hints_directory,
-        hint_host_segments_map& host_segments,
+void rebalance_segments_for(const std::string_view ep, size_t segments_per_shard,
+        const fs::path& hint_directory, hint_host_segments_map& host_segments,
         std::list<fs::path>& segments_to_move)
 {
-    manager_logger.trace("{}: segments_per_shard: {}, total number of segments to move: {}", ep, segments_per_shard, segments_to_move.size());
+    manager_logger.trace("{}: segments_per_shard: {}, total number of segments to move: {}",
+            ep, segments_per_shard, segments_to_move.size());
 
-    // sanity check
+    // Sanity check.
     if (segments_to_move.empty() || !segments_per_shard) {
         return;
     }
 
-    for (unsigned i = 0; i < smp::count && !segments_to_move.empty(); ++i) {
-        fs::path shard_path_dir(fs::path(hints_directory.c_str()) / seastar::format("{:d}", i).c_str() / ep.c_str());
+    const fs::path hint_directory_path{hint_directory};
+
+    for (shard_id i = 0; i < smp::count && !segments_to_move.empty(); ++i) {
+        fs::path shard_path_dir{hint_directory_path / seastar::format("{:d}", i) / ep};
         std::list<fs::path>& current_shard_segments = host_segments[i];
 
-        // Make sure that the shard_path_dir exists and if not - create it
-        io_check([name = shard_path_dir.c_str()] { return recursive_touch_directory(name); }).get();
+        // Make sure that the shard_path_dir exists. If not, create it.
+        io_check([name = shard_path_dir.c_str()] {
+            return recursive_touch_directory(name);
+        }).get();
 
         while (current_shard_segments.size() < segments_per_shard && !segments_to_move.empty()) {
             auto seg_path_it = segments_to_move.begin();
-            fs::path new_path(shard_path_dir / seg_path_it->filename());
+            fs::path new_path{shard_path_dir / seg_path_it->filename()};
 
-            // Don't move the file to the same location - it's pointless.
+            // Don't move the file to the same location. It's pointless.
             if (*seg_path_it != new_path) {
                 manager_logger.trace("going to move: {} -> {}", *seg_path_it, new_path);
                 io_check(rename_file, seg_path_it->native(), new_path.native()).get();
             } else {
                 manager_logger.trace("skipping: {}", *seg_path_it);
             }
-            current_shard_segments.splice(current_shard_segments.end(), segments_to_move, seg_path_it, std::next(seg_path_it));
+
+            current_shard_segments.splice(current_shard_segments.end(), segments_to_move,
+                    seg_path_it, std::next(seg_path_it));
         }
     }
 }
@@ -256,7 +261,7 @@ void remove_irrelevant_shards_directories(const fs::path& hints_directory) {
 future<> rebalance_hints(fs::path hints_directory) {
     return seastar::async([hints_directory = std::move(hints_directory)] {
         // Scan currently present hints segments.
-        hint_segments_map current_hints_segments = get_current_hints_segments(hints_directory);
+        hint_segments_map current_hints_segments = get_current_hint_segments(hints_directory);
 
         // Move segments to achieve an even distribution of files among all present shards.
         rebalance_segments(hints_directory, current_hints_segments);
