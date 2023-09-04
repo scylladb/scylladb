@@ -512,11 +512,6 @@ future<> manager::end_point_hints_manager::flush_current_hints() noexcept {
     return make_ready_future<>();
 }
 
-class no_column_mapping : public std::out_of_range {
-public:
-    no_column_mapping(const table_schema_version& id) : std::out_of_range(format("column mapping for CF schema_version {} is missing", id)) {}
-};
-
 bool manager::too_many_in_flight_hints_for(endpoint_id ep) const noexcept {
     // There is no need to check the DC here because if there is an in-flight hint for this end point then this means that
     // its DC has already been checked and found to be ok.

@@ -43,11 +43,20 @@
 namespace db::hints {
 namespace internal {
 
+namespace {
+
+class no_column_mapping : public std::out_of_range {
+public:
+    no_column_mapping(const table_schema_version& id) : std::out_of_range(format("column mapping for CF schema_version {} is missing", id)) {}
+};
+
+} // anonymous namespace
+
 future<> hint_sender::flush_maybe() noexcept {
     auto current_time = clock::now();
     if (current_time >= _next_flush_tp) {
         return _ep_manager.flush_current_hints().then([this, current_time] {
-            _next_flush_tp = current_time + hints_flush_period;
+            _next_flush_tp = current_time + manager::hints_flush_period;
         }).handle_exception([] (auto eptr) {
             manager_logger.trace("flush_maybe() failed: {}", eptr);
             return make_ready_future<>();
