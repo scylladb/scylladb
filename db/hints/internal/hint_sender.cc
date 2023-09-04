@@ -52,6 +52,69 @@ public:
 
 } // anonymous namespace
 
+struct send_one_file_ctx {
+public:
+    std::unordered_map<table_schema_version, column_mapping>& schema_ver_to_column_mapping;
+    seastar::gate file_send_gate;
+    std::optional<replay_position> first_failed_rp;
+    std::optional<replay_position> last_succeeded_rp;
+    std::set<replay_position> in_progress_rps;
+    bool segment_replay_failed = false;
+
+public:
+    send_one_file_ctx(std::unordered_map<table_schema_version, column_mapping>& last_schema_ver_to_column_mapping)
+        : schema_ver_to_column_mapping(last_schema_ver_to_column_mapping)
+    {}
+
+public:
+    void mark_hint_as_in_progress(replay_position rp) {
+        in_progress_rps.insert(rp);
+    }
+    // Noexcept because `std::set::erase` is noexcept when
+    // the operator< of the value type is noexcept.
+    void on_hint_send_success(replay_position rp) noexcept {
+        in_progress_rps.erase(rp);
+        if (!last_succeeded_rp || *last_succeeded_rp < rp) {
+            last_succeeded_rp = rp;
+        }
+    }
+    // Ditto.
+    void on_hint_send_failure(replay_position rp) noexcept {
+        in_progress_rps.erase(rp);
+        segment_replay_failed = true;
+        if (!first_failed_rp || rp < *first_failed_rp) {
+            first_failed_rp = rp;
+        }
+    }
+
+    // Returns a position below which hints were successfully replayed.
+    replay_position get_replayed_bound() const noexcept {
+        // We are sure that all hints were sent _below_ the position which is the minimum of the following:
+        // - Position of the first hint that failed to be sent in this replay (first_failed_rp),
+        // - Position of the last hint which was successfully sent (last_succeeded_rp, inclusive bound),
+        // - Position of the lowest hint which is being currently sent (in_progress_rps.begin()).
+
+        replay_position rp;
+        if (first_failed_rp) {
+            rp = *first_failed_rp;
+        } else if (last_succeeded_rp) {
+            // It is always true that `first_failed_rp` <= `last_succeeded_rp`, so no need to compare
+            rp = *last_succeeded_rp;
+            // We replayed _up to_ `last_attempted_rp`, so the bound is not strict; we can increase `pos` by one
+            rp.pos++;
+        }
+
+        if (!in_progress_rps.empty() && *in_progress_rps.begin() < rp) {
+            rp = *in_progress_rps.begin();
+        }
+
+        return rp;
+    }
+};
+
+/////////////////////////////////////////////////
+/////////////////////////////////////////////////
+
 future<> hint_sender::flush_maybe() noexcept {
     auto current_time = clock::now();
     if (current_time >= _next_flush_tp) {
@@ -382,48 +445,6 @@ future<> hint_sender::wait_until_hints_are_replayed_up_to(abort_source& as, db::
     return (**ptr).get_future().finally([sub = std::move(sub), ep] {
         manager_logger.debug("[{}] wait_until_hints_are_replayed_up_to(): returning afther the future was satisfied", ep);
     });
-}
-
-void hint_sender::send_one_file_ctx::mark_hint_as_in_progress(db::replay_position rp) {
-    in_progress_rps.insert(rp);
-}
-
-void hint_sender::send_one_file_ctx::on_hint_send_success(db::replay_position rp) noexcept {
-    in_progress_rps.erase(rp);
-    if (!last_succeeded_rp || *last_succeeded_rp < rp) {
-        last_succeeded_rp = rp;
-    }
-}
-
-void hint_sender::send_one_file_ctx::on_hint_send_failure(db::replay_position rp) noexcept {
-    in_progress_rps.erase(rp);
-    segment_replay_failed = true;
-    if (!first_failed_rp || rp < *first_failed_rp) {
-        first_failed_rp = rp;
-    }
-}
-
-db::replay_position hint_sender::send_one_file_ctx::get_replayed_bound() const noexcept {
-    // We are sure that all hints were sent _below_ the position which is the minimum of the following:
-    // - Position of the first hint that failed to be sent in this replay (first_failed_rp),
-    // - Position of the last hint which was successfully sent (last_succeeded_rp, inclusive bound),
-    // - Position of the lowest hint which is being currently sent (in_progress_rps.begin()).
-
-    db::replay_position rp;
-    if (first_failed_rp) {
-        rp = *first_failed_rp;
-    } else if (last_succeeded_rp) {
-        // It is always true that `first_failed_rp` <= `last_succeeded_rp`, so no need to compare
-        rp = *last_succeeded_rp;
-        // We replayed _up to_ `last_attempted_rp`, so the bound is not strict; we can increase `pos` by one
-        rp.pos++;
-    }
-
-    if (!in_progress_rps.empty() && *in_progress_rps.begin() < rp) {
-        rp = *in_progress_rps.begin();
-    }
-
-    return rp;
 }
 
 void hint_sender::rewind_sent_replay_position_to(db::replay_position rp) {

@@ -64,6 +64,9 @@ class resource_manager;
 
 namespace internal {
 
+// Class specifying context for sending one file with hints.
+struct send_one_file_ctx;
+
 class hint_sender {
     // Important: clock::now() must be noexcept.
     // TODO: add the corresponding static_assert() when seastar::lowres_clock::now() is marked as "noexcept".
@@ -79,25 +82,6 @@ class hint_sender {
         state::stopping,
         state::ep_state_left_the_ring,
         state::draining>>;
-
-    struct send_one_file_ctx {
-        send_one_file_ctx(std::unordered_map<table_schema_version, column_mapping>& last_schema_ver_to_column_mapping)
-            : schema_ver_to_column_mapping(last_schema_ver_to_column_mapping)
-        {}
-        std::unordered_map<table_schema_version, column_mapping>& schema_ver_to_column_mapping;
-        seastar::gate file_send_gate;
-        std::optional<db::replay_position> first_failed_rp;
-        std::optional<db::replay_position> last_succeeded_rp;
-        std::set<db::replay_position> in_progress_rps;
-        bool segment_replay_failed = false;
-
-        void mark_hint_as_in_progress(db::replay_position rp);
-        void on_hint_send_success(db::replay_position rp) noexcept;
-        void on_hint_send_failure(db::replay_position rp) noexcept;
-
-        // Returns a position below which hints were successfully replayed.
-        db::replay_position get_replayed_bound() const noexcept;
-    };
 
 private:
     std::list<sstring> _segments_to_replay;
