@@ -68,20 +68,32 @@ namespace internal {
 struct send_one_file_ctx;
 
 class hint_sender {
-    // Important: clock::now() must be noexcept.
-    // TODO: add the corresponding static_assert() when seastar::lowres_clock::now() is marked as "noexcept".
-    using clock = seastar::lowres_clock;
+private:
+    using clock_type = seastar::lowres_clock;
+    static_assert(noexcept(clock_type::now()), "clock_type::now() must be noexcept");
+
+    using time_point_type = typename clock_type::time_point;
+    using duration_type = typename clock_type::duration;
 
     enum class state {
-        stopping,               // stop() was called
-        ep_state_left_the_ring, // destination Node is not a part of the ring anymore - usually means that it has been decommissioned
-        draining,               // try to send everything out and ignore errors
+        stopping,       // stop() has been called.
+        host_left_ring, // Destination node is not a part of the ring anymore.
+                        // That usually means that it has been decommissioned.
+        draining,       // Try to send all hints and ignore errors.
     };
 
     using state_set = enum_set<super_enum<state,
         state::stopping,
-        state::ep_state_left_the_ring,
+        state::host_left_ring,
         state::draining>>;
+    
+    // There shouldn't be many segments stored at the same time.
+    // `std::list` provides good semantics in that case
+    // -- it doesn't allocate more memory than it needs.
+    using segment_list = std::list<seastar::sstring>;
+
+    // TODO: Add a comment here explaining what this type "means".
+    using replay_waiter = seastar::lw_shared_ptr<std::optional<seastar::promise<>>>;
 
 private:
     std::list<sstring> _segments_to_replay;
@@ -93,8 +105,8 @@ private:
     state_set _state;
     future<> _stopped;
     abort_source _stop_as;
-    clock::time_point _next_flush_tp;
-    clock::time_point _next_send_retry_tp;
+    time_point_type _next_flush_tp;
+    time_point_type _next_send_retry_tp;
     endpoint_id _ep_key;
     end_point_hints_manager& _ep_manager;
     manager& _shard_manager;
@@ -267,7 +279,7 @@ private:
 
     /// \brief Return the amount of time we want to sleep after the current iteration.
     /// \return The time till the soonest event: flushing or re-sending.
-    clock::duration next_sleep_duration() const;
+    duration_type next_sleep_duration() const;
 };
 
 } // namespace internal
