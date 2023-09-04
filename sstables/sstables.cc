@@ -777,6 +777,9 @@ future<> parse(const schema& s, sstable_version_types v, random_access_reader& i
     uint32_t chunk_len = 0;
 
     co_await parse(s, v, in, c.name, c.options, chunk_len, data_len);
+    if (chunk_len == 0) {
+        throw malformed_sstable_exception("CompressionInfo is malformed: zero chunk_len");
+    }
     c.set_uncompressed_chunk_length(chunk_len);
     c.set_uncompressed_file_length(data_len);
 
