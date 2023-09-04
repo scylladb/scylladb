@@ -80,7 +80,6 @@ private:
     seastar::gate _store_gate;
     hint_store_ptr _hint_store_anchor;
     lw_shared_ptr<seastar::shared_mutex> _file_update_mutex_ptr;
-    seastar::shared_mutex& _file_update_mutex;
     db::replay_position _last_written_rp;
 
     manager& _shard_manager;
@@ -207,7 +206,7 @@ public:
 
 private:
     seastar::shared_mutex& file_update_mutex() noexcept {
-        return _file_update_mutex;
+        return *_file_update_mutex_ptr;
     }
 
     /// \brief Creates a new hints store object.
