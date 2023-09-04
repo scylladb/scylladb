@@ -339,7 +339,7 @@ future<> persistent_feature_enabler::enable_features() {
             feats_set.emplace(f.name());
         }
     }
-    co_await _sys_ks.save_local_enabled_features(std::move(feats_set));
+    co_await _sys_ks.save_local_enabled_features(std::move(feats_set), true);
 
     co_await _feat.container().invoke_on_all([&features] (feature_service& fs) -> future<> {
         std::set<std::string_view> features_v = boost::copy_range<std::set<std::string_view>>(features);

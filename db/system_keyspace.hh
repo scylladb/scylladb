@@ -269,12 +269,18 @@ public:
 
     future<> remove_endpoint(gms::inet_address ep);
 
-    future<> set_scylla_local_param(const sstring& key, const sstring& value);
+    // Saves the key-value pair into system.scylla_local table.
+    // Pass visible_before_cl_replay = true iff the data should be available before
+    // schema commitlog replay. We do table.flush in this case, so it's rather slow and heavyweight.
+    future<> set_scylla_local_param(const sstring& key, const sstring& value, bool visible_before_cl_replay);
     future<std::optional<sstring>> get_scylla_local_param(const sstring& key);
 
 private:
+    // Saves the key-value pair into system.scylla_local table.
+    // Pass visible_before_cl_replay = true iff the data should be available before
+    // schema commitlog replay. We do table.flush in this case, so it's rather slow and heavyweight.
     template <typename T>
-    future<> set_scylla_local_param_as(const sstring& key, const T& value);
+    future<> set_scylla_local_param_as(const sstring& key, const T& value, bool visible_before_cl_replay);
     template <typename T>
     future<std::optional<T>> get_scylla_local_param_as(const sstring& key);
 
@@ -383,7 +389,14 @@ public:
 
     future<std::unordered_map<gms::inet_address, sstring>> load_peer_features();
     future<std::set<sstring>> load_local_enabled_features();
-    future<> save_local_enabled_features(std::set<sstring> features);
+    // This function stores the features in the system.scylla_local table.
+    // We pass visible_before_cl_replay=true iff the features should be available before
+    // schema commitlog replay. We do table.flush in this case, so it's rather slow and heavyweight.
+    // Features over RAFT are migrated to system.topology table, but
+    // we still call this function in that case with visible_before_cl_replay=false
+    // for backward compatibility, since some client applications
+    // may depend on it.
+    future<> save_local_enabled_features(std::set<sstring> features, bool visible_before_cl_replay);
 
     future<int> increment_and_get_generation();
     bool bootstrap_needed() const;

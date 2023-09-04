@@ -64,7 +64,6 @@ namespace {
     const auto set_wait_for_sync_to_commitlog = schema_builder::register_static_configurator([](const sstring& ks_name, const sstring& cf_name, schema_static_props& props) {
         static const std::unordered_set<sstring> tables = {
             system_keyspace::PAXOS,
-            system_keyspace::SCYLLA_LOCAL,
             system_keyspace::BROADCAST_KV_STORE,
             system_keyspace::TOPOLOGY,
             system_keyspace::CDC_GENERATIONS_V3,
@@ -83,6 +82,7 @@ namespace {
             system_keyspace::TABLETS,
             system_keyspace::LOCAL,
             system_keyspace::PEERS,
+            system_keyspace::SCYLLA_LOCAL
         };
         if (ks_name == system_keyspace::NAME && tables.contains(cf_name)) {
             props.enable_schema_commitlog();
@@ -1677,15 +1677,13 @@ template future<> system_keyspace::update_peer_info<utils::UUID>(gms::inet_addre
 template future<> system_keyspace::update_peer_info<net::inet_address>(gms::inet_address ep, sstring column_name, net::inet_address);
 
 template <typename T>
-future<> system_keyspace::set_scylla_local_param_as(const sstring& key, const T& value) {
+future<> system_keyspace::set_scylla_local_param_as(const sstring& key, const T& value, bool visible_before_cl_replay) {
     sstring req = format("UPDATE system.{} SET value = ? WHERE key = ?", system_keyspace::SCYLLA_LOCAL);
     auto type = data_type_for<T>();
     co_await execute_cql(req, type->to_string_impl(data_value(value)), key).discard_result();
-    // Flush the table so that the value is available on boot before commitlog replay.
-    // database::maybe_init_schema_commitlog() depends on it.
-    co_await container().invoke_on_all([] (auto& sys_ks) -> future<> {
-        co_await sys_ks._db.flush(db::system_keyspace::NAME, system_keyspace::SCYLLA_LOCAL);
-    });
+    if (visible_before_cl_replay) {
+        co_await force_blocking_flush(SCYLLA_LOCAL);
+    }
 }
 
 template <typename T>
@@ -1702,8 +1700,8 @@ future<std::optional<T>> system_keyspace::get_scylla_local_param_as(const sstrin
     });
 }
 
-future<> system_keyspace::set_scylla_local_param(const sstring& key, const sstring& value) {
-    return set_scylla_local_param_as<sstring>(key, value);
+future<> system_keyspace::set_scylla_local_param(const sstring& key, const sstring& value, bool visible_before_cl_replay) {
+    return set_scylla_local_param_as<sstring>(key, value, visible_before_cl_replay);
 }
 
 future<std::optional<sstring>> system_keyspace::get_scylla_local_param(const sstring& key){
@@ -2310,9 +2308,9 @@ future<std::set<sstring>> system_keyspace::load_local_enabled_features() {
     co_return features;
 }
 
-future<> system_keyspace::save_local_enabled_features(std::set<sstring> features) {
+future<> system_keyspace::save_local_enabled_features(std::set<sstring> features, bool visible_before_cl_replay) {
     auto features_str = fmt::to_string(fmt::join(features, ","));
-    co_await set_scylla_local_param(gms::feature_service::ENABLED_FEATURES_KEY, features_str);
+    co_await set_scylla_local_param(gms::feature_service::ENABLED_FEATURES_KEY, features_str, visible_before_cl_replay);
 }
 
 future<utils::UUID> system_keyspace::get_raft_group0_id() {
@@ -2321,7 +2319,7 @@ future<utils::UUID> system_keyspace::get_raft_group0_id() {
 }
 
 future<> system_keyspace::set_raft_group0_id(utils::UUID uuid) {
-    return set_scylla_local_param_as<utils::UUID>("raft_group0_id", uuid);
+    return set_scylla_local_param_as<utils::UUID>("raft_group0_id", uuid, false);
 }
 
 static constexpr auto GROUP0_HISTORY_KEY = "history";
@@ -2405,7 +2403,7 @@ future<std::optional<sstring>> system_keyspace::load_group0_upgrade_state() {
 }
 
 future<> system_keyspace::save_group0_upgrade_state(sstring value) {
-    return set_scylla_local_param(GROUP0_UPGRADE_STATE_KEY, value);
+    return set_scylla_local_param(GROUP0_UPGRADE_STATE_KEY, value, false);
 }
 
 static constexpr auto MUST_SYNCHRONIZE_TOPOLOGY_KEY = "must_synchronize_topology";
@@ -2416,7 +2414,7 @@ future<bool> system_keyspace::get_must_synchronize_topology() {
 }
 
 future<> system_keyspace::set_must_synchronize_topology(bool value) {
-    return set_scylla_local_param_as<bool>(MUST_SYNCHRONIZE_TOPOLOGY_KEY, value);
+    return set_scylla_local_param_as<bool>(MUST_SYNCHRONIZE_TOPOLOGY_KEY, value, false);
 }
 
 static std::set<sstring> decode_features(const set_type_impl::native_type& features) {
@@ -2665,7 +2663,7 @@ future<int64_t> system_keyspace::get_topology_fence_version() {
 }
 
 future<> system_keyspace::update_topology_fence_version(int64_t value) {
-    return set_scylla_local_param_as<int64_t>("topology_fence_version", value);
+    return set_scylla_local_param_as<int64_t>("topology_fence_version", value, false);
 }
 
 future<cdc::topology_description>

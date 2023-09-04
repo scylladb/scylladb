@@ -328,7 +328,7 @@ future<> storage_service::topology_state_load() {
     // Update the legacy `enabled_features` key in `system.scylla_local`.
     // It's OK to update it after enabling features because `system.topology` now
     // is the source of truth about enabled features.
-    co_await _sys_ks.local().save_local_enabled_features(_topology_state_machine._topology.features.enabled_features);
+    co_await _sys_ks.local().save_local_enabled_features(_topology_state_machine._topology.features.enabled_features, false);
 
     const auto& am = _group0->address_map();
     auto id2ip = [this, &am] (raft::server_id id) -> future<gms::inet_address> {

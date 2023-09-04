@@ -50,7 +50,7 @@ future<> sstables_format_selector::update_format(sstables::sstable_version_types
     if (!_sys_ks) {
         on_internal_error(logger, format("system keyspace is not loaded"));
     }
-    co_await _sys_ks->set_scylla_local_param(SSTABLE_FORMAT_PARAM_NAME, fmt::to_string(new_format));
+    co_await _sys_ks->set_scylla_local_param(SSTABLE_FORMAT_PARAM_NAME, fmt::to_string(new_format), true);
     co_await select_format(new_format);
 }
 
