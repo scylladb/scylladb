@@ -1917,13 +1917,15 @@ static bool maybe_write_in_user_memory(schema_ptr s) {
 
 future<> system_keyspace::make(
         locator::effective_replication_map_factory& erm_factory,
-        replica::database& db, system_table_load_phase phase) {
+        replica::database& db) {
     for (auto&& table : system_keyspace::all_tables(db.get_config())) {
-        if (table->static_props().load_phase != phase) {
-            continue;
-        }
-
         co_await db.create_local_system_table(table, maybe_write_in_user_memory(table), erm_factory);
+    }
+}
+
+void system_keyspace::mark_writable() {
+    for (auto&& table : system_keyspace::all_tables(_db.get_config())) {
+        _db.find_column_family(table).mark_ready_for_writes(_db.commitlog_for(table));
     }
 }
 

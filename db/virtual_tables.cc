@@ -1028,6 +1028,7 @@ future<> initialize_virtual_tables(
     auto& db = dist_db.local();
     for (auto&& [id, vt] : virtual_tables) {
         co_await db.create_local_system_table(vt->schema(), false, dist_ss.local().get_erm_factory());
+        db.find_column_family(vt->schema()).mark_ready_for_writes(nullptr);
     }
 
     install_virtual_readers_and_writers(sys_ks.local(), db);

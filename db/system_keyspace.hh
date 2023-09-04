@@ -282,8 +282,9 @@ public:
     static std::vector<schema_ptr> all_tables(const db::config& cfg);
     future<> make(
             locator::effective_replication_map_factory&,
-            replica::database&,
-            system_table_load_phase phase);
+            replica::database&);
+
+    void mark_writable();
 
 
     /// overloads

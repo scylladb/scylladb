@@ -1128,7 +1128,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // done only by shard 0, so we'll no longer face race conditions as
             // described here: https://github.com/scylladb/scylla/issues/1014
             supervisor::notify("loading system sstables");
-            replica::distributed_loader::init_system_keyspace(sys_ks, erm_factory, db, system_table_load_phase::phase1).get();
+            replica::distributed_loader::init_system_keyspace(sys_ks, erm_factory, db).get();
 
             // 1. Here we notify dependent services that system tables have been loaded,
             //    and they in turn can load the necessary data from them;
@@ -1147,13 +1147,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             db.local().maybe_init_schema_commitlog();
 
-            // Init schema tables only after enable_features_on_startup()
-            // because table construction consults enabled features.
-            // Needs to be before system_keyspace::setup_after_commitlog(), which writes to schema tables.
-            replica::distributed_loader::init_system_keyspace(sys_ks, erm_factory, db, system_table_load_phase::phase2).get();
-            sys_ks.local().cache_truncation_record().get();
+            // Mark all the system tables writable and assign the proper commitlog to them.
+            sys_ks.invoke_on_all(&db::system_keyspace::mark_writable).get();
 
             supervisor::notify("starting schema commit log");
+            sys_ks.local().cache_truncation_record().get();
 
             // Check there is no truncation record for schema tables.
             // Needs to happen before replaying the schema commitlog, which interprets

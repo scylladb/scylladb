@@ -2791,7 +2791,6 @@ SEASTAR_TEST_CASE(sstable_run_based_compaction_test) {
         auto tracker = make_lw_shared<cache_tracker>();
         auto cf = env.make_table_for_tests(s);
         auto close_cf = deferred_stop(cf);
-        cf->mark_ready_for_writes();
         cf->start();
         cf->set_compaction_strategy(sstables::compaction_strategy_type::size_tiered);
         auto compact = [&, s] (std::vector<shared_sstable> all, auto replacer) -> std::vector<shared_sstable> {
@@ -3781,7 +3780,6 @@ SEASTAR_TEST_CASE(test_offstrategy_sstable_compaction) {
                 return cf.make_sstable(version);
             };
 
-            cf->mark_ready_for_writes();
             cf->start();
 
             for (auto i = 0; i < cf->schema()->max_compaction_threshold(); i++) {
@@ -4137,9 +4135,9 @@ SEASTAR_TEST_CASE(max_ongoing_compaction_test) {
             cfg.enable_commitlog = false;
             cfg.enable_incremental_backups = false;
 
-            auto cf = make_lw_shared<replica::column_family>(s, cfg, make_lw_shared<replica::storage_options>(), replica::column_family::no_commitlog(), *cm, env.manager(), *cl_stats, *tracker, nullptr);
+            auto cf = make_lw_shared<replica::column_family>(s, cfg, make_lw_shared<replica::storage_options>(), *cm, env.manager(), *cl_stats, *tracker, nullptr);
             cf->start();
-            cf->mark_ready_for_writes();
+            cf->mark_ready_for_writes(nullptr);
             tables.push_back(cf);
         }
 
@@ -5198,7 +5196,6 @@ SEASTAR_TEST_CASE(test_sstables_excluding_staging_correctness) {
         sorted_muts.insert(make_mut(pks[1]));
 
         auto t = env.make_table_for_tests(s, env.tempdir().path().string());
-        t->mark_ready_for_writes();
         auto close_t = deferred_stop(t);
 
         auto sst_gen = env.make_sst_factory(s);

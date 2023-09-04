@@ -1318,11 +1318,6 @@ schema_ptr schema_builder::build() {
                 format("{}.{} uses schema commitlog, but not null sharder, "
                        "schema commitlog works only on shard 0", ks_name(), cf_name()));
         }
-        if (static_props.load_phase == system_table_load_phase::phase1) {
-            on_internal_error(dblog,
-                format("{}.{} uses schema commitlog, but it is loaded on phase1, "
-                       "tables using schema commitlog must be loaded on phase2", ks_name(), cf_name()));
-        }
         if (static_props.wait_for_sync_to_commitlog) {
             on_internal_error(dblog,
                 format("{}.{} uses schema commitlog, wait_for_sync_to_commitlog is redundant",
