@@ -141,24 +141,55 @@ public:
 
 public:
     void register_metrics(const sstring& group_name);
+
     future<> start(shared_ptr<service::storage_proxy> proxy_ptr, shared_ptr<gms::gossiper> gossiper_ptr);
     future<> stop();
-    bool store_hint(endpoint_id ep, schema_ptr s, lw_shared_ptr<const frozen_mutation> fm, tracing::trace_state_ptr tr_state) noexcept;
-
-    /// \brief Changes the host_filter currently used, stopping and starting ep_managers relevant to the new host_filter.
-    /// \param filter the new host_filter
-    /// \return A future that resolves when the operation is complete.
-    future<> change_host_filter(host_filter filter);
-
-    const host_filter& get_host_filter() const noexcept {
-        return _host_filter;
-    }
 
     /// \brief Check if a hint may be generated to the give end point
     /// \param ep end point to check
     /// \return true if we should generate the hint to the given end point if it becomes unavailable
     bool can_hint_for(endpoint_id ep) const noexcept;
 
+    /// \brief Check if DC \param ep belongs to is "hintable"
+    /// \param ep End point identificator
+    /// \return TRUE if hints are allowed to be generated to \param ep.
+    bool check_dc_for(endpoint_id ep) const noexcept;
+
+    bool store_hint(endpoint_id ep, schema_ptr s, lw_shared_ptr<const frozen_mutation> fm, tracing::trace_state_ptr tr_state) noexcept;
+
+    /// \brief Initiate the draining when we detect that the node has left the cluster.
+    ///
+    /// If the node that has left is the current node - drains all pending hints to all nodes.
+    /// Otherwise drains hints to the node that has left.
+    ///
+    /// In both cases - removes the corresponding hints' directories after all hints have been drained and erases the
+    /// corresponding host_manager objects.
+    ///
+    /// \param endpoint node that left the cluster
+    void drain_for(endpoint_id endpoint);
+
+    /// \brief Returns a set of replay positions for hint queues towards endpoints from the `target_hosts`.
+    sync_point::shard_rps calculate_current_sync_point(const std::vector<endpoint_id>& target_hosts) const;
+
+    /// \brief Waits until hint replay reach replay positions described in `rps`.
+    future<> wait_for_sync_point(abort_source& as, const sync_point::shard_rps& rps);
+
+    /// \brief Get the number of in-flight (to the disk) hints to a given end point.
+    /// \param ep End point identificator
+    /// \return Number of hints in-flight to \param ep.
+    uint64_t hints_in_progress_for(endpoint_id ep) const noexcept {
+        auto it = find_ep_manager(ep);
+        if (it == ep_managers_end()) {
+            return 0;
+        }
+        return it->second.hints_in_progress();
+    }
+
+    /// \return Size of mutations of hints in-flight (to the disk) at the moment.
+    uint64_t size_of_hints_in_progress() const noexcept {
+        return _stats.size_of_hints_in_progress;
+    }
+    
     /// \brief Check if there aren't too many in-flight hints
     ///
     /// This function checks if there are too many "in-flight" hints on the current shard - hints that are being stored
@@ -175,31 +206,13 @@ public:
     /// \return TRUE if we are allowed to generate hint to the given end point but there are too many in-flight hints
     bool too_many_in_flight_hints_for(endpoint_id ep) const noexcept;
 
-    /// \brief Check if DC \param ep belongs to is "hintable"
-    /// \param ep End point identificator
-    /// \return TRUE if hints are allowed to be generated to \param ep.
-    bool check_dc_for(endpoint_id ep) const noexcept;
+    /// \brief Changes the host_filter currently used, stopping and starting ep_managers relevant to the new host_filter.
+    /// \param filter the new host_filter
+    /// \return A future that resolves when the operation is complete.
+    future<> change_host_filter(host_filter filter);
 
-    /// \brief Checks if hints are disabled for all endpoints
-    /// \return TRUE if hints are disabled.
-    bool is_disabled_for_all() const noexcept {
-        return _host_filter.is_disabled_for_all();
-    }
-
-    /// \return Size of mutations of hints in-flight (to the disk) at the moment.
-    uint64_t size_of_hints_in_progress() const noexcept {
-        return _stats.size_of_hints_in_progress;
-    }
-
-    /// \brief Get the number of in-flight (to the disk) hints to a given end point.
-    /// \param ep End point identificator
-    /// \return Number of hints in-flight to \param ep.
-    uint64_t hints_in_progress_for(endpoint_id ep) const noexcept {
-        auto it = find_ep_manager(ep);
-        if (it == ep_managers_end()) {
-            return 0;
-        }
-        return it->second.hints_in_progress();
+    const host_filter& get_host_filter() const noexcept {
+        return _host_filter;
     }
 
     void add_ep_with_pending_hints(endpoint_id key) {
@@ -213,6 +226,20 @@ public:
 
     bool has_ep_with_pending_hints(endpoint_id key) const {
         return _eps_with_pending_hints.contains(key);
+    }
+
+    /// \brief Checks if hints are disabled for all endpoints
+    /// \return TRUE if hints are disabled.
+    bool is_disabled_for_all() const noexcept {
+        return _host_filter.is_disabled_for_all();
+    }
+
+    void allow_hints();
+    void forbid_hints();
+    void forbid_hints_for_eps_with_pending_hints();
+
+    void allow_replaying() noexcept {
+        _state.set(state::replay_allowed);
     }
 
     size_t ep_managers_size() const {
@@ -230,20 +257,6 @@ public:
     seastar::named_semaphore& drain_lock() noexcept {
         return _drain_lock;
     }
-
-    void allow_hints();
-    void forbid_hints();
-    void forbid_hints_for_eps_with_pending_hints();
-
-    void allow_replaying() noexcept {
-        _state.set(state::replay_allowed);
-    }
-
-    /// \brief Returns a set of replay positions for hint queues towards endpoints from the `target_hosts`.
-    sync_point::shard_rps calculate_current_sync_point(const std::vector<endpoint_id>& target_hosts) const;
-
-    /// \brief Waits until hint replay reach replay positions described in `rps`.
-    future<> wait_for_sync_point(abort_source& as, const sync_point::shard_rps& rps);
 
     /// \brief Creates an object which aids in hints directory initialization.
     /// This object can saafely be copied and used from any shard.
@@ -273,19 +286,6 @@ private:
     host_manager& get_ep_manager(endpoint_id ep);
     bool have_ep_manager(endpoint_id ep) const noexcept;
 
-public:
-    /// \brief Initiate the draining when we detect that the node has left the cluster.
-    ///
-    /// If the node that has left is the current node - drains all pending hints to all nodes.
-    /// Otherwise drains hints to the node that has left.
-    ///
-    /// In both cases - removes the corresponding hints' directories after all hints have been drained and erases the
-    /// corresponding host_manager objects.
-    ///
-    /// \param endpoint node that left the cluster
-    void drain_for(endpoint_id endpoint);
-
-private:
     void update_backlog(size_t backlog, size_t max_backlog);
 
     bool stopping() const noexcept {
