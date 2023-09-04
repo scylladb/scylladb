@@ -144,7 +144,6 @@ public:
     }
 
 public:
-
     /// \brief Start sending hints.
     ///
     /// Flush hints aggregated to far to the storage every hints_flush_period.
@@ -158,20 +157,26 @@ public:
     future<> stop(drain should_drain) noexcept;
 
     /// \brief Add a new segment ready for sending.
-    void add_segment(sstring seg_name);
+    void add_segment(sstring seg_name) {
+        _segments_to_replay.emplace_back(std::move(seg_name));
+    }
 
     /// \brief Add a new segment originating from another shard, ready for sending.
-    void add_foreign_segment(sstring seg_name);
+    void add_foreign_segment(sstring seg_name) {
+        _foreign_segments_to_replay.emplace_back(std::move(seg_name));
+    }
 
     /// \brief Check if there are still unsent segments.
     /// \return TRUE if there are still unsent segments.
-    bool have_segments() const noexcept { return !_segments_to_replay.empty() || !_foreign_segments_to_replay.empty(); };
+    bool have_segments() const noexcept {
+        return !_segments_to_replay.empty() || !_foreign_segments_to_replay.empty();
+    };
 
     /// \brief Sets the sent_upper_bound_rp marker to indicate that the hints were replayed _up to_ given position.
-    void rewind_sent_replay_position_to(db::replay_position rp);
+    void rewind_sent_replay_position_to(replay_position rp);
 
     /// \brief Waits until hints are replayed up to a given replay position, or given abort source is triggered.
-    future<> wait_until_hints_are_replayed_up_to(abort_source& as, db::replay_position up_to_rp);
+    future<> wait_until_hints_are_replayed_up_to(abort_source& as, replay_position up_to_rp);
 
 private:
     /// \brief Gets the name of the current segment that should be sent.
@@ -181,6 +186,66 @@ private:
 
     /// \brief Removes the current segment from the queue.
     void pop_current_segment();
+
+    /// \brief Flush all pending hints to storage if hints_flush_period passed since the last flush event.
+    /// \return Ready, never exceptional, future when operation is complete.
+    future<> flush_maybe() noexcept;
+
+    /// \brief Checks if we can still send hints.
+    /// \return TRUE if the destination Node is either ALIVE or has left the ring (e.g. after decommission or removenode).
+    bool can_send() noexcept;
+
+    /// \brief Get a reference to the column_mapping object for a given frozen mutation.
+    /// \param ctx_ptr pointer to the send context
+    /// \param fm Frozen mutation object
+    /// \param hr hint entry reader object
+    /// \return
+    const column_mapping& get_column_mapping(lw_shared_ptr<send_one_file_ctx> ctx_ptr, const frozen_mutation& fm, const hint_entry_reader& hr);
+
+    /// \brief Restore a mutation object from the hints file entry.
+    /// \param ctx_ptr pointer to the send context
+    /// \param buf hints file entry
+    /// \return The mutation object representing the original mutation stored in the hints file.
+    frozen_mutation_and_schema get_mutation(lw_shared_ptr<send_one_file_ctx> ctx_ptr, fragmented_temporary_buffer& buf);
+
+    /// \brief Perform a single mutation send atempt.
+    ///
+    /// If the original destination end point is still a replica for the given mutation - send the mutation directly
+    /// to it, otherwise execute the mutation "from scratch" with CL=ALL.
+    ///
+    /// \param m mutation to send
+    /// \param ermp points to the effective_replication_map used to obtain \c natural_endpoints
+    /// \param natural_endpoints current replicas for the given mutation
+    /// \return future that resolves when the operation is complete
+    future<> do_send_one_mutation(frozen_mutation_and_schema m, locator::effective_replication_map_ptr ermp, const inet_address_vector_replica_set& natural_endpoints) noexcept;
+
+    /// \brief Send one mutation out.
+    ///
+    /// \param m mutation to send
+    /// \return future that resolves when the mutation sending processing is complete.
+    future<> send_one_mutation(frozen_mutation_and_schema m);
+
+    /// \brief Try to send one hint read from the file.
+    ///  - Limit the maximum memory size of hints "in the air" and the maximum total number of hints "in the air".
+    ///  - Discard the hints that are older than the grace seconds value of the corresponding table.
+    ///
+    /// If sending fails we are going to set the state::segment_replay_failed in the _state and _first_failed_rp will be updated to min(_first_failed_rp, \ref rp).
+    ///
+    /// \param ctx_ptr shared pointer to the file sending context
+    /// \param buf buffer representing the hint
+    /// \param rp replay position of this hint in the file (see commitlog for more details on "replay position")
+    /// \param secs_since_file_mod last modification time stamp (in seconds since Epoch) of the current hints file
+    /// \param fname name of the hints file this hint was read from
+    /// \return future that resolves when next hint may be sent
+    future<> send_one_hint(lw_shared_ptr<send_one_file_ctx> ctx_ptr, fragmented_temporary_buffer buf, db::replay_position rp, gc_clock::duration secs_since_file_mod, const sstring& fname);
+
+    /// \brief Send all hint from a single file and delete it after it has been successfully sent.
+    /// Send all hints from the given file. If we failed to send the current segment we will pick up in the next
+    /// iteration from where we left in this one.
+    ///
+    /// \param fname file to send
+    /// \return TRUE if file has been successfully sent
+    bool send_one_file(const sstring& fname);
 
     /// \brief Send hints collected so far.
     ///
@@ -212,62 +277,6 @@ private:
         return _host_manager.replay_allowed();
     }
 
-    /// \brief Try to send one hint read from the file.
-    ///  - Limit the maximum memory size of hints "in the air" and the maximum total number of hints "in the air".
-    ///  - Discard the hints that are older than the grace seconds value of the corresponding table.
-    ///
-    /// If sending fails we are going to set the state::segment_replay_failed in the _state and _first_failed_rp will be updated to min(_first_failed_rp, \ref rp).
-    ///
-    /// \param ctx_ptr shared pointer to the file sending context
-    /// \param buf buffer representing the hint
-    /// \param rp replay position of this hint in the file (see commitlog for more details on "replay position")
-    /// \param secs_since_file_mod last modification time stamp (in seconds since Epoch) of the current hints file
-    /// \param fname name of the hints file this hint was read from
-    /// \return future that resolves when next hint may be sent
-    future<> send_one_hint(lw_shared_ptr<send_one_file_ctx> ctx_ptr, fragmented_temporary_buffer buf, db::replay_position rp, gc_clock::duration secs_since_file_mod, const sstring& fname);
-
-    /// \brief Send all hint from a single file and delete it after it has been successfully sent.
-    /// Send all hints from the given file. If we failed to send the current segment we will pick up in the next
-    /// iteration from where we left in this one.
-    ///
-    /// \param fname file to send
-    /// \return TRUE if file has been successfully sent
-    bool send_one_file(const sstring& fname);
-
-    /// \brief Checks if we can still send hints.
-    /// \return TRUE if the destination Node is either ALIVE or has left the ring (e.g. after decommission or removenode).
-    bool can_send() noexcept;
-
-    /// \brief Restore a mutation object from the hints file entry.
-    /// \param ctx_ptr pointer to the send context
-    /// \param buf hints file entry
-    /// \return The mutation object representing the original mutation stored in the hints file.
-    frozen_mutation_and_schema get_mutation(lw_shared_ptr<send_one_file_ctx> ctx_ptr, fragmented_temporary_buffer& buf);
-
-    /// \brief Get a reference to the column_mapping object for a given frozen mutation.
-    /// \param ctx_ptr pointer to the send context
-    /// \param fm Frozen mutation object
-    /// \param hr hint entry reader object
-    /// \return
-    const column_mapping& get_column_mapping(lw_shared_ptr<send_one_file_ctx> ctx_ptr, const frozen_mutation& fm, const hint_entry_reader& hr);
-
-    /// \brief Perform a single mutation send atempt.
-    ///
-    /// If the original destination end point is still a replica for the given mutation - send the mutation directly
-    /// to it, otherwise execute the mutation "from scratch" with CL=ALL.
-    ///
-    /// \param m mutation to send
-    /// \param ermp points to the effective_replication_map used to obtain \c natural_endpoints
-    /// \param natural_endpoints current replicas for the given mutation
-    /// \return future that resolves when the operation is complete
-    future<> do_send_one_mutation(frozen_mutation_and_schema m, locator::effective_replication_map_ptr ermp, const inet_address_vector_replica_set& natural_endpoints) noexcept;
-
-    /// \brief Send one mutation out.
-    ///
-    /// \param m mutation to send
-    /// \return future that resolves when the mutation sending processing is complete.
-    future<> send_one_mutation(frozen_mutation_and_schema m);
-
     /// \brief Notifies replay waiters for which the target replay position was reached.
     void notify_replay_waiters() noexcept;
 
@@ -282,10 +291,6 @@ private:
     hint_stats& shard_stats() {
         return _shard_manager._stats;
     }
-
-    /// \brief Flush all pending hints to storage if hints_flush_period passed since the last flush event.
-    /// \return Ready, never exceptional, future when operation is complete.
-    future<> flush_maybe() noexcept;
 
     const endpoint_id& end_point_key() const noexcept {
         return _ep_key;
