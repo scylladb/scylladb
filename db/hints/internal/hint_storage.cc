@@ -44,9 +44,9 @@ namespace internal {
 namespace {
 
 // map: shard -> segments
-using hints_ep_segments_map = std::unordered_map<unsigned, std::list<fs::path>>;
+using hint_host_segments_map = std::unordered_map<shard_id, std::list<fs::path>>;
 // map: IP -> map: shard -> segments
-using hints_segments_map = std::unordered_map<sstring, hints_ep_segments_map>;
+using hint_segments_map = std::unordered_map<sstring, hint_host_segments_map>;
 
 future<> scan_for_hints_dirs(const fs::path& hints_directory, std::function<future<> (fs::path dir, directory_entry de, unsigned shard_id)> f) {
     return lister::scan_dir(hints_directory, lister::dir_entry_types::of<directory_entry_type::directory>(), [f = std::move(f)] (fs::path dir, directory_entry de) mutable {
@@ -70,8 +70,8 @@ future<> scan_for_hints_dirs(const fs::path& hints_directory, std::function<futu
 ///
 /// \param hints_directory directory to scan
 /// \return a map: ep -> map: shard -> segments (full paths)
-hints_segments_map get_current_hints_segments(const fs::path& hints_directory) {
-    hints_segments_map current_hints_segments;
+hint_segments_map get_current_hints_segments(const fs::path& hints_directory) {
+    hint_segments_map current_hints_segments;
 
     // shards level
     scan_for_hints_dirs(hints_directory, [&current_hints_segments] (fs::path dir, directory_entry de, unsigned shard_id) {
@@ -108,13 +108,13 @@ hints_segments_map get_current_hints_segments(const fs::path& hints_directory) {
 /// \param ep destination end point ID (a string with its IP address)
 /// \param segments_per_shard number of hints segments per-shard we want to achieve
 /// \param hints_directory a root hints directory
-/// \param ep_segments a map that was originally built by get_current_hints_segments() for this end point
+/// \param host_segments a map that was originally built by get_current_hints_segments() for this end point
 /// \param segments_to_move a list of segments we are allowed to move
 void rebalance_segments_for(
         const sstring& ep,
         size_t segments_per_shard,
         const fs::path& hints_directory,
-        hints_ep_segments_map& ep_segments,
+        hint_host_segments_map& host_segments,
         std::list<fs::path>& segments_to_move)
 {
     manager_logger.trace("{}: segments_per_shard: {}, total number of segments to move: {}", ep, segments_per_shard, segments_to_move.size());
@@ -126,7 +126,7 @@ void rebalance_segments_for(
 
     for (unsigned i = 0; i < smp::count && !segments_to_move.empty(); ++i) {
         fs::path shard_path_dir(fs::path(hints_directory.c_str()) / seastar::format("{:d}", i).c_str() / ep.c_str());
-        std::list<fs::path>& current_shard_segments = ep_segments[i];
+        std::list<fs::path>& current_shard_segments = host_segments[i];
 
         // Make sure that the shard_path_dir exists and if not - create it
         io_check([name = shard_path_dir.c_str()] { return recursive_touch_directory(name); }).get();
@@ -158,7 +158,7 @@ void rebalance_segments_for(
 ///
 /// \param hints_directory a root hints directory
 /// \param segments_map a map that was built by get_current_hints_segments()
-void rebalance_segments(const fs::path& hints_directory, hints_segments_map& segments_map) {
+void rebalance_segments(const fs::path& hints_directory, hint_segments_map& segments_map) {
     // Count how many hints segments to each destination we have.
     std::unordered_map<sstring, size_t> per_ep_hints;
     for (auto& ep_info : segments_map) {
@@ -242,7 +242,7 @@ void remove_irrelevant_shards_directories(const fs::path& hints_directory) {
 future<> rebalance_hints(fs::path hints_directory) {
     return seastar::async([hints_directory = std::move(hints_directory)] {
         // Scan currently present hints segments.
-        hints_segments_map current_hints_segments = get_current_hints_segments(hints_directory);
+        hint_segments_map current_hints_segments = get_current_hints_segments(hints_directory);
 
         // Move segments to achieve an even distribution of files among all present shards.
         rebalance_segments(hints_directory, current_hints_segments);
