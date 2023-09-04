@@ -22,6 +22,7 @@
 // Scylla includes.
 #include "db/commitlog/replay_position.hh"
 #include "db/hints/internal/common.hh"
+#include "db/hints/internal/hint_storage.hh"
 #include "gms/inet_address.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "mutation/frozen_mutation.hh"
