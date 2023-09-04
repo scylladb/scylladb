@@ -28,9 +28,11 @@
 #include "utils/lister.hh"
 
 // STD.
+#include <concepts>
 #include <filesystem>
 #include <functional>
 #include <list>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -48,16 +50,24 @@ using hint_host_segments_map = std::unordered_map<shard_id, std::list<fs::path>>
 // map: IP -> map: shard -> segments
 using hint_segments_map = std::unordered_map<sstring, hint_host_segments_map>;
 
-future<> scan_for_hints_dirs(const fs::path& hints_directory, std::function<future<> (fs::path dir, directory_entry de, unsigned shard_id)> f) {
-    return lister::scan_dir(hints_directory, lister::dir_entry_types::of<directory_entry_type::directory>(), [f = std::move(f)] (fs::path dir, directory_entry de) mutable {
-        unsigned shard_id;
+/// The caller needs to ensure that the captures of the passed functor will remain valid
+/// at least until the returned future resolves.
+template <typename Func>
+    requires std::invocable<Func, fs::path, directory_entry, shard_id>
+future<> scan_for_hint_dirs(const fs::path& hints_directory, Func&& func) {
+    return lister::scan_dir(fs::path{hints_directory},
+            lister::dir_entry_types::of<directory_entry_type::directory>(),
+            [func = std::forward<Func>(func)] (fs::path dir, directory_entry de) mutable {
+        shard_id sid;
+
         try {
-            shard_id = std::stoi(de.name.c_str());
+            sid = std::stoi(de.name.c_str());
         } catch (std::invalid_argument& ex) {
             manager_logger.debug("Ignore invalid directory {}", de.name);
             return make_ready_future<>();
         }
-        return f(std::move(dir), std::move(de), shard_id);
+        
+        return func(std::move(dir), std::move(de), sid);
     });
 }
 
@@ -74,7 +84,7 @@ hint_segments_map get_current_hints_segments(const fs::path& hints_directory) {
     hint_segments_map current_hints_segments;
 
     // shards level
-    scan_for_hints_dirs(hints_directory, [&current_hints_segments] (fs::path dir, directory_entry de, unsigned shard_id) {
+    scan_for_hint_dirs(hints_directory, [&current_hints_segments] (fs::path dir, directory_entry de, unsigned shard_id) {
         manager_logger.trace("shard_id = {}", shard_id);
         // IPs level
         return lister::scan_dir(dir / de.name.c_str(), lister::dir_entry_types::of<directory_entry_type::directory>(), [&current_hints_segments, shard_id] (fs::path dir, directory_entry de) {
@@ -224,7 +234,7 @@ void rebalance_segments(const fs::path& hints_directory, hint_segments_map& segm
 /// \param hints_directory a root hints directory
 void remove_irrelevant_shards_directories(const fs::path& hints_directory) {
     // shards level
-    scan_for_hints_dirs(hints_directory, [] (fs::path dir, directory_entry de, unsigned shard_id) {
+    scan_for_hint_dirs(hints_directory, [] (fs::path dir, directory_entry de, unsigned shard_id) {
         if (shard_id >= smp::count) {
             // IPs level
             return lister::scan_dir(fs::path{dir / de.name}), lister::dir_entry_types::full(), lister::show_hidden::yes, [] (fs::path dir, directory_entry de) {
