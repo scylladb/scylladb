@@ -10,6 +10,7 @@ from test.pylib.util import wait_for, wait_for_cql_and_get_hosts
 from cassandra.cluster import ConsistencyLevel # type: ignore # pylint: disable=no-name-in-module
 from cassandra.query import SimpleStatement # type: ignore # pylint: disable=no-name-in-module
 
+import asyncio
 import pytest
 import logging
 import time
@@ -59,6 +60,19 @@ async def test_cdc_generations_are_published(request, manager: ManagerClient):
     servers += [await manager.server_add()]
     gen_timestamps = await wait_for(new_gen_appeared, time.time() + 60)
     logger.info(f"Timestamps after boostrapping third node: {gen_timestamps}")
+
+    logger.info(f"Stopping node {servers[0]}")
+    await manager.server_stop_gracefully(servers[0].server_id)
+    logger.info(f"Removing node {servers[0]} using {servers[1]}")
+    await manager.remove_node(servers[1].server_id, servers[0].server_id)
+    servers = servers[1:]
+    # Performing multiple cdc_streams_check_and_repair requests concurrently after removing a node should result
+    # in creating exactly one CDC generation, because cdc_streams_check_and_repair doesn't create a new generation
+    # if the current one is optimal.
+    await asyncio.gather(*[manager.api.client.post("/storage_service/cdc_streams_check_and_repair", servers[i % 2].ip_addr)
+                          for i in range(10)])
+    gen_timestamps = await wait_for(new_gen_appeared, time.time() + 60)
+    logger.info(f"Timestamps after check_and_repair: {gen_timestamps}")
 
 
 @pytest.mark.asyncio
