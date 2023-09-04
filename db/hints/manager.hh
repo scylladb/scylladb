@@ -54,9 +54,7 @@ class hint_sender;
 class host_manager;
 } // namespace internal
 
-using node_to_hint_store_factory_type = utils::loading_shared_values<internal::endpoint_id, db::commitlog>;
-using hints_store_ptr = node_to_hint_store_factory_type::entry_ptr;
-using hint_entry_reader = commitlog_entry_reader;
+using node_to_hint_store_factory_type = utils::loading_shared_values<internal::endpoint_id, commitlog>;
 
 /// A helper class which tracks hints directory creation
 /// and allows to perform hints directory initialization lazily.

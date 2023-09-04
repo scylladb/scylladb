@@ -19,6 +19,7 @@
 #include "db/hints/internal/common.hh"
 #include "db/hints/internal/hint_logger.hh"
 #include "db/hints/internal/hint_sender.hh"
+#include "db/hints/internal/hint_storage.hh"
 #include "db/hints/manager.hh"
 #include "replica/database.hh"
 #include "utils/disk-error-handler.hh"
@@ -76,7 +77,7 @@ future<> host_manager::stop(drain should_drain) noexcept {
 
         with_lock(file_update_mutex(), [this] {
             if (_hint_store_anchor) {
-                hints_store_ptr tmp = std::exchange(_hint_store_anchor, nullptr);
+                hint_store_ptr tmp = std::exchange(_hint_store_anchor, nullptr);
                 return tmp->shutdown().finally([tmp] {
                     return tmp->release();
                 }).finally([tmp] {});
@@ -92,17 +93,17 @@ future<> host_manager::stop(drain should_drain) noexcept {
     });
 }
 
-future<hints_store_ptr> host_manager::get_or_load() {
+future<hint_store_ptr> host_manager::get_or_load() {
     if (!_hint_store_anchor) {
         return _shard_manager.store_factory().get_or_load(_key, [this] (const endpoint_id&) noexcept {
             return add_store();
-        }).then([this] (hints_store_ptr log_ptr) {
+        }).then([this] (hint_store_ptr log_ptr) {
             _hint_store_anchor = log_ptr;
-            return make_ready_future<hints_store_ptr>(std::move(log_ptr));
+            return make_ready_future<hint_store_ptr>(std::move(log_ptr));
         });
     }
 
-    return make_ready_future<hints_store_ptr>(_hint_store_anchor);
+    return make_ready_future<hint_store_ptr>(_hint_store_anchor);
 }
 
 bool host_manager::store_hint(schema_ptr s, lw_shared_ptr<const frozen_mutation> fm, tracing::trace_state_ptr tr_state) noexcept {
@@ -114,7 +115,7 @@ bool host_manager::store_hint(schema_ptr s, lw_shared_ptr<const frozen_mutation>
             shard_stats().size_of_hints_in_progress += mut_size;
 
             return with_shared(file_update_mutex(), [this, fm, s, tr_state] () mutable -> future<> {
-                return get_or_load().then([this, fm = std::move(fm), s = std::move(s), tr_state] (hints_store_ptr log_ptr) mutable {
+                return get_or_load().then([this, fm = std::move(fm), s = std::move(s), tr_state] (hint_store_ptr log_ptr) mutable {
                     commitlog_entry_writer cew(s, *fm, db::commitlog::force_sync::no);
                     return log_ptr->add_entry(s->id(), cew, db::timeout_clock::now() + _shard_manager.hint_file_write_timeout);
                 }).then([this, tr_state] (db::rp_handle rh) {
@@ -264,13 +265,13 @@ future<> host_manager::flush_current_hints() noexcept {
     if (_hint_store_anchor) {
         return futurize_invoke([this] {
             return with_lock(file_update_mutex(), [this]() -> future<> {
-                return get_or_load().then([] (hints_store_ptr cptr) {
+                return get_or_load().then([] (hint_store_ptr cptr) {
                     return cptr->shutdown().finally([cptr] {
                         return cptr->release();
                     }).finally([cptr] {});
                 }).then([this] {
                     // Un-hold the commitlog object. Since we are under the exclusive _file_update_mutex lock there are no
-                    // other hints_store_ptr copies and this would destroy the commitlog shared value.
+                    // other hint_store_ptr copies and this would destroy the commitlog shared value.
                     _hint_store_anchor = nullptr;
 
                     // Re-create the commitlog instance - this will re-populate the _segments_to_replay if needed.
