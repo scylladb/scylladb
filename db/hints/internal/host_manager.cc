@@ -32,6 +32,83 @@
 namespace db::hints {
 namespace internal {
 
+host_manager::host_manager(const endpoint_id& key, manager& shard_manager)
+    : _key(key)
+    , _state(state_set::of<state::stopped>())
+    , _file_update_mutex_ptr(make_lw_shared<seastar::shared_mutex>())
+    // Approximate the position of the last written hint by using the same formula as for segment id calculation in commitlog
+    // TODO: Should this logic be deduplicated with what is in the commitlog?
+    , _last_written_rp(this_shard_id(), std::chrono::duration_cast<std::chrono::milliseconds>(runtime::get_boot_time().time_since_epoch()).count())
+    , _shard_manager(shard_manager)
+    , _sender(*this, _shard_manager.local_storage_proxy(), _shard_manager.local_db(), _shard_manager.local_gossiper())
+    , _hints_dir(_shard_manager.hints_dir() / format("{}", _key).c_str())
+{}
+
+host_manager::host_manager(host_manager&& other)
+    : _key(other._key)
+    , _state(other._state)
+    , _file_update_mutex_ptr(std::move(other._file_update_mutex_ptr))
+    , _last_written_rp(other._last_written_rp)
+    , _shard_manager(other._shard_manager)
+    , _sender(std::move(other._sender), *this)
+    , _hints_dir(std::move(other._hints_dir))
+{}
+
+host_manager::~host_manager() {
+    assert(stopped());
+}
+
+void host_manager::start() {
+    clear_stopped();
+    allow_hints();
+    _sender.start();
+}
+
+future<> host_manager::stop(drain should_drain) noexcept {
+    if(stopped()) {
+        return make_exception_future<>(std::logic_error(format("ep_manager[{}]: stop() is called twice", _key).c_str()));
+    }
+
+    return seastar::async([this, should_drain] {
+        std::exception_ptr eptr;
+
+        // This is going to prevent further storing of new hints and will break all sending in progress.
+        set_stopping();
+
+        _store_gate.close().handle_exception([&eptr] (auto e) { eptr = std::move(e); }).get();
+        _sender.stop(should_drain).handle_exception([&eptr] (auto e) { eptr = std::move(e); }).get();
+
+        with_lock(file_update_mutex(), [this] {
+            if (_hint_store_anchor) {
+                hints_store_ptr tmp = std::exchange(_hint_store_anchor, nullptr);
+                return tmp->shutdown().finally([tmp] {
+                    return tmp->release();
+                }).finally([tmp] {});
+            }
+            return make_ready_future<>();
+        }).handle_exception([&eptr] (auto e) { eptr = std::move(e); }).get();
+
+        if (eptr) {
+            manager_logger.error("ep_manager[{}]: exception: {}", _key, eptr);
+        }
+
+        set_stopped();
+    });
+}
+
+future<hints_store_ptr> host_manager::get_or_load() {
+    if (!_hint_store_anchor) {
+        return _shard_manager.store_factory().get_or_load(_key, [this] (const endpoint_id&) noexcept {
+            return add_store();
+        }).then([this] (hints_store_ptr log_ptr) {
+            _hint_store_anchor = log_ptr;
+            return make_ready_future<hints_store_ptr>(std::move(log_ptr));
+        });
+    }
+
+    return make_ready_future<hints_store_ptr>(_hint_store_anchor);
+}
+
 bool host_manager::store_hint(schema_ptr s, lw_shared_ptr<const frozen_mutation> fm, tracing::trace_state_ptr tr_state) noexcept {
     try {
         // Future is waited on indirectly in `stop()` (via `_store_gate`).
@@ -79,83 +156,6 @@ future<> host_manager::populate_segments_to_replay() {
     return with_lock(file_update_mutex(), [this] {
         return get_or_load().discard_result();
     });
-}
-
-void host_manager::start() {
-    clear_stopped();
-    allow_hints();
-    _sender.start();
-}
-
-future<> host_manager::stop(drain should_drain) noexcept {
-    if(stopped()) {
-        return make_exception_future<>(std::logic_error(format("ep_manager[{}]: stop() is called twice", _key).c_str()));
-    }
-
-    return seastar::async([this, should_drain] {
-        std::exception_ptr eptr;
-
-        // This is going to prevent further storing of new hints and will break all sending in progress.
-        set_stopping();
-
-        _store_gate.close().handle_exception([&eptr] (auto e) { eptr = std::move(e); }).get();
-        _sender.stop(should_drain).handle_exception([&eptr] (auto e) { eptr = std::move(e); }).get();
-
-        with_lock(file_update_mutex(), [this] {
-            if (_hint_store_anchor) {
-                hints_store_ptr tmp = std::exchange(_hint_store_anchor, nullptr);
-                return tmp->shutdown().finally([tmp] {
-                    return tmp->release();
-                }).finally([tmp] {});
-            }
-            return make_ready_future<>();
-        }).handle_exception([&eptr] (auto e) { eptr = std::move(e); }).get();
-
-        if (eptr) {
-            manager_logger.error("ep_manager[{}]: exception: {}", _key, eptr);
-        }
-
-        set_stopped();
-    });
-}
-
-host_manager::host_manager(const endpoint_id& key, manager& shard_manager)
-    : _key(key)
-    , _state(state_set::of<state::stopped>())
-    , _file_update_mutex_ptr(make_lw_shared<seastar::shared_mutex>())
-    // Approximate the position of the last written hint by using the same formula as for segment id calculation in commitlog
-    // TODO: Should this logic be deduplicated with what is in the commitlog?
-    , _last_written_rp(this_shard_id(), std::chrono::duration_cast<std::chrono::milliseconds>(runtime::get_boot_time().time_since_epoch()).count())
-    , _shard_manager(shard_manager)
-    , _sender(*this, _shard_manager.local_storage_proxy(), _shard_manager.local_db(), _shard_manager.local_gossiper())
-    , _hints_dir(_shard_manager.hints_dir() / format("{}", _key).c_str())
-{}
-
-host_manager::host_manager(host_manager&& other)
-    : _key(other._key)
-    , _state(other._state)
-    , _file_update_mutex_ptr(std::move(other._file_update_mutex_ptr))
-    , _last_written_rp(other._last_written_rp)
-    , _shard_manager(other._shard_manager)
-    , _sender(std::move(other._sender), *this)
-    , _hints_dir(std::move(other._hints_dir))
-{}
-
-host_manager::~host_manager() {
-    assert(stopped());
-}
-
-future<hints_store_ptr> host_manager::get_or_load() {
-    if (!_hint_store_anchor) {
-        return _shard_manager.store_factory().get_or_load(_key, [this] (const endpoint_id&) noexcept {
-            return add_store();
-        }).then([this] (hints_store_ptr log_ptr) {
-            _hint_store_anchor = log_ptr;
-            return make_ready_future<hints_store_ptr>(std::move(log_ptr));
-        });
-    }
-
-    return make_ready_future<hints_store_ptr>(_hint_store_anchor);
 }
 
 future<db::commitlog> host_manager::add_store() noexcept {
