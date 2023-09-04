@@ -45,7 +45,6 @@ namespace hints {
 using node_to_hint_store_factory_type = utils::loading_shared_values<gms::inet_address, db::commitlog>;
 using hints_store_ptr = node_to_hint_store_factory_type::entry_ptr;
 using hint_entry_reader = commitlog_entry_reader;
-using timer_clock_type = seastar::lowres_clock;
 
 /// A helper class which tracks hints directory creation
 /// and allows to perform hints directory initialization lazily.
