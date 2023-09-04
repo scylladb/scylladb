@@ -33,13 +33,14 @@
 #include "mutation/mutation_partition_view.hh"
 #include "utils/runtime.hh"
 #include "utils/error_injection.hh"
+#include "db/hints/internal/hint_logger.hh"
 
 using namespace std::literals::chrono_literals;
+using namespace db::hints::internal;
 
 namespace db {
 namespace hints {
 
-static logging::logger manager_logger("hints_manager");
 const std::string manager::FILENAME_PREFIX("HintsLog" + commitlog::descriptor::SEPARATOR);
 
 const std::chrono::seconds manager::hint_file_write_timeout = std::chrono::seconds(2);
