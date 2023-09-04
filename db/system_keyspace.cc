@@ -82,7 +82,8 @@ namespace {
             system_keyspace::TABLETS,
             system_keyspace::LOCAL,
             system_keyspace::PEERS,
-            system_keyspace::SCYLLA_LOCAL
+            system_keyspace::SCYLLA_LOCAL,
+            system_keyspace::v3::CDC_LOCAL
         };
         if (ks_name == system_keyspace::NAME && tables.contains(cf_name)) {
             props.enable_schema_commitlog();
@@ -1775,8 +1776,6 @@ future<> system_keyspace::update_cdc_generation_id(cdc::generation_id gen_id) {
                 sstring(v3::CDC_LOCAL), id.ts, id.id);
     }
     ), gen_id);
-
-    co_await force_blocking_flush(v3::CDC_LOCAL);
 }
 
 future<std::optional<cdc::generation_id>> system_keyspace::get_cdc_generation_id() {
