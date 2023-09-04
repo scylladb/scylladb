@@ -140,7 +140,7 @@ host_manager::host_manager(host_manager&& other)
     , _state(other._state)
     , _hints_dir(std::move(other._hints_dir))
     , _last_written_rp(other._last_written_rp)
-    , _sender(other._sender, *this)
+    , _sender(std::move(other._sender), *this)
 {}
 
 host_manager::~host_manager() {

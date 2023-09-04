@@ -106,7 +106,7 @@ private:
     replay_position _last_not_complete_rp{};
     replay_position _sent_upper_bound_rp{};
 
-    std::unordered_map<table_schema_version, column_mapping> _last_schema_ver_to_column_mapping;
+    std::unordered_map<table_schema_version, column_mapping> _last_schema_ver_to_column_mapping{};
 
     // State of the endpoint that this hint_sender sends hints to.
     state_set _state{};
@@ -131,16 +131,13 @@ private:
 
 public:
     hint_sender(host_manager& parent, service::storage_proxy& local_storage_proxy,
-            replica::database& local_db, gms::gossiper& local_gossiper) noexcept;
+            replica::database& local_db, gms::gossiper& local_gossiper);
 
-    /// \brief A constructor that should be called from the copy/move-constructor of host_manager.
+    /// \brief A constructor that should be called from the move-constructor of host_manager.
     ///
-    /// Make sure to properly reassign the references - especially to the \param parent
-    /// and its internals.
-    ///
-    /// \param other the "hint_sender" instance to copy from
+    /// \param other the "hint_sender" instance to move
     /// \param parent the parent object for this "hint_sender" instance
-    hint_sender(const hint_sender& other, host_manager& parent) noexcept;
+    hint_sender(hint_sender&& other, host_manager& parent) noexcept;
 
     ~hint_sender() noexcept {
         dismiss_replay_waiters();

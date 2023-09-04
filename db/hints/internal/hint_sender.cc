@@ -22,6 +22,7 @@
 // Scylla includes.
 #include "db/hints/internal/common.hh"
 #include "db/hints/internal/hint_logger.hh"
+#include "db/hints/internal/host_manager.hh"
 #include "db/hints/manager.hh"
 #include "db/hints/resource_manager.hh"
 #include "gms/gossiper.hh"
@@ -202,30 +203,40 @@ const column_mapping& hint_sender::get_column_mapping(lw_shared_ptr<send_one_fil
     return cm_it->second;
 }
 
-hint_sender::hint_sender(host_manager& parent, service::storage_proxy& local_storage_proxy,replica::database& local_db, gms::gossiper& local_gossiper) noexcept
-    : _stopped(make_ready_future<>())
-    , _ep_key(parent.end_point_key())
-    , _host_manager(parent)
-    , _shard_manager(_host_manager._shard_manager)
-    , _resource_manager(_shard_manager._resource_manager)
-    , _proxy(local_storage_proxy)
-    , _db(local_db)
-    , _gossiper(local_gossiper)
-    , _hints_cpu_sched_group(_db.get_streaming_scheduling_group())
-    , _file_update_mutex(_host_manager.file_update_mutex())
+hint_sender::hint_sender(host_manager& parent, service::storage_proxy& local_storage_proxy,
+        replica::database& local_db, gms::gossiper& local_gossiper)
+    : _ep_key{parent.end_point_key()}
+    , _host_manager{parent}
+    , _shard_manager{_host_manager._shard_manager}
+    , _resource_manager{_shard_manager._resource_manager}
+    , _proxy{local_storage_proxy}
+    , _db{local_db}
+    , _gossiper{local_gossiper}
+    , _hints_cpu_sched_group{_db.get_streaming_scheduling_group()}
+    , _file_update_mutex{_host_manager.file_update_mutex()}
 {}
 
-hint_sender::hint_sender(const hint_sender& other, host_manager& parent) noexcept
-    : _stopped(make_ready_future<>())
-    , _ep_key(parent.end_point_key())
-    , _host_manager(parent)
-    , _shard_manager(_host_manager._shard_manager)
-    , _resource_manager(_shard_manager._resource_manager)
-    , _proxy(other._proxy)
-    , _db(other._db)
-    , _gossiper(other._gossiper)
-    , _hints_cpu_sched_group(other._hints_cpu_sched_group)
-    , _file_update_mutex(_host_manager.file_update_mutex())
+hint_sender::hint_sender(hint_sender&& other, host_manager& new_parent) noexcept
+    : _segments_to_replay{std::move(other._segments_to_replay)}
+    , _foreign_segments_to_replay{std::move(other._foreign_segments_to_replay)}
+    , _last_not_complete_rp{std::move(other._last_not_complete_rp)}
+    , _sent_upper_bound_rp{std::move(other._sent_upper_bound_rp)}
+    , _last_schema_ver_to_column_mapping{std::move(other._last_schema_ver_to_column_mapping)}
+    , _state{other._state}
+    , _stopped{std::move(other._stopped)}
+    , _stop_as{std::move(other._stop_as)}
+    , _next_flush_tp{std::move(other._next_flush_tp)}
+    , _next_send_retry_tp{std::move(other._next_send_retry_tp)}
+    , _ep_key{new_parent.end_point_key()}
+    , _host_manager{new_parent}
+    , _shard_manager{other._shard_manager}
+    , _resource_manager{other._resource_manager}
+    , _proxy{other._proxy}
+    , _db{other._db}
+    , _gossiper{other._gossiper}
+    , _hints_cpu_sched_group{other._hints_cpu_sched_group}
+    , _file_update_mutex{new_parent.file_update_mutex()}
+    , _replay_waiters{std::move(other._replay_waiters)}
 {}
 
 future<> hint_sender::stop(drain should_drain) noexcept {
