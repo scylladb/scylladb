@@ -80,11 +80,12 @@ future<> scan_for_hint_dirs(const fs::path& hints_directory, Func&& func) {
 ///
 /// \param hint_directory directory to scan
 /// \return a map: ep -> map: shard -> segments (full paths)
-hint_segments_map get_current_hint_segments(const fs::path& hint_directory) {
+future<hint_segments_map> get_current_hint_segments(const fs::path& hint_directory) {
     hint_segments_map current_hint_segments;
 
     // Shard level.
-    scan_for_hint_dirs(hint_directory, [&current_hint_segments] (fs::path dir, directory_entry de, shard_id sid) {
+    co_await scan_for_hint_dirs(hint_directory,
+            [&current_hint_segments] (fs::path dir, directory_entry de, shard_id sid) {
         manager_logger.trace("shard_id = {}", sid);
 
         // IP level.
@@ -100,9 +101,9 @@ hint_segments_map get_current_hint_segments(const fs::path& hint_directory) {
                 return make_ready_future<>();
             });
         });
-    }).get();
+    });
 
-    return current_hint_segments;
+    co_return current_hint_segments;
 }
 
 /// \brief Rebalance hints segments for a given (destination) end point
@@ -125,7 +126,7 @@ hint_segments_map get_current_hint_segments(const fs::path& hint_directory) {
 /// \param hint_directory a root hints directory
 /// \param host_segments a map that was originally built by get_current_hints_segments() for this end point
 /// \param segments_to_move a list of segments we are allowed to move
-void rebalance_segments_for(const std::string_view ep, size_t segments_per_shard,
+future<> rebalance_segments_for(const std::string_view ep, size_t segments_per_shard,
         const fs::path& hint_directory, hint_host_segments_map& host_segments,
         std::list<fs::path>& segments_to_move)
 {
@@ -134,7 +135,7 @@ void rebalance_segments_for(const std::string_view ep, size_t segments_per_shard
 
     // Sanity check.
     if (segments_to_move.empty() || !segments_per_shard) {
-        return;
+        co_return;
     }
 
     const fs::path hint_directory_path{hint_directory};
@@ -144,9 +145,9 @@ void rebalance_segments_for(const std::string_view ep, size_t segments_per_shard
         std::list<fs::path>& current_shard_segments = host_segments[i];
 
         // Make sure that the shard_path_dir exists. If not, create it.
-        io_check([name = shard_path_dir.c_str()] {
+        co_await io_check([name = shard_path_dir.c_str()] {
             return recursive_touch_directory(name);
-        }).get();
+        });
 
         while (current_shard_segments.size() < segments_per_shard && !segments_to_move.empty()) {
             auto seg_path_it = segments_to_move.begin();
@@ -155,7 +156,7 @@ void rebalance_segments_for(const std::string_view ep, size_t segments_per_shard
             // Don't move the file to the same location. It's pointless.
             if (*seg_path_it != new_path) {
                 manager_logger.trace("going to move: {} -> {}", *seg_path_it, new_path);
-                io_check(rename_file, seg_path_it->native(), new_path.native()).get();
+                co_await io_check(rename_file, seg_path_it->native(), new_path.native());
             } else {
                 manager_logger.trace("skipping: {}", *seg_path_it);
             }
@@ -177,7 +178,7 @@ void rebalance_segments_for(const std::string_view ep, size_t segments_per_shard
 ///
 /// \param hint_directory a root hint directory
 /// \param segments_map a map that was built by get_current_hints_segments()
-void rebalance_segments(const fs::path& hint_directory, hint_segments_map& segments_map) {
+future<> rebalance_segments(const fs::path& hint_directory, hint_segments_map& segments_map) {
     // Count how many hints segments to each destination we have.
     std::unordered_map<sstring, size_t> per_ep_hints;
 
@@ -235,11 +236,13 @@ void rebalance_segments(const fs::path& hint_directory, hint_segments_map& segme
         auto& current_segments_map = segments_map[ep];
 
         if (q) {
-            rebalance_segments_for(ep, q, hint_directory, current_segments_map, current_segments_to_move);
+            co_await rebalance_segments_for(ep, q, hint_directory,
+                    current_segments_map, current_segments_to_move);
         }
 
         if (r) {
-            rebalance_segments_for(ep, q + 1, hint_directory, current_segments_map, current_segments_to_move);
+            co_await rebalance_segments_for(ep, q + 1, hint_directory,
+                    current_segments_map, current_segments_to_move);
         }
     }
 }
@@ -251,36 +254,34 @@ void rebalance_segments(const fs::path& hint_directory, hint_segments_map& segme
 ///                           E is a number of end points for which hints where ever created.
 ///
 /// \param hint_directory a root hint directory
-void remove_irrelevant_shards_directories(const fs::path& hint_directory) {
-    // shards level
-    scan_for_hint_dirs(hint_directory, [] (fs::path dir, directory_entry de, shard_id sid) {
+future<> remove_irrelevant_shards_directories(const fs::path& hint_directory) {
+    // Shard level.
+    co_await scan_for_hint_dirs(hint_directory,
+            [] (fs::path dir, directory_entry de, shard_id sid) -> future<> {
         if (sid >= smp::count) {
             // IP level.
-            return lister::scan_dir(dir / de.name, lister::dir_entry_types::full(),
+            co_await lister::scan_dir(dir / de.name, lister::dir_entry_types::full(),
                     lister::show_hidden::yes, [] (fs::path dir, directory_entry de) {
                 return io_check(remove_file, (dir / de.name).native());
-            }).then([shard_base_dir = dir, shard_entry = de] {
-                return io_check(remove_file, (shard_base_dir / shard_entry.name).native());
             });
+            
+            co_await io_check(remove_file, (dir / de.name).native());
         }
-
-        return make_ready_future<>();
-    }).get();
+    });
 }
 
 } // anonymous namespace
 
-future<> rebalance_hints(fs::path hints_directory) {
-    return seastar::async([hints_directory = std::move(hints_directory)] {
-        // Scan currently present hints segments.
-        hint_segments_map current_hints_segments = get_current_hint_segments(hints_directory);
+future<> rebalance_hints(sstring hints_directory) {
+    // Scan the currently present hints segments.
+    hint_segments_map current_hints_segments = co_await get_current_hint_segments(hints_directory);
 
-        // Move segments to achieve an even distribution of files among all present shards.
-        rebalance_segments(hints_directory, current_hints_segments);
+    // Move segments to achieve an even distribution of files among all present shards.
+    co_await rebalance_segments(hints_directory, current_hints_segments);
 
-        // Remove the directories of shards that are not present anymore - they should not have any segments by now
-        remove_irrelevant_shards_directories(hints_directory);
-    });
+    // Remove the directories of shards that are not present anymore.
+    // They should not have any segments by now.
+    co_await remove_irrelevant_shards_directories(hints_directory);
 }
 
 } // namespace internal
