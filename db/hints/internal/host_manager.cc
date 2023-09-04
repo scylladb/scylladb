@@ -54,10 +54,6 @@ host_manager::host_manager(host_manager&& other)
     , _hints_dir(std::move(other._hints_dir))
 {}
 
-host_manager::~host_manager() {
-    assert(stopped());
-}
-
 void host_manager::start() {
     clear_stopped();
     allow_hints();

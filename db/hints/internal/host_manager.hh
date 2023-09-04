@@ -91,7 +91,10 @@ private:
 public:
     host_manager(const endpoint_id& key, manager& shard_manager);
     host_manager(host_manager&&);
-    ~host_manager();
+    
+    ~host_manager() noexcept {
+        assert(stopped());
+    }
 
 public:
     /// \brief Start the timer.
