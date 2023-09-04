@@ -51,6 +51,19 @@ public:
     no_column_mapping(const table_schema_version& id) : std::out_of_range(format("column mapping for CF schema_version {} is missing", id)) {}
 };
 
+/// \brief Get the last modification time stamp for a given file.
+/// \param fname File name
+/// \return The last modification time stamp for \param fname.
+future<timespec> get_last_file_modification(const sstring& fname) {
+    return open_file_dma(fname, open_flags::ro).then([] (file f) {
+        return do_with(std::move(f), [] (file& f) {
+            return f.stat();
+        });
+    }).then([] (struct stat st) {
+        return make_ready_future<timespec>(st.st_mtim);
+    });
+}
+
 } // anonymous namespace
 
 struct send_one_file_ctx {
@@ -127,16 +140,6 @@ future<> hint_sender::flush_maybe() noexcept {
         });
     }
     return make_ready_future<>();
-}
-
-future<timespec> hint_sender::get_last_file_modification(const sstring& fname) {
-    return open_file_dma(fname, open_flags::ro).then([] (file f) {
-        return do_with(std::move(f), [] (file& f) {
-            return f.stat();
-        });
-    }).then([] (struct stat st) {
-        return make_ready_future<timespec>(st.st_mtim);
-    });
 }
 
 future<> hint_sender::do_send_one_mutation(frozen_mutation_and_schema m, locator::effective_replication_map_ptr ermp, const inet_address_vector_replica_set& natural_endpoints) noexcept {
