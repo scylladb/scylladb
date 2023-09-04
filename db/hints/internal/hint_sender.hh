@@ -287,10 +287,6 @@ private:
         return _shard_manager._stats;
     }
 
-    const endpoint_id& end_point_key() const noexcept {
-        return _ep_key;
-    }
-
     /// \brief Return the amount of time we want to sleep after the current iteration.
     /// \return The time till the soonest event: flushing or re-sending.
     duration_type next_sleep_duration() const;

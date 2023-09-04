@@ -170,7 +170,7 @@ void hint_sender::start() {
 
     attr.sched_group = _hints_cpu_sched_group;
     _stopped = seastar::async(std::move(attr), [this] {
-        manager_logger.trace("ep_manager({})::sender: started", end_point_key());
+        manager_logger.trace("ep_manager({})::sender: started", _ep_key);
         while (!stopping()) {
             try {
                 flush_maybe().get();
@@ -211,16 +211,16 @@ future<> hint_sender::stop(drain should_drain) noexcept {
             //
             // The next call for send_hints_maybe() will send the last hints to the current end point and when it is
             // done there is going to be no more pending hints and the corresponding hints directory may be removed.
-            manager_logger.trace("Draining for {}: start", end_point_key());
+            manager_logger.trace("Draining for {}: start", _ep_key);
             set_draining();
             send_hints_maybe();
             _host_manager.flush_current_hints().handle_exception([] (auto e) {
                 manager_logger.error("Failed to flush pending hints: {}. Ignoring...", e);
             }).get();
             send_hints_maybe();
-            manager_logger.trace("Draining for {}: end", end_point_key());
+            manager_logger.trace("Draining for {}: end", _ep_key);
         }
-        manager_logger.trace("ep_manager({})::sender: exiting", end_point_key());
+        manager_logger.trace("ep_manager({})::sender: exiting", _ep_key);
     });
 }
 
@@ -238,14 +238,14 @@ void hint_sender::rewind_sent_replay_position_to(db::replay_position rp) {
 }
 
 future<> hint_sender::wait_until_hints_are_replayed_up_to(abort_source& as, db::replay_position up_to_rp) {
-    manager_logger.debug("[{}] wait_until_hints_are_replayed_up_to(): entering with target {}", end_point_key(), up_to_rp);
+    manager_logger.debug("[{}] wait_until_hints_are_replayed_up_to(): entering with target {}", _ep_key, up_to_rp);
     if (_foreign_segments_to_replay.empty() && up_to_rp < _sent_upper_bound_rp) {
-        manager_logger.debug("[{}] wait_until_hints_are_replayed_up_to(): hints were already replayed above the point ({} < {})", end_point_key(), up_to_rp, _sent_upper_bound_rp);
+        manager_logger.debug("[{}] wait_until_hints_are_replayed_up_to(): hints were already replayed above the point ({} < {})", _ep_key, up_to_rp, _sent_upper_bound_rp);
         return make_ready_future<>();
     }
 
     if (as.abort_requested()) {
-        manager_logger.debug("[{}] wait_until_hints_are_replayed_up_to(): already aborted - stopping", end_point_key());
+        manager_logger.debug("[{}] wait_until_hints_are_replayed_up_to(): already aborted - stopping", _ep_key);
         return make_exception_future<>(abort_requested_exception());
     }
 
@@ -256,14 +256,14 @@ future<> hint_sender::wait_until_hints_are_replayed_up_to(abort_source& as, db::
             // The promise already was resolved by `notify_replay_waiters` and removed from the map
             return;
         }
-        manager_logger.debug("[{}] wait_until_hints_are_replayed_up_to(): abort requested - stopping", end_point_key());
+        manager_logger.debug("[{}] wait_until_hints_are_replayed_up_to(): abort requested - stopping", _ep_key);
         _replay_waiters.erase(it);
         (**ptr).set_exception(abort_requested_exception());
     });
 
     // When the future resolves, the endpoint manager is not guaranteed to exist anymore
     // therefore we cannot capture `this`
-    auto ep = end_point_key();
+    auto ep = _ep_key;
     return (**ptr).get_future().finally([sub = std::move(sub), ep] {
         manager_logger.debug("[{}] wait_until_hints_are_replayed_up_to(): returning afther the future was satisfied", ep);
     });
@@ -307,12 +307,12 @@ bool hint_sender::can_send() noexcept {
     }
 
     try {
-        if (_gossiper.is_alive(end_point_key())) {
+        if (_gossiper.is_alive(_ep_key)) {
             _state.remove(state::host_left_ring);
             return true;
         } else {
             if (!_state.contains(state::host_left_ring)) {
-                _state.set_if<state::host_left_ring>(!_shard_manager.local_db().get_token_metadata().is_normal_token_owner(end_point_key()));
+                _state.set_if<state::host_left_ring>(!_shard_manager.local_db().get_token_metadata().is_normal_token_owner(_ep_key));
             }
             // send the hints out if the destination Node is part of the ring - we will send to all new replicas in this case
             return _state.contains(state::host_left_ring);
@@ -355,11 +355,11 @@ future<> hint_sender::do_send_one_mutation(frozen_mutation_and_schema m, locator
     return futurize_invoke([this, m = std::move(m), ermp = std::move(ermp), &natural_endpoints] () mutable -> future<> {
         // The fact that we send with CL::ALL in both cases below ensures that new hints are not going
         // to be generated as a result of hints sending.
-        if (boost::range::find(natural_endpoints, end_point_key()) != natural_endpoints.end()) {
-            manager_logger.trace("Sending directly to {}", end_point_key());
-            return _proxy.send_hint_to_endpoint(std::move(m), std::move(ermp), end_point_key());
+        if (boost::range::find(natural_endpoints, _ep_key) != natural_endpoints.end()) {
+            manager_logger.trace("Sending directly to {}", _ep_key);
+            return _proxy.send_hint_to_endpoint(std::move(m), std::move(ermp), _ep_key);
         } else {
-            manager_logger.trace("Endpoints set has changed and {} is no longer a replica. Mutating from scratch...", end_point_key());
+            manager_logger.trace("Endpoints set has changed and {} is no longer a replica. Mutating from scratch...", _ep_key);
             return _proxy.send_hint_to_all_replicas(std::move(m));
         }
     });
@@ -398,7 +398,7 @@ future<> hint_sender::send_one_hint(lw_shared_ptr<send_one_file_ctx> ctx_ptr, fr
                 return this->send_one_mutation(std::move(m)).then([this, ctx_ptr] {
                     ++this->shard_stats().sent;
                 }).handle_exception([this, ctx_ptr] (auto eptr) {
-                    manager_logger.trace("send_one_hint(): failed to send to {}: {}", end_point_key(), eptr);
+                    manager_logger.trace("send_one_hint(): failed to send to {}: {}", _ep_key, eptr);
                     ++this->shard_stats().send_errors;
                     return make_exception_future<>(std::move(eptr));
                 });
@@ -531,7 +531,7 @@ bool hint_sender::send_one_file(const sstring& fname) {
 // Runs in the seastar::async context
 void hint_sender::send_hints_maybe() noexcept {
     using namespace std::literals::chrono_literals;
-    manager_logger.trace("send_hints(): going to send hints to {}, we have {} segment to replay", end_point_key(), _segments_to_replay.size() + _foreign_segments_to_replay.size());
+    manager_logger.trace("send_hints(): going to send hints to {}, we have {} segment to replay", _ep_key, _segments_to_replay.size() + _foreign_segments_to_replay.size());
 
     int replayed_segments_count = 0;
 
@@ -569,13 +569,13 @@ void hint_sender::send_hints_maybe() noexcept {
 
 void hint_sender::notify_replay_waiters() noexcept {
     if (!_foreign_segments_to_replay.empty()) {
-        manager_logger.trace("[{}] notify_replay_waiters(): not notifying because there are still {} foreign segments to replay", end_point_key(), _foreign_segments_to_replay.size());
+        manager_logger.trace("[{}] notify_replay_waiters(): not notifying because there are still {} foreign segments to replay", _ep_key, _foreign_segments_to_replay.size());
         return;
     }
 
-    manager_logger.trace("[{}] notify_replay_waiters(): replay position upper bound was updated to {}", end_point_key(), _sent_upper_bound_rp);
+    manager_logger.trace("[{}] notify_replay_waiters(): replay position upper bound was updated to {}", _ep_key, _sent_upper_bound_rp);
     while (!_replay_waiters.empty() && _replay_waiters.begin()->first < _sent_upper_bound_rp) {
-        manager_logger.trace("[{}] notify_replay_waiters(): notifying one ({} < {})", end_point_key(), _replay_waiters.begin()->first, _sent_upper_bound_rp);
+        manager_logger.trace("[{}] notify_replay_waiters(): notifying one ({} < {})", _ep_key, _replay_waiters.begin()->first, _sent_upper_bound_rp);
         auto ptr = _replay_waiters.begin()->second;
         (**ptr).set_value();
         (*ptr) = std::nullopt; // Prevent it from being resolved by abort source subscription
@@ -585,9 +585,9 @@ void hint_sender::notify_replay_waiters() noexcept {
 
 void hint_sender::dismiss_replay_waiters() noexcept {
     for (auto& p : _replay_waiters) {
-        manager_logger.debug("[{}] dismiss_replay_waiters(): dismissing one", end_point_key());
+        manager_logger.debug("[{}] dismiss_replay_waiters(): dismissing one", _ep_key);
         auto ptr = p.second;
-        (**ptr).set_exception(std::runtime_error(format("Hints manager for {} is stopping", end_point_key())));
+        (**ptr).set_exception(std::runtime_error(format("Hints manager for {} is stopping", _ep_key)));
         (*ptr) = std::nullopt; // Prevent it from being resolved by abort source subscription
     }
     _replay_waiters.clear();
