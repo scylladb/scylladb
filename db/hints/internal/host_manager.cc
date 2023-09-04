@@ -102,8 +102,8 @@ future<> host_manager::stop(drain should_drain) noexcept {
         _sender.stop(should_drain).handle_exception([&eptr] (auto e) { eptr = std::move(e); }).get();
 
         with_lock(file_update_mutex(), [this] {
-            if (_hints_store_anchor) {
-                hints_store_ptr tmp = std::exchange(_hints_store_anchor, nullptr);
+            if (_hint_store_anchor) {
+                hints_store_ptr tmp = std::exchange(_hint_store_anchor, nullptr);
                 return tmp->shutdown().finally([tmp] {
                     return tmp->release();
                 }).finally([tmp] {});
@@ -148,16 +148,16 @@ host_manager::~host_manager() {
 }
 
 future<hints_store_ptr> host_manager::get_or_load() {
-    if (!_hints_store_anchor) {
+    if (!_hint_store_anchor) {
         return _shard_manager.store_factory().get_or_load(_key, [this] (const endpoint_id&) noexcept {
             return add_store();
         }).then([this] (hints_store_ptr log_ptr) {
-            _hints_store_anchor = log_ptr;
+            _hint_store_anchor = log_ptr;
             return make_ready_future<hints_store_ptr>(std::move(log_ptr));
         });
     }
 
-    return make_ready_future<hints_store_ptr>(_hints_store_anchor);
+    return make_ready_future<hints_store_ptr>(_hint_store_anchor);
 }
 
 future<db::commitlog> host_manager::add_store() noexcept {
@@ -263,7 +263,7 @@ future<db::commitlog> host_manager::add_store() noexcept {
 
 future<> host_manager::flush_current_hints() noexcept {
     // flush the currently created hints to disk
-    if (_hints_store_anchor) {
+    if (_hint_store_anchor) {
         return futurize_invoke([this] {
             return with_lock(file_update_mutex(), [this]() -> future<> {
                 return get_or_load().then([] (hints_store_ptr cptr) {
@@ -273,7 +273,7 @@ future<> host_manager::flush_current_hints() noexcept {
                 }).then([this] {
                     // Un-hold the commitlog object. Since we are under the exclusive _file_update_mutex lock there are no
                     // other hints_store_ptr copies and this would destroy the commitlog shared value.
-                    _hints_store_anchor = nullptr;
+                    _hint_store_anchor = nullptr;
 
                     // Re-create the commitlog instance - this will re-populate the _segments_to_replay if needed.
                     return get_or_load().discard_result();

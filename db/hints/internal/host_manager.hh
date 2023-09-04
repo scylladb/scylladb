@@ -19,6 +19,7 @@
 #include "db/commitlog/replay_position.hh"
 #include "db/hints/internal/common.hh"
 #include "db/hints/internal/hint_sender.hh"
+#include "db/hints/internal/hint_storage.hh"
 #include "db/hints/resource_manager.hh"
 #include "utils/runtime.hh"
 #include "enum_set.hh"
@@ -65,7 +66,7 @@ private:
 private:
     endpoint_id _key;
     manager& _shard_manager;
-    hints_store_ptr _hints_store_anchor;
+    hint_store_ptr _hint_store_anchor;
     seastar::gate _store_gate;
     lw_shared_ptr<seastar::shared_mutex> _file_update_mutex_ptr;
     seastar::shared_mutex& _file_update_mutex;
@@ -99,7 +100,7 @@ public:
     /// \brief Get the corresponding hints_store object. Create it if needed.
     /// \note Must be called under the \ref _file_update_mutex.
     /// \return The corresponding hints_store object.
-    future<hints_store_ptr> get_or_load();
+    future<hint_store_ptr> get_or_load();
 
     /// \brief Store a single mutation hint.
     /// \param s column family descriptor
