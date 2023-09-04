@@ -73,39 +73,40 @@ public:
     impl(utils::directories& dirs, sstring hint_directory)
         : _dirs(dirs)
         , _hint_directory(std::move(hint_directory))
-    { }
+    {}
 
 public:
     future<> ensure_created_and_verified() {
         if (_state > state::uninitialized) {
-            return make_ready_future<>();
+            co_return;
         }
 
-        return with_semaphore(_lock, 1, [this] () {
-            utils::directories::set dir_set;
-            dir_set.add_sharded(_hint_directory);
-            return _dirs.create_and_verify(std::move(dir_set)).then([this] {
-                manager_logger.debug("Creating and validating hint directories: {}", _hint_directory);
-                _state = state::created_and_validated;
-            });
-        });
+        const auto mutex = co_await seastar::get_units(_lock, 1);
+
+        utils::directories::set dir_set;
+        dir_set.add_sharded(_hint_directory);
+        
+        co_await _dirs.create_and_verify(std::move(dir_set));
+        manager_logger.debug("Creating and validating hint directories: {}", _hint_directory);
+
+        _state = state::created_and_validated;
     }
 
     future<> ensure_rebalanced() {
         if (_state < state::created_and_validated) {
-            return make_exception_future<>(std::logic_error("hints directory needs to be created and validated before rebalancing"));
+            throw std::logic_error{"hints directory needs to be created and validated before rebalancing"};
         }
 
         if (_state > state::created_and_validated) {
-            return make_ready_future<>();
+            co_return;
         }
 
-        return with_semaphore(_lock, 1, [this] {
-            manager_logger.debug("Rebalancing hints in {}", _hint_directory);
-            return rebalance_hints(fs::path{_hint_directory}).then([this] {
-                _state = state::rebalanced;
-            });
-        });
+        const auto mutex = co_await seastar::get_units(_lock, 1);
+
+        manager_logger.debug("Rebalancing hints in {}", _hint_directory);
+        co_await rebalance_hints(fs::path{_hint_directory});
+
+        _state = state::rebalanced;
     }
 };
 
