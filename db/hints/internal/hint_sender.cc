@@ -224,14 +224,6 @@ future<> hint_sender::stop(drain should_drain) noexcept {
     });
 }
 
-void hint_sender::add_segment(sstring seg_name) {
-    _segments_to_replay.emplace_back(std::move(seg_name));
-}
-
-void hint_sender::add_foreign_segment(sstring seg_name) {
-    _foreign_segments_to_replay.emplace_back(std::move(seg_name));
-}
-
 void hint_sender::rewind_sent_replay_position_to(db::replay_position rp) {
     _sent_upper_bound_rp = rp;
     notify_replay_waiters();
