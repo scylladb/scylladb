@@ -99,28 +99,35 @@ private:
     using replay_waiter = seastar::lw_shared_ptr<std::optional<seastar::promise<>>>;
 
 private:
-    std::list<sstring> _segments_to_replay;
+    segment_list _segments_to_replay{};
     // Segments to replay which were not created on this shard but were moved during rebalancing
-    std::list<sstring> _foreign_segments_to_replay;
-    replay_position _last_not_complete_rp;
-    replay_position _sent_upper_bound_rp;
+    segment_list _foreign_segments_to_replay{};
+
+    replay_position _last_not_complete_rp{};
+    replay_position _sent_upper_bound_rp{};
+
     std::unordered_map<table_schema_version, column_mapping> _last_schema_ver_to_column_mapping;
-    state_set _state;
-    future<> _stopped;
-    abort_source _stop_as;
-    time_point_type _next_flush_tp;
-    time_point_type _next_send_retry_tp;
+
+    // State of the endpoint that this hint_sender sends hints to.
+    state_set _state{};
+    future<> _stopped = make_ready_future<>();
+    abort_source _stop_as{};
+
+    time_point_type _next_flush_tp{};
+    time_point_type _next_send_retry_tp{};
+
     endpoint_id _ep_key;
     host_manager& _host_manager;
     manager& _shard_manager;
     resource_manager& _resource_manager;
     service::storage_proxy& _proxy;
     replica::database& _db;
-    seastar::scheduling_group _hints_cpu_sched_group;
     gms::gossiper& _gossiper;
+
+    seastar::scheduling_group _hints_cpu_sched_group;
     seastar::shared_mutex& _file_update_mutex;
 
-    std::multimap<db::replay_position, lw_shared_ptr<std::optional<promise<>>>> _replay_waiters;
+    std::multimap<replay_position, replay_waiter> _replay_waiters{};
 
 public:
     hint_sender(host_manager& parent, service::storage_proxy& local_storage_proxy, replica::database& local_db, gms::gossiper& local_gossiper) noexcept;

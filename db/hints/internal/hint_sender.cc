@@ -210,8 +210,8 @@ hint_sender::hint_sender(host_manager& parent, service::storage_proxy& local_sto
     , _resource_manager(_shard_manager._resource_manager)
     , _proxy(local_storage_proxy)
     , _db(local_db)
-    , _hints_cpu_sched_group(_db.get_streaming_scheduling_group())
     , _gossiper(local_gossiper)
+    , _hints_cpu_sched_group(_db.get_streaming_scheduling_group())
     , _file_update_mutex(_host_manager.file_update_mutex())
 {}
 
@@ -223,8 +223,8 @@ hint_sender::hint_sender(const hint_sender& other, host_manager& parent) noexcep
     , _resource_manager(_shard_manager._resource_manager)
     , _proxy(other._proxy)
     , _db(other._db)
-    , _hints_cpu_sched_group(other._hints_cpu_sched_group)
     , _gossiper(other._gossiper)
+    , _hints_cpu_sched_group(other._hints_cpu_sched_group)
     , _file_update_mutex(_host_manager.file_update_mutex())
 {}
 
