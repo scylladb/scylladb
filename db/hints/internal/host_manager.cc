@@ -115,9 +115,9 @@ bool host_manager::store_hint(schema_ptr s, lw_shared_ptr<const frozen_mutation>
             shard_stats().size_of_hints_in_progress += mut_size;
 
             return with_shared(file_update_mutex(), [this, fm, s, tr_state] () mutable -> future<> {
-                return get_or_load().then([this, fm = std::move(fm), s = std::move(s), tr_state] (hint_store_ptr log_ptr) mutable {
+                return get_or_load().then([fm = std::move(fm), s = std::move(s), tr_state] (hint_store_ptr log_ptr) mutable {
                     commitlog_entry_writer cew(s, *fm, db::commitlog::force_sync::no);
-                    return log_ptr->add_entry(s->id(), cew, db::timeout_clock::now() + _shard_manager.hint_file_write_timeout);
+                    return log_ptr->add_entry(s->id(), cew, db::timeout_clock::now() + HINT_FILE_WRITE_TIMEOUT);
                 }).then([this, tr_state] (db::rp_handle rh) {
                     auto rp = rh.release();
                     if (_last_written_rp < rp) {
@@ -169,7 +169,7 @@ future<db::commitlog> host_manager::add_store() noexcept {
             cfg.commit_log_location = _hints_dir.c_str();
             cfg.commitlog_segment_size_in_mb = resource_manager::hint_segment_size_in_mb;
             cfg.commitlog_total_space_in_mb = resource_manager::max_hints_per_ep_size_mb;
-            cfg.fname_prefix = manager::FILENAME_PREFIX;
+            cfg.fname_prefix = HINT_FILENAME_PREFIX;
             cfg.extensions = &_shard_manager.local_db().extensions();
 
             // HH leaves segments on disk after commitlog shutdown, and later reads
@@ -237,7 +237,7 @@ future<db::commitlog> host_manager::add_store() noexcept {
                 // Divide segments into those that were created on this shard
                 // and those which were moved to it during rebalancing.
                 for (auto& seg : segs_vec) {
-                    db::commitlog::descriptor desc(seg, manager::FILENAME_PREFIX);
+                    db::commitlog::descriptor desc(seg, HINT_FILENAME_PREFIX);
                     unsigned shard_id = db::replay_position(desc).shard_id();
                     if (shard_id == this_shard_id()) {
                         local_segs_vec.emplace_back(desc.id, std::move(seg));

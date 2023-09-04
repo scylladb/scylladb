@@ -442,7 +442,7 @@ bool hint_sender::send_one_file(const sstring& fname) {
     lw_shared_ptr<send_one_file_ctx> ctx_ptr = make_lw_shared<send_one_file_ctx>(_last_schema_ver_to_column_mapping);
 
     try {
-        commitlog::read_log_file(fname, manager::FILENAME_PREFIX, [this, secs_since_file_mod, &fname, ctx_ptr] (commitlog::buffer_and_replay_position buf_rp) -> future<> {
+        commitlog::read_log_file(fname, HINT_FILENAME_PREFIX, [this, secs_since_file_mod, &fname, ctx_ptr] (commitlog::buffer_and_replay_position buf_rp) -> future<> {
             auto& buf = buf_rp.buffer;
             auto& rp = buf_rp.position;
 

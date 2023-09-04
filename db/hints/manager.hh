@@ -103,10 +103,8 @@ private:
         state::stopping>>;
 
 public:
-    static const std::string FILENAME_PREFIX;
-    // Non-const - can be modified with an error injection.
+    // Can be modified with an error injection.
     static std::chrono::seconds hints_flush_period;
-    static const std::chrono::seconds hint_file_write_timeout;
 
 private:
     static constexpr uint64_t max_size_of_hints_in_progress = 10 * 1024 * 1024; // 10MB
