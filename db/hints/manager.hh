@@ -78,11 +78,6 @@ private:
     using hint_stats = internal::hint_stats;
     using endpoint_id = internal::endpoint_id;
 
-    // map: shard -> segments
-    using hints_ep_segments_map = std::unordered_map<unsigned, std::list<fs::path>>;
-    // map: IP -> map: shard -> segments
-    using hints_segments_map = std::unordered_map<sstring, hints_ep_segments_map>;
-
     using drain = internal::drain;
 
     friend class internal::hint_sender;

@@ -43,6 +43,11 @@ namespace internal {
 
 namespace {
 
+// map: shard -> segments
+using hints_ep_segments_map = std::unordered_map<unsigned, std::list<fs::path>>;
+// map: IP -> map: shard -> segments
+using hints_segments_map = std::unordered_map<sstring, hints_ep_segments_map>;
+
 future<> scan_for_hints_dirs(const fs::path& hints_directory, std::function<future<> (fs::path dir, directory_entry de, unsigned shard_id)> f) {
     return lister::scan_dir(hints_directory, lister::dir_entry_types::of<directory_entry_type::directory>(), [f = std::move(f)] (fs::path dir, directory_entry de) mutable {
         unsigned shard_id;
