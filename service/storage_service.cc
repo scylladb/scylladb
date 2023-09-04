@@ -1227,6 +1227,12 @@ class topology_coordinator {
         slogger.trace("raft topology: start CDC generation publisher fiber");
 
         while (!_as.abort_requested()) {
+            co_await utils::get_local_injector().inject_with_handler("cdc_generation_publisher_fiber", [] (auto& handler) -> future<> {
+                slogger.info("raft toplogy: CDC generation publisher fiber sleeps after injection");
+                co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::minutes{5});
+                slogger.info("raft toplogy: CDC generation publisher fiber finishes sleeping after injection");
+            });
+
             bool sleep = false;
             try {
                 auto guard = co_await start_operation();
