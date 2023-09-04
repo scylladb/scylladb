@@ -124,85 +124,10 @@ public:
     }
 };
 
+
 /////////////////////////////////////////////////
 /////////////////////////////////////////////////
 
-future<> hint_sender::flush_maybe() noexcept {
-    auto current_time = clock_type::now();
-    if (current_time >= _next_flush_tp) {
-        return _host_manager.flush_current_hints().then([this, current_time] {
-            _next_flush_tp = current_time + manager::hints_flush_period;
-        }).handle_exception([] (auto eptr) {
-            manager_logger.trace("flush_maybe() failed: {}", eptr);
-            return make_ready_future<>();
-        });
-    }
-    return make_ready_future<>();
-}
-
-future<> hint_sender::do_send_one_mutation(frozen_mutation_and_schema m, locator::effective_replication_map_ptr ermp, const inet_address_vector_replica_set& natural_endpoints) noexcept {
-    return futurize_invoke([this, m = std::move(m), ermp = std::move(ermp), &natural_endpoints] () mutable -> future<> {
-        // The fact that we send with CL::ALL in both cases below ensures that new hints are not going
-        // to be generated as a result of hints sending.
-        if (boost::range::find(natural_endpoints, end_point_key()) != natural_endpoints.end()) {
-            manager_logger.trace("Sending directly to {}", end_point_key());
-            return _proxy.send_hint_to_endpoint(std::move(m), std::move(ermp), end_point_key());
-        } else {
-            manager_logger.trace("Endpoints set has changed and {} is no longer a replica. Mutating from scratch...", end_point_key());
-            return _proxy.send_hint_to_all_replicas(std::move(m));
-        }
-    });
-}
-
-bool hint_sender::can_send() noexcept {
-    if (stopping() && !draining()) {
-        return false;
-    }
-
-    try {
-        if (_gossiper.is_alive(end_point_key())) {
-            _state.remove(state::host_left_ring);
-            return true;
-        } else {
-            if (!_state.contains(state::host_left_ring)) {
-                _state.set_if<state::host_left_ring>(!_shard_manager.local_db().get_token_metadata().is_normal_token_owner(end_point_key()));
-            }
-            // send the hints out if the destination Node is part of the ring - we will send to all new replicas in this case
-            return _state.contains(state::host_left_ring);
-        }
-    } catch (...) {
-        return false;
-    }
-}
-
-frozen_mutation_and_schema hint_sender::get_mutation(lw_shared_ptr<send_one_file_ctx> ctx_ptr, fragmented_temporary_buffer& buf) {
-    hint_entry_reader hr(buf);
-    auto& fm = hr.mutation();
-    auto& cm = get_column_mapping(std::move(ctx_ptr), fm, hr);
-    auto schema = _db.find_schema(fm.column_family_id());
-
-    if (schema->version() != fm.schema_version()) {
-        mutation m(schema, fm.decorated_key(*schema));
-        converting_mutation_partition_applier v(cm, *schema, m.partition());
-        fm.partition().accept(cm, v);
-        return {freeze(m), std::move(schema)};
-    }
-    return {std::move(hr).mutation(), std::move(schema)};
-}
-
-const column_mapping& hint_sender::get_column_mapping(lw_shared_ptr<send_one_file_ctx> ctx_ptr, const frozen_mutation& fm, const hint_entry_reader& hr) {
-    auto cm_it = ctx_ptr->schema_ver_to_column_mapping.find(fm.schema_version());
-    if (cm_it == ctx_ptr->schema_ver_to_column_mapping.end()) {
-        if (!hr.get_column_mapping()) {
-            throw no_column_mapping(fm.schema_version());
-        }
-
-        manager_logger.debug("new schema version {}", fm.schema_version());
-        cm_it = ctx_ptr->schema_ver_to_column_mapping.emplace(fm.schema_version(), *hr.get_column_mapping()).first;
-    }
-
-    return cm_it->second;
-}
 
 hint_sender::hint_sender(host_manager& parent, service::storage_proxy& local_storage_proxy,
         replica::database& local_db, gms::gossiper& local_gossiper)
@@ -239,6 +164,30 @@ hint_sender::hint_sender(hint_sender&& other, host_manager& new_parent) noexcept
     , _file_update_mutex{new_parent.file_update_mutex()}
     , _replay_waiters{std::move(other._replay_waiters)}
 {}
+
+void hint_sender::start() {
+    seastar::thread_attributes attr;
+
+    attr.sched_group = _hints_cpu_sched_group;
+    _stopped = seastar::async(std::move(attr), [this] {
+        manager_logger.trace("ep_manager({})::sender: started", end_point_key());
+        while (!stopping()) {
+            try {
+                flush_maybe().get();
+                send_hints_maybe();
+
+                // If we got here means that either there are no more hints to send or we failed to send hints we have.
+                // In both cases it makes sense to wait a little before continuing.
+                sleep_abortable(next_sleep_duration(), _stop_as).get();
+            } catch (seastar::sleep_aborted&) {
+                break;
+            } catch (...) {
+                // log and keep on spinning
+                manager_logger.trace("sender: got the exception: {}", std::current_exception());
+            }
+        }
+    });
+}
 
 future<> hint_sender::stop(drain should_drain) noexcept {
     return seastar::async([this, should_drain] {
@@ -283,38 +232,135 @@ void hint_sender::add_foreign_segment(sstring seg_name) {
     _foreign_segments_to_replay.emplace_back(std::move(seg_name));
 }
 
-typename hint_sender::duration_type hint_sender::next_sleep_duration() const {
-    time_point_type current_time = clock_type::now();
-    time_point_type next_flush_tp = std::max(_next_flush_tp, current_time);
-    time_point_type next_retry_tp = std::max(_next_send_retry_tp, current_time);
-
-    duration_type d = std::min(next_flush_tp, next_retry_tp) - current_time;
-
-    // Don't sleep for less than 10 ticks of the "clock" if we are planning to sleep at all
-    // -- the sleep() function is not perfect.
-    return duration_type{10 * div_ceil(d.count(), 10)};
+void hint_sender::rewind_sent_replay_position_to(db::replay_position rp) {
+    _sent_upper_bound_rp = rp;
+    notify_replay_waiters();
 }
 
-void hint_sender::start() {
-    seastar::thread_attributes attr;
+future<> hint_sender::wait_until_hints_are_replayed_up_to(abort_source& as, db::replay_position up_to_rp) {
+    manager_logger.debug("[{}] wait_until_hints_are_replayed_up_to(): entering with target {}", end_point_key(), up_to_rp);
+    if (_foreign_segments_to_replay.empty() && up_to_rp < _sent_upper_bound_rp) {
+        manager_logger.debug("[{}] wait_until_hints_are_replayed_up_to(): hints were already replayed above the point ({} < {})", end_point_key(), up_to_rp, _sent_upper_bound_rp);
+        return make_ready_future<>();
+    }
 
-    attr.sched_group = _hints_cpu_sched_group;
-    _stopped = seastar::async(std::move(attr), [this] {
-        manager_logger.trace("ep_manager({})::sender: started", end_point_key());
-        while (!stopping()) {
-            try {
-                flush_maybe().get();
-                send_hints_maybe();
+    if (as.abort_requested()) {
+        manager_logger.debug("[{}] wait_until_hints_are_replayed_up_to(): already aborted - stopping", end_point_key());
+        return make_exception_future<>(abort_requested_exception());
+    }
 
-                // If we got here means that either there are no more hints to send or we failed to send hints we have.
-                // In both cases it makes sense to wait a little before continuing.
-                sleep_abortable(next_sleep_duration(), _stop_as).get();
-            } catch (seastar::sleep_aborted&) {
-                break;
-            } catch (...) {
-                // log and keep on spinning
-                manager_logger.trace("sender: got the exception: {}", std::current_exception());
+    auto ptr = make_lw_shared<std::optional<promise<>>>(promise<>());
+    auto it = _replay_waiters.emplace(up_to_rp, ptr);
+    auto sub = as.subscribe([this, ptr, it] () noexcept {
+        if (!ptr->has_value()) {
+            // The promise already was resolved by `notify_replay_waiters` and removed from the map
+            return;
+        }
+        manager_logger.debug("[{}] wait_until_hints_are_replayed_up_to(): abort requested - stopping", end_point_key());
+        _replay_waiters.erase(it);
+        (**ptr).set_exception(abort_requested_exception());
+    });
+
+    // When the future resolves, the endpoint manager is not guaranteed to exist anymore
+    // therefore we cannot capture `this`
+    auto ep = end_point_key();
+    return (**ptr).get_future().finally([sub = std::move(sub), ep] {
+        manager_logger.debug("[{}] wait_until_hints_are_replayed_up_to(): returning afther the future was satisfied", ep);
+    });
+}
+
+const sstring* hint_sender::name_of_current_segment() const {
+    // Foreign segments are replayed first
+    if (!_foreign_segments_to_replay.empty()) {
+        return &_foreign_segments_to_replay.front();
+    }
+    if (!_segments_to_replay.empty()) {
+        return &_segments_to_replay.front();
+    }
+    return nullptr;
+}
+
+void hint_sender::pop_current_segment() {
+    if (!_foreign_segments_to_replay.empty()) {
+        _foreign_segments_to_replay.pop_front();
+    } else if (!_segments_to_replay.empty()) {
+        _segments_to_replay.pop_front();
+    }
+}
+
+future<> hint_sender::flush_maybe() noexcept {
+    auto current_time = clock_type::now();
+    if (current_time >= _next_flush_tp) {
+        return _host_manager.flush_current_hints().then([this, current_time] {
+            _next_flush_tp = current_time + manager::hints_flush_period;
+        }).handle_exception([] (auto eptr) {
+            manager_logger.trace("flush_maybe() failed: {}", eptr);
+            return make_ready_future<>();
+        });
+    }
+    return make_ready_future<>();
+}
+
+bool hint_sender::can_send() noexcept {
+    if (stopping() && !draining()) {
+        return false;
+    }
+
+    try {
+        if (_gossiper.is_alive(end_point_key())) {
+            _state.remove(state::host_left_ring);
+            return true;
+        } else {
+            if (!_state.contains(state::host_left_ring)) {
+                _state.set_if<state::host_left_ring>(!_shard_manager.local_db().get_token_metadata().is_normal_token_owner(end_point_key()));
             }
+            // send the hints out if the destination Node is part of the ring - we will send to all new replicas in this case
+            return _state.contains(state::host_left_ring);
+        }
+    } catch (...) {
+        return false;
+    }
+}
+
+const column_mapping& hint_sender::get_column_mapping(lw_shared_ptr<send_one_file_ctx> ctx_ptr, const frozen_mutation& fm, const hint_entry_reader& hr) {
+    auto cm_it = ctx_ptr->schema_ver_to_column_mapping.find(fm.schema_version());
+    if (cm_it == ctx_ptr->schema_ver_to_column_mapping.end()) {
+        if (!hr.get_column_mapping()) {
+            throw no_column_mapping(fm.schema_version());
+        }
+
+        manager_logger.debug("new schema version {}", fm.schema_version());
+        cm_it = ctx_ptr->schema_ver_to_column_mapping.emplace(fm.schema_version(), *hr.get_column_mapping()).first;
+    }
+
+    return cm_it->second;
+}
+
+frozen_mutation_and_schema hint_sender::get_mutation(lw_shared_ptr<send_one_file_ctx> ctx_ptr, fragmented_temporary_buffer& buf) {
+    hint_entry_reader hr(buf);
+    auto& fm = hr.mutation();
+    auto& cm = get_column_mapping(std::move(ctx_ptr), fm, hr);
+    auto schema = _db.find_schema(fm.column_family_id());
+
+    if (schema->version() != fm.schema_version()) {
+        mutation m(schema, fm.decorated_key(*schema));
+        converting_mutation_partition_applier v(cm, *schema, m.partition());
+        fm.partition().accept(cm, v);
+        return {freeze(m), std::move(schema)};
+    }
+    return {std::move(hr).mutation(), std::move(schema)};
+}
+
+future<> hint_sender::do_send_one_mutation(frozen_mutation_and_schema m, locator::effective_replication_map_ptr ermp, const inet_address_vector_replica_set& natural_endpoints) noexcept {
+    return futurize_invoke([this, m = std::move(m), ermp = std::move(ermp), &natural_endpoints] () mutable -> future<> {
+        // The fact that we send with CL::ALL in both cases below ensures that new hints are not going
+        // to be generated as a result of hints sending.
+        if (boost::range::find(natural_endpoints, end_point_key()) != natural_endpoints.end()) {
+            manager_logger.trace("Sending directly to {}", end_point_key());
+            return _proxy.send_hint_to_endpoint(std::move(m), std::move(ermp), end_point_key());
+        } else {
+            manager_logger.trace("Endpoints set has changed and {} is no longer a replica. Mutating from scratch...", end_point_key());
+            return _proxy.send_hint_to_all_replicas(std::move(m));
         }
     });
 }
@@ -395,69 +441,6 @@ future<> hint_sender::send_one_hint(lw_shared_ptr<send_one_file_ctx> ctx_ptr, fr
         manager_logger.trace("send_one_file(): Hmmm. Something bad had happend: {}", eptr);
         ctx_ptr->on_hint_send_failure(rp);
     });
-}
-
-void hint_sender::notify_replay_waiters() noexcept {
-    if (!_foreign_segments_to_replay.empty()) {
-        manager_logger.trace("[{}] notify_replay_waiters(): not notifying because there are still {} foreign segments to replay", end_point_key(), _foreign_segments_to_replay.size());
-        return;
-    }
-
-    manager_logger.trace("[{}] notify_replay_waiters(): replay position upper bound was updated to {}", end_point_key(), _sent_upper_bound_rp);
-    while (!_replay_waiters.empty() && _replay_waiters.begin()->first < _sent_upper_bound_rp) {
-        manager_logger.trace("[{}] notify_replay_waiters(): notifying one ({} < {})", end_point_key(), _replay_waiters.begin()->first, _sent_upper_bound_rp);
-        auto ptr = _replay_waiters.begin()->second;
-        (**ptr).set_value();
-        (*ptr) = std::nullopt; // Prevent it from being resolved by abort source subscription
-        _replay_waiters.erase(_replay_waiters.begin());
-    }
-}
-
-void hint_sender::dismiss_replay_waiters() noexcept {
-    for (auto& p : _replay_waiters) {
-        manager_logger.debug("[{}] dismiss_replay_waiters(): dismissing one", end_point_key());
-        auto ptr = p.second;
-        (**ptr).set_exception(std::runtime_error(format("Hints manager for {} is stopping", end_point_key())));
-        (*ptr) = std::nullopt; // Prevent it from being resolved by abort source subscription
-    }
-    _replay_waiters.clear();
-}
-
-future<> hint_sender::wait_until_hints_are_replayed_up_to(abort_source& as, db::replay_position up_to_rp) {
-    manager_logger.debug("[{}] wait_until_hints_are_replayed_up_to(): entering with target {}", end_point_key(), up_to_rp);
-    if (_foreign_segments_to_replay.empty() && up_to_rp < _sent_upper_bound_rp) {
-        manager_logger.debug("[{}] wait_until_hints_are_replayed_up_to(): hints were already replayed above the point ({} < {})", end_point_key(), up_to_rp, _sent_upper_bound_rp);
-        return make_ready_future<>();
-    }
-
-    if (as.abort_requested()) {
-        manager_logger.debug("[{}] wait_until_hints_are_replayed_up_to(): already aborted - stopping", end_point_key());
-        return make_exception_future<>(abort_requested_exception());
-    }
-
-    auto ptr = make_lw_shared<std::optional<promise<>>>(promise<>());
-    auto it = _replay_waiters.emplace(up_to_rp, ptr);
-    auto sub = as.subscribe([this, ptr, it] () noexcept {
-        if (!ptr->has_value()) {
-            // The promise already was resolved by `notify_replay_waiters` and removed from the map
-            return;
-        }
-        manager_logger.debug("[{}] wait_until_hints_are_replayed_up_to(): abort requested - stopping", end_point_key());
-        _replay_waiters.erase(it);
-        (**ptr).set_exception(abort_requested_exception());
-    });
-
-    // When the future resolves, the endpoint manager is not guaranteed to exist anymore
-    // therefore we cannot capture `this`
-    auto ep = end_point_key();
-    return (**ptr).get_future().finally([sub = std::move(sub), ep] {
-        manager_logger.debug("[{}] wait_until_hints_are_replayed_up_to(): returning afther the future was satisfied", ep);
-    });
-}
-
-void hint_sender::rewind_sent_replay_position_to(db::replay_position rp) {
-    _sent_upper_bound_rp = rp;
-    notify_replay_waiters();
 }
 
 // runs in a seastar::async context
@@ -545,25 +528,6 @@ bool hint_sender::send_one_file(const sstring& fname) {
     return true;
 }
 
-const sstring* hint_sender::name_of_current_segment() const {
-    // Foreign segments are replayed first
-    if (!_foreign_segments_to_replay.empty()) {
-        return &_foreign_segments_to_replay.front();
-    }
-    if (!_segments_to_replay.empty()) {
-        return &_segments_to_replay.front();
-    }
-    return nullptr;
-}
-
-void hint_sender::pop_current_segment() {
-    if (!_foreign_segments_to_replay.empty()) {
-        _foreign_segments_to_replay.pop_front();
-    } else if (!_segments_to_replay.empty()) {
-        _segments_to_replay.pop_front();
-    }
-}
-
 // Runs in the seastar::async context
 void hint_sender::send_hints_maybe() noexcept {
     using namespace std::literals::chrono_literals;
@@ -601,6 +565,44 @@ void hint_sender::send_hints_maybe() noexcept {
     }
 
     manager_logger.trace("send_hints(): we handled {} segments", replayed_segments_count);
+}
+
+void hint_sender::notify_replay_waiters() noexcept {
+    if (!_foreign_segments_to_replay.empty()) {
+        manager_logger.trace("[{}] notify_replay_waiters(): not notifying because there are still {} foreign segments to replay", end_point_key(), _foreign_segments_to_replay.size());
+        return;
+    }
+
+    manager_logger.trace("[{}] notify_replay_waiters(): replay position upper bound was updated to {}", end_point_key(), _sent_upper_bound_rp);
+    while (!_replay_waiters.empty() && _replay_waiters.begin()->first < _sent_upper_bound_rp) {
+        manager_logger.trace("[{}] notify_replay_waiters(): notifying one ({} < {})", end_point_key(), _replay_waiters.begin()->first, _sent_upper_bound_rp);
+        auto ptr = _replay_waiters.begin()->second;
+        (**ptr).set_value();
+        (*ptr) = std::nullopt; // Prevent it from being resolved by abort source subscription
+        _replay_waiters.erase(_replay_waiters.begin());
+    }
+}
+
+void hint_sender::dismiss_replay_waiters() noexcept {
+    for (auto& p : _replay_waiters) {
+        manager_logger.debug("[{}] dismiss_replay_waiters(): dismissing one", end_point_key());
+        auto ptr = p.second;
+        (**ptr).set_exception(std::runtime_error(format("Hints manager for {} is stopping", end_point_key())));
+        (*ptr) = std::nullopt; // Prevent it from being resolved by abort source subscription
+    }
+    _replay_waiters.clear();
+}
+
+typename hint_sender::duration_type hint_sender::next_sleep_duration() const {
+    time_point_type current_time = clock_type::now();
+    time_point_type next_flush_tp = std::max(_next_flush_tp, current_time);
+    time_point_type next_retry_tp = std::max(_next_send_retry_tp, current_time);
+
+    duration_type d = std::min(next_flush_tp, next_retry_tp) - current_time;
+
+    // Don't sleep for less than 10 ticks of the "clock" if we are planning to sleep at all
+    // -- the sleep() function is not perfect.
+    return duration_type{10 * div_ceil(d.count(), 10)};
 }
 
 } // namespace internal
