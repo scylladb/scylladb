@@ -9,41 +9,45 @@
 
 #pragma once
 
-#include <unordered_map>
-#include <vector>
-#include <list>
-#include <chrono>
-#include <optional>
-#include <map>
+// Seastar features.
 #include <seastar/core/gate.hh>
 #include <seastar/core/sharded.hh>
 #include <seastar/core/timer.hh>
 #include <seastar/core/lowres_clock.hh>
 #include <seastar/core/shared_mutex.hh>
 #include <seastar/core/abort_source.hh>
-#include "inet_address_vectors.hh"
+
+// Scylla includes.
 #include "db/commitlog/commitlog.hh"
-#include "utils/loading_shared_values.hh"
-#include "db/hints/resource_manager.hh"
-#include "db/hints/host_filter.hh"
-#include "db/hints/sync_point.hh"
-#include "locator/abstract_replication_strategy.hh"
 #include "db/hints/internal/common.hh"
-#include "db/hints/internal/hint_sender.hh"
 #include "db/hints/internal/host_manager.hh"
+#include "db/hints/internal/hint_storage.hh"
+#include "db/hints/host_filter.hh"
+#include "db/hints/resource_manager.hh"
+#include "db/hints/sync_point.hh"
+#include "utils/loading_shared_values.hh"
+#include "inet_address_vectors.hh"
+
+// STD.
+#include <chrono>
+#include <list>
+#include <map>
+#include <optional>
+#include <span>
+#include <unordered_map>
+#include <vector>
 
 class fragmented_temporary_buffer;
 
 namespace utils {
 class directories;
-}
+} // namespace utils
 
 namespace gms {
 class gossiper;
-}
+} // namespace gms
 
-namespace db {
-namespace hints {
+namespace db::hints {
 
 namespace internal {
 class hint_sender;
@@ -331,5 +335,4 @@ public:
     }
 };
 
-}
-}
+} // namespace db::hints
