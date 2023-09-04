@@ -31,6 +31,12 @@
 #include "cdc/cdc_extension.hh"
 #include "utils/UUID_gen.hh"
 
+static cql_test_config disable_raft_schema_config() {
+    cql_test_config c;
+    c.db_config->consistent_cluster_management(false);
+    return c;
+}
+
 SEASTAR_TEST_CASE(test_new_schema_with_no_structural_change_is_propagated) {
     return do_with_cql_env([](cql_test_env& e) {
         return seastar::async([&] {
@@ -139,9 +145,23 @@ SEASTAR_TEST_CASE(test_tombstones_are_ignored_in_version_calculation) {
             auto new_node_version = e.db().local().get_version();
 
             BOOST_REQUIRE_EQUAL(new_table_version, old_table_version);
+
+            // With group 0 schema changes and GROUP0_SCHEMA_VERSIONING, this check wouldn't pass,
+            // because the version after the first schema change is not a digest, but taken
+            // to be the version sent in the schema change mutations; in this case,
+            // `prepare_new_column_family_announcement` took `table_schema->version()`
+            //
+            // On the other hand, the second schema change mutations do not contain
+            // the ususal `system_schema.scylla_tables` mutation (which would contain the version);
+            // they are 'incomplete' schema mutations created by the above piece of code,
+            // not by the usual `prepare_..._announcement` functions. This causes
+            // a digest to be calculated when applying the schema change, and the digest
+            // will be different than the first version sent.
+            //
+            // Hence we use `disable_raft_schema_config()` in this test.
             BOOST_REQUIRE_EQUAL(new_node_version, old_node_version);
         });
-    });
+    }, disable_raft_schema_config());
 }
 
 SEASTAR_TEST_CASE(test_concurrent_column_addition) {
@@ -191,9 +211,19 @@ SEASTAR_TEST_CASE(test_concurrent_column_addition) {
             BOOST_REQUIRE(new_schema->get_column_definition(to_bytes("v3")) != nullptr);
 
             BOOST_REQUIRE(new_schema->version() != old_version);
+
+            // With group 0 schema changes and GROUP0_SCHEMA_VERSIONING, this check wouldn't pass,
+            // because the version resulting after schema change is not a digest, but taken to be
+            // the version sent in the schema change mutations; in this case, `make_update_table_mutations`
+            // takes `s2->version()`.
+            //
+            // This is fine with group 0 where all schema changes are linearized, so this scenario
+            // of merging concurrent schema changes doesn't happen.
+            //
+            // Hence we use `disable_raft_schema_config()` in this test.
             BOOST_REQUIRE(new_schema->version() != s2->version());
         });
-    });
+    }, disable_raft_schema_config());
 }
 
 SEASTAR_TEST_CASE(test_sort_type_in_update) {
