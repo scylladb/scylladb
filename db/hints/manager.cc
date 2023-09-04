@@ -36,7 +36,6 @@
 #include "db/hints/internal/hint_logger.hh"
 #include "db/hints/internal/hint_sender.hh"
 
-using namespace std::literals::chrono_literals;
 using namespace db::hints::internal;
 
 namespace db {
