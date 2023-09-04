@@ -28,6 +28,7 @@
 #include "db/hints/host_filter.hh"
 #include "db/hints/sync_point.hh"
 #include "locator/abstract_replication_strategy.hh"
+#include "db/hints/internal/common.hh"
 
 class fragmented_temporary_buffer;
 
@@ -42,7 +43,7 @@ class gossiper;
 namespace db {
 namespace hints {
 
-using node_to_hint_store_factory_type = utils::loading_shared_values<gms::inet_address, db::commitlog>;
+using node_to_hint_store_factory_type = utils::loading_shared_values<internal::endpoint_id, db::commitlog>;
 using hints_store_ptr = node_to_hint_store_factory_type::entry_ptr;
 using hint_entry_reader = commitlog_entry_reader;
 
@@ -67,32 +68,21 @@ public:
 
 class manager {
 private:
-    struct stats {
-        uint64_t size_of_hints_in_progress = 0;
-        uint64_t written = 0;
-        uint64_t errors = 0;
-        uint64_t dropped = 0;
-        uint64_t sent = 0;
-        uint64_t discarded = 0;
-        uint64_t send_errors = 0;
-        uint64_t corrupted_files = 0;
-    };
+    using hint_stats = internal::hint_stats;
+    using endpoint_id = internal::endpoint_id;
 
     // map: shard -> segments
     using hints_ep_segments_map = std::unordered_map<unsigned, std::list<fs::path>>;
     // map: IP -> map: shard -> segments
     using hints_segments_map = std::unordered_map<sstring, hints_ep_segments_map>;
 
-    class drain_tag {};
-    using drain = seastar::bool_class<drain_tag>;
+    using drain = internal::drain;
 
     friend class space_watchdog;
 
 public:
     class end_point_hints_manager {
     public:
-        using key_type = gms::inet_address;
-
         class sender {
             // Important: clock::now() must be noexcept.
             // TODO: add the corresponding static_assert() when seastar::lowres_clock::now() is marked as "noexcept".
@@ -140,7 +130,7 @@ public:
             abort_source _stop_as;
             clock::time_point _next_flush_tp;
             clock::time_point _next_send_retry_tp;
-            key_type _ep_key;
+            endpoint_id _ep_key;
             end_point_hints_manager& _ep_manager;
             manager& _shard_manager;
             resource_manager& _resource_manager;
@@ -298,7 +288,7 @@ public:
             /// \return The last modification time stamp for \param fname.
             static future<timespec> get_last_file_modification(const sstring& fname);
 
-            struct stats& shard_stats() {
+            hint_stats& shard_stats() {
                 return _shard_manager._stats;
             }
 
@@ -306,7 +296,7 @@ public:
             /// \return Ready, never exceptional, future when operation is complete.
             future<> flush_maybe() noexcept;
 
-            const key_type& end_point_key() const noexcept {
+            const endpoint_id& end_point_key() const noexcept {
                 return _ep_key;
             }
 
@@ -316,7 +306,7 @@ public:
         };
 
     private:
-        key_type _key;
+        endpoint_id _key;
         manager& _shard_manager;
         hints_store_ptr _hints_store_anchor;
         seastar::gate _store_gate;
@@ -341,11 +331,11 @@ public:
         sender _sender;
 
     public:
-        end_point_hints_manager(const key_type& key, manager& shard_manager);
+        end_point_hints_manager(const endpoint_id& key, manager& shard_manager);
         end_point_hints_manager(end_point_hints_manager&&);
         ~end_point_hints_manager();
 
-        const key_type& end_point_key() const noexcept {
+        const endpoint_id& end_point_key() const noexcept {
             return _key;
         }
 
@@ -475,7 +465,7 @@ public:
         /// \return Ready future when the procedure above completes.
         future<> flush_current_hints() noexcept;
 
-        struct stats& shard_stats() {
+        hint_stats& shard_stats() {
             return _shard_manager._stats;
         }
 
@@ -498,8 +488,7 @@ public:
         state::stopping>>;
 
 private:
-    using ep_key_type = typename end_point_hints_manager::key_type;
-    using ep_managers_map_type = std::unordered_map<ep_key_type, end_point_hints_manager>;
+    using ep_managers_map_type = std::unordered_map<endpoint_id, end_point_hints_manager>;
 
 public:
     static const std::string FILENAME_PREFIX;
@@ -525,9 +514,9 @@ private:
     resource_manager& _resource_manager;
 
     ep_managers_map_type _ep_managers;
-    stats _stats;
+    hint_stats _stats;
     seastar::metrics::metric_groups _metrics;
-    std::unordered_set<ep_key_type> _eps_with_pending_hints;
+    std::unordered_set<endpoint_id> _eps_with_pending_hints;
     seastar::named_semaphore _drain_lock = {1, named_semaphore_exception_factory{"drain lock"}};
 
 public:
@@ -538,7 +527,7 @@ public:
     void register_metrics(const sstring& group_name);
     future<> start(shared_ptr<service::storage_proxy> proxy_ptr, shared_ptr<gms::gossiper> gossiper_ptr);
     future<> stop();
-    bool store_hint(gms::inet_address ep, schema_ptr s, lw_shared_ptr<const frozen_mutation> fm, tracing::trace_state_ptr tr_state) noexcept;
+    bool store_hint(endpoint_id ep, schema_ptr s, lw_shared_ptr<const frozen_mutation> fm, tracing::trace_state_ptr tr_state) noexcept;
 
     /// \brief Changes the host_filter currently used, stopping and starting ep_managers relevant to the new host_filter.
     /// \param filter the new host_filter
@@ -552,7 +541,7 @@ public:
     /// \brief Check if a hint may be generated to the give end point
     /// \param ep end point to check
     /// \return true if we should generate the hint to the given end point if it becomes unavailable
-    bool can_hint_for(ep_key_type ep) const noexcept;
+    bool can_hint_for(endpoint_id ep) const noexcept;
 
     /// \brief Check if there aren't too many in-flight hints
     ///
@@ -568,12 +557,12 @@ public:
     ///
     /// \param ep end point to check
     /// \return TRUE if we are allowed to generate hint to the given end point but there are too many in-flight hints
-    bool too_many_in_flight_hints_for(ep_key_type ep) const noexcept;
+    bool too_many_in_flight_hints_for(endpoint_id ep) const noexcept;
 
     /// \brief Check if DC \param ep belongs to is "hintable"
     /// \param ep End point identificator
     /// \return TRUE if hints are allowed to be generated to \param ep.
-    bool check_dc_for(ep_key_type ep) const noexcept;
+    bool check_dc_for(endpoint_id ep) const noexcept;
 
     /// \brief Checks if hints are disabled for all endpoints
     /// \return TRUE if hints are disabled.
@@ -589,7 +578,7 @@ public:
     /// \brief Get the number of in-flight (to the disk) hints to a given end point.
     /// \param ep End point identificator
     /// \return Number of hints in-flight to \param ep.
-    uint64_t hints_in_progress_for(ep_key_type ep) const noexcept {
+    uint64_t hints_in_progress_for(endpoint_id ep) const noexcept {
         auto it = find_ep_manager(ep);
         if (it == ep_managers_end()) {
             return 0;
@@ -597,7 +586,7 @@ public:
         return it->second.hints_in_progress();
     }
 
-    void add_ep_with_pending_hints(ep_key_type key) {
+    void add_ep_with_pending_hints(endpoint_id key) {
         _eps_with_pending_hints.insert(key);
     }
 
@@ -606,7 +595,7 @@ public:
         _eps_with_pending_hints.reserve(_ep_managers.size());
     }
 
-    bool has_ep_with_pending_hints(ep_key_type key) const {
+    bool has_ep_with_pending_hints(endpoint_id key) const {
         return _eps_with_pending_hints.contains(key);
     }
 
@@ -635,7 +624,7 @@ public:
     }
 
     /// \brief Returns a set of replay positions for hint queues towards endpoints from the `target_hosts`.
-    sync_point::shard_rps calculate_current_sync_point(const std::vector<gms::inet_address>& target_hosts) const;
+    sync_point::shard_rps calculate_current_sync_point(const std::vector<endpoint_id>& target_hosts) const;
 
     /// \brief Waits until hint replay reach replay positions described in `rps`.
     future<> wait_for_sync_point(abort_source& as, const sync_point::shard_rps& rps);
@@ -738,8 +727,8 @@ private:
         return _local_db;
     }
 
-    end_point_hints_manager& get_ep_manager(ep_key_type ep);
-    bool have_ep_manager(ep_key_type ep) const noexcept;
+    end_point_hints_manager& get_ep_manager(endpoint_id ep);
+    bool have_ep_manager(endpoint_id ep) const noexcept;
 
 public:
     /// \brief Initiate the draining when we detect that the node has left the cluster.
@@ -751,7 +740,7 @@ public:
     /// corresponding end_point_hints_manager objects.
     ///
     /// \param endpoint node that left the cluster
-    void drain_for(gms::inet_address endpoint);
+    void drain_for(endpoint_id endpoint);
 
 private:
     void update_backlog(size_t backlog, size_t max_backlog);
@@ -785,11 +774,11 @@ private:
     }
 
 public:
-    ep_managers_map_type::iterator find_ep_manager(ep_key_type ep_key) noexcept {
+    ep_managers_map_type::iterator find_ep_manager(endpoint_id ep_key) noexcept {
         return _ep_managers.find(ep_key);
     }
 
-    ep_managers_map_type::const_iterator find_ep_manager(ep_key_type ep_key) const noexcept {
+    ep_managers_map_type::const_iterator find_ep_manager(endpoint_id ep_key) const noexcept {
         return _ep_managers.find(ep_key);
     }
 

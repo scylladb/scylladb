@@ -103,7 +103,7 @@ future<> manager::start(shared_ptr<service::storage_proxy> proxy_ptr, shared_ptr
     _proxy_anchor = std::move(proxy_ptr);
     _gossiper_anchor = std::move(gossiper_ptr);
     return lister::scan_dir(_hints_dir, lister::dir_entry_types::of<directory_entry_type::directory>(), [this] (fs::path datadir, directory_entry de) {
-        ep_key_type ep = ep_key_type(de.name);
+        endpoint_id ep = endpoint_id(de.name);
         if (!check_dc_for(ep)) {
             return make_ready_future<>();
         }
@@ -163,7 +163,7 @@ void manager::forbid_hints_for_eps_with_pending_hints() {
     });
 }
 
-sync_point::shard_rps manager::calculate_current_sync_point(const std::vector<gms::inet_address>& target_hosts) const {
+sync_point::shard_rps manager::calculate_current_sync_point(const std::vector<endpoint_id>& target_hosts) const {
     sync_point::shard_rps rps;
     for (auto addr : target_hosts) {
         auto it = _ep_managers.find(addr);
@@ -308,7 +308,7 @@ future<> manager::end_point_hints_manager::stop(drain should_drain) noexcept {
     });
 }
 
-manager::end_point_hints_manager::end_point_hints_manager(const key_type& key, manager& shard_manager)
+manager::end_point_hints_manager::end_point_hints_manager(const endpoint_id& key, manager& shard_manager)
     : _key(key)
     , _shard_manager(shard_manager)
     , _file_update_mutex_ptr(make_lw_shared<seastar::shared_mutex>())
@@ -338,7 +338,7 @@ manager::end_point_hints_manager::~end_point_hints_manager() {
 
 future<hints_store_ptr> manager::end_point_hints_manager::get_or_load() {
     if (!_hints_store_anchor) {
-        return _shard_manager.store_factory().get_or_load(_key, [this] (const key_type&) noexcept {
+        return _shard_manager.store_factory().get_or_load(_key, [this] (const endpoint_id&) noexcept {
             return add_store();
         }).then([this] (hints_store_ptr log_ptr) {
             _hints_store_anchor = log_ptr;
@@ -349,7 +349,7 @@ future<hints_store_ptr> manager::end_point_hints_manager::get_or_load() {
     return make_ready_future<hints_store_ptr>(_hints_store_anchor);
 }
 
-manager::end_point_hints_manager& manager::get_ep_manager(ep_key_type ep) {
+manager::end_point_hints_manager& manager::get_ep_manager(endpoint_id ep) {
     auto it = find_ep_manager(ep);
     if (it == ep_managers_end()) {
         manager_logger.trace("Creating an ep_manager for {}", ep);
@@ -360,11 +360,11 @@ manager::end_point_hints_manager& manager::get_ep_manager(ep_key_type ep) {
     return it->second;
 }
 
-inline bool manager::have_ep_manager(ep_key_type ep) const noexcept {
+inline bool manager::have_ep_manager(endpoint_id ep) const noexcept {
     return find_ep_manager(ep) != ep_managers_end();
 }
 
-bool manager::store_hint(ep_key_type ep, schema_ptr s, lw_shared_ptr<const frozen_mutation> fm, tracing::trace_state_ptr tr_state) noexcept {
+bool manager::store_hint(endpoint_id ep, schema_ptr s, lw_shared_ptr<const frozen_mutation> fm, tracing::trace_state_ptr tr_state) noexcept {
     if (stopping() || draining_all() || !started() || !can_hint_for(ep)) {
         manager_logger.trace("Can't store a hint to {}", ep);
         ++_stats.dropped;
@@ -602,13 +602,13 @@ const column_mapping& manager::end_point_hints_manager::sender::get_column_mappi
     return cm_it->second;
 }
 
-bool manager::too_many_in_flight_hints_for(ep_key_type ep) const noexcept {
+bool manager::too_many_in_flight_hints_for(endpoint_id ep) const noexcept {
     // There is no need to check the DC here because if there is an in-flight hint for this end point then this means that
     // its DC has already been checked and found to be ok.
     return _stats.size_of_hints_in_progress > max_size_of_hints_in_progress && !utils::fb_utilities::is_me(ep) && hints_in_progress_for(ep) > 0 && local_gossiper().get_endpoint_downtime(ep) <= _max_hint_window_us;
 }
 
-bool manager::can_hint_for(ep_key_type ep) const noexcept {
+bool manager::can_hint_for(endpoint_id ep) const noexcept {
     if (utils::fb_utilities::is_me(ep)) {
         return false;
     }
@@ -662,7 +662,7 @@ future<> manager::change_host_filter(host_filter filter) {
             // Iterate over existing hint directories and see if we can enable an endpoint manager
             // for some of them
             return lister::scan_dir(_hints_dir, lister::dir_entry_types::of<directory_entry_type::directory>(), [this] (fs::path datadir, directory_entry de) {
-                const ep_key_type ep = ep_key_type(de.name);
+                const endpoint_id ep = endpoint_id(de.name);
                 if (_ep_managers.contains(ep) || !_host_filter.can_hint_for(_proxy_anchor->get_token_metadata_ptr()->get_topology(), ep)) {
                     return make_ready_future<>();
                 }
@@ -686,7 +686,7 @@ future<> manager::change_host_filter(host_filter filter) {
     });
 }
 
-bool manager::check_dc_for(ep_key_type ep) const noexcept {
+bool manager::check_dc_for(endpoint_id ep) const noexcept {
     try {
         // If target's DC is not a "hintable" DCs - don't hint.
         // If there is an end point manager then DC has already been checked and found to be ok.
@@ -698,7 +698,7 @@ bool manager::check_dc_for(ep_key_type ep) const noexcept {
     }
 }
 
-void manager::drain_for(gms::inet_address endpoint) {
+void manager::drain_for(endpoint_id endpoint) {
     if (!started() || stopping() || draining_all()) {
         return;
     }
