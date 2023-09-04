@@ -52,7 +52,7 @@ namespace db {
 namespace {
     const auto set_null_sharder = schema_builder::register_static_configurator([](const sstring& ks_name, const sstring& cf_name, schema_static_props& props) {
         // tables in the "system" keyspace which need to use null sharder
-        static const std::unordered_set<sstring> system_ks_null_shard_tables = {
+        static const std::unordered_set<sstring> tables = {
             schema_tables::SCYLLA_TABLE_SCHEMA_HISTORY,
             system_keyspace::RAFT,
             system_keyspace::RAFT_SNAPSHOTS,
@@ -64,24 +64,24 @@ namespace {
             system_keyspace::CDC_GENERATIONS_V3,
             system_keyspace::TABLETS,
         };
-        if (ks_name == system_keyspace::NAME && system_ks_null_shard_tables.contains(cf_name)) {
+        if (ks_name == system_keyspace::NAME && tables.contains(cf_name)) {
             props.use_null_sharder = true;
         }
     });
     const auto set_wait_for_sync_to_commitlog = schema_builder::register_static_configurator([](const sstring& ks_name, const sstring& cf_name, schema_static_props& props) {
-        static const std::unordered_set<sstring> extra_durable_tables = {
+        static const std::unordered_set<sstring> tables = {
             system_keyspace::PAXOS,
             system_keyspace::SCYLLA_LOCAL,
             system_keyspace::BROADCAST_KV_STORE,
             system_keyspace::TOPOLOGY,
             system_keyspace::CDC_GENERATIONS_V3,
         };
-        if (ks_name == system_keyspace::NAME && extra_durable_tables.contains(cf_name)) {
+        if (ks_name == system_keyspace::NAME && tables.contains(cf_name)) {
             props.wait_for_sync_to_commitlog = true;
         }
     });
     const auto set_use_schema_commitlog = schema_builder::register_static_configurator([](const sstring& ks_name, const sstring& cf_name, schema_static_props& props) {
-        static const std::unordered_set<sstring> raft_tables = {
+        static const std::unordered_set<sstring> tables = {
             system_keyspace::RAFT,
             system_keyspace::RAFT_SNAPSHOTS,
             system_keyspace::RAFT_SNAPSHOT_CONFIG,
@@ -89,7 +89,7 @@ namespace {
             system_keyspace::DISCOVERY,
             system_keyspace::TABLETS,
         };
-        if (ks_name == system_keyspace::NAME && raft_tables.contains(cf_name)) {
+        if (ks_name == system_keyspace::NAME && tables.contains(cf_name)) {
             props.use_schema_commitlog = true;
             props.load_phase = system_table_load_phase::phase2;
         }
