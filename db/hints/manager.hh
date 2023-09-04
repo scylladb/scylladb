@@ -105,9 +105,10 @@ private:
 public:
     // Can be modified with an error injection.
     static std::chrono::seconds hints_flush_period;
+private:
+    static constexpr uint64_t max_size_of_hints_in_progress = 10 * 1024 * 1024; // 10 MB
 
 private:
-    static constexpr uint64_t max_size_of_hints_in_progress = 10 * 1024 * 1024; // 10MB
     state_set _state;
     const fs::path _hints_dir;
     dev_t _hints_dir_device_id = 0;
@@ -130,10 +131,15 @@ private:
     seastar::named_semaphore _drain_lock = {1, named_semaphore_exception_factory{"drain lock"}};
 
 public:
-    manager(sstring hints_directory, host_filter filter, int64_t max_hint_window_ms, resource_manager&res_manager, sharded<replica::database>& db);
-    virtual ~manager();
+    manager(sstring hints_directory, host_filter filter, int64_t max_hint_window_ms,
+            resource_manager& res_manager, sharded<replica::database>& db);
+    
     manager(manager&&) = delete;
     manager& operator=(manager&&) = delete;
+    
+    ~manager();
+
+public:
     void register_metrics(const sstring& group_name);
     future<> start(shared_ptr<service::storage_proxy> proxy_ptr, shared_ptr<gms::gossiper> gossiper_ptr);
     future<> stop();
