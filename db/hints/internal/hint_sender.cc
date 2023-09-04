@@ -228,11 +228,6 @@ hint_sender::hint_sender(const hint_sender& other, host_manager& parent) noexcep
     , _file_update_mutex(_host_manager.file_update_mutex())
 {}
 
-hint_sender::~hint_sender() {
-    dismiss_replay_waiters();
-}
-
-
 future<> hint_sender::stop(drain should_drain) noexcept {
     return seastar::async([this, should_drain] {
         set_stopping();

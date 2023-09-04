@@ -130,16 +130,23 @@ private:
     std::multimap<replay_position, replay_waiter> _replay_waiters{};
 
 public:
-    hint_sender(host_manager& parent, service::storage_proxy& local_storage_proxy, replica::database& local_db, gms::gossiper& local_gossiper) noexcept;
-    ~hint_sender();
+    hint_sender(host_manager& parent, service::storage_proxy& local_storage_proxy,
+            replica::database& local_db, gms::gossiper& local_gossiper) noexcept;
 
     /// \brief A constructor that should be called from the copy/move-constructor of host_manager.
     ///
-    /// Make sure to properly reassign the references - especially to the \param parent and its internals.
+    /// Make sure to properly reassign the references - especially to the \param parent
+    /// and its internals.
     ///
     /// \param other the "hint_sender" instance to copy from
     /// \param parent the parent object for this "hint_sender" instance
     hint_sender(const hint_sender& other, host_manager& parent) noexcept;
+
+    ~hint_sender() noexcept {
+        dismiss_replay_waiters();
+    }
+
+public:
 
     /// \brief Start sending hints.
     ///
