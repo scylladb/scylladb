@@ -87,8 +87,8 @@ private:
     friend class space_watchdog;
 
     using host_manager = internal::host_manager;
+    using host_managers_map_type = std::unordered_map<endpoint_id, host_manager>;
 
-private:
     enum class state {
         started,                // hinting is currently allowed (start() call is complete)
         replay_allowed,         // replaying (hints sending) is allowed
@@ -101,9 +101,6 @@ private:
         state::replay_allowed,
         state::draining_all,
         state::stopping>>;
-
-private:
-    using ep_managers_map_type = std::unordered_map<endpoint_id, host_manager>;
 
 public:
     static const std::string FILENAME_PREFIX;
@@ -128,7 +125,7 @@ private:
 
     resource_manager& _resource_manager;
 
-    ep_managers_map_type _ep_managers;
+    host_managers_map_type _ep_managers;
     hint_stats _stats;
     seastar::metrics::metric_groups _metrics;
     std::unordered_set<endpoint_id> _eps_with_pending_hints;
@@ -316,19 +313,19 @@ private:
     }
 
 public:
-    ep_managers_map_type::iterator find_ep_manager(endpoint_id ep_key) noexcept {
+    host_managers_map_type::iterator find_ep_manager(endpoint_id ep_key) noexcept {
         return _ep_managers.find(ep_key);
     }
 
-    ep_managers_map_type::const_iterator find_ep_manager(endpoint_id ep_key) const noexcept {
+    host_managers_map_type::const_iterator find_ep_manager(endpoint_id ep_key) const noexcept {
         return _ep_managers.find(ep_key);
     }
 
-    ep_managers_map_type::iterator ep_managers_end() noexcept {
+    host_managers_map_type::iterator ep_managers_end() noexcept {
         return _ep_managers.end();
     }
 
-    ep_managers_map_type::const_iterator ep_managers_end() const noexcept {
+    host_managers_map_type::const_iterator ep_managers_end() const noexcept {
         return _ep_managers.end();
     }
 };

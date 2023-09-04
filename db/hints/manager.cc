@@ -391,7 +391,7 @@ void manager::drain_for(endpoint_id endpoint) {
                         _ep_managers.clear();
                     });
                 } else {
-                    ep_managers_map_type::iterator ep_manager_it = find_ep_manager(endpoint);
+                    host_managers_map_type::iterator ep_manager_it = find_ep_manager(endpoint);
                     if (ep_manager_it != ep_managers_end()) {
                         return ep_manager_it->second.stop(drain::yes).finally([this, endpoint, &ep_man = ep_manager_it->second] {
                             return with_file_update_mutex(ep_man, [&ep_man] {
