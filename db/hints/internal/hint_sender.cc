@@ -605,5 +605,9 @@ typename hint_sender::duration_type hint_sender::next_sleep_duration() const {
     return duration_type{10 * div_ceil(d.count(), 10)};
 }
 
+hint_stats& hint_sender::shard_stats() noexcept {
+    return _shard_manager._stats;
+}
+
 } // namespace internal
 } // namespace db::hints

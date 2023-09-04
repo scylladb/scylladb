@@ -283,13 +283,11 @@ private:
     /// \brief Dismisses ALL current replay waiters with an exception.
     void dismiss_replay_waiters() noexcept;
 
-    hint_stats& shard_stats() {
-        return _shard_manager._stats;
-    }
-
     /// \brief Return the amount of time we want to sleep after the current iteration.
     /// \return The time till the soonest event: flushing or re-sending.
     duration_type next_sleep_duration() const;
+
+    hint_stats& shard_stats() noexcept;
 };
 
 } // namespace internal
