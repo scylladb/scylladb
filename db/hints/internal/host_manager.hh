@@ -136,9 +136,7 @@ public:
         return _hints_in_progress;
     }
 
-    bool replay_allowed() const noexcept {
-        return _shard_manager.replay_allowed();
-    }
+    bool replay_allowed() const noexcept;
 
     bool can_hint() const noexcept {
         return _state.contains(state::can_hint);
@@ -227,13 +225,9 @@ private:
     /// \return Ready future when the procedure above completes.
     future<> flush_current_hints() noexcept;
 
-    hint_stats& shard_stats() {
-        return _shard_manager._stats;
-    }
+    hint_stats& shard_stats() noexcept;
 
-    resource_manager& shard_resource_manager() {
-        return _shard_manager._resource_manager;
-    }
+    resource_manager& shard_resource_manager() noexcept;
 };
 
 } // namespace internal

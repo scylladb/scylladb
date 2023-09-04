@@ -154,6 +154,10 @@ future<> host_manager::populate_segments_to_replay() {
     });
 }
 
+bool host_manager::replay_allowed() const noexcept {
+    return _shard_manager.replay_allowed();
+}
+
 future<db::commitlog> host_manager::add_store() noexcept {
     manager_logger.trace("Going to add a store to {}", _hints_dir.c_str());
 
@@ -277,6 +281,14 @@ future<> host_manager::flush_current_hints() noexcept {
     }
 
     return make_ready_future<>();
+}
+
+hint_stats& host_manager::shard_stats() noexcept {
+    return _shard_manager._stats;
+}
+
+resource_manager& host_manager::shard_resource_manager() noexcept {
+    return _shard_manager._resource_manager;
 }
 
 } // namespace internal
