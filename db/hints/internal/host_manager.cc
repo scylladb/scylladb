@@ -121,26 +121,26 @@ future<> host_manager::stop(drain should_drain) noexcept {
 
 host_manager::host_manager(const endpoint_id& key, manager& shard_manager)
     : _key(key)
-    , _shard_manager(shard_manager)
+    , _state(state_set::of<state::stopped>())
     , _file_update_mutex_ptr(make_lw_shared<seastar::shared_mutex>())
     , _file_update_mutex(*_file_update_mutex_ptr)
-    , _state(state_set::of<state::stopped>())
-    , _hints_dir(_shard_manager.hints_dir() / format("{}", _key).c_str())
     // Approximate the position of the last written hint by using the same formula as for segment id calculation in commitlog
     // TODO: Should this logic be deduplicated with what is in the commitlog?
     , _last_written_rp(this_shard_id(), std::chrono::duration_cast<std::chrono::milliseconds>(runtime::get_boot_time().time_since_epoch()).count())
+    , _shard_manager(shard_manager)
     , _sender(*this, _shard_manager.local_storage_proxy(), _shard_manager.local_db(), _shard_manager.local_gossiper())
+    , _hints_dir(_shard_manager.hints_dir() / format("{}", _key).c_str())
 {}
 
 host_manager::host_manager(host_manager&& other)
     : _key(other._key)
-    , _shard_manager(other._shard_manager)
+    , _state(other._state)
     , _file_update_mutex_ptr(std::move(other._file_update_mutex_ptr))
     , _file_update_mutex(*_file_update_mutex_ptr)
-    , _state(other._state)
-    , _hints_dir(std::move(other._hints_dir))
     , _last_written_rp(other._last_written_rp)
+    , _shard_manager(other._shard_manager)
     , _sender(std::move(other._sender), *this)
+    , _hints_dir(std::move(other._hints_dir))
 {}
 
 host_manager::~host_manager() {

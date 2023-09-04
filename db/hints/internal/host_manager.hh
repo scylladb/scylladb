@@ -75,16 +75,19 @@ private:
 
 private:
     endpoint_id _key;
-    manager& _shard_manager;
-    hint_store_ptr _hint_store_anchor;
+    state_set _state;
+
     seastar::gate _store_gate;
+    hint_store_ptr _hint_store_anchor;
     lw_shared_ptr<seastar::shared_mutex> _file_update_mutex_ptr;
     seastar::shared_mutex& _file_update_mutex;
-    state_set _state;
+    db::replay_position _last_written_rp;
+
+    manager& _shard_manager;
+    hint_sender _sender;
+    
     const fs::path _hints_dir;
     uint64_t _hints_in_progress = 0;
-    db::replay_position _last_written_rp;
-    hint_sender _sender;
 
 public:
     host_manager(const endpoint_id& key, manager& shard_manager);
