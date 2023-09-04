@@ -244,23 +244,26 @@ void rebalance_segments(const fs::path& hint_directory, hint_segments_map& segme
     }
 }
 
-/// \brief Remove sub-directories of shards that are not relevant any more (re-sharding to a lower number of shards case).
+/// \brief Remove sub-directories of shards that are not relevant any more
+/// (re-sharding to a lower number of shards case).
 ///
 /// Complexity: O(S*E), where S is a number of shards during the previous boot and
 ///                           E is a number of end points for which hints where ever created.
 ///
-/// \param hints_directory a root hints directory
-void remove_irrelevant_shards_directories(const fs::path& hints_directory) {
+/// \param hint_directory a root hint directory
+void remove_irrelevant_shards_directories(const fs::path& hint_directory) {
     // shards level
-    scan_for_hint_dirs(hints_directory, [] (fs::path dir, directory_entry de, unsigned shard_id) {
-        if (shard_id >= smp::count) {
-            // IPs level
-            return lister::scan_dir(fs::path{dir / de.name}), lister::dir_entry_types::full(), lister::show_hidden::yes, [] (fs::path dir, directory_entry de) {
-                return io_check(remove_file, (dir / de.name.c_str()).native());
+    scan_for_hint_dirs(hint_directory, [] (fs::path dir, directory_entry de, shard_id sid) {
+        if (sid >= smp::count) {
+            // IP level.
+            return lister::scan_dir(dir / de.name, lister::dir_entry_types::full(),
+                    lister::show_hidden::yes, [] (fs::path dir, directory_entry de) {
+                return io_check(remove_file, (dir / de.name).native());
             }).then([shard_base_dir = dir, shard_entry = de] {
-                return io_check(remove_file, (shard_base_dir / shard_entry.name.c_str()).native());
+                return io_check(remove_file, (shard_base_dir / shard_entry.name).native());
             });
         }
+
         return make_ready_future<>();
     }).get();
 }
