@@ -69,10 +69,6 @@ manager::manager(sstring hints_directory, host_filter filter, int64_t max_hint_w
     }
 }
 
-manager::~manager() {
-    assert(_ep_managers.empty());
-}
-
 void manager::register_metrics(const sstring& group_name) {
     namespace sm = seastar::metrics;
 

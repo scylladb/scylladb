@@ -137,7 +137,9 @@ public:
     manager(manager&&) = delete;
     manager& operator=(manager&&) = delete;
     
-    ~manager();
+    ~manager() noexcept {
+        assert(_ep_managers.empty());
+    }
 
 public:
     void register_metrics(const sstring& group_name);
