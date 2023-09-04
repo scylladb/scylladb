@@ -32,6 +32,7 @@
 #include <chrono>
 #include <list>
 #include <map>
+#include <memory>
 #include <optional>
 #include <span>
 #include <unordered_map>
@@ -61,16 +62,20 @@ using node_to_hint_store_factory_type = utils::loading_shared_values<internal::e
 class directory_initializer {
 private:
     class impl;
-    ::std::shared_ptr<impl> _impl;
-
-    directory_initializer(::std::shared_ptr<impl> impl);
+    std::shared_ptr<impl> _impl;
 
 public:
-    /// Creates an initializer that does nothing. Useful in tests.
-    static directory_initializer make_dummy();
+    directory_initializer(std::shared_ptr<impl> impl);
+    ~directory_initializer() noexcept = default;
+
+public:
     static future<directory_initializer> make(utils::directories& dirs, sstring hints_directory);
 
-    ~directory_initializer();
+    /// Creates an initializer that does nothing. Useful in tests.
+    static directory_initializer make_dummy() noexcept {
+        return {nullptr};
+    }
+
     future<> ensure_created_and_verified();
     future<> ensure_rebalanced();
 };

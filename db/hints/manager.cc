@@ -15,6 +15,7 @@
 #include <seastar/core/gate.hh>
 #include <seastar/core/future.hh>
 #include <seastar/core/seastar.hh>
+#include <seastar/core/semaphore.hh>
 #include <seastar/core/sleep.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 
@@ -50,29 +51,31 @@
 #include <ranges>
 #include <span>
 
-namespace db {
-namespace hints {
+namespace db::hints {
 
 using namespace internal;
 
 class directory_initializer::impl {
+private:
     enum class state {
         uninitialized = 0,
         created_and_validated = 1,
         rebalanced = 2,
     };
 
+private:
     utils::directories& _dirs;
-    sstring _hints_directory;
+    sstring _hint_directory;
     state _state = state::uninitialized;
     seastar::named_semaphore _lock = {1, named_semaphore_exception_factory{"hints directory initialization lock"}};
 
 public:
-    impl(utils::directories& dirs, sstring hints_directory)
-            : _dirs(dirs)
-            , _hints_directory(std::move(hints_directory))
+    impl(utils::directories& dirs, sstring hint_directory)
+        : _dirs(dirs)
+        , _hint_directory(std::move(hint_directory))
     { }
 
+public:
     future<> ensure_created_and_verified() {
         if (_state > state::uninitialized) {
             return make_ready_future<>();
@@ -80,9 +83,9 @@ public:
 
         return with_semaphore(_lock, 1, [this] () {
             utils::directories::set dir_set;
-            dir_set.add_sharded(_hints_directory);
+            dir_set.add_sharded(_hint_directory);
             return _dirs.create_and_verify(std::move(dir_set)).then([this] {
-                manager_logger.debug("Creating and validating hint directories: {}", _hints_directory);
+                manager_logger.debug("Creating and validating hint directories: {}", _hint_directory);
                 _state = state::created_and_validated;
             });
         });
@@ -97,9 +100,9 @@ public:
             return make_ready_future<>();
         }
 
-        return with_semaphore(_lock, 1, [this] () {
-            manager_logger.debug("Rebalancing hints in {}", _hints_directory);
-            return rebalance_hints(fs::path{_hints_directory}).then([this] {
+        return with_semaphore(_lock, 1, [this] {
+            manager_logger.debug("Rebalancing hints in {}", _hint_directory);
+            return rebalance_hints(fs::path{_hint_directory}).then([this] {
                 _state = state::rebalanced;
             });
         });
@@ -107,17 +110,11 @@ public:
 };
 
 directory_initializer::directory_initializer(std::shared_ptr<directory_initializer::impl> impl)
-        : _impl(std::move(impl))
-{ }
+    : _impl(std::move(impl))
+{}
 
-directory_initializer::~directory_initializer()
-{ }
-
-directory_initializer directory_initializer::make_dummy() {
-    return directory_initializer{nullptr};
-}
-
-future<directory_initializer> directory_initializer::make(utils::directories& dirs, sstring hints_directory) {
+future<directory_initializer> directory_initializer::make(utils::directories& dirs,
+        sstring hints_directory) {
     return smp::submit_to(0, [&dirs, hints_directory = std::move(hints_directory)] () mutable {
         auto impl = std::make_shared<directory_initializer::impl>(dirs, std::move(hints_directory));
         return make_ready_future<directory_initializer>(directory_initializer(std::move(impl)));
@@ -141,6 +138,9 @@ future<> directory_initializer::ensure_rebalanced() {
         return impl->ensure_rebalanced().then([impl] {});
     });
 }
+
+//////////////////////////////////////////////////
+//////////////////////////////////////////////////
 
 std::chrono::seconds manager::hints_flush_period = std::chrono::seconds(10);
 
@@ -501,5 +501,4 @@ void manager::update_backlog(size_t backlog, size_t max_backlog) {
     }
 }
 
-}
-}
+} // namespace db::hints
