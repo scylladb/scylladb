@@ -78,27 +78,31 @@ future<> scan_for_hint_dirs(const fs::path& hints_directory, Func&& func) {
 ///
 /// \note Should be called from a seastar::thread context.
 ///
-/// \param hints_directory directory to scan
+/// \param hint_directory directory to scan
 /// \return a map: ep -> map: shard -> segments (full paths)
-hint_segments_map get_current_hints_segments(const fs::path& hints_directory) {
-    hint_segments_map current_hints_segments;
+hint_segments_map get_current_hints_segments(const fs::path& hint_directory) {
+    hint_segments_map current_hint_segments;
 
-    // shards level
-    scan_for_hint_dirs(hints_directory, [&current_hints_segments] (fs::path dir, directory_entry de, unsigned shard_id) {
-        manager_logger.trace("shard_id = {}", shard_id);
-        // IPs level
-        return lister::scan_dir(dir / de.name.c_str(), lister::dir_entry_types::of<directory_entry_type::directory>(), [&current_hints_segments, shard_id] (fs::path dir, directory_entry de) {
+    // Shard level.
+    scan_for_hint_dirs(hint_directory, [&current_hint_segments] (fs::path dir, directory_entry de, shard_id sid) {
+        manager_logger.trace("shard_id = {}", sid);
+
+        // IP level.
+        return lister::scan_dir(dir / de.name, lister::dir_entry_types::of<directory_entry_type::directory>(),
+                [&current_hint_segments, sid] (fs::path dir, directory_entry de) {
             manager_logger.trace("\tIP: {}", de.name);
-            // hints files
-            return lister::scan_dir(dir / de.name.c_str(), lister::dir_entry_types::of<directory_entry_type::regular>(), [&current_hints_segments, shard_id, ep_addr = de.name] (fs::path dir, directory_entry de) {
+
+            // Hint files.
+            return lister::scan_dir(dir / de.name, lister::dir_entry_types::of<directory_entry_type::regular>(),
+                    [&current_hint_segments, sid, ep_addr = de.name] (fs::path dir, directory_entry de) {
                 manager_logger.trace("\t\tfile: {}", de.name);
-                current_hints_segments[ep_addr][shard_id].emplace_back(dir / de.name.c_str());
+                current_hint_segments[ep_addr][sid].emplace_back(dir / de.name);
                 return make_ready_future<>();
             });
         });
     }).get();
 
-    return current_hints_segments;
+    return current_hint_segments;
 }
 
 /// \brief Rebalance hints segments for a given (destination) end point
