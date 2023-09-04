@@ -64,6 +64,9 @@ class resource_manager;
 
 namespace internal {
 
+// Data structure responsible for managing hints for a specific host.
+class host_manager;
+
 // Class specifying context for sending one file with hints.
 struct send_one_file_ctx;
 
@@ -108,7 +111,7 @@ private:
     time_point_type _next_flush_tp;
     time_point_type _next_send_retry_tp;
     endpoint_id _ep_key;
-    end_point_hints_manager& _ep_manager;
+    host_manager& _host_manager;
     manager& _shard_manager;
     resource_manager& _resource_manager;
     service::storage_proxy& _proxy;
@@ -120,16 +123,16 @@ private:
     std::multimap<db::replay_position, lw_shared_ptr<std::optional<promise<>>>> _replay_waiters;
 
 public:
-    hint_sender(end_point_hints_manager& parent, service::storage_proxy& local_storage_proxy, replica::database& local_db, gms::gossiper& local_gossiper) noexcept;
+    hint_sender(host_manager& parent, service::storage_proxy& local_storage_proxy, replica::database& local_db, gms::gossiper& local_gossiper) noexcept;
     ~hint_sender();
 
-    /// \brief A constructor that should be called from the copy/move-constructor of end_point_hints_manager.
+    /// \brief A constructor that should be called from the copy/move-constructor of host_manager.
     ///
     /// Make sure to properly reassign the references - especially to the \param parent and its internals.
     ///
     /// \param other the "hint_sender" instance to copy from
     /// \param parent the parent object for this "hint_sender" instance
-    hint_sender(const hint_sender& other, end_point_hints_manager& parent) noexcept;
+    hint_sender(const hint_sender& other, host_manager& parent) noexcept;
 
     /// \brief Start sending hints.
     ///
@@ -195,7 +198,7 @@ private:
     }
 
     bool replay_allowed() const noexcept {
-        return _ep_manager.replay_allowed();
+        return _host_manager.replay_allowed();
     }
 
     /// \brief Try to send one hint read from the file.

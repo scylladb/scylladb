@@ -57,10 +57,11 @@ class resource_manager;
 
 namespace internal {
 
+class hint_sender;
+
 class host_manager {
 private:
-    friend class internal::hint_sender;
-    using hint_sender = internal::hint_sender;
+    friend class hint_sender;
 private:
     endpoint_id _key;
     manager& _shard_manager;

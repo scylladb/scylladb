@@ -118,7 +118,7 @@ public:
 future<> hint_sender::flush_maybe() noexcept {
     auto current_time = clock_type::now();
     if (current_time >= _next_flush_tp) {
-        return _ep_manager.flush_current_hints().then([this, current_time] {
+        return _host_manager.flush_current_hints().then([this, current_time] {
             _next_flush_tp = current_time + manager::hints_flush_period;
         }).handle_exception([] (auto eptr) {
             manager_logger.trace("flush_maybe() failed: {}", eptr);
@@ -202,30 +202,30 @@ const column_mapping& hint_sender::get_column_mapping(lw_shared_ptr<send_one_fil
     return cm_it->second;
 }
 
-hint_sender::hint_sender(end_point_hints_manager& parent, service::storage_proxy& local_storage_proxy,replica::database& local_db, gms::gossiper& local_gossiper) noexcept
+hint_sender::hint_sender(host_manager& parent, service::storage_proxy& local_storage_proxy,replica::database& local_db, gms::gossiper& local_gossiper) noexcept
     : _stopped(make_ready_future<>())
     , _ep_key(parent.end_point_key())
-    , _ep_manager(parent)
-    , _shard_manager(_ep_manager._shard_manager)
+    , _host_manager(parent)
+    , _shard_manager(_host_manager._shard_manager)
     , _resource_manager(_shard_manager._resource_manager)
     , _proxy(local_storage_proxy)
     , _db(local_db)
     , _hints_cpu_sched_group(_db.get_streaming_scheduling_group())
     , _gossiper(local_gossiper)
-    , _file_update_mutex(_ep_manager.file_update_mutex())
+    , _file_update_mutex(_host_manager.file_update_mutex())
 {}
 
-hint_sender::hint_sender(const hint_sender& other, end_point_hints_manager& parent) noexcept
+hint_sender::hint_sender(const hint_sender& other, host_manager& parent) noexcept
     : _stopped(make_ready_future<>())
     , _ep_key(parent.end_point_key())
-    , _ep_manager(parent)
-    , _shard_manager(_ep_manager._shard_manager)
+    , _host_manager(parent)
+    , _shard_manager(_host_manager._shard_manager)
     , _resource_manager(_shard_manager._resource_manager)
     , _proxy(other._proxy)
     , _db(other._db)
     , _hints_cpu_sched_group(other._hints_cpu_sched_group)
     , _gossiper(other._gossiper)
-    , _file_update_mutex(_ep_manager.file_update_mutex())
+    , _file_update_mutex(_host_manager.file_update_mutex())
 {}
 
 hint_sender::~hint_sender() {
@@ -258,7 +258,7 @@ future<> hint_sender::stop(drain should_drain) noexcept {
             manager_logger.trace("Draining for {}: start", end_point_key());
             set_draining();
             send_hints_maybe();
-            _ep_manager.flush_current_hints().handle_exception([] (auto e) {
+            _host_manager.flush_current_hints().handle_exception([] (auto e) {
                 manager_logger.error("Failed to flush pending hints: {}. Ignoring...", e);
             }).get();
             send_hints_maybe();
@@ -527,7 +527,7 @@ bool hint_sender::send_one_file(const sstring& fname) {
 
     // If we got here we are done with the current segment and we can remove it.
     with_shared(_file_update_mutex, [&fname, this] {
-        auto p = _ep_manager.get_or_load().get0();
+        auto p = _host_manager.get_or_load().get0();
         return p->delete_segments({ fname });
     }).get();
 
