@@ -54,14 +54,10 @@ public:
 /// \brief Get the last modification time stamp for a given file.
 /// \param fname File name
 /// \return The last modification time stamp for \param fname.
-future<timespec> get_last_file_modification(const sstring& fname) {
-    return open_file_dma(fname, open_flags::ro).then([] (file f) {
-        return do_with(std::move(f), [] (file& f) {
-            return f.stat();
-        });
-    }).then([] (struct stat st) {
-        return make_ready_future<timespec>(st.st_mtim);
-    });
+future<::timespec> get_last_file_modification(const std::string_view fname) {
+    auto f = co_await open_file_dma(fname, open_flags::ro);
+    const auto st = co_await f.stat();
+    co_return st.st_mtim;
 }
 
 } // anonymous namespace
