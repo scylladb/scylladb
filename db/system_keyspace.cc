@@ -1407,7 +1407,6 @@ future<> system_keyspace::save_local_supported_features(const std::set<std::stri
 // is different than the one that wrote, may see a corrupted value. invoke_on_all will be used to guarantee that all
 // updates are propagated correctly.
 struct local_cache {
-    locator::endpoint_dc_rack _local_dc_rack_info;
     system_keyspace::bootstrap_state _state;
 };
 
@@ -1950,10 +1949,6 @@ future<> system_keyspace::initialize_virtual_tables(
     }
 
     install_virtual_readers(*this, db);
-}
-
-locator::endpoint_dc_rack system_keyspace::local_dc_rack() const {
-    return _cache->_local_dc_rack_info;
 }
 
 future<foreign_ptr<lw_shared_ptr<reconcilable_result>>>
@@ -2793,13 +2788,6 @@ system_keyspace::system_keyspace(
     , _cache(std::make_unique<local_cache>())
 {
     _db.plug_system_keyspace(*this);
-
-    // FIXME
-    // This should be coupled with setup_version()'s part committing these values into
-    // the system.local table. However, cql_test_env needs cached local_dc_rack strings,
-    // but it doesn't call system_keyspace::setup() and thus ::setup_version() either
-    _cache->_local_dc_rack_info.dc = snitch->get_datacenter();
-    _cache->_local_dc_rack_info.rack = snitch->get_rack();
 }
 
 system_keyspace::~system_keyspace() {

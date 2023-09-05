@@ -330,7 +330,6 @@ public:
      * Return a map of IP addresses containing a map of dc and rack info
      */
     future<std::unordered_map<gms::inet_address, locator::endpoint_dc_rack>> load_dc_rack_info();
-    locator::endpoint_dc_rack local_dc_rack() const;
 
     enum class bootstrap_state {
         NEEDS_BOOTSTRAP,
