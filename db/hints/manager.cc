@@ -237,8 +237,8 @@ bool manager::can_hint_for(endpoint_id ep) const noexcept {
         return false;
     }
 
-    auto it = find_ep_manager(ep);
-    if (it != ep_managers_end() && (it->second.stopping() || !it->second.can_hint())) {
+    auto it = _ep_managers.find(ep);
+    if (it != _ep_managers.end() && (it->second.stopping() || !it->second.can_hint())) {
         return false;
     }
 
@@ -330,8 +330,8 @@ void manager::drain_for(endpoint_id endpoint) {
                     return drain_for_this_node();
                 }
                 
-                auto it = find_ep_manager(endpoint);
-                if (it != ep_managers_end()) {
+                auto it = _ep_managers.find(endpoint);
+                if (it != _ep_managers.end()) {
                     host_manager& hman = it->second;
 
                     return hman.stop(drain::yes).finally([this, endpoint, &hman] {
@@ -491,8 +491,8 @@ future<> manager::compute_hints_dir_device_id() {
 }
 
 manager::host_manager& manager::get_ep_manager(endpoint_id ep) {
-    auto it = find_ep_manager(ep);
-    if (it == ep_managers_end()) {
+    auto it = _ep_managers.find(ep);
+    if (it == _ep_managers.end()) {
         manager_logger.trace("Creating an ep_manager for {}", ep);
         manager::host_manager& ep_man = _ep_managers.emplace(ep, host_manager(ep, *this)).first->second;
         ep_man.start();
@@ -502,7 +502,7 @@ manager::host_manager& manager::get_ep_manager(endpoint_id ep) {
 }
 
 bool manager::manages_host(endpoint_id ep) const noexcept {
-    return find_ep_manager(ep) != ep_managers_end();
+    return _ep_managers.contains(ep);
 }
 
 void manager::update_backlog(size_t backlog, size_t max_backlog) {

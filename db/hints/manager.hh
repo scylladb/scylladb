@@ -189,8 +189,8 @@ public:
     /// \param ep End point identificator
     /// \return Number of hints in-flight to \param ep.
     uint64_t hints_in_progress_for(endpoint_id ep) const noexcept {
-        auto it = find_ep_manager(ep);
-        if (it == ep_managers_end()) {
+        auto it = _ep_managers.find(ep);
+        if (it == _ep_managers.end()) {
             return 0;
         }
         return it->second.hints_in_progress();
@@ -331,23 +331,6 @@ private:
     }
 
     lw_shared_ptr<shared_mutex> get_host_file_mutex(endpoint_id ep) const;
-
-public:
-    host_managers_map_type::iterator find_ep_manager(endpoint_id ep_key) noexcept {
-        return _ep_managers.find(ep_key);
-    }
-
-    host_managers_map_type::const_iterator find_ep_manager(endpoint_id ep_key) const noexcept {
-        return _ep_managers.find(ep_key);
-    }
-
-    host_managers_map_type::iterator ep_managers_end() noexcept {
-        return _ep_managers.end();
-    }
-
-    host_managers_map_type::const_iterator ep_managers_end() const noexcept {
-        return _ep_managers.end();
-    }
 };
 
 } // namespace db::hints
