@@ -27,15 +27,14 @@ namespace fs = std::filesystem;
 
 namespace service {
 class storage_proxy;
-}
+} // namespace service
 
 namespace gms {
-    class gossiper;
-    class inet_address;
+class gossiper;
+class inet_address;
 } // namespace gms
 
-namespace db {
-namespace hints {
+namespace db::hints {
 
 future<dev_t> get_device_id(const fs::path& path);
 
@@ -58,7 +57,6 @@ private:
     };
 
 public:
-
     struct per_device_limits {
         utils::small_vector<std::reference_wrapper<manager>, 2> managers;
         size_t max_shard_disk_space_size;
@@ -190,5 +188,4 @@ public:
     future<> register_manager(manager& m);
 };
 
-}
-}
+} // namespace db::hints
