@@ -133,7 +133,7 @@ private:
 
     resource_manager& _resource_manager;
 
-    host_managers_map_type _ep_managers;
+    host_managers_map_type _host_managers;
     hint_stats _stats;
     seastar::metrics::metric_groups _metrics;
     std::unordered_set<endpoint_id> _eps_with_pending_hints;
@@ -147,7 +147,7 @@ public:
     manager& operator=(manager&&) = delete;
     
     ~manager() noexcept {
-        assert(_ep_managers.empty());
+        assert(_host_managers.empty());
     }
 
 public:
@@ -189,8 +189,8 @@ public:
     /// \param ep End point identificator
     /// \return Number of hints in-flight to \param ep.
     uint64_t hints_in_progress_for(endpoint_id ep) const noexcept {
-        auto it = _ep_managers.find(ep);
-        if (it == _ep_managers.end()) {
+        auto it = _host_managers.find(ep);
+        if (it == _host_managers.end()) {
             return 0;
         }
         return it->second.hints_in_progress();
@@ -232,7 +232,7 @@ public:
 
     void clear_eps_with_pending_hints() {
         _eps_with_pending_hints.clear();
-        _eps_with_pending_hints.reserve(_ep_managers.size());
+        _eps_with_pending_hints.reserve(_host_managers.size());
     }
 
     bool has_ep_with_pending_hints(endpoint_id key) const {
@@ -262,7 +262,7 @@ public:
     }
 
     size_t ep_managers_size() const {
-        return _ep_managers.size();
+        return _host_managers.size();
     }
 
     const std::filesystem::path& hints_dir() const {
