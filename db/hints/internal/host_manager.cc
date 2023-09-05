@@ -274,7 +274,7 @@ future<commitlog> host_manager::add_store() noexcept {
 future<> host_manager::flush_current_hints() noexcept {
     // flush the currently created hints to disk
     if (_hint_store_anchor) {
-        return with_lock(file_update_mutex(), [this] () -> future<> {
+        return with_lock(file_update_mutex(), [this] {
             return get_or_load().then([] (hint_store_ptr cptr) {
                 return cptr->shutdown().finally([cptr] {
                     return cptr->release();
