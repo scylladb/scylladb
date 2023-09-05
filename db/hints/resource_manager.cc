@@ -28,6 +28,9 @@
 #include "log.hh"
 #include "seastarx.hh"
 
+// STD.
+#include <exception>
+
 namespace fs = std::filesystem;
 
 namespace db::hints {
@@ -202,15 +205,24 @@ future<> resource_manager::start(shared_ptr<service::storage_proxy> proxy_ptr, s
 }
 
 future<> resource_manager::stop() noexcept {
-    return with_semaphore(_operation_lock, 1, [this] () {
-        return parallel_for_each(_shard_managers, [](manager& m) {
+    const auto operation_mutex = co_await seastar::get_units(_operation_lock, 1);
+    std::exception_ptr eptr = nullptr;
+
+    try {
+        co_await seastar::coroutine::parallel_for_each(_shard_managers, [] (manager& m) {
             return m.stop();
-        }).finally([this]() {
-            return _space_watchdog.stop();
-        }).then([this]() {
-            unset_running();
         });
-    });
+    } catch (...) {
+        eptr = std::current_exception();
+    }
+    
+    co_await _space_watchdog.stop();
+
+    if (eptr) {
+        std::rethrow_exception(eptr);
+    }
+    
+    unset_running();
 }
 
 future<> resource_manager::register_manager(manager& m) {
