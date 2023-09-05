@@ -278,6 +278,8 @@ public:
     }
 
 private:
+    future<> drain_for_this_node();
+
     future<> compute_hints_dir_device_id();
 
     node_to_hint_store_factory_type& store_factory() noexcept {

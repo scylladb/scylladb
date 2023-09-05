@@ -299,6 +299,22 @@ bool manager::store_hint(endpoint_id ep, schema_ptr s, lw_shared_ptr<const froze
     }
 }
 
+// This function assumes that the caller already holds and will keep holding `_drain_lock`
+// at least until the returned future resolves.
+future<> manager::drain_for_this_node() {
+    set_draining_all();
+
+    return parallel_for_each(_ep_managers | boost::adaptors::map_values, [] (host_manager& hman) {
+        return hman.stop(drain::yes).finally([&hman] {
+            return hman.with_file_update_mutex([&hman] {
+                return remove_file(hman.hints_dir().c_str());
+            });
+        });
+    }).finally([this] {
+        _ep_managers.clear();
+    });
+}
+
 void manager::drain_for(endpoint_id endpoint) {
     if (!started() || stopping() || draining_all()) {
         return;
@@ -307,34 +323,27 @@ void manager::drain_for(endpoint_id endpoint) {
     manager_logger.trace("on_leave_cluster: {} is removed/decommissioned", endpoint);
 
     // Future is waited on indirectly in `stop()` (via `_draining_eps_gate`).
-    (void)with_gate(_draining_eps_gate, [this, endpoint] {
+    (void) with_gate(_draining_eps_gate, [this, endpoint] {
         return with_semaphore(drain_lock(), 1, [this, endpoint] {
-            return futurize_invoke([this, endpoint] () {
+            return futurize_invoke([this, endpoint] {
                 if (utils::fb_utilities::is_me(endpoint)) {
-                    set_draining_all();
-                    return parallel_for_each(_ep_managers | boost::adaptors::map_values, [] (host_manager& hman) {
-                        return hman.stop(drain::yes).finally([&hman] {
-                            return hman.with_file_update_mutex([&hman] {
-                                return remove_file(hman.hints_dir().c_str());
-                            });
-                        });
-                    }).finally([this] {
-                        _ep_managers.clear();
-                    });
-                } else {
-                    host_managers_map_type::iterator ep_manager_it = find_ep_manager(endpoint);
-                    if (ep_manager_it != ep_managers_end()) {
-                        return ep_manager_it->second.stop(drain::yes).finally([this, endpoint, &ep_man = ep_manager_it->second] {
-                            return ep_man.with_file_update_mutex([&ep_man] {
-                                return remove_file(ep_man.hints_dir().c_str());
-                            }).finally([this, endpoint] {
-                                _ep_managers.erase(endpoint);
-                            });
-                        });
-                    }
-
-                    return make_ready_future<>();
+                    return drain_for_this_node();
                 }
+                
+                auto it = find_ep_manager(endpoint);
+                if (it != ep_managers_end()) {
+                    host_manager& hman = it->second;
+
+                    return hman.stop(drain::yes).finally([this, endpoint, &hman] {
+                        return hman.with_file_update_mutex([&hman] {
+                            return remove_file(hman.hints_dir().c_str());
+                        }).finally([this, endpoint] {
+                            _ep_managers.erase(endpoint);
+                        });
+                    });
+                }
+
+                return make_ready_future<>();
             }).handle_exception([endpoint] (auto eptr) {
                 manager_logger.error("Exception when draining {}: {}", endpoint, eptr);
             });
