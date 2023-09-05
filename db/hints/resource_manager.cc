@@ -54,25 +54,8 @@ future<dev_t> get_device_id(const fs::path& path) {
     co_return sd.device_id;
 }
 
-future<semaphore_units<named_semaphore::exception_factory>> resource_manager::get_send_units_for(size_t buf_size) {
-    // In order to impose a limit on the number of hints being sent concurrently,
-    // require each hint to reserve at least 1/(max concurrency) of the shard budget
-    const size_t per_node_concurrency_limit = _max_hints_send_queue_length();
-    const size_t per_shard_concurrency_limit = (per_node_concurrency_limit > 0)
-            ? div_ceil(per_node_concurrency_limit, smp::count)
-            : DEFAULT_PER_SHARD_CONCURRENCY_LIMIT;
-    const size_t min_send_hint_budget = _max_send_in_flight_memory / per_shard_concurrency_limit;
-    // Let's approximate the memory size the mutation is going to consume by the size of its serialized form
-    size_t hint_memory_budget = std::max(min_send_hint_budget, buf_size);
-    // Allow a very big mutation to be sent out by consuming the whole shard budget
-    hint_memory_budget = std::min(hint_memory_budget, _max_send_in_flight_memory);
-    resource_manager_logger.trace("memory budget: need {} have {}", hint_memory_budget, _send_limiter.available_units());
-    return get_units(_send_limiter, hint_memory_budget);
-}
-
-size_t resource_manager::sending_queue_length() const {
-    return _send_limiter.waiters();
-}
+/////////////////////////////////
+/////////////////////////////////
 
 space_watchdog::space_watchdog(shard_managers_set& managers, per_device_limits_map& per_device_limits_map)
     : _shard_managers(managers)
@@ -101,31 +84,6 @@ void space_watchdog::start() {
 future<> space_watchdog::stop() noexcept {
     _as.request_abort();
     return std::move(_started);
-}
-
-// Called under the end_point_hints_manager::file_update_mutex() of the corresponding end_point_hints_manager instance.
-future<> space_watchdog::scan_one_ep_dir(fs::path path, manager& shard_manager, endpoint_id ep) {
-    return do_with(std::move(path), [this, ep, &shard_manager] (fs::path& path) {
-        // It may happen that we get here and the directory has already been deleted in the context of manager::drain_for().
-        // In this case simply bail out.
-        return file_exists(path.native()).then([this, ep, &shard_manager, &path] (bool exists) {
-            if (!exists) {
-                return make_ready_future<>();
-            } else {
-                return lister::scan_dir(path, lister::dir_entry_types::of<directory_entry_type::regular>(), [this, ep, &shard_manager] (fs::path dir, directory_entry de) {
-                    // Put the current end point ID to state.eps_with_pending_hints when we see the second hints file in its directory
-                    if (_files_count == 1) {
-                        shard_manager.add_ep_with_pending_hints(ep);
-                    }
-                    ++_files_count;
-
-                    return io_check(file_size, (dir / de.name.c_str()).c_str()).then([this] (uint64_t fsize) {
-                        _total_size += fsize;
-                    });
-                });
-            }
-        });
-    });
 }
 
 // Called from the context of a seastar::thread.
@@ -186,6 +144,34 @@ void space_watchdog::on_timer() {
     }
 }
 
+// Called under the end_point_hints_manager::file_update_mutex() of the corresponding end_point_hints_manager instance.
+future<> space_watchdog::scan_one_ep_dir(fs::path path, manager& shard_manager, endpoint_id ep) {
+    return do_with(std::move(path), [this, ep, &shard_manager] (fs::path& path) {
+        // It may happen that we get here and the directory has already been deleted in the context of manager::drain_for().
+        // In this case simply bail out.
+        return file_exists(path.native()).then([this, ep, &shard_manager, &path] (bool exists) {
+            if (!exists) {
+                return make_ready_future<>();
+            } else {
+                return lister::scan_dir(path, lister::dir_entry_types::of<directory_entry_type::regular>(), [this, ep, &shard_manager] (fs::path dir, directory_entry de) {
+                    // Put the current end point ID to state.eps_with_pending_hints when we see the second hints file in its directory
+                    if (_files_count == 1) {
+                        shard_manager.add_ep_with_pending_hints(ep);
+                    }
+                    ++_files_count;
+
+                    return io_check(file_size, (dir / de.name.c_str()).c_str()).then([this] (uint64_t fsize) {
+                        _total_size += fsize;
+                    });
+                });
+            }
+        });
+    });
+}
+
+/////////////////////////////////
+/////////////////////////////////
+
 future<> resource_manager::start(shared_ptr<service::storage_proxy> proxy_ptr, shared_ptr<gms::gossiper> gossiper_ptr) {
     _proxy_ptr = std::move(proxy_ptr);
     _gossiper_ptr = std::move(gossiper_ptr);
@@ -203,11 +189,6 @@ future<> resource_manager::start(shared_ptr<service::storage_proxy> proxy_ptr, s
             set_running();
         });
     });
-}
-
-void resource_manager::allow_replaying() noexcept {
-    set_replay_allowed();
-    boost::for_each(_shard_managers, [] (manager& m) { m.allow_replaying(); });
 }
 
 future<> resource_manager::stop() noexcept {
@@ -250,6 +231,31 @@ future<> resource_manager::register_manager(manager& m) {
             });
         });
     });
+}
+
+void resource_manager::allow_replaying() noexcept {
+    set_replay_allowed();
+    boost::for_each(_shard_managers, [] (manager& m) { m.allow_replaying(); });
+}
+
+future<semaphore_units<named_semaphore::exception_factory>> resource_manager::get_send_units_for(size_t buf_size) {
+    // In order to impose a limit on the number of hints being sent concurrently,
+    // require each hint to reserve at least 1/(max concurrency) of the shard budget
+    const size_t per_node_concurrency_limit = _max_hints_send_queue_length();
+    const size_t per_shard_concurrency_limit = (per_node_concurrency_limit > 0)
+            ? div_ceil(per_node_concurrency_limit, smp::count)
+            : DEFAULT_PER_SHARD_CONCURRENCY_LIMIT;
+    const size_t min_send_hint_budget = _max_send_in_flight_memory / per_shard_concurrency_limit;
+    // Let's approximate the memory size the mutation is going to consume by the size of its serialized form
+    size_t hint_memory_budget = std::max(min_send_hint_budget, buf_size);
+    // Allow a very big mutation to be sent out by consuming the whole shard budget
+    hint_memory_budget = std::min(hint_memory_budget, _max_send_in_flight_memory);
+    resource_manager_logger.trace("memory budget: need {} have {}", hint_memory_budget, _send_limiter.available_units());
+    return get_units(_send_limiter, hint_memory_budget);
+}
+
+size_t resource_manager::sending_queue_length() const {
+    return _send_limiter.waiters();
 }
 
 future<> resource_manager::prepare_per_device_limits(manager& shard_manager) {
