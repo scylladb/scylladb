@@ -8,6 +8,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
 
+import argparse
 import string
 import os
 import shutil
@@ -79,8 +80,18 @@ def rename_to(outputdir, from_product, to_product):
 
 
 def main():
-    builddir = 'build'
-    outputdir = os.path.join(builddir, 'debian', 'debian')
+    arg_parser = argparse.ArgumentParser()
+    arg_parser.add_argument('--build-dir', action='store', default='build',
+                            help='build directory')
+    arg_parser.add_argument('--output-dir', action='store', default='debian/debian',
+                            help='output directory')
+    args = arg_parser.parse_args()
+    builddir = args.build_dir
+    if os.path.isabs(args.output_dir):
+        outputdir = args.output_dir
+    else:
+        outputdir = os.path.join(builddir, args.output_dir)
+
     if os.path.exists(outputdir):
         shutil.rmtree(outputdir)
     shutil.copytree('dist/debian/debian', outputdir)
