@@ -111,7 +111,7 @@ public:
     // Can be modified with an error injection.
     static std::chrono::seconds hints_flush_period;
 private:
-    static constexpr uint64_t max_size_of_hints_in_progress = 10 * 1024 * 1024; // 10 MB
+    static constexpr uint64_t MAX_SIZE_OF_HINTS_IN_PROGRESS = 10 * 1024 * 1024; // 10 MB
 
 private:
     state_set _state;
