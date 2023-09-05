@@ -274,20 +274,20 @@ future<commitlog> host_manager::add_store() noexcept {
 future<> host_manager::flush_current_hints() noexcept {
     // flush the currently created hints to disk
     if (_hint_store_anchor) {
-        return futurize_invoke([this] {
-            return with_lock(file_update_mutex(), [this]() -> future<> {
-                return get_or_load().then([] (hint_store_ptr cptr) {
-                    return cptr->shutdown().finally([cptr] {
-                        return cptr->release();
-                    }).finally([cptr] {});
-                }).then([this] {
-                    // Un-hold the commitlog object. Since we are under the exclusive _file_update_mutex lock there are no
-                    // other hint_store_ptr copies and this would destroy the commitlog shared value.
-                    _hint_store_anchor = nullptr;
+        return with_lock(file_update_mutex(), [this] () -> future<> {
+            return get_or_load().then([] (hint_store_ptr cptr) {
+                return cptr->shutdown().finally([cptr] {
+                    return cptr->release();
+                }).finally([cptr] {});
+            }).then([this] {
+                // Un-hold the commitlog object. Since we are under the exclusive
+                // _file_update_mutex lock there are no other hint_store_ptr copies
+                // and this would destroy the commitlog shared value.
+                _hint_store_anchor = nullptr;
 
-                    // Re-create the commitlog instance - this will re-populate the _segments_to_replay if needed.
-                    return get_or_load().discard_result();
-                });
+                // Re-create the commitlog instance -- this will re-populate
+                // the _segments_to_replay if needed.
+                return get_or_load().discard_result();
             });
         });
     }
