@@ -21,17 +21,19 @@
 namespace db::hints {
 
 host_filter::host_filter(host_filter::enabled_for_all_tag)
-        : _enabled_kind(host_filter::enabled_kind::enabled_for_all) {
-}
+    : _enabled_kind{host_filter::enabled_kind::enabled_for_all}
+{}
 
 host_filter::host_filter(host_filter::disabled_for_all_tag)
-        : _enabled_kind(host_filter::enabled_kind::disabled_for_all) {
-}
+    : _enabled_kind{host_filter::enabled_kind::disabled_for_all}
+{}
 
 host_filter::host_filter(std::unordered_set<sstring> allowed_dcs)
-        : _enabled_kind(allowed_dcs.empty() ? enabled_kind::disabled_for_all : enabled_kind::enabled_selectively)
-        , _dcs(std::move(allowed_dcs)) {
-}
+    : _enabled_kind{allowed_dcs.empty()
+            ? enabled_kind::disabled_for_all
+            : enabled_kind::enabled_selectively}
+    , _dcs{std::move(allowed_dcs)}
+{}
 
 bool host_filter::can_hint_for(const locator::topology& topo, endpoint_id ep) const {
     switch (_enabled_kind) {
