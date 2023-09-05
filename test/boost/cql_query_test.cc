@@ -70,8 +70,8 @@ SEASTAR_TEST_CASE(test_create_table_statement) {
 }
 
 SEASTAR_TEST_CASE(test_create_table_with_id_statement) {
-    return do_with_cql_env([](cql_test_env& e) {
-        return seastar::async([&e] {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        // FIXME indent
             e.execute_cql("CREATE TABLE tbl (a int, b int, PRIMARY KEY (a))").get();
             auto id = e.local_db().find_schema("ks", "tbl")->id();
             e.execute_cql("DROP TABLE tbl").get();
@@ -89,7 +89,6 @@ SEASTAR_TEST_CASE(test_create_table_with_id_statement) {
             BOOST_REQUIRE_THROW(
                 e.execute_cql("ALTER TABLE tbl WITH id='f2a8c099-e723-48cb-8cd9-53e647a011a3'").get(),
                 exceptions::configuration_exception);
-        });
     });
 }
 
@@ -245,8 +244,8 @@ SEASTAR_TEST_CASE(test_twcs_restrictions_mixed) {
 }
 
 SEASTAR_TEST_CASE(test_drop_table_with_si_and_mv) {
-    return do_with_cql_env([](cql_test_env& e) {
-        return seastar::async([&e] {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        // FIXME indent
             e.execute_cql("CREATE TABLE tbl (a int, b int, c float, PRIMARY KEY (a))").get();
             e.execute_cql("CREATE INDEX idx1 ON tbl (b)").get();
             e.execute_cql("CREATE INDEX idx2 ON tbl (c)").get();
@@ -263,7 +262,6 @@ SEASTAR_TEST_CASE(test_drop_table_with_si_and_mv) {
             e.execute_cql("CREATE MATERIALIZED VIEW tbl_view AS SELECT c FROM tbl WHERE c IS NOT NULL PRIMARY KEY (c, a)").get();
             // dropping whole keyspace with MV and SI is fine too
             e.execute_cql("DROP KEYSPACE ks").get();
-        });
     });
 }
 
@@ -2459,8 +2457,8 @@ SEASTAR_TEST_CASE(test_select_distinct) {
 }
 
 SEASTAR_TEST_CASE(test_select_distinct_with_where_clause) {
-    return do_with_cql_env([] (cql_test_env& e) {
-        return seastar::async([&e] {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        // FIXME indent
             e.execute_cql("CREATE TABLE cf (k int, a int, b int, PRIMARY KEY (k, a))").get();
             for (int i = 0; i < 10; i++) {
                 e.execute_cql(format("INSERT INTO cf (k, a, b) VALUES ({:d}, {:d}, {:d})", i, i, i)).get();
@@ -2495,7 +2493,6 @@ SEASTAR_TEST_CASE(test_select_distinct_with_where_clause) {
                .with_row({int32_type->decompose(50)})
                .with_row({int32_type->decompose(60)})
                .with_row({int32_type->decompose(70)});
-        });
     });
 }
 
@@ -2861,8 +2858,8 @@ SEASTAR_TEST_CASE(test_alter_table) {
 }
 
 SEASTAR_TEST_CASE(test_map_query) {
-    return do_with_cql_env([] (cql_test_env& e) {
-        return seastar::async([&e] {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        // FIXME indent
             e.execute_cql("CREATE TABLE xx (k int PRIMARY KEY, m map<text, int>);").get();
             e.execute_cql("insert into xx (k, m) values (0, {'v2': 1});").get();
             auto m_type = map_type_impl::get_instance(utf8_type, int32_type, true);
@@ -2873,24 +2870,22 @@ SEASTAR_TEST_CASE(test_map_query) {
             e.execute_cql("delete m['v2'] from xx where k = 0;").get();
             assert_that(e.execute_cql("select m from xx where k = 0;").get0())
                     .is_rows().with_rows({{{}}});
-        });
     });
 }
 
 SEASTAR_TEST_CASE(test_drop_table) {
-    return do_with_cql_env([] (cql_test_env& e) {
-        return seastar::async([&e] {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        // FIXME indent
             e.execute_cql("create table tmp (pk int, v int, PRIMARY KEY (pk));").get();
             e.execute_cql("drop columnfamily tmp;").get();
             e.execute_cql("create table tmp (pk int, v int, PRIMARY KEY (pk));").get();
             e.execute_cql("drop columnfamily tmp;").get();
-        });
     });
 }
 
 SEASTAR_TEST_CASE(test_reversed_slice_with_empty_range_before_all_rows) {
-    return do_with_cql_env([] (cql_test_env& e) {
-        return seastar::async([&e] {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        // FIXME indent
             e.execute_cql("CREATE TABLE test (a int, b int, c int, s1 int static, s2 int static, PRIMARY KEY (a, b));").get();
 
             e.execute_cql("INSERT INTO test (a, b, c, s1, s2) VALUES (99, 0, 0, 17, 42);").get();
@@ -2918,7 +2913,6 @@ SEASTAR_TEST_CASE(test_reversed_slice_with_empty_range_before_all_rows) {
 
             assert_that(e.execute_cql("select * from test;").get0())
                 .is_rows().with_size(16);
-        });
     });
 }
 
@@ -3003,8 +2997,8 @@ SEASTAR_TEST_CASE(test_reversed_slice_with_many_clustering_ranges) {
 }
 
 SEASTAR_TEST_CASE(test_query_with_range_tombstones) {
-    return do_with_cql_env([] (cql_test_env& e) {
-        return seastar::async([&e] {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        // FIXME indent
             e.execute_cql("CREATE TABLE test (pk int, ck int, v int, PRIMARY KEY (pk, ck));").get();
 
             e.execute_cql("INSERT INTO test (pk, ck, v) VALUES (0, 0, 0);").get();
@@ -3030,7 +3024,6 @@ SEASTAR_TEST_CASE(test_query_with_range_tombstones) {
                    { int32_type->decompose(0) },
                    { int32_type->decompose(4) },
                 });
-        });
     });
 }
 
@@ -4761,19 +4754,18 @@ SEASTAR_TEST_CASE(test_range_deletions_for_specific_column) {
 }
 
 SEASTAR_TEST_CASE(test_alter_table_default_ttl_reset) {
-    return do_with_cql_env([](cql_test_env& e) {
-        return seastar::async([&e] {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        // FIXME indent
             e.execute_cql("CREATE TABLE tbl (a int, b int, PRIMARY KEY (a)) WITH default_time_to_live=10").get();
             BOOST_REQUIRE(e.local_db().find_schema("ks", "tbl")->default_time_to_live().count() == 10);
             e.execute_cql("ALTER TABLE tbl WITH gc_grace_seconds=0").get();
             BOOST_REQUIRE(e.local_db().find_schema("ks", "tbl")->default_time_to_live().count() == 10);
-        });
     });
 }
 
 SEASTAR_TEST_CASE(test_internal_schema_changes_on_a_distributed_table) {
-    return do_with_cql_env([](cql_test_env& e) {
-        return seastar::async([&e] {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        // FIXME indent
             cquery_nofail(e, "create table t (p int primary key, v int)");
             const auto local_err = exception_predicate::message_contains("internal query");
             BOOST_REQUIRE_EXCEPTION(e.local_qp().execute_internal("alter table ks.t add col abcd", cql3::query_processor::cache_internal::yes).get(), std::logic_error, local_err);
@@ -4781,7 +4773,6 @@ SEASTAR_TEST_CASE(test_internal_schema_changes_on_a_distributed_table) {
             BOOST_REQUIRE_EXCEPTION(e.local_qp().execute_internal("create index on ks.t(v)", cql3::query_processor::cache_internal::yes).get(), std::logic_error, local_err);
             BOOST_REQUIRE_EXCEPTION(e.local_qp().execute_internal("drop table ks.t", cql3::query_processor::cache_internal::yes).get(), std::logic_error, local_err);
             BOOST_REQUIRE_EXCEPTION(e.local_qp().execute_internal("drop keyspace ks", cql3::query_processor::cache_internal::yes).get(), std::logic_error, local_err);
-        });
     });
 }
 
