@@ -5653,12 +5653,7 @@ future<> storage_service::snitch_reconfigured() {
     auto& snitch = _snitch.local();
     co_await mutate_token_metadata([&snitch] (mutable_token_metadata_ptr tmptr) -> future<> {
         // re-read local rack and DC info
-        auto endpoint = utils::fb_utilities::get_broadcast_address();
-        auto dr = locator::endpoint_dc_rack {
-            .dc = snitch->get_datacenter(),
-            .rack = snitch->get_rack(),
-        };
-        tmptr->update_topology(endpoint, std::move(dr));
+        tmptr->update_topology(utils::fb_utilities::get_broadcast_address(), snitch->get_location());
         return make_ready_future<>();
     });
 
