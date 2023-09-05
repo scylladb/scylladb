@@ -333,18 +333,22 @@ const column_mapping& hint_sender::get_column_mapping(lw_shared_ptr<send_one_fil
     return cm_it->second;
 }
 
-frozen_mutation_and_schema hint_sender::get_mutation(lw_shared_ptr<send_one_file_ctx> ctx_ptr, fragmented_temporary_buffer& buf) {
-    hint_entry_reader hr(buf);
+frozen_mutation_and_schema hint_sender::get_mutation(lw_shared_ptr<send_one_file_ctx> ctx_ptr,
+        fragmented_temporary_buffer& buf)
+{
+    hint_entry_reader hr{buf};
     auto& fm = hr.mutation();
     auto& cm = get_column_mapping(std::move(ctx_ptr), fm, hr);
     auto schema = _db.find_schema(fm.column_family_id());
 
     if (schema->version() != fm.schema_version()) {
-        mutation m(schema, fm.decorated_key(*schema));
-        converting_mutation_partition_applier v(cm, *schema, m.partition());
+        mutation m{schema, fm.decorated_key(*schema)};
+        converting_mutation_partition_applier v{cm, *schema, m.partition()};
         fm.partition().accept(cm, v);
+        
         return {freeze(m), std::move(schema)};
     }
+
     return {std::move(hr).mutation(), std::move(schema)};
 }
 
