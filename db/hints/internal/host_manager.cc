@@ -112,33 +112,37 @@ future<hint_store_ptr> host_manager::get_or_load() {
     co_return _hint_store_anchor;
 }
 
-bool host_manager::store_hint(schema_ptr s, lw_shared_ptr<const frozen_mutation> fm, tracing::trace_state_ptr tr_state) noexcept {
+bool host_manager::store_hint(schema_ptr s, lw_shared_ptr<const frozen_mutation> fm,
+        tracing::trace_state_ptr tr_state) noexcept
+{
     try {
-        // Future is waited on indirectly in `stop()` (via `_store_gate`).
-        (void)with_gate(_store_gate, [this, s = std::move(s), fm = std::move(fm), tr_state] () mutable {
+        // The future is waited on indirectly in `stop()` (via `_store_gate`).
+        // The default capture `=` captures `*this` by reference.
+        (void) with_gate(_store_gate, [this, s, fm, tr_state] () mutable {
             ++_hints_in_progress;
             size_t mut_size = fm->representation().size();
             shard_stats().size_of_hints_in_progress += mut_size;
 
             return with_shared(file_update_mutex(), [this, fm, s, tr_state] () mutable -> future<> {
-                return get_or_load().then([fm = std::move(fm), s = std::move(s), tr_state] (hint_store_ptr log_ptr) mutable {
-                    commitlog_entry_writer cew(s, *fm, commitlog::force_sync::no);
+                return get_or_load().then([s, fm] (hint_store_ptr log_ptr) mutable {
+                    commitlog_entry_writer cew{s, *fm, commitlog::force_sync::no};
                     return log_ptr->add_entry(s->id(), cew, timeout_clock::now() + HINT_FILE_WRITE_TIMEOUT);
                 }).then([this, tr_state] (rp_handle rh) {
                     auto rp = rh.release();
                     if (_last_written_rp < rp) {
                         _last_written_rp = rp;
-                        manager_logger.debug("[{}] Updated last written replay position to {}", end_point_key(), rp);
+                        manager_logger.debug("[{}] Updated last written replay position to {}", _key, rp);
                     }
                     ++shard_stats().written;
 
-                    manager_logger.trace("Hint to {} was stored", end_point_key());
-                    tracing::trace(tr_state, "Hint to {} was stored", end_point_key());
+                    manager_logger.trace("Hint to {} was stored", _key);
+                    tracing::trace(tr_state, "Hint to {} was stored", _key);
                 }).handle_exception([this, tr_state] (std::exception_ptr eptr) {
                     ++shard_stats().errors;
 
-                    manager_logger.debug("store_hint(): got the exception when storing a hint to {}: {}", end_point_key(), eptr);
-                    tracing::trace(tr_state, "Failed to store a hint to {}: {}", end_point_key(), eptr);
+                    manager_logger.debug("store_hint(): got the exception when storing a hint to {}: {}",
+                            _key, eptr);
+                    tracing::trace(tr_state, "Failed to store a hint to {}: {}", _key, eptr);
                 });
             }).finally([this, mut_size, fm, s] {
                 --_hints_in_progress;
@@ -146,12 +150,13 @@ bool host_manager::store_hint(schema_ptr s, lw_shared_ptr<const frozen_mutation>
             });;
         });
     } catch (...) {
-        manager_logger.trace("Failed to store a hint to {}: {}", end_point_key(), std::current_exception());
-        tracing::trace(tr_state, "Failed to store a hint to {}: {}", end_point_key(), std::current_exception());
+        manager_logger.trace("Failed to store a hint to {}: {}", _key, std::current_exception());
+        tracing::trace(tr_state, "Failed to store a hint to {}: {}", _key, std::current_exception());
 
         ++shard_stats().dropped;
         return false;
     }
+    
     return true;
 }
 
