@@ -238,7 +238,7 @@ private:
     /// \param secs_since_file_mod last modification time stamp (in seconds since Epoch) of the current hints file
     /// \param fname name of the hints file this hint was read from
     /// \return future that resolves when next hint may be sent
-    future<> send_one_hint(lw_shared_ptr<send_one_file_ctx> ctx_ptr, fragmented_temporary_buffer buf, db::replay_position rp, gc_clock::duration secs_since_file_mod, const sstring& fname);
+    future<> send_one_hint(lw_shared_ptr<send_one_file_ctx> ctx_ptr, fragmented_temporary_buffer buf, replay_position rp, gc_clock::duration secs_since_file_mod, const sstring& fname);
 
     /// \brief Send all hint from a single file and delete it after it has been successfully sent.
     /// Send all hints from the given file. If we failed to send the current segment we will pick up in the next

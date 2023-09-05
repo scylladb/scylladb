@@ -224,12 +224,12 @@ future<> hint_sender::stop(drain should_drain) noexcept {
     });
 }
 
-void hint_sender::rewind_sent_replay_position_to(db::replay_position rp) {
+void hint_sender::rewind_sent_replay_position_to(replay_position rp) {
     _sent_upper_bound_rp = rp;
     notify_replay_waiters();
 }
 
-future<> hint_sender::wait_until_hints_are_replayed_up_to(abort_source& as, db::replay_position up_to_rp) {
+future<> hint_sender::wait_until_hints_are_replayed_up_to(abort_source& as, replay_position up_to_rp) {
     manager_logger.debug("[{}] wait_until_hints_are_replayed_up_to(): entering with target {}", _ep_key, up_to_rp);
     if (_foreign_segments_to_replay.empty() && up_to_rp < _sent_upper_bound_rp) {
         manager_logger.debug("[{}] wait_until_hints_are_replayed_up_to(): hints were already replayed above the point ({} < {})", _ep_key, up_to_rp, _sent_upper_bound_rp);
@@ -365,7 +365,7 @@ future<> hint_sender::send_one_mutation(frozen_mutation_and_schema m) {
     return do_send_one_mutation(std::move(m), std::move(erm), std::move(natural_endpoints));
 }
 
-future<> hint_sender::send_one_hint(lw_shared_ptr<send_one_file_ctx> ctx_ptr, fragmented_temporary_buffer buf, db::replay_position rp, gc_clock::duration secs_since_file_mod, const sstring& fname) {
+future<> hint_sender::send_one_hint(lw_shared_ptr<send_one_file_ctx> ctx_ptr, fragmented_temporary_buffer buf, replay_position rp, gc_clock::duration secs_since_file_mod, const sstring& fname) {
     return _resource_manager.get_send_units_for(buf.size_bytes()).then([this, secs_since_file_mod, &fname, buf = std::move(buf), rp, ctx_ptr] (auto units) mutable {
         ctx_ptr->mark_hint_as_in_progress(rp);
 
@@ -479,7 +479,7 @@ bool hint_sender::send_one_file(const sstring& fname) {
                 }
             };
         }, _last_not_complete_rp.pos, &_db.extensions()).get();
-    } catch (db::commitlog::segment_error& ex) {
+    } catch (commitlog::segment_error& ex) {
         manager_logger.error("{}: {}. Dropping...", fname, ex.what());
         ctx_ptr->segment_replay_failed = false;
         ++this->shard_stats().corrupted_files;

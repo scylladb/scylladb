@@ -116,9 +116,9 @@ bool host_manager::store_hint(schema_ptr s, lw_shared_ptr<const frozen_mutation>
 
             return with_shared(file_update_mutex(), [this, fm, s, tr_state] () mutable -> future<> {
                 return get_or_load().then([fm = std::move(fm), s = std::move(s), tr_state] (hint_store_ptr log_ptr) mutable {
-                    commitlog_entry_writer cew(s, *fm, db::commitlog::force_sync::no);
-                    return log_ptr->add_entry(s->id(), cew, db::timeout_clock::now() + HINT_FILE_WRITE_TIMEOUT);
-                }).then([this, tr_state] (db::rp_handle rh) {
+                    commitlog_entry_writer cew(s, *fm, commitlog::force_sync::no);
+                    return log_ptr->add_entry(s->id(), cew, timeout_clock::now() + HINT_FILE_WRITE_TIMEOUT);
+                }).then([this, tr_state] (rp_handle rh) {
                     auto rp = rh.release();
                     if (_last_written_rp < rp) {
                         _last_written_rp = rp;
@@ -159,7 +159,7 @@ bool host_manager::replay_allowed() const noexcept {
     return _shard_manager.replay_allowed();
 }
 
-future<db::commitlog> host_manager::add_store() noexcept {
+future<commitlog> host_manager::add_store() noexcept {
     manager_logger.trace("Going to add a store to {}", _hints_dir.c_str());
 
     return futurize_invoke([this] {
@@ -231,14 +231,14 @@ future<db::commitlog> host_manager::add_store() noexcept {
                     co_return l;
                 }
 
-                std::vector<std::pair<db::segment_id_type, sstring>> local_segs_vec;
+                std::vector<std::pair<segment_id_type, sstring>> local_segs_vec;
                 local_segs_vec.reserve(segs_vec.size());
 
                 // Divide segments into those that were created on this shard
                 // and those which were moved to it during rebalancing.
                 for (auto& seg : segs_vec) {
-                    db::commitlog::descriptor desc(seg, HINT_FILENAME_PREFIX);
-                    unsigned shard_id = db::replay_position(desc).shard_id();
+                    commitlog::descriptor desc(seg, HINT_FILENAME_PREFIX);
+                    unsigned shard_id = replay_position(desc).shard_id();
                     if (shard_id == this_shard_id()) {
                         local_segs_vec.emplace_back(desc.id, std::move(seg));
                     } else {

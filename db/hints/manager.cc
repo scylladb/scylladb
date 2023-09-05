@@ -374,7 +374,7 @@ future<> manager::wait_for_sync_point(abort_source& as, const sync_point::shard_
         const auto addr = p.first;
         auto& ep_man = p.second;
 
-        db::replay_position rp;
+        replay_position rp;
         auto it = rps.find(addr);
         if (it != rps.end()) {
             rp = it->second;

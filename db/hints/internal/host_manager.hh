@@ -80,7 +80,7 @@ private:
     seastar::gate _store_gate;
     hint_store_ptr _hint_store_anchor;
     lw_shared_ptr<seastar::shared_mutex> _file_update_mutex_ptr;
-    db::replay_position _last_written_rp;
+    replay_position _last_written_rp;
 
     manager& _shard_manager;
     hint_sender _sender;
