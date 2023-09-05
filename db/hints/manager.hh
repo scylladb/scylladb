@@ -230,7 +230,7 @@ public:
         _eps_with_pending_hints.insert(key);
     }
 
-    void clear_eps_with_pending_hints() {
+    void clear_hosts_with_pending_hints() {
         _eps_with_pending_hints.clear();
         _eps_with_pending_hints.reserve(_host_managers.size());
     }

@@ -116,7 +116,7 @@ void space_watchdog::on_timer() {
         _total_size = 0;
 
         for (manager& shard_manager : per_device_limits.managers) {
-            shard_manager.clear_eps_with_pending_hints();
+            shard_manager.clear_hosts_with_pending_hints();
             lister::scan_dir(shard_manager.hints_dir(), lister::dir_entry_types::of<directory_entry_type::directory>(),
                     [this, &shard_manager] (fs::path dir, directory_entry de) {
                 _files_count = 0;
