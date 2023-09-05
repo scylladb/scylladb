@@ -71,24 +71,23 @@ SEASTAR_TEST_CASE(test_create_table_statement) {
 
 SEASTAR_TEST_CASE(test_create_table_with_id_statement) {
     return do_with_cql_env_thread([](cql_test_env& e) {
-        // FIXME indent
-            e.execute_cql("CREATE TABLE tbl (a int, b int, PRIMARY KEY (a))").get();
-            auto id = e.local_db().find_schema("ks", "tbl")->id();
-            e.execute_cql("DROP TABLE tbl").get();
-            BOOST_REQUIRE_THROW(e.execute_cql("SELECT * FROM tbl").get(), std::exception);
-            e.execute_cql(
-                format("CREATE TABLE tbl (a int, b int, PRIMARY KEY (a)) WITH id='{}'", id)).get();
-            assert_that(e.execute_cql("SELECT * FROM tbl").get0())
-                .is_rows().with_size(0);
-            BOOST_REQUIRE_THROW(
-                e.execute_cql(format("CREATE TABLE tbl2 (a int, b int, PRIMARY KEY (a)) WITH id='{}'", id)).get(),
-                exceptions::invalid_request_exception);
-            BOOST_REQUIRE_THROW(
-                e.execute_cql("CREATE TABLE tbl2 (a int, b int, PRIMARY KEY (a)) WITH id='55'").get(),
-                exceptions::configuration_exception);
-            BOOST_REQUIRE_THROW(
-                e.execute_cql("ALTER TABLE tbl WITH id='f2a8c099-e723-48cb-8cd9-53e647a011a3'").get(),
-                exceptions::configuration_exception);
+        e.execute_cql("CREATE TABLE tbl (a int, b int, PRIMARY KEY (a))").get();
+        auto id = e.local_db().find_schema("ks", "tbl")->id();
+        e.execute_cql("DROP TABLE tbl").get();
+        BOOST_REQUIRE_THROW(e.execute_cql("SELECT * FROM tbl").get(), std::exception);
+        e.execute_cql(
+            format("CREATE TABLE tbl (a int, b int, PRIMARY KEY (a)) WITH id='{}'", id)).get();
+        assert_that(e.execute_cql("SELECT * FROM tbl").get0())
+            .is_rows().with_size(0);
+        BOOST_REQUIRE_THROW(
+            e.execute_cql(format("CREATE TABLE tbl2 (a int, b int, PRIMARY KEY (a)) WITH id='{}'", id)).get(),
+            exceptions::invalid_request_exception);
+        BOOST_REQUIRE_THROW(
+            e.execute_cql("CREATE TABLE tbl2 (a int, b int, PRIMARY KEY (a)) WITH id='55'").get(),
+            exceptions::configuration_exception);
+        BOOST_REQUIRE_THROW(
+            e.execute_cql("ALTER TABLE tbl WITH id='f2a8c099-e723-48cb-8cd9-53e647a011a3'").get(),
+            exceptions::configuration_exception);
     });
 }
 
@@ -245,23 +244,22 @@ SEASTAR_TEST_CASE(test_twcs_restrictions_mixed) {
 
 SEASTAR_TEST_CASE(test_drop_table_with_si_and_mv) {
     return do_with_cql_env_thread([](cql_test_env& e) {
-        // FIXME indent
-            e.execute_cql("CREATE TABLE tbl (a int, b int, c float, PRIMARY KEY (a))").get();
-            e.execute_cql("CREATE INDEX idx1 ON tbl (b)").get();
-            e.execute_cql("CREATE INDEX idx2 ON tbl (c)").get();
-            e.execute_cql("CREATE MATERIALIZED VIEW tbl_view AS SELECT c FROM tbl WHERE c IS NOT NULL PRIMARY KEY (c, a)").get();
-            // dropping a table with materialized views is prohibited
-            assert_that_failed(e.execute_cql("DROP TABLE tbl"));
-            e.execute_cql("DROP MATERIALIZED VIEW tbl_view").get();
-            // dropping a table with secondary indexes is fine
-            e.execute_cql("DROP TABLE tbl").get();
+        e.execute_cql("CREATE TABLE tbl (a int, b int, c float, PRIMARY KEY (a))").get();
+        e.execute_cql("CREATE INDEX idx1 ON tbl (b)").get();
+        e.execute_cql("CREATE INDEX idx2 ON tbl (c)").get();
+        e.execute_cql("CREATE MATERIALIZED VIEW tbl_view AS SELECT c FROM tbl WHERE c IS NOT NULL PRIMARY KEY (c, a)").get();
+        // dropping a table with materialized views is prohibited
+        assert_that_failed(e.execute_cql("DROP TABLE tbl"));
+        e.execute_cql("DROP MATERIALIZED VIEW tbl_view").get();
+        // dropping a table with secondary indexes is fine
+        e.execute_cql("DROP TABLE tbl").get();
 
-            e.execute_cql("CREATE TABLE tbl (a int, b int, c float, PRIMARY KEY (a))").get();
-            e.execute_cql("CREATE INDEX idx1 ON tbl (b)").get();
-            e.execute_cql("CREATE INDEX idx2 ON tbl (c)").get();
-            e.execute_cql("CREATE MATERIALIZED VIEW tbl_view AS SELECT c FROM tbl WHERE c IS NOT NULL PRIMARY KEY (c, a)").get();
-            // dropping whole keyspace with MV and SI is fine too
-            e.execute_cql("DROP KEYSPACE ks").get();
+        e.execute_cql("CREATE TABLE tbl (a int, b int, c float, PRIMARY KEY (a))").get();
+        e.execute_cql("CREATE INDEX idx1 ON tbl (b)").get();
+        e.execute_cql("CREATE INDEX idx2 ON tbl (c)").get();
+        e.execute_cql("CREATE MATERIALIZED VIEW tbl_view AS SELECT c FROM tbl WHERE c IS NOT NULL PRIMARY KEY (c, a)").get();
+        // dropping whole keyspace with MV and SI is fine too
+        e.execute_cql("DROP KEYSPACE ks").get();
     });
 }
 
@@ -2458,41 +2456,40 @@ SEASTAR_TEST_CASE(test_select_distinct) {
 
 SEASTAR_TEST_CASE(test_select_distinct_with_where_clause) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
-        // FIXME indent
-            e.execute_cql("CREATE TABLE cf (k int, a int, b int, PRIMARY KEY (k, a))").get();
-            for (int i = 0; i < 10; i++) {
-                e.execute_cql(format("INSERT INTO cf (k, a, b) VALUES ({:d}, {:d}, {:d})", i, i, i)).get();
-                e.execute_cql(format("INSERT INTO cf (k, a, b) VALUES ({:d}, {:d}, {:d})", i, i * 10, i * 10)).get();
-            }
-            BOOST_REQUIRE_THROW(e.execute_cql("SELECT DISTINCT k FROM cf WHERE a >= 80 ALLOW FILTERING").get(), std::exception);
-            BOOST_REQUIRE_THROW(e.execute_cql("SELECT DISTINCT k FROM cf WHERE k IN (1, 2, 3) AND a = 10").get(), std::exception);
-            BOOST_REQUIRE_THROW(e.execute_cql("SELECT DISTINCT k FROM cf WHERE b = 5").get(), std::exception);
+        e.execute_cql("CREATE TABLE cf (k int, a int, b int, PRIMARY KEY (k, a))").get();
+        for (int i = 0; i < 10; i++) {
+            e.execute_cql(format("INSERT INTO cf (k, a, b) VALUES ({:d}, {:d}, {:d})", i, i, i)).get();
+            e.execute_cql(format("INSERT INTO cf (k, a, b) VALUES ({:d}, {:d}, {:d})", i, i * 10, i * 10)).get();
+        }
+        BOOST_REQUIRE_THROW(e.execute_cql("SELECT DISTINCT k FROM cf WHERE a >= 80 ALLOW FILTERING").get(), std::exception);
+        BOOST_REQUIRE_THROW(e.execute_cql("SELECT DISTINCT k FROM cf WHERE k IN (1, 2, 3) AND a = 10").get(), std::exception);
+        BOOST_REQUIRE_THROW(e.execute_cql("SELECT DISTINCT k FROM cf WHERE b = 5").get(), std::exception);
 
-            assert_that(e.execute_cql("SELECT DISTINCT k FROM cf WHERE k = 1").get0())
-                .is_rows().with_size(1)
-                .with_row({int32_type->decompose(1)});
+        assert_that(e.execute_cql("SELECT DISTINCT k FROM cf WHERE k = 1").get0())
+            .is_rows().with_size(1)
+            .with_row({int32_type->decompose(1)});
 
-            assert_that(e.execute_cql("SELECT DISTINCT k FROM cf WHERE k IN (5, 6, 7)").get0())
-               .is_rows().with_size(3)
-               .with_row({int32_type->decompose(5)})
-               .with_row({int32_type->decompose(6)})
-               .with_row({int32_type->decompose(7)});
+        assert_that(e.execute_cql("SELECT DISTINCT k FROM cf WHERE k IN (5, 6, 7)").get0())
+           .is_rows().with_size(3)
+           .with_row({int32_type->decompose(5)})
+           .with_row({int32_type->decompose(6)})
+           .with_row({int32_type->decompose(7)});
 
-            // static columns
-            e.execute_cql("CREATE TABLE cf2 (k int, a int, s int static, b int, PRIMARY KEY (k, a))").get();
-            for (int i = 0; i < 10; i++) {
-                e.execute_cql(format("INSERT INTO cf2 (k, a, b, s) VALUES ({:d}, {:d}, {:d}, {:d})", i, i, i, i)).get();
-                e.execute_cql(format("INSERT INTO cf2 (k, a, b, s) VALUES ({:d}, {:d}, {:d}, {:d})", i, i * 10, i * 10, i * 10)).get();
-            }
-            assert_that(e.execute_cql("SELECT DISTINCT s FROM cf2 WHERE k = 5").get0())
-                .is_rows().with_size(1)
-                .with_row({int32_type->decompose(50)});
+        // static columns
+        e.execute_cql("CREATE TABLE cf2 (k int, a int, s int static, b int, PRIMARY KEY (k, a))").get();
+        for (int i = 0; i < 10; i++) {
+            e.execute_cql(format("INSERT INTO cf2 (k, a, b, s) VALUES ({:d}, {:d}, {:d}, {:d})", i, i, i, i)).get();
+            e.execute_cql(format("INSERT INTO cf2 (k, a, b, s) VALUES ({:d}, {:d}, {:d}, {:d})", i, i * 10, i * 10, i * 10)).get();
+        }
+        assert_that(e.execute_cql("SELECT DISTINCT s FROM cf2 WHERE k = 5").get0())
+            .is_rows().with_size(1)
+            .with_row({int32_type->decompose(50)});
 
-            assert_that(e.execute_cql("SELECT DISTINCT s FROM cf2 WHERE k IN (5, 6, 7)").get0())
-               .is_rows().with_size(3)
-               .with_row({int32_type->decompose(50)})
-               .with_row({int32_type->decompose(60)})
-               .with_row({int32_type->decompose(70)});
+        assert_that(e.execute_cql("SELECT DISTINCT s FROM cf2 WHERE k IN (5, 6, 7)").get0())
+           .is_rows().with_size(3)
+           .with_row({int32_type->decompose(50)})
+           .with_row({int32_type->decompose(60)})
+           .with_row({int32_type->decompose(70)});
     });
 }
 
@@ -2859,60 +2856,57 @@ SEASTAR_TEST_CASE(test_alter_table) {
 
 SEASTAR_TEST_CASE(test_map_query) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
-        // FIXME indent
-            e.execute_cql("CREATE TABLE xx (k int PRIMARY KEY, m map<text, int>);").get();
-            e.execute_cql("insert into xx (k, m) values (0, {'v2': 1});").get();
-            auto m_type = map_type_impl::get_instance(utf8_type, int32_type, true);
-            assert_that(e.execute_cql("select m from xx where k = 0;").get0())
-                    .is_rows().with_rows({
-                        { make_map_value(m_type, map_type_impl::native_type({{sstring("v2"), 1}})).serialize() }
-                    });
-            e.execute_cql("delete m['v2'] from xx where k = 0;").get();
-            assert_that(e.execute_cql("select m from xx where k = 0;").get0())
-                    .is_rows().with_rows({{{}}});
+        e.execute_cql("CREATE TABLE xx (k int PRIMARY KEY, m map<text, int>);").get();
+        e.execute_cql("insert into xx (k, m) values (0, {'v2': 1});").get();
+        auto m_type = map_type_impl::get_instance(utf8_type, int32_type, true);
+        assert_that(e.execute_cql("select m from xx where k = 0;").get0())
+                .is_rows().with_rows({
+                    { make_map_value(m_type, map_type_impl::native_type({{sstring("v2"), 1}})).serialize() }
+                });
+        e.execute_cql("delete m['v2'] from xx where k = 0;").get();
+        assert_that(e.execute_cql("select m from xx where k = 0;").get0())
+                .is_rows().with_rows({{{}}});
     });
 }
 
 SEASTAR_TEST_CASE(test_drop_table) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
-        // FIXME indent
-            e.execute_cql("create table tmp (pk int, v int, PRIMARY KEY (pk));").get();
-            e.execute_cql("drop columnfamily tmp;").get();
-            e.execute_cql("create table tmp (pk int, v int, PRIMARY KEY (pk));").get();
-            e.execute_cql("drop columnfamily tmp;").get();
+        e.execute_cql("create table tmp (pk int, v int, PRIMARY KEY (pk));").get();
+        e.execute_cql("drop columnfamily tmp;").get();
+        e.execute_cql("create table tmp (pk int, v int, PRIMARY KEY (pk));").get();
+        e.execute_cql("drop columnfamily tmp;").get();
     });
 }
 
 SEASTAR_TEST_CASE(test_reversed_slice_with_empty_range_before_all_rows) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
-        // FIXME indent
-            e.execute_cql("CREATE TABLE test (a int, b int, c int, s1 int static, s2 int static, PRIMARY KEY (a, b));").get();
+        e.execute_cql("CREATE TABLE test (a int, b int, c int, s1 int static, s2 int static, PRIMARY KEY (a, b));").get();
 
-            e.execute_cql("INSERT INTO test (a, b, c, s1, s2) VALUES (99, 0, 0, 17, 42);").get();
-            e.execute_cql("INSERT INTO test (a, b, c, s1, s2) VALUES (99, 1, 1, 17, 42);").get();
-            e.execute_cql("INSERT INTO test (a, b, c, s1, s2) VALUES (99, 2, 2, 17, 42);").get();
-            e.execute_cql("INSERT INTO test (a, b, c, s1, s2) VALUES (99, 3, 3, 17, 42);").get();
-            e.execute_cql("INSERT INTO test (a, b, c, s1, s2) VALUES (99, 4, 4, 17, 42);").get();
-            e.execute_cql("INSERT INTO test (a, b, c, s1, s2) VALUES (99, 5, 5, 17, 42);").get();
-            e.execute_cql("INSERT INTO test (a, b, c, s1, s2) VALUES (99, 6, 6, 17, 42);").get();
-            e.execute_cql("INSERT INTO test (a, b, c, s1, s2) VALUES (99, 7, 7, 17, 42);").get();
-            e.execute_cql("INSERT INTO test (a, b, c, s1, s2) VALUES (99, 8, 8, 17, 42);").get();
-            e.execute_cql("INSERT INTO test (a, b, c, s1, s2) VALUES (99, 9, 9, 17, 42);").get();
-            e.execute_cql("INSERT INTO test (a, b, c, s1, s2) VALUES (99, 10, 10, 17, 42);").get();
-            e.execute_cql("INSERT INTO test (a, b, c, s1, s2) VALUES (99, 11, 11, 17, 42);").get();
-            e.execute_cql("INSERT INTO test (a, b, c, s1, s2) VALUES (99, 12, 12, 17, 42);").get();
-            e.execute_cql("INSERT INTO test (a, b, c, s1, s2) VALUES (99, 13, 13, 17, 42);").get();
-            e.execute_cql("INSERT INTO test (a, b, c, s1, s2) VALUES (99, 14, 14, 17, 42);").get();
-            e.execute_cql("INSERT INTO test (a, b, c, s1, s2) VALUES (99, 15, 15, 17, 42);").get();
+        e.execute_cql("INSERT INTO test (a, b, c, s1, s2) VALUES (99, 0, 0, 17, 42);").get();
+        e.execute_cql("INSERT INTO test (a, b, c, s1, s2) VALUES (99, 1, 1, 17, 42);").get();
+        e.execute_cql("INSERT INTO test (a, b, c, s1, s2) VALUES (99, 2, 2, 17, 42);").get();
+        e.execute_cql("INSERT INTO test (a, b, c, s1, s2) VALUES (99, 3, 3, 17, 42);").get();
+        e.execute_cql("INSERT INTO test (a, b, c, s1, s2) VALUES (99, 4, 4, 17, 42);").get();
+        e.execute_cql("INSERT INTO test (a, b, c, s1, s2) VALUES (99, 5, 5, 17, 42);").get();
+        e.execute_cql("INSERT INTO test (a, b, c, s1, s2) VALUES (99, 6, 6, 17, 42);").get();
+        e.execute_cql("INSERT INTO test (a, b, c, s1, s2) VALUES (99, 7, 7, 17, 42);").get();
+        e.execute_cql("INSERT INTO test (a, b, c, s1, s2) VALUES (99, 8, 8, 17, 42);").get();
+        e.execute_cql("INSERT INTO test (a, b, c, s1, s2) VALUES (99, 9, 9, 17, 42);").get();
+        e.execute_cql("INSERT INTO test (a, b, c, s1, s2) VALUES (99, 10, 10, 17, 42);").get();
+        e.execute_cql("INSERT INTO test (a, b, c, s1, s2) VALUES (99, 11, 11, 17, 42);").get();
+        e.execute_cql("INSERT INTO test (a, b, c, s1, s2) VALUES (99, 12, 12, 17, 42);").get();
+        e.execute_cql("INSERT INTO test (a, b, c, s1, s2) VALUES (99, 13, 13, 17, 42);").get();
+        e.execute_cql("INSERT INTO test (a, b, c, s1, s2) VALUES (99, 14, 14, 17, 42);").get();
+        e.execute_cql("INSERT INTO test (a, b, c, s1, s2) VALUES (99, 15, 15, 17, 42);").get();
 
-            assert_that(e.execute_cql("select * from test WHERE a = 99 and b < 0 ORDER BY b DESC limit 2;").get0())
-                .is_rows().is_empty();
+        assert_that(e.execute_cql("select * from test WHERE a = 99 and b < 0 ORDER BY b DESC limit 2;").get0())
+            .is_rows().is_empty();
 
-            assert_that(e.execute_cql("select * from test WHERE a = 99 order by b desc;").get0())
-                .is_rows().with_size(16);
+        assert_that(e.execute_cql("select * from test WHERE a = 99 order by b desc;").get0())
+            .is_rows().with_size(16);
 
-            assert_that(e.execute_cql("select * from test;").get0())
-                .is_rows().with_size(16);
+        assert_that(e.execute_cql("select * from test;").get0())
+            .is_rows().with_size(16);
     });
 }
 
@@ -2998,32 +2992,31 @@ SEASTAR_TEST_CASE(test_reversed_slice_with_many_clustering_ranges) {
 
 SEASTAR_TEST_CASE(test_query_with_range_tombstones) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
-        // FIXME indent
-            e.execute_cql("CREATE TABLE test (pk int, ck int, v int, PRIMARY KEY (pk, ck));").get();
+        e.execute_cql("CREATE TABLE test (pk int, ck int, v int, PRIMARY KEY (pk, ck));").get();
 
-            e.execute_cql("INSERT INTO test (pk, ck, v) VALUES (0, 0, 0);").get();
-            e.execute_cql("INSERT INTO test (pk, ck, v) VALUES (0, 2, 2);").get();
-            e.execute_cql("INSERT INTO test (pk, ck, v) VALUES (0, 4, 4);").get();
-            e.execute_cql("INSERT INTO test (pk, ck, v) VALUES (0, 5, 5);").get();
-            e.execute_cql("INSERT INTO test (pk, ck, v) VALUES (0, 6, 6);").get();
+        e.execute_cql("INSERT INTO test (pk, ck, v) VALUES (0, 0, 0);").get();
+        e.execute_cql("INSERT INTO test (pk, ck, v) VALUES (0, 2, 2);").get();
+        e.execute_cql("INSERT INTO test (pk, ck, v) VALUES (0, 4, 4);").get();
+        e.execute_cql("INSERT INTO test (pk, ck, v) VALUES (0, 5, 5);").get();
+        e.execute_cql("INSERT INTO test (pk, ck, v) VALUES (0, 6, 6);").get();
 
-            e.execute_cql("DELETE FROM test WHERE pk = 0 AND ck >= 1 AND ck <= 3;").get();
-            e.execute_cql("DELETE FROM test WHERE pk = 0 AND ck > 4 AND ck <= 8;").get();
-            e.execute_cql("DELETE FROM test WHERE pk = 0 AND ck > 0 AND ck <= 1;").get();
+        e.execute_cql("DELETE FROM test WHERE pk = 0 AND ck >= 1 AND ck <= 3;").get();
+        e.execute_cql("DELETE FROM test WHERE pk = 0 AND ck > 4 AND ck <= 8;").get();
+        e.execute_cql("DELETE FROM test WHERE pk = 0 AND ck > 0 AND ck <= 1;").get();
 
-            assert_that(e.execute_cql("SELECT v FROM test WHERE pk = 0 ORDER BY ck DESC;").get0())
-                .is_rows()
-                .with_rows({
-                    { int32_type->decompose(4) },
-                    { int32_type->decompose(0) },
-                });
+        assert_that(e.execute_cql("SELECT v FROM test WHERE pk = 0 ORDER BY ck DESC;").get0())
+            .is_rows()
+            .with_rows({
+                { int32_type->decompose(4) },
+                { int32_type->decompose(0) },
+            });
 
-            assert_that(e.execute_cql("SELECT v FROM test WHERE pk = 0;").get0())
-                .is_rows()
-                .with_rows({
-                   { int32_type->decompose(0) },
-                   { int32_type->decompose(4) },
-                });
+        assert_that(e.execute_cql("SELECT v FROM test WHERE pk = 0;").get0())
+            .is_rows()
+            .with_rows({
+               { int32_type->decompose(0) },
+               { int32_type->decompose(4) },
+            });
     });
 }
 
@@ -4755,24 +4748,22 @@ SEASTAR_TEST_CASE(test_range_deletions_for_specific_column) {
 
 SEASTAR_TEST_CASE(test_alter_table_default_ttl_reset) {
     return do_with_cql_env_thread([](cql_test_env& e) {
-        // FIXME indent
-            e.execute_cql("CREATE TABLE tbl (a int, b int, PRIMARY KEY (a)) WITH default_time_to_live=10").get();
-            BOOST_REQUIRE(e.local_db().find_schema("ks", "tbl")->default_time_to_live().count() == 10);
-            e.execute_cql("ALTER TABLE tbl WITH gc_grace_seconds=0").get();
-            BOOST_REQUIRE(e.local_db().find_schema("ks", "tbl")->default_time_to_live().count() == 10);
+        e.execute_cql("CREATE TABLE tbl (a int, b int, PRIMARY KEY (a)) WITH default_time_to_live=10").get();
+        BOOST_REQUIRE(e.local_db().find_schema("ks", "tbl")->default_time_to_live().count() == 10);
+        e.execute_cql("ALTER TABLE tbl WITH gc_grace_seconds=0").get();
+        BOOST_REQUIRE(e.local_db().find_schema("ks", "tbl")->default_time_to_live().count() == 10);
     });
 }
 
 SEASTAR_TEST_CASE(test_internal_schema_changes_on_a_distributed_table) {
     return do_with_cql_env_thread([](cql_test_env& e) {
-        // FIXME indent
-            cquery_nofail(e, "create table t (p int primary key, v int)");
-            const auto local_err = exception_predicate::message_contains("internal query");
-            BOOST_REQUIRE_EXCEPTION(e.local_qp().execute_internal("alter table ks.t add col abcd", cql3::query_processor::cache_internal::yes).get(), std::logic_error, local_err);
-            BOOST_REQUIRE_EXCEPTION(e.local_qp().execute_internal("create table ks.t2 (id int primary key)", cql3::query_processor::cache_internal::yes).get(), std::logic_error, local_err);
-            BOOST_REQUIRE_EXCEPTION(e.local_qp().execute_internal("create index on ks.t(v)", cql3::query_processor::cache_internal::yes).get(), std::logic_error, local_err);
-            BOOST_REQUIRE_EXCEPTION(e.local_qp().execute_internal("drop table ks.t", cql3::query_processor::cache_internal::yes).get(), std::logic_error, local_err);
-            BOOST_REQUIRE_EXCEPTION(e.local_qp().execute_internal("drop keyspace ks", cql3::query_processor::cache_internal::yes).get(), std::logic_error, local_err);
+        cquery_nofail(e, "create table t (p int primary key, v int)");
+        const auto local_err = exception_predicate::message_contains("internal query");
+        BOOST_REQUIRE_EXCEPTION(e.local_qp().execute_internal("alter table ks.t add col abcd", cql3::query_processor::cache_internal::yes).get(), std::logic_error, local_err);
+        BOOST_REQUIRE_EXCEPTION(e.local_qp().execute_internal("create table ks.t2 (id int primary key)", cql3::query_processor::cache_internal::yes).get(), std::logic_error, local_err);
+        BOOST_REQUIRE_EXCEPTION(e.local_qp().execute_internal("create index on ks.t(v)", cql3::query_processor::cache_internal::yes).get(), std::logic_error, local_err);
+        BOOST_REQUIRE_EXCEPTION(e.local_qp().execute_internal("drop table ks.t", cql3::query_processor::cache_internal::yes).get(), std::logic_error, local_err);
+        BOOST_REQUIRE_EXCEPTION(e.local_qp().execute_internal("drop keyspace ks", cql3::query_processor::cache_internal::yes).get(), std::logic_error, local_err);
     });
 }
 
