@@ -26,13 +26,18 @@ namespace {
 logging::logger resource_manager_logger{"hints_resource_manager"};
 
 future<bool> is_mountpoint(const fs::path& path) {
-    // Special case for '/', which is always a mount point
+    // Special case for '/', which is always a mountpoint.
     if (path == path.parent_path()) {
-        return make_ready_future<bool>(true);
+        co_return true;
     }
-    return when_all(get_device_id(path), get_device_id(path.parent_path())).then([](std::tuple<future<dev_t>, future<dev_t>> ids) {
-        return std::get<0>(ids).get0() != std::get<1>(ids).get0();
-    });
+
+    const fs::path parent_path = path.parent_path();
+    
+    // Don't change the order below. We must use the reference immediately to ensure it still lives.
+    const auto did1 = co_await get_device_id(path);
+    const auto did2 = co_await get_device_id(parent_path);
+
+    co_return did1 != did2;
 }
 
 } // anonymous namespace
