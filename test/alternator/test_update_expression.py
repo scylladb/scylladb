@@ -59,6 +59,10 @@ def test_update_expression_set_copy(test_table_s):
     # Copying an non-existing attribute generates an error
     with pytest.raises(ClientError, match='ValidationException'):
         test_table_s.update_item(Key={'p': p}, UpdateExpression='SET c = z')
+    # Same thing happens if the item does't exist at all
+    p1 = random_string()
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_s.update_item(Key={'p': p1}, UpdateExpression='SET c = z')
     # It turns out that attributes to be copied are read before the SET
     # starts to write, so "SET x = :val1, y = x" does not work...
     with pytest.raises(ClientError, match='ValidationException'):
@@ -546,6 +550,63 @@ def test_update_expression_list_append(test_table_s):
         ExpressionAttributeValues={':val1': [8]},
         ExpressionAttributeNames={'#name1': 'a', '#name2': 'a'})
     assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['a'] == ['dog', 'hi', 2, 4, 'hello', 8]
+
+# A list_append() function requires both its arguments to be lists. If one
+# of them isn't, we get a ValidationException. This also includes the case
+# that one of the arguments is an attribute which doesn't exist, or the
+# entire item doesn't exist.
+# The specific error message returned by Alternator and DynamoDB are not
+# identical - e.g., when an attribute is missing DynamoDB says that ""The
+# provided expression refers to an attribute that does not exist in the item"
+# and Alternator says "list_append() given a non-list" - but the error
+# type, ValidationException, is the same.
+def test_update_expression_list_append_non_list_arguments(test_table_s):
+    p = random_string()
+    # The item p doesn't exist at all, so in particular the attribute "b" is
+    # missing, so in particular b is not a list
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_s.update_item(Key={'p': p},
+            UpdateExpression='SET a = list_append(b, :val1)',
+            ExpressionAttributeValues={':val1': ['hi', 2]})
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_s.update_item(Key={'p': p},
+            UpdateExpression='SET a = list_append(:val1, b)',
+            ExpressionAttributeValues={':val1': ['hi', 2]})
+    # The item p does exist, but it doesn't have an attribute b, so
+    # in particular b is not a list:
+    test_table_s.put_item(Item={'p': p, 'a': 2})
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_s.update_item(Key={'p': p},
+            UpdateExpression='SET a = list_append(b, :val1)',
+            ExpressionAttributeValues={':val1': ['hi', 2]})
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_s.update_item(Key={'p': p},
+            UpdateExpression='SET a = list_append(:val1, b)',
+            ExpressionAttributeValues={':val1': ['hi', 2]})
+    # Attribute b does exist, but it's not a list:
+    for b in [7, 'hello', b'hi', set([1,2,3]), {'a': 3, 'b': 4}]:
+        test_table_s.put_item(Item={'p': p, 'b': b})
+        with pytest.raises(ClientError, match='ValidationException'):
+            test_table_s.update_item(Key={'p': p},
+                UpdateExpression='SET a = list_append(b, :val1)',
+                ExpressionAttributeValues={':val1': ['hi', 2]})
+        with pytest.raises(ClientError, match='ValidationException'):
+            test_table_s.update_item(Key={'p': p},
+                UpdateExpression='SET a = list_append(:val1, b)',
+                ExpressionAttributeValues={':val1': ['hi', 2]})
+    # Sanity check: when b does exist and *is* a list, things finally work.
+    # Let's try a few lists, including an empty one and list including
+    # nested list items - they are all fine:
+    for b in [[1,2,3], [], ['x', ['hi', 'hello']]]:
+        test_table_s.put_item(Item={'p': p, 'b': b})
+        test_table_s.update_item(Key={'p': p},
+            UpdateExpression='SET a = list_append(b, :val1)',
+            ExpressionAttributeValues={':val1': ['hi', 2]})
+        assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['a'] == b + ['hi', 2]
+        test_table_s.update_item(Key={'p': p},
+            UpdateExpression='SET a = list_append(:val1, b)',
+            ExpressionAttributeValues={':val1': ['hi', 2]})
+        assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['a'] == ['hi', 2] + b
 
 # Test the "if_not_exists" function in SET
 # The test also checks additional features of function-call parsing.
