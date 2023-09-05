@@ -16,14 +16,6 @@ import re
 from util import create_test_table, is_aws, scylla_log
 from urllib.parse import urlparse
 
-# When tests are run with HTTPS, the server often won't have its SSL
-# certificate signed by a known authority. So we will disable certificate
-# verification with the "verify=False" request option. However, once we do
-# that, we start getting scary-looking warning messages, saying that this
-# makes HTTPS insecure. The following silences those warnings:
-import urllib3
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-
 # Test that the Boto libraries are new enough. These tests want to test a
 # large variety of DynamoDB API features, and to do this we need a new-enough
 # version of the the Boto libraries (boto3 and botocore) so that they can
