@@ -283,7 +283,7 @@ void hint_sender::pop_current_segment() {
 
 future<> hint_sender::flush_maybe() noexcept {
     const auto current_time = clock_type::now();
-    
+
     if (current_time >= _next_flush_tp) {
         try {
             co_await _host_manager.flush_current_hints();
@@ -316,11 +316,13 @@ bool hint_sender::can_send() noexcept {
     }
 }
 
-const column_mapping& hint_sender::get_column_mapping(lw_shared_ptr<send_one_file_ctx> ctx_ptr, const frozen_mutation& fm, const hint_entry_reader& hr) {
+const column_mapping& hint_sender::get_column_mapping(lw_shared_ptr<send_one_file_ctx> ctx_ptr,
+        const frozen_mutation& fm, const hint_entry_reader& hr)
+{
     auto cm_it = ctx_ptr->schema_ver_to_column_mapping.find(fm.schema_version());
     if (cm_it == ctx_ptr->schema_ver_to_column_mapping.end()) {
         if (!hr.get_column_mapping()) {
-            throw no_column_mapping(fm.schema_version());
+            throw no_column_mapping{fm.schema_version()};
         }
 
         manager_logger.debug("new schema version {}", fm.schema_version());
