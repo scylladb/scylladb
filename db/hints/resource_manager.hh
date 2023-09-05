@@ -134,9 +134,10 @@ private:
         state::replay_allowed>>;
 
 public:
-    static constexpr size_t hint_segment_size_in_mb = 32;
-    static constexpr size_t max_hints_per_ep_size_mb = 128; // 4 files 32MB each
-    static constexpr size_t default_per_shard_concurrency_limit = 8;
+    // TODO: Explain these briefly.
+    static constexpr size_t HINT_SEGMENT_SIZE_IN_MB = 32;
+    static constexpr size_t MAX_HINTS_PER_EP_SIZE_MB = 128; // 4 files 32 MB each
+    static constexpr size_t DEFAULT_PER_SHARD_CONCURRENCY_LIMIT = 8;
 
 private:
     const size_t _max_send_in_flight_memory;

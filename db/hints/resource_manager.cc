@@ -53,7 +53,7 @@ future<semaphore_units<named_semaphore::exception_factory>> resource_manager::ge
     const size_t per_node_concurrency_limit = _max_hints_send_queue_length();
     const size_t per_shard_concurrency_limit = (per_node_concurrency_limit > 0)
             ? div_ceil(per_node_concurrency_limit, smp::count)
-            : default_per_shard_concurrency_limit;
+            : DEFAULT_PER_SHARD_CONCURRENCY_LIMIT;
     const size_t min_send_hint_budget = _max_send_in_flight_memory / per_shard_concurrency_limit;
     // Let's approximate the memory size the mutation is going to consume by the size of its serialized form
     size_t hint_memory_budget = std::max(min_send_hint_budget, buf_size);
@@ -166,7 +166,7 @@ void space_watchdog::on_timer() {
         // Adjust the quota to take into account the space we guarantee to every end point manager
         size_t adjusted_quota = 0;
         size_t delta = boost::accumulate(per_device_limits.managers, 0, [] (size_t sum, manager& shard_manager) {
-            return sum + shard_manager.ep_managers_size() * resource_manager::hint_segment_size_in_mb * 1024 * 1024;
+            return sum + shard_manager.ep_managers_size() * resource_manager::HINT_SEGMENT_SIZE_IN_MB * 1024 * 1024;
         });
         if (per_device_limits.max_shard_disk_space_size > delta) {
             adjusted_quota = per_device_limits.max_shard_disk_space_size - delta;

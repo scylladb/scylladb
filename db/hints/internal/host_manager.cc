@@ -167,8 +167,8 @@ future<db::commitlog> host_manager::add_store() noexcept {
             commitlog::config cfg;
 
             cfg.commit_log_location = _hints_dir.c_str();
-            cfg.commitlog_segment_size_in_mb = resource_manager::hint_segment_size_in_mb;
-            cfg.commitlog_total_space_in_mb = resource_manager::max_hints_per_ep_size_mb;
+            cfg.commitlog_segment_size_in_mb = resource_manager::HINT_SEGMENT_SIZE_IN_MB;
+            cfg.commitlog_total_space_in_mb = resource_manager::MAX_HINTS_PER_EP_SIZE_MB;
             cfg.fname_prefix = HINT_FILENAME_PREFIX;
             cfg.extensions = &_shard_manager.local_db().extensions();
 
@@ -177,7 +177,7 @@ future<db::commitlog> host_manager::add_store() noexcept {
             // during standard HH workload, so no need to print a warning about it.
             cfg.warn_about_segments_left_on_disk_after_shutdown = false;
             // Allow going over the configured size limit of the commitlog
-            // (resource_manager::max_hints_per_ep_size_mb). The commitlog will
+            // (resource_manager::MAX_HINTS_PER_EP_SIZE_MB). The commitlog will
             // be more conservative with its disk usage when going over the limit.
             // On the other hand, HH counts used space using the space_watchdog
             // in resource_manager, so its redundant for the commitlog to apply
