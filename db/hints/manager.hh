@@ -96,10 +96,12 @@ private:
     using host_managers_map_type = std::unordered_map<endpoint_id, host_manager>;
 
     enum class state {
-        started,                // hinting is currently allowed (start() call is complete)
-        replay_allowed,         // replaying (hints sending) is allowed
-        draining_all,           // hinting is not allowed - all ep managers are being stopped because this node is leaving the cluster
-        stopping                // hinting is not allowed - stopping is in progress (stop() method has been called)
+        started,        // Hinting is currently allowed (start() call is complete).
+        replay_allowed, // Replaying (hints sending) is allowed.
+        draining_all,   // Hinting is not allowed -- all host managers are being stopped
+                        // because this node is leaving the cluster.
+        stopping        // Hinting is not allowed -- stopping is in progress,
+                        // i.e. stop() has been called.
     };
 
     using state_set = enum_set<super_enum<state,
