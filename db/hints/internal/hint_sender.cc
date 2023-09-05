@@ -10,6 +10,7 @@
 #include "db/hints/internal/hint_sender.hh"
 
 // Seastar features.
+#include <exception>
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/file.hh>
@@ -281,16 +282,17 @@ void hint_sender::pop_current_segment() {
 }
 
 future<> hint_sender::flush_maybe() noexcept {
-    auto current_time = clock_type::now();
+    const auto current_time = clock_type::now();
+    
     if (current_time >= _next_flush_tp) {
-        return _host_manager.flush_current_hints().then([this, current_time] {
+        try {
+            co_await _host_manager.flush_current_hints();
             _next_flush_tp = current_time + manager::hints_flush_period;
-        }).handle_exception([] (auto eptr) {
-            manager_logger.trace("flush_maybe() failed: {}", eptr);
-            return make_ready_future<>();
-        });
+        } catch (...) {
+            manager_logger.trace("flush_maybe() failed: {}", std::current_exception());
+            co_return;
+        }
     }
-    return make_ready_future<>();
 }
 
 bool hint_sender::can_send() noexcept {
