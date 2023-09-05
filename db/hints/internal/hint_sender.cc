@@ -537,8 +537,8 @@ bool hint_sender::send_one_file(const sstring& fname) {
 
 // Runs in the seastar::async context
 void hint_sender::send_hints_maybe() noexcept {
-    using namespace std::literals::chrono_literals;
-    manager_logger.trace("send_hints(): going to send hints to {}, we have {} segment to replay", _ep_key, _segments_to_replay.size() + _foreign_segments_to_replay.size());
+    manager_logger.trace("send_hints(): going to send hints to {}, we have {} segment to replay",
+            _ep_key, _segments_to_replay.size() + _foreign_segments_to_replay.size());
 
     int replayed_segments_count = 0;
 
@@ -565,9 +565,9 @@ void hint_sender::send_hints_maybe() noexcept {
 
     if (have_segments()) {
         // TODO: come up with something more sophisticated here
-        _next_send_retry_tp = clock_type::now() + 1s;
+        _next_send_retry_tp = clock_type::now() + std::chrono::seconds(1);
     } else {
-        // if there are no segments to send we want to retry when we maybe have some (after flushing)
+        // If there are no segments to send, we want to retry when we might have some (after flushing).
         _next_send_retry_tp = _next_flush_tp;
     }
 
