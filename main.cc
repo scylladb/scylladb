@@ -1089,7 +1089,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             static sharded<cdc::generation_service> cdc_generation_service;
 
             supervisor::notify("starting system keyspace");
-            sys_ks.start(std::ref(qp), std::ref(db), std::ref(snitch)).get();
+            sys_ks.start(std::ref(qp), std::ref(db)).get();
             // TODO: stop()?
 
             // Initialization of a keyspace is done by shard 0 only. For system

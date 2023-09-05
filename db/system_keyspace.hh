@@ -62,7 +62,6 @@ namespace gms {
 namespace locator {
     class effective_replication_map_factory;
     class endpoint_dc_rack;
-    class snitch_ptr;
 } // namespace locator
 
 namespace gms {
@@ -512,7 +511,7 @@ private:
 
 public:
 
-    system_keyspace(cql3::query_processor& qp, replica::database& db, const locator::snitch_ptr&) noexcept;
+    system_keyspace(cql3::query_processor& qp, replica::database& db) noexcept;
     ~system_keyspace();
     future<> shutdown();
 

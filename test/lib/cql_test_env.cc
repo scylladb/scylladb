@@ -613,7 +613,7 @@ private:
             auto stop_sl_controller = defer([this] { _sl_controller.stop().get(); });
             _sl_controller.invoke_on_all(&qos::service_level_controller::start).get();
 
-            _sys_ks.start(std::ref(_qp), std::ref(_db), std::ref(_snitch)).get();
+            _sys_ks.start(std::ref(_qp), std::ref(_db)).get();
             auto stop_sys_kd = defer([this] { _sys_ks.stop().get(); });
             for (const auto p: all_system_table_load_phases) {
                 replica::distributed_loader::init_system_keyspace(_sys_ks, _erm_factory, _db, *cfg, p).get();

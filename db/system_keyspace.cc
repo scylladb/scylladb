@@ -2782,7 +2782,7 @@ sstring system_keyspace_name() {
 }
 
 system_keyspace::system_keyspace(
-        cql3::query_processor& qp, replica::database& db, const locator::snitch_ptr& snitch) noexcept
+        cql3::query_processor& qp, replica::database& db) noexcept
     : _qp(qp)
     , _db(db)
     , _cache(std::make_unique<local_cache>())
