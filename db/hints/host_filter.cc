@@ -35,20 +35,6 @@ host_filter::host_filter(std::unordered_set<sstring> allowed_dcs)
     , _dcs{std::move(allowed_dcs)}
 {}
 
-bool host_filter::can_hint_for(const locator::topology& topo, endpoint_id ep) const {
-    switch (_enabled_kind) {
-    case enabled_kind::enabled_for_all:
-        return true;
-    case enabled_kind::enabled_selectively: {
-        auto node = topo.find_node(ep);
-        return node && _dcs.contains(node->dc_rack().dc);
-    }
-    case enabled_kind::disabled_for_all:
-        return false;
-    }
-    throw std::logic_error("Uncovered variant of enabled_kind");
-}
-
 host_filter host_filter::parse_from_config_string(sstring opt) {
     if (boost::iequals(opt, "false") || opt == "0") {
         return host_filter(disabled_for_all_tag());
@@ -75,11 +61,18 @@ host_filter host_filter::parse_from_dc_list(sstring opt) {
     return host_filter(std::unordered_set<sstring>(dcs.begin(), dcs.end()));
 }
 
-std::istream& operator>>(std::istream& is, host_filter& f) {
-    sstring tmp;
-    is >> tmp;
-    f = host_filter::parse_from_config_string(std::move(tmp));
-    return is;
+bool host_filter::can_hint_for(const locator::topology& topo, endpoint_id ep) const {
+    switch (_enabled_kind) {
+    case enabled_kind::enabled_for_all:
+        return true;
+    case enabled_kind::enabled_selectively: {
+        auto node = topo.find_node(ep);
+        return node && _dcs.contains(node->dc_rack().dc);
+    }
+    case enabled_kind::disabled_for_all:
+        return false;
+    }
+    throw std::logic_error("Uncovered variant of enabled_kind");
 }
 
 sstring host_filter::to_configuration_string() const {
@@ -94,6 +87,15 @@ sstring host_filter::to_configuration_string() const {
     throw std::logic_error("Uncovered variant of enabled_kind");
 }
 
+std::ostream& operator<<(std::ostream& os, const host_filter& f) {
+    fmt::print(os, "host_filter{{enabled_kind={}",
+               host_filter::enabled_kind_to_string(f._enabled_kind));
+    if (f._enabled_kind == host_filter::enabled_kind::enabled_selectively) {
+        fmt::print(os, ", dcs={{{}}}", fmt::join(f._dcs, ","));
+    }
+    fmt::print(os, "}}");
+    return os;
+}
 
 std::string_view host_filter::enabled_kind_to_string(host_filter::enabled_kind ek) {
     switch (ek) {
@@ -107,14 +109,11 @@ std::string_view host_filter::enabled_kind_to_string(host_filter::enabled_kind e
     throw std::logic_error("Uncovered variant of enabled_kind");
 }
 
-std::ostream& operator<<(std::ostream& os, const host_filter& f) {
-    fmt::print(os, "host_filter{{enabled_kind={}",
-               host_filter::enabled_kind_to_string(f._enabled_kind));
-    if (f._enabled_kind == host_filter::enabled_kind::enabled_selectively) {
-        fmt::print(os, ", dcs={{{}}}", fmt::join(f._dcs, ","));
-    }
-    fmt::print(os, "}}");
-    return os;
+std::istream& operator>>(std::istream& is, host_filter& f) {
+    sstring tmp;
+    is >> tmp;
+    f = host_filter::parse_from_config_string(std::move(tmp));
+    return is;
 }
 
 } // namespace db::hints
