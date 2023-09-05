@@ -51,6 +51,8 @@
 #include <ranges>
 #include <span>
 
+namespace fs = std::filesystem;
+
 namespace db::hints {
 
 using namespace internal;

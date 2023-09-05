@@ -27,10 +27,6 @@
 #include <filesystem>
 #include <unordered_set>
 
-// Usually we don't define namespace aliases in our headers
-// but this one is already entrenched.
-namespace fs = std::filesystem;
-
 namespace service {
 class storage_proxy;
 } // namespace service
@@ -41,7 +37,7 @@ class gossiper;
 
 namespace db::hints {
 
-future<::dev_t> get_device_id(const fs::path& path);
+future<::dev_t> get_device_id(const std::filesystem::path& path);
 
 class manager;
 
@@ -118,7 +114,7 @@ private:
     /// \param path directory to scan
     /// \param ep end point ID
     /// \return future that resolves when scanning is complete
-    future<> scan_one_ep_dir(fs::path path, manager& shard_manager, endpoint_id ep);
+    future<> scan_one_ep_dir(std::filesystem::path path, manager& shard_manager, endpoint_id ep);
 };
 
 class resource_manager {

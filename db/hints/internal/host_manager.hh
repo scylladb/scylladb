@@ -85,7 +85,7 @@ private:
     manager& _shard_manager;
     hint_sender _sender;
     
-    const fs::path _hints_dir;
+    const std::filesystem::path _hints_dir;
     uint64_t _hints_in_progress = 0;
 
 public:
@@ -197,7 +197,7 @@ public:
         return with_lock(*ep_man._file_update_mutex_ptr, std::forward<Func>(func)).finally([lock_ptr = ep_man._file_update_mutex_ptr] {});
     }
 
-    const fs::path& hints_dir() const noexcept {
+    const std::filesystem::path& hints_dir() const noexcept {
         return _hints_dir;
     }
 

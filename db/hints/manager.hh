@@ -30,6 +30,7 @@
 
 // STD.
 #include <chrono>
+#include <filesystem>
 #include <list>
 #include <map>
 #include <memory>
@@ -115,7 +116,7 @@ private:
 
 private:
     state_set _state;
-    const fs::path _hints_dir;
+    const std::filesystem::path _hints_dir;
     dev_t _hints_dir_device_id = 0;
 
     node_to_hint_store_factory_type _store_factory;
@@ -253,7 +254,7 @@ public:
         return _ep_managers.size();
     }
 
-    const fs::path& hints_dir() const {
+    const std::filesystem::path& hints_dir() const {
         return _hints_dir;
     }
 
@@ -269,7 +270,8 @@ public:
     /// This object can saafely be copied and used from any shard.
     /// \arg dirs The utils::directories object, used to create and lock hints directories
     /// \arg hints_directory The directory with hints which should be initialized
-    directory_initializer make_directory_initializer(utils::directories& dirs, fs::path hints_directory);
+    directory_initializer make_directory_initializer(utils::directories& dirs,
+            std::filesystem::path hints_directory);
 
 private:
     future<> compute_hints_dir_device_id();
