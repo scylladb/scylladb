@@ -12,6 +12,7 @@
 #include <seastar/core/sstring.hh>
 
 // Scylla includes.
+#include "db/hints/internal/common.hh"
 #include "seastarx.hh"
 
 // STD.
@@ -19,10 +20,6 @@
 #include <stdexcept>
 #include <string_view>
 #include <unordered_set>
-
-namespace gms {
-class inet_address;
-} // namespace gms
 
 namespace locator {
 class topology;
@@ -33,6 +30,8 @@ namespace db::hints {
 // host_filter tells hints_manager towards which endpoints it is allowed to generate hints.
 class host_filter final {
 private:
+    using endpoint_id = internal::endpoint_id;
+
     enum class enabled_kind {
         enabled_for_all,
         enabled_selectively,
@@ -65,7 +64,7 @@ public:
     static host_filter parse_from_dc_list(sstring opt);
 
 public:
-    bool can_hint_for(const locator::topology& topo, gms::inet_address ep) const;
+    bool can_hint_for(const locator::topology& topo, endpoint_id ep) const;
 
     bool is_enabled_for_all() const noexcept {
         return _enabled_kind == enabled_kind::enabled_for_all;
