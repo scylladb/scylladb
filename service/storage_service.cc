@@ -2437,7 +2437,7 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
         // This node must know about its chosen tokens before other nodes do
         // since they may start sending writes to this node after it gossips status = NORMAL.
         // Therefore we update _token_metadata now, before gossip starts.
-        tmptr->update_topology(get_broadcast_address(), _sys_ks.local().local_dc_rack(), locator::node::state::normal);
+        tmptr->update_topology(get_broadcast_address(), _snitch.local()->get_location(), locator::node::state::normal);
         co_await tmptr->update_normal_tokens(my_tokens, get_broadcast_address());
 
         cdc_gen_id = co_await _sys_ks.local().get_cdc_generation_id();
@@ -2728,7 +2728,7 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
         // This node must know about its chosen tokens before other nodes do
         // since they may start sending writes to this node after it gossips status = NORMAL.
         // Therefore, in case we haven't updated _token_metadata with our tokens yet, do it now.
-        tmptr->update_topology(get_broadcast_address(), _sys_ks.local().local_dc_rack(), locator::node::state::normal);
+        tmptr->update_topology(get_broadcast_address(), _snitch.local()->get_location(), locator::node::state::normal);
         return tmptr->update_normal_tokens(bootstrap_tokens, get_broadcast_address());
     });
 
@@ -2867,7 +2867,7 @@ future<> storage_service::bootstrap(std::unordered_set<token>& bootstrap_tokens,
                 slogger.debug("bootstrap: update pending ranges: endpoint={} bootstrap_tokens={}", get_broadcast_address(), bootstrap_tokens);
                 mutate_token_metadata([this, &bootstrap_tokens] (mutable_token_metadata_ptr tmptr) {
                     auto endpoint = get_broadcast_address();
-                    tmptr->update_topology(endpoint, _sys_ks.local().local_dc_rack(), locator::node::state::bootstrapping);
+                    tmptr->update_topology(endpoint, _snitch.local()->get_location(), locator::node::state::bootstrapping);
                     tmptr->add_bootstrap_tokens(bootstrap_tokens, endpoint);
                     return update_topology_change_info(std::move(tmptr), ::format("bootstrapping node {}", endpoint));
                 }).get();
@@ -2890,7 +2890,7 @@ future<> storage_service::bootstrap(std::unordered_set<token>& bootstrap_tokens,
 
                 slogger.info("sleeping {} ms for pending range setup", get_ring_delay().count());
                 _gossiper.wait_for_range_setup().get();
-                dht::boot_strapper bs(_db, _stream_manager, _abort_source, get_broadcast_address(), _sys_ks.local().local_dc_rack(), bootstrap_tokens, get_token_metadata_ptr());
+                dht::boot_strapper bs(_db, _stream_manager, _abort_source, get_broadcast_address(), _snitch.local()->get_location(), bootstrap_tokens, get_token_metadata_ptr());
                 slogger.info("Starting to bootstrap...");
                 bs.bootstrap(streaming::stream_reason::bootstrap, _gossiper).get();
             } else {
@@ -4553,7 +4553,7 @@ void storage_service::run_replace_ops(std::unordered_set<token>& bootstrap_token
             _repair.local().replace_with_repair(get_token_metadata_ptr(), bootstrap_tokens, ctl.ignore_nodes).get();
         } else {
             slogger.info("replace[{}]: Using streaming based node ops to sync data", uuid);
-            dht::boot_strapper bs(_db, _stream_manager, _abort_source, get_broadcast_address(), _sys_ks.local().local_dc_rack(), bootstrap_tokens, get_token_metadata_ptr());
+            dht::boot_strapper bs(_db, _stream_manager, _abort_source, get_broadcast_address(), _snitch.local()->get_location(), bootstrap_tokens, get_token_metadata_ptr());
             bs.bootstrap(streaming::stream_reason::replace, _gossiper, replace_address).get();
         }
         on_streaming_finished();
@@ -5220,7 +5220,7 @@ future<> storage_service::rebuild(sstring source_dc) {
                 co_await ss._repair.local().rebuild_with_repair(tmptr, std::move(source_dc));
             } else {
                 auto streamer = make_lw_shared<dht::range_streamer>(ss._db, ss._stream_manager, tmptr, ss._abort_source,
-                        ss.get_broadcast_address(), ss._sys_ks.local().local_dc_rack(), "Rebuild", streaming::stream_reason::rebuild);
+                        ss.get_broadcast_address(), ss._snitch.local()->get_location(), "Rebuild", streaming::stream_reason::rebuild);
                 streamer->add_source_filter(std::make_unique<dht::range_streamer::failure_detector_source_filter>(ss._gossiper.get_unreachable_members()));
                 if (source_dc != "") {
                     streamer->add_source_filter(std::make_unique<dht::range_streamer::single_datacenter_filter>(source_dc));
@@ -5396,7 +5396,7 @@ future<> storage_service::removenode_with_stream(gms::inet_address leaving_node,
                 as.request_abort();
             }
         });
-        auto streamer = make_lw_shared<dht::range_streamer>(_db, _stream_manager, tmptr, as, get_broadcast_address(), _sys_ks.local().local_dc_rack(), "Removenode", streaming::stream_reason::removenode);
+        auto streamer = make_lw_shared<dht::range_streamer>(_db, _stream_manager, tmptr, as, get_broadcast_address(), _snitch.local()->get_location(), "Removenode", streaming::stream_reason::removenode);
         removenode_add_ranges(streamer, leaving_node).get();
         try {
             streamer->stream_async().get();
@@ -5447,7 +5447,7 @@ future<> storage_service::leave_ring() {
 
 future<>
 storage_service::stream_ranges(std::unordered_map<sstring, std::unordered_multimap<dht::token_range, inet_address>> ranges_to_stream_by_keyspace) {
-    auto streamer = dht::range_streamer(_db, _stream_manager, get_token_metadata_ptr(), _abort_source, get_broadcast_address(), _sys_ks.local().local_dc_rack(), "Unbootstrap", streaming::stream_reason::decommission);
+    auto streamer = dht::range_streamer(_db, _stream_manager, get_token_metadata_ptr(), _abort_source, get_broadcast_address(), _snitch.local()->get_location(), "Unbootstrap", streaming::stream_reason::decommission);
     for (auto& entry : ranges_to_stream_by_keyspace) {
         const auto& keyspace = entry.first;
         auto& ranges_with_endpoints = entry.second;
@@ -5895,7 +5895,7 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(shar
                             co_await _repair.local().rebuild_with_repair(tmptr, std::move(source_dc));
                         } else {
                             auto streamer = make_lw_shared<dht::range_streamer>(_db, _stream_manager, tmptr, _abort_source,
-                                    get_broadcast_address(), _sys_ks.local().local_dc_rack(), "Rebuild", streaming::stream_reason::rebuild);
+                                    get_broadcast_address(), _snitch.local()->get_location(), "Rebuild", streaming::stream_reason::rebuild);
                             streamer->add_source_filter(std::make_unique<dht::range_streamer::failure_detector_source_filter>(_gossiper.get_unreachable_members()));
                             if (source_dc != "") {
                                 streamer->add_source_filter(std::make_unique<dht::range_streamer::single_datacenter_filter>(source_dc));
@@ -6020,7 +6020,7 @@ future<> storage_service::stream_tablet(locator::global_tablet_id tablet) {
         auto& table = _db.local().find_column_family(tablet.table);
         std::vector<sstring> tables = {table.schema()->cf_name()};
         auto streamer = make_lw_shared<dht::range_streamer>(_db, _stream_manager, tm, _abort_source,
-               get_broadcast_address(), _sys_ks.local().local_dc_rack(),
+               get_broadcast_address(), _snitch.local()->get_location(),
                "Tablet migration", streaming::stream_reason::tablet_migration, std::move(tables));
         streamer->add_source_filter(std::make_unique<dht::range_streamer::failure_detector_source_filter>(
                 _gossiper.get_unreachable_members()));
