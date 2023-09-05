@@ -603,7 +603,7 @@ void hint_sender::dismiss_replay_waiters() noexcept {
     for (auto& p : _replay_waiters) {
         manager_logger.debug("[{}] dismiss_replay_waiters(): dismissing one", _ep_key);
         auto ptr = p.second;
-        (**ptr).set_exception(std::runtime_error(format("Hints manager for {} is stopping", _ep_key)));
+        (**ptr).set_exception(std::runtime_error{format("Hints manager for {} is stopping", _ep_key)});
         (*ptr) = std::nullopt; // Prevent it from being resolved by abort source subscription
     }
     _replay_waiters.clear();
