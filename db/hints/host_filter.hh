@@ -20,15 +20,15 @@
 #include <string_view>
 #include <unordered_set>
 
-
 namespace gms {
-    class inet_address;
+class inet_address;
 } // namespace gms
 
-namespace locator { class topology; }
+namespace locator {
+class topology;
+} // namespace locator
 
-namespace db {
-namespace hints {
+namespace db::hints {
 
 // host_filter tells hints_manager towards which endpoints it is allowed to generate hints.
 class host_filter final {
@@ -94,5 +94,4 @@ public:
     using std::runtime_error::runtime_error;
 };
 
-}
-}
+} // namespace db::hints
