@@ -40,8 +40,6 @@ namespace hints {
 future<dev_t> get_device_id(const fs::path& path);
 future<bool> is_mountpoint(const fs::path& path);
 
-using timer_clock_type = seastar::lowres_clock;
-
 class manager;
 
 class space_watchdog {
