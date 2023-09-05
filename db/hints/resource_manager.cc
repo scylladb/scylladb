@@ -287,26 +287,32 @@ size_t resource_manager::sending_queue_length() const {
 }
 
 future<> resource_manager::prepare_per_device_limits(manager& shard_manager) {
-    dev_t device_id = shard_manager.hints_dir_device_id();
+    const ::dev_t device_id = shard_manager.hints_dir_device_id();
     auto it = _per_device_limits_map.find(device_id);
-    if (it == _per_device_limits_map.end()) {
-        return is_mountpoint(shard_manager.hints_dir().parent_path()).then([this, device_id, &shard_manager](bool is_mountpoint) {
-            auto [it, inserted] = _per_device_limits_map.emplace(device_id, space_watchdog::per_device_limits{});
-            // Since we possibly deferred, we need to recheck the _per_device_limits_map.
-            if (inserted) {
-                // By default, give each group of managers 10% of the available disk space. Give each shard an equal share of the available space.
-                it->second.max_shard_disk_space_size = fs::space(shard_manager.hints_dir().c_str()).capacity / (10 * smp::count);
-                // If hints directory is a mountpoint, we assume it's on dedicated (i.e. not shared with data/commitlog/etc) storage.
-                // Then, reserve 90% of all space instead of 10% above.
-                if (is_mountpoint) {
-                    it->second.max_shard_disk_space_size *= 9;
-                }
-            }
-            it->second.managers.emplace_back(std::ref(shard_manager));
-        });
-    } else {
+
+    if (it != _per_device_limits_map.end()) {
         it->second.managers.emplace_back(std::ref(shard_manager));
-        return make_ready_future<>();
+    } else {
+        const bool is_mp = co_await is_mountpoint(shard_manager.hints_dir().parent_path());
+        auto [empl_it, inserted] = _per_device_limits_map.emplace(device_id, space_watchdog::per_device_limits{});
+
+        typename space_watchdog::per_device_limits& pdl = empl_it->second;
+
+        // Since we possibly deferred, we need to recheck the _per_device_limits_map.
+        if (inserted) {
+            // By default, give each group of managers 10% of the available disk space.
+            // Give each shard an equal share of the available space.
+            pdl.max_shard_disk_space_size = fs::space(shard_manager.hints_dir()).capacity / (10 * smp::count);
+
+            // If hints directory is a mountpoint, we assume it's on
+            // a dedicated (i.e. not shared with data/commitlog/etc) storage device.
+            // Then, reserve 90% of all space instead of 10% above.
+            if (is_mp) {
+                pdl.max_shard_disk_space_size *= 9;
+            }
+        }
+
+        pdl.managers.emplace_back(std::ref(shard_manager));
     }
 }
 
