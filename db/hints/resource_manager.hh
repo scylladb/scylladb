@@ -143,15 +143,15 @@ private:
     utils::updateable_value<uint32_t> _max_hints_send_queue_length;
     seastar::named_semaphore _send_limiter;
 
-    seastar::named_semaphore _operation_lock;
-    space_watchdog::shard_managers_set _shard_managers;
-    space_watchdog::per_device_limits_map _per_device_limits_map;
+    seastar::named_semaphore _operation_lock{1, named_semaphore_exception_factory{"operation lock"}};
+    space_watchdog::shard_managers_set _shard_managers{};
+    space_watchdog::per_device_limits_map _per_device_limits_map{};
     space_watchdog _space_watchdog;
 
-    shared_ptr<service::storage_proxy> _proxy_ptr;
-    shared_ptr<gms::gossiper> _gossiper_ptr;
+    shared_ptr<service::storage_proxy> _proxy_ptr = nullptr;
+    shared_ptr<gms::gossiper> _gossiper_ptr = nullptr;
 
-    state_set _state;
+    state_set _state{};
 
 public:
     resource_manager(size_t max_send_in_flight_memory,
@@ -159,7 +159,6 @@ public:
         : _max_send_in_flight_memory(max_send_in_flight_memory)
         , _max_hints_send_queue_length(std::move(max_hint_sending_concurrency))
         , _send_limiter(_max_send_in_flight_memory, named_semaphore_exception_factory{"send limiter"})
-        , _operation_lock(1, named_semaphore_exception_factory{"operation lock"})
         , _space_watchdog(_shard_managers, _per_device_limits_map)
     {}
 
