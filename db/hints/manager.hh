@@ -94,7 +94,6 @@ private:
     friend class space_watchdog;
 
     using host_manager = internal::host_manager;
-    using host_managers_map_type = std::unordered_map<endpoint_id, host_manager>;
 
     enum class state {
         started,        // Hinting is currently allowed (start() call is complete).
@@ -133,7 +132,7 @@ private:
 
     resource_manager& _resource_manager;
 
-    host_managers_map_type _host_managers;
+    std::unordered_map<endpoint_id, host_manager> _host_managers;
     hint_stats _stats;
     seastar::metrics::metric_groups _metrics;
     std::unordered_set<endpoint_id> _eps_with_pending_hints;
