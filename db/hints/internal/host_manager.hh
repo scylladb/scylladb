@@ -197,6 +197,20 @@ public:
         return with_lock(*ep_man._file_update_mutex_ptr, std::forward<Func>(func)).finally([lock_ptr = ep_man._file_update_mutex_ptr] {});
     }
 
+    /// \brief Safely runs a given functor under the file_update_mutex.
+    ///
+    /// This function is safe even if \ref ep_man gets destroyed before the future
+    /// this function returns resolves (as long as the \ref func call itself is safe).
+    ///
+    /// \tparam Func Functor type.
+    /// \param func Functor to run under the lock.
+    /// \return Whatever \ref func returns.
+    template <typename Func>
+    decltype(auto) with_file_update_mutex(Func&& func) {
+        auto lock_ptr = _file_update_mutex_ptr;
+        return with_lock(*lock_ptr, std::forward<Func>(func)).finally([lock_ptr] {});
+    }
+
     const std::filesystem::path& hints_dir() const noexcept {
         return _hints_dir;
     }
