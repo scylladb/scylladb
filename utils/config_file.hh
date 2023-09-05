@@ -66,9 +66,20 @@ public:
     typedef std::vector<sstring> string_list;
 
     enum class value_status {
-        Used,
-        Unused,
-        Invalid,
+        Used, ///< a valid option which changes scylla's behavior. only the
+              ///< "Used" options are added to the command line options,
+              ///< and can be specified with command line.
+        Unused, ///< an option inherited or deprecated, or not yet implemented.
+                ///< we just silently ignore these options at seeing them.
+                ///< initially, we had loads of these options from Cassandra.
+                ///< they are also used for options supported by the older
+                ///< versions of Scylla.
+        Invalid, ///< an option inherited or deprecated. but we don't intend to
+                 ///< implement it. on the contrary, we print a warning message
+                 ///< at seeing each of these options if specified when booting
+                 ///< up. these options are kept around only to ease the
+                 ///< migration process so user can keep using their existing
+                 ///< settings.
     };
 
     enum class liveness {
