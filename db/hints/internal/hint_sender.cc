@@ -375,7 +375,10 @@ future<> hint_sender::send_one_mutation(frozen_mutation_and_schema m) {
     return do_send_one_mutation(std::move(m), std::move(erm), std::move(natural_endpoints));
 }
 
-future<> hint_sender::send_one_hint(lw_shared_ptr<send_one_file_ctx> ctx_ptr, fragmented_temporary_buffer buf, replay_position rp, gc_clock::duration secs_since_file_mod, const sstring& fname) {
+future<> hint_sender::send_one_hint(lw_shared_ptr<send_one_file_ctx> ctx_ptr,
+        fragmented_temporary_buffer buf, replay_position rp, gc_clock::duration secs_since_file_mod,
+        const sstring& fname)
+{
     return _resource_manager.get_send_units_for(buf.size_bytes()).then([this, secs_since_file_mod, &fname, buf = std::move(buf), rp, ctx_ptr] (auto units) mutable {
         ctx_ptr->mark_hint_as_in_progress(rp);
 
@@ -452,7 +455,8 @@ bool hint_sender::send_one_file(const sstring& fname) {
     lw_shared_ptr<send_one_file_ctx> ctx_ptr = make_lw_shared<send_one_file_ctx>(_last_schema_ver_to_column_mapping);
 
     try {
-        commitlog::read_log_file(fname, HINT_FILENAME_PREFIX, [this, secs_since_file_mod, &fname, ctx_ptr] (commitlog::buffer_and_replay_position buf_rp) -> future<> {
+        commitlog::read_log_file(fname, HINT_FILENAME_PREFIX,
+                [this, secs_since_file_mod, &fname, ctx_ptr] (commitlog::buffer_and_replay_position buf_rp) -> future<> {
             auto& buf = buf_rp.buffer;
             auto& rp = buf_rp.position;
 
