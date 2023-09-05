@@ -66,8 +66,9 @@ void host_manager::start() {
 }
 
 future<> host_manager::stop(drain should_drain) noexcept {
-    if(stopped()) {
-        return make_exception_future<>(std::logic_error(format("ep_manager[{}]: stop() is called twice", _key).c_str()));
+    if (stopped()) {
+        return make_exception_future<>(
+                std::logic_error{format("ep_manager[{}]: stop() is called twice", _key).c_str()});
     }
 
     return seastar::async([this, should_drain] {
