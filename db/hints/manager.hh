@@ -82,7 +82,7 @@ public:
     future<> ensure_rebalanced();
 };
 
-class manager {
+class shard_hint_manager {
 private:
     using hint_stats = internal::hint_stats;
     using endpoint_id = internal::endpoint_id;
@@ -139,13 +139,13 @@ private:
     seastar::named_semaphore _drain_lock = {1, named_semaphore_exception_factory{"drain lock"}};
 
 public:
-    manager(sstring hints_directory, host_filter filter, int64_t max_hint_window_ms,
+    shard_hint_manager(sstring hints_directory, host_filter filter, int64_t max_hint_window_ms,
             resource_manager& res_manager, sharded<replica::database>& db);
     
-    manager(manager&&) = delete;
-    manager& operator=(manager&&) = delete;
+    shard_hint_manager(shard_hint_manager&&) = delete;
+    shard_hint_manager& operator=(shard_hint_manager&&) = delete;
     
-    ~manager() noexcept {
+    ~shard_hint_manager() noexcept {
         assert(_host_managers.empty());
     }
 
@@ -219,7 +219,7 @@ public:
     /// \return TRUE if we are allowed to generate hint to the given end point but there are too many in-flight hints
     bool too_many_in_flight_hints_for(endpoint_id ep) const noexcept;
 
-    /// \brief Changes the host_filter currently used, stopping and starting ep_managers relevant to the new host_filter.
+    /// \brief Changes the host_filter currently used, stopping and starting host_managers relevant to the new host_filter.
     /// \param filter the new host_filter
     /// \return A future that resolves when the operation is complete.
     future<> change_host_filter(host_filter filter);

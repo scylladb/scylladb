@@ -980,7 +980,7 @@ protected:
     schema_ptr _schema;
 public:
     virtual ~mutation_holder() {}
-    virtual bool store_hint(db::hints::manager& hm, gms::inet_address ep, tracing::trace_state_ptr tr_state) = 0;
+    virtual bool store_hint(db::hints::shard_hint_manager& hm, gms::inet_address ep, tracing::trace_state_ptr tr_state) = 0;
     virtual future<> apply_locally(storage_proxy& sp, storage_proxy::clock_type::time_point timeout,
             tracing::trace_state_ptr tr_state, db::per_partition_rate_limit::info rate_limit_info,
             fencing_token fence) = 0;
@@ -1019,7 +1019,7 @@ public:
             _mutations.emplace(m.first, std::move(fm));
         }
     }
-    virtual bool store_hint(db::hints::manager& hm, gms::inet_address ep, tracing::trace_state_ptr tr_state) override {
+    virtual bool store_hint(db::hints::shard_hint_manager& hm, gms::inet_address ep, tracing::trace_state_ptr tr_state) override {
         auto m = _mutations[ep];
         if (m) {
             return hm.store_hint(ep, _schema, std::move(m), tr_state);
@@ -1078,7 +1078,7 @@ public:
     }
     explicit shared_mutation(const mutation& m) : shared_mutation(frozen_mutation_and_schema{freeze(m), m.schema()}) {
     }
-    virtual bool store_hint(db::hints::manager& hm, gms::inet_address ep, tracing::trace_state_ptr tr_state) override {
+    virtual bool store_hint(db::hints::shard_hint_manager& hm, gms::inet_address ep, tracing::trace_state_ptr tr_state) override {
             return hm.store_hint(ep, _schema, _mutation, tr_state);
     }
     virtual future<> apply_locally(storage_proxy& sp, storage_proxy::clock_type::time_point timeout,
@@ -1108,7 +1108,7 @@ public:
 class hint_mutation : public shared_mutation {
 public:
     using shared_mutation::shared_mutation;
-    virtual bool store_hint(db::hints::manager& hm, gms::inet_address ep, tracing::trace_state_ptr tr_state) override {
+    virtual bool store_hint(db::hints::shard_hint_manager& hm, gms::inet_address ep, tracing::trace_state_ptr tr_state) override {
         throw std::runtime_error("Attempted to store a hint for a hint");
     }
     virtual future<> apply_locally(storage_proxy& sp, storage_proxy::clock_type::time_point timeout,
@@ -1233,7 +1233,7 @@ public:
         _size = _proposal->update.representation().size();
         _schema = std::move(s);
     }
-    virtual bool store_hint(db::hints::manager& hm, gms::inet_address ep, tracing::trace_state_ptr tr_state) override {
+    virtual bool store_hint(db::hints::shard_hint_manager& hm, gms::inet_address ep, tracing::trace_state_ptr tr_state) override {
             return false; // CAS does not save hints yet
     }
     virtual future<> apply_locally(storage_proxy& sp, storage_proxy::clock_type::time_point timeout,
@@ -1539,7 +1539,7 @@ public:
     const inet_address_vector_topology_change& get_dead_endpoints() const {
         return _dead_endpoints;
     }
-    bool store_hint(db::hints::manager& hm, gms::inet_address ep, tracing::trace_state_ptr tr_state) {
+    bool store_hint(db::hints::shard_hint_manager& hm, gms::inet_address ep, tracing::trace_state_ptr tr_state) {
         return _mutation_holder->store_hint(hm, ep, tr_state);
     }
     future<> apply_locally(storage_proxy::clock_type::time_point timeout, tracing::trace_state_ptr tr_state) {
@@ -3759,7 +3759,7 @@ mutation storage_proxy::do_get_batchlog_mutation_for(schema_ptr schema, const st
 template<typename Range>
 bool storage_proxy::cannot_hint(const Range& targets, db::write_type type) const {
     // if hints are disabled we "can always hint" since there's going to be no hint generated in this case
-    return hints_enabled(type) && boost::algorithm::any_of(targets, std::bind(&db::hints::manager::too_many_in_flight_hints_for, &_hints_manager, std::placeholders::_1));
+    return hints_enabled(type) && boost::algorithm::any_of(targets, std::bind(&db::hints::shard_hint_manager::too_many_in_flight_hints_for, &_hints_manager, std::placeholders::_1));
 }
 
 future<> storage_proxy::send_to_endpoint(
@@ -4038,7 +4038,7 @@ template<typename Range>
 size_t storage_proxy::hint_to_dead_endpoints(std::unique_ptr<mutation_holder>& mh, const Range& targets, db::write_type type, tracing::trace_state_ptr tr_state) noexcept
 {
     if (hints_enabled(type)) {
-        db::hints::manager& hints_manager = hints_manager_for(type);
+        db::hints::shard_hint_manager& hints_manager = hints_manager_for(type);
         return boost::count_if(targets, [&mh, tr_state = std::move(tr_state), &hints_manager] (gms::inet_address target) mutable -> bool {
             return mh->store_hint(hints_manager, target, tr_state);
         });
@@ -6271,7 +6271,7 @@ bool storage_proxy::hints_enabled(db::write_type type) const noexcept {
     return (!_hints_manager.is_disabled_for_all() && type != db::write_type::CAS) || type == db::write_type::VIEW;
 }
 
-db::hints::manager& storage_proxy::hints_manager_for(db::write_type type) {
+db::hints::shard_hint_manager& storage_proxy::hints_manager_for(db::write_type type) {
     return type == db::write_type::VIEW ? _hints_for_views_manager : _hints_manager;
 }
 
@@ -6430,7 +6430,7 @@ future<> storage_proxy::wait_for_hint_sync_point(const db::hints::sync_point spo
     bool was_aborted = false;
     unsigned original_shard = this_shard_id();
     co_await container().invoke_on_all([original_shard, &sources, &spoint, &was_aborted] (storage_proxy& sp) {
-        auto wait_for = [&sources, original_shard, &was_aborted] (db::hints::manager& mgr, const std::vector<db::hints::sync_point::shard_rps>& shard_rps) {
+        auto wait_for = [&sources, original_shard, &was_aborted] (db::hints::shard_hint_manager& mgr, const std::vector<db::hints::sync_point::shard_rps>& shard_rps) {
             const unsigned shard = this_shard_id();
             return mgr.wait_for_sync_point(sources[shard], shard_rps[shard]).handle_exception([original_shard, &sources, &was_aborted] (auto eptr) {
                 // Make sure other blocking operations are cancelled soon

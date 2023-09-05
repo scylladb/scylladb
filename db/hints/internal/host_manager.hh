@@ -53,7 +53,7 @@ class gossiper;
 
 namespace db::hints {
 
-class manager;
+class shard_hint_manager;
 class resource_manager;
 
 namespace internal {
@@ -82,14 +82,14 @@ private:
     lw_shared_ptr<seastar::shared_mutex> _file_update_mutex_ptr;
     replay_position _last_written_rp;
 
-    manager& _shard_manager;
+    shard_hint_manager& _shard_manager;
     hint_sender _sender;
     
     const std::filesystem::path _hints_dir;
     uint64_t _hints_in_progress = 0;
 
 public:
-    host_manager(const endpoint_id& key, manager& shard_manager);
+    host_manager(const endpoint_id& key, shard_hint_manager& shard_manager);
     host_manager(host_manager&&);
     
     ~host_manager() noexcept {

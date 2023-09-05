@@ -287,7 +287,7 @@ future<> hint_sender::flush_maybe() noexcept {
     if (current_time >= _next_flush_tp) {
         try {
             co_await _host_manager.flush_current_hints();
-            _next_flush_tp = current_time + manager::hints_flush_period;
+            _next_flush_tp = current_time + shard_hint_manager::hints_flush_period;
         } catch (...) {
             manager_logger.trace("flush_maybe() failed: {}", std::current_exception());
             co_return;
@@ -395,10 +395,10 @@ future<> hint_sender::send_one_hint(lw_shared_ptr<send_one_file_ctx> ctx_ptr,
                 // Files are aggregated for at most manager::hints_timer_period therefore the oldest hint there is
                 // (last_modification - manager::hints_timer_period) old.
                 const auto current_time = gc_clock::now().time_since_epoch();
-                if (current_time - secs_since_file_mod > gc_grace_sec - manager::hints_flush_period) {
+                if (current_time - secs_since_file_mod > gc_grace_sec - shard_hint_manager::hints_flush_period) {
                     manager_logger.debug("send_hints(): the hint is too old, skipping it, "
                         "secs since file last modification {}, gc_grace_sec {}, hints_flush_period {}",
-                        now - secs_since_file_mod, gc_grace_sec, manager::hints_flush_period);
+                        current_time - secs_since_file_mod, gc_grace_sec, shard_hint_manager::hints_flush_period);
                     return make_ready_future<>();
                 }
 

@@ -79,7 +79,7 @@ void space_watchdog::start() {
             } catch (...) {
                 resource_manager_logger.trace("space_watchdog: unexpected exception - stop all hints generators");
                 // Stop all hint generators if space_watchdog callback failed
-                for (manager& shard_manager : _shard_managers) {
+                for (shard_hint_manager& shard_manager : _shard_managers) {
                     shard_manager.forbid_hints();
                 }
             }
@@ -115,7 +115,7 @@ void space_watchdog::on_timer() {
     for (auto& per_device_limits : _per_device_limits_map | boost::adaptors::map_values) {
         _total_size = 0;
 
-        for (manager& shard_manager : per_device_limits.managers) {
+        for (shard_hint_manager& shard_manager : per_device_limits.managers) {
             shard_manager.clear_hosts_with_pending_hints();
             lister::scan_dir(shard_manager.hints_dir(), lister::dir_entry_types::of<directory_entry_type::directory>(),
                     [this, &shard_manager] (fs::path dir, directory_entry de) {
@@ -140,7 +140,7 @@ void space_watchdog::on_timer() {
         }
 
         // Adjust the quota to take into account the space we guarantee to every end point manager
-        const size_t delta = boost::accumulate(per_device_limits.managers, size_t(0), [] (size_t sum, manager& shard_manager) {
+        const size_t delta = boost::accumulate(per_device_limits.managers, size_t(0), [] (size_t sum, shard_hint_manager& shard_manager) {
             return sum + shard_manager.host_managers_size() * resource_manager::HINT_SEGMENT_SIZE_IN_MB * 1024 * 1024;
         });
         const size_t adjusted_quota = per_device_limits.max_shard_disk_space_size > delta
@@ -148,14 +148,14 @@ void space_watchdog::on_timer() {
                 : 0;
 
         resource_manager_logger.trace("space_watchdog: consuming {}/{} bytes", _total_size, adjusted_quota);
-        for (manager& shard_manager : per_device_limits.managers) {
+        for (shard_hint_manager& shard_manager : per_device_limits.managers) {
             shard_manager.update_backlog(_total_size, adjusted_quota);
         }
     }
 }
 
 // Called under the end_point_hints_manager::file_update_mutex() of the corresponding host_manager instance.
-future<> space_watchdog::scan_one_ep_dir(fs::path path, manager& shard_manager, endpoint_id ep) {
+future<> space_watchdog::scan_one_ep_dir(fs::path path, shard_hint_manager& shard_manager, endpoint_id ep) {
     // It may happen that we get here and the directory has already been deleted
     // in the context of manager::drain_for(). In this case simply bail out.
     if (!co_await file_exists(path.native())) {
@@ -191,11 +191,11 @@ future<> resource_manager::start(shared_ptr<service::storage_proxy> proxy_ptr, s
 
     const auto operation_mutex = co_await seastar::get_units(_operation_lock, 1);
 
-    co_await seastar::coroutine::parallel_for_each(_shard_managers, [this] (manager& m) {
+    co_await seastar::coroutine::parallel_for_each(_shard_managers, [this] (shard_hint_manager& m) {
         return m.start(_proxy_ptr, _gossiper_ptr);
     });
     
-    co_await do_for_each(_shard_managers, [this] (manager& m) {
+    co_await do_for_each(_shard_managers, [this] (shard_hint_manager& m) {
         return prepare_per_device_limits(m);
     });
     
@@ -208,7 +208,7 @@ future<> resource_manager::stop() noexcept {
     std::exception_ptr eptr = nullptr;
 
     try {
-        co_await seastar::coroutine::parallel_for_each(_shard_managers, [] (manager& m) {
+        co_await seastar::coroutine::parallel_for_each(_shard_managers, [] (shard_hint_manager& m) {
             return m.stop();
         });
     } catch (...) {
@@ -224,7 +224,7 @@ future<> resource_manager::stop() noexcept {
     unset_running();
 }
 
-future<> resource_manager::register_manager(manager& m) {
+future<> resource_manager::register_manager(shard_hint_manager& m) {
     const auto operation_mutex = co_await seastar::get_units(_operation_lock, 1);
     const auto space_watchdog_lock = co_await seastar::get_units(_space_watchdog.update_lock(), 1);
 
@@ -257,7 +257,7 @@ future<> resource_manager::register_manager(manager& m) {
 
 void resource_manager::allow_replaying() noexcept {
     set_replay_allowed();
-    std::ranges::for_each(_shard_managers, [] (manager& m) { m.allow_replaying(); });
+    std::ranges::for_each(_shard_managers, [] (shard_hint_manager& m) { m.allow_replaying(); });
 }
 
 future<semaphore_units<named_semaphore::exception_factory>> resource_manager::get_send_units_for(size_t buf_size) {
@@ -285,7 +285,7 @@ size_t resource_manager::sending_queue_length() const {
     return _send_limiter.waiters();
 }
 
-future<> resource_manager::prepare_per_device_limits(manager& shard_manager) {
+future<> resource_manager::prepare_per_device_limits(shard_hint_manager& shard_manager) {
     const ::dev_t device_id = shard_manager.hints_dir_device_id();
     auto it = _per_device_limits_map.find(device_id);
 

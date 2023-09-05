@@ -33,7 +33,7 @@
 namespace db::hints {
 namespace internal {
 
-host_manager::host_manager(const endpoint_id& key, manager& shard_manager)
+host_manager::host_manager(const endpoint_id& key, shard_hint_manager& shard_manager)
     : _key{key}
     , _state{state_set::of<state::stopped>()}
     , _file_update_mutex_ptr{make_lw_shared<seastar::shared_mutex>()}

@@ -60,7 +60,7 @@ class gossiper;
 
 namespace db::hints {
 
-class manager;
+class shard_hint_manager;
 class resource_manager;
 
 namespace internal {
@@ -119,7 +119,7 @@ private:
 
     endpoint_id _ep_key;
     host_manager& _host_manager;
-    manager& _shard_manager;
+    shard_hint_manager& _shard_manager;
     resource_manager& _resource_manager;
     service::storage_proxy& _proxy;
     replica::database& _db;

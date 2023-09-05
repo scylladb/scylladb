@@ -246,9 +246,9 @@ private:
     // just skip an entry if request no longer exists.
     circular_buffer<response_id_type> _throttled_writes;
     db::hints::resource_manager _hints_resource_manager;
-    db::hints::manager _hints_manager;
+    db::hints::shard_hint_manager _hints_manager;
     db::hints::directory_initializer _hints_directory_initializer;
-    db::hints::manager _hints_for_views_manager;
+    db::hints::shard_hint_manager _hints_for_views_manager;
     scheduling_group_key _stats_key;
     storage_proxy_stats::global_stats _global_stats;
     gms::feature_service& _features;
@@ -329,7 +329,7 @@ private:
     template<typename Range>
     bool cannot_hint(const Range& targets, db::write_type type) const;
     bool hints_enabled(db::write_type type) const noexcept;
-    db::hints::manager& hints_manager_for(db::write_type type);
+    db::hints::shard_hint_manager& hints_manager_for(db::write_type type);
     void sort_endpoints_by_proximity(const locator::topology& topo, inet_address_vector_replica_set& eps) const;
     inet_address_vector_replica_set get_endpoints_for_reading(const sstring& ks_name, const locator::effective_replication_map& erm, const dht::token& token) const;
     inet_address_vector_replica_set filter_replicas_for_read(db::consistency_level, const locator::effective_replication_map&, inet_address_vector_replica_set live_endpoints, const inet_address_vector_replica_set& preferred_endpoints, db::read_repair_decision, std::optional<gms::inet_address>* extra, replica::column_family*) const;

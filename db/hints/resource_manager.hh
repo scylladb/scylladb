@@ -39,21 +39,21 @@ namespace db::hints {
 
 future<::dev_t> get_device_id(const std::filesystem::path& path);
 
-class manager;
+class shard_hint_manager;
 
 class space_watchdog {
 private:
     using endpoint_id = internal::endpoint_id;
 
     struct manager_hash {
-        size_t operator()(const manager& manager) const {
+        size_t operator()(const shard_hint_manager& manager) const {
             return reinterpret_cast<uintptr_t>(&manager);
         }
     };
 
     struct manager_comp {
-        bool operator()(const std::reference_wrapper<manager>& m1,
-                const std::reference_wrapper<manager>& m2) const {
+        bool operator()(const std::reference_wrapper<shard_hint_manager>& m1,
+                const std::reference_wrapper<shard_hint_manager>& m2) const {
             return std::addressof(m1.get()) == std::addressof(m2.get());
         }
     };
@@ -63,11 +63,12 @@ private:
 
 public:
     struct per_device_limits {
-        utils::small_vector<std::reference_wrapper<manager>, 2> managers;
+        utils::small_vector<std::reference_wrapper<shard_hint_manager>, 2> managers;
         size_t max_shard_disk_space_size;
     };
 
-    using shard_managers_set = std::unordered_set<std::reference_wrapper<manager>, manager_hash, manager_comp>;
+    using shard_managers_set = std::unordered_set<std::reference_wrapper<shard_hint_manager>,
+            manager_hash, manager_comp>;
     using per_device_limits_map = std::unordered_map<::dev_t, per_device_limits>;
 
 private:
@@ -94,7 +95,8 @@ public:
 private:
     /// \brief Check that hints don't occupy too much disk space.
     ///
-    /// Verifies that all \ref manager::_hints_dir dirs for all managers occupy less than \ref resource_manager::max_shard_disk_space_size.
+    /// Verifies that all \ref shard_hint_manager::_hints_dir dirs for all managers occupy less
+    /// than \ref resource_manager::max_shard_disk_space_size.
     ///
     /// If they do, stop all end point managers that have more than one hints file - we don't want some DOWN Node to
     /// prevent hints to other Nodes from being generated (e.g. due to some temporary overload and timeout).
@@ -114,7 +116,7 @@ private:
     /// \param path directory to scan
     /// \param ep end point ID
     /// \return future that resolves when scanning is complete
-    future<> scan_one_ep_dir(std::filesystem::path path, manager& shard_manager, endpoint_id ep);
+    future<> scan_one_ep_dir(std::filesystem::path path, shard_hint_manager& shard_manager, endpoint_id ep);
 };
 
 class resource_manager {
@@ -168,11 +170,11 @@ public:
     future<> start(shared_ptr<service::storage_proxy> proxy_ptr, shared_ptr<gms::gossiper> gossiper_ptr);
     future<> stop() noexcept;
 
-    /// \brief Registers the hints::manager in resource_manager, and starts it if resource_manager is already running.
+    /// \brief Registers a shard hint manager in resource_manager, and starts it if resource_manager is already running.
     ///
     /// The hints::managers can be added either before or after resource_manager starts.
     /// If resource_manager is already started, the hints manager will also be started.
-    future<> register_manager(manager& m);
+    future<> register_manager(shard_hint_manager& m);
 
     /// \brief Allows replaying hints for managers which are registered now or will be in the future.
     void allow_replaying() noexcept;
@@ -201,7 +203,7 @@ private:
         return _state.contains(state::replay_allowed);
     }
 
-    future<> prepare_per_device_limits(manager& shard_manager);
+    future<> prepare_per_device_limits(shard_hint_manager& shard_manager);
 };
 
 } // namespace db::hints
