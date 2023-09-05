@@ -269,11 +269,16 @@ future<semaphore_units<named_semaphore::exception_factory>> resource_manager::ge
             ? div_ceil(per_node_concurrency_limit, smp::count)
             : DEFAULT_PER_SHARD_CONCURRENCY_LIMIT;
     const size_t min_send_hint_budget = _max_send_in_flight_memory / per_shard_concurrency_limit;
+
     // Let's approximate the memory size the mutation is going to consume by the size of its serialized form
     size_t hint_memory_budget = std::max(min_send_hint_budget, buf_size);
+
     // Allow a very big mutation to be sent out by consuming the whole shard budget
     hint_memory_budget = std::min(hint_memory_budget, _max_send_in_flight_memory);
-    resource_manager_logger.trace("memory budget: need {} have {}", hint_memory_budget, _send_limiter.available_units());
+
+    resource_manager_logger.trace("memory budget: need {} have {}",
+            hint_memory_budget, _send_limiter.available_units());
+    
     return get_units(_send_limiter, hint_memory_budget);
 }
 
