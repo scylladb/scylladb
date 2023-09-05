@@ -67,17 +67,17 @@ public:
 public:
     bool can_hint_for(const locator::topology& topo, gms::inet_address ep) const;
 
-    inline bool is_enabled_for_all() const noexcept {
+    bool is_enabled_for_all() const noexcept {
         return _enabled_kind == enabled_kind::enabled_for_all;
     }
 
-    inline bool is_disabled_for_all() const noexcept {
+    bool is_disabled_for_all() const noexcept {
         return _enabled_kind == enabled_kind::disabled_for_all;
     }
 
     sstring to_configuration_string() const;
 
-    inline const std::unordered_set<sstring>& get_dcs() const {
+    const std::unordered_set<sstring>& get_dcs() const {
         return _dcs;
     }
 
