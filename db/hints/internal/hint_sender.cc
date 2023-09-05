@@ -345,14 +345,17 @@ frozen_mutation_and_schema hint_sender::get_mutation(lw_shared_ptr<send_one_file
         mutation m{schema, fm.decorated_key(*schema)};
         converting_mutation_partition_applier v{cm, *schema, m.partition()};
         fm.partition().accept(cm, v);
-        
+
         return {freeze(m), std::move(schema)};
     }
 
     return {std::move(hr).mutation(), std::move(schema)};
 }
 
-future<> hint_sender::do_send_one_mutation(frozen_mutation_and_schema m, locator::effective_replication_map_ptr ermp, const inet_address_vector_replica_set& natural_endpoints) noexcept {
+future<> hint_sender::do_send_one_mutation(frozen_mutation_and_schema m,
+        locator::effective_replication_map_ptr ermp,
+        const inet_address_vector_replica_set& natural_endpoints) noexcept
+{
     return futurize_invoke([this, m = std::move(m), ermp = std::move(ermp), &natural_endpoints] () mutable -> future<> {
         // The fact that we send with CL::ALL in both cases below ensures that new hints are not going
         // to be generated as a result of hints sending.
