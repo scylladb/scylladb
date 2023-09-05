@@ -1375,22 +1375,29 @@ future<> gossiper::do_gossip_to_live_member(gossip_digest_syn message, gms::inet
 
 future<> gossiper::do_gossip_to_unreachable_member(gossip_digest_syn message) {
     double live_endpoint_count = _live_endpoints.size();
-    double unreachable_endpoint_count = _unreachable_endpoints.size();
-    if (unreachable_endpoint_count > 0) {
-        /* based on some probability */
-        double prob = unreachable_endpoint_count / (live_endpoint_count + 1);
-        std::uniform_real_distribution<double> dist(0, 1);
-        double rand_dbl = dist(_random_engine);
-        if (rand_dbl < prob) {
+    std::vector<inet_address> endpoints = _unreachable_endpoints.empty() && _live_endpoints.empty()
+        ? boost::copy_range<std::vector<inet_address>>(_endpoint_state_map | boost::adaptors::map_keys | boost::adaptors::filtered([me = get_broadcast_address()] (const inet_address& ep) {
+            return ep != me;
+        })) : boost::copy_range<std::vector<inet_address>>(_unreachable_endpoints | boost::adaptors::map_keys);
+    double endpoint_count = endpoints.size();
+    if (endpoint_count > 0) {
+        auto do_rand_gossip = [&] () -> bool {
+            /* based on some probability */
+            double prob = endpoint_count / (live_endpoint_count + 1);
+            std::uniform_real_distribution<double> dist(0, 1);
+            double rand_dbl = dist(_random_engine);
+            return rand_dbl < prob;
+        };
+        if (!live_endpoint_count || do_rand_gossip()) {
             std::set<inet_address> addrs;
-            for (auto&& x : _unreachable_endpoints) {
-                // Ignore the node which is decommissioned
-                if (get_gossip_status(x.first) != sstring(versioned_value::STATUS_LEFT)) {
-                    addrs.insert(x.first);
+            for (auto&& ep : endpoints) {
+                // Ignore nodes that left the ring
+                if (get_gossip_status(ep) != sstring(versioned_value::STATUS_LEFT)) {
+                    addrs.insert(ep);
                 }
             }
-            logger.trace("do_gossip_to_unreachable_member: live_endpoint nr={} unreachable_endpoints nr={}",
-                live_endpoint_count, unreachable_endpoint_count);
+            logger.debug("do_gossip_to_unreachable_member: live_endpoint nr={} endpoints nr={} addrs={}",
+                live_endpoint_count, endpoint_count, addrs);
             return send_gossip(message, addrs);
         }
     }
