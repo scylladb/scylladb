@@ -2687,7 +2687,7 @@ future<std::vector<database::snapshot_details_result>> database::get_snapshot_de
     std::vector<database::snapshot_details_result> details;
 
     for (auto& datadir : data_dirs) {
-        co_await lister::scan_dir(datadir, lister::dir_entry_types::of<directory_entry_type::directory>(), [&details] (fs::path parent_dir, directory_entry de) -> future<> {
+        co_await lister::scan_dir(fs::path{datadir}, lister::dir_entry_types::of<directory_entry_type::directory>(), [&details] (fs::path parent_dir, directory_entry de) -> future<> {
             // KS directory
             sstring ks_name = de.name;
 

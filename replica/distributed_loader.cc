@@ -551,7 +551,8 @@ future<> distributed_loader::init_non_system_keyspaces(distributed<replica::data
 
         parallel_for_each(cfg.data_file_directories(), [&dirs] (sstring directory) {
             // we want to collect the directories first, so we can get a full set of potential dirs
-            return lister::scan_dir(directory, lister::dir_entry_types::of<directory_entry_type::directory>(), [&dirs] (fs::path datadir, directory_entry de) {
+            return lister::scan_dir(fs::path{directory}, lister::dir_entry_types::of<directory_entry_type::directory>(),
+                    [&dirs] (fs::path datadir, directory_entry de) {
                 if (!is_system_keyspace(de.name)) {
                     dirs.emplace(de.name, datadir.native());
                 }

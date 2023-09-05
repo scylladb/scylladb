@@ -1178,7 +1178,7 @@ void manager::end_point_hints_manager::sender::send_hints_maybe() noexcept {
     manager_logger.trace("send_hints(): we handled {} segments", replayed_segments_count);
 }
 
-static future<> scan_for_hints_dirs(const sstring& hints_directory, std::function<future<> (fs::path dir, directory_entry de, unsigned shard_id)> f) {
+static future<> scan_for_hints_dirs(const fs::path& hints_directory, std::function<future<> (fs::path dir, directory_entry de, unsigned shard_id)> f) {
     return lister::scan_dir(hints_directory, lister::dir_entry_types::of<directory_entry_type::directory>(), [f = std::move(f)] (fs::path dir, directory_entry de) mutable {
         unsigned shard_id;
         try {
@@ -1192,7 +1192,7 @@ static future<> scan_for_hints_dirs(const sstring& hints_directory, std::functio
 }
 
 // runs in seastar::async context
-manager::hints_segments_map manager::get_current_hints_segments(const sstring& hints_directory) {
+manager::hints_segments_map manager::get_current_hints_segments(const fs::path& hints_directory) {
     hints_segments_map current_hints_segments;
 
     // shards level
@@ -1214,7 +1214,7 @@ manager::hints_segments_map manager::get_current_hints_segments(const sstring& h
 }
 
 // runs in seastar::async context
-void manager::rebalance_segments(const sstring& hints_directory, hints_segments_map& segments_map) {
+void manager::rebalance_segments(const fs::path& hints_directory, hints_segments_map& segments_map) {
     // Count how many hints segments to each destination we have.
     std::unordered_map<sstring, size_t> per_ep_hints;
     for (auto& ep_info : segments_map) {
@@ -1276,7 +1276,7 @@ void manager::rebalance_segments(const sstring& hints_directory, hints_segments_
 void manager::rebalance_segments_for(
         const sstring& ep,
         size_t segments_per_shard,
-        const sstring& hints_directory,
+        const fs::path& hints_directory,
         hints_ep_segments_map& ep_segments,
         std::list<fs::path>& segments_to_move)
 {
@@ -1288,7 +1288,7 @@ void manager::rebalance_segments_for(
     }
 
     for (unsigned i = 0; i < smp::count && !segments_to_move.empty(); ++i) {
-        fs::path shard_path_dir(fs::path(hints_directory.c_str()) / seastar::format("{:d}", i).c_str() / ep.c_str());
+        fs::path shard_path_dir(hints_directory / seastar::format("{:d}", i).c_str() / ep.c_str());
         std::list<fs::path>& current_shard_segments = ep_segments[i];
 
         // Make sure that the shard_path_dir exists and if not - create it
@@ -1311,7 +1311,7 @@ void manager::rebalance_segments_for(
 }
 
 // runs in seastar::async context
-void manager::remove_irrelevant_shards_directories(const sstring& hints_directory) {
+void manager::remove_irrelevant_shards_directories(const fs::path& hints_directory) {
     // shards level
     scan_for_hints_dirs(hints_directory, [] (fs::path dir, directory_entry de, unsigned shard_id) {
         if (shard_id >= smp::count) {
@@ -1326,7 +1326,7 @@ void manager::remove_irrelevant_shards_directories(const sstring& hints_director
     }).get();
 }
 
-future<> manager::rebalance(sstring hints_directory) {
+future<> manager::rebalance(fs::path hints_directory) {
     return seastar::async([hints_directory = std::move(hints_directory)] {
         // Scan currently present hints segments.
         hints_segments_map current_hints_segments = get_current_hints_segments(hints_directory);
@@ -1391,7 +1391,7 @@ public:
 
         return with_semaphore(_lock, 1, [this] () {
             manager_logger.debug("Rebalancing hints in {}", _hints_directory);
-            return manager::rebalance(_hints_directory).then([this] {
+            return manager::rebalance(fs::path{_hints_directory}).then([this] {
                 _state = state::rebalanced;
             });
         });
