@@ -226,33 +226,34 @@ future<> resource_manager::stop() noexcept {
 }
 
 future<> resource_manager::register_manager(manager& m) {
-    return with_semaphore(_operation_lock, 1, [this, &m] () {
-        return with_semaphore(_space_watchdog.update_lock(), 1, [this, &m] {
-            const auto [it, inserted] = _shard_managers.insert(m);
-            if (!inserted) {
-                // Already registered
-                return make_ready_future<>();
-            }
-            if (!running()) {
-                // The hints manager will be started later by resource_manager::start()
-                return make_ready_future<>();
-            }
+    const auto operation_mutex = co_await seastar::get_units(_operation_lock, 1);
+    const auto space_watchdog_lock = co_await seastar::get_units(_space_watchdog.update_lock(), 1);
 
-            // If the resource_manager was started, start the hints manager, too.
-            return m.start(_proxy_ptr, _gossiper_ptr).then([this, &m] {
-                // Calculate device limits for this manager so that it is accounted for
-                // by the space_watchdog
-                return prepare_per_device_limits(m).then([this, &m] {
-                    if (this->replay_allowed()) {
-                        m.allow_replaying();
-                    }
-                });
-            }).handle_exception([this, &m] (auto ep) {
-                _shard_managers.erase(m);
-                return make_exception_future<>(ep);
-            });
-        });
-    });
+    const auto [it, inserted] = _shard_managers.insert(m);
+    if (!inserted) {
+        // Already registered.
+        co_return;
+    }
+    if (!running()) {
+        // The hints manager will be started later by resource_manager::start()
+        co_return;
+    }
+
+    try {
+        // If the resource_manager was started, start the hints manager too.
+        co_await m.start(_proxy_ptr, _gossiper_ptr);
+
+        // Calculate device limits for this manager so that it is accounted for
+        // by the space_watchdog.
+        co_await prepare_per_device_limits(m);
+
+        if (replay_allowed()) {
+            m.allow_replaying();
+        }
+    } catch (...) {
+        _shard_managers.erase(m);
+        throw;
+    }
 }
 
 void resource_manager::allow_replaying() noexcept {
