@@ -81,11 +81,7 @@ public:
         return _dcs;
     }
 
-    bool operator==(const host_filter& other) const noexcept {
-        return _enabled_kind == other._enabled_kind
-                && _dcs == other._dcs;
-    }
-
+    bool operator==(const host_filter& other) const noexcept = default;
     friend std::ostream& operator<<(std::ostream& os, const host_filter& f);
 
 private:
