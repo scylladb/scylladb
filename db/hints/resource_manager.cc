@@ -17,7 +17,6 @@
 #include <seastar/coroutine/parallel_for_each.hh>
 
 // Boost features.
-#include <boost/range/algorithm/for_each.hpp>
 #include <boost/range/adaptor/map.hpp>
 
 // Scylla includes.
@@ -30,6 +29,7 @@
 
 // STD.
 #include <exception>
+#include <ranges>
 
 namespace fs = std::filesystem;
 
@@ -258,7 +258,7 @@ future<> resource_manager::register_manager(manager& m) {
 
 void resource_manager::allow_replaying() noexcept {
     set_replay_allowed();
-    boost::for_each(_shard_managers, [] (manager& m) { m.allow_replaying(); });
+    std::ranges::for_each(_shard_managers, [] (manager& m) { m.allow_replaying(); });
 }
 
 future<semaphore_units<named_semaphore::exception_factory>> resource_manager::get_send_units_for(size_t buf_size) {
