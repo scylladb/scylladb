@@ -21,13 +21,9 @@
 namespace db {
 namespace hints {
 
-static logging::logger resource_manager_logger("hints_resource_manager");
+namespace {
 
-future<dev_t> get_device_id(const fs::path& path) {
-    return file_stat(path.native()).then([] (struct stat_data sd) {
-        return sd.device_id;
-    });
-}
+logging::logger resource_manager_logger{"hints_resource_manager"};
 
 future<bool> is_mountpoint(const fs::path& path) {
     // Special case for '/', which is always a mount point
@@ -36,6 +32,14 @@ future<bool> is_mountpoint(const fs::path& path) {
     }
     return when_all(get_device_id(path), get_device_id(path.parent_path())).then([](std::tuple<future<dev_t>, future<dev_t>> ids) {
         return std::get<0>(ids).get0() != std::get<1>(ids).get0();
+    });
+}
+
+} // anonymous namespace
+
+future<dev_t> get_device_id(const fs::path& path) {
+    return file_stat(path.native()).then([] (struct stat_data sd) {
+        return sd.device_id;
     });
 }
 

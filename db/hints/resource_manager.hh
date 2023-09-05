@@ -38,7 +38,6 @@ namespace db {
 namespace hints {
 
 future<dev_t> get_device_id(const fs::path& path);
-future<bool> is_mountpoint(const fs::path& path);
 
 class manager;
 
