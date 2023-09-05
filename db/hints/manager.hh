@@ -128,7 +128,7 @@ private:
     int64_t _max_hint_window_us = 0;
     replica::database& _local_db;
 
-    seastar::gate _draining_eps_gate; // gate used to control the progress of ep_managers stopping not in the context of manager::stop() call
+    seastar::gate _draining_hosts_gate; // gate used to control the progress of ep_managers stopping not in the context of manager::stop() call
 
     resource_manager& _resource_manager;
 
@@ -165,15 +165,16 @@ public:
     /// \return TRUE if hints are allowed to be generated to \param ep.
     bool check_dc_for(endpoint_id ep) const noexcept;
 
-    bool store_hint(endpoint_id ep, schema_ptr s, lw_shared_ptr<const frozen_mutation> fm, tracing::trace_state_ptr tr_state) noexcept;
+    bool store_hint(endpoint_id ep, schema_ptr s, lw_shared_ptr<const frozen_mutation> fm,
+            tracing::trace_state_ptr tr_state) noexcept;
 
     /// \brief Initiate the draining when we detect that the node has left the cluster.
     ///
     /// If the node that has left is the current node - drains all pending hints to all nodes.
     /// Otherwise drains hints to the node that has left.
     ///
-    /// In both cases - removes the corresponding hints' directories after all hints have been drained and erases the
-    /// corresponding host_manager objects.
+    /// In both cases - removes the corresponding hints' directories after all hints have been drained
+    /// and erases the corresponding host_manager objects.
     ///
     /// \param endpoint node that left the cluster
     void drain_for(endpoint_id endpoint);
@@ -202,15 +203,17 @@ public:
     
     /// \brief Check if there aren't too many in-flight hints
     ///
-    /// This function checks if there are too many "in-flight" hints on the current shard - hints that are being stored
-    /// and which storing is not complete yet. This is meant to stabilize the memory consumption of the hints storing path
-    /// which is initialed from the storage_proxy WRITE flow. storage_proxy is going to check this condition and if it
-    /// returns TRUE it won't attempt any new WRITEs thus eliminating the possibility of new hints generation. If new hints
-    /// are not generated the amount of in-flight hints amount and thus the memory they are consuming is going to drop eventualy
-    /// because the hints are going to be either stored or dropped. After that the things are going to get back to normal again.
+    /// This function checks if there are too many "in-flight" hints on the current shard
+    /// -- hints that are being stored and which storing is not complete yet. This is meant
+    /// to stabilize the memory consumption of the hints storing path which is initialed from
+    /// the storage_proxy WRITE flow. storage_proxy is going to check this condition and if it
+    /// returns TRUE it won't attempt any new WRITEs thus eliminating the possibility of new hints
+    /// generation. If new hints are not generated the amount of in-flight hints amount and thus
+    /// the memory they are consuming is going to drop eventualy because the hints are going to be
+    /// either stored or dropped. After that the things are going to get back to normal again.
     ///
-    /// Note that we can't consider the disk usage consumption here because the disk usage is not promissed to drop down shortly
-    /// because it requires the remote node to be UP.
+    /// Note that we can't consider the disk usage consumption here because the disk usage is
+    /// not promissed to drop down shortly because it requires the remote node to be UP.
     ///
     /// \param ep end point to check
     /// \return TRUE if we are allowed to generate hint to the given end point but there are too many in-flight hints

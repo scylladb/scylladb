@@ -221,7 +221,7 @@ future<> manager::stop() {
   return f.finally([this] {
     set_stopping();
 
-    return _draining_eps_gate.close().finally([this] {
+    return _draining_hosts_gate.close().finally([this] {
         return parallel_for_each(_host_managers, [] (auto& pair) {
             return pair.second.stop();
         }).finally([this] {
@@ -323,7 +323,7 @@ void manager::drain_for(endpoint_id endpoint) {
     manager_logger.trace("on_leave_cluster: {} is removed/decommissioned", endpoint);
 
     // Future is waited on indirectly in `stop()` (via `_draining_eps_gate`).
-    (void) with_gate(_draining_eps_gate, [this, endpoint] {
+    (void) with_gate(_draining_hosts_gate, [this, endpoint] {
         return with_semaphore(drain_lock(), 1, [this, endpoint] {
             return futurize_invoke([this, endpoint] {
                 if (utils::fb_utilities::is_me(endpoint)) {
@@ -422,7 +422,7 @@ future<> manager::change_host_filter(host_filter filter) {
         return make_exception_future<>(std::logic_error("change_host_filter: called before the hints_manager was started"));
     }
 
-    return with_gate(_draining_eps_gate, [this, filter = std::move(filter)] () mutable {
+    return with_gate(_draining_hosts_gate, [this, filter = std::move(filter)] () mutable {
         return with_semaphore(drain_lock(), 1, [this, filter = std::move(filter)] () mutable {
             if (draining_all()) {
                 return make_exception_future<>(std::logic_error("change_host_filter: cannot change the configuration because hints all hints were drained"));
