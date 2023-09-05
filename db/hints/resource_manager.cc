@@ -56,7 +56,7 @@ future<bool> is_mountpoint(const fs::path& path) {
 
 } // anonymous namespace
 
-future<dev_t> get_device_id(const fs::path& path) {
+future<::dev_t> get_device_id(const fs::path& path) {
     const auto sd = co_await file_stat(path.native());
     co_return sd.device_id;
 }
