@@ -393,13 +393,11 @@ topology_description limit_number_of_streams_if_needed(topology_description&& de
     return topology_description(std::move(entries));
 }
 
-std::pair<utils::UUID, cdc::topology_description> make_new_generation_data(
+cdc::topology_description make_new_generation_description(
         const std::unordered_set<dht::token>& bootstrap_tokens,
         const noncopyable_function<std::pair<size_t, uint8_t>(dht::token)>& get_sharding_info,
         const locator::token_metadata_ptr tmptr) {
-    auto gen = topology_description_generator(bootstrap_tokens, tmptr, get_sharding_info).generate();
-    auto uuid = utils::make_random_uuid();
-    return {uuid, std::move(gen)};
+    return topology_description_generator(bootstrap_tokens, tmptr, get_sharding_info).generate();
 }
 
 db_clock::time_point new_generation_timestamp(bool add_delay, std::chrono::milliseconds ring_delay) {
@@ -431,7 +429,9 @@ future<cdc::generation_id> generation_service::legacy_make_new_generation(const 
             return {sc > 0 ? sc : 1, get_sharding_ignore_msb(*endpoint, _gossiper)};
         }
     };
-    auto [uuid, gen] = make_new_generation_data(bootstrap_tokens, get_sharding_info, tmptr);
+
+    auto uuid = utils::make_random_uuid();
+    auto gen = make_new_generation_description(bootstrap_tokens, get_sharding_info, tmptr);
 
     // Our caller should ensure that there are normal tokens in the token ring.
     auto normal_token_owners = tmptr->count_normal_token_owners();

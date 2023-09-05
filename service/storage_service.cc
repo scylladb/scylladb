@@ -1135,7 +1135,8 @@ class topology_coordinator {
             }
         };
 
-        auto [gen_uuid, gen_desc] = cdc::make_new_generation_data(
+        auto gen_uuid = utils::make_random_uuid();
+        auto gen_desc = cdc::make_new_generation_description(
             binfo ? binfo->bootstrap_tokens : std::unordered_set<token>{}, get_sharding_info, tmptr);
         auto gen_table_schema = _db.find_schema(
             db::system_keyspace::NAME, db::system_keyspace::CDC_GENERATIONS_V3);

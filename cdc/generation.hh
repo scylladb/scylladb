@@ -139,7 +139,7 @@ bool should_propose_first_generation(const gms::inet_address& me, const gms::gos
 */
 bool is_cdc_generation_optimal(const cdc::topology_description& gen, const locator::token_metadata& tm);
 
-std::pair<utils::UUID, cdc::topology_description> make_new_generation_data(
+cdc::topology_description make_new_generation_description(
     const std::unordered_set<dht::token>& bootstrap_tokens,
     const noncopyable_function<std::pair<size_t, uint8_t> (dht::token)>& get_sharding_info,
     const locator::token_metadata_ptr);
