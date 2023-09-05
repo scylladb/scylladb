@@ -141,7 +141,7 @@ void space_watchdog::on_timer() {
 
         // Adjust the quota to take into account the space we guarantee to every end point manager
         const size_t delta = boost::accumulate(per_device_limits.managers, size_t(0), [] (size_t sum, manager& shard_manager) {
-            return sum + shard_manager.ep_managers_size() * resource_manager::HINT_SEGMENT_SIZE_IN_MB * 1024 * 1024;
+            return sum + shard_manager.host_managers_size() * resource_manager::HINT_SEGMENT_SIZE_IN_MB * 1024 * 1024;
         });
         const size_t adjusted_quota = per_device_limits.max_shard_disk_space_size > delta
                 ? per_device_limits.max_shard_disk_space_size - delta

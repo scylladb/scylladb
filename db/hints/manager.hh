@@ -261,7 +261,7 @@ public:
         return with_lock(*mutex_ptr, std::forward<Func>(func)).finally([mutex_ptr] {/* extend the lifetime */});
     }
 
-    size_t ep_managers_size() const {
+    size_t host_managers_size() const {
         return _host_managers.size();
     }
 
