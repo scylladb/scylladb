@@ -16,6 +16,7 @@
 #include "utils/to_string.hh"
 
 // STD.
+#include <ranges>
 #include <string_view>
 
 namespace db::hints {
@@ -46,15 +47,15 @@ host_filter host_filter::parse_from_config_string(sstring opt) {
 }
 
 host_filter host_filter::parse_from_dc_list(sstring opt) {
-    using namespace boost::algorithm;
+    namespace ba = boost::algorithm;
 
     std::vector<sstring> dcs;
-    split(dcs, opt, is_any_of(","));
+    ba::split(dcs, opt, ba::is_any_of(","));
 
-    std::for_each(dcs.begin(), dcs.end(), [] (sstring& dc) {
-        trim(dc);
+    std::ranges::for_each(dcs, [] (sstring& dc) {
+        ba::trim(dc);
         if (dc.empty()) {
-            throw hints_configuration_parse_error("hinted_handoff_enabled: DC name may not be an empty string");
+            throw hints_configuration_parse_error{"hinted_handoff_enabled: DC name may not be an empty string"};
         }
     });
 
