@@ -8,13 +8,18 @@
 
 #pragma once
 
-#include <unordered_set>
-#include <stdexcept>
-#include <iosfwd>
-#include <string_view>
-
+// Seastar features.
 #include <seastar/core/sstring.hh>
+
+// Scylla includes.
 #include "seastarx.hh"
+
+// STD.
+#include <iosfwd>
+#include <stdexcept>
+#include <string_view>
+#include <unordered_set>
+
 
 namespace gms {
     class inet_address;
