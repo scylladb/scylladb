@@ -218,6 +218,10 @@ public:
     const endpoint_id& end_point_key() const noexcept {
         return _key;
     }
+    
+    lw_shared_ptr<shared_mutex> file_update_mutex_ptr() const noexcept {
+        return _file_update_mutex_ptr;
+    }
 
 private:
     seastar::shared_mutex& file_update_mutex() noexcept {

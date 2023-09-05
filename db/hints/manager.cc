@@ -504,4 +504,8 @@ void manager::update_backlog(size_t backlog, size_t max_backlog) {
     }
 }
 
+lw_shared_ptr<shared_mutex> manager::get_host_file_mutex(endpoint_id ep) const {
+    return _ep_managers.at(ep).file_update_mutex_ptr();
+}
+
 } // namespace db::hints

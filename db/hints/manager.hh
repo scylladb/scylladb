@@ -25,6 +25,7 @@
 #include "db/hints/host_filter.hh"
 #include "db/hints/resource_manager.hh"
 #include "db/hints/sync_point.hh"
+#include "seastar/core/shared_ptr.hh"
 #include "utils/loading_shared_values.hh"
 #include "inet_address_vectors.hh"
 
@@ -252,6 +253,14 @@ public:
         _state.set(state::replay_allowed);
     }
 
+    bool manages_host(endpoint_id ep) const noexcept;
+
+    template <typename Func>
+    decltype(auto) invoke_with_file_mutex_for(endpoint_id ep, Func&& func) {
+        const lw_shared_ptr<shared_mutex> mutex_ptr = get_host_file_mutex(ep);
+        return with_lock(*mutex_ptr, std::forward<Func>(func)).finally([mutex_ptr] {/* extend the lifetime */});
+    }
+
     size_t ep_managers_size() const {
         return _ep_managers.size();
     }
@@ -288,7 +297,6 @@ private:
     }
 
     host_manager& get_ep_manager(endpoint_id ep);
-    bool manages_host(endpoint_id ep) const noexcept;
 
     void update_backlog(size_t backlog, size_t max_backlog);
 
@@ -319,6 +327,8 @@ private:
     bool draining_all() noexcept {
         return _state.contains(state::draining_all);
     }
+
+    lw_shared_ptr<shared_mutex> get_host_file_mutex(endpoint_id ep) const;
 
 public:
     host_managers_map_type::iterator find_ep_manager(endpoint_id ep_key) noexcept {

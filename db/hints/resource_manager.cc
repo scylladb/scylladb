@@ -128,9 +128,8 @@ void space_watchdog::on_timer() {
                 // not hintable).
                 // If exists - let's take a file update lock so that files are not changed under our feet. Otherwise, simply
                 // continue to enumeration - there is no one to change them.
-                auto it = shard_manager.find_ep_manager(ep);
-                if (it != shard_manager.ep_managers_end()) {
-                    return with_file_update_mutex(it->second,
+                if (shard_manager.manages_host(ep)) {
+                    return shard_manager.invoke_with_file_mutex_for(ep,
                             [this, &shard_manager, dir = std::move(dir), ep = std::move(ep), ep_name = std::move(de.name)] () mutable {
                         return scan_one_ep_dir(dir / ep_name, shard_manager, ep);
                     });
