@@ -236,6 +236,9 @@ public:
         return _raft_gr.group0();
     }
 
+    // Returns true after the group 0 server has been started.
+    bool joined_group0() const;
+
     const raft_address_map& address_map() const;
 private:
     static void init_rpc_verbs(raft_group0& shard0_this);
@@ -244,7 +247,6 @@ private:
     // Stop the group 0 server and remove it from the raft_group_registry.
     future<> stop_group0();
 
-    bool joined_group0() const;
     future<bool> raft_upgrade_complete() const;
 
     // Handle peer_exchange RPC
