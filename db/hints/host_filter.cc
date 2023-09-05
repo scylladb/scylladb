@@ -6,11 +6,17 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#include <string_view>
+#include "db/hints/host_filter.hh"
+
+// Boost features.
 #include <boost/algorithm/string.hpp>
+
+// Scylla includes.
 #include "locator/token_metadata.hh"
 #include "utils/to_string.hh"
-#include "host_filter.hh"
+
+// STD.
+#include <string_view>
 
 namespace db {
 namespace hints {
