@@ -8,18 +8,23 @@
 
 #pragma once
 
-#include <cstdint>
-#include <filesystem>
+// Seastar features.
 #include <seastar/core/abort_source.hh>
-#include <seastar/core/semaphore.hh>
+#include <seastar/core/future.hh>
 #include <seastar/core/gate.hh>
 #include <seastar/core/memory.hh>
-#include <seastar/core/future.hh>
-#include "seastarx.hh"
-#include <unordered_set>
+#include <seastar/core/semaphore.hh>
+
+// Scylla includes.
 #include "utils/small_vector.hh"
 #include "utils/updateable_value.hh"
 #include "enum_set.hh"
+#include "seastarx.hh"
+
+// STD.
+#include <cstdint>
+#include <filesystem>
+#include <unordered_set>
 
 // Usually we don't define namespace aliases in our headers
 // but this one is already entrenched.
