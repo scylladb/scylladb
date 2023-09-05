@@ -1090,15 +1090,10 @@ class topology_coordinator {
         co_return guard;
     }
 
-    future<node_to_work_on> exec_global_command(
-            node_to_work_on&& node, const raft_topology_cmd& cmd, bool include_local,
-            drop_guard_and_retake do_retake = drop_guard_and_retake::yes) {
+    future<node_to_work_on> exec_global_command(node_to_work_on&& node, const raft_topology_cmd& cmd) {
         std::unordered_set<raft::server_id> exclude_nodes = parse_ignore_nodes(node);
         exclude_nodes.insert(parse_replaced_node(node));
-        if (!include_local) {
-            exclude_nodes.insert(_raft.id());
-        }
-        auto guard = co_await exec_global_command(std::move(node.guard), cmd, exclude_nodes, do_retake);
+        auto guard = co_await exec_global_command(std::move(node.guard), cmd, exclude_nodes, drop_guard_and_retake::yes);
         co_return retake_node(std::move(guard), node.id);
     };
 
@@ -1449,11 +1444,9 @@ class topology_coordinator {
 
     future<node_to_work_on> global_token_metadata_barrier(node_to_work_on&& node) {
         node = co_await exec_global_command(std::move(node),
-            raft_topology_cmd::command::barrier_and_drain,
-            true);
+            raft_topology_cmd::command::barrier_and_drain);
         node = co_await exec_global_command(std::move(node),
-            raft_topology_cmd::command::fence,
-            true);
+            raft_topology_cmd::command::fence);
         co_return std::move(node);
     }
 
@@ -1968,7 +1961,7 @@ class topology_coordinator {
                 try {
                     if (node.rs->state == node_state::removing) {
                         // tell all nodes to stream data of the removed node to new range owners
-                        node = co_await exec_global_command(std::move(node), cmd, true);
+                        node = co_await exec_global_command(std::move(node), cmd);
                     } else {
                         // Tell joining/leaving/replacing node to stream its ranges
                         node = co_await exec_direct_command(std::move(node), cmd);
