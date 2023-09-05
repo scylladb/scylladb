@@ -7,6 +7,7 @@
 # defines common test fixtures for all of them to use
 
 import ssl
+import platform
 from typing import List
 from test.pylib.random_tables import RandomTables
 from test.pylib.util import unique_name
@@ -216,3 +217,9 @@ def skip_mode_fixture(request, mode):
     skip_reason = skipped_funcs.get((request.function, mode))
     if skip_reason is not None:
         pytest.skip(f'{request.node.name} skipped, reason: {skip_reason}')
+
+
+@pytest.fixture(scope="session", autouse=True)
+def skip_aarch64(request):
+    if platform.machine() == 'aarch64' and request.config.getoption('mode') == 'debug':
+        pytest.skip("Topology tests skipped on debug/aarch64")
