@@ -63,7 +63,7 @@ private:
     };
 
 private:
-    static const std::chrono::seconds _watchdog_period;
+    static constexpr std::chrono::seconds WATCHDOG_PERIOD = std::chrono::seconds(1);
 
 public:
     struct per_device_limits {

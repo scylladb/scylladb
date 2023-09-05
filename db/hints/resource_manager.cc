@@ -67,8 +67,6 @@ size_t resource_manager::sending_queue_length() const {
     return _send_limiter.waiters();
 }
 
-const std::chrono::seconds space_watchdog::_watchdog_period = std::chrono::seconds(1);
-
 space_watchdog::space_watchdog(shard_managers_set& managers, per_device_limits_map& per_device_limits_map)
     : _shard_managers(managers)
     , _per_device_limits_map(per_device_limits_map)
@@ -88,7 +86,7 @@ void space_watchdog::start() {
                     shard_manager.forbid_hints();
                 }
             }
-            seastar::sleep_abortable(_watchdog_period, _as).get();
+            seastar::sleep_abortable(WATCHDOG_PERIOD, _as).get();
         }
     }).handle_exception_type([] (const seastar::sleep_aborted& ignored) { });
 }
