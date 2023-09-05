@@ -13,6 +13,8 @@
 #include <seastar/core/seastar.hh>
 #include <seastar/core/file.hh>
 #include <seastar/core/file-types.hh>
+#include <seastar/core/semaphore.hh>
+#include <seastar/coroutine/parallel_for_each.hh>
 
 // Boost features.
 #include <boost/range/algorithm/for_each.hpp>
@@ -185,19 +187,18 @@ future<> resource_manager::start(shared_ptr<service::storage_proxy> proxy_ptr, s
     _proxy_ptr = std::move(proxy_ptr);
     _gossiper_ptr = std::move(gossiper_ptr);
 
-    return with_semaphore(_operation_lock, 1, [this] () {
-        return parallel_for_each(_shard_managers, [this](manager& m) {
-            return m.start(_proxy_ptr, _gossiper_ptr);
-        }).then([this]() {
-            return do_for_each(_shard_managers, [this](manager& m) {
-                return prepare_per_device_limits(m);
-            });
-        }).then([this]() {
-            return _space_watchdog.start();
-        }).then([this]() {
-            set_running();
-        });
+    const auto operation_mutex = co_await seastar::get_units(_operation_lock, 1);
+
+    co_await seastar::coroutine::parallel_for_each(_shard_managers, [this] (manager& m) {
+        return m.start(_proxy_ptr, _gossiper_ptr);
     });
+    
+    co_await do_for_each(_shard_managers, [this] (manager& m) {
+        return prepare_per_device_limits(m);
+    });
+    
+    _space_watchdog.start();
+    set_running();
 }
 
 future<> resource_manager::stop() noexcept {
