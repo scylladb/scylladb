@@ -379,7 +379,8 @@ future<> hint_sender::send_one_hint(lw_shared_ptr<send_one_file_ctx> ctx_ptr,
         fragmented_temporary_buffer buf, replay_position rp, gc_clock::duration secs_since_file_mod,
         const sstring& fname)
 {
-    return _resource_manager.get_send_units_for(buf.size_bytes()).then([this, secs_since_file_mod, &fname, buf = std::move(buf), rp, ctx_ptr] (auto units) mutable {
+    return _resource_manager.get_send_units_for(buf.size_bytes()).then(
+            [this, secs_since_file_mod, &fname, buf = std::move(buf), rp, ctx_ptr] (auto units) mutable {
         ctx_ptr->mark_hint_as_in_progress(rp);
 
         // Future is waited on indirectly in `send_one_file()` (via `ctx_ptr->file_send_gate`).
@@ -393,7 +394,8 @@ future<> hint_sender::send_one_hint(lw_shared_ptr<send_one_file_ctx> ctx_ptr,
                 //
                 // Files are aggregated for at most manager::hints_timer_period therefore the oldest hint there is
                 // (last_modification - manager::hints_timer_period) old.
-                if (const auto now = gc_clock::now().time_since_epoch(); now - secs_since_file_mod > gc_grace_sec - manager::hints_flush_period) {
+                const auto current_time = gc_clock::now().time_since_epoch();
+                if (current_time - secs_since_file_mod > gc_grace_sec - manager::hints_flush_period) {
                     manager_logger.debug("send_hints(): the hint is too old, skipping it, "
                         "secs since file last modification {}, gc_grace_sec {}, hints_flush_period {}",
                         now - secs_since_file_mod, gc_grace_sec, manager::hints_flush_period);
