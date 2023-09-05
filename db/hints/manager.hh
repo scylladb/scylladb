@@ -298,7 +298,7 @@ private:
         return _local_db;
     }
 
-    host_manager& get_ep_manager(endpoint_id ep);
+    host_manager& get_host_manager(endpoint_id ep);
 
     void update_backlog(size_t backlog, size_t max_backlog);
 

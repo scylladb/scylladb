@@ -205,7 +205,7 @@ future<> manager::start(shared_ptr<service::storage_proxy> proxy_ptr, shared_ptr
         if (!check_dc_for(ep)) {
             return make_ready_future<>();
         }
-        return get_ep_manager(ep).populate_segments_to_replay();
+        return get_host_manager(ep).populate_segments_to_replay();
     }).then([this] {
         return compute_hints_dir_device_id();
     }).then([this] {
@@ -289,7 +289,7 @@ bool manager::store_hint(endpoint_id ep, schema_ptr s, lw_shared_ptr<const froze
         manager_logger.trace("Going to store a hint to {}", ep);
         tracing::trace(tr_state, "Going to store a hint to {}", ep);
 
-        return get_ep_manager(ep).store_hint(std::move(s), std::move(fm), tr_state);
+        return get_host_manager(ep).store_hint(std::move(s), std::move(fm), tr_state);
     } catch (...) {
         manager_logger.trace("Failed to store a hint to {}: {}", ep, std::current_exception());
         tracing::trace(tr_state, "Failed to store a hint to {}: {}", ep, std::current_exception());
@@ -441,7 +441,7 @@ future<> manager::change_host_filter(host_filter filter) {
                 if (_host_managers.contains(ep) || !_host_filter.can_hint_for(_proxy_anchor->get_token_metadata_ptr()->get_topology(), ep)) {
                     return make_ready_future<>();
                 }
-                return get_ep_manager(ep).populate_segments_to_replay();
+                return get_host_manager(ep).populate_segments_to_replay();
             }).handle_exception([this, filter = std::move(filter)] (auto ep) mutable {
                 // Bring back the old filter. The finally() block will cause us to stop
                 // the additional ep_hint_managers that we started
@@ -490,7 +490,7 @@ future<> manager::compute_hints_dir_device_id() {
     });
 }
 
-manager::host_manager& manager::get_ep_manager(endpoint_id ep) {
+manager::host_manager& manager::get_host_manager(endpoint_id ep) {
     auto it = _host_managers.find(ep);
     if (it == _host_managers.end()) {
         manager_logger.trace("Creating an ep_manager for {}", ep);
