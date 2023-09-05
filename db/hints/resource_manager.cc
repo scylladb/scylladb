@@ -43,9 +43,8 @@ future<bool> is_mountpoint(const fs::path& path) {
 } // anonymous namespace
 
 future<dev_t> get_device_id(const fs::path& path) {
-    return file_stat(path.native()).then([] (struct stat_data sd) {
-        return sd.device_id;
-    });
+    const auto sd = co_await file_stat(path.native());
+    co_return sd.device_id;
 }
 
 future<semaphore_units<named_semaphore::exception_factory>> resource_manager::get_send_units_for(size_t buf_size) {
