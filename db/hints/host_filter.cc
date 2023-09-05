@@ -73,7 +73,7 @@ bool host_filter::can_hint_for(const locator::topology& topo, endpoint_id ep) co
     case enabled_kind::disabled_for_all:
         return false;
     }
-    throw std::logic_error("Uncovered variant of enabled_kind");
+    throw std::logic_error{"Uncovered variant of enabled_kind"};
 }
 
 sstring host_filter::to_configuration_string() const {
@@ -85,7 +85,7 @@ sstring host_filter::to_configuration_string() const {
     case enabled_kind::disabled_for_all:
         return "false";
     }
-    throw std::logic_error("Uncovered variant of enabled_kind");
+    throw std::logic_error{"Uncovered variant of enabled_kind"};
 }
 
 std::ostream& operator<<(std::ostream& os, const host_filter& f) {
@@ -107,7 +107,7 @@ std::string_view host_filter::enabled_kind_to_string(host_filter::enabled_kind e
     case host_filter::enabled_kind::disabled_for_all:
         return "disabled_for_all";
     }
-    throw std::logic_error("Uncovered variant of enabled_kind");
+    throw std::logic_error{"Uncovered variant of enabled_kind"};
 }
 
 std::istream& operator>>(std::istream& is, host_filter& f) {
