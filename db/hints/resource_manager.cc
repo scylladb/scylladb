@@ -107,35 +107,39 @@ void space_watchdog::on_timer() {
 
     for (auto& per_device_limits : _per_device_limits_map | boost::adaptors::map_values) {
         _total_size = 0;
+
         for (manager& shard_manager : per_device_limits.managers) {
             shard_manager.clear_eps_with_pending_hints();
-            lister::scan_dir(shard_manager.hints_dir(), lister::dir_entry_types::of<directory_entry_type::directory>(), [this, &shard_manager] (fs::path dir, directory_entry de) {
+            lister::scan_dir(shard_manager.hints_dir(), lister::dir_entry_types::of<directory_entry_type::directory>(),
+                    [this, &shard_manager] (fs::path dir, directory_entry de) {
                 _files_count = 0;
+                const endpoint_id ep = de.name;
+
                 // Let's scan per-end-point directories and enumerate hints files...
                 //
                 // Let's check if there is a corresponding end point manager (may not exist if the corresponding DC is
                 // not hintable).
                 // If exists - let's take a file update lock so that files are not changed under our feet. Otherwise, simply
                 // continue to enumeration - there is no one to change them.
-                auto it = shard_manager.find_ep_manager(de.name);
+                auto it = shard_manager.find_ep_manager(ep);
                 if (it != shard_manager.ep_managers_end()) {
-                    return with_file_update_mutex(it->second, [this, &shard_manager, dir = std::move(dir), ep_name = std::move(de.name)] () mutable {
-                        return scan_one_ep_dir(dir / ep_name, shard_manager, endpoint_id(ep_name));
+                    return with_file_update_mutex(it->second,
+                            [this, &shard_manager, dir = std::move(dir), ep = std::move(ep), ep_name = std::move(de.name)] () mutable {
+                        return scan_one_ep_dir(dir / ep_name, shard_manager, ep);
                     });
                 } else {
-                    return scan_one_ep_dir(dir / de.name, shard_manager, endpoint_id(de.name));
+                    return scan_one_ep_dir(dir / de.name, shard_manager, ep);
                 }
             }).get();
         }
 
         // Adjust the quota to take into account the space we guarantee to every end point manager
-        size_t adjusted_quota = 0;
-        size_t delta = boost::accumulate(per_device_limits.managers, 0, [] (size_t sum, manager& shard_manager) {
+        const size_t delta = boost::accumulate(per_device_limits.managers, size_t(0), [] (size_t sum, manager& shard_manager) {
             return sum + shard_manager.ep_managers_size() * resource_manager::HINT_SEGMENT_SIZE_IN_MB * 1024 * 1024;
         });
-        if (per_device_limits.max_shard_disk_space_size > delta) {
-            adjusted_quota = per_device_limits.max_shard_disk_space_size - delta;
-        }
+        const size_t adjusted_quota = per_device_limits.max_shard_disk_space_size > delta
+                ? per_device_limits.max_shard_disk_space_size - delta
+                : 0;
 
         resource_manager_logger.trace("space_watchdog: consuming {}/{} bytes", _total_size, adjusted_quota);
         for (manager& shard_manager : per_device_limits.managers) {
