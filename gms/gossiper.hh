@@ -114,7 +114,7 @@ private:
     future<gossip_get_endpoint_states_response> handle_get_endpoint_states_msg(gossip_get_endpoint_states_request request);
     static constexpr uint32_t _default_cpuid = 0;
     msg_addr get_msg_addr(inet_address to) const noexcept;
-    void do_sort(utils::chunked_vector<gossip_digest>& g_digest_list);
+    void do_sort(utils::chunked_vector<gossip_digest>& g_digest_list) const;
     timer<lowres_clock> _scheduled_gossip_task;
     bool _enabled = false;
     semaphore _callback_running{1};
@@ -132,7 +132,7 @@ private:
 public:
     // Get current generation number for the given nodes
     future<generation_for_nodes>
-    get_generation_for_nodes(std::unordered_set<gms::inet_address> nodes);
+    get_generation_for_nodes(std::unordered_set<gms::inet_address> nodes) const;
     // Only respond echo message listed in nodes with the generation number
     future<> advertise_to_nodes(generation_for_nodes advertise_to_nodes = {});
     const sstring& get_cluster_name() const noexcept;
@@ -213,7 +213,7 @@ public:
 
     std::chrono::milliseconds quarantine_delay() const noexcept;
 private:
-    std::default_random_engine _random_engine{std::random_device{}()};
+    mutable std::default_random_engine _random_engine{std::random_device{}()};
 
     /**
      * subscribers for interest in EndpointState change
@@ -246,9 +246,6 @@ private:
     std::map<inet_address, clk::time_point> _expire_time_endpoint_map;
 
     bool _in_shadow_round = false;
-
-    uint64_t _shadow_live_endpoints_version = 0;
-    uint64_t _shadow_unreachable_endpoints_version = 0;
 
     // Must be called on shard 0.
     future<semaphore_units<>> lock_endpoint_update_semaphore();
@@ -360,7 +357,7 @@ private:
      *
      * @param g_digests list of Gossip Digests.
      */
-    void make_random_gossip_digest(utils::chunked_vector<gossip_digest>& g_digests);
+    void make_random_gossip_digest(utils::chunked_vector<gossip_digest>& g_digests) const;
 
 public:
     /**
@@ -385,12 +382,12 @@ public:
     future<> assassinate_endpoint(sstring address);
 
 public:
-    future<generation_type> get_current_generation_number(inet_address endpoint);
-    future<version_type> get_current_heart_beat_version(inet_address endpoint);
+    future<generation_type> get_current_generation_number(inet_address endpoint) const;
+    future<version_type> get_current_heart_beat_version(inet_address endpoint) const;
 
-    bool is_gossip_only_member(inet_address endpoint);
-    bool is_safe_for_bootstrap(inet_address endpoint);
-    bool is_safe_for_restart(inet_address endpoint, locator::host_id host_id);
+    bool is_gossip_only_member(inet_address endpoint) const;
+    bool is_safe_for_bootstrap(inet_address endpoint) const;
+    bool is_safe_for_restart(inet_address endpoint, locator::host_id host_id) const;
 private:
     /**
      * Returns true if the chosen target was also a seed. False otherwise
@@ -453,12 +450,12 @@ public:
 
     std::set<gms::inet_address> get_nodes_with_host_id(locator::host_id host_id) const;
 
-    std::optional<endpoint_state> get_state_for_version_bigger_than(inet_address for_endpoint, version_type version);
+    std::optional<endpoint_state> get_state_for_version_bigger_than(inet_address for_endpoint, version_type version) const;
 
     /**
      * determine which endpoint started up earlier
      */
-    generation_type::value_type compare_endpoint_startup(inet_address addr1, inet_address addr2);
+    generation_type::value_type compare_endpoint_startup(inet_address addr1, inet_address addr2) const;
 
     /**
      * Return the rpc address associated with an endpoint as a string.
@@ -527,22 +524,22 @@ private:
 
     // notify that a local application state is going to change (doesn't get triggered for remote changes)
     // Must be called under lock_endpoint.
-    future<> do_before_change_notifications(inet_address addr, endpoint_state_ptr ep_state, const application_state& ap_state, const versioned_value& new_value);
+    future<> do_before_change_notifications(inet_address addr, endpoint_state_ptr ep_state, const application_state& ap_state, const versioned_value& new_value) const;
 
     // notify that an application state has changed
     // Must be called under lock_endpoint.
-    future<> do_on_change_notifications(inet_address addr, const application_state& state, const versioned_value& value, permit_id);
+    future<> do_on_change_notifications(inet_address addr, const application_state& state, const versioned_value& value, permit_id) const;
 
     // notify that a node is DOWN (dead)
     // Must be called under lock_endpoint.
-    future<> do_on_dead_notifications(inet_address addr, endpoint_state_ptr state, permit_id);
+    future<> do_on_dead_notifications(inet_address addr, endpoint_state_ptr state, permit_id) const;
 
     /* Request all the state for the endpoint in the g_digest */
 
-    void request_all(gossip_digest& g_digest, utils::chunked_vector<gossip_digest>& delta_gossip_digest_list, generation_type remote_generation);
+    void request_all(gossip_digest& g_digest, utils::chunked_vector<gossip_digest>& delta_gossip_digest_list, generation_type remote_generation) const;
 
     /* Send all the data with version greater than max_remote_version */
-    void send_all(gossip_digest& g_digest, std::map<inet_address, endpoint_state>& delta_ep_state_map, version_type max_remote_version);
+    void send_all(gossip_digest& g_digest, std::map<inet_address, endpoint_state>& delta_ep_state_map, version_type max_remote_version) const;
 
 public:
     /*
@@ -551,7 +548,7 @@ public:
     */
     void examine_gossiper(utils::chunked_vector<gossip_digest>& g_digest_list,
                          utils::chunked_vector<gossip_digest>& delta_gossip_digest_list,
-                         std::map<inet_address, endpoint_state>& delta_ep_state_map);
+                         std::map<inet_address, endpoint_state>& delta_ep_state_map) const;
 
 public:
     /**
@@ -642,8 +639,6 @@ public:
 
     static clk::time_point compute_expire_time();
 public:
-    void dump_endpoint_state_map();
-public:
     bool is_seed(const inet_address& endpoint) const;
     bool is_shutdown(const inet_address& endpoint) const;
     bool is_normal(const inet_address& endpoint) const;
@@ -659,10 +654,10 @@ public:
     std::string_view get_gossip_status(const endpoint_state& ep_state) const noexcept;
     std::string_view get_gossip_status(const inet_address& endpoint) const noexcept;
 public:
-    future<> wait_for_gossip_to_settle();
-    future<> wait_for_range_setup();
+    future<> wait_for_gossip_to_settle() const;
+    future<> wait_for_range_setup() const;
 private:
-    future<> wait_for_gossip(std::chrono::milliseconds, std::optional<int32_t> = {});
+    future<> wait_for_gossip(std::chrono::milliseconds, std::optional<int32_t> = {}) const;
 
     uint64_t _nr_run = 0;
     uint64_t _msg_processing = 0;
