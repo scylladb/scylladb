@@ -559,6 +559,10 @@ void hint_sender::send_hints_maybe() noexcept {
     manager_logger.trace("send_hints(): we handled {} segments", replayed_segments_count);
 }
 
+bool hint_sender::replay_allowed() const noexcept {
+    return _host_manager.replay_allowed();
+}
+
 void hint_sender::notify_replay_waiters() noexcept {
     if (!_foreign_segments_to_replay.empty()) {
         manager_logger.trace("[{}] notify_replay_waiters(): not notifying because there are still {} foreign segments to replay", _ep_key, _foreign_segments_to_replay.size());

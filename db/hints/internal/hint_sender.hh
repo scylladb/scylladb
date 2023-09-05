@@ -274,9 +274,7 @@ private:
         return _state.contains(state::stopping);
     }
 
-    bool replay_allowed() const noexcept {
-        return _host_manager.replay_allowed();
-    }
+    bool replay_allowed() const noexcept;
 
     /// \brief Notifies replay waiters for which the target replay position was reached.
     void notify_replay_waiters() noexcept;
