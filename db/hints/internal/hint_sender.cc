@@ -557,7 +557,7 @@ void hint_sender::send_hints_maybe() noexcept {
             notify_replay_waiters();
         }
 
-    // Ignore exceptions, we will retry sending this file from where we left off the next time.
+    // Ignore exceptions. We will retry sending this file from where we left off the next time.
     // Exceptions are not expected here during the regular operation, so just log them.
     } catch (...) {
         manager_logger.trace("send_hints(): got the exception: {}", std::current_exception());
@@ -580,13 +580,18 @@ bool hint_sender::replay_allowed() const noexcept {
 
 void hint_sender::notify_replay_waiters() noexcept {
     if (!_foreign_segments_to_replay.empty()) {
-        manager_logger.trace("[{}] notify_replay_waiters(): not notifying because there are still {} foreign segments to replay", _ep_key, _foreign_segments_to_replay.size());
+        manager_logger.trace("[{}] notify_replay_waiters(): not notifying because there are "
+                             "still {} foreign segments to replay", _ep_key, _foreign_segments_to_replay.size());
         return;
     }
 
-    manager_logger.trace("[{}] notify_replay_waiters(): replay position upper bound was updated to {}", _ep_key, _sent_upper_bound_rp);
+    manager_logger.trace("[{}] notify_replay_waiters(): replay position upper bound was updated to {}",
+            _ep_key, _sent_upper_bound_rp);
+    
     while (!_replay_waiters.empty() && _replay_waiters.begin()->first < _sent_upper_bound_rp) {
-        manager_logger.trace("[{}] notify_replay_waiters(): notifying one ({} < {})", _ep_key, _replay_waiters.begin()->first, _sent_upper_bound_rp);
+        manager_logger.trace("[{}] notify_replay_waiters(): notifying one ({} < {})",
+                _ep_key, _replay_waiters.begin()->first, _sent_upper_bound_rp);
+        
         auto ptr = _replay_waiters.begin()->second;
         (**ptr).set_value();
         (*ptr) = std::nullopt; // Prevent it from being resolved by abort source subscription
