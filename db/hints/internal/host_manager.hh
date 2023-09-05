@@ -182,21 +182,6 @@ public:
         return _sender.wait_until_hints_are_replayed_up_to(as, up_to_rp);
     }
 
-    /// \brief Safely runs a given functor under the file_update_mutex of \ref ep_man
-    ///
-    /// Runs a given functor under the file_update_mutex of the given host_manager instance.
-    /// This function is safe even if \ref ep_man gets destroyed before the future this function returns resolves
-    /// (as long as the \ref func call itself is safe).
-    ///
-    /// \tparam Func Functor type.
-    /// \param ep_man host_manager instance which file_update_mutex we want to lock.
-    /// \param func Functor to run under the lock.
-    /// \return Whatever \ref func returns.
-    template <typename Func>
-    friend inline auto with_file_update_mutex(host_manager& ep_man, Func&& func) {
-        return with_lock(*ep_man._file_update_mutex_ptr, std::forward<Func>(func)).finally([lock_ptr = ep_man._file_update_mutex_ptr] {});
-    }
-
     /// \brief Safely runs a given functor under the file_update_mutex.
     ///
     /// This function is safe even if \ref ep_man gets destroyed before the future

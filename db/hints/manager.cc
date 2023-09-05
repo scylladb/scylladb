@@ -312,10 +312,10 @@ void manager::drain_for(endpoint_id endpoint) {
             return futurize_invoke([this, endpoint] () {
                 if (utils::fb_utilities::is_me(endpoint)) {
                     set_draining_all();
-                    return parallel_for_each(_ep_managers, [] (auto& pair) {
-                        return pair.second.stop(drain::yes).finally([&pair] {
-                            return with_file_update_mutex(pair.second, [&pair] {
-                                return remove_file(pair.second.hints_dir().c_str());
+                    return parallel_for_each(_ep_managers | boost::adaptors::map_values, [] (host_manager& hman) {
+                        return hman.stop(drain::yes).finally([&hman] {
+                            return hman.with_file_update_mutex([&hman] {
+                                return remove_file(hman.hints_dir().c_str());
                             });
                         });
                     }).finally([this] {
@@ -325,7 +325,7 @@ void manager::drain_for(endpoint_id endpoint) {
                     host_managers_map_type::iterator ep_manager_it = find_ep_manager(endpoint);
                     if (ep_manager_it != ep_managers_end()) {
                         return ep_manager_it->second.stop(drain::yes).finally([this, endpoint, &ep_man = ep_manager_it->second] {
-                            return with_file_update_mutex(ep_man, [&ep_man] {
+                            return ep_man.with_file_update_mutex([&ep_man] {
                                 return remove_file(ep_man.hints_dir().c_str());
                             }).finally([this, endpoint] {
                                 _ep_managers.erase(endpoint);
