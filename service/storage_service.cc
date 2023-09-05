@@ -860,6 +860,9 @@ class topology_coordinator {
 
     using drop_guard_and_retake = bool_class<class retake_guard_tag>;
 
+    // True if an ongoing topology change should be rolled back
+    bool _rollback = false;
+
     const locator::token_metadata& get_token_metadata() const noexcept {
         return *_shared_tm.get();
     }
@@ -1927,6 +1930,7 @@ class topology_coordinator {
                     slogger.error("raft topology: transition_state::write_both_read_old, "
                                     "global_token_metadata_barrier failed, error {}",
                                     std::current_exception());
+                    _rollback = true;
                     break;
                 }
 
@@ -1980,6 +1984,7 @@ class topology_coordinator {
                 } catch (...) {
                     slogger.error("raft topology: send_raft_topology_cmd(stream_ranges) failed with exception"
                                     " (node state is {}): {}", node.rs->state, std::current_exception());
+                    _rollback = true;
                     break;
                 }
                 // Streaming completed. We can now move tokens state to topology::transition_state::write_both_read_new
@@ -2335,6 +2340,7 @@ class topology_coordinator {
     }
 
     future<> fence_previous_coordinator() noexcept;
+    future<> rollback_current_topology_op(group0_guard&& guard);
 
 public:
     topology_coordinator(
@@ -2410,6 +2416,57 @@ future<> topology_coordinator::fence_previous_coordinator() noexcept {
     }
 }
 
+future<> topology_coordinator::rollback_current_topology_op(group0_guard&& guard) {
+    slogger.info("raft topology: start rolling back topology change");
+    // Look for a node which operation should be aborted
+    // (there should be one since we are in the rollback)
+    node_to_work_on node = get_node_to_work_on(std::move(guard));
+    node_state state;
+    std::unordered_set<raft::server_id> exclude_nodes = parse_ignore_nodes(node);
+
+    switch (node.rs->state) {
+        case node_state::bootstrapping:
+            [[fallthrough]];
+        case node_state::replacing:
+            // To rollback bootstrap of replace just move a node that we tried to add to the left_token_ring state.
+            // It will be removed from the group0 by the state handler. It will also be notified to shutdown.
+            state = node_state::left_token_ring;
+            break;
+        case node_state::removing:
+            // Exclude dead node from global barrier
+            exclude_nodes.emplace(node.id);
+            // The node was removed already. We need to add it back. Lets do it as non voter.
+            // If it ever boots again it will make itself a voter.
+            co_await _group0.group0_server().modify_config({raft::config_member{{node.id, {}}, false}}, {}, &_as);
+            [[fallthrough]];
+        case node_state::decommissioning:
+            // to rollback decommission or remove just move a node that we tried to remove back to normal state
+            state = node_state::normal;
+            break;
+        default:
+            on_internal_error(slogger, fmt::format("raft topology: tried to rollback in unsupported state {}", node.rs->state));
+    }
+
+    topology_mutation_builder builder(node.guard.write_timestamp());
+    builder.del_transition_state()
+           .set_version(_topo_sm._topology.version + 1)
+           .with_node(node.id)
+           .set("node_state", state);
+
+    auto str = fmt::format("rollback {} after {} failure to state {}", node.id, node.rs->state, state);
+
+    co_await update_topology_state(std::move(node.guard), {builder.build()}, str);
+    slogger.info(str.c_str());
+    // Try to run metadata barrier to wait for all double writes to complete
+    // but ignore failures
+    try {
+        co_await global_token_metadata_barrier(co_await start_operation(), std::move(exclude_nodes));
+    } catch (term_changed_error&) {
+    } catch(...) {
+        slogger.warn("raft topology: failed to run metadata barrier during rollback {}", std::current_exception());
+    }
+}
+
 future<> topology_coordinator::run() noexcept {
     slogger.info("raft topology: start topology coordinator fiber");
 
@@ -2425,6 +2482,12 @@ future<> topology_coordinator::run() noexcept {
         try {
             auto guard = co_await start_operation();
             co_await cleanup_group0_config_if_needed();
+
+            if (_rollback) {
+                co_await rollback_current_topology_op(std::move(guard));
+                _rollback = false;
+                continue;
+            }
 
             bool had_work = co_await handle_topology_transition(std::move(guard));
             if (!had_work) {
@@ -3008,14 +3071,23 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
         // we do that here.
         co_await raft_initialize_discovery_leader(*raft_server, join_params);
 
+        auto leaving = [&] {
+            return _topology_state_machine._topology.left_nodes.contains(raft_server->id()) ||
+                    (_topology_state_machine._topology.transition_nodes.contains(raft_server->id()) &&
+                    _topology_state_machine._topology.transition_nodes[raft_server->id()].state == node_state::left_token_ring);
+        };
+
         // Wait until we enter one of the final states
-        co_await _topology_state_machine.event.when([this, raft_server] {
-            return _topology_state_machine._topology.normal_nodes.contains(raft_server->id()) ||
-            _topology_state_machine._topology.left_nodes.contains(raft_server->id());
+        co_await _topology_state_machine.event.when([this, raft_server, &leaving] {
+            return _topology_state_machine._topology.normal_nodes.contains(raft_server->id()) || leaving();
         });
 
-        if (_topology_state_machine._topology.left_nodes.contains(raft_server->id())) {
-            throw std::runtime_error("A node that already left the cluster cannot be restarted");
+        if (leaving()) {
+            if (_sys_ks.local().bootstrap_complete()) {
+                throw std::runtime_error("A node that already left the cluster cannot be restarted");
+            } else {
+                throw std::runtime_error(fmt::format("{} failed. See earlier errors", raft_replace_info ? "Replace" : "Bootstrap"));
+            }
         }
 
         co_await update_topology_with_local_metadata(*raft_server);
@@ -4409,7 +4481,6 @@ void on_streaming_finished() {
 future<> storage_service::raft_decomission() {
     auto& raft_server = _group0->group0_server();
 
-    auto shutdown_request_future = make_ready_future<>();
     auto disengage_shutdown_promise = defer([this] {
         _shutdown_request_promise = std::nullopt;
     });
@@ -4432,8 +4503,6 @@ future<> storage_service::raft_decomission() {
             throw std::runtime_error("Cannot decomission last node in the cluster");
         }
 
-        shutdown_request_future = _shutdown_request_promise.emplace().get_future();
-
         slogger.info("raft topology: request decomission for: {}", raft_server.id());
         topology_mutation_builder builder(guard.write_timestamp());
         builder.with_node(raft_server.id())
@@ -4450,11 +4519,41 @@ future<> storage_service::raft_decomission() {
         break;
     }
 
-    // Wait for the coordinator to tell us to shut down.
-    co_await std::move(shutdown_request_future);
+    // Wait for the coordinator to tell us to shut down or for decomission request to disappear
+    bool abort_wait = false;
 
-    // Need to set it otherwise gossiper will try to send shutdown on exit
-    co_await _gossiper.add_local_application_state({{ gms::application_state::STATUS, gms::versioned_value::left({}, _gossiper.now().time_since_epoch().count()) }});
+    auto f1 = _shutdown_request_promise.emplace().get_future().then([this, &abort_wait] {
+        // shutdown was signalled, abort the wait for the topology event
+       abort_wait = true;
+        _topology_state_machine.event.broadcast();
+    });
+
+    auto f2 = _topology_state_machine.event.wait([this, &raft_server, &abort_wait] {
+        if (abort_wait) {
+            return true; // the wait is aborted
+        }
+        // Wait for decommission request to be removed, but node stay as normal which means decommission failed
+        auto it = _topology_state_machine._topology.find(raft_server.id());
+        if (it->second.state == node_state::normal) {
+            auto rit = _topology_state_machine._topology.requests.find(raft_server.id());
+            if (rit == _topology_state_machine._topology.requests.end() || rit->second != topology_request::leave) {
+                _shutdown_request_promise->set_exception(std::runtime_error("Decommission failure"));
+                return true; // node is normal, but leave request is gone. It means decommission failed
+            }
+        }
+        return false;
+    });
+
+    auto res = co_await when_all(std::move(f1), std::move(f2));
+
+    if (!std::get<0>(res).failed()) {
+        // Need to set it otherwise gossiper will try to send shutdown on exit
+        co_await _gossiper.add_local_application_state({{ gms::application_state::STATUS, gms::versioned_value::left({}, _gossiper.now().time_since_epoch().count()) }});
+    } else {
+        const auto err = "Decommission failed. See earlier errors";
+        slogger.error(err);
+        throw std::runtime_error(err);
+    }
 }
 
 future<> storage_service::decommission() {
@@ -4786,15 +4885,34 @@ future<> storage_service::raft_removenode(locator::host_id host_id, std::list<lo
         break;
     }
 
-    // Wait the node we are removing to enter left state
-    co_await _topology_state_machine.event.when([this, id] {
-        return _topology_state_machine._topology.left_nodes.contains(id);
+    bool left = false;
+    co_await _topology_state_machine.event.when([this, id, &left] {
+        // Wait for this node to move to state left which means that removenode completed
+        // or wait for removenode request to be removed, but node stay as normal which means removenode failed
+        auto it = _topology_state_machine._topology.find(id);
+        if (!it) {
+            left = true;
+            return true; // node either left or on the way
+        }
+        if (it->second.state == node_state::normal) {
+            auto rit = _topology_state_machine._topology.requests.find(id);
+            if (rit == _topology_state_machine._topology.requests.end() || rit->second != topology_request::remove) {
+                return true; // node is normal, but remove request is gone. It means removenode failed
+            }
+        }
+        return false;
     });
 
-    try {
-        co_await _group0->remove_from_raft_config(id);
-    } catch (raft::not_a_member&) {
-        slogger.info("raft topology removenode: already removed from the raft config by the topology coordinator");
+    if (left) {
+        try {
+            co_await _group0->remove_from_raft_config(id);
+        } catch (raft::not_a_member&) {
+            slogger.info("raft topology removenode: already removed from the raft config by the topology coordinator");
+        }
+    } else {
+        const auto err = "Removenode failed. See earlier errors";
+        slogger.error(err);
+        throw std::runtime_error(err);
     }
 }
 
