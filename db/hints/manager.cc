@@ -473,7 +473,7 @@ void manager::forbid_hints_for_eps_with_pending_hints() {
     manager_logger.trace("space_watchdog: Going to block hints to: {}", _eps_with_pending_hints);
     boost::for_each(_host_managers, [this] (auto& pair) {
         host_manager& ep_man = pair.second;
-        if (has_ep_with_pending_hints(ep_man.end_point_key())) {
+        if (has_host_with_pending_hints(ep_man.end_point_key())) {
             ep_man.forbid_hints();
         } else {
             ep_man.allow_hints();

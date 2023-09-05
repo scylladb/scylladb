@@ -235,7 +235,7 @@ public:
         _eps_with_pending_hints.reserve(_host_managers.size());
     }
 
-    bool has_ep_with_pending_hints(endpoint_id key) const {
+    bool has_host_with_pending_hints(endpoint_id key) const {
         return _eps_with_pending_hints.contains(key);
     }
 
