@@ -288,7 +288,7 @@ private:
     }
 
     host_manager& get_ep_manager(endpoint_id ep);
-    bool have_ep_manager(endpoint_id ep) const noexcept;
+    bool manages_host(endpoint_id ep) const noexcept;
 
     void update_backlog(size_t backlog, size_t max_backlog);
 
