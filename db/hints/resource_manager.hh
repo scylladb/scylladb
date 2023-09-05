@@ -41,7 +41,7 @@ class gossiper;
 
 namespace db::hints {
 
-future<dev_t> get_device_id(const fs::path& path);
+future<::dev_t> get_device_id(const fs::path& path);
 
 class manager;
 
@@ -49,18 +49,21 @@ class space_watchdog {
 private:
     using endpoint_id = internal::endpoint_id;
 
-    static const std::chrono::seconds _watchdog_period;
-
     struct manager_hash {
         size_t operator()(const manager& manager) const {
             return reinterpret_cast<uintptr_t>(&manager);
         }
     };
+
     struct manager_comp {
-        bool operator()(const std::reference_wrapper<manager>& m1, const std::reference_wrapper<manager>& m2) const {
+        bool operator()(const std::reference_wrapper<manager>& m1,
+                const std::reference_wrapper<manager>& m2) const {
             return std::addressof(m1.get()) == std::addressof(m2.get());
         }
     };
+
+private:
+    static const std::chrono::seconds _watchdog_period;
 
 public:
     struct per_device_limits {
@@ -69,7 +72,7 @@ public:
     };
 
     using shard_managers_set = std::unordered_set<std::reference_wrapper<manager>, manager_hash, manager_comp>;
-    using per_device_limits_map = std::unordered_map<dev_t, per_device_limits>;
+    using per_device_limits_map = std::unordered_map<::dev_t, per_device_limits>;
 
 private:
     size_t _total_size = 0;
@@ -83,6 +86,8 @@ private:
 
 public:
     space_watchdog(shard_managers_set& managers, per_device_limits_map& per_device_limits_map);
+
+public:
     void start();
     future<> stop() noexcept;
 
