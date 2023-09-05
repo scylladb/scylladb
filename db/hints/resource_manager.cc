@@ -170,7 +170,7 @@ future<> space_watchdog::scan_one_ep_dir(fs::path path, manager& shard_manager, 
         // Put the current end point ID to state.eps_with_pending_hints
         // when we see the second hints file in its directory.
         if (_files_count == 1) {
-            shard_manager.add_ep_with_pending_hints(ep);
+            shard_manager.add_host_with_pending_hints(ep);
         }
         ++_files_count;
 

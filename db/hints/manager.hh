@@ -226,7 +226,7 @@ public:
         return _host_filter;
     }
 
-    void add_ep_with_pending_hints(endpoint_id key) {
+    void add_host_with_pending_hints(endpoint_id key) {
         _eps_with_pending_hints.insert(key);
     }
 
