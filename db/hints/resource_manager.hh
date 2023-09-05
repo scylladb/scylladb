@@ -165,20 +165,20 @@ public:
     ~resource_manager() noexcept = default;
 
 public:
-    future<semaphore_units<named_semaphore::exception_factory>> get_send_units_for(size_t buf_size);
-    size_t sending_queue_length() const;
-
     future<> start(shared_ptr<service::storage_proxy> proxy_ptr, shared_ptr<gms::gossiper> gossiper_ptr);
     future<> stop() noexcept;
-
-    /// \brief Allows replaying hints for managers which are registered now or will be in the future.
-    void allow_replaying() noexcept;
 
     /// \brief Registers the hints::manager in resource_manager, and starts it if resource_manager is already running.
     ///
     /// The hints::managers can be added either before or after resource_manager starts.
     /// If resource_manager is already started, the hints manager will also be started.
     future<> register_manager(manager& m);
+
+    /// \brief Allows replaying hints for managers which are registered now or will be in the future.
+    void allow_replaying() noexcept;
+    
+    future<semaphore_units<named_semaphore::exception_factory>> get_send_units_for(size_t buf_size);
+    size_t sending_queue_length() const;
 
 private:
     void set_running() noexcept {
