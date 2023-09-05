@@ -1117,7 +1117,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             cfg->host_id = linfo.host_id;
             linfo.listen_address = listen_address;
-            sys_ks.local().save_local_info(std::move(linfo)).get();
+            sys_ks.local().save_local_info(std::move(linfo), snitch.local()->get_location()).get();
 
           shared_token_metadata::mutate_on_all_shards(token_metadata, [hostid = cfg->host_id, endpoint = utils::fb_utilities::get_broadcast_address()] (locator::token_metadata& tm) {
               // Makes local host id available in topology cfg as soon as possible.

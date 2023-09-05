@@ -410,7 +410,7 @@ public:
     };
 
     future<local_info> load_local_info();
-    future<> save_local_info(local_info);
+    future<> save_local_info(local_info, locator::endpoint_dc_rack);
 private:
     future<truncation_record> get_truncation_record(table_id cf_id);
 
