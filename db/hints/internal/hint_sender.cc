@@ -50,7 +50,7 @@ namespace {
 class no_column_mapping : public std::out_of_range {
 public:
     no_column_mapping(const table_schema_version& id)
-        : std::out_of_range(format("column mapping for CF schema_version {} is missing", id))
+        : std::out_of_range{format("column mapping for CF schema_version {} is missing", id)}
     {}
 };
 

@@ -122,7 +122,8 @@ public:
     /// \param fm frozen mutation object
     /// \param tr_state trace_state handle
     /// \return FALSE if hint is definitely not going to be stored
-    bool store_hint(schema_ptr s, lw_shared_ptr<const frozen_mutation> fm, tracing::trace_state_ptr tr_state) noexcept;
+    bool store_hint(schema_ptr s, lw_shared_ptr<const frozen_mutation> fm,
+            tracing::trace_state_ptr tr_state) noexcept;
 
     /// \brief Populates the _segments_to_replay list.
     ///  Populates the _segments_to_replay list with the names of the files in the <manager hints files directory> directory

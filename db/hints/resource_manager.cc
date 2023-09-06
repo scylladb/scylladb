@@ -65,9 +65,9 @@ future<::dev_t> get_device_id(const fs::path& path) {
 /////////////////////////////////
 
 space_watchdog::space_watchdog(shard_managers_set& managers, per_device_limits_map& per_device_limits_map)
-    : _shard_managers(managers)
-    , _per_device_limits_map(per_device_limits_map)
-    , _update_lock(1, named_semaphore_exception_factory{"update lock"})
+    : _shard_managers{managers}
+    , _per_device_limits_map{per_device_limits_map}
+    , _update_lock{1, named_semaphore_exception_factory{"update lock"}}
 {}
 
 void space_watchdog::start() {
@@ -185,7 +185,9 @@ future<> space_watchdog::scan_one_ep_dir(fs::path path, shard_hint_manager& shar
 /////////////////////////////////
 /////////////////////////////////
 
-future<> resource_manager::start(shared_ptr<service::storage_proxy> proxy_ptr, shared_ptr<gms::gossiper> gossiper_ptr) {
+future<> resource_manager::start(shared_ptr<service::storage_proxy> proxy_ptr,
+        shared_ptr<gms::gossiper> gossiper_ptr)
+{
     _proxy_ptr = std::move(proxy_ptr);
     _gossiper_ptr = std::move(gossiper_ptr);
 
