@@ -152,7 +152,8 @@ public:
 public:
     void register_metrics(const sstring& group_name);
 
-    future<> start(shared_ptr<service::storage_proxy> proxy_ptr, shared_ptr<gms::gossiper> gossiper_ptr);
+    future<> start(shared_ptr<service::storage_proxy> proxy_ptr,
+            shared_ptr<gms::gossiper> gossiper_ptr);
     future<> stop();
 
     /// \brief Check if a hint may be generated to the give end point

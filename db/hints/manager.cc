@@ -199,21 +199,25 @@ void shard_hint_manager::register_metrics(const sstring& group_name) {
     });
 }
 
-future<> shard_hint_manager::start(shared_ptr<service::storage_proxy> proxy_ptr, shared_ptr<gms::gossiper> gossiper_ptr) {
+future<> shard_hint_manager::start(shared_ptr<service::storage_proxy> proxy_ptr,
+        shared_ptr<gms::gossiper> gossiper_ptr)
+{
     _proxy_anchor = std::move(proxy_ptr);
     _gossiper_anchor = std::move(gossiper_ptr);
-    return lister::scan_dir(_hints_dir, lister::dir_entry_types::of<directory_entry_type::directory>(),
+
+    co_await lister::scan_dir(_hints_dir, lister::dir_entry_types::of<directory_entry_type::directory>(),
             [this] (fs::path datadir, directory_entry de) {
-        endpoint_id ep = endpoint_id(de.name);
+        endpoint_id ep = endpoint_id{de.name};
+        
         if (!check_dc_for(ep)) {
             return make_ready_future<>();
         }
+        
         return get_host_manager(ep).populate_segments_to_replay();
-    }).then([this] {
-        return compute_hints_dir_device_id();
-    }).then([this] {
-        set_started();
     });
+    
+    co_await compute_hints_dir_device_id();
+    set_started();
 }
 
 future<> shard_hint_manager::stop() {
