@@ -110,7 +110,7 @@ private:
     /// \brief Scan files in a single end point directory.
     ///
     /// Add sizes of files in the directory to _total_size. If number of files is greater than 1 add this end point ID
-    /// to _eps_with_pending_hints so that we may block it if _total_size value becomes greater than the maximum allowed
+    /// to _hosts_with_pending_hints so that we may block it if _total_size value becomes greater than the maximum allowed
     /// value.
     ///
     /// \param path directory to scan

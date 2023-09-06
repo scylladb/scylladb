@@ -135,7 +135,7 @@ private:
     std::unordered_map<endpoint_id, host_manager> _host_managers;
     hint_stats _stats;
     seastar::metrics::metric_groups _metrics;
-    std::unordered_set<endpoint_id> _eps_with_pending_hints;
+    std::unordered_set<endpoint_id> _hosts_with_pending_hints;
     seastar::named_semaphore _drain_lock = {1, named_semaphore_exception_factory{"drain lock"}};
 
 public:
@@ -229,16 +229,16 @@ public:
     }
 
     void add_host_with_pending_hints(endpoint_id key) {
-        _eps_with_pending_hints.insert(key);
+        _hosts_with_pending_hints.insert(key);
     }
 
     void clear_hosts_with_pending_hints() {
-        _eps_with_pending_hints.clear();
-        _eps_with_pending_hints.reserve(_host_managers.size());
+        _hosts_with_pending_hints.clear();
+        _hosts_with_pending_hints.reserve(_host_managers.size());
     }
 
     bool has_host_with_pending_hints(endpoint_id key) const {
-        return _eps_with_pending_hints.contains(key);
+        return _hosts_with_pending_hints.contains(key);
     }
 
     /// \brief Checks if hints are disabled for all endpoints
@@ -249,7 +249,7 @@ public:
 
     void allow_hints();
     void forbid_hints();
-    void forbid_hints_for_eps_with_pending_hints();
+    void forbid_hints_for_hosts_with_pending_hints();
 
     void allow_replaying() noexcept {
         _state.set(state::replay_allowed);

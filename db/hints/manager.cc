@@ -507,8 +507,8 @@ void shard_hint_manager::forbid_hints() {
     });
 }
 
-void shard_hint_manager::forbid_hints_for_eps_with_pending_hints() {
-    manager_logger.trace("space_watchdog: Going to block hints to: {}", _eps_with_pending_hints);
+void shard_hint_manager::forbid_hints_for_hosts_with_pending_hints() {
+    manager_logger.trace("space_watchdog: Going to block hints to: {}", _hosts_with_pending_hints);
 
     // TODO: Move to STD stuff when std::views::values has been implemented.
     std::ranges::for_each(_host_managers | boost::adaptors::map_values, [this] (host_manager& hman) {
@@ -550,7 +550,7 @@ void shard_hint_manager::update_backlog(size_t backlog, size_t max_backlog) {
     if (backlog < max_backlog) {
         allow_hints();
     } else {
-        forbid_hints_for_eps_with_pending_hints();
+        forbid_hints_for_hosts_with_pending_hints();
     }
 }
 
