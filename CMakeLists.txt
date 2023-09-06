@@ -38,6 +38,8 @@ set(CMAKE_CXX_VISIBILITY_PRESET hidden)
 
 set(Seastar_TESTING ON CACHE BOOL "" FORCE)
 set(Seastar_API_LEVEL 7 CACHE STRING "" FORCE)
+set(Seastar_APPS ON CACHE BOOL "" FORCE)
+set(Seastar_EXCLUDE_APPS_FROM_ALL ON CACHE BOOL "" FORCE)
 add_subdirectory(seastar)
 
 # System libraries dependencies
