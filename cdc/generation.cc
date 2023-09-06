@@ -347,6 +347,20 @@ future<utils::chunked_vector<mutation>> get_cdc_generation_mutations_v2(
     co_return res;
 }
 
+future<utils::chunked_vector<mutation>> get_cdc_generation_mutations_v3(
+        schema_ptr s,
+        utils::UUID id,
+        const cdc::topology_description& desc,
+        size_t mutation_size_threshold,
+        api::timestamp_type ts) {
+    auto pkey = partition_key::from_singular(*s, CDC_GENERATIONS_V3_KEY);
+    auto get_ckey = [&] (dht::token range_end) {
+        return clustering_key::from_exploded(*s, {uuid_type->decompose(id), long_type->decompose(dht::token::to_int64(range_end))}) ;
+    };
+
+    co_return co_await get_common_cdc_generation_mutations(s, pkey, std::move(get_ckey), desc, mutation_size_threshold, ts);
+}
+
 // non-static for testing
 size_t limit_of_streams_in_topology_description() {
     // Each stream takes 16B and we don't want to exceed 4MB so we can have

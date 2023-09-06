@@ -257,15 +257,18 @@ schema_ptr system_keyspace::cdc_generations_v3() {
     thread_local auto schema = [] {
         auto id = generate_legacy_id(NAME, CDC_GENERATIONS_V3);
         return schema_builder(NAME, CDC_GENERATIONS_V3, {id})
+            /* This is a single-partition table with key 'cdc_generations'. */
+            .with_column("key", utf8_type, column_kind::partition_key)
             /* The unique identifier of this generation. */
-            .with_column("id", uuid_type, column_kind::partition_key)
+            .with_column("id", uuid_type, column_kind::clustering_key)
             /* The generation describes a mapping from all tokens in the token ring to a set of stream IDs.
              * This mapping is built from a bunch of smaller mappings, each describing how tokens in a
              * subrange of the token ring are mapped to stream IDs; these subranges together cover the entire
-             * token ring.  Each such range-local mapping is represented by a row of this table. The
-             * clustering key of the row is the end of the range being described by this row. The start of
-             * this range is the range_end of the previous row (in the clustering order, which is the integer
-             * order) or of the last row of this partition if this is the first the first row. */
+             * token ring. Each such range-local mapping is represented by a row of this table. The second
+             * column of the clustering key of the row is the end of the range being described by this row.
+             * The start of this range is the range_end of the previous row (in the clustering order, which
+             * is the integer order) or of the last row with the same id value if this is the first row with
+             * such id. */
             .with_column("range_end", long_type, column_kind::clustering_key)
             /* The set of streams mapped to in this range.  The number of streams mapped to a single range in
              * a CDC generation is bounded from above by the number of shards on the owner of that range in
@@ -278,10 +281,6 @@ schema_ptr system_keyspace::cdc_generations_v3() {
              * range when the generation was first created. Together with the set of streams above it fully
              * describes the mapping for this particular range. */
             .with_column("ignore_msb", byte_type)
-            /* Column used for sanity checking. For a given generation it's equal to the number of ranges in
-             * this generation; thus, after the generation is fully inserted, it must be equal to the number
-             * of rows in the partition. */
-            .with_column("num_ranges", int32_type, column_kind::static_column)
             .with_version(system_keyspace::generate_schema_version(id))
             .build();
     }();
@@ -2636,22 +2635,16 @@ future<service::topology> system_keyspace::load_topology_state() {
             // Sanity check for CDC generation data consistency.
             {
                 auto gen_rows = co_await execute_cql(
-                    format("SELECT count(range_end) as cnt, num_ranges FROM system.{} WHERE id = ?",
-                           CDC_GENERATIONS_V3),
+                    format("SELECT count(range_end) as cnt FROM {}.{} WHERE key = '{}' AND id = ?",
+                           NAME, CDC_GENERATIONS_V3, cdc::CDC_GENERATIONS_V3_KEY),
                     gen_uuid);
                 assert(gen_rows);
                 if (gen_rows->empty()) {
                     on_internal_error(slogger, format(
                         "load_topology_state: current CDC generation UUID ({}) present, but data missing", gen_uuid));
                 }
-                auto& row = gen_rows->one();
-                auto counted_ranges = row.get_as<int64_t>("cnt");
-                auto num_ranges = row.get_as<int32_t>("num_ranges");
-                if (counted_ranges != num_ranges) {
-                    on_internal_error(slogger, format(
-                        "load_topology_state: inconsistency in CDC generation data (UUID {}):"
-                        " counted {} ranges, should be {}", gen_uuid, counted_ranges, num_ranges));
-                }
+                auto cnt = gen_rows->one().get_as<int64_t>("cnt");
+                slogger.debug("load_topology_state: current CDC generation UUID ({}), loaded {} ranges", gen_uuid, cnt);
             }
         } else {
             if (!ret.normal_nodes.empty()) {
@@ -2719,10 +2712,9 @@ future<> system_keyspace::update_topology_fence_version(int64_t value) {
 future<cdc::topology_description>
 system_keyspace::read_cdc_generation(utils::UUID id) {
     std::vector<cdc::token_range_description> entries;
-    size_t num_ranges = 0;
     co_await _qp.query_internal(
-            format("SELECT range_end, streams, ignore_msb, num_ranges FROM {}.{} WHERE id = ?",
-                   NAME, CDC_GENERATIONS_V3),
+            format("SELECT range_end, streams, ignore_msb FROM {}.{} WHERE key = '{}' AND id = ?",
+                   NAME, CDC_GENERATIONS_V3, cdc::CDC_GENERATIONS_V3_KEY),
             db::consistency_level::ONE,
             { id },
             1000, // for ~1KB rows, ~1MB page size
@@ -2733,7 +2725,6 @@ system_keyspace::read_cdc_generation(utils::UUID id) {
             dht::token::from_int64(row.get_as<int64_t>("range_end")),
             std::move(streams),
             uint8_t(row.get_as<int8_t>("ignore_msb"))});
-        num_ranges = row.get_as<int32_t>("num_ranges");
         return make_ready_future<stop_iteration>(stop_iteration::no);
     });
 
@@ -2741,12 +2732,6 @@ system_keyspace::read_cdc_generation(utils::UUID id) {
         // The data must be present by precondition.
         on_internal_error(slogger, format(
             "read_cdc_generation: data for CDC generation {} not present", id));
-    }
-
-    if (entries.size() != num_ranges) {
-        throw std::runtime_error(format(
-            "read_cdc_generation: wrong number of rows. The `num_ranges` column claimed {} rows,"
-            " but reading the partition returned {}.", num_ranges, entries.size()));
     }
 
     co_return cdc::topology_description{std::move(entries)};

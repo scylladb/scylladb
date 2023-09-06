@@ -133,7 +133,7 @@ struct topology {
 
     // This is the UUID used to access the data of a new CDC generation introduced
     // e.g. when a new node bootstraps, needed in `commit_cdc_generation` transition state.
-    // It's used as partition key in CDC_GENERATIONS_V3 table.
+    // It's used as the first column of the clustering key in CDC_GENERATIONS_V3 table.
     std::optional<utils::UUID> new_cdc_generation_data_uuid;
 
     // The IDs of the commited yet unpublished CDC generations sorted by timestamps.

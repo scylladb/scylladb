@@ -155,4 +155,16 @@ future<utils::chunked_vector<mutation>> get_cdc_generation_mutations_v2(
     schema_ptr, utils::UUID gen_uuid, const cdc::topology_description&,
     size_t mutation_size_threshold, api::timestamp_type mutation_timestamp);
 
+// The partition key of all rows in the single-partition CDC_GENERATIONS_V3 schema (in system keyspace).
+static constexpr auto CDC_GENERATIONS_V3_KEY = "cdc_generations";
+
+// Translates the CDC generation data given by a `cdc::topology_description` into a vector of mutations,
+// using `mutation_size_threshold` to decide on the mutation sizes. The first clustering key column is
+// given by `gen_uuid`. The timestamp of each cell in each mutation is given by `mutation_timestamp`.
+//
+// Works only for the CDC_GENERATIONS_V3 schema (in system keyspace).
+future<utils::chunked_vector<mutation>> get_cdc_generation_mutations_v3(
+    schema_ptr, utils::UUID gen_uuid, const cdc::topology_description&,
+    size_t mutation_size_threshold, api::timestamp_type mutation_timestamp);
+
 } // namespace cdc
