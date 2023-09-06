@@ -660,7 +660,7 @@ public:
     ///
     /// \param hints_directory A hints directory to rebalance
     /// \return A future that resolves when the operation is complete.
-    static future<> rebalance(sstring hints_directory);
+    static future<> rebalance(fs::path hints_directory);
 
 private:
     future<> compute_hints_dir_device_id();
@@ -674,7 +674,7 @@ private:
     ///
     /// \param hints_directory directory to scan
     /// \return a map: ep -> map: shard -> segments (full paths)
-    static hints_segments_map get_current_hints_segments(const sstring& hints_directory);
+    static hints_segments_map get_current_hints_segments(const fs::path& hints_directory);
 
     /// \brief Rebalance hints segments for a given (destination) end point
     ///
@@ -698,7 +698,7 @@ private:
     static void rebalance_segments_for(
             const sstring& ep,
             size_t segments_per_shard,
-            const sstring& hints_directory,
+            const fs::path& hints_directory,
             hints_ep_segments_map& ep_segments,
             std::list<fs::path>& segments_to_move);
 
@@ -713,7 +713,7 @@ private:
     ///
     /// \param hints_directory a root hints directory
     /// \param segments_map a map that was built by get_current_hints_segments()
-    static void rebalance_segments(const sstring& hints_directory, hints_segments_map& segments_map);
+    static void rebalance_segments(const fs::path& hints_directory, hints_segments_map& segments_map);
 
     /// \brief Remove sub-directories of shards that are not relevant any more (re-sharding to a lower number of shards case).
     ///
@@ -721,7 +721,7 @@ private:
     ///                           E is a number of end points for which hints where ever created.
     ///
     /// \param hints_directory a root hints directory
-    static void remove_irrelevant_shards_directories(const sstring& hints_directory);
+    static void remove_irrelevant_shards_directories(const fs::path& hints_directory);
 
     node_to_hint_store_factory_type& store_factory() noexcept {
         return _store_factory;

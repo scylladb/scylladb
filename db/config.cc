@@ -544,8 +544,8 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "Throttles all streaming file transfer between the data centers. This setting allows throttles streaming throughput betweens data centers in addition to throttling all network stream traffic as configured with stream_throughput_outbound_megabits_per_sec.")
     , stream_io_throughput_mb_per_sec(this, "stream_io_throughput_mb_per_sec", liveness::LiveUpdate, value_status::Used, 0,
         "Throttles streaming I/O to the specified total throughput (in MiBs/s) across the entire system. Streaming I/O includes the one performed by repair and both RBNO and legacy topology operations such as adding or removing a node. Setting the value to 0 disables stream throttling")
-    , stream_plan_ranges_percentage(this, "stream_plan_ranges_percentage", liveness::LiveUpdate, value_status::Used, 0.1,
-        "Specify the percentage of ranges to stream in a single stream plan. Value is between 0 and 1.")
+    , stream_plan_ranges_fraction(this, "stream_plan_ranges_fraction", liveness::LiveUpdate, value_status::Used, 0.1,
+        "Specify the fraction of ranges to stream in a single stream plan. Value is between 0 and 1.")
     , trickle_fsync(this, "trickle_fsync", value_status::Unused, false,
         "When doing sequential writing, enabling this option tells fsync to force the operating system to flush the dirty buffers at a set interval trickle_fsync_interval_in_kb. Enable this parameter to avoid sudden dirty buffer flushing from impacting read latencies. Recommended to use on SSDs, but not on HDDs.")
     , trickle_fsync_interval_in_kb(this, "trickle_fsync_interval_in_kb", value_status::Unused, 10240,
@@ -863,7 +863,6 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , developer_mode(this, "developer_mode", value_status::Used, DEVELOPER_MODE_DEFAULT, "Relax environment checks. Setting to true can reduce performance and reliability significantly.")
     , skip_wait_for_gossip_to_settle(this, "skip_wait_for_gossip_to_settle", value_status::Used, -1, "An integer to configure the wait for gossip to settle. -1: wait normally, 0: do not wait at all, n: wait for at most n polls. Same as -Dcassandra.skip_wait_for_gossip_to_settle in cassandra.")
     , force_gossip_generation(this, "force_gossip_generation", liveness::LiveUpdate, value_status::Used, -1 , "Force gossip to use the generation number provided by user")
-    , experimental(this, "experimental", value_status::Unused, false, "[Deprecated] Set to true to unlock all experimental features (except 'consistent-topology-changes' feature, which should be enabled explicitly via 'experimental-features' option). Please use 'experimental-features', instead.")
     , experimental_features(this, "experimental_features", value_status::Used, {}, experimental_features_help_string())
     , lsa_reclamation_step(this, "lsa_reclamation_step", value_status::Used, 1, "Minimum number of segments to reclaim in a single step")
     , prometheus_port(this, "prometheus_port", value_status::Used, 9180, "Prometheus port, set to zero to disable")
@@ -1015,7 +1014,6 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , wasm_udf_memory_limit(this, "wasm_udf_memory_limit", value_status::Used, 2*1024*1024, "How much memory each WASM UDF can allocate at most")
     , relabel_config_file(this, "relabel_config_file", value_status::Used, "", "Optionally, read relabel config from file")
     , object_storage_config_file(this, "object_storage_config_file", value_status::Used, "", "Optionally, read object-storage endpoints config from file")
-    , minimum_keyspace_rf(this, "minimum_keyspace_rf", liveness::LiveUpdate, value_status::Used, 0, "The minimum allowed replication factor when creating or altering a keyspace.")
     , live_updatable_config_params_changeable_via_cql(this, "live_updatable_config_params_changeable_via_cql", liveness::MustRestart, value_status::Used, true, "If set to true, configuration parameters defined with LiveUpdate can be updated in runtime via CQL (by updating system.config virtual table), otherwise they can't.")
     , auth_superuser_name(this, "auth_superuser_name", value_status::Used, "",
         "Initial authentication super username. Ignored if authentication tables already contain a super user")
@@ -1024,6 +1022,10 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "Ignored if authentication tables already contain a super user password.")
     , auth_certificate_role_queries(this, "auth_certificate_role_queries", value_status::Used, { { { "source", "SUBJECT" }, {"query", "CN=([^,]+)" } } },
         "Regular expression used by CertificateAuthenticator to extract role name from an accepted transport authentication certificate subject info.")
+    , minimum_replication_factor_fail_threshold(this, "minimum_replication_factor_fail_threshold", liveness::LiveUpdate, value_status::Used, -1, "")
+    , minimum_replication_factor_warn_threshold(this, "minimum_replication_factor_warn_threshold", liveness::LiveUpdate, value_status::Used,  3, "")
+    , maximum_replication_factor_warn_threshold(this, "maximum_replication_factor_warn_threshold", liveness::LiveUpdate, value_status::Used, -1, "")
+    , maximum_replication_factor_fail_threshold(this, "maximum_replication_factor_fail_threshold", liveness::LiveUpdate, value_status::Used, -1, "")
     , error_injections_at_startup(this, "error_injections_at_startup", error_injection_value_status, {}, "List of error injections that should be enabled on startup.")
     , default_log_level(this, "default_log_level", value_status::Used)
     , logger_log_level(this, "logger_log_level", value_status::Used)

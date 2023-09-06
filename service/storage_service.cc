@@ -2341,8 +2341,7 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
         std::unordered_set<gms::inet_address> initial_contact_nodes,
         std::unordered_set<gms::inet_address> loaded_endpoints,
         std::unordered_map<gms::inet_address, sstring> loaded_peer_features,
-        std::chrono::milliseconds delay,
-        cql3::query_processor& qp) {
+        std::chrono::milliseconds delay) {
     std::unordered_set<token> bootstrap_tokens;
     std::map<gms::application_state, gms::versioned_value> app_states;
     /* The timestamp of the CDC streams generation that this node has proposed when joining.
@@ -2566,7 +2565,7 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
 
     assert(_group0);
     // if the node is bootstrapped the functin will do nothing since we already created group0 in main.cc
-    co_await _group0->setup_group0(_sys_ks.local(), initial_contact_nodes, raft_replace_info, *this, qp, _migration_manager.local());
+    co_await _group0->setup_group0(_sys_ks.local(), initial_contact_nodes, raft_replace_info, *this, *_qp, _migration_manager.local());
 
     raft::server* raft_server = co_await [this] () -> future<raft::server*> {
         if (!_raft_topology_change_enabled) {
@@ -2632,7 +2631,7 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
             throw std::runtime_error(err);
         }
 
-        co_await _group0->finish_setup_after_join(*this, qp, _migration_manager.local());
+        co_await _group0->finish_setup_after_join(*this, *_qp, _migration_manager.local());
         co_return;
     }
 
@@ -2790,7 +2789,7 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
     }
 
     assert(_group0);
-    co_await _group0->finish_setup_after_join(*this, qp, _migration_manager.local());
+    co_await _group0->finish_setup_after_join(*this, *_qp, _migration_manager.local());
     co_await _cdc_gens.local().after_join(std::move(cdc_gen_id));
 }
 
@@ -3505,8 +3504,9 @@ void storage_service::set_group0(raft_group0& group0, bool raft_topology_change_
     _raft_topology_change_enabled = raft_topology_change_enabled;
 }
 
-future<> storage_service::join_cluster(sharded<db::system_distributed_keyspace>& sys_dist_ks, sharded<service::storage_proxy>& proxy, cql3::query_processor& qp) {
+future<> storage_service::join_cluster(sharded<db::system_distributed_keyspace>& sys_dist_ks, sharded<service::storage_proxy>& proxy) {
     assert(this_shard_id() == 0);
+    assert(_qp != nullptr);
 
     set_mode(mode::STARTING);
 
@@ -3570,7 +3570,7 @@ future<> storage_service::join_cluster(sharded<db::system_distributed_keyspace>&
     for (auto& x : loaded_peer_features) {
         slogger.info("peer={}, supported_features={}", x.first, x.second);
     }
-    co_return co_await join_token_ring(sys_dist_ks, proxy, std::move(initial_contact_nodes), std::move(loaded_endpoints), std::move(loaded_peer_features), get_ring_delay(), qp);
+    co_return co_await join_token_ring(sys_dist_ks, proxy, std::move(initial_contact_nodes), std::move(loaded_endpoints), std::move(loaded_peer_features), get_ring_delay());
 }
 
 future<> storage_service::replicate_to_all_cores(mutable_token_metadata_ptr tmptr) noexcept {

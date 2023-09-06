@@ -344,8 +344,9 @@ EOF
 fi
 
 TOP_SRCDIR="$(dirname "$(dirname "$(readlink -f "$0")")")"
+IMAGE="${SCYLLA_REPO_PATH}/tools/toolchain/image"
 exec ${TOP_SRCDIR}/tools/toolchain/dbuild               \
-    --image ${SCYLLA_REPO_PATH}/tools/toolchain/image   \
+    --image "$(<"$IMAGE")"                              \
     -it                                                 \
     -v $(pwd):/workdir                                  \
     -v ${SCYLLA_REPO_PATH}:/src/scylla                  \

@@ -20,7 +20,7 @@
 template <typename T>
 class atomic_vector {
     std::vector<T> _vec;
-    seastar::rwlock _vec_lock;
+    mutable seastar::rwlock _vec_lock;
 
 public:
     void add(const T& value) {
@@ -38,7 +38,7 @@ public:
     // We would take callbacks that take a T&, but we had bugs in the
     // past with some of those callbacks holding that reference past a
     // preemption.
-    void thread_for_each(seastar::noncopyable_function<void(T)> func) {
+    void thread_for_each(seastar::noncopyable_function<void(T)> func) const {
         _vec_lock.for_read().lock().get();
         auto unlock = seastar::defer([this] {
             _vec_lock.for_read().unlock();
@@ -56,7 +56,7 @@ public:
     // We would take callbacks that take a T&, but we had bugs in the
     // past with some of those callbacks holding that reference past a
     // preemption.
-    seastar::future<> for_each(seastar::noncopyable_function<seastar::future<>(T)> func) {
+    seastar::future<> for_each(seastar::noncopyable_function<seastar::future<>(T)> func) const {
         auto holder = co_await _vec_lock.hold_read_lock();
         // We grab a lock in remove(), but not in add(), so we
         // iterate using indexes to guard against the vector being

@@ -103,7 +103,7 @@ static logging::logger mylogger("alter_keyspace");
 
 future<::shared_ptr<cql_transport::messages::result_message>>
 cql3::statements::alter_keyspace_statement::execute(query_processor& qp, service::query_state& state, const query_options& options, std::optional<service::group0_guard> guard) const {
-    std::optional<sstring> warning = check_restricted_replication_strategy(qp, keyspace(), *_attrs);
+    std::optional<sstring> warning = check_restricted_replication_strategy(qp, keyspace(), *_attrs, qp.get_cql_stats());
     return schema_altering_statement::execute(qp, state, options, std::move(guard)).then([warning = std::move(warning)] (::shared_ptr<messages::result_message> msg) {
         if (warning) {
             msg->add_warning(*warning);

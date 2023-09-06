@@ -452,8 +452,31 @@ query_processor::query_processor(service::storage_proxy& proxy, data_dictionary:
                             "unpaged_select_queries_per_ks",
                             _cql_stats.unpaged_select_queries(ks_selector::SYSTEM),
                             sm::description("Counts the number of unpaged CQL SELECT requests against particular keyspaces."),
-                            {system_ks_label_instance})
+                            {system_ks_label_instance}),
 
+                    sm::make_counter(
+                            "minimum_replication_factor_fail_violations",
+                            _cql_stats.minimum_replication_factor_fail_violations,
+                            sm::description("Counts the number of minimum_replication_factor_fail_threshold guardrail violations, "
+                                            "i.e. attempts to create a keyspace with RF on one of the DCs below the set guardrail.")),
+
+                    sm::make_counter(
+                            "minimum_replication_factor_warn_violations",
+                            _cql_stats.minimum_replication_factor_warn_violations,
+                            sm::description("Counts the number of minimum_replication_factor_warn_threshold guardrail violations, "
+                                            "i.e. attempts to create a keyspace with RF on one of the DCs below the set guardrail.")),
+
+                    sm::make_counter(
+                            "maximum_replication_factor_warn_violations",
+                            _cql_stats.maximum_replication_factor_warn_violations,
+                            sm::description("Counts the number of maximum_replication_factor_warn_threshold guardrail violations, "
+                                            "i.e. attempts to create a keyspace with RF on one of the DCs above the set guardrail.")),
+
+                    sm::make_counter(
+                            "maximum_replication_factor_fail_violations",
+                            _cql_stats.maximum_replication_factor_fail_violations,
+                            sm::description("Counts the number of maximum_replication_factor_fail_threshold guardrail violations, "
+                                            "i.e. attempts to create a keyspace with RF on one of the DCs above the set guardrail.")),
             });
 
     _mnotifier.register_listener(_migration_subscriber.get());
