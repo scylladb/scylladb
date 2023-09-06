@@ -3508,13 +3508,24 @@ std::unordered_set<locator::token> storage_service::get_tokens_for(inet_address 
     return ret;
 }
 
-locator::endpoint_dc_rack storage_service::get_dc_rack_for(inet_address endpoint) {
-    auto* dc = _gossiper.get_application_state_ptr(endpoint, gms::application_state::DC);
-    auto* rack = _gossiper.get_application_state_ptr(endpoint, gms::application_state::RACK);
+std::optional<locator::endpoint_dc_rack> storage_service::get_dc_rack_for(const gms::endpoint_state& ep_state) {
+    auto* dc = ep_state.get_application_state_ptr(gms::application_state::DC);
+    auto* rack = ep_state.get_application_state_ptr(gms::application_state::RACK);
+    if (!dc || !rack) {
+        return std::nullopt;
+    }
     return locator::endpoint_dc_rack{
-        .dc = dc ? dc->value() : locator::endpoint_dc_rack::default_location.dc,
-        .rack = rack ? rack->value() : locator::endpoint_dc_rack::default_location.rack,
+        .dc = dc->value(),
+        .rack = rack->value(),
     };
+}
+
+std::optional<locator::endpoint_dc_rack> storage_service::get_dc_rack_for(inet_address endpoint) {
+    auto eps = _gossiper.get_endpoint_state_ptr(endpoint);
+    if (!eps) {
+        return std::nullopt;
+    }
+    return get_dc_rack_for(*eps);
 }
 
 void endpoint_lifecycle_notifier::register_subscriber(endpoint_lifecycle_subscriber* subscriber)
@@ -3892,7 +3903,7 @@ storage_service::prepare_replacement_info(std::unordered_set<gms::inet_address> 
         }
     }
 
-    auto dc_rack = get_dc_rack_for(replace_address);
+    auto dc_rack = get_dc_rack_for(replace_address).value_or(locator::endpoint_dc_rack::default_location);
 
     if (!replace_host_id) {
         replace_host_id = _gossiper.get_host_id(replace_address);
