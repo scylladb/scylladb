@@ -26,6 +26,7 @@
 #include "db/hints/internal/hint_logger.hh"
 #include "db/hints/internal/hint_storage.hh"
 #include "db/extensions.hh"
+#include "db/hints/resource_manager.hh"
 #include "db/timeout_clock.hh"
 #include "gms/gossiper.hh"
 #include "gms/versioned_value.hh"
@@ -520,12 +521,13 @@ void shard_hint_manager::forbid_hints_for_eps_with_pending_hints() {
 }
 
 future<> shard_hint_manager::compute_hints_dir_device_id() {
-    return get_device_id(_hints_dir.native()).then([this](dev_t device_id) {
-        _hints_dir_device_id = device_id;
-    }).handle_exception([this](auto ep) {
-        manager_logger.warn("Failed to stat directory {} for device id: {}", _hints_dir.native(), ep);
-        return make_exception_future<>(ep);
-    });
+    try {
+        _hints_dir_device_id = co_await get_device_id(_hints_dir.native());
+    } catch (...) {
+        manager_logger.warn("Failed to stat directory {} for device id: {}",
+                _hints_dir.native(), std::current_exception());
+        throw;
+    }
 }
 
 shard_hint_manager::host_manager& shard_hint_manager::get_host_manager(endpoint_id ep) {
