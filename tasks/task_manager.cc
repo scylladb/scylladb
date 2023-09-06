@@ -8,6 +8,9 @@
 
 #include <seastar/core/on_internal_error.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
+#include <seastar/core/abort_source.hh>
+#include <seastar/core/gate.hh>
+
 #include "task_manager.hh"
 #include "test_module.hh"
 
@@ -31,7 +34,7 @@ task_manager::task::impl::impl(module_ptr module, task_id id, uint64_t sequence_
 {
     // Child tasks do not need to subscribe to abort source because they will be aborted recursively by their parents.
     if (!parent_id) {
-        _shutdown_subscription = module->get_task_manager()._as.subscribe([this] () noexcept {
+        _shutdown_subscription = module->abort_source().subscribe([this] () noexcept {
             (void)abort();
         });
     }
@@ -143,7 +146,7 @@ void task_manager::task::impl::finish_failed(std::exception_ptr ex) {
     finish_failed(ex, fmt::format("{}", ex));
 }
 
-task_manager::task::task(task_impl_ptr&& impl) noexcept : _impl(std::move(impl)) {
+task_manager::task::task(task_impl_ptr&& impl, gate::holder gh) noexcept : _impl(std::move(impl)), _gate_holder(std::move(gh)) {
     register_task();
 }
 
@@ -184,13 +187,12 @@ void task_manager::task::start() {
     try {
         // Background fiber does not capture task ptr, so the task can be unregistered and destroyed independently in the foreground.
         // After the ttl expires, the task id will be used to unregister the task if that didn't happen in any other way.
-        (void)with_gate(_impl->_module->async_gate(), [f = done(), module = _impl->_module, id = id()] () mutable {
-            return std::move(f).finally([module] {
-                return sleep_abortable(module->get_task_manager().get_task_ttl(), module->abort_source());
-            }).then_wrapped([module, id] (auto f) {
-                f.ignore_ready_future();
-                module->unregister_task(id);
-            });
+        auto module = _impl->_module;
+        (void)done().finally([module] {
+            return sleep_abortable(module->get_task_manager().get_task_ttl(), module->abort_source());
+        }).then_wrapped([module, id = id()] (auto f) {
+            f.ignore_ready_future();
+            module->unregister_task(id);
         });
         _impl->_as.check();
         _impl->_status.state = task_manager::task_state::running;
@@ -248,7 +250,11 @@ bool task_manager::task::is_complete() const noexcept {
     return _impl->is_complete();
 }
 
-task_manager::module::module(task_manager& tm, std::string name) noexcept : _tm(tm), _name(std::move(name)) {}
+task_manager::module::module(task_manager& tm, std::string name) noexcept : _tm(tm), _name(std::move(name)) {
+    _abort_subscription = _tm.abort_source().subscribe([this] () noexcept {
+        abort_source().request_abort();
+    });
+}
 
 uint64_t task_manager::module::new_sequence_number() noexcept {
     return ++_sequence_number;
@@ -259,7 +265,7 @@ task_manager& task_manager::module::get_task_manager() noexcept {
 }
 
 abort_source& task_manager::module::abort_source() noexcept {
-    return _tm.abort_source();
+    return _as;
 }
 
 gate& task_manager::module::async_gate() noexcept {
@@ -295,12 +301,13 @@ void task_manager::module::unregister_task(task_id id) noexcept {
 
 future<> task_manager::module::stop() noexcept {
     tmlogger.info("Stopping module {}", _name);
+    abort_source().request_abort();
     co_await _gate.close();
     _tm.unregister_module(_name);
 }
 
 future<task_manager::task_ptr> task_manager::module::make_task(task::task_impl_ptr task_impl_ptr, task_info parent_d) {
-    auto task = make_lw_shared<task_manager::task>(std::move(task_impl_ptr));
+    auto task = make_lw_shared<task_manager::task>(std::move(task_impl_ptr), async_gate().hold());
     bool abort = false;
     if (parent_d) {
         task->get_status().sequence_number = co_await _tm.container().invoke_on(parent_d.shard, [id = parent_d.id, task = make_foreign(task), &abort] (task_manager& tm) mutable {

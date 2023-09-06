@@ -139,8 +139,10 @@ public:
         using task_impl_ptr = shared_ptr<impl>;
     protected:
         task_impl_ptr _impl;
+    private:
+        gate::holder _gate_holder;
     public:
-        task(task_impl_ptr&& impl) noexcept;
+        task(task_impl_ptr&& impl, gate::holder) noexcept;
 
         task_id id();
         std::string type() const;
@@ -174,13 +176,16 @@ public:
         task_map _tasks;
         gate _gate;
         uint64_t _sequence_number = 0;
+    private:
+        abort_source _as;
+        optimized_optional<abort_source::subscription> _abort_subscription;
     public:
         module(task_manager& tm, std::string name) noexcept;
         virtual ~module() = default;
 
         uint64_t new_sequence_number() noexcept;
         task_manager& get_task_manager() noexcept;
-        virtual seastar::abort_source& abort_source() noexcept;
+        seastar::abort_source& abort_source() noexcept;
         gate& async_gate() noexcept;
         const std::string& get_name() const noexcept;
         task_manager::task_map& get_tasks() noexcept;
