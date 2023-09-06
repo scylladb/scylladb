@@ -9,6 +9,8 @@
 
 #include "topology_state_machine.hh"
 
+#include <boost/range/adaptors.hpp>
+
 namespace service {
 
 logging::logger tsmlogger("topology_state_machine");
@@ -36,11 +38,11 @@ bool topology::contains(raft::server_id id) {
            left_nodes.contains(id);
 }
 
-std::set<sstring> topology_features::calculate_not_yet_enabled_features() const {
+std::set<sstring> calculate_not_yet_enabled_features(const std::set<sstring>& enabled_features, const auto& supported_features) {
     std::set<sstring> to_enable;
     bool first = true;
 
-    for (const auto& [id, supported_features] : normal_supported_features) {
+    for (const auto& supported_features : supported_features) {
         if (!first && to_enable.empty()) {
             break;
         }
@@ -60,6 +62,22 @@ std::set<sstring> topology_features::calculate_not_yet_enabled_features() const 
     }
 
     return to_enable;
+}
+
+std::set<sstring> topology_features::calculate_not_yet_enabled_features() const {
+    return ::service::calculate_not_yet_enabled_features(
+            enabled_features,
+            normal_supported_features | boost::adaptors::map_values);
+}
+
+std::set<sstring> topology::calculate_not_yet_enabled_features() const {
+    return ::service::calculate_not_yet_enabled_features(
+            enabled_features,
+            normal_nodes
+            | boost::adaptors::map_values
+            | boost::adaptors::transformed([] (const replica_state& rs) -> const std::set<sstring>& {
+                return rs.supported_features;
+            }));
 }
 
 size_t topology::size() const {
