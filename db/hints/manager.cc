@@ -531,15 +531,15 @@ future<> shard_hint_manager::compute_hints_dir_device_id() {
 }
 
 shard_hint_manager::host_manager& shard_hint_manager::get_host_manager(endpoint_id ep) {
-    auto it = _host_managers.find(ep);
-    if (it == _host_managers.end()) {
-        manager_logger.trace("Creating an ep_manager for {}", ep);
-        shard_hint_manager::host_manager& ep_man = _host_managers.emplace(
-                ep, host_manager(ep, *this)).first->second;
-        ep_man.start();
-        return ep_man;
+    auto [it, inserted] = _host_managers.try_emplace(ep, ep, *this);
+    host_manager& hman = it->second;
+    
+    if (inserted) {
+        manager_logger.trace("Created an ep_manager for {}", ep);
+        hman.start();
     }
-    return it->second;
+
+    return hman;
 }
 
 bool shard_hint_manager::manages_host(endpoint_id ep) const noexcept {
