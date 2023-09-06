@@ -10,6 +10,7 @@
 
 #include <seastar/http/httpd.hh>
 #include "seastarx.hh"
+#include "utils/rjson.hh"
 
 namespace alternator {
 
@@ -27,10 +28,16 @@ public:
     status_type _http_code;
     std::string _type;
     std::string _msg;
-    api_error(std::string type, std::string msg, status_type http_code = status_type::bad_request)
+    // Additional data attached to the error, null value if not set. It's wrapped in copyable_value
+    // class because copy contructor is required for exception classes otherwise it won't compile
+    // (despite that its use may be optimized away).
+    rjson::copyable_value _extra_fields; 
+    api_error(std::string type, std::string msg, status_type http_code = status_type::bad_request,
+    rjson::value extra_fields = rjson::null_value())
         : _http_code(std::move(http_code))
         , _type(std::move(type))
         , _msg(std::move(msg))
+        , _extra_fields(std::move(extra_fields))
     { }
 
     // Factory functions for some common types of DynamoDB API errors
@@ -58,8 +65,13 @@ public:
     static api_error access_denied(std::string msg) {
         return api_error("AccessDeniedException", std::move(msg));
     }
-    static api_error conditional_check_failed(std::string msg) {
-        return api_error("ConditionalCheckFailedException", std::move(msg));
+    static api_error conditional_check_failed(std::string msg, rjson::value&& item) {
+        if (!item.IsNull()) {
+            auto tmp = rjson::empty_object();
+            rjson::add(tmp, "Item", std::move(item));
+            item = std::move(tmp);
+        }
+        return api_error("ConditionalCheckFailedException", std::move(msg), status_type::bad_request, std::move(item));
     }
     static api_error expired_iterator(std::string msg) {
         return api_error("ExpiredIteratorException", std::move(msg));

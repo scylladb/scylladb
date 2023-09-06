@@ -156,6 +156,9 @@ public:
 protected:
     void generate_error_reply(reply& rep, const api_error& err) {
         rjson::value results = rjson::empty_object();
+        if (!err._extra_fields.IsNull() && err._extra_fields.IsObject()) {
+            results = rjson::copy(err._extra_fields);
+        }
         rjson::add(results, "__type", rjson::from_string("com.amazonaws.dynamodb.v20120810#" + err._type));
         rjson::add(results, "message", err._msg);
         rep._content = rjson::print(std::move(results));
