@@ -1142,7 +1142,7 @@ class topology_coordinator {
 
         const size_t max_command_size = _raft.max_command_size();
         const size_t mutation_size_threshold = max_command_size / 2;
-        auto gen_mutations = co_await cdc::get_cdc_generation_mutations(
+        auto gen_mutations = co_await cdc::get_cdc_generation_mutations_v2(
             gen_table_schema, gen_uuid, gen_desc, mutation_size_threshold, guard.write_timestamp());
 
         co_return std::pair{gen_uuid, std::move(gen_mutations)};

@@ -282,7 +282,7 @@ bool is_cdc_generation_optimal(const cdc::topology_description& gen, const locat
     }
 }
 
-future<utils::chunked_vector<mutation>> get_cdc_generation_mutations(
+future<utils::chunked_vector<mutation>> get_cdc_generation_mutations_v2(
         schema_ptr s,
         utils::UUID id,
         const cdc::topology_description& desc,

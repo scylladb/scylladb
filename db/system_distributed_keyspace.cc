@@ -536,7 +536,7 @@ system_distributed_keyspace::insert_cdc_generation(
 
     auto s = _qp.db().real_database().find_schema(
         system_distributed_keyspace::NAME_EVERYWHERE, system_distributed_keyspace::CDC_GENERATIONS_V2);
-    auto ms = co_await cdc::get_cdc_generation_mutations(s, id, desc, mutation_size_threshold, api::new_timestamp());
+    auto ms = co_await cdc::get_cdc_generation_mutations_v2(s, id, desc, mutation_size_threshold, api::new_timestamp());
     co_await max_concurrent_for_each(ms, concurrency, [&] (mutation& m) -> future<> {
         co_await _sp.mutate(
             { std::move(m) },
