@@ -40,7 +40,7 @@ def generate_control(scriptdir, outputdir, product):
         control_template = f.read()
     s = DebianFilesTemplate(control_template)
     control_applied = s.substitute(product=product)
-    with open(os.path.join(outputdir, 'control'), 'w') as f:
+    with open(os.path.join(outputdir, 'control'), 'w', encoding='utf-8') as f:
         f.write(control_applied)
 
 
@@ -53,7 +53,7 @@ def generate_changelog(scriptdir, outputdir, product, version, release):
                                      release=release,
                                      revision='1',
                                      codename='stable')
-    with open(os.path.join(outputdir, 'changelog'), 'w') as f:
+    with open(os.path.join(outputdir, 'changelog'), 'w', encoding='utf-8') as f:
         f.write(changelog_applied)
 
 
@@ -64,7 +64,7 @@ def generate_include_binaries(outputdir):
         check=True,
         capture_output=True,
         encoding='utf-8').stdout
-    with open(os.path.join(outputdir, 'source', 'include-binaries'), 'w') as f:
+    with open(os.path.join(outputdir, 'source', 'include-binaries'), 'w', encoding='utf-8') as f:
         f.write(include_binaries)
 
 
