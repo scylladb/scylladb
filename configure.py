@@ -1848,11 +1848,11 @@ with open(buildfile, 'w') as f:
         rule strip
             command = scripts/strip.sh $in
         rule package
-            command = scripts/create-relocatable-package.py --mode $mode $out
+            command = scripts/create-relocatable-package.py --build-dir build/$mode $out
         rule stripped_package
-            command = scripts/create-relocatable-package.py --stripped --mode $mode $out
+            command = scripts/create-relocatable-package.py --stripped --build-dir build/$mode $out
         rule debuginfo_package
-            command = dist/debuginfo/scripts/create-relocatable-package.py --mode $mode $out
+            command = dist/debuginfo/scripts/create-relocatable-package.py --build-dir build/$mode $out
         rule rpmbuild
             command = reloc/build_rpm.sh --reloc-pkg $in --builddir $out
         rule debbuild

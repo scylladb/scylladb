@@ -32,14 +32,14 @@ def reloc_add(ar, name, arcname=None):
 ap = argparse.ArgumentParser(description='Create a relocatable scylla-debuginfo package.')
 ap.add_argument('dest',
                 help='Destination file (tar format)')
-ap.add_argument('--mode', dest='mode', default='release',
-                help='Build mode (debug/release) to use')
+ap.add_argument('--build-dir', default='build/release',
+                help='Build dir ("build/debug" or "build/release") to use')
 
 args = ap.parse_args()
 
 executables_scylla = [
-                'build/{}/scylla'.format(args.mode),
-                'build/{}/iotune'.format(args.mode)]
+                '{}/scylla'.format(args.build_dir),
+                '{}/iotune'.format(args.build_dir)]
 
 output = args.dest
 
