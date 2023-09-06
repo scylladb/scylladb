@@ -1649,10 +1649,6 @@ future<> gossiper::real_mark_alive(inet_address addr) {
     update_timestamp(es);
 
     logger.debug("removing expire time for endpoint : {}", addr);
-    _unreachable_endpoints.erase(addr);
-    _expire_time_endpoint_map.erase(addr);
-
-    logger.debug("removing expire time for endpoint : {}", addr);
     bool was_live = false;
     co_await mutate_live_and_unreachable_endpoints([addr, &was_live] (gossiper& g) {
         g._unreachable_endpoints.erase(addr);
