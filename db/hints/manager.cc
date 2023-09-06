@@ -147,7 +147,8 @@ future<> directory_initializer::ensure_rebalanced() {
 
 std::chrono::seconds shard_hint_manager::hints_flush_period = std::chrono::seconds(10);
 
-shard_hint_manager::shard_hint_manager(sstring hints_directory, host_filter filter, int64_t max_hint_window_ms, resource_manager& res_manager, distributed<replica::database>& db)
+shard_hint_manager::shard_hint_manager(sstring hints_directory, host_filter filter,
+        int64_t max_hint_window_ms, resource_manager& res_manager, distributed<replica::database>& db)
     : _hints_dir(fs::path(hints_directory) / format("{:d}", this_shard_id()))
     , _host_filter(std::move(filter))
     , _max_hint_window_us(max_hint_window_ms * 1000)
@@ -200,7 +201,8 @@ void shard_hint_manager::register_metrics(const sstring& group_name) {
 future<> shard_hint_manager::start(shared_ptr<service::storage_proxy> proxy_ptr, shared_ptr<gms::gossiper> gossiper_ptr) {
     _proxy_anchor = std::move(proxy_ptr);
     _gossiper_anchor = std::move(gossiper_ptr);
-    return lister::scan_dir(_hints_dir, lister::dir_entry_types::of<directory_entry_type::directory>(), [this] (fs::path datadir, directory_entry de) {
+    return lister::scan_dir(_hints_dir, lister::dir_entry_types::of<directory_entry_type::directory>(),
+            [this] (fs::path datadir, directory_entry de) {
         endpoint_id ep = endpoint_id(de.name);
         if (!check_dc_for(ep)) {
             return make_ready_future<>();
@@ -242,12 +244,14 @@ bool shard_hint_manager::can_hint_for(endpoint_id ep) const noexcept {
         return false;
     }
 
-    // Don't allow more than one in-flight (to the store) hint to a specific destination when the total size of in-flight
-    // hints is more than the maximum allowed value.
+    // Don't allow more than one in-flight (to the store) hint to a specific destination
+    // when the total size of in-flight hints is more than the maximum allowed value.
     //
-    // In the worst case there's going to be (_max_size_of_hints_in_progress + N - 1) in-flight hints, where N is the total number Nodes in the cluster.
+    // In the worst case there's going to be (_max_size_of_hints_in_progress + N - 1) in-flight
+    // hints, where N is the total number Nodes in the cluster.
     if (_stats.size_of_hints_in_progress > MAX_SIZE_OF_HINTS_IN_PROGRESS && hints_in_progress_for(ep) > 0) {
-        manager_logger.trace("size_of_hints_in_progress {} hints_in_progress_for({}) {}", _stats.size_of_hints_in_progress, ep, hints_in_progress_for(ep));
+        manager_logger.trace("size_of_hints_in_progress {} hints_in_progress_for({}) {}",
+                _stats.size_of_hints_in_progress, ep, hints_in_progress_for(ep));
         return false;
     }
 
@@ -259,7 +263,8 @@ bool shard_hint_manager::can_hint_for(endpoint_id ep) const noexcept {
 
     // check if the end point has been down for too long
     if (local_gossiper().get_endpoint_downtime(ep) > _max_hint_window_us) {
-        manager_logger.trace("{} is down for {}, not hinting", ep, local_gossiper().get_endpoint_downtime(ep));
+        manager_logger.trace("{} is down for {}, not hinting",
+                ep, local_gossiper().get_endpoint_downtime(ep));
         return false;
     }
 
@@ -278,7 +283,9 @@ bool shard_hint_manager::check_dc_for(endpoint_id ep) const noexcept {
     }
 }
 
-bool shard_hint_manager::store_hint(endpoint_id ep, schema_ptr s, lw_shared_ptr<const frozen_mutation> fm, tracing::trace_state_ptr tr_state) noexcept {
+bool shard_hint_manager::store_hint(endpoint_id ep, schema_ptr s, lw_shared_ptr<const frozen_mutation> fm,
+        tracing::trace_state_ptr tr_state) noexcept
+{
     if (stopping() || draining_all() || !started() || !can_hint_for(ep)) {
         manager_logger.trace("Can't store a hint to {}", ep);
         ++_stats.dropped;
@@ -353,7 +360,9 @@ void shard_hint_manager::drain_for(endpoint_id endpoint) {
     });
 }
 
-sync_point::shard_rps shard_hint_manager::calculate_current_sync_point(const std::vector<endpoint_id>& target_hosts) const {
+sync_point::shard_rps shard_hint_manager::calculate_current_sync_point(
+        const std::vector<endpoint_id>& target_hosts) const
+{
     sync_point::shard_rps rps;
     for (auto addr : target_hosts) {
         auto it = _host_managers.find(addr);
@@ -389,7 +398,8 @@ future<> shard_hint_manager::wait_for_sync_point(abort_source& as, const sync_po
             rp = it->second;
         }
 
-        return ep_man.wait_until_hints_are_replayed_up_to(local_as, rp).handle_exception([&local_as, &was_aborted] (auto eptr) {
+        return ep_man.wait_until_hints_are_replayed_up_to(local_as, rp).handle_exception(
+                [&local_as, &was_aborted] (auto eptr) {
             if (!local_as.abort_requested()) {
                 local_as.request_abort();
             }
@@ -412,9 +422,12 @@ future<> shard_hint_manager::wait_for_sync_point(abort_source& as, const sync_po
 }
 
 bool shard_hint_manager::too_many_in_flight_hints_for(endpoint_id ep) const noexcept {
-    // There is no need to check the DC here because if there is an in-flight hint for this end point then this means that
-    // its DC has already been checked and found to be ok.
-    return _stats.size_of_hints_in_progress > MAX_SIZE_OF_HINTS_IN_PROGRESS && !utils::fb_utilities::is_me(ep) && hints_in_progress_for(ep) > 0 && local_gossiper().get_endpoint_downtime(ep) <= _max_hint_window_us;
+    // There is no need to check the DC here because if there is an in-flight hint for this
+    // end point then this means that its DC has already been checked and found to be ok.
+    return _stats.size_of_hints_in_progress > MAX_SIZE_OF_HINTS_IN_PROGRESS &&
+            !utils::fb_utilities::is_me(ep) &&
+            hints_in_progress_for(ep) > 0 &&
+            local_gossiper().get_endpoint_downtime(ep) <= _max_hint_window_us;
 }
 
 future<> shard_hint_manager::change_host_filter(host_filter filter) {
@@ -494,7 +507,8 @@ shard_hint_manager::host_manager& shard_hint_manager::get_host_manager(endpoint_
     auto it = _host_managers.find(ep);
     if (it == _host_managers.end()) {
         manager_logger.trace("Creating an ep_manager for {}", ep);
-        shard_hint_manager::host_manager& ep_man = _host_managers.emplace(ep, host_manager(ep, *this)).first->second;
+        shard_hint_manager::host_manager& ep_man = _host_managers.emplace(
+                ep, host_manager(ep, *this)).first->second;
         ep_man.start();
         return ep_man;
     }
