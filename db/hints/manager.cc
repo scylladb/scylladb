@@ -223,20 +223,16 @@ future<> shard_hint_manager::start(shared_ptr<service::storage_proxy> proxy_ptr,
 future<> shard_hint_manager::stop() {
     manager_logger.info("Asked to stop");
 
-  auto f = make_ready_future<>();
-
-  return f.finally([this] {
     set_stopping();
 
     return _draining_hosts_gate.close().finally([this] {
-        return parallel_for_each(_host_managers, [] (auto& pair) {
-            return pair.second.stop();
+        return parallel_for_each(_host_managers | boost::adaptors::map_values, [] (host_manager& hman) {
+            return hman.stop();
         }).finally([this] {
             _host_managers.clear();
             manager_logger.info("Stopped");
         }).discard_result();
     });
-  });
 }
 
 bool shard_hint_manager::can_hint_for(endpoint_id ep) const noexcept {
