@@ -480,7 +480,8 @@ private:
     future<> do_update_system_peers_table(gms::inet_address endpoint, const application_state& state, const versioned_value& value);
 
     std::unordered_set<token> get_tokens_for(inet_address endpoint);
-    locator::endpoint_dc_rack get_dc_rack_for(inet_address endpoint);
+    std::optional<locator::endpoint_dc_rack> get_dc_rack_for(const gms::endpoint_state& ep_state);
+    std::optional<locator::endpoint_dc_rack> get_dc_rack_for(inet_address endpoint);
 private:
     // Should be serialized under token_metadata_lock.
     future<> replicate_to_all_cores(mutable_token_metadata_ptr tmptr) noexcept;

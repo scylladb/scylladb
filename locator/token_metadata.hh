@@ -133,7 +133,7 @@ public:
     /**
      * Update or add endpoint given its inet_address and endpoint_dc_rack.
      */
-    void update_topology(inet_address ep, endpoint_dc_rack dr, std::optional<node::state> opt_st = std::nullopt,
+    void update_topology(inet_address ep, std::optional<endpoint_dc_rack> opt_dr, std::optional<node::state> opt_st = std::nullopt,
                          std::optional<shard_id> shard_count = std::nullopt);
     /**
      * Creates an iterable range of the sorted tokens starting at the token t
