@@ -145,7 +145,7 @@ bool topology::is_configured_this_node(const node& n) const {
         return _cfg.this_host_id == n.host_id();
     }
     if (_cfg.this_endpoint != inet_address()) { // Selection by endpoint
-        return _cfg.this_endpoint == n.endpoint();;
+        return _cfg.this_endpoint == n.endpoint();
     }
     return false; // No selection;
 }
