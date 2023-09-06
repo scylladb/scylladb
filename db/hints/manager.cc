@@ -475,21 +475,28 @@ future<> shard_hint_manager::change_host_filter(host_filter filter) {
 }
 
 void shard_hint_manager::allow_hints() {
-    boost::for_each(_host_managers, [] (auto& pair) { pair.second.allow_hints(); });
+    // TODO: Move to STD stuff when std::views::values has been implemented.
+    std::ranges::for_each(_host_managers | boost::adaptors::map_values, [] (host_manager& hman) {
+        hman.allow_hints();
+    });
 }
 
 void shard_hint_manager::forbid_hints() {
-    boost::for_each(_host_managers, [] (auto& pair) { pair.second.forbid_hints(); });
+    // TODO: Move to STD stuff when std::views::values has been implemented.
+    std::ranges::for_each(_host_managers | boost::adaptors::map_values, [] (host_manager& hman) {
+        hman.forbid_hints();
+    });
 }
 
 void shard_hint_manager::forbid_hints_for_eps_with_pending_hints() {
     manager_logger.trace("space_watchdog: Going to block hints to: {}", _eps_with_pending_hints);
-    boost::for_each(_host_managers, [this] (auto& pair) {
-        host_manager& ep_man = pair.second;
-        if (has_host_with_pending_hints(ep_man.end_point_key())) {
-            ep_man.forbid_hints();
+
+    // TODO: Move to STD stuff when std::views::values has been implemented.
+    std::ranges::for_each(_host_managers | boost::adaptors::map_values, [this] (host_manager& hman) {
+        if (has_host_with_pending_hints(hman.end_point_key())) {
+            hman.forbid_hints();
         } else {
-            ep_man.allow_hints();
+            hman.allow_hints();
         }
     });
 }
