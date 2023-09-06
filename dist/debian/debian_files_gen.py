@@ -48,13 +48,22 @@ def generate_changelog(scriptdir, outputdir, product, version, release):
     with open(os.path.join(scriptdir, 'changelog.template')) as f:
         changelog_template = f.read()
     s = DebianFilesTemplate(changelog_template)
-    changelog_applied = s.substitute(product=product, version=version, release=release, revision='1', codename='stable')
+    changelog_applied = s.substitute(product=product,
+                                     version=version,
+                                     release=release,
+                                     revision='1',
+                                     codename='stable')
     with open(os.path.join(outputdir, 'changelog'), 'w') as f:
         f.write(changelog_applied)
 
 
 def generate_include_binaries(outputdir):
-    include_binaries = subprocess.run("./scripts/create-relocatable-package.py --print-libexec -", shell=True, check=True, capture_output=True, encoding='utf-8').stdout
+    include_binaries = subprocess.run(
+        "./scripts/create-relocatable-package.py --print-libexec -",
+        shell=True,
+        check=True,
+        capture_output=True,
+        encoding='utf-8').stdout
     with open(os.path.join(outputdir, 'source', 'include-binaries'), 'w') as f:
         f.write(include_binaries)
 
