@@ -126,27 +126,60 @@ public:
 };
 
 class compaction_controller : public backlog_controller {
+    // Normalization factor (NF) controls the trade-off between writes and reads.
+    // With larger disk:ram ratio setups, the write amplification is higher, due to:
+    //  write_amp = log(disk size / memory size)
+    //
+    // The optimal NF depends on many variables like the write bandwidth available,
+    // the additional write amp caused by the compaction strategies, and the
+    // write rate (the workload).
+    // A suboptimal NF can lead to either compaction falling behind or running more
+    // aggressive than needed.
     static constexpr float base_normalization_factor = 30.0f;
     static constexpr control_point middle_point();
     static constexpr control_point base_last_point();
-    // Calculates the last control point for a given max shares configuration.
-    static control_point last_control_point(float max_shares);
+    static const float min_normalization_factor();
+    // Calculates the max backlog sensitivity, given max shares, that yield the minimum NF.
+    static const float max_backlog_sensitivity(float max_shares);
+    // Calculates the last control point for a given max shares and backlog sensitivity.
+    static control_point last_control_point(float max_shares, float backlog_sensitivity);
+
+    float max_shares() const noexcept {
+        return _control_points.back().output;
+    }
+
+    // The backlog sensitivity has inverse proportionality to NF.
+    //
+    // The factor is applied to the slope in linear function for mapping backlog
+    // into shares. Increasing the default of 1.0 means that the slope is steeper
+    // (due to decreased NF), and therefore the system's sensitivity to compaction
+    // backlog is increased.
+    float _backlog_sensitivity;
 public:
     static const float minimum_effective_max_shares();
     static const float default_max_shares();
     static constexpr float disable_backlog = std::numeric_limits<double>::infinity();
     static constexpr float backlog_disabled(float backlog) { return std::isinf(backlog); }
+    static constexpr float min_backlog_sensitivity = 0.1f;
+    static constexpr float default_backlog_sensitivity = 1.0f;
 
     struct config {
         backlog_controller::scheduling_group sg;
         float static_shares;
         float max_shares;
+        float backlog_sensitivity;
         std::chrono::milliseconds interval;
     };
 
     void update_max_shares(float max_shares) {
         assert(!_control_points.empty());
-        _control_points.back() = last_control_point(max_shares);
+        _control_points.back() = last_control_point(max_shares, _backlog_sensitivity);
+    }
+
+    void update_backlog_sensitivity(float sensitivity) {
+        assert(!_control_points.empty());
+        _backlog_sensitivity = sensitivity;
+        _control_points.back() = last_control_point(max_shares(), _backlog_sensitivity);
     }
 
     float normalization_factor() const noexcept {

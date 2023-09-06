@@ -653,6 +653,12 @@ future<> compaction_manager::update_max_shares(float max_shares) {
     return make_ready_future<>();
 }
 
+future<> compaction_manager::update_backlog_sensitivity(float sensitivity) {
+    cmlog.info("Updating compaction backlog sensitivity to {}", sensitivity);
+    _compaction_controller.update_backlog_sensitivity(sensitivity);
+    return make_ready_future<>();
+}
+
 compaction_manager::compaction_reenabler::compaction_reenabler(compaction_manager& cm, table_state& t)
     : _cm(cm)
     , _table(&t)
@@ -733,11 +739,12 @@ auto fmt::formatter<compaction::compaction_task_executor>::format(const compacti
 }
 
 static inline compaction_controller make_compaction_controller(const compaction_manager::scheduling_group& csg, float static_shares,
-                                                               float max_shares, std::function<double()> fn) {
+                                                               float max_shares, float backlog_sensitivity, std::function<double()> fn) {
     compaction_controller::config cfg{
         .sg = csg,
         .static_shares = static_shares,
         .max_shares = max_shares,
+        .backlog_sensitivity = backlog_sensitivity,
         .interval = 250ms
     };
     return compaction_controller(cfg, std::move(fn));
@@ -859,7 +866,7 @@ compaction_manager::compaction_manager(config cfg, abort_source& as, tasks::task
     : _task_manager_module(make_shared<task_manager_module>(tm))
     , _cfg(std::move(cfg))
     , _compaction_submission_timer(compaction_sg(), compaction_submission_callback())
-    , _compaction_controller(make_compaction_controller(compaction_sg(), static_shares(), max_shares(), [this] () -> float {
+    , _compaction_controller(make_compaction_controller(compaction_sg(), static_shares(), max_shares(), backlog_sensitivity(), [this] () -> float {
         _last_backlog = backlog();
         auto b = _last_backlog / available_memory();
         // This means we are using an unimplemented strategy
@@ -878,6 +885,7 @@ compaction_manager::compaction_manager(config cfg, abort_source& as, tasks::task
     , _throughput_updater(serialized_action([this] { return update_throughput(throughput_mbs()); }))
     , _compaction_static_shares_updater(_cfg.static_shares, [this] { return update_static_shares(static_shares()); })
     , _compaction_max_shares_updater(_cfg.max_shares, [this] { return update_max_shares(max_shares()); })
+    , _compaction_backlog_sensitivity_updater(_cfg.backlog_sensitivity, [this] { return update_backlog_sensitivity(backlog_sensitivity()); })
     , _strategy_control(std::make_unique<strategy_control>(*this))
     , _tombstone_gc_state(&_repair_history_maps)
 {
@@ -897,11 +905,13 @@ compaction_manager::compaction_manager(tasks::task_manager& tm)
     , _cfg(config{ .available_memory = 1 })
     , _compaction_submission_timer(compaction_sg(), compaction_submission_callback())
     , _compaction_controller(make_compaction_controller(compaction_sg(), 1, compaction_controller::default_max_shares(),
+                                                        compaction_controller::default_backlog_sensitivity,
                                                         [] () -> float { return 1.0; }))
     , _backlog_manager(_compaction_controller)
     , _throughput_updater(serialized_action([this] { return update_throughput(throughput_mbs()); }))
     , _compaction_static_shares_updater(_cfg.static_shares, [] { return make_ready_future<>(); })
     , _compaction_max_shares_updater(_cfg.max_shares, [] { return make_ready_future<>(); })
+    , _compaction_backlog_sensitivity_updater(_cfg.backlog_sensitivity, [] { return make_ready_future<>(); })
     , _strategy_control(std::make_unique<strategy_control>(*this))
     , _tombstone_gc_state(&_repair_history_maps)
 {
@@ -1085,6 +1095,7 @@ future<> compaction_manager::really_do_stop() {
     co_await _throughput_updater.join();
     co_await _compaction_static_shares_updater.action.join();
     co_await _compaction_max_shares_updater.action.join();
+    co_await _compaction_backlog_sensitivity_updater.action.join();
     cmlog.info("Stopped");
 }
 

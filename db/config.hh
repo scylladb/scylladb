@@ -163,6 +163,7 @@ public:
     named_value<float> memtable_flush_static_shares;
     named_value<float> compaction_static_shares;
     named_value<float> compaction_max_shares;
+    named_value<float> compaction_backlog_sensitivity;
     named_value<bool> compaction_enforce_min_threshold;
     named_value<sstring> cluster_name;
     named_value<sstring> listen_address;

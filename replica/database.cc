@@ -487,8 +487,23 @@ const float compaction_controller::default_max_shares() {
     return base_last_point().output;
 }
 
-backlog_controller::control_point compaction_controller::last_control_point(float max_shares) {
+const float compaction_controller::min_normalization_factor() {
+    return middle_point().input * 2;
+}
+
+const float compaction_controller::max_backlog_sensitivity(float max_shares) {
+    auto base_slope = slope(middle_point(), base_last_point());
+
+    // To find the maximum sensitivity, given max_shares, we rewrite formula
+    //      NF = (y2 – y1) / (sensitivity * m) + x1
+    //  into
+    //      sensitivity = (y2 – y1) / (NF - x1) / m
+    return (max_shares - middle_point().output) / (min_normalization_factor() - middle_point().input) / base_slope;
+}
+
+backlog_controller::control_point compaction_controller::last_control_point(float max_shares, float backlog_sensitivity) {
     max_shares = std::max(max_shares, minimum_effective_max_shares());
+    auto sensitivity = std::clamp(backlog_sensitivity, min_backlog_sensitivity, max_backlog_sensitivity(max_shares));
 
     auto base_slope = slope(middle_point(), base_last_point());
 
@@ -499,7 +514,7 @@ backlog_controller::control_point compaction_controller::last_control_point(floa
     //      x2 = (y2 – y1) / m + x1
     // For finding x2 (or normalization factor), we replace m by
     // the constant slope with default max shares (1000).
-    float nf = (max_shares - middle_point().output) / base_slope + middle_point().input;
+    float nf = (max_shares - middle_point().output) / (sensitivity * base_slope) + middle_point().input;
 
     dblog.debug("compaction_controller: calculated normalization factor of {} for max shares of {}", nf, max_shares);
 
@@ -510,9 +525,10 @@ compaction_controller::compaction_controller(config cfg, std::function<float()> 
     : backlog_controller(std::move(cfg.sg), std::move(cfg.interval),
         std::vector<backlog_controller::control_point>({{0.0, 50},
                                                         middle_point(),
-                                                        last_control_point(cfg.max_shares)}),
+                                                        last_control_point(cfg.max_shares, cfg.backlog_sensitivity)}),
         std::move(current_backlog),
         cfg.static_shares)
+    , _backlog_sensitivity(cfg.backlog_sensitivity)
 {
 }
 
