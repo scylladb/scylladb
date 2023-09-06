@@ -227,3 +227,5 @@ set(CMAKE_EXE_LINKER_FLAGS "${default_linker_flags}" CACHE INTERNAL "")
 target_include_directories(scylla PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}"
     "${scylla_gen_build_dir}")
+
+add_subdirectory(dist)
