@@ -390,9 +390,9 @@ future<> shard_hint_manager::wait_for_sync_point(abort_source& as, const sync_po
     }
 
     bool was_aborted = false;
-    co_await coroutine::parallel_for_each(_host_managers, [&was_aborted, &rps, &local_as] (auto& p) {
-        const auto addr = p.first;
-        auto& ep_man = p.second;
+    
+    co_await coroutine::parallel_for_each(_host_managers, [&] (auto& pair) {
+        auto& [addr, hman] = pair;
 
         replay_position rp;
         auto it = rps.find(addr);
@@ -400,11 +400,11 @@ future<> shard_hint_manager::wait_for_sync_point(abort_source& as, const sync_po
             rp = it->second;
         }
 
-        return ep_man.wait_until_hints_are_replayed_up_to(local_as, rp).handle_exception(
-                [&local_as, &was_aborted] (auto eptr) {
+        return hman.wait_until_hints_are_replayed_up_to(local_as, rp).handle_exception([&] (auto eptr) {
             if (!local_as.abort_requested()) {
                 local_as.request_abort();
             }
+
             try {
                 std::rethrow_exception(std::move(eptr));
             } catch (abort_requested_exception&) {
@@ -412,15 +412,14 @@ future<> shard_hint_manager::wait_for_sync_point(abort_source& as, const sync_po
             } catch (...) {
                 return make_exception_future<>(std::current_exception());
             }
+
             return make_ready_future();
         });
     });
 
     if (was_aborted) {
-        throw abort_requested_exception();
+        throw abort_requested_exception{};
     }
-
-    co_return;
 }
 
 bool shard_hint_manager::too_many_in_flight_hints_for(endpoint_id ep) const noexcept {

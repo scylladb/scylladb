@@ -272,7 +272,7 @@ future<> remove_irrelevant_shards_directories(const fs::path& hint_directory) {
 
 } // anonymous namespace
 
-future<> rebalance_hints(sstring hints_directory) {
+future<> rebalance_hints(fs::path hints_directory) {
     // Scan the currently present hints segments.
     hint_segments_map current_hints_segments = co_await get_current_hint_segments(hints_directory);
 
