@@ -562,51 +562,37 @@ def test_update_expression_list_append(test_table_s):
 # type, ValidationException, is the same.
 def test_update_expression_list_append_non_list_arguments(test_table_s):
     p = random_string()
+    val1 = ['hi', 2]
+    def try_list_append(args):
+        test_table_s.update_item(Key={'p': p},
+            UpdateExpression=f'SET a = list_append({args})',
+            ExpressionAttributeValues={':val1': val1})
     # The item p doesn't exist at all, so in particular the attribute "b" is
     # missing, so in particular b is not a list
-    with pytest.raises(ClientError, match='ValidationException'):
-        test_table_s.update_item(Key={'p': p},
-            UpdateExpression='SET a = list_append(b, :val1)',
-            ExpressionAttributeValues={':val1': ['hi', 2]})
-    with pytest.raises(ClientError, match='ValidationException'):
-        test_table_s.update_item(Key={'p': p},
-            UpdateExpression='SET a = list_append(:val1, b)',
-            ExpressionAttributeValues={':val1': ['hi', 2]})
+    for args in ['b, :val1', ':val1, b']:
+        with pytest.raises(ClientError, match='ValidationException'):
+            try_list_append(args)
     # The item p does exist, but it doesn't have an attribute b, so
     # in particular b is not a list:
     test_table_s.put_item(Item={'p': p, 'a': 2})
-    with pytest.raises(ClientError, match='ValidationException'):
-        test_table_s.update_item(Key={'p': p},
-            UpdateExpression='SET a = list_append(b, :val1)',
-            ExpressionAttributeValues={':val1': ['hi', 2]})
-    with pytest.raises(ClientError, match='ValidationException'):
-        test_table_s.update_item(Key={'p': p},
-            UpdateExpression='SET a = list_append(:val1, b)',
-            ExpressionAttributeValues={':val1': ['hi', 2]})
+    for args in ['b, :val1', ':val1, b']:
+        with pytest.raises(ClientError, match='ValidationException'):
+            try_list_append(args)
     # Attribute b does exist, but it's not a list:
     for b in [7, 'hello', b'hi', set([1,2,3]), {'a': 3, 'b': 4}]:
         test_table_s.put_item(Item={'p': p, 'b': b})
-        with pytest.raises(ClientError, match='ValidationException'):
-            test_table_s.update_item(Key={'p': p},
-                UpdateExpression='SET a = list_append(b, :val1)',
-                ExpressionAttributeValues={':val1': ['hi', 2]})
-        with pytest.raises(ClientError, match='ValidationException'):
-            test_table_s.update_item(Key={'p': p},
-                UpdateExpression='SET a = list_append(:val1, b)',
-                ExpressionAttributeValues={':val1': ['hi', 2]})
+        for args in ['b, :val1', ':val1, b']:
+            with pytest.raises(ClientError, match='ValidationException'):
+                try_list_append(args)
     # Sanity check: when b does exist and *is* a list, things finally work.
     # Let's try a few lists, including an empty one and list including
     # nested list items - they are all fine:
     for b in [[1,2,3], [], ['x', ['hi', 'hello']]]:
         test_table_s.put_item(Item={'p': p, 'b': b})
-        test_table_s.update_item(Key={'p': p},
-            UpdateExpression='SET a = list_append(b, :val1)',
-            ExpressionAttributeValues={':val1': ['hi', 2]})
-        assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['a'] == b + ['hi', 2]
-        test_table_s.update_item(Key={'p': p},
-            UpdateExpression='SET a = list_append(:val1, b)',
-            ExpressionAttributeValues={':val1': ['hi', 2]})
-        assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['a'] == ['hi', 2] + b
+        try_list_append('b, :val1')
+        assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['a'] == b + val1
+        try_list_append(':val1, b')
+        assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['a'] == val1 + b
 
 # Test the "if_not_exists" function in SET
 # The test also checks additional features of function-call parsing.
