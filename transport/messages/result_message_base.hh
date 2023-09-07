@@ -9,6 +9,7 @@
 
 #pragma once
 
+#include <map>
 #include <vector>
 #include <seastar/core/sstring.hh>
 
@@ -19,6 +20,7 @@ namespace messages {
 
 class result_message {
     std::vector<sstring> _warnings;
+    std::optional<std::unordered_map<sstring, bytes>> _custom_payload;
 public:
     class visitor;
     class visitor_base;
@@ -33,6 +35,17 @@ public:
 
     const std::vector<sstring>& warnings() const {
         return _warnings;
+    }
+
+    void add_custom_payload(sstring key, bytes value) {
+        if (!_custom_payload) {
+            _custom_payload = std::optional<std::unordered_map<sstring, bytes>>{std::unordered_map<sstring, bytes>()};
+        }
+        _custom_payload.value()[key] = value;
+    }
+
+    const std::optional<std::unordered_map<sstring, bytes>>& custom_payload() const {
+        return _custom_payload;
     }
 
     virtual std::optional<unsigned> move_to_shard() const {
