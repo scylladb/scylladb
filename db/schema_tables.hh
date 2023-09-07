@@ -176,11 +176,9 @@ std::vector<schema_ptr> all_tables(schema_features);
 // Like all_tables(), but returns schema::cf_name() of each table.
 std::vector<sstring> all_table_names(schema_features);
 
-// saves/creates "ks" + all tables etc, while first deleting all old schema entries (will be rewritten)
-future<> save_system_schema(cql3::query_processor& qp, const sstring & ks);
-
-// saves/creates "system_schema" keyspace
-future<> save_system_keyspace_schema(cql3::query_processor& qp);
+// saves/creates all the system objects in the appropriate keyspaces;
+// deletes them first, so they will be effectively overwritten.
+future<> save_system_schema(cql3::query_processor& qp);
 
 future<table_schema_version> calculate_schema_digest(distributed<service::storage_proxy>& proxy, schema_features, noncopyable_function<bool(std::string_view)> accept_keyspace);
 // Calculates schema digest for all non-system keyspaces

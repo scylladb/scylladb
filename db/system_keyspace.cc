@@ -1442,9 +1442,7 @@ future<> system_keyspace::setup(sharded<netw::messaging_service>& ms) {
     assert(this_shard_id() == 0);
 
     co_await build_bootstrap_info();
-    co_await db::schema_tables::save_system_keyspace_schema(_qp);
-    // #2514 - make sure "system" is written to system_schema.keyspaces.
-    co_await db::schema_tables::save_system_schema(_qp, NAME);
+    co_await db::schema_tables::save_system_schema(_qp);
     co_await cache_truncation_record();
 }
 

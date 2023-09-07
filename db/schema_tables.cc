@@ -209,7 +209,7 @@ using namespace v3;
 
 using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
 
-future<> save_system_schema(cql3::query_processor& qp, const sstring & ksname) {
+static future<> save_system_schema_to_keyspace(cql3::query_processor& qp, const sstring & ksname) {
     auto ks = qp.db().find_keyspace(ksname);
     auto ksm = ks.metadata();
 
@@ -225,9 +225,10 @@ future<> save_system_schema(cql3::query_processor& qp, const sstring & ksname) {
     }
 }
 
-/** add entries to system_schema.* for the hardcoded system definitions */
-future<> save_system_keyspace_schema(cql3::query_processor& qp) {
-    return save_system_schema(qp, NAME);
+future<> save_system_schema(cql3::query_processor& qp) {
+    co_await save_system_schema_to_keyspace(qp, schema_tables::NAME);
+    // #2514 - make sure "system" is written to system_schema.keyspaces.
+    co_await save_system_schema_to_keyspace(qp, system_keyspace::NAME);
 }
 
 namespace v3 {
