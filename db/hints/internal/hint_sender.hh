@@ -71,6 +71,10 @@ class host_manager;
 // Class specifying context for sending one file with hints.
 struct send_one_file_ctx;
 
+/// This class is responsible for sending hints to a specified destination.
+///
+/// It is owned by a @ref host_manager instance, whose @ref commitlog this class reads hints from.
+/// Though this class is not the owner of that commitlog, it triggers its recreation.
 class hint_sender {
 private:
     using clock_type = seastar::lowres_clock;

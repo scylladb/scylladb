@@ -58,6 +58,18 @@ class resource_manager;
 
 namespace internal {
 
+/// This class is responsible for managing hints for a specified host.
+/// It is managed by @ref shard_hint_manager.
+///
+/// Each instance of host_manager is also responsible for creating a @ref commitlog instance
+/// hints are written to and managing it. This class is the owner of that instance.
+///
+/// Due to the nature of commitlog, we have to recreate it to be able to read hints from it
+/// -- shutting down a commitlog triggers flushing all of the active segments to disk,
+/// and thanks to that, we can read from them. It is utilized by the @ref hint_sender instance
+/// this class owns.
+///
+/// Note that recreating the commitlog instance is triggered by the hint_sender.
 class host_manager {
 private:
     enum class state {

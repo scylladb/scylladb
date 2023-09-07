@@ -82,6 +82,8 @@ public:
     future<> ensure_rebalanced();
 };
 
+/// This class is responsible for managing hints on the shard level.
+/// Each instance of shard_hint_manager manages exactly one shard.
 class shard_hint_manager {
 private:
     using hint_stats = internal::hint_stats;
