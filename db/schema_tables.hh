@@ -196,7 +196,7 @@ future<mutation> read_keyspace_mutation(distributed<service::storage_proxy>&, co
 // Must be called on shard 0.
 future<semaphore_units<>> hold_merge_lock() noexcept;
 
-future<> merge_schema(sharded<db::system_keyspace>& sys_ks, distributed<service::storage_proxy>& proxy, gms::feature_service& feat, std::vector<mutation> mutations, bool reload = false);
+future<> merge_schema(sharded<db::system_keyspace>& sys_ks, distributed<service::storage_proxy>& proxy, gms::feature_service& feat, std::vector<mutation> mutations, bool reload);
 
 // Recalculates the local schema version.
 //
