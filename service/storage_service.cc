@@ -6108,7 +6108,9 @@ void storage_service::init_messaging_service(sharded<service::storage_proxy>& pr
         });
     });
     ser::storage_service_rpc_verbs::register_tablet_stream_data(&_messaging.local(), [this] (locator::global_tablet_id tablet) {
-        return stream_tablet(tablet);
+        return container().invoke_on(0, [tablet] (auto& ss) -> future<> {
+            return ss.stream_tablet(tablet);
+        });
     });
 }
 
