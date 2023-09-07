@@ -310,3 +310,9 @@ class ManagerClient():
         logger.debug("ManagerClient getting log filename for %s", server_id)
         log_filename = await self.client.get_text(f"/cluster/server/{server_id}/get_log_filename")
         return ScyllaLogFile(self.thread_pool, log_filename)
+
+    async def server_get_workdir(self, server_id: ServerNum) -> str:
+        return await self.client.get_text(f"/cluster/server/{server_id}/workdir")
+
+    async def server_get_exe(self, server_id: ServerNum) -> str:
+        return await self.client.get_text(f"/cluster/server/{server_id}/exe")
