@@ -14,6 +14,7 @@
 #include <exception>
 #include <seastar/coroutine/exception.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
+#include <seastar/http/exception.hh>
 #include <seastar/util/file.hh>
 
 #include "sstables/exceptions.hh"
@@ -72,6 +73,7 @@ public:
     virtual noncopyable_function<future<>(std::vector<shared_sstable>)> atomic_deleter() const override {
         return sstable_directory::delete_with_pending_deletion_log;
     }
+    virtual future<> remove_by_registry_entry(utils::UUID uuid, entry_descriptor desc) override;
 
     virtual sstring prefix() const override { return _dir; }
 };
@@ -425,6 +427,10 @@ future<> filesystem_storage::wipe(const sstable& sst, sync_dir sync) noexcept {
     }
 }
 
+future<> filesystem_storage::remove_by_registry_entry(utils::UUID uuid, entry_descriptor desc) {
+    on_internal_error(sstlog, "Filesystem storage doesn't keep its entries in registry");
+}
+
 class s3_storage : public sstables::storage {
     shared_ptr<s3::client> _client;
     sstring _bucket;
@@ -464,6 +470,7 @@ public:
     virtual noncopyable_function<future<>(std::vector<shared_sstable>)> atomic_deleter() const override {
         return delete_with_system_keyspace;
     }
+    virtual future<> remove_by_registry_entry(utils::UUID uuid, entry_descriptor desc) override;
 
     virtual sstring prefix() const override { return _location; }
 };
@@ -536,6 +543,31 @@ future<> s3_storage::wipe(const sstable& sst, sync_dir) noexcept {
     });
 
     co_await sys_ks.sstables_registry_delete_entry(_location, sst.generation());
+}
+
+future<> s3_storage::remove_by_registry_entry(utils::UUID uuid, entry_descriptor desc) {
+    auto prefix = format("/{}/{}", _bucket, uuid);
+    std::optional<temporary_buffer<char>> toc;
+    std::vector<sstring> components;
+
+    try {
+        toc = co_await _client->get_object_contiguous(prefix + "/" + sstable_version_constants::get_component_map(desc.version).at(component_type::TOC));
+    } catch (seastar::httpd::unexpected_status_error& e) {
+        if (e.status() != seastar::http::reply::status_type::no_content) {
+            throw;
+        }
+    }
+    if (!toc) {
+        co_return; // missing TOC object is OK
+    }
+
+    boost::split(components, std::string_view(toc->get(), toc->size()), boost::is_any_of("\n"));
+    co_await coroutine::parallel_for_each(components, [this, &prefix] (sstring comp) -> future<> {
+        if (comp != sstable_version_constants::TOC_SUFFIX) {
+            co_await _client->delete_object(prefix + "/" + comp);
+        }
+    });
+    co_await _client->delete_object(prefix + "/" + sstable_version_constants::TOC_SUFFIX);
 }
 
 future<> s3_storage::delete_with_system_keyspace(std::vector<shared_sstable> ssts) {

@@ -345,8 +345,21 @@ future<> sstable_directory::system_keyspace_components_lister::commit() {
 }
 
 future<> sstable_directory::system_keyspace_components_lister::garbage_collect(storage& st) {
-    // FIXME -- implement
-    co_return;
+    return do_with(std::set<generation_type>(), [this, &st] (auto& gens_to_remove) {
+        return _sys_ks.sstables_registry_list(_location, [&st, &gens_to_remove] (utils::UUID uuid, sstring status, entry_descriptor desc) {
+            if (status == "sealed") {
+                return make_ready_future<>();
+            }
+
+            dirlog.info("Removing dangling {} {} entry", status, uuid);
+            gens_to_remove.insert(desc.generation);
+            return st.remove_by_registry_entry(uuid, std::move(desc));
+        }).then([this, &gens_to_remove] {
+            return parallel_for_each(gens_to_remove, [this] (auto gen) {
+                return _sys_ks.sstables_registry_delete_entry(_location, gen);
+            });
+        });
+    });
 }
 
 future<>
