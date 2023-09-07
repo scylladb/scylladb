@@ -754,7 +754,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                     throw bad_configuration_error();
                 }
             }
+            const bool raft_topology_change_enabled = cfg->consistent_cluster_management() &&
+                cfg->check_experimental(db::experimental_features_t::feature::CONSISTENT_TOPOLOGY_CHANGES);
+
             gms::feature_config fcfg = gms::feature_config_from_db_config(*cfg);
+            fcfg.use_raft_cluster_features = raft_topology_change_enabled;
 
             debug::the_feature_service = &feature_service;
             feature_service.start(fcfg).get();
@@ -1110,6 +1114,8 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             static sharded<db::view::view_update_generator> view_update_generator;
             static sharded<cdc::generation_service> cdc_generation_service;
 
+            db::sstables_format_selector sst_format_selector(db);
+
             supervisor::notify("starting system keyspace");
             sys_ks.start(std::ref(qp), std::ref(db)).get();
             // TODO: stop()?
@@ -1123,6 +1129,66 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // described here: https://github.com/scylladb/scylla/issues/1014
             supervisor::notify("loading system sstables");
             replica::distributed_loader::init_system_keyspace(sys_ks, erm_factory, db, system_table_load_phase::phase1).get();
+
+            // 1. Here we notify dependent services that system tables have been loaded,
+            //    and they in turn can load the necessary data from them;
+            // 2. This notification is important for the services that are needed
+            //    during schema commitlog replay;
+            // 3. The data this services load should be written with accompanying
+            //    table.flush, since commitlog is not replayed yet;
+            // 4. This is true for the following services:
+            //   * features_service: we need to re-enable previously enabled features,
+            //     this should be done before commitlog starts replaying
+            //     since some features affect storage.
+            //   * sstables_format_selector: we need to choose the appropriate format,
+            //     since schema commitlog replay can write to sstables.
+            when_all_succeed(feature_service.local().on_system_tables_loaded(sys_ks.local()),
+                sst_format_selector.on_system_tables_loaded(sys_ks.local())).get();
+
+            db.local().maybe_init_schema_commitlog();
+
+            // Init schema tables only after enable_features_on_startup()
+            // because table construction consults enabled features.
+            // Needs to be before system_keyspace::setup_after_commitlog(), which writes to schema tables.
+            replica::distributed_loader::init_system_keyspace(sys_ks, erm_factory, db, system_table_load_phase::phase2).get();
+            sys_ks.local().cache_truncation_record().get();
+
+            supervisor::notify("starting schema commit log");
+
+            // Check there is no truncation record for schema tables.
+            // Needs to happen before replaying the schema commitlog, which interprets
+            // replay position in the truncation record.
+            db.local().get_tables_metadata().for_each_table([] (table_id, lw_shared_ptr<replica::table> table_ptr) {
+              if (table_ptr->schema()->ks_name() == db::schema_tables::NAME) {
+                  if (table_ptr->get_truncation_record() != db_clock::time_point::min()) {
+                      // replay_position stored in the truncation record may belong to
+                      // the old (default) commitlog domain. It's not safe to interpret
+                      // that replay position in the schema commitlog domain.
+                      // Refuse to boot in this case. We assume no one truncated schema tables.
+                      // We will hit this during rolling upgrade, in which case the user will
+                      // roll back and let us know.
+                      throw std::runtime_error(format("Schema table {}.{} has a truncation record. Booting is not safe.",
+                          table_ptr->schema()->ks_name(), table_ptr->schema()->cf_name()));
+                  }
+              }
+            });
+
+            auto sch_cl = db.local().schema_commitlog();
+            if (sch_cl != nullptr) {
+              auto paths = sch_cl->get_segments_to_replay().get();
+              if (!paths.empty()) {
+                  supervisor::notify("replaying schema commit log");
+                  auto rp = db::commitlog_replayer::create_replayer(db, sys_ks).get0();
+                  rp.recover(paths, db::schema_tables::COMMITLOG_FILENAME_PREFIX).get();
+                  supervisor::notify("replaying schema commit log - flushing memtables");
+                  db.invoke_on_all(&replica::database::flush_all_memtables).get();
+                  supervisor::notify("replaying schema commit log - removing old commitlog segments");
+                  //FIXME: discarded future
+                  (void)sch_cl->delete_segments(std::move(paths));
+              }
+            }
+
+            sys_ks.local().build_bootstrap_info().get();
 
             const auto listen_address = utils::resolve(cfg->listen_address, family).get0();
             const auto host_id = initialize_local_info_thread(sys_ks, snitch, listen_address, *cfg);
@@ -1327,30 +1393,12 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // engine().at_exit([&qp] { return qp.stop(); });
             sstables::init_metrics().get();
 
-            db::sstables_format_selector sst_format_selector(db);
-            sst_format_selector.on_system_tables_loaded(sys_ks.local()).get();
             db::sstables_format_listener sst_format_listener(gossiper.local(), feature_service, sst_format_selector);
 
             sst_format_listener.start().get();
             auto stop_format_listener = defer_verbose_shutdown("sstables format listener", [&sst_format_listener] {
                 sst_format_listener.stop().get();
             });
-
-            const bool raft_topology_change_enabled = group0_service.is_raft_enabled()
-                    && cfg->check_experimental(db::experimental_features_t::feature::CONSISTENT_TOPOLOGY_CHANGES);
-
-            // Re-enable previously enabled features on node startup.
-            // This should be done before commitlog starts replaying
-            // since some features affect storage.
-            feature_service.local().enable_features_on_startup(sys_ks.local(), raft_topology_change_enabled).get();
-
-            db.local().maybe_init_schema_commitlog();
-
-            // Init schema tables only after enable_features_on_startup()
-            // because table construction consults enabled features.
-            // Needs to be before system_keyspace::setup(), which writes to schema tables.
-            supervisor::notify("loading system_schema sstables");
-            replica::distributed_loader::init_system_keyspace(sys_ks, erm_factory, db, system_table_load_phase::phase2).get();
 
             if (raft_gr.local().is_enabled()) {
                 if (!db.local().uses_schema_commitlog()) {
@@ -1373,54 +1421,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             // schema migration, if needed, is also done on shard 0
             db::legacy_schema_migrator::migrate(proxy, db, sys_ks, qp.local()).get();
+            db::schema_tables::save_system_schema(qp.local()).get();
+            db::schema_tables::recalculate_schema_version(sys_ks, proxy, feature_service.local()).get();
 
             // making compaction manager api available, after system keyspace has already been established.
             api::set_server_compaction_manager(ctx).get();
-
-            supervisor::notify("setting up system keyspace");
-            // It's safe to load truncation records here, since
-            // all the writes to the table are followed by flushes.
-            sys_ks.local().cache_truncation_record().get();
-
-            supervisor::notify("starting schema commit log");
-
-            // Check there is no truncation record for schema tables.
-            // Needs to happen before replaying the schema commitlog, which interprets
-            // replay position in the truncation record.
-            db.local().get_tables_metadata().for_each_table([] (table_id, lw_shared_ptr<replica::table> table_ptr) {
-                if (table_ptr->schema()->ks_name() == db::schema_tables::NAME) {
-                    if (table_ptr->get_truncation_record() != db_clock::time_point::min()) {
-                        // replay_position stored in the truncation record may belong to
-                        // the old (default) commitlog domain. It's not safe to interpret
-                        // that replay position in the schema commitlog domain.
-                        // Refuse to boot in this case. We assume no one truncated schema tables.
-                        // We will hit this during rolling upgrade, in which case the user will
-                        // roll back and let us know.
-                        throw std::runtime_error(format("Schema table {}.{} has a truncation record. Booting is not safe.",
-                                                        table_ptr->schema()->ks_name(), table_ptr->schema()->cf_name()));
-                    }
-                }
-            });
-
-            auto sch_cl = db.local().schema_commitlog();
-            if (sch_cl != nullptr) {
-                auto paths = sch_cl->get_segments_to_replay().get();
-                if (!paths.empty()) {
-                    supervisor::notify("replaying schema commit log");
-                    auto rp = db::commitlog_replayer::create_replayer(db, sys_ks).get0();
-                    rp.recover(paths, db::schema_tables::COMMITLOG_FILENAME_PREFIX).get();
-                    supervisor::notify("replaying schema commit log - flushing memtables");
-                    db.invoke_on_all(&replica::database::flush_all_memtables).get();
-                    supervisor::notify("replaying schema commit log - removing old commitlog segments");
-                    //FIXME: discarded future
-                    (void)sch_cl->delete_segments(std::move(paths));
-                }
-            }
-
-            sys_ks.local().build_bootstrap_info().get();
-            db::schema_tables::save_system_schema(qp.local()).get();
-
-            db::schema_tables::recalculate_schema_version(sys_ks, proxy, feature_service.local()).get();
 
             supervisor::notify("loading tablet metadata");
             ss.local().load_tablet_metadata().get();
