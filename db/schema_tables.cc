@@ -947,13 +947,21 @@ static future<> with_merge_lock(noncopyable_function<future<> ()> func) {
 }
 
 static
-future<> update_schema_version_and_announce(sharded<db::system_keyspace>& sys_ks, distributed<service::storage_proxy>& proxy, schema_features features) {
-    auto uuid = co_await calculate_schema_digest(proxy, features);
+future<> update_schema_version_and_announce(sharded<db::system_keyspace>& sys_ks, distributed<service::storage_proxy>& proxy, schema_features features, std::optional<table_schema_version> version_from_group0) {
+    auto uuid = version_from_group0 ? *version_from_group0 : co_await calculate_schema_digest(proxy, features);
     co_await sys_ks.local().update_schema_version(uuid);
     co_await proxy.local().get_db().invoke_on_all([uuid] (replica::database& db) {
         db.update_version(uuid);
     });
     slogger.info("Schema version changed to {}", uuid);
+}
+
+static future<std::optional<table_schema_version>> get_group0_schema_version(db::system_keyspace& sys_ks) {
+    auto version = co_await sys_ks.get_scylla_local_param_as<utils::UUID>("group0_schema_version");
+    if (!version) {
+        co_return std::nullopt;
+    }
+    co_return table_schema_version{*version};
 }
 
 /**
@@ -977,13 +985,15 @@ future<> merge_schema(sharded<db::system_keyspace>& sys_ks, distributed<service:
     co_await with_merge_lock([&] () mutable -> future<> {
         bool flush_schema = proxy.local().get_db().local().get_config().flush_schema_tables_after_modification();
         co_await do_merge_schema(proxy, sys_ks, std::move(mutations), flush_schema, reload);
-        co_await update_schema_version_and_announce(sys_ks, proxy, feat.cluster_schema_features());
+        auto version_from_group0 = co_await get_group0_schema_version(sys_ks.local());
+        co_await update_schema_version_and_announce(sys_ks, proxy, feat.cluster_schema_features(), version_from_group0);
     });
 }
 
 future<> recalculate_schema_version(sharded<db::system_keyspace>& sys_ks, distributed<service::storage_proxy>& proxy, gms::feature_service& feat) {
     co_await with_merge_lock([&] () -> future<> {
-        co_await update_schema_version_and_announce(sys_ks, proxy, feat.cluster_schema_features());
+        auto version_from_group0 = co_await get_group0_schema_version(sys_ks.local());
+        co_await update_schema_version_and_announce(sys_ks, proxy, feat.cluster_schema_features(), version_from_group0);
     });
 }
 
