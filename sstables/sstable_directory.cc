@@ -75,6 +75,7 @@ sstable_directory::sstable_directory(sstables_manager& manager,
     , _state(state)
     , _sstable_dir(make_path(_table_dir, _state))
     , _error_handler_gen(error_handler_gen)
+    , _storage(make_storage(_manager, *_storage_opts, _table_dir, _state))
     , _lister(make_components_lister())
     , _sharder(sharder)
     , _unshared_remote_sstables(smp::count)

@@ -33,6 +33,7 @@ namespace db { class system_keyspace; }
 namespace sstables {
 
 enum class sstable_state;
+class storage;
 class sstables_manager;
 bool manifest_json_filter(const std::filesystem::path&, const directory_entry& entry);
 
@@ -138,6 +139,7 @@ private:
     sstable_state _state;
     std::filesystem::path _sstable_dir; // FIXME -- remove eventually
     io_error_handler_gen _error_handler_gen;
+    std::unique_ptr<storage> _storage;
     std::unique_ptr<components_lister> _lister;
     const dht::sharder& _sharder;
 
