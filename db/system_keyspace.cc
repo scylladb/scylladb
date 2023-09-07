@@ -213,7 +213,7 @@ schema_ptr system_keyspace::batchlog() {
     return paxos;
 }
 
-thread_local data_type cdc_generation_id_v2_type = tuple_type_impl::get_instance({timestamp_type, uuid_type});
+thread_local data_type cdc_generation_id_v2_type = tuple_type_impl::get_instance({timestamp_type, timeuuid_type});
 
 schema_ptr system_keyspace::topology() {
     static thread_local auto schema = [] {
@@ -234,10 +234,10 @@ schema_ptr system_keyspace::topology() {
             .with_column("shard_count", int32_type)
             .with_column("ignore_msb", int32_type)
             .with_column("supported_features", set_type_impl::get_instance(utf8_type, true))
-            .with_column("new_cdc_generation_data_uuid", uuid_type, column_kind::static_column)
+            .with_column("new_cdc_generation_data_uuid", timeuuid_type, column_kind::static_column)
             .with_column("version", long_type, column_kind::static_column)
             .with_column("transition_state", utf8_type, column_kind::static_column)
-            .with_column("current_cdc_generation_uuid", uuid_type, column_kind::static_column)
+            .with_column("current_cdc_generation_uuid", timeuuid_type, column_kind::static_column)
             .with_column("current_cdc_generation_timestamp", timestamp_type, column_kind::static_column)
             .with_column("unpublished_cdc_generations", set_type_impl::get_instance(cdc_generation_id_v2_type, true), column_kind::static_column)
             .with_column("global_topology_request", utf8_type, column_kind::static_column)
@@ -260,7 +260,7 @@ schema_ptr system_keyspace::cdc_generations_v3() {
             /* This is a single-partition table with key 'cdc_generations'. */
             .with_column("key", utf8_type, column_kind::partition_key)
             /* The unique identifier of this generation. */
-            .with_column("id", uuid_type, column_kind::clustering_key)
+            .with_column("id", timeuuid_type, column_kind::clustering_key)
             /* The generation describes a mapping from all tokens in the token ring to a set of stream IDs.
              * This mapping is built from a bunch of smaller mappings, each describing how tokens in a
              * subrange of the token ring are mapped to stream IDs; these subranges together cover the entire
@@ -2624,7 +2624,7 @@ future<service::topology> system_keyspace::load_topology_state() {
             auto gen_uuid = some_row.get_as<utils::UUID>("current_cdc_generation_uuid");
             if (!some_row.has("current_cdc_generation_timestamp")) {
                 on_internal_error(slogger, format(
-                    "load_topology_state: current CDC generation UUID ({}) present, but timestamp missing", gen_uuid));
+                    "load_topology_state: current CDC generation time UUID ({}) present, but timestamp missing", gen_uuid));
             }
             auto gen_ts = some_row.get_as<db_clock::time_point>("current_cdc_generation_timestamp");
             ret.current_cdc_generation_id = cdc::generation_id_v2 {
@@ -2641,10 +2641,10 @@ future<service::topology> system_keyspace::load_topology_state() {
                 assert(gen_rows);
                 if (gen_rows->empty()) {
                     on_internal_error(slogger, format(
-                        "load_topology_state: current CDC generation UUID ({}) present, but data missing", gen_uuid));
+                        "load_topology_state: current CDC generation time UUID ({}) present, but data missing", gen_uuid));
                 }
                 auto cnt = gen_rows->one().get_as<int64_t>("cnt");
-                slogger.debug("load_topology_state: current CDC generation UUID ({}), loaded {} ranges", gen_uuid, cnt);
+                slogger.debug("load_topology_state: current CDC generation time UUID ({}), loaded {} ranges", gen_uuid, cnt);
             }
         } else {
             if (!ret.normal_nodes.empty()) {

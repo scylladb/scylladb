@@ -131,7 +131,7 @@ struct topology {
     // The ID of the last introduced CDC generation.
     std::optional<cdc::generation_id_v2> current_cdc_generation_id;
 
-    // This is the UUID used to access the data of a new CDC generation introduced
+    // This is the time UUID used to access the data of a new CDC generation introduced
     // e.g. when a new node bootstraps, needed in `commit_cdc_generation` transition state.
     // It's used as the first column of the clustering key in CDC_GENERATIONS_V3 table.
     std::optional<utils::UUID> new_cdc_generation_data_uuid;
