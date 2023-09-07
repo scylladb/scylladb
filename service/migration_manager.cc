@@ -385,7 +385,7 @@ future<> migration_manager::merge_schema_from(netw::messaging_service::msg_addr 
         return make_exception_future<>(std::make_exception_ptr<std::runtime_error>(
                     std::runtime_error(fmt::format("Error while applying schema mutations: {}", e))));
     }
-    return db::schema_tables::merge_schema(_sys_ks, proxy.container(), _feat, std::move(mutations));
+    return db::schema_tables::merge_schema(_sys_ks, proxy.container(), _feat, std::move(mutations), false);
 }
 
 future<> migration_manager::reload_schema() {
@@ -411,7 +411,7 @@ future<> migration_manager::merge_schema_from(netw::messaging_service::msg_addr 
         all.emplace_back(std::move(m));
         return std::move(all);
     }).then([this](std::vector<mutation> schema) {
-        return db::schema_tables::merge_schema(_sys_ks, _storage_proxy.container(), _feat, std::move(schema));
+        return db::schema_tables::merge_schema(_sys_ks, _storage_proxy.container(), _feat, std::move(schema), false);
     });
 }
 
@@ -947,7 +947,7 @@ future<> migration_manager::announce_with_raft(std::vector<mutation> schema, gro
 }
 
 future<> migration_manager::announce_without_raft(std::vector<mutation> schema, group0_guard guard) {
-    auto f = db::schema_tables::merge_schema(_sys_ks, _storage_proxy.container(), _feat, schema);
+    auto f = db::schema_tables::merge_schema(_sys_ks, _storage_proxy.container(), _feat, schema, false);
 
     try {
         using namespace std::placeholders;
