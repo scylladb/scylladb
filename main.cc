@@ -95,6 +95,7 @@
 #include "lang/wasm_instance_cache.hh"
 #include "lang/wasm_alien_thread_runner.hh"
 #include "sstables/sstables_manager.hh"
+#include "db/virtual_tables.hh"
 
 #include "service/raft/raft_address_map.hh"
 #include "service/raft/raft_group_registry.hh"
@@ -1289,7 +1290,9 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 ss.stop().get();
             });
             supervisor::notify("initializing virtual tables");
-            sys_ks.invoke_on_all(&db::system_keyspace::initialize_virtual_tables, std::ref(db), std::ref(ss), std::ref(gossiper), std::ref(raft_gr), std::ref(*cfg)).get();
+            smp::invoke_on_all([&] {
+                return db::initialize_virtual_tables(db, ss, gossiper, raft_gr, sys_ks, *cfg);
+            }).get();
 
             supervisor::notify("starting forward service");
             forward_service.start(std::ref(messaging), std::ref(proxy), std::ref(db), std::ref(token_metadata)).get();

@@ -985,17 +985,7 @@ private:
 // Map from table's schema ID to table itself. Helps avoiding accidental duplication.
 static thread_local std::map<table_id, std::unique_ptr<virtual_table>> virtual_tables;
 
-// Precondition: `register_virtual_tables` has finished.
-std::vector<schema_ptr> all_virtual_tables() {
-    std::vector<schema_ptr> r;
-    r.reserve(virtual_tables.size());
-    for (const auto& [_, v] : virtual_tables) {
-        r.push_back(v->schema());
-    }
-    return r;
-}
-
-void register_virtual_tables(distributed<replica::database>& dist_db, distributed<service::storage_service>& dist_ss, sharded<gms::gossiper>& dist_gossiper, sharded<service::raft_group_registry>& dist_raft_gr, db::config& cfg) {
+static void register_virtual_tables(distributed<replica::database>& dist_db, distributed<service::storage_service>& dist_ss, sharded<gms::gossiper>& dist_gossiper, sharded<service::raft_group_registry>& dist_raft_gr, db::config& cfg) {
     auto add_table = [] (std::unique_ptr<virtual_table>&& tbl) {
         virtual_tables[tbl->schema()->id()] = std::move(tbl);
     };
@@ -1016,7 +1006,7 @@ void register_virtual_tables(distributed<replica::database>& dist_db, distribute
     add_table(std::make_unique<raft_state_table>(dist_raft_gr));
 }
 
-void install_virtual_readers(db::system_keyspace& sys_ks, replica::database& db) {
+static void install_virtual_readers_and_writers(db::system_keyspace& sys_ks, replica::database& db) {
     db.find_column_family(system_keyspace::size_estimates()).set_virtual_reader(mutation_source(db::size_estimates::virtual_reader(db, sys_ks)));
     db.find_column_family(system_keyspace::v3::views_builds_in_progress()).set_virtual_reader(mutation_source(db::view::build_progress_virtual_reader(db)));
     db.find_column_family(system_keyspace::built_indexes()).set_virtual_reader(mutation_source(db::index::built_indexes_virtual_reader(db)));
@@ -1026,6 +1016,21 @@ void install_virtual_readers(db::system_keyspace& sys_ks, replica::database& db)
         cf.set_virtual_reader(vt->as_mutation_source());
         cf.set_virtual_writer([&vt = *vt] (const frozen_mutation& m) { return vt.apply(m); });
     }
+}
+
+future<> initialize_virtual_tables(
+        distributed<replica::database>& dist_db, distributed<service::storage_service>& dist_ss,
+        sharded<gms::gossiper>& dist_gossiper, distributed<service::raft_group_registry>& dist_raft_gr,
+        sharded<db::system_keyspace>& sys_ks,
+        db::config& cfg) {
+    register_virtual_tables(dist_db, dist_ss, dist_gossiper, dist_raft_gr, cfg);
+
+    auto& db = dist_db.local();
+    for (auto&& [id, vt] : virtual_tables) {
+        co_await db.create_local_system_table(vt->schema(), false, dist_ss.local().get_erm_factory());
+    }
+
+    install_virtual_readers_and_writers(sys_ks.local(), db);
 }
 
 } // namespace db

@@ -30,9 +30,12 @@ namespace db {
 class config;
 class system_keyspace;
 
-void register_virtual_tables(distributed<replica::database>& dist_db, distributed<service::storage_service>& dist_ss,
-        sharded<gms::gossiper>& dist_gossiper, sharded<service::raft_group_registry>& dist_raft_gr, db::config& cfg);
-void install_virtual_readers(db::system_keyspace& sys_ks, replica::database& db);
-std::vector<schema_ptr> all_virtual_tables();
+future<> initialize_virtual_tables(
+    distributed<replica::database>&,
+    distributed<service::storage_service>&,
+    sharded<gms::gossiper>&,
+    sharded<service::raft_group_registry>&,
+    sharded<db::system_keyspace>& sys_ks,
+    db::config&);
 
 } // namespace db

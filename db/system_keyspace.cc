@@ -44,7 +44,6 @@
 #include "cdc/generation.hh"
 #include "replica/tablets.hh"
 #include "replica/query.hh"
-#include "db/virtual_tables.hh"
 
 using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
 
@@ -1936,20 +1935,6 @@ future<> system_keyspace::make(
 
         co_await db.create_local_system_table(table, maybe_write_in_user_memory(table), erm_factory);
     }
-}
-
-future<> system_keyspace::initialize_virtual_tables(
-        distributed<replica::database>& dist_db, distributed<service::storage_service>& dist_ss,
-        sharded<gms::gossiper>& dist_gossiper, distributed<service::raft_group_registry>& dist_raft_gr,
-        db::config& cfg) {
-    register_virtual_tables(dist_db, dist_ss, dist_gossiper, dist_raft_gr, cfg);
-
-    auto& db = dist_db.local();
-    for (auto&& table: all_virtual_tables()) {
-        co_await db.create_local_system_table(table, false, dist_ss.local().get_erm_factory());
-    }
-
-    install_virtual_readers(*this, db);
 }
 
 future<foreign_ptr<lw_shared_ptr<reconcilable_result>>>

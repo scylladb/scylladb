@@ -63,6 +63,7 @@
 #include "streaming/stream_manager.hh"
 #include "debug.hh"
 #include "db/schema_tables.hh"
+#include "db/virtual_tables.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "service/raft/raft_group0.hh"
 #include "sstables/sstables_manager.hh"
@@ -744,8 +745,8 @@ private:
             _ss.invoke_on_all([this] (service::storage_service& ss) {
                 ss.set_query_processor(_qp.local());
             }).get();
-            _sys_ks.invoke_on_all([this, &cfg] (db::system_keyspace& sys_ks) {
-                return sys_ks.initialize_virtual_tables(_db, _ss, _gossiper, _group0_registry, *cfg);
+            smp::invoke_on_all([&] {
+                return db::initialize_virtual_tables(_db, _ss, _gossiper, _group0_registry, _sys_ks, *cfg);
             }).get();
 
             replica::distributed_loader::init_non_system_keyspaces(_db, _proxy, _sys_ks).get();
