@@ -1090,10 +1090,14 @@ class topology_coordinator {
         co_return guard;
     }
 
-    future<node_to_work_on> exec_global_command(node_to_work_on&& node, const raft_topology_cmd& cmd) {
-        std::unordered_set<raft::server_id> exclude_nodes = parse_ignore_nodes(node);
+    std::unordered_set<raft::server_id> get_excluded_nodes(const node_to_work_on& node) {
+        auto exclude_nodes = parse_ignore_nodes(node);
         exclude_nodes.insert(parse_replaced_node(node));
-        auto guard = co_await exec_global_command(std::move(node.guard), cmd, exclude_nodes, drop_guard_and_retake::yes);
+        return exclude_nodes;
+    }
+
+    future<node_to_work_on> exec_global_command(node_to_work_on&& node, const raft_topology_cmd& cmd) {
+        auto guard = co_await exec_global_command(std::move(node.guard), cmd, get_excluded_nodes(node), drop_guard_and_retake::yes);
         co_return retake_node(std::move(guard), node.id);
     };
 
