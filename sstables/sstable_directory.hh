@@ -75,7 +75,7 @@ public:
     public:
         virtual future<> process(sstable_directory& directory, process_flags flags) = 0;
         virtual future<> commit() = 0;
-        virtual future<> garbage_collect() = 0;
+        virtual future<> garbage_collect(storage&) = 0;
         virtual ~components_lister() {}
     };
 
@@ -111,7 +111,7 @@ public:
 
         virtual future<> process(sstable_directory& directory, process_flags flags) override;
         virtual future<> commit() override;
-        virtual future<> garbage_collect() override;
+        virtual future<> garbage_collect(storage&) override;
     };
 
     class system_keyspace_components_lister final : public components_lister {
@@ -123,7 +123,7 @@ public:
 
         virtual future<> process(sstable_directory& directory, process_flags flags) override;
         virtual future<> commit() override;
-        virtual future<> garbage_collect() override;
+        virtual future<> garbage_collect(storage&) override;
     };
 
 private:

@@ -344,7 +344,7 @@ future<> sstable_directory::system_keyspace_components_lister::commit() {
     return make_ready_future<>();
 }
 
-future<> sstable_directory::system_keyspace_components_lister::garbage_collect() {
+future<> sstable_directory::system_keyspace_components_lister::garbage_collect(storage& st) {
     // FIXME -- implement
     co_return;
 }
@@ -590,10 +590,10 @@ future<> sstable_directory::filesystem_components_lister::replay_pending_delete_
 }
 
 future<> sstable_directory::garbage_collect() {
-    return _lister->garbage_collect();
+    return _lister->garbage_collect(*_storage);
 }
 
-future<> sstable_directory::filesystem_components_lister::garbage_collect() {
+future<> sstable_directory::filesystem_components_lister::garbage_collect(storage& st) {
     // First pass, cleanup temporary sstable directories and sstables pending delete.
     co_await cleanup_column_family_temp_sst_dirs();
     co_await handle_sstables_pending_delete();
