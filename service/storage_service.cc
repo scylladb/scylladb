@@ -1446,12 +1446,10 @@ class topology_coordinator {
         slogger.info("raft topology: enabled features: {}", features_to_enable);
     }
 
-    future<node_to_work_on> global_token_metadata_barrier(node_to_work_on&& node) {
-        node = co_await exec_global_command(std::move(node),
-            raft_topology_cmd::command::barrier_and_drain);
-        node = co_await exec_global_command(std::move(node),
-            raft_topology_cmd::command::fence);
-        co_return std::move(node);
+    future<group0_guard> global_token_metadata_barrier(group0_guard&& guard, std::unordered_set<raft::server_id> exclude_nodes = {}) {
+        guard = co_await exec_global_command(std::move(guard), raft_topology_cmd::command::barrier_and_drain, exclude_nodes, drop_guard_and_retake::yes);
+        guard = co_await exec_global_command(std::move(guard), raft_topology_cmd::command::fence, exclude_nodes, drop_guard_and_retake::yes);
+        co_return std::move(guard);
     }
 
     future<group0_guard> global_tablet_token_metadata_barrier(group0_guard guard) {
@@ -1915,14 +1913,14 @@ class topology_coordinator {
 
                 // make sure all nodes know about new topology (we require all nodes to be alive for topo change for now)
                 {
-                    auto f = co_await coroutine::as_future(global_token_metadata_barrier(std::move(node)));
+                    auto f = co_await coroutine::as_future(global_token_metadata_barrier(std::move(node.guard), get_excluded_nodes(node)));
                     if (f.failed()) {
                         slogger.error("raft topology: transition_state::write_both_read_old, "
                                       "global_token_metadata_barrier failed, error {}",
                                       f.get_exception());
                         break;
                     }
-                    node = std::move(f).get();
+                    node = retake_node(std::move(f).get(), node.id);
                 }
 
                 if (_group0.is_member(node.id, true)) {
@@ -1992,14 +1990,14 @@ class topology_coordinator {
                 // In this state writes goes to old and new replicas but reads start to be done from new replicas
                 // Before we stop writing to old replicas we need to wait for all previous reads to complete
                 {
-                    auto f = co_await coroutine::as_future(global_token_metadata_barrier(std::move(node)));
+                    auto f = co_await coroutine::as_future(global_token_metadata_barrier(std::move(node.guard), get_excluded_nodes(node)));
                     if (f.failed()) {
                         slogger.error("raft topology: transition_state::write_both_read_new, "
                                       "global_token_metadata_barrier failed, error {}",
                                       f.get_exception());
                         break;
                     }
-                    node = std::move(f).get();
+                    node = retake_node(std::move(f).get(), node.id);
                 }
                 switch(node.rs->state) {
                 case node_state::bootstrapping: {
@@ -2209,14 +2207,14 @@ class topology_coordinator {
                 // Wait until other nodes observe the new token ring and stop sending writes to this node.
                 {
                     auto id = node.id;
-                    auto f = co_await coroutine::as_future(global_token_metadata_barrier(std::move(node)));
+                    auto f = co_await coroutine::as_future(global_token_metadata_barrier(std::move(node.guard), get_excluded_nodes(node)));
                     if (f.failed()) {
                         slogger.error("raft topology: node_state::left_token_ring (node: {}), "
                                       "global_token_metadata_barrier failed, error {}",
                                       id, f.get_exception());
                         break;
                     }
-                    node = std::move(f).get();
+                    node = retake_node(std::move(f).get(), node.id);
                 }
 
                 // Tell the node to shut down.
