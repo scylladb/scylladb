@@ -1376,18 +1376,15 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             api::set_server_compaction_manager(ctx).get();
 
             supervisor::notify("setting up system keyspace");
-            // FIXME -- should happen in start(), but
-            // 1. messaging is on the way with its preferred ip cache
-            // 2. cql_test_env() doesn't do it
-            // 3. need to check if it depends on any of the above steps
-            sys_ks.local().setup(messaging).get();
+            // It's safe to load truncation records here, since
+            // all the writes to the table are followed by flushes.
+            sys_ks.local().cache_truncation_record().get();
 
             supervisor::notify("starting schema commit log");
 
             // Check there is no truncation record for schema tables.
             // Needs to happen before replaying the schema commitlog, which interprets
             // replay position in the truncation record.
-            // Needs to happen before system_keyspace::setup(), which reads truncation records.
             db.local().get_tables_metadata().for_each_table([] (table_id, lw_shared_ptr<replica::table> table_ptr) {
                 if (table_ptr->schema()->ks_name() == db::schema_tables::NAME) {
                     if (table_ptr->get_truncation_record() != db_clock::time_point::min()) {
@@ -1417,6 +1414,9 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                     (void)sch_cl->delete_segments(std::move(paths));
                 }
             }
+
+            sys_ks.local().build_bootstrap_info().get();
+            db::schema_tables::save_system_schema(qp.local()).get();
 
             db::schema_tables::recalculate_schema_version(sys_ks, proxy, feature_service.local()).get();
 

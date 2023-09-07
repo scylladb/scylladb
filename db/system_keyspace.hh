@@ -126,8 +126,6 @@ class system_keyspace : public seastar::peering_sharded_service<system_keyspace>
     static schema_ptr large_cells();
     static schema_ptr scylla_local();
     future<> force_blocking_flush(sstring cfname);
-    future<> build_bootstrap_info();
-    future<> cache_truncation_record();
     template <typename Value>
     future<> update_cached_values(gms::inet_address ep, sstring column_name, Value value);
 public:
@@ -249,7 +247,8 @@ public:
 
     static table_schema_version generate_schema_version(table_id table_id, uint16_t offset = 0);
 
-    future<> setup(sharded<netw::messaging_service>& ms);
+    future<> build_bootstrap_info();
+    future<> cache_truncation_record();
     future<> update_schema_version(table_schema_version version);
 
     /*

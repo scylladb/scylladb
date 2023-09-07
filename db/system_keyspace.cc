@@ -1438,14 +1438,6 @@ future<> system_keyspace::build_bootstrap_info() {
     });
 }
 
-future<> system_keyspace::setup(sharded<netw::messaging_service>& ms) {
-    assert(this_shard_id() == 0);
-
-    co_await build_bootstrap_info();
-    co_await db::schema_tables::save_system_schema(_qp);
-    co_await cache_truncation_record();
-}
-
 struct truncation_record {
     static constexpr uint32_t current_magic = 0x53435452; // 'S' 'C' 'T' 'R'
 
@@ -1506,6 +1498,8 @@ future<> system_keyspace::cache_truncation_record() {
 future<> system_keyspace::save_truncation_record(table_id id, db_clock::time_point truncated_at, db::replay_position rp) {
     sstring req = format("INSERT INTO system.{} (table_uuid, shard, position, segment_id, truncated_at) VALUES(?,?,?,?,?)", TRUNCATED);
     co_await _qp.execute_internal(req, {id.uuid(), int32_t(rp.shard_id()), int32_t(rp.pos), int64_t(rp.base_id()), truncated_at}, cql3::query_processor::cache_internal::yes);
+    // Flush the table so that the value is available on boot before commitlog replay.
+    // Commit log replay depends on truncation records to determine the minimum replay position.
     co_await force_blocking_flush(TRUNCATED);
 }
 
