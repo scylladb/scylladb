@@ -97,7 +97,6 @@ struct topology_features {
 struct topology {
     enum class transition_state: uint16_t {
         commit_cdc_generation,
-        publish_cdc_generation,
         write_both_read_old,
         write_both_read_new,
         tablet_migration,
@@ -136,6 +135,9 @@ struct topology {
     // e.g. when a new node bootstraps, needed in `commit_cdc_generation` transition state.
     // It's used as partition key in CDC_GENERATIONS_V3 table.
     std::optional<utils::UUID> new_cdc_generation_data_uuid;
+
+    // The IDs of the commited yet unpublished CDC generations sorted by timestamps.
+    std::vector<cdc::generation_id_v2> unpublished_cdc_generations;
 
     // Describes the state of the features of normal nodes
     topology_features features;

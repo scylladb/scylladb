@@ -213,6 +213,8 @@ schema_ptr system_keyspace::batchlog() {
     return paxos;
 }
 
+thread_local data_type cdc_generation_id_v2_type = tuple_type_impl::get_instance({timestamp_type, uuid_type});
+
 schema_ptr system_keyspace::topology() {
     static thread_local auto schema = [] {
         auto id = generate_legacy_id(NAME, TOPOLOGY);
@@ -237,6 +239,7 @@ schema_ptr system_keyspace::topology() {
             .with_column("transition_state", utf8_type, column_kind::static_column)
             .with_column("current_cdc_generation_uuid", uuid_type, column_kind::static_column)
             .with_column("current_cdc_generation_timestamp", timestamp_type, column_kind::static_column)
+            .with_column("unpublished_cdc_generations", set_type_impl::get_instance(cdc_generation_id_v2_type, true), column_kind::static_column)
             .with_column("global_topology_request", utf8_type, column_kind::static_column)
             .with_column("enabled_features", set_type_impl::get_instance(utf8_type, true), column_kind::static_column)
             .set_comment("Current state of topology change machine")
@@ -1573,6 +1576,17 @@ static std::unordered_set<raft::server_id> decode_nodes_ids(const set_type_impl:
     return ids_set;
 }
 
+static std::vector<cdc::generation_id_v2> decode_cdc_generations_ids(const set_type_impl::native_type& gen_ids) {
+    std::vector<cdc::generation_id_v2> gen_ids_list;
+    for (auto& gen_id: gen_ids) {
+        auto native = value_cast<tuple_type_impl::native_type>(gen_id);
+        auto ts = value_cast<db_clock::time_point>(native[0]);
+        auto id = value_cast<utils::UUID>(native[1]);
+        gen_ids_list.push_back(cdc::generation_id_v2{ts, id});
+    }
+    return gen_ids_list;
+}
+
 future<> system_keyspace::update_tokens(gms::inet_address ep, const std::unordered_set<dht::token>& tokens)
 {
     if (ep == utils::fb_utilities::get_broadcast_address()) {
@@ -2644,6 +2658,10 @@ future<service::topology> system_keyspace::load_topology_state() {
                 on_internal_error(slogger,
                     "load_topology_state: normal nodes present but no current CDC generation ID");
             }
+        }
+
+        if (some_row.has("unpublished_cdc_generations")) {
+            ret.unpublished_cdc_generations = decode_cdc_generations_ids(deserialize_set_column(*topology(), some_row, "unpublished_cdc_generations"));
         }
 
         if (some_row.has("global_topology_request")) {

@@ -7,11 +7,25 @@ from cassandra.query import SimpleStatement
 
 from util import new_test_table
 from nodetool import flush
+import time
+
+# Waits until at least one CDC generation is published to system_distributed.cdc_generation_timestamps
+# and system_distributed.cdc_streams_descriptions_v2. It may happen after the first node bootstraps.
+def wait_for_first_cdc_generation(cql, timeout):
+    query = SimpleStatement(
+            "select time from system_distributed.cdc_generation_timestamps where key = 'timestamps'",
+            consistency_level=ConsistencyLevel.ONE)
+    deadline = time.time() + timeout
+    while len(list(cql.execute(query))) == 0:
+        assert time.time() < deadline, "Timed out waiting for the first CDC generation"
+        time.sleep(1)
 
 def test_cdc_log_entries_use_cdc_streams(scylla_only, cql, test_keyspace):
     '''Test that the stream IDs chosen for CDC log entries come from the CDC generation
     whose streams are listed in the streams description table. Since this test is executed
     on a single-node cluster, there is only one generation.'''
+
+    wait_for_first_cdc_generation(cql, 60)
 
     schema = "pk int primary key"
     extra = " with cdc = {'enabled': true}"

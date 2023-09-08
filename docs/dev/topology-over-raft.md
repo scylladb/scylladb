@@ -33,29 +33,29 @@ Additionally to specific node states, there entire topology can also be in a tra
 - `commit_cdc_generation` - a new CDC generation data was written to internal tables earlier
     and now we need to commit the generation - create a timestamp for it and tell every node
     to start using it for CDC log table writes.
-- `publish_cdc_generation` - a new CDC generation was committed and now we need to publish it
-    to user-facing description tables.
 - `write_both_read_old` - one of the nodes is in a bootstrapping/decommissioning/removing/replacing state.
     Writes are going to both new and old replicas (new replicas means calculated according to modified
 token ring), reads are using old replicas.
 - `write_both_read_new` - as above, but reads are using new replicas.
 
 When a node bootstraps, we create new tokens for it and a new CDC generation
-and enter the `commit_cdc_generation` state. After committing the generation we
-move to `publish_cdc_generation`. Once the generation is published, we enter
-`write_both_read_old` state. After the entire cluster learns about it,
+and enter the `commit_cdc_generation` state. Once the generation is committed,
+we enter `write_both_read_old` state. After the entire cluster learns about it,
 streaming starts. When streaming finishes, we move to `write_both_read_new`
 state and again the whole cluster needs to learn about it and make sure that no
 reads that started before this point exist in the system. Finally we remove the
 transitioning state.
 
 Decommission, removenode and replace work similarly, except they don't go through
-`commit_cdc_generation` and `publish_cdc_generation`.
+`commit_cdc_generation`.
 
-The state machine may also go only through `commit_cdc_generation` and
-`publish_cdc_generation` states after getting a request from the user to create
-a new CDC generation if the current one is suboptimal (e.g. after a
-decommission).
+The state machine may also go only through the `commit_cdc_generation` state
+after getting a request from the user to create a new CDC generation if the
+current one is suboptimal (e.g. after a decommission).
+
+Committed CDC generations are continually published to user-facing description
+tables. This process is concurrent with the topology state transitioning and
+does not block its further progress.
 
 The state machine also maintains a map of topology requests per node.
 When a request is issued to a node the entry is added to the map. A
@@ -188,6 +188,7 @@ CREATE TABLE system.topology (
     transition_state text static,
     current_cdc_generation_timestamp timestamp static,
     current_cdc_generation_uuid uuid static,
+    unpublished_cdc_generations set<tuple<timestamp, id>> static,
     global_topology_request text static,
     new_cdc_generation_data_uuid uuid static,
     PRIMARY KEY (key, host_id)
@@ -214,5 +215,6 @@ There are also a few static columns for cluster-global properties:
 - `transition_state` - the transitioning state of the cluster (as described earlier), may be null
 - `current_cdc_generation_timestamp` - the timestamp of the last introduced CDC generation
 - `current_cdc_generation_uuid` - the UUID of the last introduced CDC generation (used to access its data)
+- `unpublished_cdc_generations` - the IDs of the committed yet unpublished CDC generations
 - `global_topology_request` - if set, contains one of the supported global topology requests
 - `new_cdc_generation_data_uuid` - used in `commit_cdc_generation` state, the UUID of the generation to be committed
