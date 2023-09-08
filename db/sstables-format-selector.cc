@@ -53,8 +53,11 @@ future<> sstables_format_selector::maybe_select_format(sstables::sstable_version
 future<> sstables_format_selector::start() {
     assert(this_shard_id() == 0);
     co_await read_sstables_format();
-    _features.local().me_sstable.when_enabled(_me_feature_listener);
-    _features.local().md_sstable.when_enabled(_md_feature_listener);
+    // The listener may fire immediately, create a thread for that case.
+    co_await seastar::async([this] {
+        _features.local().me_sstable.when_enabled(_me_feature_listener);
+        _features.local().md_sstable.when_enabled(_md_feature_listener);
+    });
 }
 
 future<> sstables_format_selector::stop() {
