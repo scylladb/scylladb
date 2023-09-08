@@ -73,7 +73,7 @@ async def test_remove_node_with_concurrent_ddl(manager: ManagerClient, random_ta
     stopped = False
     ddl_failed = False
 
-    async def do_ddl():
+    async def do_ddl() -> None:
         nonlocal ddl_failed
         iteration = 0
         while not stopped:
@@ -94,29 +94,29 @@ async def test_remove_node_with_concurrent_ddl(manager: ManagerClient, random_ta
                 raise
             iteration += 1
 
-    async def do_remove_node():
+    async def do_remove_node() -> None:
         for i in range(10):
             logger.debug(f'do_remove_node [{i}], iteration started')
             if ddl_failed:
                 logger.debug(f'do_remove_node [{i}], ddl failed, exiting')
                 break
-            server_ids = await manager.running_servers()
-            host_ids = await asyncio.gather(*(manager.get_host_id(s) for s in server_ids))
-            initiator_index, target_index = random.sample(range(len(server_ids)), 2)
-            initiator_ip = server_ids[initiator_index]
-            target_ip = server_ids[target_index]
+            server_infos = await manager.running_servers()
+            host_ids = await asyncio.gather(*(manager.get_host_id(s.server_id) for s in server_infos))
+            initiator_index, target_index = random.sample(range(len(server_infos)), 2)
+            initiator_info = server_infos[initiator_index]
+            target_info = server_infos[target_index]
             target_host_id = host_ids[target_index]
             logger.info(f'do_remove_node [{i}], running remove_node, '
-                        f'initiator server [{initiator_ip}], target ip [{target_ip}], '
+                        f'initiator server [{initiator_info.ip_addr}], target ip [{target_info.ip_addr}], '
                         f'target host id [{target_host_id}]')
-            await manager.wait_for_host_known(initiator_ip, target_host_id)
-            logger.info(f'do_remove_node [{i}], stopping target server [{target_ip}], host_id [{target_host_id}]')
-            await manager.server_stop_gracefully(target_ip)
-            logger.info(f'do_remove_node [{i}], target server [{target_ip}] stopped, '
-                        f'waiting for it to be down on [{initiator_ip}]')
-            await manager.wait_for_host_down(initiator_ip, target_ip)
+            await manager.wait_for_host_known(initiator_info.ip_addr, target_host_id)
+            logger.info(f'do_remove_node [{i}], stopping target server [{target_info.ip_addr}], host_id [{target_host_id}]')
+            await manager.server_stop_gracefully(target_info.server_id)
+            logger.info(f'do_remove_node [{i}], target server [{target_info.ip_addr}] stopped, '
+                        f'waiting for it to be down on [{initiator_info.ip_addr}]')
+            await manager.wait_for_host_down(initiator_info.ip_addr, target_info.ip_addr)
             logger.info(f'do_remove_node [{i}], invoking remove_node')
-            await manager.remove_node(initiator_ip, target_ip, target_host_id)
+            await manager.remove_node(initiator_info.server_id, target_info.server_id, [target_info.ip_addr])
             # TODO: check that group 0 no longer contains the removed node (#12153)
             logger.info(f'do_remove_node [{i}], remove_node done')
             new_server_ip = await manager.server_add()

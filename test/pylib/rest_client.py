@@ -146,19 +146,17 @@ class ScyllaRESTAPIClient():
         host_uuid = host_uuid.lstrip('"').rstrip('"')
         return HostID(host_uuid)
 
-    async def get_host_id_map(self, dst_server_id: str) -> list:
+    async def get_host_id_map(self, dst_server_ip: IPAddress) -> list[HostID]:
         """Retrieve the mapping of endpoint to host ID"""
-        response = await self.client.get("/storage_service/host_id", dst_server_id)
-        result = await response.json()
-        assert(type(result) == list)
-        return result
+        data = await self.client.get_json("/storage_service/host_id/", dst_server_ip)
+        assert(type(data) == list)
+        return data
 
-    async def get_down_endpoints(self, dst_server_id: str) -> list:
+    async def get_down_endpoints(self, node_ip: IPAddress) -> list[IPAddress]:
         """Retrieve down endpoints from gossiper's point of view """
-        response = await self.client.get("/gossiper/endpoint/down/", dst_server_id)
-        result = await response.json()
-        assert(type(result) == list)
-        return result
+        data = await self.client.get_json("/gossiper/endpoint/down/", node_ip)
+        assert(type(data) == list)
+        return data
 
     async def remove_node(self, initiator_ip: IPAddress, host_id: HostID,
                           ignore_dead: list[IPAddress], timeout: float) -> None:

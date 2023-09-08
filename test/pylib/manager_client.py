@@ -244,20 +244,20 @@ class ManagerClient():
                                          response_type="json")
         return IPAddress(ret["ip_addr"])
 
-    async def wait_for_host_known(self, dst_server_id: str, expect_host_id: str,
+    async def wait_for_host_known(self, dst_server_ip: IPAddress, expect_host_id: HostID,
                                   deadline: Optional[float] = None) -> None:
         """Waits until dst_server_id knows about expect_host_id, with timeout"""
         async def host_is_known():
-            host_id_map = await self.api.get_host_id_map(dst_server_id)
+            host_id_map = await self.api.get_host_id_map(dst_server_ip)
             return True if any(entry for entry in host_id_map if entry['value'] == expect_host_id) else None
 
         return await wait_for(host_is_known, deadline or (time() + 30))
 
-    async def wait_for_host_down(self, dst_server_id: str, server_id: str, deadline: Optional[float] = None) -> None:
+    async def wait_for_host_down(self, dst_server_ip: IPAddress, server_ip: IPAddress, deadline: Optional[float] = None) -> None:
         """Waits for dst_server_id to consider server_id as down, with timeout"""
         async def host_is_down():
-            down_endpoints = await self.api.get_down_endpoints(dst_server_id)
-            return True if server_id in down_endpoints else None
+            down_endpoints = await self.api.get_down_endpoints(dst_server_ip)
+            return True if server_ip in down_endpoints else None
 
         return await wait_for(host_is_down, deadline or (time() + 30))
 
