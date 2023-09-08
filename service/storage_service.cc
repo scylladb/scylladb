@@ -127,6 +127,7 @@ storage_service::storage_service(abort_source& abort_source,
         , _repair(repair)
         , _stream_manager(stream_manager)
         , _snitch(snitch)
+        , _group0(nullptr)
         , _node_ops_abort_thread(node_ops_abort_thread())
         , _shared_token_metadata(stm)
         , _erm_factory(erm_factory)
