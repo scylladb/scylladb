@@ -48,7 +48,7 @@ Download and Install
 
    .. code:: console
 
-    sh -x ./install.sh --nonroot --python3 ~/scylladb/python3/bin/python3
+    ./install.sh --nonroot --python3 ~/scylladb/python3/bin/python3
 
 Configure and Run ScyllaDB
 ----------------------------
