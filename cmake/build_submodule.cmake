@@ -9,7 +9,6 @@ function(build_submodule name dir)
     OUTPUT ${reloc_pkg}
     COMMAND reloc/build_reloc.sh --version ${scylla_version} --nodeps ${ARGN}
     WORKING_DIRECTORY "${working_dir}"
-    COMMENT "Generating submodule ${name} in ${dir}"
     JOB_POOL submodule_pool)
   add_custom_target(dist-${name}-tar
     DEPENDS ${reloc_pkg})
