@@ -39,7 +39,7 @@ Download and Install
 
    .. code:: console
     
-    sudo yum install -y java-11-openjdk
+    sudo yum install -y java-11-openjdk-headless
 
    For root offline installation on Debian-like systems, two additional packages, ``xfsprogs`` 
    and ``mdadm``, should be installed to be used in RAID setup.
