@@ -99,7 +99,7 @@ public:
     future<raft::snapshot_id> take_snapshot() override;
     void drop_snapshot(raft::snapshot_id id) override;
     future<> load_snapshot(raft::snapshot_id id) override;
-    future<> transfer_snapshot(gms::inet_address from, raft::snapshot_descriptor snp) override;
+    future<> transfer_snapshot(raft::server_id from_id, raft::snapshot_descriptor snp) override;
     future<> abort() override;
 };
 
