@@ -832,7 +832,7 @@ future<> database::parse_system_tables(distributed<service::storage_proxy>& prox
     co_await do_parse_schema_tables(proxy, db::schema_tables::TABLES, coroutine::lambda([&] (schema_result_value_type &v) -> future<> {
         std::map<sstring, schema_ptr> tables = co_await create_tables_from_tables_partition(proxy, v.second);
         co_await coroutine::parallel_for_each(tables.begin(), tables.end(), [&] (auto& t) -> future<> {
-            co_await this->add_column_family_and_make_directory(t.second);
+            co_await this->add_column_family_and_make_directory(t.second, true);
             auto s = t.second;
             // Recreate missing column mapping entries in case
             // we failed to persist them for some reason after a schema change
@@ -850,7 +850,7 @@ future<> database::parse_system_tables(distributed<service::storage_proxy>& prox
             // we fix here the schema in place in oreder to avoid races (write commands comming from other coordinators).
             view_ptr fixed_v = maybe_fix_legacy_secondary_index_mv_schema(*this, v, nullptr, preserve_version::yes);
             view_ptr v_to_add = fixed_v ? fixed_v : v;
-            co_await this->add_column_family_and_make_directory(v_to_add);
+            co_await this->add_column_family_and_make_directory(v_to_add, true);
             if (bool(fixed_v)) {
                 v_to_add = fixed_v;
                 auto&& keyspace = find_keyspace(v->ks_name()).metadata();
@@ -997,10 +997,10 @@ future<> database::create_local_system_table(
         cfg.memtable_scheduling_group = default_scheduling_group();
         cfg.memtable_to_cache_scheduling_group = default_scheduling_group();
     }
-    co_await add_column_family(ks, table, std::move(cfg));
+    co_await add_column_family(ks, table, std::move(cfg), true);
 }
 
-future<> database::add_column_family(keyspace& ks, schema_ptr schema, column_family::config cfg) {
+future<> database::add_column_family(keyspace& ks, schema_ptr schema, column_family::config cfg, bool readonly) {
     schema = local_schema_registry().learn(schema);
     schema->registry_entry()->mark_synced();
     auto&& rs = ks.get_replication_strategy();
@@ -1022,6 +1022,10 @@ future<> database::add_column_family(keyspace& ks, schema_ptr schema, column_fam
        cf = make_lw_shared<column_family>(schema, std::move(cfg), ks.metadata()->get_storage_options_ptr(), column_family::no_commitlog(), _compaction_manager, sst_manager, *_cl_stats, _row_cache_tracker, erm);
     }
     cf->set_durable_writes(ks.metadata()->durable_writes());
+
+    if (!readonly) {
+        cf->mark_ready_for_writes();
+    }
 
     auto uuid = schema->id();
     if (_tables_metadata.contains(uuid)) {
@@ -1062,9 +1066,9 @@ future<> database::add_column_family(keyspace& ks, schema_ptr schema, column_fam
     }
 }
 
-future<> database::add_column_family_and_make_directory(schema_ptr schema) {
+future<> database::add_column_family_and_make_directory(schema_ptr schema, bool readonly) {
     auto& ks = find_keyspace(schema->ks_name());
-    co_await add_column_family(ks, schema, ks.make_column_family_config(*schema, *this));
+    co_await add_column_family(ks, schema, ks.make_column_family_config(*schema, *this), readonly);
     auto& cf = find_column_family(schema);
     cf.get_index_manager().reload();
     co_await cf.init_storage();

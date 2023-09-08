@@ -1576,7 +1576,7 @@ public:
             schema_ptr table, bool write_in_user_memory, locator::effective_replication_map_factory&);
 
     void maybe_init_schema_commitlog();
-    future<> add_column_family_and_make_directory(schema_ptr schema);
+    future<> add_column_family_and_make_directory(schema_ptr schema, bool readonly);
 
     /* throws no_such_column_family if missing */
     table_id find_uuid(std::string_view ks, std::string_view cf) const;
@@ -1744,7 +1744,7 @@ public:
 public:
     bool update_column_family(schema_ptr s);
 private:
-    future<> add_column_family(keyspace& ks, schema_ptr schema, column_family::config cfg);
+    future<> add_column_family(keyspace& ks, schema_ptr schema, column_family::config cfg, bool readonly);
     future<> detach_column_family(table& cf);
 
     struct table_truncate_state;
