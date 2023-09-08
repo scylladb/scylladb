@@ -111,7 +111,7 @@ public:
 
         if (_state->creds) {
             s3l.debug("Making new HTTPS connection addr={} host={}", _state->addr, _host);
-            co_return co_await tls::connect(_state->creds, _state->addr, _host);
+            co_return co_await tls::connect(_state->creds, _state->addr, tls::tls_options{.server_name = _host});
         } else {
             s3l.debug("Making new HTTP connection");
             co_return co_await seastar::connect(_state->addr, {}, transport::TCP);
