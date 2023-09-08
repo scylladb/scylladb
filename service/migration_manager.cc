@@ -988,10 +988,34 @@ static mutation make_group0_schema_version_mutation(const data_dictionary::datab
     return m;
 }
 
+// Precondition: GROUP0_SCHEMA_VERSIONING feature is enabled in the cluster.
+//
+// See the description of this column in db/schema_tables.cc.
+static void add_committed_by_group0_flag(std::vector<mutation>& schema, const group0_guard& guard) {
+    auto committed_by_group0 = guard.with_raft();
+    auto timestamp = guard.write_timestamp();
+
+    for (auto& mut: schema) {
+        if (mut.schema()->cf_name() != db::schema_tables::v3::SCYLLA_TABLES) {
+            continue;
+        }
+
+        auto& scylla_tables_schema = *mut.schema();
+        auto cdef = scylla_tables_schema.get_column_definition("committed_by_group0");
+        assert(cdef);
+
+        for (auto& cr: mut.partition().clustered_rows()) {
+            cr.row().cells().apply(*cdef, atomic_cell::make_live(
+                    *cdef->type, timestamp, cdef->type->decompose(committed_by_group0)));
+        }
+    }
+}
+
 // Returns a future on the local application of the schema
 future<> migration_manager::announce(std::vector<mutation> schema, group0_guard guard, std::string_view description) {
     if (_feat.group0_schema_versioning) {
         schema.push_back(make_group0_schema_version_mutation(_storage_proxy.data_dictionary(), guard));
+        add_committed_by_group0_flag(schema, guard);
     }
 
     if (guard.with_raft()) {

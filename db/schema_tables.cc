@@ -330,12 +330,13 @@ schema_ptr tables() {
 
 // Holds Scylla-specific table metadata.
 schema_ptr scylla_tables(schema_features features) {
-    static thread_local schema_ptr schemas[2][2]{};
+    static thread_local schema_ptr schemas[2][2][2]{};
 
     bool has_cdc_options = features.contains(schema_feature::CDC_OPTIONS);
     bool has_per_table_partitioners = features.contains(schema_feature::PER_TABLE_PARTITIONERS);
+    bool has_group0_schema_versioning = features.contains(schema_feature::GROUP0_SCHEMA_VERSIONING);
 
-    schema_ptr& s = schemas[has_cdc_options][has_per_table_partitioners];
+    schema_ptr& s = schemas[has_cdc_options][has_per_table_partitioners][has_group0_schema_versioning];
     if (!s) {
         auto id = generate_legacy_id(NAME, SCYLLA_TABLES);
         auto sb = schema_builder(NAME, SCYLLA_TABLES, std::make_optional(id))
@@ -353,6 +354,22 @@ schema_ptr scylla_tables(schema_features features) {
         if (has_per_table_partitioners) {
             sb.with_column("partitioner", utf8_type);
             offset |= 0b10;
+        }
+
+        // 0b100 reserved for Scylla Enterprise
+
+        if (has_group0_schema_versioning) {
+            // If true, this table's latest schema was committed by group 0.
+            // In this case `version` column is non-null and will be used for `schema::version()` instead of calculating a hash.
+            //
+            // If false, this table's latest schema was committed outside group 0 (e.g. during RECOVERY mode).
+            // In this case `version` is null and `schema::version()` will be a hash.
+            //
+            // If null, this is either a system table, or the latest schema was committed
+            // before the GROUP0_SCHEMA_VERSIONING feature was enabled (either inside or outside group 0).
+            // In this case, for non-system tables, `version` is null and `schema::version()` will be a hash.
+            sb.with_column("committed_by_group0", boolean_type);
+            offset |= 0b1000;
         }
         sb.with_version(system_keyspace::generate_schema_version(id, offset));
         s = sb.build();
