@@ -7,6 +7,7 @@ Options:
   -h|--help show this help message.
   -o|--output-dir PATH specify destination path at which the version files are to be created.
   -d|--date-stamp DATE manually set date for release parameter
+  -v|--verbose also print out the version number
 
 By default, the script will attempt to parse 'version' file
 in the current directory, which should contain a string of
@@ -33,6 +34,7 @@ END
 )
 
 DATE=""
+PRINT_VERSION=false
 
 while [ $# -gt 0 ]; do
 	opt="$1"
@@ -49,6 +51,10 @@ while [ $# -gt 0 ]; do
 		--date-stamp)
 			DATE="$2"
 			shift
+			shift
+			;;
+		-v|--verbose)
+			PRINT_VERSION=true
 			shift
 			;;
 		*)
@@ -102,7 +108,9 @@ if [ -f "$OUTPUT_DIR/SCYLLA-RELEASE-FILE" ]; then
 	fi
 fi
 
-echo "$SCYLLA_VERSION-$SCYLLA_RELEASE"
+if $PRINT_VERSION; then
+	echo "$SCYLLA_VERSION-$SCYLLA_RELEASE"
+fi
 mkdir -p "$OUTPUT_DIR"
 echo "$SCYLLA_VERSION" > "$OUTPUT_DIR/SCYLLA-VERSION-FILE"
 echo "$SCYLLA_RELEASE" > "$OUTPUT_DIR/SCYLLA-RELEASE-FILE"
