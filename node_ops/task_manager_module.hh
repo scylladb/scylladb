@@ -36,6 +36,86 @@ protected:
     virtual future<> run() override = 0;
 };
 
+class bootstrap_node_task_impl : public node_ops_task_impl {
+public:
+    bootstrap_node_task_impl(tasks::task_manager::module_ptr module,
+            tasks::task_id id,
+            unsigned sequence_number,
+            std::string scope,
+            std::string entity,
+            tasks::task_id parent_id,
+            service::storage_service& ss) noexcept
+        : node_ops_task_impl(std::move(module), id, sequence_number, std::move(scope), std::move(entity), parent_id,
+            streaming::stream_reason::bootstrap, ss)
+    {}
+protected:
+    virtual future<> run() override = 0;
+};
+
+class replace_node_task_impl : public node_ops_task_impl {
+public:
+    replace_node_task_impl(tasks::task_manager::module_ptr module,
+            tasks::task_id id,
+            unsigned sequence_number,
+            std::string scope,
+            std::string entity,
+            tasks::task_id parent_id,
+            service::storage_service& ss) noexcept
+        : node_ops_task_impl(std::move(module), id, sequence_number, std::move(scope), std::move(entity), parent_id,
+            streaming::stream_reason::replace, ss)
+    {}
+protected:
+    virtual future<> run() override = 0;
+};
+
+class rebuild_node_task_impl : public node_ops_task_impl {
+public:
+    rebuild_node_task_impl(tasks::task_manager::module_ptr module,
+            tasks::task_id id,
+            unsigned sequence_number,
+            std::string scope,
+            std::string entity,
+            tasks::task_id parent_id,
+            service::storage_service& ss) noexcept
+        : node_ops_task_impl(std::move(module), id, sequence_number, std::move(scope), std::move(entity), parent_id,
+            streaming::stream_reason::rebuild, ss)
+    {}
+protected:
+    virtual future<> run() override = 0;
+};
+
+class decommission_node_task_impl : public node_ops_task_impl {
+public:
+    decommission_node_task_impl(tasks::task_manager::module_ptr module,
+            tasks::task_id id,
+            unsigned sequence_number,
+            std::string scope,
+            std::string entity,
+            tasks::task_id parent_id,
+            service::storage_service& ss) noexcept
+        : node_ops_task_impl(std::move(module), id, sequence_number, std::move(scope), std::move(entity), parent_id,
+            streaming::stream_reason::decommission, ss)
+    {}
+protected:
+    virtual future<> run() override = 0;
+};
+
+class remove_node_task_impl : public node_ops_task_impl {
+public:
+    remove_node_task_impl(tasks::task_manager::module_ptr module,
+            tasks::task_id id,
+            unsigned sequence_number,
+            std::string scope,
+            std::string entity,
+            tasks::task_id parent_id,
+            service::storage_service& ss) noexcept
+        : node_ops_task_impl(std::move(module), id, sequence_number, std::move(scope), std::move(entity), parent_id,
+            streaming::stream_reason::removenode, ss)
+    {}
+protected:
+    virtual future<> run() override = 0;
+};
+
 class task_manager_module : public tasks::task_manager::module {
 public:
     task_manager_module(tasks::task_manager& tm) noexcept : tasks::task_manager::module(tm, "node_ops") {}
