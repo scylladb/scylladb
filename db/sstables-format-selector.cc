@@ -24,52 +24,34 @@ static const sstring SSTABLE_FORMAT_PARAM_NAME = "sstable_format";
 void feature_enabled_listener::on_enabled() {
     if (!_started) {
         _started = true;
-        _selector.maybe_select_format(_format).get();
+        _listener.maybe_select_format(_format).get();
     }
 }
 
-sstables_format_selector::sstables_format_selector(gms::gossiper& g, sharded<gms::feature_service>& f, sharded<replica::database>& db, db::system_keyspace& sys_ks)
-    : _gossiper(g)
-    , _features(f)
-    , _db(db)
-    , _sys_ks(sys_ks)
-    , _md_feature_listener(*this, sstables::sstable_version_types::md)
-    , _me_feature_listener(*this, sstables::sstable_version_types::me)
-{ }
-
-future<> sstables_format_selector::maybe_select_format(sstables::sstable_version_types new_format) {
-    auto hg = _sel.hold();
-    auto units = co_await get_units(_sem, 1);
-
-    if (new_format > _selected_format) {
-        co_await _sys_ks.set_scylla_local_param(SSTABLE_FORMAT_PARAM_NAME, fmt::to_string(new_format));
-        co_await select_format(new_format);
-        // FIXME discarded future
-        (void)_gossiper.add_local_application_state(gms::application_state::SUPPORTED_FEATURES,
-                 gms::versioned_value::supported_features(_features.local().supported_feature_set())).finally([h = std::move(hg)] {});
-    }
+sstables_format_selector::sstables_format_selector(sharded<replica::database>& db)
+    : _db(db)
+{
 }
 
-future<> sstables_format_selector::start() {
-    assert(this_shard_id() == 0);
-    co_await read_sstables_format();
-    // The listener may fire immediately, create a thread for that case.
-    co_await seastar::async([this] {
-        _features.local().me_sstable.when_enabled(_me_feature_listener);
-        _features.local().md_sstable.when_enabled(_md_feature_listener);
-    });
-}
-
-future<> sstables_format_selector::stop() {
-    co_await _sel.close();
+future<> sstables_format_selector::on_system_tables_loaded(db::system_keyspace& sys_ks) {
+    _sys_ks = &sys_ks;
+    return read_sstables_format();
 }
 
 future<> sstables_format_selector::read_sstables_format() {
-    std::optional<sstring> format_opt = co_await _sys_ks.get_scylla_local_param(SSTABLE_FORMAT_PARAM_NAME);
+    std::optional<sstring> format_opt = co_await _sys_ks->get_scylla_local_param(SSTABLE_FORMAT_PARAM_NAME);
     if (format_opt) {
         sstables::sstable_version_types format = sstables::version_from_string(*format_opt);
         co_await select_format(format);
     }
+}
+
+future<> sstables_format_selector::update_format(sstables::sstable_version_types new_format) {
+    if (!_sys_ks) {
+        on_internal_error(logger, format("system keyspace is not loaded"));
+    }
+    co_await _sys_ks->set_scylla_local_param(SSTABLE_FORMAT_PARAM_NAME, fmt::to_string(new_format));
+    co_await select_format(new_format);
 }
 
 future<> sstables_format_selector::select_format(sstables::sstable_version_types format) {
@@ -78,6 +60,39 @@ future<> sstables_format_selector::select_format(sstables::sstable_version_types
     co_await _db.invoke_on_all([this] (replica::database& db) {
         db.set_format(_selected_format);
     });
+}
+
+sstables_format_listener::sstables_format_listener(gms::gossiper& g, sharded<gms::feature_service>& f, sstables_format_selector& selector)
+    : _gossiper(g)
+    , _features(f)
+    , _selector(selector)
+    , _md_feature_listener(*this, sstables::sstable_version_types::md)
+    , _me_feature_listener(*this, sstables::sstable_version_types::me)
+{ }
+
+future<> sstables_format_listener::maybe_select_format(sstables::sstable_version_types new_format) {
+    auto hg = _sel.hold();
+    auto units = co_await get_units(_sem, 1);
+
+    if (new_format > _selector.selected_format()) {
+        co_await _selector.update_format(new_format);
+        // FIXME discarded future
+        (void)_gossiper.add_local_application_state(gms::application_state::SUPPORTED_FEATURES,
+                 gms::versioned_value::supported_features(_features.local().supported_feature_set())).finally([h = std::move(hg)] {});
+    }
+}
+
+future<> sstables_format_listener::start() {
+    assert(this_shard_id() == 0);
+    // The listener may fire immediately, create a thread for that case.
+    co_await seastar::async([this] {
+        _features.local().me_sstable.when_enabled(_me_feature_listener);
+        _features.local().md_sstable.when_enabled(_md_feature_listener);
+    });
+}
+
+future<> sstables_format_listener::stop() {
+    co_await _sel.close();
 }
 
 } // namespace sstables

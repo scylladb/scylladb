@@ -1327,11 +1327,13 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // engine().at_exit([&qp] { return qp.stop(); });
             sstables::init_metrics().get();
 
-            db::sstables_format_selector sst_format_selector(gossiper.local(), feature_service, db, sys_ks.local());
+            db::sstables_format_selector sst_format_selector(db);
+            sst_format_selector.on_system_tables_loaded(sys_ks.local()).get();
+            db::sstables_format_listener sst_format_listener(gossiper.local(), feature_service, sst_format_selector);
 
-            sst_format_selector.start().get();
-            auto stop_format_selector = defer_verbose_shutdown("sstables format selector", [&sst_format_selector] {
-                sst_format_selector.stop().get();
+            sst_format_listener.start().get();
+            auto stop_format_listener = defer_verbose_shutdown("sstables format listener", [&sst_format_listener] {
+                sst_format_listener.stop().get();
             });
 
             const bool raft_topology_change_enabled = group0_service.is_raft_enabled()
