@@ -88,6 +88,7 @@ class task_manager;
 
 namespace node_ops {
 class task_manager_module;
+class join_token_ring_task_impl;
 }
 
 namespace service {
@@ -97,6 +98,7 @@ class storage_proxy;
 class migration_manager;
 class raft_group0;
 class group0_info;
+class group0_handshaker;
 
 struct join_node_request_params;
 struct join_node_request_result;
@@ -106,6 +108,9 @@ struct join_node_response_result;
 enum class disk_error { regular, commit };
 
 class node_ops_meta_data;
+
+future<> set_gossip_tokens(gms::gossiper& g,
+        const std::unordered_set<dht::token>& tokens, std::optional<cdc::generation_id> cdc_gen_id);
 
 /**
  * This abstraction contains the token/identifier of this node
@@ -376,16 +381,12 @@ private:
     bool should_bootstrap();
     bool is_replacing();
     bool is_first_node();
-    future<> join_token_ring(sharded<db::system_distributed_keyspace>& sys_dist_ks,
-            sharded<service::storage_proxy>& proxy,
-            std::unordered_set<gms::inet_address> initial_contact_nodes,
-            std::unordered_set<gms::inet_address> loaded_endpoints,
-            std::unordered_map<gms::inet_address, sstring> loaded_peer_features,
-            std::chrono::milliseconds);
     future<> start_sys_dist_ks();
 public:
 
     future<> rebuild(sstring source_dc);
+
+    ::shared_ptr<service::group0_handshaker> make_join_handshaker(service::join_node_request_params& join_params);
 
 private:
     void set_mode(mode m);
@@ -842,6 +843,7 @@ private:
     semaphore _join_node_response_handler_mutex{1};
 
     friend class join_node_rpc_handshaker;
+    friend class node_ops::join_token_ring_task_impl;
 };
 
 }
