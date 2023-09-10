@@ -8,11 +8,23 @@
 
 #pragma once
 
+#include "gms/inet_address.hh"
 #include "streaming/stream_reason.hh"
 #include "tasks/task_manager.hh"
 
+#include <unordered_set>
+
+namespace db {
+class system_distributed_keyspace;
+}
+
+namespace locator {
+class token_metadata;
+}
+
 namespace service {
 class storage_service;
+class storage_proxy;
 }
 
 namespace node_ops {
@@ -114,6 +126,34 @@ public:
     {}
 protected:
     virtual future<> run() override = 0;
+};
+
+class join_token_ring_task_impl : public node_ops_task_impl {
+private:
+    sharded<db::system_distributed_keyspace>& _sys_dist_ks;
+    sharded<service::storage_proxy>& _proxy;
+    std::unordered_set<gms::inet_address> _initial_contact_nodes;
+    std::unordered_set<gms::inet_address> _loaded_endpoints;
+    std::unordered_map<gms::inet_address, sstring> _loaded_peer_features;
+    std::chrono::milliseconds _delay;
+public:
+    join_token_ring_task_impl(tasks::task_manager::module_ptr module,
+            std::string entity,
+            service::storage_service& ss,
+            sharded<db::system_distributed_keyspace>& sys_dist_ks,
+            sharded<service::storage_proxy>& proxy,
+            std::unordered_set<gms::inet_address> initial_contact_nodes,
+            std::unordered_set<gms::inet_address> loaded_endpoints,
+            std::unordered_map<gms::inet_address, sstring> loaded_peer_features,
+            std::chrono::milliseconds delay) noexcept;
+private:
+    gms::inet_address get_broadcast_address() const;
+    bool should_bootstrap();
+    bool is_replacing();
+    lw_shared_ptr<const locator::token_metadata> get_token_metadata_ptr() const noexcept;
+    const locator::token_metadata& get_token_metadata() const noexcept;
+protected:
+    virtual future<> run() override;
 };
 
 class task_manager_module : public tasks::task_manager::module {
