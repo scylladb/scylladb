@@ -740,7 +740,8 @@ private:
                 std::ref(_batchlog_manager),
                 std::ref(_snitch),
                 std::ref(_tablet_allocator),
-                std::ref(_cdc_generation_service)).get();
+                std::ref(_cdc_generation_service),
+                std::ref(_task_manager)).get();
             auto stop_storage_service = defer([this] { _ss.stop().get(); });
 
             _ss.invoke_on_all([this] (service::storage_service& ss) {

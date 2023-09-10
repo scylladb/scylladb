@@ -86,6 +86,7 @@
 #include "protocol_server.hh"
 #include "types/set.hh"
 #include "node_ops/node_ops_ctl.hh"
+#include "node_ops/task_manager_module.hh"
 
 #include <boost/algorithm/string/split.hpp>
 #include <boost/algorithm/string/classification.hpp>
@@ -119,7 +120,8 @@ storage_service::storage_service(abort_source& abort_source,
     sharded<db::batchlog_manager>& bm,
     sharded<locator::snitch_ptr>& snitch,
     sharded<service::tablet_allocator>& tablet_allocator,
-    sharded<cdc::generation_service>& cdc_gens)
+    sharded<cdc::generation_service>& cdc_gens,
+    tasks::task_manager& tm)
         : _abort_source(abort_source)
         , _feature_service(feature_service)
         , _db(db)
@@ -131,6 +133,7 @@ storage_service::storage_service(abort_source& abort_source,
         , _snitch(snitch)
         , _group0(nullptr)
         , _node_ops_abort_thread(node_ops_abort_thread())
+        , _task_manager_module(make_shared<node_ops::task_manager_module>(tm))
         , _shared_token_metadata(stm)
         , _erm_factory(erm_factory)
         , _lifecycle_notifier(elc_notif)
@@ -144,6 +147,7 @@ storage_service::storage_service(abort_source& abort_source,
         , _tablet_allocator(tablet_allocator)
         , _cdc_gens(cdc_gens)
 {
+    tm.register_module(_task_manager_module->get_name(), _task_manager_module);
     register_metrics();
 
     _listeners.emplace_back(make_lw_shared(bs2::scoped_connection(sstable_read_error.connect([this] { do_isolate_on_error(disk_error::regular); }))));
@@ -154,6 +158,10 @@ storage_service::storage_service(abort_source& abort_source,
     if (_snitch.local_is_initialized()) {
         _listeners.emplace_back(make_lw_shared(_snitch.local()->when_reconfigured(_snitch_reconfigure)));
     }
+}
+
+node_ops::task_manager_module& storage_service::get_task_manager_module() noexcept {
+    return *_task_manager_module;
 }
 
 enum class node_external_status {
@@ -3938,6 +3946,7 @@ future<> storage_service::stop() {
      _topology_state_machine.event.broken(make_exception_ptr(abort_requested_exception()));
     co_await _async_gate.close();
     co_await when_all(std::move(_node_ops_abort_thread), std::move(_raft_state_monitor));
+    co_await _task_manager_module->stop();
 }
 
 future<> storage_service::check_for_endpoint_collision(std::unordered_set<gms::inet_address> initial_contact_nodes, const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features) {
