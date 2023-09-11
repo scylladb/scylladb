@@ -8,6 +8,7 @@ from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import inject_error_one_shot
 from test.pylib.rest_client import inject_error
 from test.pylib.util import wait_for_cql_and_get_hosts
+from test.topology.util import reconnect_driver
 
 import pytest
 import asyncio
@@ -78,6 +79,8 @@ async def test_tablet_metadata_propagates_with_schema_changes_in_snapshot_mode(m
     # Check that after rolling restart the tablet metadata is still there
     for s in servers:
         await manager.server_restart(s.server_id, wait_others=2)
+
+    cql = await reconnect_driver(manager)
 
     await wait_for_cql_and_get_hosts(cql, [servers[0]], time.time() + 60)
 
