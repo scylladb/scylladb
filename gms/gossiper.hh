@@ -362,7 +362,6 @@ private:
 public:
     /**
      * Handles switching the endpoint's state from REMOVING_TOKEN to REMOVED_TOKEN
-     * This should only be called after advertise_removing
      *
      * @param endpoint
      * @param host_id
