@@ -473,10 +473,6 @@ public:
     virtual ~sstables_task_executor() = default;
 
     virtual void release_resources() noexcept override;
-
-    virtual tasks::is_internal is_internal() const noexcept override {
-        return tasks::is_internal::yes;
-    }
 protected:
     virtual future<> run() override {
         return compaction_done().discard_result();
@@ -491,10 +487,6 @@ public:
         : compaction_task_executor(mgr, t, sstables::compaction_type::Compaction, "Major compaction")
         , major_compaction_task_impl(mgr._task_manager_module, tasks::task_id::create_random_id(), 0, "compaction group", t->schema()->ks_name(), t->schema()->cf_name(), "", parent_id)
     {}
-
-    virtual tasks::is_internal is_internal() const noexcept override {
-        return tasks::is_internal::yes;
-    }
 protected:
     virtual future<> run() override {
         return compaction_done().discard_result();
@@ -599,10 +591,6 @@ public:
 
     virtual std::string type() const override {
         return fmt::format("{} compaction", compaction_type());
-    }
-
-    virtual tasks::is_internal is_internal() const noexcept override {
-        return tasks::is_internal::yes;
     }
 protected:
     virtual future<> run() override {
@@ -1293,10 +1281,6 @@ public:
     bool performed() const noexcept {
         return _performed;
     }
-
-    virtual tasks::is_internal is_internal() const noexcept override {
-        return tasks::is_internal(bool(_parent_id));
-    }
 protected:
     virtual future<> run() override {
         return compaction_done().discard_result();
@@ -1668,10 +1652,6 @@ public:
         _compacting.release_all();
         _owned_ranges_ptr = nullptr;
         compaction_task_executor::release_resources();
-    }
-
-    virtual tasks::is_internal is_internal() const noexcept override {
-        return tasks::is_internal::yes;
     }
 protected:
     virtual future<> run() override {

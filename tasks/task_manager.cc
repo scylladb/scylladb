@@ -87,7 +87,7 @@ is_abortable task_manager::task::impl::is_abortable() const noexcept {
 }
 
 is_internal task_manager::task::impl::is_internal() const noexcept {
-    return is_internal::no;
+    return tasks::is_internal(bool(_parent_id));
 }
 
 future<> task_manager::task::impl::abort() noexcept {

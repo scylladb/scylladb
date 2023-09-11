@@ -263,10 +263,6 @@ future<> major_keyspace_compaction_task_impl::run() {
     });
 }
 
-tasks::is_internal shard_major_keyspace_compaction_task_impl::is_internal() const noexcept {
-    return tasks::is_internal::yes;
-}
-
 future<> shard_major_keyspace_compaction_task_impl::run() {
     seastar::condition_variable cv;
     tasks::task_manager::task_ptr current_task;
@@ -277,10 +273,6 @@ future<> shard_major_keyspace_compaction_task_impl::run() {
     }
 
     co_await run_table_tasks(_db, std::move(table_tasks), cv, current_task, true);
-}
-
-tasks::is_internal table_major_keyspace_compaction_task_impl::is_internal() const noexcept {
-    return tasks::is_internal::yes;
 }
 
 future<> table_major_keyspace_compaction_task_impl::run() {
@@ -299,10 +291,6 @@ future<> cleanup_keyspace_compaction_task_impl::run() {
     });
 }
 
-tasks::is_internal shard_cleanup_keyspace_compaction_task_impl::is_internal() const noexcept {
-    return tasks::is_internal::yes;
-}
-
 future<> shard_cleanup_keyspace_compaction_task_impl::run() {
     seastar::condition_variable cv;
     tasks::task_manager::task_ptr current_task;
@@ -313,10 +301,6 @@ future<> shard_cleanup_keyspace_compaction_task_impl::run() {
     }
 
     co_await run_table_tasks(_db, std::move(table_tasks), cv, current_task, true);
-}
-
-tasks::is_internal table_cleanup_keyspace_compaction_task_impl::is_internal() const noexcept {
-    return tasks::is_internal::yes;
 }
 
 future<> table_cleanup_keyspace_compaction_task_impl::run() {
@@ -338,10 +322,6 @@ future<> offstrategy_keyspace_compaction_task_impl::run() {
     }, false, std::plus<bool>());
 }
 
-tasks::is_internal shard_offstrategy_keyspace_compaction_task_impl::is_internal() const noexcept {
-    return tasks::is_internal::yes;
-}
-
 future<> shard_offstrategy_keyspace_compaction_task_impl::run() {
     seastar::condition_variable cv;
     tasks::task_manager::task_ptr current_task;
@@ -352,10 +332,6 @@ future<> shard_offstrategy_keyspace_compaction_task_impl::run() {
     }
 
     co_await run_table_tasks(_db, std::move(table_tasks), cv, current_task, false);
-}
-
-tasks::is_internal table_offstrategy_keyspace_compaction_task_impl::is_internal() const noexcept {
-    return tasks::is_internal::yes;
 }
 
 future<> table_offstrategy_keyspace_compaction_task_impl::run() {
@@ -375,10 +351,6 @@ future<> upgrade_sstables_compaction_task_impl::run() {
     });
 }
 
-tasks::is_internal shard_upgrade_sstables_compaction_task_impl::is_internal() const noexcept {
-    return tasks::is_internal::yes;
-}
-
 future<> shard_upgrade_sstables_compaction_task_impl::run() {
     seastar::condition_variable cv;
     tasks::task_manager::task_ptr current_task;
@@ -389,10 +361,6 @@ future<> shard_upgrade_sstables_compaction_task_impl::run() {
     }
 
     co_await run_table_tasks(_db, std::move(table_tasks), cv, current_task, false);
-}
-
-tasks::is_internal table_upgrade_sstables_compaction_task_impl::is_internal() const noexcept {
-    return tasks::is_internal::yes;
 }
 
 future<> table_upgrade_sstables_compaction_task_impl::run() {
@@ -417,10 +385,6 @@ future<> scrub_sstables_compaction_task_impl::run() {
     }, sstables::compaction_stats{}, std::plus<sstables::compaction_stats>());
 }
 
-tasks::is_internal shard_scrub_sstables_compaction_task_impl::is_internal() const noexcept {
-    return tasks::is_internal::yes;
-}
-
 future<> shard_scrub_sstables_compaction_task_impl::run() {
     _stats = co_await map_reduce(_column_families, [&] (sstring cfname) -> future<sstables::compaction_stats> {
         sstables::compaction_stats stats{};
@@ -430,10 +394,6 @@ future<> shard_scrub_sstables_compaction_task_impl::run() {
         co_await task->done();
         co_return stats;
     }, sstables::compaction_stats{}, std::plus<sstables::compaction_stats>());
-}
-
-tasks::is_internal table_scrub_sstables_compaction_task_impl::is_internal() const noexcept {
-    return tasks::is_internal::yes;
 }
 
 future<> table_scrub_sstables_compaction_task_impl::run() {
@@ -461,10 +421,6 @@ future<> table_reshaping_compaction_task_impl::run() {
         auto duration = std::chrono::duration_cast<std::chrono::duration<float>>(std::chrono::steady_clock::now() - start);
         dblog.info("Reshaped {} in {:.2f} seconds, {}", utils::pretty_printed_data_size(total_size), duration.count(), utils::pretty_printed_throughput(total_size, duration));
     }
-}
-
-tasks::is_internal shard_reshaping_compaction_task_impl::is_internal() const noexcept {
-    return tasks::is_internal::yes;
 }
 
 future<> shard_reshaping_compaction_task_impl::run() {
@@ -549,10 +505,6 @@ future<> table_resharding_compaction_task_impl::run() {
 
     auto duration = std::chrono::duration_cast<std::chrono::duration<float>>(std::chrono::steady_clock::now() - start);
     dblog.info("Resharded {} for {}.{} in {:.2f} seconds, {}", utils::pretty_printed_data_size(total_size), _status.keyspace, _status.table, duration.count(), utils::pretty_printed_throughput(total_size, duration));
-}
-
-tasks::is_internal shard_resharding_compaction_task_impl::is_internal() const noexcept {
-    return tasks::is_internal::yes;
 }
 
 future<> shard_resharding_compaction_task_impl::run() {
