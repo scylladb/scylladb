@@ -30,6 +30,7 @@
 #include "range.hh"
 #include "frozen_schema.hh"
 #include "repair/repair.hh"
+#include "node_ops/node_ops_ctl.hh"
 #include "utils/digest_algorithm.hh"
 #include "service/paxos/proposal.hh"
 #include "service/paxos/prepare_response.hh"

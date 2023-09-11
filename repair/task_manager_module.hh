@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "node_ops/node_ops_ctl.hh"
 #include "repair/repair.hh"
 #include "tasks/task_manager.hh"
 
