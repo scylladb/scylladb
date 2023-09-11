@@ -1200,7 +1200,8 @@ class topology_coordinator {
     }
 
     // If there are some unpublished CDC generations, publishes the one with the oldest timestamp
-    // to user-facing description tables.
+    // to user-facing description tables. Additionally, if there is no clean-up candidate for the CDC
+    // generation data, marks the published generation as a new one.
     //
     // Appends necessary mutations to `updates` and updates the `reason` string.
     future<> publish_oldest_cdc_generation(
@@ -1224,6 +1225,12 @@ class topology_coordinator {
         topology_mutation_builder builder(guard.write_timestamp());
         builder.set_unpublished_cdc_generations(std::move(new_unpublished_gens));
         updates.push_back(builder.build());
+
+        // If there is no clean-up candidate, the published CDC generation becomes a new one.
+        if (!co_await _sys_ks.get_cdc_generations_cleanup_candidate()) {
+            auto candidate_mutation = _sys_ks.make_cleanup_candidate_mutation(gen_id, guard.write_timestamp());
+            updates.push_back(canonical_mutation(candidate_mutation));
+        }
 
         reason += ::format("published CDC generation with ID {}, ", gen_id);
     }

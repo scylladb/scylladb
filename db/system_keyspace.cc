@@ -2741,6 +2741,26 @@ system_keyspace::read_cdc_generation(utils::UUID id) {
     co_return cdc::topology_description{std::move(entries)};
 }
 
+future<std::optional<cdc::generation_id_v2>> system_keyspace::get_cdc_generations_cleanup_candidate() {
+    static const auto req = format("SELECT cleanup_candidate FROM {}.{} WHERE key = '{}' LIMIT 1", NAME, CDC_GENERATIONS_V3, cdc::CDC_GENERATIONS_V3_KEY);
+    auto gen_rows = co_await execute_cql(req);
+    if (!gen_rows->empty() && gen_rows->one().has("cleanup_candidate")) {
+        auto blob = gen_rows->one().get_blob("cleanup_candidate");
+        co_return decode_cdc_generation_id(cdc_generation_ts_id_type->deserialize(blob));
+    }
+    co_return std::nullopt;
+}
+
+mutation system_keyspace::make_cleanup_candidate_mutation(std::optional<cdc::generation_id_v2> value, api::timestamp_type ts) {
+    auto s = cdc_generations_v3();
+    mutation m(s, partition_key::from_singular(*s, cdc::CDC_GENERATIONS_V3_KEY));
+    data_value dv = value
+        ? make_tuple_value(db::cdc_generation_ts_id_type, tuple_type_impl::native_type({value->ts, timeuuid_native_type{value->id}}))
+        : data_value::make_null(db::cdc_generation_ts_id_type);
+    m.set_static_cell("cleanup_candidate", dv, ts);
+    return m;
+}
+
 future<> system_keyspace::sstables_registry_create_entry(sstring location, utils::UUID uuid, sstring status, sstables::entry_descriptor desc) {
     static const auto req = format("INSERT INTO system.{} (location, generation, uuid, status, version, format) VALUES (?, ?, ?, ?, ?, ?)", SSTABLES_REGISTRY);
     slogger.trace("Inserting {}.{}:{} into {}", location, desc.generation, uuid, SSTABLES_REGISTRY);
