@@ -500,8 +500,13 @@ rpc::no_wait_type gossiper::background_msg(sstring type, noncopyable_function<fu
 void gossiper::init_messaging_service_handler() {
     _messaging.register_gossip_digest_syn([this] (const rpc::client_info& cinfo, gossip_digest_syn syn_msg) {
         auto from = get_endpoint_id(cinfo);
-        return background_msg("GOSSIP_DIGEST_SYN", [from, syn_msg = std::move(syn_msg)] (gms::gossiper& gossiper) mutable {
-            return gossiper.handle_syn_msg(from, std::move(syn_msg));
+        return background_msg("GOSSIP_DIGEST_SYN", [from, syn_msg = std::move(syn_msg)] (gms::gossiper& gossiper) mutable -> future<> {
+            // Update the address map if the (optional) peer host_id is known.
+            // It might be absent when talking with nodes running an older version.
+            if (from.host_id) {
+                co_await gossiper.update_address_map(from.host_id, from.addr);
+            }
+            co_return co_await gossiper.handle_syn_msg(from, std::move(syn_msg));
         });
     });
     _messaging.register_gossip_digest_ack([this] (const rpc::client_info& cinfo, gossip_digest_ack msg) {
@@ -516,9 +521,14 @@ void gossiper::init_messaging_service_handler() {
             return gossiper.handle_ack2_msg(from, std::move(msg));
         });
     });
-    _messaging.register_gossip_echo([this] (const rpc::client_info& cinfo, rpc::optional<int64_t> generation_number_opt) {
+    _messaging.register_gossip_echo([this] (const rpc::client_info& cinfo, rpc::optional<int64_t> generation_number_opt) -> future<> {
         auto from = get_endpoint_id(cinfo);
-        return handle_echo_msg(from, generation_number_opt);
+        // Update the address map if the (optional) peer host_id is known.
+        // It might be absent when talking with nodes running an older version.
+        if (from.host_id) {
+            co_await update_address_map(from.host_id, from.addr);
+        }
+        co_await handle_echo_msg(from, generation_number_opt);
     });
     _messaging.register_gossip_shutdown([this] (const rpc::client_info& cinfo, gms::inet_address addr, rpc::optional<int64_t> generation_number_opt) {
         auto from = get_endpoint_id(cinfo);
@@ -1424,7 +1434,26 @@ endpoint_state_ptr gossiper::get_endpoint_state_ptr(inet_address ep) const noexc
 endpoint_id gossiper::get_endpoint_id(const rpc::client_info& cinfo) noexcept {
     auto host_id = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
     auto addr = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
+    if (!host_id) {
+        host_id = get_host_id(addr, throw_on_error::no);
+        if (!host_id) {
+            if (auto id = address_host_id(addr)) {
+                host_id = id;
+            } else {
+                logger.warn("Could not find Host ID for peer {}", addr);
+            }
+        }
+    }
     return endpoint_id(host_id, addr);
+}
+
+future<> gossiper::update_address_map(const locator::host_id& host_id, inet_address addr, gms::generation_type generation_number) noexcept {
+    if (!host_id || !addr) {
+        on_internal_error(logger, format("Invalid {}/{} mapping", host_id, addr));
+    }
+    return container().invoke_on(0, [id = raft::server_id(host_id.uuid()), addr, generation_number] (gossiper& g) {
+        return g._address_map.add_or_update_entry(id, std::move(addr), generation_number);
+    });
 }
 
 void gossiper::update_timestamp(const endpoint_state_ptr& eps) noexcept {

@@ -314,8 +314,10 @@ public:
     // --ignore-dead-nodes parameter in raft_removenode and raft_replace. As this
     // feature is deprecated, we should also remove this function when the
     // deprecation period ends.
-    std::optional<raft::server_id> find_by_addr(gms::inet_address addr) const {
-        rslog.warn("Finding Raft nodes by IP addresses is deprecated. Please use Host IDs instead.");
+    std::optional<raft::server_id> find_by_addr(gms::inet_address addr, bool warn = true) const {
+        if (warn) {
+            rslog.warn("Finding Raft nodes by IP addresses is deprecated. Please use Host IDs instead.");
+        }
         if (!addr) {
             on_internal_error(rslog, "raft_address_map::find_by_addr: called with an empty address");
         }

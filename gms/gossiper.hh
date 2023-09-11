@@ -204,6 +204,26 @@ private:
 
     endpoint_id get_endpoint_id(const rpc::client_info& cinfo) noexcept;
 
+    // host_id <-> inet_address mapping;
+    inet_address host_id_address(const locator::host_id& host_id) const noexcept {
+        auto id = raft::server_id(host_id.uuid());
+        if (auto opt_addr = _address_map.find(id)) {
+            return *opt_addr;
+        }
+        return inet_address{};
+    }
+
+    locator::host_id address_host_id(const inet_address& addr) const noexcept {
+        if (auto opt_id = _address_map.find_by_addr(addr, false)) {
+            return locator::host_id(opt_id->uuid());
+        }
+        return locator::host_id();
+    }
+
+    // Update the host_id <-> address mapping on all shards
+    // host_id and addr must be valid
+    future<> update_address_map(const locator::host_id& host_id, inet_address addr, gms::generation_type generation_number = {}) noexcept;
+
 public:
     const std::vector<sstring> DEAD_STATES = {
         versioned_value::REMOVED_TOKEN,
