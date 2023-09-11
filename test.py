@@ -356,6 +356,7 @@ class PythonTestSuite(TestSuite):
         cluster_cfg = self.cfg.get("cluster", {"initial_size": 1})
         cluster_size = cluster_cfg["initial_size"]
         pool_size = cfg.get("pool_size", 2)
+        self.dirties_cluster = set(cfg.get("dirties_cluster", []))
 
         self.create_cluster = self.get_cluster_factory(cluster_size, options)
         async def recycle_cluster(cluster: ScyllaCluster) -> None:
@@ -889,6 +890,8 @@ class PythonTest(Test):
             self.is_before_test_ok = True
             cluster.take_log_savepoint()
             status = await run_test(self, options)
+            if self.shortname in self.suite.dirties_cluster:
+                cluster.is_dirty = True
             cluster.after_test(self.uname, status)
             self.is_after_test_ok = True
             self.success = status

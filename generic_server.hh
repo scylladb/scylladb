@@ -81,7 +81,7 @@ protected:
     uint64_t _current_connections = 0;
     uint64_t _connections_being_accepted = 0;
     uint64_t _total_connections = 0;
-    future<> _stopped = _all_connections_stopped.get_future();
+    future<> _listeners_stopped = make_ready_future<>();
     using connections_list_t = boost::intrusive::list<connection>;
     connections_list_t _connections_list;
     struct gentle_iterator {
@@ -98,6 +98,13 @@ public:
 
     virtual ~server();
 
+    // Makes sure listening sockets no longer generate new connections and aborts the
+    // connected sockets, so that new requests are not served and existing requests don't
+    // send responses back.
+    //
+    // It does _not_ wait for any internal activity started by the established connections
+    // to finish. It's the .stop() method that does it
+    future<> shutdown();
     future<> stop();
 
     future<> listen(socket_address addr, std::shared_ptr<seastar::tls::credentials_builder> creds, bool is_shard_aware, bool keepalive);

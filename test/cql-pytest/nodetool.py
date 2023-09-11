@@ -108,6 +108,18 @@ def refreshsizeestimates(cql):
     else:
         run_nodetool(cql, "refreshsizeestimates")
 
+def enablebinary(cql):
+    if has_rest_api(cql):
+        requests.post(f'{rest_api_url(cql)}/storage_service/native_transport')
+    else:
+        run_nodetool(cql, "enablebinary")
+
+def disablebinary(cql):
+    if has_rest_api(cql):
+        requests.delete(f'{rest_api_url(cql)}/storage_service/native_transport')
+    else:
+        run_nodetool(cql, "disablebinary")
+
 class no_autocompaction_context:
     """Disable autocompaction for the enclosed scope, for the provided keyspace(s).
     """

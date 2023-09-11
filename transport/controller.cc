@@ -179,16 +179,14 @@ future<> controller::do_start_server() {
 future<> controller::stop_server() {
     assert(this_shard_id() == 0);
 
-    if (_stopped) {
-        return make_ready_future<>();
-    }
-
-    return _ops_sem.wait().then([this] {
+    if (!_stopped) {
+        co_await _ops_sem.wait();
         _stopped = true;
         _ops_sem.broken();
         _listen_addresses.clear();
-        return do_stop_server();
-    });
+        co_await do_stop_server();
+        co_await _bg_stops.close();
+    }
 }
 
 future<> controller::request_stop_server() {
@@ -200,19 +198,37 @@ future<> controller::request_stop_server() {
 }
 
 future<> controller::do_stop_server() {
-    return do_with(std::move(_server), [this] (std::unique_ptr<sharded<cql_server>>& cserver) {
-        if (cserver) {
-            // FIXME: cql_server::stop() doesn't kill existing connections and wait for them
-            return set_cql_ready(false).finally([this, &cserver] {
-                return unsubscribe_server(*cserver).then([&cserver] {
-                    return cserver->stop().then([] {
-                        logger.info("CQL server stopped");
-                    });
-                });
-            });
+    auto cserver = std::move(_server);
+    if (!cserver) {
+        co_return;
+    }
+
+    std::exception_ptr ex;
+
+    try {
+        co_await set_cql_ready(false);
+    } catch (...) {
+        ex = std::current_exception();
+    }
+
+    auto& server = *cserver;
+
+    try {
+        co_await unsubscribe_server(server);
+        co_await server.invoke_on_all([] (auto& s) { return s.shutdown(); });
+    } catch (...) {
+        if (!ex) {
+            ex = std::current_exception();
         }
-        return make_ready_future<>();
-    });
+    }
+
+    (void)server.stop().finally([s = std::move(cserver), h = _bg_stops.hold()] {});
+
+    if (ex) {
+        std::rethrow_exception(std::move(ex));
+    }
+
+    logger.info("CQL server stopped");
 }
 
 future<> controller::subscribe_server(sharded<cql_server>& server) {

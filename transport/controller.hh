@@ -9,6 +9,7 @@
 #pragma once
 
 #include <seastar/core/semaphore.hh>
+#include <seastar/core/gate.hh>
 #include <seastar/core/sharded.hh>
 #include <seastar/core/future.hh>
 
@@ -35,6 +36,7 @@ class controller : public protocol_server {
     std::vector<socket_address> _listen_addresses;
     std::unique_ptr<sharded<cql_server>> _server;
     semaphore _ops_sem; /* protects start/stop operations on _server */
+    gate _bg_stops;
     bool _stopped = false;
 
     sharded<auth::service>& _auth_service;
