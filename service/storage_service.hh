@@ -36,7 +36,7 @@
 #include <seastar/core/lowres_clock.hh>
 #include "cdc/generation_id.hh"
 #include "raft/raft.hh"
-#include "repair/id.hh"
+#include "node_ops/id.hh"
 #include "raft/server.hh"
 #include "service/topology_state_machine.hh"
 #include "service/tablet_allocator.hh"

@@ -28,7 +28,7 @@
 #include "streaming/stream_reason.hh"
 #include "locator/token_metadata.hh"
 #include "repair/hash.hh"
-#include "repair/id.hh"
+#include "node_ops/id.hh"
 #include "repair/sync_boundary.hh"
 #include "tasks/types.hh"
 

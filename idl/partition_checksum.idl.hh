@@ -13,7 +13,7 @@
 #include "idl/uuid.idl.hh"
 #include "idl/frozen_mutation.idl.hh"
 #include "idl/token.idl.hh"
-#include "repair/id.hh"
+#include "node_ops/id.hh"
 
 class repair_hash {
     uint64_t hash;
