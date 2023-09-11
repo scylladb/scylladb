@@ -143,9 +143,6 @@ public:
             streaming::stream_reason reason_,
             bool hints_batchlog_flushed,
             std::optional<int> ranges_parallelism);
-    virtual tasks::is_internal is_internal() const noexcept override {
-        return tasks::is_internal::yes;
-    }
     void check_failed_ranges();
     void check_in_abort_or_shutdown();
     repair_neighbors get_repair_neighbors(const dht::token_range& range);

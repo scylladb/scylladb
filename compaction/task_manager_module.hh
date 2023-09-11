@@ -96,8 +96,6 @@ public:
         , _db(db)
         , _local_tables(std::move(local_tables))
     {}
-
-    virtual tasks::is_internal is_internal() const noexcept override;
 protected:
     virtual future<> run() override;
 };
@@ -123,8 +121,6 @@ public:
         , _cv(cv)
         , _current_task(current_task)
     {}
-
-    virtual tasks::is_internal is_internal() const noexcept override;
 protected:
     virtual future<> run() override;
 };
@@ -183,8 +179,6 @@ public:
         , _db(db)
         , _local_tables(std::move(local_tables))
     {}
-
-    virtual tasks::is_internal is_internal() const noexcept override;
 protected:
     virtual future<> run() override;
 };
@@ -210,8 +204,6 @@ public:
         , _cv(cv)
         , _current_task(current_task)
     {}
-
-    virtual tasks::is_internal is_internal() const noexcept override;
 protected:
     virtual future<> run() override;
 };
@@ -275,8 +267,6 @@ public:
         , _table_infos(std::move(table_infos))
         , _needed(needed)
     {}
-
-    virtual tasks::is_internal is_internal() const noexcept override;
 protected:
     virtual future<> run() override;
 };
@@ -305,8 +295,6 @@ public:
         , _current_task(current_task)
         , _needed(needed)
     {}
-
-    virtual tasks::is_internal is_internal() const noexcept override;
 protected:
     virtual future<> run() override;
 };
@@ -378,8 +366,6 @@ public:
     virtual std::string type() const override {
         return "upgrade " + sstables_compaction_task_impl::type();
     }
-
-    virtual tasks::is_internal is_internal() const noexcept override;
 protected:
     virtual future<> run() override;
 };
@@ -412,8 +398,6 @@ public:
     virtual std::string type() const override {
         return "upgrade " + sstables_compaction_task_impl::type();
     }
-
-    virtual tasks::is_internal is_internal() const noexcept override;
 protected:
     virtual future<> run() override;
 };
@@ -469,8 +453,6 @@ public:
     virtual std::string type() const override {
         return "scrub " + sstables_compaction_task_impl::type();
     }
-
-    virtual tasks::is_internal is_internal() const noexcept override;
 protected:
     virtual future<> run() override;
 };
@@ -497,8 +479,6 @@ public:
     virtual std::string type() const override {
         return "scrub " + sstables_compaction_task_impl::type();
     }
-
-    virtual tasks::is_internal is_internal() const noexcept override;
 protected:
     virtual future<> run() override;
 };
@@ -579,8 +559,6 @@ public:
         , _filter(std::move(filter))
         , _total_shard_size(total_shard_size)
     {}
-
-    virtual tasks::is_internal is_internal() const noexcept override;
 protected:
     virtual future<> run() override;
 };
@@ -656,8 +634,6 @@ public:
         , _local_owned_ranges_ptr(std::move(local_owned_ranges_ptr))
         , _destinations(destinations)
     {}
-
-    virtual tasks::is_internal is_internal() const noexcept override;
 protected:
     virtual future<> run() override;
 };
