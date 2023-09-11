@@ -1579,13 +1579,17 @@ static std::unordered_set<raft::server_id> decode_nodes_ids(const set_type_impl:
     return ids_set;
 }
 
+static cdc::generation_id_v2 decode_cdc_generation_id(const data_value& gen_id) {
+    auto native = value_cast<tuple_type_impl::native_type>(gen_id);
+    auto ts = value_cast<db_clock::time_point>(native[0]);
+    auto id = value_cast<utils::UUID>(native[1]);
+    return cdc::generation_id_v2{ts, id};
+}
+
 static std::vector<cdc::generation_id_v2> decode_cdc_generations_ids(const set_type_impl::native_type& gen_ids) {
     std::vector<cdc::generation_id_v2> gen_ids_list;
     for (auto& gen_id: gen_ids) {
-        auto native = value_cast<tuple_type_impl::native_type>(gen_id);
-        auto ts = value_cast<db_clock::time_point>(native[0]);
-        auto id = value_cast<utils::UUID>(native[1]);
-        gen_ids_list.push_back(cdc::generation_id_v2{ts, id});
+        gen_ids_list.push_back(decode_cdc_generation_id(gen_id));
     }
     return gen_ids_list;
 }
