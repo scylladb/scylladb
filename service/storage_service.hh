@@ -89,6 +89,7 @@ class task_manager;
 namespace node_ops {
 class task_manager_module;
 class join_token_ring_task_impl;
+class start_rebuild_task_impl;
 }
 
 namespace service {
@@ -383,9 +384,6 @@ private:
     bool is_first_node();
     future<> start_sys_dist_ks();
 public:
-
-    future<> rebuild(sstring source_dc);
-
     ::shared_ptr<service::group0_handshaker> make_join_handshaker(service::join_node_request_params& join_params);
 
 private:
@@ -844,6 +842,7 @@ private:
 
     friend class join_node_rpc_handshaker;
     friend class node_ops::join_token_ring_task_impl;
+    friend class node_ops::start_rebuild_task_impl;
 };
 
 }
