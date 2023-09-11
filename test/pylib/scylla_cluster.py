@@ -1069,6 +1069,8 @@ class ScyllaClusterManager:
         add_put('/cluster/server/{server_id}/update_config', self._server_update_config)
         add_put('/cluster/server/{server_id}/change_ip', self._server_change_ip)
         add_get('/cluster/server/{server_id}/get_log_filename', self._server_get_log_filename)
+        add_get('/cluster/server/{server_id}/workdir', self._server_get_workdir)
+        add_get('/cluster/server/{server_id}/exe', self._server_get_exe)
 
     async def _manager_up(self, _request) -> aiohttp.web.Response:
         return aiohttp.web.Response(text=f"{self.is_running}")
@@ -1279,13 +1281,27 @@ class ScyllaClusterManager:
         ip_addr = await self.cluster.change_ip(server_id)
         return aiohttp.web.json_response({"ip_addr": ip_addr})
 
-    async def _server_get_log_filename(self, request: aiohttp.web.Request) -> aiohttp.web.Response:
+    async def _server_get_attribute(self, request: aiohttp.web.Request, attribute: str) -> aiohttp.web.Response:
+        """Generic request handler which gets a particular attribute of a ScyllaServer instance
+
+        To be used to implement concrete handlers, not for direct use.
+        """
         assert self.cluster
         server_id = ServerNum(int(request.match_info["server_id"]))
         server = self.cluster.servers[server_id]
         if not server:
             return aiohttp.web.Response(status=404, text=f"Server {server_id} unknown")
-        return aiohttp.web.Response(text=f"{server.log_filename}")
+        return aiohttp.web.Response(text=f"{getattr(server, attribute)}")
+
+    async def _server_get_log_filename(self, request: aiohttp.web.Request) -> aiohttp.web.Response:
+        return await self._server_get_attribute(request, "log_filename")
+
+    async def _server_get_workdir(self, request: aiohttp.web.Request) -> aiohttp.web.Response:
+        return await self._server_get_attribute(request, "workdir")
+
+    async def _server_get_exe(self, request: aiohttp.web.Request) -> aiohttp.web.Response:
+        return await self._server_get_attribute(request, "exe")
+
 
 
 @asynccontextmanager

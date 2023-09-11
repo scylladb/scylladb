@@ -133,6 +133,7 @@ class reconcilable_result_builder {
     uint64_t _live_rows{};
     // make this the last member so it is destroyed first. #7240
     utils::chunked_vector<partition> _result;
+    size_t _used_at_entry;
 
 private:
     stop_iteration consume(range_tombstone&& rt);

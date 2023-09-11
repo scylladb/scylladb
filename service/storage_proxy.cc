@@ -4980,6 +4980,8 @@ protected:
         data_resolver_ptr data_resolver = ::make_shared<data_read_resolver>(_schema, cl, _targets.size(), timeout);
         auto exec = shared_from_this();
 
+        cmd->slice.options.set<query::partition_slice::option::allow_mutation_read_page_without_live_row>();
+
         // Waited on indirectly.
         make_mutation_data_requests(cmd, data_resolver, _targets.begin(), _targets.end(), timeout);
 
@@ -5003,13 +5005,18 @@ protected:
 
                 // We generate a retry if at least one node reply with count live columns but after merge we have less
                 // than the total number of column we are interested in (which may be < count on a retry).
-                // So in particular, if no host returned count live columns, we know it's not a short read.
-                bool can_send_short_read = rr_opt && rr_opt->is_short_read() && rr_opt->row_count() > 0;
-                if (rr_opt && (can_send_short_read || data_resolver->all_reached_end() || rr_opt->row_count() >= original_row_limit()
+                // So in particular, if no host returned count live columns, we know it's not a short read due to
+                // row or partition limits being exhausted and retry is not needed.
+                if (rr_opt && (rr_opt->is_short_read()
+                               || data_resolver->all_reached_end()
+                               || rr_opt->row_count() >= original_row_limit()
                                || data_resolver->live_partition_count() >= original_partition_limit())
                         && !data_resolver->any_partition_short_read()) {
+                    tracing::trace(_trace_state, "Read stage is done for read-repair");
+                    mlogger.trace("reconciled: {}", rr_opt->pretty_printer(_schema));
                     auto result = ::make_foreign(::make_lw_shared<query::result>(
                             co_await to_data_query_result(std::move(*rr_opt), _schema, _cmd->slice, _cmd->get_row_limit(), cmd->partition_limit)));
+                    qlogger.trace("reconciled: {}", result->pretty_printer(_schema, _cmd->slice));
                     // wait for write to complete before returning result to prevent multiple concurrent read requests to
                     // trigger repair multiple times and to prevent quorum read to return an old value, even after a quorum
                     // another read had returned a newer value (but the newer value had not yet been sent to the other replicas)
@@ -5032,6 +5039,7 @@ protected:
                         on_read_resolved();
                     });
                 } else {
+                    tracing::trace(_trace_state, "Not enough data, need a retry for read-repair");
                     _proxy->get_stats().read_retries++;
                     _retry_cmd = make_lw_shared<query::read_command>(*cmd);
                     // We asked t (= cmd->get_row_limit()) live columns and got l (=data_resolver->total_live_count) ones.
@@ -5138,6 +5146,7 @@ public:
                             exec->_targets.erase(i, exec->_targets.end());
                         }
                     }
+                    tracing::trace(exec->_trace_state, "digest mismatch, starting read repair");
                     exec->reconcile(exec->_cl, timeout);
                     exec->_proxy->get_stats().read_repair_repaired_blocking++;
                 }
@@ -5343,6 +5352,7 @@ result<::shared_ptr<abstract_read_executor>> storage_proxy::get_read_executor(lw
     // Speculative retry is disabled *OR* there are simply no extra replicas to speculate.
     if (retry_type == speculative_retry::type::NONE || block_for == all_replicas.size()
             || (repair_decision == db::read_repair_decision::DC_LOCAL && is_datacenter_local(cl) && block_for == target_replicas.size())) {
+        tracing::trace(trace_state, "Creating never_speculating_read_executor - speculative retry is disabled or there are no extra replicas to speculate with");
         return ::make_shared<never_speculating_read_executor>(schema, cf, p, std::move(erm), cmd, std::move(pr), cl, std::move(target_replicas), std::move(trace_state), std::move(permit), rate_limit_info);
     }
 
@@ -5350,6 +5360,7 @@ result<::shared_ptr<abstract_read_executor>> storage_proxy::get_read_executor(lw
         // CL.ALL, RRD.GLOBAL or RRD.DC_LOCAL and a single-DC.
         // We are going to contact every node anyway, so ask for 2 full data requests instead of 1, for redundancy
         // (same amount of requests in total, but we turn 1 digest request into a full blown data request).
+        tracing::trace(trace_state, "always_speculating_read_executor (all targets)");
         return ::make_shared<always_speculating_read_executor>(schema, cf, p, std::move(erm), cmd, std::move(pr), cl, block_for, std::move(target_replicas), std::move(trace_state), std::move(permit), rate_limit_info);
     }
 
@@ -5358,16 +5369,20 @@ result<::shared_ptr<abstract_read_executor>> storage_proxy::get_read_executor(lw
         auto local_dc_filter = erm->get_topology().get_local_dc_filter();
         if (!extra_replica || (is_datacenter_local(cl) && !local_dc_filter(*extra_replica))) {
             slogger.trace("read executor no extra target to speculate");
+            tracing::trace(trace_state, "Creating never_speculating_read_executor - there are no extra replicas to speculate with");
             return ::make_shared<never_speculating_read_executor>(schema, cf, p, std::move(erm), cmd, std::move(pr), cl, std::move(target_replicas), std::move(trace_state), std::move(permit), rate_limit_info);
         } else {
             target_replicas.push_back(*extra_replica);
             slogger.trace("creating read executor with extra target {}", *extra_replica);
+            tracing::trace(trace_state, "Added extra target {} for speculative read", *extra_replica);
         }
     }
 
     if (retry_type == speculative_retry::type::ALWAYS) {
+        tracing::trace(trace_state, "Creating always_speculating_read_executor");
         return ::make_shared<always_speculating_read_executor>(schema, cf, p, std::move(erm), cmd, std::move(pr), cl, block_for, std::move(target_replicas), std::move(trace_state), std::move(permit), rate_limit_info);
     } else {// PERCENTILE or CUSTOM.
+        tracing::trace(trace_state, "Creating speculating_read_executor");
         return ::make_shared<speculating_read_executor>(schema, cf, p, std::move(erm), cmd, std::move(pr), cl, block_for, std::move(target_replicas), std::move(trace_state), std::move(permit), rate_limit_info);
     }
 }
