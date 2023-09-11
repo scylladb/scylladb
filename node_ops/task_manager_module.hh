@@ -156,6 +156,18 @@ protected:
     virtual future<> run() override;
 };
 
+class start_rebuild_task_impl : public rebuild_node_task_impl {
+private:
+    sstring _source_dc;
+public:
+    start_rebuild_task_impl(tasks::task_manager::module_ptr module,
+            std::string entity,
+            service::storage_service& ss,
+            sstring source_dc) noexcept;
+protected:
+    virtual future<> run() override;
+};
+
 class task_manager_module : public tasks::task_manager::module {
 public:
     task_manager_module(tasks::task_manager& tm) noexcept : tasks::task_manager::module(tm, "node_ops") {}

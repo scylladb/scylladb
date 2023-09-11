@@ -89,6 +89,7 @@ class task_manager;
 namespace node_ops {
 class task_manager_module;
 class join_token_ring_task_impl;
+class start_rebuild_task_impl;
 }
 
 namespace service {
@@ -375,10 +376,6 @@ private:
     bool is_replacing();
     bool is_first_node();
     future<> start_sys_dist_ks();
-public:
-
-    future<> rebuild(sstring source_dc);
-
 private:
     void set_mode(mode m);
     // Can only be called on shard-0
@@ -823,6 +820,7 @@ private:
     future<> merge_topology_snapshot(raft_topology_snapshot snp);
 
     friend class node_ops::join_token_ring_task_impl;
+    friend class node_ops::start_rebuild_task_impl;
 };
 
 }

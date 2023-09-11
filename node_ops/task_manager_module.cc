@@ -11,8 +11,10 @@
 #include "db/schema_tables.hh"
 #include "db/system_distributed_keyspace.hh"
 #include "dht/boot_strapper.hh"
+#include "dht/range_streamer.hh"
 #include "gms/gossiper.hh"
 #include "node_ops/task_manager_module.hh"
+#include "repair/row_level.hh"
 #include "service/raft/raft_group0.hh"
 #include "service/storage_service.hh"
 #include "supervisor.hh"
@@ -537,6 +539,49 @@ future<> join_token_ring_task_impl::run() {
     assert(_group0);
     co_await _group0->finish_setup_after_join(_ss, *_ss._qp, _ss._migration_manager.local());
     co_await _ss._cdc_gens.local().after_join(std::move(cdc_gen_id));
+}
+
+start_rebuild_task_impl::start_rebuild_task_impl(tasks::task_manager::module_ptr module,
+            std::string entity,
+            service::storage_service& ss,
+            sstring source_dc) noexcept
+    : rebuild_node_task_impl(std::move(module), tasks::task_id::create_random_id(), ss.get_task_manager_module().new_sequence_number(), "node",
+        std::move(entity), tasks::task_id::create_null_id(), ss)
+    , _source_dc(std::move(source_dc))
+{}
+
+future<> start_rebuild_task_impl::run() {
+    return _ss.run_with_api_lock(sstring("rebuild"), [&source_dc = _source_dc] (service::storage_service& ss) -> future<> {
+        if (ss._raft_topology_change_enabled) {
+            co_await ss.raft_rebuild(source_dc);
+        } else {
+            tasks::tmlogger.info("rebuild from dc: {}", source_dc == "" ? "(any dc)" : source_dc);
+            auto tmptr = ss.get_token_metadata_ptr();
+            if (ss.is_repair_based_node_ops_enabled(streaming::stream_reason::rebuild)) {
+                co_await ss._repair.local().rebuild_with_repair(tmptr, std::move(source_dc));
+            } else {
+                auto streamer = make_lw_shared<dht::range_streamer>(ss._db, ss._stream_manager, tmptr, ss._abort_source,
+                        ss.get_broadcast_address(), ss._snitch.local()->get_location(), "Rebuild", streaming::stream_reason::rebuild);
+                streamer->add_source_filter(std::make_unique<dht::range_streamer::failure_detector_source_filter>(ss._gossiper.get_unreachable_members()));
+                if (source_dc != "") {
+                    streamer->add_source_filter(std::make_unique<dht::range_streamer::single_datacenter_filter>(source_dc));
+                }
+                auto ks_erms = ss._db.local().get_non_local_strategy_keyspaces_erms();
+                for (const auto& [keyspace_name, erm] : ks_erms) {
+                    co_await streamer->add_ranges(keyspace_name, erm, ss.get_ranges_for_endpoint(erm, utils::fb_utilities::get_broadcast_address()), ss._gossiper, false);
+                }
+                try {
+                    co_await streamer->stream_async();
+                    tasks::tmlogger.info("Streaming for rebuild successful");
+                } catch (...) {
+                    auto ep = std::current_exception();
+                    // This is used exclusively through JMX, so log the full trace but only throw a simple RTE
+                    tasks::tmlogger.warn("Error while rebuilding node: {}", ep);
+                    std::rethrow_exception(std::move(ep));
+                }
+            }
+        }
+    });
 }
 
 }

@@ -46,6 +46,7 @@
 #include "locator/abstract_replication_strategy.hh"
 #include "sstables_loader.hh"
 #include "db/view/view_builder.hh"
+#include "node_ops/task_manager_module.hh"
 
 using namespace seastar::httpd;
 using namespace std::chrono_literals;
@@ -975,12 +976,12 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         });
     });
 
-    ss::rebuild.set(r, [&ss](std::unique_ptr<http::request> req) {
+    ss::rebuild.set(r, [&ss](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         auto source_dc = req->get_query_param("source_dc");
         apilog.info("rebuild: source_dc={}", source_dc);
-        return ss.local().rebuild(std::move(source_dc)).then([] {
-            return make_ready_future<json::json_return_type>(json_void());
-        });
+        auto task = co_await ss.local().get_task_manager_module().make_and_start_task<node_ops::start_rebuild_task_impl>({}, "", ss.local(), std::move(source_dc));
+        co_await task->done();
+        co_return json_void();
     });
 
     ss::bulk_load.set(r, [](std::unique_ptr<http::request> req) {
