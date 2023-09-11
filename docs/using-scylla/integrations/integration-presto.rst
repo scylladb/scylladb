@@ -1,15 +1,13 @@
 ============================
-Integrate Scylla with Presto
+Integrate ScyllaDB with Presto
 ============================
 
-Scylla is Apache Cassandra compatible at the CQL binary protocol level, and any driver which uses CQL will work with Scylla (more :doc:`here </using-scylla/drivers/index>`). Any application which uses a CQL driver will work with Scylla.
+`Presto <https://github.com/prestodb/presto>`_, is an open-source distributed SQL query engine designed to run interactive analytic queries against various data sources. Facebook developed it, and it is now actively maintained by the Presto Software Foundation.
 
-The list below contains integration projects using Scylla with Presto. If you have tested your application with Scylla and want to publish the results, contact us using the `community forum <https://forum.scylladb.com>`_.
+The blog post `Integrating ScyllaDB with a Presto Server for Data Analytics <https://www.scylladb.com/2023/08/28/integrating-scylladb-with-a-presto-server-for-data-analytics/>`_ goes over a hands-on example of integrating ScyllaDB, Presto, and `Metabase <https://github.com/metabase/metabase>`_ to provide an open-source data analytics solution for high-speed querying and user-friendly visualization.
 
+If you have tested your application with ScyllaDB and want to share the results with the community, you can do so using the `community forum <https://forum.scylladb.com>`_.
 
-* `Integration with Presto (Scylla Summit presentation) <https://www.scylladb.com/2016/09/28/scylla-summit-recap-presto/>`_
-
-* `Integration with Presto (blog entry) <https://www.scylladb.com/2018/01/25/mms-day-3-analyzing-mutant-data-presto/>`_
 
 
 
