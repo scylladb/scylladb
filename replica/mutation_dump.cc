@@ -604,7 +604,11 @@ future<foreign_ptr<lw_shared_ptr<query::result>>> dump_mutations(
             std::rethrow_exception(std::move(ex));
         }
 
-        dk_opt = co_await partition_key_generator();
+        if (compaction_state->are_limits_reached() || qs.builder.is_short_read()) {
+            dk_opt = {};
+        } else {
+            dk_opt = co_await partition_key_generator();
+        }
     }
 
     co_return make_lw_shared<query::result>(qs.builder.build(compaction_state->current_full_position()));
