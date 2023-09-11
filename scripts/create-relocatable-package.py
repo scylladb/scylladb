@@ -67,8 +67,10 @@ def reloc_add(ar, name, arcname=None):
 ap = argparse.ArgumentParser(description='Create a relocatable scylla package.')
 ap.add_argument('dest',
                 help='Destination file (tar format)')
-ap.add_argument('--mode', dest='mode', default='release',
-                help='Build mode (debug/release) to use')
+ap.add_argument('--build-dir', default='build/release',
+                help='Build dir ("build/debug" or "build/release") to use')
+ap.add_argument('--node-exporter-dir', default='build/node_exporter',
+                help='the directory where node_exporter is located')
 ap.add_argument('--stripped', action='store_true',
                 help='use stripped binaries')
 ap.add_argument('--print-libexec', action='store_true',
@@ -77,8 +79,8 @@ ap.add_argument('--print-libexec', action='store_true',
 args = ap.parse_args()
 
 executables_scylla = [
-                'build/{}/scylla'.format(args.mode),
-                'build/{}/iotune'.format(args.mode)]
+                '{}/scylla'.format(args.build_dir),
+                '{}/iotune'.format(args.build_dir)]
 executables_distrocmd = [
                 '/usr/bin/patchelf',
                 '/usr/bin/lscpu',
@@ -165,13 +167,14 @@ ar.reloc_add('api')
 ar.reloc_add('tools/scyllatop')
 ar.reloc_add('scylla-gdb.py')
 ar.reloc_add('build/debian/debian', arcname='debian')
+node_exporter_dir = args.node_exporter_dir
 if args.stripped:
-    ar.reloc_add('build/node_exporter', arcname='node_exporter')
-    ar.reloc_add('build/node_exporter/node_exporter.stripped', arcname='node_exporter/node_exporter')
+    ar.reloc_add(f'{node_exporter_dir}', arcname='node_exporter')
+    ar.reloc_add(f'{node_exporter_dir}/node_exporter.stripped', arcname='node_exporter/node_exporter')
 else:
-    ar.reloc_add('build/node_exporter/node_exporter', arcname='node_exporter/node_exporter')
-ar.reloc_add('build/node_exporter/LICENSE', arcname='node_exporter/LICENSE')
-ar.reloc_add('build/node_exporter/NOTICE', arcname='node_exporter/NOTICE')
+    ar.reloc_add(f'{node_exporter_dir}/node_exporter', arcname='node_exporter/node_exporter')
+ar.reloc_add(f'{node_exporter_dir}/LICENSE', arcname='node_exporter/LICENSE')
+ar.reloc_add(f'{node_exporter_dir}/NOTICE', arcname='node_exporter/NOTICE')
 ar.reloc_add('ubsan-suppressions.supp')
 ar.reloc_add('fix_system_distributed_tables.py')
 
