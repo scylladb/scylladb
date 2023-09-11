@@ -666,6 +666,23 @@ future<> raft_group0::setup_group0(
         co_return;
     }
 
+    if (replace_info) {
+        // Insert the replaced node's (Raft ID, IP address) pair into `raft_address_map`.
+        // In general, the mapping won't be obtained through the regular gossiping route:
+        // if we (the replacing node) use the replaced node's IP address, the replaced node's
+        // application states are gone by this point (our application states overrode them
+        // - the application states map is using the IP address as the key).
+        // Even when we use a different IP, there's no guarantee the IPs were exchanged by now.
+        // Instead, we obtain `replace_info` during the shadow round (which guarantees to contact
+        // another node and fetch application states from it) and pass it to `setup_group0`.
+
+        group0_log.info("Replacing a node with Raft ID: {}, IP address: {}",
+                        replace_info->raft_id, replace_info->ip_addr);
+
+        // `opt_add_entry` is shard-local, but that's fine - we only need this info on shard 0.
+        _raft_gr.address_map().opt_add_entry(replace_info->raft_id, replace_info->ip_addr);
+    }
+
     std::vector<gms::inet_address> seeds;
     for (auto& addr: initial_contact_nodes) {
         if (addr != _gossiper.get_broadcast_address()) {
@@ -683,23 +700,6 @@ future<> raft_group0::setup_group0(
     utils::get_local_injector().inject("stop_after_joining_group0", [&] {
         throw std::runtime_error{"injection: stop_after_joining_group0"};
     });
-
-    if (replace_info) {
-        // Insert the replaced node's (Raft ID, IP address) pair into `raft_address_map`.
-        // In general, the mapping won't be obtained through the regular gossiping route:
-        // if we (the replacing node) use the replaced node's IP address, the replaced node's
-        // application states are gone by this point (our application states overrode them
-        // - the application states map is using the IP address as the key).
-        // Even when we use a different IP, there's no guarantee the IPs were exchanged by now.
-        // Instead, we obtain `replace_info` during the shadow round (which guarantees to contact
-        // another node and fetch application states from it) and pass it to `setup_group0`.
-
-        group0_log.info("Replacing a node with Raft ID: {}, IP address: {}",
-                        replace_info->raft_id, replace_info->ip_addr);
-
-        // `opt_add_entry` is shard-local, but that's fine - we only need this info on shard 0.
-        _raft_gr.address_map().opt_add_entry(replace_info->raft_id, replace_info->ip_addr);
-    }
 
     // Enter `synchronize` upgrade state in case the cluster we're joining has recently enabled Raft
     // and is currently in the middle of `upgrade_to_group0()`. For that procedure to finish
