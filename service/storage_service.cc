@@ -96,7 +96,7 @@ using inet_address = gms::inet_address;
 extern logging::logger cdc_log;
 
 namespace db {
-    extern thread_local data_type cdc_generation_id_v2_type;
+    extern thread_local data_type cdc_generation_ts_id_type;
 }
 
 namespace service {
@@ -773,7 +773,7 @@ topology_mutation_builder& topology_mutation_builder::set_new_cdc_generation_dat
 
 topology_mutation_builder& topology_mutation_builder::set_unpublished_cdc_generations(const std::vector<cdc::generation_id_v2>& values) {
     auto dv = values | boost::adaptors::transformed([&] (const auto& v) {
-        return make_tuple_value(db::cdc_generation_id_v2_type, tuple_type_impl::native_type({v.ts, timeuuid_native_type{v.id}}));
+        return make_tuple_value(db::cdc_generation_ts_id_type, tuple_type_impl::native_type({v.ts, timeuuid_native_type{v.id}}));
     });
     return apply_set("unpublished_cdc_generations", collection_apply_mode::overwrite, std::move(dv));
 }
@@ -789,7 +789,7 @@ topology_mutation_builder& topology_mutation_builder::add_enabled_features(const
 }
 
 topology_mutation_builder& topology_mutation_builder::add_unpublished_cdc_generation(const cdc::generation_id_v2& value) {
-    auto dv = make_tuple_value(db::cdc_generation_id_v2_type, tuple_type_impl::native_type({value.ts, timeuuid_native_type{value.id}}));
+    auto dv = make_tuple_value(db::cdc_generation_ts_id_type, tuple_type_impl::native_type({value.ts, timeuuid_native_type{value.id}}));
     return apply_set("unpublished_cdc_generations", collection_apply_mode::update, std::vector<data_value>{std::move(dv)});
 }
 

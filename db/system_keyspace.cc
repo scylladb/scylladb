@@ -213,7 +213,7 @@ schema_ptr system_keyspace::batchlog() {
     return paxos;
 }
 
-thread_local data_type cdc_generation_id_v2_type = tuple_type_impl::get_instance({timestamp_type, timeuuid_type});
+thread_local data_type cdc_generation_ts_id_type = tuple_type_impl::get_instance({timestamp_type, timeuuid_type});
 
 schema_ptr system_keyspace::topology() {
     static thread_local auto schema = [] {
@@ -239,7 +239,7 @@ schema_ptr system_keyspace::topology() {
             .with_column("transition_state", utf8_type, column_kind::static_column)
             .with_column("current_cdc_generation_uuid", timeuuid_type, column_kind::static_column)
             .with_column("current_cdc_generation_timestamp", timestamp_type, column_kind::static_column)
-            .with_column("unpublished_cdc_generations", set_type_impl::get_instance(cdc_generation_id_v2_type, true), column_kind::static_column)
+            .with_column("unpublished_cdc_generations", set_type_impl::get_instance(cdc_generation_ts_id_type, true), column_kind::static_column)
             .with_column("global_topology_request", utf8_type, column_kind::static_column)
             .with_column("enabled_features", set_type_impl::get_instance(utf8_type, true), column_kind::static_column)
             .set_comment("Current state of topology change machine")
