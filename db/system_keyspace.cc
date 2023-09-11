@@ -1378,7 +1378,7 @@ future<system_keyspace::local_info> system_keyspace::load_local_info() {
     co_return ret;
 }
 
-future<> system_keyspace::save_local_info(local_info sysinfo) {
+future<> system_keyspace::save_local_info(local_info sysinfo, locator::endpoint_dc_rack location) {
     auto& cfg = _db.get_config();
     sstring req = fmt::format("INSERT INTO system.{} (key, host_id, cluster_name, release_version, cql_version, thrift_version, native_protocol_version, data_center, rack, partitioner, rpc_address, broadcast_address, listen_address) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
                     , db::system_keyspace::LOCAL);
@@ -1390,8 +1390,8 @@ future<> system_keyspace::save_local_info(local_info sysinfo) {
                             cql3::query_processor::CQL_VERSION,
                             ::cassandra::thrift_version,
                             to_sstring(unsigned(cql_serialization_format::latest().protocol_version())),
-                            local_dc_rack().dc,
-                            local_dc_rack().rack,
+                            location.dc,
+                            location.rack,
                             sstring(cfg.partitioner()),
                             utils::fb_utilities::get_broadcast_rpc_address().addr(),
                             utils::fb_utilities::get_broadcast_address().addr(),
@@ -1410,7 +1410,6 @@ future<> system_keyspace::save_local_supported_features(const std::set<std::stri
 // is different than the one that wrote, may see a corrupted value. invoke_on_all will be used to guarantee that all
 // updates are propagated correctly.
 struct local_cache {
-    locator::endpoint_dc_rack _local_dc_rack_info;
     system_keyspace::bootstrap_state _state;
 };
 
@@ -1964,10 +1963,6 @@ future<> system_keyspace::initialize_virtual_tables(
     }
 
     install_virtual_readers(*this, db);
-}
-
-locator::endpoint_dc_rack system_keyspace::local_dc_rack() const {
-    return _cache->_local_dc_rack_info;
 }
 
 future<foreign_ptr<lw_shared_ptr<reconcilable_result>>>
@@ -2805,19 +2800,12 @@ sstring system_keyspace_name() {
 }
 
 system_keyspace::system_keyspace(
-        cql3::query_processor& qp, replica::database& db, const locator::snitch_ptr& snitch) noexcept
+        cql3::query_processor& qp, replica::database& db) noexcept
     : _qp(qp)
     , _db(db)
     , _cache(std::make_unique<local_cache>())
 {
     _db.plug_system_keyspace(*this);
-
-    // FIXME
-    // This should be coupled with setup_version()'s part committing these values into
-    // the system.local table. However, cql_test_env needs cached local_dc_rack strings,
-    // but it doesn't call system_keyspace::setup() and thus ::setup_version() either
-    _cache->_local_dc_rack_info.dc = snitch->get_datacenter();
-    _cache->_local_dc_rack_info.rack = snitch->get_rack();
 }
 
 system_keyspace::~system_keyspace() {

@@ -62,7 +62,6 @@ namespace gms {
 namespace locator {
     class effective_replication_map_factory;
     class endpoint_dc_rack;
-    class snitch_ptr;
 } // namespace locator
 
 namespace gms {
@@ -330,7 +329,6 @@ public:
      * Return a map of IP addresses containing a map of dc and rack info
      */
     future<std::unordered_map<gms::inet_address, locator::endpoint_dc_rack>> load_dc_rack_info();
-    locator::endpoint_dc_rack local_dc_rack() const;
 
     enum class bootstrap_state {
         NEEDS_BOOTSTRAP,
@@ -410,7 +408,7 @@ public:
     };
 
     future<local_info> load_local_info();
-    future<> save_local_info(local_info);
+    future<> save_local_info(local_info, locator::endpoint_dc_rack);
 private:
     future<truncation_record> get_truncation_record(table_id cf_id);
 
@@ -513,7 +511,7 @@ private:
 
 public:
 
-    system_keyspace(cql3::query_processor& qp, replica::database& db, const locator::snitch_ptr&) noexcept;
+    system_keyspace(cql3::query_processor& qp, replica::database& db) noexcept;
     ~system_keyspace();
     future<> shutdown();
 

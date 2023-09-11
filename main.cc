@@ -852,7 +852,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             supervisor::notify("starting tokens manager");
             locator::token_metadata::config tm_cfg;
             tm_cfg.topo_cfg.this_endpoint = utils::fb_utilities::get_broadcast_address();
-            tm_cfg.topo_cfg.local_dc_rack = { snitch.local()->get_datacenter(), snitch.local()->get_rack() };
+            tm_cfg.topo_cfg.local_dc_rack = snitch.local()->get_location();
             if (snitch.local()->get_name() == "org.apache.cassandra.locator.SimpleSnitch") {
                 //
                 // Simple snitch wants sort_by_proximity() not to reorder nodes anyhow
@@ -1089,7 +1089,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             static sharded<cdc::generation_service> cdc_generation_service;
 
             supervisor::notify("starting system keyspace");
-            sys_ks.start(std::ref(qp), std::ref(db), std::ref(snitch)).get();
+            sys_ks.start(std::ref(qp), std::ref(db)).get();
             // TODO: stop()?
 
             // Initialization of a keyspace is done by shard 0 only. For system
@@ -1117,7 +1117,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             cfg->host_id = linfo.host_id;
             linfo.listen_address = listen_address;
-            sys_ks.local().save_local_info(std::move(linfo)).get();
+            sys_ks.local().save_local_info(std::move(linfo), snitch.local()->get_location()).get();
 
           shared_token_metadata::mutate_on_all_shards(token_metadata, [hostid = cfg->host_id, endpoint = utils::fb_utilities::get_broadcast_address()] (locator::token_metadata& tm) {
               // Makes local host id available in topology cfg as soon as possible.

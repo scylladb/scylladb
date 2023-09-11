@@ -1436,7 +1436,7 @@ future<> repair_service::bootstrap_with_repair(locator::token_metadata_ptr tmptr
         auto& db = get_db().local();
         auto ks_erms = db.get_non_local_strategy_keyspaces_erms();
         auto& topology = tmptr->get_topology();
-        auto local_dc = topology.get_datacenter();
+        auto myloc = topology.get_location();
         auto myip = utils::fb_utilities::get_broadcast_address();
         auto reason = streaming::stream_reason::bootstrap;
         // Calculate number of ranges to sync data
@@ -1446,7 +1446,7 @@ future<> repair_service::bootstrap_with_repair(locator::token_metadata_ptr tmptr
                 continue;
             }
             auto& strat = erm->get_replication_strategy();
-            dht::token_range_vector desired_ranges = strat.get_pending_address_ranges(tmptr, tokens, myip, _sys_ks.local().local_dc_rack()).get0();
+            dht::token_range_vector desired_ranges = strat.get_pending_address_ranges(tmptr, tokens, myip, myloc).get0();
             seastar::thread::maybe_yield();
             auto nr_tables = get_nr_tables(db, keyspace_name);
             nr_ranges_total += desired_ranges.size() * nr_tables;
@@ -1462,7 +1462,7 @@ future<> repair_service::bootstrap_with_repair(locator::token_metadata_ptr tmptr
                 continue;
             }
             auto& strat = erm->get_replication_strategy();
-            dht::token_range_vector desired_ranges = strat.get_pending_address_ranges(tmptr, tokens, myip, _sys_ks.local().local_dc_rack()).get0();
+            dht::token_range_vector desired_ranges = strat.get_pending_address_ranges(tmptr, tokens, myip, myloc).get0();
             bool find_node_in_local_dc_only = strat.get_type() == locator::replication_strategy_type::network_topology;
             bool everywhere_topology = strat.get_type() == locator::replication_strategy_type::everywhere_topology;
             auto replication_factor = erm->get_replication_factor();
@@ -1472,7 +1472,7 @@ future<> repair_service::bootstrap_with_repair(locator::token_metadata_ptr tmptr
             auto range_addresses = strat.get_range_addresses(metadata_clone).get0();
 
             //Pending ranges
-            metadata_clone.update_topology(myip, _sys_ks.local().local_dc_rack(), locator::node::state::bootstrapping);
+            metadata_clone.update_topology(myip, myloc, locator::node::state::bootstrapping);
             metadata_clone.update_normal_tokens(tokens, myip).get();
             auto pending_range_addresses = strat.get_range_addresses(metadata_clone).get0();
             metadata_clone.clear_gently().get();
@@ -1530,14 +1530,14 @@ future<> repair_service::bootstrap_with_repair(locator::token_metadata_ptr tmptr
                                     throw std::runtime_error(format("bootstrap_with_repair: keyspace={}, range={}, failed to cast to network_topology_strategy",
                                             keyspace_name, desired_range));
                                 }
-                                rf_in_local_dc = nts->get_replication_factor(local_dc);
+                                rf_in_local_dc = nts->get_replication_factor(myloc.dc);
                             }
                             return rf_in_local_dc;
                         };
                         auto get_old_endpoints_in_local_dc = [&] () {
                             return boost::copy_range<std::vector<gms::inet_address>>(old_endpoints |
                                 boost::adaptors::filtered([&] (const gms::inet_address& node) {
-                                    return topology.get_datacenter(node) == local_dc;
+                                    return topology.get_datacenter(node) == myloc.dc;
                                 })
                             );
                         };
@@ -1924,14 +1924,14 @@ future<> repair_service::replace_with_repair(locator::token_metadata_ptr tmptr, 
     auto cloned_tm = co_await tmptr->clone_async();
     auto op = sstring("replace_with_repair");
     auto& topology = tmptr->get_topology();
-    auto source_dc = topology.get_datacenter();
+    auto myloc = topology.get_location();
     auto reason = streaming::stream_reason::replace;
     // update a cloned version of tmptr
     // no need to set the original version
     auto cloned_tmptr = make_token_metadata_ptr(std::move(cloned_tm));
-    cloned_tmptr->update_topology(utils::fb_utilities::get_broadcast_address(), _sys_ks.local().local_dc_rack(), locator::node::state::replacing);
+    cloned_tmptr->update_topology(utils::fb_utilities::get_broadcast_address(), myloc, locator::node::state::replacing);
     co_await cloned_tmptr->update_normal_tokens(replacing_tokens, utils::fb_utilities::get_broadcast_address());
-    co_return co_await do_rebuild_replace_with_repair(std::move(cloned_tmptr), std::move(op), std::move(source_dc), reason, std::move(ignore_nodes));
+    co_return co_await do_rebuild_replace_with_repair(std::move(cloned_tmptr), std::move(op), myloc.dc, reason, std::move(ignore_nodes));
 }
 
 node_ops_cmd_category categorize_node_ops_cmd(node_ops_cmd cmd) noexcept {

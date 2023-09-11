@@ -15,6 +15,7 @@
 #include <boost/signals2.hpp>
 #include <boost/signals2/dummy_mutex.hpp>
 
+#include "locator/types.hh"
 #include "gms/inet_address.hh"
 #include "inet_address_vectors.hh"
 #include "gms/versioned_value.hh"
@@ -69,6 +70,13 @@ public:
      * returns a String representing the datacenter local node belongs to
      */
     virtual sstring get_datacenter() const = 0;
+
+    locator::endpoint_dc_rack get_location() const {
+        return locator::endpoint_dc_rack{
+            .dc = get_datacenter(),
+            .rack = get_rack(),
+        };
+    }
 
     /**
      * returns whatever info snitch wants to gossip
