@@ -116,6 +116,9 @@ public:
             optimized_optional<seastar::abort_source::subscription> _shutdown_subscription;
         public:
             impl(module_ptr module, task_id id, uint64_t sequence_number, std::string scope, std::string keyspace, std::string table, std::string entity, task_id parent_id) noexcept;
+            // impl is always created as a smart pointer so it does not need to be moved or copied.
+            impl(const impl&) = delete;
+            impl(impl&&) = delete;
             virtual ~impl() = default;
 
             virtual std::string type() const = 0;
@@ -130,8 +133,8 @@ public:
             void finish() noexcept;
             void finish_failed(std::exception_ptr ex, std::string error) noexcept;
             void finish_failed(std::exception_ptr ex);
-            future<std::optional<double>> expected_total_workload() const;
-            std::optional<double> expected_children_number() const;
+            virtual future<std::optional<double>> expected_total_workload() const;
+            virtual std::optional<double> expected_children_number() const;
             task_manager::task::progress get_binary_progress() const;
 
             friend task;

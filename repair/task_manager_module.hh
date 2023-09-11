@@ -64,7 +64,8 @@ public:
 protected:
     future<> run() override;
 
-    // TODO: implement progress for user-requested repairs
+    virtual future<std::optional<double>> expected_total_workload() const override;
+    virtual std::optional<double> expected_children_number() const override;
 };
 
 class data_sync_repair_task_impl : public repair_task_impl {
@@ -72,6 +73,7 @@ private:
     dht::token_range_vector _ranges;
     std::unordered_map<dht::token_range, repair_neighbors> _neighbors;
     optimized_optional<abort_source::subscription> _abort_subscription;
+    size_t _cfs_size = 0;
 public:
     data_sync_repair_task_impl(tasks::task_manager::module_ptr module, repair_uniq_id id, std::string keyspace, std::string entity, dht::token_range_vector ranges, std::unordered_map<dht::token_range, repair_neighbors> neighbors, streaming::stream_reason reason, shared_ptr<node_ops_info> ops_info)
         : repair_task_impl(module, id.uuid(), id.id, "keyspace", std::move(keyspace), "", std::move(entity), tasks::task_id::create_null_id(), reason)
@@ -91,7 +93,8 @@ public:
 protected:
     future<> run() override;
 
-    // TODO: implement progress for data-sync repairs
+    virtual future<std::optional<double>> expected_total_workload() const override;
+    virtual std::optional<double> expected_children_number() const override;
 };
 
 class shard_repair_task_impl : public repair_task_impl {
@@ -123,6 +126,7 @@ private:
     bool _aborted = false;
     std::optional<sstring> _failed_because;
     std::optional<semaphore> _user_ranges_parallelism;
+    uint64_t _ranges_complete = 0;
 public:
     shard_repair_task_impl(tasks::task_manager::module_ptr module,
             tasks::task_id id,
@@ -161,11 +165,12 @@ public:
         return _hints_batchlog_flushed;
     }
 
-    future<> repair_range(const dht::token_range& range, table_id);
+    future<> repair_range(const dht::token_range& range, table_info table);
 
-    size_t ranges_size();
+    size_t ranges_size() const noexcept;
 protected:
     future<> do_repair_ranges();
+    virtual future<tasks::task_manager::task::progress> get_progress() const override;
     future<> run() override;
 };
 
