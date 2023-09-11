@@ -25,43 +25,37 @@
 #include "gc_clock.hh"
 
 // The test can be run on real AWS-S3 bucket. For that, create a bucket with
-// permissive enough policy and then run the test with AWS_S3_EXTRA env set
-// to key:secret:region string. E.g. like this
+// permissive enough policy and then run the test with env set respectively
+// E.g. like this
 //
 //   export S3_SERVER_ADDRESS_FOR_TEST=s3.us-east-2.amazonaws.com
 //   export S3_SERVER_PORT_FOR_TEST=443
-//   export S3_PUBLIC_BUCKET_FOR_TEST=xemul
-//   export AWS_S3_EXTRA="${aws_key}:${aws_secret}:us-east-2"
+//   export S3_BUCKET_FOR_TEST=xemul
+//   export AWS_ACCESS_KEY_ID=${aws_key}
+//   export AWS_SECRET_ACCESS_KEY=${aws_secret}
+//   export AWS_DEFAULT_REGION="us-east-2"
 
 s3::endpoint_config_ptr make_minio_config() {
     s3::endpoint_config cfg = {
         .port = std::stoul(tests::getenv_safe("S3_SERVER_PORT_FOR_TEST")),
+        .use_https = ::getenv("AWS_DEFAULT_REGION") != nullptr,
+        .aws = {{
+            .key = tests::getenv_safe("AWS_ACCESS_KEY_ID"),
+            .secret = tests::getenv_safe("AWS_SECRET_ACCESS_KEY"),
+            .region = ::getenv("AWS_DEFAULT_REGION") ? : "local",
+        }},
     };
-    auto extra = ::getenv("AWS_S3_EXTRA");
-    if (extra) {
-        std::vector<std::string> items;
-        boost::split(items, extra, boost::is_any_of(":"));
-        if (items.size() != 3) {
-            throw std::runtime_error("Invalid endpoint format, expected host:port");
-        }
-        testlog.info("Adding AWS configuration to endpoint");
-        cfg.use_https = true;
-        cfg.aws.emplace();
-        cfg.aws->key = items[0];
-        cfg.aws->secret = items[1];
-        cfg.aws->region = items[2];
-    }
     return make_lw_shared<s3::endpoint_config>(std::move(cfg));
 }
 
 /*
  * Tests below expect minio server to be running on localhost
- * with the bucket named env['S3_PUBLIC_BUCKET_FOR_TEST'] created with
+ * with the bucket named env['S3_BUCKET_FOR_TEST'] created with
  * unrestricted anonymous read-write access
  */
 
 SEASTAR_THREAD_TEST_CASE(test_client_put_get_object) {
-    const sstring name(fmt::format("/{}/testobject-{}", tests::getenv_safe("S3_PUBLIC_BUCKET_FOR_TEST"), ::getpid()));
+    const sstring name(fmt::format("/{}/testobject-{}", tests::getenv_safe("S3_BUCKET_FOR_TEST"), ::getpid()));
 
     testlog.info("Make client\n");
     auto cln = s3::client::make(tests::getenv_safe("S3_SERVER_ADDRESS_FOR_TEST"), make_minio_config());
@@ -106,7 +100,7 @@ static auto deferred_delete_object(shared_ptr<s3::client> client, sstring name) 
 }
 
 void do_test_client_multipart_upload(bool with_copy_upload) {
-    const sstring name(fmt::format("/{}/test{}object-{}", tests::getenv_safe("S3_PUBLIC_BUCKET_FOR_TEST"), with_copy_upload ? "jumbo" : "large", ::getpid()));
+    const sstring name(fmt::format("/{}/test{}object-{}", tests::getenv_safe("S3_BUCKET_FOR_TEST"), with_copy_upload ? "jumbo" : "large", ::getpid()));
 
     testlog.info("Make client\n");
     auto cln = s3::client::make(tests::getenv_safe("S3_SERVER_ADDRESS_FOR_TEST"), make_minio_config());
@@ -165,7 +159,7 @@ SEASTAR_THREAD_TEST_CASE(test_client_multipart_copy_upload) {
 }
 
 SEASTAR_THREAD_TEST_CASE(test_client_readable_file) {
-    const sstring name(fmt::format("/{}/testroobject-{}", tests::getenv_safe("S3_PUBLIC_BUCKET_FOR_TEST"), ::getpid()));
+    const sstring name(fmt::format("/{}/testroobject-{}", tests::getenv_safe("S3_BUCKET_FOR_TEST"), ::getpid()));
 
     testlog.info("Make client\n");
     auto cln = s3::client::make(tests::getenv_safe("S3_SERVER_ADDRESS_FOR_TEST"), make_minio_config());
@@ -207,7 +201,7 @@ SEASTAR_THREAD_TEST_CASE(test_client_readable_file) {
 
 SEASTAR_THREAD_TEST_CASE(test_client_put_get_tagging) {
     const sstring name(fmt::format("/{}/testobject-{}",
-                                   tests::getenv_safe("S3_PUBLIC_BUCKET_FOR_TEST"), ::getpid()));
+                                   tests::getenv_safe("S3_BUCKET_FOR_TEST"), ::getpid()));
     auto client = s3::client::make(tests::getenv_safe("S3_SERVER_ADDRESS_FOR_TEST"), make_minio_config());
     auto close_client = deferred_close(*client);
     auto data = sstring("1234567890ABCDEF").release();

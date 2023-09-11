@@ -46,7 +46,7 @@ public:
     tester(std::chrono::seconds dur, unsigned prl, size_t obj_size)
             : _duration(dur)
             , _parallel(prl)
-            , _object_name(fmt::format("/{}/perfobject-{}-{}", tests::getenv_safe("S3_PUBLIC_BUCKET_FOR_TEST"), ::getpid(), this_shard_id()))
+            , _object_name(fmt::format("/{}/perfobject-{}-{}", tests::getenv_safe("S3_BUCKET_FOR_TEST"), ::getpid(), this_shard_id()))
             , _object_size(obj_size)
             , _client(s3::client::make(tests::getenv_safe("S3_SERVER_ADDRESS_FOR_TEST"), make_config()))
     {}
