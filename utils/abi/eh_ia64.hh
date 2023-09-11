@@ -28,7 +28,7 @@ struct cxa_exception {
     cxa_exception* nextException;
 
     int handlerCount;
-    int	handlerSwitchValue;
+    int handlerSwitchValue;
     const char* actionRecord;
     const char* languageSpecificData;
     void* catchTemp;

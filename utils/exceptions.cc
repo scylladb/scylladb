@@ -47,8 +47,8 @@ bool is_system_error_errno(int err_no)
 
 bool should_stop_on_system_error(const std::system_error& e) {
     if (e.code().category() == std::system_category()) {
-	// Whitelist of errors that don't require us to stop the server:
-	switch (e.code().value()) {
+        // Whitelist of errors that don't require us to stop the server:
+        switch (e.code().value()) {
         case EEXIST:
         case ENOENT:
             return false;
