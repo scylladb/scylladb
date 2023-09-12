@@ -25,7 +25,7 @@ while [ $# -gt 0 ]; do
             shift 2
             ;;
         "--pkgs")
-            PKGS="$2"
+            PKGS="${2//;/ }"
             shift 2
             ;;
         "--unified-pkg")
