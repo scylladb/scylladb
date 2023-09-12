@@ -2196,7 +2196,7 @@ future<> gossiper::add_local_application_state(std::list<std::pair<application_s
 
             auto es = gossiper.get_endpoint_state_ptr(ep_addr);
             if (!es) {
-                co_return;
+                on_internal_error(logger, format("endpoint_state_map does not contain endpoint = {}", ep_addr));
             }
 
             auto local_state = *es;
