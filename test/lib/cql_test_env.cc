@@ -722,14 +722,6 @@ private:
                 _qp.invoke_on_all(&cql3::query_processor::stop_remote).get();
             });
 
-            db::batchlog_manager_config bmcfg;
-            bmcfg.replay_rate = 100000000;
-            bmcfg.write_request_timeout = 2s;
-            _batchlog_manager.start(std::ref(_qp), std::ref(_sys_ks), bmcfg).get();
-            auto stop_bm = defer([this] {
-                _batchlog_manager.stop().get();
-            });
-
             service::raft_group0 group0_service{
                     abort_sources.local(), _group0_registry.local(), _ms,
                     _gossiper.local(), _feature_service.local(), _sys_ks.local(), group0_client};
@@ -871,6 +863,14 @@ private:
             auto deinit_storage_service_server = defer([this] {
                 _gossiper.invoke_on_all(&gms::gossiper::shutdown).get();
                 _auth_service.stop().get();
+            });
+
+            db::batchlog_manager_config bmcfg;
+            bmcfg.replay_rate = 100000000;
+            bmcfg.write_request_timeout = 2s;
+            _batchlog_manager.start(std::ref(_qp), std::ref(_sys_ks), bmcfg).get();
+            auto stop_bm = defer([this] {
+                _batchlog_manager.stop().get();
             });
 
             _view_builder.start(std::ref(_db), std::ref(_sys_ks), std::ref(_sys_dist_ks), std::ref(_mnotifier), std::ref(_view_update_generator)).get();
