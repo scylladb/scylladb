@@ -1294,52 +1294,51 @@ future<> gossiper::unsafe_assassinate_endpoint(sstring address) {
 
 future<> gossiper::assassinate_endpoint(sstring address) {
     co_await container().invoke_on(0, [&] (auto&& gossiper) -> future<> {
-        // FIXME: indentation
-            inet_address endpoint(address);
-            auto permit = co_await gossiper.lock_endpoint(endpoint, null_permit_id);
-            auto es = gossiper.get_endpoint_state_ptr(endpoint);
-            auto now = gossiper.now();
-            generation_type gen(std::chrono::duration_cast<std::chrono::seconds>((now + std::chrono::seconds(60)).time_since_epoch()).count());
-            version_type ver(9999);
-            endpoint_state ep_state = es ? *es : endpoint_state(heart_beat_state(gen, ver));
-            std::vector<dht::token> tokens;
-            logger.warn("Assassinating {} via gossip", endpoint);
-            if (es) {
-                tokens = gossiper.get_token_metadata_ptr()->get_tokens(endpoint);
-                if (tokens.empty()) {
-                    logger.warn("Unable to calculate tokens for {}.  Will use a random one", address);
-                    throw std::runtime_error(format("Unable to calculate tokens for {}", endpoint));
-                }
-
-                auto generation = ep_state.get_heart_beat_state().get_generation();
-                auto heartbeat = ep_state.get_heart_beat_state().get_heart_beat_version();
-                auto ring_delay = std::chrono::milliseconds(gossiper._gcfg.ring_delay_ms);
-                logger.info("Sleeping for {} ms to ensure {} does not change", ring_delay.count(), endpoint);
-                // make sure it did not change
-                co_await sleep_abortable(ring_delay, gossiper._abort_source);
-
-                es = gossiper.get_endpoint_state_ptr(endpoint);
-                if (!es) {
-                    logger.warn("Endpoint {} disappeared while trying to assassinate, continuing anyway", endpoint);
-                } else {
-                    auto& new_state = *es;
-                    if (new_state.get_heart_beat_state().get_generation() != generation) {
-                        throw std::runtime_error(format("Endpoint still alive: {} generation changed while trying to assassinate it", endpoint));
-                    } else if (new_state.get_heart_beat_state().get_heart_beat_version() != heartbeat) {
-                        throw std::runtime_error(format("Endpoint still alive: {} heartbeat changed while trying to assassinate it", endpoint));
-                    }
-                }
-                ep_state.update_timestamp(); // make sure we don't evict it too soon
-                ep_state.get_heart_beat_state().force_newer_generation_unsafe();
+        inet_address endpoint(address);
+        auto permit = co_await gossiper.lock_endpoint(endpoint, null_permit_id);
+        auto es = gossiper.get_endpoint_state_ptr(endpoint);
+        auto now = gossiper.now();
+        generation_type gen(std::chrono::duration_cast<std::chrono::seconds>((now + std::chrono::seconds(60)).time_since_epoch()).count());
+        version_type ver(9999);
+        endpoint_state ep_state = es ? *es : endpoint_state(heart_beat_state(gen, ver));
+        std::vector<dht::token> tokens;
+        logger.warn("Assassinating {} via gossip", endpoint);
+        if (es) {
+            tokens = gossiper.get_token_metadata_ptr()->get_tokens(endpoint);
+            if (tokens.empty()) {
+                logger.warn("Unable to calculate tokens for {}.  Will use a random one", address);
+                throw std::runtime_error(format("Unable to calculate tokens for {}", endpoint));
             }
 
-            // do not pass go, do not collect 200 dollars, just gtfo
-            std::unordered_set<dht::token> tokens_set(tokens.begin(), tokens.end());
-            auto expire_time = gossiper.compute_expire_time();
-            ep_state.add_application_state(application_state::STATUS, versioned_value::left(tokens_set, expire_time.time_since_epoch().count()));
-            co_await gossiper.handle_major_state_change(endpoint, std::move(ep_state), permit.id());
-            co_await sleep_abortable(INTERVAL * 4, gossiper._abort_source);
-            logger.warn("Finished assassinating {}", endpoint);
+            auto generation = ep_state.get_heart_beat_state().get_generation();
+            auto heartbeat = ep_state.get_heart_beat_state().get_heart_beat_version();
+            auto ring_delay = std::chrono::milliseconds(gossiper._gcfg.ring_delay_ms);
+            logger.info("Sleeping for {} ms to ensure {} does not change", ring_delay.count(), endpoint);
+            // make sure it did not change
+            co_await sleep_abortable(ring_delay, gossiper._abort_source);
+
+            es = gossiper.get_endpoint_state_ptr(endpoint);
+            if (!es) {
+                logger.warn("Endpoint {} disappeared while trying to assassinate, continuing anyway", endpoint);
+            } else {
+                auto& new_state = *es;
+                if (new_state.get_heart_beat_state().get_generation() != generation) {
+                    throw std::runtime_error(format("Endpoint still alive: {} generation changed while trying to assassinate it", endpoint));
+                } else if (new_state.get_heart_beat_state().get_heart_beat_version() != heartbeat) {
+                    throw std::runtime_error(format("Endpoint still alive: {} heartbeat changed while trying to assassinate it", endpoint));
+                }
+            }
+            ep_state.update_timestamp(); // make sure we don't evict it too soon
+            ep_state.get_heart_beat_state().force_newer_generation_unsafe();
+        }
+
+        // do not pass go, do not collect 200 dollars, just gtfo
+        std::unordered_set<dht::token> tokens_set(tokens.begin(), tokens.end());
+        auto expire_time = gossiper.compute_expire_time();
+        ep_state.add_application_state(application_state::STATUS, versioned_value::left(tokens_set, expire_time.time_since_epoch().count()));
+        co_await gossiper.handle_major_state_change(endpoint, std::move(ep_state), permit.id());
+        co_await sleep_abortable(INTERVAL * 4, gossiper._abort_source);
+        logger.warn("Finished assassinating {}", endpoint);
     });
 }
 
