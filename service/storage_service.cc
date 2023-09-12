@@ -3572,9 +3572,9 @@ future<> storage_service::drain_on_shutdown() {
         _drain_finished.get_future() : do_drain();
 }
 
-future<> storage_service::init_messaging_service_part(sharded<service::storage_proxy>& proxy, sharded<db::system_distributed_keyspace>& sys_dist_ks) {
-    return container().invoke_on_all([&proxy, &sys_dist_ks] (storage_service& local) {
-        return local.init_messaging_service(proxy, sys_dist_ks);
+future<> storage_service::init_messaging_service_part(sharded<db::system_distributed_keyspace>& sys_dist_ks) {
+    return container().invoke_on_all([&sys_dist_ks] (storage_service& local) {
+        return local.init_messaging_service(sys_dist_ks);
     });
 }
 
@@ -6122,7 +6122,7 @@ future<> storage_service::stream_tablet(locator::global_tablet_id tablet) {
     }
 }
 
-void storage_service::init_messaging_service(sharded<service::storage_proxy>& proxy, sharded<db::system_distributed_keyspace>& sys_dist_ks) {
+void storage_service::init_messaging_service(sharded<db::system_distributed_keyspace>& sys_dist_ks) {
     _messaging.local().register_node_ops_cmd([this] (const rpc::client_info& cinfo, node_ops_cmd_request req) {
         auto coordinator = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
         return container().invoke_on(0, [coordinator, req = std::move(req)] (auto& ss) mutable {
@@ -6134,13 +6134,11 @@ void storage_service::init_messaging_service(sharded<service::storage_proxy>& pr
             return ss.raft_topology_cmd_handler(sys_dist_ks, term, cmd_index, cmd);
         });
     });
-    ser::storage_service_rpc_verbs::register_raft_pull_topology_snapshot(&_messaging.local(), [this, &proxy] (raft_topology_pull_params params) {
-        return container().invoke_on(0, [&proxy] (auto& ss) -> future<raft_topology_snapshot> {
+    ser::storage_service_rpc_verbs::register_raft_pull_topology_snapshot(&_messaging.local(), [this] (raft_topology_pull_params params) {
+        return container().invoke_on(0, [] (auto& ss) -> future<raft_topology_snapshot> {
             if (!ss._raft_topology_change_enabled) {
                co_return raft_topology_snapshot{};
             }
-
-            auto& db = proxy.local().get_db();
 
             std::vector<canonical_mutation> topology_mutations;
             {
@@ -6148,7 +6146,7 @@ void storage_service::init_messaging_service(sharded<service::storage_proxy>& pr
                 // might be useful if multiple nodes are trying to pull concurrently.
                 auto read_apply_mutex_holder = co_await ss._group0->client().hold_read_apply_mutex();
                 auto rs = co_await db::system_keyspace::query_mutations(
-                    db, db::system_keyspace::NAME, db::system_keyspace::TOPOLOGY);
+                    ss._db, db::system_keyspace::NAME, db::system_keyspace::TOPOLOGY);
                 auto s = ss._db.local().find_schema(db::system_keyspace::NAME, db::system_keyspace::TOPOLOGY);
                 topology_mutations.reserve(rs->partitions().size());
                 boost::range::transform(
@@ -6170,7 +6168,7 @@ void storage_service::init_messaging_service(sharded<service::storage_proxy>& pr
                 // Alternatively, a node would wait for some time before switching to normal state.
                 auto read_apply_mutex_holder = co_await ss._group0->client().hold_read_apply_mutex();
                 auto rs = co_await db::system_keyspace::query_mutations(
-                    db, db::system_keyspace::NAME, db::system_keyspace::CDC_GENERATIONS_V3);
+                    ss._db, db::system_keyspace::NAME, db::system_keyspace::CDC_GENERATIONS_V3);
                 auto s = ss._db.local().find_schema(db::system_keyspace::NAME, db::system_keyspace::CDC_GENERATIONS_V3);
                 cdc_generation_mutations.reserve(rs->partitions().size());
                 boost::range::transform(
