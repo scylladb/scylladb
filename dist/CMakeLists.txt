@@ -84,3 +84,30 @@ add_custom_target(dist-server-tar
 add_custom_target(package
   ${CMAKE_COMMAND} -E copy ${stripped_dist_pkg} ${Scylla_PRODUCT}-package.tar.gz
   DEPENDS ${stripped_dist_pkg})
+
+
+set(dist_pkgs
+  "${stripped_dist_pkg}")
+dist_submodule(cqlsh cqlsh dist_pkgs
+  NOARCH)
+dist_submodule(tools java dist_pkgs
+  NOARCH)
+dist_submodule(jmx jmx dist_pkgs
+  NOARCH)
+dist_submodule(python3 python3 dist_pkgs)
+set(unified_dist_pkg
+  "${CMAKE_CURRENT_BINARY_DIR}/${Scylla_PRODUCT}-unified-${Scylla_VERSION}-${Scylla_RELEASE}.${CMAKE_SYSTEM_PROCESSOR}.tar.gz")
+add_custom_command(
+  OUTPUT
+    "${unified_dist_pkg}"
+  COMMAND
+    ${CMAKE_SOURCE_DIR}/unified/build_unified.sh
+      --build-dir ${CMAKE_BINARY_DIR}
+      --pkgs "${dist_pkgs}"
+      --unified-pkg ${unified_dist_pkg}
+  DEPENDS
+    ${dist_pkgs}
+  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+  VERBATIM)
+add_custom_target(dist-unified
+  DEPENDS ${unified_dist_pkg})

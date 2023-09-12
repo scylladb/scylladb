@@ -29,3 +29,22 @@ function(build_submodule name dir)
   add_custom_target(dist-${name}
     DEPENDS dist-${name}-tar dist-${name}-rpm dist-${name}-deb)
 endfunction()
+
+macro(dist_submodule name dir pkgs)
+  # defined as a macro, so that we can append the path to the dist tarball to
+  # specfied "pkgs"
+  cmake_parse_arguments(parsed_args "NOARCH" "" "" ${ARGN})
+  if(parsed_args_NOARCH)
+    set(arch "noarch")
+  else()
+    set(arch "${CMAKE_SYSTEM_PROCESSOR}")
+  endif()
+  set(pkg_name "${Scylla_PRODUCT}-${name}-${Scylla_VERSION}-${Scylla_RELEASE}.${arch}.tar.gz")
+  set(reloc_pkg "${CMAKE_SOURCE_DIR}/tools/${dir}/build/${pkg_name}")
+  set(dist_pkg "${CMAKE_CURRENT_BINARY_DIR}/${pkg_name}")
+  add_custom_command(
+    OUTPUT ${dist_pkg}
+    COMMAND ${CMAKE_COMMAND} -E copy ${reloc_pkg} ${dist_pkg}
+    DEPENDS dist-${name}-tar)
+  list(APPEND ${pkgs} "${dist_pkg}")
+endmacro()
