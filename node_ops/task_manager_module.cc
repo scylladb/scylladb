@@ -85,13 +85,13 @@ const locator::token_metadata& join_token_ring_task_impl::get_token_metadata() c
 }
 
 future<> join_token_ring_task_impl::run() {
-    auto& _sys_ks = _ss._sys_ks;
-    auto& _db = _ss._db;
-    auto& _gossiper = _ss._gossiper;
-    auto& _raft_topology_change_enabled = _ss._raft_topology_change_enabled;
-    auto& _snitch = _ss._snitch;
-    auto& _feature_service = _ss._feature_service;
-    auto& _group0 = _ss._group0;
+    auto& sys_ks = _ss._sys_ks;
+    auto& db = _ss._db;
+    auto& gossiper = _ss._gossiper;
+    auto& raft_topology_change_enabled = _ss._raft_topology_change_enabled;
+    auto& snitch = _ss._snitch;
+    auto& feature_service = _ss._feature_service;
+    auto& group0 = _ss._group0;
     std::unordered_set<dht::token> bootstrap_tokens;
     std::map<gms::application_state, gms::versioned_value> app_states;
     /* The timestamp of the CDC streams generation that this node has proposed when joining.
@@ -109,10 +109,10 @@ future<> join_token_ring_task_impl::run() {
      */
     std::optional<cdc::generation_id> cdc_gen_id;
 
-    if (_sys_ks.local().was_decommissioned()) {
-        if (_db.local().get_config().override_decommission() && !_db.local().get_config().consistent_cluster_management()) {
+    if (sys_ks.local().was_decommissioned()) {
+        if (db.local().get_config().override_decommission() && !db.local().get_config().consistent_cluster_management()) {
             tasks::tmlogger.warn("This node was decommissioned, but overriding by operator request.");
-            co_await _sys_ks.local().set_bootstrap_state(db::system_keyspace::bootstrap_state::COMPLETED);
+            co_await sys_ks.local().set_bootstrap_state(db::system_keyspace::bootstrap_state::COMPLETED);
         } else {
             auto msg = sstring("This node was decommissioned and will not rejoin the ring unless override_decommission=true has been set and consistent cluster management is not in use,"
                                "or all existing data is removed and the node is bootstrapped again");
@@ -130,7 +130,7 @@ future<> join_token_ring_task_impl::run() {
     auto tmlock = std::make_unique<locator::token_metadata_lock>(co_await _ss.get_token_metadata_lock());
     auto tmptr = co_await _ss.get_mutable_token_metadata_ptr();
     if (is_replacing()) {
-        if (_sys_ks.local().bootstrap_complete()) {
+        if (sys_ks.local().bootstrap_complete()) {
             throw std::runtime_error("Cannot replace address with a node that is already bootstrapped");
         }
         ri = co_await _ss.prepare_replacement_info(_initial_contact_nodes, _loaded_peer_features);
@@ -139,7 +139,7 @@ future<> join_token_ring_task_impl::run() {
             .ip_addr = *replace_address,
             .raft_id = raft::server_id{ri->host_id.uuid()},
         };
-        if (!_raft_topology_change_enabled) {
+        if (!raft_topology_change_enabled) {
             bootstrap_tokens = std::move(ri->tokens);
             replacing_a_node_with_same_ip = *replace_address == get_broadcast_address();
             replacing_a_node_with_diff_ip = *replace_address != get_broadcast_address();
@@ -154,42 +154,42 @@ future<> join_token_ring_task_impl::run() {
     } else if (should_bootstrap()) {
         co_await _ss.check_for_endpoint_collision(_initial_contact_nodes, _loaded_peer_features);
     } else {
-        auto local_features = _feature_service.supported_feature_set();
+        auto local_features = feature_service.supported_feature_set();
         tasks::tmlogger.info("Checking remote features with gossip, initial_contact_nodes={}", _initial_contact_nodes);
-        co_await _gossiper.do_shadow_round(_initial_contact_nodes);
-        _gossiper.check_knows_remote_features(local_features, _loaded_peer_features);
-        _gossiper.check_snitch_name_matches(_snitch.local()->get_name());
+        co_await gossiper.do_shadow_round(_initial_contact_nodes);
+        gossiper.check_knows_remote_features(local_features, _loaded_peer_features);
+        gossiper.check_snitch_name_matches(snitch.local()->get_name());
         // Check if the node is already removed from the cluster
         auto local_host_id = get_token_metadata().get_my_id();
         auto my_ip = get_broadcast_address();
-        if (!_gossiper.is_safe_for_restart(my_ip, local_host_id)) {
+        if (!gossiper.is_safe_for_restart(my_ip, local_host_id)) {
             throw std::runtime_error(::format("The node {} with host_id {} is removed from the cluster. Can not restart the removed node to join the cluster again!",
                     my_ip, local_host_id));
         }
-        co_await _gossiper.reset_endpoint_state_map();
+        co_await gossiper.reset_endpoint_state_map();
         for (auto ep : _loaded_endpoints) {
-            co_await _gossiper.add_saved_endpoint(ep);
+            co_await gossiper.add_saved_endpoint(ep);
         }
     }
-    auto features = _feature_service.supported_feature_set();
+    auto features = feature_service.supported_feature_set();
     tasks::tmlogger.info("Save advertised features list in the 'system.{}' table", db::system_keyspace::LOCAL);
     // Save the advertised feature set to system.local table after
     // all remote feature checks are complete and after gossip shadow rounds are done.
     // At this point, the final feature set is already determined before the node joins the ring.
-    co_await _sys_ks.local().save_local_supported_features(features);
+    co_await sys_ks.local().save_local_supported_features(features);
 
     // If this is a restarting node, we should update tokens before gossip starts
-    auto my_tokens = co_await _sys_ks.local().get_saved_tokens();
-    bool restarting_normal_node = _sys_ks.local().bootstrap_complete() && !is_replacing() && !my_tokens.empty();
+    auto my_tokens = co_await sys_ks.local().get_saved_tokens();
+    bool restarting_normal_node = sys_ks.local().bootstrap_complete() && !is_replacing() && !my_tokens.empty();
     if (restarting_normal_node) {
         tasks::tmlogger.info("Restarting a node in NORMAL status");
         // This node must know about its chosen tokens before other nodes do
         // since they may start sending writes to this node after it gossips status = NORMAL.
         // Therefore we update _token_metadata now, before gossip starts.
-        tmptr->update_topology(get_broadcast_address(), _snitch.local()->get_location(), locator::node::state::normal);
+        tmptr->update_topology(get_broadcast_address(), snitch.local()->get_location(), locator::node::state::normal);
         co_await tmptr->update_normal_tokens(my_tokens, get_broadcast_address());
 
-        cdc_gen_id = co_await _sys_ks.local().get_cdc_generation_id();
+        cdc_gen_id = co_await sys_ks.local().get_cdc_generation_id();
         if (!cdc_gen_id) {
             // We could not have completed joining if we didn't generate and persist a CDC streams timestamp,
             // unless we are restarting after upgrading from non-CDC supported version.
@@ -208,9 +208,9 @@ future<> join_token_ring_task_impl::run() {
     auto local_host_id = get_token_metadata().get_my_id();
     if (!replacing_a_node_with_diff_ip) {
         auto endpoint = get_broadcast_address();
-        auto eps = _gossiper.get_endpoint_state_ptr(endpoint);
+        auto eps = gossiper.get_endpoint_state_ptr(endpoint);
         if (eps) {
-            auto replace_host_id = _gossiper.get_host_id(get_broadcast_address());
+            auto replace_host_id = gossiper.get_host_id(get_broadcast_address());
             tasks::tmlogger.info("Host {}/{} is replacing {}/{} using the same address", local_host_id, endpoint, replace_host_id, endpoint);
         }
         tmptr->update_host_id(local_host_id, get_broadcast_address());
@@ -224,7 +224,7 @@ future<> join_token_ring_task_impl::run() {
 
     auto broadcast_rpc_address = utils::fb_utilities::get_broadcast_rpc_address();
     // Ensure we know our own actual Schema UUID in preparation for updates
-    co_await db::schema_tables::recalculate_schema_version(_sys_ks, _proxy, _feature_service);
+    co_await db::schema_tables::recalculate_schema_version(sys_ks, _proxy, feature_service);
 
     app_states.emplace(gms::application_state::NET_VERSION, versioned_value::network_version());
     app_states.emplace(gms::application_state::HOST_ID, versioned_value::host_id(local_host_id));
@@ -235,7 +235,7 @@ future<> join_token_ring_task_impl::run() {
     app_states.emplace(gms::application_state::SCHEMA_TABLES_VERSION, versioned_value(db::schema_tables::version));
     app_states.emplace(gms::application_state::RPC_READY, versioned_value::cql_ready(false));
     app_states.emplace(gms::application_state::VIEW_BACKLOG, versioned_value(""));
-    app_states.emplace(gms::application_state::SCHEMA, versioned_value::schema(_db.local().get_version()));
+    app_states.emplace(gms::application_state::SCHEMA, versioned_value::schema(db.local().get_version()));
     if (restarting_normal_node) {
         // Order is important: both the CDC streams timestamp and tokens must be known when a node handles our status.
         // Exception: there might be no CDC streams timestamp proposed by us if we're upgrading from a non-CDC version.
@@ -246,15 +246,15 @@ future<> join_token_ring_task_impl::run() {
     if (replacing_a_node_with_same_ip || replacing_a_node_with_diff_ip) {
         app_states.emplace(gms::application_state::TOKENS, versioned_value::tokens(bootstrap_tokens));
     }
-    app_states.emplace(gms::application_state::SNITCH_NAME, versioned_value::snitch_name(_snitch.local()->get_name()));
+    app_states.emplace(gms::application_state::SNITCH_NAME, versioned_value::snitch_name(snitch.local()->get_name()));
     app_states.emplace(gms::application_state::SHARD_COUNT, versioned_value::shard_count(smp::count));
-    app_states.emplace(gms::application_state::IGNORE_MSB_BITS, versioned_value::ignore_msb_bits(_db.local().get_config().murmur3_partitioner_ignore_msb_bits()));
+    app_states.emplace(gms::application_state::IGNORE_MSB_BITS, versioned_value::ignore_msb_bits(db.local().get_config().murmur3_partitioner_ignore_msb_bits()));
 
-    for (auto&& s : _snitch.local()->get_app_states()) {
+    for (auto&& s : snitch.local()->get_app_states()) {
         app_states.emplace(s.first, std::move(s.second));
     }
 
-    auto schema_change_announce = _db.local().observable_schema_version().observe([&ss = _ss] (table_schema_version schema_version) mutable {
+    auto schema_change_announce = db.local().observable_schema_version().observe([&ss = _ss] (table_schema_version schema_version) mutable {
         ss._migration_manager.local().passive_announce(std::move(schema_version));
     });
 
@@ -262,11 +262,11 @@ future<> join_token_ring_task_impl::run() {
 
     tasks::tmlogger.info("Starting up server gossip");
 
-    auto generation_number = gms::generation_type(co_await _sys_ks.local().increment_and_get_generation());
+    auto generation_number = gms::generation_type(co_await sys_ks.local().increment_and_get_generation());
     auto advertise = gms::advertise_myself(!replacing_a_node_with_same_ip);
-    co_await _gossiper.start_gossiping(generation_number, app_states, advertise);
+    co_await gossiper.start_gossiping(generation_number, app_states, advertise);
 
-    if (!_raft_topology_change_enabled && should_bootstrap()) {
+    if (!raft_topology_change_enabled && should_bootstrap()) {
         // Wait for NORMAL state handlers to finish for existing nodes now, so that connection dropping
         // (happening at the end of `handle_state_normal`: `notify_joined`) doesn't interrupt
         // group 0 joining or repair. (See #12764, #12956, #12972, #13302)
@@ -274,7 +274,7 @@ future<> join_token_ring_task_impl::run() {
         // But before we can do that, we must make sure that gossip sees at least one other node
         // and fetches the list of peers from it; otherwise `wait_for_normal_state_handled_on_boot`
         // may trivially finish without waiting for anyone.
-        co_await _gossiper.wait_for_live_nodes_to_show_up(2);
+        co_await gossiper.wait_for_live_nodes_to_show_up(2);
 
         // Note: in Raft topology mode this is unnecessary.
         // Node state changes are propagated to the cluster through explicit global barriers.
@@ -296,7 +296,7 @@ future<> join_token_ring_task_impl::run() {
         // these obsolete IPs. Refs: #14487, #14468
         auto& tm = get_token_metadata();
         auto ignore_nodes = ri
-                ? _ss.parse_node_list(_db.local().get_config().ignore_dead_nodes_for_replace(), tm)
+                ? _ss.parse_node_list(db.local().get_config().ignore_dead_nodes_for_replace(), tm)
                 // TODO: specify ignore_nodes for bootstrap
                 : std::unordered_set<gms::inet_address>{};
 
@@ -309,13 +309,13 @@ future<> join_token_ring_task_impl::run() {
         });
 
         tasks::tmlogger.info("Waiting for nodes {} to be alive", sync_nodes);
-        co_await _gossiper.wait_alive(sync_nodes, std::chrono::seconds{30});
+        co_await gossiper.wait_alive(sync_nodes, std::chrono::seconds{30});
         tasks::tmlogger.info("Nodes {} are alive", sync_nodes);
     }
 
-    assert(_group0);
+    assert(group0);
     // if the node is bootstrapped the functin will do nothing since we already created group0 in main.cc
-    co_await _group0->setup_group0(_sys_ks.local(), _initial_contact_nodes, raft_replace_info, _ss, *_ss._qp, _ss._migration_manager.local());
+    co_await group0->setup_group0(sys_ks.local(), _initial_contact_nodes, raft_replace_info, _ss, *_ss._qp, _ss._migration_manager.local());
 
     raft::server* raft_server = co_await [&ss = _ss] () -> future<raft::server*> {
         if (!ss._raft_topology_change_enabled) {
@@ -332,10 +332,10 @@ future<> join_token_ring_task_impl::run() {
         }
     } ();
 
-    co_await _gossiper.wait_for_gossip_to_settle();
+    co_await gossiper.wait_for_gossip_to_settle();
     // TODO: Look at the group 0 upgrade state and use it to decide whether to attach or not
-    if (!_raft_topology_change_enabled) {
-        co_await _feature_service.enable_features_on_join(_gossiper, _sys_ks.local());
+    if (!raft_topology_change_enabled) {
+        co_await feature_service.enable_features_on_join(gossiper, sys_ks.local());
     }
 
     _ss.set_mode(service::storage_service::mode::JOINING);
@@ -372,7 +372,7 @@ future<> join_token_ring_task_impl::run() {
 
         // Node state is enough to know that bootstrap has completed, but to make legacy code happy
         // let it know that the bootstrap is completed as well
-        co_await _sys_ks.local().set_bootstrap_state(db::system_keyspace::bootstrap_state::COMPLETED);
+        co_await sys_ks.local().set_bootstrap_state(db::system_keyspace::bootstrap_state::COMPLETED);
         _ss.set_mode(service::storage_service::mode::NORMAL);
 
         if (get_token_metadata().sorted_tokens().empty()) {
@@ -381,7 +381,7 @@ future<> join_token_ring_task_impl::run() {
             throw std::runtime_error(err);
         }
 
-        co_await _group0->finish_setup_after_join(_ss, *_ss._qp, _ss._migration_manager.local());
+        co_await group0->finish_setup_after_join(_ss, *_ss._qp, _ss._migration_manager.local());
         co_return;
     }
 
@@ -395,11 +395,11 @@ future<> join_token_ring_task_impl::run() {
     // We attempted to replace this with a schema-presence check, but you need a meaningful sleep
     // to get schema info from gossip which defeats the purpose.  See CASSANDRA-4427 for the gory details.
     if (should_bootstrap()) {
-        bool resume_bootstrap = _sys_ks.local().bootstrap_in_progress();
+        bool resume_bootstrap = sys_ks.local().bootstrap_in_progress();
         if (resume_bootstrap) {
             tasks::tmlogger.warn("Detected previous bootstrap failure; retrying");
         } else {
-            co_await _sys_ks.local().set_bootstrap_state(db::system_keyspace::bootstrap_state::IN_PROGRESS);
+            co_await sys_ks.local().set_bootstrap_state(db::system_keyspace::bootstrap_state::IN_PROGRESS);
         }
         tasks::tmlogger.info("waiting for ring information");
 
@@ -415,14 +415,14 @@ future<> join_token_ring_task_impl::run() {
             }
             tasks::tmlogger.info("getting bootstrap token");
             if (resume_bootstrap) {
-                bootstrap_tokens = co_await _sys_ks.local().get_saved_tokens();
+                bootstrap_tokens = co_await sys_ks.local().get_saved_tokens();
                 if (!bootstrap_tokens.empty()) {
                     tasks::tmlogger.info("Using previously saved tokens = {}", bootstrap_tokens);
                 } else {
-                    bootstrap_tokens = dht::boot_strapper::get_bootstrap_tokens(tmptr, _db.local().get_config(), dht::check_token_endpoint::yes);
+                    bootstrap_tokens = dht::boot_strapper::get_bootstrap_tokens(tmptr, db.local().get_config(), dht::check_token_endpoint::yes);
                 }
             } else {
-                bootstrap_tokens = dht::boot_strapper::get_bootstrap_tokens(tmptr, _db.local().get_config(), dht::check_token_endpoint::yes);
+                bootstrap_tokens = dht::boot_strapper::get_bootstrap_tokens(tmptr, db.local().get_config(), dht::check_token_endpoint::yes);
             }
         } else {
             if (*replace_address != get_broadcast_address()) {
@@ -436,7 +436,7 @@ future<> join_token_ring_task_impl::run() {
                 for (auto token : bootstrap_tokens) {
                     auto existing = tmptr->get_endpoint(token);
                     if (existing) {
-                        auto eps = _gossiper.get_endpoint_state_ptr(*existing);
+                        auto eps = gossiper.get_endpoint_state_ptr(*existing);
                         if (eps && eps->get_update_timestamp() > gms::gossiper::clk::now() - _delay) {
                             throw std::runtime_error("Cannot replace a live node...");
                         }
@@ -453,17 +453,17 @@ future<> join_token_ring_task_impl::run() {
         }
         co_await _sys_dist_ks.invoke_on_all(&db::system_distributed_keyspace::start);
         co_await _ss.mark_existing_views_as_built(_sys_dist_ks);
-        co_await _sys_ks.local().update_tokens(bootstrap_tokens);
+        co_await sys_ks.local().update_tokens(bootstrap_tokens);
         co_await _ss.bootstrap(bootstrap_tokens, cdc_gen_id, ri);
     } else {
         supervisor::notify("starting system distributed keyspace");
         co_await _sys_dist_ks.invoke_on_all(&db::system_distributed_keyspace::start);
-        bootstrap_tokens = co_await _sys_ks.local().get_saved_tokens();
+        bootstrap_tokens = co_await sys_ks.local().get_saved_tokens();
         if (bootstrap_tokens.empty()) {
-            bootstrap_tokens = dht::boot_strapper::get_bootstrap_tokens(get_token_metadata_ptr(), _db.local().get_config(), dht::check_token_endpoint::no);
-            co_await _sys_ks.local().update_tokens(bootstrap_tokens);
+            bootstrap_tokens = dht::boot_strapper::get_bootstrap_tokens(get_token_metadata_ptr(), db.local().get_config(), dht::check_token_endpoint::no);
+            co_await sys_ks.local().update_tokens(bootstrap_tokens);
         } else {
-            size_t num_tokens = _db.local().get_config().num_tokens();
+            size_t num_tokens = db.local().get_config().num_tokens();
             if (bootstrap_tokens.size() != num_tokens) {
                 throw std::runtime_error(::format("Cannot change the number of tokens from {:d} to {:d}", bootstrap_tokens.size(), num_tokens));
             } else {
@@ -481,13 +481,13 @@ future<> join_token_ring_task_impl::run() {
         return tmptr->update_normal_tokens(bootstrap_tokens, ss.get_broadcast_address());
     });
 
-    if (!_sys_ks.local().bootstrap_complete()) {
+    if (!sys_ks.local().bootstrap_complete()) {
         // If we're not bootstrapping then we shouldn't have chosen a CDC streams timestamp yet.
         assert(should_bootstrap() || !cdc_gen_id);
 
         // Don't try rewriting CDC stream description tables.
         // See cdc.md design notes, `Streams description table V1 and rewriting` section, for explanation.
-        co_await _sys_ks.local().cdc_set_rewritten(std::nullopt);
+        co_await sys_ks.local().cdc_set_rewritten(std::nullopt);
     }
 
     if (!cdc_gen_id) {
@@ -505,8 +505,8 @@ future<> join_token_ring_task_impl::run() {
         // Finally, if we're the first node, we'll create the first generation.
 
         if (!is_replacing()
-                && (!_sys_ks.local().bootstrap_complete()
-                    || cdc::should_propose_first_generation(get_broadcast_address(), _gossiper))) {
+                && (!sys_ks.local().bootstrap_complete()
+                    || cdc::should_propose_first_generation(get_broadcast_address(), gossiper))) {
             try {
                 cdc_gen_id = co_await _ss._cdc_gens.local().legacy_make_new_generation(bootstrap_tokens, !_ss.is_first_node());
             } catch (...) {
@@ -519,16 +519,16 @@ future<> join_token_ring_task_impl::run() {
 
     // Persist the CDC streams timestamp before we persist bootstrap_state = COMPLETED.
     if (cdc_gen_id) {
-        co_await _sys_ks.local().update_cdc_generation_id(*cdc_gen_id);
+        co_await sys_ks.local().update_cdc_generation_id(*cdc_gen_id);
     }
     // If we crash now, we will choose a new CDC streams timestamp anyway (because we will also choose a new set of tokens).
     // But if we crash after setting bootstrap_state = COMPLETED, we will keep using the persisted CDC streams timestamp after restarting.
 
-    co_await _sys_ks.local().set_bootstrap_state(db::system_keyspace::bootstrap_state::COMPLETED);
+    co_await sys_ks.local().set_bootstrap_state(db::system_keyspace::bootstrap_state::COMPLETED);
     // At this point our local tokens and CDC streams timestamp are chosen (bootstrap_tokens, cdc_gen_id) and will not be changed.
 
     // start participating in the ring.
-    co_await service::set_gossip_tokens(_gossiper, bootstrap_tokens, cdc_gen_id);
+    co_await service::set_gossip_tokens(gossiper, bootstrap_tokens, cdc_gen_id);
 
     _ss.set_mode(service::storage_service::mode::NORMAL);
 
@@ -538,8 +538,8 @@ future<> join_token_ring_task_impl::run() {
         throw std::runtime_error(err);
     }
 
-    assert(_group0);
-    co_await _group0->finish_setup_after_join(_ss, *_ss._qp, _ss._migration_manager.local());
+    assert(group0);
+    co_await group0->finish_setup_after_join(_ss, *_ss._qp, _ss._migration_manager.local());
     co_await _ss._cdc_gens.local().after_join(std::move(cdc_gen_id));
 }
 
