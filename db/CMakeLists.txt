@@ -17,6 +17,7 @@ target_sources(db
     functions/function.cc
     hints/internal/hint_endpoint_manager.cc
     hints/internal/hint_sender.cc
+    hints/internal/hint_storage.cc
     hints/manager.cc
     hints/resource_manager.cc
     hints/host_filter.cc

@@ -76,11 +76,6 @@ private:
     using hint_stats = internal::hint_stats;
     using drain = internal::drain;
 
-    // map: shard -> segments
-    using hints_ep_segments_map = std::unordered_map<unsigned, std::list<fs::path>>;
-    // map: IP -> map: shard -> segments
-    using hints_segments_map = std::unordered_map<sstring, hints_ep_segments_map>;
-
     friend class space_watchdog;
     friend class internal::end_point_hints_manager;
     friend class internal::sender;
@@ -249,81 +244,8 @@ public:
     /// \arg hints_directory The directory with hints which should be initialized
     directory_initializer make_directory_initializer(utils::directories& dirs, fs::path hints_directory);
 
-    /// \brief Rebalance hints segments among all present shards.
-    ///
-    /// The difference between the number of segments on every two shard will be not greater than 1 after the
-    /// rebalancing.
-    ///
-    /// Removes the sub-directories of \ref hints_directory that correspond to shards that are not relevant any more
-    /// (re-sharding to a lower shards number case).
-    ///
-    /// Complexity: O(N+K), where N is a total number of present hints' segments and
-    ///                           K = <number of shards during the previous boot> * <number of end points for which hints where ever created>
-    ///
-    /// \param hints_directory A hints directory to rebalance
-    /// \return A future that resolves when the operation is complete.
-    static future<> rebalance(fs::path hints_directory);
-
 private:
     future<> compute_hints_dir_device_id();
-
-    /// \brief Scan the given hints directory and build the map of all present hints segments.
-    ///
-    /// Complexity: O(N+K), where N is a total number of present hints' segments and
-    ///                           K = <number of shards during the previous boot> * <number of end points for which hints where ever created>
-    ///
-    /// \note Should be called from a seastar::thread context.
-    ///
-    /// \param hints_directory directory to scan
-    /// \return a map: ep -> map: shard -> segments (full paths)
-    static hints_segments_map get_current_hints_segments(const fs::path& hints_directory);
-
-    /// \brief Rebalance hints segments for a given (destination) end point
-    ///
-    /// This method is going to consume files from the \ref segments_to_move and distribute them between the present
-    /// shards (taking into an account the \ref ep_segments state - there may be zero or more segments that belong to a
-    /// particular shard in it) until we either achieve the requested \ref segments_per_shard level on each shard
-    /// or until we are out of files to move.
-    ///
-    /// As a result (in addition to the actual state on the disk) both \ref ep_segments and \ref segments_to_move are going
-    /// to be modified.
-    ///
-    /// Complexity: O(N), where N is a total number of present hints' segments for the \ref ep end point (as a destination).
-    ///
-    /// \note Should be called from a seastar::thread context.
-    ///
-    /// \param ep destination end point ID (a string with its IP address)
-    /// \param segments_per_shard number of hints segments per-shard we want to achieve
-    /// \param hints_directory a root hints directory
-    /// \param ep_segments a map that was originally built by get_current_hints_segments() for this end point
-    /// \param segments_to_move a list of segments we are allowed to move
-    static void rebalance_segments_for(
-            const sstring& ep,
-            size_t segments_per_shard,
-            const fs::path& hints_directory,
-            hints_ep_segments_map& ep_segments,
-            std::list<fs::path>& segments_to_move);
-
-    /// \brief Rebalance all present hints segments.
-    ///
-    /// The difference between the number of segments on every two shard will be not greater than 1 after the
-    /// rebalancing.
-    ///
-    /// Complexity: O(N), where N is a total number of present hints' segments.
-    ///
-    /// \note Should be called from a seastar::thread context.
-    ///
-    /// \param hints_directory a root hints directory
-    /// \param segments_map a map that was built by get_current_hints_segments()
-    static void rebalance_segments(const fs::path& hints_directory, hints_segments_map& segments_map);
-
-    /// \brief Remove sub-directories of shards that are not relevant any more (re-sharding to a lower number of shards case).
-    ///
-    /// Complexity: O(S*E), where S is a number of shards during the previous boot and
-    ///                           E is a number of end points for which hints where ever created.
-    ///
-    /// \param hints_directory a root hints directory
-    static void remove_irrelevant_shards_directories(const fs::path& hints_directory);
 
     node_to_hint_store_factory_type& store_factory() noexcept {
         return _store_factory;
