@@ -58,7 +58,7 @@ namespace internal {
 
 class end_point_hints_manager;
 
-class sender {
+class hint_sender {
     // Important: clock::now() must be noexcept.
     // TODO: add the corresponding static_assert() when seastar::lowres_clock::now() is marked as "noexcept".
     using clock = seastar::lowres_clock;
@@ -118,16 +118,16 @@ private:
     std::multimap<db::replay_position, lw_shared_ptr<std::optional<promise<>>>> _replay_waiters;
 
 public:
-    sender(end_point_hints_manager& parent, service::storage_proxy& local_storage_proxy, replica::database& local_db, gms::gossiper& local_gossiper) noexcept;
-    ~sender();
+    hint_sender(end_point_hints_manager& parent, service::storage_proxy& local_storage_proxy, replica::database& local_db, gms::gossiper& local_gossiper) noexcept;
+    ~hint_sender();
 
     /// \brief A constructor that should be called from the copy/move-constructor of end_point_hints_manager.
     ///
     /// Make sure to properly reassign the references - especially to the \param parent and its internals.
     ///
-    /// \param other the "sender" instance to copy from
-    /// \param parent the parent object for this "sender" instance
-    sender(const sender& other, end_point_hints_manager& parent) noexcept;
+    /// \param other the "hint_sender" instance to copy from
+    /// \param parent the parent object for this "hint_sender" instance
+    hint_sender(const hint_sender& other, end_point_hints_manager& parent) noexcept;
 
     /// \brief Start sending hints.
     ///
@@ -137,7 +137,7 @@ public:
     /// Sending is stopped when stop() is called.
     void start();
 
-    /// \brief Stop the sender - make sure all background sending is complete.
+    /// \brief Stop the hint_sender - make sure all background sending is complete.
     /// \param should_drain if is drain::yes - drain all pending hints
     future<> stop(drain should_drain) noexcept;
 

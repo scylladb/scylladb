@@ -78,7 +78,7 @@ private:
 
     friend class space_watchdog;
     friend class internal::end_point_hints_manager;
-    friend class internal::sender;
+    friend class internal::hint_sender;
 
     using end_point_hints_manager = internal::end_point_hints_manager;
 

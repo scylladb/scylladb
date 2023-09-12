@@ -39,7 +39,7 @@ namespace internal {
 
 class end_point_hints_manager {
 private:
-    friend class sender;
+    friend class hint_sender;
 
 private:
     endpoint_id _key;
@@ -64,7 +64,7 @@ private:
     const fs::path _hints_dir;
     uint64_t _hints_in_progress = 0;
     db::replay_position _last_written_rp;
-    sender _sender;
+    hint_sender _sender;
 
 public:
     end_point_hints_manager(const endpoint_id& key, manager& shard_manager);
