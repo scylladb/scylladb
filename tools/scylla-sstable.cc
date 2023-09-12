@@ -258,7 +258,15 @@ const std::vector<sstables::shared_sstable> load_sstables(schema_ptr schema, sst
         data_dictionary::storage_options local;
         auto sst = sst_man.make_sstable(schema, dir_path.c_str(), local, ed.generation, sstables::sstable_state::normal, ed.version, ed.format);
 
-        co_await sst->load(schema->get_sharder(), sstables::sstable_open_config{.load_first_and_last_position_metadata = false});
+        try {
+            co_await sst->load(schema->get_sharder(), sstables::sstable_open_config{.load_first_and_last_position_metadata = false});
+        } catch (...) {
+            // Print each individual error here since parallel_for_each
+            // will propagate only one of them up the stack.
+            auto msg = fmt::format("Could not load SSTable: {}", sst->get_filename());
+            fmt::print(std::cerr, "{}: {}\n", msg, std::current_exception());
+            throw_with_nested(std::runtime_error(msg));
+        }
 
         sstables[i] = std::move(sst);
     }).get();
@@ -2889,7 +2897,12 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
 
         std::vector<sstables::shared_sstable> sstables;
         if (app_config.count("sstables")) {
-            sstables = load_sstables(schema, sst_man, app_config["sstables"].as<std::vector<sstring>>());
+            try {
+                sstables = load_sstables(schema, sst_man, app_config["sstables"].as<std::vector<sstring>>());
+            } catch (...) {
+                fmt::print(std::cerr, "error loading sstables: {}\n", std::current_exception());
+                return 1;
+            }
         }
 
         reader_concurrency_semaphore rcs_sem(reader_concurrency_semaphore::no_limits{}, app_name);
