@@ -36,10 +36,9 @@
 #include <vector>
 
 namespace db::hints {
+namespace internal {
 
-using namespace internal;
-
-bool internal::end_point_hints_manager::store_hint(schema_ptr s, lw_shared_ptr<const frozen_mutation> fm, tracing::trace_state_ptr tr_state) noexcept {
+bool end_point_hints_manager::store_hint(schema_ptr s, lw_shared_ptr<const frozen_mutation> fm, tracing::trace_state_ptr tr_state) noexcept {
     try {
         // Future is waited on indirectly in `stop()` (via `_store_gate`).
         (void)with_gate(_store_gate, [this, s = std::move(s), fm = std::move(fm), tr_state] () mutable {
@@ -82,19 +81,19 @@ bool internal::end_point_hints_manager::store_hint(schema_ptr s, lw_shared_ptr<c
     return true;
 }
 
-future<> internal::end_point_hints_manager::populate_segments_to_replay() {
+future<> end_point_hints_manager::populate_segments_to_replay() {
     return with_lock(file_update_mutex(), [this] {
         return get_or_load().discard_result();
     });
 }
 
-void internal::end_point_hints_manager::start() {
+void end_point_hints_manager::start() {
     clear_stopped();
     allow_hints();
     _sender.start();
 }
 
-future<> internal::end_point_hints_manager::stop(drain should_drain) noexcept {
+future<> end_point_hints_manager::stop(drain should_drain) noexcept {
     if(stopped()) {
         return make_exception_future<>(std::logic_error(format("ep_manager[{}]: stop() is called twice", _key).c_str()));
     }
@@ -126,7 +125,7 @@ future<> internal::end_point_hints_manager::stop(drain should_drain) noexcept {
     });
 }
 
-internal::end_point_hints_manager::end_point_hints_manager(const endpoint_id& key, manager& shard_manager)
+end_point_hints_manager::end_point_hints_manager(const endpoint_id& key, manager& shard_manager)
     : _key(key)
     , _shard_manager(shard_manager)
     , _file_update_mutex_ptr(make_lw_shared<seastar::shared_mutex>())
@@ -139,7 +138,7 @@ internal::end_point_hints_manager::end_point_hints_manager(const endpoint_id& ke
     , _sender(*this, _shard_manager.local_storage_proxy(), _shard_manager.local_db(), _shard_manager.local_gossiper())
 {}
 
-internal::end_point_hints_manager::end_point_hints_manager(end_point_hints_manager&& other)
+end_point_hints_manager::end_point_hints_manager(end_point_hints_manager&& other)
     : _key(other._key)
     , _shard_manager(other._shard_manager)
     , _file_update_mutex_ptr(std::move(other._file_update_mutex_ptr))
@@ -150,11 +149,11 @@ internal::end_point_hints_manager::end_point_hints_manager(end_point_hints_manag
     , _sender(other._sender, *this)
 {}
 
-internal::end_point_hints_manager::~end_point_hints_manager() {
+end_point_hints_manager::~end_point_hints_manager() {
     assert(stopped());
 }
 
-future<hints_store_ptr> internal::end_point_hints_manager::get_or_load() {
+future<hints_store_ptr> end_point_hints_manager::get_or_load() {
     if (!_hints_store_anchor) {
         return _shard_manager.store_factory().get_or_load(_key, [this] (const endpoint_id&) noexcept {
             return add_store();
@@ -167,7 +166,7 @@ future<hints_store_ptr> internal::end_point_hints_manager::get_or_load() {
     return make_ready_future<hints_store_ptr>(_hints_store_anchor);
 }
 
-future<db::commitlog> internal::end_point_hints_manager::add_store() noexcept {
+future<db::commitlog> end_point_hints_manager::add_store() noexcept {
     manager_logger.trace("Going to add a store to {}", _hints_dir.c_str());
 
     return futurize_invoke([this] {
@@ -268,7 +267,7 @@ future<db::commitlog> internal::end_point_hints_manager::add_store() noexcept {
     });
 }
 
-future<> internal::end_point_hints_manager::flush_current_hints() noexcept {
+future<> end_point_hints_manager::flush_current_hints() noexcept {
     // flush the currently created hints to disk
     if (_hints_store_anchor) {
         return futurize_invoke([this] {
@@ -297,7 +296,7 @@ public:
     no_column_mapping(const table_schema_version& id) : std::out_of_range(format("column mapping for CF schema_version {} is missing", id)) {}
 };
 
-future<> internal::end_point_hints_manager::sender::flush_maybe() noexcept {
+future<> end_point_hints_manager::sender::flush_maybe() noexcept {
     auto current_time = clock::now();
     if (current_time >= _next_flush_tp) {
         return _ep_manager.flush_current_hints().then([this, current_time] {
@@ -310,7 +309,7 @@ future<> internal::end_point_hints_manager::sender::flush_maybe() noexcept {
     return make_ready_future<>();
 }
 
-future<timespec> internal::end_point_hints_manager::sender::get_last_file_modification(const sstring& fname) {
+future<timespec> end_point_hints_manager::sender::get_last_file_modification(const sstring& fname) {
     return open_file_dma(fname, open_flags::ro).then([] (file f) {
         return do_with(std::move(f), [] (file& f) {
             return f.stat();
@@ -320,7 +319,7 @@ future<timespec> internal::end_point_hints_manager::sender::get_last_file_modifi
     });
 }
 
-future<> internal::end_point_hints_manager::sender::do_send_one_mutation(frozen_mutation_and_schema m, locator::effective_replication_map_ptr ermp, const inet_address_vector_replica_set& natural_endpoints) noexcept {
+future<> end_point_hints_manager::sender::do_send_one_mutation(frozen_mutation_and_schema m, locator::effective_replication_map_ptr ermp, const inet_address_vector_replica_set& natural_endpoints) noexcept {
     return futurize_invoke([this, m = std::move(m), ermp = std::move(ermp), &natural_endpoints] () mutable -> future<> {
         // The fact that we send with CL::ALL in both cases below ensures that new hints are not going
         // to be generated as a result of hints sending.
@@ -334,7 +333,7 @@ future<> internal::end_point_hints_manager::sender::do_send_one_mutation(frozen_
     });
 }
 
-bool internal::end_point_hints_manager::sender::can_send() noexcept {
+bool end_point_hints_manager::sender::can_send() noexcept {
     if (stopping() && !draining()) {
         return false;
     }
@@ -355,7 +354,7 @@ bool internal::end_point_hints_manager::sender::can_send() noexcept {
     }
 }
 
-frozen_mutation_and_schema internal::end_point_hints_manager::sender::get_mutation(lw_shared_ptr<send_one_file_ctx> ctx_ptr, fragmented_temporary_buffer& buf) {
+frozen_mutation_and_schema end_point_hints_manager::sender::get_mutation(lw_shared_ptr<send_one_file_ctx> ctx_ptr, fragmented_temporary_buffer& buf) {
     hint_entry_reader hr(buf);
     auto& fm = hr.mutation();
     auto& cm = get_column_mapping(std::move(ctx_ptr), fm, hr);
@@ -370,7 +369,7 @@ frozen_mutation_and_schema internal::end_point_hints_manager::sender::get_mutati
     return {std::move(hr).mutation(), std::move(schema)};
 }
 
-const column_mapping& internal::end_point_hints_manager::sender::get_column_mapping(lw_shared_ptr<send_one_file_ctx> ctx_ptr, const frozen_mutation& fm, const hint_entry_reader& hr) {
+const column_mapping& end_point_hints_manager::sender::get_column_mapping(lw_shared_ptr<send_one_file_ctx> ctx_ptr, const frozen_mutation& fm, const hint_entry_reader& hr) {
     auto cm_it = ctx_ptr->schema_ver_to_column_mapping.find(fm.schema_version());
     if (cm_it == ctx_ptr->schema_ver_to_column_mapping.end()) {
         if (!hr.get_column_mapping()) {
@@ -384,7 +383,7 @@ const column_mapping& internal::end_point_hints_manager::sender::get_column_mapp
     return cm_it->second;
 }
 
-internal::end_point_hints_manager::sender::sender(end_point_hints_manager& parent, service::storage_proxy& local_storage_proxy,replica::database& local_db, gms::gossiper& local_gossiper) noexcept
+end_point_hints_manager::sender::sender(end_point_hints_manager& parent, service::storage_proxy& local_storage_proxy,replica::database& local_db, gms::gossiper& local_gossiper) noexcept
     : _stopped(make_ready_future<>())
     , _ep_key(parent.end_point_key())
     , _ep_manager(parent)
@@ -397,7 +396,7 @@ internal::end_point_hints_manager::sender::sender(end_point_hints_manager& paren
     , _file_update_mutex(_ep_manager.file_update_mutex())
 {}
 
-internal::end_point_hints_manager::sender::sender(const sender& other, end_point_hints_manager& parent) noexcept
+end_point_hints_manager::sender::sender(const sender& other, end_point_hints_manager& parent) noexcept
     : _stopped(make_ready_future<>())
     , _ep_key(parent.end_point_key())
     , _ep_manager(parent)
@@ -410,12 +409,12 @@ internal::end_point_hints_manager::sender::sender(const sender& other, end_point
     , _file_update_mutex(_ep_manager.file_update_mutex())
 {}
 
-internal::end_point_hints_manager::sender::~sender() {
+end_point_hints_manager::sender::~sender() {
     dismiss_replay_waiters();
 }
 
 
-future<> internal::end_point_hints_manager::sender::stop(drain should_drain) noexcept {
+future<> end_point_hints_manager::sender::stop(drain should_drain) noexcept {
     return seastar::async([this, should_drain] {
         set_stopping();
         _stop_as.request_abort();
@@ -450,15 +449,15 @@ future<> internal::end_point_hints_manager::sender::stop(drain should_drain) noe
     });
 }
 
-void internal::end_point_hints_manager::sender::add_segment(sstring seg_name) {
+void end_point_hints_manager::sender::add_segment(sstring seg_name) {
     _segments_to_replay.emplace_back(std::move(seg_name));
 }
 
-void internal::end_point_hints_manager::sender::add_foreign_segment(sstring seg_name) {
+void end_point_hints_manager::sender::add_foreign_segment(sstring seg_name) {
     _foreign_segments_to_replay.emplace_back(std::move(seg_name));
 }
 
-internal::end_point_hints_manager::sender::clock::duration internal::end_point_hints_manager::sender::next_sleep_duration() const {
+end_point_hints_manager::sender::clock::duration end_point_hints_manager::sender::next_sleep_duration() const {
     clock::time_point current_time = clock::now();
     clock::time_point next_flush_tp = std::max(_next_flush_tp, current_time);
     clock::time_point next_retry_tp = std::max(_next_send_retry_tp, current_time);
@@ -469,7 +468,7 @@ internal::end_point_hints_manager::sender::clock::duration internal::end_point_h
     return clock::duration(10 * div_ceil(d.count(), 10));
 }
 
-void internal::end_point_hints_manager::sender::start() {
+void end_point_hints_manager::sender::start() {
     seastar::thread_attributes attr;
 
     attr.sched_group = _hints_cpu_sched_group;
@@ -493,7 +492,7 @@ void internal::end_point_hints_manager::sender::start() {
     });
 }
 
-future<> internal::end_point_hints_manager::sender::send_one_mutation(frozen_mutation_and_schema m) {
+future<> end_point_hints_manager::sender::send_one_mutation(frozen_mutation_and_schema m) {
     auto erm = _db.find_column_family(m.s).get_effective_replication_map();
     auto token = dht::get_token(*m.s, m.fm.key());
     inet_address_vector_replica_set natural_endpoints = erm->get_natural_endpoints(std::move(token));
@@ -501,7 +500,7 @@ future<> internal::end_point_hints_manager::sender::send_one_mutation(frozen_mut
     return do_send_one_mutation(std::move(m), std::move(erm), std::move(natural_endpoints));
 }
 
-future<> internal::end_point_hints_manager::sender::send_one_hint(lw_shared_ptr<send_one_file_ctx> ctx_ptr, fragmented_temporary_buffer buf, db::replay_position rp, gc_clock::duration secs_since_file_mod, const sstring& fname) {
+future<> end_point_hints_manager::sender::send_one_hint(lw_shared_ptr<send_one_file_ctx> ctx_ptr, fragmented_temporary_buffer buf, db::replay_position rp, gc_clock::duration secs_since_file_mod, const sstring& fname) {
     return _resource_manager.get_send_units_for(buf.size_bytes()).then([this, secs_since_file_mod, &fname, buf = std::move(buf), rp, ctx_ptr] (auto units) mutable {
         ctx_ptr->mark_hint_as_in_progress(rp);
 
@@ -571,7 +570,7 @@ future<> internal::end_point_hints_manager::sender::send_one_hint(lw_shared_ptr<
     });
 }
 
-void internal::end_point_hints_manager::sender::notify_replay_waiters() noexcept {
+void end_point_hints_manager::sender::notify_replay_waiters() noexcept {
     if (!_foreign_segments_to_replay.empty()) {
         manager_logger.trace("[{}] notify_replay_waiters(): not notifying because there are still {} foreign segments to replay", end_point_key(), _foreign_segments_to_replay.size());
         return;
@@ -587,7 +586,7 @@ void internal::end_point_hints_manager::sender::notify_replay_waiters() noexcept
     }
 }
 
-void internal::end_point_hints_manager::sender::dismiss_replay_waiters() noexcept {
+void end_point_hints_manager::sender::dismiss_replay_waiters() noexcept {
     for (auto& p : _replay_waiters) {
         manager_logger.debug("[{}] dismiss_replay_waiters(): dismissing one", end_point_key());
         auto ptr = p.second;
@@ -597,7 +596,7 @@ void internal::end_point_hints_manager::sender::dismiss_replay_waiters() noexcep
     _replay_waiters.clear();
 }
 
-future<> internal::end_point_hints_manager::sender::wait_until_hints_are_replayed_up_to(abort_source& as, db::replay_position up_to_rp) {
+future<> end_point_hints_manager::sender::wait_until_hints_are_replayed_up_to(abort_source& as, db::replay_position up_to_rp) {
     manager_logger.debug("[{}] wait_until_hints_are_replayed_up_to(): entering with target {}", end_point_key(), up_to_rp);
     if (_foreign_segments_to_replay.empty() && up_to_rp < _sent_upper_bound_rp) {
         manager_logger.debug("[{}] wait_until_hints_are_replayed_up_to(): hints were already replayed above the point ({} < {})", end_point_key(), up_to_rp, _sent_upper_bound_rp);
@@ -629,18 +628,18 @@ future<> internal::end_point_hints_manager::sender::wait_until_hints_are_replaye
     });
 }
 
-void internal::end_point_hints_manager::sender::send_one_file_ctx::mark_hint_as_in_progress(db::replay_position rp) {
+void end_point_hints_manager::sender::send_one_file_ctx::mark_hint_as_in_progress(db::replay_position rp) {
     in_progress_rps.insert(rp);
 }
 
-void internal::end_point_hints_manager::sender::send_one_file_ctx::on_hint_send_success(db::replay_position rp) noexcept {
+void end_point_hints_manager::sender::send_one_file_ctx::on_hint_send_success(db::replay_position rp) noexcept {
     in_progress_rps.erase(rp);
     if (!last_succeeded_rp || *last_succeeded_rp < rp) {
         last_succeeded_rp = rp;
     }
 }
 
-void internal::end_point_hints_manager::sender::send_one_file_ctx::on_hint_send_failure(db::replay_position rp) noexcept {
+void end_point_hints_manager::sender::send_one_file_ctx::on_hint_send_failure(db::replay_position rp) noexcept {
     in_progress_rps.erase(rp);
     segment_replay_failed = true;
     if (!first_failed_rp || rp < *first_failed_rp) {
@@ -648,7 +647,7 @@ void internal::end_point_hints_manager::sender::send_one_file_ctx::on_hint_send_
     }
 }
 
-db::replay_position internal::end_point_hints_manager::sender::send_one_file_ctx::get_replayed_bound() const noexcept {
+db::replay_position end_point_hints_manager::sender::send_one_file_ctx::get_replayed_bound() const noexcept {
     // We are sure that all hints were sent _below_ the position which is the minimum of the following:
     // - Position of the first hint that failed to be sent in this replay (first_failed_rp),
     // - Position of the last hint which was successfully sent (last_succeeded_rp, inclusive bound),
@@ -671,13 +670,13 @@ db::replay_position internal::end_point_hints_manager::sender::send_one_file_ctx
     return rp;
 }
 
-void internal::end_point_hints_manager::sender::rewind_sent_replay_position_to(db::replay_position rp) {
+void end_point_hints_manager::sender::rewind_sent_replay_position_to(db::replay_position rp) {
     _sent_upper_bound_rp = rp;
     notify_replay_waiters();
 }
 
 // runs in a seastar::async context
-bool internal::end_point_hints_manager::sender::send_one_file(const sstring& fname) {
+bool end_point_hints_manager::sender::send_one_file(const sstring& fname) {
     timespec last_mod = get_last_file_modification(fname).get0();
     gc_clock::duration secs_since_file_mod = std::chrono::seconds(last_mod.tv_sec);
     lw_shared_ptr<send_one_file_ctx> ctx_ptr = make_lw_shared<send_one_file_ctx>(_last_schema_ver_to_column_mapping);
@@ -761,7 +760,7 @@ bool internal::end_point_hints_manager::sender::send_one_file(const sstring& fna
     return true;
 }
 
-const sstring* internal::end_point_hints_manager::sender::name_of_current_segment() const {
+const sstring* end_point_hints_manager::sender::name_of_current_segment() const {
     // Foreign segments are replayed first
     if (!_foreign_segments_to_replay.empty()) {
         return &_foreign_segments_to_replay.front();
@@ -772,7 +771,7 @@ const sstring* internal::end_point_hints_manager::sender::name_of_current_segmen
     return nullptr;
 }
 
-void internal::end_point_hints_manager::sender::pop_current_segment() {
+void end_point_hints_manager::sender::pop_current_segment() {
     if (!_foreign_segments_to_replay.empty()) {
         _foreign_segments_to_replay.pop_front();
     } else if (!_segments_to_replay.empty()) {
@@ -781,7 +780,7 @@ void internal::end_point_hints_manager::sender::pop_current_segment() {
 }
 
 // Runs in the seastar::async context
-void internal::end_point_hints_manager::sender::send_hints_maybe() noexcept {
+void end_point_hints_manager::sender::send_hints_maybe() noexcept {
     using namespace std::literals::chrono_literals;
     manager_logger.trace("send_hints(): going to send hints to {}, we have {} segment to replay", end_point_key(), _segments_to_replay.size() + _foreign_segments_to_replay.size());
 
@@ -819,20 +818,21 @@ void internal::end_point_hints_manager::sender::send_hints_maybe() noexcept {
     manager_logger.trace("send_hints(): we handled {} segments", replayed_segments_count);
 }
 
-hint_stats& internal::end_point_hints_manager::sender::shard_stats() {
+hint_stats& end_point_hints_manager::sender::shard_stats() {
     return _shard_manager._stats;
 }
 
-bool internal::end_point_hints_manager::replay_allowed() const noexcept {
+bool end_point_hints_manager::replay_allowed() const noexcept {
     return _shard_manager.replay_allowed();
 }
 
-hint_stats& internal::end_point_hints_manager::shard_stats() {
+hint_stats& end_point_hints_manager::shard_stats() {
     return _shard_manager._stats;
 }
 
-resource_manager& internal::end_point_hints_manager::shard_resource_manager() {
+resource_manager& end_point_hints_manager::shard_resource_manager() {
     return _shard_manager._resource_manager;
 }
 
+} // namespace internal
 } // namespace db::hints
