@@ -47,8 +47,9 @@ db::batchlog_manager::batchlog_manager(cql3::query_processor& qp, db::system_key
         , _sys_ks(sys_ks)
         , _write_request_timeout(std::chrono::duration_cast<db_clock::duration>(config.write_request_timeout))
         , _replay_rate(config.replay_rate)
-        , _started(make_ready_future<>())
-        , _delay(config.delay) {
+        , _delay(config.delay)
+        , _loop_done(batchlog_replay_loop())
+{
     namespace sm = seastar::metrics;
 
     _metrics.add_group("batchlog_manager", {
@@ -111,7 +112,6 @@ future<> db::batchlog_manager::batchlog_replay_loop() {
 }
 
 future<> db::batchlog_manager::start() {
-    _started = batchlog_replay_loop();
     return make_ready_future<>();
 }
 
@@ -127,7 +127,7 @@ future<> db::batchlog_manager::drain() {
         _sem.broken();
     }
 
-    co_await _started.get_future();
+    co_await std::move(_loop_done);
     blogger.info("Drained");
 }
 
