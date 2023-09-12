@@ -1436,5 +1436,21 @@ future<> directory_initializer::ensure_rebalanced() {
     });
 }
 
+hint_stats& manager::end_point_hints_manager::sender::shard_stats() {
+    return _shard_manager._stats;
+}
+
+bool manager::end_point_hints_manager::replay_allowed() const noexcept {
+    return _shard_manager.replay_allowed();
+}
+
+hint_stats& manager::end_point_hints_manager::shard_stats() {
+    return _shard_manager._stats;
+}
+
+resource_manager& manager::end_point_hints_manager::shard_resource_manager() {
+    return _shard_manager._resource_manager;
+}
+
 }
 }
