@@ -757,11 +757,11 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     });
 
 
-    ss::decommission.set(r, [&ss](std::unique_ptr<http::request> req) {
+    ss::decommission.set(r, [&ss](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         apilog.info("decommission");
-        return ss.local().decommission().then([] {
-            return make_ready_future<json::json_return_type>(json_void());
-        });
+        auto task = co_await ss.local().get_task_manager_module().make_and_start_task<node_ops::start_decommission_task_impl>({}, "", ss.local());
+        co_await task->done();
+        co_return json_void();
     });
 
     ss::move.set(r, [&ss] (std::unique_ptr<http::request> req) {
