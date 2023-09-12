@@ -1718,7 +1718,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             auto stop_batchlog_manager = defer_verbose_shutdown("batchlog manager", [&bm] {
                 bm.stop().get();
             });
-            bm.invoke_on_all(&db::batchlog_manager::start).get();
 
             supervisor::notify("starting load meter");
             load_meter.init(db, gossiper.local()).get();

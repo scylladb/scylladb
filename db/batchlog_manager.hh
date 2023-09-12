@@ -75,7 +75,6 @@ public:
     // shard qp (which is what you feed here).
     batchlog_manager(cql3::query_processor&, db::system_keyspace& sys_ks, batchlog_manager_config config);
 
-    future<> start();
     // abort the replay loop and return its future.
     future<> drain();
     future<> stop();

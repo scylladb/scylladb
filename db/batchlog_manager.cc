@@ -111,10 +111,6 @@ future<> db::batchlog_manager::batchlog_replay_loop() {
     }
 }
 
-future<> db::batchlog_manager::start() {
-    return make_ready_future<>();
-}
-
 future<> db::batchlog_manager::drain() {
     if (_stop.abort_requested()) {
         co_return;
