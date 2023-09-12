@@ -771,4 +771,144 @@ future<> start_decommission_task_impl::run() {
     });
 }
 
+start_remove_node_task_impl::start_remove_node_task_impl(tasks::task_manager::module_ptr module,
+        std::string entity,
+        service::storage_service& ss,
+        locator::host_id host_id,
+        std::list<locator::host_id_or_endpoint> ignore_nodes_params) noexcept
+    : remove_node_task_impl(std::move(module), tasks::task_id::create_random_id(), ss.get_task_manager_module().new_sequence_number(),
+        "node", std::move(entity), tasks::task_id::create_null_id(), ss)
+    , _host_id(host_id)
+    , _ignore_nodes_params(std::move(ignore_nodes_params))
+{}
+
+future<> start_remove_node_task_impl::run() {
+    return _ss.run_with_api_lock(sstring("removenode"), [host_id = _host_id, ignore_nodes_params = std::move(_ignore_nodes_params)] (service::storage_service& ss) mutable {
+        return seastar::async([&ss, host_id, ignore_nodes_params = std::move(ignore_nodes_params)] () mutable {
+            if (ss._raft_topology_change_enabled) {
+                ss.raft_removenode(host_id, std::move(ignore_nodes_params)).get();
+                return;
+            }
+            node_ops_ctl ctl(ss, node_ops_cmd::removenode_prepare, host_id, gms::inet_address());
+            auto stop_ctl = deferred_stop(ctl);
+            auto uuid = ctl.uuid();
+            const auto& tmptr = ctl.tmptr;
+            auto endpoint_opt = tmptr->get_endpoint_for_host_id(host_id);
+            assert(ss._group0);
+            auto raft_id = raft::server_id{host_id.uuid()};
+            bool raft_available = ss._group0->wait_for_raft().get();
+            bool is_group0_member = raft_available && ss._group0->is_member(raft_id, false);
+            if (!endpoint_opt && !is_group0_member) {
+                throw std::runtime_error(::format("removenode[{}]: Node {} not found in the cluster", uuid, host_id));
+            }
+
+            // If endpoint_opt is engaged, the node is a member of the token ring.
+            // is_group0_member indicates whether the node is a member of Raft group 0.
+            // A node might be a member of group 0 but not a member of the token ring, e.g. due to a
+            // previously failed removenode/decommission. The code is written to handle this
+            // situation. Parts related to removing this node from the token ring are conditioned on
+            // endpoint_opt, while parts related to removing from group 0 are conditioned on
+            // is_group0_member.
+
+            if (endpoint_opt && ss._gossiper.is_alive(*endpoint_opt)) {
+                const std::string message = ::format(
+                    "removenode[{}]: Rejected removenode operation (node={}); "
+                    "the node being removed is alive, maybe you should use decommission instead?",
+                    uuid, *endpoint_opt);
+                tasks::tmlogger.warn(std::string_view(message));
+                throw std::runtime_error(message);
+            }
+
+            for (auto& hoep : ignore_nodes_params) {
+                hoep.resolve(*tmptr);
+                ctl.ignore_nodes.insert(hoep.endpoint);
+            }
+
+            bool removed_from_token_ring = !endpoint_opt;
+            if (endpoint_opt) {
+                auto endpoint = *endpoint_opt;
+                ctl.endpoint = endpoint;
+
+                // Step 1: Make the node a group 0 non-voter before removing it from the token ring.
+                //
+                // Thanks to this, even if we fail after removing the node from the token ring
+                // but before removing it group 0, group 0's availability won't be reduced.
+                if (is_group0_member && ss._group0->is_member(raft_id, true)) {
+                    tasks::tmlogger.info("removenode[{}]: making node {} a non-voter in group 0", uuid, raft_id);
+                    ss._group0->make_nonvoter(raft_id).get();
+                    tasks::tmlogger.info("removenode[{}]: made node {} a non-voter in group 0", uuid, raft_id);
+                }
+
+                // Step 2: Decide who needs to sync data
+                //
+                // By default, we require all nodes in the cluster to participate
+                // the removenode operation and sync data if needed. We fail the
+                // removenode operation if any of them is down or fails.
+                //
+                // If the user want the removenode opeartion to succeed even if some of the nodes
+                // are not available, the user has to explicitly pass a list of
+                // node that can be skipped for the operation.
+                ctl.start("removenode", [&] (gms::inet_address node) {
+                    return node != endpoint;
+                });
+
+                auto tokens = tmptr->get_tokens(endpoint);
+
+                try {
+                    // Step 3: Start heartbeat updater
+                    ctl.start_heartbeat_updater(node_ops_cmd::removenode_heartbeat);
+
+                    // Step 4: Prepare to sync data
+                    ctl.req.leaving_nodes = {endpoint};
+                    ctl.prepare(node_ops_cmd::removenode_prepare).get();
+
+                    // Step 5: Start to sync data
+                    ctl.send_to_all(node_ops_cmd::removenode_sync_data).get();
+                    service::on_streaming_finished();
+
+                    // Step 6: Finish token movement
+                    ctl.done(node_ops_cmd::removenode_done).get();
+
+                    // Step 7: Announce the node has left
+                    tasks::tmlogger.info("removenode[{}]: Advertising that the node left the ring", uuid);
+                    auto permit = ss._gossiper.lock_endpoint(endpoint, gms::null_permit_id).get();
+                    const auto& pid = permit.id();
+                    ss._gossiper.advertise_token_removed(endpoint, host_id, pid).get();
+                    std::unordered_set<dht::token> tmp(tokens.begin(), tokens.end());
+                    ss.excise(std::move(tmp), endpoint, pid).get();
+                    removed_from_token_ring = true;
+                    tasks::tmlogger.info("removenode[{}]: Finished removing the node from the ring", uuid);
+                } catch (...) {
+                    // we need to revert the effect of prepare verb the removenode ops is failed
+                    ctl.abort_on_error(node_ops_cmd::removenode_abort, std::current_exception()).get();
+                }
+            }
+
+            // Step 8: Remove the node from group 0
+            //
+            // If the node was a token ring member but we failed to remove it,
+            // don't remove it from group 0 -- hence the `removed_from_token_ring` check.
+            try {
+                utils::get_local_injector().inject("removenode_fail_before_remove_from_group0",
+                    [] { throw std::runtime_error("removenode_fail_before_remove_from_group0"); });
+
+                if (is_group0_member && removed_from_token_ring) {
+                    tasks::tmlogger.info("removenode[{}]: removing node {} from Raft group 0", uuid, raft_id);
+                    ss._group0->remove_from_group0(raft_id).get();
+                    tasks::tmlogger.info("removenode[{}]: removed node {} from Raft group 0", uuid, raft_id);
+                }
+            } catch (...) {
+                tasks::tmlogger.error(
+                    "removenode[{}]: FAILED when trying to remove the node from Raft group 0: \"{}\". The node"
+                    " is no longer a member of the token ring, but it may still be a member of Raft group 0."
+                    " Please retry `removenode`. Consult the `removenode` documentation for more details.",
+                    uuid, std::current_exception());
+                throw;
+            }
+
+            tasks::tmlogger.info("removenode[{}]: Finished removenode operation, host id={}", uuid, host_id);
+        });
+    });
+}
+
 }

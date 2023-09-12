@@ -91,6 +91,7 @@ class task_manager_module;
 class join_token_ring_task_impl;
 class start_rebuild_task_impl;
 class start_decommission_task_impl;
+class start_remove_node_task_impl;
 }
 
 namespace service {
@@ -690,16 +691,6 @@ public:
     future<> force_remove_completion();
 
 public:
-    /**
-     * Remove a node that has died, attempting to restore the replica count.
-     * If the node is alive, decommission should be attempted.  If decommission
-     * fails, then removeToken should be called.  If we fail while trying to
-     * restore the replica count, finally forceRemoveCompleteion should be
-     * called to forcibly remove the node without regard to replica count.
-     *
-     * @param hostIdString token for the node
-     */
-    future<> removenode(locator::host_id host_id, std::list<locator::host_id_or_endpoint> ignore_nodes);
     future<node_ops_cmd_response> node_ops_cmd_handler(gms::inet_address coordinator, node_ops_cmd_request req);
     void node_ops_cmd_check(gms::inet_address coordinator, const node_ops_cmd_request& req);
     future<> node_ops_cmd_heartbeat_updater(node_ops_cmd cmd, node_ops_id uuid, std::list<gms::inet_address> nodes, lw_shared_ptr<bool> heartbeat_updater_done);
@@ -844,6 +835,7 @@ private:
     friend class node_ops::join_token_ring_task_impl;
     friend class node_ops::start_rebuild_task_impl;
     friend class node_ops::start_decommission_task_impl;
+    friend class node_ops::start_remove_node_task_impl;
 };
 
 }

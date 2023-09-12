@@ -772,7 +772,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         });
     });
 
-    ss::remove_node.set(r, [&ss](std::unique_ptr<http::request> req) {
+    ss::remove_node.set(r, [&ss](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         auto host_id = validate_host_id(req->get_query_param("host_id"));
         std::vector<sstring> ignore_nodes_strs = utils::split_comma_separated_list(req->get_query_param("ignore_nodes"));
         apilog.info("remove_node: host_id={} ignore_nodes={}", host_id, ignore_nodes_strs);
@@ -788,9 +788,9 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
                 throw std::runtime_error(format("Failed to parse ignore_nodes parameter: ignore_nodes={}, node={}: {}", ignore_nodes_strs, n, std::current_exception()));
             }
         }
-        return ss.local().removenode(host_id, std::move(ignore_nodes)).then([] {
-            return make_ready_future<json::json_return_type>(json_void());
-        });
+        auto task = co_await ss.local().get_task_manager_module().make_and_start_task<node_ops::start_remove_node_task_impl>({}, "", ss.local(), host_id, std::move(ignore_nodes));
+        co_await task->done();
+        co_return json_void();
     });
 
     ss::get_removal_status.set(r, [&ss](std::unique_ptr<http::request> req) {
