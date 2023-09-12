@@ -28,7 +28,7 @@ RELEASE_ESC=${RELEASE//./\.}
 
 PKGS=
 BUILD_DIR="build/release"
-UNIFIED_PKG="build/release/$PRODUCT-unified-$VERSION-$RELEASE.$(arch).tar.gz"
+UNIFIED_PKG=""
 while [ $# -gt 0 ]; do
     case "$1" in
         "--build-dir")
@@ -49,6 +49,9 @@ while [ $# -gt 0 ]; do
     esac
 done
 
+if [ -z "$UNIFIED_PKG" ]; then
+    UNIFIED_PKG="$BUILD_DIR/$PRODUCT-unified-$VERSION-$RELEASE.$(arch).tar.gz"
+fi
 UNIFIED_PKG="$(realpath -s $UNIFIED_PKG)"
 PKGS="$BUILD_DIR/dist/tar/$PRODUCT-$VERSION-$RELEASE.$(arch).tar.gz $BUILD_DIR/dist/tar/$PRODUCT-python3-$VERSION-$RELEASE.$(arch).tar.gz $BUILD_DIR/dist/tar/$PRODUCT-jmx-$VERSION-$RELEASE.noarch.tar.gz $BUILD_DIR/dist/tar/$PRODUCT-tools-$VERSION-$RELEASE.noarch.tar.gz $BUILD_DIR/dist/tar/$PRODUCT-cqlsh-$VERSION-$RELEASE.noarch.tar.gz"
 BASEDIR="$BUILD_DIR/unified/$PRODUCT-$VERSION"
