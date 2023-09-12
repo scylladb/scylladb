@@ -1293,10 +1293,10 @@ future<> gossiper::unsafe_assassinate_endpoint(sstring address) {
 }
 
 future<> gossiper::assassinate_endpoint(sstring address) {
-    return container().invoke_on(0, [address] (auto&& gossiper) {
-        return seastar::async([&gossiper, g = gossiper.shared_from_this(), address] {
+    co_await container().invoke_on(0, [&] (auto&& gossiper) -> future<> {
+        // FIXME: indentation
             inet_address endpoint(address);
-            auto permit = gossiper.lock_endpoint(endpoint, null_permit_id).get0();
+            auto permit = co_await gossiper.lock_endpoint(endpoint, null_permit_id);
             auto es = gossiper.get_endpoint_state_ptr(endpoint);
             auto now = gossiper.now();
             generation_type gen(std::chrono::duration_cast<std::chrono::seconds>((now + std::chrono::seconds(60)).time_since_epoch()).count());
@@ -1316,7 +1316,7 @@ future<> gossiper::assassinate_endpoint(sstring address) {
                 auto ring_delay = std::chrono::milliseconds(gossiper._gcfg.ring_delay_ms);
                 logger.info("Sleeping for {} ms to ensure {} does not change", ring_delay.count(), endpoint);
                 // make sure it did not change
-                sleep_abortable(ring_delay, gossiper._abort_source).get();
+                co_await sleep_abortable(ring_delay, gossiper._abort_source);
 
                 es = gossiper.get_endpoint_state_ptr(endpoint);
                 if (!es) {
@@ -1337,10 +1337,9 @@ future<> gossiper::assassinate_endpoint(sstring address) {
             std::unordered_set<dht::token> tokens_set(tokens.begin(), tokens.end());
             auto expire_time = gossiper.compute_expire_time();
             ep_state.add_application_state(application_state::STATUS, versioned_value::left(tokens_set, expire_time.time_since_epoch().count()));
-            gossiper.handle_major_state_change(endpoint, std::move(ep_state), permit.id()).get();
-            sleep_abortable(INTERVAL * 4, gossiper._abort_source).get();
+            co_await gossiper.handle_major_state_change(endpoint, std::move(ep_state), permit.id());
+            co_await sleep_abortable(INTERVAL * 4, gossiper._abort_source);
             logger.warn("Finished assassinating {}", endpoint);
-        });
     });
 }
 
