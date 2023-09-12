@@ -223,7 +223,7 @@ future<> manager::wait_for_sync_point(abort_source& as, const sync_point::shard_
     co_return;
 }
 
-bool manager::end_point_hints_manager::store_hint(schema_ptr s, lw_shared_ptr<const frozen_mutation> fm, tracing::trace_state_ptr tr_state) noexcept {
+bool internal::end_point_hints_manager::store_hint(schema_ptr s, lw_shared_ptr<const frozen_mutation> fm, tracing::trace_state_ptr tr_state) noexcept {
     try {
         // Future is waited on indirectly in `stop()` (via `_store_gate`).
         (void)with_gate(_store_gate, [this, s = std::move(s), fm = std::move(fm), tr_state] () mutable {
@@ -266,19 +266,19 @@ bool manager::end_point_hints_manager::store_hint(schema_ptr s, lw_shared_ptr<co
     return true;
 }
 
-future<> manager::end_point_hints_manager::populate_segments_to_replay() {
+future<> internal::end_point_hints_manager::populate_segments_to_replay() {
     return with_lock(file_update_mutex(), [this] {
         return get_or_load().discard_result();
     });
 }
 
-void manager::end_point_hints_manager::start() {
+void internal::end_point_hints_manager::start() {
     clear_stopped();
     allow_hints();
     _sender.start();
 }
 
-future<> manager::end_point_hints_manager::stop(drain should_drain) noexcept {
+future<> internal::end_point_hints_manager::stop(drain should_drain) noexcept {
     if(stopped()) {
         return make_exception_future<>(std::logic_error(format("ep_manager[{}]: stop() is called twice", _key).c_str()));
     }
@@ -310,7 +310,7 @@ future<> manager::end_point_hints_manager::stop(drain should_drain) noexcept {
     });
 }
 
-manager::end_point_hints_manager::end_point_hints_manager(const endpoint_id& key, manager& shard_manager)
+internal::end_point_hints_manager::end_point_hints_manager(const endpoint_id& key, manager& shard_manager)
     : _key(key)
     , _shard_manager(shard_manager)
     , _file_update_mutex_ptr(make_lw_shared<seastar::shared_mutex>())
@@ -323,7 +323,7 @@ manager::end_point_hints_manager::end_point_hints_manager(const endpoint_id& key
     , _sender(*this, _shard_manager.local_storage_proxy(), _shard_manager.local_db(), _shard_manager.local_gossiper())
 {}
 
-manager::end_point_hints_manager::end_point_hints_manager(end_point_hints_manager&& other)
+internal::end_point_hints_manager::end_point_hints_manager(end_point_hints_manager&& other)
     : _key(other._key)
     , _shard_manager(other._shard_manager)
     , _file_update_mutex_ptr(std::move(other._file_update_mutex_ptr))
@@ -334,11 +334,11 @@ manager::end_point_hints_manager::end_point_hints_manager(end_point_hints_manage
     , _sender(other._sender, *this)
 {}
 
-manager::end_point_hints_manager::~end_point_hints_manager() {
+internal::end_point_hints_manager::~end_point_hints_manager() {
     assert(stopped());
 }
 
-future<hints_store_ptr> manager::end_point_hints_manager::get_or_load() {
+future<hints_store_ptr> internal::end_point_hints_manager::get_or_load() {
     if (!_hints_store_anchor) {
         return _shard_manager.store_factory().get_or_load(_key, [this] (const endpoint_id&) noexcept {
             return add_store();
@@ -351,11 +351,11 @@ future<hints_store_ptr> manager::end_point_hints_manager::get_or_load() {
     return make_ready_future<hints_store_ptr>(_hints_store_anchor);
 }
 
-manager::end_point_hints_manager& manager::get_ep_manager(endpoint_id ep) {
+end_point_hints_manager& manager::get_ep_manager(endpoint_id ep) {
     auto it = find_ep_manager(ep);
     if (it == ep_managers_end()) {
         manager_logger.trace("Creating an ep_manager for {}", ep);
-        manager::end_point_hints_manager& ep_man = _ep_managers.emplace(ep, end_point_hints_manager(ep, *this)).first->second;
+        end_point_hints_manager& ep_man = _ep_managers.emplace(ep, end_point_hints_manager(ep, *this)).first->second;
         ep_man.start();
         return ep_man;
     }
@@ -387,7 +387,7 @@ bool manager::store_hint(endpoint_id ep, schema_ptr s, lw_shared_ptr<const froze
     }
 }
 
-future<db::commitlog> manager::end_point_hints_manager::add_store() noexcept {
+future<db::commitlog> internal::end_point_hints_manager::add_store() noexcept {
     manager_logger.trace("Going to add a store to {}", _hints_dir.c_str());
 
     return futurize_invoke([this] {
@@ -488,7 +488,7 @@ future<db::commitlog> manager::end_point_hints_manager::add_store() noexcept {
     });
 }
 
-future<> manager::end_point_hints_manager::flush_current_hints() noexcept {
+future<> internal::end_point_hints_manager::flush_current_hints() noexcept {
     // flush the currently created hints to disk
     if (_hints_store_anchor) {
         return futurize_invoke([this] {
@@ -517,11 +517,11 @@ public:
     no_column_mapping(const table_schema_version& id) : std::out_of_range(format("column mapping for CF schema_version {} is missing", id)) {}
 };
 
-future<> manager::end_point_hints_manager::sender::flush_maybe() noexcept {
+future<> internal::end_point_hints_manager::sender::flush_maybe() noexcept {
     auto current_time = clock::now();
     if (current_time >= _next_flush_tp) {
         return _ep_manager.flush_current_hints().then([this, current_time] {
-            _next_flush_tp = current_time + hints_flush_period;
+            _next_flush_tp = current_time + manager::hints_flush_period;
         }).handle_exception([] (auto eptr) {
             manager_logger.trace("flush_maybe() failed: {}", eptr);
             return make_ready_future<>();
@@ -530,7 +530,7 @@ future<> manager::end_point_hints_manager::sender::flush_maybe() noexcept {
     return make_ready_future<>();
 }
 
-future<timespec> manager::end_point_hints_manager::sender::get_last_file_modification(const sstring& fname) {
+future<timespec> internal::end_point_hints_manager::sender::get_last_file_modification(const sstring& fname) {
     return open_file_dma(fname, open_flags::ro).then([] (file f) {
         return do_with(std::move(f), [] (file& f) {
             return f.stat();
@@ -540,7 +540,7 @@ future<timespec> manager::end_point_hints_manager::sender::get_last_file_modific
     });
 }
 
-future<> manager::end_point_hints_manager::sender::do_send_one_mutation(frozen_mutation_and_schema m, locator::effective_replication_map_ptr ermp, const inet_address_vector_replica_set& natural_endpoints) noexcept {
+future<> internal::end_point_hints_manager::sender::do_send_one_mutation(frozen_mutation_and_schema m, locator::effective_replication_map_ptr ermp, const inet_address_vector_replica_set& natural_endpoints) noexcept {
     return futurize_invoke([this, m = std::move(m), ermp = std::move(ermp), &natural_endpoints] () mutable -> future<> {
         // The fact that we send with CL::ALL in both cases below ensures that new hints are not going
         // to be generated as a result of hints sending.
@@ -554,7 +554,7 @@ future<> manager::end_point_hints_manager::sender::do_send_one_mutation(frozen_m
     });
 }
 
-bool manager::end_point_hints_manager::sender::can_send() noexcept {
+bool internal::end_point_hints_manager::sender::can_send() noexcept {
     if (stopping() && !draining()) {
         return false;
     }
@@ -575,7 +575,7 @@ bool manager::end_point_hints_manager::sender::can_send() noexcept {
     }
 }
 
-frozen_mutation_and_schema manager::end_point_hints_manager::sender::get_mutation(lw_shared_ptr<send_one_file_ctx> ctx_ptr, fragmented_temporary_buffer& buf) {
+frozen_mutation_and_schema internal::end_point_hints_manager::sender::get_mutation(lw_shared_ptr<send_one_file_ctx> ctx_ptr, fragmented_temporary_buffer& buf) {
     hint_entry_reader hr(buf);
     auto& fm = hr.mutation();
     auto& cm = get_column_mapping(std::move(ctx_ptr), fm, hr);
@@ -590,7 +590,7 @@ frozen_mutation_and_schema manager::end_point_hints_manager::sender::get_mutatio
     return {std::move(hr).mutation(), std::move(schema)};
 }
 
-const column_mapping& manager::end_point_hints_manager::sender::get_column_mapping(lw_shared_ptr<send_one_file_ctx> ctx_ptr, const frozen_mutation& fm, const hint_entry_reader& hr) {
+const column_mapping& internal::end_point_hints_manager::sender::get_column_mapping(lw_shared_ptr<send_one_file_ctx> ctx_ptr, const frozen_mutation& fm, const hint_entry_reader& hr) {
     auto cm_it = ctx_ptr->schema_ver_to_column_mapping.find(fm.schema_version());
     if (cm_it == ctx_ptr->schema_ver_to_column_mapping.end()) {
         if (!hr.get_column_mapping()) {
@@ -745,7 +745,7 @@ void manager::drain_for(endpoint_id endpoint) {
     });
 }
 
-manager::end_point_hints_manager::sender::sender(end_point_hints_manager& parent, service::storage_proxy& local_storage_proxy,replica::database& local_db, gms::gossiper& local_gossiper) noexcept
+internal::end_point_hints_manager::sender::sender(end_point_hints_manager& parent, service::storage_proxy& local_storage_proxy,replica::database& local_db, gms::gossiper& local_gossiper) noexcept
     : _stopped(make_ready_future<>())
     , _ep_key(parent.end_point_key())
     , _ep_manager(parent)
@@ -758,7 +758,7 @@ manager::end_point_hints_manager::sender::sender(end_point_hints_manager& parent
     , _file_update_mutex(_ep_manager.file_update_mutex())
 {}
 
-manager::end_point_hints_manager::sender::sender(const sender& other, end_point_hints_manager& parent) noexcept
+internal::end_point_hints_manager::sender::sender(const sender& other, end_point_hints_manager& parent) noexcept
     : _stopped(make_ready_future<>())
     , _ep_key(parent.end_point_key())
     , _ep_manager(parent)
@@ -771,12 +771,12 @@ manager::end_point_hints_manager::sender::sender(const sender& other, end_point_
     , _file_update_mutex(_ep_manager.file_update_mutex())
 {}
 
-manager::end_point_hints_manager::sender::~sender() {
+internal::end_point_hints_manager::sender::~sender() {
     dismiss_replay_waiters();
 }
 
 
-future<> manager::end_point_hints_manager::sender::stop(drain should_drain) noexcept {
+future<> internal::end_point_hints_manager::sender::stop(drain should_drain) noexcept {
     return seastar::async([this, should_drain] {
         set_stopping();
         _stop_as.request_abort();
@@ -811,15 +811,15 @@ future<> manager::end_point_hints_manager::sender::stop(drain should_drain) noex
     });
 }
 
-void manager::end_point_hints_manager::sender::add_segment(sstring seg_name) {
+void internal::end_point_hints_manager::sender::add_segment(sstring seg_name) {
     _segments_to_replay.emplace_back(std::move(seg_name));
 }
 
-void manager::end_point_hints_manager::sender::add_foreign_segment(sstring seg_name) {
+void internal::end_point_hints_manager::sender::add_foreign_segment(sstring seg_name) {
     _foreign_segments_to_replay.emplace_back(std::move(seg_name));
 }
 
-manager::end_point_hints_manager::sender::clock::duration manager::end_point_hints_manager::sender::next_sleep_duration() const {
+internal::end_point_hints_manager::sender::clock::duration internal::end_point_hints_manager::sender::next_sleep_duration() const {
     clock::time_point current_time = clock::now();
     clock::time_point next_flush_tp = std::max(_next_flush_tp, current_time);
     clock::time_point next_retry_tp = std::max(_next_send_retry_tp, current_time);
@@ -830,7 +830,7 @@ manager::end_point_hints_manager::sender::clock::duration manager::end_point_hin
     return clock::duration(10 * div_ceil(d.count(), 10));
 }
 
-void manager::end_point_hints_manager::sender::start() {
+void internal::end_point_hints_manager::sender::start() {
     seastar::thread_attributes attr;
 
     attr.sched_group = _hints_cpu_sched_group;
@@ -854,7 +854,7 @@ void manager::end_point_hints_manager::sender::start() {
     });
 }
 
-future<> manager::end_point_hints_manager::sender::send_one_mutation(frozen_mutation_and_schema m) {
+future<> internal::end_point_hints_manager::sender::send_one_mutation(frozen_mutation_and_schema m) {
     auto erm = _db.find_column_family(m.s).get_effective_replication_map();
     auto token = dht::get_token(*m.s, m.fm.key());
     inet_address_vector_replica_set natural_endpoints = erm->get_natural_endpoints(std::move(token));
@@ -862,7 +862,7 @@ future<> manager::end_point_hints_manager::sender::send_one_mutation(frozen_muta
     return do_send_one_mutation(std::move(m), std::move(erm), std::move(natural_endpoints));
 }
 
-future<> manager::end_point_hints_manager::sender::send_one_hint(lw_shared_ptr<send_one_file_ctx> ctx_ptr, fragmented_temporary_buffer buf, db::replay_position rp, gc_clock::duration secs_since_file_mod, const sstring& fname) {
+future<> internal::end_point_hints_manager::sender::send_one_hint(lw_shared_ptr<send_one_file_ctx> ctx_ptr, fragmented_temporary_buffer buf, db::replay_position rp, gc_clock::duration secs_since_file_mod, const sstring& fname) {
     return _resource_manager.get_send_units_for(buf.size_bytes()).then([this, secs_since_file_mod, &fname, buf = std::move(buf), rp, ctx_ptr] (auto units) mutable {
         ctx_ptr->mark_hint_as_in_progress(rp);
 
@@ -932,7 +932,7 @@ future<> manager::end_point_hints_manager::sender::send_one_hint(lw_shared_ptr<s
     });
 }
 
-void manager::end_point_hints_manager::sender::notify_replay_waiters() noexcept {
+void internal::end_point_hints_manager::sender::notify_replay_waiters() noexcept {
     if (!_foreign_segments_to_replay.empty()) {
         manager_logger.trace("[{}] notify_replay_waiters(): not notifying because there are still {} foreign segments to replay", end_point_key(), _foreign_segments_to_replay.size());
         return;
@@ -948,7 +948,7 @@ void manager::end_point_hints_manager::sender::notify_replay_waiters() noexcept 
     }
 }
 
-void manager::end_point_hints_manager::sender::dismiss_replay_waiters() noexcept {
+void internal::end_point_hints_manager::sender::dismiss_replay_waiters() noexcept {
     for (auto& p : _replay_waiters) {
         manager_logger.debug("[{}] dismiss_replay_waiters(): dismissing one", end_point_key());
         auto ptr = p.second;
@@ -958,7 +958,7 @@ void manager::end_point_hints_manager::sender::dismiss_replay_waiters() noexcept
     _replay_waiters.clear();
 }
 
-future<> manager::end_point_hints_manager::sender::wait_until_hints_are_replayed_up_to(abort_source& as, db::replay_position up_to_rp) {
+future<> internal::end_point_hints_manager::sender::wait_until_hints_are_replayed_up_to(abort_source& as, db::replay_position up_to_rp) {
     manager_logger.debug("[{}] wait_until_hints_are_replayed_up_to(): entering with target {}", end_point_key(), up_to_rp);
     if (_foreign_segments_to_replay.empty() && up_to_rp < _sent_upper_bound_rp) {
         manager_logger.debug("[{}] wait_until_hints_are_replayed_up_to(): hints were already replayed above the point ({} < {})", end_point_key(), up_to_rp, _sent_upper_bound_rp);
@@ -990,18 +990,18 @@ future<> manager::end_point_hints_manager::sender::wait_until_hints_are_replayed
     });
 }
 
-void manager::end_point_hints_manager::sender::send_one_file_ctx::mark_hint_as_in_progress(db::replay_position rp) {
+void internal::end_point_hints_manager::sender::send_one_file_ctx::mark_hint_as_in_progress(db::replay_position rp) {
     in_progress_rps.insert(rp);
 }
 
-void manager::end_point_hints_manager::sender::send_one_file_ctx::on_hint_send_success(db::replay_position rp) noexcept {
+void internal::end_point_hints_manager::sender::send_one_file_ctx::on_hint_send_success(db::replay_position rp) noexcept {
     in_progress_rps.erase(rp);
     if (!last_succeeded_rp || *last_succeeded_rp < rp) {
         last_succeeded_rp = rp;
     }
 }
 
-void manager::end_point_hints_manager::sender::send_one_file_ctx::on_hint_send_failure(db::replay_position rp) noexcept {
+void internal::end_point_hints_manager::sender::send_one_file_ctx::on_hint_send_failure(db::replay_position rp) noexcept {
     in_progress_rps.erase(rp);
     segment_replay_failed = true;
     if (!first_failed_rp || rp < *first_failed_rp) {
@@ -1009,7 +1009,7 @@ void manager::end_point_hints_manager::sender::send_one_file_ctx::on_hint_send_f
     }
 }
 
-db::replay_position manager::end_point_hints_manager::sender::send_one_file_ctx::get_replayed_bound() const noexcept {
+db::replay_position internal::end_point_hints_manager::sender::send_one_file_ctx::get_replayed_bound() const noexcept {
     // We are sure that all hints were sent _below_ the position which is the minimum of the following:
     // - Position of the first hint that failed to be sent in this replay (first_failed_rp),
     // - Position of the last hint which was successfully sent (last_succeeded_rp, inclusive bound),
@@ -1032,13 +1032,13 @@ db::replay_position manager::end_point_hints_manager::sender::send_one_file_ctx:
     return rp;
 }
 
-void manager::end_point_hints_manager::sender::rewind_sent_replay_position_to(db::replay_position rp) {
+void internal::end_point_hints_manager::sender::rewind_sent_replay_position_to(db::replay_position rp) {
     _sent_upper_bound_rp = rp;
     notify_replay_waiters();
 }
 
 // runs in a seastar::async context
-bool manager::end_point_hints_manager::sender::send_one_file(const sstring& fname) {
+bool internal::end_point_hints_manager::sender::send_one_file(const sstring& fname) {
     timespec last_mod = get_last_file_modification(fname).get0();
     gc_clock::duration secs_since_file_mod = std::chrono::seconds(last_mod.tv_sec);
     lw_shared_ptr<send_one_file_ctx> ctx_ptr = make_lw_shared<send_one_file_ctx>(_last_schema_ver_to_column_mapping);
@@ -1122,7 +1122,7 @@ bool manager::end_point_hints_manager::sender::send_one_file(const sstring& fnam
     return true;
 }
 
-const sstring* manager::end_point_hints_manager::sender::name_of_current_segment() const {
+const sstring* internal::end_point_hints_manager::sender::name_of_current_segment() const {
     // Foreign segments are replayed first
     if (!_foreign_segments_to_replay.empty()) {
         return &_foreign_segments_to_replay.front();
@@ -1133,7 +1133,7 @@ const sstring* manager::end_point_hints_manager::sender::name_of_current_segment
     return nullptr;
 }
 
-void manager::end_point_hints_manager::sender::pop_current_segment() {
+void internal::end_point_hints_manager::sender::pop_current_segment() {
     if (!_foreign_segments_to_replay.empty()) {
         _foreign_segments_to_replay.pop_front();
     } else if (!_segments_to_replay.empty()) {
@@ -1142,7 +1142,7 @@ void manager::end_point_hints_manager::sender::pop_current_segment() {
 }
 
 // Runs in the seastar::async context
-void manager::end_point_hints_manager::sender::send_hints_maybe() noexcept {
+void internal::end_point_hints_manager::sender::send_hints_maybe() noexcept {
     using namespace std::literals::chrono_literals;
     manager_logger.trace("send_hints(): going to send hints to {}, we have {} segment to replay", end_point_key(), _segments_to_replay.size() + _foreign_segments_to_replay.size());
 
@@ -1436,19 +1436,19 @@ future<> directory_initializer::ensure_rebalanced() {
     });
 }
 
-hint_stats& manager::end_point_hints_manager::sender::shard_stats() {
+hint_stats& internal::end_point_hints_manager::sender::shard_stats() {
     return _shard_manager._stats;
 }
 
-bool manager::end_point_hints_manager::replay_allowed() const noexcept {
+bool internal::end_point_hints_manager::replay_allowed() const noexcept {
     return _shard_manager.replay_allowed();
 }
 
-hint_stats& manager::end_point_hints_manager::shard_stats() {
+hint_stats& internal::end_point_hints_manager::shard_stats() {
     return _shard_manager._stats;
 }
 
-resource_manager& manager::end_point_hints_manager::shard_resource_manager() {
+resource_manager& internal::end_point_hints_manager::shard_resource_manager() {
     return _shard_manager._resource_manager;
 }
 
