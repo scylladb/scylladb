@@ -1946,7 +1946,7 @@
          "operations":[
             {
                "method":"POST",
-               "summary":"Reset local schema",
+               "summary":"Forces this node to recalculate versions of schema objects.",
                "type":"void",
                "nickname":"reset_local_schema",
                "produces":[

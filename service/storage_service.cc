@@ -2598,6 +2598,16 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
     });
 }
 
+future<> storage_service::reload_schema() {
+    // Flush memtables and clear cache so that we use the same state we would after node restart
+    // to rule out potential discrepancies which could stem from merging with memtable/cache readers.
+    co_await _db.local().flush_on_all(db::schema_tables::v3::NAME);
+    co_await replica::database::drop_cache_for_keyspace_on_all_shards(_db, db::schema_tables::v3::NAME);
+    co_await _migration_manager.invoke_on(0, [] (auto& mm) {
+        return mm.reload_schema();
+    });
+}
+
 future<> storage_service::drain() {
     return run_with_api_lock(sstring("drain"), [] (storage_service& ss) {
         if (ss._operation_mode == mode::DRAINED) {

@@ -1656,6 +1656,9 @@ public:
     future<> truncate(sstring ksname, sstring cfname, timestamp_func);
     future<> truncate(const keyspace& ks, column_family& cf, timestamp_func, bool with_snapshot = true);
 
+    static future<> drop_cache_for_table_on_all_shards(sharded<database>& sharded_db, utils::UUID id);
+    static future<> drop_cache_for_keyspace_on_all_shards(sharded<database>& sharded_db, std::string_view ks_name);
+
     bool update_column_family(schema_ptr s);
 private:
     future<> drop_column_family(const sstring& ks_name, const sstring& cf_name, timestamp_func, bool with_snapshot = true);

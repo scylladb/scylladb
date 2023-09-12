@@ -2315,6 +2315,12 @@ future<> database::flush_on_all(std::string_view ks_name, std::string_view table
     return flush_on_all(find_uuid(ks_name, table_name));
 }
 
+future<> database::drop_cache_for_table_on_all_shards(sharded<database>& sharded_db, utils::UUID id) {
+    return sharded_db.invoke_on_all([id] (replica::database& db) {
+        return db.find_column_family(id).get_row_cache().invalidate(row_cache::external_updater([] {}));
+    });
+}
+
 future<> database::flush_on_all(std::string_view ks_name, std::vector<sstring> table_names) {
     return parallel_for_each(table_names, [this, ks_name] (const auto& table_name) {
         return flush_on_all(ks_name, table_name);
@@ -2324,6 +2330,13 @@ future<> database::flush_on_all(std::string_view ks_name, std::vector<sstring> t
 future<> database::flush_on_all(std::string_view ks_name) {
     return parallel_for_each(find_keyspace(ks_name).metadata()->cf_meta_data(), [this] (auto& pair) {
         return flush_on_all(pair.second->id());
+    });
+}
+
+future<> database::drop_cache_for_keyspace_on_all_shards(sharded<database>& sharded_db, std::string_view ks_name) {
+    auto& ks = sharded_db.local().find_keyspace(ks_name);
+    return parallel_for_each(ks.metadata()->cf_meta_data(), [&] (auto& pair) {
+        return drop_cache_for_table_on_all_shards(sharded_db, pair.second->id());
     });
 }
 
