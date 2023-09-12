@@ -21,9 +21,6 @@
 #include "db/hints/internal/hint_sender.hh"
 #include "db/hints/internal/hint_storage.hh"
 #include "db/hints/resource_manager.hh"
-#include "locator/abstract_replication_strategy.hh"
-#include "mutation/frozen_mutation.hh"
-#include "schema/schema.hh"
 #include "utils/runtime.hh"
 #include "enum_set.hh"
 
