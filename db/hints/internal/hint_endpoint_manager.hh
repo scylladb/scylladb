@@ -37,7 +37,7 @@ class manager;
 
 namespace internal {
 
-class end_point_hints_manager {
+class hint_endpoint_manager {
 private:
     friend class hint_sender;
 
@@ -67,9 +67,9 @@ private:
     hint_sender _sender;
 
 public:
-    end_point_hints_manager(const endpoint_id& key, manager& shard_manager);
-    end_point_hints_manager(end_point_hints_manager&&);
-    ~end_point_hints_manager();
+    hint_endpoint_manager(const endpoint_id& key, manager& shard_manager);
+    hint_endpoint_manager(hint_endpoint_manager&&);
+    ~hint_endpoint_manager();
 
     const endpoint_id& end_point_key() const noexcept {
         return _key;
@@ -162,16 +162,16 @@ public:
 
     /// \brief Safely runs a given functor under the file_update_mutex of \ref ep_man
     ///
-    /// Runs a given functor under the file_update_mutex of the given end_point_hints_manager instance.
+    /// Runs a given functor under the file_update_mutex of the given hint_endpoint_manager instance.
     /// This function is safe even if \ref ep_man gets destroyed before the future this function returns resolves
     /// (as long as the \ref func call itself is safe).
     ///
     /// \tparam Func Functor type.
-    /// \param ep_man end_point_hints_manager instance which file_update_mutex we want to lock.
+    /// \param ep_man hint_endpoint_manager instance which file_update_mutex we want to lock.
     /// \param func Functor to run under the lock.
     /// \return Whatever \ref func returns.
     template <typename Func>
-    friend inline auto with_file_update_mutex(end_point_hints_manager& ep_man, Func&& func) {
+    friend inline auto with_file_update_mutex(hint_endpoint_manager& ep_man, Func&& func) {
         return with_lock(*ep_man._file_update_mutex_ptr, std::forward<Func>(func)).finally([lock_ptr = ep_man._file_update_mutex_ptr] {});
     }
 

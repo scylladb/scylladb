@@ -32,7 +32,7 @@
 namespace db::hints {
 namespace internal {
 
-bool end_point_hints_manager::store_hint(schema_ptr s, lw_shared_ptr<const frozen_mutation> fm, tracing::trace_state_ptr tr_state) noexcept {
+bool hint_endpoint_manager::store_hint(schema_ptr s, lw_shared_ptr<const frozen_mutation> fm, tracing::trace_state_ptr tr_state) noexcept {
     try {
         // Future is waited on indirectly in `stop()` (via `_store_gate`).
         (void)with_gate(_store_gate, [this, s = std::move(s), fm = std::move(fm), tr_state] () mutable {
@@ -75,19 +75,19 @@ bool end_point_hints_manager::store_hint(schema_ptr s, lw_shared_ptr<const froze
     return true;
 }
 
-future<> end_point_hints_manager::populate_segments_to_replay() {
+future<> hint_endpoint_manager::populate_segments_to_replay() {
     return with_lock(file_update_mutex(), [this] {
         return get_or_load().discard_result();
     });
 }
 
-void end_point_hints_manager::start() {
+void hint_endpoint_manager::start() {
     clear_stopped();
     allow_hints();
     _sender.start();
 }
 
-future<> end_point_hints_manager::stop(drain should_drain) noexcept {
+future<> hint_endpoint_manager::stop(drain should_drain) noexcept {
     if(stopped()) {
         return make_exception_future<>(std::logic_error(format("ep_manager[{}]: stop() is called twice", _key).c_str()));
     }
@@ -119,7 +119,7 @@ future<> end_point_hints_manager::stop(drain should_drain) noexcept {
     });
 }
 
-end_point_hints_manager::end_point_hints_manager(const endpoint_id& key, manager& shard_manager)
+hint_endpoint_manager::hint_endpoint_manager(const endpoint_id& key, manager& shard_manager)
     : _key(key)
     , _shard_manager(shard_manager)
     , _file_update_mutex_ptr(make_lw_shared<seastar::shared_mutex>())
@@ -132,7 +132,7 @@ end_point_hints_manager::end_point_hints_manager(const endpoint_id& key, manager
     , _sender(*this, _shard_manager.local_storage_proxy(), _shard_manager.local_db(), _shard_manager.local_gossiper())
 {}
 
-end_point_hints_manager::end_point_hints_manager(end_point_hints_manager&& other)
+hint_endpoint_manager::hint_endpoint_manager(hint_endpoint_manager&& other)
     : _key(other._key)
     , _shard_manager(other._shard_manager)
     , _file_update_mutex_ptr(std::move(other._file_update_mutex_ptr))
@@ -143,11 +143,11 @@ end_point_hints_manager::end_point_hints_manager(end_point_hints_manager&& other
     , _sender(other._sender, *this)
 {}
 
-end_point_hints_manager::~end_point_hints_manager() {
+hint_endpoint_manager::~hint_endpoint_manager() {
     assert(stopped());
 }
 
-future<hints_store_ptr> end_point_hints_manager::get_or_load() {
+future<hints_store_ptr> hint_endpoint_manager::get_or_load() {
     if (!_hints_store_anchor) {
         return _shard_manager.store_factory().get_or_load(_key, [this] (const endpoint_id&) noexcept {
             return add_store();
@@ -160,7 +160,7 @@ future<hints_store_ptr> end_point_hints_manager::get_or_load() {
     return make_ready_future<hints_store_ptr>(_hints_store_anchor);
 }
 
-future<db::commitlog> end_point_hints_manager::add_store() noexcept {
+future<db::commitlog> hint_endpoint_manager::add_store() noexcept {
     manager_logger.trace("Going to add a store to {}", _hints_dir.c_str());
 
     return futurize_invoke([this] {
@@ -261,7 +261,7 @@ future<db::commitlog> end_point_hints_manager::add_store() noexcept {
     });
 }
 
-future<> end_point_hints_manager::flush_current_hints() noexcept {
+future<> hint_endpoint_manager::flush_current_hints() noexcept {
     // flush the currently created hints to disk
     if (_hints_store_anchor) {
         return futurize_invoke([this] {
@@ -285,17 +285,15 @@ future<> end_point_hints_manager::flush_current_hints() noexcept {
     return make_ready_future<>();
 }
 
-
-
-bool end_point_hints_manager::replay_allowed() const noexcept {
+bool hint_endpoint_manager::replay_allowed() const noexcept {
     return _shard_manager.replay_allowed();
 }
 
-hint_stats& end_point_hints_manager::shard_stats() {
+hint_stats& hint_endpoint_manager::shard_stats() {
     return _shard_manager._stats;
 }
 
-resource_manager& end_point_hints_manager::shard_resource_manager() {
+resource_manager& hint_endpoint_manager::shard_resource_manager() {
     return _shard_manager._resource_manager;
 }
 

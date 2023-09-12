@@ -77,10 +77,10 @@ private:
     using drain = internal::drain;
 
     friend class space_watchdog;
-    friend class internal::end_point_hints_manager;
+    friend class internal::hint_endpoint_manager;
     friend class internal::hint_sender;
 
-    using end_point_hints_manager = internal::end_point_hints_manager;
+    using hint_endpoint_manager = internal::hint_endpoint_manager;
 
 public:
     enum class state {
@@ -97,7 +97,7 @@ public:
         state::stopping>>;
 
 private:
-    using ep_managers_map_type = std::unordered_map<endpoint_id, end_point_hints_manager>;
+    using ep_managers_map_type = std::unordered_map<endpoint_id, hint_endpoint_manager>;
 
 public:
     static const std::string FILENAME_PREFIX;
@@ -118,7 +118,7 @@ private:
     int64_t _max_hint_window_us = 0;
     replica::database& _local_db;
 
-    seastar::gate _draining_eps_gate; // gate used to control the progress of ep_managers stopping not in the context of manager::stop() call
+    seastar::gate _draining_eps_gate; // gate used to control the progress of endpoint_managers stopping not in the context of manager::stop() call
 
     resource_manager& _resource_manager;
 
@@ -138,7 +138,7 @@ public:
     future<> stop();
     bool store_hint(endpoint_id ep, schema_ptr s, lw_shared_ptr<const frozen_mutation> fm, tracing::trace_state_ptr tr_state) noexcept;
 
-    /// \brief Changes the host_filter currently used, stopping and starting ep_managers relevant to the new host_filter.
+    /// \brief Changes the host_filter currently used, stopping and starting endpoint_managers relevant to the new host_filter.
     /// \param filter the new host_filter
     /// \return A future that resolves when the operation is complete.
     future<> change_host_filter(host_filter filter);
@@ -232,8 +232,8 @@ public:
         _state.set(state::replay_allowed);
     }
 
-    /// \brief Returns a set of replay positions for hint queues towards endpoints from the `target_hosts`.
-    sync_point::shard_rps calculate_current_sync_point(const std::vector<endpoint_id>& target_hosts) const;
+    /// \brief Returns a set of replay positions for hint queues towards endpoints from the `target_eps`.
+    sync_point::shard_rps calculate_current_sync_point(const std::vector<endpoint_id>& target_eps) const;
 
     /// \brief Waits until hint replay reach replay positions described in `rps`.
     future<> wait_for_sync_point(abort_source& as, const sync_point::shard_rps& rps);
@@ -263,7 +263,7 @@ private:
         return _local_db;
     }
 
-    end_point_hints_manager& get_ep_manager(endpoint_id ep);
+    hint_endpoint_manager& get_ep_manager(endpoint_id ep);
     bool have_ep_manager(endpoint_id ep) const noexcept;
 
 public:
@@ -273,7 +273,7 @@ public:
     /// Otherwise drains hints to the node that has left.
     ///
     /// In both cases - removes the corresponding hints' directories after all hints have been drained and erases the
-    /// corresponding end_point_hints_manager objects.
+    /// corresponding hint_endpoint_manager objects.
     ///
     /// \param endpoint node that left the cluster
     void drain_for(endpoint_id endpoint);
