@@ -175,9 +175,7 @@ public:
             return _state.contains(state::stopping);
         }
 
-        bool replay_allowed() const noexcept {
-            return _ep_manager.replay_allowed();
-        }
+        bool replay_allowed() const noexcept;
 
         /// \brief Try to send one hint read from the file.
         ///  - Limit the maximum memory size of hints "in the air" and the maximum total number of hints "in the air".

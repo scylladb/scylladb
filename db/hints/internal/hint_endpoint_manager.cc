@@ -834,5 +834,9 @@ resource_manager& end_point_hints_manager::shard_resource_manager() {
     return _shard_manager._resource_manager;
 }
 
+bool end_point_hints_manager::sender::replay_allowed() const noexcept {
+    return _ep_manager.replay_allowed();
+}
+
 } // namespace internal
 } // namespace db::hints
