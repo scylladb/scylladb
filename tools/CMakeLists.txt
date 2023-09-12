@@ -20,6 +20,8 @@ target_link_libraries(tools
     db)
 
 include(build_submodule)
+build_submodule(cqlsh cqlsh
+  NOARCH)
 build_submodule(tools java
   NOARCH)
 build_submodule(jmx jmx
