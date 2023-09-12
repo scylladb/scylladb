@@ -345,8 +345,8 @@ future<> gossiper::handle_ack_msg(msg_addr id, gossip_digest_ack ack_msg) {
                 ack_msg_pending& p = _ack_handlers[from.addr];
                 p.pending = false;
                 p.ack_msg_digest = {};
-                logger.warn("Failed to process gossip ack msg digests from node {}: {}", from, ep);
             }
+            logger.warn("Failed to process gossip ack msg digests from node {}: {}", from, ep);
             throw;
         }
     }
