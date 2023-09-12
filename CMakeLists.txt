@@ -38,6 +38,8 @@ set(CMAKE_CXX_VISIBILITY_PRESET hidden)
 
 set(Seastar_TESTING ON CACHE BOOL "" FORCE)
 set(Seastar_API_LEVEL 7 CACHE STRING "" FORCE)
+set(Seastar_APPS ON CACHE BOOL "" FORCE)
+set(Seastar_EXCLUDE_APPS_FROM_ALL ON CACHE BOOL "" FORCE)
 add_subdirectory(seastar)
 
 # System libraries dependencies
@@ -225,3 +227,5 @@ set(CMAKE_EXE_LINKER_FLAGS "${default_linker_flags}" CACHE INTERNAL "")
 target_include_directories(scylla PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}"
     "${scylla_gen_build_dir}")
+
+add_subdirectory(dist)
