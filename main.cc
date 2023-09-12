@@ -1482,8 +1482,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             });
             static seastar::sharded<memory_threshold_guard> mtg;
             mtg.start(cfg->large_memory_allocation_warning_threshold()).get();
-            supervisor::notify("initializing migration manager RPC verbs");
-            mm.invoke_on_all(&service::migration_manager::init_messaging_service).get();
             supervisor::notify("initializing storage proxy RPC verbs");
             proxy.invoke_on_all(&service::storage_proxy::start_remote, std::ref(messaging), std::ref(gossiper), std::ref(mm), std::ref(sys_ks)).get();
             auto stop_proxy_handlers = defer_verbose_shutdown("storage proxy RPC verbs", [&proxy] {

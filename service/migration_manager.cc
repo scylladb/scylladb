@@ -63,6 +63,7 @@ migration_manager::migration_manager(migration_notifier& notifier, gms::feature_
         , _schema_push([this] { return passive_announce(); })
         , _concurrent_ddl_retries{10}
 {
+    init_messaging_service();
 }
 
 future<> migration_manager::stop() {
