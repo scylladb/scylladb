@@ -12,7 +12,10 @@ function(generate_scylla_version)
   file(STRINGS ${version_file} scylla_version)
   file(STRINGS ${release_file} scylla_release)
   file(STRINGS ${product_file} scylla_product)
-  set(Scylla_VERSION "${scylla_version}" CACHE INTERNAL "")
+
+  string(REPLACE "-" "~" scylla_version_tilde ${scylla_version})
+
+  set(Scylla_VERSION "${scylla_version_tilde}" CACHE INTERNAL "")
   set(Scylla_RELEASE "${scylla_release}" CACHE INTERNAL "")
   set(Scylla_PRODUCT "${scylla_product}" CACHE INTERNAL "")
 endfunction(generate_scylla_version)
