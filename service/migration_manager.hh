@@ -158,12 +158,11 @@ public:
     bool have_schema_agreement();
     future<> wait_for_schema_agreement(const replica::database& db, db::timeout_clock::time_point deadline, seastar::abort_source* as);
 
-    void init_messaging_service();
-
     // Maximum number of retries one should attempt when trying to perform
     // a DDL statement and getting `group0_concurrent_modification` exception.
     size_t get_concurrent_ddl_retries() const { return _concurrent_ddl_retries; }
 private:
+    void init_messaging_service();
     future<> uninit_messaging_service();
 
     future<> push_schema_mutation(const gms::inet_address& endpoint, const std::vector<mutation>& schema);
