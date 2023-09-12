@@ -2236,43 +2236,41 @@ future<> gossiper::do_stop_gossiping() {
         logger.info("gossip is already stopped");
         co_return;
     }
-    // FIXME: indentation
-        auto my_ep_state = get_endpoint_state_ptr(get_broadcast_address());
-        if (my_ep_state) {
-            logger.info("My status = {}", get_gossip_status(*my_ep_state));
-        }
-        if (my_ep_state && !is_silent_shutdown_state(*my_ep_state)) {
-            auto local_generation = my_ep_state->get_heart_beat_state().get_generation();
-            logger.info("Announcing shutdown");
-            co_await add_local_application_state(application_state::STATUS, versioned_value::shutdown(true));
-            auto live_endpoints = _live_endpoints;
-            for (inet_address addr : live_endpoints) {
-                msg_addr id = get_msg_addr(addr);
-                logger.info("Sending a GossipShutdown to {} with generation {}", id.addr, local_generation);
-                try {
-                    co_await _messaging.send_gossip_shutdown(id, get_broadcast_address(), local_generation.value());
-                        logger.trace("Got GossipShutdown Reply");
-                    } catch (...) {
-                        logger.warn("Fail to send GossipShutdown to {}: {}", id, std::current_exception());
-                    }
+    auto my_ep_state = get_endpoint_state_ptr(get_broadcast_address());
+    if (my_ep_state) {
+        logger.info("My status = {}", get_gossip_status(*my_ep_state));
+    }
+    if (my_ep_state && !is_silent_shutdown_state(*my_ep_state)) {
+        auto local_generation = my_ep_state->get_heart_beat_state().get_generation();
+        logger.info("Announcing shutdown");
+        co_await add_local_application_state(application_state::STATUS, versioned_value::shutdown(true));
+        auto live_endpoints = _live_endpoints;
+        for (inet_address addr : live_endpoints) {
+            msg_addr id = get_msg_addr(addr);
+            logger.info("Sending a GossipShutdown to {} with generation {}", id.addr, local_generation);
+            try {
+                co_await _messaging.send_gossip_shutdown(id, get_broadcast_address(), local_generation.value());
+                logger.trace("Got GossipShutdown Reply");
+            } catch (...) {
+                logger.warn("Fail to send GossipShutdown to {}: {}", id, std::current_exception());
             }
-            co_await sleep(std::chrono::milliseconds(_gcfg.shutdown_announce_ms));
-        } else {
-            logger.warn("No local state or state is in silent shutdown, not announcing shutdown");
         }
-        logger.info("Disable and wait for gossip loop started");
-        // Set disable flag and cancel the timer makes sure gossip loop will not be scheduled
-        co_await container().invoke_on_all([] (gms::gossiper& g) {
-            g._enabled = false;
-        });
-        _scheduled_gossip_task.cancel();
-        // Take the semaphore makes sure existing gossip loop is finished
-        auto units = co_await get_units(_callback_running, 1);
-        co_await container().invoke_on_all([] (auto& g) {
-            return std::move(g._failure_detector_loop_done);
-        });
-        logger.info("Gossip is now stopped");
+        co_await sleep(std::chrono::milliseconds(_gcfg.shutdown_announce_ms));
+    } else {
+        logger.warn("No local state or state is in silent shutdown, not announcing shutdown");
+    }
+    logger.info("Disable and wait for gossip loop started");
+    // Set disable flag and cancel the timer makes sure gossip loop will not be scheduled
+    co_await container().invoke_on_all([] (gms::gossiper& g) {
+        g._enabled = false;
     });
+    _scheduled_gossip_task.cancel();
+    // Take the semaphore makes sure existing gossip loop is finished
+    auto units = co_await get_units(_callback_running, 1);
+    co_await container().invoke_on_all([] (auto& g) {
+        return std::move(g._failure_detector_loop_done);
+    });
+    logger.info("Gossip is now stopped");
 }
 
 future<> gossiper::start() {
