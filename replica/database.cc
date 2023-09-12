@@ -391,6 +391,11 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
     if (_dbcfg.sstables_format) {
         set_format(*_dbcfg.sstables_format);
     }
+
+    // Schema commitlog can only be initialized on the null shard.
+    if (this_shard_id() != 0) {
+        _uses_schema_commitlog = false;
+    }
 }
 
 const db::extensions& database::extensions() const {
@@ -947,6 +952,7 @@ void database::maybe_init_schema_commitlog() {
         _listeners.push_back(_feat.schema_commitlog.when_enabled([] {
             dblog.warn("All nodes can now switch to use the schema commit log. Restart is needed for this to take effect.");
         }));
+        _uses_schema_commitlog = false;
         return;
     }
 
@@ -1001,7 +1007,7 @@ future<> database::create_local_system_table(
 }
 
 db::commitlog* database::commitlog_for(const schema_ptr& schema) {
-    return schema->static_props().use_schema_commitlog && _uses_schema_commitlog
+    return schema->static_props().use_schema_commitlog && uses_schema_commitlog()
         ? _schema_commitlog.get()
         : _commitlog.get();
 }
@@ -1834,6 +1840,13 @@ future<reader_permit> database::obtain_reader_permit(table& tbl, const char* con
 
 future<reader_permit> database::obtain_reader_permit(schema_ptr schema, const char* const op_name, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_ptr) {
     return obtain_reader_permit(find_column_family(std::move(schema)), op_name, timeout, std::move(trace_ptr));
+}
+
+bool database::uses_schema_commitlog() const {
+    if (!_uses_schema_commitlog.has_value()) [[unlikely]] {
+        on_internal_error(dblog, format("schema commitlog is not initialized yet"));
+    }
+    return *_uses_schema_commitlog;
 }
 
 bool database::is_user_semaphore(const reader_concurrency_semaphore& semaphore) const {

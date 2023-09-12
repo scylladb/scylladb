@@ -1414,7 +1414,7 @@ private:
     bool _enable_incremental_backups = false;
     bool _shutdown = false;
     bool _enable_autocompaction_toggle = false;
-    bool _uses_schema_commitlog = false;
+    std::optional<bool> _uses_schema_commitlog;
     query::querier_cache _querier_cache;
 
     std::unique_ptr<db::large_data_handler> _large_data_handler;
@@ -1801,9 +1801,7 @@ public:
         return _sst_dir_semaphore;
     }
 
-    bool uses_schema_commitlog() const {
-        return _uses_schema_commitlog;
-    }
+    bool uses_schema_commitlog() const;
 
     bool is_user_semaphore(const reader_concurrency_semaphore& semaphore) const;
 };
