@@ -3060,9 +3060,7 @@ future<> storage_service::handle_state_bootstrap(inet_address endpoint, gms::per
 
     tmptr->update_topology(endpoint, get_dc_rack_for(endpoint), locator::node::state::bootstrapping);
     tmptr->add_bootstrap_tokens(tokens, endpoint);
-    if (_gossiper.uses_host_id(endpoint)) {
-        tmptr->update_host_id(_gossiper.get_host_id(endpoint), endpoint);
-    }
+    tmptr->update_host_id(_gossiper.get_host_id(endpoint), endpoint);
     co_await update_topology_change_info(tmptr, ::format("handle_state_bootstrap {}", endpoint));
     co_await replicate_to_all_cores(std::move(tmptr));
 }
@@ -3091,36 +3089,34 @@ future<> storage_service::handle_state_normal(inet_address endpoint, gms::permit
         endpoints_to_remove.insert(node);
     };
     // Order Matters, TM.updateHostID() should be called before TM.updateNormalToken(), (see CASSANDRA-4300).
-    if (_gossiper.uses_host_id(endpoint)) {
-        auto host_id = _gossiper.get_host_id(endpoint);
-        auto existing = tmptr->get_endpoint_for_host_id(host_id);
-        if (existing && *existing != endpoint) {
-            if (*existing == get_broadcast_address()) {
-                slogger.warn("Not updating host ID {} for {} because it's mine", host_id, endpoint);
-                do_remove_node(endpoint);
-            } else if (_gossiper.compare_endpoint_startup(endpoint, *existing) > 0) {
-                slogger.warn("Host ID collision for {} between {} and {}; {} is the new owner", host_id, *existing, endpoint, endpoint);
-                do_remove_node(*existing);
-                slogger.info("Set host_id={} to be owned by node={}, existing={}", host_id, endpoint, *existing);
-                tmptr->update_host_id(host_id, endpoint);
-            } else {
-                slogger.warn("Host ID collision for {} between {} and {}; ignored {}", host_id, *existing, endpoint, endpoint);
-                do_remove_node(endpoint);
-            }
-        } else if (existing && *existing == endpoint) {
-            tmptr->del_replacing_endpoint(endpoint);
-        } else {
-            tmptr->del_replacing_endpoint(endpoint);
-            auto nodes = _gossiper.get_nodes_with_host_id(host_id);
-            bool left = std::any_of(nodes.begin(), nodes.end(), [this] (const gms::inet_address& node) { return _gossiper.is_left(node); });
-            if (left) {
-                slogger.info("Skip to set host_id={} to be owned by node={}, because the node is removed from the cluster, nodes {} used to own the host_id", host_id, endpoint, nodes);
-                _normal_state_handled_on_boot.insert(endpoint);
-                co_return;
-            }
-            slogger.info("Set host_id={} to be owned by node={}", host_id, endpoint);
+    auto host_id = _gossiper.get_host_id(endpoint);
+    auto existing = tmptr->get_endpoint_for_host_id(host_id);
+    if (existing && *existing != endpoint) {
+        if (*existing == get_broadcast_address()) {
+            slogger.warn("Not updating host ID {} for {} because it's mine", host_id, endpoint);
+            do_remove_node(endpoint);
+        } else if (_gossiper.compare_endpoint_startup(endpoint, *existing) > 0) {
+            slogger.warn("Host ID collision for {} between {} and {}; {} is the new owner", host_id, *existing, endpoint, endpoint);
+            do_remove_node(*existing);
+            slogger.info("Set host_id={} to be owned by node={}, existing={}", host_id, endpoint, *existing);
             tmptr->update_host_id(host_id, endpoint);
+        } else {
+            slogger.warn("Host ID collision for {} between {} and {}; ignored {}", host_id, *existing, endpoint, endpoint);
+            do_remove_node(endpoint);
         }
+    } else if (existing && *existing == endpoint) {
+        tmptr->del_replacing_endpoint(endpoint);
+    } else {
+        tmptr->del_replacing_endpoint(endpoint);
+        auto nodes = _gossiper.get_nodes_with_host_id(host_id);
+        bool left = std::any_of(nodes.begin(), nodes.end(), [this] (const gms::inet_address& node) { return _gossiper.is_left(node); });
+        if (left) {
+            slogger.info("Skip to set host_id={} to be owned by node={}, because the node is removed from the cluster, nodes {} used to own the host_id", host_id, endpoint, nodes);
+            _normal_state_handled_on_boot.insert(endpoint);
+            co_return;
+        }
+        slogger.info("Set host_id={} to be owned by node={}", host_id, endpoint);
+        tmptr->update_host_id(host_id, endpoint);
     }
 
     // Tokens owned by the handled endpoint.

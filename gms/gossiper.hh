@@ -443,8 +443,6 @@ public:
     // Called function must not yield
     stop_iteration for_each_endpoint_state_until(std::function<stop_iteration(const inet_address&, const endpoint_state&)>) const;
 
-    bool uses_host_id(inet_address endpoint) const;
-
     locator::host_id get_host_id(inet_address endpoint) const;
 
     std::set<gms::inet_address> get_nodes_with_host_id(locator::host_id host_id) const;
