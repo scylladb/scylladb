@@ -139,6 +139,21 @@ bool should_propose_first_generation(const gms::inet_address& me, const gms::gos
 */
 bool is_cdc_generation_optimal(const cdc::topology_description& gen, const locator::token_metadata& tm);
 
+/*
+ * Generate a set of CDC stream identifiers such that for each shard
+ * and vnode pair there exists a stream whose token falls into this vnode
+ * and is owned by this shard. It is sometimes not possible to generate
+ * a CDC stream identifier for some (vnode, shard) pair because not all
+ * shards have to own tokens in a vnode. Small vnode can be totally owned
+ * by a single shard. In such case, a stream identifier that maps to
+ * end of the vnode is generated.
+ *
+ * Then build a cdc::topology_description which maps tokens to generated
+ * stream identifiers, such that if token T is owned by shard S in vnode V,
+ * it gets mapped to the stream identifier generated for (S, V).
+ *
+ * Run in seastar::async context.
+ */
 cdc::topology_description make_new_generation_description(
     const std::unordered_set<dht::token>& bootstrap_tokens,
     const noncopyable_function<std::pair<size_t, uint8_t> (dht::token)>& get_sharding_info,
