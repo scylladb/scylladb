@@ -115,10 +115,12 @@ future<> db::batchlog_manager::start() {
 }
 
 future<> db::batchlog_manager::drain() {
-    blogger.info("Asked to drain");
-    if (!_stop.abort_requested()) {
-        _stop.request_abort();
+    if (_stop.abort_requested()) {
+        co_return;
     }
+
+    blogger.info("Asked to drain");
+    _stop.request_abort();
     if (this_shard_id() == 0) {
         // Abort do_batch_log_replay if waiting on the semaphore.
         _sem.broken();
