@@ -9,6 +9,7 @@
 #pragma once
 
 #include "gms/inet_address.hh"
+#include "locator/host_id.hh"
 #include "streaming/stream_reason.hh"
 #include "tasks/task_manager.hh"
 
@@ -20,6 +21,7 @@ class system_distributed_keyspace;
 
 namespace locator {
 class token_metadata;
+class host_id_or_endpoint;
 }
 
 namespace service {
@@ -173,6 +175,20 @@ public:
     start_decommission_task_impl(tasks::task_manager::module_ptr module,
             std::string entity,
             service::storage_service& ss) noexcept;
+protected:
+    virtual future<> run() override;
+};
+
+class start_remove_node_task_impl : public remove_node_task_impl {
+private:
+    locator::host_id _host_id;
+    std::list<locator::host_id_or_endpoint> _ignore_nodes_params;
+public:
+    start_remove_node_task_impl(tasks::task_manager::module_ptr module,
+            std::string entity,
+            service::storage_service& ss,
+            locator::host_id host_id,
+            std::list<locator::host_id_or_endpoint> ignore_nodes_params) noexcept;
 protected:
     virtual future<> run() override;
 };
