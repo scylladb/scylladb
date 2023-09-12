@@ -29,6 +29,7 @@
 #include "db/hints/sync_point.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "db/hints/internal/common.hh"
+#include "db/hints/internal/hint_storage.hh"
 
 class fragmented_temporary_buffer;
 
@@ -43,9 +44,9 @@ class gossiper;
 namespace db {
 namespace hints {
 
-using node_to_hint_store_factory_type = utils::loading_shared_values<internal::endpoint_id, db::commitlog>;
-using hints_store_ptr = node_to_hint_store_factory_type::entry_ptr;
-using hint_entry_reader = commitlog_entry_reader;
+using node_to_hint_store_factory_type = internal::node_to_hint_store_factory_type;
+using hints_store_ptr = internal::hints_store_ptr;
+using hint_entry_reader = internal::hint_entry_reader;
 using timer_clock_type = seastar::lowres_clock;
 
 /// A helper class which tracks hints directory creation
