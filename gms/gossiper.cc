@@ -30,6 +30,7 @@
 #include <seastar/util/defer.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
+#include <seastar/coroutine/exception.hh>
 #include <chrono>
 #include "db/config.hh"
 #include "locator/host_id.hh"
@@ -42,7 +43,6 @@
 #include <utility>
 #include "gms/generation-number.hh"
 #include "locator/token_metadata.hh"
-#include "seastar/core/on_internal_error.hh"
 #include "utils/exceptions.hh"
 
 namespace gms {
@@ -168,24 +168,24 @@ future<> gossiper::handle_syn_msg(msg_addr from, gossip_digest_syn syn_msg) {
     logger.trace("handle_syn_msg():from={},cluster_name:peer={},local={},group0_id:peer={},local={},partitioner_name:peer={},local={}",
         from, syn_msg.cluster_id(), get_cluster_name(), syn_msg.group0_id(), get_group0_id(), syn_msg.partioner(), get_partitioner_name());
     if (!this->is_enabled()) {
-        return make_ready_future<>();
+        co_return;
     }
 
     /* If the message is from a different cluster throw it away. */
     if (syn_msg.cluster_id() != get_cluster_name()) {
         logger.warn("ClusterName mismatch from {} {}!={}", from.addr, syn_msg.cluster_id(), get_cluster_name());
-        return make_ready_future<>();
+        co_return;
     }
 
     /* If the message is from a node with a different group0 id throw it away. */
     if (syn_msg.group0_id() && get_group0_id() && syn_msg.group0_id() != get_group0_id()) {
         logger.warn("Group0Id mismatch from {} {} != {}", from.addr, syn_msg.group0_id(), get_group0_id());
-        return make_ready_future<>();
+        co_return;
     }
 
     if (syn_msg.partioner() != "" && syn_msg.partioner() != get_partitioner_name()) {
         logger.warn("Partitioner mismatch from {} {}!={}", from.addr, syn_msg.partioner(), get_partitioner_name());
-        return make_ready_future<>();
+        co_return;
     }
 
     syn_msg_pending& p = _syn_handlers[from.addr];
@@ -195,43 +195,43 @@ future<> gossiper::handle_syn_msg(msg_addr from, gossip_digest_syn syn_msg) {
         // one only.
         logger.debug("Queue gossip syn msg from node {}, syn_msg={}", from, syn_msg);
         p.syn_msg = std::move(syn_msg);
-        return make_ready_future<>();
-    } else {
-        // Process the syn message immediately
-        logger.debug("Process gossip syn msg from node {}, syn_msg={}", from, syn_msg);
-        p.pending = true;
-        return do_with(std::move(syn_msg), [this, from, g = this->shared_from_this()] (gossip_digest_syn& syn_msg) mutable {
-            return repeat([this, from, g, &syn_msg] {
-                return do_send_ack_msg(from, std::move(syn_msg)).then([this, from, &syn_msg] () mutable {
-                    if (!_syn_handlers.contains(from.addr)) {
-                        return stop_iteration::yes;
-                    }
-                    syn_msg_pending& p = _syn_handlers[from.addr];
-                    if (p.syn_msg) {
-                        // Process pending gossip syn msg and send ack msg back
-                        logger.debug("Handle queued gossip syn msg from node {}, syn_msg={}, pending={}",
-                                from, p.syn_msg, p.pending);
-                        syn_msg = std::move(p.syn_msg.value());
-                        p.syn_msg = {};
-                        return stop_iteration::no;
-                    } else {
-                        // No more pending syn msg to process
-                        p.pending = false;
-                        logger.debug("No more queued gossip syn msg from node {}, syn_msg={}, pending={}",
-                                from, p.syn_msg, p.pending);
-                        return stop_iteration::yes;
-                    }
-                }).handle_exception([this, from] (std::exception_ptr ep) {
-                    if (_syn_handlers.contains(from.addr)) {
-                        syn_msg_pending& p = _syn_handlers[from.addr];
-                        p.pending = false;
-                        p.syn_msg = {};
-                    }
-                    logger.warn("Failed to process gossip syn msg from node {}:  {}", from, ep);
-                    return make_exception_future<stop_iteration>(ep);
-                });
-            });
-        });
+        co_return;
+    }
+
+    // Process the syn message immediately
+    logger.debug("Process gossip syn msg from node {}, syn_msg={}", from, syn_msg);
+    p.pending = true;
+    for (;;) {
+        try {
+            co_await do_send_ack_msg(from, std::move(syn_msg));
+            if (!_syn_handlers.contains(from.addr)) {
+                co_return;
+            }
+            syn_msg_pending& p = _syn_handlers[from.addr];
+            if (p.syn_msg) {
+                // Process pending gossip syn msg and send ack msg back
+                logger.debug("Handle queued gossip syn msg from node {}, syn_msg={}, pending={}",
+                        from, p.syn_msg, p.pending);
+                syn_msg = std::move(p.syn_msg.value());
+                p.syn_msg = {};
+                continue;
+            } else {
+                // No more pending syn msg to process
+                p.pending = false;
+                logger.debug("No more queued gossip syn msg from node {}, syn_msg={}, pending={}",
+                        from, p.syn_msg, p.pending);
+                co_return;
+            }
+        } catch (...) {
+            auto ep = std::current_exception();
+            if (_syn_handlers.contains(from.addr)) {
+                syn_msg_pending& p = _syn_handlers[from.addr];
+                p.pending = false;
+                p.syn_msg = {};
+            }
+            logger.warn("Failed to process gossip syn msg from node {}: {}", from, ep);
+            throw;
+        }
     }
 }
 
@@ -277,9 +277,8 @@ future<> gossiper::handle_ack_msg(msg_addr id, gossip_digest_ack ack_msg) {
     logger.trace("handle_ack_msg():from={},msg={}", id, ack_msg);
 
     if (!this->is_enabled() && !this->is_in_shadow_round()) {
-        return make_ready_future<>();
+        co_return;
     }
-
 
     auto g_digest_list = ack_msg.get_gossip_digest_list();
     auto& ep_state_map = ack_msg.get_endpoint_state_map();
@@ -294,64 +293,63 @@ future<> gossiper::handle_ack_msg(msg_addr id, gossip_digest_ack ack_msg) {
         }
     });
 
-    auto f = make_ready_future<>();
     if (ep_state_map.size() > 0) {
         update_timestamp_for_nodes(ep_state_map);
-        f = this->apply_state_locally(std::move(ep_state_map));
+        co_await this->apply_state_locally(std::move(ep_state_map));
     }
 
-    return f.then([this, from = id, ack_msg_digest = std::move(g_digest_list), mp = std::move(mp), g = this->shared_from_this()] () mutable {
-        if (this->is_in_shadow_round()) {
-            this->finish_shadow_round();
-            // don't bother doing anything else, we have what we came for
-            return make_ready_future<>();
+    auto from = id;
+    auto ack_msg_digest = std::move(g_digest_list);
+    if (this->is_in_shadow_round()) {
+        this->finish_shadow_round();
+        // don't bother doing anything else, we have what we came for
+        co_return;
+    }
+    ack_msg_pending& p = _ack_handlers[from.addr];
+    if (p.pending) {
+        // The latest ack message digests from peer has the latest infomation, so
+        // it is safe to drop the previous ack message digests and keep the latest
+        // one only.
+        logger.debug("Queue gossip ack msg digests from node {}, ack_msg_digest={}", from, ack_msg_digest);
+        p.ack_msg_digest = std::move(ack_msg_digest);
+        co_return;
+    }
+
+    // Process the ack message immediately
+    logger.debug("Process gossip ack msg digests from node {}, ack_msg_digest={}", from, ack_msg_digest);
+    p.pending = true;
+    for (;;) {
+        try {
+            co_await do_send_ack2_msg(from, std::move(ack_msg_digest));
+            if (!_ack_handlers.contains(from.addr)) {
+                co_return;
+            }
+            ack_msg_pending& p = _ack_handlers[from.addr];
+            if (p.ack_msg_digest) {
+                // Process pending gossip ack msg digests and send ack2 msg back
+                logger.debug("Handle queued gossip ack msg digests from node {}, ack_msg_digest={}, pending={}",
+                        from, p.ack_msg_digest, p.pending);
+                ack_msg_digest = std::move(p.ack_msg_digest.value());
+                p.ack_msg_digest= {};
+                continue;
+            } else {
+                // No more pending ack msg digests to process
+                p.pending = false;
+                logger.debug("No more queued gossip ack msg digests from node {}, ack_msg_digest={}, pending={}",
+                        from, p.ack_msg_digest, p.pending);
+                co_return;
+            }
+        } catch (...) {
+            auto ep = std::current_exception();
+            if (_ack_handlers.contains(from.addr)) {
+                ack_msg_pending& p = _ack_handlers[from.addr];
+                p.pending = false;
+                p.ack_msg_digest = {};
+            }
+            logger.warn("Failed to process gossip ack msg digests from node {}: {}", from, ep);
+            throw;
         }
-        ack_msg_pending& p = _ack_handlers[from.addr];
-        if (p.pending) {
-            // The latest ack message digests from peer has the latest infomation, so
-            // it is safe to drop the previous ack message digests and keep the latest
-            // one only.
-            logger.debug("Queue gossip ack msg digests from node {}, ack_msg_digest={}", from, ack_msg_digest);
-            p.ack_msg_digest = std::move(ack_msg_digest);
-            return make_ready_future<>();
-        } else {
-            // Process the ack message immediately
-            logger.debug("Process gossip ack msg digests from node {}, ack_msg_digest={}", from, ack_msg_digest);
-            p.pending = true;
-            return do_with(std::move(ack_msg_digest), [this, from, g] (utils::chunked_vector<gossip_digest>& ack_msg_digest) mutable {
-                return repeat([this, from, g, &ack_msg_digest] {
-                    return do_send_ack2_msg(from, std::move(ack_msg_digest)).then([this, from, &ack_msg_digest] () mutable {
-                        if (!_ack_handlers.contains(from.addr)) {
-                            return stop_iteration::yes;
-                        }
-                        ack_msg_pending& p = _ack_handlers[from.addr];
-                        if (p.ack_msg_digest) {
-                            // Process pending gossip ack msg digests and send ack2 msg back
-                            logger.debug("Handle queued gossip ack msg digests from node {}, ack_msg_digest={}, pending={}",
-                                    from, p.ack_msg_digest, p.pending);
-                            ack_msg_digest = std::move(p.ack_msg_digest.value());
-                            p.ack_msg_digest= {};
-                            return stop_iteration::no;
-                        } else {
-                            // No more pending ack msg digests to process
-                            p.pending = false;
-                            logger.debug("No more queued gossip ack msg digests from node {}, ack_msg_digest={}, pending={}",
-                                    from, p.ack_msg_digest, p.pending);
-                            return stop_iteration::yes;
-                        }
-                    }).handle_exception([this, from] (std::exception_ptr ep) {
-                        if (_ack_handlers.contains(from.addr)) {
-                            ack_msg_pending& p = _ack_handlers[from.addr];
-                            p.pending = false;
-                            p.ack_msg_digest = {};
-                            logger.warn("Failed to process gossip ack msg digests from node {}: {}", from, ep);
-                        }
-                        return make_exception_future<stop_iteration>(ep);
-                    });
-                });
-            });
-        }
-    });
+    }
 }
 
 future<> gossiper::do_send_ack2_msg(msg_addr from, utils::chunked_vector<gossip_digest> ack_msg_digest) {
@@ -391,7 +389,7 @@ future<> gossiper::do_send_ack2_msg(msg_addr from, utils::chunked_vector<gossip_
 future<> gossiper::handle_ack2_msg(msg_addr from, gossip_digest_ack2 msg) {
     logger.trace("handle_ack2_msg():msg={}", msg);
     if (!is_enabled()) {
-        return make_ready_future<>();
+        co_return;
     }
 
 
@@ -408,7 +406,7 @@ future<> gossiper::handle_ack2_msg(msg_addr from, gossip_digest_ack2 msg) {
         }
     });
 
-    return apply_state_locally(std::move(remote_ep_state_map)).finally([mp = std::move(mp)] {});
+    co_await apply_state_locally(std::move(remote_ep_state_map));
 }
 
 future<> gossiper::handle_echo_msg(gms::inet_address from, std::optional<int64_t> generation_number_opt) {
@@ -1295,54 +1293,52 @@ future<> gossiper::unsafe_assassinate_endpoint(sstring address) {
 }
 
 future<> gossiper::assassinate_endpoint(sstring address) {
-    return container().invoke_on(0, [address] (auto&& gossiper) {
-        return seastar::async([&gossiper, g = gossiper.shared_from_this(), address] {
-            inet_address endpoint(address);
-            auto permit = gossiper.lock_endpoint(endpoint, null_permit_id).get0();
-            auto es = gossiper.get_endpoint_state_ptr(endpoint);
-            auto now = gossiper.now();
-            generation_type gen(std::chrono::duration_cast<std::chrono::seconds>((now + std::chrono::seconds(60)).time_since_epoch()).count());
-            version_type ver(9999);
-            endpoint_state ep_state = es ? *es : endpoint_state(heart_beat_state(gen, ver));
-            std::vector<dht::token> tokens;
-            logger.warn("Assassinating {} via gossip", endpoint);
-            if (es) {
-                tokens = gossiper.get_token_metadata_ptr()->get_tokens(endpoint);
-                if (tokens.empty()) {
-                    logger.warn("Unable to calculate tokens for {}.  Will use a random one", address);
-                    throw std::runtime_error(format("Unable to calculate tokens for {}", endpoint));
-                }
-
-                auto generation = ep_state.get_heart_beat_state().get_generation();
-                auto heartbeat = ep_state.get_heart_beat_state().get_heart_beat_version();
-                auto ring_delay = std::chrono::milliseconds(gossiper._gcfg.ring_delay_ms);
-                logger.info("Sleeping for {} ms to ensure {} does not change", ring_delay.count(), endpoint);
-                // make sure it did not change
-                sleep_abortable(ring_delay, gossiper._abort_source).get();
-
-                es = gossiper.get_endpoint_state_ptr(endpoint);
-                if (!es) {
-                    logger.warn("Endpoint {} disappeared while trying to assassinate, continuing anyway", endpoint);
-                } else {
-                    auto& new_state = *es;
-                    if (new_state.get_heart_beat_state().get_generation() != generation) {
-                        throw std::runtime_error(format("Endpoint still alive: {} generation changed while trying to assassinate it", endpoint));
-                    } else if (new_state.get_heart_beat_state().get_heart_beat_version() != heartbeat) {
-                        throw std::runtime_error(format("Endpoint still alive: {} heartbeat changed while trying to assassinate it", endpoint));
-                    }
-                }
-                ep_state.update_timestamp(); // make sure we don't evict it too soon
-                ep_state.get_heart_beat_state().force_newer_generation_unsafe();
+    co_await container().invoke_on(0, [&] (auto&& gossiper) -> future<> {
+        inet_address endpoint(address);
+        auto permit = co_await gossiper.lock_endpoint(endpoint, null_permit_id);
+        auto es = gossiper.get_endpoint_state_ptr(endpoint);
+        auto now = gossiper.now();
+        generation_type gen(std::chrono::duration_cast<std::chrono::seconds>((now + std::chrono::seconds(60)).time_since_epoch()).count());
+        version_type ver(9999);
+        endpoint_state ep_state = es ? *es : endpoint_state(heart_beat_state(gen, ver));
+        std::vector<dht::token> tokens;
+        logger.warn("Assassinating {} via gossip", endpoint);
+        if (es) {
+            tokens = gossiper.get_token_metadata_ptr()->get_tokens(endpoint);
+            if (tokens.empty()) {
+                logger.warn("Unable to calculate tokens for {}.  Will use a random one", address);
+                throw std::runtime_error(format("Unable to calculate tokens for {}", endpoint));
             }
 
-            // do not pass go, do not collect 200 dollars, just gtfo
-            std::unordered_set<dht::token> tokens_set(tokens.begin(), tokens.end());
-            auto expire_time = gossiper.compute_expire_time();
-            ep_state.add_application_state(application_state::STATUS, versioned_value::left(tokens_set, expire_time.time_since_epoch().count()));
-            gossiper.handle_major_state_change(endpoint, std::move(ep_state), permit.id()).get();
-            sleep_abortable(INTERVAL * 4, gossiper._abort_source).get();
-            logger.warn("Finished assassinating {}", endpoint);
-        });
+            auto generation = ep_state.get_heart_beat_state().get_generation();
+            auto heartbeat = ep_state.get_heart_beat_state().get_heart_beat_version();
+            auto ring_delay = std::chrono::milliseconds(gossiper._gcfg.ring_delay_ms);
+            logger.info("Sleeping for {} ms to ensure {} does not change", ring_delay.count(), endpoint);
+            // make sure it did not change
+            co_await sleep_abortable(ring_delay, gossiper._abort_source);
+
+            es = gossiper.get_endpoint_state_ptr(endpoint);
+            if (!es) {
+                logger.warn("Endpoint {} disappeared while trying to assassinate, continuing anyway", endpoint);
+            } else {
+                auto& new_state = *es;
+                if (new_state.get_heart_beat_state().get_generation() != generation) {
+                    throw std::runtime_error(format("Endpoint still alive: {} generation changed while trying to assassinate it", endpoint));
+                } else if (new_state.get_heart_beat_state().get_heart_beat_version() != heartbeat) {
+                    throw std::runtime_error(format("Endpoint still alive: {} heartbeat changed while trying to assassinate it", endpoint));
+                }
+            }
+            ep_state.update_timestamp(); // make sure we don't evict it too soon
+            ep_state.get_heart_beat_state().force_newer_generation_unsafe();
+        }
+
+        // do not pass go, do not collect 200 dollars, just gtfo
+        std::unordered_set<dht::token> tokens_set(tokens.begin(), tokens.end());
+        auto expire_time = gossiper.compute_expire_time();
+        ep_state.add_application_state(application_state::STATUS, versioned_value::left(tokens_set, expire_time.time_since_epoch().count()));
+        co_await gossiper.handle_major_state_change(endpoint, std::move(ep_state), permit.id());
+        co_await sleep_abortable(INTERVAL * 4, gossiper._abort_source);
+        logger.warn("Finished assassinating {}", endpoint);
     });
 }
 
@@ -2164,19 +2160,18 @@ future<> gossiper::add_local_application_state(std::initializer_list<std::pair<a
 //
 future<> gossiper::add_local_application_state(std::list<std::pair<application_state, versioned_value>> states) {
     if (states.empty()) {
-        return make_ready_future<>();
+        co_return;
     }
-    return container().invoke_on(0, [states = std::move(states)] (gossiper& gossiper) mutable {
-        return seastar::async([g = gossiper.shared_from_this(), states = std::move(states)]() mutable {
-            auto& gossiper = *g;
+    try {
+        co_await container().invoke_on(0, [&] (gossiper& gossiper) mutable -> future<> {
             inet_address ep_addr = gossiper.get_broadcast_address();
             // for symmetry with other apply, use endpoint lock for our own address.
-            auto permit = gossiper.lock_endpoint(ep_addr, null_permit_id).get0();
+            auto permit = co_await gossiper.lock_endpoint(ep_addr, null_permit_id);
             auto ep_state_before = gossiper.get_endpoint_state_ptr(ep_addr);
             if (!ep_state_before) {
                 auto err = format("endpoint_state_map does not contain endpoint = {}, application_states = {}",
                                   ep_addr, states);
-                throw std::runtime_error(err);
+                co_await coroutine::return_exception(std::runtime_error(err));
             }
 
             for (auto& p : states) {
@@ -2184,12 +2179,12 @@ future<> gossiper::add_local_application_state(std::list<std::pair<application_s
                 auto& value = p.second;
                 // Fire "before change" notifications:
                 // Not explicit, but apparently we allow this to defer (inside out implicit seastar::async)
-                gossiper.do_before_change_notifications(ep_addr, ep_state_before, state, value).get();
+                co_await gossiper.do_before_change_notifications(ep_addr, ep_state_before, state, value);
             }
 
             auto es = gossiper.get_endpoint_state_ptr(ep_addr);
             if (!es) {
-                return;
+                on_internal_error(logger, format("endpoint_state_map does not contain endpoint = {}", ep_addr));
             }
 
             auto local_state = *es;
@@ -2208,7 +2203,7 @@ future<> gossiper::add_local_application_state(std::list<std::pair<application_s
             // after all application states were modified as a batch.
             // We guarantee that the on_change notifications
             // will be called in the order given by `states` anyhow.
-            gossiper.replicate(ep_addr, std::move(local_state), permit.id()).get();
+            co_await gossiper.replicate(ep_addr, std::move(local_state), permit.id());
 
             for (auto& p : states) {
                 auto& state = p.first;
@@ -2217,12 +2212,12 @@ future<> gossiper::add_local_application_state(std::list<std::pair<application_s
                 // now we might defer again, so this could be reordered. But we've
                 // ensured the whole set of values are monotonically versioned and
                 // applied to endpoint state.
-                gossiper.do_on_change_notifications(ep_addr, state, value, permit.id()).get();
+                co_await gossiper.do_on_change_notifications(ep_addr, state, value, permit.id());
             }
-        }).handle_exception([] (auto ep) {
-            logger.warn("Fail to apply application_state: {}", ep);
         });
-    });
+    } catch (...) {
+        logger.warn("Fail to apply application_state: {}", std::current_exception());
+    }
 }
 
 future<> gossiper::do_stop_gossiping() {
@@ -2231,48 +2226,43 @@ future<> gossiper::do_stop_gossiping() {
     // before _enabled is set to false down below.
     if (!_enabled) {
         logger.info("gossip is already stopped");
-        return make_ready_future<>();
+        co_return;
     }
-    return seastar::async([this, g = this->shared_from_this()] {
-        auto my_ep_state = get_endpoint_state_ptr(get_broadcast_address());
-        if (my_ep_state) {
-            logger.info("My status = {}", get_gossip_status(*my_ep_state));
-        }
-        if (my_ep_state && !is_silent_shutdown_state(*my_ep_state)) {
-            auto local_generation = my_ep_state->get_heart_beat_state().get_generation();
-            logger.info("Announcing shutdown");
-            add_local_application_state(application_state::STATUS, versioned_value::shutdown(true)).get();
-            auto live_endpoints = _live_endpoints;
-            for (inet_address addr : live_endpoints) {
-                msg_addr id = get_msg_addr(addr);
-                logger.info("Sending a GossipShutdown to {} with generation {}", id.addr, local_generation);
-                _messaging.send_gossip_shutdown(id, get_broadcast_address(), local_generation.value()).then_wrapped([id] (auto&&f) {
-                    try {
-                        f.get();
-                        logger.trace("Got GossipShutdown Reply");
-                    } catch (...) {
-                        logger.warn("Fail to send GossipShutdown to {}: {}", id, std::current_exception());
-                    }
-                    return make_ready_future<>();
-                }).get();
+    auto my_ep_state = get_endpoint_state_ptr(get_broadcast_address());
+    if (my_ep_state) {
+        logger.info("My status = {}", get_gossip_status(*my_ep_state));
+    }
+    if (my_ep_state && !is_silent_shutdown_state(*my_ep_state)) {
+        auto local_generation = my_ep_state->get_heart_beat_state().get_generation();
+        logger.info("Announcing shutdown");
+        co_await add_local_application_state(application_state::STATUS, versioned_value::shutdown(true));
+        auto live_endpoints = _live_endpoints;
+        for (inet_address addr : live_endpoints) {
+            msg_addr id = get_msg_addr(addr);
+            logger.info("Sending a GossipShutdown to {} with generation {}", id.addr, local_generation);
+            try {
+                co_await _messaging.send_gossip_shutdown(id, get_broadcast_address(), local_generation.value());
+                logger.trace("Got GossipShutdown Reply");
+            } catch (...) {
+                logger.warn("Fail to send GossipShutdown to {}: {}", id, std::current_exception());
             }
-            sleep(std::chrono::milliseconds(_gcfg.shutdown_announce_ms)).get();
-        } else {
-            logger.warn("No local state or state is in silent shutdown, not announcing shutdown");
         }
-        logger.info("Disable and wait for gossip loop started");
-        // Set disable flag and cancel the timer makes sure gossip loop will not be scheduled
-        container().invoke_on_all([] (gms::gossiper& g) {
-            g._enabled = false;
-        }).get();
-        _scheduled_gossip_task.cancel();
-        // Take the semaphore makes sure existing gossip loop is finished
-        get_units(_callback_running, 1).get0();
-        container().invoke_on_all([] (auto& g) {
-            return std::move(g._failure_detector_loop_done);
-        }).get();
-        logger.info("Gossip is now stopped");
+        co_await sleep(std::chrono::milliseconds(_gcfg.shutdown_announce_ms));
+    } else {
+        logger.warn("No local state or state is in silent shutdown, not announcing shutdown");
+    }
+    logger.info("Disable and wait for gossip loop started");
+    // Set disable flag and cancel the timer makes sure gossip loop will not be scheduled
+    co_await container().invoke_on_all([] (gms::gossiper& g) {
+        g._enabled = false;
     });
+    _scheduled_gossip_task.cancel();
+    // Take the semaphore makes sure existing gossip loop is finished
+    auto units = co_await get_units(_callback_running, 1);
+    co_await container().invoke_on_all([] (auto& g) {
+        return std::move(g._failure_detector_loop_done);
+    });
+    logger.info("Gossip is now stopped");
 }
 
 future<> gossiper::start() {

@@ -596,6 +596,8 @@ public:
 
 private:
     void build_seeds_list();
+    // Must be called on shard 0
+    future<> do_stop_gossiping();
 
 public:
     /**
@@ -620,7 +622,6 @@ public:
     future<> shutdown();
     // Needed by seastar::sharded
     future<> stop();
-    future<> do_stop_gossiping();
 
 public:
     bool is_enabled() const;
