@@ -90,6 +90,7 @@ namespace node_ops {
 class task_manager_module;
 class join_token_ring_task_impl;
 class start_rebuild_task_impl;
+class start_decommission_task_impl;
 }
 
 namespace service {
@@ -112,6 +113,7 @@ class node_ops_meta_data;
 
 future<> set_gossip_tokens(gms::gossiper& g,
         const std::unordered_set<dht::token>& tokens, std::optional<cdc::generation_id> cdc_gen_id);
+void on_streaming_finished();
 
 /**
  * This abstraction contains the token/identifier of this node
@@ -650,8 +652,6 @@ public:
             const sstring& cf_name,
             range<dht::token> range,
             uint32_t keys_per_split);
-public:
-    future<> decommission();
 
 private:
     /**
@@ -843,6 +843,7 @@ private:
     friend class join_node_rpc_handshaker;
     friend class node_ops::join_token_ring_task_impl;
     friend class node_ops::start_rebuild_task_impl;
+    friend class node_ops::start_decommission_task_impl;
 };
 
 }
