@@ -30,6 +30,7 @@
 #include <seastar/util/defer.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
+#include <seastar/coroutine/exception.hh>
 #include <chrono>
 #include "db/config.hh"
 #include "locator/host_id.hh"
@@ -42,7 +43,6 @@
 #include <utility>
 #include "gms/generation-number.hh"
 #include "locator/token_metadata.hh"
-#include "seastar/core/on_internal_error.hh"
 #include "utils/exceptions.hh"
 
 namespace gms {
@@ -2172,19 +2172,18 @@ future<> gossiper::add_local_application_state(std::initializer_list<std::pair<a
 //
 future<> gossiper::add_local_application_state(std::list<std::pair<application_state, versioned_value>> states) {
     if (states.empty()) {
-        return make_ready_future<>();
+        co_return;
     }
-    return container().invoke_on(0, [states = std::move(states)] (gossiper& gossiper) mutable {
-        return seastar::async([g = gossiper.shared_from_this(), states = std::move(states)]() mutable {
-            auto& gossiper = *g;
+    try {
+        co_await container().invoke_on(0, [&] (gossiper& gossiper) mutable -> future<> {
             inet_address ep_addr = gossiper.get_broadcast_address();
             // for symmetry with other apply, use endpoint lock for our own address.
-            auto permit = gossiper.lock_endpoint(ep_addr, null_permit_id).get0();
+            auto permit = co_await gossiper.lock_endpoint(ep_addr, null_permit_id);
             auto ep_state_before = gossiper.get_endpoint_state_ptr(ep_addr);
             if (!ep_state_before) {
                 auto err = format("endpoint_state_map does not contain endpoint = {}, application_states = {}",
                                   ep_addr, states);
-                throw std::runtime_error(err);
+                co_await coroutine::return_exception(std::runtime_error(err));
             }
 
             for (auto& p : states) {
@@ -2192,12 +2191,12 @@ future<> gossiper::add_local_application_state(std::list<std::pair<application_s
                 auto& value = p.second;
                 // Fire "before change" notifications:
                 // Not explicit, but apparently we allow this to defer (inside out implicit seastar::async)
-                gossiper.do_before_change_notifications(ep_addr, ep_state_before, state, value).get();
+                co_await gossiper.do_before_change_notifications(ep_addr, ep_state_before, state, value);
             }
 
             auto es = gossiper.get_endpoint_state_ptr(ep_addr);
             if (!es) {
-                return;
+                co_return;
             }
 
             auto local_state = *es;
@@ -2216,7 +2215,7 @@ future<> gossiper::add_local_application_state(std::list<std::pair<application_s
             // after all application states were modified as a batch.
             // We guarantee that the on_change notifications
             // will be called in the order given by `states` anyhow.
-            gossiper.replicate(ep_addr, std::move(local_state), permit.id()).get();
+            co_await gossiper.replicate(ep_addr, std::move(local_state), permit.id());
 
             for (auto& p : states) {
                 auto& state = p.first;
@@ -2225,12 +2224,12 @@ future<> gossiper::add_local_application_state(std::list<std::pair<application_s
                 // now we might defer again, so this could be reordered. But we've
                 // ensured the whole set of values are monotonically versioned and
                 // applied to endpoint state.
-                gossiper.do_on_change_notifications(ep_addr, state, value, permit.id()).get();
+                co_await gossiper.do_on_change_notifications(ep_addr, state, value, permit.id());
             }
-        }).handle_exception([] (auto ep) {
-            logger.warn("Fail to apply application_state: {}", ep);
         });
-    });
+    } catch (...) {
+        logger.warn("Fail to apply application_state: {}", std::current_exception());
+    }
 }
 
 future<> gossiper::do_stop_gossiping() {
