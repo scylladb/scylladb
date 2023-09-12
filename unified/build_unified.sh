@@ -15,17 +15,6 @@ print_usage() {
     exit 1
 }
 
-# configure.py will run SCYLLA-VERSION-GEN prior to this case
-# but just in case...
-if [ ! -f build/SCYLLA-PRODUCT-FILE ]; then
-    ./SCYLLA-VERSION-GEN
-fi
-PRODUCT=`cat build/SCYLLA-PRODUCT-FILE`
-VERSION=`sed 's/-/~/' build/SCYLLA-VERSION-FILE`
-VERSION_ESC=${VERSION//./\.}
-RELEASE=`cat build/SCYLLA-RELEASE-FILE`
-RELEASE_ESC=${RELEASE//./\.}
-
 PKGS=
 BUILD_DIR="build/release"
 UNIFIED_PKG=""
@@ -48,6 +37,26 @@ while [ $# -gt 0 ]; do
             ;;
     esac
 done
+
+# configure.py let multiple builds share the same set of
+# SCYLLA-{PRODUCT,VERSION,RELEASE}-FILE, but building system created by CMake
+# different set of P-V-R (short for PRODUCT, VERSION and RELEASE) files for
+# each build.
+VERSION_DIR=$BUILD_DIR
+if [ ! -f $VERSION_DIR/SCYLLA-PRODUCT-FILE ]; then
+    VERSION_DIR="$(dirname "${BUILD_DIR}")"
+fi
+# configure.py will run SCYLLA-VERSION-GEN prior to this case
+# but just in case...
+if [ ! -f "$VERSION_DIR/SCYLLA-PRODUCT-FILE" ]; then
+    VERSION_DIR=$BUILD_DIR
+    ./SCYLLA-VERSION-GEN --output-dir "$VERSION_DIR"
+fi
+PRODUCT=`cat $VERSION_DIR/SCYLLA-PRODUCT-FILE`
+VERSION=`sed 's/-/~/' $VERSION_DIR/SCYLLA-VERSION-FILE`
+VERSION_ESC=${VERSION//./\.}
+RELEASE=`cat $VERSION_DIR/SCYLLA-RELEASE-FILE`
+RELEASE_ESC=${RELEASE//./\.}
 
 if [ -z "$UNIFIED_PKG" ]; then
     UNIFIED_PKG="$BUILD_DIR/$PRODUCT-unified-$VERSION-$RELEASE.$(arch).tar.gz"
