@@ -151,8 +151,6 @@ class partition_tombstone_data:
 
     @classmethod
     def check_mutation_row(cls, row, expected_live_rows: set[int]) -> tuple | None:
-        logger.info(f"check_mutation_row(): kind={row.mutation_fragment_kind}, pk={row.pk}, metadata={row.metadata},"
-                    " value={row.value}")
         if row.partition_region == 0:
             cls.partition_tombstone_timestamp = json.loads(row.metadata)["tombstone"].get("timestamp")
             return None
@@ -199,7 +197,6 @@ async def test_incremental_read_repair(data_class, workdir, manager):
     Write a long stream of row tombstones, with a live row before and after.
     """
     seed = int(time.time())
-    seed = 1694170155
     logger.info(f"random-seed: {seed}")
     random.seed(seed)
     cmdline = ["--hinted-handoff-enabled", "0", "--query-tombstone-page-limit", "1000"]
