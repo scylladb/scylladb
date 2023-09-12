@@ -79,7 +79,16 @@ future<> db::batchlog_manager::do_batch_log_replay() {
 }
 
 future<> db::batchlog_manager::batchlog_replay_loop() {
-    assert (this_shard_id() == 0);
+    if (this_shard_id() != 0) {
+        // Since replay is a "node global" operation, we should not attempt to do
+        // it in parallel on each shard. It will just overlap/interfere.  To
+        // simplify syncing between batchlog_replay_loop and user initiated replay operations,
+        // we use the _sem on shard zero only. Replaying batchlog can
+        // generate a lot of work, so we distrute the real work on all cpus with
+        // round-robin scheduling.
+        co_return;
+    }
+
     auto delay = _delay;
     while (!_stop.abort_requested()) {
         try {
@@ -102,15 +111,7 @@ future<> db::batchlog_manager::batchlog_replay_loop() {
 }
 
 future<> db::batchlog_manager::start() {
-    // Since replay is a "node global" operation, we should not attempt to do
-    // it in parallel on each shard. It will just overlap/interfere.  To
-    // simplify syncing between batchlog_replay_loop and user initiated replay operations,
-    // we use the _sem on shard zero only. Replaying batchlog can
-    // generate a lot of work, so we distrute the real work on all cpus with
-    // round-robin scheduling.
-    if (this_shard_id() == 0) {
-        _started = batchlog_replay_loop();
-    }
+    _started = batchlog_replay_loop();
     return make_ready_future<>();
 }
 
