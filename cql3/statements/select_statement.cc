@@ -404,12 +404,25 @@ select_statement::do_execute(query_processor& qp,
 
     auto key_ranges = _restrictions->get_partition_key_ranges(options);
 
+    auto token = dht::token();
+    std::optional<locator::tablet_routing_info> tablet_info = {};
+
+    auto&& table = _schema->table();
+    if (_may_use_token_aware_routing && table.uses_tablets()) {
+        if (key_ranges.size() == 1 && query::is_single_partition(key_ranges.front())) {
+            token = key_ranges[0].start()->value().as_decorated_key().token();
+
+            auto erm = table.get_effective_replication_map();
+            tablet_info = erm->check_locality(token);
+        }
+    }
+
     if (db::is_serial_consistency(options.get_consistency())) {
         if (key_ranges.size() != 1 || !query::is_single_partition(key_ranges.front())) {
              throw exceptions::invalid_request_exception(
                      "SERIAL/LOCAL_SERIAL consistency may only be requested for one partition at a time");
         }
-        unsigned shard = _schema->table().shard_of(key_ranges[0].start()->value().as_decorated_key().token());
+        unsigned shard = table.shard_of(key_ranges[0].start()->value().as_decorated_key().token());
         if (this_shard_id() != shard) {
             return make_ready_future<shared_ptr<cql_transport::messages::result_message>>(
                     qp.bounce_to_shard(shard, std::move(const_cast<cql3::query_options&>(options).take_cached_pk_function_calls()))
@@ -417,13 +430,24 @@ select_statement::do_execute(query_processor& qp,
         }
     }
 
+    auto f = make_ready_future<shared_ptr<cql_transport::messages::result_message>>();
+
     if (!aggregate && !_restrictions_need_filtering && (page_size <= 0
             || !service::pager::query_pagers::may_need_paging(*_schema, page_size,
                     *command, key_ranges))) {
-        return execute_without_checking_exception_message_non_aggregate_unpaged(qp, command, std::move(key_ranges), state, options, now);
+        f = execute_without_checking_exception_message_non_aggregate_unpaged(qp, command, std::move(key_ranges), state, options, now);
     } else {
-        return execute_without_checking_exception_message_aggregate_or_paged(qp, command, std::move(key_ranges), state, options, now, page_size, aggregate, nonpaged_filtering);
+        f = execute_without_checking_exception_message_aggregate_or_paged(qp, command, std::move(key_ranges), state, options, now, page_size, aggregate, nonpaged_filtering);
     }
+
+    if (!tablet_info.has_value()) {
+        return f;
+    }
+
+    return f.then([tablet_replicas = std::move(tablet_info->tablet_replicas), token_range = tablet_info->token_range] (auto res) mutable {
+        res->add_tablet_info(std::move(tablet_replicas), token_range);
+        return res;
+    });
 }
 
 future<::shared_ptr<cql_transport::messages::result_message>>
@@ -2077,7 +2101,7 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
     }
 
     auto partition_key_bind_indices = ctx.get_partition_key_bind_indexes(*schema);
-
+    stmt->_may_use_token_aware_routing = partition_key_bind_indices.size() != 0;
     return make_unique<prepared_statement>(std::move(stmt), ctx, std::move(partition_key_bind_indices), std::move(warnings));
 }
 

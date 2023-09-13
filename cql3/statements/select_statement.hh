@@ -55,6 +55,7 @@ public:
     using parameters = raw::select_statement::parameters;
     using ordering_comparator_type = raw::select_statement::ordering_comparator_type;
     static constexpr int DEFAULT_COUNT_PAGE_SIZE = 10000;
+    bool _may_use_token_aware_routing;
 protected:
     static thread_local const lw_shared_ptr<const parameters> _default_parameters;
     schema_ptr _schema;
