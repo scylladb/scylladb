@@ -16,6 +16,7 @@
 #include "service/endpoint_lifecycle_subscriber.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "locator/tablets.hh"
+#include "locator/tablet_metadata_guard.hh"
 #include "inet_address_vectors.hh"
 #include <seastar/core/distributed.hh>
 #include <seastar/core/condition-variable.hh>
@@ -156,7 +157,7 @@ private:
     future<> node_ops_abort_thread();
     future<> do_tablet_operation(locator::global_tablet_id tablet,
                                  sstring op_name,
-                                 std::function<future<>()> op);
+                                 std::function<future<>(locator::tablet_metadata_guard&)> op);
     future<> stream_tablet(locator::global_tablet_id);
     inet_address host2ip(locator::host_id);
 public:
