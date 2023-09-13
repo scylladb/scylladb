@@ -139,7 +139,22 @@ bool should_propose_first_generation(const gms::inet_address& me, const gms::gos
 */
 bool is_cdc_generation_optimal(const cdc::topology_description& gen, const locator::token_metadata& tm);
 
-std::pair<utils::UUID, cdc::topology_description> make_new_generation_data(
+/*
+ * Generate a set of CDC stream identifiers such that for each shard
+ * and vnode pair there exists a stream whose token falls into this vnode
+ * and is owned by this shard. It is sometimes not possible to generate
+ * a CDC stream identifier for some (vnode, shard) pair because not all
+ * shards have to own tokens in a vnode. Small vnode can be totally owned
+ * by a single shard. In such case, a stream identifier that maps to
+ * end of the vnode is generated.
+ *
+ * Then build a cdc::topology_description which maps tokens to generated
+ * stream identifiers, such that if token T is owned by shard S in vnode V,
+ * it gets mapped to the stream identifier generated for (S, V).
+ *
+ * Run in seastar::async context.
+ */
+cdc::topology_description make_new_generation_description(
     const std::unordered_set<dht::token>& bootstrap_tokens,
     const noncopyable_function<std::pair<size_t, uint8_t> (dht::token)>& get_sharding_info,
     const locator::token_metadata_ptr);
@@ -150,9 +165,20 @@ db_clock::time_point new_generation_timestamp(bool add_delay, std::chrono::milli
 // using `mutation_size_threshold` to decide on the mutation sizes. The partition key of each mutation
 // is given by `gen_uuid`. The timestamp of each cell in each mutation is given by `mutation_timestamp`.
 //
-// Works for only specific schemas: CDC_GENERATIONS_V2 (in system_distributed_keyspace)
-// and CDC_GENERATIONS_V3 (in system_keyspace).
-future<utils::chunked_vector<mutation>> get_cdc_generation_mutations(
+// Works only for the CDC_GENERATIONS_V2 schema (in system_distributed keyspace).
+future<utils::chunked_vector<mutation>> get_cdc_generation_mutations_v2(
+    schema_ptr, utils::UUID gen_uuid, const cdc::topology_description&,
+    size_t mutation_size_threshold, api::timestamp_type mutation_timestamp);
+
+// The partition key of all rows in the single-partition CDC_GENERATIONS_V3 schema (in system keyspace).
+static constexpr auto CDC_GENERATIONS_V3_KEY = "cdc_generations";
+
+// Translates the CDC generation data given by a `cdc::topology_description` into a vector of mutations,
+// using `mutation_size_threshold` to decide on the mutation sizes. The first clustering key column is
+// given by `gen_uuid`. The timestamp of each cell in each mutation is given by `mutation_timestamp`.
+//
+// Works only for the CDC_GENERATIONS_V3 schema (in system keyspace).
+future<utils::chunked_vector<mutation>> get_cdc_generation_mutations_v3(
     schema_ptr, utils::UUID gen_uuid, const cdc::topology_description&,
     size_t mutation_size_threshold, api::timestamp_type mutation_timestamp);
 

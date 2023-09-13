@@ -96,7 +96,7 @@ using inet_address = gms::inet_address;
 extern logging::logger cdc_log;
 
 namespace db {
-    extern thread_local data_type cdc_generation_id_v2_type;
+    extern thread_local data_type cdc_generation_ts_id_type;
 }
 
 namespace service {
@@ -773,7 +773,7 @@ topology_mutation_builder& topology_mutation_builder::set_new_cdc_generation_dat
 
 topology_mutation_builder& topology_mutation_builder::set_unpublished_cdc_generations(const std::vector<cdc::generation_id_v2>& values) {
     auto dv = values | boost::adaptors::transformed([&] (const auto& v) {
-        return make_tuple_value(db::cdc_generation_id_v2_type, tuple_type_impl::native_type({v.ts, v.id}));
+        return make_tuple_value(db::cdc_generation_ts_id_type, tuple_type_impl::native_type({v.ts, timeuuid_native_type{v.id}}));
     });
     return apply_set("unpublished_cdc_generations", collection_apply_mode::overwrite, std::move(dv));
 }
@@ -789,7 +789,7 @@ topology_mutation_builder& topology_mutation_builder::add_enabled_features(const
 }
 
 topology_mutation_builder& topology_mutation_builder::add_unpublished_cdc_generation(const cdc::generation_id_v2& value) {
-    auto dv = make_tuple_value(db::cdc_generation_id_v2_type, tuple_type_impl::native_type({value.ts, value.id}));
+    auto dv = make_tuple_value(db::cdc_generation_ts_id_type, tuple_type_impl::native_type({value.ts, timeuuid_native_type{value.id}}));
     return apply_set("unpublished_cdc_generations", collection_apply_mode::update, std::vector<data_value>{std::move(dv)});
 }
 
@@ -1135,14 +1135,15 @@ class topology_coordinator {
             }
         };
 
-        auto [gen_uuid, gen_desc] = cdc::make_new_generation_data(
+        auto gen_uuid = guard.new_group0_state_id();
+        auto gen_desc = cdc::make_new_generation_description(
             binfo ? binfo->bootstrap_tokens : std::unordered_set<token>{}, get_sharding_info, tmptr);
         auto gen_table_schema = _db.find_schema(
             db::system_keyspace::NAME, db::system_keyspace::CDC_GENERATIONS_V3);
 
         const size_t max_command_size = _raft.max_command_size();
         const size_t mutation_size_threshold = max_command_size / 2;
-        auto gen_mutations = co_await cdc::get_cdc_generation_mutations(
+        auto gen_mutations = co_await cdc::get_cdc_generation_mutations_v3(
             gen_table_schema, gen_uuid, gen_desc, mutation_size_threshold, guard.write_timestamp());
 
         co_return std::pair{gen_uuid, std::move(gen_mutations)};

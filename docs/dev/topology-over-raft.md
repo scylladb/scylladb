@@ -187,10 +187,10 @@ CREATE TABLE system.topology (
     topology_request text,
     transition_state text static,
     current_cdc_generation_timestamp timestamp static,
-    current_cdc_generation_uuid uuid static,
-    unpublished_cdc_generations set<tuple<timestamp, id>> static,
+    current_cdc_generation_uuid timeuuid static,
+    unpublished_cdc_generations set<tuple<timestamp, timeuuid>> static,
     global_topology_request text static,
-    new_cdc_generation_data_uuid uuid static,
+    new_cdc_generation_data_uuid timeuuid static,
     PRIMARY KEY (key, host_id)
 )
 ```
@@ -214,7 +214,7 @@ Each node has a clustering row in the table where its `host_id` is the clusterin
 There are also a few static columns for cluster-global properties:
 - `transition_state` - the transitioning state of the cluster (as described earlier), may be null
 - `current_cdc_generation_timestamp` - the timestamp of the last introduced CDC generation
-- `current_cdc_generation_uuid` - the UUID of the last introduced CDC generation (used to access its data)
+- `current_cdc_generation_uuid` - the time UUID of the last introduced CDC generation (used to access its data)
 - `unpublished_cdc_generations` - the IDs of the committed yet unpublished CDC generations
 - `global_topology_request` - if set, contains one of the supported global topology requests
-- `new_cdc_generation_data_uuid` - used in `commit_cdc_generation` state, the UUID of the generation to be committed
+- `new_cdc_generation_data_uuid` - used in `commit_cdc_generation` state, the time UUID of the generation to be committed
