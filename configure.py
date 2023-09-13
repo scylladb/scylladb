@@ -1858,7 +1858,7 @@ with open(buildfile, 'w') as f:
         rule debbuild
             command = reloc/build_deb.sh --reloc-pkg $in --builddir $out
         rule unified
-            command = unified/build_unified.sh --mode $mode --unified-pkg $out
+            command = unified/build_unified.sh --build-dir build/$mode --unified-pkg $out
         rule rust_header
             command = cxxbridge --include rust/cxx.h --header $in > $out
             description = RUST_HEADER $out
