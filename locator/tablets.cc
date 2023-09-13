@@ -430,6 +430,42 @@ public:
         return result;
     }
 
+    std::optional<tablet_routing_info> check_locality(const token& search_token) const override {
+        auto&& tablets = get_tablet_map();
+        auto tid = tablets.get_tablet_id(search_token);
+        auto&& info = tablets.get_tablet_info(tid);
+        auto host = get_token_metadata().get_my_id();
+        auto shard = this_shard_id();
+
+        auto make_tablet_routing_info = [&] {
+            dht::token first_token;
+            if (tid == tablets.first_tablet()) {
+                first_token = dht::minimum_token();
+            } else {
+                first_token = tablets.get_last_token(tablet_id(size_t(tid) - 1));
+            }
+            auto token_range = std::make_pair(first_token, tablets.get_last_token(tid));
+            return tablet_routing_info{info.replicas, token_range};
+        };
+
+        for (auto&& r : info.replicas) {
+            if (r.host == host) {
+                if (r.shard == shard) {
+                    return std::nullopt; // routed correctly
+                } else {
+                    return make_tablet_routing_info();
+                }
+            }
+        }
+
+        auto tinfo = tablets.get_tablet_transition_info(tid);
+        if (tinfo && tinfo->pending_replica.host == host && tinfo->pending_replica.shard == shard) {
+            return std::nullopt; // routed correctly
+        }
+
+        return make_tablet_routing_info();
+    }
+
     virtual bool has_pending_ranges(inet_address endpoint) const override {
         const auto host_id = _tmptr->get_host_id_if_known(endpoint);
         if (!host_id.has_value()) {

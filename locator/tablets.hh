@@ -349,6 +349,11 @@ public:
     friend std::ostream& operator<<(std::ostream&, const tablet_metadata&);
 };
 
+struct tablet_routing_info {
+    tablet_replica_set tablet_replicas;
+    std::pair<dht::token, dht::token> token_range;
+};
+
 }
 
 template <>
