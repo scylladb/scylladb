@@ -173,8 +173,10 @@ protected:
     replication_strategy_ptr _rs;
     token_metadata_ptr _tmptr;
     size_t _replication_factor;
+    std::unique_ptr<abort_source> _validity_abort_source;
 public:
     effective_replication_map(replication_strategy_ptr, token_metadata_ptr, size_t replication_factor) noexcept;
+    effective_replication_map(effective_replication_map&&) noexcept = default;
     virtual ~effective_replication_map() = default;
 
     const abstract_replication_strategy& get_replication_strategy() const noexcept { return *_rs; }
@@ -182,6 +184,16 @@ public:
     const token_metadata_ptr& get_token_metadata_ptr() const noexcept { return _tmptr; }
     const topology& get_topology() const noexcept { return _tmptr->get_topology(); }
     size_t get_replication_factor() const noexcept { return _replication_factor; }
+
+    void invalidate() const noexcept {
+        _validity_abort_source->request_abort();
+    }
+
+    /// Returns a reference to abort_source which is aborted when this effective replication map
+    /// is no longer the latest table's effective replication map.
+    abort_source& get_validity_abort_source() const {
+        return *_validity_abort_source;
+    }
 
     /// Returns addresses of replicas for a given token.
     /// Does not include pending replicas except for a pending replica which
