@@ -628,7 +628,7 @@ protected:
     }
 
     bool enable_garbage_collected_sstable_writer() const noexcept {
-        return _contains_multi_fragment_runs && _max_sstable_size != std::numeric_limits<uint64_t>::max();
+        return _contains_multi_fragment_runs && _max_sstable_size != std::numeric_limits<uint64_t>::max() && bool(_replacer);
     }
 public:
     compaction& operator=(const compaction&) = delete;
