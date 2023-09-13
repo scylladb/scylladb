@@ -556,13 +556,73 @@ future<> node_ops_task_impl::finish_raft_joining(raft::server& raft_server) {
 
 future<> raft_bootstrap_task_impl::run() {
     co_await prepare_raft_joining(_raft_server, _sys_dist_ks);
-    co_await _ss.raft_bootstrap(_raft_server);
+
+    // We try to find ourself in the topology without doing read barrier
+    // first to not require quorum of live nodes during regular boot. But
+    // if we are not in the topology it either means this is the first boot
+    // or we failed during bootstrap so do a read barrier (which requires
+    // quorum to be alive) and re-check.
+    if (!_ss._topology_state_machine._topology.contains(_raft_server.id())) {
+        co_await _raft_server.read_barrier(&_ss._abort_source);
+    }
+
+    while (!_ss._topology_state_machine._topology.contains(_raft_server.id())) {
+        tasks::tmlogger.info("raft topology: adding myself to topology: {}", _raft_server.id());
+        // Current topology does not contains this node. Bootstrap is needed!
+        auto guard = co_await _ss._group0->client().start_operation(&_ss._abort_source);
+
+        auto change= _ss.build_bootstrap_topology_change(_raft_server, guard);
+        service::group0_command g0_cmd = _ss._group0->client().prepare_command(std::move(change), guard, "bootstrap: add myself to topology");
+        try {
+            co_await _ss._group0->client().add_entry(std::move(g0_cmd), std::move(guard), &_ss._abort_source);
+        } catch (service::group0_concurrent_modification&) {
+            tasks::tmlogger.info("raft topology: bootstrap: concurrent operation is detected, retrying.");
+        }
+    }
+
     co_await finish_raft_joining(_raft_server);
 }
 
 future<> raft_replace_task_impl::run() {
     co_await prepare_raft_joining(_raft_server, _sys_dist_ks);
-    co_await _ss.raft_replace(_raft_server, _raft_id, _ip_addr);
+
+    auto& db = _ss._db.local();
+    auto ignore_nodes_strs = utils::split_comma_separated_list(db.get_config().ignore_dead_nodes_for_replace());
+    std::list<locator::host_id_or_endpoint> ignore_nodes_params;
+    for (const auto& n : ignore_nodes_strs) {
+        ignore_nodes_params.emplace_back(n);
+    }
+
+    // Read barrier to access the latest topology. Quorum of nodes has to be alive.
+    co_await _raft_server.read_barrier(&_ss._abort_source);
+
+    auto it = _ss._topology_state_machine._topology.find(_raft_server.id());
+    if (it && it->second.state != service::node_state::replacing) {
+        throw std::runtime_error(::format("Cannot do \"replace address\" operation with a node that is in state: {}", it->second.state));
+    }
+
+    // add myself to topology with request to replace
+    while (!_ss._topology_state_machine._topology.contains(_raft_server.id())) {
+        auto guard = co_await _ss._group0->client().start_operation(&_ss._abort_source);
+
+        auto it = _ss._topology_state_machine._topology.normal_nodes.find(_raft_id);
+        if (it == _ss._topology_state_machine._topology.normal_nodes.end()) {
+            throw std::runtime_error(::format("Cannot replace node {}/{} because it is not in the 'normal' state", _ip_addr, _raft_id));
+        }
+
+        auto ignored_ids = _ss.find_raft_nodes_from_hoeps(ignore_nodes_params);
+
+        tasks::tmlogger.info("raft topology: adding myself to topology for replace: {} replacing {}, ignored nodes: {}", _raft_server.id(), _raft_id, ignored_ids);
+        auto& rs = it->second;
+        auto change = _ss.build_replace_topology_change(_raft_server, _raft_id, rs, guard, std::move(ignored_ids));
+        service::group0_command g0_cmd = _ss._group0->client().prepare_command(std::move(change), guard, ::format("replace {}/{}: add myself ({}) to topology", _raft_id, _ip_addr, _raft_server.id()));
+        try {
+            co_await _ss._group0->client().add_entry(std::move(g0_cmd), std::move(guard), &_ss._abort_source);
+        } catch (service::group0_concurrent_modification&) {
+            tasks::tmlogger.info("raft topology: replace: concurrent operation is detected, retrying.");
+        }
+    }
+
     co_await finish_raft_joining(_raft_server);
 }
 

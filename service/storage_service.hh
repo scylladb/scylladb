@@ -794,10 +794,11 @@ private:
 
     future<raft_topology_cmd_result> raft_topology_cmd_handler(sharded<db::system_distributed_keyspace>& sys_dist_ks, raft::term_t term, uint64_t cmd_index, const raft_topology_cmd& cmd);
 
-    future<> raft_bootstrap(raft::server&);
+    topology_change build_bootstrap_topology_change(raft::server& raft_server, group0_guard& guard);
     future<> raft_decomission();
     future<> raft_removenode(locator::host_id host_id, std::list<locator::host_id_or_endpoint> ignore_nodes_params);
-    future<> raft_replace(raft::server&, raft::server_id, gms::inet_address);
+    topology_change build_replace_topology_change(raft::server& raft_server, raft::server_id replaced_id, replica_state& rs, group0_guard& guard,
+        std::unordered_set<raft::server_id> ignored_ids);
     future<> raft_rebuild(sstring source_dc);
     future<> raft_check_and_repair_cdc_streams();
     future<> update_topology_with_local_metadata(raft::server&);
