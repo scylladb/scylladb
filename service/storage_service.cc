@@ -1217,6 +1217,9 @@ class topology_coordinator {
         // the timestamps of other CDC generations we are removing because the candidate's is the latest
         // among them.
         auto ts_upper_bound = db_clock::now() - std::chrono::days(1);
+        utils::get_local_injector().inject("clean_obsolete_cdc_generations_ignore_ts", [&] {
+            ts_upper_bound = candidate->ts;
+        });
         if (candidate == _topo_sm._topology.current_cdc_generation_id || candidate->ts > ts_upper_bound) {
             co_return;
         }
