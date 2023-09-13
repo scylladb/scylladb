@@ -114,6 +114,13 @@ private:
     using inet_address = gms::inet_address;
     using versioned_value = gms::versioned_value;
 
+    struct tablet_operation {
+        sstring name;
+        shared_future<> done;
+    };
+
+    using tablet_op_registry = std::unordered_map<locator::global_tablet_id, tablet_operation>;
+
     abort_source& _abort_source;
     gms::feature_service& _feature_service;
     distributed<replica::database>& _db;
@@ -147,6 +154,9 @@ private:
     future<> node_ops_abort(node_ops_id ops_uuid);
     void node_ops_signal_abort(std::optional<node_ops_id> ops_uuid);
     future<> node_ops_abort_thread();
+    future<> do_tablet_operation(locator::global_tablet_id tablet,
+                                 sstring op_name,
+                                 std::function<future<>()> op);
     future<> stream_tablet(locator::global_tablet_id);
     inet_address host2ip(locator::host_id);
 public:
@@ -766,7 +776,7 @@ private:
     std::optional<shared_future<>> _decomission_result;
     std::optional<shared_future<>> _rebuild_result;
     std::unordered_map<raft::server_id, std::optional<shared_future<>>> _remove_result;
-    std::unordered_map<locator::global_tablet_id, std::optional<shared_future<>>> _tablet_streaming;
+    tablet_op_registry _tablet_ops;
     // During decommission, the node waits for the coordinator to tell it to shut down.
     std::optional<promise<>> _shutdown_request_promise;
     struct {
