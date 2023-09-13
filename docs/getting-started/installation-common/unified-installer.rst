@@ -69,7 +69,7 @@ Configure and Run ScyllaDB
 
    .. code:: console
 
-    journalctl --user start scylla-server -xe
+    systemctl --user status scylla-server
 
 Now you can start using ScyllaDB. Here are some tools you may find useful.
 
