@@ -6,7 +6,7 @@ Compaction is an optimization that reduces the cost of IO and CPU over time by m
 
 By default, major compaction runs on all the ``keyspaces`` and tables.
 Major compactions will take all the SSTables for a column family and merge them into a **single SSTable per shard**.
-If a keyspace is provided, the compaction will run on all of the tables within that keyspace. If one or more tables are provided as command-line arguments, the compaction will run on all tables.
+If a keyspace is provided, the compaction will run on all of the tables within that keyspace. If one or more tables are provided as command-line arguments, the compaction will run only on those tables.
 
 .. caution:: It is always best to allow Scylla to automatically run minor compactions using a :doc:`compaction strategy </kb/compaction>`. Using Nodetool to run compaction can quickly exhaust all resources, increase operational costs, and take up valuable disk space. For this reason, major compactions should be avoided and are not recommended for any production system.  
 
