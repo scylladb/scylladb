@@ -22,6 +22,16 @@ if (( ! ok )); then
     exit 1
 fi
 
+if ! reg version > /dev/null; then
+    echo install the reg command for registry inspection
+    exit 1
+fi
+
+if reg digest $(<tools/toolchain/image) > /dev/null; then
+    echo "Toolchain image $(<tools/toolchain/image) exists; select a new name"
+    exit 1
+fi
+
 archs=(amd64 arm64)
 
 # docker arch has a diffrent spelling than uname arch
