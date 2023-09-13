@@ -1317,14 +1317,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // engine().at_exit([&qp] { return qp.stop(); });
             sstables::init_metrics().get();
 
-            supervisor::notify("initializing batchlog manager");
-            db::batchlog_manager_config bm_cfg;
-            bm_cfg.write_request_timeout = cfg->write_request_timeout_in_ms() * 1ms;
-            bm_cfg.replay_rate = cfg->batchlog_replay_throttle_in_kb() * 1000;
-            bm_cfg.delay = std::chrono::milliseconds(cfg->ring_delay_ms());
-
-            bm.start(std::ref(qp), std::ref(sys_ks), bm_cfg).get();
-
             db::sstables_format_selector sst_format_selector(gossiper.local(), feature_service, db, sys_ks.local());
 
             sst_format_selector.start().get();
@@ -1715,7 +1707,12 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             });
 
             supervisor::notify("starting batchlog manager");
-            bm.invoke_on_all(&db::batchlog_manager::start).get();
+            db::batchlog_manager_config bm_cfg;
+            bm_cfg.write_request_timeout = cfg->write_request_timeout_in_ms() * 1ms;
+            bm_cfg.replay_rate = cfg->batchlog_replay_throttle_in_kb() * 1000;
+            bm_cfg.delay = std::chrono::milliseconds(cfg->ring_delay_ms());
+
+            bm.start(std::ref(qp), std::ref(sys_ks), bm_cfg).get();
             auto stop_batchlog_manager = defer_verbose_shutdown("batchlog manager", [&bm] {
                 bm.stop().get();
             });

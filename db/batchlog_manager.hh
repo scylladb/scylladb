@@ -61,12 +61,12 @@ private:
     db::system_keyspace& _sys_ks;
     db_clock::duration _write_request_timeout;
     uint64_t _replay_rate;
-    shared_future<> _started;
     std::chrono::milliseconds _delay;
     semaphore _sem{1};
     seastar::gate _gate;
     unsigned _cpu = 0;
     seastar::abort_source _stop;
+    future<> _loop_done;
 
     future<> replay_all_failed_batches();
 public:
@@ -75,7 +75,6 @@ public:
     // shard qp (which is what you feed here).
     batchlog_manager(cql3::query_processor&, db::system_keyspace& sys_ks, batchlog_manager_config config);
 
-    future<> start();
     // abort the replay loop and return its future.
     future<> drain();
     future<> stop();

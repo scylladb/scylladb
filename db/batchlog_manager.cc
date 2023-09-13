@@ -47,8 +47,9 @@ db::batchlog_manager::batchlog_manager(cql3::query_processor& qp, db::system_key
         , _sys_ks(sys_ks)
         , _write_request_timeout(std::chrono::duration_cast<db_clock::duration>(config.write_request_timeout))
         , _replay_rate(config.replay_rate)
-        , _started(make_ready_future<>())
-        , _delay(config.delay) {
+        , _delay(config.delay)
+        , _loop_done(batchlog_replay_loop())
+{
     namespace sm = seastar::metrics;
 
     _metrics.add_group("batchlog_manager", {
@@ -79,7 +80,16 @@ future<> db::batchlog_manager::do_batch_log_replay() {
 }
 
 future<> db::batchlog_manager::batchlog_replay_loop() {
-    assert (this_shard_id() == 0);
+    if (this_shard_id() != 0) {
+        // Since replay is a "node global" operation, we should not attempt to do
+        // it in parallel on each shard. It will just overlap/interfere.  To
+        // simplify syncing between batchlog_replay_loop and user initiated replay operations,
+        // we use the _sem on shard zero only. Replaying batchlog can
+        // generate a lot of work, so we distrute the real work on all cpus with
+        // round-robin scheduling.
+        co_return;
+    }
+
     auto delay = _delay;
     while (!_stop.abort_requested()) {
         try {
@@ -101,30 +111,19 @@ future<> db::batchlog_manager::batchlog_replay_loop() {
     }
 }
 
-future<> db::batchlog_manager::start() {
-    // Since replay is a "node global" operation, we should not attempt to do
-    // it in parallel on each shard. It will just overlap/interfere.  To
-    // simplify syncing between batchlog_replay_loop and user initiated replay operations,
-    // we use the _sem on shard zero only. Replaying batchlog can
-    // generate a lot of work, so we distrute the real work on all cpus with
-    // round-robin scheduling.
-    if (this_shard_id() == 0) {
-        _started = batchlog_replay_loop();
-    }
-    return make_ready_future<>();
-}
-
 future<> db::batchlog_manager::drain() {
-    blogger.info("Asked to drain");
-    if (!_stop.abort_requested()) {
-        _stop.request_abort();
+    if (_stop.abort_requested()) {
+        co_return;
     }
+
+    blogger.info("Asked to drain");
+    _stop.request_abort();
     if (this_shard_id() == 0) {
         // Abort do_batch_log_replay if waiting on the semaphore.
         _sem.broken();
     }
 
-    co_await _started.get_future();
+    co_await std::move(_loop_done);
     blogger.info("Drained");
 }
 
