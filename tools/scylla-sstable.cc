@@ -2349,7 +2349,6 @@ class json_mutation_stream_parser {
     };
 
 private:
-    struct parsing_aborted : public std::exception { };
     class impl {
         queue<mutation_fragment_v2_opt> _queue;
         stream _stream;
@@ -2365,12 +2364,7 @@ private:
             , _thread([this] { _reader.Parse(_stream, _handler); })
         { }
         ~impl() {
-            _queue.abort(std::make_exception_ptr(parsing_aborted{}));
-            try {
-                _thread.join().get();
-            } catch (...) {
-                sst_log.warn("json_mutation_stream_parser: parser thread exited with exception: {}", std::current_exception());
-            }
+            _thread.join().get();
         }
         future<mutation_fragment_v2_opt> operator()() {
             return _queue.pop_eventually().handle_exception([this] (std::exception_ptr e) -> mutation_fragment_v2_opt {
