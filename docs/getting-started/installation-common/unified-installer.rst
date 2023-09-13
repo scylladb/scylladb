@@ -31,7 +31,7 @@ Download and Install
 
    .. code:: console
 
-    tar xvfz tar scylla-unified-5.2.4-0.20230623.cebbf6c5df2b.x86_64.tar.gz
+    tar xvfz scylla-unified-5.2.4-0.20230623.cebbf6c5df2b.x86_64.tar.gz
 
 #. Install OpenJDK 8 or 11.
 
