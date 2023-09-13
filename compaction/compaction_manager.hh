@@ -521,7 +521,8 @@ protected:
     future<sstables::compaction_result> compact_sstables_and_update_history(sstables::compaction_descriptor descriptor, sstables::compaction_data& cdata, on_replacement&,
                                 compaction_manager::can_purge_tombstones can_purge = compaction_manager::can_purge_tombstones::yes);
     future<sstables::compaction_result> compact_sstables(sstables::compaction_descriptor descriptor, sstables::compaction_data& cdata, on_replacement&,
-                                compaction_manager::can_purge_tombstones can_purge = compaction_manager::can_purge_tombstones::yes);
+                                compaction_manager::can_purge_tombstones can_purge = compaction_manager::can_purge_tombstones::yes,
+                                sstables::offstrategy offstrategy = sstables::offstrategy::no);
     future<> update_history(::compaction::table_state& t, const sstables::compaction_result& res, const sstables::compaction_data& cdata);
     bool should_update_history(sstables::compaction_type ct) {
         return ct == sstables::compaction_type::Compaction;

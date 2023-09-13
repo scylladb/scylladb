@@ -378,7 +378,8 @@ future<sstables::compaction_result> compaction_task_executor::compact_sstables_a
 
     co_return res;
 }
-future<sstables::compaction_result> compaction_task_executor::compact_sstables(sstables::compaction_descriptor descriptor, sstables::compaction_data& cdata, on_replacement& on_replace, compaction_manager::can_purge_tombstones can_purge) {
+future<sstables::compaction_result> compaction_task_executor::compact_sstables(sstables::compaction_descriptor descriptor, sstables::compaction_data& cdata, on_replacement& on_replace, compaction_manager::can_purge_tombstones can_purge,
+                                                                               sstables::offstrategy offstrategy) {
     table_state& t = *_compacting_table;
     if (can_purge) {
         descriptor.enable_garbage_collection(t.main_sstable_set());
@@ -387,7 +388,7 @@ future<sstables::compaction_result> compaction_task_executor::compact_sstables(s
         auto sst = t.make_sstable();
         return sst;
     };
-    descriptor.replacer = [this, &t, &on_replace] (sstables::compaction_completion_desc desc) {
+    descriptor.replacer = [this, &t, &on_replace, offstrategy] (sstables::compaction_completion_desc desc) {
         t.get_compaction_strategy().notify_completion(t, desc.old_sstables, desc.new_sstables);
         _cm.propagate_replacement(t, desc.old_sstables, desc.new_sstables);
         // on_replace updates the compacting registration with the old and new
@@ -404,7 +405,7 @@ future<sstables::compaction_result> compaction_task_executor::compact_sstables(s
         // - are not being compacted.
         on_replace.on_addition(desc.new_sstables);
         auto old_sstables = desc.old_sstables;
-        _cm.on_compaction_completion(t, std::move(desc), sstables::offstrategy::no).get();
+        _cm.on_compaction_completion(t, std::move(desc), offstrategy).get();
         on_replace.on_removal(old_sstables);
     };
 
@@ -1303,53 +1304,38 @@ protected:
     }
 private:
     future<> run_offstrategy_compaction(sstables::compaction_data& cdata) {
-        // This procedure will reshape sstables in maintenance set until it's ready for
-        // integration into main set.
-        // It may require N reshape rounds before the set satisfies the strategy invariant.
-        // This procedure also only updates maintenance set at the end, on success.
-        // Otherwise, some overlapping could be introduced in the set after each reshape
-        // round, progressively degrading read amplification until integration happens.
-        // The drawback of this approach is the 2x space requirement as the old sstables
-        // will only be deleted at the end. The impact of this space requirement is reduced
-        // by the fact that off-strategy is serialized across all tables, meaning that the
-        // actual requirement is the size of the largest table's maintenance set.
+        // Incrementally reshape the SSTables in maintenance set. The output of each reshape
+        // round is merged into the main set. The common case is that off-strategy input
+        // is mostly disjoint, e.g. repair-based node ops, then all the input will be
+        // reshaped in a single round. The incremental approach allows us to be space
+        // efficient (avoiding a 100% overhead) as we will incrementally replace input
+        // SSTables from maintenance set by output ones into main set.
 
         table_state& t = *_compacting_table;
-        const auto& maintenance_sstables = t.maintenance_sstable_set();
 
         // Filter out sstables that require view building, to avoid a race between off-strategy
         // and view building. Refs: #11882
-        const auto old_sstables = boost::copy_range<std::vector<sstables::shared_sstable>>(*maintenance_sstables.all()
-                | boost::adaptors::filtered([] (const sstables::shared_sstable& sst) {
-            return !sst->requires_view_building();
-        }));
-        std::vector<sstables::shared_sstable> reshape_candidates = old_sstables;
-        std::unordered_set<sstables::shared_sstable> new_unused_sstables;
-
-        auto cleanup_new_unused_sstables_on_failure = defer([&new_unused_sstables] {
-            for (auto& sst : new_unused_sstables) {
-                sst->mark_for_deletion();
-            }
-        });
+        auto get_reshape_candidates = [&t] () {
+            return boost::copy_range<std::vector<sstables::shared_sstable>>(*t.maintenance_sstable_set().all()
+                | boost::adaptors::filtered([](const sstables::shared_sstable &sst) {
+                        return !sst->requires_view_building();
+                }));
+        };
 
         auto get_next_job = [&] () -> std::optional<sstables::compaction_descriptor> {
-            auto desc = t.get_compaction_strategy().get_reshaping_job(reshape_candidates, t.schema(), sstables::reshape_mode::strict);
+            auto desc = t.get_compaction_strategy().get_reshaping_job(get_reshape_candidates(), t.schema(), sstables::reshape_mode::strict);
             return desc.sstables.size() ? std::make_optional(std::move(desc)) : std::nullopt;
         };
 
         std::exception_ptr err;
         while (auto desc = get_next_job()) {
-            desc->creator = [&new_unused_sstables, &t] (shard_id dummy) {
-                auto sst = t.make_sstable();
-                new_unused_sstables.insert(sst);
-                return sst;
-            };
-            desc->owned_ranges = _compaction_state.owned_ranges_ptr;
-            auto input = boost::copy_range<std::unordered_set<sstables::shared_sstable>>(desc->sstables);
+            auto compacting = compacting_sstable_registration(_cm, _cm.get_compaction_state(&t), desc->sstables);
+            auto on_replace = compacting.update_on_sstable_replacement();
 
-            sstables::compaction_result ret;
             try {
-                ret = co_await sstables::compact_sstables(std::move(*desc), cdata, t);
+                sstables::compaction_result _ = co_await compact_sstables(std::move(*desc), _compaction_data, on_replace,
+                                                                          compaction_manager::can_purge_tombstones::no,
+                                                                          sstables::offstrategy::yes);
             } catch (sstables::compaction_stopped_exception&) {
                 // If off-strategy compaction stopped on user request, let's not discard the partial work.
                 // Therefore, both un-reshaped and reshaped data will be integrated into main set, allowing
@@ -1358,33 +1344,20 @@ private:
                 break;
             }
             _performed = true;
-
-            // update list of reshape candidates without input but with output added to it
-            auto it = boost::remove_if(reshape_candidates, [&] (auto& s) { return input.contains(s); });
-            reshape_candidates.erase(it, reshape_candidates.end());
-            std::move(ret.new_sstables.begin(), ret.new_sstables.end(), std::back_inserter(reshape_candidates));
-
-            // If compaction strategy is unable to reshape input data in a single round, it may happen that a SSTable A
-            // created in round 1 will be compacted in a next round producing SSTable B. As SSTable A is no longer needed,
-            // it can be removed immediately. Let's remove all such SSTables immediately to reduce off-strategy space requirement.
-            // Input SSTables from maintenance set can only be removed later, as SSTable sets are only updated on completion.
-            auto can_remove_now = [&] (const sstables::shared_sstable& s) { return new_unused_sstables.contains(s); };
-            for (auto&& sst : input) {
-                if (can_remove_now(sst)) {
-                    co_await sst->unlink();
-                    new_unused_sstables.erase(std::move(sst));
-                }
-            }
         }
 
-        // at this moment reshape_candidates contains a set of sstables ready for integration into main set
-        auto completion_desc = sstables::compaction_completion_desc{
-            .old_sstables = std::move(old_sstables),
-            .new_sstables = std::move(reshape_candidates)
-        };
-        co_await _cm.on_compaction_completion(t, std::move(completion_desc), sstables::offstrategy::yes);
+        // There might be some remaining sstables in maintenance set that didn't require reshape, or the
+        // user has aborted off-strategy. So we can only integrate them into the main set, such that
+        // they become candidates for regular compaction. We cannot hold them forever in maintenance set,
+        // as that causes read and space amplification issues.
+        if (auto sstables = get_reshape_candidates(); sstables.size()) {
+            auto completion_desc = sstables::compaction_completion_desc{
+                .old_sstables = sstables, // removes from maintenance set.
+                .new_sstables = sstables, // adds into main set.
+            };
+            co_await _cm.on_compaction_completion(t, std::move(completion_desc), sstables::offstrategy::yes);
+        }
 
-        cleanup_new_unused_sstables_on_failure.cancel();
         if (err) {
             co_await coroutine::return_exception_ptr(std::move(err));
         }
