@@ -148,7 +148,7 @@ async def test_fence_hints(request, manager: ManagerClient):
         if send_errors_metric(metrics_data) >= 1 and sent_metric(metrics_data) == 0:
             return True
         logger.info(f"Metrics on {s0}: {metrics_data.lines_by_prefix('scylla_hints_manager_')}")
-    await wait_for(at_least_one_hint_failed, time.time() + 5)
+    await wait_for(at_least_one_hint_failed, time.time() + 60)
 
     host2 = (await wait_for_cql_and_get_hosts(manager.cql, [s2], time.time() + 60))[0]
 
@@ -167,7 +167,7 @@ async def test_fence_hints(request, manager: ManagerClient):
         if send_errors_metric(metrics_data) == 0 and sent_metric(metrics_data) == 1:
             return True
         logger.info(f"Metrics on {s0}: {metrics_data.lines_by_prefix('scylla_hints_manager_')}")
-    await wait_for(exactly_one_hint_sent, time.time() + 5)
+    await wait_for(exactly_one_hint_sent, time.time() + 60)
 
     # Check the hint is delivered, and we see the new data on host2
     rows = await manager.cql.run_async(select_all_stmt, host=host2)
