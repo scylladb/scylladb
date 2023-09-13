@@ -88,10 +88,13 @@ class task_manager;
 
 namespace node_ops {
 class task_manager_module;
+class node_ops_task_impl;
 class join_token_ring_task_impl;
 class start_rebuild_task_impl;
 class start_decommission_task_impl;
 class start_remove_node_task_impl;
+class raft_bootstrap_task_impl;
+class raft_replace_task_impl;
 }
 
 namespace service {
@@ -810,10 +813,13 @@ private:
     // raft_group0_client::_read_apply_mutex must be held
     future<> merge_topology_snapshot(raft_topology_snapshot snp);
 
+    friend class node_ops::node_ops_task_impl;
     friend class node_ops::join_token_ring_task_impl;
     friend class node_ops::start_rebuild_task_impl;
     friend class node_ops::start_decommission_task_impl;
     friend class node_ops::start_remove_node_task_impl;
+    friend class node_ops::raft_bootstrap_task_impl;
+    friend class node_ops::raft_replace_task_impl;
 };
 
 }

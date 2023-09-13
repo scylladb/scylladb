@@ -10,6 +10,7 @@
 
 #include "gms/inet_address.hh"
 #include "locator/host_id.hh"
+#include "raft/internal.hh"
 #include "streaming/stream_reason.hh"
 #include "tasks/task_manager.hh"
 
@@ -22,6 +23,11 @@ class system_distributed_keyspace;
 namespace locator {
 class token_metadata;
 class host_id_or_endpoint;
+}
+
+namespace raft {
+class server;
+using server_id = internal::tagged_id<struct server_id_tag>;
 }
 
 namespace service {
@@ -47,6 +53,8 @@ public:
 
     virtual std::string type() const override;
 protected:
+    future<> prepare_raft_joining(raft::server& raft_server, sharded<db::system_distributed_keyspace>& sys_dist_ks);
+    future<> finish_raft_joining(raft::server& raft_server);
     virtual future<> run() override = 0;
 };
 
@@ -154,6 +162,50 @@ private:
     bool is_replacing();
     lw_shared_ptr<const locator::token_metadata> get_token_metadata_ptr() const noexcept;
     const locator::token_metadata& get_token_metadata() const noexcept;
+protected:
+    virtual future<> run() override;
+};
+
+class raft_bootstrap_task_impl : public bootstrap_node_task_impl {
+private:
+    sharded<db::system_distributed_keyspace>& _sys_dist_ks;
+    raft::server& _raft_server;
+public:
+    raft_bootstrap_task_impl(tasks::task_manager::module_ptr module,
+            std::string entity,
+            tasks::task_id parent_id,
+            service::storage_service& ss,
+            sharded<db::system_distributed_keyspace>& sys_dist_ks,
+            raft::server& raft_server) noexcept
+        : bootstrap_node_task_impl(module, tasks::task_id::create_random_id(), 0, "raft entry", std::move(entity), parent_id, ss)
+        , _sys_dist_ks(sys_dist_ks)
+        , _raft_server(raft_server)
+    {}
+protected:
+    virtual future<> run() override;
+};
+
+class raft_replace_task_impl : public replace_node_task_impl {
+private:
+    sharded<db::system_distributed_keyspace>& _sys_dist_ks;
+    raft::server& _raft_server;
+    gms::inet_address _ip_addr;
+    raft::server_id _raft_id;
+public:
+    raft_replace_task_impl(tasks::task_manager::module_ptr module,
+            std::string entity,
+            tasks::task_id parent_id,
+            service::storage_service& ss,
+            sharded<db::system_distributed_keyspace>& sys_dist_ks,
+            raft::server& raft_server,
+            gms::inet_address ip_addr,
+            raft::server_id raft_id) noexcept
+        : replace_node_task_impl(module, tasks::task_id::create_random_id(), 0, "raft entry", std::move(entity), parent_id, ss)
+        , _sys_dist_ks(sys_dist_ks)
+        , _raft_server(raft_server)
+        , _ip_addr(ip_addr)
+        , _raft_id(raft_id)
+    {}
 protected:
     virtual future<> run() override;
 };

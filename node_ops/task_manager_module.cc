@@ -342,35 +342,20 @@ future<> join_token_ring_task_impl::run() {
 
     _ss.set_mode(service::storage_service::mode::JOINING);
 
+    tasks::task_info parent_info{_status.id, _status.shard};
     if (raft_server) { // Raft is enabled. Check if we need to bootstrap ourself using raft
         tasks::tmlogger.info("topology changes are using raft");
 
-        // start topology coordinator fiber
-        _ss._raft_state_monitor = _ss.raft_state_monitor_fiber(*raft_server, _sys_dist_ks);
-
-        // Need to start system_distributed_keyspace before bootstrap because bootstraping
-        // process may access those tables.
-        supervisor::notify("starting system distributed keyspace");
-        co_await _sys_dist_ks.invoke_on_all(&db::system_distributed_keyspace::start);
-
         if (is_replacing()) {
             assert(raft_replace_info);
-            co_await _ss.raft_replace(*raft_server, raft_replace_info->raft_id, raft_replace_info->ip_addr);
+            auto task = co_await _ss.get_task_manager_module().make_and_start_task<raft_replace_task_impl>(parent_info, "", _status.id, _ss, _sys_dist_ks,
+                *raft_server, raft_replace_info->ip_addr, raft_replace_info->raft_id);
+            co_await task->done();
         } else {
-            co_await _ss.raft_bootstrap(*raft_server);
+            auto task = co_await _ss.get_task_manager_module().make_and_start_task<raft_bootstrap_task_impl>(parent_info, "", _status.id, _ss, _sys_dist_ks,
+                *raft_server);
+            co_await task->done();
         }
-
-        // Wait until we enter one of the final states
-        co_await _ss._topology_state_machine.event.when([&ss = _ss, raft_server] {
-            return ss._topology_state_machine._topology.normal_nodes.contains(raft_server->id()) ||
-            ss._topology_state_machine._topology.left_nodes.contains(raft_server->id());
-        });
-
-        if (_ss._topology_state_machine._topology.left_nodes.contains(raft_server->id())) {
-            throw std::runtime_error("A node that already left the cluster cannot be restarted");
-        }
-
-        co_await _ss.update_topology_with_local_metadata(*raft_server);
 
         // Node state is enough to know that bootstrap has completed, but to make legacy code happy
         // let it know that the bootstrap is completed as well
@@ -543,6 +528,42 @@ future<> join_token_ring_task_impl::run() {
     assert(group0);
     co_await group0->finish_setup_after_join(_ss, *_ss._qp, _ss._migration_manager.local());
     co_await _ss._cdc_gens.local().after_join(std::move(cdc_gen_id));
+}
+
+future<> node_ops_task_impl::prepare_raft_joining(raft::server& raft_server, sharded<db::system_distributed_keyspace>& sys_dist_ks) {
+    // start topology coordinator fiber
+    _ss._raft_state_monitor = _ss.raft_state_monitor_fiber(raft_server, sys_dist_ks);
+
+    // Need to start system_distributed_keyspace before bootstrap because bootstraping
+    // process may access those tables.
+    supervisor::notify("starting system distributed keyspace");
+    co_await sys_dist_ks.invoke_on_all(&db::system_distributed_keyspace::start);
+}
+
+future<> node_ops_task_impl::finish_raft_joining(raft::server& raft_server) {
+    // Wait until we enter one of the final states
+    co_await _ss._topology_state_machine.event.when([&ss = _ss, &raft_server] {
+        return ss._topology_state_machine._topology.normal_nodes.contains(raft_server.id()) ||
+        ss._topology_state_machine._topology.left_nodes.contains(raft_server.id());
+    });
+
+    if (_ss._topology_state_machine._topology.left_nodes.contains(raft_server.id())) {
+        throw std::runtime_error("A node that already left the cluster cannot be restarted");
+    }
+
+    co_await _ss.update_topology_with_local_metadata(raft_server);
+}
+
+future<> raft_bootstrap_task_impl::run() {
+    co_await prepare_raft_joining(_raft_server, _sys_dist_ks);
+    co_await _ss.raft_bootstrap(_raft_server);
+    co_await finish_raft_joining(_raft_server);
+}
+
+future<> raft_replace_task_impl::run() {
+    co_await prepare_raft_joining(_raft_server, _sys_dist_ks);
+    co_await _ss.raft_replace(_raft_server, _raft_id, _ip_addr);
+    co_await finish_raft_joining(_raft_server);
 }
 
 start_rebuild_task_impl::start_rebuild_task_impl(tasks::task_manager::module_ptr module,
