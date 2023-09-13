@@ -25,6 +25,10 @@ using namespace locator;
 static thread_local auto replica_type = tuple_type_impl::get_instance({uuid_type, int32_type});
 static thread_local auto replica_set_type = list_type_impl::get_instance(replica_type, false);
 
+data_type get_replica_set_type() {
+    return replica_set_type;
+}
+
 schema_ptr make_tablets_schema() {
     // FIXME: Allow UDTs in system keyspace:
     // CREATE TYPE tablet_replica (replica_id uuid, shard int);
@@ -43,7 +47,6 @@ schema_ptr make_tablets_schema() {
             .build();
 }
 
-static
 std::vector<data_value> replicas_to_data_value(const tablet_replica_set& replicas) {
     std::vector<data_value> result;
     result.reserve(replicas.size());
