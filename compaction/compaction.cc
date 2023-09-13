@@ -610,7 +610,7 @@ protected:
         return _used_garbage_collected_sstables;
     }
 
-    bool enable_garbage_collected_sstable_writer() const noexcept {
+    virtual bool enable_garbage_collected_sstable_writer() const noexcept {
         return _contains_multi_fragment_runs && _max_sstable_size != std::numeric_limits<uint64_t>::max() && bool(_replacer);
     }
 public:
@@ -1038,14 +1038,23 @@ private:
     }
 };
 
-class reshape_compaction : public compaction {
+class reshape_compaction : public regular_compaction {
+private:
+    bool has_sstable_replacer() const noexcept {
+        return bool(_replacer);
+    }
 public:
     reshape_compaction(table_state& table_s, compaction_descriptor descriptor, compaction_data& cdata)
-            : compaction(table_s, std::move(descriptor), cdata) {
+            : regular_compaction(table_s, std::move(descriptor), cdata) {
     }
 
     virtual sstables::sstable_set make_sstable_set_for_input() const override {
         return sstables::make_partitioned_sstable_set(_schema, false);
+    }
+
+    // Unconditionally enable incremental compaction if the strategy specifies a max output size, e.g. LCS.
+    virtual bool enable_garbage_collected_sstable_writer() const noexcept override {
+        return _max_sstable_size != std::numeric_limits<uint64_t>::max() && bool(_replacer);
     }
 
     flat_mutation_reader_v2 make_sstable_reader() const override {
@@ -1078,7 +1087,17 @@ public:
 
     virtual void stop_sstable_writer(compaction_writer* writer) override {
         if (writer) {
-            finish_new_sstable(writer);
+            if (has_sstable_replacer()) {
+                regular_compaction::stop_sstable_writer(writer);
+            } else {
+                finish_new_sstable(writer);
+            }
+        }
+    }
+
+    virtual void on_end_of_compaction() override {
+        if (has_sstable_replacer()) {
+            regular_compaction::on_end_of_compaction();
         }
     }
 };
