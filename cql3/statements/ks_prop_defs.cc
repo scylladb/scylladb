@@ -54,9 +54,28 @@ static std::map<sstring, sstring> prepare_options(
         // already have rf settings), so let's validate it once (#8880).
         locator::abstract_replication_strategy::validate_replication_factor(*rf);
 
+        std::unordered_map<sstring, sstring> dc_options;
+        std::unordered_set<sstring> dc_rfs;
+
+        for (const auto& dc : tm.get_topology().get_datacenters()) {
+            auto it = old_options.find(dc);
+            if (it != old_options.end()) {
+                dc_options.emplace(*it);
+                dc_rfs.insert(it->second);
+            } else {
+                dc_options.emplace(dc, "");
+                dc_rfs.insert("");
+            }
+        }
+
+        if (dc_rfs.size() != 1) {
+            throw exceptions::configuration_exception(
+                    format("The replication_factor option cannot be applied as it is ambiguous, use per-data-center options instead. Current replication options are {}", dc_options));
+        }
+
         // We keep previously specified DC factors for safety.
         for (const auto& opt : old_options) {
-            if (opt.first != ks_prop_defs::REPLICATION_FACTOR_KEY) {
+            if (opt.first != ks_prop_defs::REPLICATION_FACTOR_KEY && !dc_options.contains(opt.first)) {
                 options.insert(opt);
             }
         }
