@@ -54,28 +54,47 @@ static std::map<sstring, sstring> prepare_options(
         // already have rf settings), so let's validate it once (#8880).
         locator::abstract_replication_strategy::validate_replication_factor(*rf);
 
-        std::unordered_map<sstring, sstring> dc_options;
+        // Allow applying the replication factor only in the following cases:
+        // - Data centers are divided into 2 groups:
+        //   configured and unconfigured DCs 
+        // - If no DC is configured, apply the replication_factor to all DCs.
+        // - Otherwise, if all configured DCs have the same RF: 
+        //   - If there are no unconfigured DCs, just apply the new 
+        //     replication_factor too all DCs.
+        //   - If there are both configured DCs (all configured the same),
+        //     and one or more unconfigured DCs, apply the replication_factor
+        //     to the unconfigured DCs (like it is done today) iff
+        //     the replication_factor is the same as the one already configured
+        //     to the presently configured DCs
+        // - Otherwise, the replication_factor is deemed as ambiguous
+        //   and an error will be returned.
+
+        std::unordered_set<sstring> unconfigured_dcs;
+        std::unordered_map<sstring, sstring> configured_dcs;
         std::unordered_set<sstring> dc_rfs;
+
+        std::unordered_map<sstring, sstring> dc_options;
 
         for (const auto& dc : tm.get_topology().get_datacenters()) {
             auto it = old_options.find(dc);
             if (it != old_options.end()) {
                 dc_options.emplace(*it);
+                configured_dcs.emplace(*it);
                 dc_rfs.insert(it->second);
             } else {
                 dc_options.emplace(dc, "");
-                dc_rfs.insert("");
+                unconfigured_dcs.emplace(dc);
             }
         }
 
-        if (dc_rfs.size() != 1) {
+        if (dc_rfs.size() > 1 || (dc_rfs.size() == 1 && *dc_rfs.begin() != *rf && !unconfigured_dcs.empty())) {
             throw exceptions::configuration_exception(
                     format("The replication_factor option cannot be applied as it is ambiguous, use per-data-center options instead. Current replication options are {}", dc_options));
         }
 
         // We keep previously specified DC factors for safety.
         for (const auto& opt : old_options) {
-            if (opt.first != ks_prop_defs::REPLICATION_FACTOR_KEY && !dc_options.contains(opt.first)) {
+            if (opt.first != ks_prop_defs::REPLICATION_FACTOR_KEY && !tm.get_topology().get_datacenters().contains(opt.first)) {
                 options.insert(opt);
             }
         }

@@ -161,17 +161,32 @@ sub-option                             type  description
                                              the provided datacenter.
 ``'replication_factor'``               int   The number of replicas to use as a default
                                              per datacenter if not specifically provided.
-                                             Note that this always defers to existing
-                                             definitions or explicit datacenter settings.
+                                             Note that when altered, the new value is
+                                             applied only if it is consistent with the
+                                             existing settings.
                                              For example, to have three replicas per
                                              datacenter, supply this with a value of 3.
 ===================================== ====== =============================================
 
 Note that when ``ALTER`` ing keyspaces and supplying ``replication_factor``,
-auto-expansion will only *add* new datacenters for safety, it will not alter
-existing datacenters or remove any even if they are no longer in the cluster.
+auto-expansion validates the new value and it is applied only in the following cases:
+ - Data centers are divided into 2 groups:
+   configured and unconfigured DCs 
+ - If no DC is configured, apply the replication_factor to all DCs.
+ - Otherwise, if all configured DCs have the same RF: 
+   - If there are no unconfigured DCs, just apply the new 
+     replication_factor too all DCs.
+   - If there are both configured DCs (all configured the same),
+     and one or more unconfigured DCs, apply the replication_factor
+     to the unconfigured DCs if and only if the replication_factor
+     is the same as the one already configured to the presently configured DCs.
+ - Otherwise, the replication_factor is deemed as ambiguous
+   and an error will be returned.
+
+auto-expansion will only *add* new datacenters or alter existing datacenters for safety.
+It will not remove any datacenters even if they are no longer in the cluster.
 If you want to remove datacenters while still supplying ``replication_factor``,
-explicitly zero out the datacenter you want to have zero replicas.
+explicitly set the replication factor of the datacenters you to remove to zero.
 
 An example of auto-expanding datacenters with two datacenters: ``DC1`` and ``DC2``::
 
