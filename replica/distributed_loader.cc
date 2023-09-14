@@ -522,13 +522,13 @@ future<> distributed_loader::init_system_keyspace(sharded<db::system_keyspace>& 
             return sys_ks.make(erm_factory.local(), db.local());
         }).get();
 
-            for (auto ksname : system_keyspaces) {
-                auto& ks = db.local().get_keyspaces();
-                auto i = ks.find(ksname);
-                if (i != ks.end()) {
-                    distributed_loader::populate_keyspace(db, i->second, sstring(ksname)).get();
-                }
+        for (auto ksname : system_keyspaces) {
+            auto& ks = db.local().get_keyspaces();
+            auto i = ks.find(ksname);
+            if (i != ks.end()) {
+                distributed_loader::populate_keyspace(db, i->second, sstring(ksname)).get();
             }
+        }
     });
 }
 
