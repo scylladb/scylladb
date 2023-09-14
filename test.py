@@ -500,6 +500,31 @@ class RunTestSuite(TestSuite):
         return "run"
 
 
+class ToolTestSuite(TestSuite):
+    """A collection of Python pytests that test tools
+
+    These tests do not need an cluster setup for them. They invoke scylla
+    manually, in tool mode.
+    """
+
+    def __init__(self, path, cfg: dict, options: argparse.Namespace, mode: str) -> None:
+        super().__init__(path, cfg, options, mode)
+
+    def build_test_list(self) -> List[str]:
+        """For pytest, search for directories recursively"""
+        path = self.suite_path
+        pytests = itertools.chain(path.rglob("*_test.py"), path.rglob("test_*.py"))
+        return [os.path.splitext(t.relative_to(self.suite_path))[0] for t in pytests]
+
+    @property
+    def pattern(self) -> str:
+        assert False
+
+    async def add_test(self, shortname) -> None:
+        test = ToolTest(self.next_id((shortname, self.suite_key)), shortname, self)
+        self.tests.append(test)
+
+
 class Test:
     """Base class for CQL, Unit and Boost tests"""
     def __init__(self, test_no: int, shortname: str, suite) -> None:
@@ -947,6 +972,53 @@ class TopologyTest(PythonTest):
                     raise
             manager.logger.info("Test %s %s", self.uname, "succeeded" if self.success else "failed ")
         return self
+
+
+class ToolTest(Test):
+    """Run a collection of pytest test cases
+
+    That do not need a scylla cluster set-up for them."""
+
+    def __init__(self, test_no: int, shortname: str, suite) -> None:
+        super().__init__(test_no, shortname, suite)
+        self.path = "pytest"
+        self.xmlout = os.path.join(self.suite.options.tmpdir, self.mode, "xml", self.uname + ".xunit.xml")
+        ToolTest._reset(self)
+
+    def _prepare_pytest_params(self, options: argparse.Namespace):
+        self.args = [
+            "-s",  # don't capture print() output inside pytest
+            "--log-level=DEBUG",   # Capture logs
+            "-o",
+            "junit_family=xunit2",
+            "--junit-xml={}".format(self.xmlout),
+            f"--mode={self.mode}"]
+        if options.markers:
+            self.args.append(f"-m={options.markers}")
+
+            # https://docs.pytest.org/en/7.1.x/reference/exit-codes.html
+            no_tests_selected_exit_code = 5
+            self.valid_exit_codes = [0, no_tests_selected_exit_code]
+        self.args.append(str(self.suite.suite_path / (self.shortname + ".py")))
+
+    def _reset(self) -> None:
+        """Reset the test before a retry, if it is retried as flaky"""
+        pass
+
+    def print_summary(self) -> None:
+        print("Output of {} {}:".format(self.path, " ".join(self.args)))
+
+    async def run(self, options: argparse.Namespace) -> Test:
+        self._prepare_pytest_params(options)
+
+        loggerPrefix = self.mode + '/' + self.uname
+        logger = LogPrefixAdapter(logging.getLogger(loggerPrefix), {'prefix': loggerPrefix})
+        self.success = await run_test(self, options)
+        logger.info("Test %s %s", self.uname, "succeeded" if self.success else "failed ")
+        return self
+
+    def write_junit_failure_report(self, xml_res: ET.Element) -> None:
+        super().write_junit_failure_report(xml_res)
 
 
 class TabularConsoleOutput:

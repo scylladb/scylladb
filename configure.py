@@ -1245,7 +1245,7 @@ scylla_tests_dependencies = scylla_core + alternator + idls + scylla_tests_gener
 
 scylla_raft_dependencies = scylla_raft_core + ['utils/uuid.cc', 'utils/error_injection.cc']
 
-scylla_tools = ['tools/scylla-types.cc', 'tools/scylla-sstable.cc', 'tools/schema_loader.cc', 'tools/utils.cc', 'tools/lua_sstable_consumer.cc']
+scylla_tools = ['tools/scylla-types.cc', 'tools/scylla-sstable.cc', 'tools/scylla-nodetool.cc', 'tools/schema_loader.cc', 'tools/utils.cc', 'tools/lua_sstable_consumer.cc']
 scylla_perfs = ['test/perf/perf_fast_forward.cc',
                 'test/perf/perf_row_cache_update.cc',
                 'test/perf/perf_simple_query.cc',

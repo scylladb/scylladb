@@ -72,7 +72,7 @@ void configure_tool_mode(app_template::seastar_options& opts, const sstring& log
 
 int tool_app_template::run_async(int argc, char** argv, noncopyable_function<int(const operation&, const boost::program_options::variables_map&)> main_func) {
     const operation* found_op = nullptr;
-    if (std::strcmp(argv[1], "--help") != 0 && std::strcmp(argv[1], "-h") != 0) {
+    if (std::strncmp(argv[1], "--help", 6) != 0 && std::strcmp(argv[1], "-h") != 0) {
         found_op = &tools::utils::get_selected_operation(argc, argv, _cfg.operations, "operation");
     }
 
