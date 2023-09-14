@@ -33,18 +33,15 @@ public:
     static constexpr auto COMPACTION_WINDOW_UNIT_KEY = "compaction_window_unit";
     static constexpr auto COMPACTION_WINDOW_SIZE_KEY = "compaction_window_size";
     static constexpr auto EXPIRED_SSTABLE_CHECK_FREQUENCY_SECONDS_KEY = "expired_sstable_check_frequency_seconds";
-private:
-    const std::unordered_map<sstring, std::chrono::seconds> valid_window_units = { { "MINUTES", 60s }, { "HOURS", 3600s }, { "DAYS", 86400s } };
+
+    static const std::unordered_map<sstring, std::chrono::seconds> valid_window_units;
 
     enum class timestamp_resolutions {
         microsecond,
         millisecond,
     };
-    const std::unordered_map<sstring, timestamp_resolutions> valid_timestamp_resolutions = {
-        { "MICROSECONDS", timestamp_resolutions::microsecond },
-        { "MILLISECONDS", timestamp_resolutions::millisecond },
-    };
-
+    static const std::unordered_map<sstring, timestamp_resolutions> valid_timestamp_resolutions;
+private:
     std::chrono::seconds sstable_window_size = DEFAULT_COMPACTION_WINDOW_UNIT * DEFAULT_COMPACTION_WINDOW_SIZE;
     db_clock::duration expired_sstable_check_frequency = DEFAULT_EXPIRED_SSTABLE_CHECK_FREQUENCY_SECONDS();
     timestamp_resolutions timestamp_resolution = timestamp_resolutions::microsecond;
@@ -54,6 +51,8 @@ public:
     time_window_compaction_strategy_options(time_window_compaction_strategy_options&&);
     time_window_compaction_strategy_options(const std::map<sstring, sstring>& options);
 
+    static void validate(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options);
+public:
     std::chrono::seconds get_sstable_window_size() const { return sstable_window_size; }
 
     friend class time_window_compaction_strategy;
@@ -87,6 +86,8 @@ public:
     virtual compaction_descriptor get_sstables_for_compaction(table_state& table_s, strategy_control& control, std::vector<shared_sstable> candidates) override;
 
     virtual std::vector<compaction_descriptor> get_cleanup_compaction_jobs(table_state& table_s, std::vector<shared_sstable> candidates) const override;
+
+    static void validate_options(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options);
 private:
     time_window_compaction_strategy_state& get_state(table_state& table_s) const;
 

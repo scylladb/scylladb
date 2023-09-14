@@ -15,20 +15,73 @@
 
 namespace sstables {
 
+static long validate_sstable_size(const std::map<sstring, sstring>& options) {
+    auto tmp_value = compaction_strategy_impl::get_value(options, size_tiered_compaction_strategy_options::MIN_SSTABLE_SIZE_KEY);
+    auto min_sstables_size = cql3::statements::property_definitions::to_long(size_tiered_compaction_strategy_options::MIN_SSTABLE_SIZE_KEY, tmp_value, size_tiered_compaction_strategy_options::DEFAULT_MIN_SSTABLE_SIZE);
+    if (min_sstables_size < 0) {
+        throw exceptions::configuration_exception(fmt::format("{} value ({}) must be non negative", size_tiered_compaction_strategy_options::MIN_SSTABLE_SIZE_KEY, min_sstables_size));
+    }
+    return min_sstables_size;
+}
+
+static long validate_sstable_size(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options) {
+    auto min_sstables_size = validate_sstable_size(options);
+    unchecked_options.erase(size_tiered_compaction_strategy_options::MIN_SSTABLE_SIZE_KEY);
+    return min_sstables_size;
+}
+
+static double validate_bucket_low(const std::map<sstring, sstring>& options) {
+    auto tmp_value = compaction_strategy_impl::get_value(options, size_tiered_compaction_strategy_options::BUCKET_LOW_KEY);
+    auto bucket_low = cql3::statements::property_definitions::to_double(size_tiered_compaction_strategy_options::BUCKET_LOW_KEY, tmp_value, size_tiered_compaction_strategy_options::DEFAULT_BUCKET_LOW);
+    if (bucket_low <= 0.0 || bucket_low >= 1.0) {
+        throw exceptions::configuration_exception(fmt::format("{} value ({}) must be between 0.0 and 1.0", size_tiered_compaction_strategy_options::BUCKET_LOW_KEY, bucket_low));
+    }
+    return bucket_low;
+}
+
+static double validate_bucket_low(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options) {
+    auto bucket_low = validate_bucket_low(options);
+    unchecked_options.erase(size_tiered_compaction_strategy_options::BUCKET_LOW_KEY);
+    return bucket_low;
+}
+
+static double validate_bucket_high(const std::map<sstring, sstring>& options) {
+    auto tmp_value = compaction_strategy_impl::get_value(options, size_tiered_compaction_strategy_options::BUCKET_HIGH_KEY);
+    auto bucket_high = cql3::statements::property_definitions::to_double(size_tiered_compaction_strategy_options::BUCKET_HIGH_KEY, tmp_value, size_tiered_compaction_strategy_options::DEFAULT_BUCKET_HIGH);
+    if (bucket_high <= 1.0) {
+        throw exceptions::configuration_exception(fmt::format("{} value ({}) must be greater than 1.0", size_tiered_compaction_strategy_options::BUCKET_HIGH_KEY, bucket_high));
+    }
+    return bucket_high;
+}
+
+static double validate_bucket_high(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options) {
+    auto bucket_high = validate_bucket_high(options);
+    unchecked_options.erase(size_tiered_compaction_strategy_options::BUCKET_HIGH_KEY);
+    return bucket_high;
+}
+
+static double validate_cold_reads_to_omit(const std::map<sstring, sstring>& options) {
+    auto tmp_value = compaction_strategy_impl::get_value(options, size_tiered_compaction_strategy_options::COLD_READS_TO_OMIT_KEY);
+    auto cold_reads_to_omit = cql3::statements::property_definitions::to_double(size_tiered_compaction_strategy_options::COLD_READS_TO_OMIT_KEY, tmp_value, size_tiered_compaction_strategy_options::DEFAULT_COLD_READS_TO_OMIT);
+    if (cold_reads_to_omit < 0.0 || cold_reads_to_omit > 1.0) {
+        throw exceptions::configuration_exception(fmt::format("{} value ({}) must be between 0.0 and 1.0", size_tiered_compaction_strategy_options::COLD_READS_TO_OMIT_KEY, cold_reads_to_omit));
+    }
+    return cold_reads_to_omit;
+}
+
+static double validate_cold_reads_to_omit(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options) {
+    auto cold_reads_to_omit = validate_cold_reads_to_omit(options);
+    unchecked_options.erase(size_tiered_compaction_strategy_options::COLD_READS_TO_OMIT_KEY);
+    return cold_reads_to_omit;
+}
+
 size_tiered_compaction_strategy_options::size_tiered_compaction_strategy_options(const std::map<sstring, sstring>& options) {
     using namespace cql3::statements;
 
-    auto tmp_value = compaction_strategy_impl::get_value(options, MIN_SSTABLE_SIZE_KEY);
-    min_sstable_size = property_definitions::to_long(MIN_SSTABLE_SIZE_KEY, tmp_value, DEFAULT_MIN_SSTABLE_SIZE);
-
-    tmp_value = compaction_strategy_impl::get_value(options, BUCKET_LOW_KEY);
-    bucket_low = property_definitions::to_double(BUCKET_LOW_KEY, tmp_value, DEFAULT_BUCKET_LOW);
-
-    tmp_value = compaction_strategy_impl::get_value(options, BUCKET_HIGH_KEY);
-    bucket_high = property_definitions::to_double(BUCKET_HIGH_KEY, tmp_value, DEFAULT_BUCKET_HIGH);
-
-    tmp_value = compaction_strategy_impl::get_value(options, COLD_READS_TO_OMIT_KEY);
-    cold_reads_to_omit = property_definitions::to_double(COLD_READS_TO_OMIT_KEY, tmp_value, DEFAULT_COLD_READS_TO_OMIT);
+    min_sstable_size = validate_sstable_size(options);
+    bucket_low = validate_bucket_low(options);
+    bucket_high = validate_bucket_high(options);
+    cold_reads_to_omit = validate_cold_reads_to_omit(options);
 }
 
 size_tiered_compaction_strategy_options::size_tiered_compaction_strategy_options() {
@@ -36,6 +89,20 @@ size_tiered_compaction_strategy_options::size_tiered_compaction_strategy_options
     bucket_low = DEFAULT_BUCKET_LOW;
     bucket_high = DEFAULT_BUCKET_HIGH;
     cold_reads_to_omit = DEFAULT_COLD_READS_TO_OMIT;
+}
+
+// options is a map of compaction strategy options and their values.
+// unchecked_options is an analogical map from which already checked options are deleted.
+// This helps making sure that only allowed options are being set.
+void size_tiered_compaction_strategy_options::validate(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options) {
+    validate_sstable_size(options, unchecked_options);
+    auto bucket_low = validate_bucket_low(options, unchecked_options);
+    auto bucket_high = validate_bucket_high(options, unchecked_options);
+    if (bucket_high <= bucket_low) {
+        throw exceptions::configuration_exception(fmt::format("{} value ({}) is less than or equal to the {} value ({})", BUCKET_HIGH_KEY, bucket_high, BUCKET_LOW_KEY, bucket_low));
+    }
+    validate_cold_reads_to_omit(options, unchecked_options);
+    compaction_strategy_impl::validate_min_max_threshold(options, unchecked_options);
 }
 
 std::vector<std::pair<sstables::shared_sstable, uint64_t>>

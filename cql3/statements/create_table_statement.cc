@@ -442,6 +442,10 @@ std::optional<sstring> check_restricted_table_properties(
         current_ttl = (*schema)->default_time_to_live();
     }
 
+    if (strategy) {
+        sstables::compaction_strategy_impl::validate_options_for_strategy_type(cfprops.get_compaction_type_options(), strategy.value());
+    }
+
     // Evaluate whether the strategy to evaluate was explicitly passed
     auto cs = (strategy) ? strategy : current_strategy;
 

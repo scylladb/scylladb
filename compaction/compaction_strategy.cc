@@ -87,17 +87,96 @@ std::optional<sstring> compaction_strategy_impl::get_value(const std::map<sstrin
     return it->second;
 }
 
+void compaction_strategy_impl::validate_min_max_threshold(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options) {
+    auto min_threshold_key = "min_threshold", max_threshold_key = "max_threshold";
+
+    auto tmp_value = compaction_strategy_impl::get_value(options, min_threshold_key);
+    auto min_threshold = cql3::statements::property_definitions::to_long(min_threshold_key, tmp_value, DEFAULT_MIN_COMPACTION_THRESHOLD);
+    if (min_threshold < 2) {
+        throw exceptions::configuration_exception(fmt::format("{} value ({}) must be bigger or equal to 2", min_threshold_key, min_threshold));
+    }
+
+    tmp_value = compaction_strategy_impl::get_value(options, max_threshold_key);
+    auto max_threshold = cql3::statements::property_definitions::to_long(max_threshold_key, tmp_value, DEFAULT_MAX_COMPACTION_THRESHOLD);
+    if (max_threshold < 2) {
+        throw exceptions::configuration_exception(fmt::format("{} value ({}) must be bigger or equal to 2", max_threshold_key, max_threshold));
+    }
+
+    unchecked_options.erase(min_threshold_key);
+    unchecked_options.erase(max_threshold_key);
+}
+
+static double validate_tombstone_threshold(const std::map<sstring, sstring>& options) {
+    auto tmp_value = compaction_strategy_impl::get_value(options, compaction_strategy_impl::TOMBSTONE_THRESHOLD_OPTION);
+    auto tombstone_threshold = cql3::statements::property_definitions::to_double(compaction_strategy_impl::TOMBSTONE_THRESHOLD_OPTION, tmp_value, compaction_strategy_impl::DEFAULT_TOMBSTONE_THRESHOLD);
+    if (tombstone_threshold < 0.0 || tombstone_threshold > 1.0) {
+        throw exceptions::configuration_exception(fmt::format("{} value ({}) must be between 0.0 and 1.0", compaction_strategy_impl::TOMBSTONE_THRESHOLD_OPTION, tombstone_threshold));
+    }
+    return tombstone_threshold;
+}
+
+static double validate_tombstone_threshold(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options) {
+    auto tombstone_threshold = validate_tombstone_threshold(options);
+    unchecked_options.erase(compaction_strategy_impl::TOMBSTONE_THRESHOLD_OPTION);
+    return tombstone_threshold;
+}
+
+static db_clock::duration validate_tombstone_compaction_interval(const std::map<sstring, sstring>& options) {
+    auto tmp_value = compaction_strategy_impl::get_value(options, compaction_strategy_impl::TOMBSTONE_COMPACTION_INTERVAL_OPTION);
+    auto interval = cql3::statements::property_definitions::to_long(compaction_strategy_impl::TOMBSTONE_COMPACTION_INTERVAL_OPTION, tmp_value, compaction_strategy_impl::DEFAULT_TOMBSTONE_COMPACTION_INTERVAL().count());
+    auto tombstone_compaction_interval = db_clock::duration(std::chrono::seconds(interval));
+    if (interval <= 0) {
+        throw exceptions::configuration_exception(fmt::format("{} value ({}) must be positive", compaction_strategy_impl::TOMBSTONE_COMPACTION_INTERVAL_OPTION, tombstone_compaction_interval));
+    }
+    return tombstone_compaction_interval;
+}
+
+static db_clock::duration validate_tombstone_compaction_interval(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options) {
+    auto tombstone_compaction_interval = validate_tombstone_compaction_interval(options);
+    unchecked_options.erase(compaction_strategy_impl::TOMBSTONE_COMPACTION_INTERVAL_OPTION);
+    return tombstone_compaction_interval;
+}
+
+void compaction_strategy_impl::validate_options_for_strategy_type(const std::map<sstring, sstring>& options, sstables::compaction_strategy_type type) {
+    auto unchecked_options = options;
+    compaction_strategy_impl::validate_options(options, unchecked_options);
+    switch (type) {
+        case compaction_strategy_type::size_tiered:
+            size_tiered_compaction_strategy::validate_options(options, unchecked_options);
+            break;
+        case compaction_strategy_type::leveled:
+            leveled_compaction_strategy::validate_options(options, unchecked_options);
+            break;
+        case compaction_strategy_type::time_window:
+            time_window_compaction_strategy::validate_options(options, unchecked_options);
+            break;
+        default:
+            break;
+    }
+
+    unchecked_options.erase("class");
+    if (!unchecked_options.empty()) {
+        throw exceptions::configuration_exception(fmt::format("Invalid compaction strategy options {} for chosen strategy type", unchecked_options));
+    }
+}
+
+// options is a map of compaction strategy options and their values.
+// unchecked_options is an analogical map from which already checked options are deleted.
+// This helps making sure that only allowed options are being set.
+void compaction_strategy_impl::validate_options(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options) {
+    validate_tombstone_threshold(options, unchecked_options);
+    validate_tombstone_compaction_interval(options, unchecked_options);
+
+    auto it = options.find("enabled");
+    if (it != options.end() && it->second != "true" && it->second != "false") {
+        throw exceptions::configuration_exception(fmt::format("enabled value ({}) must be \"true\" or \"false\"", it->second));
+    }
+    unchecked_options.erase("enabled");
+}
+
 compaction_strategy_impl::compaction_strategy_impl(const std::map<sstring, sstring>& options) {
-    using namespace cql3::statements;
-
-    auto tmp_value = get_value(options, TOMBSTONE_THRESHOLD_OPTION);
-    _tombstone_threshold = property_definitions::to_double(TOMBSTONE_THRESHOLD_OPTION, tmp_value, DEFAULT_TOMBSTONE_THRESHOLD);
-
-    tmp_value = get_value(options, TOMBSTONE_COMPACTION_INTERVAL_OPTION);
-    auto interval = property_definitions::to_long(TOMBSTONE_COMPACTION_INTERVAL_OPTION, tmp_value, DEFAULT_TOMBSTONE_COMPACTION_INTERVAL().count());
-    _tombstone_compaction_interval = db_clock::duration(std::chrono::seconds(interval));
-
-    // FIXME: validate options.
+    _tombstone_threshold = validate_tombstone_threshold(options);
+    _tombstone_compaction_interval = validate_tombstone_compaction_interval(options);
 }
 
 } // namespace sstables
@@ -493,6 +572,20 @@ leveled_compaction_strategy::leveled_compaction_strategy(const std::map<sstring,
 {
 }
 
+// options is a map of compaction strategy options and their values.
+// unchecked_options is an analogical map from which already checked options are deleted.
+// This helps making sure that only allowed options are being set.
+void leveled_compaction_strategy::validate_options(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options) {
+    size_tiered_compaction_strategy_options::validate(options, unchecked_options);
+
+    auto tmp_value = compaction_strategy_impl::get_value(options, SSTABLE_SIZE_OPTION);
+    auto min_sstables_size = cql3::statements::property_definitions::to_long(SSTABLE_SIZE_OPTION, tmp_value, DEFAULT_MAX_SSTABLE_SIZE_IN_MB);
+    if (min_sstables_size <= 0) {
+        throw exceptions::configuration_exception(fmt::format("{} value ({}) must be positive", SSTABLE_SIZE_OPTION, min_sstables_size));
+    }
+    unchecked_options.erase(SSTABLE_SIZE_OPTION);
+}
+
 std::unique_ptr<compaction_backlog_tracker::impl> leveled_compaction_strategy::make_backlog_tracker() const {
     return std::make_unique<leveled_compaction_backlog_tracker>(_max_sstable_size_in_mb, _stcs_options);
 }
@@ -526,6 +619,14 @@ time_window_compaction_strategy::time_window_compaction_strategy(const std::map<
     _use_clustering_key_filter = true;
 }
 
+// options is a map of compaction strategy options and their values.
+// unchecked_options is an analogical map from which already checked options are deleted.
+// This helps making sure that only allowed options are being set.
+void time_window_compaction_strategy::validate_options(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options) {
+    time_window_compaction_strategy_options::validate(options, unchecked_options);
+    size_tiered_compaction_strategy_options::validate(options, unchecked_options);
+}
+
 std::unique_ptr<compaction_backlog_tracker::impl> time_window_compaction_strategy::make_backlog_tracker() const {
     return std::make_unique<time_window_backlog_tracker>(_options, _stcs_options);
 }
@@ -542,6 +643,13 @@ size_tiered_compaction_strategy::size_tiered_compaction_strategy(const std::map<
 size_tiered_compaction_strategy::size_tiered_compaction_strategy(const size_tiered_compaction_strategy_options& options)
     : _options(options)
 {}
+
+// options is a map of compaction strategy options and their values.
+// unchecked_options is an analogical map from which already checked options are deleted.
+// This helps making sure that only allowed options are being set.
+void size_tiered_compaction_strategy::validate_options(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options) {
+    size_tiered_compaction_strategy_options::validate(options, unchecked_options);
+}
 
 std::unique_ptr<compaction_backlog_tracker::impl> size_tiered_compaction_strategy::make_backlog_tracker() const {
     return std::make_unique<size_tiered_backlog_tracker>(_options);

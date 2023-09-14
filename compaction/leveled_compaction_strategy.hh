@@ -36,7 +36,7 @@ struct leveled_compaction_strategy_state {
 
 class leveled_compaction_strategy : public compaction_strategy_impl {
     static constexpr int32_t DEFAULT_MAX_SSTABLE_SIZE_IN_MB = 160;
-    const sstring SSTABLE_SIZE_OPTION = "sstable_size_in_mb";
+    static constexpr auto SSTABLE_SIZE_OPTION = "sstable_size_in_mb";
 
     int32_t _max_sstable_size_in_mb = DEFAULT_MAX_SSTABLE_SIZE_IN_MB;
     size_tiered_compaction_strategy_options _stcs_options;
@@ -46,6 +46,7 @@ private:
     leveled_compaction_strategy_state& get_state(table_state& table_s) const;
 public:
     static unsigned ideal_level_for_input(const std::vector<sstables::shared_sstable>& input, uint64_t max_sstable_size);
+    static void validate_options(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options);
 
     leveled_compaction_strategy(const std::map<sstring, sstring>& options);
     virtual compaction_descriptor get_sstables_for_compaction(table_state& table_s, strategy_control& control, std::vector<sstables::shared_sstable> candidates) override;

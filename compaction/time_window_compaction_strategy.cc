@@ -26,53 +26,104 @@ time_window_compaction_strategy_state& time_window_compaction_strategy::get_stat
     return table_s.get_compaction_strategy_state().get<time_window_compaction_strategy_state>();
 }
 
-time_window_compaction_strategy_options::time_window_compaction_strategy_options(const std::map<sstring, sstring>& options) {
-    std::chrono::seconds window_unit = DEFAULT_COMPACTION_WINDOW_UNIT;
-    int window_size = DEFAULT_COMPACTION_WINDOW_SIZE;
+const std::unordered_map<sstring, std::chrono::seconds> time_window_compaction_strategy_options::valid_window_units = {
+    { "MINUTES", 60s }, { "HOURS", 3600s }, { "DAYS", 86400s }
+};
 
-    auto it = options.find(COMPACTION_WINDOW_UNIT_KEY);
-    if (it != options.end()) {
-        auto valid_window_units_it = valid_window_units.find(it->second);
-        if (valid_window_units_it == valid_window_units.end()) {
-            throw exceptions::syntax_exception(sstring("Invalid window unit ") + it->second + " for " + COMPACTION_WINDOW_UNIT_KEY);
+const std::unordered_map<sstring, time_window_compaction_strategy_options::timestamp_resolutions> time_window_compaction_strategy_options::valid_timestamp_resolutions = {
+    { "MICROSECONDS", timestamp_resolutions::microsecond },
+    { "MILLISECONDS", timestamp_resolutions::millisecond },
+};
+
+static std::chrono::seconds validate_compaction_window_unit(const std::map<sstring, sstring>& options) {
+    std::chrono::seconds window_unit = time_window_compaction_strategy_options::DEFAULT_COMPACTION_WINDOW_UNIT;
+
+    auto tmp_value = compaction_strategy_impl::get_value(options, time_window_compaction_strategy_options::COMPACTION_WINDOW_UNIT_KEY);
+    if (tmp_value) {
+        auto valid_window_units_it = time_window_compaction_strategy_options::valid_window_units.find(tmp_value.value());
+        if (valid_window_units_it == time_window_compaction_strategy_options::valid_window_units.end()) {
+            throw exceptions::configuration_exception(fmt::format("Invalid window unit {} for {}", tmp_value.value(), time_window_compaction_strategy_options::COMPACTION_WINDOW_UNIT_KEY));
         }
         window_unit = valid_window_units_it->second;
     }
 
-    it = options.find(COMPACTION_WINDOW_SIZE_KEY);
-    if (it != options.end()) {
-        try {
-            window_size = std::stoi(it->second);
-        } catch (const std::exception& e) {
-            throw exceptions::syntax_exception(sstring("Invalid integer value ") + it->second + " for " + COMPACTION_WINDOW_SIZE_KEY);
-        }
-    }
+    return window_unit;
+}
+
+static std::chrono::seconds validate_compaction_window_unit(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options) {
+    auto window_unit = validate_compaction_window_unit(options);
+    unchecked_options.erase(time_window_compaction_strategy_options::COMPACTION_WINDOW_UNIT_KEY);
+    return window_unit;
+}
+
+static int validate_compaction_window_size(const std::map<sstring, sstring>& options) {
+    auto tmp_value = compaction_strategy_impl::get_value(options, time_window_compaction_strategy_options::COMPACTION_WINDOW_SIZE_KEY);
+    int window_size = cql3::statements::property_definitions::to_long(time_window_compaction_strategy_options::COMPACTION_WINDOW_SIZE_KEY, tmp_value, time_window_compaction_strategy_options::DEFAULT_COMPACTION_WINDOW_SIZE);
 
     if (window_size <= 0) {
-        throw exceptions::configuration_exception(fmt::format("{} must be greater than 1 for compaction_window_size", window_size));
+        throw exceptions::configuration_exception(fmt::format("{} value ({}) must be greater than 1", time_window_compaction_strategy_options::COMPACTION_WINDOW_SIZE_KEY, window_size));
     }
+
+    return window_size;
+}
+
+static int validate_compaction_window_size(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options) {
+    int window_size = validate_compaction_window_size(options);
+    unchecked_options.erase(time_window_compaction_strategy_options::COMPACTION_WINDOW_SIZE_KEY);
+    return window_size;
+}
+
+static db_clock::duration validate_expired_sstable_check_frequency_seconds(const std::map<sstring, sstring>& options) {
+    db_clock::duration expired_sstable_check_frequency = time_window_compaction_strategy_options::DEFAULT_EXPIRED_SSTABLE_CHECK_FREQUENCY_SECONDS();
+
+    auto tmp_value = compaction_strategy_impl::get_value(options, time_window_compaction_strategy_options::EXPIRED_SSTABLE_CHECK_FREQUENCY_SECONDS_KEY);
+    if (tmp_value) {
+        try {
+            expired_sstable_check_frequency = std::chrono::seconds(std::stol(tmp_value.value()));
+        } catch (const std::exception& e) {
+            throw exceptions::syntax_exception(fmt::format("Invalid long value {} for {}", tmp_value.value(), time_window_compaction_strategy_options::EXPIRED_SSTABLE_CHECK_FREQUENCY_SECONDS_KEY));
+        }
+    }
+
+    return expired_sstable_check_frequency;
+}
+
+static db_clock::duration validate_expired_sstable_check_frequency_seconds(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options) {
+    db_clock::duration expired_sstable_check_frequency = validate_expired_sstable_check_frequency_seconds(options);
+    unchecked_options.erase(time_window_compaction_strategy_options::EXPIRED_SSTABLE_CHECK_FREQUENCY_SECONDS_KEY);
+    return expired_sstable_check_frequency;
+}
+
+static time_window_compaction_strategy_options::timestamp_resolutions validate_timestamp_resolution(const std::map<sstring, sstring>& options) {
+    time_window_compaction_strategy_options::timestamp_resolutions timestamp_resolution = time_window_compaction_strategy_options::timestamp_resolutions::microsecond;
+
+    auto tmp_value = compaction_strategy_impl::get_value(options, time_window_compaction_strategy_options::TIMESTAMP_RESOLUTION_KEY);
+    if (tmp_value) {
+        if (!time_window_compaction_strategy_options::valid_timestamp_resolutions.contains(tmp_value.value())) {
+            throw exceptions::configuration_exception(fmt::format("Invalid timestamp resolution {} for {}", tmp_value.value(), time_window_compaction_strategy_options::TIMESTAMP_RESOLUTION_KEY));
+        } else {
+            timestamp_resolution = time_window_compaction_strategy_options::valid_timestamp_resolutions.at(tmp_value.value());
+        }
+    }
+
+    return timestamp_resolution;
+}
+
+static time_window_compaction_strategy_options::timestamp_resolutions validate_timestamp_resolution(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options) {
+    time_window_compaction_strategy_options::timestamp_resolutions timestamp_resolution = validate_timestamp_resolution(options);
+    unchecked_options.erase(time_window_compaction_strategy_options::TIMESTAMP_RESOLUTION_KEY);
+    return timestamp_resolution;
+}
+
+time_window_compaction_strategy_options::time_window_compaction_strategy_options(const std::map<sstring, sstring>& options) {
+    auto window_unit = validate_compaction_window_unit(options);
+    int window_size = validate_compaction_window_size(options);
 
     sstable_window_size = window_size * window_unit;
+    expired_sstable_check_frequency = validate_expired_sstable_check_frequency_seconds(options);
+    timestamp_resolution = validate_timestamp_resolution(options);
 
-    it = options.find(EXPIRED_SSTABLE_CHECK_FREQUENCY_SECONDS_KEY);
-    if (it != options.end()) {
-        try {
-            expired_sstable_check_frequency = std::chrono::seconds(std::stol(it->second));
-        } catch (const std::exception& e) {
-            throw exceptions::syntax_exception(sstring("Invalid long value ") + it->second + "for " + EXPIRED_SSTABLE_CHECK_FREQUENCY_SECONDS_KEY);
-        }
-    }
-
-    it = options.find(TIMESTAMP_RESOLUTION_KEY);
-    if (it != options.end()) {
-        if (!valid_timestamp_resolutions.contains(it->second)) {
-            throw exceptions::syntax_exception(sstring("Invalid timestamp resolution ") + it->second + "for " + TIMESTAMP_RESOLUTION_KEY);
-        } else {
-            timestamp_resolution = valid_timestamp_resolutions.at(it->second);
-        }
-    }
-
-    it = options.find("enable_optimized_twcs_queries");
+    auto it = options.find("enable_optimized_twcs_queries");
     if (it != options.end() && it->second == "false") {
         enable_optimized_twcs_queries = false;
     }
@@ -81,6 +132,29 @@ time_window_compaction_strategy_options::time_window_compaction_strategy_options
 time_window_compaction_strategy_options::time_window_compaction_strategy_options(time_window_compaction_strategy_options&&) = default;
 
 time_window_compaction_strategy_options::time_window_compaction_strategy_options(const time_window_compaction_strategy_options&) = default;
+
+// options is a map of compaction strategy options and their values.
+// unchecked_options is an analogical map from which already checked options are deleted.
+// This helps making sure that only allowed options are being set.
+void time_window_compaction_strategy_options::validate(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options) {
+    validate_compaction_window_unit(options, unchecked_options);
+    validate_compaction_window_size(options, unchecked_options);
+    validate_expired_sstable_check_frequency_seconds(options, unchecked_options);
+    validate_timestamp_resolution(options, unchecked_options);
+    compaction_strategy_impl::validate_min_max_threshold(options, unchecked_options);
+
+    auto it = options.find("enable_optimized_twcs_queries");
+    if (it != options.end() && it->second != "true"  && it->second != "false") {
+        throw exceptions::configuration_exception(fmt::format("enable_optimized_twcs_queries value ({}) must be \"true\" or \"false\"", it->second));
+    }
+    unchecked_options.erase("enable_optimized_twcs_queries");
+
+    it = unchecked_options.find("unsafe_aggressive_sstable_expiration");
+    if (it != unchecked_options.end()) {
+        clogger.warn("unsafe_aggressive_sstable_expiration option is not supported for time window compaction strategy");
+        unchecked_options.erase(it);
+    }
+}
 
 class classify_by_timestamp {
     time_window_compaction_strategy_options _options;
