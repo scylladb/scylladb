@@ -19,8 +19,8 @@ The last three items must be all present or all absent. When set the values are
 used by the S3 client to sign requests. If not set requests are sent unsigned
 which may not always accepted by the server.
 
-By default Scylla tries to read it from the object_storage_config.yaml file
-located in the same directory with the scylla.yaml one. Optionally, the
+By default Scylla tries to read it from the `object_storage.yaml` file
+located in the same directory with the `scylla.yaml`. Optionally, the
 `--object-storage-config-file $path` option can be specified.
 
 ## Enabling the feature
