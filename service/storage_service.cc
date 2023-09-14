@@ -1201,7 +1201,12 @@ class topology_coordinator {
 
     // If there are some unpublished CDC generations, publishes the one with the oldest timestamp
     // to user-facing description tables.
-    future<> publish_oldest_cdc_generation(group0_guard guard) {
+    //
+    // Appends necessary mutations to `updates` and updates the `reason` string.
+    future<> publish_oldest_cdc_generation(
+            const group0_guard& guard,
+            std::vector<canonical_mutation>& updates,
+            sstring& reason) {
         const auto& unpublished_gens = _topo_sm._topology.unpublished_cdc_generations;
         if (unpublished_gens.empty()) {
             co_return;
@@ -1218,9 +1223,9 @@ class topology_coordinator {
         std::vector<cdc::generation_id_v2> new_unpublished_gens(unpublished_gens.begin() + 1, unpublished_gens.end());
         topology_mutation_builder builder(guard.write_timestamp());
         builder.set_unpublished_cdc_generations(std::move(new_unpublished_gens));
+        updates.push_back(builder.build());
 
-        auto str = ::format("published CDC generation, ID: {}", gen_id);
-        co_await update_topology_state(std::move(guard), {builder.build()}, std::move(str));
+        reason += ::format("published CDC generation with ID {}, ", gen_id);
     }
 
     // The background fiber of the topology coordinator that continually publishes committed yet unpublished
@@ -1238,8 +1243,16 @@ class topology_coordinator {
             bool sleep = false;
             try {
                 auto guard = co_await start_operation();
+                std::vector<canonical_mutation> updates;
+                sstring reason;
 
-                co_await publish_oldest_cdc_generation(std::move(guard));
+                co_await publish_oldest_cdc_generation(guard, updates, reason);
+
+                if (!updates.empty()) {
+                    co_await update_topology_state(std::move(guard), std::move(updates), std::move(reason));
+                } else {
+                    release_guard(std::move(guard));
+                }
 
                 if (_topo_sm._topology.unpublished_cdc_generations.empty()) {
                     // No CDC generations to publish. Wait until one appears or the topology coordinator aborts.
