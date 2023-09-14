@@ -1,13 +1,18 @@
 set(unstripped_dist_pkg
-  ${Scylla_PRODUCT}-unstripped-${Scylla_VERSION}-${Scylla_RELEASE}.${CMAKE_SYSTEM_PROCESSOR}.tar.gz)
+  ${CMAKE_CURRENT_BINARY_DIR}/${Scylla_PRODUCT}-unstripped-${Scylla_VERSION}-${Scylla_RELEASE}.${CMAKE_SYSTEM_PROCESSOR}.tar.gz)
 add_custom_command(
   OUTPUT ${unstripped_dist_pkg}
-  COMMAND script/create-relocatable-package.py --mode ${CMAKE_BUILD_TYPE} ${unstripped_dist_pkg}
+  COMMAND scripts/create-relocatable-package.py
+    --build-dir ${CMAKE_BINARY_DIR}
+    --node-exporter-dir ${CMAKE_BINARY_DIR}/node_exporter
+    ${unstripped_dist_pkg}
   DEPENDS
     scylla
-    iotune
-    ${CMAKE_BINARY_DIR}/debian/debian
-    ${CMAKE_BINARY_DIR}/node_exporter/node_exporter)
+    ${CMAKE_BINARY_DIR}/iotune
+    ${CMAKE_BINARY_DIR}/node_exporter/node_exporter
+    ${CMAKE_CURRENT_BINARY_DIR}/debian
+  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+
 
 function(add_stripped name)
   set(output ${name}.stripped)
