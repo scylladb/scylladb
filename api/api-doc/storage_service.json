@@ -161,6 +161,14 @@
                     "allowMultiple":false,
                     "type": "long",
                     "paramType":"query"
+                 },
+                 {
+                    "name":"per_shard",
+                    "description":"A flag indicating if the results should be returned per shard",
+                    "required":false,
+                    "allowMultiple":false,
+                    "type": "boolean",
+                    "paramType":"query"
                  }
               ]
             }

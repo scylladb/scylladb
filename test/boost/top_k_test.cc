@@ -32,7 +32,7 @@ std::vector<unsigned> exp_results(unsigned k = 10) {
 
 std::vector<unsigned> count(const utils::space_saving_top_k<unsigned>::results& res) {
     std::vector<unsigned> v;
-    for (auto& c : res) {
+    for (auto& c : res.values) {
         v.push_back(c.count);
     }
     return v;

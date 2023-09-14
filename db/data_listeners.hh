@@ -27,6 +27,15 @@ class frozen_mutation;
 namespace db {
 
 class data_listener {
+protected:
+    double _sampling_probability;
+    uint64_t _normalized_sampling_probability;
+    std::ranlux48_base _gen;
+
+    data_listener(double sampling_probability) : _sampling_probability(sampling_probability), _gen(std::random_device()()) {
+        _sampling_probability = sampling_probability;
+        _normalized_sampling_probability = std::llround(_sampling_probability * (_gen.max() + 1));
+    }
 public:
     virtual ~data_listener() = default;
     // Invoked for each write, with partition granularity.
@@ -44,6 +53,16 @@ public:
     virtual flat_mutation_reader_v2 on_read(const schema_ptr& s, const dht::partition_range& range,
             const query::partition_slice& slice, flat_mutation_reader_v2&& rd) {
         return std::move(rd);
+    }
+
+    bool set_sampling_probability(double p);
+
+    double get_sampling_probability() const {
+        return _sampling_probability;
+    }
+
+    bool sample_next_query() {
+        return _normalized_sampling_probability != 0 && _gen() < _normalized_sampling_probability;
     }
 };
 
@@ -66,9 +85,10 @@ public:
 struct toppartitions_item_key {
     schema_ptr schema;
     dht::decorated_key key;
+    unsigned shard;
 
-    toppartitions_item_key(const schema_ptr& schema, const dht::decorated_key& key) : schema(schema), key(key) {}
-    toppartitions_item_key(const toppartitions_item_key& key) noexcept : schema(key.schema), key(key.key) {}
+    toppartitions_item_key(const schema_ptr& schema, const dht::decorated_key& key, unsigned shard) : schema(schema), key(key), shard(shard) {}
+    toppartitions_item_key(const toppartitions_item_key& key) noexcept : schema(key.schema), key(key.key), shard(key.shard) {}
 
     struct hash {
         size_t operator()(const toppartitions_item_key& k) const {
@@ -89,10 +109,11 @@ struct toppartitions_item_key {
 struct toppartitions_global_item_key {
     global_schema_ptr schema;
     dht::decorated_key key;
+    unsigned shard;
 
-    toppartitions_global_item_key(toppartitions_item_key&& tik) : schema(std::move(tik.schema)), key(std::move(tik.key)) {}
+    toppartitions_global_item_key(toppartitions_item_key&& tik) : schema(std::move(tik.schema)), key(std::move(tik.key)), shard(tik.shard) {}
     operator toppartitions_item_key() const {
-        return toppartitions_item_key(schema, key);
+        return toppartitions_item_key(schema, key, shard);
     }
 
     struct hash {
@@ -116,6 +137,7 @@ class toppartitions_data_listener : public data_listener, public weakly_referenc
     replica::database& _db;
     std::unordered_set<std::tuple<sstring, sstring>, utils::tuple_hash> _table_filters;
     std::unordered_set<sstring> _keyspace_filters;
+    size_t _capacity;
 
 public:
     using top_k = utils::space_saving_top_k<toppartitions_item_key, toppartitions_item_key::hash, toppartitions_item_key::comp>;
@@ -128,13 +150,30 @@ private:
     top_k _top_k_write;
 
 public:
-    toppartitions_data_listener(replica::database& db, std::unordered_set<std::tuple<sstring, sstring>, utils::tuple_hash> table_filters, std::unordered_set<sstring> keyspace_filters);
+    toppartitions_data_listener(replica::database& db, std::unordered_set<std::tuple<sstring, sstring>, utils::tuple_hash> table_filters, std::unordered_set<sstring> keyspace_filters, size_t capacity, double sampling_probability = 1.0);
     ~toppartitions_data_listener();
 
     virtual flat_mutation_reader_v2 on_read(const schema_ptr& s, const dht::partition_range& range,
             const query::partition_slice& slice, flat_mutation_reader_v2&& rd) override;
 
     virtual void on_write(const schema_ptr& s, const frozen_mutation& m) override;
+
+    const top_k get_top_k_read() const {
+        return _top_k_read;
+    }
+
+    const top_k get_top_k_write() const {
+        return _top_k_write;
+    }
+
+    void set_capacity(size_t capacity) {
+        _capacity = capacity;
+
+        _top_k_read = top_k(capacity);
+        _top_k_write = top_k(capacity);
+    }
+
+    void reset();
 
     future<> stop();
 };
@@ -156,7 +195,10 @@ public:
         toppartitions_data_listener::top_k read;
         toppartitions_data_listener::top_k write;
 
-        results(size_t capacity) : read(capacity), write(capacity) {}
+        unsigned read_cardinality;
+        unsigned write_cardinality;
+
+        results(size_t capacity) : read(capacity), write(capacity), read_cardinality(0), write_cardinality(0) {}
     };
 
     std::chrono::milliseconds duration() const { return _duration; }

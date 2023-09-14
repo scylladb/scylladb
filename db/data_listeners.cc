@@ -17,6 +17,19 @@ extern logging::logger dblog;
 
 namespace db {
 
+bool data_listener::set_sampling_probability(double p) {
+    if (p < 0 || p > 1) {
+        return false;
+    }
+
+    _sampling_probability = p;
+    _normalized_sampling_probability = std::llround(_sampling_probability * (_gen.max() + 1));
+
+    dblog.info("Setting sampling probability to {} (normalized {})", _sampling_probability, _normalized_sampling_probability);
+
+    return true;
+}
+
 void data_listeners::install(data_listener* listener) {
     _listeners.emplace(listener);
     dblog.debug("data_listeners: install listener {}", fmt::ptr(listener));
@@ -34,14 +47,18 @@ bool data_listeners::exists(data_listener* listener) const {
 flat_mutation_reader_v2 data_listeners::on_read(const schema_ptr& s, const dht::partition_range& range,
         const query::partition_slice& slice, flat_mutation_reader_v2&& rd) {
     for (auto&& li : _listeners) {
-        rd = li->on_read(s, range, slice, std::move(rd));
+        if (li->sample_next_query()) {
+            rd = li->on_read(s, range, slice, std::move(rd));
+        }
     }
     return std::move(rd);
 }
 
 void data_listeners::on_write(const schema_ptr& s, const frozen_mutation& m) {
     for (auto&& li : _listeners) {
-        li->on_write(s, m);
+        if (li->sample_next_query()) {
+            li->on_write(s, m);
+        }
     }
 }
 
@@ -50,7 +67,8 @@ toppartitions_item_key::operator sstring() const {
 }
 
 toppartitions_data_listener::toppartitions_data_listener(replica::database& db, std::unordered_set<std::tuple<sstring, sstring>, utils::tuple_hash> table_filters,
-        std::unordered_set<sstring> keyspace_filters) : _db(db), _table_filters(std::move(table_filters)), _keyspace_filters(std::move(keyspace_filters)) {
+        std::unordered_set<sstring> keyspace_filters, size_t capacity, double sampling_probability) : data_listener(sampling_probability), _db(db), _table_filters(std::move(table_filters)), _keyspace_filters(std::move(keyspace_filters))
+                                                                                                  , _capacity(capacity), _top_k_read(capacity), _top_k_write(capacity) {
     dblog.debug("toppartitions_data_listener: installing {}", fmt::ptr(this));
     _db.data_listeners().install(this);
 }
@@ -65,6 +83,12 @@ future<> toppartitions_data_listener::stop() {
     return make_ready_future<>();
 }
 
+void toppartitions_data_listener::reset() {
+    dblog.debug("toppartitions_data_listener: resetting {}", fmt::ptr(this));
+    _top_k_read = top_k(_capacity);
+    _top_k_write = top_k(_capacity);
+}
+
 flat_mutation_reader_v2 toppartitions_data_listener::on_read(const schema_ptr& s, const dht::partition_range& range,
         const query::partition_slice& slice, flat_mutation_reader_v2&& rd) {
     bool include_all = _table_filters.empty() && _keyspace_filters.empty();
@@ -74,7 +98,7 @@ flat_mutation_reader_v2 toppartitions_data_listener::on_read(const schema_ptr& s
         return make_filtering_reader(std::move(rd), [zis = this->weak_from_this(), s = std::move(s)] (const dht::decorated_key& dk) {
             // The data query may be executing after the toppartitions_data_listener object has been removed, so check
             if (zis) {
-                zis->_top_k_read.append(toppartitions_item_key{s, dk});
+                zis->_top_k_read.append(toppartitions_item_key{s, dk, this_shard_id()});
             }
             return true;
         });
@@ -88,16 +112,17 @@ void toppartitions_data_listener::on_write(const schema_ptr& s, const frozen_mut
     
     if (include_all || _keyspace_filters.contains(s->ks_name()) || _table_filters.contains({s->ks_name(), s->cf_name()})) {
         dblog.trace("toppartitions_data_listener::on_write: {}.{}", s->ks_name(), s->cf_name());
-        _top_k_write.append(toppartitions_item_key{s, m.decorated_key(*s)});
+        _top_k_write.append(toppartitions_item_key{s, m.decorated_key(*s), this_shard_id()});
     }
 }
 
 toppartitions_data_listener::global_top_k::results
 toppartitions_data_listener::globalize(top_k::results&& r) {
     toppartitions_data_listener::global_top_k::results n;
-    n.reserve(r.size());
-    for (auto&& e : r) {
-        n.emplace_back(global_top_k::results::value_type{toppartitions_global_item_key(std::move(e.item)), e.count, e.error});
+    n.values.reserve(r.values.size());
+    n.cardinality = r.cardinality;
+    for (auto&& e : r.values) {
+        n.values.emplace_back(global_top_k::result(toppartitions_global_item_key(std::move(e.item)), e.count, e.error));
     }
     return n;
 }
@@ -105,9 +130,10 @@ toppartitions_data_listener::globalize(top_k::results&& r) {
 toppartitions_data_listener::top_k::results
 toppartitions_data_listener::localize(const global_top_k::results& r) {
     toppartitions_data_listener::top_k::results n;
-    n.reserve(r.size());
-    for (auto&& e : r) {
-        n.emplace_back(top_k::results::value_type{toppartitions_item_key(e.item), e.count, e.error});
+    n.values.reserve(r.values.size());
+    n.cardinality = r.cardinality;
+    for (auto&& e : r.values) {
+        n.values.emplace_back(top_k::result(toppartitions_item_key(e.item), e.count, e.error));
     }
     return n;
 }
@@ -121,7 +147,7 @@ toppartitions_query::toppartitions_query(distributed<replica::database>& xdb, st
 }
 
 future<> toppartitions_query::scatter() {
-    return _query->start(std::ref(_xdb), _table_filters, _keyspace_filters);
+    return _query->start(std::ref(_xdb), _table_filters, _keyspace_filters, _capacity);
 }
 
 using top_t = toppartitions_data_listener::global_top_k::results;
@@ -133,14 +159,18 @@ future<toppartitions_query::results> toppartitions_query::gather(unsigned res_si
         dblog.trace("toppartitions_query::map_reduce with listener {}", fmt::ptr(&listener));
         top_t rd = toppartitions_data_listener::globalize(listener._top_k_read.top(res_size));
         top_t wr = toppartitions_data_listener::globalize(listener._top_k_write.top(res_size));
+
         return make_foreign(std::make_unique<std::tuple<top_t, top_t>>(std::move(rd), std::move(wr)));
     };
     auto reduce = [] (results res, foreign_ptr<std::unique_ptr<std::tuple<top_t, top_t>>> rd_wr) {
         res.read.append(toppartitions_data_listener::localize(std::get<0>(*rd_wr)));
         res.write.append(toppartitions_data_listener::localize(std::get<1>(*rd_wr)));
+
+        res.read_cardinality += std::get<0>(*rd_wr).cardinality;
+        res.write_cardinality += std::get<1>(*rd_wr).cardinality;
         return res;
     };
-    return _query->map_reduce0(map, results{res_size}, reduce)
+    return _query->map_reduce0(map, results{res_size * smp::count}, reduce)
         .handle_exception([] (auto ep) {
             dblog.error("toppartitions_query::gather: {}", ep);
             return make_exception_future<results>(ep);

@@ -119,6 +119,7 @@ class config;
 class extensions;
 class rp_handle;
 class data_listeners;
+class toppartitions_data_listener;
 class large_data_handler;
 class system_keyspace;
 class table_selector;
@@ -1432,6 +1433,15 @@ private:
 
     friend db::data_listeners;
     std::unique_ptr<db::data_listeners> _data_listeners;
+    std::unique_ptr<db::toppartitions_data_listener> _toppartitions_listener;
+
+    timer<seastar::lowres_clock> _toppartitions_timer;
+
+    serialized_action _update_persistent_toppartitions_action;
+    utils::observer<uint32_t> _persistent_toppartitions_publish_interval_sec_observer;
+    utils::observer<size_t> _persistent_toppartitions_capacity_observer;
+    utils::observer<size_t>  _persistent_toppartitions_list_size_observer;
+    utils::observer<double> _persistent_toppartitions_sampling_probability_observer;
 
     service::migration_notifier& _mnotifier;
     gms::feature_service& _feat;
@@ -1705,6 +1715,10 @@ public:
         return _cfg;
     }
     const db::extensions& extensions() const;
+
+    void on_toppartitions_timer();
+
+    void update_toppartitions_listener();
 
     sstables::sstables_manager& get_user_sstables_manager() const noexcept {
         assert(_user_sstables_manager);

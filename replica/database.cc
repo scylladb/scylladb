@@ -79,6 +79,7 @@ using namespace std::chrono_literals;
 using namespace db;
 
 logging::logger dblog("database");
+logging::logger metricslog("metrics");
 
 namespace replica {
 
@@ -371,6 +372,14 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
     , _system_sstables_manager(std::make_unique<sstables::sstables_manager>(*_nop_large_data_handler, _cfg, feat, _row_cache_tracker, dbcfg.available_memory, sst_dir_sem.local()))
     , _result_memory_limiter(dbcfg.available_memory / 10)
     , _data_listeners(std::make_unique<db::data_listeners>())
+    , _toppartitions_listener(std::make_unique<db::toppartitions_data_listener>(*this, std::unordered_set<std::tuple<sstring, sstring>, utils::tuple_hash>(),
+                                                                                std::unordered_set<sstring>(), _cfg.persistent_toppartitions_capacity(), _cfg.persistent_toppartitions_sampling_probability()))
+    , _toppartitions_timer([this] { on_toppartitions_timer(); })
+    , _update_persistent_toppartitions_action([this] { update_toppartitions_listener(); return make_ready_future<>(); })
+    , _persistent_toppartitions_publish_interval_sec_observer(_cfg.persistent_toppartitions_publish_interval_sec.observe(_update_persistent_toppartitions_action.make_observer()))
+    , _persistent_toppartitions_capacity_observer(_cfg.persistent_toppartitions_capacity.observe(_update_persistent_toppartitions_action.make_observer()))
+    , _persistent_toppartitions_list_size_observer(_cfg.persistent_toppartitions_list_size.observe(_update_persistent_toppartitions_action.make_observer()))
+    , _persistent_toppartitions_sampling_probability_observer(_cfg.persistent_toppartitions_sampling_probability.observe(_update_persistent_toppartitions_action.make_observer()))
     , _mnotifier(mn)
     , _feat(feat)
     , _shared_token_metadata(stm)
@@ -391,6 +400,37 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
     if (_dbcfg.sstables_format) {
         set_format(*_dbcfg.sstables_format);
     }
+
+    _toppartitions_timer.arm_periodic(std::chrono::seconds(_cfg.persistent_toppartitions_publish_interval_sec()));
+}
+
+void database::on_toppartitions_timer() {
+    size_t list_size = _cfg.persistent_toppartitions_list_size();
+
+    for (auto& d: _toppartitions_listener->get_top_k_read().top(list_size).values) {
+        auto partition = ("(" + d.item.schema->ks_name() + ":" + d.item.schema->cf_name() + ") ") + sstring(d.item);
+        metricslog.info("Toppartitions - Read - Partition [{}]: {}", partition, d.count);
+    }
+
+    for (auto& d: _toppartitions_listener->get_top_k_write().top(list_size).values) {
+        auto partition = ("(" + d.item.schema->ks_name() + ":" + d.item.schema->cf_name() + ") ") + sstring(d.item);
+        metricslog.info("Toppartitions - Write - Partition [{}]: {}", partition, d.count);
+    }
+
+    _toppartitions_listener->reset();
+}
+
+void database::update_toppartitions_listener() {
+    dblog.info("Updating toppartitions listener");
+
+    if (!_toppartitions_listener->set_sampling_probability(_cfg.persistent_toppartitions_sampling_probability())) {
+        dblog.error("Failed to apply sampling probability ({}). Sampling probability must be in a [0,1] range",
+                    _cfg.persistent_toppartitions_sampling_probability());
+    }
+
+    _toppartitions_listener->set_capacity(_cfg.persistent_toppartitions_capacity());
+
+    _toppartitions_timer.rearm_periodic(std::chrono::seconds(_cfg.persistent_toppartitions_publish_interval_sec()));
 }
 
 const db::extensions& database::extensions() const {
@@ -2422,6 +2462,9 @@ future<> database::stop() {
     if (_schema_commitlog) {
         co_await _schema_commitlog->release();
     }
+
+    _toppartitions_timer.cancel();
+
     dblog.info("Shutting down system dirty memory manager");
     co_await _system_dirty_memory_manager.shutdown();
     dblog.info("Shutting down dirty memory manager");
