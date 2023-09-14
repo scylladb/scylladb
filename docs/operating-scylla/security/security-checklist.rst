@@ -31,7 +31,11 @@ Encryption on Transit, Client to Node and Node to Node
 Encryption on Transit protects your communication against a 3rd interception on the network connection.
 Configure Scylla to use TLS/SSL for all the connections. Use TLS/SSL to encrypt communication between Scylla nodes and client applications.
 
-See:
+.. only:: enterprise
+
+    Starting with version 2023.1.1, you can run ScyllaDB Enterprise on FIPS-enabled Ubuntu, 
+    which uses FIPS 140-2 certified libraries (such as OpenSSL, GnuTLS, and more) and Linux 
+    kernel in FIPS mode.
 
 * :doc:`Encryption Data in Transit Client to Node </operating-scylla/security/client-node-encryption>`
 
