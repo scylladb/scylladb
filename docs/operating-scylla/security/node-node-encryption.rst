@@ -4,7 +4,10 @@ Encryption: Data in Transit Node to Node
 Communication between all or some nodes can be encrypted. The controlling parameter is :code:`server_encryption_options`.
 
 Once enabled, all communication between the nodes is transmitted over TLS/SSL.
-The libraries used by Scylla for OpenSSL are FIPS 140-2 certified.
+
+.. only:: enterprise
+
+  The libraries used by ScyllaDB Enterprise for OpenSSL are FIPS 140-2 certified.
 
 To build a self-signed certificate chain, see :doc:`generating a self-signed certificate chain using openssl </operating-scylla/security/generate-certificate/>`.
 
