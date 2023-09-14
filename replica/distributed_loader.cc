@@ -462,6 +462,14 @@ future<> table_populator::populate_subdir(sstables::sstable_state state, allow_o
     });
 }
 
+future<> distributed_loader::populate_keyspace(distributed<replica::database>& db, keyspace& ks, sstring ks_name) {
+    // might have more than one dir for a keyspace iff data_file_directories is > 1 and
+    // somehow someone placed sstables in more than one of them for a given ks. (import?)
+    return parallel_for_each(db.local().get_config().data_file_directories(), [&db, &ks, ks_name] (const sstring& data_dir) {
+        return populate_keyspace(db, ks, data_dir, ks_name);
+    });
+}
+
 future<> distributed_loader::populate_keyspace(distributed<replica::database>& db, keyspace& ks, sstring datadir, sstring ks_name) {
     auto ksdir = datadir + "/" + ks_name;
 
@@ -514,16 +522,13 @@ future<> distributed_loader::init_system_keyspace(sharded<db::system_keyspace>& 
             return sys_ks.make(erm_factory.local(), db.local());
         }).get();
 
-        const auto& cfg = db.local().get_config();
-        for (auto& data_dir : cfg.data_file_directories()) {
             for (auto ksname : system_keyspaces) {
                 auto& ks = db.local().get_keyspaces();
                 auto i = ks.find(ksname);
                 if (i != ks.end()) {
-                    distributed_loader::populate_keyspace(db, i->second, data_dir, sstring(ksname)).get();
+                    distributed_loader::populate_keyspace(db, i->second, sstring(ksname)).get();
                 }
             }
-        }
     });
 }
 
@@ -556,11 +561,7 @@ future<> distributed_loader::init_non_system_keyspaces(distributed<replica::data
                     continue;
                 }
 
-                // might have more than one dir for a keyspace iff data_file_directories is > 1 and
-                // somehow someone placed sstables in more than one of them for a given ks. (import?)
-                futures.emplace_back(parallel_for_each(cfg.data_file_directories(), [&] (const sstring& data_dir) {
-                    return distributed_loader::populate_keyspace(db, ks.second, data_dir, ks_name);
-                }));
+                futures.emplace_back(distributed_loader::populate_keyspace(db, ks.second, ks_name));
             }
 
             when_all_succeed(futures.begin(), futures.end()).discard_result().get();
