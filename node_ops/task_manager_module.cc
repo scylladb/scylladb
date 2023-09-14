@@ -127,7 +127,7 @@ future<> join_token_ring_task_impl::run() {
 
     bool replacing_a_node_with_same_ip = false;
     bool replacing_a_node_with_diff_ip = false;
-    std::optional<service::storage_service::replacement_info> ri;
+    std::optional<service::replacement_info> ri;
     std::optional<gms::inet_address> replace_address;
     std::optional<locator::host_id> replaced_host_id;
     std::optional<service::raft_group0::replace_info> raft_replace_info;

@@ -3501,7 +3501,7 @@ future<> storage_service::remove_endpoint(inet_address endpoint, gms::permit_id 
     }
 }
 
-future<storage_service::replacement_info>
+future<replacement_info>
 storage_service::prepare_replacement_info(std::unordered_set<gms::inet_address> initial_contact_nodes, const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features) {
     locator::host_id replace_host_id;
     gms::inet_address replace_address;
