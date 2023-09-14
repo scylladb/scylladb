@@ -168,7 +168,9 @@ future<std::vector<mutation>> batch_statement::get_mutations(query_processor& qp
         statement->inc_cql_stats(query_state.get_client_state().is_internal());
         auto&& statement_options = options.for_statement(i);
         auto timestamp = _attrs->get_timestamp(now, statement_options);
-        auto more = co_await statement->get_mutations(qp, statement_options, timeout, local, timestamp, query_state);
+        modification_statement::json_cache_opt json_cache = statement->maybe_prepare_json_cache(statement_options);
+        std::vector<dht::partition_range> keys = statement->build_partition_keys(statement_options, json_cache);
+        auto more = co_await statement->get_mutations(qp, statement_options, timeout, local, timestamp, query_state, json_cache, std::move(keys));
 
         for (auto&& m : more) {
             // We want unordered_set::try_emplace(), but we don't have it

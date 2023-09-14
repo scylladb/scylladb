@@ -114,10 +114,8 @@ future<> modification_statement::check_access(query_processor& qp, const service
 }
 
 future<std::vector<mutation>>
-modification_statement::get_mutations(query_processor& qp, const query_options& options, db::timeout_clock::time_point timeout, bool local, int64_t now, service::query_state& qs) const {
+modification_statement::get_mutations(query_processor& qp, const query_options& options, db::timeout_clock::time_point timeout, bool local, int64_t now, service::query_state& qs, json_cache_opt& json_cache, std::vector<dht::partition_range> keys) const {
     auto cl = options.get_consistency();
-    auto json_cache = maybe_prepare_json_cache(options);
-    auto keys = build_partition_keys(options, json_cache);
     auto ranges = create_clustering_ranges(options, json_cache);
     auto f = make_ready_future<update_parameters::prefetch_data>(s);
 
@@ -272,24 +270,44 @@ modification_statement::do_execute(query_processor& qp, service::query_state& qs
     _restrictions->validate_primary_key(options);
 
     if (has_conditions()) {
-        return execute_with_condition(qp, qs, options);
+        co_return co_await execute_with_condition(qp, qs, options);
     }
 
-    return execute_without_condition(qp, qs, options).then([] (coordinator_result<> res) {
-        if (!res) {
-            return make_ready_future<::shared_ptr<cql_transport::messages::result_message>>(
-                    seastar::make_shared<cql_transport::messages::result_message::exception>(std::move(res).assume_error()));
+    json_cache_opt json_cache = maybe_prepare_json_cache(options);
+    std::vector<dht::partition_range> keys = build_partition_keys(options, json_cache);
+
+    bool keys_size_one = keys.size() == 1;
+    auto token = dht::token();
+    if (keys_size_one) {
+        token = keys[0].start()->value().token();
+    } 
+
+    auto res = co_await execute_without_condition(qp, qs, options, json_cache, std::move(keys));
+    
+    if (!res) {
+        co_return seastar::make_shared<cql_transport::messages::result_message::exception>(std::move(res).assume_error());
+    }
+
+    auto result = seastar::make_shared<cql_transport::messages::result_message::void_message>();
+    if (keys_size_one) {
+        auto&& table = s->table();
+        if (_may_use_token_aware_routing && table.uses_tablets()) {
+            auto erm = table.get_effective_replication_map();
+            auto tablet_info = erm->check_locality(token);
+            if (tablet_info.has_value()) {
+                result->add_tablet_info(tablet_info->tablet_replicas, tablet_info->token_range);
+            }
         }
-        return make_ready_future<::shared_ptr<cql_transport::messages::result_message>>(
-                ::shared_ptr<cql_transport::messages::result_message>{});
-    });
+    }
+
+    co_return std::move(result);
 }
 
 future<coordinator_result<>>
-modification_statement::execute_without_condition(query_processor& qp, service::query_state& qs, const query_options& options) const {
+modification_statement::execute_without_condition(query_processor& qp, service::query_state& qs, const query_options& options, json_cache_opt& json_cache, std::vector<dht::partition_range> keys) const {
     auto cl = options.get_consistency();
     auto timeout = db::timeout_clock::now() + get_timeout(qs.get_client_state(), options);
-    return get_mutations(qp, options, timeout, false, options.get_timestamp(qs), qs).then([this, cl, timeout, &qp, &qs] (auto mutations) {
+    return get_mutations(qp, options, timeout, false, options.get_timestamp(qs), qs, json_cache, std::move(keys)).then([this, cl, timeout, &qp, &qs] (auto mutations) {
         if (mutations.empty()) {
             return make_ready_future<coordinator_result<>>(bo::success());
         }
@@ -328,17 +346,29 @@ modification_statement::execute_with_condition(query_processor& qp, service::que
     // modification in the list of CAS commands, since we're handling single-statement execution.
     request->add_row_update(*this, std::move(ranges), std::move(json_cache), options);
 
-    auto shard = service::storage_proxy::cas_shard(*s, request->key()[0].start()->value().as_decorated_key().token());
+    auto token = request->key()[0].start()->value().as_decorated_key().token();
+
+    auto shard = service::storage_proxy::cas_shard(*s, token);
     if (shard != this_shard_id()) {
         return make_ready_future<shared_ptr<cql_transport::messages::result_message>>(
                 qp.bounce_to_shard(shard, std::move(const_cast<cql3::query_options&>(options).take_cached_pk_function_calls()))
             );
     }
 
+    std::optional<locator::tablet_routing_info> tablet_info = locator::tablet_routing_info{locator::tablet_replica_set(), std::pair<dht::token, dht::token>()};
+
+    auto&& table = s->table();
+    if (_may_use_token_aware_routing && table.uses_tablets()) {
+        auto erm = table.get_effective_replication_map();
+        tablet_info = erm->check_locality(token);
+    }
+
     return qp.proxy().cas(s, request, request->read_command(qp), request->key(),
             {read_timeout, qs.get_permit(), qs.get_client_state(), qs.get_trace_state()},
-            cl_for_paxos, cl_for_learn, statement_timeout, cas_timeout).then([this, request] (bool is_applied) {
-        return request->build_cas_result_set(_metadata, _columns_of_cas_result_set, is_applied);
+            cl_for_paxos, cl_for_learn, statement_timeout, cas_timeout).then([this, request, tablet_replicas = std::move(tablet_info->tablet_replicas), token_range = tablet_info->token_range] (bool is_applied) {
+        auto result = request->build_cas_result_set(_metadata, _columns_of_cas_result_set, is_applied);
+        result->add_tablet_info(tablet_replicas, token_range);
+        return result;
     });
 }
 
@@ -509,6 +539,7 @@ modification_statement::prepare(data_dictionary::database db, prepare_context& c
     if (!prepared_stmt->has_conditions() && prepared_stmt->_restrictions.has_value()) {
         ctx.clear_pk_function_calls_cache();
     }
+    prepared_stmt->_may_use_token_aware_routing = ctx.get_partition_key_bind_indexes(*schema).size() != 0;
     return prepared_stmt;
 }
 
