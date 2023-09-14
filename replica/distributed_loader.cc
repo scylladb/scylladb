@@ -331,7 +331,7 @@ public:
         });
 
         co_await populate_subdir(sstables::sstable_state::staging, allow_offstrategy_compaction::no);
-        co_await populate_subdir(sstables::sstable_state::quarantine, allow_offstrategy_compaction::no, must_exist::no);
+        co_await populate_subdir(sstables::sstable_state::quarantine, allow_offstrategy_compaction::no);
         co_await populate_subdir(sstables::sstable_state::normal, allow_offstrategy_compaction::yes);
 
         co_await smp::invoke_on_all([this] {
@@ -353,8 +353,7 @@ private:
     }
 
     using allow_offstrategy_compaction = bool_class<struct allow_offstrategy_compaction_tag>;
-    using must_exist = bool_class<struct must_exist_tag>;
-    future<> populate_subdir(sstables::sstable_state state, allow_offstrategy_compaction, must_exist = must_exist::yes);
+    future<> populate_subdir(sstables::sstable_state state, allow_offstrategy_compaction);
 
     future<> start_subdir(sstables::sstable_state state);
 };
@@ -362,6 +361,9 @@ private:
 future<> table_populator::start_subdir(sstables::sstable_state state) {
     sstring sstdir = get_path(state).native();
     if (!co_await file_exists(sstdir)) {
+        if (state != sstables::sstable_state::quarantine) {
+            throw std::runtime_error(format("Populating {}/{} failed: {} does not exist", _ks, _cf, sstdir));
+        }
         co_return;
     }
 
@@ -408,14 +410,11 @@ sstables::shared_sstable make_sstable(replica::table& table, sstables::sstable_s
     return table.get_sstables_manager().make_sstable(table.schema(), table.dir(), table.get_storage_options(), generation, state, v, sstables::sstable_format_types::big);
 }
 
-future<> table_populator::populate_subdir(sstables::sstable_state state, allow_offstrategy_compaction do_allow_offstrategy_compaction, must_exist dir_must_exist) {
+future<> table_populator::populate_subdir(sstables::sstable_state state, allow_offstrategy_compaction do_allow_offstrategy_compaction) {
     auto sstdir = get_path(state);
-    dblog.debug("Populating {}/{}/{} allow_offstrategy_compaction={} must_exist={}", _ks, _cf, sstdir, do_allow_offstrategy_compaction, dir_must_exist);
+    dblog.debug("Populating {}/{}/{} allow_offstrategy_compaction={}", _ks, _cf, sstdir, do_allow_offstrategy_compaction);
 
     if (!_sstable_directories.contains(state)) {
-        if (dir_must_exist) {
-            throw std::runtime_error(format("Populating {}/{} failed: {} does not exist", _ks, _cf, sstdir));
-        }
         co_return;
     }
 
