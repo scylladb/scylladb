@@ -1312,6 +1312,18 @@ schema_ptr schema_builder::build() {
     for (const auto& c: static_configurators()) {
         c(new_raw._ks_name, new_raw._cf_name, static_props);
     }
+    if (static_props.use_schema_commitlog) {
+        if (!static_props.use_null_sharder) {
+            on_internal_error(dblog,
+                format("{}.{} uses schema commitlog, but not null sharder, "
+                       "schema commitlog works only on shard 0", ks_name(), cf_name()));
+        }
+        if (static_props.wait_for_sync_to_commitlog) {
+            on_internal_error(dblog,
+                format("{}.{} uses schema commitlog, wait_for_sync_to_commitlog is redundant",
+                        ks_name(), cf_name()));
+        }
+    }
 
     if (_version) {
         new_raw._version = *_version;

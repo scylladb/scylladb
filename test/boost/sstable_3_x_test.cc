@@ -3017,8 +3017,8 @@ static flat_mutation_reader_v2 compacted_sstable_reader(test_env& env, schema_pt
     auto cm = make_lw_shared<compaction_manager_for_testing>(false);
     auto cl_stats = make_lw_shared<cell_locker_stats>();
     auto tracker = make_lw_shared<cache_tracker>();
-    auto cf = make_lw_shared<replica::column_family>(s, env.make_table_config(), make_lw_shared<replica::storage_options>(), replica::column_family::no_commitlog(), **cm, env.manager(), *cl_stats, *tracker, nullptr);
-    cf->mark_ready_for_writes();
+    auto cf = make_lw_shared<replica::column_family>(s, env.make_table_config(), make_lw_shared<replica::storage_options>(), **cm, env.manager(), *cl_stats, *tracker, nullptr);
+    cf->mark_ready_for_writes(nullptr);
     lw_shared_ptr<replica::memtable> mt = make_lw_shared<replica::memtable>(s);
 
     auto sstables = open_sstables(env, s, format("test/resource/sstables/3.x/uncompressed/{}", table_name), generations);
@@ -5168,7 +5168,6 @@ static void test_sstable_write_large_row_f(schema_ptr s, reader_permit permit, r
     large_row_handler handler(threshold, std::numeric_limits<uint64_t>::max(), std::numeric_limits<uint64_t>::max(), std::numeric_limits<uint64_t>::max(), f);
 
     sstables::test_env::do_with_async([&] (auto& env) {
-        env.db_config().host_id = locator::host_id::create_random_id();
         auto sst = env.make_sstable(s, version);
 
         // The test provides thresholds values for the large row handler. Whether the handler gets
@@ -5223,7 +5222,6 @@ static void test_sstable_write_large_cell_f(schema_ptr s, reader_permit permit, 
     large_row_handler handler(std::numeric_limits<uint64_t>::max(), std::numeric_limits<uint64_t>::max(), threshold, std::numeric_limits<uint64_t>::max(), f);
 
     sstables::test_env::do_with_async([&] (auto& env) {
-        env.db_config().host_id = locator::host_id::create_random_id();
         auto sst = env.make_sstable(s, version);
 
         // The test provides thresholds values for the large row handler. Whether the handler gets
@@ -5282,7 +5280,6 @@ static void test_sstable_log_too_many_rows_f(int rows, uint64_t threshold, bool 
     large_row_handler handler(std::numeric_limits<uint64_t>::max(), threshold, std::numeric_limits<uint64_t>::max(), std::numeric_limits<uint64_t>::max(), f);
 
     sstables::test_env::do_with_async([&] (auto& env) {
-        env.db_config().host_id = locator::host_id::create_random_id();
         auto sst = env.make_sstable(sc, version);
         sst->write_components(mt->make_flat_reader(sc, semaphore.make_permit()), 1, sc, env.manager().configure_writer("test"), encoding_stats{}).get();
 
@@ -5334,7 +5331,6 @@ static void test_sstable_too_many_collection_elements_f(int elements, uint64_t t
     large_row_handler handler(std::numeric_limits<uint64_t>::max(), std::numeric_limits<uint64_t>::max(), std::numeric_limits<uint64_t>::max(), threshold, f);
 
     sstables::test_env::do_with_async([&] (auto& env) {
-        env.db_config().host_id = locator::host_id::create_random_id();
         auto sst = env.make_sstable(sc, version);
         sst->write_components(mt->make_flat_reader(sc, semaphore.make_permit()), 1, sc, env.manager().configure_writer("test"), encoding_stats{}).get();
 

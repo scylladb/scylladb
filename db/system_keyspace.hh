@@ -126,8 +126,6 @@ class system_keyspace : public seastar::peering_sharded_service<system_keyspace>
     static schema_ptr large_cells();
     static schema_ptr scylla_local();
     future<> force_blocking_flush(sstring cfname);
-    future<> build_bootstrap_info();
-    future<> cache_truncation_record();
     template <typename Value>
     future<> update_cached_values(gms::inet_address ep, sstring column_name, Value value);
 public:
@@ -249,7 +247,8 @@ public:
 
     static table_schema_version generate_schema_version(table_id table_id, uint16_t offset = 0);
 
-    future<> setup(sharded<netw::messaging_service>& ms);
+    future<> build_bootstrap_info();
+    future<> cache_truncation_record();
     future<> update_schema_version(table_schema_version version);
 
     /*
@@ -270,12 +269,18 @@ public:
 
     future<> remove_endpoint(gms::inet_address ep);
 
-    future<> set_scylla_local_param(const sstring& key, const sstring& value);
+    // Saves the key-value pair into system.scylla_local table.
+    // Pass visible_before_cl_replay = true iff the data should be available before
+    // schema commitlog replay. We do table.flush in this case, so it's rather slow and heavyweight.
+    future<> set_scylla_local_param(const sstring& key, const sstring& value, bool visible_before_cl_replay);
     future<std::optional<sstring>> get_scylla_local_param(const sstring& key);
 
 private:
+    // Saves the key-value pair into system.scylla_local table.
+    // Pass visible_before_cl_replay = true iff the data should be available before
+    // schema commitlog replay. We do table.flush in this case, so it's rather slow and heavyweight.
     template <typename T>
-    future<> set_scylla_local_param_as(const sstring& key, const T& value);
+    future<> set_scylla_local_param_as(const sstring& key, const T& value, bool visible_before_cl_replay);
     template <typename T>
     future<std::optional<T>> get_scylla_local_param_as(const sstring& key);
 
@@ -283,16 +288,9 @@ public:
     static std::vector<schema_ptr> all_tables(const db::config& cfg);
     future<> make(
             locator::effective_replication_map_factory&,
-            replica::database&,
-            db::config&,
-            system_table_load_phase phase);
+            replica::database&);
 
-    future<> initialize_virtual_tables(
-                         distributed<replica::database>&,
-                         distributed<service::storage_service>&,
-                         sharded<gms::gossiper>&,
-                         sharded<service::raft_group_registry>&,
-                         db::config&);
+    void mark_writable();
 
 
     /// overloads
@@ -391,7 +389,14 @@ public:
 
     future<std::unordered_map<gms::inet_address, sstring>> load_peer_features();
     future<std::set<sstring>> load_local_enabled_features();
-    future<> save_local_enabled_features(std::set<sstring> features);
+    // This function stores the features in the system.scylla_local table.
+    // We pass visible_before_cl_replay=true iff the features should be available before
+    // schema commitlog replay. We do table.flush in this case, so it's rather slow and heavyweight.
+    // Features over RAFT are migrated to system.topology table, but
+    // we still call this function in that case with visible_before_cl_replay=false
+    // for backward compatibility, since some client applications
+    // may depend on it.
+    future<> save_local_enabled_features(std::set<sstring> features, bool visible_before_cl_replay);
 
     future<int> increment_and_get_generation();
     bool bootstrap_needed() const;

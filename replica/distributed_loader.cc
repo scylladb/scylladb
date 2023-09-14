@@ -334,9 +334,13 @@ public:
         co_await populate_subdir(sstables::sstable_state::quarantine, allow_offstrategy_compaction::no, must_exist::no);
         co_await populate_subdir(sstables::sstable_state::normal, allow_offstrategy_compaction::yes);
 
-        co_await smp::invoke_on_all([this] {
-            _global_table->mark_ready_for_writes();
-        });
+        // system tables are made writable through sys_ks::mark_writable
+        if (!is_system_keyspace(_ks)) {
+            co_await smp::invoke_on_all([this] {
+                auto s = _global_table->schema();
+                _db.local().find_column_family(s).mark_ready_for_writes(_db.local().commitlog_for(s));
+            });
+        }
     }
 
     future<> stop() {
@@ -475,15 +479,6 @@ future<> distributed_loader::populate_keyspace(distributed<replica::database>& d
         auto uuid = s->id();
         lw_shared_ptr<replica::column_family> cf = tables_metadata.get_table(uuid).shared_from_this();
 
-        // System tables (from system and system_schema keyspaces) are loaded in two phases.
-        // The populate_keyspace function can be called in the second phase for tables that
-        // were already populated in the first phase.
-        // This check protects from double-populating them, since every populated cf
-        // is marked as ready_for_writes.
-        if (cf->is_ready_for_writes()) {
-            co_return;
-        }
-
         sstring cfname = cf->schema()->cf_name();
         dblog.info("Keyspace {}: Reading CF {} id={} version={} storage={}", ks_name, cfname, uuid, s->version(), cf->get_storage_options().type_string());
 
@@ -518,20 +513,18 @@ future<> distributed_loader::populate_keyspace(distributed<replica::database>& d
     });
 }
 
-future<> distributed_loader::init_system_keyspace(sharded<db::system_keyspace>& sys_ks, distributed<locator::effective_replication_map_factory>& erm_factory, distributed<replica::database>& db, db::config& cfg, system_table_load_phase phase) {
+future<> distributed_loader::init_system_keyspace(sharded<db::system_keyspace>& sys_ks, distributed<locator::effective_replication_map_factory>& erm_factory, distributed<replica::database>& db) {
     population_started = true;
 
-    return seastar::async([&sys_ks, &erm_factory, &db, &cfg, phase] {
-        sys_ks.invoke_on_all([&erm_factory, &db, &cfg, phase] (auto& sys_ks) {
-            return sys_ks.make(erm_factory.local(), db.local(), cfg, phase);
+    return seastar::async([&sys_ks, &erm_factory, &db] {
+        sys_ks.invoke_on_all([&erm_factory, &db] (auto& sys_ks) {
+            return sys_ks.make(erm_factory.local(), db.local());
         }).get();
 
         const auto& cfg = db.local().get_config();
         for (auto& data_dir : cfg.data_file_directories()) {
             for (auto ksname : system_keyspaces) {
-                if (db.local().has_keyspace(ksname)) {
-                    distributed_loader::populate_keyspace(db, data_dir, sstring(ksname)).get();
-                }
+                distributed_loader::populate_keyspace(db, data_dir, sstring(ksname)).get();
             }
         }
     });

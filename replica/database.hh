@@ -394,7 +394,6 @@ public:
         unsigned x_log2_compaction_groups{0};
         utils::updateable_value<bool> enable_compacting_data_for_streaming_and_repair;
     };
-    struct no_commitlog {};
 
     struct snapshot_details {
         int64_t total;
@@ -445,6 +444,12 @@ private:
 
     // Provided by the database that owns this commitlog
     db::commitlog* _commitlog;
+    // The table is constructed in readonly mode - this flag is true after the constructor finishes.
+    // This allows to read the table on the early stages of the node boot process,
+    // when the commitlog is not yet initialized.
+    // The flag is set to false in mark_ready_for_writes function, which
+    // is called when the commitlog is created and the table is ready to accept writes.
+    bool _readonly;
     bool _durable_writes;
     sstables::sstables_manager& _sstables_manager;
     secondary_index::secondary_index_manager _index_manager;
@@ -655,13 +660,7 @@ public:
     // to a db in memory only, and if anybody is about to write to a CF, that was most
     // likely already called. We need to call this explicitly when we are sure we're ready
     // to issue disk operations safely.
-    void mark_ready_for_writes() {
-        update_sstables_known_generation(sstables::generation_from_value(0));
-    }
-
-    bool is_ready_for_writes() const {
-        return _sstable_generation_generator.has_value();
-    }
+    void mark_ready_for_writes(db::commitlog* cl);
 
     // Creates a mutation reader which covers all data sources for this column family.
     // Caller needs to ensure that column_family remains live (FIXME: relax this).
@@ -777,18 +776,14 @@ public:
     future<std::vector<locked_cell>> lock_counter_cells(const mutation& m, db::timeout_clock::time_point timeout);
 
     logalloc::occupancy_stats occupancy() const;
-private:
-    table(schema_ptr schema, config cfg, lw_shared_ptr<const storage_options>, db::commitlog* cl, compaction_manager&, sstables::sstables_manager&, cell_locker_stats& cl_stats, cache_tracker& row_cache_tracker, locator::effective_replication_map_ptr erm);
 public:
-    table(schema_ptr schema, config cfg, lw_shared_ptr<const storage_options> sopts, db::commitlog& cl, compaction_manager& cm, sstables::sstables_manager& sm, cell_locker_stats& cl_stats, cache_tracker& row_cache_tracker, locator::effective_replication_map_ptr erm)
-        : table(schema, std::move(cfg), std::move(sopts), &cl, cm, sm, cl_stats, row_cache_tracker, std::move(erm)) {}
-    table(schema_ptr schema, config cfg, lw_shared_ptr<const storage_options> sopts, no_commitlog, compaction_manager& cm, sstables::sstables_manager& sm, cell_locker_stats& cl_stats, cache_tracker& row_cache_tracker, locator::effective_replication_map_ptr erm)
-        : table(schema, std::move(cfg), std::move(sopts), nullptr, cm, sm, cl_stats, row_cache_tracker, std::move(erm)) {}
+    table(schema_ptr schema, config cfg, lw_shared_ptr<const storage_options> sopts, compaction_manager& cm, sstables::sstables_manager& sm, cell_locker_stats& cl_stats, cache_tracker& row_cache_tracker, locator::effective_replication_map_ptr erm);
+
     table(column_family&&) = delete; // 'this' is being captured during construction
     ~table();
     const schema_ptr& schema() const { return _schema; }
     void set_schema(schema_ptr);
-    db::commitlog* commitlog() { return _commitlog; }
+    db::commitlog* commitlog() const;
     const locator::effective_replication_map_ptr& get_effective_replication_map() const { return _erm; }
     void update_effective_replication_map(locator::effective_replication_map_ptr);
     [[gnu::always_inline]] bool uses_tablets() const;
@@ -1419,7 +1414,7 @@ private:
     bool _enable_incremental_backups = false;
     bool _shutdown = false;
     bool _enable_autocompaction_toggle = false;
-    bool _uses_schema_commitlog = false;
+    std::optional<bool> _uses_schema_commitlog;
     query::querier_cache _querier_cache;
 
     std::unique_ptr<db::large_data_handler> _large_data_handler;
@@ -1450,6 +1445,7 @@ private:
 
 public:
     data_dictionary::database as_data_dictionary() const;
+    db::commitlog* commitlog_for(const schema_ptr& schema);
     std::shared_ptr<data_dictionary::user_types_storage> as_user_types_storage() const noexcept;
     const data_dictionary::user_types_storage& user_types() const noexcept;
     future<> init_commitlog();
@@ -1576,7 +1572,7 @@ public:
             schema_ptr table, bool write_in_user_memory, locator::effective_replication_map_factory&);
 
     void maybe_init_schema_commitlog();
-    future<> add_column_family_and_make_directory(schema_ptr schema);
+    future<> add_column_family_and_make_directory(schema_ptr schema, bool readonly);
 
     /* throws no_such_column_family if missing */
     table_id find_uuid(std::string_view ks, std::string_view cf) const;
@@ -1744,7 +1740,7 @@ public:
 public:
     bool update_column_family(schema_ptr s);
 private:
-    future<> add_column_family(keyspace& ks, schema_ptr schema, column_family::config cfg);
+    future<> add_column_family(keyspace& ks, schema_ptr schema, column_family::config cfg, bool readonly);
     future<> detach_column_family(table& cf);
 
     struct table_truncate_state;
@@ -1805,9 +1801,7 @@ public:
         return _sst_dir_semaphore;
     }
 
-    bool uses_schema_commitlog() const {
-        return _uses_schema_commitlog;
-    }
+    bool uses_schema_commitlog() const;
 
     bool is_user_semaphore(const reader_concurrency_semaphore& semaphore) const;
 };

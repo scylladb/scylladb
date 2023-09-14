@@ -33,6 +33,7 @@ class gossiper;
 class feature_service;
 
 struct feature_config {
+    bool use_raft_cluster_features = false;
 private:
     std::set<sstring> _disabled_features;
     feature_config();
@@ -66,6 +67,8 @@ class feature_service final : public peering_sharded_service<feature_service> {
     std::unordered_map<sstring, std::reference_wrapper<feature>> _registered_features;
 
     feature_config _config;
+
+    future<> enable_features_on_startup(db::system_keyspace&);
 public:
     explicit feature_service(feature_config cfg);
     ~feature_service() = default;
@@ -138,8 +141,8 @@ public:
     const std::unordered_map<sstring, std::reference_wrapper<feature>>& registered_features() const;
 
     static std::set<sstring> to_feature_set(sstring features_string);
-    future<> enable_features_on_startup(db::system_keyspace&, bool use_raft_cluster_features);
     future<> enable_features_on_join(gossiper&, db::system_keyspace&);
+    future<> on_system_tables_loaded(db::system_keyspace& sys_ks);
 
     // Performs the feature check.
     // Throws an unsupported_feature_exception if there is a feature either

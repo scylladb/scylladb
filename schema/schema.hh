@@ -553,26 +553,14 @@ public:
     }
 };
 
-// To break some cyclic data dependencies in the early stages of a node boot process,
-// the system tables are loaded in two phases. This allows to use the tables
-// from the first phase to load the tables from the second phase.
-// For example, we need system.scylla_local table to load raft tables, since it
-// stores the enabled features, and SCHEMA_COMMITLOG feature is used to choose
-// what commitlog (regular or schema) will be used for raft tables.
-enum class system_table_load_phase {
-    phase1,
-    phase2
-};
-constexpr system_table_load_phase all_system_table_load_phases[] = {
-    system_table_load_phase::phase1,
-    system_table_load_phase::phase2
-};
-
 struct schema_static_props {
     bool use_null_sharder = false; // use a sharder that puts everything on shard 0
     bool wait_for_sync_to_commitlog = false; // true if all writes using this schema have to be synced immediately by commitlog
     bool use_schema_commitlog = false;
-    system_table_load_phase load_phase = system_table_load_phase::phase1;
+    void enable_schema_commitlog() {
+        use_schema_commitlog = true;
+        use_null_sharder = true; // schema commitlog lives only on the null shard
+    }
 };
 
 /*

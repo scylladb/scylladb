@@ -1642,7 +1642,7 @@ void compaction_group::clear_sstables() {
     _maintenance_sstables = _t.make_maintenance_sstable_set();
 }
 
-table::table(schema_ptr schema, config config, lw_shared_ptr<const storage_options> sopts, db::commitlog* cl, compaction_manager& compaction_manager,
+table::table(schema_ptr schema, config config, lw_shared_ptr<const storage_options> sopts, compaction_manager& compaction_manager,
         sstables::sstables_manager& sst_manager, cell_locker_stats& cl_stats, cache_tracker& row_cache_tracker,
         locator::effective_replication_map_ptr erm)
     : _schema(std::move(schema))
@@ -1659,7 +1659,8 @@ table::table(schema_ptr schema, config config, lw_shared_ptr<const storage_optio
     , _compaction_groups(_cg_manager->make_compaction_groups())
     , _sstables(make_compound_sstable_set())
     , _cache(_schema, sstables_as_snapshot_source(), row_cache_tracker, is_continuous::yes)
-    , _commitlog(cl)
+    , _commitlog(nullptr)
+    , _readonly(true)
     , _durable_writes(true)
     , _sstables_manager(sst_manager)
     , _index_manager(this->as_data_dictionary())
@@ -2038,6 +2039,24 @@ future<db::replay_position> table::discard_sstables(db_clock::time_point truncat
         erase_sstable_cleanup_state(r.sst);
     });
     co_return p->rp;
+}
+
+void table::mark_ready_for_writes(db::commitlog* cl) {
+    if (!_readonly) {
+        on_internal_error(dblog, ::format("table {}.{} is already writable", _schema->ks_name(), _schema->cf_name()));
+    }
+    update_sstables_known_generation(sstables::generation_from_value(0));
+    if (_config.enable_commitlog) {
+        _commitlog = cl;
+    }
+    _readonly = false;
+}
+
+db::commitlog* table::commitlog() const {
+    if (_readonly) [[unlikely]] {
+        on_internal_error(dblog, ::format("table {}.{} is readonly", _schema->ks_name(), _schema->cf_name()));
+    }
+    return _commitlog;
 }
 
 void table::set_schema(schema_ptr s) {

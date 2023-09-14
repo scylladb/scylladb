@@ -99,9 +99,13 @@ private:
     reader_concurrency_semaphore _sstable_metadata_concurrency_sem;
     directory_semaphore& _dir_semaphore;
     seastar::shared_ptr<db::system_keyspace> _sys_ks;
+    // This function is bound to token_metadata.get_my_id() in the database constructor,
+    // it can return unset value (bool(host_id) == false) until host_id is loaded
+    // after system_keyspace initialization.
+    noncopyable_function<locator::host_id()> _resolve_host_id;
 
 public:
-    explicit sstables_manager(db::large_data_handler& large_data_handler, const db::config& dbcfg, gms::feature_service& feat, cache_tracker&, size_t available_memory, directory_semaphore& dir_sem, storage_manager* shared = nullptr);
+    explicit sstables_manager(db::large_data_handler& large_data_handler, const db::config& dbcfg, gms::feature_service& feat, cache_tracker&, size_t available_memory, directory_semaphore& dir_sem, noncopyable_function<locator::host_id()>&& resolve_host_id, storage_manager* shared = nullptr);
     virtual ~sstables_manager();
 
     shared_sstable make_sstable(schema_ptr schema, sstring table_dir,
@@ -127,7 +131,7 @@ public:
     void set_format(sstable_version_types format) noexcept { _format = format; }
     sstables::sstable::version_types get_highest_supported_format() const noexcept { return _format; }
 
-    const locator::host_id& get_local_host_id() const;
+    locator::host_id get_local_host_id() const;
 
     reader_concurrency_semaphore& sstable_metadata_concurrency_sem() noexcept { return _sstable_metadata_concurrency_sem; }
 

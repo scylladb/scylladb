@@ -6382,7 +6382,7 @@ future<db::hints::sync_point> storage_proxy::create_hint_sync_point(const std::v
     db::hints::sync_point spoint;
     spoint.regular_per_shard_rps.resize(smp::count);
     spoint.mv_per_shard_rps.resize(smp::count);
-    spoint.host_id = _db.local().get_config().host_id;
+    spoint.host_id = get_token_metadata_ptr()->get_my_id();
     co_await coroutine::parallel_for_each(boost::irange<unsigned>(0, smp::count), [this, &target_hosts, &spoint] (unsigned shard) -> future<> {
         const auto& sharded_sp = container();
         // sharded::invoke_on does not have a const-method version, so we cannot use it here
@@ -6399,7 +6399,7 @@ future<db::hints::sync_point> storage_proxy::create_hint_sync_point(const std::v
 }
 
 future<> storage_proxy::wait_for_hint_sync_point(const db::hints::sync_point spoint, clock_type::time_point deadline) {
-    const auto my_host_id = _db.local().get_config().host_id;
+    const auto my_host_id = get_token_metadata_ptr()->get_my_id();
     if (spoint.host_id != my_host_id) {
         throw std::runtime_error(format("The hint sync point was created on another node, with host ID {}. This node's host ID is {}",
                 spoint.host_id, my_host_id));

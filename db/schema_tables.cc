@@ -88,15 +88,9 @@ static logging::logger diff_logger("schema_diff");
 /** system.schema_* tables used to store keyspace/table/type attributes prior to C* 3.0 */
 namespace db {
 namespace {
-    const auto set_null_sharder = schema_builder::register_static_configurator([](const sstring& ks_name, const sstring& cf_name, schema_static_props& props) {
-        if (ks_name == schema_tables::NAME) {
-            props.use_null_sharder = true;
-        }
-    });
     const auto set_use_schema_commitlog = schema_builder::register_static_configurator([](const sstring& ks_name, const sstring& cf_name, schema_static_props& props) {
         if (ks_name == schema_tables::NAME) {
-            props.use_schema_commitlog = true;
-            props.load_phase = system_table_load_phase::phase2;
+            props.enable_schema_commitlog();
         }
     });
 }
@@ -215,7 +209,7 @@ using namespace v3;
 
 using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
 
-future<> save_system_schema(cql3::query_processor& qp, const sstring & ksname) {
+static future<> save_system_schema_to_keyspace(cql3::query_processor& qp, const sstring & ksname) {
     auto ks = qp.db().find_keyspace(ksname);
     auto ksm = ks.metadata();
 
@@ -231,9 +225,10 @@ future<> save_system_schema(cql3::query_processor& qp, const sstring & ksname) {
     }
 }
 
-/** add entries to system_schema.* for the hardcoded system definitions */
-future<> save_system_keyspace_schema(cql3::query_processor& qp) {
-    return save_system_schema(qp, NAME);
+future<> save_system_schema(cql3::query_processor& qp) {
+    co_await save_system_schema_to_keyspace(qp, schema_tables::NAME);
+    // #2514 - make sure "system" is written to system_schema.keyspaces.
+    co_await save_system_schema_to_keyspace(qp, system_keyspace::NAME);
 }
 
 namespace v3 {
@@ -1531,22 +1526,19 @@ static future<> merge_tables_and_views(distributed<service::storage_proxy>& prox
         // In order to avoid possible races we first create the tables and only then the views.
         // That way if a view seeks information about its base table it's guarantied to find it.
         co_await max_concurrent_for_each(tables_diff.created, max_concurrent, [&] (global_schema_ptr& gs) -> future<> {
-            co_await db.add_column_family_and_make_directory(gs);
+            co_await db.add_column_family_and_make_directory(gs, false);
         });
         co_await max_concurrent_for_each(views_diff.created, max_concurrent, [&] (global_schema_ptr& gs) -> future<> {
-            co_await db.add_column_family_and_make_directory(gs);
+            co_await db.add_column_family_and_make_directory(gs, false);
         });
-        for (auto&& gs : boost::range::join(tables_diff.created, views_diff.created)) {
-            db.find_column_family(gs).mark_ready_for_writes();
-            co_await coroutine::maybe_yield();
-        }
+    });
+    co_await db.invoke_on_all([&](replica::database& db) -> future<> {
         std::vector<bool> columns_changed;
         columns_changed.reserve(tables_diff.altered.size() + views_diff.altered.size());
         for (auto&& altered : boost::range::join(tables_diff.altered, views_diff.altered)) {
             columns_changed.push_back(db.update_column_family(altered.new_schema));
             co_await coroutine::maybe_yield();
         }
-
         auto it = columns_changed.begin();
         auto notify = [&] (auto& r, auto&& f) -> future<> {
             co_await max_concurrent_for_each(r, max_concurrent, std::move(f));

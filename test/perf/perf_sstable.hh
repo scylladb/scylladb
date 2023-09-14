@@ -228,7 +228,7 @@ public:
                 cell_locker_stats cl_stats;
                 tasks::task_manager tm;
                 auto cm = make_lw_shared<compaction_manager>(tm, compaction_manager::for_testing_tag{});
-                auto cf = make_lw_shared<replica::column_family>(s, env.make_table_config(), make_lw_shared<replica::storage_options>(), replica::column_family::no_commitlog(), *cm, env.manager(), cl_stats, tracker, nullptr);
+                auto cf = make_lw_shared<replica::column_family>(s, env.make_table_config(), make_lw_shared<replica::storage_options>(), *cm, env.manager(), cl_stats, tracker, nullptr);
 
                 auto start = perf_sstable_test_env::now();
 

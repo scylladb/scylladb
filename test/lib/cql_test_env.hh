@@ -92,6 +92,7 @@ public:
     std::set<sstring> disabled_features;
     std::optional<cql3::query_processor::memory_config> qp_mcfg;
     bool need_remote_proxy = false;
+    locator::host_id host_id;
 
     cql_test_config();
     cql_test_config(const cql_test_config&);

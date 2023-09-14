@@ -367,8 +367,8 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
               _cfg.compaction_rows_count_warning_threshold,
               _cfg.compaction_collection_elements_count_warning_threshold))
     , _nop_large_data_handler(std::make_unique<db::nop_large_data_handler>())
-    , _user_sstables_manager(std::make_unique<sstables::sstables_manager>(*_large_data_handler, _cfg, feat, _row_cache_tracker, dbcfg.available_memory, sst_dir_sem.local(), &sstm))
-    , _system_sstables_manager(std::make_unique<sstables::sstables_manager>(*_nop_large_data_handler, _cfg, feat, _row_cache_tracker, dbcfg.available_memory, sst_dir_sem.local()))
+    , _user_sstables_manager(std::make_unique<sstables::sstables_manager>(*_large_data_handler, _cfg, feat, _row_cache_tracker, dbcfg.available_memory, sst_dir_sem.local(), [&stm]{ return stm.get()->get_my_id(); }, &sstm))
+    , _system_sstables_manager(std::make_unique<sstables::sstables_manager>(*_nop_large_data_handler, _cfg, feat, _row_cache_tracker, dbcfg.available_memory, sst_dir_sem.local(), [&stm]{ return stm.get()->get_my_id(); }))
     , _result_memory_limiter(dbcfg.available_memory / 10)
     , _data_listeners(std::make_unique<db::data_listeners>())
     , _mnotifier(mn)
@@ -390,6 +390,11 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
     setup_scylla_memory_diagnostics_producer();
     if (_dbcfg.sstables_format) {
         set_format(*_dbcfg.sstables_format);
+    }
+
+    // Schema commitlog can only be initialized on the null shard.
+    if (this_shard_id() != 0) {
+        _uses_schema_commitlog = false;
     }
 }
 
@@ -832,7 +837,7 @@ future<> database::parse_system_tables(distributed<service::storage_proxy>& prox
     co_await do_parse_schema_tables(proxy, db::schema_tables::TABLES, coroutine::lambda([&] (schema_result_value_type &v) -> future<> {
         std::map<sstring, schema_ptr> tables = co_await create_tables_from_tables_partition(proxy, v.second);
         co_await coroutine::parallel_for_each(tables.begin(), tables.end(), [&] (auto& t) -> future<> {
-            co_await this->add_column_family_and_make_directory(t.second);
+            co_await this->add_column_family_and_make_directory(t.second, true);
             auto s = t.second;
             // Recreate missing column mapping entries in case
             // we failed to persist them for some reason after a schema change
@@ -850,7 +855,7 @@ future<> database::parse_system_tables(distributed<service::storage_proxy>& prox
             // we fix here the schema in place in oreder to avoid races (write commands comming from other coordinators).
             view_ptr fixed_v = maybe_fix_legacy_secondary_index_mv_schema(*this, v, nullptr, preserve_version::yes);
             view_ptr v_to_add = fixed_v ? fixed_v : v;
-            co_await this->add_column_family_and_make_directory(v_to_add);
+            co_await this->add_column_family_and_make_directory(v_to_add, true);
             if (bool(fixed_v)) {
                 v_to_add = fixed_v;
                 auto&& keyspace = find_keyspace(v->ks_name()).metadata();
@@ -947,6 +952,7 @@ void database::maybe_init_schema_commitlog() {
         _listeners.push_back(_feat.schema_commitlog.when_enabled([] {
             dblog.warn("All nodes can now switch to use the schema commit log. Restart is needed for this to take effect.");
         }));
+        _uses_schema_commitlog = false;
         return;
     }
 
@@ -997,10 +1003,16 @@ future<> database::create_local_system_table(
         cfg.memtable_scheduling_group = default_scheduling_group();
         cfg.memtable_to_cache_scheduling_group = default_scheduling_group();
     }
-    co_await add_column_family(ks, table, std::move(cfg));
+    co_await add_column_family(ks, table, std::move(cfg), true);
 }
 
-future<> database::add_column_family(keyspace& ks, schema_ptr schema, column_family::config cfg) {
+db::commitlog* database::commitlog_for(const schema_ptr& schema) {
+    return schema->static_props().use_schema_commitlog && uses_schema_commitlog()
+        ? _schema_commitlog.get()
+        : _commitlog.get();
+}
+
+future<> database::add_column_family(keyspace& ks, schema_ptr schema, column_family::config cfg, bool readonly) {
     schema = local_schema_registry().learn(schema);
     schema->registry_entry()->mark_synced();
     auto&& rs = ks.get_replication_strategy();
@@ -1012,16 +1024,12 @@ future<> database::add_column_family(keyspace& ks, schema_ptr schema, column_fam
     }
     // avoid self-reporting
     auto& sst_manager = is_system_table(*schema) ? get_system_sstables_manager() : get_user_sstables_manager();
-    lw_shared_ptr<column_family> cf;
-    if (cfg.enable_commitlog && _commitlog) {
-        db::commitlog& cl = schema->static_props().use_schema_commitlog && _uses_schema_commitlog
-                ? *_schema_commitlog
-                : *_commitlog;
-        cf = make_lw_shared<column_family>(schema, std::move(cfg), ks.metadata()->get_storage_options_ptr(), cl, _compaction_manager, sst_manager, *_cl_stats, _row_cache_tracker, erm);
-    } else {
-       cf = make_lw_shared<column_family>(schema, std::move(cfg), ks.metadata()->get_storage_options_ptr(), column_family::no_commitlog(), _compaction_manager, sst_manager, *_cl_stats, _row_cache_tracker, erm);
-    }
+    auto cf = make_lw_shared<column_family>(schema, std::move(cfg), ks.metadata()->get_storage_options_ptr(), _compaction_manager, sst_manager, *_cl_stats, _row_cache_tracker, erm);
     cf->set_durable_writes(ks.metadata()->durable_writes());
+
+    if (!readonly) {
+        cf->mark_ready_for_writes(commitlog_for(schema));
+    }
 
     auto uuid = schema->id();
     if (_tables_metadata.contains(uuid)) {
@@ -1062,9 +1070,9 @@ future<> database::add_column_family(keyspace& ks, schema_ptr schema, column_fam
     }
 }
 
-future<> database::add_column_family_and_make_directory(schema_ptr schema) {
+future<> database::add_column_family_and_make_directory(schema_ptr schema, bool readonly) {
     auto& ks = find_keyspace(schema->ks_name());
-    co_await add_column_family(ks, schema, ks.make_column_family_config(*schema, *this));
+    co_await add_column_family(ks, schema, ks.make_column_family_config(*schema, *this), readonly);
     auto& cf = find_column_family(schema);
     cf.get_index_manager().reload();
     co_await cf.init_storage();
@@ -1834,6 +1842,13 @@ future<reader_permit> database::obtain_reader_permit(schema_ptr schema, const ch
     return obtain_reader_permit(find_column_family(std::move(schema)), op_name, timeout, std::move(trace_ptr));
 }
 
+bool database::uses_schema_commitlog() const {
+    if (!_uses_schema_commitlog.has_value()) [[unlikely]] {
+        on_internal_error(dblog, format("schema commitlog is not initialized yet"));
+    }
+    return *_uses_schema_commitlog;
+}
+
 bool database::is_user_semaphore(const reader_concurrency_semaphore& semaphore) const {
     return &semaphore != &_streaming_concurrency_sem
         && &semaphore != &_compaction_concurrency_sem
@@ -1903,7 +1918,7 @@ future<mutation> database::do_apply_counter_update(column_family& cf, const froz
                 // ...now, that we got existing state of all affected counter
                 // cells we can look for our shard in each of them, increment
                 // its clock and apply the delta.
-                transform_counter_updates_to_shards(m, mopt ? &*mopt : nullptr, cf.failed_counter_applies_to_memtable(), _cfg.host_id);
+                transform_counter_updates_to_shards(m, mopt ? &*mopt : nullptr, cf.failed_counter_applies_to_memtable(), get_token_metadata().get_my_id());
                 tracing::trace(trace_state, "Applying counter update");
                 return this->apply_with_commitlog(cf, m, timeout);
             }).then([&m] {
