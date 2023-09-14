@@ -146,8 +146,8 @@ if have_gnutls:
     ar.reloc_add(gnutls_config_nolink, arcname='libreloc/gnutls.config')
     ar.reloc_add('conf')
 ar.reloc_add('dist', filter=filter_dist)
-pathlib.Path('build/SCYLLA-RELOCATABLE-FILE').touch()
-ar.reloc_add('build/SCYLLA-RELOCATABLE-FILE', arcname='SCYLLA-RELOCATABLE-FILE')
+with tempfile.NamedTemporaryFile('w') as relocatable_file:
+    ar.reloc_add(relocatable_file.name, arcname='SCYLLA-RELOCATABLE-FILE')
 ar.reloc_add('build/SCYLLA-RELEASE-FILE', arcname='SCYLLA-RELEASE-FILE')
 ar.reloc_add('build/SCYLLA-VERSION-FILE', arcname='SCYLLA-VERSION-FILE')
 ar.reloc_add('build/SCYLLA-PRODUCT-FILE', arcname='SCYLLA-PRODUCT-FILE')
