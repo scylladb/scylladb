@@ -1686,7 +1686,6 @@ def configure_seastar(build_dir, mode, mode_config):
         '-DSeastar_UNUSED_RESULT_ERROR=ON',
         '-DCMAKE_EXPORT_COMPILE_COMMANDS=ON',
         '-DSeastar_SCHEDULING_GROUPS_COUNT=16',
-        '-DSeastar_IO_URING=OFF', # io_uring backend is not stable enough
     ] + distro_extra_cmake_args
 
     if args.stack_guards is not None:
