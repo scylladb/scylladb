@@ -178,8 +178,38 @@ void client::authorize(http::request& req) {
     req._headers["Authorization"] = format("AWS4-HMAC-SHA256 Credential={}/{}/{}/s3/aws4_request,SignedHeaders={},Signature={}", _cfg->aws->key, time_point_st, _cfg->aws->region, signed_headers_list, sig);
 }
 
-future<> client::make_request(http::request req, http::experimental::client::reply_handler handle, http::reply::status_type expected) {
-    authorize(req);
+client::group_client::group_client(std::unique_ptr<http::experimental::connection_factory> f, unsigned max_conn)
+        : http(std::move(f), max_conn)
+{
+}
+
+void client::group_client::register_metrics(std::string class_name, std::string host) {
+    namespace sm = seastar::metrics;
+    auto ep_label = sm::label("endpoint")(host);
+    auto sg_label = sm::label("class")(class_name);
+    metrics.add_group("s3", {
+        sm::make_gauge("nr_connections", [this] { return http.connections_nr(); },
+                sm::description("Total number of connections"), {ep_label, sg_label}),
+        sm::make_gauge("nr_active_connections", [this] { return http.connections_nr() - http.idle_connections_nr(); },
+                sm::description("Total number of connections with running requests"), {ep_label, sg_label}),
+        sm::make_counter("total_new_connections", [this] { return http.total_new_connections_nr(); },
+                sm::description("Total number of new connections created so far"), {ep_label, sg_label}),
+        sm::make_counter("total_read_requests", [this] { return read_stats.ops; },
+                sm::description("Total number of object read requests"), {ep_label, sg_label}),
+        sm::make_counter("total_write_requests", [this] { return write_stats.ops; },
+                sm::description("Total number of object write requests"), {ep_label, sg_label}),
+        sm::make_counter("total_read_bytes", [this] { return read_stats.bytes; },
+                sm::description("Total number of bytes read from objects"), {ep_label, sg_label}),
+        sm::make_counter("total_write_bytes", [this] { return write_stats.bytes; },
+                sm::description("Total number of bytes written to objects"), {ep_label, sg_label}),
+        sm::make_counter("total_read_latency_sec", [this] { return read_stats.duration.count(); },
+                sm::description("Total time spent reading data from objects"), {ep_label, sg_label}),
+        sm::make_counter("total_write_latency_sec", [this] { return write_stats.duration.count(); },
+                sm::description("Total time spend writing data to objects"), {ep_label, sg_label}),
+    });
+}
+
+client::group_client& client::find_or_create_client() {
     auto sg = current_scheduling_group();
     auto it = _https.find(sg);
     if (it == _https.end()) [[unlikely]] {
@@ -192,8 +222,25 @@ future<> client::make_request(http::request req, http::experimental::client::rep
             std::forward_as_tuple(sg),
             std::forward_as_tuple(std::move(factory), max_connections)
         ).first;
+
+        it->second.register_metrics(sg.name(), _host);
     }
-    return it->second.make_request(std::move(req), std::move(handle), expected);
+    return it->second;
+}
+
+future<> client::make_request(http::request req, http::experimental::client::reply_handler handle, http::reply::status_type expected) {
+    authorize(req);
+    auto& gc = find_or_create_client();
+    return gc.http.make_request(std::move(req), std::move(handle), expected);
+}
+
+future<> client::make_request(http::request req, reply_handler_ext handle_ex, http::reply::status_type expected) {
+    authorize(req);
+    auto& gc = find_or_create_client();
+    auto handle = [&gc, handle = std::move(handle_ex)] (const http::reply& rep, input_stream<char>&& in) {
+        return handle(gc, rep, std::move(in));
+    };
+    return gc.http.make_request(std::move(req), std::move(handle), expected);
 }
 
 future<> client::get_object_header(sstring object_name, http::experimental::client::reply_handler handler) {
@@ -224,7 +271,7 @@ static std::time_t parse_http_last_modified_time(const sstring& object_name, sst
     return std::mktime(&tm);
 }
 
-future<client::stats> client::get_object_stats(sstring object_name) {
+future<stats> client::get_object_stats(sstring object_name) {
     struct stats st{};
     co_await get_object_header(object_name, [&] (const http::reply& rep, input_stream<char>&& in_) mutable -> future<> {
         st.size = rep.content_length;
@@ -334,7 +381,7 @@ future<temporary_buffer<char>> client::get_object_contiguous(sstring object_name
 
     size_t off = 0;
     std::optional<temporary_buffer<char>> ret;
-    co_await make_request(std::move(req), [&off, &ret, &object_name] (const http::reply& rep, input_stream<char>&& in_) mutable -> future<> {
+    co_await make_request(std::move(req), [&off, &ret, &object_name, start = s3_clock::now()] (group_client& gc, const http::reply& rep, input_stream<char>&& in_) mutable -> future<> {
         auto in = std::move(in_);
         ret = temporary_buffer<char>(rep.content_length);
         s3l.trace("Consume {} bytes for {}", ret->size(), object_name);
@@ -349,6 +396,8 @@ future<temporary_buffer<char>> client::get_object_contiguous(sstring object_name
                 off += to_copy;
             }
             return make_ready_future<consumption_result<char>>(continue_consuming());
+        }).then([&gc, &off, start] {
+            gc.read_stats.update(off, s3_clock::now() - start);
         });
     }, expected);
     ret->trim(off);
@@ -374,7 +423,10 @@ future<> client::put_object(sstring object_name, temporary_buffer<char> buf) {
             co_await coroutine::return_exception_ptr(std::move(ex));
         }
     });
-    co_await make_request(std::move(req));
+    co_await make_request(std::move(req), [len, start = s3_clock::now()] (group_client& gc, const auto& rep, auto&& in) {
+        gc.write_stats.update(len, s3_clock::now() - start);
+        return ignore_reply(rep, std::move(in));
+    });
 }
 
 future<> client::put_object(sstring object_name, ::memory_data_sink_buffers bufs) {
@@ -397,7 +449,10 @@ future<> client::put_object(sstring object_name, ::memory_data_sink_buffers bufs
             co_await coroutine::return_exception_ptr(std::move(ex));
         }
     });
-    co_await make_request(std::move(req));
+    co_await make_request(std::move(req), [len, start = s3_clock::now()] (group_client& gc, const auto& rep, auto&& in) {
+        gc.write_stats.update(len, s3_clock::now() - start);
+        return ignore_reply(rep, std::move(in));
+    });
 }
 
 future<> client::delete_object(sstring object_name) {
@@ -548,10 +603,11 @@ future<> client::upload_sink_base::upload_part(memory_data_sink_buffers bufs) {
     _part_etags.emplace_back();
     s3l.trace("PUT part {} {} bytes in {} buffers (upload id {})", part_number, bufs.size(), bufs.buffers().size(), _upload_id);
     auto req = http::request::make("PUT", _client->_host, _object_name);
-    req._headers["Content-Length"] = format("{}", bufs.size());
+    auto size = bufs.size();
+    req._headers["Content-Length"] = format("{}", size);
     req.query_parameters["partNumber"] = format("{}", part_number + 1);
     req.query_parameters["uploadId"] = _upload_id;
-    req.write_body("bin", bufs.size(), [this, part_number, bufs = std::move(bufs)] (output_stream<char>&& out_) mutable -> future<> {
+    req.write_body("bin", size, [this, part_number, bufs = std::move(bufs)] (output_stream<char>&& out_) mutable -> future<> {
         auto out = std::move(out_);
         std::exception_ptr ex;
         s3l.trace("upload {} part data (upload id {})", part_number, _upload_id);
@@ -581,10 +637,11 @@ future<> client::upload_sink_base::upload_part(memory_data_sink_buffers bufs) {
     // In case part upload goes wrong and doesn't happen, the _part_etags[part]
     // is not set, so the finalize_upload() sees it and aborts the whole thing.
     auto gh = _bg_flushes.hold();
-    (void)_client->make_request(std::move(req), [this, part_number] (const http::reply& rep, input_stream<char>&& in_) mutable -> future<> {
+    (void)_client->make_request(std::move(req), [this, size, part_number, start = s3_clock::now()] (group_client& gc, const http::reply& rep, input_stream<char>&& in_) mutable -> future<> {
         auto etag = rep.get_header("ETag");
         s3l.trace("uploaded {} part data -> etag = {} (upload id {})", part_number, etag, _upload_id);
         _part_etags[part_number] = std::move(etag);
+        gc.write_stats.update(size, s3_clock::now() - start);
         return make_ready_future<>();
     }).handle_exception([this, part_number] (auto ex) {
         // ... the exact exception only remains in logs
@@ -879,7 +936,7 @@ file client::make_readable_file(sstring object_name) {
 
 future<> client::close() {
     co_await coroutine::parallel_for_each(_https, [] (auto& it) -> future<> {
-        co_await it.second.close();
+        co_await it.second.http.close();
     });
 }
 

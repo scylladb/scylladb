@@ -70,7 +70,7 @@ SEASTAR_THREAD_TEST_CASE(test_client_put_get_object) {
     BOOST_REQUIRE_EQUAL(sz, 10);
 
     testlog.info("Get object stats\n");
-    s3::client::stats st = cln->get_object_stats(name).get0();
+    s3::stats st = cln->get_object_stats(name).get0();
     BOOST_REQUIRE_EQUAL(st.size, 10);
     // forgive timezone difference as minio server is GMT by default
     BOOST_REQUIRE(std::difftime(st.last_modified, gc_clock::to_time_t(gc_clock::now())) < 24*3600);

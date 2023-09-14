@@ -9,6 +9,7 @@
 #include <seastar/core/file.hh>
 #include <seastar/core/sstring.hh>
 #include <seastar/core/shared_ptr.hh>
+#include <seastar/core/metrics.hh>
 #include <seastar/http/client.hh>
 #include "utils/s3/creds.hh"
 
@@ -16,6 +17,8 @@ using namespace seastar;
 class memory_data_sink_buffers;
 
 namespace s3 {
+
+using s3_clock = std::chrono::steady_clock;
 
 struct range {
     uint64_t off;
@@ -29,6 +32,11 @@ struct tag {
 };
 using tag_set = std::vector<tag>;
 
+struct stats {
+    uint64_t size;
+    std::time_t last_modified;
+};
+
 future<> ignore_reply(const http::reply& rep, input_stream<char>&& in_);
 
 class client : public enable_shared_from_this<client> {
@@ -38,14 +46,36 @@ class client : public enable_shared_from_this<client> {
     class readable_file;
     std::string _host;
     endpoint_config_ptr _cfg;
-    std::unordered_map<seastar::scheduling_group, http::experimental::client> _https;
+    struct io_stats {
+        uint64_t ops = 0;
+        uint64_t bytes = 0;
+        std::chrono::duration<double> duration = std::chrono::duration<double>(0);
+
+        void update(uint64_t len, std::chrono::duration<double> lat) {
+            ops++;
+            bytes += len;
+            duration += lat;
+        }
+    };
+    struct group_client {
+        http::experimental::client http;
+        io_stats read_stats;
+        io_stats write_stats;
+        seastar::metrics::metric_groups metrics;
+        group_client(std::unique_ptr<http::experimental::connection_factory> f, unsigned max_conn);
+        void register_metrics(std::string class_name, std::string host);
+    };
+    std::unordered_map<seastar::scheduling_group, group_client> _https;
     using global_factory = std::function<shared_ptr<client>(std::string)>;
     global_factory _gf;
 
     struct private_tag {};
 
     void authorize(http::request&);
+    group_client& find_or_create_client();
     future<> make_request(http::request req, http::experimental::client::reply_handler handle = ignore_reply, http::reply::status_type expected = http::reply::status_type::ok);
+    using reply_handler_ext = noncopyable_function<future<>(group_client&, const http::reply&, input_stream<char>&& body)>;
+    future<> make_request(http::request req, reply_handler_ext handle, http::reply::status_type expected = http::reply::status_type::ok);
 
     future<> get_object_header(sstring object_name, http::experimental::client::reply_handler handler);
 public:
@@ -53,10 +83,6 @@ public:
     static shared_ptr<client> make(std::string endpoint, endpoint_config_ptr cfg, global_factory gf = {});
 
     future<uint64_t> get_object_size(sstring object_name);
-    struct stats {
-        uint64_t size;
-        std::time_t last_modified;
-    };
     future<stats> get_object_stats(sstring object_name);
     future<tag_set> get_object_tagging(sstring object_name);
     future<> put_object_tagging(sstring object_name, tag_set tagging);
