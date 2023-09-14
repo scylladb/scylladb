@@ -97,6 +97,7 @@ class raft_bootstrap_task_impl;
 class raft_replace_task_impl;
 class raft_rebuild_task_impl;
 class raft_decommission_task_impl;
+class raft_remove_node_task_impl;
 }
 
 namespace service {
@@ -798,9 +799,9 @@ private:
 
     topology_change build_bootstrap_topology_change(raft::server& raft_server, group0_guard& guard);
     topology_change build_decommission_topology_change(raft::server& raft_server, group0_guard& guard);
-    future<> raft_removenode(locator::host_id host_id, std::list<locator::host_id_or_endpoint> ignore_nodes_params);
     topology_change build_replace_topology_change(raft::server& raft_server, raft::server_id replaced_id, replica_state& rs, group0_guard& guard,
         std::unordered_set<raft::server_id> ignored_ids);
+    topology_change build_remove_topology_change(group0_guard& guard, raft::server_id id, std::unordered_set<raft::server_id> ignored_ids);
     topology_change build_rebuild_topology_change(raft::server& raft_server, group0_guard& guard, sstring& source_dc);
     future<> raft_check_and_repair_cdc_streams();
     future<> update_topology_with_local_metadata(raft::server&);
@@ -825,6 +826,7 @@ private:
     friend class node_ops::raft_replace_task_impl;
     friend class node_ops::raft_rebuild_task_impl;
     friend class node_ops::raft_decommission_task_impl;
+    friend class node_ops::raft_remove_node_task_impl;
 };
 
 }
