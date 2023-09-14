@@ -4385,48 +4385,12 @@ future<> storage_service::do_drain() {
     co_await _repair.invoke_on_all(&repair_service::shutdown);
 }
 
-future<> storage_service::raft_rebuild(sstring source_dc) {
-    auto& raft_server = _group0->group0_server();
-
-    while (true) {
-        auto guard = co_await _group0->client().start_operation(&_abort_source);
-
-        auto it = _topology_state_machine._topology.find(raft_server.id());
-        if (!it) {
-            throw std::runtime_error(::format("local node {} is not a member of the cluster", raft_server.id()));
-        }
-
-        const auto& rs = it->second;
-
-        if (rs.state != node_state::normal) {
-            throw std::runtime_error(::format("local node is not in the normal state (current state: {})", rs.state));
-        }
-
-        if (_topology_state_machine._topology.normal_nodes.size() == 1) {
-            throw std::runtime_error("Cannot rebuild a single node");
-        }
-
-        slogger.info("raft topology: request rebuild for: {}", raft_server.id());
-        topology_mutation_builder builder(guard.write_timestamp());
-        builder.with_node(raft_server.id())
-               .set("topology_request", topology_request::rebuild)
-               .set("rebuild_option", source_dc);
-        topology_change change{{builder.build()}};
-        group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard, ::format("rebuild: request rebuild for {} ({})", raft_server.id(), source_dc));
-
-        try {
-            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), &_abort_source);
-        } catch (group0_concurrent_modification&) {
-            slogger.info("raft topology: rebuild: concurrent operation is detected, retrying.");
-            continue;
-        }
-        break;
-    }
-
-    // Wait until rebuild completes. We know it completes when the request parameter is empty
-    co_await _topology_state_machine.event.when([this, &raft_server] {
-        return !_topology_state_machine._topology.req_param.contains(raft_server.id());
-    });
+topology_change storage_service::build_rebuild_topology_change(raft::server& raft_server, group0_guard& guard, sstring& source_dc) {
+    topology_mutation_builder builder(guard.write_timestamp());
+    builder.with_node(raft_server.id())
+            .set("topology_request", topology_request::rebuild)
+            .set("rebuild_option", source_dc);
+    return topology_change{{builder.build()}};
 }
 
 future<> storage_service::raft_check_and_repair_cdc_streams() {
