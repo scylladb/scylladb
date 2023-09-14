@@ -247,6 +247,18 @@ protected:
     virtual future<> run() override;
 };
 
+class raft_decommission_task_impl : public decommission_node_task_impl {
+public:
+    raft_decommission_task_impl(tasks::task_manager::module_ptr module,
+            std::string entity,
+            tasks::task_id parent_id,
+            service::storage_service& ss) noexcept
+        : decommission_node_task_impl(module, tasks::task_id::create_random_id(), 0, "raft entry", std::move(entity), parent_id, ss)
+    {}
+protected:
+    virtual future<> run() override;
+};
+
 class start_remove_node_task_impl : public remove_node_task_impl {
 private:
     locator::host_id _host_id;

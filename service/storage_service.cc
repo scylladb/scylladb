@@ -3779,55 +3779,11 @@ void on_streaming_finished() {
     utils::get_local_injector().inject("storage_service_streaming_sleep3", std::chrono::seconds{3}).get();
 }
 
-future<> storage_service::raft_decomission() {
-    auto& raft_server = _group0->group0_server();
-
-    auto shutdown_request_future = make_ready_future<>();
-    auto disengage_shutdown_promise = defer([this] {
-        _shutdown_request_promise = std::nullopt;
-    });
-
-    while (true) {
-        auto guard = co_await _group0->client().start_operation(&_abort_source);
-
-        auto it = _topology_state_machine._topology.find(raft_server.id());
-        if (!it) {
-            throw std::runtime_error(::format("local node {} is not a member of the cluster", raft_server.id()));
-        }
-
-        const auto& rs = it->second;
-
-        if (rs.state != node_state::normal) {
-            throw std::runtime_error(::format("local node is not in the normal state (current state: {})", rs.state));
-        }
-
-        if (_topology_state_machine._topology.normal_nodes.size() == 1) {
-            throw std::runtime_error("Cannot decomission last node in the cluster");
-        }
-
-        shutdown_request_future = _shutdown_request_promise.emplace().get_future();
-
-        slogger.info("raft topology: request decomission for: {}", raft_server.id());
-        topology_mutation_builder builder(guard.write_timestamp());
-        builder.with_node(raft_server.id())
-               .set("topology_request", topology_request::leave);
-        topology_change change{{builder.build()}};
-        group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard, ::format("decomission: request decomission for {}", raft_server.id()));
-
-        try {
-            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), &_abort_source);
-        } catch (group0_concurrent_modification&) {
-            slogger.info("raft topology: decomission: concurrent operation is detected, retrying.");
-            continue;
-        }
-        break;
-    }
-
-    // Wait for the coordinator to tell us to shut down.
-    co_await std::move(shutdown_request_future);
-
-    // Need to set it otherwise gossiper will try to send shutdown on exit
-    co_await _gossiper.add_local_application_state({{ gms::application_state::STATUS, gms::versioned_value::left({}, _gossiper.now().time_since_epoch().count()) }});
+topology_change storage_service::build_decommission_topology_change(raft::server& raft_server, group0_guard& guard) {
+    topology_mutation_builder builder(guard.write_timestamp());
+    builder.with_node(raft_server.id())
+            .set("topology_request", topology_request::leave);
+    return topology_change{{builder.build()}};
 }
 
 // Runs inside seastar::async context
