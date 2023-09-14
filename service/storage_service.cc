@@ -4119,69 +4119,12 @@ void storage_service::run_replace_ops(std::unordered_set<token>& bootstrap_token
     }
 }
 
-future<> storage_service::raft_removenode(locator::host_id host_id, std::list<locator::host_id_or_endpoint> ignore_nodes_params) {
-    auto id = raft::server_id{host_id.uuid()};
-
-    while (true) {
-        auto guard = co_await _group0->client().start_operation(&_abort_source);
-
-        auto it = _topology_state_machine._topology.find(id);
-
-        if (!it) {
-            throw std::runtime_error(::format("removenode: host id {} is not found in the cluster", host_id));
-        }
-
-        auto& rs = it->second; // not usable after yeild
-
-        if (rs.state != node_state::normal) {
-            throw std::runtime_error(::format("removenode: node {} is in '{}' state. Wait for it to be in 'normal' state", id, rs.state));
-        }
-        const auto& am = _group0->address_map();
-        auto ip = am.find(id);
-        if (!ip) {
-            // What to do if there is no mapping? Wait and retry?
-            on_fatal_internal_error(slogger, ::format("Remove node cannot find a mapping from node id {} to its ip", id));
-        }
-
-        if (_gossiper.is_alive(*ip)) {
-            const std::string message = ::format(
-                "removenode: Rejected removenode operation for node {} ip {} "
-                "the node being removed is alive, maybe you should use decommission instead?",
-                id, *ip);
-            slogger.warn("raft topology {}", message);
-            throw std::runtime_error(message);
-        }
-
-        auto ignored_ids = find_raft_nodes_from_hoeps(ignore_nodes_params);
-
-        slogger.info("raft topology: request removenode for: {}, ignored nodes: {}", id, ignored_ids);
-        topology_mutation_builder builder(guard.write_timestamp());
-        builder.with_node(id)
-               .set("ignore_nodes", ignored_ids)
-               .set("topology_request", topology_request::remove);
-        topology_change change{{builder.build()}};
-        group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard, ::format("removenode: request remove for {}", id));
-
-        try {
-            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), &_abort_source);
-        } catch (group0_concurrent_modification&) {
-            slogger.info("raft topology: removenode: concurrent operation is detected, retrying.");
-            continue;
-        }
-
-        break;
-    }
-
-    // Wait the node we are removing to enter left state
-    co_await _topology_state_machine.event.when([this, id] {
-        return _topology_state_machine._topology.left_nodes.contains(id);
-    });
-
-    try {
-        co_await _group0->remove_from_raft_config(id);
-    } catch (raft::not_a_member&) {
-        slogger.info("raft topology removenode: already removed from the raft config by the topology coordinator");
-    }
+topology_change storage_service::build_remove_topology_change(group0_guard& guard, raft::server_id id, std::unordered_set<raft::server_id> ignored_ids) {
+    topology_mutation_builder builder(guard.write_timestamp());
+    builder.with_node(id)
+            .set("ignore_nodes", ignored_ids)
+            .set("topology_request", topology_request::remove);
+    return topology_change{{builder.build()}};
 }
 
 future<> storage_service::check_and_repair_cdc_streams() {

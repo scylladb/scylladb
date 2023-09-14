@@ -17,6 +17,8 @@
 #include "node_ops/task_manager_module.hh"
 #include "repair/row_level.hh"
 #include "service/raft/join_node.hh"
+#include "service/raft/group0_fwd.hh"
+#include "service/raft/raft_address_map.hh"
 #include "service/raft/raft_group0.hh"
 #include "service/storage_service.hh"
 #include "supervisor.hh"
@@ -881,10 +883,12 @@ start_remove_node_task_impl::start_remove_node_task_impl(tasks::task_manager::mo
 {}
 
 future<> start_remove_node_task_impl::run() {
-    return _ss.run_with_api_lock(sstring("removenode"), [host_id = _host_id, ignore_nodes_params = std::move(_ignore_nodes_params)] (service::storage_service& ss) mutable {
-        return seastar::async([&ss, host_id, ignore_nodes_params = std::move(ignore_nodes_params)] () mutable {
+    tasks::task_info parent_info{_status.id, _status.shard};
+    return _ss.run_with_api_lock(sstring("removenode"), [host_id = _host_id, ignore_nodes_params = std::move(_ignore_nodes_params), parent_info] (service::storage_service& ss) mutable {
+        return seastar::async([&ss, host_id, ignore_nodes_params = std::move(ignore_nodes_params), parent_info] () mutable {
             if (ss._raft_topology_change_enabled) {
-                ss.raft_removenode(host_id, std::move(ignore_nodes_params)).get();
+                auto task = ss.get_task_manager_module().make_and_start_task<raft_remove_node_entry_task_impl>(parent_info, "", parent_info.id, ss, host_id, std::move(ignore_nodes_params)).get();
+                task->done().get();
                 return;
             }
             node_ops_ctl ctl(ss, node_ops_cmd::removenode_prepare, host_id, gms::inet_address());
@@ -1007,6 +1011,67 @@ future<> start_remove_node_task_impl::run() {
             tasks::tmlogger.info("removenode[{}]: Finished removenode operation, host id={}", uuid, host_id);
         });
     });
+}
+
+future<> raft_remove_node_entry_task_impl::run() {
+    auto id = raft::server_id{_host_id.uuid()};
+
+    while (true) {
+        auto guard = co_await _ss._group0->client().start_operation(&_ss._abort_source);
+
+        auto it = _ss._topology_state_machine._topology.find(id);
+
+        if (!it) {
+            throw std::runtime_error(::format("removenode: host id {} is not found in the cluster", _host_id));
+        }
+
+        auto& rs = it->second; // not usable after yeild
+
+        if (rs.state != service::node_state::normal) {
+            throw std::runtime_error(::format("removenode: node {} is in '{}' state. Wait for it to be in 'normal' state", id, rs.state));
+        }
+        const auto& am = _ss._group0->address_map();
+        auto ip = am.find(id);
+        if (!ip) {
+            // What to do if there is no mapping? Wait and retry?
+            on_fatal_internal_error(tasks::tmlogger, ::format("Remove node cannot find a mapping from node id {} to its ip", id));
+        }
+
+        if (_ss._gossiper.is_alive(*ip)) {
+            const std::string message = ::format(
+                "removenode: Rejected removenode operation for node {} ip {} "
+                "the node being removed is alive, maybe you should use decommission instead?",
+                id, *ip);
+            tasks::tmlogger.warn("raft topology {}", message);
+            throw std::runtime_error(message);
+        }
+
+        auto ignored_ids = _ss.find_raft_nodes_from_hoeps(_ignore_nodes_params);
+
+        tasks::tmlogger.info("raft topology: request removenode for: {}, ignored nodes: {}", id, ignored_ids);
+        auto change = _ss.build_remove_topology_change(guard, id, std::move(ignored_ids));
+        service::group0_command g0_cmd = _ss._group0->client().prepare_command(std::move(change), guard, ::format("removenode: request remove for {}", id));
+
+        try {
+            co_await _ss._group0->client().add_entry(std::move(g0_cmd), std::move(guard), &_ss._abort_source);
+        } catch (service::group0_concurrent_modification&) {
+            tasks::tmlogger.info("raft topology: removenode: concurrent operation is detected, retrying.");
+            continue;
+        }
+
+        break;
+    }
+
+    // Wait the node we are removing to enter left state
+    co_await _ss._topology_state_machine.event.when([&ss= _ss, id] {
+        return ss._topology_state_machine._topology.left_nodes.contains(id);
+    });
+
+    try {
+        co_await _ss._group0->remove_from_raft_config(id);
+    } catch (raft::not_a_member&) {
+        tasks::tmlogger.info("raft topology removenode: already removed from the raft config by the topology coordinator");
+    }
 }
 
 }
