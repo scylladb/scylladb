@@ -7,6 +7,7 @@
  */
 
 #include "sstables/sstable_set.hh"
+#include "sstables/types_fwd.hh"
 #include "streaming/stream_reason.hh"
 
 namespace replica {
@@ -28,6 +29,7 @@ std::function<future<>(flat_mutation_reader_v2)> make_streaming_consumer(sstring
     sharded<db::view::view_update_generator>& vug,
     uint64_t estimated_partitions,
     stream_reason reason,
-    sstables::offstrategy offstrategy);
+    sstables::offstrategy offstrategy,
+    sstables::run_id run_id = sstables::run_id::create_null_id());
 
 }

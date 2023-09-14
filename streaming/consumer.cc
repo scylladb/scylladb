@@ -24,8 +24,9 @@ std::function<future<> (flat_mutation_reader_v2)> make_streaming_consumer(sstrin
         sharded<db::view::view_update_generator>& vug,
         uint64_t estimated_partitions,
         stream_reason reason,
-        sstables::offstrategy offstrategy) {
-    return [&db, &sys_dist_ks, &vug, estimated_partitions, reason, offstrategy, origin = std::move(origin)] (flat_mutation_reader_v2 reader) -> future<> {
+        sstables::offstrategy offstrategy,
+        sstables::run_id run_id) {
+    return [&db, &sys_dist_ks, &vug, estimated_partitions, reason, offstrategy, origin = std::move(origin), run_id] (flat_mutation_reader_v2 reader) -> future<> {
         std::exception_ptr ex;
         try {
             auto cf = db.local().find_column_family(reader.schema()).shared_from_this();
@@ -43,7 +44,7 @@ std::function<future<> (flat_mutation_reader_v2)> make_streaming_consumer(sstrin
             };
 
             auto consumer = make_interposer_consumer(metadata,
-                    [cf = std::move(cf), adjusted_estimated_partitions, use_view_update_path, &vug, origin = std::move(origin), offstrategy] (flat_mutation_reader_v2 reader) {
+                    [cf = std::move(cf), adjusted_estimated_partitions, use_view_update_path, &vug, origin = std::move(origin), offstrategy, run_id] (flat_mutation_reader_v2 reader) {
                 sstables::shared_sstable sst;
                 try {
                     sst = use_view_update_path ? cf->make_streaming_staging_sstable() : cf->make_streaming_sstable_for_write();
@@ -56,6 +57,7 @@ std::function<future<> (flat_mutation_reader_v2)> make_streaming_consumer(sstrin
 
                 auto cfg = cf->get_sstables_manager().configure_writer(origin);
                 cfg.erm = cf->get_effective_replication_map();
+                cfg.run_identifier = run_id;
                 return sst->write_components(std::move(reader), adjusted_estimated_partitions, s,
                                              cfg, encoding_stats{}).then([sst] {
                     return sst->open_data();

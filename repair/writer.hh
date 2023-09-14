@@ -9,6 +9,7 @@
 #include "repair/decorated_key_with_hash.hh"
 #include "readers/queue.hh"
 #include "sstables/sstable_set.hh"
+#include "sstables/types_fwd.hh"
 #include "readers/upgrading_consumer.hh"
 #include <seastar/core/coroutine.hh>
 
@@ -154,5 +155,6 @@ lw_shared_ptr<repair_writer> make_repair_writer(
             streaming::stream_reason reason,
             sharded<replica::database>& db,
             sharded<db::system_distributed_keyspace>& sys_dist_ks,
-            sharded<db::view::view_update_generator>& view_update_generator);
+            sharded<db::view::view_update_generator>& view_update_generator,
+            sstables::run_id run_id);
 

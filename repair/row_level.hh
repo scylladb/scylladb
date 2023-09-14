@@ -9,11 +9,15 @@
 #pragma once
 
 #include <vector>
+
+#include <boost/icl/interval_base_set.hpp>
+
 #include "gms/inet_address.hh"
 #include "repair/repair.hh"
 #include "repair/task_manager_module.hh"
 #include "tasks/task_manager.hh"
 #include "locator/abstract_replication_strategy.hh"
+#include "sstables/types_fwd.hh"
 #include <seastar/core/distributed.hh>
 #include <seastar/util/bool_class.hh>
 
@@ -96,6 +100,18 @@ class repair_service : public seastar::peering_sharded_service<repair_service> {
     node_ops_metrics _node_ops_metrics;
     std::unordered_map<node_repair_meta_id, repair_meta_ptr> _repair_metas;
     uint32_t _next_repair_meta_id = 0;  // used only on shard 0
+
+    struct range_tracker {
+        using interval_set_type = boost::icl::interval_set<dht::token>;
+        using interval_type = interval_set_type::interval_type;
+        table_id tid;
+        interval_set_type ranges;
+        sstables::run_id run_id;
+
+        range_tracker() = default;
+        void insert_range(table_id tid, const dht::token_range&);
+    };
+    std::unordered_map<gms::inet_address, range_tracker> _repair_ranges;
 
     std::unordered_map<tasks::task_id, repair_history> _finished_ranges_history;
 
@@ -198,6 +214,10 @@ public:
 
     std::unordered_map<node_repair_meta_id, repair_meta_ptr>& repair_meta_map() noexcept {
         return _repair_metas;
+    }
+
+    std::unordered_map<gms::inet_address, range_tracker>& repair_ranges_map() noexcept {
+        return _repair_ranges;
     }
 
     repair_meta_ptr get_repair_meta(gms::inet_address from, uint32_t repair_meta_id);
