@@ -141,6 +141,7 @@ enum class tablet_transition_stage {
     write_both_read_new,
     use_new,
     cleanup,
+    end_migration,
 };
 
 sstring tablet_transition_stage_to_string(tablet_transition_stage);

@@ -494,6 +494,7 @@ effective_replication_map::effective_replication_map(replication_strategy_ptr rs
         : _rs(std::move(rs))
         , _tmptr(std::move(tmptr))
         , _replication_factor(replication_factor)
+        , _validity_abort_source(std::make_unique<abort_source>())
 { }
 
 vnode_effective_replication_map::factory_key vnode_effective_replication_map::make_factory_key(const replication_strategy_ptr& rs, const token_metadata_ptr& tmptr) {

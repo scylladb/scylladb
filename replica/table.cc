@@ -1675,6 +1675,9 @@ table::table(schema_ptr schema, config config, lw_shared_ptr<const storage_optio
 }
 
 void table::update_effective_replication_map(locator::effective_replication_map_ptr erm) {
+    if (_erm) {
+        _erm->invalidate();
+    }
     _erm = std::move(erm);
 }
 
@@ -2978,6 +2981,11 @@ bool table::requires_cleanup(const sstables::sstable_set& set) const {
         auto& cg = compaction_group_for_sstable(sst);
         return stop_iteration(_compaction_manager.requires_cleanup(cg.as_table_state(), sst));
     }));
+}
+
+future<> table::cleanup_tablet(locator::tablet_id) {
+    co_await flush();
+    // FIXME: Remove sstables
 }
 
 } // namespace replica

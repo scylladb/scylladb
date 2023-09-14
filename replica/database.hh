@@ -62,6 +62,7 @@
 #include "sstables/generation_type.hh"
 #include "db/rate_limiter.hh"
 #include "db/operation_type.hh"
+#include "locator/tablets.hh"
 #include "utils/serialized_action.hh"
 #include "compaction/compaction_fwd.hh"
 
@@ -787,6 +788,7 @@ public:
     const locator::effective_replication_map_ptr& get_effective_replication_map() const { return _erm; }
     void update_effective_replication_map(locator::effective_replication_map_ptr);
     [[gnu::always_inline]] bool uses_tablets() const;
+    future<> cleanup_tablet(locator::tablet_id);
     future<const_mutation_partition_ptr> find_partition(schema_ptr, reader_permit permit, const dht::decorated_key& key) const;
     future<const_row_ptr> find_row(schema_ptr, reader_permit permit, const dht::decorated_key& partition_key, clustering_key clustering_key) const;
     shard_id shard_of(const mutation& m) const {

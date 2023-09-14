@@ -22,6 +22,7 @@
 #include "db/consistency_level.hh"
 #include "service/tablet_allocator.hh"
 #include "locator/tablets.hh"
+#include "locator/tablet_metadata_guard.hh"
 #include "replica/tablet_mutation_builder.hh"
 #include <seastar/core/smp.hh>
 #include "mutation/canonical_mutation.hh"
@@ -303,6 +304,21 @@ future<> storage_service::wait_for_ring_to_settle() {
     slogger.info("Checking bootstrapping/leaving nodes: ok");
 }
 
+static locator::node::state to_topology_node_state(node_state ns) {
+    switch (ns) {
+        case node_state::bootstrapping: return locator::node::state::bootstrapping;
+        case node_state::decommissioning: return locator::node::state::being_decommissioned;
+        case node_state::removing: return locator::node::state::being_removed;
+        case node_state::normal: return locator::node::state::normal;
+        case node_state::left_token_ring: return locator::node::state::left;
+        case node_state::left: return locator::node::state::left;
+        case node_state::replacing: return locator::node::state::replacing;
+        case node_state::rebuilding: return locator::node::state::normal;
+        case node_state::none: return locator::node::state::none;
+    }
+    on_internal_error(slogger, format("unhandled node state: {}", ns));
+}
+
 future<> storage_service::topology_state_load() {
 #ifdef SEASTAR_DEBUG
     static bool running = false;
@@ -364,8 +380,10 @@ future<> storage_service::topology_state_load() {
 
         tmptr->set_version(_topology_state_machine._topology.version);
 
-        auto update_topology = [&] (inet_address ip, const replica_state& rs) {
-            tmptr->update_topology(ip, locator::endpoint_dc_rack{rs.datacenter, rs.rack}, std::nullopt, rs.shard_count);
+        auto update_topology = [&] (locator::host_id id, inet_address ip, const replica_state& rs) {
+            tmptr->update_topology(ip, locator::endpoint_dc_rack{rs.datacenter, rs.rack},
+                                   to_topology_node_state(rs.state), rs.shard_count);
+            tmptr->update_host_id(id, ip);
         };
 
         auto add_normal_node = [&] (raft::server_id id, const replica_state& rs) -> future<> {
@@ -392,9 +410,8 @@ future<> storage_service::topology_state_load() {
                 co_await _sys_ks.local().update_tokens(rs.ring.value().tokens);
                 co_await _gossiper.add_local_application_state({{ gms::application_state::STATUS, gms::versioned_value::normal(rs.ring.value().tokens) }});
             }
-            update_topology(ip, rs);
+            update_topology(host_id, ip, rs);
             co_await tmptr->update_normal_tokens(rs.ring.value().tokens, ip);
-            tmptr->update_host_id(host_id, ip);
         };
 
         for (const auto& [id, rs]: _topology_state_machine._topology.normal_nodes) {
@@ -411,6 +428,8 @@ future<> storage_service::topology_state_load() {
                     [[fallthrough]];
                 case topology::transition_state::commit_cdc_generation:
                     [[fallthrough]];
+                case topology::transition_state::tablet_draining:
+                    [[fallthrough]];
                 case topology::transition_state::write_both_read_old:
                     return read_new_t::no;
                 case topology::transition_state::write_both_read_new:
@@ -423,7 +442,10 @@ future<> storage_service::topology_state_load() {
             auto ip = co_await id2ip(id);
 
             slogger.trace("raft topology: loading topology: raft id={} ip={} node state={} dc={} rack={} tokens state={} tokens={}",
-                          id, ip, rs.state, rs.datacenter, rs.rack, _topology_state_machine._topology.tstate, rs.ring->tokens);
+                          id, ip, rs.state, rs.datacenter, rs.rack, _topology_state_machine._topology.tstate,
+                          seastar::value_of([&] () -> sstring {
+                              return rs.ring ? ::format("{}", rs.ring->tokens) : sstring("null");
+                          }));
 
             switch (rs.state) {
             case node_state::bootstrapping:
@@ -432,7 +454,7 @@ future<> storage_service::topology_state_load() {
                     co_await _sys_ks.local().update_tokens(ip, {});
                     co_await _sys_ks.local().update_peer_info(ip, "host_id", id.uuid());
                 }
-                update_topology(ip, rs);
+                update_topology(host_id, ip, rs);
                 if (_topology_state_machine._topology.normal_nodes.empty()) {
                     // This is the first node in the cluster. Insert the tokens as normal to the token ring early
                     // so we can perform writes to regular 'distributed' tables during the bootstrap procedure
@@ -446,9 +468,8 @@ future<> storage_service::topology_state_load() {
                 break;
             case node_state::decommissioning:
             case node_state::removing:
-                update_topology(ip, rs);
+                update_topology(host_id, ip, rs);
                 co_await tmptr->update_normal_tokens(rs.ring.value().tokens, ip);
-                tmptr->update_host_id(host_id, ip);
                 tmptr->add_leaving_endpoint(ip);
                 co_await update_topology_change_info(tmptr, ::format("{} {}/{}", rs.state, id, ip));
                 break;
@@ -461,7 +482,10 @@ future<> storage_service::topology_state_load() {
                     on_fatal_internal_error(slogger, ::format("Cannot map id of a node being replaced {} to its ip", replaced_id));
                 }
                 assert(existing_ip);
-                update_topology(ip, rs);
+                // FIXME: Topology cannot hold two IPs with different host ids yet so
+                // when replacing we must advertise the replaced_id for the ip, otherwise
+                // topology will complain about host id of a local node changing and fail.
+                update_topology(ip == existing_ip ? locator::host_id(replaced_id.uuid()) : host_id, ip, rs);
                 tmptr->add_replacing_endpoint(*existing_ip, ip);
                 co_await update_topology_change_info(tmptr, ::format("replacing {}/{} by {}/{}", replaced_id, *existing_ip, id, ip));
             }
@@ -1379,6 +1403,7 @@ class topology_coordinator {
     // Next migration of the same tablet is guaranteed to use a different instance.
     struct tablet_migration_state {
         background_action_holder streaming;
+        background_action_holder cleanup;
         std::unordered_map<locator::tablet_transition_stage, background_action_holder> barriers;
     };
 
@@ -1446,13 +1471,17 @@ class topology_coordinator {
     }
 
     future<> generate_migration_updates(std::vector<canonical_mutation>& out, const group0_guard& guard, const migration_plan& plan) {
-        for (const tablet_migration_info& mig : plan) {
+        for (const tablet_migration_info& mig : plan.migrations()) {
             co_await coroutine::maybe_yield();
             generate_migration_update(out, guard, mig);
         }
     }
 
-    future<> handle_tablet_migration(group0_guard guard) {
+    // When "drain" is true, we migrate tablets only as long as there are nodes to drain
+    // and then change the transition state to write_both_read_old. Also, while draining,
+    // we ignore pending topology requests which normally interrupt load balancing.
+    // When "drain" is false, we do regular load balancing.
+    future<> handle_tablet_migration(group0_guard guard, bool drain) {
         // This step acts like a pump which advances state machines of individual tablets,
         // batching barriers and group0 updates.
         // If progress cannot be made, e.g. because all transitions are streaming, we block
@@ -1488,11 +1517,15 @@ class topology_coordinator {
                         .build());
             };
 
-            auto transition_to_with_barrier = [&] (locator::tablet_transition_stage stage) {
-                if (advance_in_background(gid, tablet_state.barriers[stage], "barrier", [&] {
+            auto do_barrier = [&] {
+                return advance_in_background(gid, tablet_state.barriers[trinfo.stage], "barrier", [&] {
                     needs_barrier = true;
                     return barrier.get_shared_future();
-                })) {
+                });
+            };
+
+            auto transition_to_with_barrier = [&] (locator::tablet_transition_stage stage) {
+                if (do_barrier()) {
                     transition_to(stage);
                 }
             };
@@ -1524,30 +1557,51 @@ class topology_coordinator {
                     transition_to_with_barrier(locator::tablet_transition_stage::cleanup);
                     break;
                 case locator::tablet_transition_stage::cleanup:
-                    // FIXME: Actually perform the cleanup. Block on integration with compaction groups.
-                    _tablets.erase(gid);
-                    updates.emplace_back(
-                        replica::tablet_mutation_builder(guard.write_timestamp(), s->ks_name(), table)
-                            .del_transition(last_token)
-                            .set_replicas(last_token, trinfo.next)
-                            .build());
+                    if (advance_in_background(gid, tablet_state.cleanup, "cleanup", [&] {
+                        locator::tablet_replica dst = locator::get_leaving_replica(tmap.get_tablet_info(gid.tablet), trinfo);
+                        slogger.info("raft topology: Initiating tablet cleanup of {} on {}", gid, dst);
+                        return ser::storage_service_rpc_verbs::send_tablet_cleanup(&_messaging,
+                                                                                   netw::msg_addr(id2ip(dst.host)), _as, gid);
+                    })) {
+                        transition_to(locator::tablet_transition_stage::end_migration);
+                    }
+                    break;
+                case locator::tablet_transition_stage::end_migration:
+                    // Need a separate stage and a barrier after cleanup RPC to cut off stale RPCs.
+                    // See do_tablet_operation() doc.
+                    if (do_barrier()) {
+                        _tablets.erase(gid);
+                        updates.emplace_back(
+                            replica::tablet_mutation_builder(guard.write_timestamp(), s->ks_name(), table)
+                                .del_transition(last_token)
+                                .set_replicas(last_token, trinfo.next)
+                                .build());
+                    }
                     break;
             }
         });
 
         // In order to keep the cluster saturated, ask the load balancer for more transitions.
         // Unless there is a pending topology change operation.
-        auto ts = guard.write_timestamp();
-        auto [preempt, new_guard] = should_preempt_balancing(std::move(guard));
-        guard = std::move(new_guard);
-        if (ts != guard.write_timestamp()) {
-            // We rely on the fact that should_preempt_balancing() does not release the guard
-            // so that tablet metadata reading and updates are atomic.
-            on_internal_error(slogger, "should_preempt_balancing() retook the guard");
+        bool preempt = false;
+        if (!drain) {
+            // When draining, this method is invoked with an active node transition, which
+            // would normally cause preemption, which we don't want here.
+            auto ts = guard.write_timestamp();
+            auto [new_preempt, new_guard] = should_preempt_balancing(std::move(guard));
+            preempt = new_preempt;
+            guard = std::move(new_guard);
+            if (ts != guard.write_timestamp()) {
+                // We rely on the fact that should_preempt_balancing() does not release the guard
+                // so that tablet metadata reading and updates are atomic.
+                on_internal_error(slogger, "should_preempt_balancing() retook the guard");
+            }
         }
         if (!preempt) {
             auto plan = co_await _tablet_allocator.balance_tablets(get_token_metadata_ptr());
-            co_await generate_migration_updates(updates, guard, plan);
+            if (!drain || plan.has_nodes_to_drain()) {
+                co_await generate_migration_updates(updates, guard, plan);
+            }
         }
 
         // The updates have to be executed under the same guard which was used to read tablet metadata
@@ -1589,11 +1643,19 @@ class topology_coordinator {
             co_return;
         }
 
-        updates.emplace_back(
-            topology_mutation_builder(guard.write_timestamp())
-                .del_transition_state()
-                .set_version(_topo_sm._topology.version + 1)
-                .build());
+        if (drain) {
+            updates.emplace_back(
+                topology_mutation_builder(guard.write_timestamp())
+                    .set_transition_state(topology::transition_state::write_both_read_old)
+                    .set_version(_topo_sm._topology.version + 1)
+                    .build());
+        } else {
+            updates.emplace_back(
+                topology_mutation_builder(guard.write_timestamp())
+                    .del_transition_state()
+                    .set_version(_topo_sm._topology.version + 1)
+                    .build());
+        }
         co_await update_topology_state(std::move(guard), std::move(updates), "Finished tablet migration");
     }
 
@@ -1730,6 +1792,9 @@ class topology_coordinator {
                 auto str = ::format("committed new CDC generation, ID: {}", cdc_gen_id);
                 co_await update_topology_state(std::move(guard), {builder.build()}, std::move(str));
             }
+                break;
+            case topology::transition_state::tablet_draining:
+                co_await handle_tablet_migration(std::move(guard), true);
                 break;
             case topology::transition_state::write_both_read_old: {
                 auto node = get_node_to_work_on(std::move(guard));
@@ -1883,7 +1948,8 @@ class topology_coordinator {
             }
                 break;
             case topology::transition_state::tablet_migration:
-                co_await handle_tablet_migration(std::move(guard));
+                co_await handle_tablet_migration(std::move(guard), false);
+                break;
         }
         co_return true;
     };
@@ -1930,7 +1996,7 @@ class topology_coordinator {
                         // start decommission and put tokens of decommissioning nodes into write_both_read_old state
                         // meaning that reads will go to the replica being decommissioned
                         // but writes will go to new owner as well
-                        builder.set_transition_state(topology::transition_state::write_both_read_old)
+                        builder.set_transition_state(topology::transition_state::tablet_draining)
                                .set_version(_topo_sm._topology.version + 1)
                                .with_node(node.id)
                                .set("node_state", node_state::decommissioning)
@@ -1940,10 +2006,7 @@ class topology_coordinator {
                         break;
                     case topology_request::remove:
                         assert(node.rs->ring);
-                        // start removing and put tokens of a node been removed into write_both_read_old state
-                        // meaning that reads will go to the replica being removed (it is dead though)
-                        // but writes will go to new owner as well
-                        builder.set_transition_state(topology::transition_state::write_both_read_old)
+                        builder.set_transition_state(topology::transition_state::tablet_draining)
                                .set_version(_topo_sm._topology.version + 1)
                                .with_node(node.id)
                                .set("node_state", node_state::removing)
@@ -1957,10 +2020,7 @@ class topology_coordinator {
                         auto it = _topo_sm._topology.normal_nodes.find(replaced_id);
                         assert(it != _topo_sm._topology.normal_nodes.end());
                         assert(it->second.ring && it->second.state == node_state::normal);
-                        // start replacing and take ownership of the tokens of a node been replaced
-                        // and put them into write_both_read_old state meaning that reads will go
-                        // to the replica being removed (it is dead though) but writes will go to new owner as well
-                        builder.set_transition_state(topology::transition_state::write_both_read_old)
+                        builder.set_transition_state(topology::transition_state::tablet_draining)
                                .set_version(_topo_sm._topology.version + 1)
                                .with_node(node.id)
                                .set("node_state", node_state::replacing)
@@ -6060,58 +6120,129 @@ inet_address storage_service::host2ip(locator::host_id host) {
     return *ip;
 }
 
-// Streams data to the pending tablet replica of a given tablet on this node.
-// The source tablet replica is determined from the current transition info of the tablet.
-future<> storage_service::stream_tablet(locator::global_tablet_id tablet) {
-    // The coordinator does not execute global token metadata barrier before jumping to "streaming" stage, so we need
+// Performs a replica-side operation for a given tablet.
+// What operation is performed is determined by "op" based on the
+// current state of tablet metadata. The coordinator is supposed to prepare tablet
+// metadata according to his intent and trigger the operation,
+// without passing any transient information.
+//
+// If the operation succeeds, and the coordinator is still valid, it means
+// that the operation intended by the coordinator was performed.
+// If the coordinator is no longer valid, the operation may succeed but
+// the actual operation performed may be different than intended, it may
+// be the one intended by the new coordinator. This is not a problem
+// because the old coordinator should do nothing with such result.
+//
+// The triggers may be retried. They may also be reordered with older triggers, from
+// the same or a different coordinator. There is a protocol which ensures that
+// stale triggers won't cause operations to run beyond the migration stage they were
+// intended for. For example, that streaming is not still running after the coordinator
+// moved past the "streaming" stage, and that it won't be started when the stage is not appropriate.
+// A non-stale trigger is the one which completed successfully and caused the valid coordinator
+// to advance tablet migration to the next stage. Other triggers are called stale.
+// We can divide stale triggers into categories:
+//   (1) Those which start after the tablet was moved to the next stage
+//   Those which start before the tablet was moved to the next stage,
+//     (2) ...but after the non-stale trigger finished
+//     (3) ...but before the non-stale trigger finished
+//
+// By "start" I mean the atomic block which inserts into _tablet_ops, and by "finish" I mean
+// removal from _tablet_ops.
+// So event ordering is local from the perspective of this replica, and is linear because
+// this happens on the same shard.
+//
+// What prevents (1) from running is the fact that triggers check the state of tablet
+// metadata, and will fail immediately if the stage is not appropriate. It can happen
+// that the trigger is so stale that it will match with an appropriate stage of the next
+// migration of the same tablet. This is not a problem because we fall into the same
+// category as a stale trigger which was started in the new migration, so cases (2) or (3) apply.
+//
+// What prevents (2) from running is the fact that after the coordinator moves on to
+// the next stage, it executes a token metadata barrier, which will wait for such triggers
+// to complete as they hold on to erm via tablet_metadata_barrier. They should be aborted
+// soon after the coordinator changes the stage by the means of tablet_metadata_barrier::get_abort_source().
+//
+// What prevents (3) from running is that they will join with the non-stale trigger, or non-stale
+// trigger will join with them, depending on which came first. In that case they finish at the same time.
+//
+// It's very important that the global token metadata barrier involves all nodes which
+// may receive stale triggers started in the previous stage, so that those nodes will
+// see tablet metadata which reflects group0 state. This will cut-off stale triggers
+// as soon as the coordinator moves to the next stage.
+future<> storage_service::do_tablet_operation(locator::global_tablet_id tablet,
+                                              sstring op_name,
+                                              std::function<future<>(locator::tablet_metadata_guard&)> op) {
+    // The coordinator may not execute global token metadata barrier before triggering the operation, so we need
     // a barrier here to see the token metadata which is at least as recent as that of the sender.
     auto& raft_server = _group0->group0_server();
     co_await raft_server.read_barrier(&_abort_source);
 
-    auto tm = _shared_token_metadata.get();
-    auto& tmap = tm->tablets().get_tablet_map(tablet.table);
-    auto* trinfo = tmap.get_tablet_transition_info(tablet.tablet);
-
-    // Check if the request is still valid.
-    // If there is mismatch, it means this streaming was canceled and the coordinator moved on.
-    if (!trinfo) {
-        throw std::runtime_error(format("No transition info for tablet {}", tablet));
-    }
-    if (trinfo->stage != locator::tablet_transition_stage::streaming) {
-        throw std::runtime_error(format("Tablet {} stage is not at streaming", tablet));
-    }
-    if (trinfo->pending_replica.host != tm->get_my_id()) {
-        throw std::runtime_error(format("Tablet {} has pending replica different than this one", tablet));
-    }
-
-    auto& tinfo = tmap.get_tablet_info(tablet.tablet);
-    auto range = tmap.get_token_range(tablet.tablet);
-    locator::tablet_replica leaving_replica = locator::get_leaving_replica(tinfo, *trinfo);
-    if (leaving_replica.host == tm->get_my_id()) {
-        // The algorithm doesn't work with tablet migration within the same node because
-        // it assumes there is only one tablet replica, picked by the sharder, on local node.
-        throw std::runtime_error(format("Cannot stream within the same node, tablet: {}, shard {} -> {}",
-                                        tablet, leaving_replica.shard, trinfo->pending_replica.shard));
-    }
-    auto leaving_replica_ip = host2ip(leaving_replica.host);
-
-    if (_tablet_streaming[tablet]) {
-        slogger.debug("Streaming retry joining with existing session for tablet {}", tablet);
-        co_await _tablet_streaming[tablet]->get_future();
+    if (_tablet_ops.contains(tablet)) {
+        slogger.debug("{} retry joining with existing session for tablet {}", op_name, tablet);
+        co_await _tablet_ops[tablet].done.get_future();
         co_return;
     }
 
+    locator::tablet_metadata_guard guard(_db.local().find_column_family(tablet.table), tablet);
+    auto& as = guard.get_abort_source();
+    auto sub = _abort_source.subscribe([&as] () noexcept {
+        as.request_abort();
+    });
+
     auto async_gate_holder = _async_gate.hold();
     promise<> p;
-    _tablet_streaming[tablet] = seastar::shared_future<>(p.get_future());
-    auto erase_tablet_streaming = seastar::defer([&] {
-        _tablet_streaming.erase(tablet);
+    _tablet_ops.emplace(tablet, tablet_operation {
+        op_name, seastar::shared_future<>(p.get_future())
+    });
+    auto erase_registry_entry = seastar::defer([&] {
+        _tablet_ops.erase(tablet);
     });
 
     try {
+        co_await op(guard);
+        p.set_value();
+        slogger.debug("{} for tablet migration of {} successful", op_name, tablet);
+    } catch (...) {
+        p.set_exception(std::current_exception());
+        slogger.warn("{} for tablet migration of {} failed: {}", op_name, tablet, std::current_exception());
+        throw;
+    }
+}
+
+// Streams data to the pending tablet replica of a given tablet on this node.
+// The source tablet replica is determined from the current transition info of the tablet.
+future<> storage_service::stream_tablet(locator::global_tablet_id tablet) {
+    return do_tablet_operation(tablet, "Streaming", [this, tablet] (locator::tablet_metadata_guard& guard) -> future<> {
+        auto tm = guard.get_token_metadata();
+        auto& tmap = guard.get_tablet_map();
+        auto* trinfo = tmap.get_tablet_transition_info(tablet.tablet);
+
+        // Check if the request is still valid.
+        // If there is mismatch, it means this streaming was canceled and the coordinator moved on.
+        if (!trinfo) {
+            throw std::runtime_error(format("No transition info for tablet {}", tablet));
+        }
+        if (trinfo->stage != locator::tablet_transition_stage::streaming) {
+            throw std::runtime_error(format("Tablet {} stage is not at streaming", tablet));
+        }
+        if (trinfo->pending_replica.host != tm->get_my_id()) {
+            throw std::runtime_error(format("Tablet {} has pending replica different than this one", tablet));
+        }
+
+        auto& tinfo = tmap.get_tablet_info(tablet.tablet);
+        auto range = tmap.get_token_range(tablet.tablet);
+        locator::tablet_replica leaving_replica = locator::get_leaving_replica(tinfo, *trinfo);
+        if (leaving_replica.host == tm->get_my_id()) {
+            // The algorithm doesn't work with tablet migration within the same node because
+            // it assumes there is only one tablet replica, picked by the sharder, on local node.
+            throw std::runtime_error(format("Cannot stream within the same node, tablet: {}, shard {} -> {}",
+                                            tablet, leaving_replica.shard, trinfo->pending_replica.shard));
+        }
+        auto leaving_replica_ip = host2ip(leaving_replica.host);
+
         auto& table = _db.local().find_column_family(tablet.table);
         std::vector<sstring> tables = {table.schema()->cf_name()};
-        auto streamer = make_lw_shared<dht::range_streamer>(_db, _stream_manager, tm, _abort_source,
+        auto streamer = make_lw_shared<dht::range_streamer>(_db, _stream_manager, std::move(tm), guard.get_abort_source(),
                get_broadcast_address(), _snitch.local()->get_location(),
                "Tablet migration", streaming::stream_reason::tablet_migration, std::move(tables));
         streamer->add_source_filter(std::make_unique<dht::range_streamer::failure_detector_source_filter>(
@@ -6121,14 +6252,44 @@ future<> storage_service::stream_tablet(locator::global_tablet_id tablet) {
         ranges_per_endpoint[leaving_replica_ip].emplace_back(range);
         streamer->add_rx_ranges(table.schema()->ks_name(), std::move(ranges_per_endpoint));
         co_await streamer->stream_async();
+        co_return;
+    });
+}
 
-        p.set_value();
-        slogger.info("Streaming for tablet migration of {} successful", tablet);
-    } catch (...) {
-        p.set_exception(std::current_exception());
-        slogger.warn("Streaming for tablet migration of {} from {} failed: {}", tablet, leaving_replica, std::current_exception());
-        throw;
-    }
+future<> storage_service::cleanup_tablet(locator::global_tablet_id tablet) {
+    return do_tablet_operation(tablet, "Cleanup", [this, tablet] (locator::tablet_metadata_guard& guard) {
+        shard_id shard;
+
+        {
+            auto tm = guard.get_token_metadata();
+            auto& tmap = guard.get_tablet_map();
+            auto *trinfo = tmap.get_tablet_transition_info(tablet.tablet);
+
+            // Check if the request is still valid.
+            // If there is mismatch, it means this cleanup was canceled and the coordinator moved on.
+            if (!trinfo) {
+                throw std::runtime_error(format("No transition info for tablet {}", tablet));
+            }
+            if (trinfo->stage != locator::tablet_transition_stage::cleanup) {
+                throw std::runtime_error(format("Tablet {} stage is not at cleanup", tablet));
+            }
+
+            auto& tinfo = tmap.get_tablet_info(tablet.tablet);
+            locator::tablet_replica leaving_replica = locator::get_leaving_replica(tinfo, *trinfo);
+            if (leaving_replica.host != tm->get_my_id()) {
+                throw std::runtime_error(format("Tablet {} has leaving replica different than this one", tablet));
+            }
+            auto shard_opt = tmap.get_shard(tablet.tablet, tm->get_my_id());
+            if (!shard_opt) {
+                on_internal_error(slogger, format("Tablet {} has no shard on this node", tablet));
+            }
+            shard = *shard_opt;
+        }
+        return _db.invoke_on(shard, [tablet] (replica::database& db) {
+            auto& table = db.find_column_family(tablet.table);
+            return table.cleanup_tablet(tablet.tablet);
+        });
+    });
 }
 
 void storage_service::init_messaging_service(sharded<db::system_distributed_keyspace>& sys_dist_ks) {
@@ -6196,6 +6357,9 @@ void storage_service::init_messaging_service(sharded<db::system_distributed_keys
         return container().invoke_on(0, [tablet] (auto& ss) -> future<> {
             return ss.stream_tablet(tablet);
         });
+    });
+    ser::storage_service_rpc_verbs::register_tablet_cleanup(&_messaging.local(), [this] (locator::global_tablet_id tablet) {
+        return cleanup_tablet(tablet);
     });
 }
 

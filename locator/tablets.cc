@@ -8,6 +8,7 @@
 
 #include "locator/tablet_replication_strategy.hh"
 #include "locator/tablets.hh"
+#include "locator/tablet_metadata_guard.hh"
 #include "locator/tablet_sharder.hh"
 #include "locator/token_range_splitter.hh"
 #include "dht/i_partitioner.hh"
@@ -44,6 +45,8 @@ write_replica_set_selector get_selector_for_writes(tablet_transition_stage stage
             return write_replica_set_selector::next;
         case tablet_transition_stage::cleanup:
             return write_replica_set_selector::next;
+        case tablet_transition_stage::end_migration:
+            return write_replica_set_selector::next;
     }
     on_internal_error(tablet_logger, format("Invalid tablet transition stage: {}", static_cast<int>(stage)));
 }
@@ -62,6 +65,8 @@ read_replica_set_selector get_selector_for_reads(tablet_transition_stage stage) 
         case tablet_transition_stage::use_new:
             return read_replica_set_selector::next;
         case tablet_transition_stage::cleanup:
+            return read_replica_set_selector::next;
+        case tablet_transition_stage::end_migration:
             return read_replica_set_selector::next;
     }
     on_internal_error(tablet_logger, format("Invalid tablet transition stage: {}", static_cast<int>(stage)));
@@ -231,6 +236,7 @@ static const std::unordered_map<tablet_transition_stage, sstring> tablet_transit
     {tablet_transition_stage::streaming, "streaming"},
     {tablet_transition_stage::use_new, "use_new"},
     {tablet_transition_stage::cleanup, "cleanup"},
+    {tablet_transition_stage::end_migration, "end_migration"},
 };
 
 static const std::unordered_map<sstring, tablet_transition_stage> tablet_transition_stage_from_name = std::invoke([] {
@@ -509,6 +515,35 @@ std::unordered_set<sstring> tablet_aware_replication_strategy::recognized_tablet
 effective_replication_map_ptr tablet_aware_replication_strategy::do_make_replication_map(
         table_id table, replication_strategy_ptr rs, token_metadata_ptr tm, size_t replication_factor) const {
     return seastar::make_shared<tablet_effective_replication_map>(table, std::move(rs), std::move(tm), replication_factor);
+}
+
+void tablet_metadata_guard::check() noexcept {
+    auto erm = _table->get_effective_replication_map();
+    auto& tmap = erm->get_token_metadata_ptr()->tablets().get_tablet_map(_tablet.table);
+    auto* trinfo = tmap.get_tablet_transition_info(_tablet.tablet);
+    if (bool(_stage) != bool(trinfo) || (_stage && _stage != trinfo->stage)) {
+        _abort_source.request_abort();
+    } else {
+        _erm = std::move(erm);
+        subscribe();
+    }
+}
+
+tablet_metadata_guard::tablet_metadata_guard(replica::table& table, global_tablet_id tablet)
+    : _table(table.shared_from_this())
+    , _tablet(tablet)
+    , _erm(table.get_effective_replication_map())
+{
+    subscribe();
+    if (auto* trinfo = get_tablet_map().get_tablet_transition_info(tablet.tablet)) {
+        _stage = trinfo->stage;
+    }
+}
+
+void tablet_metadata_guard::subscribe() {
+    _callback = _erm->get_validity_abort_source().subscribe([this] () noexcept {
+        check();
+    });
 }
 
 }

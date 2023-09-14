@@ -22,7 +22,33 @@ struct tablet_migration_info {
     locator::tablet_replica dst;
 };
 
-using migration_plan = utils::chunked_vector<tablet_migration_info>;
+class migration_plan {
+public:
+    using migrations_vector = utils::chunked_vector<tablet_migration_info>;
+private:
+    migrations_vector _migrations;
+    bool _has_nodes_to_drain = false;
+public:
+    /// Returns true iff there are decommissioning nodes which own some tablet replicas.
+    bool has_nodes_to_drain() const { return _has_nodes_to_drain; }
+
+    const migrations_vector& migrations() const { return _migrations; }
+    bool empty() const { return _migrations.empty(); }
+    size_t size() const { return _migrations.size(); }
+
+    void add(tablet_migration_info info) {
+        _migrations.emplace_back(std::move(info));
+    }
+
+    void merge(migration_plan&& other) {
+        std::move(other._migrations.begin(), other._migrations.end(), std::back_inserter(_migrations));
+        _has_nodes_to_drain |= other._has_nodes_to_drain;
+    }
+
+    void set_has_nodes_to_drain(bool b) {
+        _has_nodes_to_drain = b;
+    }
+};
 
 class tablet_allocator_impl;
 
