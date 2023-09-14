@@ -1152,12 +1152,13 @@ private:
     }
 
     void update_pending_ranges() {
-        if (!_sstable_set || _sstable_set->all()->empty() || _cdata.pending_replacements.empty()) { // set can be empty for testing scenario.
+        auto pending_replacements = std::exchange(_cdata.pending_replacements, {});
+        if (!_sstable_set || _sstable_set->all()->empty() || pending_replacements.empty()) { // set can be empty for testing scenario.
             return;
         }
         // Releases reference to sstables compacted by this compaction or another, both of which belongs
         // to the same column family
-        for (auto& pending_replacement : _cdata.pending_replacements) {
+        for (auto& pending_replacement : pending_replacements) {
             for (auto& sst : pending_replacement.removed) {
                 // Set may not contain sstable to be removed because this compaction may have started
                 // before the creation of that sstable.
@@ -1171,7 +1172,6 @@ private:
             }
         }
         _selector.emplace(_sstable_set->make_incremental_selector());
-        _cdata.pending_replacements.clear();
     }
 };
 
