@@ -13,6 +13,18 @@ add_custom_command(
     ${CMAKE_CURRENT_BINARY_DIR}/debian
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 
+add_custom_target(dist-server-deb
+  COMMAND reloc/build_deb.sh
+    --reloc-pkg ${unstripped_dist_pkg}
+    --builddir ${CMAKE_CURRENT_BINARY_DIR}
+  DEPENDS ${unstripped_dist_pkg}
+  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+add_custom_target(dist-server-rpm
+  COMMAND reloc/build_rpm.sh
+    --reloc-pkg ${unstripped_dist_pkg}
+    --builddir ${CMAKE_CURRENT_BINARY_DIR}
+  DEPENDS ${unstripped_dist_pkg}
+  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 
 function(add_stripped name)
   set(output ${name}.stripped)
