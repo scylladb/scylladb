@@ -278,8 +278,9 @@ batch_size_fail_threshold_in_kb: 1024
 # experimental_features:
 #     - udf
 #     - alternator-streams
-#     - alternator-ttl
-#     - raft
+#     - consistent-topology-changes
+#     - broadcast-tables
+#     - keyspace-storage-options
 #     - tablets
 
 # The directory where hints files are stored if hinted handoff is enabled.
