@@ -90,7 +90,7 @@ Run cassandra-stress:
 
 .. code:: console
 
-    ~/scylladb/share/cassandra/bin/cassandra-stress write -node xxx
+    ~/scylladb/share/cassandra/bin/cassandra-stress write
 
 .. note::
 
