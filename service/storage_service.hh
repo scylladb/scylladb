@@ -92,6 +92,7 @@ class join_token_ring_task_impl;
 class start_rebuild_task_impl;
 class start_decommission_task_impl;
 class start_remove_node_task_impl;
+class raft_rebuild_entry_task_impl;
 }
 
 namespace service {
@@ -804,7 +805,7 @@ private:
     future<> raft_initialize_discovery_leader(raft::server&, const join_node_request_params& params);
     future<> raft_decomission();
     future<> raft_removenode(locator::host_id host_id, std::list<locator::host_id_or_endpoint> ignore_nodes_params);
-    future<> raft_rebuild(sstring source_dc);
+    topology_change build_rebuild_topology_change(raft::server& raft_server, group0_guard& guard, sstring& source_dc);
     future<> raft_check_and_repair_cdc_streams();
     future<> update_topology_with_local_metadata(raft::server&);
 
@@ -836,6 +837,7 @@ private:
     friend class node_ops::start_rebuild_task_impl;
     friend class node_ops::start_decommission_task_impl;
     friend class node_ops::start_remove_node_task_impl;
+    friend class node_ops::raft_rebuild_entry_task_impl;
 };
 
 }

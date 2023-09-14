@@ -580,9 +580,12 @@ start_rebuild_task_impl::start_rebuild_task_impl(tasks::task_manager::module_ptr
 {}
 
 future<> start_rebuild_task_impl::run() {
-    return _ss.run_with_api_lock(sstring("rebuild"), [&source_dc = _source_dc] (service::storage_service& ss) -> future<> {
+    tasks::task_info parent_info{_status.id, _status.shard};
+    return _ss.run_with_api_lock(sstring("rebuild"), [&source_dc = _source_dc, parent_info] (service::storage_service& ss) -> future<> {
         if (ss._raft_topology_change_enabled) {
-            co_await ss.raft_rebuild(source_dc);
+            auto task = co_await ss.get_task_manager_module().make_and_start_task<raft_rebuild_entry_task_impl>(parent_info, "", parent_info.id, ss,
+                std::move(source_dc));
+            co_await task->done();
         } else {
             tasks::tmlogger.info("rebuild from dc: {}", source_dc == "" ? "(any dc)" : source_dc);
             auto tmptr = ss.get_token_metadata_ptr();
@@ -610,6 +613,46 @@ future<> start_rebuild_task_impl::run() {
                 }
             }
         }
+    });
+}
+
+future<> raft_rebuild_entry_task_impl::run() {
+    auto& raft_server = _ss._group0->group0_server();
+
+    while (true) {
+        auto guard = co_await _ss._group0->client().start_operation(&_ss._abort_source);
+
+        auto it = _ss._topology_state_machine._topology.find(raft_server.id());
+        if (!it) {
+            throw std::runtime_error(::format("local node {} is not a member of the cluster", raft_server.id()));
+        }
+
+        const auto& rs = it->second;
+
+        if (rs.state != service::node_state::normal) {
+            throw std::runtime_error(::format("local node is not in the normal state (current state: {})", rs.state));
+        }
+
+        if (_ss._topology_state_machine._topology.normal_nodes.size() == 1) {
+            throw std::runtime_error("Cannot rebuild a single node");
+        }
+
+        tasks::tmlogger.info("raft topology: request rebuild for: {}", raft_server.id());
+        auto change = _ss.build_rebuild_topology_change(raft_server, guard, _source_dc);
+        service::group0_command g0_cmd = _ss._group0->client().prepare_command(std::move(change), guard, ::format("rebuild: request rebuild for {} ({})", raft_server.id(), _source_dc));
+
+        try {
+            co_await _ss._group0->client().add_entry(std::move(g0_cmd), std::move(guard), &_ss._abort_source);
+        } catch (service::group0_concurrent_modification&) {
+            tasks::tmlogger.info("raft topology: rebuild: concurrent operation is detected, retrying.");
+            continue;
+        }
+        break;
+    }
+
+    // Wait until rebuild completes. We know it completes when the request parameter is empty
+    co_await _ss._topology_state_machine.event.when([&ss = _ss, &raft_server] {
+        return !ss._topology_state_machine._topology.req_param.contains(raft_server.id());
     });
 }
 

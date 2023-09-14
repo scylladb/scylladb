@@ -172,6 +172,22 @@ protected:
     virtual future<> run() override;
 };
 
+class raft_rebuild_entry_task_impl : public rebuild_node_task_impl {
+private:
+    sstring _source_dc;
+public:
+    raft_rebuild_entry_task_impl(tasks::task_manager::module_ptr module,
+            std::string entity,
+            tasks::task_id parent_id,
+            service::storage_service& ss,
+            sstring source_dc) noexcept
+        : rebuild_node_task_impl(std::move(module), tasks::task_id::create_random_id(), 0, "raft entry", std::move(entity), parent_id, ss)
+        , _source_dc(std::move(source_dc))
+    {}
+protected:
+    virtual future<> run() override;
+};
+
 class start_decommission_task_impl : public decommission_node_task_impl {
 public:
     start_decommission_task_impl(tasks::task_manager::module_ptr module,
