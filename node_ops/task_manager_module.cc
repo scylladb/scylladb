@@ -667,11 +667,13 @@ future<> start_decommission_task_impl::run() {
     co_await utils::get_local_injector().inject_with_handler("node_ops_start_decommission_task_impl_run",
             [] (auto& handler) { return handler.wait_for_message(db::timeout_clock::now() + 10s); });
 
-    co_await _ss.run_with_api_lock(sstring("decommission"), [] (service::storage_service& ss) {
-        return seastar::async([&ss] {
+    tasks::task_info parent_info{_status.id, _status.shard};
+    co_await _ss.run_with_api_lock(sstring("decommission"), [parent_info] (service::storage_service& ss) {
+        return seastar::async([&ss, parent_info] {
             std::exception_ptr leave_group0_ex;
             if (ss._raft_topology_change_enabled) {
-                ss.raft_decomission().get();
+                auto task = ss.get_task_manager_module().make_and_start_task<raft_decommission_entry_task_impl>(parent_info, "", parent_info.id, ss).get();
+                task->done().get();
             } else {
                 bool left_token_ring = false;
                 auto uuid = node_ops_id::create_random_id();
@@ -817,6 +819,54 @@ future<> start_decommission_task_impl::run() {
             // let op be responsible for killing the process
         });
     });
+}
+
+future<> raft_decommission_entry_task_impl::run() {
+    auto& raft_server = _ss._group0->group0_server();
+
+    auto shutdown_request_future = make_ready_future<>();
+    auto disengage_shutdown_promise = defer([&ss = _ss] {
+        ss._shutdown_request_promise = std::nullopt;
+    });
+
+    while (true) {
+        auto guard = co_await _ss._group0->client().start_operation(&_ss._abort_source);
+
+        auto it = _ss._topology_state_machine._topology.find(raft_server.id());
+        if (!it) {
+            throw std::runtime_error(::format("local node {} is not a member of the cluster", raft_server.id()));
+        }
+
+        const auto& rs = it->second;
+
+        if (rs.state != service::node_state::normal) {
+            throw std::runtime_error(::format("local node is not in the normal state (current state: {})", rs.state));
+        }
+
+        if (_ss._topology_state_machine._topology.normal_nodes.size() == 1) {
+            throw std::runtime_error("Cannot decomission last node in the cluster");
+        }
+
+        shutdown_request_future = _ss._shutdown_request_promise.emplace().get_future();
+
+        tasks::tmlogger.info("raft topology: request decomission for: {}", raft_server.id());
+        service::topology_change change = _ss.build_decommission_topology_change(raft_server, guard);
+        service::group0_command g0_cmd = _ss._group0->client().prepare_command(std::move(change), guard, ::format("decomission: request decomission for {}", raft_server.id()));
+
+        try {
+            co_await _ss._group0->client().add_entry(std::move(g0_cmd), std::move(guard), &_ss._abort_source);
+        } catch (service::group0_concurrent_modification&) {
+            tasks::tmlogger.info("raft topology: decomission: concurrent operation is detected, retrying.");
+            continue;
+        }
+        break;
+    }
+
+    // Wait for the coordinator to tell us to shut down.
+    co_await std::move(shutdown_request_future);
+
+    // Need to set it otherwise gossiper will try to send shutdown on exit
+    co_await _ss._gossiper.add_local_application_state({{ gms::application_state::STATUS, gms::versioned_value::left({}, _ss._gossiper.now().time_since_epoch().count()) }});
 }
 
 start_remove_node_task_impl::start_remove_node_task_impl(tasks::task_manager::module_ptr module,
