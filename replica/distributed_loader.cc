@@ -411,8 +411,7 @@ sstables::shared_sstable make_sstable(replica::table& table, sstables::sstable_s
 }
 
 future<> table_populator::populate_subdir(sstables::sstable_state state, allow_offstrategy_compaction do_allow_offstrategy_compaction) {
-    auto sstdir = get_path(state);
-    dblog.debug("Populating {}/{}/{} allow_offstrategy_compaction={}", _ks, _cf, sstdir, do_allow_offstrategy_compaction);
+    dblog.debug("Populating {}/{}/{} state={} allow_offstrategy_compaction={}", _ks, _cf, _base_path, state, do_allow_offstrategy_compaction);
 
     if (!_sstable_directories.contains(state)) {
         co_return;
