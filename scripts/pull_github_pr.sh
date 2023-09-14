@@ -69,7 +69,7 @@ git fetch "$REMOTE" pull/$PR_NUM/head
 
 nr_commits=$(git log --pretty=oneline HEAD..FETCH_HEAD | wc -l)
 
-closes="${NL}${NL}Closes #${PR_NUM}${NL}"
+closes="${NL}${NL}Closes ${PROJECT}#${PR_NUM}${NL}"
 
 if [[ $nr_commits == 1 ]]; then
 	commit=$(git log --pretty=oneline HEAD..FETCH_HEAD | awk '{print $1}')
