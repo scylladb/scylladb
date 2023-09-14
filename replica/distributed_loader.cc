@@ -462,17 +462,10 @@ future<> table_populator::populate_subdir(sstables::sstable_state state, allow_o
     });
 }
 
-future<> distributed_loader::populate_keyspace(distributed<replica::database>& db, sstring datadir, sstring ks_name) {
+future<> distributed_loader::populate_keyspace(distributed<replica::database>& db, keyspace& ks, sstring datadir, sstring ks_name) {
     auto ksdir = datadir + "/" + ks_name;
-    auto& keyspaces = db.local().get_keyspaces();
-    auto i = keyspaces.find(ks_name);
-    if (i == keyspaces.end()) {
-        dblog.warn("Skipping undefined keyspace: {}", ks_name);
-        co_return;
-    }
 
     dblog.info("Populating Keyspace {}", ks_name);
-    auto& ks = i->second;
     auto& tables_metadata = db.local().get_tables_metadata();
 
     co_await coroutine::parallel_for_each(ks.metadata()->cf_meta_data() | boost::adaptors::map_values, [&] (schema_ptr s) -> future<> {
@@ -524,7 +517,11 @@ future<> distributed_loader::init_system_keyspace(sharded<db::system_keyspace>& 
         const auto& cfg = db.local().get_config();
         for (auto& data_dir : cfg.data_file_directories()) {
             for (auto ksname : system_keyspaces) {
-                distributed_loader::populate_keyspace(db, data_dir, sstring(ksname)).get();
+                auto& ks = db.local().get_keyspaces();
+                auto i = ks.find(ksname);
+                if (i != ks.end()) {
+                    distributed_loader::populate_keyspace(db, i->second, data_dir, sstring(ksname)).get();
+                }
             }
         }
     });
@@ -562,7 +559,7 @@ future<> distributed_loader::init_non_system_keyspaces(distributed<replica::data
                 // might have more than one dir for a keyspace iff data_file_directories is > 1 and
                 // somehow someone placed sstables in more than one of them for a given ks. (import?)
                 futures.emplace_back(parallel_for_each(cfg.data_file_directories(), [&] (const sstring& data_dir) {
-                    return distributed_loader::populate_keyspace(db, data_dir, ks_name);
+                    return distributed_loader::populate_keyspace(db, ks.second, data_dir, ks_name);
                 }));
             }
 
