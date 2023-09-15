@@ -548,7 +548,7 @@ struct null_backlog_tracker final : public compaction_backlog_tracker::impl {
 //
 class null_compaction_strategy : public compaction_strategy_impl {
 public:
-    virtual compaction_descriptor get_sstables_for_compaction(table_state& table_s, strategy_control& control, std::vector<sstables::shared_sstable> candidates) override {
+    virtual compaction_descriptor get_sstables_for_compaction(table_state& table_s, strategy_control& control) override {
         return sstables::compaction_descriptor();
     }
 
@@ -667,8 +667,8 @@ compaction_strategy_type compaction_strategy::type() const {
     return _compaction_strategy_impl->type();
 }
 
-compaction_descriptor compaction_strategy::get_sstables_for_compaction(table_state& table_s, strategy_control& control, std::vector<sstables::shared_sstable> candidates) {
-    return _compaction_strategy_impl->get_sstables_for_compaction(table_s, control, std::move(candidates));
+compaction_descriptor compaction_strategy::get_sstables_for_compaction(table_state& table_s, strategy_control& control) {
+    return _compaction_strategy_impl->get_sstables_for_compaction(table_s, control);
 }
 
 compaction_descriptor compaction_strategy::get_major_compaction_job(table_state& table_s, std::vector<sstables::shared_sstable> candidates) {

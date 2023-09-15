@@ -1175,7 +1175,7 @@ protected:
 
             table_state& t = *_compacting_table;
             sstables::compaction_strategy cs = t.get_compaction_strategy();
-            sstables::compaction_descriptor descriptor = cs.get_sstables_for_compaction(t, _cm.get_strategy_control(), _cm.get_candidates(t));
+            sstables::compaction_descriptor descriptor = cs.get_sstables_for_compaction(t, _cm.get_strategy_control());
             int weight = calculate_weight(descriptor);
 
             if (descriptor.sstables.empty() || !can_proceed() || t.is_auto_compaction_disabled_by_user()) {
@@ -1263,7 +1263,7 @@ future<> compaction_manager::maybe_wait_for_sstable_count_reduction(table_state&
     }
     auto num_runs_for_compaction = [&, this] {
         auto& cs = t.get_compaction_strategy();
-        auto desc = cs.get_sstables_for_compaction(t, get_strategy_control(), get_candidates(t));
+        auto desc = cs.get_sstables_for_compaction(t, get_strategy_control());
         return boost::copy_range<std::unordered_set<sstables::run_id>>(
             desc.sstables
             | boost::adaptors::transformed(std::mem_fn(&sstables::sstable::run_identifier))).size();

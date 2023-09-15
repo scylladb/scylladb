@@ -144,11 +144,11 @@ static std::unique_ptr<strategy_control> make_strategy_control_for_test(bool has
 
 template <typename CompactionStrategy>
 requires requires(CompactionStrategy cs, table_state& t, strategy_control& c) {
-    { cs.get_sstables_for_compaction(t, c, std::vector<shared_sstable>()) } -> std::same_as<sstables::compaction_descriptor>;
+    { cs.get_sstables_for_compaction(t, c) } -> std::same_as<sstables::compaction_descriptor>;
 }
 static compaction_descriptor get_sstables_for_compaction(CompactionStrategy& cs, table_state& t, std::vector<shared_sstable> candidates) {
     auto control = make_strategy_control_for_test(false, std::move(candidates));
-    return cs.get_sstables_for_compaction(t, *control, control->candidates(t));
+    return cs.get_sstables_for_compaction(t, *control);
 }
 
 static void assert_table_sstable_count(table_for_tests& t, size_t expected_count) {

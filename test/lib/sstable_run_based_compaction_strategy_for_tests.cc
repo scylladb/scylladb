@@ -13,7 +13,7 @@ namespace sstables {
 
 sstable_run_based_compaction_strategy_for_tests::sstable_run_based_compaction_strategy_for_tests() = default;
 
-compaction_descriptor sstable_run_based_compaction_strategy_for_tests::get_sstables_for_compaction(table_state& table_s, strategy_control& control, std::vector<sstables::shared_sstable> uncompacting_sstables) {
+compaction_descriptor sstable_run_based_compaction_strategy_for_tests::get_sstables_for_compaction(table_state& table_s, strategy_control& control) {
     // Get unique runs from all uncompacting sstables
     std::vector<frozen_sstable_run> runs = table_s.main_sstable_set().all_sstable_runs();
 
