@@ -384,66 +384,15 @@ future<> join_token_ring_task_impl::run() {
     // We attempted to replace this with a schema-presence check, but you need a meaningful sleep
     // to get schema info from gossip which defeats the purpose.  See CASSANDRA-4427 for the gory details.
     if (should_bootstrap()) {
-        bool resume_bootstrap = sys_ks.local().bootstrap_in_progress();
-        if (resume_bootstrap) {
-            tasks::tmlogger.warn("Detected previous bootstrap failure; retrying");
-        } else {
-            co_await sys_ks.local().set_bootstrap_state(db::system_keyspace::bootstrap_state::IN_PROGRESS);
-        }
-        tasks::tmlogger.info("waiting for ring information");
-
-        // if our schema hasn't matched yet, keep sleeping until it does
-        // (post CASSANDRA-1391 we don't expect this to be necessary very often, but it doesn't hurt to be careful)
-        co_await _ss.wait_for_ring_to_settle();
-
         if (!replace_address) {
-            auto tmptr = get_token_metadata_ptr();
-
-            if (tmptr->is_normal_token_owner(get_broadcast_address())) {
-                throw std::runtime_error("This node is already a member of the token ring; bootstrap aborted. (If replacing a dead node, remove the old one from the ring first.)");
-            }
-            tasks::tmlogger.info("getting bootstrap token");
-            if (resume_bootstrap) {
-                bootstrap_tokens = co_await sys_ks.local().get_saved_tokens();
-                if (!bootstrap_tokens.empty()) {
-                    tasks::tmlogger.info("Using previously saved tokens = {}", bootstrap_tokens);
-                } else {
-                    bootstrap_tokens = dht::boot_strapper::get_bootstrap_tokens(tmptr, db.local().get_config(), dht::check_token_endpoint::yes);
-                }
-            } else {
-                bootstrap_tokens = dht::boot_strapper::get_bootstrap_tokens(tmptr, db.local().get_config(), dht::check_token_endpoint::yes);
-            }
+            auto task = co_await _ss.get_task_manager_module().make_and_start_task<gossiper_bootstrap_task_impl>(parent_info, "", _status.id, _ss, _sys_dist_ks,
+                bootstrap_tokens, cdc_gen_id);
+            co_await task->done();
         } else {
-            if (*replace_address != get_broadcast_address()) {
-                // Sleep additionally to make sure that the server actually is not alive
-                // and giving it more time to gossip if alive.
-                tasks::tmlogger.info("Sleeping before replacing {}...", *replace_address);
-                co_await sleep_abortable(2 * _ss.get_ring_delay(), _ss._abort_source);
-
-                // check for operator errors...
-                const auto tmptr = get_token_metadata_ptr();
-                for (auto token : bootstrap_tokens) {
-                    auto existing = tmptr->get_endpoint(token);
-                    if (existing) {
-                        auto eps = gossiper.get_endpoint_state_ptr(*existing);
-                        if (eps && eps->get_update_timestamp() > gms::gossiper::clk::now() - _delay) {
-                            throw std::runtime_error("Cannot replace a live node...");
-                        }
-                    } else {
-                        throw std::runtime_error(::format("Cannot replace token {} which does not exist!", token));
-                    }
-                }
-            } else {
-                tasks::tmlogger.info("Sleeping before replacing {}...", *replace_address);
-                co_await sleep_abortable(_ss.get_ring_delay(), _ss._abort_source);
-            }
-            tasks::tmlogger.info("Replacing a node with token(s): {}", bootstrap_tokens);
-            // bootstrap_tokens was previously set using tokens gossiped by the replaced node
+            auto task = co_await _ss.get_task_manager_module().make_and_start_task<gossiper_replace_task_impl>(parent_info, "", _status.id, _ss, _sys_dist_ks,
+                bootstrap_tokens, cdc_gen_id, *ri, *replace_address, _delay);
+            co_await task->done();
         }
-        co_await _sys_dist_ks.invoke_on_all(&db::system_distributed_keyspace::start);
-        co_await _ss.mark_existing_views_as_built(_sys_dist_ks);
-        co_await sys_ks.local().update_tokens(bootstrap_tokens);
-        co_await _ss.bootstrap(bootstrap_tokens, cdc_gen_id, ri);
     } else {
         supervisor::notify("starting system distributed keyspace");
         co_await _sys_dist_ks.invoke_on_all(&db::system_distributed_keyspace::start);
@@ -626,6 +575,91 @@ future<> raft_replace_task_impl::run() {
     }
 
     co_await finish_raft_joining(_raft_server);
+}
+
+future<> gossiper_bootstrap_task_impl::run() {
+    auto& sys_ks = _ss._sys_ks;
+    auto& db = _ss._db;
+    bool resume_bootstrap = sys_ks.local().bootstrap_in_progress();
+    if (resume_bootstrap) {
+        tasks::tmlogger.warn("Detected previous bootstrap failure; retrying");
+    } else {
+        co_await sys_ks.local().set_bootstrap_state(db::system_keyspace::bootstrap_state::IN_PROGRESS);
+    }
+    tasks::tmlogger.info("waiting for ring information");
+
+    // if our schema hasn't matched yet, keep sleeping until it does
+    // (post CASSANDRA-1391 we don't expect this to be necessary very often, but it doesn't hurt to be careful)
+    co_await _ss.wait_for_ring_to_settle();
+
+    auto tmptr = _ss.get_token_metadata_ptr();
+
+    if (tmptr->is_normal_token_owner(_ss.get_broadcast_address())) {
+        throw std::runtime_error("This node is already a member of the token ring; bootstrap aborted. (If replacing a dead node, remove the old one from the ring first.)");
+    }
+    tasks::tmlogger.info("getting bootstrap token");
+    if (resume_bootstrap) {
+        _bootstrap_tokens = co_await sys_ks.local().get_saved_tokens();
+        if (!_bootstrap_tokens.empty()) {
+            tasks::tmlogger.info("Using previously saved tokens = {}", _bootstrap_tokens);
+        } else {
+            _bootstrap_tokens = dht::boot_strapper::get_bootstrap_tokens(tmptr, db.local().get_config(), dht::check_token_endpoint::yes);
+        }
+    } else {
+        _bootstrap_tokens = dht::boot_strapper::get_bootstrap_tokens(tmptr, db.local().get_config(), dht::check_token_endpoint::yes);
+    }
+
+    co_await _sys_dist_ks.invoke_on_all(&db::system_distributed_keyspace::start);
+    co_await _ss.mark_existing_views_as_built(_sys_dist_ks);
+    co_await sys_ks.local().update_tokens(_bootstrap_tokens);
+    co_await _ss.bootstrap(_bootstrap_tokens, _cdc_gen_id, std::nullopt);
+}
+
+future<> gossiper_replace_task_impl::run() {
+    auto& sys_ks = _ss._sys_ks;
+    auto& gossiper = _ss._gossiper;
+    bool resume_bootstrap = sys_ks.local().bootstrap_in_progress();
+    if (resume_bootstrap) {
+        tasks::tmlogger.warn("Detected previous bootstrap failure; retrying");
+    } else {
+        co_await sys_ks.local().set_bootstrap_state(db::system_keyspace::bootstrap_state::IN_PROGRESS);
+    }
+    tasks::tmlogger.info("waiting for ring information");
+
+    // if our schema hasn't matched yet, keep sleeping until it does
+    // (post CASSANDRA-1391 we don't expect this to be necessary very often, but it doesn't hurt to be careful)
+    co_await _ss.wait_for_ring_to_settle();
+
+    if (_replace_address != _ss.get_broadcast_address()) {
+        // Sleep additionally to make sure that the server actually is not alive
+        // and giving it more time to gossip if alive.
+        tasks::tmlogger.info("Sleeping before replacing {}...", _replace_address);
+        co_await sleep_abortable(2 * _ss.get_ring_delay(), _ss._abort_source);
+
+        // check for operator errors...
+        const auto tmptr = _ss.get_token_metadata_ptr();
+        for (auto token : _bootstrap_tokens) {
+            auto existing = tmptr->get_endpoint(token);
+            if (existing) {
+                auto eps = gossiper.get_endpoint_state_ptr(*existing);
+                if (eps && eps->get_update_timestamp() > gms::gossiper::clk::now() - _delay) {
+                    throw std::runtime_error("Cannot replace a live node...");
+                }
+            } else {
+                throw std::runtime_error(::format("Cannot replace token {} which does not exist!", token));
+            }
+        }
+    } else {
+        tasks::tmlogger.info("Sleeping before replacing {}...", _replace_address);
+        co_await sleep_abortable(_ss.get_ring_delay(), _ss._abort_source);
+    }
+    tasks::tmlogger.info("Replacing a node with token(s): {}", _bootstrap_tokens);
+    // bootstrap_tokens was previously set using tokens gossiped by the replaced node
+
+    co_await _sys_dist_ks.invoke_on_all(&db::system_distributed_keyspace::start);
+    co_await _ss.mark_existing_views_as_built(_sys_dist_ks);
+    co_await sys_ks.local().update_tokens(_bootstrap_tokens);
+    co_await _ss.bootstrap(_bootstrap_tokens, _cdc_gen_id, _ri);
 }
 
 start_rebuild_task_impl::start_rebuild_task_impl(tasks::task_manager::module_ptr module,
