@@ -143,17 +143,13 @@ sstable_set::select(const dht::partition_range& range) const {
 }
 
 std::vector<sstable_run>
-sstable_set::select_sstable_runs(const std::vector<shared_sstable>& sstables) const {
-    return _impl->select_sstable_runs(sstables);
+sstable_set::all_sstable_runs() const {
+    return _impl->all_sstable_runs();
 }
 
 std::vector<sstable_run>
-partitioned_sstable_set::select_sstable_runs(const std::vector<shared_sstable>& sstables) const {
-    auto has_run = [this] (const shared_sstable& sst) { return _all_runs.contains(sst->run_identifier()); };
-    auto run_ids = boost::copy_range<std::unordered_set<sstables::run_id>>(sstables | boost::adaptors::filtered(has_run) | boost::adaptors::transformed(std::mem_fn(&sstable::run_identifier)));
-    return boost::copy_range<std::vector<sstable_run>>(run_ids | boost::adaptors::transformed([this] (sstables::run_id run_id) {
-        return _all_runs.at(run_id);
-    }));
+partitioned_sstable_set::all_sstable_runs() const {
+    return boost::copy_range<std::vector<sstable_run>>(_all_runs | boost::adaptors::map_values);
 }
 
 lw_shared_ptr<const sstable_list>
@@ -908,7 +904,7 @@ filter_sstable_for_reader_by_ck(std::vector<shared_sstable>&& sstables, replica:
 }
 
 std::vector<sstable_run>
-sstable_set_impl::select_sstable_runs(const std::vector<shared_sstable>& sstables) const {
+sstable_set_impl::all_sstable_runs() const {
     throw_with_backtrace<std::bad_function_call>();
 }
 
@@ -1065,10 +1061,10 @@ std::vector<shared_sstable> compound_sstable_set::select(const dht::partition_ra
     return ret;
 }
 
-std::vector<sstable_run> compound_sstable_set::select_sstable_runs(const std::vector<shared_sstable>& sstables) const {
+std::vector<sstable_run> compound_sstable_set::all_sstable_runs() const {
     std::vector<sstable_run> ret;
     for (auto& set : _sets) {
-        auto runs = set->select_sstable_runs(sstables);
+        auto runs = set->all_sstable_runs();
         if (ret.empty()) {
             ret = std::move(runs);
         } else {

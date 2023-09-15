@@ -71,7 +71,7 @@ public:
     virtual ~sstable_set_impl() {}
     virtual std::unique_ptr<sstable_set_impl> clone() const = 0;
     virtual std::vector<shared_sstable> select(const dht::partition_range& range) const = 0;
-    virtual std::vector<sstable_run> select_sstable_runs(const std::vector<shared_sstable>& sstables) const;
+    virtual std::vector<sstable_run> all_sstable_runs() const;
     virtual lw_shared_ptr<const sstable_list> all() const = 0;
     virtual stop_iteration for_each_sstable_until(std::function<stop_iteration(const shared_sstable&)> func) const = 0;
     virtual future<stop_iteration> for_each_sstable_gently_until(std::function<future<stop_iteration>(const shared_sstable&)> func) const = 0;
@@ -116,7 +116,7 @@ public:
     sstable_set& operator=(sstable_set&&) noexcept;
     std::vector<shared_sstable> select(const dht::partition_range& range) const;
     // Return all runs which contain any of the input sstables.
-    std::vector<sstable_run> select_sstable_runs(const std::vector<shared_sstable>& sstables) const;
+    std::vector<sstable_run> all_sstable_runs() const;
     // Return all sstables. It's not guaranteed that sstable_set will keep a reference to the returned list, so user should keep it.
     lw_shared_ptr<const sstable_list> all() const;
     // Prefer for_each_sstable() over all() for iteration purposes, as the latter may have to copy all sstables into a temporary
