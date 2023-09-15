@@ -404,6 +404,8 @@ public:
 
     uint64_t id() const noexcept;
 
+    std::unordered_map<std::string, uint64_t> collect_stats() const;
+
     friend class allocating_section;
 };
 

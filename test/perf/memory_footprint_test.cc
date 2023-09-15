@@ -265,6 +265,12 @@ int main(int argc, char** argv) {
 
             std::cout << "\n";
             size_calculator::print_cache_entry_size();
+
+            auto cache_st = tracker.region().collect_stats();
+            std::cout << "LSA stats:" << "\n";
+            for (auto [ name, size ] : cache_st) {
+                std::cout << "  " << name << ": " << size << "\n";
+            }
         });
     });
 }

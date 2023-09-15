@@ -40,6 +40,7 @@ public:
     virtual size_t size(const void* obj) const = 0;
     size_t align() const { return _align; }
     uint32_t index() const { return _index; }
+    virtual std::string name() const = 0;
 };
 
 // Non-constant-size classes (ending with `char data[0]`) must provide
@@ -74,6 +75,10 @@ public:
     }
     virtual size_t size(const void* obj) const override {
         return size_for_allocation_strategy(*static_cast<const T*>(obj));
+    }
+
+    virtual std::string name() const override {
+        return typeid(T).name();
     }
 };
 
