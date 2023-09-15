@@ -41,7 +41,7 @@ public:
     // Builds a sstable run with single fragment. It bypasses overlapping check done in insert().
     sstable_run(shared_sstable);
     // Returns false if sstable being inserted cannot satisfy the disjoint invariant. Then caller should pick another run for it.
-    bool insert(shared_sstable sst);
+    [[nodiscard]] bool insert(shared_sstable sst);
     void erase(shared_sstable sst);
     bool empty() const noexcept {
         return _all.empty();

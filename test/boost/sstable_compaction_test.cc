@@ -1710,7 +1710,7 @@ SEASTAR_TEST_CASE(sstable_expired_data_ratio) {
         // Asserts that two keys are equal to within a positive delta
         BOOST_REQUIRE(std::fabs(sst->estimate_droppable_tombstone_ratio(gc_before) - expired) <= 0.1);
         sstable_run run;
-        run.insert(sst);
+        BOOST_REQUIRE(run.insert(sst));
         BOOST_REQUIRE(std::fabs(run.estimate_droppable_tombstone_ratio(gc_before) - expired) <= 0.1);
 
         auto creator = sst_gen;
