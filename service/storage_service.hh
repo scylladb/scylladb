@@ -37,13 +37,14 @@
 #include <seastar/core/lowres_clock.hh>
 #include "cdc/generation_id.hh"
 #include "raft/raft.hh"
-#include "repair/id.hh"
+#include "node_ops/id.hh"
 #include "raft/server.hh"
 #include "service/topology_state_machine.hh"
 #include "service/tablet_allocator.hh"
 
 class node_ops_cmd_request;
 class node_ops_cmd_response;
+struct node_ops_ctl;
 class node_ops_info;
 enum class node_ops_cmd : uint32_t;
 class repair_service;
@@ -91,7 +92,6 @@ class raft_group0;
 enum class disk_error { regular, commit };
 
 class node_ops_meta_data;
-struct node_ops_ctl;
 
 /**
  * This abstraction contains the token/identifier of this node
@@ -236,7 +236,7 @@ private:
         return _gossiper;
     };
 
-    friend struct node_ops_ctl;
+    friend struct ::node_ops_ctl;
 public:
 
     locator::effective_replication_map_factory& get_erm_factory() noexcept {
