@@ -203,7 +203,7 @@ std::vector<char*> massage_argv(int argc, char** argv) {
     static std::vector<std::string> argv_holder;
     argv_holder.reserve(argc);
 
-    for (size_t i = 0; i < argc; ++i) {
+    for (int i = 0; i < argc; ++i) {
         if (argv[i][0] != '-') {
             argv_holder.push_back(argv[i]);
             continue;
