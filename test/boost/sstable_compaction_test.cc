@@ -125,6 +125,14 @@ public:
     bool has_ongoing_compaction(table_state& table_s) const noexcept override {
         return _has_ongoing_compaction;
     }
+
+    std::vector<sstables::shared_sstable> candidates(table_state& t) const override {
+        return boost::copy_range<std::vector<sstables::shared_sstable>>(*t.main_sstable_set().all());
+    }
+
+    std::vector<sstables::frozen_sstable_run> candidates_as_runs(table_state& t) const override {
+        return t.main_sstable_set().all_sstable_runs();
+    }
 };
 
 static std::unique_ptr<strategy_control> make_strategy_control_for_test(bool has_ongoing_compaction) {

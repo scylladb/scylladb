@@ -2047,6 +2047,14 @@ public:
                 && task->compacting_table()->schema()->cf_name() == s->cf_name();
         });
     }
+
+    std::vector<sstables::shared_sstable> candidates(table_state& t) const override {
+        return _cm.get_candidates(t, *t.main_sstable_set().all());
+    }
+
+    std::vector<sstables::frozen_sstable_run> candidates_as_runs(table_state& t) const override {
+        return _cm.get_candidates(t, t.main_sstable_set().all_sstable_runs());
+    }
 };
 
 strategy_control& compaction_manager::get_strategy_control() const noexcept {
