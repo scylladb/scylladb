@@ -42,7 +42,7 @@ namespace cdc {
         uint8_t sharding_ignore_msb;
     };
     class topology_description {
-        std::vector<token_range_description> _entries;
+        utils::chunked_vector<token_range_description> _entries;
 public:
         ... methods ...
     };

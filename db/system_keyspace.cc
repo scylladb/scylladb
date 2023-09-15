@@ -2676,7 +2676,7 @@ future<> system_keyspace::update_topology_fence_version(int64_t value) {
 
 future<cdc::topology_description>
 system_keyspace::read_cdc_generation(utils::UUID id) {
-    std::vector<cdc::token_range_description> entries;
+    utils::chunked_vector<cdc::token_range_description> entries;
     co_await _qp.query_internal(
             format("SELECT range_end, streams, ignore_msb FROM {}.{} WHERE key = '{}' AND id = ?",
                    NAME, CDC_GENERATIONS_V3, cdc::CDC_GENERATIONS_V3_KEY),
