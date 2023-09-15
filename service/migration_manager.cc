@@ -146,18 +146,17 @@ void migration_manager::init_messaging_service()
             [] (migration_manager& self, const rpc::client_info& cinfo, rpc::optional<netw::schema_pull_options> options)
                 -> future<rpc::tuple<std::vector<frozen_mutation>, std::vector<canonical_mutation>>> {
         const auto cm_retval_supported = options && options->remote_supports_canonical_mutation_retval;
+        if (!cm_retval_supported) {
+            // Canonical mutations support was added way back in scylla-3.2 and we don't support
+            // skipping versions during upgrades (certainly not a 3.2 -> 5.4 upgrade).
+            on_internal_error(mlogger, "canonical mutations not supported by remote node");
+        }
 
         auto features = self._feat.cluster_schema_features();
         auto& proxy = self._storage_proxy.container();
         auto& db = proxy.local().get_db();
         auto cm = co_await db::schema_tables::convert_schema_to_mutations(proxy, features);
         if (options->group0_snapshot_transfer) {
-            // if `group0_snapshot_transfer` is `true`, the sender must also understand canonical mutations
-            // (`group0_snapshot_transfer` was added more recently).
-            if (!cm_retval_supported) {
-                on_internal_error(mlogger,
-                    "migration request handler: group0 snapshot transfer requested, but canonical mutations not supported");
-            }
             cm.emplace_back(co_await db::system_keyspace::get_group0_history(db));
             if (proxy.local().local_db().get_config().check_experimental(db::experimental_features_t::feature::TABLETS)) {
                 for (auto&& m: co_await replica::read_tablet_mutations(db)) {
@@ -165,13 +164,7 @@ void migration_manager::init_messaging_service()
                 }
             }
         }
-        if (cm_retval_supported) {
-            co_return rpc::tuple(std::vector<frozen_mutation>{}, std::move(cm));
-        }
-        auto fm = boost::copy_range<std::vector<frozen_mutation>>(cm | boost::adaptors::transformed([&db = db.local()] (const canonical_mutation& cm) {
-            return cm.to_mutation(db.find_column_family(cm.column_family_id()).schema());
-        }));
-        co_return rpc::tuple(std::move(fm), std::move(cm));
+        co_return rpc::tuple(std::vector<frozen_mutation>{}, std::move(cm));
     }, std::ref(*this)));
     _messaging.register_schema_check([this] {
         return make_ready_future<table_schema_version>(_storage_proxy.get_db().local().get_version());
