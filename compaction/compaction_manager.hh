@@ -194,9 +194,12 @@ private:
     // Get candidates for compaction strategy, which are all sstables but the ones being compacted.
     std::vector<sstables::shared_sstable> get_candidates(compaction::table_state& t) const;
 
+    bool eligible_for_compaction(const sstables::shared_sstable& sstable) const;
+    bool eligible_for_compaction(const sstables::frozen_sstable_run& sstable_run) const;
+
     template <std::ranges::range Range>
-    requires std::convertible_to<std::ranges::range_value_t<Range>, sstables::shared_sstable>
-    std::vector<sstables::shared_sstable> get_candidates(table_state& t, const Range& sstables) const;
+    requires std::convertible_to<std::ranges::range_value_t<Range>, sstables::shared_sstable> || std::convertible_to<std::ranges::range_value_t<Range>, sstables::frozen_sstable_run>
+    std::vector<std::ranges::range_value_t<Range>> get_candidates(table_state& t, const Range& sstables) const;
 
     template <std::ranges::range Range>
     requires std::same_as<std::ranges::range_value_t<Range>, sstables::shared_sstable>
