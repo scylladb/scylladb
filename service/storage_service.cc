@@ -444,7 +444,7 @@ future<> storage_service::topology_state_load() {
 
             slogger.trace("raft topology: loading topology: raft id={} ip={} node state={} dc={} rack={} tokens state={} tokens={}",
                           id, ip, rs.state, rs.datacenter, rs.rack, _topology_state_machine._topology.tstate,
-                          seastar::value_of([&] () -> sstring {
+                          seastar::value_of([&rs = rs] () -> sstring {
                               return rs.ring ? ::format("{}", rs.ring->tokens) : sstring("null");
                           }));
 
