@@ -11,6 +11,7 @@
 #include "readers/flat_mutation_reader_fwd.hh"
 #include "readers/flat_mutation_reader_v2.hh"
 #include "sstables/progress_monitor.hh"
+#include "sstables/types_fwd.hh"
 #include "shared_sstable.hh"
 #include "dht/i_partitioner.hh"
 #include <seastar/core/shared_ptr.hh>
@@ -50,6 +51,7 @@ public:
     uint64_t data_size() const;
     const sstable_set& all() const { return _all; }
     double estimate_droppable_tombstone_ratio(gc_clock::time_point gc_before) const;
+    run_id run_identifier() const;
 };
 
 using shared_sstable_run = lw_shared_ptr<sstable_run>;

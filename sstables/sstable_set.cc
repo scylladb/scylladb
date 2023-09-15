@@ -97,6 +97,10 @@ double sstable_run::estimate_droppable_tombstone_ratio(gc_clock::time_point gc_b
     return _all.size() ? estimate_sum / _all.size() : double(0);
 }
 
+sstables::run_id sstable_run::run_identifier() const {
+    return (_all.empty()) ? run_id() : (*_all.begin())->run_identifier();
+}
+
 std::ostream& operator<<(std::ostream& os, const sstables::sstable_run& run) {
     os << "Run = {\n";
     if (run.all().empty()) {
