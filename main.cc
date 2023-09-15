@@ -1879,10 +1879,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             supervisor::notify("serving");
             // Register at_exit last, so that storage_service::drain_on_shutdown will be called first
 
-            auto stop_repair = defer_verbose_shutdown("repair", [&repair] {
-                repair.invoke_on_all(&repair_service::shutdown).get();
-            });
-
             auto drain_sl_controller = defer_verbose_shutdown("service level controller update loop", [&lifecycle_notifier] {
                 sl_controller.invoke_on_all([&lifecycle_notifier] (qos::service_level_controller& controller) {
                     return lifecycle_notifier.local().unregister_subscriber(&controller);
