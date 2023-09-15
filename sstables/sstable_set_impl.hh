@@ -29,7 +29,7 @@ private:
     std::vector<shared_sstable> _unleveled_sstables;
     interval_map_type _leveled_sstables;
     lw_shared_ptr<sstable_list> _all;
-    std::unordered_map<run_id, sstable_run> _all_runs;
+    std::unordered_map<run_id, shared_sstable_run> _all_runs;
     // Change counter on interval map for leveled sstables which is used by
     // incremental selector to determine whether or not to invalidate iterators.
     uint64_t _leveled_sstables_change_cnt = 0;
@@ -56,13 +56,13 @@ public:
         const std::vector<shared_sstable>& unleveled_sstables,
         const interval_map_type& leveled_sstables,
         const lw_shared_ptr<sstable_list>& all,
-        const std::unordered_map<run_id, sstable_run>& all_runs,
+        const std::unordered_map<run_id, shared_sstable_run>& all_runs,
         bool use_level_metadata,
         uint64_t bytes_on_disk);
 
     virtual std::unique_ptr<sstable_set_impl> clone() const override;
     virtual std::vector<shared_sstable> select(const dht::partition_range& range) const override;
-    virtual std::vector<sstable_run> all_sstable_runs() const override;
+    virtual std::vector<frozen_sstable_run> all_sstable_runs() const override;
     virtual lw_shared_ptr<const sstable_list> all() const override;
     virtual stop_iteration for_each_sstable_until(std::function<stop_iteration(const shared_sstable&)> func) const override;
     virtual future<stop_iteration> for_each_sstable_gently_until(std::function<future<stop_iteration>(const shared_sstable&)> func) const override;
@@ -131,7 +131,7 @@ public:
 
     virtual std::unique_ptr<sstable_set_impl> clone() const override;
     virtual std::vector<shared_sstable> select(const dht::partition_range& range = query::full_partition_range) const override;
-    virtual std::vector<sstable_run> all_sstable_runs() const override;
+    virtual std::vector<frozen_sstable_run> all_sstable_runs() const override;
     virtual lw_shared_ptr<const sstable_list> all() const override;
     virtual stop_iteration for_each_sstable_until(std::function<stop_iteration(const shared_sstable&)> func) const override;
     virtual future<stop_iteration> for_each_sstable_gently_until(std::function<future<stop_iteration>(const shared_sstable&)> func) const override;

@@ -72,6 +72,10 @@ bool sstable_run::will_introduce_overlapping(const shared_sstable& sst) const {
     return p.first != p.second;
 };
 
+sstable_run::sstable_run(shared_sstable sst)
+    : _all({std::move(sst)}) {
+}
+
 bool sstable_run::insert(shared_sstable sst) {
     if (will_introduce_overlapping(sst)) {
         return false;
@@ -142,14 +146,14 @@ sstable_set::select(const dht::partition_range& range) const {
     return _impl->select(range);
 }
 
-std::vector<sstable_run>
+std::vector<frozen_sstable_run>
 sstable_set::all_sstable_runs() const {
     return _impl->all_sstable_runs();
 }
 
-std::vector<sstable_run>
+std::vector<frozen_sstable_run>
 partitioned_sstable_set::all_sstable_runs() const {
-    return boost::copy_range<std::vector<sstable_run>>(_all_runs | boost::adaptors::map_values);
+    return boost::copy_range<std::vector<frozen_sstable_run>>(_all_runs | boost::adaptors::map_values);
 }
 
 lw_shared_ptr<const sstable_list>
@@ -293,7 +297,7 @@ partitioned_sstable_set::partitioned_sstable_set(schema_ptr schema, bool use_lev
 }
 
 partitioned_sstable_set::partitioned_sstable_set(schema_ptr schema, const std::vector<shared_sstable>& unleveled_sstables, const interval_map_type& leveled_sstables,
-        const lw_shared_ptr<sstable_list>& all, const std::unordered_map<run_id, sstable_run>& all_runs, bool use_level_metadata, uint64_t bytes_on_disk)
+        const lw_shared_ptr<sstable_list>& all, const std::unordered_map<run_id, shared_sstable_run>& all_runs, bool use_level_metadata, uint64_t bytes_on_disk)
         : sstable_set_impl(bytes_on_disk)
         , _schema(schema)
         , _unleveled_sstables(unleveled_sstables)
@@ -356,13 +360,22 @@ bool partitioned_sstable_set::insert(shared_sstable sst) {
         sub_bytes_on_disk(n);
     });
 
+    auto maybe_insert_run_fragment = [this] (const shared_sstable& sst) mutable {
+        auto it = _all_runs.find(sst->run_identifier());
+        if (it == _all_runs.end()) {
+            auto new_run = make_lw_shared<sstable_run>(sst);
+            return _all_runs.emplace(sst->run_identifier(), std::move(new_run)).second;
+        }
+        return it->second->insert(sst);
+    };
+
     // If sstable doesn't satisfy disjoint invariant, then place it in a new sstable run.
-    while (!_all_runs[sst->run_identifier()].insert(sst)) {
+    while (!maybe_insert_run_fragment(sst)) {
         sstlog.warn("Generating a new run identifier for SSTable {} as overlapping was detected when inserting it into SSTable run {}",
                     sst->get_filename(), sst->run_identifier());
         sst->generate_new_run_identifier();
     }
-    auto undo_all_runs_insert = defer([&] () { _all_runs[sst->run_identifier()].erase(sst); });
+    auto undo_all_runs_insert = defer([&] () { _all_runs[sst->run_identifier()]->erase(sst); });
 
     if (store_as_unleveled(sst)) {
         _unleveled_sstables.push_back(sst);
@@ -377,8 +390,8 @@ bool partitioned_sstable_set::insert(shared_sstable sst) {
 
 bool partitioned_sstable_set::erase(shared_sstable sst) {
     if (auto it = _all_runs.find(sst->run_identifier()); it != _all_runs.end()) {
-        it->second.erase(sst);
-        if (it->second.empty()) {
+        it->second->erase(sst);
+        if (it->second->empty()) {
             _all_runs.erase(it);
         }
     }
@@ -903,7 +916,7 @@ filter_sstable_for_reader_by_ck(std::vector<shared_sstable>&& sstables, replica:
     return std::move(sstables);
 }
 
-std::vector<sstable_run>
+std::vector<frozen_sstable_run>
 sstable_set_impl::all_sstable_runs() const {
     throw_with_backtrace<std::bad_function_call>();
 }
@@ -1061,8 +1074,8 @@ std::vector<shared_sstable> compound_sstable_set::select(const dht::partition_ra
     return ret;
 }
 
-std::vector<sstable_run> compound_sstable_set::all_sstable_runs() const {
-    std::vector<sstable_run> ret;
+std::vector<frozen_sstable_run> compound_sstable_set::all_sstable_runs() const {
+    std::vector<frozen_sstable_run> ret;
     for (auto& set : _sets) {
         auto runs = set->all_sstable_runs();
         if (ret.empty()) {

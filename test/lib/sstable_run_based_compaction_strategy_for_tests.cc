@@ -15,21 +15,21 @@ sstable_run_based_compaction_strategy_for_tests::sstable_run_based_compaction_st
 
 compaction_descriptor sstable_run_based_compaction_strategy_for_tests::get_sstables_for_compaction(table_state& table_s, strategy_control& control, std::vector<sstables::shared_sstable> uncompacting_sstables) {
     // Get unique runs from all uncompacting sstables
-    std::vector<sstable_run> runs = table_s.main_sstable_set().all_sstable_runs();
+    std::vector<frozen_sstable_run> runs = table_s.main_sstable_set().all_sstable_runs();
 
     // Group similar sized runs into a bucket.
-    std::map<uint64_t, std::vector<sstable_run>> similar_sized_runs;
+    std::map<uint64_t, std::vector<frozen_sstable_run>> similar_sized_runs;
     for (auto& run : runs) {
         bool found = false;
         for (auto& e : similar_sized_runs) {
-            if (run.data_size() >= e.first*0.5 && run.data_size() <= e.first*1.5) {
+            if (run->data_size() >= e.first*0.5 && run->data_size() <= e.first*1.5) {
                 e.second.push_back(run);
                 found = true;
                 break;
             }
         }
         if (!found) {
-            similar_sized_runs[run.data_size()].push_back(run);
+            similar_sized_runs[run->data_size()].push_back(run);
         }
     }
     // Get the most interesting bucket, if any, and return sstables from all its runs.
@@ -38,8 +38,8 @@ compaction_descriptor sstable_run_based_compaction_strategy_for_tests::get_sstab
         if (runs.size() < size_t(table_s.schema()->min_compaction_threshold())) {
             continue;
         }
-        auto all = boost::accumulate(runs, std::vector<shared_sstable>(), [&] (std::vector<shared_sstable>&& v, const sstable_run& run) {
-            v.insert(v.end(), run.all().begin(), run.all().end());
+        auto all = boost::accumulate(runs, std::vector<shared_sstable>(), [&] (std::vector<shared_sstable>&& v, const frozen_sstable_run& run) {
+            v.insert(v.end(), run->all().begin(), run->all().end());
             return std::move(v);
         });
         return sstables::compaction_descriptor(std::move(all), 0, static_fragment_size_for_run);
