@@ -155,18 +155,18 @@ bool token_range_description::operator==(const token_range_description& o) const
         && sharding_ignore_msb == o.sharding_ignore_msb;
 }
 
-topology_description::topology_description(std::vector<token_range_description> entries)
+topology_description::topology_description(utils::chunked_vector<token_range_description> entries)
     : _entries(std::move(entries)) {}
 
 bool topology_description::operator==(const topology_description& o) const {
     return _entries == o._entries;
 }
 
-const std::vector<token_range_description>& topology_description::entries() const& {
+const utils::chunked_vector<token_range_description>& topology_description::entries() const& {
     return _entries;
 }
 
-std::vector<token_range_description>&& topology_description::entries() && {
+utils::chunked_vector<token_range_description>&& topology_description::entries() && {
     return std::move(_entries);
 }
 
@@ -355,7 +355,7 @@ cdc::topology_description make_new_generation_description(
         const locator::token_metadata_ptr tmptr) {
     const auto tokens = get_tokens(bootstrap_tokens, tmptr);
 
-    std::vector<token_range_description> vnode_descriptions;
+    utils::chunked_vector<token_range_description> vnode_descriptions;
     vnode_descriptions.reserve(tokens.size());
 
     vnode_descriptions.push_back(create_token_range_description(0, tokens.back(), tokens.front(), get_sharding_info));
