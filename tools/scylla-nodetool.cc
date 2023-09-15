@@ -246,7 +246,7 @@ int scylla_nodetool_main(int argc, char** argv) {
     auto replacement_argv = massage_argv(argc, argv);
     nlog.debug("replacement argv: {}", replacement_argv);
 
-    const auto description_template =
+    constexpr auto description_template =
 R"(scylla-nodetool - a command-line tool to administer local or remote ScyllaDB nodes
 
 # Operations
