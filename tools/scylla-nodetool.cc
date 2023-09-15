@@ -164,7 +164,9 @@ const std::map<std::string_view, std::string_view> option_substitutions{
     {"-et", "--end-token"},
 };
 
-const std::map<operation, operation_func> operations_with_func{
+auto get_operations_with_func() {
+
+const static std::map<operation, operation_func> operations_with_func {
     {{"compact",
             "Force a (major) compaction on one or more tables",
 R"(
@@ -191,6 +193,9 @@ Fore more information, see: https://opensource.docs.scylladb.com/stable/operatin
             }},
             compact_operation},
 };
+
+    return operations_with_func;
+}
 
 // boost::program_options doesn't allow multi-char option short-form,
 // e.g. -pw, that C*'s nodetool uses. We silently map these to the
@@ -261,7 +266,7 @@ Supported Nodetool operations:
 For more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool.html
 )";
 
-    const auto operations = boost::copy_range<std::vector<operation>>(operations_with_func | boost::adaptors::map_keys);
+    const auto operations = boost::copy_range<std::vector<operation>>(get_operations_with_func() | boost::adaptors::map_keys);
     tool_app_template::config app_cfg{
             .name = app_name,
             .description = format(description_template, app_name, boost::algorithm::join(operations | boost::adaptors::transformed([] (const auto& op) {
@@ -277,7 +282,7 @@ For more information, see: https://opensource.docs.scylladb.com/stable/operating
         scylla_rest_client client(app_config["host"].as<sstring>(), app_config["port"].as<uint16_t>());
 
         try {
-            operations_with_func.at(operation)(client, app_config);
+            get_operations_with_func().at(operation)(client, app_config);
         } catch (std::invalid_argument& e) {
             fmt::print(std::cerr, "error processing arguments: {}\n", e.what());
             return 1;
