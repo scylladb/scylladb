@@ -22,7 +22,7 @@ topology_description limit_number_of_streams_if_needed(topology_description&& de
 } // namespace cdc
 
 static cdc::topology_description create_description(const std::vector<size_t>& streams_count_per_vnode) {
-    std::vector<cdc::token_range_description> result;
+    utils::chunked_vector<cdc::token_range_description> result;
     result.reserve(streams_count_per_vnode.size());
     size_t vnode_index = 0;
     int64_t token = std::numeric_limits<int64_t>::min() + 100;
@@ -71,7 +71,7 @@ static void assert_stream_ids_in_right_token_ranges(const cdc::topology_descript
 
 }
 
-cdc::stream_id get_stream(const std::vector<cdc::token_range_description>& entries, dht::token tok);
+cdc::stream_id get_stream(const utils::chunked_vector<cdc::token_range_description>& entries, dht::token tok);
 
 static void assert_random_tokens_mapped_to_streams_with_tokens_in_the_same_token_range(const cdc::topology_description& desc) {
     for (size_t count = 0; count < 100; ++count) {

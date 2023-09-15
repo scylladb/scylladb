@@ -486,7 +486,7 @@ system_distributed_keyspace::read_cdc_topology_description(
             return {};
         }
 
-        std::vector<cdc::token_range_description> entries;
+        utils::chunked_vector<cdc::token_range_description> entries;
 
         auto entries_val = value_cast<list_type_impl::native_type>(
                 cdc_generation_description_type->deserialize(cql_result->one().get_view("description")));
@@ -580,7 +580,7 @@ system_distributed_keyspace::insert_cdc_generation(
 
 future<std::optional<cdc::topology_description>>
 system_distributed_keyspace::read_cdc_generation(utils::UUID id) {
-    std::vector<cdc::token_range_description> entries;
+    utils::chunked_vector<cdc::token_range_description> entries;
     auto num_ranges = 0;
     co_await _qp.query_internal(
             // This should be a local read so 20s should be more than enough

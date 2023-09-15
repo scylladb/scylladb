@@ -40,7 +40,7 @@ static cdc::stream_id get_stream(
 
 // non-static for testing
 cdc::stream_id get_stream(
-        const std::vector<cdc::token_range_description>& entries,
+        const utils::chunked_vector<cdc::token_range_description>& entries,
         dht::token tok) {
     if (entries.empty()) {
         on_internal_error(cdc_log, "get_stream: entries empty");
