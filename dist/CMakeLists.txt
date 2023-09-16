@@ -10,7 +10,6 @@ add_custom_command(
     scylla
     ${CMAKE_BINARY_DIR}/iotune
     ${CMAKE_BINARY_DIR}/node_exporter/node_exporter
-    ${CMAKE_CURRENT_BINARY_DIR}/debian
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 
 add_custom_target(dist-server-deb
@@ -94,7 +93,6 @@ add_custom_command(
     ${CMAKE_BINARY_DIR}/scylla.stripped
     ${CMAKE_BINARY_DIR}/iotune.stripped
     ${CMAKE_BINARY_DIR}/node_exporter/node_exporter.stripped
-    ${CMAKE_CURRENT_BINARY_DIR}/debian
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 add_custom_target(dist-server-tar
   DEPENDS ${stripped_dist_pkg})
