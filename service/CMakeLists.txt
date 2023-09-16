@@ -37,6 +37,7 @@ target_link_libraries(service
     xxHash::xxhash
   PRIVATE
     mutation
+    node_ops
     raft
     repair
     streaming
