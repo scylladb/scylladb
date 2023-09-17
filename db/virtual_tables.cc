@@ -67,13 +67,13 @@ public:
         return _ss.get_ownership().then([&, mutation_sink] (std::map<gms::inet_address, float> ownership) {
             const locator::token_metadata& tm = _ss.get_token_metadata();
 
-            _gossiper.for_each_endpoint_state([&] (const gms::inet_address& endpoint, const gms::endpoint_state&) {
+            _gossiper.for_each_endpoint_state([&] (const gms::inet_address& endpoint, const gms::endpoint_state& ep_state) {
                 mutation m(schema(), partition_key::from_single_value(*schema(), data_value(endpoint).serialize_nonnull()));
                 row& cr = m.partition().clustered_row(*schema(), clustering_key::make_empty()).cells();
 
                 set_cell(cr, "up", _gossiper.is_alive(endpoint));
-                set_cell(cr, "status", _gossiper.get_gossip_status(endpoint));
-                set_cell(cr, "load", _gossiper.get_application_state_value(endpoint, gms::application_state::LOAD));
+                set_cell(cr, "status", _gossiper.get_gossip_status(ep_state));
+                set_cell(cr, "load", ep_state.get_application_state_value(gms::application_state::LOAD));
 
                 auto hostid = tm.get_host_id_if_known(endpoint);
                 if (hostid) {

@@ -80,6 +80,8 @@ public:
 
     const versioned_value* get_application_state_ptr(application_state key) const noexcept;
 
+    sstring get_application_state_value(application_state key) const noexcept;
+
     /**
      * TODO replace this with operations that don't expose private state
      */

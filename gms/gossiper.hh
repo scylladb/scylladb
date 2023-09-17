@@ -442,6 +442,14 @@ private:
 
     const std::unordered_map<inet_address, endpoint_state_ptr>& get_endpoint_states() const noexcept;
 
+    const versioned_value* get_application_state_ptr(endpoint_state_ptr eps, application_state appstate) const noexcept {
+        return eps ? eps->get_application_state_ptr(appstate) : nullptr;
+    }
+
+    sstring get_application_state_value(const versioned_value* v) const {
+        return v ? v->value() : "";
+    }
+
 public:
     clk::time_point get_expire_time_for_endpoint(inet_address endpoint) const noexcept;
 
@@ -451,8 +459,13 @@ public:
     // the endpoint_state_ptr is held.
     endpoint_state_ptr get_endpoint_state_ptr(inet_address ep) const noexcept;
 
-    const versioned_value* get_application_state_ptr(inet_address endpoint, application_state appstate) const noexcept;
-    sstring get_application_state_value(inet_address endpoint, application_state appstate) const;
+    const versioned_value* get_application_state_ptr(inet_address endpoint, application_state appstate) const noexcept {
+        return get_application_state_ptr(get_endpoint_state_ptr(endpoint), appstate);
+    }
+
+    sstring get_application_state_value(inet_address endpoint, application_state appstate) const {
+        return get_application_state_value(get_application_state_ptr(endpoint, appstate));
+    }
 
     // removes ALL endpoint states; should only be called after shadow gossip.
     // Must be called on shard 0

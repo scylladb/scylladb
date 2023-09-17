@@ -2482,22 +2482,6 @@ future<> gossiper::wait_for_live_nodes_to_show_up(size_t n) {
     logger.info("Live nodes seen in gossip: {}", get_live_members());
 }
 
-const versioned_value* gossiper::get_application_state_ptr(inet_address endpoint, application_state appstate) const noexcept {
-    auto eps = get_endpoint_state_ptr(std::move(endpoint));
-    if (!eps) {
-        return nullptr;
-    }
-    return eps->get_application_state_ptr(appstate);
-}
-
-sstring gossiper::get_application_state_value(inet_address endpoint, application_state appstate) const {
-    auto v = get_application_state_ptr(endpoint, appstate);
-    if (!v) {
-        return {};
-    }
-    return v->value();
-}
-
 /**
  * This method is used to mark a node as shutdown; that is it gracefully exited on its own and told us about it
  * @param endpoint endpoint that has shut itself down

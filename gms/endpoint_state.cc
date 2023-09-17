@@ -32,6 +32,15 @@ const versioned_value* endpoint_state::get_application_state_ptr(application_sta
     }
 }
 
+sstring endpoint_state::get_application_state_value(application_state key) const noexcept {
+    auto* app_state = get_application_state_ptr(key);
+    if (app_state) {
+        return app_state->value();
+    } else {
+        return {};
+    }
+}
+
 std::ostream& operator<<(std::ostream& os, const endpoint_state& x) {
     os << "HeartBeatState = " << x._heart_beat_state << ", AppStateMap =";
     for (auto&entry : x._application_state) {
