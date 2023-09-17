@@ -2153,14 +2153,17 @@ compaction_backlog_tracker::compaction_backlog_tracker(compaction_backlog_tracke
         : _impl(std::move(other._impl))
         , _ongoing_writes(std::move(other._ongoing_writes))
         , _ongoing_compactions(std::move(other._ongoing_compactions))
-        , _manager(std::exchange(other._manager, nullptr)) {
+{
+    if (other._manager) {
+        on_internal_error(cmlog, "compaction_backlog_tracker is moved while registered");
+    }
 }
 
 compaction_backlog_tracker&
 compaction_backlog_tracker::operator=(compaction_backlog_tracker&& x) noexcept {
     if (this != &x) {
-        if (auto manager = std::exchange(_manager, x._manager)) {
-            manager->remove_backlog_tracker(this);
+        if (x._manager) {
+            on_internal_error(cmlog, "compaction_backlog_tracker is moved while registered");
         }
         _impl = std::move(x._impl);
         _ongoing_writes = std::move(x._ongoing_writes);
