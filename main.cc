@@ -11,6 +11,7 @@
 #include <yaml-cpp/yaml.h>
 
 #include <seastar/util/closeable.hh>
+#include <seastar/core/abort_source.hh>
 #include "tasks/task_manager.hh"
 #include "utils/build_id.hh"
 #include "supervisor.hh"
@@ -1912,6 +1913,12 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             startlog.info("Signal received; shutting down");
 	    // At this point, all objects destructors and all shutdown hooks registered with defer() are executed
           } catch (const sleep_aborted&) {
+            startlog.info("Startup interrupted");
+            // This happens when scylla gets SIGINT in the middle of join_cluster(), so
+            // just ignore it and exit normally
+            _exit(0);
+            return 0;
+          } catch (const abort_requested_exception&) {
             startlog.info("Startup interrupted");
             // This happens when scylla gets SIGINT in the middle of join_cluster(), so
             // just ignore it and exit normally
