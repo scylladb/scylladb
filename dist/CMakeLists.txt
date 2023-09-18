@@ -10,7 +10,6 @@ add_custom_command(
     scylla
     ${CMAKE_BINARY_DIR}/iotune
     ${CMAKE_BINARY_DIR}/node_exporter/node_exporter
-    ${CMAKE_CURRENT_BINARY_DIR}/debian
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 
 add_custom_target(dist-server-deb
@@ -30,13 +29,17 @@ function(add_stripped name)
   set(output ${name}.stripped)
   if(TARGET ${name})
     add_custom_command(
-      OUTPUT ${CMAKE_BINARY_DIR}/${name}.stripped
+      OUTPUT
+        ${CMAKE_BINARY_DIR}/${name}.debug
+        ${CMAKE_BINARY_DIR}/${name}.stripped
       COMMAND ${CMAKE_SOURCE_DIR}/scripts/strip.sh $<TARGET_FILE:${name}>
       DEPENDS ${name})
   else()
     # ${name} must be an absolute path
     add_custom_command(
-      OUTPUT ${name}.stripped
+      OUTPUT
+        ${name}.debug
+        ${name}.stripped
       COMMAND ${CMAKE_SOURCE_DIR}/scripts/strip.sh ${name}
       DEPENDS ${name})
   endif()
@@ -94,7 +97,6 @@ add_custom_command(
     ${CMAKE_BINARY_DIR}/scylla.stripped
     ${CMAKE_BINARY_DIR}/iotune.stripped
     ${CMAKE_BINARY_DIR}/node_exporter/node_exporter.stripped
-    ${CMAKE_CURRENT_BINARY_DIR}/debian
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 add_custom_target(dist-server-tar
   DEPENDS ${stripped_dist_pkg})
@@ -128,3 +130,5 @@ add_custom_command(
   VERBATIM)
 add_custom_target(dist-unified
   DEPENDS ${unified_dist_pkg})
+
+add_subdirectory(debuginfo)
