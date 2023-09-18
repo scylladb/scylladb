@@ -337,6 +337,22 @@ protected:
     virtual future<> run() override;
 };
 
+class gossiper_decommission_task_impl : public decommission_node_task_impl {
+private:
+    std::exception_ptr& _leave_group0_ex;
+public:
+    gossiper_decommission_task_impl(tasks::task_manager::module_ptr module,
+            std::string entity,
+            tasks::task_id parent_id,
+            service::storage_service& ss,
+            std::exception_ptr& leave_group0_ex) noexcept
+        : decommission_node_task_impl(module, tasks::task_id::create_random_id(), 0, "gossiper entry", std::move(entity), parent_id, ss)
+        , _leave_group0_ex(leave_group0_ex)
+    {}
+protected:
+    virtual future<> run() override;
+};
+
 class start_remove_node_task_impl : public remove_node_task_impl {
 private:
     locator::host_id _host_id;

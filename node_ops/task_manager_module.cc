@@ -773,6 +773,45 @@ future<> start_decommission_task_impl::run() {
                 auto task = ss.get_task_manager_module().make_and_start_task<raft_decommission_task_impl>(parent_info, "", parent_info.id, ss).get();
                 task->done().get();
             } else {
+                auto task = ss.get_task_manager_module().make_and_start_task<gossiper_decommission_task_impl>(parent_info, "", parent_info.id, ss, leave_group0_ex).get();
+                try {
+                    task->done().get();
+                } catch (...) {
+                    if (leave_group0_ex) {
+                        // Clean up after decommission before rethrowing.
+                    } else {
+                        throw;
+                    }
+                }
+            }
+
+            ss.stop_transport().get();
+            tasks::tmlogger.info("DECOMMISSIONING: stopped transport");
+
+            ss.get_batchlog_manager().invoke_on_all([] (auto& bm) {
+                return bm.drain();
+            }).get();
+            tasks::tmlogger.info("DECOMMISSIONING: stop batchlog_manager done");
+
+            // StageManager.shutdownNow();
+            ss._sys_ks.local().set_bootstrap_state(db::system_keyspace::bootstrap_state::DECOMMISSIONED).get();
+            tasks::tmlogger.info("DECOMMISSIONING: set_bootstrap_state done");
+            ss.set_mode(service::storage_service::mode::DECOMMISSIONED);
+
+            if (leave_group0_ex) {
+                std::rethrow_exception(leave_group0_ex);
+            }
+
+            tasks::tmlogger.info("DECOMMISSIONING: done");
+            // let op be responsible for killing the process
+        });
+    });
+}
+
+future<> gossiper_decommission_task_impl::run() {
+    // FIXME: fix indentation and variables names
+    return seastar::async([&] {
+        auto& ss = _ss;
                 bool left_token_ring = false;
                 auto uuid = node_ops_id::create_random_id();
                 auto& db = ss._db.local();
@@ -892,30 +931,9 @@ future<> start_decommission_task_impl::run() {
                         " It may still be a member of Raft group 0. To remove it, shut it down and use `removenode`."
                         " Consult the `decommission` and `removenode` documentation for more details.",
                         uuid, std::current_exception());
-                    leave_group0_ex = std::current_exception();
+                    _leave_group0_ex = std::current_exception();
+                    throw;  // Task should finish with failure.
                 }
-            }
-
-            ss.stop_transport().get();
-            tasks::tmlogger.info("DECOMMISSIONING: stopped transport");
-
-            ss.get_batchlog_manager().invoke_on_all([] (auto& bm) {
-                return bm.drain();
-            }).get();
-            tasks::tmlogger.info("DECOMMISSIONING: stop batchlog_manager done");
-
-            // StageManager.shutdownNow();
-            ss._sys_ks.local().set_bootstrap_state(db::system_keyspace::bootstrap_state::DECOMMISSIONED).get();
-            tasks::tmlogger.info("DECOMMISSIONING: set_bootstrap_state done");
-            ss.set_mode(service::storage_service::mode::DECOMMISSIONED);
-
-            if (leave_group0_ex) {
-                std::rethrow_exception(leave_group0_ex);
-            }
-
-            tasks::tmlogger.info("DECOMMISSIONING: done");
-            // let op be responsible for killing the process
-        });
     });
 }
 
