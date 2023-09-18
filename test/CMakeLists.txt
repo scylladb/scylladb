@@ -42,6 +42,8 @@ function(add_scylla_test name)
     set(src "${name}.cc")
   endif()
   add_executable(${name} ${src})
+  add_dependencies(tests ${name})
+
   target_include_directories(${name}
     PRIVATE
       ${CMAKE_SOURCE_DIR})
@@ -77,6 +79,9 @@ function(add_scylla_test name)
 endfunction()
 
 if(BUILD_TESTING)
+    add_custom_target(tests)
+    add_dependencies(tests scylla)
+
     add_subdirectory(boost)
     add_subdirectory(manual)
     add_subdirectory(unit)
