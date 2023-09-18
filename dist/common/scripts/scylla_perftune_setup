@@ -121,7 +121,24 @@ def generate_cpuset(args):
     # skip generating cpuset when it's already configured
     if conf.has_option('cpuset'):
         return
-    res = out(f'/opt/scylladb/scripts/perftune.py --tune net --nic {args.nic} --get-cpu-mask')
+
+    params = ''
+    if args.setup_nic_and_disks:
+        params += f'--tune net --nic "{args.nic}" --tune disks '
+        params += ' '.join('--dir {}'.format(d) for d in get_scylla_dirs())
+
+    if args.set_clocksource:
+        params += ' --tune system --tune-clock'
+
+    if args.disable_writeback_cache:
+        params += ' --tune disks --write-back-cache false'
+
+    if len(params) > 0:
+        params += ' --get-cpu-mask'
+        res = out('/opt/scylladb/scripts/perftune.py ' + params)
+    else:
+        raise Exception('No perftune parameters specified.')
+
     # we need to extract CPU mask from output, since perftune.py may also print warning messages (#10082)
     match = re.match('(.*\n)?(0x[0-9a-f]+(?:,0x[0-9a-f]+)*)', res, re.DOTALL)
     try:
