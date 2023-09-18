@@ -215,13 +215,31 @@ future<> view_update_generator::start() {
     return make_ready_future<>();
 }
 
-void view_update_generator::do_abort() noexcept {
-}
+// The .do_abort() just kicks the v.u.g. background fiber to wrap up and it
+// normally happens when scylla stops upon SIGINT. Doing it that early is safe,
+// once the fiber is kicked, no new work can be added to it, see _as check in
+// register_staging_sstable().
+//
+// The .stop() really stops the sharded<v.u.g.> service by waiting for the fiber
+// to stop using 'this' and thus releasing any resources owned by it. It also
+// calls do_abort() to handle the case when subscription didn't shoot which, in
+// turn, can happen when main() throws in the middle and doesn't request abort
+// via the stop-signal.
 
-future<> view_update_generator::stop() {
+void view_update_generator::do_abort() noexcept {
+    if (_as.abort_requested()) {
+        // The below code is re-entrable, but avoid it explicitly to be
+        // on the safe side in case it suddenly stops being such
+        return;
+    }
+
     _db.unplug_view_update_generator();
     _as.request_abort();
     _pending_sstables.signal();
+}
+
+future<> view_update_generator::stop() {
+    do_abort();
     return std::move(_started).then([this] {
         _registration_sem.broken();
     });
