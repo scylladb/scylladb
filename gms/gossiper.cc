@@ -1428,7 +1428,10 @@ endpoint_state& gossiper::get_or_create_endpoint_state(inet_address ep) {
     auto it = _endpoint_state_map.find(ep);
     if (it == _endpoint_state_map.end()) {
         auto eps = endpoint_state();
-        eps.add_application_state(application_state::RPC_ADDRESS, versioned_value::rpcaddress(ep));
+        if (utils::fb_utilities::is_me(ep)) {
+            auto rpc_addr = utils::fb_utilities::get_broadcast_rpc_address();
+            eps.add_application_state(application_state::RPC_ADDRESS, versioned_value::rpcaddress(rpc_addr));
+        }
         it = _endpoint_state_map.emplace(ep, make_endpoint_state_ptr(std::move(eps))).first;
     }
     return const_cast<endpoint_state&>(*it->second);
