@@ -1841,10 +1841,7 @@ future<> gossiper::do_before_change_notifications(inet_address addr, endpoint_st
 }
 
 future<> gossiper::do_on_change_notifications(inet_address addr, const application_state& state, const versioned_value& value, permit_id pid) const {
-    co_await _subscribers.for_each([this, addr, state, value, pid] (shared_ptr<i_endpoint_state_change_subscriber> subscriber) {
-        // Once _abort_source is aborted, don't attempt to process any further notifications
-        // because that would violate monotonicity due to partially failed notification.
-        _abort_source.check();
+    co_await _subscribers.for_each([addr, state, value, pid] (shared_ptr<i_endpoint_state_change_subscriber> subscriber) {
         return subscriber->on_change(addr, state, value, pid);
     });
 }
