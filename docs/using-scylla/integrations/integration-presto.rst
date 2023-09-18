@@ -6,7 +6,6 @@ Integrate ScyllaDB with Presto
 
 The blog post `Integrating ScyllaDB with a Presto Server for Data Analytics <https://www.scylladb.com/2023/08/28/integrating-scylladb-with-a-presto-server-for-data-analytics/>`_ goes over a hands-on example of integrating ScyllaDB, Presto, and `Metabase <https://github.com/metabase/metabase>`_ to provide an open-source data analytics solution for high-speed querying and user-friendly visualization.
 
-If you have tested your application with ScyllaDB and want to share the results with the community, you can do so using the `community forum <https://forum.scylladb.com>`_.
 
 
 
