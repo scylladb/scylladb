@@ -385,6 +385,25 @@ protected:
     virtual future<> run() override;
 };
 
+class gossiper_remove_node_task_impl : public remove_node_task_impl {
+private:
+    locator::host_id _host_id;
+    std::list<locator::host_id_or_endpoint> _ignore_nodes_params;
+public:
+    gossiper_remove_node_task_impl(tasks::task_manager::module_ptr module,
+            std::string entity,
+            tasks::task_id parent_id,
+            service::storage_service& ss,
+            locator::host_id host_id,
+            std::list<locator::host_id_or_endpoint> ignore_nodes_params) noexcept
+        : remove_node_task_impl(module, tasks::task_id::create_random_id(), 0, "gossiper entry", std::move(entity), parent_id, ss)
+        , _host_id(host_id)
+        , _ignore_nodes_params(std::move(ignore_nodes_params))
+    {}
+protected:
+    virtual future<> run() override;
+};
+
 class task_manager_module : public tasks::task_manager::module {
 public:
     task_manager_module(tasks::task_manager& tm) noexcept : tasks::task_manager::module(tm, "node_ops") {}

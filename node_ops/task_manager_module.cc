@@ -1008,6 +1008,17 @@ future<> start_remove_node_task_impl::run() {
                 task->done().get();
                 return;
             }
+            auto task = ss.get_task_manager_module().make_and_start_task<gossiper_remove_node_task_impl>(parent_info, "", parent_info.id, ss, host_id, std::move(ignore_nodes_params)).get();
+            task->done().get();
+        });
+    });
+}
+
+future<> gossiper_remove_node_task_impl::run() {
+    // FIXME: fix indentation and variables names
+    auto& ss = _ss;
+    auto& host_id = _host_id;
+    auto& ignore_nodes_params = _ignore_nodes_params;
             node_ops_ctl ctl(ss, node_ops_cmd::removenode_prepare, host_id, gms::inet_address());
             auto stop_ctl = deferred_stop(ctl);
             auto uuid = ctl.uuid();
@@ -1126,8 +1137,7 @@ future<> start_remove_node_task_impl::run() {
             }
 
             tasks::tmlogger.info("removenode[{}]: Finished removenode operation, host id={}", uuid, host_id);
-        });
-    });
+    return make_ready_future();
 }
 
 future<> raft_remove_node_task_impl::run() {
