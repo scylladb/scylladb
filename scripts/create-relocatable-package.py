@@ -146,11 +146,14 @@ if have_gnutls:
     ar.reloc_add(gnutls_config_nolink, arcname='libreloc/gnutls.config')
     ar.reloc_add('conf')
 ar.reloc_add('dist', filter=filter_dist)
-pathlib.Path('build/SCYLLA-RELOCATABLE-FILE').touch()
-ar.reloc_add('build/SCYLLA-RELOCATABLE-FILE', arcname='SCYLLA-RELOCATABLE-FILE')
-ar.reloc_add('build/SCYLLA-RELEASE-FILE', arcname='SCYLLA-RELEASE-FILE')
-ar.reloc_add('build/SCYLLA-VERSION-FILE', arcname='SCYLLA-VERSION-FILE')
-ar.reloc_add('build/SCYLLA-PRODUCT-FILE', arcname='SCYLLA-PRODUCT-FILE')
+with tempfile.NamedTemporaryFile('w') as relocatable_file:
+    ar.reloc_add(relocatable_file.name, arcname='SCYLLA-RELOCATABLE-FILE')
+version_dir = pathlib.Path(args.build_dir)
+if not (version_dir / 'SCYLLA-RELEASE-FILE').exists():
+    version_dir = version_dir.parent
+ar.reloc_add(version_dir / 'SCYLLA-RELEASE-FILE', arcname='SCYLLA-RELEASE-FILE')
+ar.reloc_add(version_dir / 'SCYLLA-VERSION-FILE', arcname='SCYLLA-VERSION-FILE')
+ar.reloc_add(version_dir / 'SCYLLA-PRODUCT-FILE', arcname='SCYLLA-PRODUCT-FILE')
 ar.reloc_add('seastar/scripts')
 ar.reloc_add('seastar/dpdk/usertools')
 ar.reloc_add('install.sh')
