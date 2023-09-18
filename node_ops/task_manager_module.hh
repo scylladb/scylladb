@@ -297,6 +297,25 @@ protected:
     virtual future<> run() override;
 };
 
+class gossiper_rebuild_task_impl : public rebuild_node_task_impl {
+private:
+    sstring _source_dc;
+    bool _rbno_enabled;
+public:
+    gossiper_rebuild_task_impl(tasks::task_manager::module_ptr module,
+            std::string entity,
+            tasks::task_id parent_id,
+            service::storage_service& ss,
+            sstring source_dc,
+            bool rbno_enabled) noexcept
+        : rebuild_node_task_impl(module, tasks::task_id::create_random_id(), 0, "gossiper entry", std::move(entity), parent_id, ss)
+        , _source_dc(std::move(source_dc))
+        , _rbno_enabled(rbno_enabled)
+    {}
+protected:
+    virtual future<> run() override;
+};
+
 class start_decommission_task_impl : public decommission_node_task_impl {
 public:
     start_decommission_task_impl(tasks::task_manager::module_ptr module,

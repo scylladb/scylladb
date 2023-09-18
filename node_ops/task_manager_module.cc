@@ -679,9 +679,20 @@ future<> start_rebuild_task_impl::run() {
                 std::move(source_dc));
             co_await task->done();
         } else {
+            auto task = co_await ss.get_task_manager_module().make_and_start_task<gossiper_rebuild_task_impl>(parent_info, "", parent_info.id, ss,
+                std::move(source_dc), ss.is_repair_based_node_ops_enabled(streaming::stream_reason::rebuild));
+            co_await task->done();
+        }
+    });
+}
+
+future<> gossiper_rebuild_task_impl::run() {
+    // FIXME: fix indentation and variables names
+    auto& ss = _ss;
+    auto& source_dc = _source_dc;
             tasks::tmlogger.info("rebuild from dc: {}", source_dc == "" ? "(any dc)" : source_dc);
-            auto tmptr = ss.get_token_metadata_ptr();
-            if (ss.is_repair_based_node_ops_enabled(streaming::stream_reason::rebuild)) {
+            auto tmptr = _ss.get_token_metadata_ptr();
+            if (_rbno_enabled) {
                 co_await ss._repair.local().rebuild_with_repair(tmptr, std::move(source_dc));
             } else {
                 auto streamer = make_lw_shared<dht::range_streamer>(ss._db, ss._stream_manager, tmptr, ss._abort_source,
@@ -704,8 +715,6 @@ future<> start_rebuild_task_impl::run() {
                     std::rethrow_exception(std::move(ep));
                 }
             }
-        }
-    });
 }
 
 future<> raft_rebuild_task_impl::run() {
