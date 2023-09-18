@@ -1224,9 +1224,57 @@ class topology_coordinator {
         co_return std::tuple{gen_uuid, std::move(guard), std::move(updates.back())};
     }
 
+    // Deletes obsolete CDC generations if there is a clean-up candidate and it can be safely removed.
+    //
+    // Appends necessary mutations to `updates` and updates the `reason` string.
+    future<> clean_obsolete_cdc_generations(
+            const group0_guard& guard,
+            std::vector<canonical_mutation>& updates,
+            sstring& reason) {
+        auto candidate = co_await _sys_ks.get_cdc_generations_cleanup_candidate();
+        if (!candidate) {
+            co_return;
+        }
+
+        // We cannot delete the current CDC generation. We must also ensure that timestamps of all deleted
+        // generations are in the past compared to all nodes' clocks. Checking that the clean-up candidate's
+        // timestamp does not exceed now() - 24 h should suffice with a safe reserve. We don't have to check
+        // the timestamps of other CDC generations we are removing because the candidate's is the latest
+        // among them.
+        auto ts_upper_bound = db_clock::now() - std::chrono::days(1);
+        utils::get_local_injector().inject("clean_obsolete_cdc_generations_ignore_ts", [&] {
+            ts_upper_bound = candidate->ts;
+        });
+        if (candidate == _topo_sm._topology.current_cdc_generation_id || candidate->ts > ts_upper_bound) {
+            co_return;
+        }
+
+        auto mut_ts = guard.write_timestamp();
+
+        // Mark the lack of a new clean-up candidate. The current one will be deleted.
+        mutation m = _sys_ks.make_cleanup_candidate_mutation(std::nullopt, mut_ts);
+
+        // Insert a tombstone covering all generations that have time UUID not higher than the candidate.
+        auto s = _db.find_schema(db::system_keyspace::NAME, db::system_keyspace::CDC_GENERATIONS_V3);
+        auto id_upper_bound = candidate->id;
+        auto range = query::clustering_range::make_ending_with({
+                clustering_key_prefix::from_single_value(*s, timeuuid_type->decompose(id_upper_bound)), true});
+        auto bv = bound_view::from_range(range);
+        m.partition().apply_delete(*s, range_tombstone{bv.first, bv.second, tombstone{mut_ts, gc_clock::now()}});
+        updates.push_back(canonical_mutation(m));
+
+        reason += ::format("deleted data of CDC generations with time UUID not exceeding {}", id_upper_bound);
+    }
+
     // If there are some unpublished CDC generations, publishes the one with the oldest timestamp
-    // to user-facing description tables.
-    future<> publish_oldest_cdc_generation(group0_guard guard) {
+    // to user-facing description tables. Additionally, if there is no clean-up candidate for the CDC
+    // generation data, marks the published generation as a new one.
+    //
+    // Appends necessary mutations to `updates` and updates the `reason` string.
+    future<> publish_oldest_cdc_generation(
+            const group0_guard& guard,
+            std::vector<canonical_mutation>& updates,
+            sstring& reason) {
         const auto& unpublished_gens = _topo_sm._topology.unpublished_cdc_generations;
         if (unpublished_gens.empty()) {
             co_return;
@@ -1243,13 +1291,21 @@ class topology_coordinator {
         std::vector<cdc::generation_id_v2> new_unpublished_gens(unpublished_gens.begin() + 1, unpublished_gens.end());
         topology_mutation_builder builder(guard.write_timestamp());
         builder.set_unpublished_cdc_generations(std::move(new_unpublished_gens));
+        updates.push_back(builder.build());
 
-        auto str = ::format("published CDC generation, ID: {}", gen_id);
-        co_await update_topology_state(std::move(guard), {builder.build()}, std::move(str));
+        // If there is no clean-up candidate, the published CDC generation becomes a new one.
+        if (!co_await _sys_ks.get_cdc_generations_cleanup_candidate()) {
+            auto candidate_mutation = _sys_ks.make_cleanup_candidate_mutation(gen_id, guard.write_timestamp());
+            updates.push_back(canonical_mutation(candidate_mutation));
+        }
+
+        reason += ::format("published CDC generation with ID {}, ", gen_id);
     }
 
     // The background fiber of the topology coordinator that continually publishes committed yet unpublished
     // CDC generations. Every generation is published in a separate group 0 operation.
+    //
+    // It also continually cleans the obsolete CDC generation data.
     future<> cdc_generation_publisher_fiber() {
         slogger.trace("raft topology: start CDC generation publisher fiber");
 
@@ -1263,8 +1319,18 @@ class topology_coordinator {
             bool sleep = false;
             try {
                 auto guard = co_await start_operation();
+                std::vector<canonical_mutation> updates;
+                sstring reason;
 
-                co_await publish_oldest_cdc_generation(std::move(guard));
+                co_await publish_oldest_cdc_generation(guard, updates, reason);
+
+                co_await clean_obsolete_cdc_generations(guard, updates, reason);
+
+                if (!updates.empty()) {
+                    co_await update_topology_state(std::move(guard), std::move(updates), std::move(reason));
+                } else {
+                    release_guard(std::move(guard));
+                }
 
                 if (_topo_sm._topology.unpublished_cdc_generations.empty()) {
                     // No CDC generations to publish. Wait until one appears or the topology coordinator aborts.

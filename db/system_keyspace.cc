@@ -271,6 +271,11 @@ schema_ptr system_keyspace::cdc_generations_v3() {
              * range when the generation was first created. Together with the set of streams above it fully
              * describes the mapping for this particular range. */
             .with_column("ignore_msb", byte_type)
+            /* The identifier and timestamp of the current clean-up candidate - the next generation to be
+             * removed. If set, the candidate will be removed together with all older generations when it
+             * becomes obsolete. Otherwise, the next published CDC generation will become a new candidate.
+             * This process prevents the CDC generation data from endlessly growing. */
+            .with_column("cleanup_candidate", cdc_generation_ts_id_type, column_kind::static_column)
             .with_version(system_keyspace::generate_schema_version(id))
             .build();
     }();
@@ -1556,13 +1561,17 @@ static std::unordered_set<raft::server_id> decode_nodes_ids(const set_type_impl:
     return ids_set;
 }
 
+static cdc::generation_id_v2 decode_cdc_generation_id(const data_value& gen_id) {
+    auto native = value_cast<tuple_type_impl::native_type>(gen_id);
+    auto ts = value_cast<db_clock::time_point>(native[0]);
+    auto id = value_cast<utils::UUID>(native[1]);
+    return cdc::generation_id_v2{ts, id};
+}
+
 static std::vector<cdc::generation_id_v2> decode_cdc_generations_ids(const set_type_impl::native_type& gen_ids) {
     std::vector<cdc::generation_id_v2> gen_ids_list;
     for (auto& gen_id: gen_ids) {
-        auto native = value_cast<tuple_type_impl::native_type>(gen_id);
-        auto ts = value_cast<db_clock::time_point>(native[0]);
-        auto id = value_cast<utils::UUID>(native[1]);
-        gen_ids_list.push_back(cdc::generation_id_v2{ts, id});
+        gen_ids_list.push_back(decode_cdc_generation_id(gen_id));
     }
     return gen_ids_list;
 }
@@ -2691,6 +2700,26 @@ system_keyspace::read_cdc_generation(utils::UUID id) {
     }
 
     co_return cdc::topology_description{std::move(entries)};
+}
+
+future<std::optional<cdc::generation_id_v2>> system_keyspace::get_cdc_generations_cleanup_candidate() {
+    static const auto req = format("SELECT cleanup_candidate FROM {}.{} WHERE key = '{}' LIMIT 1", NAME, CDC_GENERATIONS_V3, cdc::CDC_GENERATIONS_V3_KEY);
+    auto gen_rows = co_await execute_cql(req);
+    if (!gen_rows->empty() && gen_rows->one().has("cleanup_candidate")) {
+        auto blob = gen_rows->one().get_blob("cleanup_candidate");
+        co_return decode_cdc_generation_id(cdc_generation_ts_id_type->deserialize(blob));
+    }
+    co_return std::nullopt;
+}
+
+mutation system_keyspace::make_cleanup_candidate_mutation(std::optional<cdc::generation_id_v2> value, api::timestamp_type ts) {
+    auto s = cdc_generations_v3();
+    mutation m(s, partition_key::from_singular(*s, cdc::CDC_GENERATIONS_V3_KEY));
+    data_value dv = value
+        ? make_tuple_value(db::cdc_generation_ts_id_type, tuple_type_impl::native_type({value->ts, timeuuid_native_type{value->id}}))
+        : data_value::make_null(db::cdc_generation_ts_id_type);
+    m.set_static_cell("cleanup_candidate", dv, ts);
+    return m;
 }
 
 future<> system_keyspace::sstables_registry_create_entry(sstring location, utils::UUID uuid, sstring status, sstables::entry_descriptor desc) {
