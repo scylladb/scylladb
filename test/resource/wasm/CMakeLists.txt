@@ -15,5 +15,6 @@ function(wasm2wat input)
 endfunction()
 
 add_custom_target(wasm)
+add_dependencies(tests wasm)
 add_subdirectory(c)
 add_subdirectory(rust)
