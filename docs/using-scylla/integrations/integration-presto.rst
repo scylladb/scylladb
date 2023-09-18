@@ -1,6 +1,6 @@
 ============================
 Integrate ScyllaDB with Presto
-============================
+===============================
 
 `Presto <https://github.com/prestodb/presto>`_, is an open-source distributed SQL query engine designed to run interactive analytic queries against various data sources. Facebook developed it, and it is now actively maintained by the Presto Software Foundation.
 
