@@ -781,7 +781,7 @@ private:
                 _group0_registry.invoke_on_all(&service::raft_group_registry::drain_on_shutdown).get();
             });
 
-            _view_update_generator.start(std::ref(_db), std::ref(_proxy)).get();
+            _view_update_generator.start(std::ref(_db), std::ref(_proxy), std::ref(abort_sources)).get();
             _view_update_generator.invoke_on_all(&db::view::view_update_generator::start).get();
             auto stop_view_update_generator = defer([this] {
                 _view_update_generator.stop().get();

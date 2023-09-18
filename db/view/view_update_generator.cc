@@ -90,10 +90,12 @@ public:
     }
 };
 
-view_update_generator::view_update_generator(replica::database& db, sharded<service::storage_proxy>& proxy)
+view_update_generator::view_update_generator(replica::database& db, sharded<service::storage_proxy>& proxy, abort_source& as)
         : _db(db)
         , _proxy(proxy)
-        , _progress_tracker(std::make_unique<progress_tracker>()) {
+        , _progress_tracker(std::make_unique<progress_tracker>())
+        , _early_abort_subscription(as.subscribe([this] () noexcept { do_abort(); }))
+{
     setup_metrics();
     discover_staging_sstables();
     _db.plug_view_update_generator(*this);
@@ -211,6 +213,9 @@ future<> view_update_generator::start() {
         }
     });
     return make_ready_future<>();
+}
+
+void view_update_generator::do_abort() noexcept {
 }
 
 future<> view_update_generator::stop() {
