@@ -1427,9 +1427,7 @@ const endpoint_state& gossiper::get_endpoint_state(inet_address ep) const {
 endpoint_state& gossiper::get_or_create_endpoint_state(inet_address ep) {
     auto it = _endpoint_state_map.find(ep);
     if (it == _endpoint_state_map.end()) {
-        auto eps = endpoint_state();
-        eps.add_application_state(application_state::RPC_ADDRESS, versioned_value::rpcaddress(ep));
-        it = _endpoint_state_map.emplace(ep, make_endpoint_state_ptr(std::move(eps))).first;
+        it = _endpoint_state_map.emplace(ep, make_endpoint_state_ptr({})).first;
     }
     return const_cast<endpoint_state&>(*it->second);
 }
