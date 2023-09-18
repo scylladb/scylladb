@@ -120,7 +120,10 @@ schema_altering_statement::execute(query_processor& qp, service::query_state& st
     }
 
     return execute0(qp, state, options).then([this, &state, internal](::shared_ptr<messages::result_message> result) {
-        auto permissions_granted_fut = internal
+        // We don't want to grant the permissions to the supposed creator even if the statement succeeded if it's an internal query
+        // or if the query did not actually create the item, i.e. the query is bounced to another shard or it's a IF NOT EXISTS
+        // query where the item already exists.
+        auto permissions_granted_fut = internal || !result->is_schema_change()
                 ? make_ready_future<>()
                 : grant_permissions_to_creator(state.get_client_state());
         return permissions_granted_fut.then([result = std::move(result)] {
