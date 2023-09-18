@@ -14,10 +14,8 @@ function(scylla_generate_thrift)
         ${args_OUT_DIR}/${args_SERVICE}.cpp
         ${args_OUT_DIR}/${args_SERVICE}.h)
 
-    find_program(THRIFT thrift)
-    if(NOT THRIFT)
-      message(FATAL_ERROR "thrift is required")
-    endif()
+    find_program(THRIFT thrift
+      REQUIRED)
     execute_process(
         COMMAND "${THRIFT}" -version
         OUTPUT_VARIABLE thrift_version_output

@@ -1,7 +1,5 @@
-find_program(CARGO cargo)
-if(NOT CARGO)
-  message(FATAL_ERROR "cargo is required")
-endif()
+find_program(CARGO cargo
+  REQUIRED)
 
 function(add_rust_library name)
   # use for profiles defined in Cargo.toml
@@ -24,10 +22,8 @@ function(add_rust_library name)
     IMPORTED_LOCATION "${library}")
 endfunction(add_rust_library)
 
-find_program(CXXBRIDGE cxxbridge)
-if(NOT CXXBRIDGE)
-  message(FATAL_ERROR "cxxbridge is required")
-endif()
+find_program(CXXBRIDGE cxxbridge
+  REQUIRED)
 # Generate cxxbridge header and source
 function(generate_cxxbridge name)
   cmake_parse_arguments(parsed_args

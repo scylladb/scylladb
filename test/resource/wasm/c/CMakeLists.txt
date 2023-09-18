@@ -1,7 +1,5 @@
-find_program(CLANG clang)
-if(NOT CLANG)
-  message(FATAL_ERROR "clang is required")
-endif()
+find_program(CLANG clang
+  REQUIRED)
 
 function(compile_c_to_wasm input)
   cmake_parse_arguments(parsed_args "" "WASM;OUT_DIR" "" ${ARGN})
