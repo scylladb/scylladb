@@ -1,15 +1,25 @@
 type: boost
 # A list of long tests, which should be started early
 run_first:
-    - index_with_paging_test
+    - index_with_paging_test::test_index_with_paging
     - schema_changes_test
-    - sstable_conforms_to_mutation_source_test
-    - secondary_index_test
-    - mutation_reader_test
+    - sstable_conforms_to_mutation_source_test::test_sstable_conforms_to_mutation_source
+    - secondary_index_test::test_indexing_paging_and_aggregation
+    - secondary_index_test::test_deleting_ghost_rows
+    - mutation_reader_test::test_combined_mutation_source_is_a_mutation_source
+    - mutation_reader_test::test_foreign_reader_as_mutation_source
+    - mutation_reader_test::clustering_combined_reader_mutation_source_test
+    - mutation_reader_test::test_compacting_reader_as_mutation_source
+    - mutation_reader_test::test_multishard_streaming_reader
+    - mutation_reader_test::test_manual_paused_evictable_reader_is_mutation_source
+    - mutation_reader_test::test_auto_paused_evictable_reader_is_mutation_source
     - multishard_combining_reader_as_mutation_source_test
-    - database_test
-    - cql_function_test
-    - memtable_test
+    - database_test::test_database_with_data_in_sstables_is_a_mutation_source
+    - database_test::unpaged_mutation_read_global_limit
+    - cql_functions_test::test_aggregate_functions
+    - memtable_test::test_memtable_with_many_versions_conforms_to_mutation_source
+    - memtable_test::flushing_rate_is_reduced_if_compaction_doesnt_keep_up
+    - memtable_test::test_memtable_conforms_to_mutation_source
 # These test cannot work in case-by-case mode because
 # some test-cases depend on each other
 no_parallel_cases:
