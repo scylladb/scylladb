@@ -294,7 +294,7 @@ class table_populator {
     sstring _cf;
     global_table_ptr _global_table;
     fs::path _base_path;
-    std::unordered_map<sstring, lw_shared_ptr<sharded<sstables::sstable_directory>>> _sstable_directories;
+    std::unordered_map<sstables::sstable_state, lw_shared_ptr<sharded<sstables::sstable_directory>>> _sstable_directories;
     sstables::sstable_version_types _highest_version = sstables::oldest_writable_sstable_format;
     sstables::generation_type _highest_generation;
     sharded<locator::effective_replication_map_ptr> _erms;
@@ -331,7 +331,7 @@ public:
         });
 
         co_await populate_subdir(sstables::sstable_state::staging, allow_offstrategy_compaction::no);
-        co_await populate_subdir(sstables::sstable_state::quarantine, allow_offstrategy_compaction::no, must_exist::no);
+        co_await populate_subdir(sstables::sstable_state::quarantine, allow_offstrategy_compaction::no);
         co_await populate_subdir(sstables::sstable_state::normal, allow_offstrategy_compaction::yes);
 
         // system tables are made writable through sys_ks::mark_writable
@@ -351,21 +351,23 @@ public:
     }
 
 private:
-    fs::path get_path(std::string_view subdir) {
+    fs::path get_path(sstables::sstable_state state) {
+        auto subdir = state_to_dir(state);
         return subdir.empty() ? _base_path : _base_path / subdir;
     }
 
     using allow_offstrategy_compaction = bool_class<struct allow_offstrategy_compaction_tag>;
-    using must_exist = bool_class<struct must_exist_tag>;
-    future<> populate_subdir(sstables::sstable_state state, allow_offstrategy_compaction, must_exist = must_exist::yes);
+    future<> populate_subdir(sstables::sstable_state state, allow_offstrategy_compaction);
 
     future<> start_subdir(sstables::sstable_state state);
 };
 
 future<> table_populator::start_subdir(sstables::sstable_state state) {
-    auto subdir = sstables::state_to_dir(state);
-    sstring sstdir = get_path(subdir).native();
+    sstring sstdir = get_path(state).native();
     if (!co_await file_exists(sstdir)) {
+        if (state != sstables::sstable_state::quarantine) {
+            throw std::runtime_error(format("Populating {}/{} failed: {} does not exist", _ks, _cf, sstdir));
+        }
         co_return;
     }
 
@@ -383,7 +385,7 @@ future<> table_populator::start_subdir(sstables::sstable_state state) {
     );
 
     // directory must be stopped using table_populator::stop below
-    _sstable_directories[subdir] = dptr;
+    _sstable_directories[state] = dptr;
 
     co_await distributed_loader::lock_table(directory, _db, _ks, _cf);
 
@@ -412,19 +414,14 @@ sstables::shared_sstable make_sstable(replica::table& table, sstables::sstable_s
     return table.get_sstables_manager().make_sstable(table.schema(), table.dir(), table.get_storage_options(), generation, state, v, sstables::sstable_format_types::big);
 }
 
-future<> table_populator::populate_subdir(sstables::sstable_state state, allow_offstrategy_compaction do_allow_offstrategy_compaction, must_exist dir_must_exist) {
-    auto subdir = state_to_dir(state);
-    auto sstdir = get_path(subdir);
-    dblog.debug("Populating {}/{}/{} allow_offstrategy_compaction={} must_exist={}", _ks, _cf, sstdir, do_allow_offstrategy_compaction, dir_must_exist);
+future<> table_populator::populate_subdir(sstables::sstable_state state, allow_offstrategy_compaction do_allow_offstrategy_compaction) {
+    dblog.debug("Populating {}/{}/{} state={} allow_offstrategy_compaction={}", _ks, _cf, _base_path, state, do_allow_offstrategy_compaction);
 
-    if (!_sstable_directories.contains(subdir)) {
-        if (dir_must_exist) {
-            throw std::runtime_error(format("Populating {}/{} failed: {} does not exist", _ks, _cf, sstdir));
-        }
+    if (!_sstable_directories.contains(state)) {
         co_return;
     }
 
-    auto& directory = *_sstable_directories.at(subdir);
+    auto& directory = *_sstable_directories.at(state);
 
     co_await distributed_loader::reshard(directory, _db, _ks, _cf, [this, state] (shard_id shard) mutable {
         auto gen = smp::submit_to(shard, [this] () {

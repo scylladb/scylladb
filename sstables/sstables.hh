@@ -154,6 +154,10 @@ inline sstring state_to_dir(sstable_state state) {
     }
 }
 
+inline std::ostream& operator<<(std::ostream& o, sstable_state s) {
+    return o << state_to_dir(s);
+}
+
 // FIXME -- temporary, move to fs storage after patching the rest
 inline fs::path make_path(std::string_view table_dir, sstable_state state) {
     fs::path ret(table_dir);
