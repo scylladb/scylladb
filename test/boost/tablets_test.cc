@@ -1332,7 +1332,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_random_load) {
 
             size_t tablet_count_bits = 8;
             int rf = tests::random::get_int<shard_id>(2, 4);
-            for (int log2_tablets = 0; log2_tablets < tablet_count_bits; ++log2_tablets) {
+            for (size_t log2_tablets = 0; log2_tablets < tablet_count_bits; ++log2_tablets) {
                 if (tests::random::get_bool()) {
                     continue;
                 }
