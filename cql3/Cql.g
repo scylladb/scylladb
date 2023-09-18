@@ -1012,14 +1012,8 @@ alterTableStatement returns [std::unique_ptr<alter_table_statement> expr]
     }
     ;
 
-cfisStatic returns [bool isStaticColumn]
-    @init{
-        bool isStatic = false;
-    }
-    : (K_STATIC { isStatic=true; })?
-    {
-        $isStaticColumn = isStatic;
-    }
+cfisStatic returns [bool isStaticColumn=false]
+    : (K_STATIC { $isStaticColumn=true; })?
     ;
 
 /**
@@ -1168,7 +1162,7 @@ listPermissionsStatement returns [std::unique_ptr<list_permissions_statement> st
       { $stmt = std::make_unique<list_permissions_statement>($permissionOrAll.perms, std::move(r), std::move(role), recursive); }
     ;
 
-permission returns [auth::permission perm]
+permission returns [auth::permission perm = auth::permission{}]
     : p=(K_CREATE | K_ALTER | K_DROP | K_SELECT | K_MODIFY | K_AUTHORIZE | K_DESCRIBE | K_EXECUTE)
     { $perm = auth::permissions::from_string($p.text); }
     ;
@@ -1773,7 +1767,7 @@ propertyValue returns [sstring str]
     | K_NULL { $str = "null"; }
     ;
 
-relationType returns [oper_t op]
+relationType returns [oper_t op = oper_t{}]
     : '='  { $op = oper_t::EQ; }
     | '<'  { $op = oper_t::LT; }
     | '<=' { $op = oper_t::LTE; }
