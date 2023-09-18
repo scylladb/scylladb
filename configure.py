@@ -1426,23 +1426,14 @@ warnings = [
     '-Werror',
     '-Wimplicit-fallthrough',
     '-Wno-mismatched-tags',  # clang-only
-    '-Wno-tautological-compare',
     '-Wno-c++11-narrowing',
-    '-Wno-ignored-attributes',
     '-Wno-overloaded-virtual',
     '-Wno-unused-command-line-argument',
     '-Wno-unsupported-friend',
-    '-Wno-delete-non-abstract-non-virtual-dtor',
-    '-Wno-braced-scalar-init',
     '-Wno-implicit-int-float-conversion',
-    '-Wno-delete-abstract-non-virtual-dtor',
     # https://gcc.gnu.org/bugzilla/show_bug.cgi?id=77728
     '-Wno-psabi',
     '-Wno-narrowing',
-    '-Wno-nonnull',
-    '-Wno-stringop-overread', # false positives with gcc 12
-    '-Wno-uninitialized',  # false positives with gcc 12,
-    '-Wno-dangling-pointer', # false positives with gcc 12
 ]
 
 warnings = [w
