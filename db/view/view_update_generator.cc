@@ -233,6 +233,7 @@ void view_update_generator::do_abort() noexcept {
         return;
     }
 
+    vug_logger.info("Terminating background fiber");
     _db.unplug_view_update_generator();
     _as.request_abort();
     _pending_sstables.signal();
