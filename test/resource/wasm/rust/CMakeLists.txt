@@ -1,7 +1,6 @@
-find_program(CARGO cargo)
-if(NOT CARGO)
-  message(FATAL_ERROR "cargo is required")
-endif()
+find_program(CARGO cargo
+  REQUIRED)
+
 
 function(compile_rust_to_wasm input)
   cmake_parse_arguments(parsed_args "" "WASM;OUT_DIR" "" ${ARGN})

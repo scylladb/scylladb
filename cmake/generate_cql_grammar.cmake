@@ -1,7 +1,5 @@
-find_program (ANTLR3 antlr3)
-if(NOT ANTLR3)
-  message(FATAL_ERROR "antlr3 is required")
-endif()
+find_program (ANTLR3 antlr3
+  REQUIRED)
 
 # Parse antlr3 grammar files and generate C++ sources
 function(generate_cql_grammar)
