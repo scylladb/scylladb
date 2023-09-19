@@ -300,13 +300,15 @@ class table_populator {
     sharded<locator::effective_replication_map_ptr> _erms;
 
 public:
-    table_populator(global_table_ptr& ptr, distributed<replica::database>& db, sstring ks, sstring cf)
+    table_populator(global_table_ptr& ptr, distributed<replica::database>& db, sstring ks, sstring cf, sstring datadir)
         : _db(db)
         , _ks(std::move(ks))
         , _cf(std::move(cf))
         , _global_table(ptr)
-        , _base_path(_global_table->dir())
-    {}
+        , _base_path(std::move(datadir))
+    {
+        dblog.debug("table_populator: {}", _base_path);
+    }
 
     ~table_populator() {
         // All directories must have been stopped
@@ -464,9 +466,9 @@ future<> distributed_loader::populate_keyspace(distributed<replica::database>& d
         co_await coroutine::parallel_for_each(gtable->get_config().all_datadirs, [&] (const sstring& datadir) -> future<> {
             auto cf = gtable->shared_from_this();
 
-            dblog.info("Keyspace {}: Reading CF {} id={} version={} storage={}", ks_name, cfname, uuid, s->version(), cf->get_storage_options().type_string());
+            dblog.info("Keyspace {}: Reading CF {} id={} version={} storage={} datadir={}", ks_name, cfname, uuid, s->version(), cf->get_storage_options().type_string(), datadir);
 
-            auto metadata = table_populator(gtable, db, ks_name, cfname);
+            auto metadata = table_populator(gtable, db, ks_name, cfname, datadir);
             std::exception_ptr ex;
 
             try {
@@ -476,10 +478,10 @@ future<> distributed_loader::populate_keyspace(distributed<replica::database>& d
             } catch (...) {
                 std::exception_ptr eptr = std::current_exception();
                 std::string msg =
-                    format("Exception while populating keyspace '{}' with column family '{}' from file '{}': {}",
-                            ks_name, cfname, cf->dir(), eptr);
-                dblog.error("Exception while populating keyspace '{}' with column family '{}' from file '{}': {}",
-                            ks_name, cfname, cf->dir(), eptr);
+                    format("Exception while populating keyspace '{}' with column family '{}' from datadir '{}': {}",
+                            ks_name, cfname, datadir, eptr);
+                dblog.error("Exception while populating keyspace '{}' with column family '{}' from datadir '{}': {}",
+                            ks_name, cfname, datadir, eptr);
                 try {
                     std::rethrow_exception(eptr);
                 } catch (sstables::compaction_stopped_exception& e) {
