@@ -1698,7 +1698,7 @@ def configure_seastar(build_dir, mode, mode_config):
     if dpdk is None:
         dpdk = platform.machine() == 'x86_64' and mode == 'release'
     if dpdk:
-        seastar_cmake_args += ['-DSeastar_DPDK=ON', '-DSeastar_DPDK_MACHINE=wsm']
+        seastar_cmake_args += ['-DSeastar_DPDK=ON', '-DSeastar_DPDK_MACHINE=westmere']
     if args.split_dwarf:
         seastar_cmake_args += ['-DSeastar_SPLIT_DWARF=ON']
     if args.alloc_failure_injector:
