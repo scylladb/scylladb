@@ -165,71 +165,80 @@ void rebalance_segments_for(const sstring& ep, size_t segments_per_shard,
     }
 }
 
-/// \brief Rebalance all present hints segments.
+/// \brief Rebalance all present hint segments.
 ///
-/// The difference between the number of segments on every two shard will be not greater than 1 after the
-/// rebalancing.
+/// The difference between the number of segments on any two shards will not be
+/// greater than 1 after the rebalancing.
 ///
-/// Complexity: O(N), where N is a total number of present hints' segments.
+/// Complexity: O(N), where N is a total number of present hint segments.
 ///
 /// \note Should be called from a seastar::thread context.
 ///
-/// \param hints_directory a root hints directory
+/// \param hint_directory a root hint directory
 /// \param segments_map a map that was built by get_current_hints_segments()
-void rebalance_segments(const fs::path& hints_directory, hints_segments_map& segments_map) {
-    // Count how many hints segments to each destination we have.
+void rebalance_segments(const fs::path& hint_directory, hints_segments_map& segments_map) {
+    // Count how many hint segments we have for each destination.
     std::unordered_map<sstring, size_t> per_ep_hints;
-    for (auto& ep_info : segments_map) {
-        per_ep_hints[ep_info.first] = boost::accumulate(ep_info.second | boost::adaptors::map_values | boost::adaptors::transformed(std::mem_fn(&std::list<fs::path>::size)), 0);
-        manager_logger.trace("{}: total files: {}", ep_info.first, per_ep_hints[ep_info.first]);
+
+    for (const auto& [ep, ep_hint_segments] : segments_map) {
+        per_ep_hints[ep] = boost::accumulate(ep_hint_segments
+                | boost::adaptors::map_values
+                | boost::adaptors::transformed(std::mem_fn(&std::list<fs::path>::size)),
+                size_t(0));
+        manager_logger.trace("{}: total files: {}", ep, per_ep_hints[ep]);
     }
 
-    // Create a map of lists of segments that we will move (for each destination end point): if a shard has segments
-    // then we will NOT move q = int(N/S) segments out of them, where N is a total number of segments to the current
-    // destination and S is a current number of shards.
+    // Create a map of lists of segments that we will move (for each destination endpoint):
+    //   if a shard has segments, then we will NOT move q = int(N/S) segments out of them,
+    //   where N is a total number of segments to the current destination
+    //   and S is the current number of shards.
     std::unordered_map<sstring, std::list<fs::path>> segments_to_move;
+
     for (auto& [ep, ep_segments] : segments_map) {
-        size_t q = per_ep_hints[ep] / smp::count;
+        const size_t q = per_ep_hints[ep] / smp::count;
         auto& current_segments_to_move = segments_to_move[ep];
 
         for (auto& [shard_id, shard_segments] : ep_segments) {
-            // Move all segments from the shards that are no longer relevant (re-sharding to the lower number of shards)
+            // Move all segments from the shards that are no longer relevant
+            // (re-sharding to the lower number of shards).
             if (shard_id >= smp::count) {
                 current_segments_to_move.splice(current_segments_to_move.end(), shard_segments);
             } else if (shard_segments.size() > q) {
-                current_segments_to_move.splice(current_segments_to_move.end(), shard_segments, std::next(shard_segments.begin(), q), shard_segments.end());
+                current_segments_to_move.splice(current_segments_to_move.end(), shard_segments,
+                        std::next(shard_segments.begin(), q), shard_segments.end());
             }
         }
     }
 
-    // Since N (a total number of segments to a specific destination) may be not a multiple of S (a current number of
-    // shards) we will distribute files in two passes:
+    // Since N (a total number of segments to a specific destination) may be not a multiple
+    // of S (the current number of shards) we will distribute files in two passes:
     //    * if N = S * q + r, then
     //       * one pass for segments_per_shard = q
     //       * another one for segments_per_shard = q + 1.
     //
     // This way we will ensure as close to the perfect distribution as possible.
     //
-    // Right till this point we haven't moved any segments. However we have created a logical separation of segments
-    // into two groups:
+    // Right till this point we haven't moved any segments. However we have created a logical
+    // separation of segments into two groups:
     //    * Segments that are not going to be moved: segments in the segments_map.
     //    * Segments that are going to be moved: segments in the segments_to_move.
     //
-    // rebalance_segments_for() is going to consume segments from segments_to_move and move them to corresponding
-    // lists in the segments_map AND actually move segments to the corresponding shard's sub-directory till the requested
-    // segments_per_shard level is reached (see more details in the description of rebalance_segments_for()).
-    for (auto& [ep, N] : per_ep_hints) {
-        size_t q = N / smp::count;
-        size_t r = N - q * smp::count;
+    // rebalance_segments_for() is going to consume segments from segments_to_move
+    // and move them to corresponding lists in the segments_map AND actually move segments
+    // to the corresponding shard's sub-directory till the requested segments_per_shard level
+    // is reached (see more details in the description of rebalance_segments_for()).
+    for (const auto& [ep, N] : per_ep_hints) {
+        const size_t q = N / smp::count;
+        const size_t r = N - q * smp::count;
         auto& current_segments_to_move = segments_to_move[ep];
         auto& current_segments_map = segments_map[ep];
 
         if (q) {
-            rebalance_segments_for(ep, q, hints_directory, current_segments_map, current_segments_to_move);
+            rebalance_segments_for(ep, q, hint_directory, current_segments_map, current_segments_to_move);
         }
 
         if (r) {
-            rebalance_segments_for(ep, q + 1, hints_directory, current_segments_map, current_segments_to_move);
+            rebalance_segments_for(ep, q + 1, hint_directory, current_segments_map, current_segments_to_move);
         }
     }
 }
