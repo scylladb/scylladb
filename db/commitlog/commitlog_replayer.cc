@@ -56,6 +56,7 @@ public:
         uint64_t skipped_mutations = 0;
         uint64_t applied_mutations = 0;
         uint64_t corrupt_bytes = 0;
+        uint64_t truncated_at = 0;
 
         stats& operator+=(const stats& s) {
             invalid_mutations += s.invalid_mutations;
@@ -199,6 +200,8 @@ db::commitlog_replayer::impl::recover(sstring file, const sstring& fname_prefix)
             f.get();
         } catch (commitlog::segment_data_corruption_error& e) {
             s->corrupt_bytes += e.bytes();
+        } catch (commitlog::segment_truncation& e) {
+            s->truncated_at = e.position();
         } catch (...) {
             throw;
         }
@@ -348,6 +351,9 @@ future<> db::commitlog_replayer::recover(std::vector<sstring> files, sstring fna
                         return _impl->recover(f, fname_prefix).then([f, total](impl::stats stats) {
                             if (stats.corrupt_bytes != 0) {
                                 rlogger.warn("Corrupted file: {}. {} bytes skipped.", f, stats.corrupt_bytes);
+                            }
+                            if (stats.truncated_at != 0) {
+                                rlogger.warn("Truncated file: {} at position {}.", f, stats.truncated_at);
                             }
                             rlogger.debug("Log replay of {} complete, {} replayed mutations ({} invalid, {} skipped)"
                                             , f
