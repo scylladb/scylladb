@@ -373,7 +373,7 @@ public:
         uint64_t bytes() const {
             return _bytes;
         }
-        virtual const char* what() const noexcept {
+        const char* what() const noexcept override {
             return _msg.c_str();
         }
     private:
@@ -383,7 +383,7 @@ public:
     class invalid_segment_format : public segment_error {
         static constexpr const char* _msg = "Not a scylla format commitlog file";
     public:
-        virtual const char* what() const noexcept {
+        const char* what() const noexcept override {
             return _msg;
         }
     };
@@ -391,9 +391,19 @@ public:
     class header_checksum_error : public segment_error {
         static constexpr const char* _msg = "Checksum error in file header";
     public:
-        virtual const char* what() const noexcept {
+        const char* what() const noexcept override {
             return _msg;
         }
+    };
+
+    class segment_truncation : public segment_error {
+        std::string _msg;
+        uint64_t _pos;
+    public:
+        segment_truncation(uint64_t);
+
+        uint64_t position() const;
+        const char* what() const noexcept override;
     };
 
     static future<> read_log_file(sstring filename, sstring prefix, commit_load_reader_func, position_type = 0, const db::extensions* = nullptr);

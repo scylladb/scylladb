@@ -2580,6 +2580,20 @@ const db::commitlog::config& db::commitlog::active_config() const {
     return _segment_manager->cfg;
 }
 
+
+db::commitlog::segment_truncation::segment_truncation(uint64_t pos) 
+    : _msg(fmt::format("Segment truncation at {}", pos))
+    , _pos(pos)
+{}
+
+uint64_t db::commitlog::segment_truncation::position() const {
+    return _pos;
+}
+
+const char* db::commitlog::segment_truncation::what() const noexcept {
+    return _msg.c_str();
+}
+
 // No commit_io_check needed in the log reader since the database will fail
 // on error at startup if required
 future<>
@@ -2718,6 +2732,13 @@ db::commitlog::read_log_file(sstring filename, sstring pfx, commit_load_reader_f
                 // if a chunk header checksum is broken, we shall just assume that all
                 // remaining is as well. We cannot trust the "next" pointer, so...
                 clogger.debug("Checksum error in segment chunk at {}.", start);
+
+                if (corrupt_size == 0) {
+                    // if we got here and had no broken data previously, we can 
+                    // just call it truncation
+                    throw segment_truncation(pos - segment::segment_overhead_size);
+                }
+
                 corrupt_size += (file_size - pos);
                 stop();
                 co_return;

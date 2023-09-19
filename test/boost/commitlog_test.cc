@@ -492,9 +492,58 @@ SEASTAR_TEST_CASE(test_commitlog_chunk_corruption){
                         auto segments = log.get_active_segment_names();
                         BOOST_REQUIRE(!segments.empty());
                         auto seg = segments[0];
-                        return corrupt_segment(seg, rps->at(0).pos - 4, 0x451234ab).then([seg, rps] {
+                        auto cpos = rps->at(0).pos - 4;
+                        return corrupt_segment(seg, cpos, 0x451234ab).then([seg, rps, cpos] {
                             return db::commitlog::read_log_file(seg, db::commitlog::descriptor::FILENAME_PREFIX, [rps](db::commitlog::buffer_and_replay_position buf_rp) {
                                 BOOST_FAIL("Should not reach");
+                                return make_ready_future<>();
+                            }).then_wrapped([cpos](auto&& f) {
+                                try {
+                                    f.get();
+                                    BOOST_FAIL("Expected exception");
+                                } catch (commitlog::segment_truncation& e) {
+                                    // ok. We've destroyed the first chunk of the segment. This counts as a truncation
+                                    BOOST_REQUIRE(e.position() <= cpos);
+                                }
+                            });
+                        });
+                    });
+        });
+}
+
+
+SEASTAR_TEST_CASE(test_commitlog_chunk_corruption2){
+    commitlog::config cfg;
+    cfg.commitlog_segment_size_in_mb = 1;
+    return cl_test(cfg, [](commitlog& log) {
+        auto rps = make_lw_shared<std::vector<db::replay_position>>();
+        // write enough entries to fill more than one chunk
+        return do_until([rps]() {return rps->size() > (128*1024/8);},
+                    [&log, rps]() {
+                        auto uuid = make_table_id();
+                        sstring tmp = "hej bubba cow";
+                        return log.add_mutation(uuid, tmp.size(), db::commitlog::force_sync::no, [tmp](db::commitlog::output& dst) {
+                                    dst.write(tmp.data(), tmp.size());
+                                }).then([rps](rp_handle h) {
+                                    BOOST_CHECK_NE(h.rp(), db::replay_position());
+                                    rps->push_back(h.release());
+                                });
+                    }).then([&log]() {
+                        return log.sync_all_segments();
+                    }).then([&log, rps] {
+                        auto segments = log.get_active_segment_names();
+                        BOOST_REQUIRE(!segments.empty());
+                        auto seg = segments[0];
+                        auto desc = commitlog::descriptor(seg);
+                        auto e = std::find_if(rps->begin(), rps->end(), [desc](auto& rp) {
+                            return rp.id != desc.id;
+                        });
+                        auto idx = std::distance(rps->begin(), e);
+                        auto cpos = rps->at(idx/2).pos;
+
+                        return corrupt_segment(seg, cpos, 0x451234ab).then([seg, rps, cpos] {
+                            return db::commitlog::read_log_file(seg, db::commitlog::descriptor::FILENAME_PREFIX, [rps, cpos](db::commitlog::buffer_and_replay_position buf_rp) {
+                                BOOST_CHECK_NE(buf_rp.position.pos, cpos);
                                 return make_ready_future<>();
                             }).then_wrapped([](auto&& f) {
                                 try {
