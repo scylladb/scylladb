@@ -44,9 +44,10 @@ namespace internal {
 
 namespace {
 
+using segment_list = std::list<fs::path>;
 // map: shard -> segments
-using hints_ep_segments_map = std::unordered_map<unsigned, std::list<fs::path>>;
-// map: IP -> map: shard -> segments
+using hints_ep_segments_map = std::unordered_map<unsigned, segment_list>;
+// map: IP -> (map: shard -> segments)
 using hints_segments_map = std::unordered_map<sstring, hints_ep_segments_map>;
 
 future<> scan_shard_hint_directories(const fs::path& hint_directory,
@@ -123,7 +124,7 @@ future<hints_segments_map> get_current_hints_segments(const fs::path& hint_direc
 /// \param segments_to_move a list of segments we are allowed to move
 future<> rebalance_segments_for(const sstring& ep, size_t segments_per_shard,
         const fs::path& hint_directory, hints_ep_segments_map& ep_segments,
-        std::list<fs::path>& segments_to_move)
+        segment_list& segments_to_move)
 {
     manager_logger.trace("{}: segments_per_shard: {}, total number of segments to move: {}",
             ep, segments_per_shard, segments_to_move.size());
@@ -135,7 +136,7 @@ future<> rebalance_segments_for(const sstring& ep, size_t segments_per_shard,
 
     for (unsigned i = 0; i < smp::count && !segments_to_move.empty(); ++i) {
         const fs::path endpoint_dir_path = hint_directory / fmt::to_string(i) / ep;
-        std::list<fs::path>& current_shard_segments = ep_segments[i];
+        segment_list& current_shard_segments = ep_segments[i];
 
         // Make sure that the endpoint_dir_path exists. If not, create it.
         co_await io_check([name = endpoint_dir_path.c_str()] {
@@ -176,7 +177,7 @@ future<> rebalance_segments(const fs::path& hint_directory, hints_segments_map& 
     for (const auto& [ep, ep_hint_segments] : segments_map) {
         per_ep_hints[ep] = boost::accumulate(ep_hint_segments
                 | boost::adaptors::map_values
-                | boost::adaptors::transformed(std::mem_fn(&std::list<fs::path>::size)),
+                | boost::adaptors::transformed(std::mem_fn(&segment_list::size)),
                 size_t(0));
         manager_logger.trace("{}: total files: {}", ep, per_ep_hints[ep]);
     }
@@ -185,7 +186,7 @@ future<> rebalance_segments(const fs::path& hint_directory, hints_segments_map& 
     //   if a shard has segments, then we will NOT move q = int(N/S) segments out of them,
     //   where N is a total number of segments to the current destination
     //   and S is the current number of shards.
-    std::unordered_map<sstring, std::list<fs::path>> segments_to_move;
+    std::unordered_map<sstring, segment_list> segments_to_move;
 
     for (auto& [ep, ep_segments] : segments_map) {
         const size_t q = per_ep_hints[ep] / smp::count;
