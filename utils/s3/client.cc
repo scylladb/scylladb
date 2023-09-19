@@ -453,16 +453,16 @@ sstring parse_multipart_upload_id(sstring& body) {
 }
 
 sstring parse_multipart_copy_upload_etag(sstring& body) {
-    rapidxml::xml_document<> doc;
+    auto doc = std::make_unique<rapidxml::xml_document<>>();
     try {
-        doc.parse<0>(body.data());
+        doc->parse<0>(body.data());
     } catch (const rapidxml::parse_error& e) {
         s3l.warn("cannot parse multipart copy upload response: {}", e.what());
         // The caller is supposed to check the etag to be empty
         // and handle the error the way it prefers
         return "";
     }
-    auto root_node = doc.first_node("CopyPartResult");
+    auto root_node = doc->first_node("CopyPartResult");
     auto etag_node = root_node->first_node("ETag");
     return etag_node->value();
 }
