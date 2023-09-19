@@ -70,11 +70,6 @@ fedora_packages=(
     git
     python
     sudo
-    java-1.8.0-openjdk-headless
-    java-1.8.0-openjdk-devel
-    ant
-    ant-junit
-    maven
     patchelf
     python3
     python3-aiohttp
