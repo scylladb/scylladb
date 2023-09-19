@@ -85,10 +85,11 @@ std::chrono::milliseconds gossiper::quarantine_delay() const noexcept {
     return ring_delay * 2;
 }
 
-gossiper::gossiper(abort_source& as, const locator::shared_token_metadata& stm, netw::messaging_service& ms, const db::config& cfg, gossip_config gcfg)
+gossiper::gossiper(abort_source& as, const locator::shared_token_metadata& stm, netw::messaging_service& ms, service::raft_address_map& address_map, const db::config& cfg, gossip_config gcfg)
         : _abort_source(as)
         , _shared_token_metadata(stm)
         , _messaging(ms)
+        , _address_map(address_map)
         , _failure_detector_timeout_ms(cfg.failure_detector_timeout_in_ms)
         , _force_gossip_generation(cfg.force_gossip_generation)
         , _gcfg(std::move(gcfg)) {
@@ -1989,6 +1990,7 @@ future<> gossiper::start_gossiping(gms::generation_type generation_nbr, std::map
         generation_nbr = gms::generation_type(_force_gossip_generation());
         logger.warn("Use the generation number provided by user: generation = {}", generation_nbr);
     }
+    _address_map.add_or_update_entry(raft::server_id(my_host_id().uuid()), get_broadcast_address(), generation_nbr);
     endpoint_state local_state = my_endpoint_state();
     local_state.set_heart_beat_state_and_update_timestamp(heart_beat_state(generation_nbr));
     for (auto& entry : preload_local_states) {

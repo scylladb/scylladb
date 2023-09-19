@@ -1270,6 +1270,13 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // before start_listen is called.
             messaging.invoke_on_all(&netw::messaging_service::start).get();
 
+            static sharded<service::raft_address_map> raft_address_map;
+            supervisor::notify("starting Raft address map");
+            raft_address_map.start().get();
+            auto stop_address_map = defer_verbose_shutdown("raft_address_map", [] {
+                raft_address_map.stop().get();
+            });
+
             supervisor::notify("starting gossiper");
             gms::gossip_config gcfg;
             gcfg.gossip_scheduling_group = dbcfg.gossip_scheduling_group;
@@ -1287,19 +1294,12 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             gcfg.group0_id = sys_ks.local().get_raft_group0_id().get();
 
             debug::the_gossiper = &gossiper;
-            gossiper.start(std::ref(stop_signal.as_sharded_abort_source()), std::ref(token_metadata), std::ref(messaging), std::ref(*cfg), std::ref(gcfg)).get();
+            gossiper.start(std::ref(stop_signal.as_sharded_abort_source()), std::ref(token_metadata), std::ref(messaging), std::ref(raft_address_map), std::ref(*cfg), std::ref(gcfg)).get();
             auto stop_gossiper = defer_verbose_shutdown("gossiper", [&gossiper] {
                 // call stop on each instance, but leave the sharded<> pointers alive
                 gossiper.invoke_on_all(&gms::gossiper::stop).get();
             });
             gossiper.invoke_on_all(&gms::gossiper::start).get();
-
-            static sharded<service::raft_address_map> raft_address_map;
-            supervisor::notify("starting Raft address map");
-            raft_address_map.start().get();
-            auto stop_address_map = defer_verbose_shutdown("raft_address_map", [] {
-                raft_address_map.stop().get();
-            });
 
             static sharded<service::direct_fd_pinger> fd_pinger;
             supervisor::notify("starting direct failure detector pinger service");

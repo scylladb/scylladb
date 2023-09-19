@@ -41,6 +41,7 @@
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/scheduling.hh>
 #include "locator/token_metadata.hh"
+#include "service/raft/raft_address_map.hh"
 
 namespace db {
 class config;
@@ -288,7 +289,7 @@ private:
     // Must be called under lock_endpoint.
     future<> replicate(inet_address, endpoint_state, permit_id);
 public:
-    explicit gossiper(abort_source& as, const locator::shared_token_metadata& stm, netw::messaging_service& ms, const db::config& cfg, gossip_config gcfg);
+    explicit gossiper(abort_source& as, const locator::shared_token_metadata& stm, netw::messaging_service& ms, service::raft_address_map& address_map, const db::config& cfg, gossip_config gcfg);
 
     /**
      * Register for interesting state changes.
@@ -683,6 +684,7 @@ private:
     abort_source& _abort_source;
     const locator::shared_token_metadata& _shared_token_metadata;
     netw::messaging_service& _messaging;
+    service::raft_address_map& _address_map;
     utils::updateable_value<uint32_t> _failure_detector_timeout_ms;
     utils::updateable_value<int32_t> _force_gossip_generation;
     gossip_config _gcfg;

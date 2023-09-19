@@ -665,20 +665,20 @@ private:
                 seeds.emplace(gms::inet_address("127.0.0.1"));
             }
 
-            gms::gossip_config gcfg;
-            gcfg.cluster_name = "Test Cluster";
-            gcfg.seeds = std::move(seeds);
-            gcfg.skip_wait_for_gossip_to_settle = 0;
-            _gossiper.start(std::ref(abort_sources), std::ref(_token_metadata), std::ref(_ms), std::ref(*cfg), std::move(gcfg)).get();
-            auto stop_ms_fd_gossiper = defer([this] {
-                _gossiper.stop().get();
-            });
-            _gossiper.invoke_on_all(&gms::gossiper::start).get();
-
             _raft_address_map.start().get();
             auto stop_address_map = defer([this] {
                 _raft_address_map.stop().get();
             });
+
+            gms::gossip_config gcfg;
+            gcfg.cluster_name = "Test Cluster";
+            gcfg.seeds = std::move(seeds);
+            gcfg.skip_wait_for_gossip_to_settle = 0;
+            _gossiper.start(std::ref(abort_sources), std::ref(_token_metadata), std::ref(_ms), std::ref(_raft_address_map), std::ref(*cfg), std::move(gcfg)).get();
+            auto stop_ms_fd_gossiper = defer([this] {
+                _gossiper.stop().get();
+            });
+            _gossiper.invoke_on_all(&gms::gossiper::start).get();
 
             _fd_pinger.start(std::ref(_ms), std::ref(_raft_address_map)).get();
             auto stop_fd_pinger = defer([this] { _fd_pinger.stop().get(); });
