@@ -1969,7 +1969,7 @@ future<> compaction_manager::remove(table_state& t) noexcept {
         co_await std::move(close_gate);
     }
 
-    c_state.backlog_tracker.disable();
+    c_state.backlog_tracker->disable();
 
     _compaction_state.erase(&t);
 
@@ -2159,19 +2159,6 @@ compaction_backlog_tracker::compaction_backlog_tracker(compaction_backlog_tracke
     }
 }
 
-compaction_backlog_tracker&
-compaction_backlog_tracker::operator=(compaction_backlog_tracker&& x) noexcept {
-    if (this != &x) {
-        if (x._manager) {
-            on_internal_error(cmlog, "compaction_backlog_tracker is moved while registered");
-        }
-        _impl = std::move(x._impl);
-        _ongoing_writes = std::move(x._ongoing_writes);
-        _ongoing_compactions = std::move(x._ongoing_compactions);
-    }
-    return *this;
-}
-
 compaction_backlog_tracker::~compaction_backlog_tracker() {
     if (_manager) {
         _manager->remove_backlog_tracker(this);
@@ -2212,11 +2199,11 @@ compaction_backlog_manager::~compaction_backlog_manager() {
 
 void compaction_manager::register_backlog_tracker(table_state& t, compaction_backlog_tracker new_backlog_tracker) {
     auto& cs = get_compaction_state(&t);
-    cs.backlog_tracker = std::move(new_backlog_tracker);
-    register_backlog_tracker(cs.backlog_tracker);
+    cs.backlog_tracker.emplace(std::move(new_backlog_tracker));
+    register_backlog_tracker(*cs.backlog_tracker);
 }
 
 compaction_backlog_tracker& compaction_manager::get_backlog_tracker(table_state& t) {
     auto& cs = get_compaction_state(&t);
-    return cs.backlog_tracker;
+    return *cs.backlog_tracker;
 }
