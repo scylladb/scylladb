@@ -452,7 +452,7 @@ public:
 
         return with_semaphore(_lock, 1, [this] () {
             manager_logger.debug("Rebalancing hints in {}", _hints_directory);
-            return rebalance(fs::path{_hints_directory}).then([this] {
+            return rebalance_hints(fs::path{_hints_directory}).then([this] {
                 _state = state::rebalanced;
             });
         });
