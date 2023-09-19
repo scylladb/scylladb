@@ -106,58 +106,61 @@ hints_segments_map get_current_hints_segments(const fs::path& hint_directory) {
     return current_hint_segments;
 }
 
-/// \brief Rebalance hints segments for a given (destination) end point
+/// \brief Rebalance hint segments for a given (destination) end point
 ///
-/// This method is going to consume files from the \ref segments_to_move and distribute them between the present
-/// shards (taking into an account the \ref ep_segments state - there may be zero or more segments that belong to a
-/// particular shard in it) until we either achieve the requested \ref segments_per_shard level on each shard
-/// or until we are out of files to move.
+/// This method is going to consume files from the \ref segments_to_move and distribute
+/// them between the present shards (taking into an account the \ref ep_segments state - there may
+/// be zero or more segments that belong to a particular shard in it) until we either achieve
+/// the requested \ref segments_per_shard level on each shard or until we are out of files to move.
 ///
-/// As a result (in addition to the actual state on the disk) both \ref ep_segments and \ref segments_to_move are going
-/// to be modified.
+/// As a result (in addition to the actual state on the disk) both \ref ep_segments
+/// and \ref segments_to_move are going to be modified.
 ///
-/// Complexity: O(N), where N is a total number of present hints' segments for the \ref ep end point (as a destination).
+/// Complexity: O(N), where N is a total number of present hint segments for
+///             the \ref ep end point (as a destination).
 ///
 /// \note Should be called from a seastar::thread context.
 ///
 /// \param ep destination end point ID (a string with its IP address)
-/// \param segments_per_shard number of hints segments per-shard we want to achieve
-/// \param hints_directory a root hints directory
-/// \param ep_segments a map that was originally built by get_current_hints_segments() for this end point
+/// \param segments_per_shard number of hint segments per-shard we want to achieve
+/// \param hint_directory a root hint directory
+/// \param ep_segments a map that was originally built by get_current_hints_segments() for this endpoint
 /// \param segments_to_move a list of segments we are allowed to move
-void rebalance_segments_for(
-        const sstring& ep,
-        size_t segments_per_shard,
-        const fs::path& hints_directory,
-        hints_ep_segments_map& ep_segments,
+void rebalance_segments_for(const sstring& ep, size_t segments_per_shard,
+        const fs::path& hint_directory, hints_ep_segments_map& ep_segments,
         std::list<fs::path>& segments_to_move)
 {
-    manager_logger.trace("{}: segments_per_shard: {}, total number of segments to move: {}", ep, segments_per_shard, segments_to_move.size());
+    manager_logger.trace("{}: segments_per_shard: {}, total number of segments to move: {}",
+            ep, segments_per_shard, segments_to_move.size());
 
-    // sanity check
+    // Sanity check.
     if (segments_to_move.empty() || !segments_per_shard) {
         return;
     }
 
     for (unsigned i = 0; i < smp::count && !segments_to_move.empty(); ++i) {
-        fs::path shard_path_dir(hints_directory / seastar::format("{:d}", i).c_str() / ep.c_str());
+        const fs::path endpoint_dir_path = hint_directory / fmt::to_string(i) / ep;
         std::list<fs::path>& current_shard_segments = ep_segments[i];
 
-        // Make sure that the shard_path_dir exists and if not - create it
-        io_check([name = shard_path_dir.c_str()] { return recursive_touch_directory(name); }).get();
+        // Make sure that the endpoint_dir_path exists. If not, create it.
+        io_check([name = endpoint_dir_path.c_str()] {
+            return recursive_touch_directory(name);
+        }).get();
 
         while (current_shard_segments.size() < segments_per_shard && !segments_to_move.empty()) {
             auto seg_path_it = segments_to_move.begin();
-            fs::path new_path(shard_path_dir / seg_path_it->filename());
+            const fs::path seg_new_path = endpoint_dir_path / seg_path_it->filename();
 
-            // Don't move the file to the same location - it's pointless.
-            if (*seg_path_it != new_path) {
-                manager_logger.trace("going to move: {} -> {}", *seg_path_it, new_path);
-                io_check(rename_file, seg_path_it->native(), new_path.native()).get();
+            // Don't move the file to the same location. It's pointless.
+            if (*seg_path_it != seg_new_path) {
+                manager_logger.trace("going to move: {} -> {}", *seg_path_it, seg_new_path);
+                io_check(rename_file, seg_path_it->native(), seg_new_path.native()).get();
             } else {
                 manager_logger.trace("skipping: {}", *seg_path_it);
             }
-            current_shard_segments.splice(current_shard_segments.end(), segments_to_move, seg_path_it, std::next(seg_path_it));
+
+            current_shard_segments.splice(current_shard_segments.end(), segments_to_move,
+                    seg_path_it, std::next(seg_path_it));
         }
     }
 }
