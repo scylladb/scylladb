@@ -43,12 +43,14 @@ namespace fs = std::filesystem;
 namespace db::hints {
 namespace internal {
 
+namespace {
+
 // map: shard -> segments
 using hints_ep_segments_map = std::unordered_map<unsigned, std::list<fs::path>>;
 // map: IP -> map: shard -> segments
 using hints_segments_map = std::unordered_map<sstring, hints_ep_segments_map>;
 
-static future<> scan_for_hints_dirs(const fs::path& hints_directory, std::function<future<> (fs::path dir, directory_entry de, unsigned shard_id)> f) {
+future<> scan_for_hints_dirs(const fs::path& hints_directory, std::function<future<> (fs::path dir, directory_entry de, unsigned shard_id)> f) {
     return lister::scan_dir(hints_directory, lister::dir_entry_types::of<directory_entry_type::directory>(), [f = std::move(f)] (fs::path dir, directory_entry de) mutable {
         unsigned shard_id;
         try {
@@ -70,7 +72,7 @@ static future<> scan_for_hints_dirs(const fs::path& hints_directory, std::functi
 ///
 /// \param hints_directory directory to scan
 /// \return a map: ep -> map: shard -> segments (full paths)
-static hints_segments_map get_current_hints_segments(const fs::path& hints_directory) {
+hints_segments_map get_current_hints_segments(const fs::path& hints_directory) {
     hints_segments_map current_hints_segments;
 
     // shards level
@@ -110,7 +112,7 @@ static hints_segments_map get_current_hints_segments(const fs::path& hints_direc
 /// \param hints_directory a root hints directory
 /// \param ep_segments a map that was originally built by get_current_hints_segments() for this end point
 /// \param segments_to_move a list of segments we are allowed to move
-static void rebalance_segments_for(
+void rebalance_segments_for(
         const sstring& ep,
         size_t segments_per_shard,
         const fs::path& hints_directory,
@@ -158,7 +160,7 @@ static void rebalance_segments_for(
 ///
 /// \param hints_directory a root hints directory
 /// \param segments_map a map that was built by get_current_hints_segments()
-static void rebalance_segments(const fs::path& hints_directory, hints_segments_map& segments_map) {
+void rebalance_segments(const fs::path& hints_directory, hints_segments_map& segments_map) {
     // Count how many hints segments to each destination we have.
     std::unordered_map<sstring, size_t> per_ep_hints;
     for (auto& ep_info : segments_map) {
@@ -222,7 +224,7 @@ static void rebalance_segments(const fs::path& hints_directory, hints_segments_m
 ///                           E is a number of end points for which hints where ever created.
 ///
 /// \param hints_directory a root hints directory
-static void remove_irrelevant_shards_directories(const fs::path& hints_directory) {
+void remove_irrelevant_shards_directories(const fs::path& hints_directory) {
     // shards level
     scan_for_hints_dirs(hints_directory, [] (fs::path dir, directory_entry de, unsigned shard_id) {
         if (shard_id >= smp::count) {
@@ -236,6 +238,8 @@ static void remove_irrelevant_shards_directories(const fs::path& hints_directory
         return make_ready_future<>();
     }).get();
 }
+
+} // anonymous namespace
 
 future<> rebalance(fs::path hints_directory) {
     return seastar::async([hints_directory = std::move(hints_directory)] {
