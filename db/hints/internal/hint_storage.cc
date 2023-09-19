@@ -243,23 +243,25 @@ void rebalance_segments(const fs::path& hint_directory, hints_segments_map& segm
     }
 }
 
-/// \brief Remove sub-directories of shards that are not relevant any more (re-sharding to a lower number of shards case).
+/// \brief Remove subdirectories of shards that are not relevant anymore (re-sharding to a lower number of shards case).
 ///
-/// Complexity: O(S*E), where S is a number of shards during the previous boot and
-///                           E is a number of end points for which hints where ever created.
+/// Complexity: O(S*E), where S is the number of shards during the previous boot and
+///                           E is the number of endpoints for which hints were ever created.
 ///
-/// \param hints_directory a root hints directory
-void remove_irrelevant_shards_directories(const fs::path& hints_directory) {
-    // shards level
-    scan_shard_hint_directories(hints_directory, [] (fs::path dir, directory_entry de, unsigned shard_id) {
+/// \param hint_directory a root hint directory
+void remove_irrelevant_shards_directories(const fs::path& hint_directory) {
+    // Shard level.
+    scan_shard_hint_directories(hint_directory, [] (fs::path dir, directory_entry de, unsigned shard_id) {
         if (shard_id >= smp::count) {
-            // IPs level
-            return lister::scan_dir(dir / de.name.c_str(), lister::dir_entry_types::full(), lister::show_hidden::yes, [] (fs::path dir, directory_entry de) {
-                return io_check(remove_file, (dir / de.name.c_str()).native());
+            // IP level.
+            return lister::scan_dir(dir / de.name, lister::dir_entry_types::full(),
+                    lister::show_hidden::yes, [] (fs::path dir, directory_entry de) {
+                return io_check(remove_file, (dir / de.name).native());
             }).then([shard_base_dir = dir, shard_entry = de] {
-                return io_check(remove_file, (shard_base_dir / shard_entry.name.c_str()).native());
+                return io_check(remove_file, (shard_base_dir / shard_entry.name).native());
             });
         }
+
         return make_ready_future<>();
     }).get();
 }
