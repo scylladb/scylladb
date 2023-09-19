@@ -146,18 +146,17 @@ void migration_manager::init_messaging_service()
             [] (migration_manager& self, const rpc::client_info& cinfo, rpc::optional<netw::schema_pull_options> options)
                 -> future<rpc::tuple<std::vector<frozen_mutation>, std::vector<canonical_mutation>>> {
         const auto cm_retval_supported = options && options->remote_supports_canonical_mutation_retval;
+        if (!cm_retval_supported) {
+            // Canonical mutations support was added way back in scylla-3.2 and we don't support
+            // skipping versions during upgrades (certainly not a 3.2 -> 5.4 upgrade).
+            on_internal_error(mlogger, "canonical mutations not supported by remote node");
+        }
 
         auto features = self._feat.cluster_schema_features();
         auto& proxy = self._storage_proxy.container();
         auto& db = proxy.local().get_db();
         auto cm = co_await db::schema_tables::convert_schema_to_mutations(proxy, features);
         if (options->group0_snapshot_transfer) {
-            // if `group0_snapshot_transfer` is `true`, the sender must also understand canonical mutations
-            // (`group0_snapshot_transfer` was added more recently).
-            if (!cm_retval_supported) {
-                on_internal_error(mlogger,
-                    "migration request handler: group0 snapshot transfer requested, but canonical mutations not supported");
-            }
             cm.emplace_back(co_await db::system_keyspace::get_group0_history(db));
             if (proxy.local().local_db().get_config().check_experimental(db::experimental_features_t::feature::TABLETS)) {
                 for (auto&& m: co_await replica::read_tablet_mutations(db)) {
@@ -165,13 +164,16 @@ void migration_manager::init_messaging_service()
                 }
             }
         }
-        if (cm_retval_supported) {
-            co_return rpc::tuple(std::vector<frozen_mutation>{}, std::move(cm));
-        }
-        auto fm = boost::copy_range<std::vector<frozen_mutation>>(cm | boost::adaptors::transformed([&db = db.local()] (const canonical_mutation& cm) {
-            return cm.to_mutation(db.find_column_family(cm.column_family_id()).schema());
-        }));
-        co_return rpc::tuple(std::move(fm), std::move(cm));
+
+        // If the schema we're returning was last modified in group 0 mode, we also need to return
+        // the persisted schema version so the pulling node uses it instead of calculating a schema digest.
+        //
+        // If it was modified in RECOVERY mode, we still need to return the mutation as it may contain a tombstone
+        // that will force the pulling node to revert to digest calculation instead of using a version that it
+        // could've persisted earlier.
+        cm.emplace_back(co_await self._sys_ks.local().get_group0_schema_version());
+
+        co_return rpc::tuple(std::vector<frozen_mutation>{}, std::move(cm));
     }, std::ref(*this)));
     _messaging.register_schema_check([this] {
         return make_ready_future<table_schema_version>(_storage_proxy.get_db().local().get_version());
@@ -385,7 +387,7 @@ future<> migration_manager::merge_schema_from(netw::messaging_service::msg_addr 
         return make_exception_future<>(std::make_exception_ptr<std::runtime_error>(
                     std::runtime_error(fmt::format("Error while applying schema mutations: {}", e))));
     }
-    return db::schema_tables::merge_schema(_sys_ks, proxy.container(), _feat, std::move(mutations));
+    return db::schema_tables::merge_schema(_sys_ks, proxy.container(), _feat, std::move(mutations), false);
 }
 
 future<> migration_manager::reload_schema() {
@@ -411,7 +413,7 @@ future<> migration_manager::merge_schema_from(netw::messaging_service::msg_addr 
         all.emplace_back(std::move(m));
         return std::move(all);
     }).then([this](std::vector<mutation> schema) {
-        return db::schema_tables::merge_schema(_sys_ks, _storage_proxy.container(), _feat, std::move(schema));
+        return db::schema_tables::merge_schema(_sys_ks, _storage_proxy.container(), _feat, std::move(schema), false);
     });
 }
 
@@ -935,7 +937,7 @@ future<> migration_manager::push_schema_mutation(const gms::inet_address& endpoi
 future<> migration_manager::announce_with_raft(std::vector<mutation> schema, group0_guard guard, std::string_view description) {
     assert(this_shard_id() == 0);
     auto schema_features = _feat.cluster_schema_features();
-    auto adjusted_schema = db::schema_tables::adjust_schema_for_schema_features(schema, schema_features);
+    auto adjusted_schema = db::schema_tables::adjust_schema_for_schema_features(std::move(schema), schema_features);
 
     auto group0_cmd = _group0_client.prepare_command(
         schema_change{
@@ -947,7 +949,7 @@ future<> migration_manager::announce_with_raft(std::vector<mutation> schema, gro
 }
 
 future<> migration_manager::announce_without_raft(std::vector<mutation> schema, group0_guard guard) {
-    auto f = db::schema_tables::merge_schema(_sys_ks, _storage_proxy.container(), _feat, schema);
+    auto f = db::schema_tables::merge_schema(_sys_ks, _storage_proxy.container(), _feat, schema, false);
 
     try {
         using namespace std::placeholders;
@@ -967,8 +969,50 @@ future<> migration_manager::announce_without_raft(std::vector<mutation> schema, 
     co_return co_await std::move(f);
 }
 
+static mutation make_group0_schema_version_mutation(const data_dictionary::database db, const group0_guard& guard) {
+    auto s = db.find_schema(db::system_keyspace::NAME, db::system_keyspace::SCYLLA_LOCAL);
+    auto* cdef = s->get_column_definition("value");
+    assert(cdef);
+
+    mutation m(s, partition_key::from_singular(*s, "group0_schema_version"));
+    auto cell = guard.with_raft()
+        ? atomic_cell::make_live(*cdef->type, guard.write_timestamp(),
+                                 cdef->type->decompose(guard.new_group0_state_id().to_sstring()))
+        : atomic_cell::make_dead(guard.write_timestamp(), gc_clock::now());
+    m.set_clustered_cell(clustering_key::make_empty(), *cdef, std::move(cell));
+    return m;
+}
+
+// Precondition: GROUP0_SCHEMA_VERSIONING feature is enabled in the cluster.
+//
+// See the description of this column in db/schema_tables.cc.
+static void add_committed_by_group0_flag(std::vector<mutation>& schema, const group0_guard& guard) {
+    auto committed_by_group0 = guard.with_raft();
+    auto timestamp = guard.write_timestamp();
+
+    for (auto& mut: schema) {
+        if (mut.schema()->cf_name() != db::schema_tables::v3::SCYLLA_TABLES) {
+            continue;
+        }
+
+        auto& scylla_tables_schema = *mut.schema();
+        auto cdef = scylla_tables_schema.get_column_definition("committed_by_group0");
+        assert(cdef);
+
+        for (auto& cr: mut.partition().clustered_rows()) {
+            cr.row().cells().apply(*cdef, atomic_cell::make_live(
+                    *cdef->type, timestamp, cdef->type->decompose(committed_by_group0)));
+        }
+    }
+}
+
 // Returns a future on the local application of the schema
 future<> migration_manager::announce(std::vector<mutation> schema, group0_guard guard, std::string_view description) {
+    if (_feat.group0_schema_versioning) {
+        schema.push_back(make_group0_schema_version_mutation(_storage_proxy.data_dictionary(), guard));
+        add_committed_by_group0_flag(schema, guard);
+    }
+
     if (guard.with_raft()) {
         return announce_with_raft(std::move(schema), std::move(guard), std::move(description));
     } else {

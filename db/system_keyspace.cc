@@ -2404,6 +2404,23 @@ future<mutation> system_keyspace::get_group0_history(distributed<replica::databa
     co_return mutation(s, partition_key::from_singular(*s, GROUP0_HISTORY_KEY));
 }
 
+future<mutation> system_keyspace::get_group0_schema_version() {
+    auto s = _db.find_schema(db::system_keyspace::NAME, db::system_keyspace::SCYLLA_LOCAL);
+
+    partition_key pk = partition_key::from_singular(*s, "group0_schema_version");
+    dht::partition_range pr = dht::partition_range::make_singular(dht::decorate_key(*s, pk));
+
+    auto rs = co_await replica::query_mutations(_db.container(), s, pr, s->full_slice(), db::no_timeout);
+    assert(rs);
+    auto& ps = rs->partitions();
+    for (auto& p: ps) {
+        auto mut = p.mut().unfreeze(s);
+        co_return std::move(mut);
+    }
+
+    co_return mutation(s, pk);
+}
+
 static constexpr auto GROUP0_UPGRADE_STATE_KEY = "group0_upgrade_state";
 
 future<std::optional<sstring>> system_keyspace::load_group0_upgrade_state() {

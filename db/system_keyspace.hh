@@ -275,7 +275,6 @@ public:
     future<> set_scylla_local_param(const sstring& key, const sstring& value, bool visible_before_cl_replay);
     future<std::optional<sstring>> get_scylla_local_param(const sstring& key);
 
-private:
     // Saves the key-value pair into system.scylla_local table.
     // Pass visible_before_cl_replay = true iff the data should be available before
     // schema commitlog replay. We do table.flush in this case, so it's rather slow and heavyweight.
@@ -284,7 +283,6 @@ private:
     template <typename T>
     future<std::optional<T>> get_scylla_local_param_as(const sstring& key);
 
-public:
     static std::vector<schema_ptr> all_tables(const db::config& cfg);
     future<> make(
             locator::effective_replication_map_factory&,
@@ -502,8 +500,12 @@ public:
             utils::UUID state_id, std::optional<gc_clock::duration> gc_older_than, std::string_view description);
 
     // Obtain the contents of the group 0 history table in mutation form.
-    // Assumes that the history table exists, i.e. Raft experimental feature is enabled.
+    // Assumes that the history table exists, i.e. Raft feature is enabled.
     static future<mutation> get_group0_history(distributed<replica::database>&);
+
+    // If the `group0_schema_version` key in `system.scylla_local` is present (either live or tombstone),
+    // returns the corresponding mutation. Otherwise returns an empty mutation for that key.
+    future<mutation> get_group0_schema_version();
 
     future<> sstables_registry_create_entry(sstring location, utils::UUID uuid, sstring status, sstables::entry_descriptor desc);
     future<utils::UUID> sstables_registry_lookup_entry(sstring location, sstables::generation_type gen);
