@@ -383,12 +383,12 @@ future<> raft_group0::start_server_for_group0(raft::group_id group0_id, service:
     // The address map may miss our own id in case we connect
     // to an existing Raft Group 0 leader.
     auto my_id = load_my_id();
-    _raft_gr.address_map().add_or_update_entry(my_id, _gossiper.get_broadcast_address());
+    co_await _raft_gr.address_map().add_or_update_entry(my_id, _gossiper.get_broadcast_address());
     // At this time the group registry is already up and running,
     // so the address map is getting all the notifications from
     // the gossiper. By reading the application state *after* subscribing to new gossip events,
     // we ensure we haven't missed any IP update in the map.
-    load_initial_raft_address_map();
+    co_await load_initial_raft_address_map();
     group0_log.info("Server {} is starting group 0 with id {}", my_id, group0_id);
     co_await _raft_gr.start_server_for_group(create_server_for_group0(group0_id, my_id, ss, qp, mm));
     _group0.emplace<raft::group_id>(group0_id);
@@ -738,22 +738,22 @@ future<> raft_group0::setup_group0(
     co_await _client.set_group0_upgrade_state(group0_upgrade_state::use_post_raft_procedures);
 }
 
-void raft_group0::load_initial_raft_address_map() {
-    _gossiper.for_each_endpoint_state([this] (const gms::inet_address& ip_addr, const gms::endpoint_state& state) {
+future<> raft_group0::load_initial_raft_address_map() {
+    co_await _gossiper.for_each_endpoint_state_gently([this] (const gms::inet_address& ip_addr, const gms::endpoint_state& state) -> future<> {
         auto* value = state.get_application_state_ptr(gms::application_state::HOST_ID);
         if (value == nullptr) {
-            return;
+            co_return;
         }
         auto server_id = utils::UUID(value->value());
         if (server_id == utils::UUID{}) {
             upgrade_log.error("empty Host ID for host {} ", ip_addr);
-            return;
+            co_return;
         }
         // The failure detector needs the IPs on all shards. We
         // can safely overwrite existing entries since are loading
         // them directly from gossiper app state - which is most
         // recent.
-        _raft_gr.address_map().add_or_update_entry(raft::server_id{server_id}, ip_addr);
+        co_await _raft_gr.address_map().add_or_update_entry(raft::server_id{server_id}, ip_addr);
     });
 }
 
@@ -1744,7 +1744,7 @@ std::ostream& operator<<(std::ostream& os, group0_upgrade_state state) {
 
 future<> load_address_map(db::system_keyspace& sys_ks, raft_address_map& address_map) {
     for (auto [ip, host] : co_await sys_ks.load_host_ids()) {
-        address_map.add_or_update_entry(raft::server_id(host.uuid()), ip);
+        co_await address_map.add_or_update_entry(raft::server_id(host.uuid()), ip);
     }
 }
 

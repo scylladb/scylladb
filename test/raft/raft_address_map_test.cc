@@ -57,7 +57,7 @@ SEASTAR_THREAD_TEST_CASE(test_raft_address_map_operations) {
         auto stop_map = defer([&m_svc] { m_svc.stop().get(); });
         auto& m = m_svc.local();
 
-        m.add_or_update_entry(id1, addr1);
+        m.add_or_update_entry(id1, addr1).get();
         m.set_nonexpiring(id1);
         // Check that regular entries don't expire
         manual_clock::advance(expiration_time);
@@ -76,7 +76,7 @@ SEASTAR_THREAD_TEST_CASE(test_raft_address_map_operations) {
         auto stop_map = defer([&m_svc] { m_svc.stop().get(); });
         auto& m = m_svc.local();
 
-        m.add_or_update_entry(id1, addr1);
+        m.add_or_update_entry(id1, addr1).get();
         auto found = m.find(id1);
         BOOST_CHECK(!!found && *found == addr1);
         // The entry stay in the cache for 1 hour
@@ -91,9 +91,9 @@ SEASTAR_THREAD_TEST_CASE(test_raft_address_map_operations) {
         auto stop_map = defer([&m_svc] { m_svc.stop().get(); });
         auto& m = m_svc.local();
 
-        m.add_or_update_entry(id1, addr1);
+        m.add_or_update_entry(id1, addr1).get();
         manual_clock::advance(30min);
-        m.add_or_update_entry(id2, addr2);
+        m.add_or_update_entry(id2, addr2).get();
         // Here the expiration timer will rearm itself automatically since id2
         // hasn't expired yet and need to be collected some time later
         manual_clock::advance(30min + 1s);
@@ -111,9 +111,9 @@ SEASTAR_THREAD_TEST_CASE(test_raft_address_map_operations) {
         auto stop_map = defer([&m_svc] { m_svc.stop().get(); });
         auto& m = m_svc.local();
 
-        m.add_or_update_entry(id1, addr1);
+        m.add_or_update_entry(id1, addr1).get();
         m.set_nonexpiring(id1);
-        BOOST_CHECK_NO_THROW(m.add_or_update_entry(id1, addr2));
+        BOOST_CHECK_NO_THROW(m.add_or_update_entry(id1, addr2).get());
         BOOST_CHECK(m.find(id1) && *m.find(id1) == addr2);
     }
     {
@@ -124,9 +124,9 @@ SEASTAR_THREAD_TEST_CASE(test_raft_address_map_operations) {
         auto stop_map = defer([&m_svc] { m_svc.stop().get(); });
         auto& m = m_svc.local();
 
-        m.add_or_update_entry(id1, addr1);
+        m.add_or_update_entry(id1, addr1).get();
         m.set_nonexpiring(id1);
-        m.add_or_update_entry(id1, addr2);
+        m.add_or_update_entry(id1, addr2).get();
         manual_clock::advance(expiration_time);
         BOOST_CHECK(m.find(id1) && *m.find(id1) == addr2);
     }
@@ -155,7 +155,7 @@ SEASTAR_THREAD_TEST_CASE(test_raft_address_map_operations) {
         // inserted entry's address and advance the clock by expiration_time
         // before checking if the entry is in the address map. If set_nonexpiring()
         // didn't add the entry, add_or_update_entry() would add a new expiring entry.
-        m.add_or_update_entry(id1, addr1);
+        m.add_or_update_entry(id1, addr1).get();
         manual_clock::advance(expiration_time);
         BOOST_CHECK(m.find(id1) && *m.find(id1) == addr1);
     }
@@ -167,7 +167,7 @@ SEASTAR_THREAD_TEST_CASE(test_raft_address_map_operations) {
         auto& m = m_svc.local();
 
         scoped_no_abort_on_internal_error abort_guard;
-        BOOST_CHECK_THROW(m.add_or_update_entry(id1, gms::inet_address{}), std::runtime_error);
+        BOOST_CHECK_THROW(m.add_or_update_entry(id1, gms::inet_address{}).get(), std::runtime_error);
     }
     {
         // Check that opt_add_entry() throws when called without an actual IP address
@@ -187,8 +187,8 @@ SEASTAR_THREAD_TEST_CASE(test_raft_address_map_operations) {
         auto stop_map = defer([&m_svc] { m_svc.stop().get(); });
         auto& m = m_svc.local();
 
-        m.add_or_update_entry(id1, addr1, gms::generation_type(1));
-        m.add_or_update_entry(id1, addr2, gms::generation_type(0));
+        m.add_or_update_entry(id1, addr1, gms::generation_type(1)).get();
+        m.add_or_update_entry(id1, addr2, gms::generation_type(0)).get();
         BOOST_CHECK(m.find(id1) && *m.find(id1) == addr1);
     }
     {
@@ -200,7 +200,7 @@ SEASTAR_THREAD_TEST_CASE(test_raft_address_map_operations) {
         auto& m = m_svc.local();
 
         m.set_nonexpiring(id1);
-        m.add_or_update_entry(id1, addr1, gms::generation_type(-1));
+        m.add_or_update_entry(id1, addr1, gms::generation_type(-1)).get();
         BOOST_CHECK(m.find(id1) && *m.find(id1) == addr1);
     }
     {
@@ -215,7 +215,7 @@ SEASTAR_THREAD_TEST_CASE(test_raft_address_map_operations) {
         m.set_nonexpiring(id1);
         BOOST_CHECK(!m.find_by_addr(addr1));
 
-        m.add_or_update_entry(id1, addr1);
+        m.add_or_update_entry(id1, addr1).get();
         BOOST_CHECK(m.find_by_addr(addr1) && *m.find_by_addr(addr1) == id1);
     }
     {
@@ -225,7 +225,7 @@ SEASTAR_THREAD_TEST_CASE(test_raft_address_map_operations) {
         auto stop_map = defer([&m_svc] { m_svc.stop().get(); });
         auto& m = m_svc.local();
 
-        m.add_or_update_entry(id1, addr1);
+        m.add_or_update_entry(id1, addr1).get();
         manual_clock::advance(30min);
         BOOST_CHECK(m.find_by_addr(addr1) && *m.find_by_addr(addr1) == id1);
 
@@ -271,7 +271,7 @@ SEASTAR_THREAD_TEST_CASE(test_raft_address_map_replication) {
 
         // Add entry on both shards, replicate non-expiration
         // flag, ensure it doesn't expire on the other shard
-        m.add_or_update_entry(id1, addr1);
+        m.add_or_update_entry(id1, addr1).get();
         m.set_nonexpiring(id1);
         ping_shards().get();
         m_svc.invoke_on(1, [] (raft_address_map_t<manual_clock>& m) {
@@ -293,7 +293,7 @@ SEASTAR_THREAD_TEST_CASE(test_raft_address_map_replication) {
         BOOST_CHECK(!m.find(id1));
 
         // Expiring entries are replicated
-        m.add_or_update_entry(id1, addr1);
+        m.add_or_update_entry(id1, addr1).get();
         ping_shards().get();
         m_svc.invoke_on(1, [] (raft_address_map_t<manual_clock>& m) {
             BOOST_CHECK(m.find(id1));
@@ -302,7 +302,7 @@ SEASTAR_THREAD_TEST_CASE(test_raft_address_map_replication) {
         // Can't call add_or_update_entry on shard other than 0
         m_svc.invoke_on(1, [] (raft_address_map_t<manual_clock>& m) {
             scoped_no_abort_on_internal_error abort_guard;
-            BOOST_CHECK_THROW(m.add_or_update_entry(id1, addr2), std::runtime_error);
+            BOOST_CHECK_THROW(m.add_or_update_entry(id1, addr2).get(), std::runtime_error);
         }).get();
 
         // Can add expiring entries on shard other than 0 - and they indeed expire

@@ -1476,6 +1476,18 @@ stop_iteration gossiper::for_each_endpoint_state_until(std::function<stop_iterat
     return stop_iteration::no;
 }
 
+future<stop_iteration> gossiper::for_each_endpoint_state_gently_until(std::function<future<stop_iteration>(const inet_address&, const endpoint_state&)> func) const {
+    // Copy the endpoint state map to allow yielding.
+    // This is relatively inexpensive since we it stores shared ptrs of the endpoint states
+    auto endpoint_state_map = _endpoint_state_map;
+    for (const auto& [node, eps] : endpoint_state_map) {
+        if ((co_await func(node, *eps)) == stop_iteration::yes) {
+            co_return stop_iteration::yes;
+        }
+    }
+    co_return stop_iteration::no;
+}
+
 bool gossiper::is_cql_ready(const inet_address& endpoint) const {
     // Note:
     // - New scylla node always send application_state::RPC_READY = false when
@@ -1990,7 +2002,7 @@ future<> gossiper::start_gossiping(gms::generation_type generation_nbr, std::map
         generation_nbr = gms::generation_type(_force_gossip_generation());
         logger.warn("Use the generation number provided by user: generation = {}", generation_nbr);
     }
-    _address_map.add_or_update_entry(raft::server_id(my_host_id().uuid()), get_broadcast_address(), generation_nbr);
+    co_await _address_map.add_or_update_entry(raft::server_id(my_host_id().uuid()), get_broadcast_address(), generation_nbr);
     endpoint_state local_state = my_endpoint_state();
     local_state.set_heart_beat_state_and_update_timestamp(heart_beat_state(generation_nbr));
     for (auto& entry : preload_local_states) {

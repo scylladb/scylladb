@@ -16,6 +16,7 @@
 #include <seastar/core/sharded.hh>
 #include <seastar/core/gate.hh>
 #include <seastar/core/coroutine.hh>
+#include <seastar/core/shared_future.hh>
 #include <seastar/util/log.hh>
 
 #include <boost/intrusive/list.hpp>
@@ -160,7 +161,7 @@ class raft_address_map_t : public peering_sharded_service<raft_address_map_t<Clo
     seastar::timer<Clock> _timer;
     clock_duration _expiry_period;
 
-    std::optional<future<>> _replication_fiber{make_ready_future<>()};
+    std::optional<shared_future<>> _replication_fiber{make_ready_future<>()};
 
     void drop_expired_entries() {
         auto list_it = _expiring_list.rbegin();
@@ -189,17 +190,17 @@ class raft_address_map_t : public peering_sharded_service<raft_address_map_t<Clo
     }
 
     template <std::invocable<raft_address_map_t&> F>
-    void replicate(F f, seastar::compat::source_location l = seastar::compat::source_location::current()) {
+    future<> replicate(F f, seastar::compat::source_location l = seastar::compat::source_location::current()) {
         if (this_shard_id() != 0) {
             auto msg = format("raft_address_map::{}() called on shard {} != 0",
                 l.function_name(), this_shard_id());
             on_internal_error(rslog, msg);
         }
         if (!_replication_fiber) {
-            return;
+            return make_ready_future<>();
         }
 
-        _replication_fiber = _replication_fiber->then([this, f = std::move(f), l] () -> future<> {
+        _replication_fiber = _replication_fiber->get_future().then([this, f = std::move(f), l] () -> future<> {
             try {
                 co_await this->container().invoke_on_others([f] (raft_address_map_t& self) {
                     f(self);
@@ -209,24 +210,28 @@ class raft_address_map_t : public peering_sharded_service<raft_address_map_t<Clo
                             l.function_name(), std::current_exception());
             }
         });
+
+        return _replication_fiber->get_future();
     }
 
     void replicate_set_nonexpiring(const raft::server_id& id) {
-        replicate([id] (raft_address_map_t& self) {
+        // Future can be dropped safely since stop() wait for _replication_fiber.
+        (void)replicate([id] (raft_address_map_t& self) {
             self.handle_set_nonexpiring(id);
         });
     }
 
     void replicate_set_expiring(const raft::server_id& id) {
-        replicate([id] (raft_address_map_t& self) {
+        // Future can be dropped safely since stop() wait for _replication_fiber.
+        (void)replicate([id] (raft_address_map_t& self) {
             self.handle_set_expiring(id);
         });
     }
 
-    void replicate_add_or_update_entry(const raft::server_id& id,
+    future<> replicate_add_or_update_entry(const raft::server_id& id,
             gms::generation_type generation_number, const gms::inet_address& ip_addr,
             bool update_if_exists) {
-        replicate([id, generation_number, ip_addr, update_if_exists] (raft_address_map_t& self) {
+        return replicate([id, generation_number, ip_addr, update_if_exists] (raft_address_map_t& self) {
             self.handle_add_or_update_entry(id, generation_number, ip_addr, update_if_exists);
         });
     }
@@ -278,7 +283,7 @@ public:
 
     future<> stop() {
         assert(_replication_fiber);
-        co_await *std::exchange(_replication_fiber, std::nullopt);
+        co_await std::exchange(_replication_fiber, std::nullopt)->get_future();
     }
 
     ~raft_address_map_t() {
@@ -367,13 +372,13 @@ public:
     // If no entry is present, creates an expiring entry - there
     // must be a separate Raft configuration change event (@sa
     // set_nonexpiring()) to mark the entry as non expiring.
-    void add_or_update_entry(raft::server_id id, gms::inet_address addr,
+    future<> add_or_update_entry(raft::server_id id, gms::inet_address addr,
             gms::generation_type generation_number = {}) {
         if (!addr) {
             on_internal_error(rslog, format("IP address missing for {}", id));
         }
         handle_add_or_update_entry(id, generation_number, addr, true);
-        replicate_add_or_update_entry(id, generation_number, addr, true);
+        return replicate_add_or_update_entry(id, generation_number, addr, true);
     }
 };
 

@@ -454,10 +454,18 @@ public:
         });
     }
 
+    future<> for_each_endpoint_state_gently(std::function<future<>(const inet_address&, const endpoint_state&)> func) const {
+        co_await for_each_endpoint_state_gently_until([func = std::move(func)] (const inet_address& node, const endpoint_state& eps) -> future<stop_iteration> {
+            co_await func(node, eps);
+            co_return stop_iteration::no;
+        });
+    }
+
     // Calls func for each endpoint_state until it returns stop_iteration::yes
     // Returns stop_iteration::yes iff `func` returns stop_iteration::yes.
     // Called function must not yield
     stop_iteration for_each_endpoint_state_until(std::function<stop_iteration(const inet_address&, const endpoint_state&)>) const;
+    future<stop_iteration> for_each_endpoint_state_gently_until(std::function<future<stop_iteration>(const inet_address&, const endpoint_state&)>) const;
 
     // Returns the `host_id` of the node with the given broadcast `addr`.
     // If not found, throws a runtime_error by default with `throw_on_error::yes`,

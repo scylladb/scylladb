@@ -86,9 +86,8 @@ class gossiper_state_change_subscriber_proxy: public gms::i_endpoint_state_chang
         if (app_state_ptr) {
             raft::server_id id(utils::UUID(app_state_ptr->value()));
             rslog.debug("gossiper_state_change_subscriber_proxy::on_endpoint_change() {} {}", endpoint, id);
-            _address_map.add_or_update_entry(id, endpoint, ep_state->get_heart_beat_state().get_generation());
+            co_await _address_map.add_or_update_entry(id, endpoint, ep_state->get_heart_beat_state().get_generation());
         }
-        return make_ready_future<>();
     }
 
 public:

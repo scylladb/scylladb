@@ -355,7 +355,7 @@ private:
 
     // Load the initial Raft <-> IP address map as seen by
     // the gossiper.
-    void load_initial_raft_address_map();
+    future<> load_initial_raft_address_map();
 
     // Returns true if raft is enabled
     future<bool> use_raft();
