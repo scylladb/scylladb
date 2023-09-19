@@ -15,6 +15,9 @@ target_sources(db
     commitlog/commitlog_entry.cc
     data_listeners.cc
     functions/function.cc
+    hints/internal/hint_endpoint_manager.cc
+    hints/internal/hint_sender.cc
+    hints/internal/hint_storage.cc
     hints/manager.cc
     hints/resource_manager.cc
     hints/host_filter.cc
