@@ -172,8 +172,8 @@ private:
     template<typename TaskExecutor, typename... Args>
     requires std::is_base_of_v<compaction_task_executor, TaskExecutor> &&
             std::is_base_of_v<compaction_task_impl, TaskExecutor> &&
-    requires (compaction_manager& cm, Args&&... args) {
-        {TaskExecutor(cm, std::forward<Args>(args)...)} -> std::same_as<TaskExecutor>;
+    requires (compaction_manager& cm, throw_if_stopping do_throw_if_stopping, Args&&... args) {
+        {TaskExecutor(cm, do_throw_if_stopping, std::forward<Args>(args)...)} -> std::same_as<TaskExecutor>;
     }
     future<compaction_manager::compaction_stats_opt> perform_compaction(throw_if_stopping do_throw_if_stopping, std::optional<tasks::task_info> parent_info, Args&&... args);
 
@@ -449,7 +449,7 @@ public:
 
 namespace compaction {
 
-class compaction_task_executor {
+class compaction_task_executor : public enable_shared_from_this<compaction_task_executor> {
 public:
     enum class state {
         none,       // initial and final state
@@ -471,6 +471,7 @@ protected:
     compaction::compaction_state& _compaction_state;
     sstables::compaction_data _compaction_data;
     state _state = state::none;
+    throw_if_stopping _do_throw_if_stopping;
 
 private:
     shared_future<compaction_manager::compaction_stats_opt> _compaction_done = make_ready_future<compaction_manager::compaction_stats_opt>();
@@ -478,9 +479,10 @@ private:
     sstables::compaction_type _type;
     sstables::run_id _output_run_identifier;
     sstring _description;
+    compaction_manager::compaction_stats_opt _stats = std::nullopt;
 
 public:
-    explicit compaction_task_executor(compaction_manager& mgr, ::compaction::table_state* t, sstables::compaction_type type, sstring desc);
+    explicit compaction_task_executor(compaction_manager& mgr, throw_if_stopping do_throw_if_stopping, ::compaction::table_state* t, sstables::compaction_type type, sstring desc);
 
     compaction_task_executor(compaction_task_executor&&) = delete;
     compaction_task_executor(const compaction_task_executor&) = delete;
@@ -500,6 +502,8 @@ public:
     };
 
 protected:
+    future<> perform();
+
     virtual future<compaction_manager::compaction_stats_opt> do_run() = 0;
 
     state switch_state(state new_state);
@@ -527,6 +531,10 @@ protected:
         return ct == sstables::compaction_type::Compaction;
     }
 public:
+    compaction_manager::compaction_stats_opt get_stats() const noexcept {
+        return _stats;
+    }
+
     future<compaction_manager::compaction_stats_opt> run_compaction() noexcept;
 
     const ::compaction::table_state* compacting_table() const noexcept {
@@ -559,11 +567,12 @@ public:
     const sstring& description() const noexcept {
         return _description;
     }
-
+private:
+    // Before _compaction_done is set in compaction_task_executor::run_compaction(), compaction_done() returns ready future.
     future<compaction_manager::compaction_stats_opt> compaction_done() noexcept {
         return _compaction_done.get_future();
     }
-
+public:
     bool stopping() const noexcept {
         return _compaction_data.abort.abort_requested();
     }
@@ -575,12 +584,13 @@ public:
     template<typename TaskExecutor, typename... Args>
     requires std::is_base_of_v<compaction_task_executor, TaskExecutor> &&
             std::is_base_of_v<compaction_task_impl, TaskExecutor> &&
-    requires (compaction_manager& cm, Args&&... args) {
-        {TaskExecutor(cm, std::forward<Args>(args)...)} -> std::same_as<TaskExecutor>;
+    requires (compaction_manager& cm, throw_if_stopping do_throw_if_stopping, Args&&... args) {
+        {TaskExecutor(cm, do_throw_if_stopping, std::forward<Args>(args)...)} -> std::same_as<TaskExecutor>;
     }
     friend future<compaction_manager::compaction_stats_opt> compaction_manager::perform_compaction(throw_if_stopping do_throw_if_stopping, std::optional<tasks::task_info> parent_info, Args&&... args);
     friend future<compaction_manager::compaction_stats_opt> compaction_manager::perform_task(shared_ptr<compaction_task_executor> task, throw_if_stopping do_throw_if_stopping);
     friend fmt::formatter<compaction_task_executor>;
+    friend future<> compaction_manager::stop_tasks(std::vector<shared_ptr<compaction_task_executor>> tasks, sstring reason);
 };
 
 }
