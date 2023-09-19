@@ -50,7 +50,7 @@ using hints_ep_segments_map = std::unordered_map<unsigned, std::list<fs::path>>;
 // map: IP -> map: shard -> segments
 using hints_segments_map = std::unordered_map<sstring, hints_ep_segments_map>;
 
-future<> scan_for_hints_dirs(const fs::path& hint_directory,
+future<> scan_shard_hint_directories(const fs::path& hint_directory,
         std::function<future<>(fs::path /* hint dir */, directory_entry, unsigned /* shard_id */)> func)
 {
     return lister::scan_dir(hint_directory, lister::dir_entry_types::of<directory_entry_type::directory>(),
@@ -81,7 +81,7 @@ hints_segments_map get_current_hints_segments(const fs::path& hints_directory) {
     hints_segments_map current_hints_segments;
 
     // shards level
-    scan_for_hints_dirs(hints_directory, [&current_hints_segments] (fs::path dir, directory_entry de, unsigned shard_id) {
+    scan_shard_hint_directories(hints_directory, [&current_hints_segments] (fs::path dir, directory_entry de, unsigned shard_id) {
         manager_logger.trace("shard_id = {}", shard_id);
         // IPs level
         return lister::scan_dir(dir / de.name.c_str(), lister::dir_entry_types::of<directory_entry_type::directory>(), [&current_hints_segments, shard_id] (fs::path dir, directory_entry de) {
@@ -231,7 +231,7 @@ void rebalance_segments(const fs::path& hints_directory, hints_segments_map& seg
 /// \param hints_directory a root hints directory
 void remove_irrelevant_shards_directories(const fs::path& hints_directory) {
     // shards level
-    scan_for_hints_dirs(hints_directory, [] (fs::path dir, directory_entry de, unsigned shard_id) {
+    scan_shard_hint_directories(hints_directory, [] (fs::path dir, directory_entry de, unsigned shard_id) {
         if (shard_id >= smp::count) {
             // IPs level
             return lister::scan_dir(dir / de.name.c_str(), lister::dir_entry_types::full(), lister::show_hidden::yes, [] (fs::path dir, directory_entry de) {
