@@ -289,7 +289,7 @@ cql_server::cql_server(distributed<cql3::query_processor>& qp, auth::service& au
         transport_metrics.emplace_back(
             sm::make_counter("cql_errors_total", sm::description("Counts the total number of returned CQL errors."),
                         {label_instance},
-                        [this, code = e.first] { auto it = _stats.errors.find(code); return it != _stats.errors.end() ? it->second : 0; })
+                        [this, code = e.first] { auto it = _stats.errors.find(code); return it != _stats.errors.end() ? it->second : 0; }).set_skip_when_empty()
         );
     }
 

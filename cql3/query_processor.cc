@@ -138,7 +138,7 @@ query_processor::query_processor(service::storage_proxy& proxy, data_dictionary:
                                         + _cql_stats.query_cnt(source_selector::USER, ks_selector::NONSYSTEM, cond_selector::WITH_CONDITIONS, stm::statement_type::INSERT)
                                         + _cql_stats.query_cnt(source_selector::INTERNAL, ks_selector::SYSTEM, cond_selector::WITH_CONDITIONS, stm::statement_type::INSERT)
                                         + _cql_stats.query_cnt(source_selector::INTERNAL, ks_selector::NONSYSTEM, cond_selector::WITH_CONDITIONS, stm::statement_type::INSERT);
-                            }),
+                            }).set_skip_when_empty(),
 
                     sm::make_counter(
                             "updates",
@@ -159,7 +159,7 @@ query_processor::query_processor(service::storage_proxy& proxy, data_dictionary:
                                         + _cql_stats.query_cnt(source_selector::USER, ks_selector::NONSYSTEM, cond_selector::WITH_CONDITIONS, stm::statement_type::UPDATE)
                                         + _cql_stats.query_cnt(source_selector::INTERNAL, ks_selector::SYSTEM, cond_selector::WITH_CONDITIONS, stm::statement_type::UPDATE)
                                         + _cql_stats.query_cnt(source_selector::INTERNAL, ks_selector::NONSYSTEM, cond_selector::WITH_CONDITIONS, stm::statement_type::UPDATE);
-                            }),
+                            }).set_skip_when_empty(),
 
                     sm::make_counter(
                             "deletes",
@@ -180,7 +180,7 @@ query_processor::query_processor(service::storage_proxy& proxy, data_dictionary:
                                         + _cql_stats.query_cnt(source_selector::USER, ks_selector::NONSYSTEM, cond_selector::WITH_CONDITIONS, stm::statement_type::DELETE)
                                         + _cql_stats.query_cnt(source_selector::INTERNAL, ks_selector::SYSTEM, cond_selector::WITH_CONDITIONS, stm::statement_type::DELETE)
                                         + _cql_stats.query_cnt(source_selector::INTERNAL, ks_selector::NONSYSTEM, cond_selector::WITH_CONDITIONS, stm::statement_type::DELETE);
-                            }),
+                            }).set_skip_when_empty(),
 
                     sm::make_counter(
                             "reads_per_ks",
@@ -213,13 +213,13 @@ query_processor::query_processor(service::storage_proxy& proxy, data_dictionary:
                             _cql_stats.query_cnt(source_selector::USER, ks_selector::SYSTEM, cond_selector::WITH_CONDITIONS, stm::statement_type::INSERT),
                             sm::description("Counts the number of CQL INSERT requests executed on particular keyspaces. "
                                             "Label `who' indicates where the reqs come from (clients or DB internals)."),
-                            {user_who_label_instance, system_ks_label_instance, cas_label_instance}),
+                            {user_who_label_instance, system_ks_label_instance, cas_label_instance}).set_skip_when_empty(),
                     sm::make_counter(
                             "inserts_per_ks",
                             _cql_stats.query_cnt(source_selector::INTERNAL, ks_selector::SYSTEM, cond_selector::WITH_CONDITIONS, stm::statement_type::INSERT),
                             sm::description("Counts the number of CQL INSERT requests executed on particular keyspaces. "
                                             "Label `who' indicates where the reqs come from (clients or DB internals)."),
-                            {internal_who_label_instance, system_ks_label_instance, cas_label_instance}),
+                            {internal_who_label_instance, system_ks_label_instance, cas_label_instance}).set_skip_when_empty(),
 
                     sm::make_counter(
                             "updates_per_ks",
@@ -238,13 +238,13 @@ query_processor::query_processor(service::storage_proxy& proxy, data_dictionary:
                             _cql_stats.query_cnt(source_selector::USER, ks_selector::SYSTEM, cond_selector::WITH_CONDITIONS, stm::statement_type::UPDATE),
                             sm::description("Counts the number of CQL UPDATE requests executed on particular keyspaces. "
                                             "Label `who' indicates where the reqs come from (clients or DB internals)"),
-                            {user_who_label_instance, system_ks_label_instance, cas_label_instance}),
+                            {user_who_label_instance, system_ks_label_instance, cas_label_instance}).set_skip_when_empty(),
                     sm::make_counter(
                             "updates_per_ks",
                             _cql_stats.query_cnt(source_selector::INTERNAL, ks_selector::SYSTEM, cond_selector::WITH_CONDITIONS, stm::statement_type::UPDATE),
                             sm::description("Counts the number of CQL UPDATE requests executed on particular keyspaces. "
                                             "Label `who' indicates where the reqs come from (clients or DB internals)"),
-                            {internal_who_label_instance, system_ks_label_instance, cas_label_instance}),
+                            {internal_who_label_instance, system_ks_label_instance, cas_label_instance}).set_skip_when_empty(),
 
                     sm::make_counter(
                             "deletes_per_ks",
@@ -263,13 +263,13 @@ query_processor::query_processor(service::storage_proxy& proxy, data_dictionary:
                             _cql_stats.query_cnt(source_selector::USER, ks_selector::SYSTEM, cond_selector::WITH_CONDITIONS, stm::statement_type::DELETE),
                             sm::description("Counts the number of CQL DELETE requests executed on particular keyspaces. "
                                             "Label `who' indicates where the reqs come from (clients or DB internals)"),
-                            {user_who_label_instance, system_ks_label_instance, cas_label_instance}),
+                            {user_who_label_instance, system_ks_label_instance, cas_label_instance}).set_skip_when_empty(),
                     sm::make_counter(
                             "deletes_per_ks",
                             _cql_stats.query_cnt(source_selector::INTERNAL, ks_selector::SYSTEM, cond_selector::WITH_CONDITIONS, stm::statement_type::DELETE),
                             sm::description("Counts the number of CQL DELETE requests executed on particular keyspaces. "
                                             "Label `who' indicates where the reqs come from (clients or DB internals)"),
-                            {internal_who_label_instance, system_ks_label_instance, cas_label_instance}),
+                            {internal_who_label_instance, system_ks_label_instance, cas_label_instance}).set_skip_when_empty(),
 
                     sm::make_counter(
                             "batches",

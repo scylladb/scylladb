@@ -2562,11 +2562,11 @@ void storage_proxy_stats::stats::register_stats() {
 
         sm::make_queue_length("foreground_reads", foreground_reads,
                 sm::description("number of currently pending foreground read requests"),
-                {storage_proxy_stats::current_scheduling_group_label()}),
+                {storage_proxy_stats::current_scheduling_group_label()}).set_skip_when_empty(),
 
         sm::make_queue_length("background_reads", [this] { return reads - foreground_reads; },
                        sm::description("number of currently pending background read requests"),
-                       {storage_proxy_stats::current_scheduling_group_label()}),
+                       {storage_proxy_stats::current_scheduling_group_label()}).set_skip_when_empty(),
 
         sm::make_total_operations("read_retries", read_retries,
                        sm::description("number of read retry attempts"),
@@ -2756,7 +2756,7 @@ void storage_proxy_stats::split_stats::register_metrics_local() {
     auto new_metrics = sm::metric_groups();
     new_metrics.add_group(_category, {
         sm::make_counter(_short_description_prefix + sstring("_local_node"), [this] { return _local.val; },
-                       sm::description(_long_description_prefix + "on a local Node"), {storage_proxy_stats::make_scheduling_group_label(_sg), op_type_label(_op_type)})
+                       sm::description(_long_description_prefix + "on a local Node"), {storage_proxy_stats::make_scheduling_group_label(_sg), op_type_label(_op_type)}).set_skip_when_empty()
     });
     _metrics = std::exchange(new_metrics, {});
 }
