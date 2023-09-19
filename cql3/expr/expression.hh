@@ -487,7 +487,7 @@ data_type type_of(const expression& e);
 
 } // namespace cql3
 
-/// Custom formatter for an expression.  Supports multiple modes:\
+/// Custom formatter for an expression.  Supports multiple modes:
 ///     {:user} for user-oriented output, suitable for error messages (default)
 ///     {:debug} for debug-oriented output
 ///     {:result_set_metadata} for stable output suitable for result set metadata (column headings)
