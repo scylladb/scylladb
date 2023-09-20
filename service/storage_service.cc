@@ -1775,7 +1775,7 @@ class topology_coordinator {
                 co_await enable_features(std::move(guard), std::move(feats));
                 co_return true;
             }
-            
+
             // If there is no other work, evaluate load and start tablet migration if there is imbalance.
             if (co_await maybe_start_tablet_migration(std::move(guard))) {
                 co_return true;
@@ -1912,15 +1912,13 @@ class topology_coordinator {
                 auto node = get_node_to_work_on(std::move(guard));
 
                 // make sure all nodes know about new topology (we require all nodes to be alive for topo change for now)
-                {
-                    auto f = co_await coroutine::as_future(global_token_metadata_barrier(std::move(node.guard), get_excluded_nodes(node)));
-                    if (f.failed()) {
-                        slogger.error("raft topology: transition_state::write_both_read_old, "
-                                      "global_token_metadata_barrier failed, error {}",
-                                      f.get_exception());
-                        break;
-                    }
-                    node = retake_node(std::move(f).get(), node.id);
+                try {
+                    node = retake_node(co_await global_token_metadata_barrier(std::move(node.guard), get_excluded_nodes(node)), node.id);
+                } catch (...) {
+                    slogger.error("raft topology: transition_state::write_both_read_old, "
+                                    "global_token_metadata_barrier failed, error {}",
+                                    std::current_exception());
+                    break;
                 }
 
                 if (_group0.is_member(node.id, true)) {
@@ -1989,15 +1987,13 @@ class topology_coordinator {
 
                 // In this state writes goes to old and new replicas but reads start to be done from new replicas
                 // Before we stop writing to old replicas we need to wait for all previous reads to complete
-                {
-                    auto f = co_await coroutine::as_future(global_token_metadata_barrier(std::move(node.guard), get_excluded_nodes(node)));
-                    if (f.failed()) {
-                        slogger.error("raft topology: transition_state::write_both_read_new, "
-                                      "global_token_metadata_barrier failed, error {}",
-                                      f.get_exception());
-                        break;
-                    }
-                    node = retake_node(std::move(f).get(), node.id);
+                try {
+                    node = retake_node(co_await global_token_metadata_barrier(std::move(node.guard), get_excluded_nodes(node)), node.id);
+                } catch (...) {
+                    slogger.error("raft topology: transition_state::write_both_read_new, "
+                                    "global_token_metadata_barrier failed, error {}",
+                                    std::current_exception());
+                    break;
                 }
                 switch(node.rs->state) {
                 case node_state::bootstrapping: {
@@ -2205,16 +2201,13 @@ class topology_coordinator {
                 }
 
                 // Wait until other nodes observe the new token ring and stop sending writes to this node.
-                {
-                    auto id = node.id;
-                    auto f = co_await coroutine::as_future(global_token_metadata_barrier(std::move(node.guard), get_excluded_nodes(node)));
-                    if (f.failed()) {
-                        slogger.error("raft topology: node_state::left_token_ring (node: {}), "
-                                      "global_token_metadata_barrier failed, error {}",
-                                      id, f.get_exception());
-                        break;
-                    }
-                    node = retake_node(std::move(f).get(), node.id);
+                try {
+                    node = retake_node(co_await global_token_metadata_barrier(std::move(node.guard), get_excluded_nodes(node)), node.id);
+                } catch (...) {
+                    slogger.error("raft topology: node_state::left_token_ring (node: {}), "
+                                    "global_token_metadata_barrier failed, error {}",
+                                    node.id, std::current_exception());
+                    break;
                 }
 
                 // Tell the node to shut down.
