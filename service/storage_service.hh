@@ -180,7 +180,7 @@ public:
 
     // Needed by distributed<>
     future<> stop();
-    void init_messaging_service(sharded<db::system_distributed_keyspace>& sys_dist_ks);
+    void init_messaging_service(sharded<db::system_distributed_keyspace>& sys_dist_ks, bool raft_topology_change_enabled);
     future<> uninit_messaging_service();
 
     future<> load_tablet_metadata();
@@ -329,7 +329,7 @@ public:
      * API.
      * \see init_server_without_the_messaging_service_part
      */
-    future<> init_messaging_service_part(sharded<db::system_distributed_keyspace>& sys_dist_ks);
+    future<> init_messaging_service_part(sharded<db::system_distributed_keyspace>& sys_dist_ks, bool raft_topology_change_enabled);
     /*!
      * \brief Uninit the messaging service part of the service.
      */

@@ -3732,9 +3732,9 @@ future<> storage_service::drain_on_shutdown() {
         _drain_finished.get_future() : do_drain();
 }
 
-future<> storage_service::init_messaging_service_part(sharded<db::system_distributed_keyspace>& sys_dist_ks) {
-    return container().invoke_on_all([&sys_dist_ks] (storage_service& local) {
-        return local.init_messaging_service(sys_dist_ks);
+future<> storage_service::init_messaging_service_part(sharded<db::system_distributed_keyspace>& sys_dist_ks, bool raft_topology_change_enabled) {
+    return container().invoke_on_all([&sys_dist_ks, raft_topology_change_enabled] (storage_service& local) {
+        return local.init_messaging_service(sys_dist_ks, raft_topology_change_enabled);
     });
 }
 
@@ -6186,7 +6186,7 @@ future<> storage_service::cleanup_tablet(locator::global_tablet_id tablet) {
     });
 }
 
-void storage_service::init_messaging_service(sharded<db::system_distributed_keyspace>& sys_dist_ks) {
+void storage_service::init_messaging_service(sharded<db::system_distributed_keyspace>& sys_dist_ks, bool raft_topology_change_enabled) {
     _messaging.local().register_node_ops_cmd([this] (const rpc::client_info& cinfo, node_ops_cmd_request req) {
         auto coordinator = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
         return container().invoke_on(0, [coordinator, req = std::move(req)] (auto& ss) mutable {

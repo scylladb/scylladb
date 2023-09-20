@@ -1581,7 +1581,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             });
 
             supervisor::notify("starting storage service", true);
-            ss.local().init_messaging_service_part(sys_dist_ks).get();
+            ss.local().init_messaging_service_part(sys_dist_ks, raft_topology_change_enabled).get();
             auto stop_ss_msg = defer_verbose_shutdown("storage service messaging", [&ss] {
                 ss.local().uninit_messaging_service_part().get();
             });
