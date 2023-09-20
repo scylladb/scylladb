@@ -1394,15 +1394,14 @@ class topology_coordinator {
     }
 
     // Preconditions:
-    // - There are no nodes that are trying to join and there are no topology
-    //   operations in progress
+    // - There are no topology operations in progress
     // - `features_to_enable` represents a set of features that are currently
     //   marked as supported by all normal nodes and it is not empty
     future<> enable_features(group0_guard guard, std::set<sstring> features_to_enable) {
-        if (!_topo_sm._topology.new_nodes.empty() || !_topo_sm._topology.transition_nodes.empty()) {
+        if (!_topo_sm._topology.transition_nodes.empty()) {
             on_internal_error(slogger,
-                    "topology coordinator attempted to enable features even though there are"
-                    " joining nodes or topology operations in progress");
+                    "topology coordinator attempted to enable features even though there is"
+                    " a topology operations in progress");
         }
 
         if (utils::get_local_injector().enter("raft_topology_suppress_enabling_features")) {
@@ -1415,16 +1414,22 @@ class topology_coordinator {
             co_return;
         }
 
-        // If we are here, then we noticed that all nodes support some features
-        // that are not enabled yet. Perform a global barrier to make sure that:
+        // If we are here, then we noticed that all normal nodes support some
+        // features that are not enabled yet. Perform a global barrier to make
+        // sure that:
         //
-        // 1. All nodes saw (and persisted) a view of the system.topology table
-        //    that is equal to what the topology coordinator sees (or newer,
+        // 1. All normal nodes saw (and persisted) a view of the system.topology
+        //    table that is equal to what the topology coordinator sees (or newer,
         //    but in that case updating the topology state will fail),
-        // 2. None of the nodes is restarting at the moment and trying to
+        // 2. None of the normal nodes is restarting at the moment and trying to
         //    downgrade (this is done by a special check in the barrier handler).
         //
-        // After we get a successful confirmation from each node, we have
+        // It's sufficient to only include normal nodes because:
+        //
+        // - There are no transitioning nodes due to the precondition,
+        // - New and left nodes are not part of group 0.
+        //
+        // After we get a successful confirmation from each normal node, we have
         // a guarantee that they won't attempt to revoke support for those
         // features. That's because we do not allow nodes to boot without
         // a feature that is supported by all nodes in the cluster, even if
