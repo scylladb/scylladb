@@ -537,10 +537,9 @@ public:
     locator::host_id get_host_id(inet_address addr, throw_on_error = throw_on_error::yes) const;
 
     // Returns the endpoint_id of a given endpoint address.
-    // Unlike get_host_id that throws a runtime_error if the host is not found,
-    // get_endpoint_id returns a null host_id for backward compatibility.
-    endpoint_id get_endpoint_id(inet_address addr) const noexcept {
-        return endpoint_id(get_host_id(addr, throw_on_error::no), addr);
+    // Throws a runtime_error if the host is not found,
+    endpoint_id get_endpoint_id(inet_address addr) const {
+        return endpoint_id(get_host_id(addr), addr);
     }
 
     std::set<gms::inet_address> get_nodes_with_host_id(locator::host_id host_id) const;
