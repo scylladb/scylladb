@@ -624,6 +624,47 @@ std::enable_if_t<std::is_fundamental<T>::value, T> read(Input& in) {
     return net::ntoh(in.template read<T>());
 }
 
+detail::sector_split_iterator::sector_split_iterator(const sector_split_iterator&) noexcept = default;
+
+detail::sector_split_iterator::sector_split_iterator()
+    : _ptr(nullptr)
+    , _size(0)
+    , _sector_size(0)
+{}
+
+detail::sector_split_iterator::sector_split_iterator(base_iterator i, base_iterator e, size_t sector_size)
+    : _iter(i)
+    , _end(e)
+    , _ptr(i != e ? const_cast<char*>(i->get()) : nullptr)
+    , _size(i != e ? sector_size - sector_overhead_size : 0)
+    , _sector_size(sector_size)
+{}
+
+detail::sector_split_iterator& detail::sector_split_iterator::operator++() {
+    assert(_iter != _end);
+    _ptr += _sector_size;
+    // check if we have more pages in this temp-buffer (in out case they are always aligned + sized in page units)
+    auto rem = _iter->size() - std::distance(_iter->get(), const_cast<const char*>(_ptr));
+    if (rem == 0) {
+        if (++_iter == _end) {
+            _ptr = nullptr;
+            _size = 0; 
+            return *this;
+        }
+        rem = _iter->size();
+        assert(rem >= _sector_size);
+        // booh. ugly.
+        _ptr = const_cast<char*>(_iter->get());
+    }
+    return *this;
+}
+
+detail::sector_split_iterator detail::sector_split_iterator::operator++(int) {
+    auto res = *this;
+    ++(*this);
+    return res;
+}
+
 /*
  * A single commit log file on disk. Manages creation of the file and writing mutations to disk,
  * as well as tracking the last mutation position of any "dirty" CFs covered by the segment file. Segment
