@@ -554,14 +554,19 @@ private:
     compaction_group* single_compaction_group_if_available() const noexcept;
     // Select a compaction group from a given token.
     compaction_group& compaction_group_for_token(dht::token token) const noexcept;
+    // Returns the id of compaction group that owns token. Doesn't enforce that the group
+    // is actually allocated on this node.
+    size_t compaction_group_id_for_token(dht::token token) const noexcept;
     // Return ids of compaction groups, present in this shard, that own a particular token range.
     std::vector<size_t> compaction_group_ids_for_token_range(dht::token_range tr) const;
     // Select a compaction group from a given key.
     compaction_group& compaction_group_for_key(partition_key_view key, const schema_ptr& s) const noexcept;
     // Select a compaction group from a given sstable based on its token range.
     compaction_group& compaction_group_for_sstable(const sstables::shared_sstable& sst) const noexcept;
-    // Returns a list of all compaction groups.
-    const compaction_group_vector& compaction_groups() const noexcept;
+    // Returns a range for all compaction groups allocated in this shard.
+    auto compaction_groups() const noexcept {
+        return _compaction_groups | boost::adaptors::filtered(std::identity());
+    }
     // Safely iterate through compaction groups, while performing async operations on them.
     future<> parallel_foreach_compaction_group(std::function<future<>(compaction_group&)> action);
 

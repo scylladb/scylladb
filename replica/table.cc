@@ -578,11 +578,13 @@ public:
             auto range = tmap.get_token_range(tid);
 
             auto shard = tmap.get_shard(tid, tm.get_my_id());
+            std::unique_ptr<compaction_group> new_cg = nullptr;
             if (shard && *shard == this_shard_id()) {
                 tlogger.debug("Tablet with id {} present for {}.{}", tid, schema()->ks_name(), schema()->cf_name());
+                new_cg = std::make_unique<compaction_group>(_t, tid.value(), std::move(range));
             }
-            // FIXME: don't allocate compaction groups for tablets that aren't present in this shard.
-            ret.emplace_back(std::make_unique<compaction_group>(_t, tid.value(), std::move(range)));
+            ret.emplace_back(std::move(new_cg));
+
         }
         return ret;
     }
@@ -609,26 +611,35 @@ compaction_group* table::single_compaction_group_if_available() const noexcept {
     return _compaction_groups.size() == 1 ? &*_compaction_groups[0] : nullptr;
 }
 
-compaction_group& table::compaction_group_for_token(dht::token token) const noexcept {
+size_t table::compaction_group_id_for_token(dht::token token) const noexcept {
     auto idx = _cg_manager->compaction_group_of(token);
     if (idx >= _compaction_groups.size()) {
         on_fatal_internal_error(tlogger, format("compaction_group_for_token: index out of range: idx={} size_log2={} size={} token={}",
                                                 idx, _cg_manager->log2_compaction_groups(), _compaction_groups.size(), token));
     }
-    auto& ret = *_compaction_groups[idx];
-    if (!ret.token_range().contains(token, dht::token_comparator())) {
-        on_fatal_internal_error(tlogger, format("compaction_group_for_token: compaction_group idx={} range={} does not contain token={}",
-                idx, ret.token_range(), token));
+    return idx;
+}
+
+compaction_group& table::compaction_group_for_token(dht::token token) const noexcept {
+    auto idx = compaction_group_id_for_token(token);
+    auto& cg_ptr = _compaction_groups[idx];
+    if (!cg_ptr) {
+        on_fatal_internal_error(tlogger, format("compaction group idx={}, that owns token={}, is not allocated on this shard",
+                                                idx, token));
     }
-    return ret;
+    if (!cg_ptr->token_range().contains(token, dht::token_comparator())) {
+        on_fatal_internal_error(tlogger, format("compaction_group_for_token: compaction_group idx={} range={} does not contain token={}",
+                idx, cg_ptr->token_range(), token));
+    }
+    return *cg_ptr;
 }
 
 std::vector<size_t> table::compaction_group_ids_for_token_range(dht::token_range tr) const {
     std::vector<size_t> ret;
     auto cmp = dht::token_comparator();
 
-    size_t candidate_start = tr.start() ? compaction_group_for_token(tr.start()->value()).group_id() : size_t(0);
-    size_t candidate_end = tr.end() ? compaction_group_for_token(tr.end()->value()).group_id() : (_compaction_groups.size() - 1);
+    size_t candidate_start = tr.start() ? compaction_group_id_for_token(tr.start()->value()) : size_t(0);
+    size_t candidate_end = tr.end() ? compaction_group_id_for_token(tr.end()->value()) : (_compaction_groups.size() - 1);
 
     while (candidate_start <= candidate_end) {
         auto& cg = _compaction_groups[candidate_start++];
@@ -651,10 +662,6 @@ compaction_group& table::compaction_group_for_key(partition_key_view key, const 
 compaction_group& table::compaction_group_for_sstable(const sstables::shared_sstable& sst) const noexcept {
     // FIXME: a sstable can belong to more than one group, change interface to reflect that.
     return compaction_group_for_token(sst->get_first_decorated_key().token());
-}
-
-const compaction_group_vector& table::compaction_groups() const noexcept {
-    return _compaction_groups;
 }
 
 future<> table::parallel_foreach_compaction_group(std::function<future<>(compaction_group&)> action) {
