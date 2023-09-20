@@ -32,7 +32,7 @@ struct compaction_state {
     // Signaled whenever a compaction task completes.
     condition_variable compaction_done;
 
-    compaction_backlog_tracker backlog_tracker;
+    std::optional<compaction_backlog_tracker> backlog_tracker;
 
     std::unordered_set<sstables::shared_sstable> sstables_requiring_cleanup;
     compaction::owned_ranges_ptr owned_ranges_ptr;

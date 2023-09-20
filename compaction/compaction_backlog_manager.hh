@@ -67,7 +67,7 @@ public:
 
     compaction_backlog_tracker(std::unique_ptr<impl> impl) : _impl(std::move(impl)) {}
     compaction_backlog_tracker(compaction_backlog_tracker&&);
-    compaction_backlog_tracker& operator=(compaction_backlog_tracker&&) noexcept;
+    compaction_backlog_tracker& operator=(compaction_backlog_tracker&&) = delete;
     compaction_backlog_tracker(const compaction_backlog_tracker&) = delete;
     ~compaction_backlog_tracker();
 
