@@ -68,8 +68,11 @@ class client : public enable_shared_from_this<client> {
     std::unordered_map<seastar::scheduling_group, group_client> _https;
     using global_factory = std::function<shared_ptr<client>(std::string)>;
     global_factory _gf;
+    semaphore& _memory;
 
     struct private_tag {};
+
+    future<semaphore_units<>> claim_memory(size_t mem);
 
     void authorize(http::request&);
     group_client& find_or_create_client();
