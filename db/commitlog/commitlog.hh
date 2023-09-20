@@ -134,10 +134,12 @@ public:
 
         static inline constexpr uint32_t segment_version_1 = 1u;
         static inline constexpr uint32_t segment_version_2 = 2u;
+        static inline constexpr uint32_t segment_version_3 = 4u;
+        static inline constexpr uint32_t current_version = segment_version_3;
 
         descriptor(descriptor&&) noexcept = default;
         descriptor(const descriptor&) = default;
-        descriptor(segment_id_type i, const std::string& fname_prefix, uint32_t v = segment_version_2, sstring = {});
+        descriptor(segment_id_type i, const std::string& fname_prefix, uint32_t v = current_version, sstring = {});
         descriptor(replay_position p, const std::string& fname_prefix = FILENAME_PREFIX);
         descriptor(const std::string& filename, const std::string& fname_prefix = FILENAME_PREFIX);
 
@@ -171,7 +173,7 @@ public:
      * of data to be written. (See add).
      * Don't write less, absolutely don't write more...
      */
-    using output = fragmented_temporary_buffer::ostream;
+    using output = typename seastar::memory_output_stream<detail::sector_split_iterator>;
     using serializer_func = std::function<void(output&)>;
 
     /**

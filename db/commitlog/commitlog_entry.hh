@@ -121,7 +121,10 @@ public:
     force_sync sync() const {
         return _sync;
     }
-    void write(typename seastar::memory_output_stream<std::vector<temporary_buffer<char>>::iterator>& out) const;
+
+    using ostream = typename seastar::memory_output_stream<detail::sector_split_iterator>;
+
+    void write(ostream& out) const;
 };
 
 class commitlog_entry_reader {

@@ -493,17 +493,17 @@ SEASTAR_TEST_CASE(test_commitlog_chunk_corruption){
                         BOOST_REQUIRE(!segments.empty());
                         auto seg = segments[0];
                         auto cpos = rps->at(0).pos - 4;
-                        return corrupt_segment(seg, cpos, 0x451234ab).then([seg, rps, cpos] {
+                        return corrupt_segment(seg, cpos, 0x451234ab).then([seg, rps] {
                             return db::commitlog::read_log_file(seg, db::commitlog::descriptor::FILENAME_PREFIX, [rps](db::commitlog::buffer_and_replay_position buf_rp) {
                                 BOOST_FAIL("Should not reach");
                                 return make_ready_future<>();
-                            }).then_wrapped([cpos](auto&& f) {
+                            }).then_wrapped([](auto&& f) {
                                 try {
                                     f.get();
                                     BOOST_FAIL("Expected exception");
-                                } catch (commitlog::segment_truncation& e) {
-                                    // ok. We've destroyed the first chunk of the segment. This counts as a truncation
-                                    BOOST_REQUIRE(e.position() <= cpos);
+                                } catch (commitlog::segment_data_corruption_error& e) {
+                                    // ok.
+                                    BOOST_REQUIRE(e.bytes() > 0);
                                 }
                             });
                         });
