@@ -84,6 +84,9 @@ void client::authorize(http::request& req) {
     auto time_point_st = time_point_str.substr(0, 8);
     req._headers["x-amz-date"] = time_point_str;
     req._headers["x-amz-content-sha256"] = "UNSIGNED-PAYLOAD";
+    if (!_cfg->aws->token.empty()) {
+        req._headers["x-amz-security-token"] = _cfg->aws->token;
+    }
     std::map<std::string_view, std::string_view> signed_headers;
     sstring signed_headers_list = "";
     // AWS requires all x-... and Host: headers to be signed

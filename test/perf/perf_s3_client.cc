@@ -33,6 +33,9 @@ class tester {
         cfg.aws.emplace();
         cfg.aws->key = tests::getenv_safe("AWS_ACCESS_KEY_ID");
         cfg.aws->secret = tests::getenv_safe("AWS_SECRET_ACCESS_KEY");
+        if (auto token = ::getenv("AWS_SESSION_TOKEN"); token) {
+            cfg.aws->token = token;
+        }
         cfg.aws->region = tests::getenv_safe("AWS_DEFAULT_REGION");
 
         return make_lw_shared<s3::endpoint_config>(std::move(cfg));
