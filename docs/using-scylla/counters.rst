@@ -47,7 +47,7 @@ However, counters have limitations not present in other column types:
 * Counter columns, on the other hand, may not be part of the primary key.
 * Counters may not be indexed.
 * Counters may not be part of a materialized view.
-* You cannot use TIMESTAMP or set a TTL (time to live) when updating a counter.
+* ScyllaDB does not support USING TIMESTAMP or USING TTL in the command to update a counter column.
 * Once deleted, counter column values **should** not be used again. If you reuse them, proper behavior is not guaranteed.
 * Counters cannot be set to a specific value other than when incrementing from 0 using the UPDATE command at initialization.
 * Updates are **not** :term:`idempotent <Idempotent>`. In the case of a write failure, the client cannot safely retry the request. 
