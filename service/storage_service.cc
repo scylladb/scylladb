@@ -1914,6 +1914,8 @@ class topology_coordinator {
                 // make sure all nodes know about new topology (we require all nodes to be alive for topo change for now)
                 try {
                     node = retake_node(co_await global_token_metadata_barrier(std::move(node.guard), get_excluded_nodes(node)), node.id);
+                } catch (term_changed_error&) {
+                    throw;
                 } catch (...) {
                     slogger.error("raft topology: transition_state::write_both_read_old, "
                                     "global_token_metadata_barrier failed, error {}",
@@ -1989,6 +1991,8 @@ class topology_coordinator {
                 // Before we stop writing to old replicas we need to wait for all previous reads to complete
                 try {
                     node = retake_node(co_await global_token_metadata_barrier(std::move(node.guard), get_excluded_nodes(node)), node.id);
+                } catch (term_changed_error&) {
+                    throw;
                 } catch (...) {
                     slogger.error("raft topology: transition_state::write_both_read_new, "
                                     "global_token_metadata_barrier failed, error {}",
@@ -2203,6 +2207,8 @@ class topology_coordinator {
                 // Wait until other nodes observe the new token ring and stop sending writes to this node.
                 try {
                     node = retake_node(co_await global_token_metadata_barrier(std::move(node.guard), get_excluded_nodes(node)), node.id);
+                } catch (term_changed_error&) {
+                    throw;
                 } catch (...) {
                     slogger.error("raft topology: node_state::left_token_ring (node: {}), "
                                     "global_token_metadata_barrier failed, error {}",
