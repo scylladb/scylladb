@@ -18,8 +18,12 @@ struct endpoint_config {
     bool use_https;
 
     struct aws_config {
+        // the access key of the credentials
         std::string key;
+        // the secret key of the credentials
         std::string secret;
+        // the security token, only for session credentials
+        std::string token;
         std::string region;
     };
 

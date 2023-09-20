@@ -33,6 +33,7 @@
 //   export S3_BUCKET_FOR_TEST=xemul
 //   export AWS_ACCESS_KEY_ID=${aws_key}
 //   export AWS_SECRET_ACCESS_KEY=${aws_secret}
+//   export AWS_SESSION_TOKEN=${aws_token}
 //   export AWS_DEFAULT_REGION="us-east-2"
 
 s3::endpoint_config_ptr make_minio_config() {
@@ -42,6 +43,7 @@ s3::endpoint_config_ptr make_minio_config() {
         .aws = {{
             .key = tests::getenv_safe("AWS_ACCESS_KEY_ID"),
             .secret = tests::getenv_safe("AWS_SECRET_ACCESS_KEY"),
+            .token = ::getenv("AWS_SESSION_TOKEN") ? : "",
             .region = ::getenv("AWS_DEFAULT_REGION") ? : "local",
         }},
     };

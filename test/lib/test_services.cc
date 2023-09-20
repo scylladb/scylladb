@@ -178,6 +178,7 @@ std::unordered_map<sstring, s3::endpoint_config> make_storage_options_config(con
                 .aws = {{
                     .key = tests::getenv_safe("AWS_ACCESS_KEY_ID"),
                     .secret = tests::getenv_safe("AWS_SECRET_ACCESS_KEY"),
+                    .token = ::getenv("AWS_SESSION_TOKEN") ? : "",
                     .region = ::getenv("AWS_DEFAULT_REGION") ? : "local",
                 }},
             };
