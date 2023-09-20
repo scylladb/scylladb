@@ -1903,13 +1903,13 @@ class topology_coordinator {
                 // majority and commit.
                 topology_mutation_builder builder(guard.write_timestamp());
                 builder.set_current_cdc_generation_id(cdc_gen_id)
-                       .add_unpublished_cdc_generation(cdc_gen_id)
-                       .set_version(_topo_sm._topology.version + 1);
+                       .add_unpublished_cdc_generation(cdc_gen_id);
                 if (_topo_sm._topology.global_request == global_topology_request::new_cdc_generation) {
                     builder.del_global_topology_request();
                     builder.del_transition_state();
                 } else {
                     builder.set_transition_state(topology::transition_state::write_both_read_old);
+                    builder.set_version(_topo_sm._topology.version + 1);
                 }
                 auto str = ::format("committed new CDC generation, ID: {}", cdc_gen_id);
                 co_await update_topology_state(std::move(guard), {builder.build()}, std::move(str));
