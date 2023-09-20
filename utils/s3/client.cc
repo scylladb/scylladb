@@ -707,7 +707,10 @@ future<> client::upload_sink_base::upload_part(std::unique_ptr<upload_sink> piec
             // ... the exact exception only remains in logs
             s3l.warn("couldn't copy-upload part {}: {} (upload id {})", part_number, ex, _upload_id);
         });
-    }).finally([this, &piece] {
+    }).then_wrapped([this, &piece] (auto f) {
+        if (f.failed()) {
+            s3l.warn("couldn't flush piece {}: {} (upload id {})", piece._object_name, f.get_exception(), _upload_id);
+        }
         return _client->delete_object(piece._object_name).handle_exception([&piece] (auto ex) {
             s3l.warn("failed to remove copy-upload piece {}", piece._object_name);
         });
