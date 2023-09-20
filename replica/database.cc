@@ -1244,6 +1244,7 @@ keyspace::make_column_family_config(const schema& s, const database& db) const {
     cfg.statement_scheduling_group = _config.statement_scheduling_group;
     cfg.enable_metrics_reporting = db_config.enable_keyspace_column_family_metrics();
     cfg.enable_node_aggregated_table_metrics = db_config.enable_node_aggregated_table_metrics();
+    cfg.enable_estimated_row_count_reporting = db_config.enable_keyspace_column_family_estimated_row_count();
     cfg.reversed_reads_auto_bypass_cache = db_config.reversed_reads_auto_bypass_cache;
     cfg.enable_optimized_reversed_reads = db_config.enable_optimized_reversed_reads;
     cfg.tombstone_warn_threshold = db_config.tombstone_warn_threshold();
@@ -2143,6 +2144,7 @@ database::make_keyspace_config(const keyspace_metadata& ksm) {
     cfg.streaming_scheduling_group = _dbcfg.streaming_scheduling_group;
     cfg.statement_scheduling_group = _dbcfg.statement_scheduling_group;
     cfg.enable_metrics_reporting = _cfg.enable_keyspace_column_family_metrics();
+    cfg.enable_estimated_row_count_reporting = _cfg.enable_keyspace_column_family_estimated_row_count();
 
     cfg.view_update_concurrency_semaphore_limit = max_memory_pending_view_updates();
     return cfg;

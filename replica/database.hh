@@ -339,6 +339,7 @@ struct table_stats {
     int64_t live_disk_space_used = 0;
     int64_t total_disk_space_used = 0;
     int64_t live_sstable_count = 0;
+    int64_t estimated_row_count = 0;
     /** Estimated number of compactions pending for this column family */
     int64_t pending_compactions = 0;
     int64_t memtable_partition_insertions = 0;
@@ -410,6 +411,7 @@ public:
         seastar::scheduling_group streaming_scheduling_group;
         bool enable_metrics_reporting = false;
         bool enable_node_aggregated_table_metrics = true;
+        bool enable_estimated_row_count_reporting = false;
         size_t view_update_concurrency_semaphore_limit;
         db::data_listeners* data_listeners = nullptr;
         // Not really table-specific (it's a global configuration parameter), but stored here
@@ -1267,6 +1269,7 @@ public:
         seastar::scheduling_group statement_scheduling_group;
         seastar::scheduling_group streaming_scheduling_group;
         bool enable_metrics_reporting = false;
+        bool enable_estimated_row_count_reporting = false;
         size_t view_update_concurrency_semaphore_limit;
     };
 private:
