@@ -116,7 +116,7 @@ Counters have a number of important limitations:
 - They cannot be used for columns part of the ``PRIMARY KEY`` of a table.
 - A table that contains a counter can only contain counters. In other words, either all the columns of a table outside
   the ``PRIMARY KEY`` have the ``counter`` type, or none of them have it.
-- Counters do not support expiration.
+- Counters do not support expiring data with :doc:`Time to Live (TTL) </cql/time-to-live>`.
 - The deletion of counters is supported but is only guaranteed to work the first time you delete a counter. In other
   words, you should not re-update a counter that you have deleted (if you do, proper behavior is not guaranteed).
 - Counter updates are, by nature, **not** `idempotent <https://en.wikipedia.org/wiki/Idempotence>`__. An important
