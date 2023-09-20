@@ -42,7 +42,7 @@ sstables_manager::~sstables_manager() {
     assert(_undergoing_close.empty());
 }
 
-storage_manager::storage_manager(const db::config& cfg)
+storage_manager::storage_manager(const db::config& cfg, config stm_cfg)
     : _config_updater(this_shard_id() == 0 ? std::make_unique<config_updater>(cfg, *this) : nullptr)
 {
     for (auto [ep, ecfg] : cfg.object_storage_config()) {

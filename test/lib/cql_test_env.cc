@@ -552,7 +552,7 @@ private:
             _cm.start(std::move(get_cm_cfg), std::ref(abort_sources), std::ref(_task_manager)).get();
             auto stop_cm = deferred_stop(_cm);
 
-            _sstm.start(std::ref(*cfg)).get();
+            _sstm.start(std::ref(*cfg), sstables::storage_manager::config{}).get();
             auto stop_sstm = deferred_stop(_sstm);
 
             std::optional<wasm::startup_context> wasm_ctx;

@@ -983,7 +983,8 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                cm.stop().get();
             });
 
-            sstm.start(std::ref(*cfg)).get();
+            sstables::storage_manager::config stm_cfg;
+            sstm.start(std::ref(*cfg), stm_cfg).get();
             auto stop_sstm = defer_verbose_shutdown("sstables storage manager", [&sstm] {
                 sstm.stop().get();
             });

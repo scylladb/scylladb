@@ -64,7 +64,10 @@ class storage_manager : public peering_sharded_service<storage_manager> {
     void update_config(const db::config&);
 
 public:
-    storage_manager(const db::config&);
+    struct config {
+    };
+
+    storage_manager(const db::config&, config cfg);
     shared_ptr<s3::client> get_endpoint_client(sstring endpoint);
     future<> stop();
 };
