@@ -66,6 +66,7 @@ class storage_manager : public peering_sharded_service<storage_manager> {
 
 public:
     struct config {
+        size_t s3_clients_memory = 16 << 20; // 16M by default
     };
 
     storage_manager(const db::config&, config cfg);

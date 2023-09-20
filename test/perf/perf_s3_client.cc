@@ -9,6 +9,7 @@
 #include <chrono>
 #include <seastar/core/app-template.hh>
 #include <seastar/core/sleep.hh>
+#include <seastar/core/memory.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 #include "test/lib/test_utils.hh"
 #include "test/lib/random_utils.hh"
@@ -49,7 +50,7 @@ public:
             , _parallel(prl)
             , _object_name(fmt::format("/{}/perfobject-{}-{}", tests::getenv_safe("S3_BUCKET_FOR_TEST"), ::getpid(), this_shard_id()))
             , _object_size(obj_size)
-            , _mem(0)
+            , _mem(memory::stats().total_memory())
             , _client(s3::client::make(tests::getenv_safe("S3_SERVER_ADDRESS_FOR_TEST"), make_config(), _mem))
     {}
 

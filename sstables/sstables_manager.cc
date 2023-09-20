@@ -43,7 +43,7 @@ sstables_manager::~sstables_manager() {
 }
 
 storage_manager::storage_manager(const db::config& cfg, config stm_cfg)
-    : _s3_clients_memory(0)
+    : _s3_clients_memory(stm_cfg.s3_clients_memory)
     , _config_updater(this_shard_id() == 0 ? std::make_unique<config_updater>(cfg, *this) : nullptr)
 {
     for (auto [ep, ecfg] : cfg.object_storage_config()) {
