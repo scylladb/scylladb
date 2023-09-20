@@ -7,6 +7,7 @@
  */
 #include <source_location>
 
+#include "service/raft/group0_fwd.hh"
 #include "service/raft/raft_group0.hh"
 #include "service/raft/raft_rpc.hh"
 #include "service/raft/raft_sys_table_storage.hh"
@@ -414,7 +415,7 @@ future<> raft_group0::leadership_monitor_fiber() {
     }
 }
 
-future<> raft_group0::join_group0(std::vector<gms::inet_address> seeds, bool as_voter, service::storage_service& ss, cql3::query_processor& qp, service::migration_manager& mm,
+future<> raft_group0::join_group0(std::vector<gms::inet_address> seeds, shared_ptr<service::group0_handshaker> handshaker, service::storage_service& ss, cql3::query_processor& qp, service::migration_manager& mm,
                                   db::system_keyspace& sys_ks) {
     assert(this_shard_id() == 0);
     assert(!joined_group0());
@@ -460,6 +461,8 @@ future<> raft_group0::join_group0(std::vector<gms::inet_address> seeds, bool as_
                 // In a fresh cluster this will trigger an empty snapshot transfer which is redundant but correct.
                 // See #14066.
                 nontrivial_snapshot = true;
+            } else {
+                co_await handshaker->pre_server_start(g0_info);
             }
             // Bootstrap the initial configuration
             co_await raft_sys_table_storage(qp, group0_id, my_id)
@@ -481,15 +484,9 @@ future<> raft_group0::join_group0(std::vector<gms::inet_address> seeds, bool as_
             break;
         }
 
-        auto timeout = db::timeout_clock::now() + std::chrono::milliseconds{1000};
-        netw::msg_addr peer(g0_info.ip_addr);
-        try {
-            // TODO: aborts?
-            co_await ser::group0_rpc_verbs::send_group0_modify_config(&_ms.local(), peer, timeout, group0_id, {{my_addr, as_voter}}, {});
+        // TODO: aborts?
+        if (co_await handshaker->post_server_start(g0_info)) {
             break;
-        } catch (std::runtime_error& e) {
-            // Retry
-            group0_log.warn("failed to modify config at peer {}: {}. Retrying.", g0_info.id, e);
         }
 
         // Try again after a pause
@@ -506,6 +503,41 @@ future<> raft_group0::join_group0(std::vector<gms::inet_address> seeds, bool as_
     });
 
     group0_log.info("server {} joined group 0 with group id {}", my_id, group0_id);
+}
+
+shared_ptr<service::group0_handshaker> raft_group0::make_legacy_handshaker(bool can_vote) {
+    struct legacy_handshaker : public group0_handshaker {
+        service::raft_group0& _group0;
+        netw::messaging_service& _ms;
+        bool _can_vote;
+
+        legacy_handshaker(service::raft_group0& group0, netw::messaging_service& ms, bool can_vote)
+                : _group0(group0)
+                , _ms(ms)
+                , _can_vote(can_vote)
+        {}
+
+        future<> pre_server_start(const group0_info& info) override {
+            // Nothing to do in this step
+            co_return;
+        }
+
+        future<bool> post_server_start(const group0_info& g0_info) override {
+            netw::msg_addr peer(g0_info.ip_addr);
+            auto timeout = db::timeout_clock::now() + std::chrono::milliseconds{1000};
+            auto my_id = _group0.load_my_id();
+            raft::server_address my_addr{my_id, {}};
+            try {
+                co_await ser::group0_rpc_verbs::send_group0_modify_config(&_ms, peer, timeout, g0_info.group0_id, {{my_addr, _can_vote}}, {});
+                co_return true;
+            } catch (std::runtime_error& e) {
+                group0_log.warn("failed to modify config at peer {}: {}. Retrying.", g0_info.id, e);
+                co_return false;
+            }
+        };
+    };
+
+    return make_shared<legacy_handshaker>(*this, _ms.local(), can_vote);
 }
 
 struct group0_members {
@@ -623,7 +655,7 @@ future<> raft_group0::setup_group0_if_exist(db::system_keyspace& sys_ks, service
 }
 
 future<> raft_group0::setup_group0(
-        db::system_keyspace& sys_ks, const std::unordered_set<gms::inet_address>& initial_contact_nodes,
+        db::system_keyspace& sys_ks, const std::unordered_set<gms::inet_address>& initial_contact_nodes, shared_ptr<group0_handshaker> handshaker,
         std::optional<replace_info> replace_info, service::storage_service& ss, cql3::query_processor& qp, service::migration_manager& mm) {
     if (!co_await use_raft()) {
         co_return;
@@ -642,7 +674,7 @@ future<> raft_group0::setup_group0(
     }
 
     group0_log.info("setup_group0: joining group 0...");
-    co_await join_group0(std::move(seeds), false /* non-voter */, ss, qp, mm, sys_ks);
+    co_await join_group0(std::move(seeds), std::move(handshaker), ss, qp, mm, sys_ks);
     group0_log.info("setup_group0: successfully joined group 0.");
 
     // Start group 0 leadership monitor fiber.
@@ -1604,7 +1636,8 @@ future<> raft_group0::do_upgrade_to_group0(group0_upgrade_state start_state, ser
 
     if (!joined_group0()) {
         upgrade_log.info("Joining group 0...");
-        co_await join_group0(co_await _sys_ks.load_peers(), true, ss, qp, mm, _sys_ks);
+        auto handshaker = make_legacy_handshaker(true); // Voter
+        co_await join_group0(co_await _sys_ks.load_peers(), std::move(handshaker), ss, qp, mm, _sys_ks);
     } else {
         upgrade_log.info(
             "We're already a member of group 0."

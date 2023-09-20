@@ -64,6 +64,29 @@ private:
     persistent_discovery(discovery_peer my_addr, const peer_list&, cql3::query_processor&);
 };
 
+// Abstracts away the details of a handshake used to join an existing group 0.
+// None of its methods are called if the node creates a new group 0.
+class group0_handshaker {
+public:
+    virtual ~group0_handshaker() {}
+
+    // Called after initial discovery run is finished, but before starting
+    // the raft server. This is only called once and is not retried in case
+    // it or `post_server_start` fails.
+    virtual future<> pre_server_start(const group0_info& info) = 0;
+
+    // Performs a handshake that should result in this node being added to group 0.
+    // Called after the raft server is started.
+    //
+    // - If the function returns true, the node has been added to group 0
+    //   successfully.
+    // - If the function returns false, this step has failed but should be
+    //   retried.
+    // - An exception is interpreted as an irrecoverable error and causes
+    //   setup_group0 to fail.
+    virtual future<bool> post_server_start(const group0_info& info) = 0;
+};
+
 class raft_group0 {
     seastar::gate _shutdown_gate;
     seastar::abort_source& _abort_source;
@@ -139,7 +162,7 @@ public:
     // Cannot be called twice.
     //
     // Also make sure to call `finish_setup_after_join` after the node has joined the cluster and entered NORMAL state.
-    future<> setup_group0(db::system_keyspace&, const std::unordered_set<gms::inet_address>& initial_contact_nodes,
+    future<> setup_group0(db::system_keyspace&, const std::unordered_set<gms::inet_address>& initial_contact_nodes, shared_ptr<group0_handshaker> handshaker,
                           std::optional<replace_info>, service::storage_service& ss, cql3::query_processor& qp, service::migration_manager& mm);
 
     // Call during the startup procedure before networking is enabled.
@@ -226,6 +249,12 @@ public:
     // completes and current state of group0 is not RECOVERY.
     future<> remove_from_raft_config(raft::server_id id);
 
+    // Creates a group0 adder which uses the legacy GROUP0_MODIFY_CONFIG RPC.
+    // It is meant to be used as a fallback when a proper handshake procedure
+    // cannot be used (e.g. when completing the upgrade or group0 procedures
+    // or when joining an old cluster which does not support JOIN_NODE RPC).
+    shared_ptr<group0_handshaker> make_legacy_handshaker(bool can_vote);
+
     raft_group0_client& client() {
         return _client;
     }
@@ -283,6 +312,10 @@ private:
     //
     // Uses `seeds` as contact points to discover other servers which will be part of group 0.
     //
+    // If the server becomes the discovery leader, meaning that is it elected as the server
+    // which creates group 0, then it will become a voter. Otherwise it will use the `handshaker`
+    // to ask the discovery leader to join the node to the group, and the voting status
+    // depends on how exactly this is implemented.
     // `as_voter` determines whether the server joins as a voter. If `false`, it will join
     // as a non-voter with one exception: if it becomes the 'discovery leader', meaning that
     // it is elected as the server which creates group 0, it will become a voter.
@@ -294,14 +327,14 @@ private:
     // Persists group 0 ID on disk at the end so subsequent restarts of Scylla process can detect that group 0
     // has already been joined and the server initialized.
     //
-    // `as_voter` should be initially `false` when joining an existing cluster; calling `become_voter`
-    // will cause it to become a voter. `as_voter` should be `true` when upgrading, when we create
-    // a group 0 using all nodes in the cluster.
+    // When joining an existing cluster, the provided handshaker should result in the node being added
+    // as a non-voter. When the cluster is being upgraded and group 0 is being created, the node
+    // should be joined as a voter.
     //
     // Preconditions: Raft local feature enabled
     // and we haven't initialized group 0 yet after last Scylla start (`joined_group0()` is false).
     // Postcondition: `joined_group0()` is true.
-    future<> join_group0(std::vector<gms::inet_address> seeds, bool as_voter, service::storage_service& ss, cql3::query_processor& qp, service::migration_manager& mm, db::system_keyspace& sys_ks);
+    future<> join_group0(std::vector<gms::inet_address> seeds, shared_ptr<group0_handshaker> handshaker, service::storage_service& ss, cql3::query_processor& qp, service::migration_manager& mm, db::system_keyspace& sys_ks);
 
     // Start an existing Raft server for the cluster-wide group 0.
     // Assumes the server was already added to the group earlier so we don't attempt to join it again.

@@ -2801,7 +2801,9 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
 
     assert(_group0);
     // if the node is bootstrapped the functin will do nothing since we already created group0 in main.cc
-    co_await _group0->setup_group0(_sys_ks.local(), initial_contact_nodes, raft_replace_info, *this, *_qp, _migration_manager.local());
+    ::shared_ptr<group0_handshaker> handshaker = _group0->make_legacy_handshaker(false);
+    co_await _group0->setup_group0(_sys_ks.local(), initial_contact_nodes, std::move(handshaker),
+            raft_replace_info, *this, *_qp, _migration_manager.local());
 
     raft::server* raft_server = co_await [this] () -> future<raft::server*> {
         if (!_raft_topology_change_enabled) {
