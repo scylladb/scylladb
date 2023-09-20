@@ -164,7 +164,7 @@ struct convert<::object_storage_endpoint_param> {
     static bool decode(const Node& node, ::object_storage_endpoint_param& ep) {
         ep.endpoint = node["name"].as<std::string>();
         ep.config.port = node["port"].as<unsigned>();
-        ep.config.use_https = node["https"] && node["https"].as<bool>();
+        ep.config.use_https = node["https"].as<bool>(false);
         if (node["aws_region"]) {
             ep.config.aws.emplace();
             ep.config.aws->region = node["aws_region"].as<std::string>();
