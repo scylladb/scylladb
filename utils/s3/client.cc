@@ -91,9 +91,9 @@ void client::authorize(http::request& req) {
     sstring signed_headers_list = "";
     // AWS requires all x-... and Host: headers to be signed
     signed_headers["host"] = req._headers["Host"];
-    for (const auto& h : req._headers) {
-        if (h.first[0] == 'x' && h.first[1] == '-') {
-            signed_headers[h.first] = h.second;
+    for (const auto& [name, value] : req._headers) {
+        if (name.starts_with("x-")) {
+            signed_headers[name] = value;
         }
     }
     unsigned header_nr = signed_headers.size();
