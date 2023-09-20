@@ -58,6 +58,7 @@ class storage_manager : public peering_sharded_service<storage_manager> {
         s3_endpoint(s3::endpoint_config_ptr c) noexcept : cfg(std::move(c)) {}
     };
 
+    semaphore _s3_clients_memory;
     std::unordered_map<sstring, s3_endpoint> _s3_endpoints;
     std::unique_ptr<config_updater> _config_updater;
 

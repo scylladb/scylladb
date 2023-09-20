@@ -57,7 +57,7 @@ future<> ignore_reply(const http::reply& rep, input_stream<char>&& in_) {
     co_await util::skip_entire_stream(in);
 }
 
-client::client(std::string host, endpoint_config_ptr cfg, global_factory gf, private_tag)
+client::client(std::string host, endpoint_config_ptr cfg, semaphore& mem, global_factory gf, private_tag)
         : _host(std::move(host))
         , _cfg(std::move(cfg))
         , _gf(std::move(gf))
@@ -71,8 +71,8 @@ void client::update_config(endpoint_config_ptr cfg) {
     _cfg = std::move(cfg);
 }
 
-shared_ptr<client> client::make(std::string endpoint, endpoint_config_ptr cfg, global_factory gf) {
-    return seastar::make_shared<client>(std::move(endpoint), std::move(cfg), std::move(gf), private_tag{});
+shared_ptr<client> client::make(std::string endpoint, endpoint_config_ptr cfg, semaphore& mem, global_factory gf) {
+    return seastar::make_shared<client>(std::move(endpoint), std::move(cfg), mem, std::move(gf), private_tag{});
 }
 
 void client::authorize(http::request& req) {
