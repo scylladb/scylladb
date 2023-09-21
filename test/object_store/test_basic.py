@@ -10,6 +10,7 @@ import requests
 import signal
 import yaml
 import pytest
+import xml.etree.ElementTree as ET
 
 from contextlib import contextmanager
 
@@ -143,3 +144,66 @@ async def test_basic(test_tempdir, s3_server, ssl):
         res = conn.execute("SELECT * FROM system.sstables;")
         rows = "\n".join(f"{row.location} {row.status}" for row in res)
         assert not rows, 'Unexpected entries in registry'
+
+@pytest.mark.asyncio
+async def test_garbage_collect(test_tempdir, s3_server, ssl):
+    '''verify ownership table is garbage-collected on boot'''
+    ks = 'test_ks'
+    cf = 'test_cf'
+    rows = [('0', 'zero'),
+            ('1', 'one'),
+            ('2', 'two')]
+
+    def list_bucket(s3_server):
+        r = requests.get(f'http://{s3_server.address}:{s3_server.port}/{s3_server.bucket_name}')
+        bucket_list_res = ET.fromstring(r.content)
+        objects = []
+        for elem in bucket_list_res:
+            if elem.tag.endswith('Contents'):
+                for opt in elem:
+                    if opt.tag.endswith('Key'):
+                        objects.append(opt.text)
+        return objects
+
+    sstable_entries = []
+
+    with managed_cluster(test_tempdir, ssl, s3_server) as cluster:
+        print(f'Create keyspace (minio listening at {s3_server.address})')
+        replication_opts = format_tuples({'class': 'NetworkTopologyStrategy',
+                                          'replication_factor': '1'})
+        storage_opts = format_tuples(type='S3',
+                                     endpoint=s3_server.address,
+                                     bucket=s3_server.bucket_name)
+
+        conn = cluster.connect()
+        conn.execute((f"CREATE KEYSPACE {ks} WITH"
+                      f" REPLICATION = {replication_opts} AND STORAGE = {storage_opts};"))
+        conn.execute(f"CREATE TABLE {ks}.{cf} ( name text primary key, value text );")
+        for row in rows:
+            cql_fmt = "INSERT INTO {}.{} ( name, value ) VALUES ('{}', '{}');"
+            conn.execute(cql_fmt.format(ks, cf, *row))
+
+        ip = cluster.contact_points[0]
+        r = requests.post(f'http://{ip}:10000/storage_service/keyspace_flush/{ks}', timeout=60)
+        assert r.status_code == 200, f"Error flushing keyspace: {r}"
+        # Mark the sstables as "removing" to simulate the problem
+        res = conn.execute("SELECT * FROM system.sstables;")
+        for row in res:
+            sstable_entries.append(tuple((row.location, row.generation, row.uuid)))
+        print(f'Found entries: {[ str(ent[2]) for ent in sstable_entries ]}')
+        for sst in sstable_entries:
+            conn.execute(f"UPDATE system.sstables SET status = 'removing' WHERE location = '{sst[0]}' AND generation = {sst[1]};")
+
+    print('Restart scylla')
+    with managed_cluster(test_tempdir, ssl, s3_server) as cluster:
+        conn = cluster.connect()
+        res = conn.execute(f"SELECT * FROM {ks}.{cf};")
+        have_res = { x.name: x.value for x in res }
+        # Must be empty as no sstables should have been picked up
+        assert not have_res, f'Sstables not cleaned, got {have_res}'
+        # Make sure objects also disappeared
+        objects = list_bucket(s3_server)
+        print(f'Found objects: {[ objects ]}')
+        for o in objects:
+            for ent in sstable_entries:
+                assert not o.startswith(str(ent[2])), f'Sstable object not cleaned, found {o}'

@@ -75,6 +75,7 @@ sstable_directory::sstable_directory(sstables_manager& manager,
     , _state(state)
     , _sstable_dir(make_path(_table_dir, _state))
     , _error_handler_gen(error_handler_gen)
+    , _storage(make_storage(_manager, *_storage_opts, _table_dir, _state))
     , _lister(make_components_lister())
     , _sharder(sharder)
     , _unshared_remote_sstables(smp::count)
@@ -343,9 +344,22 @@ future<> sstable_directory::system_keyspace_components_lister::commit() {
     return make_ready_future<>();
 }
 
-future<> sstable_directory::system_keyspace_components_lister::garbage_collect() {
-    // FIXME -- implement
-    co_return;
+future<> sstable_directory::system_keyspace_components_lister::garbage_collect(storage& st) {
+    return do_with(std::set<generation_type>(), [this, &st] (auto& gens_to_remove) {
+        return _sys_ks.sstables_registry_list(_location, [&st, &gens_to_remove] (utils::UUID uuid, sstring status, entry_descriptor desc) {
+            if (status == "sealed") {
+                return make_ready_future<>();
+            }
+
+            dirlog.info("Removing dangling {} {} entry", status, uuid);
+            gens_to_remove.insert(desc.generation);
+            return st.remove_by_registry_entry(uuid, std::move(desc));
+        }).then([this, &gens_to_remove] {
+            return parallel_for_each(gens_to_remove, [this] (auto gen) {
+                return _sys_ks.sstables_registry_delete_entry(_location, gen);
+            });
+        });
+    });
 }
 
 future<>
@@ -589,10 +603,10 @@ future<> sstable_directory::filesystem_components_lister::replay_pending_delete_
 }
 
 future<> sstable_directory::garbage_collect() {
-    return _lister->garbage_collect();
+    return _lister->garbage_collect(*_storage);
 }
 
-future<> sstable_directory::filesystem_components_lister::garbage_collect() {
+future<> sstable_directory::filesystem_components_lister::garbage_collect(storage& st) {
     // First pass, cleanup temporary sstable directories and sstables pending delete.
     co_await cleanup_column_family_temp_sst_dirs();
     co_await handle_sstables_pending_delete();

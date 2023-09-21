@@ -33,6 +33,7 @@ namespace db { class system_keyspace; }
 namespace sstables {
 
 enum class sstable_state;
+class storage;
 class sstables_manager;
 bool manifest_json_filter(const std::filesystem::path&, const directory_entry& entry);
 
@@ -74,7 +75,7 @@ public:
     public:
         virtual future<> process(sstable_directory& directory, process_flags flags) = 0;
         virtual future<> commit() = 0;
-        virtual future<> garbage_collect() = 0;
+        virtual future<> garbage_collect(storage&) = 0;
         virtual ~components_lister() {}
     };
 
@@ -110,7 +111,7 @@ public:
 
         virtual future<> process(sstable_directory& directory, process_flags flags) override;
         virtual future<> commit() override;
-        virtual future<> garbage_collect() override;
+        virtual future<> garbage_collect(storage&) override;
     };
 
     class system_keyspace_components_lister final : public components_lister {
@@ -122,7 +123,7 @@ public:
 
         virtual future<> process(sstable_directory& directory, process_flags flags) override;
         virtual future<> commit() override;
-        virtual future<> garbage_collect() override;
+        virtual future<> garbage_collect(storage&) override;
     };
 
 private:
@@ -138,6 +139,7 @@ private:
     sstable_state _state;
     std::filesystem::path _sstable_dir; // FIXME -- remove eventually
     io_error_handler_gen _error_handler_gen;
+    std::unique_ptr<storage> _storage;
     std::unique_ptr<components_lister> _lister;
     const dht::sharder& _sharder;
 
