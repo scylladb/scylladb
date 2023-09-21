@@ -1602,8 +1602,6 @@ scylla_release = file.read().strip()
 file = open(f'{outdir}/SCYLLA-PRODUCT-FILE', 'r')
 scylla_product = file.read().strip()
 
-arch = platform.machine()
-
 for m, mode_config in modes.items():
     mode_config['cxxflags'] += f" -DSCYLLA_BUILD_MODE={m}"
     cxxflags = "-DSCYLLA_VERSION=\"\\\"" + scylla_version + "\\\"\" -DSCYLLA_RELEASE=\"\\\"" + scylla_release + "\\\"\""
@@ -1803,7 +1801,12 @@ if args.ragel_exec:
 else:
     ragel_exec = "ragel"
 
-with open(buildfile, 'w') as f:
+
+def write_build_file(f,
+                     arch,
+                     scylla_product,
+                     scylla_version,
+                     scylla_release):
     f.write(textwrap.dedent('''\
         configure_args = {configure_args}
         builddir = {outdir}
@@ -2342,4 +2345,12 @@ with open(buildfile, 'w') as f:
         build help: print_help | always
         ''').format(**globals()))
 
+
+with open(buildfile, 'w') as f:
+    arch = platform.machine()
+    write_build_file(f,
+                     arch,
+                     scylla_product,
+                     scylla_version,
+                     scylla_release)
 generate_compdb('compile_commands.json', buildfile, selected_modes)
