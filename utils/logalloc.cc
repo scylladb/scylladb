@@ -206,6 +206,17 @@ migrate_fn_type::unregister_migrator(uint32_t index) {
 
 namespace logalloc {
 
+// LSA-specific bad_alloc variant which allows adding additional information on
+// why the allocation failed.
+class bad_alloc : public std::bad_alloc {
+    sstring _what;
+public:
+    bad_alloc(sstring what) : _what(std::move(what)) { }
+    virtual const char* what() const noexcept override {
+        return _what.c_str();
+    }
+};
+
 #ifdef DEBUG_LSA_SANITIZER
 
 class region_sanitizer {
@@ -1291,7 +1302,7 @@ void segment_pool::refill_emergency_reserve() {
     while (_free_segments < _emergency_reserve_max) {
         auto seg = allocate_segment(_emergency_reserve_max);
         if (!seg) {
-            throw std::bad_alloc();
+            throw bad_alloc(format("failed to refill emergency reserve of {} (have {} free segments)", _emergency_reserve_max, _free_segments));
         }
         ++_segments_in_use;
         free_segment(seg);
@@ -1327,7 +1338,7 @@ segment_pool::allocate_or_fallback_to_reserve() {
     auto seg = allocate_segment(_current_emergency_reserve_goal);
     if (!seg) {
         _allocation_failure_flag = true;
-        throw std::bad_alloc();
+        throw bad_alloc(format("failed to allocate segment (_current_emergency_reserve_goal={})", _current_emergency_reserve_goal));
     }
     return seg;
 }
@@ -2895,14 +2906,14 @@ void allocating_section::reserve(tracker::impl& tracker) {
             break;
         }
         if (!tracker.reclaim(_std_reserve - free, is_preemptible::no)) {
-            throw std::bad_alloc();
+            throw bad_alloc(format("failed to reclaim {} bytes of memory, while attempting to ensure an std reserve of {}", _std_reserve - free, _std_reserve));
         }
     }
 
     pool.clear_allocation_failure_flag();
-  } catch (const std::bad_alloc&) {
+  } catch (const std::bad_alloc& ex) {
         if (tracker.should_abort_on_bad_alloc()) {
-            llogger.error("Aborting due to allocation failure");
+            llogger.error("Aborting due to allocation failure: {}", ex.what());
             abort();
         }
         throw;
