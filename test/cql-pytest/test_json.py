@@ -225,7 +225,6 @@ def test_fromjson_boolean_string_prepared(cql, table1):
 
 # Test that null argument is allowed for fromJson(), with unprepared statement
 # Reproduces issue #7912.
-@pytest.mark.xfail(reason="issue #7912")
 def test_fromjson_null_unprepared(cql, table1):
     p = unique_key_int()
     cql.execute(f"INSERT INTO {table1} (p, v) VALUES ({p}, fromJson(null))")
@@ -233,7 +232,6 @@ def test_fromjson_null_unprepared(cql, table1):
 
 # Test that null argument is allowed for fromJson(), with prepared statement
 # Reproduces issue #7912.
-@pytest.mark.xfail(reason="issue #7912")
 def test_fromjson_null_prepared(cql, table1):
     p = unique_key_int()
     stmt = cql.prepare(f"INSERT INTO {table1} (p, v) VALUES (?, fromJson(?))")

@@ -223,7 +223,7 @@ make_from_json_function(data_dictionary::database db, const sstring& keyspace, d
     return make_native_scalar_function<true>("fromjson", t, {utf8_type},
             [keyspace, t](std::span<const bytes_opt> parameters) -> bytes_opt {
         try {
-            rjson::value json_value = rjson::parse(utf8_type->to_string(parameters[0].value()));
+            rjson::value json_value = rjson::parse(utf8_type->to_string(parameters[0].value_or("null")));
             bytes_opt parsed_json_value;
             if (!json_value.IsNull()) {
                 parsed_json_value.emplace(from_json_object(*t, json_value));
