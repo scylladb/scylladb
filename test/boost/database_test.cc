@@ -1197,7 +1197,7 @@ SEASTAR_TEST_CASE(multipage_range_scan_semaphore_mismatch) {
 
         read_page(default_scheduling_group(), cmd1);
         BOOST_REQUIRE_EXCEPTION(read_page(sched_groups.statement_scheduling_group, cmd2), std::runtime_error,
-                testing::exception_predicate::message_contains("looked-up reader belongs to different semaphore than the one appropriate for this query class:"));
+                testing::exception_predicate::message_contains("semaphore mismatch detected, dropping reader"));
     });
 }
 

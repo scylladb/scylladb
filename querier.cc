@@ -355,10 +355,12 @@ std::optional<Querier> querier_cache::lookup_querier(
     tracing::trace(trace_state, "Dropping querier because {}", cannot_use_reason(can_be_used));
     ++stats.drops;
 
+    auto permit = q.permit();
+
     // Save semaphore name and address for later to use it in
     // error/warning message
-    auto q_semaphore_name = q.permit().semaphore().name();
-    auto q_semaphore_address = reinterpret_cast<uintptr_t>(&q.permit().semaphore());
+    auto q_semaphore_name = permit.semaphore().name();
+    auto q_semaphore_address = reinterpret_cast<uintptr_t>(&permit.semaphore());
 
     // Close and drop the querier in the background.
     // It is safe to do so, since _closing_gate is closed and
@@ -369,16 +371,18 @@ std::optional<Querier> querier_cache::lookup_querier(
 
     if (can_be_used == can_use::no_scheduling_group_mismatch) {
         ++stats.scheduling_group_mismatches;
-        qlogger.warn("user semaphores mismatch detected. dropping looked-up reader: "
-                    "looked-up reader belongs to {} (0x{:x}) the query class appropriate is {} (0x{:x})",
+        qlogger.warn("user semaphore mismatch detected, dropping reader {}: "
+                "reader belongs to {} (0x{:x}) but the query class appropriate is {} (0x{:x})",
+                    permit.description(),
                     q_semaphore_name,
                     q_semaphore_address,
                     current_sem.name(),
                     reinterpret_cast<uintptr_t>(&current_sem));
     }
     else if (can_be_used == can_use::no_fatal_semaphore_mismatch) {
-        on_internal_error(qlogger, format("looked-up reader belongs to different semaphore than the one appropriate for this query class: "
-                "looked-up reader belongs to {} (0x{:x}) the query class appropriate is {} (0x{:x})",
+        on_internal_error(qlogger, format("semaphore mismatch detected, dropping reader {}: "
+                "reader belongs to {} (0x{:x}) but the query class appropriate is {} (0x{:x})",
+                permit.description(),
                 q_semaphore_name,
                 q_semaphore_address,
                 current_sem.name(),

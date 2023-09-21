@@ -12,6 +12,7 @@
 #include "test/lib/simple_schema.hh"
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/random_utils.hh"
+#include "test/lib/exception_utils.hh"
 #include "db/config.hh"
 
 #include <seastar/core/sleep.hh>
@@ -151,9 +152,10 @@ public:
         query::partition_slice expected_slice;
     };
 
-    test_querier_cache(const noncopyable_function<sstring(size_t)>& external_make_value, std::chrono::seconds entry_ttl = 24h, ssize_t max_memory = std::numeric_limits<ssize_t>::max())
+    test_querier_cache(const noncopyable_function<sstring(size_t)>& external_make_value, std::chrono::seconds entry_ttl = 24h,
+            ssize_t max_memory = std::numeric_limits<ssize_t>::max(), query::querier_cache::is_user_semaphore_func is_user_semaphore = {})
         : _sem(reader_concurrency_semaphore::for_tests{}, "test_querier_cache", std::numeric_limits<int>::max(), max_memory)
-        , _cache([] (const reader_concurrency_semaphore&) { return true; }, entry_ttl)
+        , _cache(is_user_semaphore ? std::move(is_user_semaphore) : [] (const reader_concurrency_semaphore&) { return true; }, entry_ttl)
         , _mutations(make_mutations(_s, external_make_value))
         , _mutation_source([this] (schema_ptr schema, reader_permit permit, const dht::partition_range& range) {
             auto rd = make_flat_mutation_reader_from_mutations_v2(schema, std::move(permit), _mutations, range);
@@ -165,6 +167,10 @@ public:
     explicit test_querier_cache(std::chrono::seconds entry_ttl = 24h)
         : test_querier_cache(test_querier_cache::make_value, entry_ttl) {
     }
+
+    test_querier_cache(query::querier_cache::is_user_semaphore_func is_user_semaphore)
+        : test_querier_cache(test_querier_cache::make_value, 24h, std::numeric_limits<ssize_t>::max(), std::move(is_user_semaphore))
+    { }
 
     ~test_querier_cache() {
         _cache.stop().get();
@@ -304,14 +310,22 @@ public:
     test_querier_cache& assert_cache_lookup_data_querier(unsigned lookup_key,
             const schema& lookup_schema,
             const dht::partition_range& lookup_range,
-            const query::partition_slice& lookup_slice) {
+            const query::partition_slice& lookup_slice,
+            reader_concurrency_semaphore& sem) {
 
-        auto querier_opt = _cache.lookup_data_querier(make_cache_key(lookup_key), lookup_schema, lookup_range, lookup_slice, get_semaphore(), nullptr, db::no_timeout);
+        auto querier_opt = _cache.lookup_data_querier(make_cache_key(lookup_key), lookup_schema, lookup_range, lookup_slice, sem, nullptr, db::no_timeout);
         if (querier_opt) {
             querier_opt->close().get();
         }
         BOOST_REQUIRE_EQUAL(_cache.get_stats().lookups, ++_expected_stats.lookups);
         return *this;
+    }
+
+    test_querier_cache& assert_cache_lookup_data_querier(unsigned lookup_key,
+            const schema& lookup_schema,
+            const dht::partition_range& lookup_range,
+            const query::partition_slice& lookup_slice) {
+        return assert_cache_lookup_data_querier(lookup_key, lookup_schema, lookup_range, lookup_slice, get_semaphore());
     }
 
     test_querier_cache& assert_cache_lookup_mutation_querier(unsigned lookup_key,
@@ -767,4 +781,55 @@ SEASTAR_THREAD_TEST_CASE(test_unique_inactive_read_handle) {
     });
     BOOST_REQUIRE_THROW(sem1.unregister_inactive_read(std::move(sem2_h1)), std::runtime_error);
     BOOST_REQUIRE_THROW(sem2.unregister_inactive_read(std::move(sem1_h1)), std::runtime_error);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_semaphore_mismatch) {
+    reader_concurrency_semaphore other_sem(reader_concurrency_semaphore::no_limits{}, "other_semaphore");
+    auto stop_sem1 = deferred_stop(other_sem);
+
+    bool is_user_semaphore = true;
+    auto is_user_semaphore_func = [&] (const reader_concurrency_semaphore& sem) {
+        if (&sem == &other_sem) {
+            return is_user_semaphore;
+        }
+        return true;
+    };
+
+    test_querier_cache t(is_user_semaphore_func);
+
+    auto& sem = t.get_semaphore();
+
+    // Same semaphore
+    {
+        const auto entry = t.produce_first_page_and_save_data_querier();
+        t.assert_cache_lookup_data_querier(entry.key, *t.get_schema(), entry.expected_range, entry.expected_slice, sem)
+            .no_misses()
+            .no_drops()
+            .no_evictions();
+    }
+
+    // Other semaphore, other is a "user" semaphore
+    {
+        const auto entry = t.produce_first_page_and_save_data_querier();
+        t.assert_cache_lookup_data_querier(entry.key, *t.get_schema(), entry.expected_range, entry.expected_slice, other_sem)
+            .no_misses()
+            .drops()
+            .no_evictions();
+    }
+
+    // Other semaphore, other is not a "user" semaphore
+    {
+        bool abort = set_abort_on_internal_error(false);
+        auto reset_abort = defer([abort] {
+            set_abort_on_internal_error(abort);
+        });
+        is_user_semaphore = false;
+        const auto entry = t.produce_first_page_and_save_data_querier();
+        BOOST_REQUIRE_EXCEPTION(t.assert_cache_lookup_data_querier(entry.key, *t.get_schema(), entry.expected_range, entry.expected_slice, other_sem),
+                std::runtime_error,
+                exception_predicate::message_contains("semaphore mismatch detected, dropping reader"));
+        t.no_misses()
+            .drops()
+            .no_evictions();
+    }
 }
