@@ -315,6 +315,48 @@ def generate_compdb(compdb, buildfile, modes):
             return
 
 
+def check_for_minimal_compiler_version(cxx):
+    compiler_test_src = '''
+
+// clang pretends to be gcc (defined __GNUC__), so we
+// must check it first
+#ifdef __clang__
+
+#if __clang_major__ < 10
+    #error "MAJOR"
+#endif
+
+#elif defined(__GNUC__)
+
+#if __GNUC__ < 10
+    #error "MAJOR"
+#elif __GNUC__ == 10
+    #if __GNUC_MINOR__ < 1
+        #error "MINOR"
+    #elif __GNUC_MINOR__ == 1
+        #if __GNUC_PATCHLEVEL__ < 1
+            #error "PATCHLEVEL"
+        #endif
+    #endif
+#endif
+
+#else
+
+#error "Unrecognized compiler"
+
+#endif
+
+int main() { return 0; }
+'''
+    if try_compile_and_link(compiler=cxx, source=compiler_test_src):
+        return
+    try_compile_and_link(compiler=cxx, source=compiler_test_src, verbose=True)
+    print('Wrong compiler version or incorrect flags. '
+          'Scylla needs GCC >= 10.1.1 with coroutines (-fcoroutines) or '
+          'clang >= 10.0.0 to compile.')
+    sys.exit(1)
+
+
 modes = {
     'debug': {
         'cxxflags': '-DDEBUG -DSANITIZE -DDEBUG_LSA_SANITIZER -DSCYLLA_ENABLE_ERROR_INJECTION',
@@ -1503,42 +1545,6 @@ pkgs.append('lua53' if have_pkg('lua53') else 'lua')
 pkgs.append('libsystemd')
 
 
-compiler_test_src = '''
-
-// clang pretends to be gcc (defined __GNUC__), so we
-// must check it first
-#ifdef __clang__
-
-#if __clang_major__ < 10
-    #error "MAJOR"
-#endif
-
-#elif defined(__GNUC__)
-
-#if __GNUC__ < 10
-    #error "MAJOR"
-#elif __GNUC__ == 10
-    #if __GNUC_MINOR__ < 1
-        #error "MINOR"
-    #elif __GNUC_MINOR__ == 1
-        #if __GNUC_PATCHLEVEL__ < 1
-            #error "PATCHLEVEL"
-        #endif
-    #endif
-#endif
-
-#else
-
-#error "Unrecognized compiler"
-
-#endif
-
-int main() { return 0; }
-'''
-if not try_compile_and_link(compiler=args.cxx, source=compiler_test_src):
-    try_compile_and_link(compiler=args.cxx, source=compiler_test_src, verbose=True)
-    print('Wrong compiler version or incorrect flags. Scylla needs GCC >= 10.1.1 with coroutines (-fcoroutines) or clang >= 10.0.0 to compile.')
-    sys.exit(1)
 
 if not try_compile(compiler=args.cxx, source='#include <boost/version.hpp>'):
     print('Boost not installed.  Please install {}.'.format(pkgname("boost-devel")))
@@ -2346,6 +2352,7 @@ def write_build_file(f,
         ''').format(**globals()))
 
 
+check_for_minimal_compiler_version(args.cxx)
 with open(buildfile, 'w') as f:
     arch = platform.machine()
     write_build_file(f,
