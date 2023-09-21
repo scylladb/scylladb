@@ -292,7 +292,7 @@ class table_populator {
     distributed<replica::database>& _db;
     sstring _ks;
     sstring _cf;
-    global_table_ptr _global_table;
+    global_table_ptr& _global_table;
     fs::path _base_path;
     std::unordered_map<sstables::sstable_state, lw_shared_ptr<sharded<sstables::sstable_directory>>> _sstable_directories;
     sstables::sstable_version_types _highest_version = sstables::oldest_writable_sstable_format;
@@ -300,11 +300,11 @@ class table_populator {
     sharded<locator::effective_replication_map_ptr> _erms;
 
 public:
-    table_populator(global_table_ptr ptr, distributed<replica::database>& db, sstring ks, sstring cf)
+    table_populator(global_table_ptr& ptr, distributed<replica::database>& db, sstring ks, sstring cf)
         : _db(db)
         , _ks(std::move(ks))
         , _cf(std::move(cf))
-        , _global_table(std::move(ptr))
+        , _global_table(ptr)
         , _base_path(_global_table->dir())
     {}
 
@@ -460,28 +460,21 @@ future<> table_populator::populate_subdir(sstables::sstable_state state, allow_o
 }
 
 future<> distributed_loader::populate_keyspace(distributed<replica::database>& db, keyspace& ks, sstring ks_name) {
-    // might have more than one dir for a keyspace iff data_file_directories is > 1 and
-    // somehow someone placed sstables in more than one of them for a given ks. (import?)
-    return parallel_for_each(db.local().get_config().data_file_directories(), [&db, &ks, ks_name] (const sstring& data_dir) {
-        return populate_keyspace(db, ks, data_dir, ks_name);
-    });
-}
-
-future<> distributed_loader::populate_keyspace(distributed<replica::database>& db, keyspace& ks, sstring datadir, sstring ks_name) {
-    auto ksdir = datadir + "/" + ks_name;
-
     dblog.info("Populating Keyspace {}", ks_name);
-    auto& tables_metadata = db.local().get_tables_metadata();
 
     co_await coroutine::parallel_for_each(ks.metadata()->cf_meta_data() | boost::adaptors::map_values, [&] (schema_ptr s) -> future<> {
         auto uuid = s->id();
-        lw_shared_ptr<replica::column_family> cf = tables_metadata.get_table(uuid).shared_from_this();
+        sstring cfname = s->cf_name();
+        auto gtable = co_await get_table_on_all_shards(db, ks_name, cfname);
 
-        sstring cfname = cf->schema()->cf_name();
+      // might have more than one dir for a keyspace iff data_file_directories is > 1 and
+      // somehow someone placed sstables in more than one of them for a given ks. (import?)
+      co_await coroutine::parallel_for_each(gtable->get_config().all_datadirs, [&] (const sstring& datadir) -> future<> {
+        auto cf = gtable->shared_from_this();
+
         dblog.info("Keyspace {}: Reading CF {} id={} version={} storage={}", ks_name, cfname, uuid, s->version(), cf->get_storage_options().type_string());
 
-        auto gtable = co_await get_table_on_all_shards(db, ks_name, cfname);
-        auto metadata = table_populator(std::move(gtable), db, ks_name, cfname);
+        auto metadata = table_populator(gtable, db, ks_name, cfname);
         std::exception_ptr ex;
 
         try {
@@ -508,6 +501,7 @@ future<> distributed_loader::populate_keyspace(distributed<replica::database>& d
         if (ex) {
             co_await coroutine::return_exception_ptr(std::move(ex));
         }
+      });
     });
 }
 
