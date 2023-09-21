@@ -315,6 +315,76 @@ def generate_compdb(compdb, buildfile, modes):
             return
 
 
+def check_for_minimal_compiler_version(cxx):
+    compiler_test_src = '''
+
+// clang pretends to be gcc (defined __GNUC__), so we
+// must check it first
+#ifdef __clang__
+
+#if __clang_major__ < 10
+    #error "MAJOR"
+#endif
+
+#elif defined(__GNUC__)
+
+#if __GNUC__ < 10
+    #error "MAJOR"
+#elif __GNUC__ == 10
+    #if __GNUC_MINOR__ < 1
+        #error "MINOR"
+    #elif __GNUC_MINOR__ == 1
+        #if __GNUC_PATCHLEVEL__ < 1
+            #error "PATCHLEVEL"
+        #endif
+    #endif
+#endif
+
+#else
+
+#error "Unrecognized compiler"
+
+#endif
+
+int main() { return 0; }
+'''
+    if try_compile_and_link(compiler=cxx, source=compiler_test_src):
+        return
+    try_compile_and_link(compiler=cxx, source=compiler_test_src, verbose=True)
+    print('Wrong compiler version or incorrect flags. '
+          'Scylla needs GCC >= 10.1.1 with coroutines (-fcoroutines) or '
+          'clang >= 10.0.0 to compile.')
+    sys.exit(1)
+
+
+def check_for_boost(cxx):
+    pkg_name = pkgname("boost-devel")
+    if not try_compile(compiler=cxx, source='#include <boost/version.hpp>'):
+        print(f'Boost not installed.  Please install {pkg_name}.')
+        sys.exit(1)
+
+    if not try_compile(compiler=cxx, source='''\
+            #include <boost/version.hpp>
+            #if BOOST_VERSION < 105500
+            #error Boost version too low
+            #endif
+            '''):
+        print(f'Installed boost version too old.  Please update {pkg_name}.')
+        sys.exit(1)
+
+
+def check_for_lz4(cxx, cflags):
+    if not try_compile(cxx, source=textwrap.dedent('''\
+        #include <lz4.h>
+
+        void m() {
+            LZ4_compress_default(static_cast<const char*>(0), static_cast<char*>(0), 0, 0);
+        }
+        '''), flags=cflags.split()):
+        print('Installed lz4-devel is too old. Please upgrade it to r129 / v1.73 and up')
+        sys.exit(1)
+
+
 modes = {
     'debug': {
         'cxxflags': '-DDEBUG -DSANITIZE -DDEBUG_LSA_SANITIZER -DSCYLLA_ENABLE_ERROR_INJECTION',
@@ -1502,67 +1572,6 @@ pkgs.append('lua53' if have_pkg('lua53') else 'lua')
 
 pkgs.append('libsystemd')
 
-
-compiler_test_src = '''
-
-// clang pretends to be gcc (defined __GNUC__), so we
-// must check it first
-#ifdef __clang__
-
-#if __clang_major__ < 10
-    #error "MAJOR"
-#endif
-
-#elif defined(__GNUC__)
-
-#if __GNUC__ < 10
-    #error "MAJOR"
-#elif __GNUC__ == 10
-    #if __GNUC_MINOR__ < 1
-        #error "MINOR"
-    #elif __GNUC_MINOR__ == 1
-        #if __GNUC_PATCHLEVEL__ < 1
-            #error "PATCHLEVEL"
-        #endif
-    #endif
-#endif
-
-#else
-
-#error "Unrecognized compiler"
-
-#endif
-
-int main() { return 0; }
-'''
-if not try_compile_and_link(compiler=args.cxx, source=compiler_test_src):
-    try_compile_and_link(compiler=args.cxx, source=compiler_test_src, verbose=True)
-    print('Wrong compiler version or incorrect flags. Scylla needs GCC >= 10.1.1 with coroutines (-fcoroutines) or clang >= 10.0.0 to compile.')
-    sys.exit(1)
-
-if not try_compile(compiler=args.cxx, source='#include <boost/version.hpp>'):
-    print('Boost not installed.  Please install {}.'.format(pkgname("boost-devel")))
-    sys.exit(1)
-
-if not try_compile(compiler=args.cxx, source='''\
-        #include <boost/version.hpp>
-        #if BOOST_VERSION < 105500
-        #error Boost version too low
-        #endif
-        '''):
-    print('Installed boost version too old.  Please update {}.'.format(pkgname("boost-devel")))
-    sys.exit(1)
-
-if not try_compile(args.cxx, source=textwrap.dedent('''\
-        #include <lz4.h>
-
-        void m() {
-            LZ4_compress_default(static_cast<const char*>(0), static_cast<char*>(0), 0, 0);
-        }
-        '''), flags=args.user_cflags.split()):
-    print('Installed lz4-devel is too old. Please upgrade it to r129 / v1.73 and up')
-    sys.exit(1)
-
 has_sanitize_address_use_after_scope = try_compile(compiler=args.cxx, flags=['-fsanitize-address-use-after-scope'], source='int f() {}')
 
 defines = ' '.join(['-D' + d for d in defines])
@@ -1601,8 +1610,6 @@ file = open(f'{outdir}/SCYLLA-RELEASE-FILE', 'r')
 scylla_release = file.read().strip()
 file = open(f'{outdir}/SCYLLA-PRODUCT-FILE', 'r')
 scylla_product = file.read().strip()
-
-arch = platform.machine()
 
 for m, mode_config in modes.items():
     mode_config['cxxflags'] += f" -DSCYLLA_BUILD_MODE={m}"
@@ -1803,7 +1810,12 @@ if args.ragel_exec:
 else:
     ragel_exec = "ragel"
 
-with open(buildfile, 'w') as f:
+
+def write_build_file(f,
+                     arch,
+                     scylla_product,
+                     scylla_version,
+                     scylla_release):
     f.write(textwrap.dedent('''\
         configure_args = {configure_args}
         builddir = {outdir}
@@ -2342,4 +2354,15 @@ with open(buildfile, 'w') as f:
         build help: print_help | always
         ''').format(**globals()))
 
+
+check_for_minimal_compiler_version(args.cxx)
+check_for_boost(args.cxx)
+check_for_lz4(args.cxx, args.user_cflags)
+with open(buildfile, 'w') as f:
+    arch = platform.machine()
+    write_build_file(f,
+                     arch,
+                     scylla_product,
+                     scylla_version,
+                     scylla_release)
 generate_compdb('compile_commands.json', buildfile, selected_modes)
