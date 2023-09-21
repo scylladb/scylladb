@@ -1793,10 +1793,7 @@ else:
 
 os.makedirs(outdir, exist_ok=True)
 
-if args.ragel_exec:
-    ragel_exec = args.ragel_exec
-else:
-    ragel_exec = "ragel"
+ragel_exec = args.ragel_exec
 
 with open(buildfile, 'w') as f:
     f.write(textwrap.dedent('''\
