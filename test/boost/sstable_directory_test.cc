@@ -19,6 +19,7 @@
 #include "test/lib/tmpdir.hh"
 #include "test/lib/key_utils.hh"
 #include "test/lib/test_utils.hh"
+#include "test/lib/cql_assertions.hh"
 #include "utils/lister.hh"
 #include "db/config.hh"
 
@@ -703,9 +704,19 @@ SEASTAR_THREAD_TEST_CASE(test_multiple_data_dirs) {
         auto id = e.local_db().find_uuid(ks_name, tbl_name);
         uuid_sstring = id.to_sstring();
         boost::erase_all(uuid_sstring, "-");
+        e.execute_cql(format("insert into {}.{} (p, c) values ('one', 1)", ks_name, tbl_name)).get();
+        e.execute_cql(format("insert into {}.{} (p, c) values ('two', 2)", ks_name, tbl_name)).get();
     }, cfg).get();
 
     sstring tbl_dirname = tbl_name + "-" + uuid_sstring;
     BOOST_REQUIRE(file_exists((data_dirs[0].path() / ks_name / tbl_dirname).native()).get());
     BOOST_REQUIRE(file_exists((data_dirs[1].path() / ks_name / tbl_dirname).native()).get());
+
+    do_with_cql_env_thread([&] (cql_test_env& e) {
+        auto res = e.execute_cql(format("select * from {}.{}", ks_name, tbl_name)).get();
+        assert_that(res).is_rows().with_size(2).with_rows({
+            { utf8_type->decompose("one"), int32_type->decompose(1) },
+            { utf8_type->decompose("two"), int32_type->decompose(2) }
+        });
+    }, cfg).get();
 }

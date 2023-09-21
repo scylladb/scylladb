@@ -333,14 +333,6 @@ public:
         co_await populate_subdir(sstables::sstable_state::staging, allow_offstrategy_compaction::no);
         co_await populate_subdir(sstables::sstable_state::quarantine, allow_offstrategy_compaction::no);
         co_await populate_subdir(sstables::sstable_state::normal, allow_offstrategy_compaction::yes);
-
-        // system tables are made writable through sys_ks::mark_writable
-        if (!is_system_keyspace(_ks)) {
-            co_await smp::invoke_on_all([this] {
-                auto s = _global_table->schema();
-                _db.local().find_column_family(s).mark_ready_for_writes(_db.local().commitlog_for(s));
-            });
-        }
     }
 
     future<> stop() {
@@ -502,6 +494,14 @@ future<> distributed_loader::populate_keyspace(distributed<replica::database>& d
                 co_await coroutine::return_exception_ptr(std::move(ex));
             }
         });
+
+        // system tables are made writable through sys_ks::mark_writable
+        if (!is_system_keyspace(ks_name)) {
+            co_await smp::invoke_on_all([&] {
+                auto s = gtable->schema();
+                db.local().find_column_family(s).mark_ready_for_writes(db.local().commitlog_for(s));
+            });
+        }
     });
 }
 
