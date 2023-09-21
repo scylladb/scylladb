@@ -608,8 +608,8 @@ protected:
         return _used_garbage_collected_sstables;
     }
 
-    bool enable_garbage_collected_sstable_writer() const noexcept {
-        return _contains_multi_fragment_runs && _max_sstable_size != std::numeric_limits<uint64_t>::max();
+    virtual bool enable_garbage_collected_sstable_writer() const noexcept {
+        return _contains_multi_fragment_runs && _max_sstable_size != std::numeric_limits<uint64_t>::max() && bool(_replacer);
     }
 public:
     compaction& operator=(const compaction&) = delete;
@@ -1038,56 +1038,6 @@ void compacted_fragments_writer::consume_end_of_stream() {
     }
 }
 
-class reshape_compaction : public compaction {
-public:
-    reshape_compaction(table_state& table_s, compaction_descriptor descriptor, compaction_data& cdata)
-        : compaction(table_s, std::move(descriptor), cdata) {
-    }
-
-    virtual sstables::sstable_set make_sstable_set_for_input() const override {
-        return sstables::make_partitioned_sstable_set(_schema, false);
-    }
-
-    flat_mutation_reader_v2 make_sstable_reader(schema_ptr s,
-                                                reader_permit permit,
-                                                const dht::partition_range& range,
-                                                const query::partition_slice& slice,
-                                                tracing::trace_state_ptr trace,
-                                                streamed_mutation::forwarding sm_fwd,
-                                                mutation_reader::forwarding mr_fwd) const override {
-        return _compacting->make_local_shard_sstable_reader(std::move(s),
-                std::move(permit),
-                range,
-                slice,
-                std::move(trace),
-                sm_fwd,
-                mr_fwd,
-                default_read_monitor_generator());
-    }
-
-    std::string_view report_start_desc() const override {
-        return "Reshaping";
-    }
-
-    std::string_view report_finish_desc() const override {
-        return "Reshaped";
-    }
-
-    virtual compaction_writer create_compaction_writer(const dht::decorated_key& dk) override {
-        auto sst = _sstable_creator(this_shard_id());
-        setup_new_sstable(sst);
-
-        sstable_writer_config cfg = make_sstable_writer_config(compaction_type::Reshape);
-        return compaction_writer{sst->get_writer(*_schema, partitions_per_sstable(), cfg, get_encoding_stats()), sst};
-    }
-
-    virtual void stop_sstable_writer(compaction_writer* writer) override {
-        if (writer) {
-            finish_new_sstable(writer);
-        }
-    }
-};
-
 class regular_compaction : public compaction {
     // keeps track of monitors for input sstable, which are responsible for adjusting backlog as compaction progresses.
     mutable compaction_read_monitor_generator _monitor_generator;
@@ -1202,12 +1152,13 @@ private:
     }
 
     void update_pending_ranges() {
-        if (!_sstable_set || _sstable_set->all()->empty() || _cdata.pending_replacements.empty()) { // set can be empty for testing scenario.
+        auto pending_replacements = std::exchange(_cdata.pending_replacements, {});
+        if (!_sstable_set || _sstable_set->all()->empty() || pending_replacements.empty()) { // set can be empty for testing scenario.
             return;
         }
         // Releases reference to sstables compacted by this compaction or another, both of which belongs
         // to the same column family
-        for (auto& pending_replacement : _cdata.pending_replacements) {
+        for (auto& pending_replacement : pending_replacements) {
             for (auto& sst : pending_replacement.removed) {
                 // Set may not contain sstable to be removed because this compaction may have started
                 // before the creation of that sstable.
@@ -1221,7 +1172,75 @@ private:
             }
         }
         _selector.emplace(_sstable_set->make_incremental_selector());
-        _cdata.pending_replacements.clear();
+    }
+};
+
+class reshape_compaction : public regular_compaction {
+private:
+    bool has_sstable_replacer() const noexcept {
+        return bool(_replacer);
+    }
+public:
+    reshape_compaction(table_state& table_s, compaction_descriptor descriptor, compaction_data& cdata)
+            : regular_compaction(table_s, std::move(descriptor), cdata) {
+    }
+
+    virtual sstables::sstable_set make_sstable_set_for_input() const override {
+        return sstables::make_partitioned_sstable_set(_schema, false);
+    }
+
+    // Unconditionally enable incremental compaction if the strategy specifies a max output size, e.g. LCS.
+    virtual bool enable_garbage_collected_sstable_writer() const noexcept override {
+        return _max_sstable_size != std::numeric_limits<uint64_t>::max() && bool(_replacer);
+    }
+
+    flat_mutation_reader_v2 make_sstable_reader(schema_ptr s,
+                                                reader_permit permit,
+                                                const dht::partition_range& range,
+                                                const query::partition_slice& slice,
+                                                tracing::trace_state_ptr trace,
+                                                streamed_mutation::forwarding sm_fwd,
+                                                mutation_reader::forwarding mr_fwd) const override {
+        return _compacting->make_local_shard_sstable_reader(std::move(s),
+                std::move(permit),
+                range,
+                slice,
+                std::move(trace),
+                sm_fwd,
+                mr_fwd,
+                default_read_monitor_generator());
+    }
+
+    std::string_view report_start_desc() const override {
+        return "Reshaping";
+    }
+
+    std::string_view report_finish_desc() const override {
+        return "Reshaped";
+    }
+
+    virtual compaction_writer create_compaction_writer(const dht::decorated_key& dk) override {
+        auto sst = _sstable_creator(this_shard_id());
+        setup_new_sstable(sst);
+
+        sstable_writer_config cfg = make_sstable_writer_config(compaction_type::Reshape);
+        return compaction_writer{sst->get_writer(*_schema, partitions_per_sstable(), cfg, get_encoding_stats()), sst};
+    }
+
+    virtual void stop_sstable_writer(compaction_writer* writer) override {
+        if (writer) {
+            if (has_sstable_replacer()) {
+                regular_compaction::stop_sstable_writer(writer);
+            } else {
+                finish_new_sstable(writer);
+            }
+        }
+    }
+
+    virtual void on_end_of_compaction() override {
+        if (has_sstable_replacer()) {
+            regular_compaction::on_end_of_compaction();
+        }
     }
 };
 
