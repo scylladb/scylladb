@@ -146,6 +146,7 @@ This format allows you to represent a small part of a partition or an arbitrary 
 The ``partition-start`` and ``partition-end`` fragments are always present, even if a single row is read from a partition.
 If the stream contains multiple partitions, these follow each other in the stream, the ``partition-start`` fragment of the next partition following the ``partition-end`` fragment of the previous one.
 The stream is strictly ordered:
+
 * Partitions are ordered according to their token (hashes);
 * Fragments in the partition are ordered according to their order presented in the listing above, ``clustering-row`` and ``range-tombstone-change`` fragments can be intermingled, see below.
 * Clustering fragments (``clustering-row`` and ``range-tombstone-change``) are ordered between themselves according to the clustering order defined by the schema.
