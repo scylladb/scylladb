@@ -467,41 +467,41 @@ future<> distributed_loader::populate_keyspace(distributed<replica::database>& d
         sstring cfname = s->cf_name();
         auto gtable = co_await get_table_on_all_shards(db, ks_name, cfname);
 
-      // might have more than one dir for a keyspace iff data_file_directories is > 1 and
-      // somehow someone placed sstables in more than one of them for a given ks. (import?)
-      co_await coroutine::parallel_for_each(gtable->get_config().all_datadirs, [&] (const sstring& datadir) -> future<> {
-        auto cf = gtable->shared_from_this();
+        // might have more than one dir for a keyspace iff data_file_directories is > 1 and
+        // somehow someone placed sstables in more than one of them for a given ks. (import?)
+        co_await coroutine::parallel_for_each(gtable->get_config().all_datadirs, [&] (const sstring& datadir) -> future<> {
+            auto cf = gtable->shared_from_this();
 
-        dblog.info("Keyspace {}: Reading CF {} id={} version={} storage={}", ks_name, cfname, uuid, s->version(), cf->get_storage_options().type_string());
+            dblog.info("Keyspace {}: Reading CF {} id={} version={} storage={}", ks_name, cfname, uuid, s->version(), cf->get_storage_options().type_string());
 
-        auto metadata = table_populator(gtable, db, ks_name, cfname);
-        std::exception_ptr ex;
+            auto metadata = table_populator(gtable, db, ks_name, cfname);
+            std::exception_ptr ex;
 
-        try {
-            co_await cf->init_storage();
-
-            co_await metadata.start();
-        } catch (...) {
-            std::exception_ptr eptr = std::current_exception();
-            std::string msg =
-                format("Exception while populating keyspace '{}' with column family '{}' from file '{}': {}",
-                        ks_name, cfname, cf->dir(), eptr);
-            dblog.error("Exception while populating keyspace '{}' with column family '{}' from file '{}': {}",
-                        ks_name, cfname, cf->dir(), eptr);
             try {
-                std::rethrow_exception(eptr);
-            } catch (sstables::compaction_stopped_exception& e) {
-                // swallow compaction stopped exception, to allow clean shutdown.
-            } catch (...) {
-                ex = std::make_exception_ptr(std::runtime_error(msg.c_str()));
-            }
-        }
+                co_await cf->init_storage();
 
-        co_await metadata.stop();
-        if (ex) {
-            co_await coroutine::return_exception_ptr(std::move(ex));
-        }
-      });
+                co_await metadata.start();
+            } catch (...) {
+                std::exception_ptr eptr = std::current_exception();
+                std::string msg =
+                    format("Exception while populating keyspace '{}' with column family '{}' from file '{}': {}",
+                            ks_name, cfname, cf->dir(), eptr);
+                dblog.error("Exception while populating keyspace '{}' with column family '{}' from file '{}': {}",
+                            ks_name, cfname, cf->dir(), eptr);
+                try {
+                    std::rethrow_exception(eptr);
+                } catch (sstables::compaction_stopped_exception& e) {
+                    // swallow compaction stopped exception, to allow clean shutdown.
+                } catch (...) {
+                    ex = std::make_exception_ptr(std::runtime_error(msg.c_str()));
+                }
+            }
+
+            co_await metadata.stop();
+            if (ex) {
+                co_await coroutine::return_exception_ptr(std::move(ex));
+            }
+        });
     });
 }
 
