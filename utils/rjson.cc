@@ -109,7 +109,9 @@ public:
         rapidjson::GenericReader<encoding, encoding, allocator> reader(&the_allocator);
         reader.Parse(stream, *this);
         if (reader.HasParseError()) {
-            throw rjson::error(format("Parsing JSON failed: {}", rapidjson::GetParseError_En(reader.GetParseErrorCode())));
+            throw rjson::error(
+                format("Parsing JSON failed: {} at {}",
+                    rapidjson::GetParseError_En(reader.GetParseErrorCode()), reader.GetErrorOffset()));
         }
         //NOTICE: The handler has parsed the string, but in case of rapidjson::GenericDocument
         // the data now resides in an internal stack_ variable, which is private instead of
@@ -308,7 +310,8 @@ rjson::value parse(std::string_view str, size_t max_nested_level) {
     guarded_yieldable_json_handler<document, false> d(max_nested_level);
     d.Parse(str.data(), str.size());
     if (d.HasParseError()) {
-        throw rjson::error(format("Parsing JSON failed: {}", GetParseError_En(d.GetParseError())));
+        throw rjson::error(format("Parsing JSON failed: {} at {}",
+            GetParseError_En(d.GetParseError()), d.GetErrorOffset()));
     }
     rjson::value& v = d;
     return std::move(v);
@@ -318,7 +321,8 @@ rjson::value parse(chunked_content&& content, size_t max_nested_level) {
     guarded_yieldable_json_handler<document, false> d(max_nested_level);
     d.Parse(std::move(content));
     if (d.HasParseError()) {
-        throw rjson::error(format("Parsing JSON failed: {}", GetParseError_En(d.GetParseError())));
+        throw rjson::error(format("Parsing JSON failed: {} at {}",
+            GetParseError_En(d.GetParseError()), d.GetErrorOffset()));
     }
     rjson::value& v = d;
     return std::move(v);
@@ -342,7 +346,8 @@ rjson::value parse_yieldable(std::string_view str, size_t max_nested_level) {
     guarded_yieldable_json_handler<document, true> d(max_nested_level);
     d.Parse(str.data(), str.size());
     if (d.HasParseError()) {
-        throw rjson::error(format("Parsing JSON failed: {}", GetParseError_En(d.GetParseError())));
+        throw rjson::error(format("Parsing JSON failed: {} at {}",
+            GetParseError_En(d.GetParseError()), d.GetErrorOffset()));
     }
     rjson::value& v = d;
     return std::move(v);
@@ -352,7 +357,8 @@ rjson::value parse_yieldable(chunked_content&& content, size_t max_nested_level)
     guarded_yieldable_json_handler<document, true> d(max_nested_level);
     d.Parse(std::move(content));
     if (d.HasParseError()) {
-        throw rjson::error(format("Parsing JSON failed: {}", GetParseError_En(d.GetParseError())));
+        throw rjson::error(format("Parsing JSON failed: {} at {}",
+            GetParseError_En(d.GetParseError()), d.GetErrorOffset()));
     }
     rjson::value& v = d;
     return std::move(v);
