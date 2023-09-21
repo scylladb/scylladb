@@ -1434,7 +1434,10 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             replica::distributed_loader::init_non_system_keyspaces(db, proxy, sys_ks).get();
 
             supervisor::notify("starting view update generator");
-            view_update_generator.start(std::ref(db), std::ref(proxy)).get();
+            view_update_generator.start(std::ref(db), std::ref(proxy), std::ref(stop_signal.as_sharded_abort_source())).get();
+            auto stop_view_update_generator = defer_verbose_shutdown("view update generator", [] {
+                view_update_generator.stop().get();
+            });
 
             supervisor::notify("starting commit log");
             auto cl = db.local().commitlog();
@@ -1884,10 +1887,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                     return lifecycle_notifier.local().unregister_subscriber(&controller);
                 }).get();
                 sl_controller.invoke_on_all(&qos::service_level_controller::drain).get();
-            });
-
-            auto stop_view_update_generator = defer_verbose_shutdown("view update generator", [] {
-                view_update_generator.stop().get();
             });
 
             auto do_drain = defer_verbose_shutdown("local storage", [&ss] {

@@ -64,8 +64,10 @@ private:
     metrics::metric_groups _metrics;
     class progress_tracker;
     std::unique_ptr<progress_tracker> _progress_tracker;
+    optimized_optional<abort_source::subscription> _early_abort_subscription;
+    void do_abort() noexcept;
 public:
-    view_update_generator(replica::database& db, sharded<service::storage_proxy>& proxy);
+    view_update_generator(replica::database& db, sharded<service::storage_proxy>& proxy, abort_source& as);
     ~view_update_generator();
 
     future<> start();
