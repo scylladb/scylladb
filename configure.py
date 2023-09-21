@@ -357,6 +357,22 @@ int main() { return 0; }
     sys.exit(1)
 
 
+def check_for_boost(cxx):
+    pkg_name = pkgname("boost-devel")
+    if not try_compile(compiler=cxx, source='#include <boost/version.hpp>'):
+        print(f'Boost not installed.  Please install {pkg_name}.')
+        sys.exit(1)
+
+    if not try_compile(compiler=cxx, source='''\
+            #include <boost/version.hpp>
+            #if BOOST_VERSION < 105500
+            #error Boost version too low
+            #endif
+            '''):
+        print(f'Installed boost version too old.  Please update {pkg_name}.')
+        sys.exit(1)
+
+
 modes = {
     'debug': {
         'cxxflags': '-DDEBUG -DSANITIZE -DDEBUG_LSA_SANITIZER -DSCYLLA_ENABLE_ERROR_INJECTION',
@@ -1545,20 +1561,6 @@ pkgs.append('lua53' if have_pkg('lua53') else 'lua')
 pkgs.append('libsystemd')
 
 
-
-if not try_compile(compiler=args.cxx, source='#include <boost/version.hpp>'):
-    print('Boost not installed.  Please install {}.'.format(pkgname("boost-devel")))
-    sys.exit(1)
-
-if not try_compile(compiler=args.cxx, source='''\
-        #include <boost/version.hpp>
-        #if BOOST_VERSION < 105500
-        #error Boost version too low
-        #endif
-        '''):
-    print('Installed boost version too old.  Please update {}.'.format(pkgname("boost-devel")))
-    sys.exit(1)
-
 if not try_compile(args.cxx, source=textwrap.dedent('''\
         #include <lz4.h>
 
@@ -2353,6 +2355,7 @@ def write_build_file(f,
 
 
 check_for_minimal_compiler_version(args.cxx)
+check_for_boost(args.cxx)
 with open(buildfile, 'w') as f:
     arch = platform.machine()
     write_build_file(f,
