@@ -487,7 +487,6 @@ public:
     compaction_task_executor(compaction_task_executor&&) = delete;
     compaction_task_executor(const compaction_task_executor&) = delete;
 
-    virtual void release_resources() noexcept {}
     virtual ~compaction_task_executor() = default;
 
     // called when a compaction replaces the exhausted sstables with the new set

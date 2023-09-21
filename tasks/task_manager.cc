@@ -250,6 +250,10 @@ bool task_manager::task::is_complete() const noexcept {
     return _impl->is_complete();
 }
 
+void task_manager::task::release_resources() noexcept {
+    return _impl->release_resources();
+}
+
 task_manager::module::module(task_manager& tm, std::string name) noexcept : _tm(tm), _name(std::move(name)) {
     _abort_subscription = _tm.abort_source().subscribe([this] () noexcept {
         abort_source().request_abort();

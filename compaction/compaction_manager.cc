@@ -741,7 +741,6 @@ compaction::compaction_state::~compaction_state() {
 void sstables_task_executor::release_resources() noexcept {
     _cm._stats.pending_tasks -= _sstables.size() - (_state == state::pending);
     _sstables = {};
-    compaction_task_executor::release_resources();
 }
 
 future<compaction_manager::compaction_stats_opt> compaction_task_executor::run_compaction() noexcept {
@@ -1648,7 +1647,6 @@ public:
         _pending_cleanup_jobs = {};
         _compacting.release_all();
         _owned_ranges_ptr = nullptr;
-        compaction_task_executor::release_resources();
     }
 
     virtual tasks::is_internal is_internal() const noexcept override {
