@@ -42,8 +42,9 @@ sstables_manager::~sstables_manager() {
     assert(_undergoing_close.empty());
 }
 
-storage_manager::storage_manager(const db::config& cfg)
-    : _config_updater(this_shard_id() == 0 ? std::make_unique<config_updater>(cfg, *this) : nullptr)
+storage_manager::storage_manager(const db::config& cfg, config stm_cfg)
+    : _s3_clients_memory(stm_cfg.s3_clients_memory)
+    , _config_updater(this_shard_id() == 0 ? std::make_unique<config_updater>(cfg, *this) : nullptr)
 {
     for (auto [ep, ecfg] : cfg.object_storage_config()) {
         _s3_endpoints.emplace(std::make_pair(std::move(ep), make_lw_shared<s3::endpoint_config>(std::move(ecfg))));
@@ -83,7 +84,7 @@ shared_ptr<s3::client> storage_manager::get_endpoint_client(sstring endpoint) {
     }
     auto& ep = found->second;
     if (ep.client == nullptr) {
-        ep.client = s3::client::make(endpoint, ep.cfg, [ &ct = container() ] (std::string ep) {
+        ep.client = s3::client::make(endpoint, ep.cfg, _s3_clients_memory, [ &ct = container() ] (std::string ep) {
             return ct.local().get_endpoint_client(ep);
         });
     }

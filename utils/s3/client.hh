@@ -68,8 +68,11 @@ class client : public enable_shared_from_this<client> {
     std::unordered_map<seastar::scheduling_group, group_client> _https;
     using global_factory = std::function<shared_ptr<client>(std::string)>;
     global_factory _gf;
+    semaphore& _memory;
 
     struct private_tag {};
+
+    future<semaphore_units<>> claim_memory(size_t mem);
 
     void authorize(http::request&);
     group_client& find_or_create_client();
@@ -79,8 +82,8 @@ class client : public enable_shared_from_this<client> {
 
     future<> get_object_header(sstring object_name, http::experimental::client::reply_handler handler);
 public:
-    explicit client(std::string host, endpoint_config_ptr cfg, global_factory gf, private_tag);
-    static shared_ptr<client> make(std::string endpoint, endpoint_config_ptr cfg, global_factory gf = {});
+    explicit client(std::string host, endpoint_config_ptr cfg, semaphore& mem, global_factory gf, private_tag);
+    static shared_ptr<client> make(std::string endpoint, endpoint_config_ptr cfg, semaphore& memory, global_factory gf = {});
 
     future<uint64_t> get_object_size(sstring object_name);
     future<stats> get_object_stats(sstring object_name);

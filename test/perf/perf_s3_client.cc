@@ -9,6 +9,7 @@
 #include <chrono>
 #include <seastar/core/app-template.hh>
 #include <seastar/core/sleep.hh>
+#include <seastar/core/memory.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 #include "test/lib/test_utils.hh"
 #include "test/lib/random_utils.hh"
@@ -22,6 +23,7 @@ class tester {
     unsigned _parallel;
     std::string _object_name;
     size_t _object_size;
+    semaphore _mem;
     shared_ptr<s3::client> _client;
     utils::estimated_histogram _reads_hist;
     unsigned _errors = 0;
@@ -51,7 +53,8 @@ public:
             , _parallel(prl)
             , _object_name(fmt::format("/{}/perfobject-{}-{}", tests::getenv_safe("S3_BUCKET_FOR_TEST"), ::getpid(), this_shard_id()))
             , _object_size(obj_size)
-            , _client(s3::client::make(tests::getenv_safe("S3_SERVER_ADDRESS_FOR_TEST"), make_config()))
+            , _mem(memory::stats().total_memory())
+            , _client(s3::client::make(tests::getenv_safe("S3_SERVER_ADDRESS_FOR_TEST"), make_config(), _mem))
     {}
 
     future<> start() {

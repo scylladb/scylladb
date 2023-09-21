@@ -57,10 +57,11 @@ future<> ignore_reply(const http::reply& rep, input_stream<char>&& in_) {
     co_await util::skip_entire_stream(in);
 }
 
-client::client(std::string host, endpoint_config_ptr cfg, global_factory gf, private_tag)
+client::client(std::string host, endpoint_config_ptr cfg, semaphore& mem, global_factory gf, private_tag)
         : _host(std::move(host))
         , _cfg(std::move(cfg))
         , _gf(std::move(gf))
+        , _memory(mem)
 {
 }
 
@@ -71,8 +72,8 @@ void client::update_config(endpoint_config_ptr cfg) {
     _cfg = std::move(cfg);
 }
 
-shared_ptr<client> client::make(std::string endpoint, endpoint_config_ptr cfg, global_factory gf) {
-    return seastar::make_shared<client>(std::move(endpoint), std::move(cfg), std::move(gf), private_tag{});
+shared_ptr<client> client::make(std::string endpoint, endpoint_config_ptr cfg, semaphore& mem, global_factory gf) {
+    return seastar::make_shared<client>(std::move(endpoint), std::move(cfg), mem, std::move(gf), private_tag{});
 }
 
 void client::authorize(http::request& req) {
@@ -117,6 +118,10 @@ void client::authorize(http::request& req) {
         utils::aws::unsigned_content,
         _cfg->aws->region, "s3", query_string);
     req._headers["Authorization"] = format("AWS4-HMAC-SHA256 Credential={}/{}/{}/s3/aws4_request,SignedHeaders={},Signature={}", _cfg->aws->key, time_point_st, _cfg->aws->region, signed_headers_list, sig);
+}
+
+future<semaphore_units<>> client::claim_memory(size_t size) {
+    return get_units(_memory, size);
 }
 
 client::group_client::group_client(std::unique_ptr<http::experimental::connection_factory> f, unsigned max_conn)
@@ -540,6 +545,8 @@ future<> client::upload_sink_base::upload_part(memory_data_sink_buffers bufs) {
         co_await start_upload();
     }
 
+    auto claim = co_await _client->claim_memory(bufs.size());
+
     unsigned part_number = _part_etags.size();
     _part_etags.emplace_back();
     s3l.trace("PUT part {} {} bytes in {} buffers (upload id {})", part_number, bufs.size(), bufs.buffers().size(), _upload_id);
@@ -548,7 +555,7 @@ future<> client::upload_sink_base::upload_part(memory_data_sink_buffers bufs) {
     req._headers["Content-Length"] = format("{}", size);
     req.query_parameters["partNumber"] = format("{}", part_number + 1);
     req.query_parameters["uploadId"] = _upload_id;
-    req.write_body("bin", size, [this, part_number, bufs = std::move(bufs)] (output_stream<char>&& out_) mutable -> future<> {
+    req.write_body("bin", size, [this, part_number, bufs = std::move(bufs), p = std::move(claim)] (output_stream<char>&& out_) mutable -> future<> {
         auto out = std::move(out_);
         std::exception_ptr ex;
         s3l.trace("upload {} part data (upload id {})", part_number, _upload_id);
@@ -564,6 +571,8 @@ future<> client::upload_sink_base::upload_part(memory_data_sink_buffers bufs) {
         if (ex) {
             co_await coroutine::return_exception_ptr(std::move(ex));
         }
+        // note: At this point the buffers are sent, but the responce is not yet
+        // received. However, claim is released and next part may start uploading
     });
 
     // Do upload in the background so that several parts could go in parallel.
