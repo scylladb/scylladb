@@ -751,7 +751,7 @@ arg_parser.add_argument('--enable-alloc-failure-injector', dest='alloc_failure_i
                         help='enable allocation failure injection')
 arg_parser.add_argument('--enable-seastar-debug-allocations', dest='seastar_debug_allocations', action='store_true', default=False,
                         help='enable seastar debug allocations')
-arg_parser.add_argument('--with-antlr3', dest='antlr3_exec', action='store', default=None,
+arg_parser.add_argument('--with-antlr3', dest='antlr3_exec', action='store', default="antlr3",
                         help='path to antlr3 executable')
 arg_parser.add_argument('--with-ragel', dest='ragel_exec', action='store', default='ragel',
         help='path to ragel executable')
@@ -1800,15 +1800,7 @@ else:
 
 os.makedirs(outdir, exist_ok=True)
 
-if args.antlr3_exec:
-    antlr3_exec = args.antlr3_exec
-else:
-    antlr3_exec = "antlr3"
-
-if args.ragel_exec:
-    ragel_exec = args.ragel_exec
-else:
-    ragel_exec = "ragel"
+ragel_exec = args.ragel_exec
 
 
 def write_build_file(f,
@@ -1958,7 +1950,7 @@ def write_build_file(f,
               command = CARGO_BUILD_DEP_INFO_BASEDIR='.' cargo build --locked --manifest-path=rust/Cargo.toml --target-dir=$builddir/{mode} --profile=rust-{mode} $
                         && touch $out
               description = RUST_LIB $out
-            ''').format(mode=mode, antlr3_exec=antlr3_exec, fmt_lib=fmt_lib, test_repeat=test_repeat, test_timeout=test_timeout, **modeval))
+            ''').format(mode=mode, antlr3_exec=args.antlr3_exec, fmt_lib=fmt_lib, test_repeat=test_repeat, test_timeout=test_timeout, **modeval))
         f.write(
             'build {mode}-build: phony {artifacts} {wasms}\n'.format(
                 mode=mode,
