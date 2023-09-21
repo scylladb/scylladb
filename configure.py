@@ -373,6 +373,18 @@ def check_for_boost(cxx):
         sys.exit(1)
 
 
+def check_for_lz4(cxx, cflags):
+    if not try_compile(cxx, source=textwrap.dedent('''\
+        #include <lz4.h>
+
+        void m() {
+            LZ4_compress_default(static_cast<const char*>(0), static_cast<char*>(0), 0, 0);
+        }
+        '''), flags=cflags.split()):
+        print('Installed lz4-devel is too old. Please upgrade it to r129 / v1.73 and up')
+        sys.exit(1)
+
+
 modes = {
     'debug': {
         'cxxflags': '-DDEBUG -DSANITIZE -DDEBUG_LSA_SANITIZER -DSCYLLA_ENABLE_ERROR_INJECTION',
@@ -1560,17 +1572,6 @@ pkgs.append('lua53' if have_pkg('lua53') else 'lua')
 
 pkgs.append('libsystemd')
 
-
-if not try_compile(args.cxx, source=textwrap.dedent('''\
-        #include <lz4.h>
-
-        void m() {
-            LZ4_compress_default(static_cast<const char*>(0), static_cast<char*>(0), 0, 0);
-        }
-        '''), flags=args.user_cflags.split()):
-    print('Installed lz4-devel is too old. Please upgrade it to r129 / v1.73 and up')
-    sys.exit(1)
-
 has_sanitize_address_use_after_scope = try_compile(compiler=args.cxx, flags=['-fsanitize-address-use-after-scope'], source='int f() {}')
 
 defines = ' '.join(['-D' + d for d in defines])
@@ -2356,6 +2357,7 @@ def write_build_file(f,
 
 check_for_minimal_compiler_version(args.cxx)
 check_for_boost(args.cxx)
+check_for_lz4(args.cxx, args.user_cflags)
 with open(buildfile, 'w') as f:
     arch = platform.machine()
     write_build_file(f,
