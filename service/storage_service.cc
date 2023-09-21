@@ -2201,6 +2201,9 @@ class topology_coordinator {
         _as.check();
         co_await _topo_sm.event.when();
     }
+
+    future<> fence_previous_coordinator();
+
 public:
     topology_coordinator(
             sharded<db::system_distributed_keyspace>& sys_dist_ks,
@@ -2245,6 +2248,36 @@ future<bool> topology_coordinator::maybe_start_tablet_migration(group0_guard gua
     co_return true;
 }
 
+future<> topology_coordinator::fence_previous_coordinator() {
+    // Write empty change to make sure that a guard taken by any previous coordinator cannot
+    // be used to do a successful write any more. Otherwise the following can theoretically happen
+    // while a coordinator tries to execute RPC R and move to state S.
+    // 1. Leader A executes topology RPC R
+    // 2. Leader A takes guard G
+    // 3. Leader A calls update_topology_state(S)
+    // 4. Leadership moves to B (while update_topology_state is still running)
+    // 5. B executed topology RPC R again
+    // 6. while the RPC is running leadership moves to A again
+    // 7. A completes update_topology_state(S)
+    // Topology state machine moves to state S while RPC R is still running.
+    // If RPC is idempotent that should not be a problem since second one executed by B will do nothing,
+    // but better to be safe and cut off previous write attempt
+    while (true) {
+        try {
+            auto guard = co_await start_operation();
+            topology_mutation_builder builder(guard.write_timestamp());
+            co_await update_topology_state(std::move(guard), {builder.build()}, fmt::format("Starting new topology coordinator {}", _group0.group0_server().id()));
+            break;
+        } catch (group0_concurrent_modification&) {
+            // If we failed to write because of concurrent modification lets retry
+            continue;
+        } catch (...) {
+            slogger.error("raft topology: failed to fence previous coordinator {}", std::current_exception());
+            throw;
+        }
+    }
+}
+
 future<> topology_coordinator::run() {
     slogger.info("raft topology: start topology coordinator fiber");
 
@@ -2252,6 +2285,7 @@ future<> topology_coordinator::run() {
         _topo_sm.event.broadcast();
     });
 
+    co_await fence_previous_coordinator();
     auto cdc_generation_publisher = cdc_generation_publisher_fiber();
 
     while (!_as.abort_requested()) {
