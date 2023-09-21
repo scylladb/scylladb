@@ -6074,6 +6074,10 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(shar
                     slogger.warn("raft topology: got stream_ranges request while my tokens state is {} and node state is {}", tstate, rs.state);
                     break;
                 }
+
+                utils::get_local_injector().inject("stream_ranges_fail",
+                                       [] { throw std::runtime_error("stream_range failed due to error injection"); });
+
                 switch(rs.state) {
                 case node_state::bootstrapping:
                 case node_state::replacing: {
