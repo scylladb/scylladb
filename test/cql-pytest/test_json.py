@@ -242,12 +242,10 @@ def test_fromjson_null_prepared(cql, table1):
 # Test that fromJson can parse a map<ascii,int>. Strangely Scylla had a bug
 # setting a map<ascii,int> with fromJson(), while map<text,int> worked well.
 # Reproduces #7949.
-@pytest.mark.xfail(reason="issue #7949")
 def test_fromjson_map_ascii_unprepared(cql, table1):
     p = unique_key_int()
     cql.execute("INSERT INTO " + table1 + " (p, mai) VALUES (" + str(p) + ", fromJson('{\"a\": 1, \"b\": 2}'))")
     assert list(cql.execute(f"SELECT p, mai from {table1} where p = {p}")) == [(p, {'a': 1, 'b': 2})]
-@pytest.mark.xfail(reason="issue #7949")
 def test_fromjson_map_ascii_prepared(cql, table1):
     p = unique_key_int()
     stmt = cql.prepare(f"INSERT INTO {table1} (p, mai) VALUES (?, fromJson(?))")

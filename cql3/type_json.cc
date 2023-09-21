@@ -151,14 +151,19 @@ static bytes from_json_object_aux(const map_type_impl& t, const rjson::value& va
     std::map<bytes, bytes, serialized_compare> raw_map(t.get_keys_type()->as_less_comparator());
     for (auto it = value.MemberBegin(); it != value.MemberEnd(); ++it) {
         bytes value = from_json_object(*t.get_values_type(), it->value);
-        if (!t.get_keys_type()->is_compatible_with(*utf8_type)) {
+        if (t.get_keys_type()->underlying_type() == ascii_type ||
+            t.get_keys_type()->underlying_type() == utf8_type) {
+            raw_map.emplace(from_json_object(*t.get_keys_type(), it->name), std::move(value));
+        } else {
             // Keys in maps can only be strings in JSON, but they can also be a string representation
             // of another JSON type, which needs to be reparsed. Example - map<frozen<list<int>>, int>
             // will be represented like this: { "[1, 3, 6]": 3, "[]": 0, "[1, 2]": 2 }
-            rjson::value map_key = rjson::parse(rjson::to_string_view(it->name));
-            raw_map.emplace(from_json_object(*t.get_keys_type(), map_key), std::move(value));
-        } else {
-            raw_map.emplace(from_json_object(*t.get_keys_type(), it->name), std::move(value));
+            try {
+                rjson::value map_key = rjson::parse(rjson::to_string_view(it->name));
+                raw_map.emplace(from_json_object(*t.get_keys_type(), map_key), std::move(value));
+            } catch (rjson::error& e) {
+                throw marshal_exception(format("Failed parsing map_key {}: {}", it->name, e.what()));
+            }
         }
     }
     return map_type_impl::serialize_to_bytes(raw_map);
