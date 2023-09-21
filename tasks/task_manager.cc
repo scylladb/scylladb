@@ -204,6 +204,10 @@ const task_manager::foreign_task_vector& task_manager::task::get_children() cons
     return _impl->_children;
 }
 
+void task_manager::task::release_resources() noexcept {
+    return _impl->release_resources();
+}
+
 task_manager::module::module(task_manager& tm, std::string name) noexcept : _tm(tm), _name(std::move(name)) {}
 
 uint64_t task_manager::module::new_sequence_number() noexcept {
