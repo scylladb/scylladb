@@ -919,6 +919,16 @@ private:
     }
 };
 
+void shard_repair_task_impl::release_resources() noexcept {
+    erm = {};
+    cfs = {};
+    data_centers = {};
+    hosts = {};
+    ignore_nodes = {};
+    neighbors = {};
+    dropped_tables = {};
+}
+
 static future<tasks::task_manager::task_ptr> start_repair_task(tasks::task_manager::task::task_impl_ptr task_impl_ptr, shared_ptr<repair_module> module, tasks::task_info pd = {}) {
     auto task = co_await module->make_task(std::move(task_impl_ptr), pd);
     task->start();
@@ -1220,7 +1230,11 @@ future<> user_requested_repair_task_impl::run() {
                 auto task_impl_ptr = std::make_unique<shard_repair_task_impl>(local_repair._repair_module, tasks::task_id::create_random_id(), keyspace,
                         local_repair, germs->get().shared_from_this(), std::move(ranges), std::move(table_ids),
                         id, std::move(data_centers), std::move(hosts), std::move(ignore_nodes), streaming::stream_reason::repair, hints_batchlog_flushed);
-                auto task = co_await start_repair_task(std::move(task_impl_ptr), local_repair._repair_module, parent_data);
+                auto task = co_await local_repair._repair_module->make_task(std::move(task_impl_ptr), parent_data);
+                auto release_task_resources = defer([task] () noexcept {
+                    task->release_resources();
+                });
+                task->start();
                 co_await task->done();
             });
             repair_results.push_back(std::move(f));
@@ -1329,7 +1343,11 @@ future<> data_sync_repair_task_impl::run() {
                         local_repair, germs->get().shared_from_this(), std::move(ranges), std::move(table_ids),
                         id, std::move(data_centers), std::move(hosts), std::move(ignore_nodes), reason, hints_batchlog_flushed);
                 task_impl_ptr->neighbors = std::move(neighbors);
-                auto task = co_await start_repair_task(std::move(task_impl_ptr), local_repair._repair_module, parent_data);
+                auto task = co_await local_repair._repair_module->make_task(std::move(task_impl_ptr), parent_data);
+                auto release_task_resources = defer([task] () noexcept {
+                    task->release_resources();
+                });
+                task->start();
                 co_await task->done();
             });
             repair_results.push_back(std::move(f));

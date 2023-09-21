@@ -158,6 +158,8 @@ public:
     future<> repair_range(const dht::token_range& range, table_id);
 
     size_t ranges_size();
+
+    virtual void release_resources() noexcept override;
 protected:
     future<> do_repair_ranges();
     future<> run() override;
