@@ -38,11 +38,12 @@ private:
     std::vector<shared_ptr<column_identifier>> _variable_names;
 
     // Keeps column_specification for every bind_index. column_specification describes the name and type of this variable.
-    // It's different from _target_columns because it describes the name of this variable, not the target column.
     std::vector<lw_shared_ptr<column_specification>> _variable_specs;
 
-    // The column to which bind variable with a given bind_index will be assigned to.
-    std::vector<lw_shared_ptr<column_specification>> _target_columns;
+    // For every expression like (<target> = <bind variable>), there's a pair of (bind_index, target column_specification) in _targets.
+    // Collecting all equalities of bind variables allows to determine which of the variables set the value of partition key columns.
+    // The driver needs this information in order to compute the partition token and send the request to the right node.
+    std::vector<std::pair<std::size_t, lw_shared_ptr<column_specification>>> _targets;
 
     // A list of pointers to prepared `function_call` cache ids, that
     // participate in partition key ranges computation within an LWT statement.

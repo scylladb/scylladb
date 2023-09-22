@@ -30,11 +30,11 @@ std::vector<uint16_t> prepare_context::get_partition_key_bind_indexes(const sche
     auto count = schema.partition_key_columns().size();
     std::vector<uint16_t> partition_key_positions(count, uint16_t(0));
     std::vector<bool> set(count, false);
-    for (size_t i = 0; i < _target_columns.size(); i++) {
-        auto& target_column = _target_columns[i];
-        const auto* cdef = target_column ? schema.get_column_definition(target_column->name->name()) : nullptr;
+
+    for (auto&& [bind_index, target_spec] : _targets) {
+        const auto* cdef = target_spec ? schema.get_column_definition(target_spec->name->name()) : nullptr;
         if (cdef && cdef->is_partition_key()) {
-            partition_key_positions[cdef->position()] = i;
+            partition_key_positions[cdef->position()] = bind_index;
             set[cdef->position()] = true;
         }
     }
@@ -56,7 +56,7 @@ void prepare_context::add_variable_specification(int32_t bind_index, lw_shared_p
                             *name, _variable_specs[bind_index]->type->as_cql3_type(), spec->name));
         }
     }
-    _target_columns[bind_index] = spec;
+    _targets.emplace_back(bind_index, spec);
     // Use the user name, if there is one
     if (name) {
         spec = make_lw_shared<column_specification>(spec->ks_name, spec->cf_name, name, spec->type);
@@ -67,11 +67,11 @@ void prepare_context::add_variable_specification(int32_t bind_index, lw_shared_p
 void prepare_context::set_bound_variables(const std::vector<shared_ptr<column_identifier>>& bind_variable_names) {
     _variable_names = bind_variable_names;
     _variable_specs.clear();
-    _target_columns.clear();
+    _targets.clear();
 
     const size_t bn_size = bind_variable_names.size();
     _variable_specs.resize(bn_size);
-    _target_columns.resize(bn_size);
+    _targets.resize(bn_size);
 }
 
 void prepare_context::clear_pk_function_calls_cache() {
