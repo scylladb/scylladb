@@ -1509,11 +1509,6 @@ future<replay_positions> system_keyspace::get_truncated_positions(table_id cf_id
     });
 }
 
-future<db_clock::time_point> system_keyspace::get_truncated_at(table_id cf_id) {
-    return get_truncation_record(cf_id).then([](truncation_record e) {
-        return make_ready_future<db_clock::time_point>(e.time_stamp);
-    });
-}
 
 static set_type_impl::native_type deserialize_set_column(const schema& s, const cql3::untyped_result_set_row& row, const char* name) {
     auto blob = row.get_blob(name);
