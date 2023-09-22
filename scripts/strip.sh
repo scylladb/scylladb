@@ -20,7 +20,7 @@ mini_debuginfo="$orig.minidebug"
 # silence "Error: Unable to find program interpreter name" warning from readelf, see https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=1012107
 remove_sections=`readelf -W -S "$debuginfo" 2> /dev/null | awk '{ if (index($2,".debug_") != 1 && ($3 == "PROGBITS" || $3 == "NOTE" || $3 == "NOBITS") && index($8,"A") == 0) printf "--remove-section "$2" " }'`
 nm -D "$stripped" --format=posix --defined-only | awk '{ print $1 }' | sort > "$dynsyms"
-nm "$debuginfo" --format=sysv --defined-only | awk -F \| '{ if ($4 ~ "FUNC") print $1 }' | sort > "$funcsyms"
+nm "$debuginfo" --format=posix --defined-only | awk '{ if ($2 == "T" || $2 == "t" || $2 == "D") print $1 }' | sort > "$funcsyms"
 comm -13 "$dynsyms" "$funcsyms" > "$keep_symbols"
 objcopy -S $remove_sections --keep-symbols="$keep_symbols" "$debuginfo" "$mini_debuginfo"
 xz -f --threads=0 "$mini_debuginfo"
