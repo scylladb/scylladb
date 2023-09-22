@@ -377,6 +377,10 @@ struct estimated_histogram {
     int64_t _count = 0;
     int64_t _sample_sum = 0;
 
+    estimated_histogram(std::vector<int64_t> bucket_offsets, std::vector<int64_t> buckets)
+        : bucket_offsets(std::move(bucket_offsets)), buckets(std::move(buckets))
+    { }
+
     estimated_histogram(int bucket_count = 90) {
 
         new_offsets(bucket_count);
