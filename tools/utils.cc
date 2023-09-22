@@ -41,7 +41,7 @@ const operation& get_selected_operation(int& ac, char**& av, const std::vector<o
     const auto all_operation_names = boost::algorithm::join(operations | boost::adaptors::transformed([] (const operation op) { return op.name(); } ), ", ");
 
     fmt::print(std::cerr, "error: unrecognized {} argument: expected one of ({}), got {}\n", alias, all_operation_names, op_name);
-    exit(1);
+    exit(100);
 }
 
 // Configure seastar with defaults more appropriate for a tool.
