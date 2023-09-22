@@ -2495,7 +2495,23 @@
                ]
             }
          ]
-      }      
+      },
+      {
+         "path":"/storage_service/raft_topology/reload",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"Reload Raft topology state from disk.",
+               "type":"void",
+               "nickname":"reload_raft_topology_state",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      }
    ],
    "models":{
       "mapper":{
