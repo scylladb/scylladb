@@ -164,10 +164,10 @@ async def test_fence_hints(request, manager: ManagerClient):
     rows = await cql.run_async(select_all_stmt, host=host2)
     assert len(list(rows)) == 0
 
-    logger.info("Restarting first node with new version")
+    logger.info("Updating version on first node")
     await set_version(manager, host0, new_version)
     await set_fence_version(manager, host0, new_version)
-    await manager.server_restart(s0.server_id, wait_others=2)
+    await manager.api.client.post("/storage_service/raft_topology/reload", s0.ip_addr)
 
     logger.info(f"Waiting for sent hints on {host0}")
     async def exactly_one_hint_sent():
