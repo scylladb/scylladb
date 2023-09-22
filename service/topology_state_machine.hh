@@ -97,6 +97,7 @@ struct topology_features {
 
 struct topology {
     enum class transition_state: uint16_t {
+        join_group0,
         commit_cdc_generation,
         tablet_draining,
         write_both_read_old,

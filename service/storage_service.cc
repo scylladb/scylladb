@@ -429,6 +429,8 @@ future<> storage_service::topology_state_load() {
                 return read_new_t::no;
             }
             switch (*state) {
+                case topology::transition_state::join_group0:
+                    [[fallthrough]];
                 case topology::transition_state::tablet_migration:
                     [[fallthrough]];
                 case topology::transition_state::commit_cdc_generation:
@@ -1782,6 +1784,44 @@ class topology_coordinator {
         }
 
         switch (*tstate) {
+            case topology::transition_state::join_group0: {
+                auto node = get_node_to_work_on(std::move(guard));
+                switch (node.rs->state) {
+                    case node_state::bootstrapping: {
+                        assert(node.rs->ring);
+                        auto tmptr = get_token_metadata_ptr();
+                        auto [gen_uuid, guard, mutation] = co_await prepare_and_broadcast_cdc_generation_data(
+                                tmptr, take_guard(std::move(node)), bootstrapping_info{node.rs->ring->tokens, *node.rs});
+
+                        topology_mutation_builder builder(guard.write_timestamp());
+
+                        // Write the new CDC generation data through raft.
+                        builder.set_transition_state(topology::transition_state::commit_cdc_generation)
+                               .set_new_cdc_generation_data_uuid(gen_uuid);
+                        auto reason = ::format(
+                            "bootstrap: insert CDC generation data (UUID: {})", gen_uuid);
+                        co_await update_topology_state(std::move(guard), {std::move(mutation), builder.build()}, reason);
+                    }
+                        break;
+                    case node_state::replacing: {
+                        assert(node.rs->ring);
+
+                        topology_mutation_builder builder(node.guard.write_timestamp());
+
+                        builder.set_transition_state(topology::transition_state::tablet_draining)
+                               .set_version(_topo_sm._topology.version + 1);
+                        co_await update_topology_state(take_guard(std::move(node)), {builder.build()},
+                                "replace: transition to tablet_draining");
+                    }
+                        break;
+                    default:
+                        on_internal_error(slogger,
+                                format("raft topology: topology is in join_group0 state, but the node"
+                                       " being worked on ({}) is in unexpected state '{}'; should be"
+                                       " either 'bootstrapping' or 'replacing'", node.id, node.rs->state));
+                }
+            }
+                break;
             case topology::transition_state::commit_cdc_generation: {
                 // make sure all nodes know about new topology and have the new CDC generation data
                 // (we require all nodes to be alive for topo change for now)
@@ -2047,19 +2087,14 @@ class topology_coordinator {
                         auto bootstrap_tokens = dht::boot_strapper::get_random_bootstrap_tokens(
                                 tmptr, num_tokens, dht::check_token_endpoint::yes);
 
-                        auto [gen_uuid, guard, mutation] = co_await prepare_and_broadcast_cdc_generation_data(
-                                tmptr, take_guard(std::move(node)), bootstrapping_info{bootstrap_tokens, *node.rs});
-
-                        // Write chosen tokens and CDC generation data through raft.
-                        builder.set_transition_state(topology::transition_state::commit_cdc_generation)
-                               .set_new_cdc_generation_data_uuid(gen_uuid)
+                        // Write chosen tokens through raft.
+                        builder.set_transition_state(topology::transition_state::join_group0)
                                .with_node(node.id)
                                .set("node_state", node_state::bootstrapping)
                                .del("topology_request")
                                .set("tokens", bootstrap_tokens);
-                        auto reason = ::format(
-                            "bootstrap: assign tokens and insert CDC generation data (UUID: {})", gen_uuid);
-                        co_await update_topology_state(std::move(guard), {std::move(mutation), builder.build()}, reason);
+                        auto reason = ::format("bootstrap: accept node and assign tokens");
+                        co_await update_topology_state(std::move(node.guard), {builder.build()}, reason);
                         break;
                         }
                     case topology_request::leave:
@@ -2091,13 +2126,13 @@ class topology_coordinator {
                         auto it = _topo_sm._topology.normal_nodes.find(replaced_id);
                         assert(it != _topo_sm._topology.normal_nodes.end());
                         assert(it->second.ring && it->second.state == node_state::normal);
-                        builder.set_transition_state(topology::transition_state::tablet_draining)
-                               .set_version(_topo_sm._topology.version + 1)
+                        builder.set_transition_state(topology::transition_state::join_group0)
                                .with_node(node.id)
                                .set("node_state", node_state::replacing)
                                .del("topology_request")
                                .set("tokens", it->second.ring->tokens);
-                        co_await update_topology_state(take_guard(std::move(node)), {builder.build()}, "start replace");
+                        co_await update_topology_state(take_guard(std::move(node)), {builder.build()},
+                                "replace: accept node and take ownership of the replaced node's tokens");
                         break;
                         }
                     case topology_request::rebuild: {

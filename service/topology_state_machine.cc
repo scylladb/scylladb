@@ -93,6 +93,7 @@ std::ostream& operator<<(std::ostream& os, const fencing_token& fencing_token) {
 }
 
 static std::unordered_map<topology::transition_state, sstring> transition_state_to_name_map = {
+    {topology::transition_state::join_group0, "join group0"},
     {topology::transition_state::commit_cdc_generation, "commit cdc generation"},
     {topology::transition_state::write_both_read_old, "write both read old"},
     {topology::transition_state::write_both_read_new, "write both read new"},
