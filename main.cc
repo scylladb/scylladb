@@ -1168,7 +1168,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // Mark all the system tables writable and assign the proper commitlog to them.
             sys_ks.invoke_on_all(&db::system_keyspace::mark_writable).get();
 
-            supervisor::notify("starting schema commit log");
             auto sch_cl = db.local().schema_commitlog();
             if (sch_cl != nullptr) {
               auto paths = sch_cl->get_segments_to_replay().get();
