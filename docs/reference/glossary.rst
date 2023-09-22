@@ -119,6 +119,14 @@ Glossary
     Replication Factor (RF)
       The total number of replica nodes across a given cluster. An :abbr:`RF (Replication Factor)` of 1 means that the data will only exist on a single node in the cluster and will not have any fault tolerance. This number is a setting defined for each keyspace. All replicas share equal priority; there are no primary or master replicas. An RF for any table, can be defined for each :abbr:`DC (Data Center)`. See :doc:`Fault Tolerance </architecture/architecture-fault-tolerance>`.
 
+    Repair Based Node Operations (RBNO)
+      :abbr:`RBNO (Repair Based Node Operations)` is an internal ScyllaDB mechanism that uses repair to 
+      synchronize data between the nodes in a cluster instead of using streaming. RBNO significantly 
+      improve database performance and data consistency.
+
+      RBNO is enabled by default for a subset node operations. 
+      See :doc:`Repair Based Node Operations </operating-scylla/procedures/cluster-management/repair-based-node-operation>` for details.
+
     Shard
       Each Scylla node is internally split into *shards*, an independent thread bound to a dedicated core.
       Each shard of data is allotted CPU, RAM, persistent storage, and networking resources which it uses as efficiently as possible.
