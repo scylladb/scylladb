@@ -204,6 +204,7 @@ class ScyllaServer:
     log_file: BufferedWriter
     host_id: HostID                             # Host id (UUID)
     newid = itertools.count(start=1).__next__   # Sequential unique id
+    start_failure_exception: Optional[Exception]
 
     def __init__(self, exe: str, vardir: str,
                  logger: Union[logging.Logger, logging.LoggerAdapter],
@@ -237,6 +238,7 @@ class ScyllaServer:
                 cluster_name = self.cluster_name) \
             | config_options
         self.property_file = property_file
+        self.start_failure_exception = None
 
     def change_ip(self, ip_addr: IPAddress) -> None:
         """Change IP address of the current server. Pre: the server is
@@ -680,8 +682,12 @@ class ScyllaCluster:
                          cmdline: Optional[List[str]] = None,
                          config: Optional[dict[str, Any]] = None,
                          property_file: Optional[dict[str, Any]] = None,
-                         start: bool = True) -> ServerInfo:
+                         start: bool = True,
+                         expect_start_failure: bool = False) -> ServerInfo:
         """Add a new server to the cluster"""
+
+        assert expect_start_failure is False or start is True, f"Expect start failure needs start"""
+
         self.is_dirty = True
 
         # If the cluster isn't empty and all servers are stopped,
@@ -744,11 +750,19 @@ class ScyllaCluster:
             if not replace_cfg or not replace_cfg.reuse_ip_addr:
                 self.leased_ips.remove(ip_addr)
                 await self.host_registry.release_host(Host(ip_addr))
-            raise
-        if start:
+            if expect_start_failure:
+                server.start_failure_exception = exc
+            else:
+                raise
+
+        if start and not expect_start_failure:
             self.running[server.server_id] = server
         else:
+            if expect_start_failure:
+                assert server.start_failure_exception is not None, \
+                        "Server was expected to fail to start but it started"
             self.stopped[server.server_id] = server
+
         self.logger.info("Cluster %s added %s", self, server)
         return ServerInfo(server.server_id, server.ip_addr)
 
@@ -1180,7 +1194,8 @@ class ScyllaClusterManager:
         data = await request.json()
         replace_cfg = ReplaceConfig(**data["replace_cfg"]) if "replace_cfg" in data else None
         s_info = await self.cluster.add_server(replace_cfg, data.get('cmdline'), data.get('config'),
-                                               data.get('property_file'), data.get('start', True))
+                                               data.get('property_file'), data.get('start', True),
+                                               data.get('expect_start_failure', False))
         return aiohttp.web.json_response({"server_id" : s_info.server_id,
                                           "ip_addr": s_info.ip_addr})
 

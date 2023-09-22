@@ -178,10 +178,14 @@ class ManagerClient():
                          cmdline: Optional[List[str]] = None,
                          config: Optional[dict[str, Any]] = None,
                          property_file: Optional[dict[str, Any]] = None,
-                         start: bool = True) -> ServerInfo:
+                         start: bool = True,
+                         expect_start_failure: bool = False) -> ServerInfo:
         """Add a new server"""
+
+        assert expect_start_failure is False or start is True, f"Expect start failure needs start"""
+
         try:
-            data: dict[str, Any] = {'start': start}
+            data: dict[str, Any] = {'start': start, 'expect_start_failure': expect_start_failure}
             if replace_cfg:
                 data['replace_cfg'] = replace_cfg._asdict()
             if cmdline:
