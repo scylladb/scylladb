@@ -588,6 +588,7 @@ private:
     sstables::generation_type calculate_generation_for_new_table();
 private:
     void rebuild_statistics();
+    void subtract_compaction_group_from_stats(const compaction_group& cg) noexcept;
 private:
     mutation_source_opt _virtual_reader;
     std::optional<noncopyable_function<future<>(const frozen_mutation&)>> _virtual_writer;

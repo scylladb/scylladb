@@ -579,7 +579,7 @@ public:
 
             auto shard = tmap.get_shard(tid, tm.get_my_id());
             if (shard && *shard == this_shard_id()) {
-                tlogger.debug("Tablet with id {} present for {}.{}", tid, schema()->ks_name(), schema()->cf_name());
+                tlogger.debug("Tablet with id {} and range {} present for {}.{}", tid, range, schema()->ks_name(), schema()->cf_name());
             }
             // FIXME: don't allocate compaction groups for tablets that aren't present in this shard.
             ret.emplace_back(std::make_unique<compaction_group>(_t, tid.value(), std::move(range)));
@@ -1188,6 +1188,12 @@ void table::rebuild_statistics() {
         _stats.total_disk_space_used += cg->total_disk_space_used();
         _stats.live_sstable_count += cg->live_sstable_count();
     }
+}
+
+void table::subtract_compaction_group_from_stats(const compaction_group& cg) noexcept {
+    _stats.live_disk_space_used -= cg.live_disk_space_used();
+    _stats.total_disk_space_used -= cg.total_disk_space_used();
+    _stats.live_sstable_count -= cg.live_sstable_count();
 }
 
 future<lw_shared_ptr<sstables::sstable_set>>
@@ -2990,9 +2996,69 @@ bool table::requires_cleanup(const sstables::sstable_set& set) const {
     }));
 }
 
-future<> table::cleanup_tablet(locator::tablet_id) {
-    co_await flush();
-    // FIXME: Remove sstables
+future<> compaction_group::cleanup() {
+    class compaction_group_cleaner : public row_cache::external_updater_impl {
+        table& _t;
+        compaction_group& _cg;
+        const lw_shared_ptr<sstables::sstable_set> _empty_main_set;
+        const lw_shared_ptr<sstables::sstable_set> _empty_maintenance_set;
+    private:
+        lw_shared_ptr<sstables::sstable_set> empty_sstable_set() const {
+            return make_lw_shared<sstables::sstable_set>(_t._compaction_strategy.make_sstable_set(_t._schema));
+        }
+    public:
+        explicit compaction_group_cleaner(compaction_group& cg)
+                : _t(cg._t)
+                , _cg(cg)
+                , _empty_main_set(empty_sstable_set())
+                , _empty_maintenance_set(empty_sstable_set())
+        {
+        }
+        virtual future<> prepare() override {
+            // Capture SSTables after flush, and with compaction disabled, to avoid missing any.
+            auto set = _cg.make_compound_sstable_set();
+            std::vector<sstables::shared_sstable> all_sstables;
+            all_sstables.reserve(set->size());
+            set->for_each_sstable([&all_sstables] (const sstables::shared_sstable& sst) mutable {
+                all_sstables.push_back(sst);
+            });
+            return _cg.delete_sstables_atomically(std::move(all_sstables));
+        }
+
+        virtual void execute() override {
+            _t.subtract_compaction_group_from_stats(_cg);
+            _cg.set_main_sstables(std::move(_empty_main_set));
+            _cg.set_maintenance_sstables(std::move(_empty_maintenance_set));
+        }
+    };
+
+    auto updater = row_cache::external_updater(std::make_unique<compaction_group_cleaner>(*this));
+
+    auto p_range = to_partition_range(token_range());
+    tlogger.debug("Invalidating range {} for compaction group {} of table {} during cleanup.",
+                  p_range, group_id(), _t.schema()->ks_name(), _t.schema()->cf_name());
+    co_await _t._cache.invalidate(std::move(updater), p_range);
+}
+
+future<> table::cleanup_tablet(locator::tablet_id tid) {
+    auto holder = async_gate().hold();
+
+    auto& cg_ptr = _compaction_groups[tid.value()];
+
+    if (!cg_ptr) {
+        throw std::runtime_error(format("Cannot cleanup tablet {} of table {}.{} because it is not allocated in this shard",
+                                        tid, _schema->ks_name(), _schema->cf_name()));
+    }
+
+    // Synchronizes with in-flight writes if any, and also takes care of flushing if needed.
+    // FIXME: to be able to stop group and provide guarantee above, we must first be able to reallocate a new group if tablet is migrated back.
+    //co_await _cg.stop();
+    co_await cg_ptr->flush();
+    co_await cg_ptr->cleanup();
+
+    tlogger.info("Cleaned up tablet {} of table {}.{} successfully.", tid, _schema->ks_name(), _schema->cf_name());
+
+    // FIXME: Deallocate compaction group in this shard
 }
 
 } // namespace replica
