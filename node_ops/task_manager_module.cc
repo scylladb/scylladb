@@ -22,6 +22,8 @@
 #include "supervisor.hh"
 #include "utils/error_injection.hh"
 
+using namespace std::chrono_literals;
+
 using versioned_value = gms::versioned_value;
 
 extern logging::logger cdc_log;
@@ -619,7 +621,10 @@ start_decommission_task_impl::start_decommission_task_impl(tasks::task_manager::
 {}
 
 future<> start_decommission_task_impl::run() {
-    return _ss.run_with_api_lock(sstring("decommission"), [] (service::storage_service& ss) {
+    co_await utils::get_local_injector().inject_with_handler("node_ops_start_decommission_task_impl_run",
+            [] (auto& handler) { return handler.wait_for_message(db::timeout_clock::now() + 10s); });
+
+    co_await _ss.run_with_api_lock(sstring("decommission"), [] (service::storage_service& ss) {
         return seastar::async([&ss] {
             std::exception_ptr leave_group0_ex;
             if (ss._raft_topology_change_enabled) {
