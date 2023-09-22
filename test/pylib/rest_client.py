@@ -46,7 +46,7 @@ class RESTClient(metaclass=ABCMeta):
     async def _fetch(self, method: str, resource: str, response_type: Optional[str] = None,
                      host: Optional[str] = None, port: Optional[int] = None,
                      params: Optional[Mapping[str, str]] = None,
-                     json: Optional[Mapping] = None, timeout: Optional[float] = None) -> Any:
+                     json: Optional[Mapping] = None, timeout: Optional[float] = None, allow_failed: bool = False) -> Any:
         # Can raise exception. See https://docs.aiohttp.org/en/latest/web_exceptions.html
         assert method in ["GET", "POST", "PUT", "DELETE"], f"Invalid HTTP request method {method}"
         assert response_type is None or response_type in ["text", "json"], \
@@ -64,6 +64,8 @@ class RESTClient(metaclass=ABCMeta):
         async with request(method, uri,
                            connector = self.connector if hasattr(self, "connector") else None,
                            params = params, json = json, timeout = client_timeout) as resp:
+            if allow_failed:
+                return resp
             if resp.status != 200:
                 text = await resp.text()
                 raise HTTPError(uri, resp.status, params, json, text)
@@ -73,8 +75,8 @@ class RESTClient(metaclass=ABCMeta):
         return None
 
     async def get(self, resource_uri: str, host: Optional[str] = None, port: Optional[int] = None,
-                  params: Optional[Mapping[str, str]] = None) -> Any:
-        return await self._fetch("GET", resource_uri, host = host, port = port, params = params)
+                  params: Optional[Mapping[str, str]] = None, allow_failed: bool = False) -> Any:
+        return await self._fetch("GET", resource_uri, host = host, port = port, params = params, allow_failed=allow_failed)
 
     async def get_text(self, resource_uri: str, host: Optional[str] = None,
                        port: Optional[int] = None, params: Optional[Mapping[str, str]] = None,
