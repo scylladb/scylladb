@@ -1176,7 +1176,12 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                   auto rp = db::commitlog_replayer::create_replayer(db, sys_ks).get0();
                   rp.recover(paths, db::schema_tables::COMMITLOG_FILENAME_PREFIX).get();
                   supervisor::notify("replaying schema commit log - flushing memtables");
-                  db.invoke_on_all(&replica::database::flush_all_memtables).get();
+                  // The schema commitlog lives only on the null shard.
+                  // This is enforced when the table is marked to use
+                  // it - schema_static_props::enable_schema_commitlog function
+                  // also sets the use_null_sharder property.
+                  // This means only the local memtables need to be flushed.
+                  db.local().flush_all_memtables().get();
                   supervisor::notify("replaying schema commit log - removing old commitlog segments");
                   //FIXME: discarded future
                   (void)sch_cl->delete_segments(std::move(paths));
