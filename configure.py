@@ -385,6 +385,18 @@ def check_for_lz4(cxx, cflags):
         sys.exit(1)
 
 
+def thrift_uses_boost_share_ptr():
+    # thrift version detection, see #4538
+    proc_res = subprocess.run(["thrift", "-version"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    proc_res_output = proc_res.stdout.decode("utf-8")
+    if proc_res.returncode != 0 and not re.search(r'^Thrift version', proc_res_output):
+        raise Exception("Thrift compiler must be missing: {}".format(proc_res_output))
+
+    thrift_version = proc_res_output.split(" ")[-1]
+    thrift_boost_versions = ["0.{}.".format(n) for n in range(1, 11)]
+    return any(filter(thrift_version.startswith, thrift_boost_versions))
+
+
 modes = {
     'debug': {
         'cxxflags': '-DDEBUG -DSANITIZE -DDEBUG_LSA_SANITIZER -DSCYLLA_ENABLE_ERROR_INJECTION',
@@ -1775,15 +1787,7 @@ libs = ' '.join([maybe_static(args.staticyamlcpp, '-lyaml-cpp'), '-latomic', '-l
 if not args.staticboost:
     args.user_cflags += ' -DBOOST_TEST_DYN_LINK'
 
-# thrift version detection, see #4538
-proc_res = subprocess.run(["thrift", "-version"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-proc_res_output = proc_res.stdout.decode("utf-8")
-if proc_res.returncode != 0 and not re.search(r'^Thrift version', proc_res_output):
-    raise Exception("Thrift compiler must be missing: {}".format(proc_res_output))
-
-thrift_version = proc_res_output.split(" ")[-1]
-thrift_boost_versions = ["0.{}.".format(n) for n in range(1, 11)]
-if any(filter(thrift_version.startswith, thrift_boost_versions)):
+if thrift_uses_boost_share_ptr():
     args.user_cflags += ' -DTHRIFT_USES_BOOST'
 
 for pkg in pkgs:
