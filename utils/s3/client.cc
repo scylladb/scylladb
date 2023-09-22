@@ -618,11 +618,14 @@ future<> client::upload_sink_base::finalize_upload() {
 
     s3l.trace("POST upload completion {} parts (upload id {})", _part_etags.size(), _upload_id);
     auto req = http::request::make("POST", _client->_host, _object_name);
-    req.query_parameters["uploadId"] = std::exchange(_upload_id, ""); // now upload_started() returns false
+    req.query_parameters["uploadId"] = _upload_id;
     req.write_body("xml", parts_xml_len, [this] (output_stream<char>&& out) -> future<> {
         return dump_multipart_upload_parts(std::move(out), _part_etags);
     });
+    // If this request fails, finalize_upload() throws, the upload should then
+    // be aborted in .close() method
     co_await _client->make_request(std::move(req));
+    _upload_id = ""; // now upload_started() returns false
 }
 
 future<> client::upload_sink_base::close() {
@@ -631,9 +634,11 @@ future<> client::upload_sink_base::close() {
         // If we got here, we need to pick up any background activity as it may
         // still trying to handle successful request and 'this' should remain alive
         //
-        // The gate is not closed by finalize_upload() (i.e. -- no double-close),
-        // because otherwise the upload_started() would return false
-        co_await _bg_flushes.close();
+        // The gate might have been closed by finalize_upload() so need to avoid
+        // double close
+        if (!_bg_flushes.is_closed()) {
+            co_await _bg_flushes.close();
+        }
         co_await abort_upload();
     } else {
         s3l.trace("closing multipart upload");
