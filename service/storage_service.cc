@@ -5683,7 +5683,7 @@ void storage_service::on_update_tablet_metadata() {
     }
     // FIXME: Avoid reading whole tablet metadata on partial changes.
     load_tablet_metadata().get();
-    _topology_state_machine.event.signal(); // wake up load balancer.
+    _topology_state_machine.event.broadcast(); // wake up load balancer.
 }
 
 future<> storage_service::load_tablet_metadata() {
