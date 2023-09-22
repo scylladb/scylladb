@@ -15,8 +15,11 @@
 #include "service/storage_service.hh"
 #include "service/topology_state_machine.hh"
 #include "tasks/task_handler.hh"
+#include "utils/error_injection.hh"
 
 #include <boost/range/adaptor/transformed.hpp>
+
+using namespace std::chrono_literals;
 
 namespace node_ops {
 
@@ -268,7 +271,10 @@ decommission_streaming_task_impl::decommission_streaming_task_impl(tasks::task_m
 {}
 
 future<> decommission_streaming_task_impl::stream() {
-    return _ss.unbootstrap();
+    co_await utils::get_local_injector().inject("node_ops_decommission_streaming_task_impl_stream",
+            [] (auto& handler) { return handler.wait_for_message(db::timeout_clock::now() + 60s); });
+
+    co_await _ss.unbootstrap();
 }
 
 remove_streaming_task_impl::remove_streaming_task_impl(tasks::task_manager::module_ptr module,
