@@ -27,19 +27,6 @@ tempfile.tempdir = f"{outdir}/tmp"
 
 configure_args = str.join(' ', [shlex.quote(x) for x in sys.argv[1:] if not x.startswith('--out=')])
 
-if os.path.exists('/etc/os-release'):
-    for line in open('/etc/os-release'):
-        key, _, value = line.partition('=')
-        value = value.strip().strip('"')
-        if key == 'ID':
-            os_ids = [value]
-        if key == 'ID_LIKE':
-            os_ids += value.split(' ')
-    if not os_ids:
-        os_ids = ['linux']  # default ID per os-release(5)
-else:
-    os_ids = ['unknown']
-
 distro_extra_cflags = ''
 distro_extra_ldflags = ''
 distro_extra_cmake_args = []
@@ -47,8 +34,7 @@ employ_ld_trickery = True
 
 # distro-specific setup
 def distro_setup_nix():
-    global os_ids, employ_ld_trickery
-    os_ids = ['linux']
+    global employ_ld_trickery
     employ_ld_trickery = False
 
 if os.environ.get('NIX_CC'):
@@ -70,10 +56,30 @@ node_exporter_filename = subprocess.run('./install-dependencies.sh --print-node-
 node_exporter_dirname = os.path.basename(node_exporter_filename).rstrip('.tar.gz')
 
 
+def get_os_ids():
+    if os.environ.get('NIX_CC'):
+        return ['linux']
+
+    if not os.path.exists('/etc/os-release'):
+        return ['unknown']
+
+    os_ids = []
+    for line in open('/etc/os-release'):
+        key, _, value = line.partition('=')
+        value = value.strip().strip('"')
+        if key == 'ID':
+            os_ids = [value]
+        if key == 'ID_LIKE':
+            os_ids += value.split(' ')
+    if os_ids:
+        return os_ids
+    return ['linux']  # default ID per os-release(5)
+
+
 def pkgname(name):
     if name in i18n_xlat:
         dict = i18n_xlat[name]
-        for id in os_ids:
+        for id in get_os_ids():
             if id in dict:
                 return dict[id]
     return name
