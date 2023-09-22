@@ -40,6 +40,7 @@
 #include "log.hh"
 #include "tools/format_printers.hh"
 #include "tools/utils.hh"
+#include "utils/estimated_histogram.hh"
 #include "utils/http.hh"
 #include "utils/pretty_printers.hh"
 #include "utils/rjson.hh"
@@ -296,6 +297,51 @@ keyspace_and_tables parse_keyspace_and_tables(scylla_rest_client& client, const 
     }
 
     return ret;
+}
+
+struct keyspace_and_table {
+    sstring keyspace;
+    sstring table;
+};
+
+// Parses keyspace and table for commands which take a single keyspace and table.
+// The accepted formats are:
+// command keyspace table
+// command keyspace.table
+// command keyspace/table
+//
+// keyspace is allowed to contain a ".", if the keyspace and table is separated by a /
+keyspace_and_table parse_keyspace_and_table(scylla_rest_client& client, const bpo::variables_map& vm, std::string_view option_name) {
+    auto args = vm[std::string(option_name)].as<std::vector<sstring>>();
+
+    const auto error_msg = "single argument must be keyspace and table separated by \".\" or \"/\"";
+
+    auto split_by = [error_msg] (std::string_view arg, std::string_view by) {
+        const auto pos = arg.find(by);
+        if (pos == sstring::npos || pos == 0 || pos == arg.size() - 1) {
+            throw std::invalid_argument(error_msg);
+        }
+        return std::pair(sstring(arg.substr(0, pos)), sstring(arg.substr(pos + 1)));
+    };
+
+    sstring keyspace, table;
+    switch (args.size()) {
+        case 1:
+            if (args[0].find("/") == sstring::npos) {
+                std::tie(keyspace, table) = split_by(args[0], ".");
+            } else {
+                std::tie(keyspace, table) = split_by(args[0], "/");
+            }
+            break;
+        case 2:
+            keyspace = args[0];
+            table = args[1];
+            break;
+        default:
+            throw std::invalid_argument(error_msg);
+    }
+
+    return {keyspace, table};
 }
 
 using operation_func = void(*)(scylla_rest_client&, const bpo::variables_map&);
@@ -1719,6 +1765,58 @@ void stop_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     client.post("/compaction_manager/stop_compaction", {{"type", compaction_type}});
 }
 
+void tablehistograms_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    const auto [keyspace, table] = parse_keyspace_and_table(client, vm, "table");
+
+    auto get_estimated_histogram = [&client, &keyspace, &table] (std::string_view histogram) {
+        const auto res = client.get(format("/column_family/metrics/{}/{}:{}", histogram, keyspace, table));
+        const auto res_object = res.GetObject();
+        const auto& buckets_array = res["buckets"].GetArray();
+        const auto& bucket_offsets_array = res["bucket_offsets"].GetArray();
+
+        if (bucket_offsets_array.Size() + 1 != buckets_array.Size()) {
+            throw std::runtime_error(format("invalid estimated histogram {}, buckets must have one more element than bucket_offsets", histogram));
+        }
+
+        std::vector<int64_t> bucket_offsets, buckets;
+        for (size_t i = 0; i < bucket_offsets_array.Size(); ++i) {
+            buckets.emplace_back(buckets_array[i].GetInt64());
+            bucket_offsets.emplace_back(bucket_offsets_array[i].GetInt64());
+        }
+        buckets.emplace_back(buckets_array[buckets_array.Size() - 1].GetInt64());
+
+        return utils::estimated_histogram(std::move(bucket_offsets), std::move(buckets));
+    };
+
+    const auto row_size_hg = get_estimated_histogram("estimated_row_size_histogram");
+    const auto column_count_hg = get_estimated_histogram("estimated_column_count_histogram");
+    const auto read_latency_hg = buffer_samples::retrieve_from_api(client,
+            format("/column_family/metrics/read_latency/moving_average_histogram/{}:{}", keyspace, table));
+    const auto write_latency_hg = buffer_samples::retrieve_from_api(client,
+            format("/column_family/metrics/write_latency/moving_average_histogram/{}:{}", keyspace, table));
+    const auto sstables_per_read_hg = get_estimated_histogram("sstables_per_read_histogram");
+
+    fmt::print(std::cout, "{}/{} histograms\n", keyspace, table);
+    fmt::print(std::cout, "{:>10}{:>10}{:>18}{:>18}{:>18}{:>18}\n", "Percentile", "SSTables", "Write Latency", "Read Latency", "Partition Size", "Cell Count");
+    fmt::print(std::cout, "{:>10}{:>10}{:>18}{:>18}{:>18}{:>18}\n", "", " ", "(micros)", "(micros)", "(bytes)", "");
+    for (const auto percentile : {0.5, 0.75, 0.95, 0.98, 0.99}) {
+        fmt::print(
+                std::cout,
+                "{}%       {:>10.2f}{:>18.2f}{:>18.2f}{:>18}{:>18}\n",
+                int(percentile * 100),
+                double(sstables_per_read_hg.percentile(percentile)),
+                write_latency_hg.value(percentile),
+                read_latency_hg.value(percentile),
+                row_size_hg.percentile(percentile),
+                column_count_hg.percentile(percentile));
+    }
+    fmt::print(std::cout, "{:<10}{:>10.2f}{:>18.2f}{:>18.2f}{:>18}{:>18}\n", "Min", double(sstables_per_read_hg.min()), write_latency_hg.min(),
+            read_latency_hg.min(), row_size_hg.min(), column_count_hg.min());
+    fmt::print(std::cout, "{:<10}{:>10.2f}{:>18.2f}{:>18.2f}{:>18}{:>18}\n", "Max", double(sstables_per_read_hg.max()), write_latency_hg.max(),
+            read_latency_hg.max(), row_size_hg.max(), column_count_hg.max());
+    fmt::print(std::cout, "\n");
+}
+
 class table_metrics {
     scylla_rest_client& _client;
     std::string _ks_name;
@@ -3096,6 +3194,27 @@ Fore more information, see: https://opensource.docs.scylladb.com/stable/operatin
                 },
             },
             stop_operation
+        },
+        {
+            {
+                "tablehistograms",
+                {"cfhistograms"},
+                "Provides statistics about a table",
+R"(
+Provides statistics about a table, including number of SSTables, read/write
+latency, partition size and column count. cfhistograms covers all operations
+since the last time you ran the nodetool cfhistograms command.
+
+Also invokable as "cfhistograms".
+
+Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/cfhistograms.html
+)",
+                { },
+                {
+                    typed_option<std::vector<sstring>>("table", "<keyspace> <table>, <keyspace>.<table> or <keyspace>-<table>", 2),
+                }
+            },
+            tablehistograms_operation
         },
         {
             {
