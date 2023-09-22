@@ -54,6 +54,10 @@ def sent_metric(metrics: ScyllaMetrics):
     return metrics.get('scylla_hints_manager_sent')
 
 
+def all_hints_metrics(metrics: ScyllaMetrics) -> list[str]:
+    return metrics.lines_by_prefix('scylla_hints_manager_')
+
+
 @pytest.mark.asyncio
 async def test_fence_writes(request, manager: ManagerClient):
     logger.info("Bootstrapping first two nodes")
@@ -74,10 +78,11 @@ async def test_fence_writes(request, manager: ManagerClient):
         Column("pk", IntType),
         Column('counter_c', CounterType)
     ])
-    await manager.cql.run_async(f"USE {random_tables.keyspace}")
+    cql = manager.get_cql()
+    await cql.run_async(f"USE {random_tables.keyspace}")
 
     logger.info(f'Waiting for cql and hosts')
-    host2 = (await wait_for_cql_and_get_hosts(manager.cql, [servers[2]], time.time() + 60))[0]
+    host2 = (await wait_for_cql_and_get_hosts(cql, [servers[2]], time.time() + 60))[0]
 
     version = await get_version(manager, host2)
     logger.info(f"version on host2 {version}")
@@ -88,15 +93,15 @@ async def test_fence_writes(request, manager: ManagerClient):
     await manager.server_restart(servers[2].server_id, wait_others=2)
     logger.info(f"host2 restarted")
 
-    host2 = (await wait_for_cql_and_get_hosts(manager.cql, [servers[2]], time.time() + 60))[0]
+    host2 = (await wait_for_cql_and_get_hosts(cql, [servers[2]], time.time() + 60))[0]
 
     logger.info(f"trying to write through host2 to regular column [{host2}]")
     with pytest.raises(WriteFailure, match="stale topology exception"):
-        await manager.cql.run_async("insert into t1(pk, int_c) values (1, 1)", host=host2)
+        await cql.run_async("insert into t1(pk, int_c) values (1, 1)", host=host2)
 
     logger.info(f"trying to write through host2 to counter column [{host2}]")
     with pytest.raises(WriteFailure, match="stale topology exception"):
-        await manager.cql.run_async("update t2 set counter_c=counter_c+1 where pk=1", host=host2)
+        await cql.run_async("update t2 set counter_c=counter_c+1 where pk=1", host=host2)
 
     random_tables.drop_all()
 
@@ -117,10 +122,11 @@ async def test_fence_hints(request, manager: ManagerClient):
         Column("pk", IntType),
         Column('int_c', IntType)
     ])
-    await manager.cql.run_async(f"USE {random_tables.keyspace}")
+    cql = manager.get_cql()
+    await cql.run_async(f"USE {random_tables.keyspace}")
 
     logger.info(f'Waiting for cql and hosts')
-    hosts = await wait_for_cql_and_get_hosts(manager.cql, [s0, s2], time.time() + 60)
+    hosts = await wait_for_cql_and_get_hosts(cql, [s0, s2], time.time() + 60)
 
     host2 = host_by_server(hosts, s2)
     new_version = (await get_version(manager, host2)) + 1
@@ -129,7 +135,7 @@ async def test_fence_hints(request, manager: ManagerClient):
     await set_fence_version(manager, host2, new_version)
 
     select_all_stmt = SimpleStatement("select * from t1", consistency_level=ConsistencyLevel.ONE)
-    rows = await manager.cql.run_async(select_all_stmt, host=host2)
+    rows = await cql.run_async(select_all_stmt, host=host2)
     assert len(list(rows)) == 0
 
     logger.info(f"Stopping node {host2}")
@@ -137,7 +143,7 @@ async def test_fence_hints(request, manager: ManagerClient):
 
     host0 = host_by_server(hosts, s0)
     logger.info(f"Writing through {host0} to regular column")
-    await manager.cql.run_async("insert into t1(pk, int_c) values (1, 1)", host=host0)
+    await cql.run_async("insert into t1(pk, int_c) values (1, 1)", host=host0)
 
     logger.info(f"Starting last node {host2}")
     await manager.server_start(s2.server_id)
@@ -145,15 +151,17 @@ async def test_fence_hints(request, manager: ManagerClient):
     logger.info(f"Waiting for failed hints on {host0}")
     async def at_least_one_hint_failed():
         metrics_data = await manager.metrics.query(s0.ip_addr)
-        if send_errors_metric(metrics_data) >= 1 and sent_metric(metrics_data) == 0:
+        if sent_metric(metrics_data) > 0:
+            pytest.fail(f"Unexpected successful hints; metrics on {s0}: {all_hints_metrics(metrics_data)}")
+        if send_errors_metric(metrics_data) >= 1:
             return True
-        logger.info(f"Metrics on {s0}: {metrics_data.lines_by_prefix('scylla_hints_manager_')}")
+        logger.info(f"Metrics on {s0}: {all_hints_metrics(metrics_data)}")
     await wait_for(at_least_one_hint_failed, time.time() + 60)
 
-    host2 = (await wait_for_cql_and_get_hosts(manager.cql, [s2], time.time() + 60))[0]
+    host2 = (await wait_for_cql_and_get_hosts(cql, [s2], time.time() + 60))[0]
 
     # Check there is no new data on host2.
-    rows = await manager.cql.run_async(select_all_stmt, host=host2)
+    rows = await cql.run_async(select_all_stmt, host=host2)
     assert len(list(rows)) == 0
 
     logger.info("Restarting first node with new version")
@@ -164,13 +172,15 @@ async def test_fence_hints(request, manager: ManagerClient):
     logger.info(f"Waiting for sent hints on {host0}")
     async def exactly_one_hint_sent():
         metrics_data = await manager.metrics.query(s0.ip_addr)
-        if send_errors_metric(metrics_data) == 0 and sent_metric(metrics_data) == 1:
+        if sent_metric(metrics_data) > 1:
+            pytest.fail(f"Unexpected more than 1 successful hints; metrics on {s0}: {all_hints_metrics(metrics_data)}")
+        if sent_metric(metrics_data) == 1:
             return True
-        logger.info(f"Metrics on {s0}: {metrics_data.lines_by_prefix('scylla_hints_manager_')}")
+        logger.info(f"Metrics on {s0}: {all_hints_metrics(metrics_data)}")
     await wait_for(exactly_one_hint_sent, time.time() + 60)
 
     # Check the hint is delivered, and we see the new data on host2
-    rows = await manager.cql.run_async(select_all_stmt, host=host2)
+    rows = await cql.run_async(select_all_stmt, host=host2)
     assert len(list(rows)) == 1
 
     random_tables.drop_all()
