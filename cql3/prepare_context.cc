@@ -19,11 +19,11 @@ size_t prepare_context::bound_variables_size() const {
 }
 
 const std::vector<lw_shared_ptr<column_specification>>& prepare_context::get_variable_specifications() const & {
-    return _specs;
+    return _variable_specs;
 }
 
 std::vector<lw_shared_ptr<column_specification>> prepare_context::get_variable_specifications() && {
-    return std::move(_specs);
+    return std::move(_variable_specs);
 }
 
 std::vector<uint16_t> prepare_context::get_partition_key_bind_indexes(const schema& schema) const {
@@ -48,12 +48,12 @@ std::vector<uint16_t> prepare_context::get_partition_key_bind_indexes(const sche
 
 void prepare_context::add_variable_specification(int32_t bind_index, lw_shared_ptr<column_specification> spec) {
     auto name = _variable_names[bind_index];
-    if (_specs[bind_index]) {
+    if (_variable_specs[bind_index]) {
         // If the same variable is used in multiple places, check that the types are compatible
-        if (&spec->type->without_reversed() != &_specs[bind_index]->type->without_reversed()) {
+        if (&spec->type->without_reversed() != &_variable_specs[bind_index]->type->without_reversed()) {
             throw exceptions::invalid_request_exception(
                     fmt::format("variable :{} has type {} which doesn't match {}",
-                            *name, _specs[bind_index]->type->as_cql3_type(), spec->name));
+                            *name, _variable_specs[bind_index]->type->as_cql3_type(), spec->name));
         }
     }
     _target_columns[bind_index] = spec;
@@ -61,16 +61,16 @@ void prepare_context::add_variable_specification(int32_t bind_index, lw_shared_p
     if (name) {
         spec = make_lw_shared<column_specification>(spec->ks_name, spec->cf_name, name, spec->type);
     }
-    _specs[bind_index] = spec;
+    _variable_specs[bind_index] = spec;
 }
 
-void prepare_context::set_bound_variables(const std::vector<shared_ptr<column_identifier>>& prepare_meta) {
-    _variable_names = prepare_meta;
-    _specs.clear();
+void prepare_context::set_bound_variables(const std::vector<shared_ptr<column_identifier>>& bind_variable_names) {
+    _variable_names = bind_variable_names;
+    _variable_specs.clear();
     _target_columns.clear();
 
-    const size_t bn_size = prepare_meta.size();
-    _specs.resize(bn_size);
+    const size_t bn_size = bind_variable_names.size();
+    _variable_specs.resize(bn_size);
     _target_columns.resize(bn_size);
 }
 

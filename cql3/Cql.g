@@ -147,8 +147,11 @@ using uexpression = uninitialized<expression>;
 
     listener_type* listener;
 
-    std::vector<::shared_ptr<cql3::column_identifier>> _bind_variables;
-    // index into _bind_variables
+    // Keeps the names of all bind variables. For bind variables without a name ('?'), the name is nullptr.
+    // Maps bind_index -> name.
+    std::vector<::shared_ptr<cql3::column_identifier>> _bind_variable_names;
+
+    // Maps name -> bind_index for all named bind variables.
     std::unordered_map<cql3::column_identifier, size_t> _named_bind_variables_indexes;
     std::vector<std::unique_ptr<TokenType>> _missing_tokens;
 
@@ -172,8 +175,8 @@ using uexpression = uninitialized<expression>;
         if (name && _named_bind_variables_indexes.contains(*name)) {
             return bind_variable{_named_bind_variables_indexes[*name]};
         }
-        auto marker = bind_variable{_bind_variables.size()};
-        _bind_variables.push_back(name);
+        auto marker = bind_variable{_bind_variable_names.size()};
+        _bind_variable_names.push_back(name);
         if (name) {
             _named_bind_variables_indexes[*name] = marker.bind_index;
         }
@@ -321,7 +324,7 @@ query returns [std::unique_ptr<raw::parsed_statement> stmnt]
     ;
 
 cqlStatement returns [std::unique_ptr<raw::parsed_statement> stmt]
-    @after{ if (stmt) { stmt->set_bound_variables(_bind_variables); } }
+    @after{ if (stmt) { stmt->set_bound_variables(_bind_variable_names); } }
     : st1= selectStatement             { $stmt = std::move(st1); }
     | st2= insertStatement             { $stmt = std::move(st2); }
     | st3= updateStatement             { $stmt = std::move(st3); }
