@@ -112,7 +112,7 @@ async def test_fence_hints(request, manager: ManagerClient):
     logger.info("Bootstrapping cluster with three nodes")
     s0 = await manager.server_add(config={
         'error_injections_at_startup': ['decrease_hints_flush_period']
-    })
+    }, cmdline=['--logger-log-level', 'hints_manager=trace'])
     s1 = await manager.server_add()
     s2 = await manager.server_add()
 
