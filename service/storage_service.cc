@@ -105,6 +105,8 @@ namespace service {
 
 static logging::logger slogger("storage_service");
 
+static constexpr std::chrono::seconds wait_for_live_nodes_timeout{30};
+
 storage_service::storage_service(abort_source& abort_source,
     distributed<replica::database>& db, gms::gossiper& gossiper,
     sharded<db::system_keyspace>& sys_ks,
@@ -2795,7 +2797,7 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
         });
 
         slogger.info("Waiting for nodes {} to be alive", sync_nodes);
-        co_await _gossiper.wait_alive(sync_nodes, std::chrono::seconds{30});
+        co_await _gossiper.wait_alive(sync_nodes, wait_for_live_nodes_timeout);
         slogger.info("Nodes {} are alive", sync_nodes);
     }
 
