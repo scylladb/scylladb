@@ -517,10 +517,10 @@ public:
     future<> add_sstables_and_update_cache(const std::vector<sstables::shared_sstable>& ssts);
     future<> move_sstables_from_staging(std::vector<sstables::shared_sstable>);
     sstables::shared_sstable make_sstable();
-    void cache_truncation_record(db_clock::time_point truncated_at) {
+    void set_truncation_time(db_clock::time_point truncated_at) noexcept {
         _truncated_at = truncated_at;
     }
-    db_clock::time_point get_truncation_record() {
+    db_clock::time_point get_truncation_time() const noexcept {
         return _truncated_at;
     }
 

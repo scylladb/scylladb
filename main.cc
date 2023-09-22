@@ -1155,14 +1155,14 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             sys_ks.invoke_on_all(&db::system_keyspace::mark_writable).get();
 
             supervisor::notify("starting schema commit log");
-            sys_ks.local().cache_truncation_record().get();
+            sys_ks.local().load_truncation_times().get();
 
             // Check there is no truncation record for schema tables.
             // Needs to happen before replaying the schema commitlog, which interprets
             // replay position in the truncation record.
             db.local().get_tables_metadata().for_each_table([] (table_id, lw_shared_ptr<replica::table> table_ptr) {
               if (table_ptr->schema()->ks_name() == db::schema_tables::NAME) {
-                  if (table_ptr->get_truncation_record() != db_clock::time_point::min()) {
+                  if (table_ptr->get_truncation_time() != db_clock::time_point::min()) {
                       // replay_position stored in the truncation record may belong to
                       // the old (default) commitlog domain. It's not safe to interpret
                       // that replay position in the schema commitlog domain.

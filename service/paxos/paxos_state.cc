@@ -193,7 +193,7 @@ future<> paxos_state::learn(storage_proxy& sp, db::system_keyspace& sys_ks, sche
         auto f = utils::get_local_injector().inject("paxos_state_learn_timeout", timeout);
 
         replica::table& cf = sp.get_db().local().find_column_family(schema);
-        db_clock::time_point t = cf.get_truncation_record();
+        db_clock::time_point t = cf.get_truncation_time();
         auto truncated_at = std::chrono::duration_cast<std::chrono::milliseconds>(t.time_since_epoch());
         // When saving a decision, also delete the last accepted proposal. This is just an
         // optimization to save space.

@@ -1481,7 +1481,7 @@ future<truncation_record> system_keyspace::get_truncation_record(table_id cf_id)
 }
 
 // Read system.truncate table and cache last truncation time in `table` object for each table on every shard
-future<> system_keyspace::cache_truncation_record() {
+future<> system_keyspace::load_truncation_times() {
     if (_db.get_config().ignore_truncation_record.is_set()) {
         return make_ready_future<>();
     }
@@ -1494,7 +1494,7 @@ future<> system_keyspace::cache_truncation_record() {
             return _db.container().invoke_on_all([table_uuid, ts] (replica::database& db) mutable {
                 try {
                     replica::table& cf = db.find_column_family(table_uuid);
-                    cf.cache_truncation_record(ts);
+                    cf.set_truncation_time(ts);
                 } catch (replica::no_such_column_family&) {
                     slogger.debug("Skip caching truncation time for {} since the table is no longer present", table_uuid);
                 }

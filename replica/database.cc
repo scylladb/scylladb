@@ -2676,7 +2676,7 @@ future<> database::truncate(db::system_keyspace& sys_ks, column_family& cf, cons
     // save_truncation_record() may actually fail after we cached the truncation time
     // but this is not be worse that if failing without caching: at least the correct time
     // will be available until next reboot and a client will have to retry truncation anyway.
-    cf.cache_truncation_record(truncated_at);
+    cf.set_truncation_time(truncated_at);
     co_await sys_ks.save_truncation_record(cf, truncated_at, rp);
 
     auto& gc_state = get_compaction_manager().get_tombstone_gc_state();
