@@ -12,8 +12,11 @@
 #include "service/topology_coordinator.hh"
 #include "service/topology_state_machine.hh"
 #include "tasks/task_handler.hh"
+#include "utils/error_injection.hh"
 
 #include <boost/range/adaptor/transformed.hpp>
+
+using namespace std::chrono_literals;
 
 namespace node_ops {
 
