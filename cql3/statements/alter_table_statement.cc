@@ -398,20 +398,19 @@ alter_table_statement::prepare_schema_mutations(query_processor& qp, api::timest
 
 std::unique_ptr<cql3::statements::prepared_statement>
 cql3::statements::alter_table_statement::prepare(data_dictionary::database db, cql_stats& stats) {
+    auto t = db.try_find_table(keyspace(), column_family());
+    std::optional<schema_ptr> s = t ? std::make_optional(t->schema()) : std::nullopt;
+    std::optional<sstring> warning = check_restricted_table_properties(db, s, keyspace(), column_family(), *_properties);
+    if (warning) {
+        mylogger.warn("{}", *warning);
+    }
     return std::make_unique<prepared_statement>(make_shared<alter_table_statement>(*this));
 }
 
 future<::shared_ptr<messages::result_message>>
 alter_table_statement::execute(query_processor& qp, service::query_state& state, const query_options& options, std::optional<service::group0_guard> guard) const {
-    auto s = validation::validate_column_family(qp.db(), keyspace(), column_family());
-    std::optional<sstring> warning = check_restricted_table_properties(qp, s, keyspace(), column_family(), *_properties);
-    return schema_altering_statement::execute(qp, state, options, std::move(guard)).then([warning = std::move(warning)] (::shared_ptr<messages::result_message> msg) {
-        if (warning) {
-            msg->add_warning(*warning);
-            mylogger.warn("{}", *warning);
-        }
-        return msg;
-    });
+    validation::validate_column_family(qp.db(), keyspace(), column_family());
+    return schema_altering_statement::execute(qp, state, options, std::move(guard));
 }
 
 }

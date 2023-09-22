@@ -103,15 +103,17 @@ SEASTAR_TEST_CASE(test_create_twcs_table_no_ttl) {
         e.execute_cql("ALTER TABLE tbl WITH default_time_to_live=60;").get();
         // LiveUpdate and enforce TTL to be defined
         e.execute_cql("UPDATE system.config SET value='true' WHERE name='restrict_twcs_without_default_ttl';").get();
-        assert_that_failed(e.execute_cql("CREATE TABLE tbl2 (a int, b int, PRIMARY KEY (a)) WITH "
-                      "compaction = {'class': 'TimeWindowCompactionStrategy', "
-                      "'compaction_window_size': '1', 'compaction_window_unit': 'MINUTES'};"));
+        // default_time_to_live option is required
+        BOOST_REQUIRE_THROW(e.execute_cql("CREATE TABLE tbl2 (a int, b int, PRIMARY KEY (a)) WITH "
+                    "compaction = {'class': 'TimeWindowCompactionStrategy', "
+                    "'compaction_window_size': '1', 'compaction_window_unit': 'MINUTES'};").get(), exceptions::configuration_exception);
         e.execute_cql("CREATE TABLE tbl2 (a int, b int, PRIMARY KEY (a)) WITH "
                       "compaction = {'class': 'TimeWindowCompactionStrategy', "
                       "'compaction_window_size': '1', 'compaction_window_unit': 'MINUTES'} AND "
                       "default_time_to_live=60").get();
         BOOST_REQUIRE(e.local_db().has_schema("ks", "tbl2"));
-        assert_that_failed(e.execute_cql("ALTER TABLE tbl WITH default_time_to_live=0;"));
+        // default_time_to_live option must not be set to 0.
+        BOOST_REQUIRE_THROW(e.execute_cql("ALTER TABLE tbl WITH default_time_to_live=0;").get(), exceptions::configuration_exception);
         // LiveUpdate and disable the check, then try table creation again
         e.execute_cql("UPDATE system.config SET value='false' WHERE name='restrict_twcs_without_default_ttl';").get();
         e.execute_cql("CREATE TABLE tbl3 (a int, b int, PRIMARY KEY (a)) WITH "
@@ -130,10 +132,10 @@ SEASTAR_TEST_CASE(test_twcs_max_window) {
         // Hardcode restriction to max 10 windows
         e.execute_cql("UPDATE system.config SET value='10' WHERE name='twcs_max_window_count';").get();
         // Creating a TWCS table with a large number of windows/buckets should fail
-        assert_that_failed(e.execute_cql("CREATE TABLE tbl (a int, b int, PRIMARY KEY (a)) WITH "
-                      "compaction = {'class': 'TimeWindowCompactionStrategy', "
-                      "'compaction_window_size': '1', 'compaction_window_unit': 'HOURS'} "
-                      "AND default_time_to_live=86400;"));
+        BOOST_REQUIRE_THROW(e.execute_cql("CREATE TABLE tbl (a int, b int, PRIMARY KEY (a)) WITH "
+                        "compaction = {'class': 'TimeWindowCompactionStrategy', "
+                        "'compaction_window_size': '1', 'compaction_window_unit': 'HOURS'} "
+                        "AND default_time_to_live=86400;").get(), exceptions::configuration_exception);
         // However the creation of a table within bounds should succeed
         e.execute_cql("CREATE TABLE tbl (a int, b int, PRIMARY KEY (a)) WITH "
                       "compaction = {'class': 'TimeWindowCompactionStrategy', "
@@ -168,19 +170,19 @@ SEASTAR_TEST_CASE(test_twcs_restrictions_mixed) {
         // Cenario 3: STCS->TWCS with large TTL value
         e.execute_cql("CREATE TABLE tbl3 (a int PRIMARY KEY, b int) WITH default_time_to_live = 8640000;").get();
         BOOST_REQUIRE(e.local_db().has_schema("ks", "tbl3"));
-        assert_that_failed(e.execute_cql("ALTER TABLE tbl3 WITH compaction = {'class': 'TimeWindowCompactionStrategy'};"));
+        BOOST_REQUIRE_THROW(e.execute_cql("ALTER TABLE tbl3 WITH compaction = {'class': 'TimeWindowCompactionStrategy'};").get(), exceptions::configuration_exception);
 
         // Cenario 4: TWCS table with small to large TTL
         e.execute_cql("CREATE TABLE tbl4 (a int PRIMARY KEY, b int) WITH compaction = "
                       "{'class': 'TimeWindowCompactionStrategy'} AND default_time_to_live = 60;").get();
         BOOST_REQUIRE(e.local_db().has_schema("ks", "tbl4"));
-        assert_that_failed(e.execute_cql("ALTER TABLE tbl4 WITH default_time_to_live = 86400000;"));
+        BOOST_REQUIRE_THROW(e.execute_cql("ALTER TABLE tbl4 WITH default_time_to_live = 86400000;").get(), exceptions::configuration_exception);
 
         // Cenario 5: No TTL TWCS to large TTL and then small TTL
         e.execute_cql("CREATE TABLE tbl5 (a int PRIMARY KEY, b int) WITH compaction = "
                       "{'class': 'TimeWindowCompactionStrategy'}").get();
         BOOST_REQUIRE(e.local_db().has_schema("ks", "tbl5"));
-        assert_that_failed(e.execute_cql("ALTER TABLE tbl5 WITH default_time_to_live = 86400000;"));
+        BOOST_REQUIRE_THROW(e.execute_cql("ALTER TABLE tbl5 WITH default_time_to_live = 86400000;").get(), exceptions::configuration_exception);
         e.execute_cql("ALTER TABLE tbl5 WITH default_time_to_live = 60;").get();
 
         // Cenario 6: twcs_max_window_count LiveUpdate - Decrease TTL
@@ -216,7 +218,7 @@ SEASTAR_TEST_CASE(test_twcs_restrictions_mixed) {
         // Cenario 10: Large TTL STCS table, fail to switch to TWCS with no TTL
         e.execute_cql("CREATE TABLE tbl10 (a int PRIMARY KEY, b int) WITH default_time_to_live = 8640000;").get();
         BOOST_REQUIRE(e.local_db().has_schema("ks", "tbl10"));
-        assert_that_failed(e.execute_cql("ALTER TABLE tbl10 WITH compaction = {'class': 'TimeWindowCompactionStrategy'};"));
+        BOOST_REQUIRE_THROW(e.execute_cql("ALTER TABLE tbl10 WITH compaction = {'class': 'TimeWindowCompactionStrategy'};").get(), exceptions::configuration_exception);
         e.execute_cql("ALTER TABLE tbl10 WITH compaction = {'class': 'TimeWindowCompactionStrategy'} AND default_time_to_live = 0;").get();
 
         // Cenario 11: Ensure default_time_to_live updates reference existing table properties
@@ -224,21 +226,21 @@ SEASTAR_TEST_CASE(test_twcs_restrictions_mixed) {
                       "{'class': 'TimeWindowCompactionStrategy', 'compaction_window_size': '1', "
                       "'compaction_window_unit': 'MINUTES'} AND default_time_to_live=3000;").get();
         BOOST_REQUIRE(e.local_db().has_schema("ks", "tbl11"));
-       assert_that_failed(e.execute_cql("ALTER TABLE tbl11 WITH default_time_to_live=3600;"));
+       BOOST_REQUIRE_THROW(e.execute_cql("ALTER TABLE tbl11 WITH default_time_to_live=3600;").get(), exceptions::configuration_exception);
        e.execute_cql("ALTER TABLE tbl11 WITH compaction = {'class': 'TimeWindowCompactionStrategy', "
                      "'compaction_window_size': '2', 'compaction_window_unit': 'MINUTES'};").get();
        e.execute_cql("ALTER TABLE tbl11 WITH default_time_to_live=3600;").get();
 
        // Cenario 12: Ensure that window sizes <= 0 are forbidden
-       assert_that_failed(e.execute_cql("CREATE TABLE tbl12 (a int PRIMARY KEY, b int) WITH compaction = "
-                          "{'class': 'TimeWindowCompactionStrategy', 'compaction_window_size': '0'};"));
-       assert_that_failed(e.execute_cql("CREATE TABLE tbl12 (a int PRIMARY KEY, b int) WITH compaction = "
-                          "{'class': 'TimeWindowCompactionStrategy', 'compaction_window_size': -65535};"));
+       BOOST_REQUIRE_THROW(e.execute_cql("CREATE TABLE tbl12 (a int PRIMARY KEY, b int) WITH compaction = "
+                          "{'class': 'TimeWindowCompactionStrategy', 'compaction_window_size': '0'};").get(), exceptions::configuration_exception);
+       BOOST_REQUIRE_THROW(e.execute_cql("CREATE TABLE tbl12 (a int PRIMARY KEY, b int) WITH compaction = "
+                          "{'class': 'TimeWindowCompactionStrategy', 'compaction_window_size': -65535};").get(), exceptions::configuration_exception);
        e.execute_cql("CREATE TABLE tbl12 (a int PRIMARY KEY, b int) WITH compaction = "
                      "{'class': 'TimeWindowCompactionStrategy', 'compaction_window_size': 1};").get();
        BOOST_REQUIRE(e.local_db().has_schema("ks", "tbl12"));
-       assert_that_failed(e.execute_cql("ALTER TABLE tbl12 WITH compaction = {'class': 'TimeWindowCompactionStrategy', "
-                          "'compaction_window_size': 0};"));
+       BOOST_REQUIRE_THROW(e.execute_cql("ALTER TABLE tbl12 WITH compaction = {'class': 'TimeWindowCompactionStrategy', "
+                          "'compaction_window_size': 0};").get(), exceptions::configuration_exception);
     });
 }
 
