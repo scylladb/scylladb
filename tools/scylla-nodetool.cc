@@ -9,6 +9,7 @@
 #include <boost/algorithm/string/join.hpp>
 #include <boost/range/adaptor/map.hpp>
 #include <seastar/core/thread.hh>
+#include <seastar/http/exception.hh>
 #include <seastar/http/request.hh>
 #include <seastar/util/short_streams.hh>
 
@@ -35,15 +36,21 @@ class scylla_rest_client {
 
     rjson::value do_request(sstring type, sstring path, std::unordered_map<sstring, sstring> params) {
         auto req = http::request::make(type, _host_name, path);
-        req.query_parameters = std::move(params);
+        auto url = req.get_url();
+        req.query_parameters = params;
 
-        nlog.trace("Making {} request to {} with parameters {}", type, req.get_url(), req.query_parameters);
+        nlog.trace("Making {} request to {} with parameters {}", type, url, params);
 
         sstring res;
 
-        _api_client.make_request(std::move(req), seastar::coroutine::lambda([&] (const http::reply&, input_stream<char> body) -> future<> {
-            res = co_await util::read_entire_stream_contiguous(body);
-        })).get();
+        try {
+            _api_client.make_request(std::move(req), seastar::coroutine::lambda([&] (const http::reply&, input_stream<char> body) -> future<> {
+                res = co_await util::read_entire_stream_contiguous(body);
+            })).get();
+        } catch (httpd::unexpected_status_error& e) {
+            throw std::runtime_error(fmt::format("error executing {} request to {} with parameters {}: remote replied with {}", type, url, params,
+                        e.status()));
+        }
 
         if (res.empty()) {
             return rjson::null_value();
