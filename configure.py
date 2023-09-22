@@ -280,7 +280,7 @@ def find_headers(repodir, excluded_dirs):
     return sorted(headers)
 
 
-def generate_compdb(compdb, buildfile, modes):
+def generate_compdb(compdb, ninja, buildfile, modes):
     # per-mode compdbs are built by taking the relevant entries from the
     # output of "ninja -t compdb" and combining them with the CMake-made
     # compdbs for Seastar in the relevant mode.
@@ -395,6 +395,14 @@ def thrift_uses_boost_share_ptr():
     thrift_version = proc_res_output.split(" ")[-1]
     thrift_boost_versions = ["0.{}.".format(n) for n in range(1, 11)]
     return any(filter(thrift_version.startswith, thrift_boost_versions))
+
+
+def find_ninja():
+    ninja = find_executable('ninja') or find_executable('ninja-build')
+    if ninja:
+        return ninja
+    print('Ninja executable (ninja or ninja-build) not found on PATH\n')
+    sys.exit(1)
 
 
 modes = {
@@ -1739,10 +1747,6 @@ if not args.dist_only:
         configure_seastar(outdir, mode, mode_config)
 
 pc = {mode: f'{outdir}/{mode}/seastar/seastar.pc' for mode in build_modes}
-ninja = find_executable('ninja') or find_executable('ninja-build')
-if not ninja:
-    print('Ninja executable (ninja or ninja-build) not found on PATH\n')
-    sys.exit(1)
 
 def query_seastar_flags(pc_file, link_static_cxx=False):
     use_shared_libs = modes[mode]['build_seastar_shared_libs']
@@ -1809,6 +1813,7 @@ ragel_exec = args.ragel_exec
 
 def write_build_file(f,
                      arch,
+                     ninja,
                      scylla_product,
                      scylla_version,
                      scylla_release):
@@ -2354,11 +2359,13 @@ def write_build_file(f,
 check_for_minimal_compiler_version(args.cxx)
 check_for_boost(args.cxx)
 check_for_lz4(args.cxx, args.user_cflags)
+ninja = find_ninja()
 with open(buildfile, 'w') as f:
     arch = platform.machine()
     write_build_file(f,
                      arch,
+                     ninja,
                      scylla_product,
                      scylla_version,
                      scylla_release)
-generate_compdb('compile_commands.json', buildfile, selected_modes)
+generate_compdb('compile_commands.json', ninja, buildfile, selected_modes)
