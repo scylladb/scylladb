@@ -15,6 +15,7 @@
 
 #include "log.hh"
 #include "tools/utils.hh"
+#include "utils/estimated_histogram.hh"
 #include "utils/http.hh"
 #include "utils/rjson.hh"
 
@@ -153,6 +154,87 @@ void compact_operation(scylla_rest_client& client, const bpo::variables_map& vm)
     }
 }
 
+void tablehistograms_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    auto args = vm["table"].as<std::vector<sstring>>();
+    const auto error_msg = "single argument must be keyspace and table separated by \".\" or \"/\"";
+
+    auto split_by = [error_msg] (std::string_view arg, std::string_view by) {
+        const auto pos = arg.find(by);
+        if (pos == sstring::npos || pos == 0 || pos == arg.size() - 1) {
+            throw std::invalid_argument(error_msg);
+        }
+        return std::pair(sstring(arg.substr(0, pos)), sstring(arg.substr(pos + 1, arg.size())));
+    };
+
+    sstring keyspace, table;
+    switch (args.size()) {
+        case 0:
+        case 1:
+            if (args[0].find("/") == sstring::npos) {
+                std::tie(table, keyspace) = split_by(args[0], ".");
+            } else {
+                std::tie(table, keyspace) = split_by(args[0], "/");
+            }
+            break;
+        case 2:
+            keyspace = args[0];
+            table = args[1];
+            break;
+        default:
+            throw std::invalid_argument(error_msg);
+    }
+
+    auto get_estimated_histogram = [&] (std::string_view histogram) {
+        const auto res = client.get(format("/column_family/metrics/{}/{}:{}", histogram, keyspace, table));
+        const auto res_object = check_json_type(res, json_type::object).GetObject();
+        const auto& buckets_array = check_json_type(res_object["buckets"], json_type::array);
+        const auto& bucket_offsets_array = check_json_type(res_object["bucket_offsets"], json_type::array);
+
+        if (bucket_offsets_array.Size() + 1 != buckets_array.Size()) {
+            throw std::runtime_error(format("invalid estimated histogram {}, buckets must have one more element than bucket_offsets", histogram));
+        }
+
+        std::vector<int64_t> bucket_offsets, buckets;
+        for (size_t i = 0; i < bucket_offsets_array.Size(); ++i) {
+            buckets.emplace_back(check_json_type(buckets_array[i], json_type::number).GetInt64());
+            bucket_offsets.emplace_back(check_json_type(bucket_offsets_array[i], json_type::number).GetInt64());
+        }
+        buckets.emplace_back(check_json_type(buckets_array[buckets_array.Size() - 1], json_type::number).GetInt64());
+
+        return utils::estimated_histogram(std::move(bucket_offsets), std::move(buckets));
+    };
+
+    auto get_latency_histogram = [&] (std::string_view histogram) {
+        const auto res = client.get(format("/column_family/metrics/{}/moving_average_histogram/{}:{}", histogram, keyspace, table));
+        const auto res_object = check_json_type(res, json_type::object).GetObject();
+        return 0;
+    };
+
+    const auto row_size_hg = get_estimated_histogram("estimated_row_size_histogram");
+    const auto column_count_hg = get_estimated_histogram("estimated_column_count_histogram");
+    const auto read_latency_hg = get_latency_histogram("read_latency");
+    const auto write_latency_hg = get_latency_histogram("write_latency");
+    const auto sstables_per_read_hg = get_estimated_histogram("sstables_per_read_histogram");
+    (void)read_latency_hg;
+    (void)write_latency_hg;
+
+    fmt::print(std::cout, "{:>10}{:>10}{:>18}{:>18}{:>18}{:>18}\n", "Percentile", "SSTables", "Write Latency", "Read Latency", "Partition Size", "Cell Count");
+    fmt::print(std::cout, "{:>10}{:>10}{:>18}{:>18}{:>18}{:>18}\n", "", " ", "(micros)", "(micros)", "(bytes)", "");
+    for (const auto percentile : {0.5, 0.75, 0.95, 0.98, 0.99}) {
+        fmt::print(
+                std::cout,
+                "{:<10}{:>10}{:>18}{:>18}{:>18}{:>18}\n",
+                format("{}%", int(percentile * 100)),
+                sstables_per_read_hg.percentile(percentile),
+                0.0,
+                0.0,
+                row_size_hg.percentile(percentile),
+                column_count_hg.percentile(percentile));
+    }
+    fmt::print(std::cout, "{:<10}{:>10}{:>18}{:>18}{:>18}{:>18}\n", "min", sstables_per_read_hg.min(), 0.0, 0.0, row_size_hg.min(), column_count_hg.min());
+    fmt::print(std::cout, "{:<10}{:>10}{:>18}{:>18}{:>18}{:>18}\n", "max", sstables_per_read_hg.max(), 0.0, 0.0, row_size_hg.max(), column_count_hg.max());
+}
+
 const std::vector<operation_option> global_options{
     typed_option<sstring>("host,h", "localhost", "the hostname or ip address of the ScyllaDB node"),
     typed_option<uint16_t>("port,p", 10000, "the port of the REST API of the ScyllaDB node"),
@@ -173,6 +255,7 @@ const std::map<std::string_view, std::string_view> option_substitutions{
 
 auto get_operations_with_func() {
 
+    // Maintain same order as in https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool.html (alphabetic order)
     const static std::map<operation, operation_func> operations_with_func {
         {
             {
@@ -203,6 +286,27 @@ Fore more information, see: https://opensource.docs.scylladb.com/stable/operatin
             },
             compact_operation
         },
+        {
+            {
+                "tablehistograms",
+                {"cfhistograms"},
+                "Provides statistics about a table",
+R"(
+Provides statistics about a table, including number of SSTables, read/write
+latency, partition size and column count. cfhistograms covers all operations
+since the last time you ran the nodetool cfhistograms command.
+
+Also invokable as "cfhistograms".
+
+Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/cfhistograms.html
+)",
+                { },
+                {
+                    {"table", bpo::value<std::vector<sstring>>(), "<keyspace> <table>, <keyspace>.<table> or <keyspace>-<table>", 2},
+                }
+            },
+            tablehistograms_operation
+        }
     };
 
     return operations_with_func;
