@@ -464,15 +464,15 @@ future<> distributed_loader::populate_keyspace(distributed<replica::database>& d
         // might have more than one dir for a keyspace iff data_file_directories is > 1 and
         // somehow someone placed sstables in more than one of them for a given ks. (import?)
         co_await coroutine::parallel_for_each(gtable->get_config().all_datadirs, [&] (const sstring& datadir) -> future<> {
-            auto cf = gtable->shared_from_this();
+            auto& cf = *gtable;
 
-            dblog.info("Keyspace {}: Reading CF {} id={} version={} storage={} datadir={}", ks_name, cfname, uuid, s->version(), cf->get_storage_options().type_string(), datadir);
+            dblog.info("Keyspace {}: Reading CF {} id={} version={} storage={} datadir={}", ks_name, cfname, uuid, s->version(), cf.get_storage_options().type_string(), datadir);
 
             auto metadata = table_populator(gtable, db, ks_name, cfname, datadir);
             std::exception_ptr ex;
 
             try {
-                co_await cf->init_storage();
+                co_await cf.init_storage();
 
                 co_await metadata.start();
             } catch (...) {
