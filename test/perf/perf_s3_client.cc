@@ -33,10 +33,10 @@ class tester {
         cfg.port = 443;
         cfg.use_https = true;
         cfg.aws.emplace();
-        cfg.aws->key = tests::getenv_safe("AWS_ACCESS_KEY_ID");
-        cfg.aws->secret = tests::getenv_safe("AWS_SECRET_ACCESS_KEY");
+        cfg.aws->access_key_id = tests::getenv_safe("AWS_ACCESS_KEY_ID");
+        cfg.aws->secret_access_key = tests::getenv_safe("AWS_SECRET_ACCESS_KEY");
         if (auto token = ::getenv("AWS_SESSION_TOKEN"); token) {
-            cfg.aws->token = token;
+            cfg.aws->session_token = token;
         }
         cfg.aws->region = tests::getenv_safe("AWS_DEFAULT_REGION");
 
