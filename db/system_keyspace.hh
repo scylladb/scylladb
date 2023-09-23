@@ -356,7 +356,7 @@ public:
 
     future<> save_truncation_record(table_id, db_clock::time_point truncated_at, db::replay_position);
     future<> save_truncation_record(const replica::column_family&, db_clock::time_point truncated_at, db::replay_position);
-    future<replay_positions> get_truncated_position(table_id);
+    future<replay_positions> get_truncated_positions(table_id);
     future<db_clock::time_point> get_truncated_at(table_id);
 
     /**

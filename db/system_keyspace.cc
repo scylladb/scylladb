@@ -1515,7 +1515,7 @@ future<> system_keyspace::save_truncation_record(const replica::column_family& c
     return save_truncation_record(cf.schema()->id(), truncated_at, rp);
 }
 
-future<replay_positions> system_keyspace::get_truncated_position(table_id cf_id) {
+future<replay_positions> system_keyspace::get_truncated_positions(table_id cf_id) {
     return get_truncation_record(cf_id).then([](truncation_record e) {
         return make_ready_future<replay_positions>(e.positions);
     });

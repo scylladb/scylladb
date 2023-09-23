@@ -132,7 +132,7 @@ future<> db::commitlog_replayer::impl::init() {
                 // Get all truncation records for the CF and initialize max rps if
                 // present. Cannot do this on demand, as there may be no sstables to
                 // mark the CF as "needed".
-                return _sys_ks.local().get_truncated_position(uuid).then([&map, uuid](std::vector<db::replay_position> tpps) {
+                return _sys_ks.local().get_truncated_positions(uuid).then([&map, uuid](std::vector<db::replay_position> tpps) {
                     for (auto& p : tpps) {
                         rlogger.trace("CF {} truncated at {}", uuid, p);
                         auto& pp = map[p.shard_id()][uuid];
