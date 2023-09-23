@@ -91,7 +91,6 @@ struct local_cache;
 using system_keyspace_view_name = std::pair<sstring, sstring>;
 class system_keyspace_view_build_progress;
 
-struct truncation_record;
 struct replay_position;
 typedef std::vector<db::replay_position> replay_positions;
 
@@ -408,9 +407,6 @@ public:
 
     future<local_info> load_local_info();
     future<> save_local_info(local_info, locator::endpoint_dc_rack);
-private:
-    future<truncation_record> get_truncation_record(table_id cf_id);
-
 public:
     static api::timestamp_type schema_creation_timestamp();
 

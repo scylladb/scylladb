@@ -1446,39 +1446,9 @@ future<> system_keyspace::build_bootstrap_info() {
     });
 }
 
-struct truncation_record {
-    static constexpr uint32_t current_magic = 0x53435452; // 'S' 'C' 'T' 'R'
-
-    uint32_t magic;
-    std::vector<db::replay_position> positions;
-    db_clock::time_point time_stamp;
-};
-
 }
 
 namespace db {
-
-future<truncation_record> system_keyspace::get_truncation_record(table_id cf_id) {
-    if (_db.get_config().ignore_truncation_record.is_set()) {
-        truncation_record r{truncation_record::current_magic};
-        return make_ready_future<truncation_record>(std::move(r));
-    }
-    sstring req = format("SELECT * from system.{} WHERE table_uuid = ?", TRUNCATED);
-    return execute_cql(req, {cf_id.uuid()}).then([](::shared_ptr<cql3::untyped_result_set> rs) {
-        truncation_record r{truncation_record::current_magic};
-
-        for (const cql3::untyped_result_set_row& row : *rs) {
-            auto shard = row.get_as<int32_t>("shard");
-            auto ts = row.get_as<db_clock::time_point>("truncated_at");
-            auto pos = row.get_as<int32_t>("position");
-            auto id = row.get_as<int64_t>("segment_id");
-
-            r.time_stamp = ts;
-            r.positions.emplace_back(replay_position(shard, id, pos));
-        }
-        return make_ready_future<truncation_record>(std::move(r));
-    });
-}
 
 // Read system.truncate table and cache last truncation time in `table` object for each table on every shard
 future<std::unordered_map<table_id, db_clock::time_point>> system_keyspace::load_truncation_times() {
@@ -1504,11 +1474,20 @@ future<> system_keyspace::save_truncation_record(const replica::column_family& c
 }
 
 future<replay_positions> system_keyspace::get_truncated_positions(table_id cf_id) {
-    return get_truncation_record(cf_id).then([](truncation_record e) {
-        return make_ready_future<replay_positions>(e.positions);
-    });
+    replay_positions result;
+    if (_db.get_config().ignore_truncation_record.is_set()) {
+        co_return result;
+    }
+    const auto req = format("SELECT * from system.{} WHERE table_uuid = ?", TRUNCATED);
+    auto result_set = co_await execute_cql(req, {cf_id.uuid()});
+    result.reserve(result_set->size());
+    for (const auto& row: *result_set) {
+        result.emplace_back(row.get_as<int32_t>("shard"),
+            row.get_as<int64_t>("segment_id"),
+            row.get_as<int32_t>("position"));
+    }
+    co_return result;
 }
-
 
 static set_type_impl::native_type deserialize_set_column(const schema& s, const cql3::untyped_result_set_row& row, const char* name) {
     auto blob = row.get_blob(name);

@@ -37,7 +37,6 @@ set(idl_headers
   frozen_schema.idl.hh
   partition_checksum.idl.hh
   replay_position.idl.hh
-  truncation_record.idl.hh
   mutation.idl.hh
   query.idl.hh
   idl_test.idl.hh
