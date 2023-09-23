@@ -154,8 +154,8 @@ class MinioServer:
         with open(path, 'w', encoding='ascii') as config_file:
             endpoint = {'name': address,
                         'port': port,
-                        'aws_key': acc_key,
-                        'aws_secret': secret_key,
+                        'aws_access_key_id': acc_key,
+                        'aws_secret_access_key': secret_key,
                         'aws_region': region,
                         }
             yaml.dump({'endpoints': [endpoint]}, config_file)
