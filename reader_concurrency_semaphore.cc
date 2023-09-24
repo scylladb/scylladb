@@ -772,8 +772,10 @@ future<> reader_concurrency_semaphore::stop() noexcept {
     _stopped = true;
     co_await stop_ext_pre();
     clear_inactive_reads();
-    co_await _close_readers_gate.close();
     co_await _permit_gate.close();
+    // Gate for closing readers is only closed after waiting for all reads, as the evictable
+    // readers might take the inactive registration path and find the gate closed.
+    co_await _close_readers_gate.close();
     _ready_list.abort(std::make_exception_ptr(stop_execution_loop{}));
     if (_execution_loop_future) {
         co_await std::move(*_execution_loop_future);
