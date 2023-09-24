@@ -859,7 +859,7 @@ public:
 // Assumes the given `pos` and `schema` are alive during the function's lifetime.
 static std::predicate<const sstable&> auto
 make_pk_filter(const dht::ring_position& pos, const schema& schema) {
-    return [&pos, key = key::from_partition_key(schema, *pos.key()), cmp = dht::ring_position_comparator(schema)] (const sstable& sst) {
+    return [&pos, key = utils::make_hashed_key(static_cast<bytes_view>(key::from_partition_key(schema, *pos.key()))), cmp = dht::ring_position_comparator(schema)] (const sstable& sst) {
         return cmp(pos, sst.get_first_decorated_key()) >= 0 &&
                cmp(pos, sst.get_last_decorated_key()) <= 0 &&
                sst.filter_has_key(key);
