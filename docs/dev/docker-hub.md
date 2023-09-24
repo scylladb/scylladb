@@ -25,21 +25,6 @@ Production grade configuration requires tuning a few kernel parameters
 such that limiting the number of available cores (with `--smp 1`) is
 the simplest way to go.
 
-Using multiple cores requires setting a proper value to the `/proc/sys/fs/aio-max-nr`.
-On many non-production systems, it will be equal to 65K. The formula
-to calculate the proper value is:
-
-    Available AIO on the system - (request AIO per-cpu * ncpus) =
-    aio_max_nr - aio_nr < (reactor::max_aio + detect_aio_poll + reactor_backend_aio::max_polls) * cpu_cores =
-    aio_max_nr - aio_nr < (1024 + 2 + 10000) * cpu_cores =
-    aio_max_nr - aio_nr < 11026 * cpu_cores
-
-    where
-
-    reactor::max_aio = max_aio_per_queue * max_queues,
-    max_aio_per_queue = 128,
-    max_queues = 8.
-
 ## How to use this image
 
 ### Start a `scylla` server instance
@@ -149,6 +134,28 @@ The Docker image uses supervisord to manage ScyllaDB processes. You can restart 
 
 ```
 docker exec -it some-scylla supervisorctl restart scylla
+```
+
+### aio-max-nr Value
+
+Before starting the cluster, make sure the [aio-max-nr](https://www.kernel.org/doc/Documentation/sysctl/fs.txt/)  value is high enough (typically 10485760 or higher). This parameter determines the maximum number of allowable Asynchronous non-blocking I/O (AIO) concurrent requests by the Linux Kernel, and it helps ScyllaDB perform in a heavy I/O workload environment.
+If you encounter the error:
+
+```
+FATAL: Exception during startup, aborting: std::runtime_error (Could not setup Async I/O: Resource temporarily unavailable. The most common cause is not enough request capacity in /proc/sys/fs/aio-max-nr. Try increasing that number or reducing the amount of logical CPUs available for your application)
+```
+
+You might need to update the aio-max-nr value (in the host machine). To check the value:
+
+```
+cat /proc/sys/fs/aio-max-nr
+```
+
+If it needs to be changed:
+
+```
+echo "fs.aio-max-nr = 1048576" >> /etc/sysctl.conf
+sysctl -p /etc/sysctl.conf
 ```
 
 ### Command-line options
