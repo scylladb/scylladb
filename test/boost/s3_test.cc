@@ -31,9 +31,9 @@
 //   export S3_SERVER_ADDRESS_FOR_TEST=s3.us-east-2.amazonaws.com
 //   export S3_SERVER_PORT_FOR_TEST=443
 //   export S3_BUCKET_FOR_TEST=xemul
-//   export AWS_ACCESS_KEY_ID=${aws_key}
-//   export AWS_SECRET_ACCESS_KEY=${aws_secret}
-//   export AWS_SESSION_TOKEN=${aws_token}
+//   export AWS_ACCESS_KEY_ID=${aws_access_key_id}
+//   export AWS_SECRET_ACCESS_KEY=${aws_secret_access_key}
+//   export AWS_SESSION_TOKEN=${aws_session_token}
 //   export AWS_DEFAULT_REGION="us-east-2"
 
 s3::endpoint_config_ptr make_minio_config() {
@@ -41,9 +41,9 @@ s3::endpoint_config_ptr make_minio_config() {
         .port = std::stoul(tests::getenv_safe("S3_SERVER_PORT_FOR_TEST")),
         .use_https = ::getenv("AWS_DEFAULT_REGION") != nullptr,
         .aws = {{
-            .key = tests::getenv_safe("AWS_ACCESS_KEY_ID"),
-            .secret = tests::getenv_safe("AWS_SECRET_ACCESS_KEY"),
-            .token = ::getenv("AWS_SESSION_TOKEN") ? : "",
+            .access_key_id = tests::getenv_safe("AWS_ACCESS_KEY_ID"),
+            .secret_access_key = tests::getenv_safe("AWS_SECRET_ACCESS_KEY"),
+            .session_token = ::getenv("AWS_SESSION_TOKEN") ? : "",
             .region = ::getenv("AWS_DEFAULT_REGION") ? : "local",
         }},
     };

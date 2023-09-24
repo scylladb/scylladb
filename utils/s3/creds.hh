@@ -19,11 +19,11 @@ struct endpoint_config {
 
     struct aws_config {
         // the access key of the credentials
-        std::string key;
+        std::string access_key_id;
         // the secret key of the credentials
-        std::string secret;
+        std::string secret_access_key;
         // the security token, only for session credentials
-        std::string token;
+        std::string session_token;
         std::string region;
     };
 

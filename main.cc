@@ -168,9 +168,9 @@ struct convert<::object_storage_endpoint_param> {
         if (node["aws_region"]) {
             ep.config.aws.emplace();
             ep.config.aws->region = node["aws_region"].as<std::string>();
-            ep.config.aws->key = node["aws_key"].as<std::string>();
-            ep.config.aws->secret = node["aws_secret"].as<std::string>();
-            ep.config.aws->token = node["aws_token"].as<std::string>("");
+            ep.config.aws->access_key_id = node["aws_access_key_id"].as<std::string>();
+            ep.config.aws->secret_access_key = node["aws_secret_access_key"].as<std::string>();
+            ep.config.aws->session_token = node["aws_session_token"].as<std::string>("");
         }
         return true;
     }

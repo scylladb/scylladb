@@ -85,8 +85,8 @@ void client::authorize(http::request& req) {
     auto time_point_st = time_point_str.substr(0, 8);
     req._headers["x-amz-date"] = time_point_str;
     req._headers["x-amz-content-sha256"] = "UNSIGNED-PAYLOAD";
-    if (!_cfg->aws->token.empty()) {
-        req._headers["x-amz-security-token"] = _cfg->aws->token;
+    if (!_cfg->aws->session_token.empty()) {
+        req._headers["x-amz-security-token"] = _cfg->aws->session_token;
     }
     std::map<std::string_view, std::string_view> signed_headers;
     sstring signed_headers_list = "";
@@ -112,12 +112,14 @@ void client::authorize(http::request& req) {
         query_string += format("{}={}{}", q.first, q.second, query_nr == 1 ? "" : "&");
         query_nr--;
     }
-    auto sig = utils::aws::get_signature(_cfg->aws->key, _cfg->aws->secret, _host, req._url, req._method,
+    auto sig = utils::aws::get_signature(
+        _cfg->aws->access_key_id, _cfg->aws->secret_access_key,
+        _host, req._url, req._method,
         utils::aws::omit_datestamp_expiration_check,
         signed_headers_list, signed_headers,
         utils::aws::unsigned_content,
         _cfg->aws->region, "s3", query_string);
-    req._headers["Authorization"] = format("AWS4-HMAC-SHA256 Credential={}/{}/{}/s3/aws4_request,SignedHeaders={},Signature={}", _cfg->aws->key, time_point_st, _cfg->aws->region, signed_headers_list, sig);
+    req._headers["Authorization"] = format("AWS4-HMAC-SHA256 Credential={}/{}/{}/s3/aws4_request,SignedHeaders={},Signature={}", _cfg->aws->access_key_id, time_point_st, _cfg->aws->region, signed_headers_list, sig);
 }
 
 future<semaphore_units<>> client::claim_memory(size_t size) {

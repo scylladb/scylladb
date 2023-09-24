@@ -11,8 +11,9 @@ endpoints:
     port: $port_number
     https: optional True or False
     aws_region: optional region name, e.g. us-east-1
-    aws_key: optional AWS access key ID
-    aws_secret: optional AWS secret access key
+    aws_access_key_id: optional AWS access key ID
+    aws_secret_access_key: optional AWS secret access key
+    aws_session_token: optional AWS session token
 ```
 
 The last three items must be all present or all absent. When set the values are
@@ -55,8 +56,8 @@ endpoints:
     port: 443
     https: true
     aws_region: us-east-2
-    aws_key: AKIAIOSFODNN7EXAMPLE
-    aws_secret: wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
+    aws_access_key_id: AKIAIOSFODNN7EXAMPLE
+    aws_secret_access_key: wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
 ```
 
 and when creating the keyspace:
