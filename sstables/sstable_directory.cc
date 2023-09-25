@@ -212,6 +212,8 @@ future<> sstable_directory::filesystem_components_lister::prepare(sstable_direct
         if (!co_await file_exists(_directory.native())) {
             co_return;
         }
+    } else {
+        co_await io_check([this] { return recursive_touch_directory(_directory.native()); });
     }
 
     // verify owner and mode on the sstables directory

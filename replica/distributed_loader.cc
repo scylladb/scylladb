@@ -464,8 +464,6 @@ future<> distributed_loader::populate_keyspace(distributed<replica::database>& d
             std::exception_ptr ex;
 
             try {
-                co_await cf.init_storage();
-
                 co_await metadata.start();
             } catch (...) {
                 std::exception_ptr eptr = std::current_exception();
