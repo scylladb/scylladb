@@ -16,7 +16,7 @@
 #include "replica/database.hh"
 #include "service/migration_manager.hh"
 
-future<> table_helper::setup_table(cql3::query_processor& qp, service::migration_manager& mm, const sstring& create_cql) {
+static schema_ptr parse_new_cf_statement(cql3::query_processor& qp, const sstring& create_cql) {
     auto db = qp.db();
 
     auto parsed = cql3::query_processor::parse_statement(create_cql);
@@ -27,6 +27,22 @@ future<> table_helper::setup_table(cql3::query_processor& qp, service::migration
                     static_pointer_cast<cql3::statements::create_table_statement>(
                                     parsed_cf_stmt->prepare(db, qp.get_cql_stats())->statement);
     auto schema = statement->get_cf_meta_data(db);
+
+    // Generate the CF UUID based on its KF names. This is needed to ensure that
+    // all Nodes that create it would create it with the same UUID and we don't
+    // hit the #420 issue.
+    auto uuid = generate_legacy_id(schema->ks_name(), schema->cf_name());
+
+    schema_builder b(schema);
+    b.set_uuid(uuid);
+
+    return b.build();
+}
+
+future<> table_helper::setup_table(cql3::query_processor& qp, service::migration_manager& mm, const sstring& create_cql) {
+    auto db = qp.db();
+
+    auto schema = parse_new_cf_statement(qp, create_cql);
 
     if (db.has_schema(schema->ks_name(), schema->cf_name())) {
         co_return;
@@ -39,20 +55,12 @@ future<> table_helper::setup_table(cql3::query_processor& qp, service::migration
         co_return;
     }
 
-    // Generate the CF UUID based on its KF names. This is needed to ensure that
-    // all Nodes that create it would create it with the same UUID and we don't
-    // hit the #420 issue.
-    auto uuid = generate_legacy_id(schema->ks_name(), schema->cf_name());
-
-    schema_builder b(schema);
-    b.set_uuid(uuid);
-
     // We don't care it it fails really - this may happen due to concurrent
     // "CREATE TABLE" invocation on different Nodes.
     // The important thing is that it will converge eventually (some traces may
     // be lost in a process but that's ok).
     try {
-        co_return co_await mm.announce(co_await service::prepare_new_column_family_announcement(qp.proxy(), b.build(), ts),
+        co_return co_await mm.announce(co_await service::prepare_new_column_family_announcement(qp.proxy(), schema, ts),
                 std::move(group0_guard), format("table_helper: create {} table", schema->cf_name()));
     } catch (...) {}
 }
