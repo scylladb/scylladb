@@ -208,6 +208,12 @@ future<> sstable_directory::prepare(process_flags flags) {
 }
 
 future<> sstable_directory::filesystem_components_lister::prepare(sstable_directory& dir, process_flags flags, storage& st) {
+    if (dir._state == sstable_state::quarantine) {
+        if (!co_await file_exists(_directory.native())) {
+            co_return;
+        }
+    }
+
     // verify owner and mode on the sstables directory
     // and all its subdirectories, except for "snapshots"
     // as there could be a race with scylla-manager that might
@@ -235,6 +241,12 @@ future<> sstable_directory::process_sstable_dir(process_flags flags) {
 }
 
 future<> sstable_directory::filesystem_components_lister::process(sstable_directory& directory, process_flags flags) {
+    if (directory._state == sstable_state::quarantine) {
+        if (!co_await file_exists(_directory.native())) {
+            co_return;
+        }
+    }
+
     // It seems wasteful that each shard is repeating this scan, and to some extent it is.
     // However, we still want to open the files and especially call process_dir() in a distributed
     // fashion not to overload any shard. Also in the common case the SSTables will all be

@@ -357,14 +357,6 @@ private:
 };
 
 future<> table_populator::start_subdir(sstables::sstable_state state) {
-    sstring sstdir = get_path(state).native();
-    if (!co_await file_exists(sstdir)) {
-        if (state != sstables::sstable_state::quarantine) {
-            throw std::runtime_error(format("Populating {}/{} failed: {} does not exist", _ks, _cf, sstdir));
-        }
-        co_return;
-    }
-
     auto dptr = make_lw_shared<sharded<sstables::sstable_directory>>();
     auto& directory = *dptr;
     auto& global_table = _global_table;
