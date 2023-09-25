@@ -1628,8 +1628,7 @@ compaction_group::compaction_group(table& t, size_t group_id, dht::token_range t
 
 future<> compaction_group::stop() noexcept {
     try {
-        // FIXME: make memtable_list::flush() noexcept too.
-        return _memtables->flush().finally([this] {
+        return flush().finally([this] {
             return _t._compaction_manager.remove(as_table_state());
         });
     } catch (...) {
@@ -1930,8 +1929,12 @@ future<std::unordered_map<sstring, table::snapshot_details>> table::get_snapshot
     });
 }
 
-future<> compaction_group::flush() {
-    return _memtables->flush();
+future<> compaction_group::flush() noexcept {
+    try {
+        return _memtables->flush();
+    } catch (...) {
+        return current_exception_as_future<>();
+    }
 }
 
 bool compaction_group::can_flush() const {

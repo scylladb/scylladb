@@ -79,7 +79,7 @@ public:
     // Clear memtable(s) content
     future<> clear_memtables();
 
-    future<> flush();
+    future<> flush() noexcept;
     bool can_flush() const;
 
     const dht::token_range& token_range() const noexcept {
