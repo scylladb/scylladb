@@ -270,38 +270,9 @@ void update_tablet_metadata_change_hint(locator::tablet_metadata_change_hint& hi
     do_update_tablet_metadata_change_hint(hint, *s, m);
 }
 
-future<tablet_metadata> read_tablet_metadata(cql3::query_processor& qp) {
-    tablet_metadata tm;
-    struct active_tablet_map {
-        table_id table;
-        tablet_map map;
-        tablet_id tid;
-    };
-    std::optional<active_tablet_map> current;
+namespace {
 
-    tablet_logger.trace("Start reading tablet metadata");
-
-    auto process_row = [&] (const cql3::untyped_result_set_row& row) {
-        auto table = table_id(row.get_as<utils::UUID>("table_id"));
-
-        if (!current || current->table != table) {
-            if (current) {
-                tm.set_tablet_map(current->table, std::move(current->map));
-            }
-            auto tablet_count = row.get_as<int>("tablet_count");
-            auto tmap = tablet_map(tablet_count);
-            current = active_tablet_map{table, tmap, tmap.first_tablet()};
-
-            // Resize decision fields are static columns, so set them only once per table.
-            if (row.has("resize_type") && row.has("resize_seq_number")) {
-                auto resize_type_name = row.get_as<sstring>("resize_type");
-                int64_t resize_seq_number = row.get_as<int64_t>("resize_seq_number");
-
-                locator::resize_decision resize_decision(std::move(resize_type_name), resize_seq_number);
-                current->map.set_resize_decision(std::move(resize_decision));
-            }
-        }
-
+tablet_id process_one_row(table_id table, tablet_map& map, tablet_id tid, const cql3::untyped_result_set_row& row) {
         tablet_replica_set tablet_replicas;
         if (row.has("replicas")) {
             tablet_replicas = deserialize_replica_set(row.get_view("replicas"));
@@ -323,7 +294,7 @@ future<tablet_metadata> read_tablet_metadata(cql3::query_processor& qp) {
             std::optional<tablet_replica> pending_replica;
             if (pending.size() > 1) {
                 throw std::runtime_error(format("Too many pending replicas for table {} tablet {}: {}",
-                                                table, current->tid, pending));
+                                                table, tid, pending));
             }
             if (pending.size() != 0) {
                 pending_replica = *pending.begin();
@@ -332,39 +303,83 @@ future<tablet_metadata> read_tablet_metadata(cql3::query_processor& qp) {
             if (row.has("session")) {
                 session_id = service::session_id(row.get_as<utils::UUID>("session"));
             }
-            current->map.set_tablet_transition_info(current->tid, tablet_transition_info{stage, transition,
+            map.set_tablet_transition_info(tid, tablet_transition_info{stage, transition,
                     std::move(new_tablet_replicas), pending_replica, session_id});
         }
 
-        current->map.set_tablet(current->tid, tablet_info{std::move(tablet_replicas)});
+        map.set_tablet(tid, tablet_info{std::move(tablet_replicas)});
 
         auto persisted_last_token = dht::token::from_int64(row.get_as<int64_t>("last_token"));
-        auto current_last_token = current->map.get_last_token(current->tid);
+        auto current_last_token = map.get_last_token(tid);
         if (current_last_token != persisted_last_token) {
-            tablet_logger.debug("current tablet_map: {}", current->map);
+            tablet_logger.debug("current tablet_map: {}", map);
             throw std::runtime_error(format("last_token mismatch between on-disk ({}) and in-memory ({}) tablet map for table {} tablet {}",
-                                            persisted_last_token, current_last_token, table, current->tid));
+                                            persisted_last_token, current_last_token, table, tid));
         }
 
-        current->tid = *current->map.next_tablet(current->tid);
-    };
+        return *map.next_tablet(tid);
+}
 
+struct tablet_metadata_builder {
+    tablet_metadata& tm;
+    struct active_tablet_map {
+        table_id table;
+        tablet_map map;
+        tablet_id tid;
+    };
+    std::optional<active_tablet_map> current;
+
+    void process_row(const cql3::untyped_result_set_row& row) {
+        auto table = table_id(row.get_as<utils::UUID>("table_id"));
+
+        if (!current || current->table != table) {
+            if (current) {
+                tm.set_tablet_map(current->table, std::move(current->map));
+            }
+            auto tablet_count = row.get_as<int>("tablet_count");
+            auto tmap = tablet_map(tablet_count);
+            current = active_tablet_map{table, tmap, tmap.first_tablet()};
+
+            // Resize decision fields are static columns, so set them only once per table.
+            if (row.has("resize_type") && row.has("resize_seq_number")) {
+                auto resize_type_name = row.get_as<sstring>("resize_type");
+                int64_t resize_seq_number = row.get_as<int64_t>("resize_seq_number");
+
+                locator::resize_decision resize_decision(std::move(resize_type_name), resize_seq_number);
+                current->map.set_resize_decision(std::move(resize_decision));
+            }
+        }
+
+        current->tid = process_one_row(current->table, current->map, current->tid, row);
+    }
+
+    void on_end_of_stream() {
+        if (current) {
+            tm.set_tablet_map(current->table, std::move(current->map));
+        }
+    }
+};
+
+} // anonymous namespace
+
+future<tablet_metadata> read_tablet_metadata(cql3::query_processor& qp) {
+    tablet_metadata tm;
+    tablet_metadata_builder builder{tm};
+    tablet_logger.trace("Start reading tablet metadata");
     try {
         co_await qp.query_internal("select * from system.tablets",
            [&] (const cql3::untyped_result_set_row& row) -> future<stop_iteration> {
-               process_row(row);
+               builder.process_row(row);
                return make_ready_future<stop_iteration>(stop_iteration::no);
            });
     } catch (...) {
-        if (current) {
-            std::throw_with_nested(std::runtime_error(format("Failed to read tablet metadata for table {}", current->table)));
+        if (builder.current) {
+            std::throw_with_nested(std::runtime_error(format("Failed to read tablet metadata for table {}", builder.current->table)));
         } else {
             std::throw_with_nested(std::runtime_error("Failed to read tablet metadata"));
         }
     }
-    if (current) {
-        tm.set_tablet_map(current->table, std::move(current->map));
-    }
+    builder.on_end_of_stream();
     tablet_logger.trace("Read tablet metadata: {}", tm);
     co_return std::move(tm);
 }
