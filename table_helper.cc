@@ -129,7 +129,11 @@ future<> table_helper::setup_keyspace(cql3::query_processor& qp, service::migrat
         co_return;
     }
 
-    // FIXME: call `announce` once (collapse the calls here and in `setup_table`)
+    // FIXME: call `announce` once (`announce` keyspace and tables together)
+    //
+    // Note that the CQL code in `parse_new_cf_statement` assumes that the keyspace exists.
+    // To solve this problem, we could, for example, use `schema_builder` instead of the
+    // CQL statements to create tables in `table_helper`.
 
     if (std::any_of(tables.begin(), tables.end(), [&] (table_helper* t) { return t->_keyspace != keyspace_name; })) {
         throw std::invalid_argument("setup_keyspace called with table_helper for different keyspace");
@@ -137,14 +141,15 @@ future<> table_helper::setup_keyspace(cql3::query_processor& qp, service::migrat
 
     data_dictionary::database db = qp.db();
 
+    std::map<sstring, sstring> opts;
+    opts["replication_factor"] = replication_factor;
+    auto ksm = keyspace_metadata::new_keyspace(keyspace_name, "org.apache.cassandra.locator.SimpleStrategy", std::move(opts), true);
+
     if (!db.has_keyspace(keyspace_name)) {
         auto group0_guard = co_await mm.start_group0_operation();
         auto ts = group0_guard.write_timestamp();
 
         if (!db.has_keyspace(keyspace_name)) {
-            std::map<sstring, sstring> opts;
-            opts["replication_factor"] = replication_factor;
-            auto ksm = keyspace_metadata::new_keyspace(keyspace_name, "org.apache.cassandra.locator.SimpleStrategy", std::move(opts), true);
             co_await mm.announce(service::prepare_new_keyspace_announcement(db.real_database(), ksm, ts),
                     std::move(group0_guard), format("table_helper: create {} keyspace", keyspace_name));
         }
@@ -152,8 +157,23 @@ future<> table_helper::setup_keyspace(cql3::query_processor& qp, service::migrat
 
     qs.get_client_state().set_keyspace(db.real_database(), keyspace_name);
 
-    // Create tables
-    co_await coroutine::parallel_for_each(tables, [&qp, &mm] (table_helper* t) {
-        return table_helper::setup_table(qp, mm, t->_create_cql);
+    if (std::all_of(tables.begin(), tables.end(), [db] (table_helper* t) { return db.has_schema(t->_keyspace, t->_name); })) {
+        co_return;
+    }
+
+    auto group0_guard = co_await mm.start_group0_operation();
+    auto ts = group0_guard.write_timestamp();
+    std::vector<mutation> table_mutations;
+
+    co_await coroutine::parallel_for_each(tables, [&] (auto&& table) -> future<> {
+        auto schema = parse_new_cf_statement(qp, table->_create_cql);
+        if (!db.has_schema(schema->ks_name(), schema->cf_name())) {
+            co_return co_await service::prepare_new_column_family_announcement(table_mutations, qp.proxy(), *ksm, schema, ts);
+        }
     });
+
+    if (!table_mutations.empty()) {
+        co_await mm.announce(std::move(table_mutations), std::move(group0_guard),
+                format("table_helper: create tables for {} keyspace", keyspace_name));
+    }
 }
