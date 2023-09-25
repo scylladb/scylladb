@@ -647,7 +647,7 @@ future<> storage_service::notify_nodes_after_sync(nodes_to_notify_after_sync&& n
     }
 }
 
-future<> storage_service::topology_state_load() {
+future<> storage_service::topology_state_load(state_change_hint hint) {
 #ifdef SEASTAR_DEBUG
     static bool running = false;
     SCYLLA_ASSERT(!running); // The function is not re-entrant
@@ -737,8 +737,17 @@ future<> storage_service::topology_state_load() {
         auto nodes_to_notify = co_await sync_raft_topology_nodes(tmptr, std::nullopt, std::move(prev_normal));
 
         if (_db.local().get_config().enable_tablets()) {
-            tmptr->set_tablets(co_await replica::read_tablet_metadata(_qp));
-            tmptr->tablets().set_balancing_enabled(_topology_state_machine._topology.tablet_balancing_enabled);
+            std::optional<locator::tablet_metadata> tablets;
+            if (hint.tablets_hint) {
+                // We want to update the tablet metadata incrementally, so copy it
+                // from the current token metadata and update only the changed parts.
+                tablets = co_await get_token_metadata().tablets().copy();
+                co_await replica::update_tablet_metadata(_qp, *tablets, *hint.tablets_hint);
+            } else {
+                tablets = co_await replica::read_tablet_metadata(_qp);
+            }
+            tablets->set_balancing_enabled(_topology_state_machine._topology.tablet_balancing_enabled);
+            tmptr->set_tablets(std::move(*tablets));
         }
 
         co_await replicate_to_all_cores(std::move(tmptr));
@@ -817,9 +826,9 @@ future<> storage_service::topology_state_load() {
     slogger.debug("topology_state_load: excluded nodes: {}", _topology_state_machine._topology.get_excluded_nodes());
 }
 
-future<> storage_service::topology_transition() {
+future<> storage_service::topology_transition(state_change_hint hint) {
     SCYLLA_ASSERT(this_shard_id() == 0);
-    co_await topology_state_load(); // reload new state
+    co_await topology_state_load(std::move(hint)); // reload new state
 
     _topology_state_machine.event.broadcast();
 }
