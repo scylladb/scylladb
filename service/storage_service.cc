@@ -331,7 +331,7 @@ static locator::node::state to_topology_node_state(node_state ns) {
     on_internal_error(slogger, format("unhandled node state: {}", ns));
 }
 
-future<> storage_service::topology_state_load() {
+future<> storage_service::topology_state_load(state_change_hint hint) {
 #ifdef SEASTAR_DEBUG
     static bool running = false;
     assert(!running); // The function is not re-entrant
@@ -387,7 +387,10 @@ future<> storage_service::topology_state_load() {
         co_await _messaging.local().ban_host(locator::host_id{id.uuid()});
     }
 
-    co_await mutate_token_metadata(seastar::coroutine::lambda([this, &id2ip, &am] (mutable_token_metadata_ptr tmptr) -> future<> {
+    co_await mutate_token_metadata(seastar::coroutine::lambda([this, &id2ip, &am, &hint] (mutable_token_metadata_ptr tmptr) -> future<> {
+        // We want to update the tablet metadata incrementall, so extract it from
+        // the token metadata before the latter is cleared below.
+        auto tablets = std::move(tmptr->tablets());
         co_await tmptr->clear_gently(); // drop previous state
 
         tmptr->set_version(_topology_state_machine._topology.version);
@@ -520,7 +523,13 @@ future<> storage_service::topology_state_load() {
         }
 
         if (_db.local().get_config().check_experimental(db::experimental_features_t::feature::TABLETS)) {
-            tmptr->set_tablets(co_await replica::read_tablet_metadata(_qp));
+            if (hint.tablets_hint) {
+                co_await replica::update_tablet_metadata(_qp, tablets, *hint.tablets_hint);
+            } else {
+                co_await tablets.clear_gently();
+                tablets = co_await replica::read_tablet_metadata(_qp);
+            }
+            tmptr->set_tablets(std::move(tablets));
         }
     }));
 
@@ -542,9 +551,9 @@ future<> storage_service::topology_state_load() {
     }
 }
 
-future<> storage_service::topology_transition() {
+future<> storage_service::topology_transition(state_change_hint hint) {
     assert(this_shard_id() == 0);
-    co_await topology_state_load(); // reload new state
+    co_await topology_state_load(std::move(hint)); // reload new state
 
     _topology_state_machine.event.broadcast();
 }

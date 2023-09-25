@@ -768,15 +768,19 @@ private:
     future<> update_topology_with_local_metadata(raft::server&);
 
 public:
+    struct state_change_hint {
+        std::optional<locator::tablet_metadata_change_hint> tablets_hint;
+    };
+
     // This is called on all nodes for each new command received through raft
     // raft_group0_client::_read_apply_mutex must be held
     // Precondition: the topology mutations were already written to disk; the function only transitions the in-memory state machine.
     // Public for `reload_raft_topology_state` REST API.
-    future<> topology_transition();
+    future<> topology_transition(state_change_hint hint = {});
 private:
     // load topology state machine snapshot into memory
     // raft_group0_client::_read_apply_mutex must be held
-    future<> topology_state_load();
+    future<> topology_state_load(state_change_hint hint = {});
     // Applies received raft snapshot to local state machine persistent storage
     // raft_group0_client::_read_apply_mutex must be held
     future<> merge_topology_snapshot(raft_topology_snapshot snp);
