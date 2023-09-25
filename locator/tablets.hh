@@ -370,6 +370,17 @@ struct tablet_routing_info {
     std::pair<dht::token, dht::token> token_range;
 };
 
+struct tablet_metadata_change_hint {
+    struct table_hint {
+        sstring keyspace_name;
+        table_id table_id;
+        std::vector<token> tokens;
+    };
+    std::unordered_map<table_id, table_hint> tables;
+
+    operator bool() const noexcept { return !tables.empty(); }
+};
+
 }
 
 template <>

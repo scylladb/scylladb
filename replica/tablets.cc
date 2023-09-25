@@ -156,6 +156,65 @@ future<> save_tablet_metadata(replica::database& db, const tablet_metadata& tm, 
     co_await db.apply(freeze(muts), db::no_timeout);
 }
 
+static std::tuple<sstring, table_id> to_tablet_metadata_key(const schema& s, const partition_key& key) {
+    const auto elements = key.explode(s);
+    auto keyspace_name = value_cast<sstring>(utf8_type->deserialize_value(elements[0]));
+    auto table_id = value_cast<utils::UUID>(uuid_type->deserialize_value(elements[1]));
+    return std::tuple(std::move(keyspace_name), ::table_id(table_id));
+}
+
+static dht::token to_tablet_metadata_row_key(const schema& s, const clustering_key& key) {
+    const auto elements = key.explode(s);
+    return dht::token::from_int64(value_cast<int64_t>(long_type->deserialize_value(elements[0])));
+}
+
+static void do_update_tablet_metadata_change_hint(locator::tablet_metadata_change_hint& hint, const schema& s, const mutation& m) {
+    const auto [keyspace_name, table_id] = to_tablet_metadata_key(s, m.key());
+    auto it = hint.tables.try_emplace(table_id, locator::tablet_metadata_change_hint::table_hint{keyspace_name, table_id, {}}).first;
+
+    const auto& mp = m.partition();
+    if (mp.partition_tombstone() || !mp.row_tombstones().empty()) {
+        // If there is a partition tombstone or range tombstone, update the
+        // entire partition.
+        return;
+    }
+
+    auto& tokens = it->second.tokens;
+    for (const auto& row : mp.clustered_rows()) {
+        // TODO: we do not handle deletions yet, will revisit when tablet count
+        // reduction is worked out.
+        if (row.row().deleted_at()) {
+            tokens.clear();
+            return;
+        }
+        tokens.push_back(to_tablet_metadata_row_key(s, row.key()));
+    }
+}
+
+locator::tablet_metadata_change_hint get_tablet_metadata_change_hint(const std::vector<canonical_mutation>& mutations) {
+    auto s = db::system_keyspace::tablets();
+
+    locator::tablet_metadata_change_hint hint;
+    hint.tables.reserve(mutations.size());
+
+    for (const auto& cm : mutations) {
+        if (cm.column_family_id() != s->id()) {
+            continue;
+        }
+        do_update_tablet_metadata_change_hint(hint, *s, cm.to_mutation(s));
+    }
+
+    return hint;
+}
+
+void update_tablet_metadata_change_hint(locator::tablet_metadata_change_hint& hint, const mutation& m) {
+    auto s = db::system_keyspace::tablets();
+    if (m.column_family_id() != s->id()) {
+        return;
+    }
+    do_update_tablet_metadata_change_hint(hint, *s, m);
+}
+
 future<tablet_metadata> read_tablet_metadata(cql3::query_processor& qp) {
     tablet_metadata tm;
     struct active_tablet_map {
