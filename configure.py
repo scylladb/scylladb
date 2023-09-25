@@ -27,19 +27,6 @@ tempfile.tempdir = f"{outdir}/tmp"
 
 configure_args = str.join(' ', [shlex.quote(x) for x in sys.argv[1:] if not x.startswith('--out=')])
 
-if os.path.exists('/etc/os-release'):
-    for line in open('/etc/os-release'):
-        key, _, value = line.partition('=')
-        value = value.strip().strip('"')
-        if key == 'ID':
-            os_ids = [value]
-        if key == 'ID_LIKE':
-            os_ids += value.split(' ')
-    if not os_ids:
-        os_ids = ['linux']  # default ID per os-release(5)
-else:
-    os_ids = ['unknown']
-
 distro_extra_cflags = ''
 distro_extra_ldflags = ''
 distro_extra_cmake_args = []
@@ -47,8 +34,7 @@ employ_ld_trickery = True
 
 # distro-specific setup
 def distro_setup_nix():
-    global os_ids, employ_ld_trickery
-    os_ids = ['linux']
+    global employ_ld_trickery
     employ_ld_trickery = False
 
 if os.environ.get('NIX_CC'):
@@ -70,10 +56,30 @@ node_exporter_filename = subprocess.run('./install-dependencies.sh --print-node-
 node_exporter_dirname = os.path.basename(node_exporter_filename).rstrip('.tar.gz')
 
 
+def get_os_ids():
+    if os.environ.get('NIX_CC'):
+        return ['linux']
+
+    if not os.path.exists('/etc/os-release'):
+        return ['unknown']
+
+    os_ids = []
+    for line in open('/etc/os-release'):
+        key, _, value = line.partition('=')
+        value = value.strip().strip('"')
+        if key == 'ID':
+            os_ids = [value]
+        if key == 'ID_LIKE':
+            os_ids += value.split(' ')
+    if os_ids:
+        return os_ids
+    return ['linux']  # default ID per os-release(5)
+
+
 def pkgname(name):
     if name in i18n_xlat:
         dict = i18n_xlat[name]
-        for id in os_ids:
+        for id in get_os_ids():
             if id in dict:
                 return dict[id]
     return name
@@ -280,7 +286,7 @@ def find_headers(repodir, excluded_dirs):
     return sorted(headers)
 
 
-def generate_compdb(compdb, buildfile, modes):
+def generate_compdb(compdb, ninja, buildfile, modes):
     # per-mode compdbs are built by taking the relevant entries from the
     # output of "ninja -t compdb" and combining them with the CMake-made
     # compdbs for Seastar in the relevant mode.
@@ -383,6 +389,26 @@ def check_for_lz4(cxx, cflags):
         '''), flags=cflags.split()):
         print('Installed lz4-devel is too old. Please upgrade it to r129 / v1.73 and up')
         sys.exit(1)
+
+
+def thrift_uses_boost_share_ptr():
+    # thrift version detection, see #4538
+    proc_res = subprocess.run(["thrift", "-version"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    proc_res_output = proc_res.stdout.decode("utf-8")
+    if proc_res.returncode != 0 and not re.search(r'^Thrift version', proc_res_output):
+        raise Exception("Thrift compiler must be missing: {}".format(proc_res_output))
+
+    thrift_version = proc_res_output.split(" ")[-1]
+    thrift_boost_versions = ["0.{}.".format(n) for n in range(1, 11)]
+    return any(filter(thrift_version.startswith, thrift_boost_versions))
+
+
+def find_ninja():
+    ninja = find_executable('ninja') or find_executable('ninja-build')
+    if ninja:
+        return ninja
+    print('Ninja executable (ninja or ninja-build) not found on PATH\n')
+    sys.exit(1)
 
 
 modes = {
@@ -1727,10 +1753,6 @@ if not args.dist_only:
         configure_seastar(outdir, mode, mode_config)
 
 pc = {mode: f'{outdir}/{mode}/seastar/seastar.pc' for mode in build_modes}
-ninja = find_executable('ninja') or find_executable('ninja-build')
-if not ninja:
-    print('Ninja executable (ninja or ninja-build) not found on PATH\n')
-    sys.exit(1)
 
 def query_seastar_flags(pc_file, link_static_cxx=False):
     use_shared_libs = modes[mode]['build_seastar_shared_libs']
@@ -1775,15 +1797,7 @@ libs = ' '.join([maybe_static(args.staticyamlcpp, '-lyaml-cpp'), '-latomic', '-l
 if not args.staticboost:
     args.user_cflags += ' -DBOOST_TEST_DYN_LINK'
 
-# thrift version detection, see #4538
-proc_res = subprocess.run(["thrift", "-version"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-proc_res_output = proc_res.stdout.decode("utf-8")
-if proc_res.returncode != 0 and not re.search(r'^Thrift version', proc_res_output):
-    raise Exception("Thrift compiler must be missing: {}".format(proc_res_output))
-
-thrift_version = proc_res_output.split(" ")[-1]
-thrift_boost_versions = ["0.{}.".format(n) for n in range(1, 11)]
-if any(filter(thrift_version.startswith, thrift_boost_versions)):
+if thrift_uses_boost_share_ptr():
     args.user_cflags += ' -DTHRIFT_USES_BOOST'
 
 for pkg in pkgs:
@@ -1805,6 +1819,7 @@ ragel_exec = args.ragel_exec
 
 def write_build_file(f,
                      arch,
+                     ninja,
                      scylla_product,
                      scylla_version,
                      scylla_release):
@@ -2350,11 +2365,13 @@ def write_build_file(f,
 check_for_minimal_compiler_version(args.cxx)
 check_for_boost(args.cxx)
 check_for_lz4(args.cxx, args.user_cflags)
+ninja = find_ninja()
 with open(buildfile, 'w') as f:
     arch = platform.machine()
     write_build_file(f,
                      arch,
+                     ninja,
                      scylla_product,
                      scylla_version,
                      scylla_release)
-generate_compdb('compile_commands.json', buildfile, selected_modes)
+generate_compdb('compile_commands.json', ninja, buildfile, selected_modes)
