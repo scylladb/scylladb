@@ -84,7 +84,7 @@ private:
     future<> do_store_log_entries(const std::vector<raft::log_entry_ptr>& entries);
     // Truncate all entries from the persisted log with indices <= idx
     // Called from the `store_snapshot` function.
-    future<> truncate_log_tail(raft::index_t idx);
+    future<> update_snapshot_and_truncate_log_tail(const raft::snapshot_descriptor &snap, size_t preserve_log_entries);
 
     future<> execute_with_linearization_point(std::function<future<>()> f);
 };
