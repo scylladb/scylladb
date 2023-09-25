@@ -116,7 +116,6 @@ def test_composite_pk_indexes_named_variables(cql, table2):
 # Test generating pk indexes with named bind variables where the same variable is used multiple times.
 # The test is scylla_only because Scylla treats :x as a single bind variable, but Cassandra thinks
 # that there are two bind variables, both of them named :x.
-@pytest.mark.xfail(reason="issue #15374")
 def test_single_pk_indexes_duplicate_named_variables(cql, table1, scylla_only):
     prepared = cql.prepare(f"SELECT p FROM {table1} WHERE p = :x")
     assert prepared.routing_key_indexes == [0]
@@ -130,7 +129,6 @@ def test_single_pk_indexes_duplicate_named_variables(cql, table1, scylla_only):
 # Test generating pk indexes with named bind variables where the same variable is used multiple times.
 # The test is scylla_only because Scylla treats :x as a single bind variable, but Cassandra thinks
 # that there are multiple bind variables, all of them named :x.
-@pytest.mark.xfail(reason="issue #15374")
 def test_composite_pk_indexes_duplicate_named_variables(cql, table2, scylla_only):
     prepared = cql.prepare(f"SELECT * FROM {table2} WHERE p1 = :x AND p2 = :x AND p3 = :x AND p4 = :x")
     assert prepared.routing_key_indexes == [0, 0, 0, 0]
