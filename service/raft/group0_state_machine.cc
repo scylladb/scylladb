@@ -42,6 +42,7 @@
 #include <optional>
 #include "db/config.hh"
 #include "replica/database.hh"
+#include "replica/tablets.hh"
 #include "service/raft/group0_state_machine_merger.hh"
 
 namespace service {
@@ -125,8 +126,9 @@ future<> group0_state_machine::merge_and_apply(group0_state_machine_merger& merg
         _client.set_query_result(cmd.new_state_id, std::move(result));
     },
     [&] (topology_change& chng) -> future<> {
+        auto tablet_keys = replica::get_tablet_metadata_change_hint(chng.mutations);
         co_await write_mutations_to_database(_sp, cmd.creator_addr, std::move(chng.mutations));
-        co_await _ss.topology_transition();
+        co_await _ss.topology_transition({.tablets_hint = std::move(tablet_keys)});
     },
     [&] (write_mutations& muts) -> future<> {
         return write_mutations_to_database(_sp, cmd.creator_addr, std::move(muts.mutations));
