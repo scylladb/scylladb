@@ -559,6 +559,67 @@ SEASTAR_TEST_CASE(test_commitlog_chunk_corruption2){
         });
 }
 
+
+SEASTAR_TEST_CASE(test_commitlog_chunk_corruption3){
+    commitlog::config cfg;
+    cfg.commitlog_segment_size_in_mb = 1;
+    cfg.commitlog_total_space_in_mb = 2 * smp::count;
+    cfg.allow_going_over_size_limit = false;
+
+    return cl_test(cfg, [](commitlog& log) -> future<> {
+        auto uuid = make_table_id();
+        sstring tmp = "hej bubba cow";
+
+        std::optional<db::segment_id_type> last;
+        db::replay_position last_rp;
+
+        int n = 0;
+
+        for (;;) {
+            auto h = co_await log.add_mutation(uuid, tmp.size(), db::commitlog::force_sync::no, [&](db::commitlog::output& dst) {
+                dst.write(tmp.data(), tmp.size());
+            });
+            BOOST_CHECK_NE(h.rp(), db::replay_position());
+
+            // release data immediately
+            auto rp = h.rp();
+            auto id = rp.id;
+
+            if (last && last != id) {
+                // this should mean we are in a recycled segment.
+                if (++n > 3) {
+                    last_rp = h.release(); // prevent removal for now.
+                    break;
+                }
+            }
+            last = id;
+        }
+
+        co_await log.sync_all_segments();
+
+        auto segments = log.get_active_segment_names();
+        BOOST_REQUIRE(!segments.empty());
+
+        for (auto& seg : segments) {
+            auto desc = commitlog::descriptor(seg);
+            if (desc.id == last_rp.id) {
+                try {
+                    co_await db::commitlog::read_log_file(seg, db::commitlog::descriptor::FILENAME_PREFIX, [&](db::commitlog::buffer_and_replay_position buf_rp) {
+                        BOOST_CHECK_LE(buf_rp.position, last_rp);
+                        return make_ready_future<>();
+                    });
+                    BOOST_FAIL("Expected exception");
+                } catch (commitlog::segment_truncation& e) {
+                    // ok.
+                }
+                co_return;
+            }
+        }
+
+        BOOST_FAIL("Did not find segment");
+    });
+}
+
 SEASTAR_TEST_CASE(test_commitlog_reader_produce_exception){
     commitlog::config cfg;
     cfg.commitlog_segment_size_in_mb = 1;
