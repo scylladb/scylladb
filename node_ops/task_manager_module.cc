@@ -722,9 +722,6 @@ start_decommission_task_impl::start_decommission_task_impl(tasks::task_manager::
 {}
 
 future<> start_decommission_task_impl::run() {
-    co_await utils::get_local_injector().inject_with_handler("node_ops_start_decommission_task_impl_run",
-            [] (auto& handler) { return handler.wait_for_message(db::timeout_clock::now() + 10s); });
-
     tasks::task_info parent_info{_status.id, _status.shard};
     co_await _ss.run_with_api_lock(sstring("decommission"), [parent_info] (service::storage_service& ss) {
         return seastar::async([&ss, parent_info] {
@@ -880,6 +877,9 @@ future<> start_decommission_task_impl::run() {
 }
 
 future<> raft_decommission_task_impl::run() {
+    co_await utils::get_local_injector().inject_with_handler("node_ops_raft_decommission_task_impl_run",
+            [] (auto& handler) { return handler.wait_for_message(db::timeout_clock::now() + 10s); });
+
     auto& raft_server = _ss._group0->group0_server();
 
     auto shutdown_request_future = make_ready_future<>();
