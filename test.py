@@ -1391,7 +1391,7 @@ def read_log(log_filename: pathlib.Path) -> str:
         return "===Error reading log {}===".format(e)
 
 
-def print_summary(failed_tests, options: argparse.Namespace) -> None:
+def print_summary(failed_tests: List[Test], options: argparse.Namespace) -> None:
     rusage = resource.getrusage(resource.RUSAGE_CHILDREN)
     cpu_used = rusage.ru_stime + rusage.ru_utime
     cpu_available = (time.monotonic() - launch_time) * multiprocessing.cpu_count()
