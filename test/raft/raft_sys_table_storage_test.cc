@@ -182,7 +182,7 @@ SEASTAR_TEST_CASE(test_store_snapshot_truncate_log_tail) {
 
         co_await storage.store_snapshot_descriptor(snp, preserve_log_entries);
         raft::log_entries loaded_entries = co_await storage.load_log();
-        BOOST_CHECK_EQUAL(loaded_entries.size(), 2);
+        BOOST_CHECK_EQUAL(loaded_entries.size(), preserve_log_entries);
         for (size_t i = 0, end = loaded_entries.size(); i != end; ++i) {
             BOOST_CHECK(*entries[i + 1] == *loaded_entries[i]);
         }
