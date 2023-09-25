@@ -72,6 +72,12 @@ void update_tablet_metadata_change_hint(locator::tablet_metadata_change_hint&, c
 /// Reads tablet metadata from system.tablets.
 future<locator::tablet_metadata> read_tablet_metadata(cql3::query_processor&);
 
+/// Update tablet metadata from system.tablets, based on the provided hint.
+///
+/// The hint is used to determine what has changed and only reload the changed
+/// parts from disk, updating the passed-in metadata in-place accordingly.
+future<> update_tablet_metadata(cql3::query_processor&, locator::tablet_metadata&, const locator::tablet_metadata_change_hint&);
+
 /// Reads tablet metadata from system.tablets in the form of mutations.
 future<std::vector<canonical_mutation>> read_tablet_mutations(seastar::sharded<database>&);
 
