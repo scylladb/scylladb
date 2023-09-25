@@ -419,6 +419,60 @@ future<std::unordered_set<locator::host_id>> read_required_hosts(cql3::query_pro
     co_return std::move(hosts);
 }
 
+static future<>
+do_update_tablet_metadata_partition(cql3::query_processor& qp, tablet_metadata& tm, const tablet_metadata_change_hint::table_hint& hint) {
+    tablet_metadata_builder builder{tm};
+    co_await qp.query_internal(
+            "select * from system.tablets where table_id = ?",
+            db::consistency_level::ONE,
+            {data_value(hint.table_id.uuid())},
+            1000,
+            [&] (const cql3::untyped_result_set_row& row) -> future<stop_iteration> {
+                builder.process_row(row);
+                return make_ready_future<stop_iteration>(stop_iteration::no);
+            });
+    if (builder.current) {
+        tm.set_tablet_map(builder.current->table, std::move(builder.current->map));
+    } else {
+        tm.drop_tablet_map(hint.table_id);
+    }
+}
+
+static future<>
+do_update_tablet_metadata_rows(cql3::query_processor& qp, tablet_map& tmap, const tablet_metadata_change_hint::table_hint& hint) {
+    for (const auto token : hint.tokens) {
+        auto res = co_await qp.execute_internal(
+                "select * from system.tablets where table_id = ? and last_token = ?",
+                db::consistency_level::ONE,
+                {data_value(hint.table_id.uuid()), data_value(dht::token::to_int64(token))},
+                cql3::query_processor::cache_internal::yes);
+        const auto tid = tmap.get_tablet_id(token);
+        if (res->empty()) {
+            throw std::runtime_error("Failed to update tablet metadata: updated row is empty");
+        } else {
+            tmap.clear_tablet_transition_info(tid);
+            process_one_row(hint.table_id, tmap, tid, res->one());
+        }
+    }
+}
+
+future<> update_tablet_metadata(cql3::query_processor& qp, tablet_metadata& tm, const locator::tablet_metadata_change_hint& hint) {
+    try {
+        for (const auto& [_, table_hint] : hint.tables) {
+            if (table_hint.tokens.empty()) {
+                co_await do_update_tablet_metadata_partition(qp, tm, table_hint);
+            } else {
+                co_await tm.mutate_tablet_map_async(table_hint.table_id, [&] (tablet_map& tmap) -> future<> {
+                    co_await do_update_tablet_metadata_rows(qp, tmap, table_hint);
+                });
+            }
+        }
+    } catch (...) {
+        std::throw_with_nested(std::runtime_error("Failed to read tablet metadata"));
+    }
+    tablet_logger.trace("Updated tablet metadata: {}", tm);
+}
+
 future<std::vector<canonical_mutation>> read_tablet_mutations(seastar::sharded<replica::database>& db) {
     auto s = db::system_keyspace::tablets();
     auto rs = co_await db::system_keyspace::query_mutations(db, db::system_keyspace::NAME, db::system_keyspace::TABLETS);
