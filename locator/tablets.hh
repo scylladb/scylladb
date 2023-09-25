@@ -535,6 +535,19 @@ public:
     std::optional<range_split_result> operator()();
 };
 
+struct tablet_metadata_change_hint {
+    struct table_hint {
+        table_id table_id;
+        std::vector<token> tokens;
+
+        bool operator==(const table_hint&) const = default;
+    };
+    std::unordered_map<table_id, table_hint> tables;
+
+    bool operator==(const tablet_metadata_change_hint&) const = default;
+    explicit operator bool() const noexcept { return !tables.empty(); }
+};
+
 }
 
 template <>
@@ -574,4 +587,9 @@ struct fmt::formatter<locator::tablet_map> : fmt::formatter<string_view> {
 template <>
 struct fmt::formatter<locator::tablet_metadata> : fmt::formatter<string_view> {
     auto format(const locator::tablet_metadata&, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
+
+template <>
+struct fmt::formatter<locator::tablet_metadata_change_hint> : fmt::formatter<string_view> {
+    auto format(const locator::tablet_metadata_change_hint&, fmt::format_context& ctx) const -> decltype(ctx.out());
 };

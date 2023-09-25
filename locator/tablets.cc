@@ -954,3 +954,18 @@ auto fmt::formatter<locator::tablet_metadata>::format(const locator::tablet_meta
     }
     return fmt::format_to(out, "\n}}");
 }
+
+auto fmt::formatter<locator::tablet_metadata_change_hint>::format(const locator::tablet_metadata_change_hint& hint, fmt::format_context& ctx) const
+        -> decltype(ctx.out()) {
+    auto out = ctx.out();
+    out = fmt::format_to(out, "{{");
+    bool first = true;
+    for (auto&& [table_id, table_hint] : hint.tables) {
+        if (!first) {
+            out = fmt::format_to(out, ",");
+        }
+        out = fmt::format_to(out, "\n  [{}]: {}", table_id, table_hint.tokens);
+        first = false;
+    }
+    return fmt::format_to(out, "\n}}");
+}
