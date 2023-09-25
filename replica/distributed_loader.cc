@@ -345,11 +345,6 @@ public:
     }
 
 private:
-    fs::path get_path(sstables::sstable_state state) {
-        auto subdir = state_to_dir(state);
-        return subdir.empty() ? _base_path : _base_path / subdir;
-    }
-
     using allow_offstrategy_compaction = bool_class<struct allow_offstrategy_compaction_tag>;
     future<> populate_subdir(sstables::sstable_state state, allow_offstrategy_compaction);
 
