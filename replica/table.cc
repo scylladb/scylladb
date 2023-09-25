@@ -1627,13 +1627,8 @@ compaction_group::compaction_group(table& t, size_t group_id, dht::token_range t
 }
 
 future<> compaction_group::stop() noexcept {
-    try {
-        return flush().finally([this] {
-            return _t._compaction_manager.remove(as_table_state());
-        });
-    } catch (...) {
-        return current_exception_as_future<>();
-    }
+    co_await flush();
+    co_await _t._compaction_manager.remove(as_table_state());
 }
 
 void compaction_group::clear_sstables() {
