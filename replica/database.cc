@@ -1393,11 +1393,11 @@ keyspace::make_column_family_config(const schema& s, const database& db) const {
 }
 
 future<> table::init_storage() {
-    co_await coroutine::parallel_for_each(_config.all_datadirs, [] (sstring cfdir) {
-        return io_check([cfdir] { return recursive_touch_directory(cfdir); });
+    co_await coroutine::parallel_for_each(_config.all_datadirs, [] (sstring cfdir) -> future<> {
+        co_await io_check([cfdir] { return recursive_touch_directory(cfdir); });
+        co_await io_check([cfdir] { return touch_directory(cfdir + "/upload"); });
+        co_await io_check([cfdir] { return touch_directory(cfdir + "/staging"); });
     });
-    co_await io_check([this] { return touch_directory(_config.datadir + "/upload"); });
-    co_await io_check([this] { return touch_directory(_config.datadir + "/staging"); });
 }
 
 future<> table::destroy_storage() {

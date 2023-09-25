@@ -292,7 +292,7 @@ class table_populator {
     distributed<replica::database>& _db;
     sstring _ks;
     sstring _cf;
-    global_table_ptr _global_table;
+    global_table_ptr& _global_table;
     fs::path _base_path;
     std::unordered_map<sstables::sstable_state, lw_shared_ptr<sharded<sstables::sstable_directory>>> _sstable_directories;
     sstables::sstable_version_types _highest_version = sstables::oldest_writable_sstable_format;
@@ -300,13 +300,15 @@ class table_populator {
     sharded<locator::effective_replication_map_ptr> _erms;
 
 public:
-    table_populator(global_table_ptr ptr, distributed<replica::database>& db, sstring ks, sstring cf)
+    table_populator(global_table_ptr& ptr, distributed<replica::database>& db, sstring ks, sstring cf, sstring datadir)
         : _db(db)
         , _ks(std::move(ks))
         , _cf(std::move(cf))
-        , _global_table(std::move(ptr))
-        , _base_path(_global_table->dir())
-    {}
+        , _global_table(ptr)
+        , _base_path(std::move(datadir))
+    {
+        dblog.debug("table_populator: {}", _base_path);
+    }
 
     ~table_populator() {
         // All directories must have been stopped
@@ -333,14 +335,6 @@ public:
         co_await populate_subdir(sstables::sstable_state::staging, allow_offstrategy_compaction::no);
         co_await populate_subdir(sstables::sstable_state::quarantine, allow_offstrategy_compaction::no);
         co_await populate_subdir(sstables::sstable_state::normal, allow_offstrategy_compaction::yes);
-
-        // system tables are made writable through sys_ks::mark_writable
-        if (!is_system_keyspace(_ks)) {
-            co_await smp::invoke_on_all([this] {
-                auto s = _global_table->schema();
-                _db.local().find_column_family(s).mark_ready_for_writes(_db.local().commitlog_for(s));
-            });
-        }
     }
 
     future<> stop() {
@@ -460,53 +454,55 @@ future<> table_populator::populate_subdir(sstables::sstable_state state, allow_o
 }
 
 future<> distributed_loader::populate_keyspace(distributed<replica::database>& db, keyspace& ks, sstring ks_name) {
-    // might have more than one dir for a keyspace iff data_file_directories is > 1 and
-    // somehow someone placed sstables in more than one of them for a given ks. (import?)
-    return parallel_for_each(db.local().get_config().data_file_directories(), [&db, &ks, ks_name] (const sstring& data_dir) {
-        return populate_keyspace(db, ks, data_dir, ks_name);
-    });
-}
-
-future<> distributed_loader::populate_keyspace(distributed<replica::database>& db, keyspace& ks, sstring datadir, sstring ks_name) {
-    auto ksdir = datadir + "/" + ks_name;
-
     dblog.info("Populating Keyspace {}", ks_name);
-    auto& tables_metadata = db.local().get_tables_metadata();
 
     co_await coroutine::parallel_for_each(ks.metadata()->cf_meta_data() | boost::adaptors::map_values, [&] (schema_ptr s) -> future<> {
         auto uuid = s->id();
-        lw_shared_ptr<replica::column_family> cf = tables_metadata.get_table(uuid).shared_from_this();
-
-        sstring cfname = cf->schema()->cf_name();
-        dblog.info("Keyspace {}: Reading CF {} id={} version={} storage={}", ks_name, cfname, uuid, s->version(), cf->get_storage_options().type_string());
-
+        sstring cfname = s->cf_name();
         auto gtable = co_await get_table_on_all_shards(db, ks_name, cfname);
-        auto metadata = table_populator(std::move(gtable), db, ks_name, cfname);
-        std::exception_ptr ex;
 
-        try {
-            co_await cf->init_storage();
+        // might have more than one dir for a keyspace iff data_file_directories is > 1 and
+        // somehow someone placed sstables in more than one of them for a given ks. (import?)
+        co_await coroutine::parallel_for_each(gtable->get_config().all_datadirs, [&] (const sstring& datadir) -> future<> {
+            auto& cf = *gtable;
 
-            co_await metadata.start();
-        } catch (...) {
-            std::exception_ptr eptr = std::current_exception();
-            std::string msg =
-                format("Exception while populating keyspace '{}' with column family '{}' from file '{}': {}",
-                        ks_name, cfname, cf->dir(), eptr);
-            dblog.error("Exception while populating keyspace '{}' with column family '{}' from file '{}': {}",
-                        ks_name, cfname, cf->dir(), eptr);
+            dblog.info("Keyspace {}: Reading CF {} id={} version={} storage={} datadir={}", ks_name, cfname, uuid, s->version(), cf.get_storage_options().type_string(), datadir);
+
+            auto metadata = table_populator(gtable, db, ks_name, cfname, datadir);
+            std::exception_ptr ex;
+
             try {
-                std::rethrow_exception(eptr);
-            } catch (sstables::compaction_stopped_exception& e) {
-                // swallow compaction stopped exception, to allow clean shutdown.
-            } catch (...) {
-                ex = std::make_exception_ptr(std::runtime_error(msg.c_str()));
-            }
-        }
+                co_await cf.init_storage();
 
-        co_await metadata.stop();
-        if (ex) {
-            co_await coroutine::return_exception_ptr(std::move(ex));
+                co_await metadata.start();
+            } catch (...) {
+                std::exception_ptr eptr = std::current_exception();
+                std::string msg =
+                    format("Exception while populating keyspace '{}' with column family '{}' from datadir '{}': {}",
+                            ks_name, cfname, datadir, eptr);
+                dblog.error("Exception while populating keyspace '{}' with column family '{}' from datadir '{}': {}",
+                            ks_name, cfname, datadir, eptr);
+                try {
+                    std::rethrow_exception(eptr);
+                } catch (sstables::compaction_stopped_exception& e) {
+                    // swallow compaction stopped exception, to allow clean shutdown.
+                } catch (...) {
+                    ex = std::make_exception_ptr(std::runtime_error(msg.c_str()));
+                }
+            }
+
+            co_await metadata.stop();
+            if (ex) {
+                co_await coroutine::return_exception_ptr(std::move(ex));
+            }
+        });
+
+        // system tables are made writable through sys_ks::mark_writable
+        if (!is_system_keyspace(ks_name)) {
+            co_await smp::invoke_on_all([&] {
+                auto s = gtable->schema();
+                db.local().find_column_family(s).mark_ready_for_writes(db.local().commitlog_for(s));
+            });
         }
     });
 }

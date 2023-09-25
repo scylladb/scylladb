@@ -19,9 +19,12 @@
 #include "test/lib/tmpdir.hh"
 #include "test/lib/key_utils.hh"
 #include "test/lib/test_utils.hh"
+#include "test/lib/cql_assertions.hh"
 #include "utils/lister.hh"
+#include "db/config.hh"
 
 #include <fmt/core.h>
+#include <boost/algorithm/string/erase.hpp>
 
 class distributed_loader_for_tests {
 public:
@@ -683,4 +686,37 @@ SEASTAR_TEST_CASE(sstable_directory_shared_sstables_reshard_respect_max_threshol
         verify_that_all_sstables_are_local(sstdir, 2 * smp::count * smp::count).get();
       });
     });
+}
+
+SEASTAR_THREAD_TEST_CASE(test_multiple_data_dirs) {
+    std::vector<tmpdir> data_dirs;
+    data_dirs.resize(2);
+    sstring ks_name = "ks";
+    sstring tbl_name = "test";
+    sstring uuid_sstring;
+    cql_test_config cfg;
+    cfg.db_config->data_file_directories({
+        data_dirs[0].path().native(),
+        data_dirs[1].path().native()
+    }, db::config::config_source::CommandLine);
+    do_with_cql_env_thread([&] (cql_test_env& e) {
+        e.execute_cql(format("create table {}.{} (p text PRIMARY KEY, c int)", ks_name, tbl_name)).get();
+        auto id = e.local_db().find_uuid(ks_name, tbl_name);
+        uuid_sstring = id.to_sstring();
+        boost::erase_all(uuid_sstring, "-");
+        e.execute_cql(format("insert into {}.{} (p, c) values ('one', 1)", ks_name, tbl_name)).get();
+        e.execute_cql(format("insert into {}.{} (p, c) values ('two', 2)", ks_name, tbl_name)).get();
+    }, cfg).get();
+
+    sstring tbl_dirname = tbl_name + "-" + uuid_sstring;
+    BOOST_REQUIRE(file_exists((data_dirs[0].path() / ks_name / tbl_dirname).native()).get());
+    BOOST_REQUIRE(file_exists((data_dirs[1].path() / ks_name / tbl_dirname).native()).get());
+
+    do_with_cql_env_thread([&] (cql_test_env& e) {
+        auto res = e.execute_cql(format("select * from {}.{}", ks_name, tbl_name)).get();
+        assert_that(res).is_rows().with_size(2).with_rows({
+            { utf8_type->decompose("one"), int32_type->decompose(1) },
+            { utf8_type->decompose("two"), int32_type->decompose(2) }
+        });
+    }, cfg).get();
 }
