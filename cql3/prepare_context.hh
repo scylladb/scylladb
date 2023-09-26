@@ -33,9 +33,18 @@ namespace functions { class function_call; }
  */
 class prepare_context final {
 private:
+    // Keeps names of all the bind variables. For bind variables without a name ('?'), the name is nullptr.
+    // Maps bind_index -> name.
     std::vector<shared_ptr<column_identifier>> _variable_names;
-    std::vector<lw_shared_ptr<column_specification>> _specs;
-    std::vector<lw_shared_ptr<column_specification>> _target_columns;
+
+    // Keeps column_specification for every bind_index. column_specification describes the name and type of this variable.
+    std::vector<lw_shared_ptr<column_specification>> _variable_specs;
+
+    // For every expression like (<target> = <bind variable>), there's a pair of (bind_index, target column_specification) in _targets.
+    // Collecting all equalities of bind variables allows to determine which of the variables set the value of partition key columns.
+    // The driver needs this information in order to compute the partition token and send the request to the right node.
+    std::vector<std::pair<std::size_t, lw_shared_ptr<column_specification>>> _targets;
+
     // A list of pointers to prepared `function_call` cache ids, that
     // participate in partition key ranges computation within an LWT statement.
     std::vector<::shared_ptr<std::optional<uint8_t>>> _pk_function_calls_cache_ids;
@@ -61,7 +70,7 @@ public:
 
     void add_variable_specification(int32_t bind_index, lw_shared_ptr<column_specification> spec);
 
-    void set_bound_variables(const std::vector<shared_ptr<column_identifier>>& prepare_meta);
+    void set_bound_variables(const std::vector<shared_ptr<column_identifier>>& bind_variable_names);
 
     void clear_pk_function_calls_cache();
 
