@@ -191,7 +191,8 @@ public:
     void init_messaging_service(bool raft_topology_change_enabled);
     future<> uninit_messaging_service();
 
-    future<> load_tablet_metadata();
+    // If a hint is provided, only the changed parts of the tablet metadata will be (re)loaded.
+    future<> load_tablet_metadata(const locator::tablet_metadata_change_hint* hint = nullptr);
 private:
     using acquire_merge_lock = bool_class<class acquire_merge_lock_tag>;
 
