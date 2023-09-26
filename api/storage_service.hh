@@ -57,7 +57,7 @@ std::vector<sstring> parse_tables(const sstring& ks_name, http_context& ctx, con
 // if the parameter is not found or is empty, returns a list of all table infos in the keyspace.
 std::vector<table_info> parse_table_infos(const sstring& ks_name, http_context& ctx, const std::unordered_map<sstring, sstring>& query_params, sstring param_name);
 
-void set_storage_service(http_context& ctx, httpd::routes& r, sharded<service::storage_service>& ss, gms::gossiper& g, sharded<db::system_keyspace>& sys_ls);
+void set_storage_service(http_context& ctx, httpd::routes& r, sharded<service::storage_service>& ss, gms::gossiper& g);
 void set_sstables_loader(http_context& ctx, httpd::routes& r, sharded<sstables_loader>& sst_loader);
 void unset_sstables_loader(http_context& ctx, httpd::routes& r);
 void set_view_builder(http_context& ctx, httpd::routes& r, sharded<db::view::view_builder>& vb);

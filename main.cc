@@ -1590,7 +1590,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             auto stop_messaging_api = defer_verbose_shutdown("messaging service API", [&ctx] {
                 api::unset_server_messaging_service(ctx).get();
             });
-            api::set_server_storage_service(ctx, ss, gossiper, sys_ks).get();
+            api::set_server_storage_service(ctx, ss, gossiper).get();
             api::set_server_repair(ctx, repair).get();
             auto stop_repair_api = defer_verbose_shutdown("repair API", [&ctx] {
                 api::unset_server_repair(ctx).get();
