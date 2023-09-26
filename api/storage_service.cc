@@ -647,9 +647,9 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         });
     });
 
-    ss::get_current_generation_number.set(r, [&g](std::unique_ptr<http::request> req) {
+    ss::get_current_generation_number.set(r, [&ss](std::unique_ptr<http::request> req) {
         gms::inet_address ep(utils::fb_utilities::get_broadcast_address());
-        return g.get_current_generation_number(ep).then([](gms::generation_type res) {
+        return ss.local().gossiper().get_current_generation_number(ep).then([](gms::generation_type res) {
             return make_ready_future<json::json_return_type>(res.value());
         });
     });
@@ -894,11 +894,11 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         return make_ready_future<json::json_return_type>(json_void());
     });
 
-    ss::is_initialized.set(r, [&ss, &g](std::unique_ptr<http::request> req) {
-        return ss.local().get_operation_mode().then([&g] (auto mode) {
+    ss::is_initialized.set(r, [&ss](std::unique_ptr<http::request> req) {
+        return ss.local().get_operation_mode().then([&ss] (auto mode) {
             bool is_initialized = mode >= service::storage_service::mode::STARTING;
             if (mode == service::storage_service::mode::NORMAL) {
-                is_initialized = g.is_enabled();
+                is_initialized = ss.local().gossiper().is_enabled();
             }
             return make_ready_future<json::json_return_type>(is_initialized);
         });
@@ -1119,12 +1119,12 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         return make_ready_future<json::json_return_type>(json_void());
       });
 
-    ss::get_cluster_name.set(r, [&g](const_req req) {
-        return g.get_cluster_name();
+    ss::get_cluster_name.set(r, [&ss](const_req req) {
+        return ss.local().gossiper().get_cluster_name();
     });
 
-    ss::get_partitioner_name.set(r, [&g](const_req req) {
-        return g.get_partitioner_name();
+    ss::get_partitioner_name.set(r, [&ss](const_req req) {
+        return ss.local().gossiper().get_partitioner_name();
     });
 
     ss::get_tombstone_warn_threshold.set(r, [](std::unique_ptr<http::request> req) {
