@@ -1503,6 +1503,27 @@ future<> system_keyspace::cache_truncation_record() {
     });
 }
 
+future<> system_keyspace::drop_truncation_rp_records() {
+    sstring req = format("SELECT table_uuid, shard, segment_id from system.{}", TRUNCATED);
+    auto rs = co_await execute_cql(req);
+
+    bool any = false;
+    co_await parallel_for_each(rs->begin(), rs->end(), [&] (const cql3::untyped_result_set_row& row) -> future<> {
+        auto table_uuid = table_id(row.get_as<utils::UUID>("table_uuid"));
+        auto shard = row.get_as<int32_t>("shard");
+        auto segment_id = row.get_as<int64_t>("segment_id");
+
+        if (segment_id != 0) {
+            any = true;
+            sstring req = format("UPDATE system.{} SET segment_id = 0, position = 0 WHERE table_uuid = {} AND shard = {}", TRUNCATED, table_uuid, shard);
+            co_await execute_cql(req);
+        }
+    });
+    if (any) {
+        co_await force_blocking_flush(TRUNCATED);
+    }
+}
+
 future<> system_keyspace::save_truncation_record(table_id id, db_clock::time_point truncated_at, db::replay_position rp) {
     sstring req = format("INSERT INTO system.{} (table_uuid, shard, position, segment_id, truncated_at) VALUES(?,?,?,?,?)", TRUNCATED);
     co_await _qp.execute_internal(req, {id.uuid(), int32_t(rp.shard_id()), int32_t(rp.pos), int64_t(rp.base_id()), truncated_at}, cql3::query_processor::cache_internal::yes);

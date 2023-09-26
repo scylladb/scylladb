@@ -358,6 +358,7 @@ public:
     future<> save_truncation_record(const replica::column_family&, db_clock::time_point truncated_at, db::replay_position);
     future<replay_positions> get_truncated_position(table_id);
     future<db_clock::time_point> get_truncated_at(table_id);
+    future<> drop_truncation_rp_records();
 
     /**
      * Return a map of stored tokens to IP addresses

@@ -1457,6 +1457,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 }
             }
 
+            // Once stuff is replayed, we can empty RP:s from truncation records. 
+            // This ensures we can't mis-mash older records with a newer crashed run.
+            // I.e: never keep replay_positions alive across a restart cycle.
+            sys_ks.local().drop_truncation_rp_records().get();
+
             db.invoke_on_all([] (replica::database& db) {
                 db.get_tables_metadata().for_each_table([] (table_id, lw_shared_ptr<replica::table> table) {
                     replica::table& t = *table;
