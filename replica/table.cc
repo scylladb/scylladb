@@ -62,7 +62,7 @@
 
 namespace replica {
 
-static logging::logger tlogger("table");
+logging::logger tlogger("table");
 static seastar::metrics::label column_family_label("cf");
 static seastar::metrics::label keyspace_label("ks");
 
@@ -118,26 +118,11 @@ lw_shared_ptr<sstables::sstable_set> compaction_group::make_compound_sstable_set
     return make_lw_shared(sstables::make_compound_sstable_set(_t.schema(), { _main_sstables, _maintenance_sstables }));
 }
 
-lw_shared_ptr<sstables::sstable_set> table::make_compound_sstable_set() {
-    if (auto cg = single_compaction_group_if_available()) {
-        return cg->make_compound_sstable_set();
-    }
-    // TODO: switch to a specialized set for groups which assumes disjointness across compound sets and incrementally read from them.
-    // FIXME: avoid recreation of compound_set for groups which had no change. usually, only one group will be changed at a time.
-    auto sstable_sets = boost::copy_range<std::vector<lw_shared_ptr<sstables::sstable_set>>>(compaction_groups()
-        | boost::adaptors::transformed(std::mem_fn(&compaction_group::make_compound_sstable_set)));
-    return make_lw_shared(sstables::make_compound_sstable_set(schema(), std::move(sstable_sets)));
-}
-
 lw_shared_ptr<sstables::sstable_set> table::make_maintenance_sstable_set() const {
     // Level metadata is not used because (level 0) maintenance sstables are disjoint and must be stored for efficient retrieval in the partitioned set
     bool use_level_metadata = false;
     return make_lw_shared<sstables::sstable_set>(
             sstables::make_partitioned_sstable_set(_schema, use_level_metadata));
-}
-
-void table::refresh_compound_sstable_set() {
-    _sstables = make_compound_sstable_set();
 }
 
 // Exposed for testing, not performance critical.
@@ -733,8 +718,6 @@ public:
         }
         auto bytes_on_disk = boost::accumulate(_sstables | boost::adaptors::transformed(std::mem_fn(&sstables::sstable::bytes_on_disk)), uint64_t(0));
         _t.update_sstables_stats(_sstables.size(), bytes_on_disk);
-        // FIXME: the following isn't exception safe.
-        _t.refresh_compound_sstable_set();
         if (_mut) {
             _mut->mark_flushed(std::move(*_ms_opt));
         }
@@ -1094,7 +1077,7 @@ table::stop() {
         for (const compaction_group_ptr& cg : compaction_groups()) {
             cg->clear_sstables();
         }
-        _sstables = make_compound_sstable_set();
+        _sstables = make_table_sstable_set();
     }));
     _cache.refresh_snapshot();
 }
@@ -1274,8 +1257,6 @@ compaction_group::update_sstable_lists_on_off_strategy_completion(sstables::comp
         virtual void execute() override {
             _cg.set_main_sstables(std::move(_new_main_list));
             _cg.set_maintenance_sstables(std::move(_new_maintenance_list));
-            // FIXME: the following is not exception safe
-            _t.refresh_compound_sstable_set();
             _t._compaction_manager.register_backlog_tracker(_cg.as_table_state(), std::move(*_new_backlog_tracker));
         }
         static std::unique_ptr<row_cache::external_updater_impl> make(compaction_group& cg, table::sstable_list_builder::permit_t permit, const sstables_t& old_maintenance, const sstables_t& new_main) {
@@ -1362,8 +1343,6 @@ compaction_group::update_main_sstable_list_on_compaction_completion(sstables::co
         }
         virtual void execute() override {
             _cg.set_main_sstables(std::move(_new_sstables));
-            // FIXME: the following is not exception safe
-            _t.refresh_compound_sstable_set();
             _t._compaction_manager.register_backlog_tracker(_cg.as_table_state(), std::move(*_new_backlog_tracker));
         }
         static std::unique_ptr<row_cache::external_updater_impl> make(compaction_group& cg, table::sstable_list_builder::permit_t permit, sstables::compaction_completion_desc& d) {
@@ -1545,7 +1524,6 @@ void table::set_compaction_strategy(sstables::compaction_strategy_type strategy)
     for (auto& updater : cg_sstable_set_updaters) {
         updater.execute();
     }
-    refresh_compound_sstable_set();
 }
 
 size_t table::sstables_count() const {
@@ -1687,7 +1665,7 @@ table::table(schema_ptr schema, config config, lw_shared_ptr<const storage_optio
     , _compaction_strategy(make_compaction_strategy(_schema->compaction_strategy(), _schema->compaction_strategy_options()))
     , _cg_manager(make_compaction_group_manager())
     , _compaction_groups(_cg_manager->make_compaction_groups())
-    , _sstables(make_compound_sstable_set())
+    , _sstables(make_table_sstable_set())
     , _cache(_schema, sstables_as_snapshot_source(), row_cache_tracker, is_continuous::yes)
     , _commitlog(nullptr)
     , _readonly(true)
@@ -2094,8 +2072,6 @@ future<db::replay_position> table::discard_sstables(db_clock::time_point truncat
                     cg->set_maintenance_sstables(std::move(st.maintenance.pruned));
                 }
             }
-            // FIXME: the following isn't exception safe.
-            t.refresh_compound_sstable_set();
             tlogger.debug("cleaning out row cache");
         }
     };
