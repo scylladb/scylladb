@@ -53,9 +53,9 @@ def run_with_dir(run_cmd_gen, run_dir):
         log = os.path.join(run_dir, 'log')
         log_fd = os.open(log, os.O_WRONLY | os.O_CREAT | os.O_APPEND, mode=0o666)
         # redirect stdout and stderr to log file
-        for output in [sys.stdout, sys.stderr]:
+        outputs = [(output, output.fileno()) for output in [sys.stdout, sys.stderr]]
+        for output, output_fd in outputs:
             output.flush()
-            output_fd = output.fileno()
             os.close(output_fd)
             os.dup2(log_fd, output_fd)
         os.setsid()
