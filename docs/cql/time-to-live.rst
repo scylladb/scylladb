@@ -98,7 +98,7 @@ Notes
 
 
 Additional Information
-----------------------
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 To learn more about TTL, and see a hands-on example, check out `this lesson <https://university.scylladb.com/courses/data-modeling/lessons/advanced-data-modeling/topic/expiring-data-with-ttl-time-to-live/>`_ on Scylla University.
 

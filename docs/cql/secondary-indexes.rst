@@ -106,7 +106,7 @@ name, which may optionally specify the keyspace of the index.
 .. operation is a no-op.
 
 Additional Information
-----------------------
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 * :doc:`Global Secondary Indexes </using-scylla/secondary-indexes/>`
 * :doc:`Local Secondary Indexes </using-scylla/local-secondary-indexes/>`
