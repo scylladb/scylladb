@@ -5250,17 +5250,20 @@ void storage_service::on_update_tablet_metadata(const locator::tablet_metadata_c
         // replicate_to_all_cores() takes care of other shards.
         return;
     }
-    // FIXME: Avoid reading whole tablet metadata on partial changes.
-    load_tablet_metadata().get();
+    load_tablet_metadata(hint).get();
     _topology_state_machine.event.broadcast(); // wake up load balancer.
 }
 
-future<> storage_service::load_tablet_metadata() {
+future<> storage_service::load_tablet_metadata(const locator::tablet_metadata_change_hint& hint) {
     if (!_db.local().get_config().enable_tablets()) {
         return make_ready_future<>();
     }
-    return mutate_token_metadata([this] (mutable_token_metadata_ptr tmptr) -> future<> {
-        tmptr->set_tablets(co_await replica::read_tablet_metadata(_qp));
+    return mutate_token_metadata([this, &hint] (mutable_token_metadata_ptr tmptr) -> future<> {
+        if (hint) {
+            co_await replica::update_tablet_metadata(_qp, tmptr->tablets(), hint);
+        } else {
+            tmptr->set_tablets(co_await replica::read_tablet_metadata(_qp));
+        }
         tmptr->tablets().set_balancing_enabled(_topology_state_machine._topology.tablet_balancing_enabled);
     }, acquire_merge_lock::no);
 }

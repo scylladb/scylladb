@@ -1606,7 +1606,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             supervisor::notify("loading tablet metadata");
             try {
-                ss.local().load_tablet_metadata().get();
+                ss.local().load_tablet_metadata({}).get();
             } catch (...) {
                 if (!cfg->maintenance_mode()) {
                     throw;
