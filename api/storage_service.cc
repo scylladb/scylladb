@@ -54,10 +54,6 @@ extern logging::logger apilog;
 
 namespace api {
 
-const locator::token_metadata& http_context::get_token_metadata() {
-        return *shared_token_metadata.local().get();
-}
-
 namespace ss = httpd::storage_service_json;
 using namespace json;
 
@@ -466,20 +462,20 @@ static future<json::json_return_type> describe_ring_as_json(sharded<service::sto
 }
 
 void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_service>& ss, gms::gossiper& g, sharded<db::system_keyspace>& sys_ks) {
-    ss::local_hostid.set(r, [&ctx](std::unique_ptr<http::request> req) {
-        auto id = ctx.db.local().get_token_metadata().get_my_id();
+    ss::local_hostid.set(r, [&ss](std::unique_ptr<http::request> req) {
+        auto id = ss.local().get_token_metadata().get_my_id();
         return make_ready_future<json::json_return_type>(id.to_sstring());
     });
 
-    ss::get_tokens.set(r, [&ctx] (std::unique_ptr<http::request> req) {
-        return make_ready_future<json::json_return_type>(stream_range_as_array(ctx.get_token_metadata().sorted_tokens(), [](const dht::token& i) {
+    ss::get_tokens.set(r, [&ss] (std::unique_ptr<http::request> req) {
+        return make_ready_future<json::json_return_type>(stream_range_as_array(ss.local().get_token_metadata().sorted_tokens(), [](const dht::token& i) {
            return fmt::to_string(i);
         }));
     });
 
-    ss::get_node_tokens.set(r, [&ctx] (std::unique_ptr<http::request> req) {
+    ss::get_node_tokens.set(r, [&ss] (std::unique_ptr<http::request> req) {
         gms::inet_address addr(req->param["endpoint"]);
-        return make_ready_future<json::json_return_type>(stream_range_as_array(ctx.get_token_metadata().get_tokens(addr), [](const dht::token& i) {
+        return make_ready_future<json::json_return_type>(stream_range_as_array(ss.local().get_token_metadata().get_tokens(addr), [](const dht::token& i) {
            return fmt::to_string(i);
        }));
     });
@@ -547,8 +543,8 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         });
     });
 
-    ss::get_leaving_nodes.set(r, [&ctx](const_req req) {
-        return container_to_vec(ctx.get_token_metadata().get_leaving_endpoints());
+    ss::get_leaving_nodes.set(r, [&ss](const_req req) {
+        return container_to_vec(ss.local().get_token_metadata().get_leaving_endpoints());
     });
 
     ss::get_moving_nodes.set(r, [](const_req req) {
@@ -556,8 +552,8 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         return container_to_vec(addr);
     });
 
-    ss::get_joining_nodes.set(r, [&ctx](const_req req) {
-        auto points = ctx.get_token_metadata().get_bootstrap_tokens();
+    ss::get_joining_nodes.set(r, [&ss](const_req req) {
+        auto points = ss.local().get_token_metadata().get_bootstrap_tokens();
         std::unordered_set<sstring> addr;
         for (auto i: points) {
             addr.insert(fmt::to_string(i.second));
@@ -629,9 +625,9 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         return describe_ring_as_json(ss, validate_keyspace(ctx, req->param));
     });
 
-    ss::get_host_id_map.set(r, [&ctx](const_req req) {
+    ss::get_host_id_map.set(r, [&ss](const_req req) {
         std::vector<ss::mapper> res;
-        return map_to_key_value(ctx.get_token_metadata().get_endpoint_to_host_id_map_for_reading(), res);
+        return map_to_key_value(ss.local().get_token_metadata().get_endpoint_to_host_id_map_for_reading(), res);
     });
 
     ss::get_load.set(r, [&ctx](std::unique_ptr<http::request> req) {
