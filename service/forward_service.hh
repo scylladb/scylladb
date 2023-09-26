@@ -147,7 +147,6 @@ public:
         init_messaging_service();
     }
 
-    future<> shutdown();
     future<> stop();
 
     // Splits given `forward_request` and distributes execution of resulting
