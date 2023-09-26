@@ -1335,6 +1335,95 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     });
 }
 
+void unset_storage_service(http_context& ctx, routes& r) {
+    ss::local_hostid.unset(r);
+    ss::get_tokens.unset(r);
+    ss::get_node_tokens.unset(r);
+    ss::get_commitlog.unset(r);
+    ss::get_token_endpoint.unset(r);
+    ss::toppartitions_generic.unset(r);
+    ss::get_leaving_nodes.unset(r);
+    ss::get_moving_nodes.unset(r);
+    ss::get_joining_nodes.unset(r);
+    ss::get_release_version.unset(r);
+    ss::get_scylla_release_version.unset(r);
+    ss::get_schema_version.unset(r);
+    ss::get_all_data_file_locations.unset(r);
+    ss::get_saved_caches_location.unset(r);
+    ss::get_range_to_endpoint_map.unset(r);
+    ss::get_pending_range_to_endpoint_map.unset(r);
+    ss::describe_any_ring.unset(r);
+    ss::describe_ring.unset(r);
+    ss::get_host_id_map.unset(r);
+    ss::get_load.unset(r);
+    ss::get_load_map.unset(r);
+    ss::get_current_generation_number.unset(r);
+    ss::get_natural_endpoints.unset(r);
+    ss::cdc_streams_check_and_repair.unset(r);
+    ss::force_keyspace_compaction.unset(r);
+    ss::force_keyspace_cleanup.unset(r);
+    ss::perform_keyspace_offstrategy_compaction.unset(r);
+    ss::upgrade_sstables.unset(r);
+    ss::force_keyspace_flush.unset(r);
+    ss::decommission.unset(r);
+    ss::move.unset(r);
+    ss::remove_node.unset(r);
+    ss::get_removal_status.unset(r);
+    ss::force_remove_completion.unset(r);
+    ss::set_logging_level.unset(r);
+    ss::get_logging_levels.unset(r);
+    ss::get_operation_mode.unset(r);
+    ss::is_starting.unset(r);
+    ss::get_drain_progress.unset(r);
+    ss::drain.unset(r);
+    ss::truncate.unset(r);
+    ss::get_keyspaces.unset(r);
+    ss::stop_gossiping.unset(r);
+    ss::start_gossiping.unset(r);
+    ss::is_gossip_running.unset(r);
+    ss::stop_daemon.unset(r);
+    ss::is_initialized.unset(r);
+    ss::join_ring.unset(r);
+    ss::is_joined.unset(r);
+    ss::set_stream_throughput_mb_per_sec.unset(r);
+    ss::get_stream_throughput_mb_per_sec.unset(r);
+    ss::get_compaction_throughput_mb_per_sec.unset(r);
+    ss::set_compaction_throughput_mb_per_sec.unset(r);
+    ss::is_incremental_backups_enabled.unset(r);
+    ss::set_incremental_backups_enabled.unset(r);
+    ss::rebuild.unset(r);
+    ss::bulk_load.unset(r);
+    ss::bulk_load_async.unset(r);
+    ss::reschedule_failed_deletions.unset(r);
+    ss::sample_key_range.unset(r);
+    ss::reset_local_schema.unset(r);
+    ss::set_trace_probability.unset(r);
+    ss::get_trace_probability.unset(r);
+    ss::get_slow_query_info.unset(r);
+    ss::set_slow_query.unset(r);
+    ss::enable_auto_compaction.unset(r);
+    ss::disable_auto_compaction.unset(r);
+    ss::enable_tombstone_gc.unset(r);
+    ss::disable_tombstone_gc.unset(r);
+    ss::deliver_hints.unset(r);
+    ss::get_cluster_name.unset(r);
+    ss::get_partitioner_name.unset(r);
+    ss::get_tombstone_warn_threshold.unset(r);
+    ss::set_tombstone_warn_threshold.unset(r);
+    ss::get_tombstone_failure_threshold.unset(r);
+    ss::set_tombstone_failure_threshold.unset(r);
+    ss::get_batch_size_failure_threshold.unset(r);
+    ss::set_batch_size_failure_threshold.unset(r);
+    ss::set_hinted_handoff_throttle_in_kb.unset(r);
+    ss::get_metrics_load.unset(r);
+    ss::get_exceptions.unset(r);
+    ss::get_total_hints_in_progress.unset(r);
+    ss::get_total_hints.unset(r);
+    ss::get_ownership.unset(r);
+    ss::get_effective_ownership.unset(r);
+    ss::sstable_info.unset(r);
+}
+
 enum class scrub_status {
     successful = 0,
     aborted,

@@ -108,6 +108,10 @@ future<> set_server_storage_service(http_context& ctx, sharded<service::storage_
         });
 }
 
+future<> unset_server_storage_service(http_context& ctx) {
+    return ctx.http_server.set_routes([&ctx] (routes& r) { unset_storage_service(ctx, r); });
+}
+
 future<> set_server_sstables_loader(http_context& ctx, sharded<sstables_loader>& sst_loader) {
     return ctx.http_server.set_routes([&ctx, &sst_loader] (routes& r) { set_sstables_loader(ctx, r, sst_loader); });
 }

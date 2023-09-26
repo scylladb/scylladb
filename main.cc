@@ -1357,6 +1357,12 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             auto stop_storage_service = defer_verbose_shutdown("storage_service", [&] {
                 ss.stop().get();
             });
+
+            api::set_server_storage_service(ctx, ss).get();
+            auto stop_ss_api = defer_verbose_shutdown("storage service API", [&ctx] {
+                api::unset_server_storage_service(ctx).get();
+            });
+
             supervisor::notify("initializing virtual tables");
             smp::invoke_on_all([&] {
                 return db::initialize_virtual_tables(db, ss, gossiper, raft_gr, sys_ks, *cfg);
@@ -1590,7 +1596,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             auto stop_messaging_api = defer_verbose_shutdown("messaging service API", [&ctx] {
                 api::unset_server_messaging_service(ctx).get();
             });
-            api::set_server_storage_service(ctx, ss).get();
             api::set_server_repair(ctx, repair).get();
             auto stop_repair_api = defer_verbose_shutdown("repair API", [&ctx] {
                 api::unset_server_repair(ctx).get();
