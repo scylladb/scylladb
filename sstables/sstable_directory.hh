@@ -75,7 +75,7 @@ public:
     public:
         virtual future<> process(sstable_directory& directory, process_flags flags) = 0;
         virtual future<> commit() = 0;
-        virtual future<> garbage_collect(storage&) = 0;
+        virtual future<> prepare(sstable_directory&, process_flags, storage&) = 0;
         virtual ~components_lister() {}
     };
 
@@ -101,6 +101,7 @@ public:
         fs::path _directory;
         std::unique_ptr<scan_state> _state;
 
+        future<> garbage_collect(storage&);
         future<> cleanup_column_family_temp_sst_dirs();
         future<> handle_sstables_pending_delete();
         future<> replay_pending_delete_log(std::filesystem::path log_file);
@@ -111,19 +112,21 @@ public:
 
         virtual future<> process(sstable_directory& directory, process_flags flags) override;
         virtual future<> commit() override;
-        virtual future<> garbage_collect(storage&) override;
+        virtual future<> prepare(sstable_directory&, process_flags, storage&) override;
     };
 
     class system_keyspace_components_lister final : public components_lister {
         db::system_keyspace& _sys_ks;
         sstring _location;
 
+        future<> garbage_collect(storage&);
+
     public:
         system_keyspace_components_lister(db::system_keyspace& sys_ks, sstring location);
 
         virtual future<> process(sstable_directory& directory, process_flags flags) override;
         virtual future<> commit() override;
-        virtual future<> garbage_collect(storage&) override;
+        virtual future<> prepare(sstable_directory&, process_flags, storage&) override;
     };
 
 private:
@@ -273,7 +276,6 @@ public:
     static future<> delete_with_pending_deletion_log(std::vector<shared_sstable> ssts);
 
     static bool compare_sstable_storage_prefix(const sstring& a, const sstring& b) noexcept;
-    future<> garbage_collect();
 };
 
 future<sstables::generation_type> highest_generation_seen(sharded<sstables::sstable_directory>& directory);

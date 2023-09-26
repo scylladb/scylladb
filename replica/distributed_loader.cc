@@ -345,11 +345,6 @@ public:
     }
 
 private:
-    fs::path get_path(sstables::sstable_state state) {
-        auto subdir = state_to_dir(state);
-        return subdir.empty() ? _base_path : _base_path / subdir;
-    }
-
     using allow_offstrategy_compaction = bool_class<struct allow_offstrategy_compaction_tag>;
     future<> populate_subdir(sstables::sstable_state state, allow_offstrategy_compaction);
 
@@ -357,14 +352,6 @@ private:
 };
 
 future<> table_populator::start_subdir(sstables::sstable_state state) {
-    sstring sstdir = get_path(state).native();
-    if (!co_await file_exists(sstdir)) {
-        if (state != sstables::sstable_state::quarantine) {
-            throw std::runtime_error(format("Populating {}/{} failed: {} does not exist", _ks, _cf, sstdir));
-        }
-        co_return;
-    }
-
     auto dptr = make_lw_shared<sharded<sstables::sstable_directory>>();
     auto& directory = *dptr;
     auto& global_table = _global_table;
@@ -472,8 +459,6 @@ future<> distributed_loader::populate_keyspace(distributed<replica::database>& d
             std::exception_ptr ex;
 
             try {
-                co_await cf.init_storage();
-
                 co_await metadata.start();
             } catch (...) {
                 std::exception_ptr eptr = std::current_exception();
