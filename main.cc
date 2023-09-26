@@ -1363,7 +1363,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             }).get();
 
             supervisor::notify("starting forward service");
-            forward_service.start(std::ref(messaging), std::ref(proxy), std::ref(db), std::ref(token_metadata)).get();
+            forward_service.start(std::ref(messaging), std::ref(proxy), std::ref(db), std::ref(token_metadata), std::ref(stop_signal.as_sharded_abort_source())).get();
             auto stop_forward_service_handlers = defer_verbose_shutdown("forward service", [&forward_service] {
                 forward_service.stop().get();
             });
@@ -1893,11 +1893,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             auto do_drain = defer_verbose_shutdown("local storage", [&ss] {
                 ss.local().drain_on_shutdown().get();
-            });
-
-            // Signal shutdown to the forward service before draining the messaging service.
-            auto shutdown_forward_service = defer_verbose_shutdown("forward service", [&forward_service] {
-                forward_service.invoke_on_all(&service::forward_service::shutdown).get();
             });
 
             auto drain_view_builder = defer_verbose_shutdown("view builder ops", [cfg] {

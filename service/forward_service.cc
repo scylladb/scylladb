@@ -307,11 +307,6 @@ locator::token_metadata_ptr forward_service::get_token_metadata_ptr() const noex
     return _shared_token_metadata.get();
 }
 
-future<> forward_service::shutdown() {
-    _shutdown = true;
-    return make_ready_future<>();
-}
-
 future<> forward_service::stop() {
     return uninit_messaging_service();
 }

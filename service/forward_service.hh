@@ -131,20 +131,22 @@ class forward_service : public seastar::peering_sharded_service<forward_service>
     } _stats;
     seastar::metrics::metric_groups _metrics;
 
+    optimized_optional<abort_source::subscription> _early_abort_subscription;
     bool _shutdown = false;
 
 public:
     forward_service(netw::messaging_service& ms, service::storage_proxy& p, distributed<replica::database> &db,
-        const locator::shared_token_metadata& stm)
+        const locator::shared_token_metadata& stm, abort_source& as)
         : _messaging(ms)
         , _proxy(p)
         , _db(db)
-        , _shared_token_metadata(stm) {
+        , _shared_token_metadata(stm)
+        , _early_abort_subscription(as.subscribe([this] () noexcept { _shutdown = true; }))
+    {
         register_metrics();
         init_messaging_service();
     }
 
-    future<> shutdown();
     future<> stop();
 
     // Splits given `forward_request` and distributes execution of resulting
