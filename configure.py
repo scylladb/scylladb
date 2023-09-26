@@ -1673,15 +1673,15 @@ forced_ldflags += f'--dynamic-linker={dynamic_linker}'
 
 user_ldflags = forced_ldflags + ' ' + args.user_ldflags
 
-args.user_cflags += f" -ffile-prefix-map={curdir}=."
+user_cflags = args.user_cflags + f" -ffile-prefix-map={curdir}=."
 
 if args.target != '':
-    args.user_cflags += ' -march=' + args.target
+    user_cflags += ' -march=' + args.target
 
 for mode in modes:
     # Those flags are passed not only to Scylla objects, but also to libraries
     # that we compile ourselves.
-    modes[mode]['lib_cflags'] = args.user_cflags
+    modes[mode]['lib_cflags'] = user_cflags
     modes[mode]['lib_ldflags'] = user_ldflags + linker_flags
 
 # cmake likes to separate things with semicolons
@@ -1778,7 +1778,7 @@ abseil_pkgs = [
 
 pkgs += abseil_pkgs
 
-args.user_cflags += " " + pkg_config('jsoncpp', '--cflags')
+user_cflags += " " + pkg_config('jsoncpp', '--cflags')
 libs = ' '.join([maybe_static(args.staticyamlcpp, '-lyaml-cpp'), '-latomic', '-llz4', '-lz', '-lsnappy', pkg_config('jsoncpp', '--libs'),
                  ' -lstdc++fs', ' -lcrypt', ' -lcryptopp', ' -lpthread',
                  # Must link with static version of libzstd, since
@@ -1790,15 +1790,15 @@ libs = ' '.join([maybe_static(args.staticyamlcpp, '-lyaml-cpp'), '-latomic', '-l
                 ])
 
 if not args.staticboost:
-    args.user_cflags += ' -DBOOST_TEST_DYN_LINK'
+    user_cflags += ' -DBOOST_TEST_DYN_LINK'
 
 if thrift_uses_boost_share_ptr():
-    args.user_cflags += ' -DTHRIFT_USES_BOOST'
+    user_cflags += ' -DTHRIFT_USES_BOOST'
 
 for pkg in pkgs:
-    args.user_cflags += ' ' + pkg_config(pkg, '--cflags')
+    user_cflags += ' ' + pkg_config(pkg, '--cflags')
     libs += ' ' + pkg_config(pkg, '--libs')
-user_cflags = args.user_cflags + ' -fvisibility=hidden'
+user_cflags += ' -fvisibility=hidden'
 user_ldflags += ' -fvisibility=hidden'
 if args.staticcxx:
     user_ldflags += " -static-libstdc++"
