@@ -53,10 +53,16 @@ def run_with_dir(run_cmd_gen, run_dir):
         cmd, env = run_cmd_gen(os.getpid(), run_dir)
         log = os.path.join(run_dir, 'log')
         log_fd = os.open(log, os.O_WRONLY | os.O_CREAT | os.O_APPEND, mode=0o666)
-        # redirect stdout and stderr to log file
-        for output in [sys.stdout, sys.stderr]:
+        # redirect stdout and stderr to the log file
+        # close and dup2 the original fds associated with stdout and stderr,
+        # pytest changes sys.stdout and sys.stderr to the its output buffers
+        # to capture them. so, if we intent to redirect the child process's
+        # stdout and stderr to the specified fd, we have to use the fd numbers
+        # *used* by the child process, not the ones used by the test.
+        outputs = [(sys.stdout, 1),
+                   (sys.stderr, 2)]
+        for output, output_fd in outputs:
             output.flush()
-            output_fd = output.fileno()
             os.close(output_fd)
             os.dup2(log_fd, output_fd)
         os.setsid()
