@@ -27,7 +27,6 @@ tempfile.tempdir = f"{outdir}/tmp"
 
 configure_args = str.join(' ', [shlex.quote(x) for x in sys.argv[1:] if not x.startswith('--out=')])
 
-distro_extra_cflags = ''
 distro_extra_ldflags = ''
 employ_ld_trickery = True
 
@@ -1821,7 +1820,7 @@ def write_build_file(f,
         configure_args = {configure_args}
         builddir = {outdir}
         cxx = {cxx}
-        cxxflags = --std=gnu++20 {user_cflags} {distro_extra_cflags} {warnings} {defines}
+        cxxflags = --std=gnu++20 {user_cflags} {warnings} {defines}
         ldflags = {linker_flags} {user_ldflags} {distro_extra_ldflags}
         ldflags_build = {linker_flags} {distro_extra_ldflags}
         libs = {libs}
@@ -1890,7 +1889,6 @@ def write_build_file(f,
                     outdir=outdir,
                     cxx=cxx,
                     user_cflags=user_cflags,
-                    distro_extra_cflags=distro_extra_cflags,
                     warnings=warnings,
                     defines=defines,
                     linker_flags=linker_flags,
