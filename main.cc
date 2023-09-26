@@ -1363,7 +1363,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             }).get();
 
             supervisor::notify("starting forward service");
-            forward_service.start(std::ref(messaging), std::ref(proxy), std::ref(db), std::ref(token_metadata)).get();
+            forward_service.start(std::ref(messaging), std::ref(proxy), std::ref(db), std::ref(token_metadata), std::ref(stop_signal.as_sharded_abort_source())).get();
             auto stop_forward_service_handlers = defer_verbose_shutdown("forward service", [&forward_service] {
                 forward_service.stop().get();
             });

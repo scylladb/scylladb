@@ -135,7 +135,7 @@ class forward_service : public seastar::peering_sharded_service<forward_service>
 
 public:
     forward_service(netw::messaging_service& ms, service::storage_proxy& p, distributed<replica::database> &db,
-        const locator::shared_token_metadata& stm)
+        const locator::shared_token_metadata& stm, abort_source& as)
         : _messaging(ms)
         , _proxy(p)
         , _db(db)

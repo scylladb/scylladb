@@ -704,7 +704,7 @@ private:
                 return fs.enable(fs.supported_feature_set());
             }).get();
 
-            _forward_service.start(std::ref(_ms), std::ref(_proxy), std::ref(_db), std::ref(_token_metadata)).get();
+            _forward_service.start(std::ref(_ms), std::ref(_proxy), std::ref(_db), std::ref(_token_metadata), std::ref(abort_sources)).get();
             auto stop_forward_service =  defer([this] { _forward_service.stop().get(); });
 
             // gropu0 client exists only on shard 0
