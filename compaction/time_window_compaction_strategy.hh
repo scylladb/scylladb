@@ -83,7 +83,7 @@ public:
     enum class bucket_compaction_mode { none, size_tiered, major };
 public:
     time_window_compaction_strategy(const std::map<sstring, sstring>& options);
-    virtual compaction_descriptor get_sstables_for_compaction(table_state& table_s, strategy_control& control, std::vector<shared_sstable> candidates) override;
+    virtual compaction_descriptor get_sstables_for_compaction(table_state& table_s, strategy_control& control) override;
 
     virtual std::vector<compaction_descriptor> get_cleanup_compaction_jobs(table_state& table_s, std::vector<shared_sstable> candidates) const override;
 

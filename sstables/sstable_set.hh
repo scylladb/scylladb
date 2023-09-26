@@ -11,6 +11,7 @@
 #include "readers/flat_mutation_reader_fwd.hh"
 #include "readers/flat_mutation_reader_v2.hh"
 #include "sstables/progress_monitor.hh"
+#include "sstables/types_fwd.hh"
 #include "shared_sstable.hh"
 #include "dht/i_partitioner.hh"
 #include <seastar/core/shared_ptr.hh>
@@ -37,8 +38,11 @@ private:
 private:
     bool will_introduce_overlapping(const shared_sstable& sst) const;
 public:
+    sstable_run() = default;
+    // Builds a sstable run with single fragment. It bypasses overlapping check done in insert().
+    sstable_run(shared_sstable);
     // Returns false if sstable being inserted cannot satisfy the disjoint invariant. Then caller should pick another run for it.
-    bool insert(shared_sstable sst);
+    [[nodiscard]] bool insert(shared_sstable sst);
     void erase(shared_sstable sst);
     bool empty() const noexcept {
         return _all.empty();
@@ -47,7 +51,11 @@ public:
     uint64_t data_size() const;
     const sstable_set& all() const { return _all; }
     double estimate_droppable_tombstone_ratio(gc_clock::time_point gc_before) const;
+    run_id run_identifier() const;
 };
+
+using shared_sstable_run = lw_shared_ptr<sstable_run>;
+using frozen_sstable_run = lw_shared_ptr<const sstable_run>;
 
 class incremental_selector_impl {
 public:
@@ -71,7 +79,7 @@ public:
     virtual ~sstable_set_impl() {}
     virtual std::unique_ptr<sstable_set_impl> clone() const = 0;
     virtual std::vector<shared_sstable> select(const dht::partition_range& range) const = 0;
-    virtual std::vector<sstable_run> select_sstable_runs(const std::vector<shared_sstable>& sstables) const;
+    virtual std::vector<frozen_sstable_run> all_sstable_runs() const;
     virtual lw_shared_ptr<const sstable_list> all() const = 0;
     virtual stop_iteration for_each_sstable_until(std::function<stop_iteration(const shared_sstable&)> func) const = 0;
     virtual future<stop_iteration> for_each_sstable_gently_until(std::function<future<stop_iteration>(const shared_sstable&)> func) const = 0;
@@ -116,7 +124,7 @@ public:
     sstable_set& operator=(sstable_set&&) noexcept;
     std::vector<shared_sstable> select(const dht::partition_range& range) const;
     // Return all runs which contain any of the input sstables.
-    std::vector<sstable_run> select_sstable_runs(const std::vector<shared_sstable>& sstables) const;
+    std::vector<frozen_sstable_run> all_sstable_runs() const;
     // Return all sstables. It's not guaranteed that sstable_set will keep a reference to the returned list, so user should keep it.
     lw_shared_ptr<const sstable_list> all() const;
     // Prefer for_each_sstable() over all() for iteration purposes, as the latter may have to copy all sstables into a temporary
