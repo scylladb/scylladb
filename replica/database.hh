@@ -451,7 +451,7 @@ private:
     // The storage_group_manager manages either a single storage_group for vnodes or per-table storage_group for tablets.
     // Must be initialized after _compaction_groups, as each storage_group enlists its compaction groups in that list.
     std::unique_ptr<storage_group_manager> _sg_manager;
-    // Compound SSTable set for all the compaction groups, which is useful for operations spanning all of them.
+    // table_sstable_set for all storage groups, which is useful for operations spanning all of them.
     lw_shared_ptr<sstables::sstable_set> _sstables;
     // Control background fibers waiting for sstables to be deleted
     seastar::gate _sstable_deletion_gate;
@@ -603,6 +603,7 @@ private:
     storage_group* shard_local_storage_group_at(size_t idx) const noexcept;
 
     std::unique_ptr<storage_group_manager> make_storage_group_manager();
+    storage_group_manager& get_storage_group_manager() const noexcept;
     // Return compaction group if table owns a single one. Otherwise, null is returned.
     compaction_group* single_compaction_group_if_available() const noexcept;
     compaction_group* get_compaction_group(size_t id) const noexcept;
@@ -665,9 +666,7 @@ private:
                                         const sstables::sstable_predicate& = sstables::default_sstable_predicate()) const;
 
     lw_shared_ptr<sstables::sstable_set> make_maintenance_sstable_set() const;
-    lw_shared_ptr<sstables::sstable_set> make_compound_sstable_set();
-    // Compound sstable set must be refreshed whenever any of its managed sets are changed
-    void refresh_compound_sstable_set();
+    lw_shared_ptr<sstables::sstable_set> make_table_sstable_set();
 
     snapshot_source sstables_as_snapshot_source();
     partition_presence_checker make_partition_presence_checker(lw_shared_ptr<sstables::sstable_set>);
@@ -1213,6 +1212,8 @@ public:
 
     friend class distributed_loader;
     friend class table_populator;
+    friend class table_sstable_set;
+    friend class table_incremental_selector;
 
 private:
     timer<> _off_strategy_trigger;

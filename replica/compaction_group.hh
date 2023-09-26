@@ -260,6 +260,10 @@ public:
     virtual utils::chunked_vector<compaction_group*> compaction_groups_for_token_range(dht::token_range tr) const = 0;
     // Safely iterate through compaction groups, while performing async operations on them.
     virtual future<> parallel_foreach_compaction_group(std::function<future<>(compaction_group&)> action) = 0;
+    // Iterate serially storage compaction groups in the given token range, while performing sync operations on them.
+    virtual stop_iteration foreach_storage_group_until(const dht::partition_range&, std::function<stop_iteration(storage_group&)> action) = 0;
+    // Iterate serially and safely through compaction groups, while performing async operations on them.
+    virtual future<stop_iteration> foreach_storage_group_gently_until(const dht::partition_range&, std::function<future<stop_iteration>(storage_group&)> action) = 0;
 };
 
 }

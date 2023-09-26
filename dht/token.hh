@@ -227,6 +227,15 @@ token next_token(const token& t) {
     return {dht::token::kind::key, t._data + 1};
 }
 
+// Returns a successor for token t, capped at maximum_token.
+inline
+token next_token_safe(const token& t) {
+    if (t.is_last() || t.is_maximum()) {
+        return maximum_token();
+    }
+    return next_token(t);
+}
+
 // Returns the smallest token in the ring which can be associated with a partition key.
 inline
 token first_token() {

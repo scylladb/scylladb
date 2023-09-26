@@ -24,6 +24,22 @@
 
 namespace dht {
 
+// Returns a successor for token_range tr, capped at maximum_token.
+inline
+token next_token(const dht::token_range& tr) {
+    const auto& end_bound = tr.end();
+    if (end_bound) {
+        const auto& t = end_bound->value();
+        if (end_bound->is_inclusive()) {
+            return next_token_safe(t);
+        } else {
+            return t;
+        }
+    } else {
+        return maximum_token();
+    }
+}
+
 class i_partitioner {
 public:
     using ptr_type = std::unique_ptr<i_partitioner>;
