@@ -1834,7 +1834,7 @@ def write_build_file(f,
             command = echo -e $text > $out
             description = GEN $out
         rule swagger
-            command = {args.seastar_path}/scripts/seastar-json2code.py --create-cc -f $in -o $out
+            command = {seastar_path}/scripts/seastar-json2code.py --create-cc -f $in -o $out
             description = SWAGGER $out
         rule serializer
             command = {python} ./idl-compiler.py --ns ser -f $in -o $out
@@ -1887,7 +1887,23 @@ def write_build_file(f,
         rule wasm2wat
             command = wasm2wat $in > $out
             description = WASM2WAT $out
-        ''').format(**globals()))
+        ''').format(configure_args=configure_args,
+                    outdir=outdir,
+                    cxx=cxx,
+                    user_cflags=user_cflags,
+                    distro_extra_cflags=distro_extra_cflags,
+                    warnings=warnings,
+                    defines=defines,
+                    linker_flags=linker_flags,
+                    user_ldflags=user_ldflags,
+                    distro_extra_ldflags=distro_extra_ldflags,
+                    libs=libs,
+                    link_pool_depth=link_pool_depth,
+                    python=python,
+                    seastar_path=args.seastar_path,
+                    ninja=ninja,
+                    ragel_exec=ragel_exec))
+
     for binary in sorted(wasms):
         src = wasm_deps[binary]
         wasm = binary[:-4] + '.wasm'
