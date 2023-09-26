@@ -131,6 +131,7 @@ class forward_service : public seastar::peering_sharded_service<forward_service>
     } _stats;
     seastar::metrics::metric_groups _metrics;
 
+    optimized_optional<abort_source::subscription> _early_abort_subscription;
     bool _shutdown = false;
 
 public:
@@ -139,7 +140,9 @@ public:
         : _messaging(ms)
         , _proxy(p)
         , _db(db)
-        , _shared_token_metadata(stm) {
+        , _shared_token_metadata(stm)
+        , _early_abort_subscription(as.subscribe([this] () noexcept { _shutdown = true; }))
+    {
         register_metrics();
         init_messaging_service();
     }

@@ -308,7 +308,6 @@ locator::token_metadata_ptr forward_service::get_token_metadata_ptr() const noex
 }
 
 future<> forward_service::shutdown() {
-    _shutdown = true;
     return make_ready_future<>();
 }
 
