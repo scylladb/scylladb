@@ -1671,7 +1671,7 @@ forced_ldflags += '--build-id=sha1,'
 
 forced_ldflags += f'--dynamic-linker={dynamic_linker}'
 
-args.user_ldflags = forced_ldflags + ' ' + args.user_ldflags
+user_ldflags = forced_ldflags + ' ' + args.user_ldflags
 
 args.user_cflags += f" -ffile-prefix-map={curdir}=."
 
@@ -1682,7 +1682,7 @@ for mode in modes:
     # Those flags are passed not only to Scylla objects, but also to libraries
     # that we compile ourselves.
     modes[mode]['lib_cflags'] = args.user_cflags
-    modes[mode]['lib_ldflags'] = args.user_ldflags + linker_flags
+    modes[mode]['lib_ldflags'] = user_ldflags + linker_flags
 
 # cmake likes to separate things with semicolons
 def semicolon_separated(*flags):
@@ -1799,7 +1799,7 @@ for pkg in pkgs:
     args.user_cflags += ' ' + pkg_config(pkg, '--cflags')
     libs += ' ' + pkg_config(pkg, '--libs')
 user_cflags = args.user_cflags + ' -fvisibility=hidden'
-user_ldflags = args.user_ldflags + ' -fvisibility=hidden'
+user_ldflags += ' -fvisibility=hidden'
 if args.staticcxx:
     user_ldflags += " -static-libstdc++"
 if args.staticthrift:
