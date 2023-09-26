@@ -136,13 +136,8 @@ def try_compile(compiler, source='', flags=[]):
     return try_compile_and_link(compiler, source, flags=flags + ['-c'])
 
 
-def ensure_tmp_dir_exists():
-    if not os.path.exists(tempfile.tempdir):
-        os.makedirs(tempfile.tempdir)
-
-
 def try_compile_and_link(compiler, source='', flags=[], verbose=False):
-    ensure_tmp_dir_exists()
+    os.makedirs(tempfile.tempdir, exist_ok=True)
     with tempfile.NamedTemporaryFile() as sfile:
         ofd, ofile = tempfile.mkstemp()
         os.close(ofd)
@@ -296,7 +291,7 @@ def generate_compdb(compdb, ninja, buildfile, modes):
     #   the same source file usually confuse indexers
     # - it contains lots of irrelevant entries (for linker invocations,
     #   header-only compilations, etc.)
-    ensure_tmp_dir_exists()
+    os.makedirs(tempfile.tempdir, exist_ok=True)
     with tempfile.NamedTemporaryFile() as ninja_compdb:
         subprocess.run([ninja, '-f', buildfile, '-t', 'compdb'], stdout=ninja_compdb.file.fileno())
         ninja_compdb.file.flush()
