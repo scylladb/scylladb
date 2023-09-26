@@ -807,6 +807,9 @@ future<> start_decommission_task_impl::run() {
 
 future<> gossiper_decommission_task_impl::run() {
     return seastar::async([&] {
+        utils::get_local_injector().inject_with_handler("node_ops_gossiper_decommission_task_impl_run",
+            [&] (auto& handler) { return handler.wait_for_message(db::timeout_clock::now() + 10s); }).get();
+
         bool left_token_ring = false;
         auto uuid = node_ops_id::create_random_id();
         auto& db = _ss._db.local();
