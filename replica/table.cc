@@ -578,10 +578,22 @@ compaction_group& table::compaction_group_for_token(dht::token token) const noex
                                                 idx, _cg_manager->log2_compaction_groups(), _compaction_groups.size(), token));
     }
     auto& ret = *_compaction_groups[idx];
-    if (!ret.token_range().contains(token, dht::token_comparator())) {
+#ifndef SCYLLA_BUILD_MODE_RELEASE
+    if (token.is_minimum()) {
+        if (ret.group_id() != 0) {
+            on_fatal_internal_error(tlogger, format("compaction_group_for_token: compaction_group idx={} range={} mismatches token={}: expected idx={}",
+                    idx, ret.token_range(), token, 0));
+        }
+    } else if (token.is_maximum()) {
+        if (ret.group_id() != _compaction_groups.size() - 1) {
+            on_fatal_internal_error(tlogger, format("compaction_group_for_token: compaction_group idx={} range={} mismatches token={}: expected idx={}",
+                    idx, ret.token_range(), token, _compaction_groups.size() - 1));
+        }
+    } else if (!ret.token_range().contains(token, dht::token_comparator())) {
         on_fatal_internal_error(tlogger, format("compaction_group_for_token: compaction_group idx={} range={} does not contain token={}",
                 idx, ret.token_range(), token));
     }
+#endif
     return ret;
 }
 
