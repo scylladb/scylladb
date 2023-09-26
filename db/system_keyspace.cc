@@ -11,6 +11,7 @@
 #include <boost/range/adaptor/transformed.hpp>
 
 #include <seastar/core/coroutine.hh>
+#include <seastar/coroutine/parallel_for_each.hh>
 #include "system_keyspace.hh"
 #include "cql3/untyped_result_set.hh"
 #include "utils/fb_utilities.hh"
@@ -1463,6 +1464,27 @@ future<std::unordered_map<table_id, db_clock::time_point>> system_keyspace::load
         }
     }
     co_return result;
+}
+
+future<> system_keyspace::drop_truncation_rp_records() {
+    sstring req = format("SELECT table_uuid, shard, segment_id from system.{}", TRUNCATED);
+    auto rs = co_await execute_cql(req);
+
+    bool any = false;
+    co_await coroutine::parallel_for_each(rs->begin(), rs->end(), [&] (const cql3::untyped_result_set_row& row) -> future<> {
+        auto table_uuid = table_id(row.get_as<utils::UUID>("table_uuid"));
+        auto shard = row.get_as<int32_t>("shard");
+        auto segment_id = row.get_as<int64_t>("segment_id");
+
+        if (segment_id != 0) {
+            any = true;
+            sstring req = format("UPDATE system.{} SET segment_id = 0, position = 0 WHERE table_uuid = {} AND shard = {}", TRUNCATED, table_uuid, shard);
+            co_await execute_cql(req);
+        }
+    });
+    if (any) {
+        co_await force_blocking_flush(TRUNCATED);
+    }
 }
 
 future<> system_keyspace::save_truncation_record(const replica::column_family& cf, db_clock::time_point truncated_at, db::replay_position rp) {
