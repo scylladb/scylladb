@@ -29,7 +29,6 @@ configure_args = str.join(' ', [shlex.quote(x) for x in sys.argv[1:] if not x.st
 
 distro_extra_cflags = ''
 distro_extra_ldflags = ''
-distro_extra_cmake_args = []
 employ_ld_trickery = True
 
 # distro-specific setup
@@ -1710,7 +1709,7 @@ def configure_seastar(build_dir, mode, mode_config):
         '-DCMAKE_EXPORT_COMPILE_COMMANDS=ON',
         '-DSeastar_SCHEDULING_GROUPS_COUNT=16',
         '-DSeastar_IO_URING=OFF', # io_uring backend is not stable enough
-    ] + distro_extra_cmake_args
+    ]
 
     if args.stack_guards is not None:
         stack_guards = 'ON' if args.stack_guards else 'OFF'
