@@ -30,7 +30,6 @@ SEASTAR_THREAD_TEST_CASE(test_many_100) {
     rpc_config{ .network_delay = 20ms, .local_delay = 1ms });
 }
 
-#ifndef SEASTAR_DEBUG
 SEASTAR_THREAD_TEST_CASE(test_many_400) {
     replication_test<steady_clock_type>(
         {.nodes = 400, .total_values = 10,
@@ -55,4 +54,3 @@ SEASTAR_THREAD_TEST_CASE(test_many_1000) {
     , true, tick_delay,
     rpc_config{ .network_delay = 20ms, .local_delay = 1ms });
 }
-#endif

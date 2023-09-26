@@ -81,3 +81,5 @@ custom_args:
         - '-c1 -m256M'
 run_in_debug:
     - logalloc_standard_allocator_segment_pool_backend_test
+skip_in_debug:
+    - cache_algorithm_test

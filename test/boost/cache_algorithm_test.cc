@@ -9,10 +9,9 @@
 #include <seastar/testing/test_case.hh>
 #include "test/lib/cql_test_env.hh"
 
-// These tests are slow, and tuned to a particular amount of memory
-// (and --memory is ignored in debug mode).
-// Hence they are not run in debug.
-#ifndef SEASTAR_DEBUG
+// NOTE: These tests are slow, and tuned to a particular amount of memory
+//       (and --memory is ignored in debug mode).
+//       Hence they should be disabled in debug.
 
 // The problem with naive index caching is that every uncached read drags a full
 // index page into the cache. But the index page can be orders of magnitude bigger
@@ -177,5 +176,3 @@ SEASTAR_TEST_CASE(test_index_is_cached_in_big_partition_workload) {
         BOOST_REQUIRE_EQUAL(get_misses(), misses_before);
     }, std::move(cfg));
 }
-
-#endif
