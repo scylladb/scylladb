@@ -513,10 +513,10 @@ future<> migration_notifier::update_view(view_ptr view, bool columns_changed) {
     });
 }
 
-future<> migration_notifier::update_tablet_metadata() {
-    return seastar::async([this] {
-        _listeners.thread_for_each([] (migration_listener* listener) {
-            listener->on_update_tablet_metadata();
+future<> migration_notifier::update_tablet_metadata(locator::tablet_metadata_change_hint hint) {
+    return seastar::async([this, hint = std::move(hint)] {
+        _listeners.thread_for_each([&hint] (migration_listener* listener) {
+            listener->on_update_tablet_metadata(hint);
         });
     });
 }

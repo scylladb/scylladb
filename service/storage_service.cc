@@ -5245,7 +5245,7 @@ future<> storage_service::keyspace_changed(const sstring& ks_name) {
     return update_topology_change_info(reason, acquire_merge_lock::no);
 }
 
-void storage_service::on_update_tablet_metadata() {
+void storage_service::on_update_tablet_metadata(const locator::tablet_metadata_change_hint& hint) {
     if (this_shard_id() != 0) {
         // replicate_to_all_cores() takes care of other shards.
         return;
