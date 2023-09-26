@@ -1806,15 +1806,13 @@ else:
 
 os.makedirs(outdir, exist_ok=True)
 
-ragel_exec = args.ragel_exec
-
-
 def write_build_file(f,
                      arch,
                      ninja,
                      scylla_product,
                      scylla_version,
-                     scylla_release):
+                     scylla_release,
+                     args):
     f.write(textwrap.dedent('''\
         configure_args = {configure_args}
         builddir = {outdir}
@@ -1886,7 +1884,7 @@ def write_build_file(f,
             description = WASM2WAT $out
         ''').format(configure_args=configure_args,
                     outdir=outdir,
-                    cxx=cxx,
+                    cxx=args.cxx,
                     user_cflags=user_cflags,
                     warnings=warnings,
                     defines=defines,
@@ -1894,10 +1892,10 @@ def write_build_file(f,
                     user_ldflags=user_ldflags,
                     libs=libs,
                     link_pool_depth=link_pool_depth,
-                    python=python,
+                    python=args.python,
                     seastar_path=args.seastar_path,
                     ninja=ninja,
-                    ragel_exec=ragel_exec))
+                    ragel_exec=args.ragel_exec))
 
     for binary in sorted(wasms):
         src = wasm_deps[binary]
@@ -2379,5 +2377,6 @@ with open(buildfile, 'w') as f:
                      ninja,
                      scylla_product,
                      scylla_version,
-                     scylla_release)
+                     scylla_release,
+                     args)
 generate_compdb('compile_commands.json', ninja, buildfile, selected_modes)
