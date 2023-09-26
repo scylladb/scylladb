@@ -156,7 +156,7 @@ void cql_server::event_notifier::on_update_aggregate(const sstring& ks_name, con
     elogger.warn("%s event ignored", __func__);
 }
 
-void cql_server::event_notifier::on_update_tablet_metadata() {}
+void cql_server::event_notifier::on_update_tablet_metadata(const locator::tablet_metadata_change_hint&) {}
 
 void cql_server::event_notifier::on_drop_keyspace(const sstring& ks_name)
 {

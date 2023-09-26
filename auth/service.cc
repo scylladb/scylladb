@@ -68,7 +68,7 @@ private:
     void on_update_function(const sstring& ks_name, const sstring& function_name) override {}
     void on_update_aggregate(const sstring& ks_name, const sstring& aggregate_name) override {}
     void on_update_view(const sstring& ks_name, const sstring& view_name, bool columns_changed) override {}
-    void on_update_tablet_metadata() override {}
+    void on_update_tablet_metadata(const locator::tablet_metadata_change_hint&) override {}
 
     void on_drop_keyspace(const sstring& ks_name) override {
         // Do it in the background.

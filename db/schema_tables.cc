@@ -1509,7 +1509,7 @@ static future<> merge_tables_and_views(distributed<service::storage_proxy>& prox
         // and so that compaction groups are not destroyed altogether.
         // We must also do it before tables are created so that new tables see the tablet map.
         co_await db.invoke_on_all([&] (replica::database& db) -> future<> {
-            co_await db.get_notifier().update_tablet_metadata();
+            co_await db.get_notifier().update_tablet_metadata({});
         });
     }
 
