@@ -4959,30 +4959,8 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(shar
                     auto source_dc = std::get<rebuild_param>(_topology_state_machine._topology.req_param[raft_server.id()]).source_dc;
                     slogger.info("raft topology: rebuild from dc: {}", source_dc == "" ? "(any dc)" : source_dc);
                     co_await retrier(_rebuild_result, [&] () -> future<> {
-                        auto tmptr = get_token_metadata_ptr();
-                        if (is_repair_based_node_ops_enabled(streaming::stream_reason::rebuild)) {
-                            co_await _repair.local().rebuild_with_repair(tmptr, std::move(source_dc));
-                        } else {
-                            auto streamer = make_lw_shared<dht::range_streamer>(_db, _stream_manager, tmptr, _abort_source,
-                                    get_broadcast_address(), _snitch.local()->get_location(), "Rebuild", streaming::stream_reason::rebuild);
-                            streamer->add_source_filter(std::make_unique<dht::range_streamer::failure_detector_source_filter>(_gossiper.get_unreachable_members()));
-                            if (source_dc != "") {
-                                streamer->add_source_filter(std::make_unique<dht::range_streamer::single_datacenter_filter>(source_dc));
-                            }
-                            auto ks_erms = _db.local().get_non_local_strategy_keyspaces_erms();
-                            for (const auto& [keyspace_name, erm] : ks_erms) {
-                                co_await streamer->add_ranges(keyspace_name, erm, get_ranges_for_endpoint(erm, utils::fb_utilities::get_broadcast_address()), _gossiper, false);
-                            }
-                            try {
-                                co_await streamer->stream_async();
-                                slogger.info("raft topology: streaming for rebuild successful");
-                            } catch (...) {
-                                auto ep = std::current_exception();
-                                // This is used exclusively through JMX, so log the full trace but only throw a simple RTE
-                                slogger.warn("raft topology: error while rebuilding node: {}", ep);
-                                std::rethrow_exception(std::move(ep));
-                            }
-                        }
+                        auto task = co_await get_task_manager_module().make_and_start_task<node_ops::raft_rebuild_handler_task_impl>({}, "", *this, std::move(source_dc));
+                        co_await task->done();
                     });
                     _rebuild_result.reset();
                     result.status = raft_topology_cmd_result::command_status::success;

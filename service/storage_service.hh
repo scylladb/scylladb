@@ -106,6 +106,7 @@ class gossiper_decommission_task_impl;
 class gossiper_remove_node_task_impl;
 class raft_bootstrap_handler_task_impl;
 class raft_replace_handler_task_impl;
+class raft_rebuild_handler_task_impl;
 }
 
 namespace service {
@@ -836,6 +837,7 @@ private:
     friend class node_ops::gossiper_remove_node_task_impl;
     friend class node_ops::raft_bootstrap_handler_task_impl;
     friend class node_ops::raft_replace_handler_task_impl;
+    friend class node_ops::raft_rebuild_handler_task_impl;
 };
 
 }

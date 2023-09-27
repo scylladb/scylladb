@@ -807,6 +807,41 @@ future<> raft_rebuild_task_impl::run() {
     });
 }
 
+raft_rebuild_handler_task_impl::raft_rebuild_handler_task_impl(tasks::task_manager::module_ptr module,
+        std::string entity,
+        service::storage_service& ss,
+        sstring source_dc) noexcept
+    : rebuild_node_task_impl(std::move(module), tasks::task_id::create_random_id(), ss.get_task_manager_module().new_sequence_number(), "raft handling", std::move(entity), tasks::task_id::create_null_id(), ss)
+    , _source_dc(std::move(source_dc))
+{}
+
+future<> raft_rebuild_handler_task_impl::run() {
+    auto tmptr = _ss.get_token_metadata_ptr();
+    if (_ss.is_repair_based_node_ops_enabled(streaming::stream_reason::rebuild)) {
+        co_await _ss._repair.local().rebuild_with_repair(tmptr, std::move(_source_dc));
+    } else {
+        auto streamer = make_lw_shared<dht::range_streamer>(_ss._db, _ss._stream_manager, tmptr, _ss._abort_source,
+                _ss.get_broadcast_address(), _ss._snitch.local()->get_location(), "Rebuild", streaming::stream_reason::rebuild);
+        streamer->add_source_filter(std::make_unique<dht::range_streamer::failure_detector_source_filter>(_ss._gossiper.get_unreachable_members()));
+        if (_source_dc != "") {
+            streamer->add_source_filter(std::make_unique<dht::range_streamer::single_datacenter_filter>(_source_dc));
+        }
+        auto ks_erms = _ss._db.local().get_non_local_strategy_keyspaces_erms();
+        for (const auto& [keyspace_name, erm] : ks_erms) {
+            co_await streamer->add_ranges(keyspace_name, erm, _ss.get_ranges_for_endpoint(erm, utils::fb_utilities::get_broadcast_address()), _ss._gossiper, false);
+        }
+        try {
+            co_await streamer->stream_async();
+            tasks::tmlogger.info("raft topology: streaming for rebuild successful");
+        } catch (...) {
+            auto ep = std::current_exception();
+            // This is used exclusively through JMX, so log the full trace but only throw a simple RTE
+            tasks::tmlogger.warn("raft topology: error while rebuilding node: {}", ep);
+            std::rethrow_exception(std::move(ep));
+        }
+    }
+}
+
 start_decommission_task_impl::start_decommission_task_impl(tasks::task_manager::module_ptr module,
         std::string entity,
         service::storage_service& ss) noexcept

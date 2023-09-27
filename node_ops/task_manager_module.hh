@@ -324,6 +324,18 @@ protected:
     virtual future<> run() override;
 };
 
+class raft_rebuild_handler_task_impl : public rebuild_node_task_impl {
+private:
+    sstring _source_dc;
+public:
+    raft_rebuild_handler_task_impl(tasks::task_manager::module_ptr module,
+            std::string entity,
+            service::storage_service& ss,
+            sstring source_dc) noexcept;
+protected:
+    virtual future<> run() override;
+};
+
 class gossiper_rebuild_task_impl : public rebuild_node_task_impl {
 private:
     sstring _source_dc;
