@@ -433,6 +433,20 @@ protected:
     virtual future<> run() override;
 };
 
+class raft_remove_node_handler_task_impl : public remove_node_task_impl {
+private:
+    raft::server_id _id;
+    gms::inet_address _ip;
+public:
+    raft_remove_node_handler_task_impl(tasks::task_manager::module_ptr module,
+            std::string entity,
+            service::storage_service& ss,
+            raft::server_id id,
+            gms::inet_address ip) noexcept;
+protected:
+    virtual future<> run() override;
+};
+
 class gossiper_remove_node_task_impl : public remove_node_task_impl {
 private:
     locator::host_id _host_id;

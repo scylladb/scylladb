@@ -4929,31 +4929,9 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(shar
                     const auto& am = _group0->address_map();
                     auto ip = am.find(id); // map node id to ip
                     assert (ip); // what to do if address is unknown?
-                    co_await retrier(_remove_result[id], coroutine::lambda([&] () {
-                        auto as = make_shared<abort_source>();
-                        auto sub = _abort_source.subscribe([as] () noexcept {
-                            if (!as->abort_requested()) {
-                                as->request_abort();
-                            }
-                        });
-                        if (is_repair_based_node_ops_enabled(streaming::stream_reason::removenode)) {
-                            if (!_topology_state_machine._topology.req_param.contains(id)) {
-                                on_internal_error(slogger, ::format("Cannot find request_param for node id {}", id));
-                            }
-                            // FIXME: we should not need to translate ids to IPs here. See #6403.
-                            std::list<gms::inet_address> ignored_ips;
-                            for (const auto& ignored_id : std::get<removenode_param>(_topology_state_machine._topology.req_param[id]).ignored_ids) {
-                                auto ip = _group0->address_map().find(ignored_id);
-                                if (!ip) {
-                                    on_fatal_internal_error(slogger, ::format("Cannot find a mapping from node id {} to its ip", ignored_id));
-                                }
-                                ignored_ips.push_back(*ip);
-                            }
-                            auto ops = seastar::make_shared<node_ops_info>(node_ops_id::create_random_id(), as, std::move(ignored_ips));
-                            return _repair.local().removenode_with_repair(get_token_metadata_ptr(), *ip, ops);
-                        } else {
-                            return removenode_with_stream(*ip, as);
-                        }
+                    co_await retrier(_remove_result[id], coroutine::lambda([&] () -> future<> {
+                        auto task = co_await get_task_manager_module().make_and_start_task<node_ops::raft_remove_node_handler_task_impl>({}, "", *this, id, *ip);
+                        co_await task->done();
                     }));
                     result.status = raft_topology_cmd_result::command_status::success;
                 }

@@ -1293,4 +1293,41 @@ future<> raft_remove_node_task_impl::run() {
     }
 }
 
+raft_remove_node_handler_task_impl::raft_remove_node_handler_task_impl(tasks::task_manager::module_ptr module,
+        std::string entity,
+        service::storage_service& ss,
+        raft::server_id id,
+        gms::inet_address ip) noexcept
+    : remove_node_task_impl(std::move(module), tasks::task_id::create_random_id(), ss.get_task_manager_module().new_sequence_number(), "raft handling", std::move(entity), tasks::task_id::create_null_id(), ss)
+    , _id(id)
+    , _ip(ip)
+{}
+
+future<> raft_remove_node_handler_task_impl::run() {
+    auto as = make_shared<abort_source>();
+    auto sub = _ss._abort_source.subscribe([as] () noexcept {
+        if (!as->abort_requested()) {
+            as->request_abort();
+        }
+    });
+    if (_ss.is_repair_based_node_ops_enabled(streaming::stream_reason::removenode)) {
+        if (!_ss._topology_state_machine._topology.req_param.contains(_id)) {
+            on_internal_error(tasks::tmlogger, ::format("Cannot find request_param for node id {}", _id));
+        }
+        // FIXME: we should not need to translate ids to IPs here. See #6403.
+        std::list<gms::inet_address> ignored_ips;
+        for (const auto& ignored_id : std::get<service::removenode_param>(_ss._topology_state_machine._topology.req_param[_id]).ignored_ids) {
+            auto ip = _ss._group0->address_map().find(ignored_id);
+            if (!ip) {
+                on_fatal_internal_error(tasks::tmlogger, ::format("Cannot find a mapping from node id {} to its ip", ignored_id));
+            }
+            ignored_ips.push_back(*ip);
+        }
+        auto ops = seastar::make_shared<node_ops_info>(node_ops_id::create_random_id(), as, std::move(ignored_ips));
+        return _ss._repair.local().removenode_with_repair(_ss.get_token_metadata_ptr(), _ip, ops);
+    } else {
+        return _ss.removenode_with_stream(_ip, as);
+    }
+}
+
 }
