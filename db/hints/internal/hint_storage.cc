@@ -261,14 +261,15 @@ future<> remove_irrelevant_shards_directories(const fs::path& hint_directory) {
 } // anonymous namespace
 
 future<> rebalance(fs::path hints_directory) {
-        // Scan currently present hint segments.
-        hints_segments_map current_hints_segments = co_await get_current_hints_segments(hints_directory);
+    // Scan currently present hint segments.
+    hints_segments_map current_hints_segments = co_await get_current_hints_segments(hints_directory);
 
-        // Move segments to achieve an even distribution of files among all present shards.
-        co_await rebalance_segments(hints_directory, current_hints_segments);
+    // Move segments to achieve an even distribution of files among all present shards.
+    co_await rebalance_segments(hints_directory, current_hints_segments);
 
-        // Remove the directories of shards that are not present anymore - they should not have any segments by now
-        co_await remove_irrelevant_shards_directories(hints_directory);
+    // Remove the directories of shards that are not present anymore.
+    // They should not have any segments by now.
+    co_await remove_irrelevant_shards_directories(hints_directory);
 }
 
 } // namespace internal
