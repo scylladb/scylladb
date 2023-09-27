@@ -2,8 +2,6 @@
 ScyllaDB and Apache Cassandra Compatibility 
 =============================================
 
-Latest update: ScyllaDB 5.0
-
 ScyllaDB is a drop-in replacement for Apache Cassandra 3.11, with additional features from Apache Cassandra 4.0.
 This page contains information about ScyllaDB compatibility with Apache Cassandra. 
 
@@ -101,7 +99,7 @@ Consistency Level (read and write)
 | LOCAL_SERIAL                        | |v|:sup:`*`  |
 +-------------------------------------+--------------+
 
-:sup:`*` From ScyllaDB 4.0. See :doc:`Scylla LWT </using-scylla/lwt>`.
+:sup:`*` See :doc:`Scylla LWT </using-scylla/lwt>`.
 
 
 Snitches
@@ -135,16 +133,14 @@ Partitioners
 +=====================================+==============+
 | Murmur3Partitioner (default)        |   |v|        |
 +-------------------------------------+--------------+
-| RandomPartitioner                   | |x| :sup:`*` |
+| RandomPartitioner                   | |x|          |
 +-------------------------------------+--------------+
 | OrderPreservingPartitioner          | |x|          |
 +-------------------------------------+--------------+
-| ByteOrderedPartitioner              | |x| :sup:`*` |
+| ByteOrderedPartitioner              | |x|          |
 +-------------------------------------+--------------+
 | CollatingOrderPreservingPartitioner |    |x|       |
 +-------------------------------------+--------------+
-
-:sup:`*` Removed in ScyllaDB 4.0
 
 Protocol Options
 ^^^^^^^^^^^^^^^^
@@ -198,11 +194,9 @@ Repair and Consistency
 +----------------------------------------------------------------------+--------------+
 |:doc:`Hinted Handoff </architecture/anti-entropy/hinted-handoff>`     | |v|          |
 +----------------------------------------------------------------------+--------------+
-|:doc:`Lightweight Transactions </using-scylla/lwt>`                   |  |v|:sup:`*` |
+|:doc:`Lightweight Transactions </using-scylla/lwt>`                   |  |v|         |
 +----------------------------------------------------------------------+--------------+
 
-
-:sup:`*` From ScyllaDB 4.0. See :doc:`Scylla LWT </using-scylla/lwt>`.
 
 Replica Replacement Strategy
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -235,12 +229,11 @@ Indexing and Caching
 +==============================================================+======================================================================================+
 |row / key cache                                               | |x| (More on `Scylla memory and cache <http://www.scylladb.com/technology/memory/>`_)|
 +--------------------------------------------------------------+--------------------------------------------------------------------------------------+
-|:doc:`Secondary Index </using-scylla/secondary-indexes>`      | |v| :sup:`*`                                                                         |
+|:doc:`Secondary Index </using-scylla/secondary-indexes>`      | |v|                                                                                  |
 +--------------------------------------------------------------+--------------------------------------------------------------------------------------+
-|:doc:`Materialized Views </using-scylla/materialized-views>`  |  |v|:sup:`*`                                                                         |
+|:doc:`Materialized Views </using-scylla/materialized-views>`  |  |v|                                                                                 |
 +--------------------------------------------------------------+--------------------------------------------------------------------------------------+
 
-:sup:`*` In ScyllaDB Open Source and ScyllaDB Enterprise from 2019.1
 
 Additional Features
 ^^^^^^^^^^^^^^^^^^^
@@ -370,7 +363,7 @@ Create Table Compaction
 |:ref:`TimeWindowCompactionStrategy <TWCS>` (TWCS)   | |v|                                 |
 +----------------------------------------------------+-------------------------------------+
 
-:sup:`*`  Deprecated in ScyllaDB 4.0, use TWCS instead
+:sup:`*`  Deprecated; use TWCS instead.
 
 Create Table Compression
 ........................

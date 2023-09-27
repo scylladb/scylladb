@@ -154,11 +154,11 @@ Check the :doc:`Operating System Support Guide </getting-started/os-support>` fo
 
 Is Scylla Apache Cassandra compatible? Is API / interface X compatible?
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-Check the `Cassandra Compatibility <http://www.scylladb.com/technology/status/#cassandra-compatibility>`_ section for compatibility matrix.
+See :doc:`ScyllaDB and Apache Cassandra Compatibility </using-scylla/cassandra-compatibility>` for compatibility matrix.
 
 Which version(s) of Apache Cassandra is Scylla compatible with? Will Scylla be compatible with future Cassandra versions?
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-Check the `Cassandra Compatibility <http://www.scylladb.com/technology/status/#cassandra-compatibility>`_ section for current and future Apache Cassandra release compatibility.
+See :doc:`ScyllaDB and Apache Cassandra Compatibility </using-scylla/cassandra-compatibility>` for current and future Apache Cassandra release compatibility.
 
 
 I am upgrading my nodes to a version that uses a newer SSTable format, when will the nodes start using the new SSTable format?
