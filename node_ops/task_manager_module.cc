@@ -1024,9 +1024,6 @@ future<> gossiper_decommission_task_impl::run() {
 }
 
 future<> raft_decommission_task_impl::run() {
-    co_await utils::get_local_injector().inject_with_handler("node_ops_raft_decommission_task_impl_run",
-            [] (auto& handler) { return handler.wait_for_message(db::timeout_clock::now() + 10s); });
-
     auto& raft_server = _ss._group0->group0_server();
 
     auto shutdown_request_future = make_ready_future<>();
@@ -1081,7 +1078,10 @@ raft_decommission_handler_task_impl::raft_decommission_handler_task_impl(tasks::
 {}
 
 future<> raft_decommission_handler_task_impl::run() {
-    return _ss.unbootstrap();
+    co_await utils::get_local_injector().inject_with_handler("node_ops_raft_decommission_handler_task_impl_run",
+            [] (auto& handler) { return handler.wait_for_message(db::timeout_clock::now() + 10s); });
+
+    co_await _ss.unbootstrap();
 }
 
 start_remove_node_task_impl::start_remove_node_task_impl(tasks::task_manager::module_ptr module,

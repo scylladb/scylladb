@@ -37,17 +37,18 @@ async def check_single_child(tm: TaskManagerClient, server: ServerInfo, parent_s
     assert parent_status.sequence_number == child_status.sequence_number, f"Child task with id {child_id} did not inherit parent's sequence number"
     assert child_status.parent_id == parent_status.id, f"Parent id of task with id {child_id} is not set"
 
-async def check_top_level_task(tm: TaskManagerClient, server: ServerInfo, module_name: str, expected_state: str,
-                               expected_type: str) -> TaskStatus:
-    tasks = [stats for stats in await tm.list_tasks(server.ip_addr, module_name) if stats.scope == "node"]
+async def check_root_task(tm: TaskManagerClient, server: ServerInfo, module_name: str, expected_state: str,
+                               expected_type: str, expected_scope: str, wait: bool = True) -> TaskStatus:
+    tasks = [stats for stats in await tm.list_tasks(server.ip_addr, module_name) if stats.scope == expected_scope]
     assert tasks, "A task wasn't created"
     assert len(tasks) == 1, "More than one task was created"
 
-    status = await tm.wait_for_task(server.ip_addr, tasks[0].task_id)
+    status = await tm.wait_for_task(server.ip_addr, tasks[0].task_id) if wait else await tm.get_task_status(server.ip_addr, tasks[0].task_id)
     assert status.state == expected_state, "Task failed"
     assert status.type == expected_type, "Wrong task type"
 
     return status
+
 
 async def check_bootstrap(manager: ManagerClient, tm: TaskManagerClient, servers: list[ServerInfo],
                           module_name: str, raft: bool) -> list[ServerInfo]:
@@ -55,8 +56,10 @@ async def check_bootstrap(manager: ManagerClient, tm: TaskManagerClient, servers
     bootstrapped_server = await prepare_server(manager, raft)
 
     logger.info("Checking top level bootstrap task")
-    status = await check_top_level_task(tm, bootstrapped_server, module_name, "done", "bootstrap")
+    status = await check_root_task(tm, bootstrapped_server, module_name, "done", "bootstrap", "node")
     await check_single_child(tm, bootstrapped_server, status, "done", "bootstrap", "raft entry" if raft else "gossiper entry")
+    if raft:
+        await check_root_task(tm, bootstrapped_server, module_name, "done", "bootstrap", "raft handling")
 
     servers.append(bootstrapped_server)
     return servers
@@ -74,8 +77,10 @@ async def check_replace(manager: ManagerClient, tm: TaskManagerClient, servers: 
     replacing_server = await prepare_server(manager, raft, replace_cfg)
 
     logger.info("Checking top level replace task")
-    status = await check_top_level_task(tm, replacing_server, module_name, "done", "bootstrap")
+    status = await check_root_task(tm, replacing_server, module_name, "done", "bootstrap", "node")
     await check_single_child(tm, replacing_server, status, "done", "replace", "raft entry" if raft else "gossiper entry")
+    if raft:
+        await check_root_task(tm, replacing_server, module_name, "done", "replace", "raft handling")
 
     servers = servers[1:] + [replacing_server]
     return servers
@@ -93,8 +98,10 @@ async def check_rebuild(manager: ManagerClient, tm: TaskManagerClient, servers: 
     await wait_for(_all_alive, time.time() + 60)
 
     logger.info("Checking top level rebuild task")
-    status = await check_top_level_task(tm, rebuilt_server, module_name, "done", "rebuild")
+    status = await check_root_task(tm, rebuilt_server, module_name, "done", "rebuild", "node")
     await check_single_child(tm, rebuilt_server, status, "done", "rebuild", "raft entry" if raft else "gossiper entry")
+    if raft:
+        await check_root_task(tm, rebuilt_server, module_name, "done", "rebuild", "raft handling")
 
     return servers
 
@@ -111,16 +118,19 @@ async def check_remove_node(manager: ManagerClient, tm: TaskManagerClient, serve
     await manager.remove_node(removing_server.server_id, removed_server.server_id)
 
     logger.info("Checking top level remove node task")
-    status = await check_top_level_task(tm, removing_server, module_name, "done", "removenode")
+    status = await check_root_task(tm, removing_server, module_name, "done", "removenode", "node")
     await check_single_child(tm, removing_server, status, "done", "removenode", "raft entry" if raft else "gossiper entry")
+    if raft:
+        [await check_root_task(tm, server, module_name, "done", "removenode", "raft handling") for server in servers[1:]]
 
     return servers[1:]
 
 async def check_decommission(manager: ManagerClient, tm: TaskManagerClient, servers: list[ServerInfo],
                              module_name: str, raft: bool) -> list[ServerInfo]:
     async def _check_top_level_decommission_task(server: ServerInfo, handler):
-        async def _get_tasks():
-            if await tm.list_tasks(server.ip_addr, module_name):
+        async def _get_tasks(min_num: int = 1):
+            tasks = await tm.list_tasks(server.ip_addr, module_name)
+            if len(tasks) >= min_num:
                 return True
 
         async def _get_children(parent_id: TaskID):
@@ -130,16 +140,15 @@ async def check_decommission(manager: ManagerClient, tm: TaskManagerClient, serv
 
         logger.info("Checking top level decommission node task")
         await wait_for(_get_tasks, time.time() + 100.)  # Wait until task is created.
-        tasks = [stats for stats in await tm.list_tasks(server.ip_addr, module_name) if stats.scope == "node"]
-        assert tasks, "Decommission task wasn't created"
-        assert len(tasks) == 1, "More than one decommision task was created"
-
-        status = await tm.get_task_status(server.ip_addr, tasks[0].task_id)
-        assert status.type == "decommission", "Wrong task type"
-        assert status.state == "running", "Wrong task state"
+        status = await check_root_task(tm, server, module_name, "running", "decommission", "node", False)
 
         await wait_for(partial(_get_children, status.id), time.time() + 100.)
         await check_single_child(tm, server, status, "running", "decommission", "raft entry" if raft else "gossiper entry")
+
+        if raft:
+            logger.info("Checking raft handler decommission task")
+            await wait_for(partial(_get_tasks, 2), time.time() + 100.)  # Wait until task is created.
+            status = await check_root_task(tm, server, module_name, "running", "decommission", "raft handling", False)
 
         await handler.message()
 
@@ -147,7 +156,7 @@ async def check_decommission(manager: ManagerClient, tm: TaskManagerClient, serv
 
     decommissioned_server = servers[0]
     await tm.drain_module_tasks(decommissioned_server.ip_addr, module_name)
-    injection = "node_ops_raft_decommission_task_impl_run" if raft else "node_ops_gossiper_decommission_task_impl_run"
+    injection = "node_ops_raft_decommission_handler_task_impl_run" if raft else "node_ops_gossiper_decommission_task_impl_run"
     handler = await inject_error_one_shot(manager.api, decommissioned_server.ip_addr, injection)
     logger.info(f"Decommissioning node {decommissioned_server}")
     await asyncio.gather(*(manager.decommission_node(decommissioned_server.server_id),
