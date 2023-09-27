@@ -130,7 +130,7 @@ async def check_decommission(manager: ManagerClient, tm: TaskManagerClient, serv
 
         logger.info("Checking top level decommission node task")
         await wait_for(_get_tasks, time.time() + 100.)  # Wait until task is created.
-        tasks = await tm.list_tasks(server.ip_addr, module_name)
+        tasks = [stats for stats in await tm.list_tasks(server.ip_addr, module_name) if stats.scope == "node"]
         assert tasks, "Decommission task wasn't created"
         assert len(tasks) == 1, "More than one decommision task was created"
 

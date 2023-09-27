@@ -376,6 +376,15 @@ protected:
     virtual future<> run() override;
 };
 
+class raft_decommission_handler_task_impl : public decommission_node_task_impl {
+public:
+    raft_decommission_handler_task_impl(tasks::task_manager::module_ptr module,
+            std::string entity,
+            service::storage_service& ss) noexcept;
+protected:
+    virtual future<> run() override;
+};
+
 class gossiper_decommission_task_impl : public decommission_node_task_impl {
 private:
     std::exception_ptr& _leave_group0_ex;

@@ -4910,7 +4910,10 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(shar
                 }
                 break;
                 case node_state::decommissioning:
-                    co_await retrier(_decomission_result, coroutine::lambda([&] () { return unbootstrap(); }));
+                    co_await retrier(_decomission_result, coroutine::lambda([&] () -> future<> {
+                        auto task = co_await get_task_manager_module().make_and_start_task<node_ops::raft_decommission_handler_task_impl>({}, "", *this);
+                        co_await task->done();
+                    }));
                     result.status = raft_topology_cmd_result::command_status::success;
                 break;
                 case node_state::normal: {

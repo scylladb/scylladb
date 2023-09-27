@@ -1074,6 +1074,16 @@ future<> raft_decommission_task_impl::run() {
     co_await _ss._gossiper.add_local_application_state({{ gms::application_state::STATUS, gms::versioned_value::left({}, _ss._gossiper.now().time_since_epoch().count()) }});
 }
 
+raft_decommission_handler_task_impl::raft_decommission_handler_task_impl(tasks::task_manager::module_ptr module,
+        std::string entity,
+        service::storage_service& ss) noexcept
+    : decommission_node_task_impl(std::move(module), tasks::task_id::create_random_id(), ss.get_task_manager_module().new_sequence_number(), "raft handling", std::move(entity), tasks::task_id::create_null_id(), ss)
+{}
+
+future<> raft_decommission_handler_task_impl::run() {
+    return _ss.unbootstrap();
+}
+
 start_remove_node_task_impl::start_remove_node_task_impl(tasks::task_manager::module_ptr module,
         std::string entity,
         service::storage_service& ss,
