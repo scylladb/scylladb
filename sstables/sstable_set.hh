@@ -116,10 +116,9 @@ public:
 
 class sstable_set : public enable_lw_shared_from_this<sstable_set> {
     std::unique_ptr<sstable_set_impl> _impl;
-    schema_ptr _schema;
 public:
     ~sstable_set();
-    sstable_set(std::unique_ptr<sstable_set_impl> impl, schema_ptr s);
+    sstable_set(std::unique_ptr<sstable_set_impl> impl);
     sstable_set(const sstable_set&);
     sstable_set(sstable_set&&) noexcept;
     sstable_set& operator=(const sstable_set&);

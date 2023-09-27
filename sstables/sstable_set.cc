@@ -121,14 +121,12 @@ std::ostream& operator<<(std::ostream& os, const sstables::sstable_run& run) {
     return os;
 }
 
-sstable_set::sstable_set(std::unique_ptr<sstable_set_impl> impl, schema_ptr s)
+sstable_set::sstable_set(std::unique_ptr<sstable_set_impl> impl)
         : _impl(std::move(impl))
-        , _schema(std::move(s))
 {}
 
 sstable_set::sstable_set(const sstable_set& x)
         : _impl(x._impl->clone())
-        , _schema(x._schema)
 {}
 
 sstable_set::sstable_set(sstable_set&&) noexcept = default;
@@ -756,14 +754,13 @@ std::unique_ptr<sstable_set_impl> time_window_compaction_strategy::make_sstable_
 }
 
 sstable_set make_partitioned_sstable_set(schema_ptr schema, bool use_level_metadata) {
-    return sstable_set(std::make_unique<partitioned_sstable_set>(schema, use_level_metadata), schema);
+    return sstable_set(std::make_unique<partitioned_sstable_set>(schema, use_level_metadata));
 }
 
 sstable_set
 compaction_strategy::make_sstable_set(schema_ptr schema) const {
     return sstable_set(
-            _compaction_strategy_impl->make_sstable_set(schema),
-            schema);
+            _compaction_strategy_impl->make_sstable_set(schema));
 }
 
 using sstable_reader_factory_type = std::function<flat_mutation_reader_v2(shared_sstable&, const dht::partition_range& pr)>;
@@ -1212,7 +1209,7 @@ sstable_set_impl::selector_and_schema_t compound_sstable_set::make_incremental_s
 }
 
 sstable_set make_compound_sstable_set(schema_ptr schema, std::vector<lw_shared_ptr<sstable_set>> sets) {
-    return sstable_set(std::make_unique<compound_sstable_set>(schema, std::move(sets)), schema);
+    return sstable_set(std::make_unique<compound_sstable_set>(schema, std::move(sets)));
 }
 
 flat_mutation_reader_v2

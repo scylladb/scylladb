@@ -20,7 +20,7 @@
 using namespace sstables;
 
 static sstables::sstable_set make_sstable_set(schema_ptr schema, lw_shared_ptr<sstable_list> all = {}, bool use_level_metadata = true) {
-    auto ret = sstables::sstable_set(std::make_unique<partitioned_sstable_set>(schema, use_level_metadata), schema);
+    auto ret = sstables::sstable_set(std::make_unique<partitioned_sstable_set>(schema, use_level_metadata));
     for (auto& sst : *all) {
         ret.insert(sst);
     }
@@ -114,7 +114,7 @@ SEASTAR_TEST_CASE(test_time_series_sstable_set_bytes_on_disk) {
         auto sst1 = make_sstable_easy(env, std::move(mr), cfg);
         auto size1 = sst1->bytes_on_disk();
 
-        auto ss1 = make_lw_shared<sstable_set>(std::make_unique<time_series_sstable_set>(ss.schema(), true), ss.schema());
+        auto ss1 = make_lw_shared<sstable_set>(std::make_unique<time_series_sstable_set>(ss.schema(), true));
         ss1->insert(sst1);
         BOOST_REQUIRE_EQUAL(ss1->bytes_on_disk(), size1);
 
@@ -129,7 +129,7 @@ SEASTAR_TEST_CASE(test_time_series_sstable_set_bytes_on_disk) {
         BOOST_REQUIRE_EQUAL(ss2->bytes_on_disk(), size1 + size2);
 
         std::vector<lw_shared_ptr<sstable_set>> sets = {ss1, ss2};
-        auto sst_set = make_lw_shared<sstable_set>(std::make_unique<compound_sstable_set>(s, std::move(sets)), ss.schema());
+        auto sst_set = make_lw_shared<sstable_set>(std::make_unique<compound_sstable_set>(s, std::move(sets)));
         BOOST_REQUIRE_EQUAL(sst_set->bytes_on_disk(), ss1->bytes_on_disk() + ss2->bytes_on_disk());
     });
 }
@@ -148,7 +148,7 @@ SEASTAR_TEST_CASE(test_partitioned_sstable_set_bytes_on_disk) {
         auto sst1 = make_sstable_easy(env, std::move(mr), cfg);
         auto size1 = sst1->bytes_on_disk();
 
-        auto ss1 = make_lw_shared<sstable_set>(std::make_unique<partitioned_sstable_set>(ss.schema(), true), ss.schema());
+        auto ss1 = make_lw_shared<sstable_set>(std::make_unique<partitioned_sstable_set>(ss.schema(), true));
         ss1->insert(sst1);
         BOOST_REQUIRE_EQUAL(ss1->bytes_on_disk(), size1);
 
@@ -163,7 +163,7 @@ SEASTAR_TEST_CASE(test_partitioned_sstable_set_bytes_on_disk) {
         BOOST_REQUIRE_EQUAL(ss2->bytes_on_disk(), size1 + size2);
 
         std::vector<lw_shared_ptr<sstable_set>> sets = {ss1, ss2};
-        auto sst_set = make_lw_shared<sstable_set>(std::make_unique<compound_sstable_set>(s, std::move(sets)), ss.schema());
+        auto sst_set = make_lw_shared<sstable_set>(std::make_unique<compound_sstable_set>(s, std::move(sets)));
         BOOST_REQUIRE_EQUAL(sst_set->bytes_on_disk(), ss1->bytes_on_disk() + ss2->bytes_on_disk());
     });
 }
