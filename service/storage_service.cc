@@ -4897,28 +4897,8 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(shar
                         // Bootstrap did not complete yet, but streaming did
                     } else {
                         co_await retrier(_bootstrap_result, coroutine::lambda([&] () ->future<> {
-                            if (!_topology_state_machine._topology.req_param.contains(raft_server.id())) {
-                                on_internal_error(slogger, ::format("Cannot find request_param for node id {}", raft_server.id()));
-                            }
-                            if (is_repair_based_node_ops_enabled(streaming::stream_reason::replace)) {
-                                // FIXME: we should not need to translate ids to IPs here. See #6403.
-                                std::unordered_set<gms::inet_address> ignored_ips;
-                                for (const auto& id : std::get<replace_param>(_topology_state_machine._topology.req_param[raft_server.id()]).ignored_ids) {
-                                    auto ip = _group0->address_map().find(id);
-                                    if (!ip) {
-                                        on_fatal_internal_error(slogger, ::format("Cannot find a mapping from node id {} to its ip", id));
-                                    }
-                                    ignored_ips.insert(*ip);
-                                }
-                                co_await _repair.local().replace_with_repair(get_token_metadata_ptr(), rs.ring.value().tokens, std::move(ignored_ips));
-                            } else {
-                                dht::boot_strapper bs(_db, _stream_manager, _abort_source, get_broadcast_address(),
-                                                      locator::endpoint_dc_rack{rs.datacenter, rs.rack}, rs.ring.value().tokens, get_token_metadata_ptr());
-                                auto replaced_id = std::get<replace_param>(_topology_state_machine._topology.req_param[raft_server.id()]).replaced_id;
-                                auto existing_ip = _group0->address_map().find(replaced_id);
-                                assert(existing_ip);
-                                co_await bs.bootstrap(streaming::stream_reason::replace, _gossiper, *existing_ip);
-                            }
+                            auto task = co_await get_task_manager_module().make_and_start_task<node_ops::raft_replace_handler_task_impl>({}, "", *this, raft_server, rs);
+                            co_await task->done();
                         }));
                     }
                     co_await _db.invoke_on_all([] (replica::database& db) {

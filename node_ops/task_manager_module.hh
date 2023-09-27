@@ -251,6 +251,20 @@ protected:
     virtual future<> run() override;
 };
 
+class raft_replace_handler_task_impl : public replace_node_task_impl {
+private:
+    raft::server& _raft_server;
+    const service::replica_state& _rs;
+public:
+    raft_replace_handler_task_impl(tasks::task_manager::module_ptr module,
+            std::string entity,
+            service::storage_service& ss,
+            raft::server& raft_server,
+            const service::replica_state& rs) noexcept;
+protected:
+    virtual future<> run() override;
+};
+
 class gossiper_replace_task_impl : public replace_node_task_impl {
 private:
     sharded<db::system_distributed_keyspace>& _sys_dist_ks;
