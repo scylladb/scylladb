@@ -13,6 +13,7 @@ import pytest
 import xml.etree.ElementTree as ET
 
 from contextlib import contextmanager
+from test.pylib.rest_client import ScyllaRESTAPIClient
 
 def get_scylla_with_s3_cmd(ssl, s3_server):
     '''return a function which in turn returns the command for running scylla'''
@@ -77,8 +78,10 @@ def kill_with_dir(old_pid, run_dir):
 
 
 class Cluster:
-    def __init__(self, cql):
+    def __init__(self, cql, ip: str):
         self.cql = cql
+        self.ip = ip
+        self.api = ScyllaRESTAPIClient()
 
 
 @contextmanager
@@ -92,7 +95,7 @@ def managed_cluster(run_dir, ssl, s3_server):
     run.wait_for_services(pid, [check_with_cql(ip, ssl)])
     cluster = run.get_cql_cluster(ip)
     try:
-        yield Cluster(cluster)
+        yield Cluster(cluster, ip)
     finally:
         cluster.shutdown()
         kill_with_dir(pid, run_dir)
@@ -124,9 +127,7 @@ async def test_basic(test_tempdir, s3_server, ssl):
             conn.execute(cql_fmt.format(ks, cf, *row))
         res = conn.execute(f"SELECT * FROM {ks}.{cf};")
 
-        ip = cluster.cql.contact_points[0]
-        r = requests.post(f'http://{ip}:10000/storage_service/keyspace_flush/{ks}', timeout=60)
-        assert r.status_code == 200, f"Error flushing keyspace: {r}"
+        await cluster.api.flush_keyspace(cluster.ip, ks)
 
         # Check that the ownership table is populated properly
         res = conn.execute("SELECT * FROM system.sstables;")
@@ -187,9 +188,7 @@ async def test_garbage_collect(test_tempdir, s3_server, ssl):
             cql_fmt = "INSERT INTO {}.{} ( name, value ) VALUES ('{}', '{}');"
             conn.execute(cql_fmt.format(ks, cf, *row))
 
-        ip = cluster.cql.contact_points[0]
-        r = requests.post(f'http://{ip}:10000/storage_service/keyspace_flush/{ks}', timeout=60)
-        assert r.status_code == 200, f"Error flushing keyspace: {r}"
+        await cluster.api.flush_keyspace(cluster.ip, ks)
         # Mark the sstables as "removing" to simulate the problem
         res = conn.execute("SELECT * FROM system.sstables;")
         for row in res:
