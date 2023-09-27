@@ -76,19 +76,23 @@ def kill_with_dir(old_pid, run_dir):
     os.unlink(scylla_link)
 
 
+class Cluster:
+    def __init__(self, cql):
+        self.cql = cql
+
+
 @contextmanager
 def managed_cluster(run_dir, ssl, s3_server):
     # launch a one-node scylla cluster which uses the give s3_server as its
-    # object storage backend, it yields an instance of cassandra.Cluster
-    # referencing this cluster. before this function returns, the cluster is
-    # teared down.
+    # object storage backend, it yields an instance of Cluster
+    # before this function returns, the cluster is teared down.
     run_scylla_cmd = get_scylla_with_s3_cmd(ssl, s3_server)
     pid = run_with_dir(run_scylla_cmd, run_dir)
     ip = run.pid_to_ip(pid)
     run.wait_for_services(pid, [check_with_cql(ip, ssl)])
     cluster = run.get_cql_cluster(ip)
     try:
-        yield cluster
+        yield Cluster(cluster)
     finally:
         cluster.shutdown()
         kill_with_dir(pid, run_dir)
@@ -111,7 +115,7 @@ async def test_basic(test_tempdir, s3_server, ssl):
                                      endpoint=s3_server.address,
                                      bucket=s3_server.bucket_name)
 
-        conn = cluster.connect()
+        conn = cluster.cql.connect()
         conn.execute((f"CREATE KEYSPACE {ks} WITH"
                       f" REPLICATION = {replication_opts} AND STORAGE = {storage_opts};"))
         conn.execute(f"CREATE TABLE {ks}.{cf} ( name text primary key, value text );")
@@ -120,7 +124,7 @@ async def test_basic(test_tempdir, s3_server, ssl):
             conn.execute(cql_fmt.format(ks, cf, *row))
         res = conn.execute(f"SELECT * FROM {ks}.{cf};")
 
-        ip = cluster.contact_points[0]
+        ip = cluster.cql.contact_points[0]
         r = requests.post(f'http://{ip}:10000/storage_service/keyspace_flush/{ks}', timeout=60)
         assert r.status_code == 200, f"Error flushing keyspace: {r}"
 
@@ -133,7 +137,7 @@ async def test_basic(test_tempdir, s3_server, ssl):
 
     print('Restart scylla')
     with managed_cluster(test_tempdir, ssl, s3_server) as cluster:
-        conn = cluster.connect()
+        conn = cluster.cql.connect()
         res = conn.execute(f"SELECT * FROM {ks}.{cf};")
         have_res = { x.name: x.value for x in res }
         assert have_res == dict(rows), f'Unexpected table content: {have_res}'
@@ -175,7 +179,7 @@ async def test_garbage_collect(test_tempdir, s3_server, ssl):
                                      endpoint=s3_server.address,
                                      bucket=s3_server.bucket_name)
 
-        conn = cluster.connect()
+        conn = cluster.cql.connect()
         conn.execute((f"CREATE KEYSPACE {ks} WITH"
                       f" REPLICATION = {replication_opts} AND STORAGE = {storage_opts};"))
         conn.execute(f"CREATE TABLE {ks}.{cf} ( name text primary key, value text );")
@@ -183,7 +187,7 @@ async def test_garbage_collect(test_tempdir, s3_server, ssl):
             cql_fmt = "INSERT INTO {}.{} ( name, value ) VALUES ('{}', '{}');"
             conn.execute(cql_fmt.format(ks, cf, *row))
 
-        ip = cluster.contact_points[0]
+        ip = cluster.cql.contact_points[0]
         r = requests.post(f'http://{ip}:10000/storage_service/keyspace_flush/{ks}', timeout=60)
         assert r.status_code == 200, f"Error flushing keyspace: {r}"
         # Mark the sstables as "removing" to simulate the problem
@@ -196,7 +200,7 @@ async def test_garbage_collect(test_tempdir, s3_server, ssl):
 
     print('Restart scylla')
     with managed_cluster(test_tempdir, ssl, s3_server) as cluster:
-        conn = cluster.connect()
+        conn = cluster.cql.connect()
         res = conn.execute(f"SELECT * FROM {ks}.{cf};")
         have_res = { x.name: x.value for x in res }
         # Must be empty as no sstables should have been picked up
