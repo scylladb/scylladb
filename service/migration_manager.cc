@@ -614,11 +614,11 @@ future<> migration_notifier::drop_aggregate(const db::functions::function_name& 
     });
 }
 
-void migration_notifier::before_create_column_family(const schema& schema,
-        std::vector<mutation>& mutations, api::timestamp_type timestamp) {
-    _listeners.thread_for_each([&mutations, &schema, timestamp] (migration_listener* listener) {
+void migration_notifier::before_create_column_family(const keyspace_metadata& ksm,
+        const schema& schema, std::vector<mutation>& mutations, api::timestamp_type timestamp) {
+    _listeners.thread_for_each([&ksm, &schema, &mutations, timestamp] (migration_listener* listener) {
         // allow exceptions. so a listener can effectively kill a create-table
-        listener->on_before_create_column_family(schema, mutations, timestamp);
+        listener->on_before_create_column_family(ksm, schema, mutations, timestamp);
     });
 }
 
@@ -691,9 +691,9 @@ static future<std::vector<mutation>> do_prepare_new_column_family_announcement(s
 
     mlogger.info("Create new ColumnFamily: {}", cfm);
 
-    return seastar::async([&db, cfm, timestamp] {
+    return seastar::async([&db, &ksm, cfm, timestamp] {
         auto mutations = db::schema_tables::make_create_table_mutations(cfm, timestamp);
-        db.get_notifier().before_create_column_family(*cfm, mutations, timestamp);
+        db.get_notifier().before_create_column_family(ksm, *cfm, mutations, timestamp);
         return mutations;
     }).then([&sp, &ksm](std::vector<mutation> mutations) {
         return include_keyspace(sp, ksm, std::move(mutations));

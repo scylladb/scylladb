@@ -824,7 +824,7 @@ public:
         co_return co_await lb.make_plan();
     }
 
-    void on_before_create_column_family(const schema& s, std::vector<mutation>& muts, api::timestamp_type ts) override {
+    void on_before_create_column_family(const keyspace_metadata& ksm, const schema& s, std::vector<mutation>& muts, api::timestamp_type ts) override {
         keyspace& ks = _db.find_keyspace(s.ks_name());
         auto&& rs = ks.get_replication_strategy();
         if (auto&& tablet_rs = rs.maybe_as_tablet_aware()) {
