@@ -39,7 +39,7 @@ async def check_single_child(tm: TaskManagerClient, server: ServerInfo, parent_s
 
 async def check_top_level_task(tm: TaskManagerClient, server: ServerInfo, module_name: str, expected_state: str,
                                expected_type: str) -> TaskStatus:
-    tasks = await tm.list_tasks(server.ip_addr, module_name)
+    tasks = [stats for stats in await tm.list_tasks(server.ip_addr, module_name) if stats.scope == "node"]
     assert tasks, "A task wasn't created"
     assert len(tasks) == 1, "More than one task was created"
 

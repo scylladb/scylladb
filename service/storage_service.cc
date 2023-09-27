@@ -4890,13 +4890,8 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(shar
                     if (rs.state == node_state::bootstrapping) {
                         if (!_topology_state_machine._topology.normal_nodes.empty()) { // stream only if there is a node in normal state
                             co_await retrier(_bootstrap_result, coroutine::lambda([&] () -> future<> {
-                                if (is_repair_based_node_ops_enabled(streaming::stream_reason::bootstrap)) {
-                                    co_await _repair.local().bootstrap_with_repair(get_token_metadata_ptr(), rs.ring.value().tokens);
-                                } else {
-                                    dht::boot_strapper bs(_db, _stream_manager, _abort_source, get_broadcast_address(),
-                                        locator::endpoint_dc_rack{rs.datacenter, rs.rack}, rs.ring.value().tokens, get_token_metadata_ptr());
-                                    co_await bs.bootstrap(streaming::stream_reason::bootstrap, _gossiper);
-                                }
+                                auto task = co_await get_task_manager_module().make_and_start_task<node_ops::raft_bootstrap_handler_task_impl>({}, "", *this, rs);
+                                co_await task->done();
                             }));
                         }
                         // Bootstrap did not complete yet, but streaming did

@@ -37,6 +37,7 @@ using server_id = internal::tagged_id<struct server_id_tag>;
 }
 
 namespace service {
+class replica_state;
 class storage_service;
 class storage_proxy;
 }
@@ -187,6 +188,18 @@ public:
         , _sys_dist_ks(sys_dist_ks)
         , _raft_server(raft_server)
     {}
+protected:
+    virtual future<> run() override;
+};
+
+class raft_bootstrap_handler_task_impl : public bootstrap_node_task_impl {
+private:
+    const service::replica_state& _rs;
+public:
+    raft_bootstrap_handler_task_impl(tasks::task_manager::module_ptr module,
+            std::string entity,
+            service::storage_service& ss,
+            const service::replica_state& rs) noexcept;
 protected:
     virtual future<> run() override;
 };

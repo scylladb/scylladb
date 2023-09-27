@@ -534,6 +534,24 @@ future<> raft_bootstrap_task_impl::run() {
     co_await finish_raft_joining(_raft_server);
 }
 
+raft_bootstrap_handler_task_impl::raft_bootstrap_handler_task_impl(tasks::task_manager::module_ptr module,
+        std::string entity,
+        service::storage_service& ss,
+        const service::replica_state& rs) noexcept
+    : bootstrap_node_task_impl(std::move(module), tasks::task_id::create_random_id(), ss.get_task_manager_module().new_sequence_number(), "raft handling", std::move(entity), tasks::task_id::create_null_id(), ss)
+    , _rs(rs)
+{}
+
+future<> raft_bootstrap_handler_task_impl::run() {
+    if (_ss.is_repair_based_node_ops_enabled(streaming::stream_reason::bootstrap)) {
+        co_await _ss._repair.local().bootstrap_with_repair(_ss.get_token_metadata_ptr(), _rs.ring.value().tokens);
+    } else {
+        dht::boot_strapper bs(_ss._db, _ss._stream_manager, _ss._abort_source, _ss.get_broadcast_address(),
+            locator::endpoint_dc_rack{_rs.datacenter, _rs.rack}, _rs.ring.value().tokens, _ss.get_token_metadata_ptr());
+        co_await bs.bootstrap(streaming::stream_reason::bootstrap, _ss._gossiper);
+    }
+}
+
 future<> raft_replace_task_impl::run() {
     co_await prepare_raft_joining(_raft_server, _sys_dist_ks);
 
