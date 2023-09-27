@@ -54,6 +54,7 @@
 #include "utils/fb_utilities.hh"
 #include "utils/stall_free.hh"
 #include "utils/fmt-compat.hh"
+#include "utils/error_injection.hh"
 
 #include "db/timeout_clock.hh"
 #include "db/large_data_handler.hh"
@@ -872,7 +873,13 @@ database::init_commitlog() {
         return make_ready_future<>();
     }
 
-    return db::commitlog::create_commitlog(db::commitlog::config::from_db_config(_cfg, _dbcfg.commitlog_scheduling_group, _dbcfg.available_memory)).then([this](db::commitlog&& log) {
+    auto config = db::commitlog::config::from_db_config(_cfg, _dbcfg.commitlog_scheduling_group, _dbcfg.available_memory);
+    // todo: it would be much cleaner to allow the test to set the appropriate value:
+    // utils::get_local_injector().resolve("decrease_commitlog_base_segment_id")
+    if (utils::get_local_injector().enter("decrease_commitlog_base_segment_id")) {
+        config.base_segment_id = 0;
+    }
+    return db::commitlog::create_commitlog(std::move(config)).then([this](db::commitlog&& log) {
         _commitlog = std::make_unique<db::commitlog>(std::move(log));
         _commitlog->add_flush_handler([this](db::cf_id_type id, db::replay_position pos) {
             if (!_tables_metadata.contains(id)) {
