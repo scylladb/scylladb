@@ -27,9 +27,6 @@ tempfile.tempdir = f"{outdir}/tmp"
 
 configure_args = str.join(' ', [shlex.quote(x) for x in sys.argv[1:] if not x.startswith('--out=')])
 
-distro_extra_cflags = ''
-distro_extra_ldflags = ''
-distro_extra_cmake_args = []
 employ_ld_trickery = True
 
 # distro-specific setup
@@ -136,13 +133,8 @@ def try_compile(compiler, source='', flags=[]):
     return try_compile_and_link(compiler, source, flags=flags + ['-c'])
 
 
-def ensure_tmp_dir_exists():
-    if not os.path.exists(tempfile.tempdir):
-        os.makedirs(tempfile.tempdir)
-
-
 def try_compile_and_link(compiler, source='', flags=[], verbose=False):
-    ensure_tmp_dir_exists()
+    os.makedirs(tempfile.tempdir, exist_ok=True)
     with tempfile.NamedTemporaryFile() as sfile:
         ofd, ofile = tempfile.mkstemp()
         os.close(ofd)
@@ -296,7 +288,7 @@ def generate_compdb(compdb, ninja, buildfile, modes):
     #   the same source file usually confuse indexers
     # - it contains lots of irrelevant entries (for linker invocations,
     #   header-only compilations, etc.)
-    ensure_tmp_dir_exists()
+    os.makedirs(tempfile.tempdir, exist_ok=True)
     with tempfile.NamedTemporaryFile() as ninja_compdb:
         subprocess.run([ninja, '-f', buildfile, '-t', 'compdb'], stdout=ninja_compdb.file.fileno())
         ninja_compdb.file.flush()
@@ -1676,18 +1668,18 @@ forced_ldflags += '--build-id=sha1,'
 
 forced_ldflags += f'--dynamic-linker={dynamic_linker}'
 
-args.user_ldflags = forced_ldflags + ' ' + args.user_ldflags
+user_ldflags = forced_ldflags + ' ' + args.user_ldflags
 
-args.user_cflags += f" -ffile-prefix-map={curdir}=."
+user_cflags = args.user_cflags + f" -ffile-prefix-map={curdir}=."
 
 if args.target != '':
-    args.user_cflags += ' -march=' + args.target
+    user_cflags += ' -march=' + args.target
 
 for mode in modes:
     # Those flags are passed not only to Scylla objects, but also to libraries
     # that we compile ourselves.
-    modes[mode]['lib_cflags'] = args.user_cflags
-    modes[mode]['lib_ldflags'] = args.user_ldflags + linker_flags
+    modes[mode]['lib_cflags'] = user_cflags
+    modes[mode]['lib_ldflags'] = user_ldflags + linker_flags
 
 # cmake likes to separate things with semicolons
 def semicolon_separated(*flags):
@@ -1715,7 +1707,7 @@ def configure_seastar(build_dir, mode, mode_config):
         '-DCMAKE_EXPORT_COMPILE_COMMANDS=ON',
         '-DSeastar_SCHEDULING_GROUPS_COUNT=16',
         '-DSeastar_IO_URING=OFF', # io_uring backend is not stable enough
-    ] + distro_extra_cmake_args
+    ]
 
     if args.stack_guards is not None:
         stack_guards = 'ON' if args.stack_guards else 'OFF'
@@ -1783,7 +1775,7 @@ abseil_pkgs = [
 
 pkgs += abseil_pkgs
 
-args.user_cflags += " " + pkg_config('jsoncpp', '--cflags')
+user_cflags += " " + pkg_config('jsoncpp', '--cflags')
 libs = ' '.join([maybe_static(args.staticyamlcpp, '-lyaml-cpp'), '-latomic', '-llz4', '-lz', '-lsnappy', pkg_config('jsoncpp', '--libs'),
                  ' -lstdc++fs', ' -lcrypt', ' -lcryptopp', ' -lpthread',
                  # Must link with static version of libzstd, since
@@ -1795,16 +1787,16 @@ libs = ' '.join([maybe_static(args.staticyamlcpp, '-lyaml-cpp'), '-latomic', '-l
                 ])
 
 if not args.staticboost:
-    args.user_cflags += ' -DBOOST_TEST_DYN_LINK'
+    user_cflags += ' -DBOOST_TEST_DYN_LINK'
 
 if thrift_uses_boost_share_ptr():
-    args.user_cflags += ' -DTHRIFT_USES_BOOST'
+    user_cflags += ' -DTHRIFT_USES_BOOST'
 
 for pkg in pkgs:
-    args.user_cflags += ' ' + pkg_config(pkg, '--cflags')
+    user_cflags += ' ' + pkg_config(pkg, '--cflags')
     libs += ' ' + pkg_config(pkg, '--libs')
-user_cflags = args.user_cflags + ' -fvisibility=hidden'
-user_ldflags = args.user_ldflags + ' -fvisibility=hidden'
+user_cflags += ' -fvisibility=hidden'
+user_ldflags += ' -fvisibility=hidden'
 if args.staticcxx:
     user_ldflags += " -static-libstdc++"
 if args.staticthrift:
@@ -1814,22 +1806,20 @@ else:
 
 os.makedirs(outdir, exist_ok=True)
 
-ragel_exec = args.ragel_exec
-
-
 def write_build_file(f,
                      arch,
                      ninja,
                      scylla_product,
                      scylla_version,
-                     scylla_release):
+                     scylla_release,
+                     args):
     f.write(textwrap.dedent('''\
         configure_args = {configure_args}
         builddir = {outdir}
         cxx = {cxx}
-        cxxflags = --std=gnu++20 {user_cflags} {distro_extra_cflags} {warnings} {defines}
-        ldflags = {linker_flags} {user_ldflags} {distro_extra_ldflags}
-        ldflags_build = {linker_flags} {distro_extra_ldflags}
+        cxxflags = --std=gnu++20 {user_cflags} {warnings} {defines}
+        ldflags = {linker_flags} {user_ldflags}
+        ldflags_build = {linker_flags}
         libs = {libs}
         pool link_pool
             depth = {link_pool_depth}
@@ -1839,7 +1829,7 @@ def write_build_file(f,
             command = echo -e $text > $out
             description = GEN $out
         rule swagger
-            command = {args.seastar_path}/scripts/seastar-json2code.py --create-cc -f $in -o $out
+            command = {seastar_path}/scripts/seastar-json2code.py --create-cc -f $in -o $out
             description = SWAGGER $out
         rule serializer
             command = {python} ./idl-compiler.py --ns ser -f $in -o $out
@@ -1892,7 +1882,21 @@ def write_build_file(f,
         rule wasm2wat
             command = wasm2wat $in > $out
             description = WASM2WAT $out
-        ''').format(**globals()))
+        ''').format(configure_args=configure_args,
+                    outdir=outdir,
+                    cxx=args.cxx,
+                    user_cflags=user_cflags,
+                    warnings=warnings,
+                    defines=defines,
+                    linker_flags=linker_flags,
+                    user_ldflags=user_ldflags,
+                    libs=libs,
+                    link_pool_depth=link_pool_depth,
+                    python=args.python,
+                    seastar_path=args.seastar_path,
+                    ninja=ninja,
+                    ragel_exec=args.ragel_exec))
+
     for binary in sorted(wasms):
         src = wasm_deps[binary]
         wasm = binary[:-4] + '.wasm'
@@ -2373,5 +2377,6 @@ with open(buildfile, 'w') as f:
                      ninja,
                      scylla_product,
                      scylla_version,
-                     scylla_release)
+                     scylla_release,
+                     args)
 generate_compdb('compile_commands.json', ninja, buildfile, selected_modes)
