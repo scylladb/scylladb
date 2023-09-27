@@ -11,8 +11,8 @@
 # https://github.com/apache/cassandra/blob/1959502d8b16212479eecb076c89945c3f0f180c/doc/native_protocol_v4.spec#L675
 
 import pytest
-from util import new_test_table
-
+from util import new_test_table, unique_key_int
+from cassandra.protocol import InvalidRequest
 
 @pytest.fixture(scope="module")
 def table1(cql, test_keyspace):
@@ -150,3 +150,44 @@ def test_composite_pk_indexes_duplicate_named_variables(cql, table2, scylla_only
     prepared = cql.prepare(
         f"SELECT * FROM {table2} WHERE p1 = :x AND p2 = :x AND p3 = :z AND p4 = :y AND c1 = :y AND c2 = :z ")
     assert prepared.routing_key_indexes == [0, 0, 1, 2]
+
+# Test what happens when using a bind marker with the same name (e.g., ":x")
+# twice in a query. Above we tested which "routing_key_indexes" is returned
+# in a PREPARE request, but here we test the functionality of the duplicate
+# marker when actually executing the query.
+# Note: The CQL protocol allows using bind markers in both QUERY (unprepared
+# statement) and EXECUTE (prepared statement) cases, but it appears that the
+# Python driver only supports bind markers with prepared statements (and
+# for unprepared statements uses a different mechanisms with Python "%s" and
+# "%(name)s"), so this test is only for the prepared-statement case.
+# Reproduces issue #15559.
+@pytest.mark.xfail(reason="Different behavior in Scylla and Cassandra - see issue #15559")
+def test_duplicate_named_bind_marker_prepared(cql, table1):
+    x = unique_key_int()
+    cql.execute(f'INSERT INTO {table1} (p,c) VALUES ({x},{x})')
+    cql.execute(f'INSERT INTO {table1} (p,c) VALUES ({x},{x+1})')
+    # Sanity check: query without bind markers, with unnamed bind markers,
+    # and with two different bind-marker names. All should work.
+    assert [(x,x)] == list(cql.execute(f'SELECT * FROM {table1} WHERE p={x} AND c={x}'))
+    stmt = cql.prepare(f'SELECT * FROM {table1} WHERE p=? AND c=?')
+    assert [(x,x)] == list(cql.execute(stmt, (x,x)))
+    stmt = cql.prepare(f'SELECT * FROM {table1} WHERE p=:x1 AND c=:x2')
+    assert [(x,x)] == list(cql.execute(stmt, {'x1': x, 'x2': x}))
+    assert [(x,x)] == list(cql.execute(stmt, (x,x)))
+    # Now for the real test: Use the same bind-marker name twice.
+    stmt = cql.prepare(f'SELECT * FROM {table1} WHERE p=:x AND c=:x')
+    # If EXECUTE is passed a bound value with a name "x", both bind markers
+    # named "x" are assigned, and the query works:
+    assert [(x,x)] == list(cql.execute(stmt, {'x': x}))
+    # In Cassandra, if EXECUTE is passed unnamed bound values, they go to the
+    # bind markers no matter what their name is - using ":x" twice in the
+    # query has the same effect as using "?" twice - you still need to pass
+    # two bound values.
+    # The following currently fails on Scylla - the driver complains that
+    # "Too many arguments provided to bind() (got 2, expected 1)", because
+    # Scylla told it there is just one bind variable in the query.
+    assert [(x,x)] == list(cql.execute(stmt, (x,x)))
+    # Passing unnamed values, one can pass two different values even when the
+    # query's bind markers have the same name :x. Exactly like two different
+    # "?" bind markers can also be bound to different values:
+    assert [(x,x+1)] == list(cql.execute(stmt, (x,x+1)))
