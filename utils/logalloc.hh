@@ -19,6 +19,7 @@
 #include "seastarx.hh"
 #include "db/timeout_clock.hh"
 #include "utils/entangled.hh"
+#include "utils/memory_limit_reached.hh"
 
 namespace logalloc {
 
@@ -499,6 +500,11 @@ public:
                 logalloc::reclaim_lock _(r);
                 memory::disable_abort_on_alloc_failure_temporarily dfg;
                 return fn();
+            } catch (const utils::memory_limit_reached&) {
+                // Do not retry, bumping reserves won't help.
+                // The read reached a memory limit in the semaphore and is being
+                // terminated.
+                throw;
             } catch (const std::bad_alloc&) {
                 on_alloc_failure(r);
             }
