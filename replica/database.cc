@@ -1965,15 +1965,11 @@ future<> database::apply_in_memory(const frozen_mutation& m, schema_ptr m_schema
 
     data_listeners().on_write(m_schema, m);
 
-    return with_gate(cf.async_gate(), [&m, m_schema = std::move(m_schema), h = std::move(h), &cf, timeout] () mutable -> future<> {
-        return cf.apply(m, std::move(m_schema), std::move(h), timeout);
-    });
+    return cf.apply(m, std::move(m_schema), std::move(h), timeout);
 }
 
 future<> database::apply_in_memory(const mutation& m, column_family& cf, db::rp_handle&& h, db::timeout_clock::time_point timeout) {
-    return with_gate(cf.async_gate(), [&m, h = std::move(h), &cf, timeout]() mutable -> future<> {
-        return cf.apply(m, std::move(h), timeout);
-    });
+    return cf.apply(m, std::move(h), timeout);
 }
 
 future<mutation> database::apply_counter_update(schema_ptr s, const frozen_mutation& m, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_state) {

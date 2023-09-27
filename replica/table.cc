@@ -988,7 +988,7 @@ table::try_flush_memtable_to_sstable(compaction_group& cg, lw_shared_ptr<memtabl
         metadata.max_timestamp = old->get_max_timestamp();
         auto estimated_partitions = _compaction_strategy.adjust_partition_estimate(metadata, old->partition_count());
 
-        if (!_async_gate.is_closed()) {
+        if (!cg.async_gate().is_closed()) {
             co_await _compaction_manager.maybe_wait_for_sstable_count_reduction(cg.as_table_state());
         }
 
@@ -1383,7 +1383,7 @@ void table::try_trigger_compaction(compaction_group& cg) noexcept {
 
 void compaction_group::trigger_compaction() {
     // But not if we're locked out or stopping
-    if (!_t._async_gate.is_closed()) {
+    if (!_async_gate.is_closed()) {
         _t._compaction_manager.submit(as_table_state());
     }
 }
@@ -1627,6 +1627,10 @@ compaction_group::compaction_group(table& t, size_t group_id, dht::token_range t
 }
 
 future<> compaction_group::stop() noexcept {
+    if (_async_gate.is_closed()) {
+        co_return;
+    }
+    co_await _async_gate.close();
     co_await flush();
     co_await _t._compaction_manager.remove(as_table_state());
 }
@@ -2390,8 +2394,8 @@ db::replay_position table::set_low_replay_position_mark() {
 
 template<typename... Args>
 void table::do_apply(compaction_group& cg, db::rp_handle&& h, Args&&... args) {
-    if (_async_gate.is_closed()) {
-        on_internal_error(tlogger, "Table async_gate is closed");
+    if (cg.async_gate().is_closed()) [[unlikely]] {
+        on_internal_error(tlogger, "async_gate of table's compaction group is closed");
     }
 
     utils::latency_counter lc;
@@ -2409,8 +2413,10 @@ void table::do_apply(compaction_group& cg, db::rp_handle&& h, Args&&... args) {
 }
 
 future<> table::apply(const mutation& m, db::rp_handle&& h, db::timeout_clock::time_point timeout) {
-    return dirty_memory_region_group().run_when_memory_available([this, &m, h = std::move(h)] () mutable {
-        do_apply(compaction_group_for_token(m.token()), std::move(h), m);
+    auto& cg = compaction_group_for_token(m.token());
+    auto holder = cg.async_gate().hold();
+    return dirty_memory_region_group().run_when_memory_available([this, &m, h = std::move(h), &cg, holder = std::move(holder)] () mutable {
+        do_apply(cg, std::move(h), m);
     }, timeout);
 }
 
@@ -2421,8 +2427,11 @@ future<> table::apply(const frozen_mutation& m, schema_ptr m_schema, db::rp_hand
         return (*_virtual_writer)(m);
     }
 
-    return dirty_memory_region_group().run_when_memory_available([this, &m, m_schema = std::move(m_schema), h = std::move(h)]() mutable {
-        do_apply(compaction_group_for_key(m.key(), m_schema), std::move(h), m, m_schema);
+    auto& cg = compaction_group_for_key(m.key(), m_schema);
+    auto holder = cg.async_gate().hold();
+
+    return dirty_memory_region_group().run_when_memory_available([this, &m, m_schema = std::move(m_schema), h = std::move(h), &cg, holder = std::move(holder)]() mutable {
+        do_apply(cg, std::move(h), m, m_schema);
     }, timeout);
 }
 

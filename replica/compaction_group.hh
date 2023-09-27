@@ -7,6 +7,7 @@
  */
 
 #include <seastar/core/condition-variable.hh>
+#include <seastar/core/gate.hh>
 
 #include "database_fwd.hh"
 #include "compaction/compaction_descriptor.hh"
@@ -48,6 +49,8 @@ class compaction_group {
     // that may delete data in these sstables:
     std::vector<sstables::shared_sstable> _sstables_compacted_but_not_deleted;
     seastar::condition_variable _staging_done_condition;
+    // Gates async operations confined to a single group.
+    seastar::gate _async_gate;
 private:
     // Adds new sstable to the set of sstables
     // Doesn't update the cache. The cache must be synchronized in order for reads to see
@@ -130,6 +133,10 @@ public:
 
     seastar::condition_variable& get_staging_done_condition() noexcept {
         return _staging_done_condition;
+    }
+
+    seastar::gate& async_gate() noexcept {
+        return _async_gate;
     }
 };
 
