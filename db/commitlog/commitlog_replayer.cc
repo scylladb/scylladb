@@ -112,65 +112,46 @@ db::commitlog_replayer::impl::impl(seastar::sharded<replica::database>& db, seas
 {}
 
 future<> db::commitlog_replayer::impl::init() {
-    return _db.map_reduce([this](shard_rpm_map map) {
-        for (auto& p1 : map) {
-            for (auto& p2 : p1.second) {
-                auto& pp = _rpm[p1.first][p2.first];
-                pp = std::max(pp, p2.second);
-
-                auto i = _min_pos.find(p1.first);
-                if (i == _min_pos.end() || p2.second < i->second) {
-                    _min_pos[p1.first] = p2.second;
-                }
-            }
-        }
-    }, [this](replica::database& db) {
-        return do_with(shard_rpm_map{}, [this, &db](shard_rpm_map& map) {
-            return db.get_tables_metadata().parallel_for_each_table([this, &map] (table_id uuid, lw_shared_ptr<replica::table>) {
-                // We do this on each cpu, for each CF, which technically is a little wasteful, but the values are
-                // cached, this is only startup, and it makes the code easier.
-                // Get all truncation records for the CF and initialize max rps if
-                // present. Cannot do this on demand, as there may be no sstables to
-                // mark the CF as "needed".
-                return _sys_ks.local().get_truncated_positions(uuid).then([&map, uuid](std::vector<db::replay_position> tpps) {
-                    for (auto& p : tpps) {
-                        rlogger.trace("CF {} truncated at {}", uuid, p);
-                        auto& pp = map[p.shard_id()][uuid];
-                        pp = std::max(pp, p);
-                    }
-                });
-            }).then([&map] {
-                return make_ready_future<shard_rpm_map>(map);
-            });
-        });
-    }).finally([this] {
-        // bugfix: the above map-reduce will not_ detect if sstables
-        // are _missing_ from a CF. And because of re-sharding, we can't
-        // just insert initial zeros into the maps, because we don't know
-        // how many shards there was last time.
-        // However, this only affects global min pos, since
-        // for each CF, the worst that happens is that we have a missing
-        // entry -> empty replay_pos == min value. But calculating
-        // global min pos will be off, since we will only base it on
-        // existing sstables-per-shard.
-        // So, go through all CF:s and check, if a shard mapping does not
-        // have data for it, assume we must set global pos to zero.
-        _db.local().get_tables_metadata().for_each_table([&] (table_id id, lw_shared_ptr<replica::table>) {
-            for (auto&p1 : _rpm) { // for each shard
-                if (!p1.second.contains(id)) {
-                    _min_pos[p1.first] = replay_position();
-                }
-            }
-        });
-        for (auto&p : _min_pos) {
-            rlogger.debug("minimum position for shard {}: {}", p.first, p.second);
-        }
-        for (auto&p1 : _rpm) {
-            for (auto& p2 : p1.second) {
-                rlogger.debug("replay position for shard/uuid {}/{}: {}", p1.first, p2.first, p2.second);
+    co_await _db.local().get_tables_metadata().parallel_for_each_table([this] (table_id uuid, lw_shared_ptr<replica::table>) -> future<> {
+        const auto rps = co_await _sys_ks.local().get_truncated_positions(uuid);
+        for (const auto& p: rps) {
+            rlogger.trace("CF {} truncated at {}", uuid, p);
+            auto &pp = _rpm[p.shard_id()][uuid];
+            pp = std::max(pp, p);
+            const auto i = _min_pos.find(p.shard_id());
+            if (i == _min_pos.end() || p < i->second) {
+                _min_pos[p.shard_id()] = p;
             }
         }
     });
+
+    // bugfix: the above code will not_ detect if sstables
+    // are _missing_ from a CF. And because of re-sharding, we can't
+    // just insert initial zeros into the maps, because we don't know
+    // how many shards there was last time.
+    // However, this only affects global min pos, since
+    // for each CF, the worst that happens is that we have a missing
+    // entry -> empty replay_pos == min value. But calculating
+    // global min pos will be off, since we will only base it on
+    // existing sstables-per-shard.
+    // So, go through all CF:s and check, if a shard mapping does not
+    // have data for it, assume we must set global pos to zero.
+    _db.local().get_tables_metadata().for_each_table([&] (table_id id, lw_shared_ptr<replica::table>) {
+        for (auto&p1 : _rpm) { // for each shard
+            if (!p1.second.contains(id)) {
+                _min_pos[p1.first] = replay_position();
+            }
+        }
+    });
+
+    for (auto&p : _min_pos) {
+        rlogger.debug("minimum position for shard {}: {}", p.first, p.second);
+    }
+    for (auto&p1 : _rpm) {
+        for (auto& p2 : p1.second) {
+            rlogger.debug("replay position for shard/uuid {}/{}: {}", p1.first, p2.first, p2.second);
+        }
+    }
 }
 
 future<db::commitlog_replayer::impl::stats>
