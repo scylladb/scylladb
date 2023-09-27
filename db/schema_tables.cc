@@ -1568,10 +1568,10 @@ static future<> merge_tables_and_views(distributed<service::storage_proxy>& prox
         // In order to avoid possible races we first create the tables and only then the views.
         // That way if a view seeks information about its base table it's guarantied to find it.
         co_await max_concurrent_for_each(tables_diff.created, max_concurrent, [&] (global_schema_ptr& gs) -> future<> {
-            co_await db.add_column_family_and_make_directory(gs, false);
+            co_await db.add_column_family_and_make_directory(gs, replica::database::is_new_cf::yes);
         });
         co_await max_concurrent_for_each(views_diff.created, max_concurrent, [&] (global_schema_ptr& gs) -> future<> {
-            co_await db.add_column_family_and_make_directory(gs, false);
+            co_await db.add_column_family_and_make_directory(gs, replica::database::is_new_cf::yes);
         });
     });
     co_await db.invoke_on_all([&](replica::database& db) -> future<> {
