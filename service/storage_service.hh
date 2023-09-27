@@ -228,6 +228,9 @@ private:
         return _batchlog_manager;
     }
 
+    friend struct ::node_ops_ctl;
+public:
+
     const gms::gossiper& gossiper() const noexcept {
         return _gossiper;
     };
@@ -235,9 +238,6 @@ private:
     gms::gossiper& gossiper() noexcept {
         return _gossiper;
     };
-
-    friend struct ::node_ops_ctl;
-public:
 
     locator::effective_replication_map_factory& get_erm_factory() noexcept {
         return _erm_factory;

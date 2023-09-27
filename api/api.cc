@@ -102,10 +102,14 @@ future<> unset_rpc_controller(http_context& ctx) {
     return ctx.http_server.set_routes([&ctx] (routes& r) { unset_rpc_controller(ctx, r); });
 }
 
-future<> set_server_storage_service(http_context& ctx, sharded<service::storage_service>& ss, sharded<gms::gossiper>& g, sharded<db::system_keyspace>& sys_ks) {
-    return register_api(ctx, "storage_service", "The storage service API", [&ss, &g, &sys_ks] (http_context& ctx, routes& r) {
-            set_storage_service(ctx, r, ss, g.local(), sys_ks);
+future<> set_server_storage_service(http_context& ctx, sharded<service::storage_service>& ss) {
+    return register_api(ctx, "storage_service", "The storage service API", [&ss] (http_context& ctx, routes& r) {
+            set_storage_service(ctx, r, ss);
         });
+}
+
+future<> unset_server_storage_service(http_context& ctx) {
+    return ctx.http_server.set_routes([&ctx] (routes& r) { unset_storage_service(ctx, r); });
 }
 
 future<> set_server_sstables_loader(http_context& ctx, sharded<sstables_loader>& sst_loader) {
