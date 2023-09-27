@@ -47,10 +47,8 @@ def run_with_generated_dir(run_cmd_generator, run_dir_generator):
         # redirect stdout and stderr to log file, as in a shell's >log 2>&1:
         log = os.path.join(dir, 'log')
         fd = os.open(log, os.O_WRONLY | os.O_CREAT | os.O_APPEND, mode=0o666)
-        sys.stdout.flush()
         os.close(1)
         os.dup2(fd, 1)
-        sys.stderr.flush()
         os.close(2)
         os.dup2(fd, 2)
         # Detach child from parent's "session", so that a SIGINT will be
