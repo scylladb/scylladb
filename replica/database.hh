@@ -502,7 +502,7 @@ private:
 
     // This field cashes the last truncation time for the table.
     // The master resides in system.truncated table
-    db_clock::time_point _truncated_at = db_clock::time_point::min();
+    std::optional<db_clock::time_point> _truncated_at;
 
     bool _is_bootstrap_or_replace = false;
     sstables::shared_sstable make_sstable(sstables::sstable_state state);
@@ -520,9 +520,7 @@ public:
     void set_truncation_time(db_clock::time_point truncated_at) noexcept {
         _truncated_at = truncated_at;
     }
-    db_clock::time_point get_truncation_time() const noexcept {
-        return _truncated_at;
-    }
+    db_clock::time_point get_truncation_time() const;
 
     void notify_bootstrap_or_replace_start();
 

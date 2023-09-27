@@ -439,6 +439,14 @@ sstables::shared_sstable table::make_sstable() {
     return make_sstable(sstables::sstable_state::normal);
 }
 
+db_clock::time_point table::get_truncation_time() const {
+    if (!_truncated_at) [[unlikely]] {
+        on_internal_error(dblog, ::format("truncation time is not set, table {}.{}",
+            _schema->ks_name(), _schema->cf_name()));
+    }
+    return *_truncated_at;
+}
+
 void table::notify_bootstrap_or_replace_start() {
     _is_bootstrap_or_replace = true;
 }
