@@ -160,7 +160,7 @@ public:
         });
     }
 
-    void on_before_create_column_family(const schema& schema, std::vector<mutation>& mutations, api::timestamp_type timestamp) override {
+    void on_before_create_column_family(const keyspace_metadata& ksm, const schema& schema, std::vector<mutation>& mutations, api::timestamp_type timestamp) override {
         if (schema.cdc_options().enabled()) {
             auto& db = _ctxt._proxy.get_db().local();
             auto logname = log_name(schema.cf_name());
