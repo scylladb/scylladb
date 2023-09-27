@@ -22,7 +22,12 @@ function(default_target_arch arch)
   set(x86_instruction_sets i386 i686 x86_64)
   if(CMAKE_SYSTEM_PROCESSOR IN_LIST x86_instruction_sets)
     set(${arch} "westmere" PARENT_SCOPE)
-  elseif(CMAKE_SYSTEM_PROCESSOR EQUAL "aarch64")
+  elseif(CMAKE_SYSTEM_PROCESSOR STREQUAL "aarch64")
+    # we always use intrinsics like vmull.p64 for speeding up crc32 calculations
+    # on the aarch64 architectures, and they require the crypto extension, so
+    # we have to add "+crypto" in the architecture flags passed to -march. the
+    # same applies to crc32 instructions, which need the ARMv8-A CRC32 extension
+    # please note, Seastar also sets -march when compiled with DPDK enabled.
     set(${arch} "armv8-a+crc+crypto" PARENT_SCOPE)
   else()
     set(${arch} "" PARENT_SCOPE)
