@@ -1029,6 +1029,7 @@ future<> database::add_column_family(keyspace& ks, schema_ptr schema, column_fam
 
     if (is_new) {
         cf->mark_ready_for_writes(commitlog_for(schema));
+        cf->set_truncation_time(db_clock::time_point::min());
     }
 
     auto uuid = schema->id();
