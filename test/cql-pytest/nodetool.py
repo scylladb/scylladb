@@ -20,6 +20,7 @@ import os
 import subprocess
 import shutil
 import pytest
+import re
 
 # For a "cql" object connected to one node, find the REST API URL
 # with the same node and port 10000.
@@ -120,27 +121,38 @@ def disablebinary(cql):
     else:
         run_nodetool(cql, "disablebinary")
 
+def parse_keyspace_table(name, separator_chars = '.'):
+    pat = f"(?P<keyspace>\w+)(?:[{separator_chars}](?P<table>\w+))?"
+    m = re.match(pat, name)
+    return m.group('keyspace'), m.group('table')
+
 class no_autocompaction_context:
-    """Disable autocompaction for the enclosed scope, for the provided keyspace(s).
+    """Disable autocompaction for the enclosed scope, for the provided keyspace(s) or keyspace.table(s).
     """
-    def __init__(self, cql, *keyspaces):
+    def __init__(self, cql, *names):
         self._cql = cql
-        self._keyspaces = list(keyspaces)
+        self._names = list(names)
 
     def __enter__(self):
-        for ks in self._keyspaces:
+        for name in self._names:
+            ks, tbl = parse_keyspace_table(name, '.:')
             if has_rest_api(self._cql):
-                ret = requests.delete(f'{rest_api_url(self._cql)}/storage_service/auto_compaction/{ks}')
+                api_path = f"/storage_service/auto_compaction/{ks}" if not tbl else \
+                           f"/column_family/autocompaction/{ks}:{tbl}"
+                ret = requests.delete(f'{rest_api_url(self._cql)}{api_path}')
                 if not ret.ok:
-                    raise RuntimeError(f"failed to disable autocompaction: {ret.text}")
+                    raise RuntimeError(f"failed to disable autocompaction using {api_path}: {ret.text}")
             else:
-                run_nodetool(self._cql, "disableautocompaction", ks)
+                run_nodetool(self._cql, "disableautocompaction", ks, tbl)
 
     def __exit__(self, exc_type, exc_value, exc_traceback):
-        for ks in self._keyspaces:
+        for name in self._names:
+            ks, tbl = parse_keyspace_table(name, '.:')
             if has_rest_api(self._cql):
-                ret = requests.post(f'{rest_api_url(self._cql)}/storage_service/auto_compaction/{ks}')
+                api_path = f"/storage_service/auto_compaction/{ks}" if not tbl else \
+                           f"/column_family/autocompaction/{ks}:{tbl}"
+                ret = requests.post(f'{rest_api_url(self._cql)}{api_path}')
                 if not ret.ok:
-                    raise RuntimeError(f"failed to re-enable autocompaction: {ret.text}")
+                    raise RuntimeError(f"failed to enable autocompaction using {api_path}: {ret.text}")
             else:
-                run_nodetool(self._cql, "enableautocompaction", ks)
+                run_nodetool(self._cql, "enableautocompaction", ks, tbl)

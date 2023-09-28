@@ -508,11 +508,11 @@ def system_scylla_local_sstable_prepared(cql, scylla_data_dir):
     """ Prepares the system.scylla_local table for the needs of the schema loading tests.
 
     Namely:
-    * Disable auto-compaction for the system and system-schema keyspaces.
+    * Disable auto-compaction for the system-schema keyspace and system.scylla_local table.
     * Flushes said keyspaces.
     * Locates an sstable belonging to system.scylla_local and returns it.
     """
-    with nodetool.no_autocompaction_context(cql, "system", "system_schema"):
+    with nodetool.no_autocompaction_context(cql, "system.scylla_local", "system_schema"):
         # Need to flush system keyspaces whoose sstables we want to meddle
         # with, to make sure they are actually on disk.
         nodetool.flush_keyspace(cql, "system_schema")
