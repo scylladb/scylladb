@@ -1314,8 +1314,6 @@ idls = ['idl/gossip_digest.idl.hh',
         'idl/utils.idl.hh',
         ]
 
-headers = find_headers('.', excluded_dirs=['idl', 'build', 'seastar', '.git'])
-
 scylla_tests_generic_dependencies = [
     'test/lib/cql_test_env.cc',
     'test/lib/test_services.cc',
@@ -2071,6 +2069,8 @@ def write_build_file(f,
                 objs=' '.join(compiles)
             )
         )
+
+        headers = find_headers('.', excluded_dirs=['idl', 'build', 'seastar', '.git'])
         f.write(
             'build {mode}-headers: phony {header_objs}\n'.format(
                 mode=mode,
