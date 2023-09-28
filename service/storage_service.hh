@@ -90,6 +90,10 @@ class gossiper;
 class loaded_endpoint_state;
 };
 
+namespace node_ops {
+class task_manager_module;
+}
+
 namespace service {
 
 class storage_service;
@@ -955,6 +959,7 @@ private:
     abort_source _group0_as;
 
     friend class join_node_rpc_handshaker;
+    friend class node_ops::task_manager_module;
 };
 
 }

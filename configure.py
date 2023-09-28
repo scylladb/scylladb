@@ -1180,7 +1180,8 @@ scylla_core = (['message/messaging_service.cc',
                 'service/topology_state_machine.cc',
                 'service/topology_mutation.cc',
                 'service/topology_coordinator.cc',
-                'node_ops/node_ops_ctl.cc'
+                'node_ops/node_ops_ctl.cc',
+                'node_ops/task_manager_module.cc',
                 ] + [Antlr3Grammar('cql3/Cql.g')] \
                   + scylla_raft_core
                )
