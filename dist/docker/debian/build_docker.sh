@@ -74,10 +74,10 @@ bcp dist/docker/scylla_bashrc /scylla_bashrc
 
 run apt-get -y clean expire-cache
 run apt-get -y update
-run apt-get -y install dialog apt-utils
+run apt-get -y --no-install-suggests install dialog apt-utils
 run bash -ec "echo 'debconf debconf/frontend select Noninteractive' | debconf-set-selections"
 run bash -ec "rm -rf /etc/rsyslog.conf"
-run apt-get -y install hostname supervisor openssh-server openssh-client openjdk-11-jre-headless python2 python3 python3-yaml curl rsyslog sudo
+run apt-get -y --no-install-suggests install hostname supervisor openssh-server openssh-client openjdk-11-jre-headless python2 python3 python3-yaml curl rsyslog sudo
 run bash -ec "echo LANG=C.UTF-8 > /etc/default/locale"
 run bash -ec "dpkg -i packages/*.deb"
 run apt-get -y clean all
