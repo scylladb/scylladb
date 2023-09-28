@@ -81,6 +81,7 @@ struct replica_state {
     std::optional<ring_slice> ring; // if engaged contain the set of tokens the node owns together with their state
     size_t shard_count;
     uint8_t ignore_msb;
+    std::set<sstring> supported_features;
 };
 
 struct topology_features {
@@ -96,6 +97,7 @@ struct topology_features {
 
 struct topology {
     enum class transition_state: uint16_t {
+        join_group0,
         commit_cdc_generation,
         tablet_draining,
         write_both_read_old,
@@ -140,8 +142,8 @@ struct topology {
     // The IDs of the commited yet unpublished CDC generations sorted by timestamps.
     std::vector<cdc::generation_id_v2> unpublished_cdc_generations;
 
-    // Describes the state of the features of normal nodes
-    topology_features features;
+    // Set of features that are considered to be enabled by the cluster.
+    std::set<sstring> enabled_features;
 
     // Find only nodes in non 'left' state
     const std::pair<const raft::server_id, replica_state>* find(raft::server_id id) const;
@@ -151,6 +153,9 @@ struct topology {
     size_t size() const;
     // Are there any non-left nodes?
     bool is_empty() const;
+
+    // Calculates a set of features that are supported by all normal nodes but not yet enabled.
+    std::set<sstring> calculate_not_yet_enabled_features() const;
 };
 
 struct raft_topology_snapshot {

@@ -24,6 +24,9 @@ class storage_proxy;
 class storage_service;
 struct group0_state_machine_merger;
 
+template <typename C> class raft_address_map_t;
+using raft_address_map = raft_address_map_t<seastar::lowres_clock>;
+
 struct schema_change {
     // Mutations of schema tables (such as `system_schema.keyspaces`, `system_schema.tables` etc.)
     // e.g. computed from a DDL statement (keyspace/table/type create/drop/alter etc.)
@@ -84,17 +87,19 @@ class group0_state_machine : public raft_state_machine {
     migration_manager& _mm;
     storage_proxy& _sp;
     storage_service& _ss;
+    raft_address_map& _address_map;
     seastar::gate _gate;
     abort_source _abort_source;
 
     future<> merge_and_apply(group0_state_machine_merger& merger);
 public:
-    group0_state_machine(raft_group0_client& client, migration_manager& mm, storage_proxy& sp, storage_service& ss) : _client(client), _mm(mm), _sp(sp), _ss(ss) {}
+    group0_state_machine(raft_group0_client& client, migration_manager& mm, storage_proxy& sp, storage_service& ss, raft_address_map& address_map)
+            : _client(client), _mm(mm), _sp(sp), _ss(ss), _address_map(address_map) {}
     future<> apply(std::vector<raft::command_cref> command) override;
     future<raft::snapshot_id> take_snapshot() override;
     void drop_snapshot(raft::snapshot_id id) override;
     future<> load_snapshot(raft::snapshot_id id) override;
-    future<> transfer_snapshot(gms::inet_address from, raft::snapshot_descriptor snp) override;
+    future<> transfer_snapshot(raft::server_id from_id, raft::snapshot_descriptor snp) override;
     future<> abort() override;
 };
 

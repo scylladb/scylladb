@@ -228,6 +228,11 @@ public:
     // The information is only relevant for the current_term() only
     virtual bool is_leader() = 0;
 
+    // Returns ID of the server that is thought to be the current leader.
+    // Returns an empty ID if there is an ongoing election.
+    // The information is only relevant for the current_term() only.
+    virtual raft::server_id current_leader() const = 0;
+
     // The function should be called periodically to advance logical clock.
     virtual void tick() = 0;
 

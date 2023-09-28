@@ -175,15 +175,7 @@ future<raft::read_barrier_reply> raft_rpc::execute_read_barrier(raft::server_id 
 }
 
 future<raft::snapshot_reply> raft_rpc::apply_snapshot(raft::server_id from, raft::install_snapshot snp) {
-    auto ip_addr = _address_map.find(from);
-    if (!ip_addr.has_value()) {
-        // This is virtually impossible. We've just received the
-        // snapshot from the sender and must have updated our
-        // address map with its IP address.
-        const auto msg = format("Failed to apply snapshot from {}: ip address of the sender is not found", from);
-        co_return coroutine::exception(std::make_exception_ptr(raft::transport_error(msg)));
-    }
-    co_await _sm.transfer_snapshot(*ip_addr, snp.snp);
+    co_await _sm.transfer_snapshot(from, snp.snp);
     co_return co_await raft_with_gate(_shutdown_gate, [&] {
         return _client->apply_snapshot(from, std::move(snp));
     });

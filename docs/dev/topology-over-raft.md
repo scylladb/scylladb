@@ -224,3 +224,65 @@ There are also a few static columns for cluster-global properties:
 - `unpublished_cdc_generations` - the IDs of the committed yet unpublished CDC generations
 - `global_topology_request` - if set, contains one of the supported global topology requests
 - `new_cdc_generation_data_uuid` - used in `commit_cdc_generation` state, the time UUID of the generation to be committed
+
+# Join procedure
+
+In topology on raft mode, new nodes need to go through a new handshake procedure
+before they can join the cluster, including joining group 0. The handshake
+happens during raft discovery and replaced the old `GROUP0_MODIFY_CONFIG`.
+
+Two RPC verbs are introduced:
+
+- `JOIN_NODE_REQUEST`
+  Sent by the node that wishes to join the cluster. It contains some basic
+  information about the node that will have to be verified. Some of them
+  can be verified by the node that receives the RPC - which can result in
+  an immediate failure of the RPC -  but others need to be verified
+  by the topology coordinator.
+
+- `JOIN_NODE_RESPONSE`
+  Sent by the topology coordinator back to the joining node. It contains
+  coordinator's decision about the node - whether the request was accepted
+  or rejected.
+
+The procedure is not retryable. If the joining node crashes before finishing it,
+it might get rejected after restart. In order to retry adding the node, the data
+directory must be deleted first.
+
+*The procedure*
+
+If the node didn't join group 0, it sends `JOIN_NODE_REQUEST` to any existing
+node in the cluster. The receiving node can either:
+- Accept the request and tell the new node to wait for `JOIN_NODE_RESPONSE`.
+- Reject the request. This can happen if:
+  - The request does not satisfy some validity checks done by the receiving node
+    (e.g. cluster name does not match),
+  - There already is an existing request to join this node (which can happen if
+    the node crashed during the previous attempt to join),
+  - The node is already a part of the cluster,
+  - The node was removed from the cluster.
+
+The new node should not process `JOIN_NODE_RESPONSE` RPC until it is explicitly
+ordered by node that handles `JOIN_NODE_REQUEST`. This is necessary so that
+it doesn't accidentally process a join response from a previous attempt, if
+there was any. Similarly, the group 0 server must not be started on the new node
+until the `JOIN_NODE_REQUEST` RPC succeeds, otherwise, if it crashes during
+the prodecude and disables some features before restart it might receive some
+commands it is not prepared to understand.
+
+The topology coordinator will read the request from `system.topology`. It will
+perform additional verification that couldn't be done by the recipient
+of `JOIN_NODE_REQUEST` (e.g. check whether the node supports all cluster
+features). Then:
+- If verification was successful, the node will be transitioned to `join_group0`
+  state, then added to group 0 and `JOIN_NODE_RESPONSE` will be sent by
+  the topology coordinator. Afterwards, the usual bootstrap/replace procedure
+  continues.
+- If verification was unsuccessful, topology coordinator will move the node
+  to `left` state and then send a `JOIN_NODE_RESPONSE` to the joining node,
+  rejecting it. 
+
+In case of failures like timeouts, connection issues, etc., the topology
+coordinator keeps retrying. Eventually, it can give up and just move the new
+node to the `left` state, either due to a timeout or an operator intervention,
+but this is not implemented yet.

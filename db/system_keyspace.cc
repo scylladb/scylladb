@@ -2502,6 +2502,11 @@ future<service::topology> system_keyspace::load_topology_state() {
             ignored_ids = decode_nodes_ids(deserialize_set_column(*topology(), row, "ignore_nodes"));
         }
 
+        std::set<sstring> supported_features;
+        if (row.has("supported_features")) {
+            supported_features = decode_features(deserialize_set_column(*topology(), row, "supported_features"));
+        }
+
         if (row.has("topology_request")) {
             auto req = service::topology_request_from_string(row.get_as<sstring>("topology_request"));
             ret.requests.emplace(host_id, req);
@@ -2572,7 +2577,7 @@ future<service::topology> system_keyspace::load_topology_state() {
         if (map) {
             map->emplace(host_id, service::replica_state{
                 nstate, std::move(datacenter), std::move(rack), std::move(release_version),
-                ring_slice, shard_count, ignore_msb});
+                ring_slice, shard_count, ignore_msb, std::move(supported_features)});
         }
     }
 
@@ -2644,9 +2649,11 @@ future<service::topology> system_keyspace::load_topology_state() {
                     some_row.get_as<sstring>("global_topology_request"));
             ret.global_request.emplace(req);
         }
-    }
 
-    ret.features = decode_topology_features_state(std::move(rs));
+        if (some_row.has("enabled_features")) {
+            ret.enabled_features = decode_features(deserialize_set_column(*topology(), some_row, "enabled_features"));
+        }
+    }
 
     co_return ret;
 }

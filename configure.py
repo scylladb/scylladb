@@ -1310,6 +1310,7 @@ idls = ['idl/gossip_digest.idl.hh',
         'idl/position_in_partition.idl.hh',
         'idl/experimental/broadcast_tables_lang.idl.hh',
         'idl/storage_service.idl.hh',
+        'idl/join_node.idl.hh',
         'idl/utils.idl.hh',
         ]
 
