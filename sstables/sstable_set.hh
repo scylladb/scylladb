@@ -17,6 +17,7 @@
 #include <seastar/core/shared_ptr.hh>
 #include <type_traits>
 #include <vector>
+#include <tuple>
 
 namespace utils {
 class estimated_histogram;
@@ -97,7 +98,8 @@ public:
     uint64_t sub_bytes_on_disk(uint64_t delta) noexcept {
         return _bytes_on_disk -= delta;
     }
-    virtual std::unique_ptr<incremental_selector_impl> make_incremental_selector() const = 0;
+    using selector_and_schema_t = std::tuple<std::unique_ptr<incremental_selector_impl>, const schema&>;
+    virtual selector_and_schema_t make_incremental_selector() const = 0;
 
     virtual flat_mutation_reader_v2 create_single_key_sstable_reader(
         replica::column_family*,
