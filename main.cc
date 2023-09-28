@@ -217,7 +217,7 @@ static future<> read_object_storage_config(db::config& db_cfg) {
         }
     }
 
-    db_cfg.object_storage_config = std::move(cfg);
+    db_cfg.object_storage_config.set(std::move(cfg));
 }
 
 static future<>
