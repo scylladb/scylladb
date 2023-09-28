@@ -1062,6 +1062,10 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             // #293 - do not stop anything
             // engine().at_exit([&proxy] { return proxy.stop(); });
+            api::set_server_storage_proxy(ctx).get();
+            auto stop_sp_api = defer_verbose_shutdown("storage proxy API", [&ctx] {
+                api::unset_server_storage_proxy(ctx).get();
+            });
 
             static sharded<cql3::cql_config> cql_config;
             cql_config.start(std::ref(*cfg)).get();
@@ -1492,10 +1496,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             api::set_server_snitch(ctx, snitch).get();
             auto stop_snitch_api = defer_verbose_shutdown("snitch API", [&ctx] {
                 api::unset_server_snitch(ctx).get();
-            });
-            api::set_server_storage_proxy(ctx).get();
-            auto stop_sp_api = defer_verbose_shutdown("storage proxy API", [&ctx] {
-                api::unset_server_storage_proxy(ctx).get();
             });
             api::set_server_load_sstable(ctx, sys_ks).get();
             auto stop_cf_api = defer_verbose_shutdown("column family API", [&ctx] {
