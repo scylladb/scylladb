@@ -81,6 +81,7 @@ target_sources(scylla-main
     message/messaging_service.cc
     multishard_mutation_query.cc
     mutation_query.cc
+    node_ops/task_manager_module.cc
     partition_slice_builder.cc
     querier.cc
     query.cc
