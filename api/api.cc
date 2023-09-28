@@ -193,10 +193,10 @@ future<> unset_server_messaging_service(http_context& ctx) {
     return ctx.http_server.set_routes([&ctx] (routes& r) { unset_messaging_service(ctx, r); });
 }
 
-future<> set_server_storage_proxy(http_context& ctx, sharded<service::storage_service>& ss) {
+future<> set_server_storage_proxy(http_context& ctx) {
     return register_api(ctx, "storage_proxy",
-                "The storage proxy API", [&ss] (http_context& ctx, routes& r) {
-                    set_storage_proxy(ctx, r, ss);
+                "The storage proxy API", [] (http_context& ctx, routes& r) {
+                    set_storage_proxy(ctx, r);
                 });
 }
 

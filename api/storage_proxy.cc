@@ -10,7 +10,6 @@
 #include "service/storage_proxy.hh"
 #include "api/api-doc/storage_proxy.json.hh"
 #include "api/api-doc/utils.json.hh"
-#include "service/storage_service.hh"
 #include "db/config.hh"
 #include "utils/histogram.hh"
 #include "replica/database.hh"
@@ -184,7 +183,7 @@ sum_timer_stats_storage_proxy(distributed<proxy>& d,
     });
 }
 
-void set_storage_proxy(http_context& ctx, routes& r, sharded<service::storage_service>& ss) {
+void set_storage_proxy(http_context& ctx, routes& r) {
     sp::get_total_hints.set(r, [](std::unique_ptr<http::request> req)  {
         //TBD
         unimplemented();
