@@ -354,19 +354,6 @@ void set_storage_proxy(http_context& ctx, routes& r, sharded<service::storage_se
         return sum_stats_storage_proxy(ctx.sp, &service::storage_proxy_stats::stats::read_repair_repaired_background);
     });
 
-    sp::get_schema_versions.set(r, [&ss](std::unique_ptr<http::request> req)  {
-        return ss.local().describe_schema_versions().then([] (auto result) {
-            std::vector<sp::mapper_list> res;
-            for (auto e : result) {
-                sp::mapper_list entry;
-                entry.key = std::move(e.first);
-                entry.value = std::move(e.second);
-                res.emplace_back(std::move(entry));
-            }
-            return make_ready_future<json::json_return_type>(std::move(res));
-        });
-    });
-
     sp::get_cas_read_timeouts.set(r, [&ctx](std::unique_ptr<http::request> req) {
         return sum_timed_rate_as_long(ctx.sp, &proxy::stats::cas_read_timeouts);
     });
@@ -547,7 +534,6 @@ void unset_storage_proxy(http_context& ctx, routes& r) {
     sp::get_read_repair_attempted.unset(r);
     sp::get_read_repair_repaired_blocking.unset(r);
     sp::get_read_repair_repaired_background.unset(r);
-    sp::get_schema_versions.unset(r);
     sp::get_cas_read_timeouts.unset(r);
     sp::get_cas_read_unavailables.unset(r);
     sp::get_cas_write_timeouts.unset(r);
