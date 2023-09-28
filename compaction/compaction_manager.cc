@@ -308,6 +308,9 @@ private:
         return _added_backlog * _available_memory;
     }
     virtual void replace_sstables(const std::vector<sstables::shared_sstable>& old_ssts, const std::vector<sstables::shared_sstable>& new_ssts) override {}
+    virtual std::unique_ptr<compaction_backlog_tracker::impl> clone_and_replace_sstables(const std::vector<sstables::shared_sstable>& old_ssts, const std::vector<sstables::shared_sstable>& new_ssts) const override {
+        return std::make_unique<user_initiated_backlog_tracker>(*this);
+    }
 };
 
 compaction::compaction_state& compaction_manager::get_compaction_state(table_state* t) {
@@ -1936,8 +1939,6 @@ future<> compaction_manager::remove(table_state& t) noexcept {
         co_await std::move(close_gate);
     }
 
-    c_state.backlog_tracker->disable();
-
     _compaction_state.erase(&t);
 
 #ifdef DEBUG
@@ -2048,13 +2049,10 @@ void compaction_manager::unplug_system_keyspace() noexcept {
 }
 
 double compaction_backlog_tracker::backlog() const {
-    return disabled() ? compaction_controller::disable_backlog : _impl->backlog(_ongoing_writes, _ongoing_compactions);
+    return _impl->backlog(_ongoing_writes, _ongoing_compactions);
 }
 
 void compaction_backlog_tracker::replace_sstables(const std::vector<sstables::shared_sstable>& old_ssts, const std::vector<sstables::shared_sstable>& new_ssts) {
-    if (disabled()) {
-        return;
-    }
     auto filter_and_revert_charges = [this] (const std::vector<sstables::shared_sstable>& ssts) {
         std::vector<sstables::shared_sstable> ret;
         for (auto& sst : ssts) {
@@ -2066,14 +2064,18 @@ void compaction_backlog_tracker::replace_sstables(const std::vector<sstables::sh
         return ret;
     };
 
-    // FIXME: propagate exception to caller once all replace_sstables implementations provide strong exception safety guarantees.
-    try {
-        _impl->replace_sstables(filter_and_revert_charges(old_ssts), filter_and_revert_charges(new_ssts));
-    } catch (...) {
-        cmlog.error("Disabling backlog tracker due to exception {}", std::current_exception());
-        // FIXME: tracker should be able to recover from a failure, e.g. OOM, by having its state reset. More details on https://github.com/scylladb/scylla/issues/10297.
-        disable();
+    _impl->replace_sstables(filter_and_revert_charges(old_ssts), filter_and_revert_charges(new_ssts));
+}
+
+compaction_backlog_tracker compaction_backlog_tracker::clone_and_replace_sstables(const std::vector<sstables::shared_sstable>& old_ssts, const std::vector<sstables::shared_sstable>& new_ssts) const {
+    auto ret = compaction_backlog_tracker(_impl->clone_and_replace_sstables(old_ssts, new_ssts));
+    ret._ongoing_writes = _ongoing_writes;
+    ret._ongoing_compactions = _ongoing_compactions;
+    for (const auto& sst : old_ssts) {
+        ret._ongoing_writes.erase(sst);
+        ret._ongoing_compactions.erase(sst);
     }
+    return ret;
 }
 
 bool compaction_backlog_tracker::sstable_belongs_to_tracker(const sstables::shared_sstable& sst) {
@@ -2081,9 +2083,6 @@ bool compaction_backlog_tracker::sstable_belongs_to_tracker(const sstables::shar
 }
 
 void compaction_backlog_tracker::register_partially_written_sstable(sstables::shared_sstable sst, backlog_write_progress_manager& wp) {
-    if (disabled()) {
-        return;
-    }
     try {
         _ongoing_writes.emplace(sst, &wp);
     } catch (...) {
@@ -2096,10 +2095,6 @@ void compaction_backlog_tracker::register_partially_written_sstable(sstables::sh
 }
 
 void compaction_backlog_tracker::register_compacting_sstable(sstables::shared_sstable sst, backlog_read_progress_manager& rp) {
-    if (disabled()) {
-        return;
-    }
-
     try {
         _ongoing_compactions.emplace(sst, &rp);
     } catch (...) {

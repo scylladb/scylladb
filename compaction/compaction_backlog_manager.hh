@@ -59,7 +59,8 @@ public:
     using ongoing_compactions = std::unordered_map<sstables::shared_sstable, backlog_read_progress_manager*>;
 
     struct impl {
-        // FIXME: Should provide strong exception safety guarantees
+        // Clone the tracker impl, replacing old_ssts with new_ssts.
+        virtual std::unique_ptr<impl> clone_and_replace_sstables(const std::vector<sstables::shared_sstable>& old_ssts, const std::vector<sstables::shared_sstable>& new_ssts) const = 0;
         virtual void replace_sstables(const std::vector<sstables::shared_sstable>& old_ssts, const std::vector<sstables::shared_sstable>& new_ssts) = 0;
         virtual double backlog(const ongoing_writes& ow, const ongoing_compactions& oc) const = 0;
         virtual ~impl() { }
@@ -72,22 +73,17 @@ public:
     ~compaction_backlog_tracker();
 
     double backlog() const;
-    // FIXME: Should provide strong exception safety guarantees
+    // Clone the tracker and return an unregistered copy of it, replacing old_ssts with new_ssts.
+    compaction_backlog_tracker clone_and_replace_sstables(const std::vector<sstables::shared_sstable>& old_ssts, const std::vector<sstables::shared_sstable>& new_ssts) const;
     void replace_sstables(const std::vector<sstables::shared_sstable>& old_ssts, const std::vector<sstables::shared_sstable>& new_ssts);
     void register_partially_written_sstable(sstables::shared_sstable sst, backlog_write_progress_manager& wp);
     void register_compacting_sstable(sstables::shared_sstable sst, backlog_read_progress_manager& rp);
     void copy_ongoing_charges(compaction_backlog_tracker& new_bt, bool move_read_charges = true) const;
     void revert_charges(sstables::shared_sstable sst);
 
-    void disable() {
-        _impl = {};
-        _ongoing_writes = {};
-        _ongoing_compactions = {};
-    }
 private:
     // Returns true if this SSTable can be added or removed from the tracker.
     bool sstable_belongs_to_tracker(const sstables::shared_sstable& sst);
-    bool disabled() const noexcept { return !_impl; }
     std::unique_ptr<impl> _impl;
     // We keep track of this so that we can transfer to a new tracker if the compaction strategy is
     // changed in the middle of a compaction.

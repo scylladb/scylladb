@@ -1144,8 +1144,21 @@ mutation make_new_mutation(schema_ptr s, int key) {
     return make_new_mutation(s, partition_key::from_single_value(*s, to_bytes(format("key{:d}", key))));
 }
 
-SEASTAR_TEST_CASE(test_update_failure) {
-    return seastar::async([] {
+struct update_failure_tester {
+    enum class mode {
+        internal,
+        prepare,
+    };
+
+    const char* to_string(mode m) {
+        switch (m) {
+        case mode::internal: return "internal";
+        case mode::prepare: return "prepare";
+        }
+    }
+
+    future<> run(mode test_mode) {
+      return seastar::async([this, test_mode] {
         auto s = make_schema();
         tests::reader_concurrency_semaphore_wrapper semaphore;
         auto cache_mt = make_lw_shared<replica::memtable>(s);
@@ -1173,13 +1186,41 @@ SEASTAR_TEST_CASE(test_update_failure) {
             mt->apply(m);
         }
 
-        // fill all transient memory
+        struct updater_impl : public row_cache::external_updater_impl {
+            mode test_mode;
+            std::vector<bytes> memory;
+
+            updater_impl(mode test_mode) noexcept : test_mode(test_mode) {}
+
+            void allocate() {
+                while (true) {
+                    auto x = bytes(bytes::initialized_later(), 4 * 1024);
+                    memory.emplace_back(std::move(x));
+                }
+            }
+
+            virtual future<> prepare() override {
+                if (test_mode != mode::prepare) {
+                    co_return;
+                }
+                allocate();
+            }
+            virtual void execute() noexcept override {
+            }
+        };
+        auto updater = row_cache::external_updater(std::make_unique<updater_impl>(test_mode));
+
+        // allocate almost all available memory
         std::vector<bytes> memory_hog;
         {
             logalloc::reclaim_lock _(tracker.region());
             try {
                 while (true) {
-                    memory_hog.emplace_back(bytes(bytes::initialized_later(), 4 * 1024));
+                    // Try allocating large blocks to leave more slack
+                    // after the last allocation fails.
+                    // Otherwise, the row_cache::update coroutine hits a
+                    // nasty internal allocation failure in dev mode.
+                    memory_hog.emplace_back(bytes(bytes::initialized_later(), 128 * 1024));
                 }
             } catch (const std::bad_alloc&) {
                 // expected
@@ -1187,22 +1228,30 @@ SEASTAR_TEST_CASE(test_update_failure) {
         }
 
         auto ev = tracker.region().evictor();
-        int evicitons_left = 10;
+        int evictions_left = 10;
         tracker.region().make_evictable([&] () mutable {
-            if (evicitons_left == 0) {
+            if (evictions_left == 0) {
                 return memory::reclaiming_result::reclaimed_nothing;
             }
-            --evicitons_left;
+            --evictions_left;
             return ev();
         });
 
         bool failed = false;
         try {
-            cache.update(row_cache::external_updater([] { }), *mt).get();
+            cache.update(std::move(updater), *mt).get();
         } catch (const std::bad_alloc&) {
             failed = true;
         }
-        BOOST_REQUIRE(!evicitons_left); // should have happened
+        testlog.info("update with failure mode={} failed={} evictions_left={}", to_string(test_mode), failed, evictions_left);
+        // Failure in the external_updater::prepare phase
+        // should propagate to the caller, and be exception safe,
+        // i.e. leave both the cache and the updated entity
+        // (e.g. the table) unchanged.
+        if (test_mode != mode::internal) {
+            BOOST_REQUIRE(failed);
+        }
+        BOOST_REQUIRE(!evictions_left); // should have happened
 
         memory_hog.clear();
 
@@ -1226,7 +1275,18 @@ SEASTAR_TEST_CASE(test_update_failure) {
         } else {
             has_only(updated_partitions);
         }
-    });
+      });
+    }
+};
+
+SEASTAR_TEST_CASE(test_update_failure) {
+    update_failure_tester tester;
+    return tester.run(update_failure_tester::mode::internal);
+}
+
+SEASTAR_TEST_CASE(test_update_failure_in_prepare) {
+    update_failure_tester tester;
+    return tester.run(update_failure_tester::mode::prepare);
 }
 #endif
 

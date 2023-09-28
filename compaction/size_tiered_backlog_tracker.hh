@@ -86,6 +86,10 @@ class size_tiered_backlog_tracker final : public compaction_backlog_tracker::imp
     }
 
     static sstables_backlog_contribution calculate_sstables_backlog_contribution(const std::vector<sstables::shared_sstable>& all, const sstables::size_tiered_compaction_strategy_options& stcs_options);
+
+    void calculate_sstables_backlog_contribution();
+
+    size_tiered_backlog_tracker do_replace_sstables(const std::vector<sstables::shared_sstable>& old_ssts, const std::vector<sstables::shared_sstable>& new_ssts) const;
 public:
     size_tiered_backlog_tracker(sstables::size_tiered_compaction_strategy_options stcs_options) : _stcs_options(stcs_options) {}
 
@@ -95,6 +99,10 @@ public:
     // compaction, or some one-off operation, like drop
     // Provides strong exception safety guarantees.
     virtual void replace_sstables(const std::vector<sstables::shared_sstable>& old_ssts, const std::vector<sstables::shared_sstable>& new_ssts) override;
+    virtual std::unique_ptr<compaction_backlog_tracker::impl> clone_and_replace_sstables(const std::vector<sstables::shared_sstable>& old_ssts, const std::vector<sstables::shared_sstable>& new_ssts) const override;
+
+    // Not exception safe.
+    void replace_sstables_in_place(const std::vector<sstables::shared_sstable>& old_ssts, const std::vector<sstables::shared_sstable>& new_ssts);
 
     int64_t total_bytes() const {
         return _total_bytes;

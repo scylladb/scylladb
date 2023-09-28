@@ -169,6 +169,10 @@ public:
 
         return _data;
     }
+
+    // Return the token following this one.
+    // Unless the token is_maximum, in which case, the maximum token is returned.
+    token next() const noexcept;
 };
 
 static inline std::strong_ordering tri_compare_raw(const int64_t l1, const int64_t l2) noexcept {

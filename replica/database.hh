@@ -568,11 +568,8 @@ private:
     bool cache_enabled() const {
         return _config.enable_cache && _schema->caching_options().enabled();
     }
-    void update_stats_for_new_sstable(const sstables::shared_sstable& sst) noexcept;
+    void update_sstables_stats(ssize_t count, int64_t bytes_on_disk) noexcept;
     future<> do_add_sstable_and_update_cache(sstables::shared_sstable sst, sstables::offstrategy offstrategy);
-    // Helpers which add sstable on behalf of a compaction group and refreshes compound set.
-    void add_sstable(compaction_group& cg, sstables::shared_sstable sstable);
-    void add_maintenance_sstable(compaction_group& cg, sstables::shared_sstable sst);
     static void add_sstable_to_backlog_tracker(compaction_backlog_tracker& tracker, sstables::shared_sstable sstable);
     static void remove_sstable_from_backlog_tracker(compaction_backlog_tracker& tracker, sstables::shared_sstable sstable);
     lw_shared_ptr<memtable> new_memtable();
@@ -592,6 +589,9 @@ private:
     mutation_source_opt _virtual_reader;
     std::optional<noncopyable_function<future<>(const frozen_mutation&)>> _virtual_writer;
 
+    friend class table_sstable_set;
+    friend class table_incremental_selector;
+
     // Creates a mutation reader which covers given sstables.
     // Caller needs to ensure that column_family remains live (FIXME: relax this).
     // The 'range' parameter must be live as long as the reader is used.
@@ -607,9 +607,7 @@ private:
                                         const sstables::sstable_predicate& = sstables::default_sstable_predicate()) const;
 
     lw_shared_ptr<sstables::sstable_set> make_maintenance_sstable_set() const;
-    lw_shared_ptr<sstables::sstable_set> make_compound_sstable_set();
-    // Compound sstable set must be refreshed whenever any of its managed sets are changed
-    void refresh_compound_sstable_set();
+    lw_shared_ptr<sstables::sstable_set> make_table_sstable_set();
 
     snapshot_source sstables_as_snapshot_source();
     partition_presence_checker make_partition_presence_checker(lw_shared_ptr<sstables::sstable_set>);
@@ -1175,6 +1173,7 @@ public:
     future<sstables::sstable_list> take_storage_snapshot(dht::token_range tr);
 
     friend class compaction_group;
+    friend class table_sstables_adder;
 };
 
 using user_types_metadata = data_dictionary::user_types_metadata;

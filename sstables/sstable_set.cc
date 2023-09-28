@@ -186,6 +186,28 @@ sstable_set::erase(shared_sstable sst) {
     return _impl->erase(sst);
 }
 
+std::vector<shared_sstable>
+sstable_set::insert(const std::span<shared_sstable>& sstables) {
+    std::vector<shared_sstable> inserted;
+    inserted.reserve(sstables.size());
+    try {
+        for (const auto& sst : sstables) {
+            if (_impl->insert(sst)) {
+                inserted.emplace_back(sst);
+            }
+        }
+    } catch (...) {
+        for (const auto& sst : inserted) {
+            auto erased = _impl->erase(sst);
+            if (!erased) {
+                on_fatal_internal_error(sstlog, fmt::format("sstable {} was not erased after insert failure: {}", sst, std::current_exception()));
+            }
+        }
+        throw;
+    }
+    return inserted;
+}
+
 size_t
 sstable_set::size() const noexcept {
     return _impl->size();

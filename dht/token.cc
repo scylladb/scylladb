@@ -234,6 +234,13 @@ dht::token token::from_int64(int64_t i) {
     return {kind::key, i};
 }
 
+dht::token token::next() const noexcept {
+    if (is_maximum()) {
+        return *this;
+    }
+    return from_int64(to_int64(*this) + 1);
+}
+
 static
 dht::token find_first_token_for_shard_in_not_wrap_around_range(const dht::sharder& sharder, dht::token start, dht::token end, size_t shard_idx) {
     // Invariant start < end

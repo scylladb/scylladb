@@ -62,7 +62,7 @@
 
 namespace replica {
 
-static logging::logger tlogger("table");
+logging::logger tlogger("table");
 static seastar::metrics::label column_family_label("cf");
 static seastar::metrics::label keyspace_label("ks");
 
@@ -118,26 +118,11 @@ lw_shared_ptr<sstables::sstable_set> compaction_group::make_compound_sstable_set
     return make_lw_shared(sstables::make_compound_sstable_set(_t.schema(), { _main_sstables, _maintenance_sstables }));
 }
 
-lw_shared_ptr<sstables::sstable_set> table::make_compound_sstable_set() {
-    if (auto cg = single_compaction_group_if_available()) {
-        return cg->make_compound_sstable_set();
-    }
-    // TODO: switch to a specialized set for groups which assumes disjointness across compound sets and incrementally read from them.
-    // FIXME: avoid recreation of compound_set for groups which had no change. usually, only one group will be changed at a time.
-    auto sstable_sets = boost::copy_range<std::vector<lw_shared_ptr<sstables::sstable_set>>>(compaction_groups()
-        | boost::adaptors::transformed(std::mem_fn(&compaction_group::make_compound_sstable_set)));
-    return make_lw_shared(sstables::make_compound_sstable_set(schema(), std::move(sstable_sets)));
-}
-
 lw_shared_ptr<sstables::sstable_set> table::make_maintenance_sstable_set() const {
     // Level metadata is not used because (level 0) maintenance sstables are disjoint and must be stored for efficient retrieval in the partitioned set
     bool use_level_metadata = false;
     return make_lw_shared<sstables::sstable_set>(
             sstables::make_partitioned_sstable_set(_schema, use_level_metadata));
-}
-
-void table::refresh_compound_sstable_set() {
-    _sstables = make_compound_sstable_set();
 }
 
 // Exposed for testing, not performance critical.
@@ -456,30 +441,6 @@ inline void table::remove_sstable_from_backlog_tracker(compaction_backlog_tracke
     tracker.replace_sstables({std::move(sstable)}, {});
 }
 
-void compaction_group::backlog_tracker_adjust_charges(const std::vector<sstables::shared_sstable>& old_sstables, const std::vector<sstables::shared_sstable>& new_sstables) {
-    auto& tracker = get_backlog_tracker();
-    tracker.replace_sstables(old_sstables, new_sstables);
-}
-
-lw_shared_ptr<sstables::sstable_set>
-compaction_group::do_add_sstable(lw_shared_ptr<sstables::sstable_set> sstables, sstables::shared_sstable sstable,
-        enable_backlog_tracker backlog_tracker) {
-    if (belongs_to_other_shard(sstable->get_shards_for_this_sstable())) {
-        on_internal_error(tlogger, format("Attempted to load the shared SSTable {} at table", sstable->get_filename()));
-    }
-    // allow in-progress reads to continue using old list
-    auto new_sstables = make_lw_shared<sstables::sstable_set>(*sstables);
-    new_sstables->insert(sstable);
-    if (backlog_tracker) {
-        table::add_sstable_to_backlog_tracker(get_backlog_tracker(), sstable);
-    }
-    return new_sstables;
-}
-
-void compaction_group::add_sstable(sstables::shared_sstable sstable) {
-    _main_sstables = do_add_sstable(_main_sstables, std::move(sstable), enable_backlog_tracker::yes);
-}
-
 const lw_shared_ptr<sstables::sstable_set>& compaction_group::main_sstables() const noexcept {
     return _main_sstables;
 }
@@ -488,26 +449,12 @@ void compaction_group::set_main_sstables(lw_shared_ptr<sstables::sstable_set> ne
     _main_sstables = std::move(new_main_sstables);
 }
 
-void compaction_group::add_maintenance_sstable(sstables::shared_sstable sst) {
-    _maintenance_sstables = do_add_sstable(_maintenance_sstables, std::move(sst), enable_backlog_tracker::no);
-}
-
 const lw_shared_ptr<sstables::sstable_set>& compaction_group::maintenance_sstables() const noexcept {
     return _maintenance_sstables;
 }
 
 void compaction_group::set_maintenance_sstables(lw_shared_ptr<sstables::sstable_set> new_maintenance_sstables) {
     _maintenance_sstables = std::move(new_maintenance_sstables);
-}
-
-void table::add_sstable(compaction_group& cg, sstables::shared_sstable sstable) {
-    cg.add_sstable(std::move(sstable));
-    refresh_compound_sstable_set();
-}
-
-void table::add_maintenance_sstable(compaction_group& cg, sstables::shared_sstable sst) {
-    cg.add_maintenance_sstable(std::move(sst));
-    refresh_compound_sstable_set();
 }
 
 void table::do_update_off_strategy_trigger() {
@@ -616,10 +563,22 @@ compaction_group& table::compaction_group_for_token(dht::token token) const noex
                                                 idx, _cg_manager->log2_compaction_groups(), _compaction_groups.size(), token));
     }
     auto& ret = *_compaction_groups[idx];
-    if (!ret.token_range().contains(token, dht::token_comparator())) {
+#ifndef SCYLLA_BUILD_MODE_RELEASE
+    if (token.is_minimum()) {
+        if (ret.group_id() != 0) {
+            on_fatal_internal_error(tlogger, format("compaction_group_for_token: compaction_group idx={} range={} mismatches token={}: expected idx={}",
+                    idx, ret.token_range(), token, 0));
+        }
+    } else if (token.is_maximum()) {
+        if (ret.group_id() != _compaction_groups.size() - 1) {
+            on_fatal_internal_error(tlogger, format("compaction_group_for_token: compaction_group idx={} range={} mismatches token={}: expected idx={}",
+                    idx, ret.token_range(), token, _compaction_groups.size() - 1));
+        }
+    } else if (!ret.token_range().contains(token, dht::token_comparator())) {
         on_fatal_internal_error(tlogger, format("compaction_group_for_token: compaction_group idx={} range={} does not contain token={}",
                 idx, ret.token_range(), token));
     }
+#endif
     return ret;
 }
 
@@ -688,32 +647,99 @@ future<sstables::sstable_list> table::take_storage_snapshot(dht::token_range tr)
     co_return ret;
 }
 
-void table::update_stats_for_new_sstable(const sstables::shared_sstable& sst) noexcept {
-    _stats.live_disk_space_used += sst->bytes_on_disk();
-    _stats.total_disk_space_used += sst->bytes_on_disk();
-    _stats.live_sstable_count++;
+void table::update_sstables_stats(ssize_t count, int64_t bytes_on_disk) noexcept {
+    _stats.live_disk_space_used += bytes_on_disk;
+    _stats.total_disk_space_used += bytes_on_disk;
+    _stats.live_sstable_count += count;
 }
+
+using is_main = bool_class<struct is_main_tag>;
+
+class table_sstables_adder : public row_cache::external_updater_impl {
+    table& _t;
+    compaction_group& _cg;
+    std::vector<sstables::shared_sstable> _sstables;
+    is_main _is_main;
+    lw_shared_ptr<memtable> _mut;
+
+    lw_shared_ptr<sstables::sstable_set> _new_sstable_set;
+    std::optional<compaction_backlog_tracker> _new_backlog_tracker;
+    mutation_source_opt _ms_opt;
+public:
+    table_sstables_adder(table& t, compaction_group& cg, std::vector<sstables::shared_sstable> sstables, is_main main, lw_shared_ptr<memtable> m)
+        : _t(t)
+        , _cg(cg)
+        , _sstables(std::move(sstables))
+        , _is_main(main)
+        , _mut(std::move(m))
+    {
+        for (const auto& sst : _sstables) {
+            if (belongs_to_other_shard(sst->get_shards_for_this_sstable())) {
+                on_internal_error(tlogger, format("Attempted to load the shared SSTable {} at table", sst->get_filename()));
+            }
+        }
+        if (_mut) {
+            if (_sstables.size() == 1) {
+                _ms_opt = _sstables.front()->as_mutation_source();
+            } else {
+                std::vector<mutation_source> sources;
+                sources.reserve(_sstables.size());
+                for (auto& sst : _sstables) {
+                    sources.push_back(sst->as_mutation_source());
+                }
+                _ms_opt = make_combined_mutation_source(std::move(sources));
+            }
+        }
+    }
+
+    // Guarantees strong exception safety
+    virtual future<> prepare() override {
+        auto cur = _is_main ? _cg.main_sstables() : _cg.maintenance_sstables();
+        _new_sstable_set = make_lw_shared<sstables::sstable_set>(*cur);
+        auto inserted = _new_sstable_set->insert(_sstables);
+        if (inserted.size() != _sstables.size()) {
+            on_internal_error(tlogger, fmt::format("table_sstables_adder: some sstables are already in the table: candidates={} inserted={}", _sstables, inserted));
+        }
+        if (_is_main) {
+            _new_backlog_tracker.emplace(_cg.get_backlog_tracker().clone_and_replace_sstables({}, _sstables));
+        }
+        return make_ready_future<>();
+    }
+
+    // FIXME: no exceptions should be thrown from execute, as they are considered fatal.
+    // Do all preparations in prepare(), providing strong exception safety guarantees,
+    // and only apply the modified temporary state here.
+    virtual void execute() override {
+        if (_is_main) {
+            _cg.set_main_sstables(std::move(_new_sstable_set));
+            _t._compaction_manager.register_backlog_tracker(_cg.as_table_state(), std::move(*_new_backlog_tracker));
+        } else {
+            _cg.set_maintenance_sstables(std::move(_new_sstable_set));
+        }
+        auto bytes_on_disk = boost::accumulate(_sstables | boost::adaptors::transformed(std::mem_fn(&sstables::sstable::bytes_on_disk)), uint64_t(0));
+        _t.update_sstables_stats(_sstables.size(), bytes_on_disk);
+        if (_mut) {
+            _mut->mark_flushed(std::move(*_ms_opt));
+        }
+        _t.try_trigger_compaction(_cg);
+    }
+
+    static row_cache::external_updater make(table& t, compaction_group& cg, std::vector<sstables::shared_sstable> sstables, is_main main, lw_shared_ptr<memtable> m = nullptr) {
+        return row_cache::external_updater(std::make_unique<table_sstables_adder>(t, cg, std::move(sstables), main, std::move(m)));
+    }
+};
 
 future<>
 table::do_add_sstable_and_update_cache(sstables::shared_sstable sst, sstables::offstrategy offstrategy) {
     auto permit = co_await seastar::get_units(_sstable_set_mutation_sem, 1);
-    co_return co_await get_row_cache().invalidate(row_cache::external_updater([this, sst, offstrategy] () noexcept {
-        // FIXME: this is not really noexcept, but we need to provide strong exception guarantees.
-        // atomically load all opened sstables into column family.
-        compaction_group& cg = compaction_group_for_sstable(sst);
-        if (!offstrategy) {
-            add_sstable(cg, sst);
-        } else {
-            add_maintenance_sstable(cg, sst);
-        }
-        update_stats_for_new_sstable(sst);
-    }), dht::partition_range::make({sst->get_first_decorated_key(), true}, {sst->get_last_decorated_key(), true}));
+    auto range = dht::partition_range::make({sst->get_first_decorated_key(), true}, {sst->get_last_decorated_key(), true});
+    auto adder = table_sstables_adder::make(*this, compaction_group_for_sstable(sst), {sst}, is_main(!bool(offstrategy)));
+    co_return co_await get_row_cache().invalidate(std::move(adder), std::move(range));
 }
 
 future<>
 table::add_sstable_and_update_cache(sstables::shared_sstable sst, sstables::offstrategy offstrategy) {
     co_await do_add_sstable_and_update_cache(std::move(sst), offstrategy);
-    trigger_compaction();
 }
 
 future<>
@@ -726,31 +752,12 @@ table::add_sstables_and_update_cache(const std::vector<sstables::shared_sstable>
             throw;
         }
     }
-    trigger_compaction();
 }
 
 future<>
 table::update_cache(compaction_group& cg, lw_shared_ptr<memtable> m, std::vector<sstables::shared_sstable> ssts) {
     auto permit = co_await seastar::get_units(_sstable_set_mutation_sem, 1);
-    mutation_source_opt ms_opt;
-    if (ssts.size() == 1) {
-        ms_opt = ssts.front()->as_mutation_source();
-    } else {
-        std::vector<mutation_source> sources;
-        sources.reserve(ssts.size());
-        for (auto& sst : ssts) {
-            sources.push_back(sst->as_mutation_source());
-        }
-        ms_opt = make_combined_mutation_source(std::move(sources));
-    }
-    auto adder = row_cache::external_updater([this, m, ssts = std::move(ssts), new_ssts_ms = std::move(*ms_opt), &cg] () mutable {
-        for (auto& sst : ssts) {
-            add_sstable(cg, sst);
-            update_stats_for_new_sstable(sst);
-        }
-        m->mark_flushed(std::move(new_ssts_ms));
-        try_trigger_compaction(cg);
-    });
+    auto adder = table_sstables_adder::make(*this, cg, std::move(ssts), is_main::yes, m);
     if (cache_enabled()) {
         co_return co_await _cache.update(std::move(adder), *m);
     } else {
@@ -1070,7 +1077,7 @@ table::stop() {
         for (const compaction_group_ptr& cg : compaction_groups()) {
             cg->clear_sstables();
         }
-        _sstables = make_compound_sstable_set();
+        _sstables = make_table_sstable_set();
     }));
     _cache.refresh_snapshot();
 }
@@ -1233,6 +1240,7 @@ compaction_group::update_sstable_lists_on_off_strategy_completion(sstables::comp
         const sstables_t& _new_main;
         lw_shared_ptr<sstables::sstable_set> _new_maintenance_list;
         lw_shared_ptr<sstables::sstable_set> _new_main_list;
+        std::optional<compaction_backlog_tracker> _new_backlog_tracker;
     public:
         explicit sstable_lists_updater(compaction_group& cg, table::sstable_list_builder::permit_t permit, const sstables_t& old_maintenance, const sstables_t& new_main)
                 : _t(cg._t), _cg(cg), _builder(std::move(permit)), _old_maintenance(old_maintenance), _new_main(new_main) {
@@ -1243,13 +1251,13 @@ compaction_group::update_sstable_lists_on_off_strategy_completion(sstables::comp
             _new_main_list = co_await _builder.build_new_list(*_cg.main_sstables(), _t._compaction_strategy.make_sstable_set(_t._schema), _new_main, empty);
             // removing old sstables, used as input by off-strategy, from the maintenance set
             _new_maintenance_list = co_await _builder.build_new_list(*_cg.maintenance_sstables(), std::move(*_t.make_maintenance_sstable_set()), empty, _old_maintenance);
+            // Input sstables aren't not removed from backlog tracker because they come from the maintenance set.
+            _new_backlog_tracker.emplace(_cg.get_backlog_tracker().clone_and_replace_sstables({}, _new_main));
         }
         virtual void execute() override {
             _cg.set_main_sstables(std::move(_new_main_list));
             _cg.set_maintenance_sstables(std::move(_new_maintenance_list));
-            _t.refresh_compound_sstable_set();
-            // Input sstables aren't not removed from backlog tracker because they come from the maintenance set.
-            _cg.backlog_tracker_adjust_charges({}, _new_main);
+            _t._compaction_manager.register_backlog_tracker(_cg.as_table_state(), std::move(*_new_backlog_tracker));
         }
         static std::unique_ptr<row_cache::external_updater_impl> make(compaction_group& cg, table::sstable_list_builder::permit_t permit, const sstables_t& old_maintenance, const sstables_t& new_main) {
             return std::make_unique<sstable_lists_updater>(cg, std::move(permit), old_maintenance, new_main);
@@ -1325,16 +1333,17 @@ compaction_group::update_main_sstable_list_on_compaction_completion(sstables::co
         table::sstable_list_builder _builder;
         const sstables::compaction_completion_desc& _desc;
         lw_shared_ptr<sstables::sstable_set> _new_sstables;
+        std::optional<compaction_backlog_tracker> _new_backlog_tracker;
     public:
         explicit sstable_list_updater(compaction_group& cg, table::sstable_list_builder::permit_t permit, sstables::compaction_completion_desc& d)
             : _t(cg._t), _cg(cg), _builder(std::move(permit)), _desc(d) {}
         virtual future<> prepare() override {
             _new_sstables = co_await _builder.build_new_list(*_cg.main_sstables(), _t._compaction_strategy.make_sstable_set(_t._schema), _desc.new_sstables, _desc.old_sstables);
+            _new_backlog_tracker.emplace(_cg.get_backlog_tracker().clone_and_replace_sstables(_desc.old_sstables, _desc.new_sstables));
         }
         virtual void execute() override {
             _cg.set_main_sstables(std::move(_new_sstables));
-            _t.refresh_compound_sstable_set();
-            _cg.backlog_tracker_adjust_charges(_desc.old_sstables, _desc.new_sstables);
+            _t._compaction_manager.register_backlog_tracker(_cg.as_table_state(), std::move(*_new_backlog_tracker));
         }
         static std::unique_ptr<row_cache::external_updater_impl> make(compaction_group& cg, table::sstable_list_builder::permit_t permit, sstables::compaction_completion_desc& d) {
             return std::make_unique<sstable_list_updater>(cg, std::move(permit), d);
@@ -1515,7 +1524,6 @@ void table::set_compaction_strategy(sstables::compaction_strategy_type strategy)
     for (auto& updater : cg_sstable_set_updaters) {
         updater.execute();
     }
-    refresh_compound_sstable_set();
 }
 
 size_t table::sstables_count() const {
@@ -1657,7 +1665,7 @@ table::table(schema_ptr schema, config config, lw_shared_ptr<const storage_optio
     , _compaction_strategy(make_compaction_strategy(_schema->compaction_strategy(), _schema->compaction_strategy_options()))
     , _cg_manager(make_compaction_group_manager())
     , _compaction_groups(_cg_manager->make_compaction_groups())
-    , _sstables(make_compound_sstable_set())
+    , _sstables(make_table_sstable_set())
     , _cache(_schema, sstables_as_snapshot_source(), row_cache_tracker, is_continuous::yes)
     , _commitlog(nullptr)
     , _readonly(true)
@@ -1990,12 +1998,17 @@ future<db::replay_position> table::discard_sstables(db_clock::time_point truncat
     struct pruner {
         column_family& cf;
         db::replay_position rp;
-        struct removed_sstable {
-            compaction_group& cg;
-            sstables::shared_sstable sst;
-            replica::enable_backlog_tracker enable_backlog_tracker;
+
+        struct cg_sstables {
+            lw_shared_ptr<sstables::sstable_set> pruning;
+            lw_shared_ptr<sstables::sstable_set> pruned;
+            std::vector<sstables::shared_sstable> remove;
         };
-        std::vector<removed_sstable> remove;
+        struct cg_state {
+            cg_sstables main;
+            cg_sstables maintenance;
+        };
+        std::unordered_map<compaction_group*, cg_state> cg_map;
 
         pruner(column_family& cf)
             : cf(cf) {}
@@ -2003,44 +2016,81 @@ future<db::replay_position> table::discard_sstables(db_clock::time_point truncat
         void prune(compaction_group& cg, db_clock::time_point truncated_at) {
             auto gc_trunc = to_gc_clock(truncated_at);
 
-            auto pruned = make_lw_shared<sstables::sstable_set>(cf._compaction_strategy.make_sstable_set(cf._schema));
-            auto maintenance_pruned = cf.make_maintenance_sstable_set();
+            cg_state st;
+            st.main.pruning = cg.main_sstables();
+            st.main.pruned = make_lw_shared<sstables::sstable_set>(cf._compaction_strategy.make_sstable_set(cf._schema));
+            st.maintenance.pruning = cg.maintenance_sstables();
+            st.maintenance.pruned = cf.make_maintenance_sstable_set();
 
-            auto prune = [this, &cg, &gc_trunc] (lw_shared_ptr<sstables::sstable_set>& pruned,
-                                            const lw_shared_ptr<sstables::sstable_set>& pruning,
-                                            replica::enable_backlog_tracker enable_backlog_tracker) mutable {
-                pruning->for_each_sstable([&] (const sstables::shared_sstable& p) mutable {
+            auto prune = [this, &gc_trunc] (cg_sstables& cgs) mutable {
+                cgs.pruning->for_each_sstable([&] (const sstables::shared_sstable& p) mutable {
                     if (p->max_data_age() <= gc_trunc) {
                         rp = std::max(p->get_stats_metadata().position, rp);
-                        remove.emplace_back(removed_sstable{cg, p, enable_backlog_tracker});
+                        cgs.remove.emplace_back(p);
                         return;
                     }
-                    pruned->insert(p);
+                    cgs.pruned->insert(p);
                 });
+                if (cgs.remove.empty()) {
+                    cgs.pruned = {};
+                }
             };
-            prune(pruned, cg.main_sstables(), enable_backlog_tracker::yes);
-            prune(maintenance_pruned, cg.maintenance_sstables(), enable_backlog_tracker::no);
+            prune(st.main);
+            prune(st.maintenance);
 
-            cg.set_main_sstables(std::move(pruned));
-            cg.set_maintenance_sstables(std::move(maintenance_pruned));
+            if (!st.main.remove.empty() || !st.maintenance.remove.empty()) {
+                cg_map[&cg] = std::move(st);
+            }
         }
     };
+
+    struct updater_impl : public row_cache::external_updater_impl {
+        table& t;
+        pruner& p;
+        db_clock::time_point truncated_at;
+        std::unordered_map<compaction_group*, compaction_backlog_tracker> new_trackers;
+
+        updater_impl(table& t, pruner& p, db_clock::time_point truncated_at) noexcept
+            : t(t)
+            , p(p)
+            , truncated_at(truncated_at)
+        {}
+
+        virtual future<> prepare() override {
+            for (const compaction_group_ptr& cg : t.compaction_groups()) {
+                p.prune(*cg, truncated_at);
+                co_await coroutine::maybe_yield();
+            }
+        }
+
+        virtual void execute() override {
+            for (auto& [cg, st] : p.cg_map) {
+                if (st.main.pruned) {
+                    cg->set_main_sstables(std::move(st.main.pruned));
+                }
+                if (st.maintenance.pruned) {
+                    cg->set_maintenance_sstables(std::move(st.maintenance.pruned));
+                }
+            }
+            tlogger.debug("cleaning out row cache");
+        }
+    };
+
     auto p = make_lw_shared<pruner>(*this);
-    co_await _cache.invalidate(row_cache::external_updater([this, p, truncated_at] {
-        for (const compaction_group_ptr& cg : compaction_groups()) {
-            p->prune(*cg, truncated_at);
-        }
-        refresh_compound_sstable_set();
-        tlogger.debug("cleaning out row cache");
-    }));
+    auto updater = row_cache::external_updater(std::make_unique<updater_impl>(*this, *p, truncated_at));
+    co_await _cache.invalidate(std::move(updater));
     rebuild_statistics();
-    co_await coroutine::parallel_for_each(p->remove, [this, p] (pruner::removed_sstable& r) -> future<> {
-        if (r.enable_backlog_tracker) {
-            remove_sstable_from_backlog_tracker(r.cg.get_backlog_tracker(), r.sst);
+    for (const auto& [cg, st] : p->cg_map) {
+        for (const auto& sst : st.main.remove) {
+            remove_sstable_from_backlog_tracker(cg->get_backlog_tracker(), sst);
+            co_await get_sstables_manager().delete_atomically({sst});
+            erase_sstable_cleanup_state(sst);
         }
-        co_await get_sstables_manager().delete_atomically({r.sst});
-        erase_sstable_cleanup_state(r.sst);
-    });
+        for (const auto& sst : st.maintenance.remove) {
+            co_await get_sstables_manager().delete_atomically({sst});
+            erase_sstable_cleanup_state(sst);
+        }
+    }
     co_return p->rp;
 }
 
