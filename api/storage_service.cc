@@ -461,7 +461,7 @@ static future<json::json_return_type> describe_ring_as_json(sharded<service::sto
     co_return json::json_return_type(stream_range_as_array(co_await ss.local().describe_ring(keyspace), token_range_endpoints_to_json));
 }
 
-void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_service>& ss) {
+void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_service>& ss, service::raft_group0_client& group0_client) {
     ss::local_hostid.set(r, [&ss](std::unique_ptr<http::request> req) {
         auto id = ss.local().get_token_metadata().get_my_id();
         return make_ready_future<json::json_return_type>(id.to_sstring());
@@ -1332,6 +1332,19 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
                 return make_ready_future<json::json_return_type>(stream_object(dst));
             });
         });
+    });
+
+    ss::reload_raft_topology_state.set(r,
+            [&ss, &group0_client] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
+        co_await ss.invoke_on(0, [&group0_client] (service::storage_service& ss) -> future<> {
+            apilog.info("Waiting for group 0 read/apply mutex before reloading Raft topology state...");
+            auto holder = co_await group0_client.hold_read_apply_mutex();
+            apilog.info("Reloading Raft topology state");
+            // Using topology_transition() instead of topology_state_load(), because the former notifies listeners
+            co_await ss.topology_transition();
+            apilog.info("Reloaded Raft topology state");
+        });
+        co_return json_void();
     });
 }
 
