@@ -98,6 +98,7 @@
 #include "idl/join_node.dist.hh"
 #include "protocol_server.hh"
 #include "node_ops/node_ops_ctl.hh"
+#include "node_ops/task_manager_module.hh"
 #include "service/topology_mutation.hh"
 #include "service/topology_coordinator.hh"
 #include "cql3/query_processor.hh"
@@ -143,7 +144,8 @@ storage_service::storage_service(abort_source& abort_source,
     sharded<db::view::view_builder>& view_builder,
     cql3::query_processor& qp,
     sharded<qos::service_level_controller>& sl_controller,
-    topology_state_machine& topology_state_machine)
+    topology_state_machine& topology_state_machine,
+    tasks::task_manager& tm)
         : _abort_source(abort_source)
         , _feature_service(feature_service)
         , _db(db)
@@ -157,6 +159,7 @@ storage_service::storage_service(abort_source& abort_source,
         , _sl_controller(sl_controller)
         , _group0(nullptr)
         , _node_ops_abort_thread(node_ops_abort_thread())
+        , _task_manager_module(make_shared<node_ops::task_manager_module>(tm, *this))
         , _shared_token_metadata(stm)
         , _erm_factory(erm_factory)
         , _lifecycle_notifier(elc_notif)
@@ -173,6 +176,7 @@ storage_service::storage_service(abort_source& abort_source,
         , _view_builder(view_builder)
         , _topology_state_machine(topology_state_machine)
 {
+    tm.register_module(_task_manager_module->get_name(), _task_manager_module);
     register_metrics();
 
     _listeners.emplace_back(make_lw_shared(bs2::scoped_connection(sstable_read_error.connect([this] { do_isolate_on_error(disk_error::regular); }))));
@@ -188,6 +192,10 @@ storage_service::storage_service(abort_source& abort_source,
 }
 
 storage_service::~storage_service() = default;
+
+node_ops::task_manager_module& storage_service::get_task_manager_module() noexcept {
+    return *_task_manager_module;
+}
 
 enum class node_external_status {
     UNKNOWN        = 0,
@@ -3145,6 +3153,7 @@ future<> storage_service::stop() {
     // make sure nobody uses the semaphore
     node_ops_signal_abort(std::nullopt);
     _listeners.clear();
+    co_await _task_manager_module->stop();
     co_await _async_gate.close();
     co_await std::move(_node_ops_abort_thread);
     _tablet_split_monitor_event.signal();

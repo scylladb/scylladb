@@ -95,6 +95,10 @@ class node_ops_virtual_task;
 class task_manager_module;
 }
 
+namespace tasks {
+class task_manager;
+}
+
 namespace service {
 
 class storage_service;
@@ -176,6 +180,7 @@ private:
     seastar::condition_variable _node_ops_abort_cond;
     named_semaphore _node_ops_abort_sem{1, named_semaphore_exception_factory{"node_ops_abort_sem"}};
     future<> _node_ops_abort_thread;
+    shared_ptr<node_ops::task_manager_module> _task_manager_module;
     void node_ops_insert(node_ops_id, gms::inet_address coordinator, std::list<inet_address> ignore_nodes,
                          std::function<future<>()> abort_func);
     future<> node_ops_update_heartbeat(node_ops_id ops_uuid);
@@ -217,9 +222,11 @@ public:
         sharded<db::view::view_builder>& view_builder,
         cql3::query_processor& qp,
         sharded<qos::service_level_controller>& sl_controller,
-        topology_state_machine& topology_state_machine);
+        topology_state_machine& topology_state_machine,
+        tasks::task_manager& tm);
     ~storage_service();
 
+    node_ops::task_manager_module& get_task_manager_module() noexcept;
     // Needed by distributed<>
     future<> stop();
     void init_messaging_service();
