@@ -4478,7 +4478,7 @@ void on_streaming_finished() {
     utils::get_local_injector().inject("storage_service_streaming_sleep3", std::chrono::seconds{3}).get();
 }
 
-future<> storage_service::raft_decomission() {
+future<> storage_service::raft_decommission() {
     auto& raft_server = _group0->group0_server();
 
     auto disengage_shutdown_promise = defer([this] {
@@ -4500,20 +4500,20 @@ future<> storage_service::raft_decomission() {
         }
 
         if (_topology_state_machine._topology.normal_nodes.size() == 1) {
-            throw std::runtime_error("Cannot decomission last node in the cluster");
+            throw std::runtime_error("Cannot decommission last node in the cluster");
         }
 
-        slogger.info("raft topology: request decomission for: {}", raft_server.id());
+        slogger.info("raft topology: request decommission for: {}", raft_server.id());
         topology_mutation_builder builder(guard.write_timestamp());
         builder.with_node(raft_server.id())
                .set("topology_request", topology_request::leave);
         topology_change change{{builder.build()}};
-        group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard, ::format("decomission: request decomission for {}", raft_server.id()));
+        group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard, ::format("decommission: request decommission for {}", raft_server.id()));
 
         try {
             co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), &_abort_source);
         } catch (group0_concurrent_modification&) {
-            slogger.info("raft topology: decomission: concurrent operation is detected, retrying.");
+            slogger.info("raft topology: decommission: concurrent operation is detected, retrying.");
             continue;
         }
         break;
@@ -4561,7 +4561,7 @@ future<> storage_service::decommission() {
         return seastar::async([&ss] {
             std::exception_ptr leave_group0_ex;
             if (ss._raft_topology_change_enabled) {
-                ss.raft_decomission().get();
+                ss.raft_decommission().get();
             } else {
                 bool left_token_ring = false;
                 auto uuid = node_ops_id::create_random_id();
@@ -6137,7 +6137,7 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(shar
                 }
                 break;
                 case node_state::decommissioning:
-                    co_await retrier(_decomission_result, coroutine::lambda([&] () { return unbootstrap(); }));
+                    co_await retrier(_decommission_result, coroutine::lambda([&] () { return unbootstrap(); }));
                     result.status = raft_topology_cmd_result::command_status::success;
                 break;
                 case node_state::normal: {
