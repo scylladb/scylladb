@@ -1062,7 +1062,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             // #293 - do not stop anything
             // engine().at_exit([&proxy] { return proxy.stop(); });
-            api::set_server_storage_proxy(ctx).get();
+            api::set_server_storage_proxy(ctx, proxy).get();
             auto stop_sp_api = defer_verbose_shutdown("storage proxy API", [&ctx] {
                 api::unset_server_storage_proxy(ctx).get();
             });

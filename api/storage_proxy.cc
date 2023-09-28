@@ -183,7 +183,7 @@ sum_timer_stats_storage_proxy(distributed<proxy>& d,
     });
 }
 
-void set_storage_proxy(http_context& ctx, routes& r) {
+void set_storage_proxy(http_context& ctx, routes& r, sharded<service::storage_proxy>& proxy) {
     sp::get_total_hints.set(r, [](std::unique_ptr<http::request> req)  {
         //TBD
         unimplemented();
