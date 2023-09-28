@@ -42,7 +42,6 @@
 #include "thrift/controller.hh"
 #include "locator/token_metadata.hh"
 #include "cdc/generation_service.hh"
-#include "service/storage_proxy.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "sstables_loader.hh"
 #include "db/view/view_builder.hh"
