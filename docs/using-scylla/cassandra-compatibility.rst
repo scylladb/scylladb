@@ -31,8 +31,8 @@ Interfaces
        | Fully compatible with protocol v4, with additional features from v5.
      - More below
    * - Thrift 
-     - Compatible with Cassandra 2.1
-     - 
+     - Deprecated in ScyllaDB and Cassandra
+     - Support for the Thrift protocol is deprecated and will be dropped in future releases of ScyllaDB. 
    * - SSTable format (all versions)
      - 3.11(mc / md / me), 2.2(la), 2.1.8 (ka)
      - | ``me`` - supported in ScyllaDB Open Source 5.1 and ScyllaDB Enterprise 2022.2.0 (and later)
