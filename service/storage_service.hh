@@ -82,6 +82,14 @@ class feature_service;
 class gossiper;
 };
 
+namespace tasks {
+class task_manager;
+}
+
+namespace node_ops {
+class task_manager_module;
+}
+
 namespace service {
 
 class storage_service;
@@ -154,6 +162,7 @@ private:
     seastar::condition_variable _node_ops_abort_cond;
     named_semaphore _node_ops_abort_sem{1, named_semaphore_exception_factory{"node_ops_abort_sem"}};
     future<> _node_ops_abort_thread;
+    shared_ptr<node_ops::task_manager_module> _task_manager_module;
     void node_ops_insert(node_ops_id, gms::inet_address coordinator, std::list<inet_address> ignore_nodes,
                          std::function<future<>()> abort_func);
     future<> node_ops_update_heartbeat(node_ops_id ops_uuid);
@@ -182,8 +191,10 @@ public:
         sharded<db::batchlog_manager>& bm,
         sharded<locator::snitch_ptr>& snitch,
         sharded<service::tablet_allocator>& tablet_allocator,
-        sharded<cdc::generation_service>& cdc_gs);
+        sharded<cdc::generation_service>& cdc_gs,
+        tasks::task_manager& tm);
 
+    node_ops::task_manager_module& get_task_manager_module() noexcept;
     // Needed by distributed<>
     future<> stop();
     void init_messaging_service(sharded<db::system_distributed_keyspace>& sys_dist_ks, bool raft_topology_change_enabled);
