@@ -117,6 +117,19 @@ void compact_operation(scylla_rest_client& client, const bpo::variables_map& vm)
     }
 }
 
+void disablebackup_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    client.post("/storage_service/incremental_backups", {{"value", "false"}});
+}
+
+void enablebackup_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    client.post("/storage_service/incremental_backups", {{"value", "true"}});
+}
+
+void statusbackup_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    auto status = client.get("/storage_service/incremental_backups");
+    fmt::print(std::cout, "{}\n", status.GetBool() ? "running" : "not running");
+}
+
 void version_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     auto version_json = client.get("/storage_service/release_version");
     fmt::print(std::cout, "ReleaseVersion: {}\n", rjson::to_string_view(version_json));
@@ -170,6 +183,40 @@ Fore more information, see: https://opensource.docs.scylladb.com/stable/operatin
                 }
             },
             compact_operation
+        },
+        {
+            {
+                "disablebackup",
+                "Disables incremental backup",
+R"(
+Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/disablebackup.html
+)",
+            },
+            disablebackup_operation
+        },
+        {
+            {
+                "enablebackup",
+                "Enables incremental backup",
+R"(
+Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/enablebackup.html
+)",
+            },
+            enablebackup_operation
+        },
+        {
+            {
+                "statusbackup",
+                "Displays the incremental backup status",
+R"(
+Results can be one of the following: `running` or `not running`.
+
+By default, the incremental backup status is `not running`.
+
+Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/statusbackup.html
+)",
+            },
+            statusbackup_operation
         },
         {
             {
