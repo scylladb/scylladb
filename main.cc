@@ -1246,6 +1246,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             if (snitch.local()->prefer_local()) {
                 mscfg.preferred_ips = sys_ks.local().get_preferred_ips().get0();
             }
+            mscfg.maintenance_mode = maintenance_mode_enabled{cfg->maintenance_mode()};
 
             const auto& seo = cfg->server_encryption_options();
             auto encrypt = utils::get_or_default(seo, "internode_encryption", "none");
