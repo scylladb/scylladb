@@ -173,13 +173,12 @@ void space_watchdog::on_timer() {
     }
 }
 
-future<> resource_manager::start(shared_ptr<service::storage_proxy> proxy_ptr, shared_ptr<gms::gossiper> gossiper_ptr) {
-    _proxy_ptr = std::move(proxy_ptr);
+future<> resource_manager::start(shared_ptr<gms::gossiper> gossiper_ptr) {
     _gossiper_ptr = std::move(gossiper_ptr);
 
     return with_semaphore(_operation_lock, 1, [this] () {
         return parallel_for_each(_shard_managers, [this](manager& m) {
-            return m.start(_proxy_ptr, _gossiper_ptr);
+            return m.start(_gossiper_ptr);
         }).then([this]() {
             return do_for_each(_shard_managers, [this](manager& m) {
                 return prepare_per_device_limits(m);
@@ -223,7 +222,7 @@ future<> resource_manager::register_manager(manager& m) {
             }
 
             // If the resource_manager was started, start the hints manager, too.
-            return m.start(_proxy_ptr, _gossiper_ptr).then([this, &m] {
+            return m.start(_gossiper_ptr).then([this, &m] {
                 // Calculate device limits for this manager so that it is accounted for
                 // by the space_watchdog
                 return prepare_per_device_limits(m).then([this, &m] {

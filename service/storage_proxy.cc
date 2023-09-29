@@ -2828,10 +2828,10 @@ storage_proxy::storage_proxy(distributed<replica::database>& db, storage_proxy::
     , _hints_write_smp_service_group(cfg.hints_write_smp_service_group)
     , _write_ack_smp_service_group(cfg.write_ack_smp_service_group)
     , _next_response_id(std::chrono::system_clock::now().time_since_epoch()/1ms)
-    , _hints_resource_manager(cfg.available_memory / 10, _db.local().get_config().max_hinted_handoff_concurrency)
-    , _hints_manager(_db.local().get_config().hints_directory(), cfg.hinted_handoff_enabled, _db.local().get_config().max_hint_window_in_ms(), _hints_resource_manager, _db)
+    , _hints_resource_manager(*this, cfg.available_memory / 10, _db.local().get_config().max_hinted_handoff_concurrency)
+    , _hints_manager(*this, _db.local().get_config().hints_directory(), cfg.hinted_handoff_enabled, _db.local().get_config().max_hint_window_in_ms(), _hints_resource_manager, _db)
     , _hints_directory_initializer(std::move(cfg.hints_directory_initializer))
-    , _hints_for_views_manager(_db.local().get_config().view_hints_directory(), {}, _db.local().get_config().max_hint_window_in_ms(), _hints_resource_manager, _db)
+    , _hints_for_views_manager(*this, _db.local().get_config().view_hints_directory(), {}, _db.local().get_config().max_hint_window_in_ms(), _hints_resource_manager, _db)
     , _stats_key(stats_key)
     , _features(feat)
     , _background_write_throttle_threahsold(cfg.available_memory / 10)
@@ -6366,7 +6366,7 @@ future<> storage_proxy::start_hints_manager(shared_ptr<gms::gossiper> g) {
         co_await _hints_resource_manager.register_manager(_hints_manager);
     }
     co_await _hints_resource_manager.register_manager(_hints_for_views_manager);
-    co_await _hints_resource_manager.start(shared_from_this(), std::move(g));
+    co_await _hints_resource_manager.start(std::move(g));
 }
 
 void storage_proxy::allow_replaying_hints() noexcept {

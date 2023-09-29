@@ -135,9 +135,10 @@ future<> directory_initializer::ensure_rebalanced() {
     });
 }
 
-manager::manager(sstring hints_directory, host_filter filter, int64_t max_hint_window_ms, resource_manager& res_manager, distributed<replica::database>& db)
+manager::manager(service::storage_proxy& proxy, sstring hints_directory, host_filter filter, int64_t max_hint_window_ms, resource_manager& res_manager, distributed<replica::database>& db)
     : _hints_dir(fs::path(hints_directory) / format("{:d}", this_shard_id()))
     , _host_filter(std::move(filter))
+    , _proxy(proxy)
     , _max_hint_window_us(max_hint_window_ms * 1000)
     , _local_db(db.local())
     , _resource_manager(res_manager)
@@ -189,8 +190,7 @@ void manager::register_metrics(const sstring& group_name) {
     });
 }
 
-future<> manager::start(shared_ptr<service::storage_proxy> proxy_ptr, shared_ptr<gms::gossiper> gossiper_ptr) {
-    _proxy_anchor = std::move(proxy_ptr);
+future<> manager::start(shared_ptr<gms::gossiper> gossiper_ptr) {
     _gossiper_anchor = std::move(gossiper_ptr);
     return lister::scan_dir(_hints_dir, lister::dir_entry_types::of<directory_entry_type::directory>(), [this] (fs::path datadir, directory_entry de) {
         endpoint_id ep = endpoint_id(de.name);
@@ -408,7 +408,7 @@ future<> manager::change_host_filter(host_filter filter) {
             // for some of them
             return lister::scan_dir(_hints_dir, lister::dir_entry_types::of<directory_entry_type::directory>(), [this] (fs::path datadir, directory_entry de) {
                 const endpoint_id ep = endpoint_id(de.name);
-                if (_ep_managers.contains(ep) || !_host_filter.can_hint_for(_proxy_anchor->get_token_metadata_ptr()->get_topology(), ep)) {
+                if (_ep_managers.contains(ep) || !_host_filter.can_hint_for(_proxy.get_token_metadata_ptr()->get_topology(), ep)) {
                     return make_ready_future<>();
                 }
                 return get_ep_manager(ep).populate_segments_to_replay();
@@ -419,7 +419,7 @@ future<> manager::change_host_filter(host_filter filter) {
             }).finally([this] {
                 // Remove endpoint managers which are rejected by the filter
                 return parallel_for_each(_ep_managers, [this] (auto& pair) {
-                    if (_host_filter.can_hint_for(_proxy_anchor->get_token_metadata_ptr()->get_topology(), pair.first)) {
+                    if (_host_filter.can_hint_for(_proxy.get_token_metadata_ptr()->get_topology(), pair.first)) {
                         return make_ready_future<>();
                     }
                     return pair.second.stop(drain::no).finally([this, ep = pair.first] {
@@ -436,7 +436,7 @@ bool manager::check_dc_for(endpoint_id ep) const noexcept {
         // If target's DC is not a "hintable" DCs - don't hint.
         // If there is an end point manager then DC has already been checked and found to be ok.
         return _host_filter.is_enabled_for_all() || have_ep_manager(ep) ||
-               _host_filter.can_hint_for(_proxy_anchor->get_token_metadata_ptr()->get_topology(), ep);
+               _host_filter.can_hint_for(_proxy.get_token_metadata_ptr()->get_topology(), ep);
     } catch (...) {
         // if we failed to check the DC - block this hint
         return false;
