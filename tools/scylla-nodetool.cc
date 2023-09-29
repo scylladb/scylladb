@@ -121,12 +121,25 @@ void disablebackup_operation(scylla_rest_client& client, const bpo::variables_ma
     client.post("/storage_service/incremental_backups", {{"value", "false"}});
 }
 
+void disablebinary_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    client.del("/storage_service/native_transport");
+}
+
 void enablebackup_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     client.post("/storage_service/incremental_backups", {{"value", "true"}});
 }
 
+void enablebinary_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    client.post("/storage_service/native_transport");
+}
+
 void statusbackup_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     auto status = client.get("/storage_service/incremental_backups");
+    fmt::print(std::cout, "{}\n", status.GetBool() ? "running" : "not running");
+}
+
+void statusbinary_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    auto status = client.get("/storage_service/native_transport");
     fmt::print(std::cout, "{}\n", status.GetBool() ? "running" : "not running");
 }
 
@@ -196,6 +209,16 @@ Fore more information, see: https://opensource.docs.scylladb.com/stable/operatin
         },
         {
             {
+                "disablebinary",
+                "Disable the CQL native protocol",
+R"(
+Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/disablebinary.html
+)",
+            },
+            disablebinary_operation
+        },
+        {
+            {
                 "enablebackup",
                 "Enables incremental backup",
 R"(
@@ -203,6 +226,18 @@ Fore more information, see: https://opensource.docs.scylladb.com/stable/operatin
 )",
             },
             enablebackup_operation
+        },
+        {
+            {
+                "enablebinary",
+                "Enables the CQL native protocol",
+R"(
+The native protocol is enabled by default.
+
+Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/enablebinary.html
+)",
+            },
+            enablebinary_operation
         },
         {
             {
@@ -217,6 +252,23 @@ Fore more information, see: https://opensource.docs.scylladb.com/stable/operatin
 )",
             },
             statusbackup_operation
+        },
+        {
+            {
+                "statusbinary",
+                "Displays the incremental backup status",
+R"(
+Provides the status of native transport - CQL (binary protocol).
+In case that you don’t want to use CQL you can disable it using the disablebinary
+command.
+Results can be one of the following: `running` or `not running`.
+
+By default, the native transport is `running`.
+
+Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/statusbinary.html
+)",
+            },
+            statusbinary_operation
         },
         {
             {
