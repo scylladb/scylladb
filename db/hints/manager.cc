@@ -110,9 +110,6 @@ directory_initializer::directory_initializer(std::shared_ptr<directory_initializ
         : _impl(std::move(impl))
 { }
 
-directory_initializer::~directory_initializer()
-{ }
-
 directory_initializer directory_initializer::make_dummy() {
     return directory_initializer{nullptr};
 }
