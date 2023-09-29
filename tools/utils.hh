@@ -143,6 +143,8 @@ public:
         : _cfg(std::move(cfg))
     { }
 
+    const config& get_config() const { return _cfg; }
+
     int run_async(int argc, char** argv, noncopyable_function<int(const operation&, const boost::program_options::variables_map&)> main_func);
 };
 

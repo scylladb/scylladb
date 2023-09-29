@@ -7,6 +7,7 @@
  */
 
 #include <boost/algorithm/string/join.hpp>
+#include <boost/make_shared.hpp>
 #include <boost/range/adaptor/map.hpp>
 #include <seastar/core/thread.hh>
 #include <seastar/http/exception.hh>
@@ -87,6 +88,8 @@ public:
 
 using operation_func = void(*)(scylla_rest_client&, const bpo::variables_map&);
 
+std::map<operation, operation_func> get_operations_with_func();
+
 void compact_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     if (vm.count("user-defined")) {
         throw std::invalid_argument("--user-defined flag is unsupported");
@@ -146,6 +149,70 @@ void gettraceprobability_operation(scylla_rest_client& client, const bpo::variab
     fmt::print(std::cout, "Current trace probability: {}\n", res.GetDouble());
 }
 
+void help_operation(const tool_app_template::config& cfg, const bpo::variables_map& vm) {
+    if (vm.count("command")) {
+        const auto command = vm["command"].as<sstring>();
+        auto ops = get_operations_with_func();
+        auto keys = ops | boost::adaptors::map_keys;
+        auto it = std::ranges::find_if(keys, [&] (const operation& op) { return op.name() == command; });
+        if (it == keys.end()) {
+            throw std::invalid_argument(fmt::format("unknown command {}", command));
+        }
+
+        const auto& op = *it;
+
+        fmt::print(std::cout, "{}\n\n", op.summary());
+        fmt::print(std::cout, "{}\n\n", op.description());
+
+        // FIXME
+        // The below code is needed because we don't have complete access to the
+        // internal options descriptions inside the app-template.
+        // This will be addressed once https://github.com/scylladb/seastar/pull/1762
+        // goes in.
+
+        bpo::options_description opts_desc(fmt::format("{} options", app_name));
+        opts_desc.add_options()
+                ("help,h", "show help message")
+                ;
+        opts_desc.add_options()
+                ("help-seastar", "show help message about seastar options")
+                ;
+        opts_desc.add_options()
+                ("help-loggers", "print a list of logger names and exit")
+                ;
+        if (cfg.global_options) {
+            for (const auto& go : *cfg.global_options) {
+                go.add_option(opts_desc);
+            }
+        }
+        if (cfg.global_positional_options) {
+            for (const auto& gpo : *cfg.global_positional_options) {
+                gpo.add_option(opts_desc);
+            }
+        }
+
+        bpo::options_description op_opts_desc(op.name());
+        for (const auto& opt : op.options()) {
+            opt.add_option(op_opts_desc);
+        }
+        for (const auto& opt : op.positional_options()) {
+            opt.add_option(opts_desc);
+        }
+        if (!op.options().empty()) {
+            opts_desc.add(op_opts_desc);
+        }
+
+        fmt::print(std::cout, "{}\n", opts_desc);
+    } else {
+        fmt::print(std::cout, "usage: nodetool [(-p <port> | --port <port>)] [(-h <host> | --host <host>)] <command> [<args>]\n\n");
+        fmt::print(std::cout, "The most commonly used nodetool commands are:\n");
+        for (auto [op, _] : get_operations_with_func()) {
+            fmt::print(std::cout, "    {:<26} {}\n", op.name(), op.summary());
+        }
+        fmt::print(std::cout, "\nSee 'nodetool help <command>' for more information on a specific command.\n\n");
+    }
+}
+
 void settraceprobability_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     if (!vm.count("trace_probability")) {
         throw std::invalid_argument("required parameters are missing: trace_probability");
@@ -195,7 +262,7 @@ const std::map<std::string_view, std::string_view> option_substitutions{
     {"-et", "--end-token"},
 };
 
-auto get_operations_with_func() {
+std::map<operation, operation_func> get_operations_with_func() {
 
     const static std::map<operation, operation_func> operations_with_func {
         {
@@ -301,6 +368,18 @@ Fore more information, see: https://opensource.docs.scylladb.com/stable/operatin
 )",
             },
             gettraceprobability_operation
+        },
+        {
+            {
+                "help",
+                "Displays the list of all available nodetool commands",
+                "",
+                { },
+                {
+                    typed_option<sstring>("command", "The command to get more information about", 1),
+                },
+            },
+            [] (scylla_rest_client&, const bpo::variables_map&) {}
         },
         {
             {
@@ -466,11 +545,18 @@ For more information, see: https://opensource.docs.scylladb.com/stable/operating
             .global_options = &global_options};
     tool_app_template app(std::move(app_cfg));
 
-    return app.run_async(replacement_argv.size(), replacement_argv.data(), [] (const operation& operation, const bpo::variables_map& app_config) {
-        scylla_rest_client client(app_config["host"].as<sstring>(), app_config["port"].as<uint16_t>());
-
+    return app.run_async(replacement_argv.size(), replacement_argv.data(), [&app] (const operation& operation, const bpo::variables_map& app_config) {
         try {
-            get_operations_with_func().at(operation)(client, app_config);
+            // Help operation is special (and weird), add special path for it
+            // instead of making all other commands:
+            // * make client param optional
+            // * take an additional param
+            if (operation.name() == "help") {
+                help_operation(app.get_config(), app_config);
+            } else {
+                scylla_rest_client client(app_config["host"].as<sstring>(), app_config["port"].as<uint16_t>());
+                get_operations_with_func().at(operation)(client, app_config);
+            }
         } catch (std::invalid_argument& e) {
             fmt::print(std::cerr, "error processing arguments: {}\n", e.what());
             return 1;
