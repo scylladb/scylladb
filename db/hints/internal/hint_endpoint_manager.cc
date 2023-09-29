@@ -43,7 +43,7 @@ bool hint_endpoint_manager::store_hint(schema_ptr s, lw_shared_ptr<const frozen_
             return with_shared(file_update_mutex(), [this, fm, s, tr_state] () mutable -> future<> {
                 return get_or_load().then([this, fm = std::move(fm), s = std::move(s), tr_state] (hints_store_ptr log_ptr) mutable {
                     commitlog_entry_writer cew(s, *fm, db::commitlog::force_sync::no);
-                    return log_ptr->add_entry(s->id(), cew, db::timeout_clock::now() + _shard_manager.hint_file_write_timeout);
+                    return log_ptr->add_entry(s->id(), cew, db::timeout_clock::now() + _shard_manager.HINT_FILE_WRITE_TIMEOUT);
                 }).then([this, tr_state] (db::rp_handle rh) {
                     auto rp = rh.release();
                     if (_last_written_rp < rp) {

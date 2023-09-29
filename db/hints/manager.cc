@@ -350,7 +350,7 @@ bool manager::store_hint(endpoint_id ep, schema_ptr s, lw_shared_ptr<const froze
 bool manager::too_many_in_flight_hints_for(endpoint_id ep) const noexcept {
     // There is no need to check the DC here because if there is an in-flight hint for this end point then this means that
     // its DC has already been checked and found to be ok.
-    return _stats.size_of_hints_in_progress > max_size_of_hints_in_progress && !utils::fb_utilities::is_me(ep) && hints_in_progress_for(ep) > 0 && local_gossiper().get_endpoint_downtime(ep) <= _max_hint_window_us;
+    return _stats.size_of_hints_in_progress > MAX_SIZE_OF_HINTS_IN_PROGRESS && !utils::fb_utilities::is_me(ep) && hints_in_progress_for(ep) > 0 && local_gossiper().get_endpoint_downtime(ep) <= _max_hint_window_us;
 }
 
 bool manager::can_hint_for(endpoint_id ep) const noexcept {
@@ -367,7 +367,7 @@ bool manager::can_hint_for(endpoint_id ep) const noexcept {
     // hints is more than the maximum allowed value.
     //
     // In the worst case there's going to be (_max_size_of_hints_in_progress + N - 1) in-flight hints, where N is the total number Nodes in the cluster.
-    if (_stats.size_of_hints_in_progress > max_size_of_hints_in_progress && hints_in_progress_for(ep) > 0) {
+    if (_stats.size_of_hints_in_progress > MAX_SIZE_OF_HINTS_IN_PROGRESS && hints_in_progress_for(ep) > 0) {
         manager_logger.trace("size_of_hints_in_progress {} hints_in_progress_for({}) {}", _stats.size_of_hints_in_progress, ep, hints_in_progress_for(ep));
         return false;
     }

@@ -99,9 +99,9 @@ public:
     static inline const std::string FILENAME_PREFIX{"HintsLog" + commitlog::descriptor::SEPARATOR};
     // Non-const - can be modified with an error injection.
     static inline std::chrono::seconds hints_flush_period = std::chrono::seconds(10);
-    static constexpr std::chrono::seconds hint_file_write_timeout = std::chrono::seconds(2);
+    static constexpr std::chrono::seconds HINT_FILE_WRITE_TIMEOUT = std::chrono::seconds(2);
 private:
-    static constexpr uint64_t max_size_of_hints_in_progress = 10 * 1024 * 1024; // 10MB
+    static constexpr uint64_t MAX_SIZE_OF_HINTS_IN_PROGRESS = 10 * 1024 * 1024; // 10MB
 
 private:
     state_set _state;
