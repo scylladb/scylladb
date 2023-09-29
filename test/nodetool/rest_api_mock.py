@@ -24,7 +24,7 @@ class expected_request:
                  response: Dict[str, Any] = None):
         self.method = method
         self.path = path
-        self.params = {}
+        self.params = params
         self.multiple = multiple
         self.response = response
 
