@@ -82,47 +82,6 @@ public:
 
 using operation_func = void(*)(scylla_rest_client&, const bpo::variables_map&);
 
-enum class json_type {
-    null, boolean, object, array, string, number
-};
-
-const rjson::value& check_json_type(const rjson::value& value, json_type type) {
-    bool ok = false;
-    sstring type_name = "unknown";
-    switch (type) {
-        case json_type::null:
-            ok = value.IsNull();
-            type_name = "null";
-            break;
-        case json_type::boolean:
-            ok = value.IsBool();
-            type_name = "bool";
-            break;
-        case json_type::object:
-            ok = value.IsObject();
-            type_name = "object";
-            break;
-        case json_type::array:
-            ok = value.IsArray();
-            type_name = "array";
-            break;
-        case json_type::string:
-            ok = value.IsString();
-            type_name = "string";
-            break;
-        case json_type::number:
-            ok = value.IsNumber();
-            type_name = "number";
-            break;
-        default:
-            throw std::runtime_error(fmt::format("check_json_type(): unknown type: {}", static_cast<int>(type)));
-    }
-    if (!ok) {
-        throw std::runtime_error(fmt::format("check_json_type(): json value is not of the expected type: {}", type_name));
-    }
-    return value;
-}
-
 void compact_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     if (vm.count("user-defined")) {
         throw std::invalid_argument("--user-defined flag is unsupported");
@@ -130,8 +89,8 @@ void compact_operation(scylla_rest_client& client, const bpo::variables_map& vm)
 
     auto keyspaces_json = client.get("/storage_service/keyspaces", {});
     std::vector<sstring> all_keyspaces;
-    for (const auto& keyspace_json : check_json_type(keyspaces_json, json_type::array).GetArray()) {
-        all_keyspaces.emplace_back(rjson::to_string_view(check_json_type(keyspace_json, json_type::string)));
+    for (const auto& keyspace_json : keyspaces_json.GetArray()) {
+        all_keyspaces.emplace_back(rjson::to_string_view(keyspace_json));
     }
 
     if (vm.count("compaction_arg")) {
