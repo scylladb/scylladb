@@ -14,6 +14,7 @@
 #include <seastar/core/shared_mutex.hh>
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/smp.hh>
+#include <seastar/util/noncopyable_function.hh>
 
 // Scylla includes.
 #include "db/commitlog/replay_position.hh"
@@ -160,20 +161,14 @@ public:
         return _sender.wait_until_hints_are_replayed_up_to(as, up_to_rp);
     }
 
-    /// \brief Safely runs a given functor under the file_update_mutex of \ref ep_man
+    /// \brief Safely runs a given functor under the file_update_mutex of \ref this object.
     ///
-    /// Runs a given functor under the file_update_mutex of the given hint_endpoint_manager instance.
+    /// Runs a given functor under the file_update_mutex of this hint_endpoint_manager instance.
     /// This function is safe even if \ref ep_man gets destroyed before the future this function returns resolves
     /// (as long as the \ref func call itself is safe).
     ///
-    /// \tparam Func Functor type.
-    /// \param ep_man hint_endpoint_manager instance which file_update_mutex we want to lock.
     /// \param func Functor to run under the lock.
-    /// \return Whatever \ref func returns.
-    template <typename Func>
-    friend inline auto with_file_update_mutex(hint_endpoint_manager& ep_man, Func&& func) {
-        return with_lock(*ep_man._file_update_mutex_ptr, std::forward<Func>(func)).finally([lock_ptr = ep_man._file_update_mutex_ptr] {});
-    }
+    future<> with_file_update_mutex(noncopyable_function<future<> ()> func);
 
     const fs::path& hints_dir() const noexcept {
         return _hints_dir;
