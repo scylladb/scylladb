@@ -78,6 +78,11 @@ public:
     rjson::value get(sstring path, std::unordered_map<sstring, sstring> params = {}) {
         return do_request("GET", std::move(path), std::move(params));
     }
+
+    // delete is a reserved keyword, using del instead
+    rjson::value del(sstring path, std::unordered_map<sstring, sstring> params = {}) {
+        return do_request("DELETE", std::move(path), std::move(params));
+    }
 };
 
 using operation_func = void(*)(scylla_rest_client&, const bpo::variables_map&);
