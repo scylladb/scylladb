@@ -829,6 +829,14 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             }
             const auto hinted_handoff_enabled = cfg->hinted_handoff_enabled();
 
+            auto api_addr = utils::resolve(cfg->api_address || cfg->rpc_address, family, preferred).get0();
+            supervisor::notify("starting API server");
+            ctx.http_server.start("API").get();
+            auto stop_http_server = defer_verbose_shutdown("API server", [&ctx] {
+                ctx.http_server.stop().get();
+            });
+            api::set_server_init(ctx).get();
+
             supervisor::notify("starting prometheus API server");
             std::any stop_prometheus;
             if (cfg->prometheus_port()) {
@@ -1084,13 +1092,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 tracing::tracing::tracing_instance().stop().get();
             });
 
-            auto api_addr = utils::resolve(cfg->api_address || cfg->rpc_address, family, preferred).get0();
-            supervisor::notify("starting API server");
-            ctx.http_server.start("API").get();
-            auto stop_http_server = defer_verbose_shutdown("API server", [&ctx] {
-                ctx.http_server.stop().get();
-            });
-            api::set_server_init(ctx).get();
             with_scheduling_group(maintenance_scheduling_group, [&] {
                 return ctx.http_server.listen(socket_address{api_addr, cfg->api_port()});
             }).get();
