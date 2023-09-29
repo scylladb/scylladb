@@ -117,6 +117,11 @@ void compact_operation(scylla_rest_client& client, const bpo::variables_map& vm)
     }
 }
 
+void version_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    auto version_json = client.get("/storage_service/release_version");
+    fmt::print(std::cout, "ReleaseVersion: {}\n", rjson::to_string_view(version_json));
+}
+
 const std::vector<operation_option> global_options{
     typed_option<sstring>("host,h", "localhost", "the hostname or ip address of the ScyllaDB node"),
     typed_option<uint16_t>("port,p", 10000, "the port of the REST API of the ScyllaDB node"),
@@ -165,6 +170,20 @@ Fore more information, see: https://opensource.docs.scylladb.com/stable/operatin
                 }
             },
             compact_operation
+        },
+        {
+            {
+                "version",
+                "Displays the Apache Cassandra version which your version of Scylla is most compatible with",
+R"(
+Displays the Apache Cassandra version which your version of Scylla is most
+compatible with, not your current Scylla version. To display the Scylla version,
+run `scylla --version`.
+
+For more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/version.html
+)",
+            },
+            version_operation
         },
     };
 

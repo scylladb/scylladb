@@ -28,8 +28,8 @@ def test_nonexistent_keyspace(nodetool):
             {"expected_requests": [
                 expected_request("GET", "/storage_service/keyspaces", multiple=True, response=["system"]),
                 expected_request("POST", "/storage_service/keyspace_compaction/non_existent_ks")]},
-            "nodetool: Keyspace [non_existent_ks] does not exist.",
-            "error processing arguments: keyspace non_existent_ks does not exist")
+            ["nodetool: Keyspace [non_existent_ks] does not exist.",
+             "error processing arguments: keyspace non_existent_ks does not exist"])
 
 
 def test_table(nodetool):
@@ -68,5 +68,4 @@ def test_user_defined(nodetool, scylla_only):
             ("compact", "--user-defined", "/var/lib/scylla/data/system/local-7ad54392bcdd35a684174e047860b377/"
              "me-3g8w_11cg_4317k2ppfb6d5vgp0w-big-Data.db"),
             {},
-            None,
-            "error processing arguments: --user-defined flag is unsupported")
+            ["error processing arguments: --user-defined flag is unsupported"])
