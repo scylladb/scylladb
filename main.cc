@@ -1475,23 +1475,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 });
             }).get();
 
-            // If the same sstable is shared by several shards, it cannot be
-            // deleted until all shards decide to compact it. So we want to
-            // start these compactions now. Note we start compacting only after
-            // all sstables in this CF were loaded on all shards - otherwise
-            // we will have races between the compaction and loading processes
-            // We also want to trigger regular compaction on boot.
-
-            // FIXME: temporary as this code is being replaced. I am keeping the scheduling
-            // group that was effectively used in the bulk of it (compaction). Soon it will become
-            // streaming
-
-            db.invoke_on_all([] (replica::database& db) {
-                db.get_tables_metadata().for_each_table([] (table_id, lw_shared_ptr<replica::table> table) {
-                    replica::column_family& cf = *table;
-                    cf.trigger_compaction();
-                });
-            }).get();
             api::set_server_gossip(ctx, gossiper).get();
             api::set_server_snitch(ctx, snitch).get();
             auto stop_snitch_api = defer_verbose_shutdown("snitch API", [&ctx] {
