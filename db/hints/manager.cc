@@ -15,6 +15,7 @@
 #include <seastar/core/future.hh>
 #include <seastar/core/gate.hh>
 #include <seastar/core/seastar.hh>
+#include <seastar/core/semaphore.hh>
 #include <seastar/core/sleep.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 
@@ -89,19 +90,19 @@ public:
 
     future<> ensure_rebalanced() {
         if (_state == state::uninitialized) {
-            return make_exception_future<>(std::logic_error("hints directory needs to be created and validated before rebalancing"));
+            throw std::logic_error("hints directory needs to be created and validated before rebalancing");
         }
 
         if (_state == state::rebalanced) {
-            return make_ready_future<>();
+            co_return;
         }
 
-        return with_semaphore(_lock, 1, [this] () {
-            manager_logger.debug("Rebalancing hints in {}", _hints_directory);
-            return rebalance_hints(fs::path{_hints_directory}).then([this] {
-                _state = state::rebalanced;
-            });
-        });
+        const auto units = co_await seastar::get_units(_lock, 1);
+        
+        manager_logger.debug("Rebalancing hints in {}", _hints_directory);
+        co_await rebalance_hints(fs::path{_hints_directory});
+
+        _state = state::rebalanced;
     }
 };
 
