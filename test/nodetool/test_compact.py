@@ -4,10 +4,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
 
-import pytest
-import subprocess
-
 from rest_api_mock import expected_request
+import utils
 
 
 def test_all_keyspaces(nodetool):
@@ -24,17 +22,14 @@ def test_keyspace(nodetool):
 
 
 def test_nonexistent_keyspace(nodetool):
-    with pytest.raises(subprocess.CalledProcessError) as e:
-        nodetool("compact", "non_existent_ks", expected_requests=[
+    utils.check_nodetool_fails_with(
+            nodetool,
+            ("compact", "non_existent_ks"),
+            {"expected_requests": [
                 expected_request("GET", "/storage_service/keyspaces", multiple=True, response=["system"]),
-                expected_request("POST", "/storage_service/keyspace_compaction/non_existent_ks")])
-
-    err_lines = e.value.stderr.rstrip().split('\n')
-    out_lines = e.value.stdout.rstrip().split('\n')
-    cassandra_error = "nodetool: Keyspace [non_existent_ks] does not exist."
-    scylla_error = "error processing arguments: keyspace non_existent_ks does not exist"
-    assert cassandra_error in err_lines or cassandra_error in out_lines or \
-        scylla_error in err_lines or scylla_error in out_lines
+                expected_request("POST", "/storage_service/keyspace_compaction/non_existent_ks")]},
+            "nodetool: Keyspace [non_existent_ks] does not exist.",
+            "error processing arguments: keyspace non_existent_ks does not exist")
 
 
 def test_table(nodetool):
@@ -68,9 +63,10 @@ def test_token_range_compatibility_argument(nodetool):
 
 
 def test_user_defined(nodetool, scylla_only):
-    with pytest.raises(subprocess.CalledProcessError) as e:
-        nodetool("compact", "--user-defined", "/var/lib/scylla/data/system/local-7ad54392bcdd35a684174e047860b377/"
-                 "me-3g8w_11cg_4317k2ppfb6d5vgp0w-big-Data.db")
-
-    err_lines = e.value.stderr.rstrip().split('\n')
-    "error processing arguments: --user-defined flag is unsupported" in err_lines
+    utils.check_nodetool_fails_with(
+            nodetool,
+            ("compact", "--user-defined", "/var/lib/scylla/data/system/local-7ad54392bcdd35a684174e047860b377/"
+             "me-3g8w_11cg_4317k2ppfb6d5vgp0w-big-Data.db"),
+            {},
+            None,
+            "error processing arguments: --user-defined flag is unsupported")
