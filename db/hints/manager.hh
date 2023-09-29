@@ -38,14 +38,13 @@ class fragmented_temporary_buffer;
 
 namespace utils {
 class directories;
-}
+} // namespace utils
 
 namespace gms {
 class gossiper;
-}
+} // namespace gms
 
-namespace db {
-namespace hints {
+namespace db::hints {
 
 /// A helper class which tracks hints directory creation
 /// and allows to perform hints directory initialization lazily.
@@ -325,5 +324,4 @@ public:
     }
 };
 
-}
-}
+} // namespace db::hints

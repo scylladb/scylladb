@@ -46,8 +46,7 @@
 
 using namespace std::literals::chrono_literals;
 
-namespace db {
-namespace hints {
+namespace db::hints {
 
 using namespace internal;
 
@@ -504,5 +503,4 @@ future<> directory_initializer::ensure_rebalanced() {
     });
 }
 
-}
-}
+} // namespace db::hints
