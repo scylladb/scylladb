@@ -141,6 +141,22 @@ void enablegossip_operation(scylla_rest_client& client, const bpo::variables_map
     client.post("/storage_service/gossiping");
 }
 
+void gettraceprobability_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    auto res = client.get("/storage_service/trace_probability");
+    fmt::print(std::cout, "Current trace probability: {}\n", res.GetDouble());
+}
+
+void settraceprobability_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    if (!vm.count("trace_probability")) {
+        throw std::invalid_argument("required parameters are missing: trace_probability");
+    }
+    const auto value = vm["trace_probability"].as<double>();
+    if (value < 0.0 or value > 1.0) {
+        throw std::invalid_argument("trace probability must be between 0 and 1");
+    }
+    client.post("/storage_service/trace_probability", {{"probability", fmt::to_string(value)}});
+}
+
 void statusbackup_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     auto status = client.get("/storage_service/incremental_backups");
     fmt::print(std::cout, "{}\n", status.GetBool() ? "running" : "not running");
@@ -273,6 +289,36 @@ Fore more information, see: https://opensource.docs.scylladb.com/stable/operatin
 )",
             },
             enablegossip_operation
+        },
+        {
+            {
+                "gettraceprobability",
+                "Displays the current trace probability value",
+R"(
+This value is the probability for tracing a request. To change this value see settraceprobability.
+
+Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/gettraceprobability.html
+)",
+            },
+            gettraceprobability_operation
+        },
+        {
+            {
+                "settraceprobability",
+                "Sets the probability for tracing a request",
+R"(
+Value is trace probability between 0 and 1. 0 the trace will never happen and 1
+the trace will always happen. Anything in between is a percentage of the time,
+converted into a decimal. For example, 60% would be 0.6.
+
+Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/settraceprobability.html
+)",
+                { },
+                {
+                    typed_option<double>("trace_probability", "trace probability value, must between 0 and 1, e.g. 0.2", 1),
+                },
+            },
+            settraceprobability_operation
         },
         {
             {
