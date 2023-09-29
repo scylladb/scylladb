@@ -57,7 +57,9 @@ private:
 
 public:
     /// Creates an initializer that does nothing. Useful in tests.
-    static directory_initializer make_dummy();
+    static directory_initializer make_dummy() noexcept {
+        return {nullptr};
+    }
     static future<directory_initializer> make(utils::directories& dirs, sstring hints_directory);
 
     future<> ensure_created_and_verified();

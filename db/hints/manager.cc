@@ -110,10 +110,6 @@ directory_initializer::directory_initializer(std::shared_ptr<directory_initializ
         : _impl(std::move(impl))
 { }
 
-directory_initializer directory_initializer::make_dummy() {
-    return directory_initializer{nullptr};
-}
-
 future<directory_initializer> directory_initializer::make(utils::directories& dirs, sstring hints_directory) {
     return smp::submit_to(0, [&dirs, hints_directory = std::move(hints_directory)] () mutable {
         auto impl = std::make_shared<directory_initializer::impl>(dirs, std::move(hints_directory));
