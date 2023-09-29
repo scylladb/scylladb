@@ -82,9 +82,9 @@ public:
         utils::directories::set dir_set;
         dir_set.add_sharded(_hints_directory);
         
+        manager_logger.debug("Creating and validating hint directories: {}", _hints_directory);
         co_await _dirs.create_and_verify(std::move(dir_set));
         
-        manager_logger.debug("Creating and validating hint directories: {}", _hints_directory);
         _state = state::created_and_validated;
     }
 
