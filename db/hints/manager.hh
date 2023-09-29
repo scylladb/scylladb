@@ -98,10 +98,10 @@ private:
     using ep_managers_map_type = std::unordered_map<endpoint_id, hint_endpoint_manager>;
 
 public:
-    static const std::string FILENAME_PREFIX;
+    static inline const std::string FILENAME_PREFIX{"HintsLog" + commitlog::descriptor::SEPARATOR};
     // Non-const - can be modified with an error injection.
-    static std::chrono::seconds hints_flush_period;
-    static const std::chrono::seconds hint_file_write_timeout;
+    static inline std::chrono::seconds hints_flush_period = std::chrono::seconds(10);
+    static constexpr std::chrono::seconds hint_file_write_timeout = std::chrono::seconds(2);
 
 private:
     static constexpr uint64_t max_size_of_hints_in_progress = 10 * 1024 * 1024; // 10MB

@@ -135,11 +135,6 @@ future<> directory_initializer::ensure_rebalanced() {
     });
 }
 
-const std::string manager::FILENAME_PREFIX("HintsLog" + commitlog::descriptor::SEPARATOR);
-
-const std::chrono::seconds manager::hint_file_write_timeout = std::chrono::seconds(2);
-std::chrono::seconds manager::hints_flush_period = std::chrono::seconds(10);
-
 manager::manager(sstring hints_directory, host_filter filter, int64_t max_hint_window_ms, resource_manager& res_manager, distributed<replica::database>& db)
     : _hints_dir(fs::path(hints_directory) / format("{:d}", this_shard_id()))
     , _host_filter(std::move(filter))
