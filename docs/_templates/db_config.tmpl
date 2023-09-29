@@ -1,18 +1,30 @@
 .. -*- mode: rst -*-
 
-{% for item in data %}
-{% if item.value_status == value_status %}
+{% for group in data %}
+{% if group.value_status_count[value_status] > 0 %}
+{{ group.name }}
+{{ '-' * (group.name|length) }}
 
+{% if group.description %}
+.. raw:: html
+
+   <p>{{ group.description }}</p>
+{% endif %}
+
+{% for item in group.properties %}
+{% if item.value_status == value_status %}
 ``{{ item.name }}``
-{{ '-' * (item.name|length + 4) }}
+{{ '=' * (item.name|length + 4) }}
 
    .. raw:: html
 
-      <p>{{item.description}}</p>
+      <p>{{ item.description }}</p>
 
    {% if item.type %}* **Type:** ``{{ item.type }}``{% endif %}
    {% if item.default %}* **Default value:** ``{{ item.default }}``{% endif %}
    {% if item.liveness %}* **Liveness** :term:`* <Liveness>` **:** ``{{ item.liveness }}``{% endif %}
 
+{% endif %}
+{% endfor %}
 {% endif %}
 {% endfor %}

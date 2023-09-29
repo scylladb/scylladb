@@ -13,9 +13,18 @@ DESTINATION_PATH = "_data/db_config.yaml"
 class DBConfigParser:
 
     """
+    Regex pattern for parsing group comments.
+    """
+    GROUP_REGEX_PATTERN = (
+        r'/\*\*\s*'
+        r'\*+\s*@Group\s+(.*?)\s*'
+        r'(?:\*+\s*@GroupDescription\s+(.*?)\s*)?'
+        r'\*/'
+    )
+
+    """
     Regex pattern for parsing the configuration properties.
     """
-
     CONFIG_CC_REGEX_PATTERN = (
         r',\s*(\w+)\(this,'  # 0. Property name
         r'\s*"([^"]*)",\s*'  # 1. Property key
@@ -67,19 +76,39 @@ class DBConfigParser:
             .replace("\\t", "- ")
             .replace('"', "")
         )
+    
+    def _clean_comments(self, content):
+        return re.sub(self.COMMENT_PATTERN, "", content, flags=re.DOTALL | re.MULTILINE)
 
-    def _parse_db_properties(self):
-        properties_dict = {}
+    def _parse_group(self, group_match, config_group_content):
+        group_name = group_match.group(1).strip()
+        group_description = self._clean_description(group_match.group(2).strip()) if group_match.group(2) else ""
 
-        with open(self.config_file_path, "r") as file:
-            config_content = file.read()
+        current_group = {
+            "name": group_name,
+            "description": group_description,
+            "properties": [],
+            "value_status_count": {
+                'Used': 0,
+                'Unused': 0,
+                'Invalid': 0
+            },
+        }
 
-        config_content = re.sub(
-            self.COMMENT_PATTERN, "", config_content, flags=re.DOTALL | re.MULTILINE
-        )
-        config_matches = re.findall(
-            self.CONFIG_CC_REGEX_PATTERN, config_content, re.DOTALL
-        )
+        cleaned_properties_content = self._clean_comments(config_group_content)
+        properties = self._parse_properties(cleaned_properties_content)
+        current_group['properties'] = properties
+
+        for prop in properties:
+            value_status = prop['value_status']
+            if value_status in current_group['value_status_count']:
+                current_group['value_status_count'][value_status] += 1
+        return current_group
+
+
+    def _parse_properties(self, content):
+        properties = []
+        config_matches = re.findall(self.CONFIG_CC_REGEX_PATTERN, content, re.DOTALL)
 
         for match in config_matches:
             property_data = {
@@ -89,20 +118,45 @@ class DBConfigParser:
                 "liveness": "True" if match[3] else "False",
                 "description": self._clean_description(match[6].strip()),
             }
-            properties_dict[match[1].strip()] = property_data
+            properties.append(property_data)
 
+        return properties
+
+    def _add_type_information(self, groups):
         with open(self.config_header_file_path, "r") as file:
             config_header_content = file.read()
 
-        config_header_matches = re.findall(
-            self.CONFIG_H_REGEX_PATTERN, config_header_content
-        )
+        config_header_matches = re.findall(self.CONFIG_H_REGEX_PATTERN, config_header_content)
 
         for match in config_header_matches:
             property_key = match[1].strip()
-            if property_key in properties_dict:
-                properties_dict[property_key]["type"] = match[0].strip()
-        return list(properties_dict.values())
+            for group in groups:
+                for property_data in group["properties"]:
+                    if property_data["name"] == property_key:
+                        property_data["type"] = match[0].strip()
+
+    def _parse_db_properties(self):
+        groups = []
+
+        with open(self.config_file_path, "r", encoding='utf-8') as file:
+            config_content = file.read()
+
+        group_matches = list(re.finditer(self.GROUP_REGEX_PATTERN, config_content, re.DOTALL))
+        group_matches.append(None)  # Add a sentinel to process the last group
+
+        for i in range(len(group_matches) - 1):
+            group_match = group_matches[i]
+            next_group_match = group_matches[i + 1]
+
+            end_pos = next_group_match.start() if next_group_match else len(config_content)
+            config_group_content = config_content[group_match.end():end_pos]
+            
+            current_group = self._parse_group(group_match, config_group_content)
+            groups.append(current_group)
+
+        self._add_type_information(groups)
+
+        return groups
 
     def run(self, app: Sphinx):
         dest_path = os.path.join(app.builder.srcdir, self.destination_path)
