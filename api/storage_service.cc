@@ -1449,6 +1449,7 @@ void unset_storage_service(http_context& ctx, routes& r) {
     ss::get_ownership.unset(r);
     ss::get_effective_ownership.unset(r);
     ss::sstable_info.unset(r);
+    ss::reload_raft_topology_state.unset(r);
     sp::get_schema_versions.unset(r);
 }
 
