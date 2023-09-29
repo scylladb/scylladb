@@ -309,7 +309,7 @@ future<> manager::wait_for_sync_point(abort_source& as, const sync_point::shard_
 
 hint_endpoint_manager& manager::get_ep_manager(endpoint_id ep) {
     auto it = _ep_managers.find(ep);
-    if (it == ep_managers_end()) {
+    if (it == _ep_managers.end()) {
         manager_logger.trace("Creating an ep_manager for {}", ep);
         hint_endpoint_manager& ep_man = _ep_managers.emplace(ep, hint_endpoint_manager(ep, *this)).first->second;
         ep_man.start();
@@ -355,7 +355,7 @@ bool manager::can_hint_for(endpoint_id ep) const noexcept {
     }
 
     auto it = _ep_managers.find(ep);
-    if (it != ep_managers_end() && (it->second.stopping() || !it->second.can_hint())) {
+    if (it != _ep_managers.end() && (it->second.stopping() || !it->second.can_hint())) {
         return false;
     }
 
@@ -463,7 +463,7 @@ void manager::drain_for(endpoint_id endpoint) {
                     });
                 } else {
                     ep_managers_map_type::iterator ep_manager_it = _ep_managers.find(endpoint);
-                    if (ep_manager_it != ep_managers_end()) {
+                    if (ep_manager_it != _ep_managers.end()) {
                         return ep_manager_it->second.stop(drain::yes).finally([this, endpoint, &ep_man = ep_manager_it->second] {
                             return ep_man.with_file_update_mutex([&ep_man] {
                                 return remove_file(ep_man.hints_dir().c_str());
