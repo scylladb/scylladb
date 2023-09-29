@@ -323,7 +323,14 @@ static std::string_view experimental_features_help_string() {
 
 db::config::config(std::shared_ptr<db::extensions> exts)
     : utils::config_file()
-
+    /**
+    * Annotations used for autogenerating documentation. 
+    * @Group: Names the category of subsequent config properties.
+    * @GroupDescription: Provides an overview of the group.
+    */
+    /**
+    * @Group Ungrouped properties
+    */
     , background_writer_scheduling_quota(this, "background_writer_scheduling_quota", value_status::Unused, 1.0,
         "max cpu usage ratio (between 0 and 1) for compaction process. Not intended for setting in normal operations. Setting it to 1 or higher will disable it, recommended operational setting is 0.5.")
     , auto_adjust_flush_quota(this, "auto_adjust_flush_quota", value_status::Unused, false,
@@ -334,8 +341,10 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "If set to higher than 0, ignore the controller's output and set the compaction shares statically. Do not set this unless you know what you are doing and suspect a problem in the controller. This option will be retired when the controller reaches more maturity")
     , compaction_enforce_min_threshold(this, "compaction_enforce_min_threshold", liveness::LiveUpdate, value_status::Used, false,
         "If set to true, enforce the min_threshold option for compactions strictly. If false (default), Scylla may decide to compact even if below min_threshold")
-    /* Initialization properties */
-    /* The minimal properties needed for configuring a cluster. */
+    /**
+    * @Group Initialization properties
+    * @GroupDescription The minimal properties needed for configuring a cluster.
+    */
     , cluster_name(this, "cluster_name", value_status::Used, "",
         "The name of the cluster; used to prevent machines in one logical cluster from joining another. All nodes participating in a cluster must have the same value.")
     , listen_address(this, "listen_address", value_status::Used, "localhost",
@@ -348,8 +357,10 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "address will be used. If true the first ipv6 address will be used. Defaults to false preferring\n"
         "ipv4. If there is only one address it will be selected regardless of ipv4/ipv6."
     )
-    /* Default directories */
-    /* If you have changed any of the default directories during installation, make sure you have root access and set these properties: */
+    /**
+    * @Group Default directories
+    * @GroupDescription If you have changed any of the default directories during installation, make sure you have root access and set these properties.
+    */
     , work_directory(this, "workdir,W", value_status::Used, "/var/lib/scylla",
         "The directory in which Scylla will put all its subdirectories. The location of individual subdirs can be overriden by the respective *_directory options.")
     , commitlog_directory(this, "commitlog_directory", value_status::Used, "",
@@ -364,11 +375,15 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "The directory where materialized-view updates are stored while a view replica is unreachable.")
     , saved_caches_directory(this, "saved_caches_directory", value_status::Unused, "",
         "The directory location where table key and row caches are stored.")
-    /* Commonly used properties */
-    /* Properties most frequently used when configuring Scylla. */
-    /* Before starting a node for the first time, you should carefully evaluate your requirements. */
-    /* Common initialization properties */
-    /* Note: Be sure to set the properties in the Quick start section as well. */
+    /**
+    * @Group Commonly used properties
+    * @GroupDescription Properties most frequently used when configuring Scylla.
+     Before starting a node for the first time, you should carefully evaluate your requirements.
+    */
+    /**
+    * @Group Common initialization properties
+    * @GroupDescription Be sure to set the properties in the Quick start section as well.
+    */
     , commit_failure_policy(this, "commit_failure_policy", value_status::Unused, "stop",
         "Policy for commit disk failures:\n"
         "\n"
@@ -423,7 +438,10 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "  \t- seeds (Default: 127.0.0.1)    A comma-delimited list of IP addresses used by gossip for bootstrapping new nodes joining a cluster. When running multiple nodes, you must change the list from the default value. In multiple data-center clusters, the seed list should include at least one node from each data center (replication group). More than a single seed node per data center is recommended for fault tolerance. Otherwise, gossip has to communicate with another data center when bootstrapping a node. Making every node a seed node is not recommended because of increased maintenance and reduced gossip performance. Gossip optimization is not critical, but it is recommended to use a small seed list (approximately three nodes per data center).\n"
         "\n"
         "Related information: Initializing a multiple node cluster (single data center) and Initializing a multiple node cluster (multiple data centers).")
-    /* Common compaction settings */
+    /**
+    * @Group Common compaction settings
+    * @GroupDescription Be sure to set the properties in the Quick start section as well.
+    */
     , compaction_throughput_mb_per_sec(this, "compaction_throughput_mb_per_sec", liveness::LiveUpdate, value_status::Used, 0,
         "Throttles compaction to the specified total throughput across the entire system. The faster you insert data, the faster you need to compact in order to keep the SSTable count down. The recommended Value is 16 to 32 times the rate of write throughput (in MBs/second). Setting the value to 0 disables compaction throttling.\n"
         "Related information: Configuring compaction")
@@ -437,31 +455,43 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "Log a warning when writing a number of rows larger than this value")
     , compaction_collection_elements_count_warning_threshold(this, "compaction_collection_elements_count_warning_threshold", liveness::LiveUpdate, value_status::Used, 10000,
         "Log a warning when writing a collection containing more elements than this value")
-    /* Common memtable settings */
+    /**
+    * @Group Common memtable settings
+    */
     , memtable_total_space_in_mb(this, "memtable_total_space_in_mb", value_status::Invalid, 0,
         "Specifies the total memory used for all memtables on a node. This replaces the per-table storage settings memtable_operations_in_millions and memtable_throughput_in_mb.")
-    /* Common disk settings */
+    /**
+    * @Group Common disk settings
+    */
     , concurrent_reads(this, "concurrent_reads", value_status::Invalid, 32,
         "For workloads with more data than can fit in memory, the bottleneck is reads fetching data from disk. Setting to (16 × number_of_drives) allows operations to queue low enough in the stack so that the OS and drives can reorder them.")
     , concurrent_writes(this, "concurrent_writes", value_status::Invalid, 32,
         "Writes in Cassandra are rarely I/O bound, so the ideal number of concurrent writes depends on the number of CPU cores in your system. The recommended value is (8 x number_of_cpu_cores).")
     , concurrent_counter_writes(this, "concurrent_counter_writes", value_status::Unused, 32,
         "Counter writes read the current values before incrementing and writing them back. The recommended value is (16 × number_of_drives) .")
-    /* Common automatic backup settings */
+    /**
+    * @Group Common automatic backup settings
+    */
     , incremental_backups(this, "incremental_backups", value_status::Used, false,
         "Backs up data updated since the last snapshot was taken. When enabled, Scylla creates a hard link to each SSTable flushed or streamed locally in a backups/ subdirectory of the keyspace data. Removing these links is the operator's responsibility.\n"
         "Related information: Enabling incremental backups")
     , snapshot_before_compaction(this, "snapshot_before_compaction", value_status::Unused, false,
         "Enable or disable taking a snapshot before each compaction. This option is useful to back up data when there is a data format change. Be careful using this option because Cassandra does not clean up older snapshots automatically.\n"
         "Related information: Configuring compaction")
-    /* Common fault detection setting */
+    /**
+    * @Group Common fault detection setting
+    */
     , phi_convict_threshold(this, "phi_convict_threshold", value_status::Used, 8,
         "Adjusts the sensitivity of the failure detector on an exponential scale. Generally this setting never needs adjusting.\n"
         "Related information: Failure detection and recovery")
     , failure_detector_timeout_in_ms(this, "failure_detector_timeout_in_ms", liveness::LiveUpdate, value_status::Used, 20 * 1000, "Maximum time between two successful echo message before gossip mark a node down in milliseconds.\n")
-    /* Performance tuning properties */
-    /* Tuning performance and system reso   urce utilization, including commit log, compaction, memory, disk I/O, CPU, reads, and writes. */
-    /* Commit log settings */
+    /**
+    * @Group Performance tuning properties
+    * @GroupDescription Tuning performance and system resource utilization, including commit log, compaction, memory, disk I/O, CPU, reads, and writes.
+    */
+    /**
+    * @Group Commit log settings
+    */
     , commitlog_sync(this, "commitlog_sync", value_status::Used, "periodic",
         "The method that Scylla uses to acknowledge writes in milliseconds:\n"
         "\n"
@@ -492,8 +522,10 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "Whether or not to use O_DSYNC mode for commitlog segments IO. Can improve commitlog latency on some file systems.\n")
     , commitlog_use_hard_size_limit(this, "commitlog_use_hard_size_limit", value_status::Used, false,
         "Whether or not to use a hard size limit for commitlog disk usage. Default is false. Enabling this can cause latency spikes, whereas the default can lead to occasional disk usage peaks.\n")
-    /* Compaction settings */
-    /* Related information: Configuring compaction */
+    /**
+    * @Group Compaction settings
+    * @GroupDescription Related information: Configuring compaction
+    */
     , compaction_preheat_key_cache(this, "compaction_preheat_key_cache", value_status::Unused, true,
         "When set to true , cached row keys are tracked during compaction, and re-cached to their new positions in the compacted SSTable. If you have extremely large key caches for tables, set the value to false ; see Global row and key caches properties.")
     , concurrent_compactors(this, "concurrent_compactors", value_status::Invalid, 0,
@@ -505,7 +537,9 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , sstable_preemptive_open_interval_in_mb(this, "sstable_preemptive_open_interval_in_mb", value_status::Unused, 50,
         "When compacting, the replacement opens SSTables before they are completely written and uses in place of the prior SSTables for any range previously written. This setting helps to smoothly transfer reads between the SSTables by reducing page cache churn and keeps hot rows hot.")
     , defragment_memory_on_idle(this, "defragment_memory_on_idle", value_status::Used, false, "When set to true, will defragment memory when the cpu is idle.  This reduces the amount of work Scylla performs when processing client requests.")
-    /* Memtable settings */
+    /**
+    * @Group Memtable settings
+    */
     , memtable_allocation_type(this, "memtable_allocation_type", value_status::Invalid, "heap_buffers",
         "Specify the way Cassandra allocates and manages memtable memory. See Off-heap memtables in Cassandra 2.1. Options are:\n"
         "\theap_buffers     On heap NIO (non-blocking I/O) buffers.\n"
@@ -524,7 +558,9 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "Total permitted memory to use for memtables. Triggers a flush based on memtable_cleanup_threshold. Cassandra stops accepting writes when the limit is exceeded until a flush completes. If unset, sets to default.")
     , memtable_offheap_space_in_mb(this, "memtable_offheap_space_in_mb", value_status::Unused, 0,
         "See memtable_heap_space_in_mb")
-    /* Cache and index settings */
+    /**
+    * @Group Cache and index settings
+    */
     , column_index_size_in_kb(this, "column_index_size_in_kb", value_status::Used, 64,
         "Granularity of the index of rows within a partition. For huge rows, decrease this setting to improve seek time. If you use key cache, be careful not to make this setting too large because key cache will be overwhelmed. If you're unsure of the size of the rows, it's best to use the default setting.")
     , column_index_auto_scale_threshold_in_kb(this, "column_index_auto_scale_threshold_in_kb", liveness::LiveUpdate, value_status::Used, 10240,
@@ -537,7 +573,9 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "Sets the size percentage to which maximum cache capacity is reduced when Java heap usage reaches the threshold defined by reduce_cache_sizes_at. Together with flush_largest_memtables_at, these properties constitute an emergency measure for preventing sudden out-of-memory (OOM) errors.")
     , reduce_cache_sizes_at(this, "reduce_cache_sizes_at", value_status::Invalid, .85,
         "When Java heap usage (after a full concurrent mark sweep (CMS) garbage collection) exceeds this percentage, Cassandra reduces the cache capacity to the fraction of the current size as specified by reduce_cache_capacity_to. To disable, set the value to 1.0.")
-    /* Disks settings */
+    /**
+    * @Group Disks settings
+    */
     , stream_throughput_outbound_megabits_per_sec(this, "stream_throughput_outbound_megabits_per_sec", value_status::Unused, 400,
         "Throttles all outbound streaming file transfers on a node to the specified throughput. Cassandra does mostly sequential I/O when streaming data during bootstrap or repair, which can lead to saturating the network connection and degrading client (RPC) performance.")
     , inter_dc_stream_throughput_outbound_megabits_per_sec(this, "inter_dc_stream_throughput_outbound_megabits_per_sec", value_status::Unused, 0,
@@ -550,9 +588,14 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "When doing sequential writing, enabling this option tells fsync to force the operating system to flush the dirty buffers at a set interval trickle_fsync_interval_in_kb. Enable this parameter to avoid sudden dirty buffer flushing from impacting read latencies. Recommended to use on SSDs, but not on HDDs.")
     , trickle_fsync_interval_in_kb(this, "trickle_fsync_interval_in_kb", value_status::Unused, 10240,
         "Sets the size of the fsync in kilobytes.")
-    /* Advanced properties */
-    /* Properties for advanced users or properties that are less commonly used. */
-    /* Advanced initialization properties */
+    /**
+    * @Group Advanced properties
+    * @GroupDescription Properties for advanced users or properties that are less commonly used.
+    */
+    /**
+    * @Group Advanced initialization properties
+    * @GroupDescription Properties for advanced users or properties that are less commonly used.
+    */
     , auto_bootstrap(this, "auto_bootstrap", value_status::Used, true,
         "This setting has been removed from default configuration. It makes new (non-seed) nodes automatically migrate the right data to themselves. Do not set this to false unless you really know what you are doing.\n"
         "Related information: Initializing a multiple node cluster (single data center) and Initializing a multiple node cluster (multiple data centers).")
@@ -580,12 +623,16 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         , {"org.apache.cassandra.dht.Murmur3Partitioner"})
     , storage_port(this, "storage_port", value_status::Used, 7000,
         "The port for inter-node communication.")
-    /* Advanced automatic backup setting */
+    /**
+    * @Group Advanced automatic backup setting
+    */
     , auto_snapshot(this, "auto_snapshot", value_status::Used, true,
         "Enable or disable whether a snapshot is taken of the data before keyspace truncation or dropping of tables. To prevent data loss, using the default setting is strongly advised. If you set to false, you will lose data on truncation or drop.")
-    /* Key caches and global row properties */
-    /* When creating or modifying tables, you enable or disable the key cache (partition key cache) or row cache for that table by setting the caching parameter. Other row and key cache tuning and configuration options are set at the global (node) level. Cassandra uses these settings to automatically distribute memory for each table on the node based on the overall workload and specific table usage. You can also configure the save periods for these caches globally. */
-    /* Related information: Configuring caches */
+    /**
+    * @Group Key caches and global row properties
+    * @GroupDescription When creating or modifying tables, you enable or disable the key cache (partition key cache) or row cache for that table by setting the caching parameter. Other row and key cache tuning and configuration options are set at the global (node) level. Cassandra uses these settings to automatically distribute memory for each table on the node based on the overall workload and specific table usage. You can also configure the save periods for these caches globally.
+      Related information: Configuring caches.
+    */
     , key_cache_keys_to_save(this, "key_cache_keys_to_save", value_status::Unused, 0,
         "Number of keys from the key cache to save. (0: all)")
     , key_cache_save_period(this, "key_cache_save_period", value_status::Unused, 14400,
@@ -605,25 +652,31 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "\tJEMallocAllocator\n"
         "\n"
         "Experiments show that jemalloc saves some memory compared to the native allocator because it is more fragmentation resistant. To use, install jemalloc as a library and modify cassandra-env.sh (instructions in file).")
-    /* Counter caches properties */
-    /* Counter cache helps to reduce counter locks' contention for hot counter cells. In case of RF = 1 a counter cache hit will cause Cassandra to skip the read before write entirely. With RF > 1 a counter cache hit will still help to reduce the duration of the lock hold, helping with hot counter cell updates, but will not allow skipping the read entirely. Only the local (clock, count) tuple of a counter cell is kept in memory, not the whole counter, so it's relatively cheap. */
-    /* Note: Reducing the size counter cache may result in not getting the hottest keys loaded on start-up. */
+    /**
+    * @Group Counter caches properties
+    * @GroupDescription Counter cache helps to reduce counter locks' contention for hot counter cells. In case of RF = 1 a counter cache hit will cause Cassandra to skip the read before write entirely. With RF > 1 a counter cache hit will still help to reduce the duration of the lock hold, helping with hot counter cell updates, but will not allow skipping the read entirely. Only the local (clock, count) tuple of a counter cell is kept in memory, not the whole counter, so it's relatively cheap.
+      Note: Reducing the size counter cache may result in not getting the hottest keys loaded on start-up.
+    */
     , counter_cache_size_in_mb(this, "counter_cache_size_in_mb", value_status::Unused, 0,
         "When no value is specified a minimum of 2.5% of Heap or 50MB. If you perform counter deletes and rely on low gc_grace_seconds, you should disable the counter cache. To disable, set to 0")
     , counter_cache_save_period(this, "counter_cache_save_period", value_status::Unused, 7200,
         "Duration after which Cassandra should save the counter cache (keys only). Caches are saved to saved_caches_directory.")
     , counter_cache_keys_to_save(this, "counter_cache_keys_to_save", value_status::Unused, 0,
         "Number of keys from the counter cache to save. When disabled all keys are saved.")
-    /* Tombstone settings */
-    /* When executing a scan, within or across a partition, tombstones must be kept in memory to allow returning them to the coordinator. The coordinator uses them to ensure other replicas know about the deleted rows. Workloads that generate numerous tombstones may cause performance problems and exhaust the server heap. See Cassandra anti-patterns: Queues and queue-like datasets. Adjust these thresholds only if you understand the impact and want to scan more tombstones. Additionally, you can adjust these thresholds at runtime using the StorageServiceMBean. */
-    /* Related information: Cassandra anti-patterns: Queues and queue-like datasets */
+    /**
+    * @Group Tombstone settings
+    * @GroupDescription When executing a scan, within or across a partition, tombstones must be kept in memory to allow returning them to the coordinator. The coordinator uses them to ensure other replicas know about the deleted rows. Workloads that generate numerous tombstones may cause performance problems and exhaust the server heap. See Cassandra anti-patterns: Queues and queue-like datasets. Adjust these thresholds only if you understand the impact and want to scan more tombstones. Additionally, you can adjust these thresholds at runtime using the StorageServiceMBean.
+      Related information: Cassandra anti-patterns: Queues and queue-like datasets.
+    */
     , tombstone_warn_threshold(this, "tombstone_warn_threshold", value_status::Used, 1000,
         "The maximum number of tombstones a query can scan before warning.")
     , tombstone_failure_threshold(this, "tombstone_failure_threshold", value_status::Unused, 100000,
         "The maximum number of tombstones a query can scan before aborting.")
     , query_tombstone_page_limit(this, "query_tombstone_page_limit", liveness::LiveUpdate, value_status::Used, 10000,
         "The number of tombstones after which a query cuts a page, even if not full or even empty.")
-    /* Network timeout settings */
+    /**
+    * @Group Network timeout settings
+    */
     , range_request_timeout_in_ms(this, "range_request_timeout_in_ms", liveness::LiveUpdate, value_status::Used, 10000,
         "The time in milliseconds that the coordinator waits for sequential or index scans to complete.")
     , read_request_timeout_in_ms(this, "read_request_timeout_in_ms", liveness::LiveUpdate, value_status::Used, 5000,
@@ -640,7 +693,9 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , request_timeout_in_ms(this, "request_timeout_in_ms", liveness::LiveUpdate, value_status::Used, 10000,
         "The default timeout for other, miscellaneous operations.\n"
         "Related information: About hinted handoff writes")
-    /* Inter-node settings */
+    /**
+    * @Group Inter-node settings
+    */
     , cross_node_timeout(this, "cross_node_timeout", value_status::Unused, false,
         "Enable or disable operation timeout information exchange between nodes (to accurately measure request timeouts). If disabled Cassandra assumes the request was forwarded to the replica instantly by the coordinator.\n"
         "CAUTION:\n"
@@ -665,7 +720,9 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "Enable or disable tcp_nodelay for inter-data center communication. When disabled larger, but fewer, network packets are sent. This reduces overhead from the TCP protocol itself. However, if cross data-center responses are blocked, it will increase latency.")
     , streaming_socket_timeout_in_ms(this, "streaming_socket_timeout_in_ms", value_status::Unused, 0,
         "Enable or disable socket timeout for streaming operations. When a timeout occurs during streaming, streaming is retried from the start of the current file. Avoid setting this value too low, as it can result in a significant amount of data re-streaming.")
-    /* Native transport (CQL Binary Protocol) */
+    /**
+    * @Group Native transport (CQL Binary Protocol)
+    */
     , start_native_transport(this, "start_native_transport", value_status::Used, true,
         "Enable or disable the native transport server. Uses the same address as the rpc_address, but the port is different from the rpc_port. See native_transport_port.")
     , native_transport_port(this, "native_transport_port", "cql_port", value_status::Used, 9042,
@@ -687,8 +744,10 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "Idle threads are stopped after 30 seconds.\n")
     , native_transport_max_frame_size_in_mb(this, "native_transport_max_frame_size_in_mb", value_status::Unused, 256,
         "The maximum size of allowed frame. Frame (requests) larger than this are rejected as invalid.")
-    /* RPC (remote procedure call) settings */
-    /* Settings for configuring and tuning client connections. */
+    /**
+    * @Group RPC (remote procedure call) settings
+    * @GroupDescription Settings for configuring and tuning client connections.
+    */
     , broadcast_rpc_address(this, "broadcast_rpc_address", value_status::Used, {/* unset */},
         "RPC address to broadcast to drivers and other Scylla nodes. This cannot be set to 0.0.0.0. If blank, it is set to the value of the rpc_address or rpc_interface. If rpc_address or rpc_interfaceis set to 0.0.0.0, this property must be set.\n")
     , rpc_port(this, "rpc_port", "thrift_port", value_status::Used, 9160,
@@ -714,8 +773,10 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "\tYour own RPC server: You must provide a fully-qualified class name of an o.a.c.t.TServerFactory that can create a server instance.")
     , cache_hit_rate_read_balancing(this, "cache_hit_rate_read_balancing", value_status::Used, true,
         "This boolean controls whether the replicas for read query will be choosen based on cache hit ratio")
-    /* Advanced fault detection settings */
-    /* Settings to handle poorly performing or failing nodes. */
+    /**
+    * @Group Advanced fault detection settings
+    * @GroupDescription Settings to handle poorly performing or failing nodes.
+    */
     , dynamic_snitch_badness_threshold(this, "dynamic_snitch_badness_threshold", value_status::Unused, 0,
         "Sets the performance threshold for dynamically routing requests away from a poorly performing node. A value of 0.2 means Cassandra continues to prefer the static snitch values until the node response time is 20% worse than the best performing node. Until the threshold is reached, incoming client requests are statically routed to the closest replica (as determined by the snitch). Having requests consistently routed to a given replica can help keep a working set of data hot when read repair is less than 1.")
     , dynamic_snitch_reset_interval_in_ms(this, "dynamic_snitch_reset_interval_in_ms", value_status::Unused, 60000,
@@ -736,8 +797,10 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "Number of threads with which to deliver hints. In multiple data-center deployments, consider increasing this number because cross data-center handoff is generally slower.")
     , batchlog_replay_throttle_in_kb(this, "batchlog_replay_throttle_in_kb", value_status::Unused, 1024,
         "Total maximum throttle. Throttling is reduced proportionally to the number of nodes in the cluster.")
-    /* Request scheduler properties */
-    /* Settings to handle incoming client requests according to a defined policy. If you need to use these properties, your nodes are overloaded and dropping requests. It is recommended that you add more nodes and not try to prioritize requests. */
+    /**
+    * @Group Request scheduler properties
+    * @GroupDescription Settings to handle incoming client requests according to a defined policy. If you need to use these properties, your nodes are overloaded and dropping requests. It is recommended that you add more nodes and not try to prioritize requests.
+    */
     , request_scheduler(this, "request_scheduler", value_status::Unused, "org.apache.cassandra.scheduler.NoScheduler",
         "Defines a scheduler to handle incoming client requests according to a defined policy. This scheduler is useful for throttling client requests in single clusters containing multiple keyspaces. This parameter is specifically for requests from the client and does not affect inter-node communication. Valid values are:\n"
         "\n"
@@ -753,14 +816,18 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "\tthrottle_limit: The number of in-flight requests per client. Requests beyond this limit are queued up until running requests complete. Recommended value is ((concurrent_reads + concurrent_writes) × 2)\n"
         "\tdefault_weight: (Default: 1 **)  How many requests are handled during each turn of the RoundRobin.\n"
         "\tweights: (Default: Keyspace: 1)  Takes a list of keyspaces. It sets how many requests are handled during each turn of the RoundRobin, based on the request_scheduler_id.")
-    /* Thrift interface properties */
-    /* Legacy API for older clients. CQL is a simpler and better API for Scylla. */
+    /**
+    * @Group Thrift interface properties
+    * @GroupDescription Legacy API for older clients. CQL is a simpler and better API for Scylla.
+    */
     , thrift_framed_transport_size_in_mb(this, "thrift_framed_transport_size_in_mb", value_status::Unused, 15,
         "Frame size (maximum field length) for Thrift. The frame is the row or part of the row the application is inserting.")
     , thrift_max_message_length_in_mb(this, "thrift_max_message_length_in_mb", value_status::Used, 16,
         "The maximum length of a Thrift message in megabytes, including all fields and internal Thrift overhead (1 byte of overhead for each frame). Message length is usually used in conjunction with batches. A frame length greater than or equal to 24 accommodates a batch with four inserts, each of which is 24 bytes. The required message length is greater than or equal to 24+24+24+24+4 (number of frames).")
-    /* Security properties */
-    /* Server and client security settings. */
+    /**
+    * @Group Security properties
+    * @GroupDescription Server and client security settings.
+    */
     , authenticator(this, "authenticator", value_status::Used, "org.apache.cassandra.auth.AllowAllAuthenticator",
         "The authentication backend, used to identify users. The available authenticators are:\n"
         "\n"
