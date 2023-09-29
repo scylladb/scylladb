@@ -205,7 +205,7 @@ public:
     /// \param ep End point identificator
     /// \return Number of hints in-flight to \param ep.
     uint64_t hints_in_progress_for(endpoint_id ep) const noexcept {
-        auto it = find_ep_manager(ep);
+        auto it = _ep_managers.find(ep);
         if (it == ep_managers_end()) {
             return 0;
         }
@@ -323,14 +323,6 @@ private:
     }
 
 public:
-    ep_managers_map_type::iterator find_ep_manager(endpoint_id ep_key) noexcept {
-        return _ep_managers.find(ep_key);
-    }
-
-    ep_managers_map_type::const_iterator find_ep_manager(endpoint_id ep_key) const noexcept {
-        return _ep_managers.find(ep_key);
-    }
-
     ep_managers_map_type::iterator ep_managers_end() noexcept {
         return _ep_managers.end();
     }
