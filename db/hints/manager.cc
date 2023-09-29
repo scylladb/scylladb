@@ -52,9 +52,9 @@ using namespace internal;
 
 class directory_initializer::impl {
     enum class state {
-        uninitialized = 0,
-        created_and_validated = 1,
-        rebalanced = 2,
+        uninitialized,
+        created_and_validated,
+        rebalanced
     };
 
     utils::directories& _dirs;
@@ -69,7 +69,7 @@ public:
     { }
 
     future<> ensure_created_and_verified() {
-        if (_state > state::uninitialized) {
+        if (_state != state::uninitialized) {
             return make_ready_future<>();
         }
 
@@ -84,11 +84,11 @@ public:
     }
 
     future<> ensure_rebalanced() {
-        if (_state < state::created_and_validated) {
+        if (_state == state::uninitialized) {
             return make_exception_future<>(std::logic_error("hints directory needs to be created and validated before rebalancing"));
         }
 
-        if (_state > state::created_and_validated) {
+        if (_state == state::rebalanced) {
             return make_ready_future<>();
         }
 
