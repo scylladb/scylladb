@@ -318,7 +318,7 @@ hint_endpoint_manager& manager::get_ep_manager(endpoint_id ep) {
     return it->second;
 }
 
-inline bool manager::have_ep_manager(endpoint_id ep) const noexcept {
+bool manager::have_ep_manager(endpoint_id ep) const noexcept {
     return find_ep_manager(ep) != ep_managers_end();
 }
 
