@@ -51,12 +51,14 @@ namespace db::hints {
 using namespace internal;
 
 class directory_initializer::impl {
+private:
     enum class state {
         uninitialized,
         created_and_validated,
         rebalanced
     };
 
+private:
     utils::directories& _dirs;
     sstring _hints_directory;
     state _state = state::uninitialized;
@@ -64,10 +66,11 @@ class directory_initializer::impl {
 
 public:
     impl(utils::directories& dirs, sstring hints_directory)
-            : _dirs(dirs)
-            , _hints_directory(std::move(hints_directory))
+        : _dirs(dirs)
+        , _hints_directory(std::move(hints_directory))
     { }
 
+public:
     future<> ensure_created_and_verified() {
         if (_state != state::uninitialized) {
             return make_ready_future<>();
