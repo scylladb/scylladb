@@ -47,8 +47,6 @@ class gossiper;
 namespace db {
 namespace hints {
 
-using timer_clock_type = seastar::lowres_clock;
-
 /// A helper class which tracks hints directory creation
 /// and allows to perform hints directory initialization lazily.
 class directory_initializer {
