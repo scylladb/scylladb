@@ -126,14 +126,20 @@ private:
     seastar::named_semaphore _drain_lock = {1, named_semaphore_exception_factory{"drain lock"}};
 
 public:
-    manager(service::storage_proxy& proxy, sstring hints_directory, host_filter filter, int64_t max_hint_window_ms, resource_manager&res_manager, sharded<replica::database>& db);
+    manager(service::storage_proxy& proxy, sstring hints_directory, host_filter filter,
+            int64_t max_hint_window_ms, resource_manager& res_manager, sharded<replica::database>& db);
+    
     manager(const manager&) = delete;
     manager& operator=(const manager&) = delete;
+
+    manager(manager&&) = delete;
+    manager& operator=(manager&&) = delete;
+    
     ~manager() noexcept {
         assert(_ep_managers.empty());
     }
-    manager(manager&&) = delete;
-    manager& operator=(manager&&) = delete;
+
+public:
     void register_metrics(const sstring& group_name);
     future<> start(shared_ptr<gms::gossiper> gossiper_ptr);
     future<> stop();
