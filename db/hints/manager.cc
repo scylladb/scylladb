@@ -148,10 +148,6 @@ manager::manager(service::storage_proxy& proxy, sstring hints_directory, host_fi
     }
 }
 
-manager::~manager() {
-    assert(_ep_managers.empty());
-}
-
 void manager::register_metrics(const sstring& group_name) {
     namespace sm = seastar::metrics;
 
