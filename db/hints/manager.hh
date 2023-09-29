@@ -80,7 +80,6 @@ private:
     using hint_endpoint_manager = internal::hint_endpoint_manager;
     using node_to_hint_store_factory_type = internal::node_to_hint_store_factory_type;
 
-public:
     enum class state {
         started,                // hinting is currently allowed (start() call is complete)
         replay_allowed,         // replaying (hints sending) is allowed
@@ -94,7 +93,6 @@ public:
         state::draining_all,
         state::stopping>>;
 
-private:
     using ep_managers_map_type = std::unordered_map<endpoint_id, hint_endpoint_manager>;
 
 public:
@@ -102,9 +100,10 @@ public:
     // Non-const - can be modified with an error injection.
     static inline std::chrono::seconds hints_flush_period = std::chrono::seconds(10);
     static constexpr std::chrono::seconds hint_file_write_timeout = std::chrono::seconds(2);
-
 private:
     static constexpr uint64_t max_size_of_hints_in_progress = 10 * 1024 * 1024; // 10MB
+
+private:
     state_set _state;
     const fs::path _hints_dir;
     dev_t _hints_dir_device_id = 0;
