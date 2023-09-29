@@ -125,12 +125,20 @@ void disablebinary_operation(scylla_rest_client& client, const bpo::variables_ma
     client.del("/storage_service/native_transport");
 }
 
+void disablegossip_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    client.del("/storage_service/gossiping");
+}
+
 void enablebackup_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     client.post("/storage_service/incremental_backups", {{"value", "true"}});
 }
 
 void enablebinary_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     client.post("/storage_service/native_transport");
+}
+
+void enablegossip_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    client.post("/storage_service/gossiping");
 }
 
 void statusbackup_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
@@ -140,6 +148,11 @@ void statusbackup_operation(scylla_rest_client& client, const bpo::variables_map
 
 void statusbinary_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     auto status = client.get("/storage_service/native_transport");
+    fmt::print(std::cout, "{}\n", status.GetBool() ? "running" : "not running");
+}
+
+void statusgossip_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    auto status = client.get("/storage_service/gossiping");
     fmt::print(std::cout, "{}\n", status.GetBool() ? "running" : "not running");
 }
 
@@ -219,6 +232,16 @@ Fore more information, see: https://opensource.docs.scylladb.com/stable/operatin
         },
         {
             {
+                "disablegossip",
+                "Disable the gossip protocol",
+R"(
+Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/disablegossip.html
+)",
+            },
+            disablegossip_operation
+        },
+        {
+            {
                 "enablebackup",
                 "Enables incremental backup",
 R"(
@@ -238,6 +261,18 @@ Fore more information, see: https://opensource.docs.scylladb.com/stable/operatin
 )",
             },
             enablebinary_operation
+        },
+        {
+            {
+                "enablegossip",
+                "Enables the gossip protocol",
+R"(
+The gossip protocol is enabled by default.
+
+Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/enablegossip.html
+)",
+            },
+            enablegossip_operation
         },
         {
             {
@@ -269,6 +304,21 @@ Fore more information, see: https://opensource.docs.scylladb.com/stable/operatin
 )",
             },
             statusbinary_operation
+        },
+        {
+            {
+                "statusgossip",
+                "Displays the gossip status",
+R"(
+Provides the status of gossip.
+Results can be one of the following: `running` or `not running`.
+
+By default, the gossip protocol is `running`.
+
+Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/statusgossip.html
+)",
+            },
+            statusgossip_operation
         },
         {
             {
