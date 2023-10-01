@@ -289,7 +289,7 @@ public:
     /// corresponding hint_endpoint_manager objects.
     ///
     /// \param endpoint node that left the cluster
-    void drain_for(endpoint_id endpoint);
+    future<> drain_for(endpoint_id endpoint);
 
 private:
     void update_backlog(size_t backlog, size_t max_backlog);

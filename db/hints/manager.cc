@@ -439,15 +439,14 @@ bool manager::check_dc_for(endpoint_id ep) const noexcept {
     }
 }
 
-void manager::drain_for(endpoint_id endpoint) {
+future<> manager::drain_for(endpoint_id endpoint) {
     if (!started() || stopping() || draining_all()) {
-        return;
+        return make_ready_future<>();
     }
 
     manager_logger.trace("on_leave_cluster: {} is removed/decommissioned", endpoint);
 
-    // Future is waited on indirectly in `stop()` (via `_draining_eps_gate`).
-    (void)with_gate(_draining_eps_gate, [this, endpoint] {
+    return with_gate(_draining_eps_gate, [this, endpoint] {
         return with_semaphore(drain_lock(), 1, [this, endpoint] {
             return futurize_invoke([this, endpoint] () {
                 if (utils::fb_utilities::is_me(endpoint)) {
