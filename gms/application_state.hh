@@ -11,6 +11,7 @@
 #pragma once
 
 #include <ostream>
+#include <fmt/ostream.h>
 
 namespace gms {
 
@@ -43,3 +44,5 @@ enum class application_state {
 std::ostream& operator<<(std::ostream& os, const application_state& m);
 
 }
+
+template <> struct fmt::formatter<gms::application_state> : fmt::ostream_formatter {};

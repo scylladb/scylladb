@@ -156,3 +156,6 @@ public:
         return out << "{bound: prefix=" << b._prefix.get() << ", kind=" << b._kind << "}";
     }
 };
+
+template <> struct fmt::formatter<bound_kind> : fmt::ostream_formatter {};
+template <> struct fmt::formatter<bound_view> : fmt::ostream_formatter {};

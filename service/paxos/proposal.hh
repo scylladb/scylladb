@@ -9,6 +9,7 @@
 #pragma once
 #include "utils/UUID_gen.hh"
 #include "mutation/frozen_mutation.hh"
+#include <fmt/ostream.h>
 
 namespace service {
 
@@ -50,3 +51,5 @@ std::ostream& operator<<(std::ostream& os, const proposal& proposal);
 
 } // end of namespace "paxos"
 } // end of namespace "service"
+
+template <> struct fmt::formatter<service::paxos::proposal> : fmt::ostream_formatter {};

@@ -8,6 +8,7 @@
 #pragma once
 
 #include "raft.hh"
+#include <fmt/ostream.h>
 
 namespace raft {
 // This class represents the Raft log in memory.
@@ -215,3 +216,5 @@ public:
 };
 
 }
+
+template <> struct fmt::formatter<raft::log> : fmt::ostream_formatter {};

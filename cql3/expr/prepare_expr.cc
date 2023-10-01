@@ -591,6 +591,13 @@ operator<<(std::ostream&out, untyped_constant::type_class t)
     abort();
 }
 
+}
+
+template <> struct fmt::formatter<cql3::expr::untyped_constant::type_class> : fmt::ostream_formatter {};
+
+namespace cql3::expr {
+
+
 static
 bytes
 untyped_constant_parsed_value(const untyped_constant uc, data_type validator)

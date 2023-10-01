@@ -246,7 +246,7 @@ void stream_transfer_task::append_ranges(const dht::token_range_vector& ranges) 
 void stream_transfer_task::sort_and_merge_ranges() {
     boost::icl::interval_set<dht::token> myset;
     dht::token_range_vector ranges;
-    sslog.debug("cf_id = {}, before ranges = {}, size={}", cf_id, _ranges, _ranges.size());
+    sslog.debug("cf_id = {}, before ranges = {}, size={}", cf_id, fmt::join(_ranges, ", "), _ranges.size());
     _ranges.swap(ranges);
     for (auto& range : ranges) {
         // TODO: We should convert range_to_interval and interval_to_range to
@@ -259,7 +259,7 @@ void stream_transfer_task::sort_and_merge_ranges() {
         auto r = locator::token_metadata::interval_to_range(i);
         _ranges.push_back(dht::token_range(std::move(r)));
     }
-    sslog.debug("cf_id = {}, after  ranges = {}, size={}", cf_id, _ranges, _ranges.size());
+    sslog.debug("cf_id = {}, after  ranges = {}, size={}", cf_id, fmt::join(_ranges, ", "), _ranges.size());
 }
 
 } // namespace streaming

@@ -317,7 +317,7 @@ static std::vector<sstring> experimental_feature_names() {
 static std::string_view experimental_features_help_string() {
     static sstring s = format("Unlock experimental features provided as the "
         "option arguments (possible values: {}). Can be repeated.",
-        experimental_feature_names());
+        fmt::join(experimental_feature_names(), ", "));
     return s;
 }
 

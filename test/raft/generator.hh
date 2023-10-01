@@ -844,3 +844,9 @@ std::ostream& operator<<(std::ostream& os, const completion<Op>& c) {
 }
 
 } // namespace operation
+
+template <operation::Executable... Ops> struct fmt::formatter<operation::either_of<Ops...>> : fmt::ostream_formatter {};
+template <typename Op> struct fmt::formatter<operation::exceptional_result<Op>> : fmt::ostream_formatter {};
+template <operation::Executable Op> struct fmt::formatter<operation::completion<Op>> : fmt::ostream_formatter {};
+template <operation::Executable Op> struct fmt::formatter<operation::invocable<Op>> : fmt::ostream_formatter {};
+

@@ -17,6 +17,7 @@
 #include "utils/hash.hh"
 #include "db_clock.hh"
 #include "gc_clock.hh"
+#include <fmt/ostream.h>
 #include <chrono>
 #include <seastar/core/distributed.hh>
 #include <functional>
@@ -1825,3 +1826,5 @@ flat_mutation_reader_v2 make_multishard_streaming_reader(distributed<replica::da
     schema_ptr schema, reader_permit permit, const dht::partition_range& range, gc_clock::time_point compaction_time);
 
 bool is_internal_keyspace(std::string_view name);
+
+template <> struct fmt::formatter<replica::database::table_kind> : fmt::ostream_formatter {};

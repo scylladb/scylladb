@@ -9,6 +9,7 @@
 #pragma once
 
 #include <vector>
+#include <fmt/ostream.h>
 #include "mutation/mutation.hh"
 #include "schema/schema_fwd.hh"
 #include "mutation/canonical_mutation.hh"
@@ -136,4 +137,6 @@ public:
 
     friend std::ostream& operator<<(std::ostream&, const schema_mutations&);
 };
+
+template <> struct fmt::formatter<schema_mutations> : fmt::ostream_formatter {};
 

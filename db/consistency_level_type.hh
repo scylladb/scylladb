@@ -11,6 +11,7 @@
 #pragma once
 
 #include <iosfwd>
+#include <fmt/ostream.h>
 
 namespace db {
 
@@ -34,3 +35,5 @@ enum class consistency_level {
 std::ostream& operator<<(std::ostream& os, consistency_level cl);
 
 }
+
+template <> struct fmt::formatter<db::consistency_level> : fmt::ostream_formatter {};

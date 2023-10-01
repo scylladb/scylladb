@@ -10,6 +10,7 @@
 
 #pragma once
 
+#include <fmt/ostream.h>
 #include "utils/serialization.hh"
 #include "gms/gossip_digest.hh"
 #include "gms/inet_address.hh"
@@ -44,3 +45,5 @@ public:
 };
 
 } // gms
+
+template <> struct fmt::formatter<gms::gossip_digest_ack2> : fmt::ostream_formatter {};

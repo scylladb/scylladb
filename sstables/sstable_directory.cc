@@ -184,7 +184,7 @@ sstable_directory::sort_sstable(sstables::entry_descriptor desc, process_flags f
             _unshared_remote_sstables[shards[0]].push_back(std::move(desc));
         }
     } else {
-        dirlog.trace("{} identified as a shared SSTable, shards={}", sstable_filename(desc), shards);
+        dirlog.trace("{} identified as a shared SSTable, shards={}", sstable_filename(desc), fmt::join(shards, ", "));
         _shared_sstable_info.push_back(co_await get_open_info_for_this_sstable(desc));
     }
 }

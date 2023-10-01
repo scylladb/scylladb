@@ -12,6 +12,7 @@
 #include <boost/functional/hash.hpp>
 #include <iosfwd>
 #include <sstream>
+#include <fmt/ostream.h>
 
 #include <seastar/core/sstring.hh>
 #include <seastar/core/shared_ptr.hh>
@@ -1002,3 +1003,5 @@ struct appending_hash<data_type> {
         feed_hash(h, v->name());
     }
 };
+
+template <> struct fmt::formatter<data_value> : fmt::ostream_formatter {};

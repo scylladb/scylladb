@@ -44,7 +44,7 @@ std::ostream& operator<<(std::ostream& out, const partition_slice& ps) {
                "{{regular_cols=[{}], static_cols=[{}], rows=[{}]",
                fmt::join(ps.regular_columns, ", "),
                fmt::join(ps.static_columns, ", "),
-               ps._row_ranges);
+               fmt::join(ps._row_ranges, ", "));
     if (ps._specific_ranges) {
         fmt::print(out, ", specific=[{}]", *ps._specific_ranges);
     }
@@ -88,7 +88,7 @@ std::ostream& operator<<(std::ostream& out, const forward_request& r) {
                    fmt::join(r.aggregation_infos.value(), ","));
     }
     fmt::print(out, "cmd={}, pr={}, cl={}, timeout(ms)={}}}",
-               r.cmd, r.pr, r.cl, ms);
+               r.cmd, fmt::join(r.pr, ", "), r.cl, ms);
     return out;
 }
 

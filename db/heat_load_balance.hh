@@ -122,7 +122,7 @@ miss_equalizing_combination(
     clip_probabilities(p, 1.0f / bf);
 
 
-    hr_logger.trace("desired probabilities: {}, {}", node_hit_rate | boost::adaptors::map_keys, p);
+    hr_logger.trace("desired probabilities: {}, {}", fmt::join(node_hit_rate | boost::adaptors::map_keys, ", "), fmt::join(p, ", "));
 
     // If me >= rf, this node is NOT one of the replicas, and we just need
     // to use the probabilties for these replicas, without doing the
@@ -131,7 +131,7 @@ miss_equalizing_combination(
         p = redistribute(p, me, bf);
     }
 
-    hr_logger.trace("returned _pp={}", p);
+    hr_logger.trace("returned _pp={}", fmt::join(p, ", "));
     std::vector<Node> nodes(rf);
     for (unsigned i = 0; i < rf; i++) {
         nodes[i] = node_hit_rate[i].first;

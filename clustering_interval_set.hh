@@ -11,6 +11,7 @@
 #include "schema/schema_fwd.hh"
 #include "mutation/position_in_partition.hh"
 #include <boost/icl/interval_set.hpp>
+#include <fmt/ostream.h>
 
 // Represents a non-contiguous subset of clustering_key domain of a particular schema.
 // Can be treated like an ordered and non-overlapping sequence of position_range:s.
@@ -125,3 +126,4 @@ public:
     friend std::ostream& operator<<(std::ostream&, const clustering_interval_set&);
 };
 
+template <> struct fmt::formatter<clustering_interval_set> : fmt::ostream_formatter {};

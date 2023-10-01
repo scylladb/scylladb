@@ -2,6 +2,7 @@
 #include <absl/container/btree_set.h>
 #include <cstdint>
 #include <ostream>
+#include <fmt/ostream.h>
 #include "schema/schema.hh"
 
 class decorated_key_with_hash;
@@ -41,3 +42,4 @@ public:
 };
 
 
+template <> struct fmt::formatter<repair_hash> : fmt::ostream_formatter {};

@@ -56,6 +56,10 @@
 #include <boost/range/adaptor/map.hpp>
 #include <boost/range/join.hpp>
 
+#include <fmt/std.h>
+#include <fmt/ranges.h>
+#include <fmt/ostream.h>
+
 #include "compaction/compaction_strategy.hh"
 #include "view_info.hh"
 #include "cql_type_parser.hh"
@@ -1051,6 +1055,14 @@ static std::ostream& operator<<(std::ostream& os, table_kind k) {
     abort();
 }
 
+}
+}
+
+template <> struct fmt::formatter<db::schema_tables::table_kind> : fmt::ostream_formatter {};
+
+namespace db {
+namespace schema_tables {
+
 static constexpr std::initializer_list<table_kind> all_table_kinds = {
     table_kind::table,
     table_kind::view
@@ -1258,7 +1270,7 @@ table_selector get_affected_tables(const sstring& keyspace_name, const mutation&
         result.add(get_table_name(row.key()));
     }
     slogger.trace("Mutation of {}.{} for keyspace {} affects tables: {}, all_in_keyspace: {}",
-                  m.schema()->ks_name(), m.schema()->cf_name(), keyspace_name, result.tables, result.all_in_keyspace);
+                  m.schema()->ks_name(), m.schema()->cf_name(), keyspace_name, fmt::join(result.tables, ", "), result.all_in_keyspace);
     return result;
 }
 
@@ -1310,7 +1322,7 @@ static future<> do_merge_schema(distributed<service::storage_proxy>& proxy, shar
                 }
             }
         }
-        slogger.debug("Affected tables for keyspace {}: {}", keyspace_name, sel.tables);
+        slogger.debug("Affected tables for keyspace {}: {}", keyspace_name, fmt::join(sel.tables, ", "));
     }
 
     // current state of the schema

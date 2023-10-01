@@ -11,6 +11,7 @@
 #include <map>
 #include <optional>
 #include <seastar/core/sstring.hh>
+#include <fmt/ostream.h>
 #include "seastarx.hh"
 
 namespace cdc {
@@ -68,3 +69,6 @@ public:
 };
 
 } // namespace cdc
+
+template <> struct fmt::formatter<cdc::image_mode> : fmt::ostream_formatter {};
+template <> struct fmt::formatter<cdc::delta_mode> : fmt::ostream_formatter {};

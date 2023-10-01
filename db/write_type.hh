@@ -13,6 +13,7 @@
 #include <assert.h>
 #include <cstdint>
 #include <iosfwd>
+#include <fmt/ostream.h>
 
 namespace db {
 
@@ -30,4 +31,4 @@ std::ostream& operator<<(std::ostream& os, const write_type& t);
 
 }
 
-
+template <> struct fmt::formatter<db::write_type> : fmt::ostream_formatter {};

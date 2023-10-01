@@ -11,6 +11,7 @@
 #include <seastar/core/thread.hh>
 #include <seastar/http/request.hh>
 #include <seastar/util/short_streams.hh>
+#include <fmt/ranges.h>
 
 #include "log.hh"
 #include "tools/utils.hh"
@@ -37,7 +38,7 @@ class scylla_rest_client {
         auto req = http::request::make(type, _host_name, path);
         req.query_parameters = std::move(params);
 
-        nlog.trace("Making {} request to {} with parameters {}", type, req.get_url(), req.query_parameters);
+        nlog.trace("Making {} request to {} with parameters {}", type, req.get_url(), fmt::join(req.query_parameters, ", "));
 
         sstring res;
 
@@ -253,7 +254,7 @@ namespace tools {
 
 int scylla_nodetool_main(int argc, char** argv) {
     auto replacement_argv = massage_argv(argc, argv);
-    nlog.debug("replacement argv: {}", replacement_argv);
+    nlog.debug("replacement argv: {}", fmt::join(replacement_argv | boost::adaptors::transformed([] (char* p) -> const char* { return p; }), ", "));
 
     constexpr auto description_template =
 R"(scylla-nodetool - a command-line tool to administer local or remote ScyllaDB nodes

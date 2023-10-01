@@ -28,6 +28,8 @@
 #include "locator/host_id.hh"
 #include "types_fwd.hh"
 
+#include <fmt/ostream.h>
+
 // While the sstable code works with char, bytes_view works with int8_t
 // (signed char). Rather than change all the code, let's do a cast.
 static inline bytes_view to_bytes_view(const temporary_buffer<char>& b) {
@@ -783,3 +785,4 @@ public:
 };
 }
 
+template <> struct fmt::formatter<sstables::indexable_element> : fmt::ostream_formatter {};

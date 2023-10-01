@@ -10,6 +10,7 @@
 
 #include <cinttypes>
 #include <iosfwd>
+#include <fmt/ostream.h>
 
 namespace utils {
 
@@ -38,3 +39,5 @@ std::ostream& operator<<(std::ostream& os, const human_readable_value& val);
 human_readable_value to_hr_size(uint64_t size);
 
 } // namespace utils
+
+template <> struct fmt::formatter<utils::human_readable_value> : fmt::ostream_formatter {};

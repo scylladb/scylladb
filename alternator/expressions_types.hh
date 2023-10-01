@@ -13,6 +13,7 @@
 #include <variant>
 
 #include <seastar/core/shared_ptr.hh>
+#include <fmt/ostream.h>
 
 #include "utils/rjson.hh"
 
@@ -255,3 +256,6 @@ public:
 
 } // namespace parsed
 } // namespace alternator
+
+template <> struct fmt::formatter<alternator::parsed::path> : fmt::ostream_formatter {};
+template <> struct fmt::formatter<alternator::parsed::update_expression::action> : fmt::ostream_formatter {};

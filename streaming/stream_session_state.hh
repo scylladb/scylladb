@@ -11,6 +11,7 @@
 #pragma once
 
 #include <ostream>
+#include <fmt/ostream.h>
 
 namespace streaming {
 
@@ -26,3 +27,5 @@ enum class stream_session_state {
 std::ostream& operator<<(std::ostream& os, const stream_session_state& s);
 
 } // namespace
+
+template <> struct fmt::formatter<streaming::stream_session_state> : fmt::ostream_formatter {};

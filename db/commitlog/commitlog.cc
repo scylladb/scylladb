@@ -19,6 +19,10 @@
 #include <unordered_set>
 #include <exception>
 #include <filesystem>
+#include <fmt/ostream.h>
+#include <fmt/std.h>
+#include <fmt/ranges.h>
+#include <fmt/chrono.h>
 
 #include <seastar/core/align.hh>
 #include <seastar/core/seastar.hh>
@@ -1880,7 +1884,7 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
 void db::commitlog::segment_manager::discard_completed_segments(const cf_id_type& id, const rp_set& used) noexcept {
     auto& usage = used.usage();
 
-    clogger.debug("Discarding {}: {}", id, usage);
+    clogger.debug("Discarding {}: {}", id, fmt::join(usage, ", "));
 
     for (auto&s : _segments) {
         auto i = usage.find(s->_desc.id);
@@ -1906,7 +1910,7 @@ std::ostream& operator<<(std::ostream& out, const db::commitlog::segment& s) {
 }
 
 std::ostream& operator<<(std::ostream& out, const db::commitlog::segment::cf_mark& m) {
-    fmt::print(out, "{}", m.s._cf_dirty | boost::adaptors::map_keys);
+    fmt::print(out, "{}", fmt::join(m.s._cf_dirty | boost::adaptors::map_keys, ", "));
     return out;
 }
 
@@ -2120,7 +2124,7 @@ future<> db::commitlog::segment_manager::do_pending_deletes() {
     std::exception_ptr recycle_error;
     auto exts = cfg.extensions;
 
-    clogger.debug("Discarding segments {}", ftd);
+    clogger.debug("Discarding segments {}", fmt::join(ftd, ", "));
 
     for (auto& [f, mode] : ftd) {
         // `f.remove_file()` resets known_size to 0, so remember the size here,
@@ -3004,3 +3008,9 @@ db::rp_handle::~rp_handle() {
 db::replay_position db::rp_handle::release() {
     return std::exchange(_rp, {});
 }
+
+template <> struct fmt::formatter<db::commitlog::segment> : fmt::ostream_formatter {};
+template <> struct fmt::formatter<db::commitlog::segment::cf_mark> : fmt::ostream_formatter {};
+template <> struct fmt::formatter<db::commitlog::segment_manager::named_file> : fmt::ostream_formatter {};
+template <> struct fmt::formatter<db::commitlog::segment_manager::dispose_mode> : fmt::ostream_formatter {};
+template <typename T> struct fmt::formatter<db::commitlog::segment_manager::byte_flow<T>> : fmt::ostream_formatter {};

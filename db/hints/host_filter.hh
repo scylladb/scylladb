@@ -91,3 +91,5 @@ public:
 
 }
 }
+
+template <> struct fmt::formatter<db::hints::host_filter> : fmt::ostream_formatter {};

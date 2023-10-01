@@ -15,6 +15,7 @@
 #include "db/operation_type.hh"
 #include <stdexcept>
 #include <seastar/core/sstring.hh>
+#include <fmt/ostream.h>
 #include "bytes.hh"
 
 namespace exceptions {
@@ -310,3 +311,5 @@ public:
 };
 
 }
+
+template <> struct fmt::formatter<exceptions::exception_code> : fmt::ostream_formatter {};

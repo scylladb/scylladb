@@ -35,6 +35,8 @@
 #include <optional>
 #include <boost/range/adaptors.hpp>
 #include <boost/intrusive/list.hpp>
+#include <fmt/std.h>
+#include <fmt/ranges.h>
 #include "gms/i_endpoint_state_change_subscriber.hh"
 #include "gms/gossiper.hh"
 #include "repair/row_level.hh"
@@ -221,7 +223,7 @@ static row_level_diff_detect_algorithm get_common_diff_detect_algorithm(netw::me
                 [&nodes_algorithms, &nodes, idx] (std::vector<row_level_diff_detect_algorithm> algorithms) {
             std::sort(algorithms.begin(), algorithms.end());
             nodes_algorithms[idx] = std::move(algorithms);
-            rlogger.trace("Got node_algorithms={}, from node={}", nodes_algorithms[idx], nodes[idx]);
+            rlogger.trace("Got node_algorithms={}, from node={}", fmt::join(nodes_algorithms[idx], ", "), nodes[idx]);
         });
     }).get();
 
@@ -235,7 +237,7 @@ static row_level_diff_detect_algorithm get_common_diff_detect_algorithm(netw::me
         common_algorithms = std::move(results);
     }
     rlogger.trace("peer_algorithms={}, local_algorithms={}, common_diff_detect_algorithms={}",
-            nodes_algorithms, suportted_diff_detect_algorithms(), common_algorithms);
+            fmt::join(nodes_algorithms, ", "), fmt::join(suportted_diff_detect_algorithms(), ", "), fmt::join(common_algorithms, ", "));
     if (common_algorithms.empty()) {
         throw std::runtime_error("Can not find row level repair diff detect algorithm");
     }

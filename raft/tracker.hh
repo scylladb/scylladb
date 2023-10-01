@@ -8,6 +8,7 @@
 #pragma once
 
 #include <seastar/core/condition-variable.hh>
+#include <fmt/ostream.h>
 #include "raft.hh"
 
 namespace raft {
@@ -207,3 +208,6 @@ public:
 
 } // namespace raft
 
+template <> struct fmt::formatter<raft::vote_result> : fmt::ostream_formatter {};
+template <> struct fmt::formatter<raft::election_tracker> : fmt::ostream_formatter {};
+template <> struct fmt::formatter<raft::votes> : fmt::ostream_formatter {};

@@ -42,6 +42,7 @@
 #include "locator/abstract_replication_strategy.hh"
 
 #include <seastar/util/optimized_optional.hh>
+#include <fmt/ostream.h>
 
 class sstable_assertions;
 class cached_file;
@@ -1002,3 +1003,5 @@ future<> remove_table_directory_if_has_no_snapshots(fs::path table_dir);
 future<> remove_by_toc_name(sstring sstable_toc_name, storage::sync_dir sync = storage::sync_dir::yes);
 
 } // namespace sstables
+
+template <> struct fmt::formatter<sstables::sstable_state> : fmt::ostream_formatter {};

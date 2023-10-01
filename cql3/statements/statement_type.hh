@@ -11,6 +11,7 @@
 #pragma once
 
 #include <ostream>
+#include <fmt/ostream.h>
 
 namespace cql3 {
 
@@ -73,3 +74,5 @@ public:
 
 }
 }
+
+template <> struct fmt::formatter<cql3::statements::statement_type> : fmt::ostream_formatter {};

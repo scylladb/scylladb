@@ -9,6 +9,7 @@
 
 #include <seastar/core/condition-variable.hh>
 #include <seastar/core/on_internal_error.hh>
+#include <fmt/ostream.h>
 #include "utils/small_vector.hh"
 #include "raft.hh"
 #include "tracker.hh"
@@ -654,3 +655,5 @@ void fsm::step(server_id from, Message&& msg) {
 }
 
 } // namespace raft
+
+template <> struct fmt::formatter<raft::fsm> : fmt::ostream_formatter {};

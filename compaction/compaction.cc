@@ -419,6 +419,13 @@ std::ostream& operator<<(std::ostream& os, const formatted_sstables_list& lst) {
     return os;
 }
 
+}
+
+template <> struct fmt::formatter<sstables::formatted_sstables_list> : fmt::ostream_formatter {};
+
+
+namespace sstables {
+
 class compaction {
 protected:
     compaction_data& _cdata;

@@ -7,6 +7,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include <fmt/std.h>
 #include <boost/test/unit_test.hpp>
 #include <boost/range/adaptor/transformed.hpp>
 #include "test/lib/cql_assertions.hh"
@@ -38,7 +39,7 @@ rows_assertions::is_empty() {
     auto row_count = rs.size();
     if (row_count != 0) {
         auto&& first_row = *rs.rows().begin();
-        fail(format("Expected no rows, but got {:d}. First row: {}", row_count, fmt::to_string(first_row)));
+        fail(format("Expected no rows, but got {:d}. First row: {}", row_count, fmt::join(first_row, ", ")));
     }
     return {*this};
 }

@@ -340,7 +340,7 @@ abstract_replication_strategy::get_pending_address_ranges(const token_metadata_p
         auto eps = co_await calculate_natural_endpoints(t, temp);
         if (eps.contains(pending_address)) {
             dht::token_range_vector r = temp.get_primary_ranges_for(t);
-            rslogger.debug("get_pending_address_ranges: token={} primary_range={} endpoint={}", t, r, pending_address);
+            rslogger.debug("get_pending_address_ranges: token={} primary_range={} endpoint={}", t, fmt::join(r, ", "), pending_address);
             ret.insert(ret.end(), r.begin(), r.end());
         }
     }

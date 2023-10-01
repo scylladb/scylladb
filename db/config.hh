@@ -11,6 +11,7 @@
 
 #include <boost/program_options.hpp>
 #include <unordered_map>
+#include <fmt/ostream.h>
 
 #include <seastar/core/sstring.hh>
 #include <seastar/core/shared_ptr.hh>
@@ -82,6 +83,7 @@ std::istream& operator>>(std::istream& is, error_injection_at_startup&);
 
 }
 
+template <> struct fmt::formatter<db::error_injection_at_startup> : fmt::ostream_formatter {};
 
 namespace utils {
 
@@ -520,3 +522,5 @@ future<> update_relabel_config_from_file(const std::string& name);
 std::vector<sstring> split_comma_separated_list(sstring comma_separated_list);
 
 }
+
+template <> struct fmt::formatter<db::seed_provider_type> : fmt::ostream_formatter {};

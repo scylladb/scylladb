@@ -158,3 +158,5 @@ operator<<(std::ostream& os, const mutation_column_value& mcv) {
 }  // namespace test_utils
 }  // namespace expr
 }  // namespace cql3
+
+template <> struct fmt::formatter<cql3::expr::test_utils::mutation_column_value> : fmt::ostream_formatter {};

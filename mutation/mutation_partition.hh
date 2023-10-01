@@ -1504,3 +1504,8 @@ mutation_partition& mutation_partition::container_of(rows_type& rows) {
 
 bool has_any_live_data(const schema& s, column_kind kind, const row& cells, tombstone tomb = tombstone(),
                        gc_clock::time_point now = gc_clock::time_point::min());
+
+template <> struct fmt::formatter<row_tombstone> : fmt::ostream_formatter {};
+template <> struct fmt::formatter<row_marker> : fmt::ostream_formatter {};
+template <> struct fmt::formatter<deletable_row::printer> : fmt::ostream_formatter {};
+template <> struct fmt::formatter<mutation_partition::printer> : fmt::ostream_formatter {};

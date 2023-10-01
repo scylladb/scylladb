@@ -15,6 +15,7 @@
 
 #include <optional>
 #include <cstdlib>
+#include <fmt/ostream.h>
 
 inline
 lexicographical_relation relation_for_lower_bound(composite_view v) {
@@ -813,3 +814,5 @@ bool position_range::is_all_clustered_rows(const schema& s) const {
 //
 // If `r` does not contain any keys, returns nullopt.
 std::optional<query::clustering_range> position_range_to_clustering_range(const position_range& r, const schema&);
+
+template <> struct fmt::formatter<position_range> : fmt::ostream_formatter {};

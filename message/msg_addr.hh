@@ -10,6 +10,7 @@
 
 #include "gms/inet_address.hh"
 #include <cstdint>
+#include <fmt/ostream.h>
 
 namespace netw {
 
@@ -27,3 +28,5 @@ struct msg_addr {
 };
 
 }
+
+template <> struct fmt::formatter<netw::msg_addr> : fmt::ostream_formatter {};

@@ -14,6 +14,7 @@
 #include <variant>
 #include <seastar/core/smp.hh>
 #include <seastar/core/file.hh>
+#include <fmt/ostream.h>
 #include "sstables/types_fwd.hh"
 #include "sstables/sstable_set.hh"
 #include "utils/UUID.hh"
@@ -208,3 +209,7 @@ struct compaction_descriptor {
 };
 
 }
+
+template <> struct fmt::formatter<sstables::compaction_type> : fmt::ostream_formatter {};
+template <> struct fmt::formatter<sstables::compaction_type_options::scrub::mode> : fmt::ostream_formatter {};
+template <> struct fmt::formatter<sstables::compaction_type_options::scrub::quarantine_mode> : fmt::ostream_formatter {};

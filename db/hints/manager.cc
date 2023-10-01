@@ -154,7 +154,7 @@ void manager::forbid_hints() {
 }
 
 void manager::forbid_hints_for_eps_with_pending_hints() {
-    manager_logger.trace("space_watchdog: Going to block hints to: {}", _eps_with_pending_hints);
+    manager_logger.trace("space_watchdog: Going to block hints to: {}", fmt::join(_eps_with_pending_hints, ", "));
     boost::for_each(_ep_managers, [this] (auto& pair) {
         hint_endpoint_manager& ep_man = pair.second;
         if (has_ep_with_pending_hints(ep_man.end_point_key())) {

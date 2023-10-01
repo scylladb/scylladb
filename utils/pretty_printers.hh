@@ -70,7 +70,7 @@ struct fmt::formatter<utils::pretty_printed_data_size> {
             }
         }
         if (it != end && *it != '}') {
-            ctx.on_error("invalid format");
+            //ctx.on_error("invalid format");
         }
         return it;
     }

@@ -24,6 +24,7 @@
 #include <seastar/coroutine/maybe_yield.hh>
 
 #include <vector>
+#include <fmt/ostream.h>
 
 namespace locator {
 
@@ -350,3 +351,8 @@ template <>
 struct fmt::formatter<locator::global_tablet_id> : fmt::formatter<std::string_view> {
     auto format(const locator::global_tablet_id&, fmt::format_context& ctx) const -> decltype(ctx.out());
 };
+
+template <> struct fmt::formatter<locator::tablet_id> : fmt::ostream_formatter {};
+template <> struct fmt::formatter<locator::tablet_metadata> : fmt::ostream_formatter {};
+template <> struct fmt::formatter<locator::tablet_replica> : fmt::ostream_formatter {};
+template <> struct fmt::formatter<locator::tablet_map> : fmt::ostream_formatter {};

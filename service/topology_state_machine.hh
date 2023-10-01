@@ -9,6 +9,7 @@
 
 #pragma once
 
+#include <fmt/ostream.h>
 #include <boost/range/algorithm/find_if.hpp>
 #include "boost/range/join.hpp"
 #include <iostream>
@@ -223,3 +224,10 @@ std::ostream& operator<<(std::ostream&, const global_topology_request&);
 global_topology_request global_topology_request_from_string(const sstring&);
 std::ostream& operator<<(std::ostream& os, const raft_topology_cmd::command& cmd);
 }
+
+template <> struct fmt::formatter<service::fencing_token> : fmt::ostream_formatter {};
+template <> struct fmt::formatter<service::topology::transition_state> : fmt::ostream_formatter {};
+template <> struct fmt::formatter<service::node_state> : fmt::ostream_formatter {};
+template <> struct fmt::formatter<service::topology_request> : fmt::ostream_formatter {};
+template <> struct fmt::formatter<service::global_topology_request> : fmt::ostream_formatter {};
+template <> struct fmt::formatter<service::raft_topology_cmd::command> : fmt::ostream_formatter {};

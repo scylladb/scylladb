@@ -23,6 +23,7 @@
 #include <chrono>
 #include <iosfwd>
 #include <boost/range/irange.hpp>
+#include <fmt/ostream.h>
 
 template <typename Func>
 static
@@ -174,6 +175,9 @@ struct perf_result_with_aio_writes : public perf_result, public aio_writes_resul
 
 std::ostream& operator<<(std::ostream& os, const perf_result_with_aio_writes& result);
 
+template <> struct fmt::formatter<perf_result_with_aio_writes> : fmt::ostream_formatter {};
+
+
 /**
  * Measures throughput of an asynchronous action. Executes the action on all cores
  * in parallel, with given number of concurrent executions per core.
@@ -282,3 +286,6 @@ public:
 };
 
 } // namespace perf
+
+template <> struct fmt::formatter<scheduling_latency_measurer> : fmt::ostream_formatter {};
+template <> struct fmt::formatter<perf_result> : fmt::ostream_formatter {};

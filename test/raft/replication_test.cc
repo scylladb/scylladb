@@ -7,6 +7,7 @@
  */
 
 #include "replication.hh"
+#include <fmt/std.h>
 
 // Test Raft library with declarative test definitions
 

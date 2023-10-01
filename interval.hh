@@ -17,6 +17,7 @@
 #include <boost/range/adaptor/transformed.hpp>
 #include <compare>
 #include <fmt/format.h>
+#include <fmt/ostream.h>
 
 template <typename Comparator, typename T>
 concept IntervalComparatorFor = requires (T a, T b, Comparator& cmp) {
@@ -736,3 +737,6 @@ struct hash<nonwrapping_interval<T>> {
 };
 
 }
+
+template <typename T> struct fmt::formatter<wrapping_interval<T>> : fmt::ostream_formatter {};
+template <typename T> struct fmt::formatter<nonwrapping_interval<T>> : fmt::ostream_formatter {};

@@ -18,6 +18,8 @@
 #include <seastar/core/future.hh>
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/sstring.hh>
+#include <fmt/std.h>
+#include <fmt/ranges.h>
 
 #include "auth/authenticated_user.hh"
 #include "auth/permission.hh"

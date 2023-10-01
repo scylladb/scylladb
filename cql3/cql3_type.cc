@@ -511,3 +511,4 @@ sstring single_quote(const sstring& str) {
 
 }
 
+template <> struct fmt::formatter<cql3::cql3_type::raw_collection> : fmt::ostream_formatter {};

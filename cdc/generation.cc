@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <seastar/core/sleep.hh>
 #include <seastar/core/coroutine.hh>
+#include <fmt/std.h>
 
 #include "gms/endpoint_state.hh"
 #include "keys.hh"

@@ -12,6 +12,7 @@
 #include <compare>
 #include <iostream>
 #include <type_traits>
+#include <fmt/ostream.h>
 
 namespace utils {
 
@@ -114,3 +115,6 @@ struct numeric_limits<utils::tagged_tagged_integer<Final, Tag, ValueType>> : pub
 };
 
 } // namespace std
+
+template <typename Final, typename Tag, std::integral ValueType>
+struct fmt::formatter<utils::tagged_tagged_integer<Final, Tag, ValueType>> : fmt::ostream_formatter {};

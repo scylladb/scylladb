@@ -15,6 +15,7 @@
 #include "dht/i_partitioner.hh"
 #include "partition_range_compat.hh"
 #include <vector>
+#include <fmt/ostream.h>
 
 namespace streaming {
 
@@ -41,3 +42,5 @@ public:
 };
 
 } // namespace streaming
+
+template <> struct fmt::formatter<streaming::stream_request> : fmt::ostream_formatter {};

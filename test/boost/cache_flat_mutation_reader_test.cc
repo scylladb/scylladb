@@ -138,6 +138,8 @@ struct expected_row {
     }
 };
 
+template <> struct fmt::formatter<expected_row> : fmt::ostream_formatter {};
+
 static void assert_cached_rows(partition_snapshot_ptr snp, std::deque<expected_row> expected) {
     auto&& rows = snp->version()->partition().clustered_rows();
     for (auto&& r : rows) {

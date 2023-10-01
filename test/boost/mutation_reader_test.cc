@@ -2031,7 +2031,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_only_reads_from_needed
             .produces_end_of_stream();
 
         for (unsigned i = 0; i < smp::count; ++i) {
-            testlog.info("[{}]: {} == {}", i, shards_touched[i], expected_shards_touched[i]);
+            testlog.info("[{}]: {} == {}", i, shards_touched[i].load(), bool(expected_shards_touched[i]));
             BOOST_CHECK(shards_touched[i] == expected_shards_touched[i]);
         }
 

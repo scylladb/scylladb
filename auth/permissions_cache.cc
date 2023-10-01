@@ -12,6 +12,8 @@
 #include "auth/common.hh"
 #include "auth/service.hh"
 
+#include <fmt/std.h>
+
 namespace auth {
 
 permissions_cache::permissions_cache(const utils::loading_cache_config& c, service& ser, logging::logger& log)

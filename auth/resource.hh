@@ -17,6 +17,7 @@
 #include <tuple>
 #include <vector>
 #include <unordered_set>
+#include <fmt/ostream.h>
 
 #include <boost/range/adaptor/transformed.hpp>
 #include <seastar/core/print.hh>
@@ -321,3 +322,6 @@ using resource_set = std::unordered_set<resource>;
 resource_set expand_resource_family(const resource&);
 
 }
+
+template <> struct fmt::formatter<auth::resource> : fmt::ostream_formatter {};
+template <> struct fmt::formatter<auth::data_resource_view> : fmt::ostream_formatter {};

@@ -993,7 +993,7 @@ class topology_coordinator {
     future<> update_topology_state(
             group0_guard guard, std::vector<canonical_mutation>&& updates, const sstring& reason) {
         try {
-            slogger.trace("raft topology: do update {} reason {}", updates, reason);
+            slogger.trace("raft topology: do update {} reason {}", fmt::join(updates, ", "), reason);
             topology_change change{std::move(updates)};
             group0_command g0_cmd = _group0.client().prepare_command(std::move(change), guard, reason);
             co_await _group0.client().add_entry(std::move(g0_cmd), std::move(guard));

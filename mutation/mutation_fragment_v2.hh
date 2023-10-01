@@ -13,6 +13,7 @@
 #include "position_in_partition.hh"
 
 #include <fmt/core.h>
+#include <fmt/ostream.h>
 #include <optional>
 #include <seastar/util/optimized_optional.hh>
 
@@ -20,6 +21,7 @@
 
 #include "db/timeout_clock.hh"
 #include "reader_permit.hh"
+
 
 // Mutation fragment which represents a range tombstone boundary.
 //
@@ -380,3 +382,6 @@ requires(F f, mutation_fragment_v2 mf, schema_ptr s) {
     { f(std::move(mf)) } -> std::same_as<mutation_fragment_v2>;
     { f(s) } -> std::same_as<schema_ptr>;
 };
+
+template <> struct fmt::formatter<mutation_fragment_v2::kind> : fmt::ostream_formatter {};
+template <> struct fmt::formatter<mutation_fragment_v2::printer> : fmt::ostream_formatter {};

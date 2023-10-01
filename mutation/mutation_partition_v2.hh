@@ -9,6 +9,7 @@
 #pragma once
 
 #include <iosfwd>
+#include <fmt/ostream.h>
 #include <map>
 #include <boost/intrusive/set.hpp>
 #include <boost/range/iterator_range.hpp>
@@ -282,3 +283,5 @@ mutation_partition_v2& mutation_partition_v2::container_of(rows_type& rows) {
 // Returns true iff the mutation contains dummy rows which are redundant,
 // meaning that they can be removed without affecting the set of writes represented by the mutation.
 bool has_redundant_dummies(const mutation_partition_v2&);
+
+template <> struct fmt::formatter<mutation_partition_v2::printer> : fmt::ostream_formatter {};

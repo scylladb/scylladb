@@ -12,6 +12,7 @@
 
 #include "schema/schema_fwd.hh"
 #include <ostream>
+#include <fmt/ostream.h>
 
 namespace streaming {
 
@@ -38,3 +39,5 @@ public:
 };
 
 } // namespace streaming
+
+template <> struct fmt::formatter<streaming::stream_summary> : fmt::ostream_formatter {};

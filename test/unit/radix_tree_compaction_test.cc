@@ -46,6 +46,8 @@ std::ostream& operator<<(std::ostream& out, const test_data& d) {
     return out;
 }
 
+template <> struct fmt::formatter<test_data> : fmt::ostream_formatter {};
+
 using test_tree = tree<test_data>;
 
 int main(int argc, char **argv) {

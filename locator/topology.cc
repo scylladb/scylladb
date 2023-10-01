@@ -10,6 +10,7 @@
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/core/on_internal_error.hh>
 #include <utility>
+#include <fmt/std.h>
 
 #include "log.hh"
 #include "locator/topology.hh"

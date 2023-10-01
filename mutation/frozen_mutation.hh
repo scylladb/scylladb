@@ -16,6 +16,7 @@
 #include "mutation_consumer_concepts.hh"
 #include "range_tombstone_change_generator.hh"
 #include "schema/schema.hh"
+#include <fmt/ostream.h>
 
 class mutation;
 class flat_mutation_reader_v2;
@@ -323,3 +324,5 @@ auto frozen_mutation::consume_gently(schema_ptr s, Consumer& consumer) const -> 
     frozen_mutation_consumer_adaptor adaptor(s, consumer);
     co_return co_await consume_gently(s, adaptor);
 }
+
+template <> struct fmt::formatter<frozen_mutation::printer> : fmt::ostream_formatter {};

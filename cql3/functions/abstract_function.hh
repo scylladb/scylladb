@@ -16,12 +16,14 @@
 #include <vector>
 #include <iosfwd>
 #include <boost/functional/hash.hpp>
+#include <fmt/ostream.h>
 
 #include "cql3/functions/function_name.hh"
 
 namespace std {
     std::ostream& operator<<(std::ostream& os, const std::vector<data_type>& arg_types);
 }
+template <> struct fmt::formatter<std::vector<data_type>> : fmt::ostream_formatter {};
 
 namespace cql3 {
 

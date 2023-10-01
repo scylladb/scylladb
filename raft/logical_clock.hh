@@ -9,6 +9,7 @@
 
 #include <chrono>
 #include <ostream>
+#include <fmt/ostream.h>
 
 namespace raft {
 
@@ -58,3 +59,6 @@ inline std::ostream& operator<<(std::ostream& os, const raft::logical_clock::dur
 }
 
 } // end of namespace std
+
+template <> struct fmt::formatter<raft::logical_clock> : fmt::ostream_formatter {};
+template <> struct fmt::formatter<raft::logical_clock::time_point> : fmt::ostream_formatter {};

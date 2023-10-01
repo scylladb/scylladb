@@ -10,6 +10,7 @@
 
 #include "clustering_bounds_comparator.hh"
 #include <iosfwd>
+#include <fmt/ostream.h>
 
 namespace sstables {
 
@@ -85,3 +86,5 @@ inline bound_kind boundary_to_end_bound(bound_kind_m kind) {
 std::ostream& operator<<(std::ostream& out, sstables::bound_kind_m kind);
 
 }
+
+template <> struct fmt::formatter<sstables::bound_kind_m> : fmt::ostream_formatter {};

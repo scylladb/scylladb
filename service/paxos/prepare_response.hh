@@ -9,6 +9,7 @@
 
 #pragma once
 #include <variant>
+#include <fmt/ostream.h>
 #include "query-result.hh"
 #include "service/paxos/proposal.hh"
 
@@ -73,3 +74,5 @@ std::ostream& operator<<(std::ostream& os, const promise& promise);
 } // end of namespace "paxos"
 
 } // end of namespace "service"
+
+template <> struct fmt::formatter<service::paxos::promise> : fmt::ostream_formatter {};

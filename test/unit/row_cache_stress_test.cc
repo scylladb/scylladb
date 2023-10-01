@@ -18,6 +18,8 @@
 #include "utils/div_ceil.hh"
 #include "test/lib/memtable_snapshot_source.hh"
 #include <seastar/core/reactor.hh>
+#include <seastar/util/log.hh>
+#include <fmt/std.h>
 
 static thread_local bool cancelled = false;
 
@@ -185,6 +187,8 @@ struct reader_id {
     friend std::ostream& operator<<(std::ostream& out, reader_id id) {
         return out << id.name;
     }
+
+    friend auto format_as(const reader_id& x) { return fmt::streamed(x); }
 };
 
 class validating_consumer {

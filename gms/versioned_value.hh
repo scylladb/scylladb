@@ -11,6 +11,7 @@
 #pragma once
 
 #include <seastar/core/sstring.hh>
+#include <fmt/ostream.h>
 #include "utils/serialization.hh"
 #include "locator/host_id.hh"
 #include "version_generator.hh"
@@ -222,3 +223,5 @@ public:
 }; // class versioned_value
 
 } // namespace gms
+
+template <> struct fmt::formatter<gms::versioned_value> : fmt::ostream_formatter {};

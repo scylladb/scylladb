@@ -11,6 +11,7 @@
 #pragma once
 
 #include <seastar/core/sstring.hh>
+#include <fmt/ostream.h>
 #include "utils/serialization.hh"
 #include "gms/gossip_digest.hh"
 #include "utils/chunked_vector.hh"
@@ -71,3 +72,5 @@ public:
 };
 
 }
+
+template <> struct fmt::formatter<gms::gossip_digest_syn> : fmt::ostream_formatter {};

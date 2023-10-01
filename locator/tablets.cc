@@ -25,6 +25,8 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 
+#include <fmt/ranges.h>
+
 namespace locator {
 
 seastar::logger tablet_logger("tablets");

@@ -375,7 +375,7 @@ static void test_streamed_mutation_forwarding_is_consistent_with_slicing(tests::
             .with_ranges(ranges)
             .build();
 
-        testlog.info("ranges: {}", ranges);
+        testlog.info("ranges: {}", fmt::join(ranges, ", "));
 
         mutation_source ms = populate(m.schema(), {m}, gc_clock::now());
 

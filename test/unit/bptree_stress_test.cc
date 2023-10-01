@@ -40,6 +40,8 @@ std::ostream& operator<<(std::ostream& os, test_data d) {
     return os;
 }
 
+template <> struct fmt::formatter<test_data> : fmt::ostream_formatter {};
+
 using test_tree = tree<test_key, test_data, test_key_compare, TEST_NODE_SIZE, key_search::both, with_debug::yes>;
 using test_node = typename test_tree::node;
 using test_validator = validator<test_key, test_data, test_key_compare, TEST_NODE_SIZE>;

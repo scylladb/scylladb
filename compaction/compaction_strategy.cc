@@ -11,6 +11,7 @@
 
 #include <vector>
 #include <chrono>
+#include <fmt/ranges.h>
 #include <seastar/core/shared_ptr.hh>
 #include "seastar/core/on_internal_error.hh"
 #include "sstables/shared_sstable.hh"
@@ -156,7 +157,7 @@ void compaction_strategy_impl::validate_options_for_strategy_type(const std::map
 
     unchecked_options.erase("class");
     if (!unchecked_options.empty()) {
-        throw exceptions::configuration_exception(fmt::format("Invalid compaction strategy options {} for chosen strategy type", unchecked_options));
+        throw exceptions::configuration_exception(fmt::format("Invalid compaction strategy options {} for chosen strategy type", fmt::join(unchecked_options, ", ")));
     }
 }
 

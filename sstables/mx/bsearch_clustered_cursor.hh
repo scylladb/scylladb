@@ -19,6 +19,8 @@
 #include <seastar/core/on_internal_error.hh>
 
 #include <optional>
+#include <fmt/ostream.h>
+#include <fmt/std.h>
 
 namespace sstables {
 
@@ -567,3 +569,5 @@ public:
 };
 
 }
+
+template <> struct fmt::formatter<sstables::mc::cached_promoted_index::promoted_index_block> : fmt::ostream_formatter {};

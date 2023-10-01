@@ -22,6 +22,7 @@
 #include <seastar/core/metrics.hh>
 #include <seastar/rpc/rpc_types.hh>
 #include <absl/container/flat_hash_map.h>
+#include <fmt/std.h>
 
 #include "fsm.hh"
 #include "log.hh"
@@ -1710,7 +1711,7 @@ std::unique_ptr<server> create_server(server_id uuid, std::unique_ptr<rpc> rpc,
 }
 
 std::ostream& operator<<(std::ostream& os, const server_impl& s) {
-    fmt::print(os, "[id: {}, fsm ()]\n", s._id, s._fsm);
+    fmt::print(os, "[id: {}, fsm ()]\n", s._id, *s._fsm);
     return os;
 }
 

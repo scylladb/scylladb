@@ -343,3 +343,5 @@ inline bytes base64_decode(const value& v) {
 namespace std {
 std::ostream& operator<<(std::ostream& os, const rjson::value& v);
 }
+
+template <> struct fmt::formatter<rjson::value> : fmt::ostream_formatter {};

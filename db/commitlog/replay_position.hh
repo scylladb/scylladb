@@ -104,3 +104,5 @@ struct hash<db::replay_position> {
     }
 };
 }
+
+template <> struct fmt::formatter<db::replay_position> : fmt::ostream_formatter {};

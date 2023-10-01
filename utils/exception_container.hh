@@ -157,3 +157,5 @@ template<typename T>
 concept ExceptionContainer = is_exception_container<T>::value;
 
 }
+
+template <typename... Exs> struct fmt::formatter<utils::exception_container<Exs...>> : fmt::ostream_formatter {};

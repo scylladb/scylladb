@@ -32,6 +32,8 @@
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/coroutine/as_future.hh>
+#include <fmt/std.h>
+#include <fmt/ranges.h>
 
 #include "data_dictionary/storage_options.hh"
 #include "dht/sharder.hh"
@@ -1448,7 +1450,7 @@ future<foreign_sstable_open_info> sstable::get_open_info() & {
 future<>
 sstable::load_owner_shards(const dht::sharder& sharder) {
     if (!_shards.empty()) {
-        sstlog.trace("{}: shards={}", get_filename(), _shards);
+        sstlog.trace("{}: shards={}", get_filename(), fmt::join(_shards, ", "));
         co_return;
     }
     co_await read_scylla_metadata();
@@ -1476,7 +1478,7 @@ sstable::load_owner_shards(const dht::sharder& sharder) {
     }
 
     _shards = compute_shards_for_this_sstable(sharder);
-    sstlog.trace("{}: shards={}", get_filename(), _shards);
+    sstlog.trace("{}: shards={}", get_filename(), fmt::join(_shards, ", "));
 }
 
 void prepare_summary(summary& s, uint64_t expected_partition_count, uint32_t min_index_interval) {
@@ -1549,7 +1551,7 @@ create_sharding_metadata(schema_ptr schema, const dht::sharder& sharder, const d
     if (ranges.empty()) {
         auto split_ranges_all_shards = dht::split_range_to_shards(prange, *schema, sharder);
         sstlog.warn("create_sharding_metadata: range={} has no intersection with shard={} first_key={} last_key={} ranges_single_shard={} ranges_all_shards={}",
-                prange, shard, first_key, last_key, ranges, split_ranges_all_shards);
+                prange, shard, first_key, last_key, fmt::join(ranges, ", "), fmt::join(split_ranges_all_shards, ", "));
     }
     sm.token_ranges.elements.reserve(ranges.size());
     for (auto&& range : std::move(ranges)) {

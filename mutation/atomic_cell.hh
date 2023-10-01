@@ -18,6 +18,7 @@
 #include <cstdint>
 #include <iosfwd>
 #include <concepts>
+#include <fmt/ostream.h>
 #include "utils/fragmented_temporary_buffer.hh"
 
 #include "serializer.hh"
@@ -387,3 +388,8 @@ std::strong_ordering compare_atomic_cell_for_merge(atomic_cell_view left, atomic
 void merge_column(const abstract_type& def,
         atomic_cell_or_collection& old,
         const atomic_cell_or_collection& neww);
+
+template <> struct fmt::formatter<atomic_cell> : fmt::ostream_formatter {};
+template <> struct fmt::formatter<atomic_cell::printer> : fmt::ostream_formatter {};
+template <> struct fmt::formatter<atomic_cell_view> : fmt::ostream_formatter {};
+template <> struct fmt::formatter<atomic_cell_view::printer> : fmt::ostream_formatter {};

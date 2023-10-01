@@ -25,6 +25,8 @@
 #include <boost/range/adaptor/transformed.hpp>
 
 #include <fmt/format.h>
+#include <fmt/std.h>
+#include <fmt/ranges.h>
 
 #include <seastar/core/print.hh>
 

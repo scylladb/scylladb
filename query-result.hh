@@ -13,6 +13,7 @@
 #include "query-request.hh"
 #include "full_position.hh"
 #include <optional>
+#include <fmt/ostream.h>
 #include <seastar/util/bool_class.hh>
 #include "seastarx.hh"
 
@@ -450,3 +451,5 @@ public:
 
 std::ostream& operator<<(std::ostream& os, const query::result::printer&);
 }
+
+template <> struct fmt::formatter<query::result::printer> : fmt::ostream_formatter {};

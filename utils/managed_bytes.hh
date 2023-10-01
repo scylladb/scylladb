@@ -11,6 +11,7 @@
 
 #include <stdint.h>
 #include <memory>
+#include <fmt/ostream.h>
 #include "bytes.hh"
 #include "utils/allocation_strategy.hh"
 #include "utils/fragment_range.hh"
@@ -558,3 +559,7 @@ inline std::ostream& operator<<(std::ostream& os, const managed_bytes& b) {
     return (os << managed_bytes_view(b));
 }
 std::ostream& operator<<(std::ostream& os, const managed_bytes_opt& b);
+
+template <> struct fmt::formatter<managed_bytes> : fmt::ostream_formatter {};
+template <> struct fmt::formatter<managed_bytes_view> : fmt::ostream_formatter {};
+template <> struct fmt::formatter<managed_bytes_opt> : fmt::ostream_formatter {};

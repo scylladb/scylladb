@@ -18,5 +18,6 @@ std::atomic<int64_t> clocks_offset;
 std::string format_timestamp(api::timestamp_type ts) {
     auto t = std::time_t(std::chrono::duration_cast<std::chrono::seconds>(api::timestamp_clock::duration(ts)).count());
     ::tm t_buf;
-    return format("{}", std::put_time(::gmtime_r(&t, &t_buf), "%Y/%m/%d %T"));
+    ::gmtime_r(&t, &t_buf);
+    return format("{%Y/%m/%d %T}", t_buf);
 }

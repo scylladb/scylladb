@@ -13,6 +13,7 @@
 #include "utils/fragment_range.hh"
 
 #include <boost/range/algorithm/stable_partition.hpp>
+#include <fmt/std.h>
 
 namespace sstables {
 

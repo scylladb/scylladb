@@ -10,6 +10,7 @@
 
 #include "dht/token.hh"
 #include <seastar/core/smp.hh>
+#include <fmt/ostream.h>
 
 namespace dht {
 
@@ -109,3 +110,5 @@ dht::token find_first_token_for_shard(
         const dht::sharder& sharder, dht::token start, dht::token end, size_t shard_idx);
 
 } //namespace dht
+
+template <> struct fmt::formatter<dht::sharder> : fmt::ostream_formatter {};

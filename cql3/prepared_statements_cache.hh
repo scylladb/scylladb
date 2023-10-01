@@ -14,6 +14,7 @@
 #include "utils/hash.hh"
 #include "cql3/statements/prepared_statement.hh"
 #include "cql3/column_specification.hh"
+#include <fmt/ostream.h>
 
 namespace cql3 {
 
@@ -178,3 +179,5 @@ struct hash<cql3::prepared_cache_key_type> final {
     }
 };
 }
+
+template <> struct fmt::formatter<cql3::prepared_cache_key_type> : fmt::ostream_formatter {};

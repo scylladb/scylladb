@@ -12,6 +12,8 @@
 #include "position_in_partition.hh"
 
 #include <optional>
+#include <fmt/ostream.h>
+
 #include <seastar/util/optimized_optional.hh>
 
 #include <seastar/core/future-util.hh>
@@ -591,3 +593,11 @@ struct appending_hash<mutation_fragment> {
     template<typename Hasher>
     void operator()(Hasher& h, const mutation_fragment& mf, const schema& s) const;
 };
+
+template <> struct fmt::formatter<clustering_row::printer> : fmt::ostream_formatter {};
+template <> struct fmt::formatter<static_row::printer> : fmt::ostream_formatter {};
+template <> struct fmt::formatter<partition_start> : fmt::ostream_formatter {};
+template <> struct fmt::formatter<partition_end> : fmt::ostream_formatter {};
+template <> struct fmt::formatter<mutation_fragment::printer> : fmt::ostream_formatter {};
+template <> struct fmt::formatter<mutation_fragment::kind> : fmt::ostream_formatter {};
+template <> struct fmt::formatter<range_tombstone_stream> : fmt::ostream_formatter {};

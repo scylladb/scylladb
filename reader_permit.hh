@@ -9,6 +9,7 @@
 #pragma once
 
 #include <seastar/util/optimized_optional.hh>
+#include <fmt/ostream.h>
 #include "seastarx.hh"
 
 #include "db/timeout_clock.hh"
@@ -325,3 +326,6 @@ template <typename T>
 bool operator==(const tracking_allocator<T>& a, const tracking_allocator<T>& b) {
     return a._semaphore == b._semaphore;
 }
+
+template <> struct fmt::formatter<reader_permit::state> : fmt::ostream_formatter {};
+template <> struct fmt::formatter<reader_resources> : fmt::ostream_formatter {};

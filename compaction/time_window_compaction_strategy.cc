@@ -429,6 +429,12 @@ static std::ostream& operator<<(std::ostream& os, const std::map<timestamp_type,
     return os;
 }
 
+}
+
+template <> struct fmt::formatter<std::map<api::timestamp_type, std::vector<shared_sstable>>> : fmt::ostream_formatter {};
+
+namespace sstables {
+
 std::vector<shared_sstable>
 time_window_compaction_strategy::newest_bucket(table_state& table_s, strategy_control& control, std::map<timestamp_type, std::vector<shared_sstable>> buckets,
         int min_threshold, int max_threshold, timestamp_type now) {

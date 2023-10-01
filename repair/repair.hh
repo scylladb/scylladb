@@ -12,6 +12,7 @@
 #include <unordered_map>
 #include <exception>
 #include <absl/container/btree_set.h>
+#include <fmt/ostream.h>
 
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/sstring.hh>
@@ -270,3 +271,5 @@ struct hash<node_repair_meta_id> {
 };
 
 }
+
+template <> struct fmt::formatter<row_level_diff_detect_algorithm> : fmt::ostream_formatter {};

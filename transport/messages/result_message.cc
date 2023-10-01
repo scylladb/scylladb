@@ -10,6 +10,7 @@
 #include "result_message.hh"
 #include "cql3/cql_statement.hh"
 #include <seastar/core/print.hh>
+#include <fmt/std.h>
 
 namespace cql_transport::messages {
 

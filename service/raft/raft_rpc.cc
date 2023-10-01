@@ -7,6 +7,7 @@
  */
 #include "service/raft/raft_rpc.hh"
 #include <seastar/core/coroutine.hh>
+#include <fmt/std.h>
 #include "gms/inet_address.hh"
 #include "serializer_impl.hh"
 #include "message/msg_addr.hh"

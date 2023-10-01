@@ -16,6 +16,8 @@
 #include <seastar/core/future-util.hh>
 #include <seastar/core/weak_ptr.hh>
 #include <seastar/util/defer.hh>
+#include <fmt/ranges.h>
+#include <fmt/std.h>
 
 #include "direct_failure_detector/failure_detector.hh"
 #include "raft/server.hh"
@@ -2616,6 +2618,8 @@ struct raft_read {
     }
 };
 
+template <PureStateMachine M> struct fmt::formatter<raft_read<M>> : fmt::ostream_formatter {};
+
 // An operation that partitions the network in half.
 // During the partition, no server from one half can contact any server from the other;
 // the partition is symmetric.
@@ -2686,6 +2690,8 @@ public:
         return os << format("network_majority_grudge{{duration:{}}}", p._duration);
     }
 };
+
+template <PureStateMachine M> struct fmt::formatter<network_majority_grudge<M>> : fmt::ostream_formatter {};
 
 // Must be executed sequentially.
 template <PureStateMachine M>
@@ -2814,6 +2820,8 @@ struct reconfiguration {
     }
 };
 
+template <PureStateMachine M> struct fmt::formatter<reconfiguration<M>> : fmt::ostream_formatter {};
+
 template <PureStateMachine M>
 struct stop_crash {
     raft::logical_clock::duration restart_delay;
@@ -2856,7 +2864,13 @@ struct stop_crash {
     friend std::ostream& operator<<(std::ostream& os, const result_type&) {
         return os << "";
     }
+
+    friend auto format_as(const result_type& x) {
+        return fmt::streamed(x);
+    }    
 };
+
+template <PureStateMachine M> struct fmt::formatter<stop_crash<M>> : fmt::ostream_formatter {};
 
 namespace std {
 
@@ -2879,6 +2893,8 @@ std::ostream& operator<<(std::ostream& os, const thread_id& tid) {
 }
 
 } // namespace operation
+
+template <> struct fmt::formatter<operation::thread_id> : fmt::ostream_formatter {};
 
 // An immutable sequence of integers.
 class append_seq {
@@ -2986,6 +3002,9 @@ struct AppendReg {
 
     static thread_local const state_t init;
 };
+
+template <> struct fmt::formatter<append_seq> : fmt::ostream_formatter {};
+
 
 thread_local const AppendReg::state_t AppendReg::init{{0}};
 
@@ -3167,6 +3186,9 @@ private:
     }
 };
 
+template <> struct fmt::formatter<append_reg_model::entry> : fmt::ostream_formatter {};
+
+
 std::ostream& operator<<(std::ostream& os, const AppendReg::append& a) {
     return os << format("append{{{}}}", a.x);
 }
@@ -3174,6 +3196,9 @@ std::ostream& operator<<(std::ostream& os, const AppendReg::append& a) {
 std::ostream& operator<<(std::ostream& os, const AppendReg::ret& r) {
     return os << format("ret{{{}, {}}}", r.x, r.prev);
 }
+
+template <> struct fmt::formatter<AppendReg::append> : fmt::ostream_formatter {};
+template <> struct fmt::formatter<AppendReg::ret> : fmt::ostream_formatter {};
 
 SEASTAR_TEST_CASE(basic_generator_test) {
     using op_type = operation::invocable<operation::either_of<

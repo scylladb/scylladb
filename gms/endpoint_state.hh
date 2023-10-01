@@ -16,6 +16,7 @@
 #include "gms/versioned_value.hh"
 #include <optional>
 #include <chrono>
+#include <fmt/ostream.h>
 
 namespace gms {
 
@@ -173,3 +174,5 @@ using permit_id = utils::tagged_uuid<struct permit_id_tag>;
 constexpr permit_id null_permit_id = permit_id::create_null_id();
 
 } // gms
+
+template <> struct fmt::formatter<gms::endpoint_state> : fmt::ostream_formatter {};

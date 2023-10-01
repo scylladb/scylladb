@@ -16,6 +16,8 @@
 #include <chrono>
 #include <optional>
 
+#include <fmt/ostream.h>
+
 class gc_clock final {
 public:
     using base = seastar::lowres_system_clock;
@@ -107,3 +109,5 @@ struct serializer<gc_clock::duration> {
 };
 
 }
+
+template <> struct fmt::formatter<gc_clock::time_point> : fmt::ostream_formatter {};

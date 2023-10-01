@@ -23,6 +23,7 @@
 #include <seastar/testing/random.hh>
 #include <seastar/testing/thread_test_case.hh>
 #include <seastar/testing/test_case.hh>
+#include <fmt/std.h>
 #include "raft/server.hh"
 #include "serializer.hh"
 #include "serializer_impl.hh"

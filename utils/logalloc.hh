@@ -15,6 +15,7 @@
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/shared_future.hh>
 #include <seastar/core/expiring_fifo.hh>
+#include <fmt/ostream.h>
 #include "allocation_strategy.hh"
 #include "seastarx.hh"
 #include "db/timeout_clock.hh"
@@ -534,3 +535,5 @@ future<> prime_segment_pool(size_t available_memory, size_t min_free_memory);
 future<> use_standard_allocator_segment_pool_backend(size_t available_memory);
 
 }
+
+template <> struct fmt::formatter<logalloc::occupancy_stats> : fmt::ostream_formatter {};

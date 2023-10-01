@@ -17,6 +17,7 @@
 
 #include <boost/intrusive/parent_from_member.hpp>
 #include <boost/intrusive/slist.hpp>
+#include <fmt/ostream.h>
 
 class static_row;
 
@@ -728,3 +729,5 @@ inline const partition_version_ref& partition_snapshot::version() const
         return _entry->_version;
     }
 }
+
+template <> struct fmt::formatter<partition_entry::printer> : fmt::ostream_formatter {};

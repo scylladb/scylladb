@@ -18,6 +18,7 @@
 
 #include <list>
 #include <unordered_set>
+#include <fmt/ostream.h>
 
 namespace service {
 class storage_service;
@@ -161,3 +162,7 @@ public:
     future<> send_to_all(node_ops_cmd cmd);
     future<> heartbeat_updater(node_ops_cmd cmd);
 };
+
+
+template <> struct fmt::formatter<node_ops_cmd> : fmt::ostream_formatter {};
+template <> struct fmt::formatter<node_ops_cmd_request> : fmt::ostream_formatter {};

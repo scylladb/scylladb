@@ -296,6 +296,8 @@ public:
     future<> stop();
 };
 
+template <> struct fmt::formatter<read_context::dismantle_buffer_stats> : fmt::ostream_formatter {};
+
 std::string_view read_context::reader_state_to_string(reader_state rs) {
     switch (rs) {
         case reader_state::inexistent:

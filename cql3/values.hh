@@ -14,6 +14,7 @@
 
 #include <optional>
 #include <variant>
+#include <fmt/ostream.h>
 
 #include <seastar/util/variant_utils.hh>
 
@@ -292,3 +293,6 @@ inline bytes_opt to_bytes_opt(const cql3::raw_value_view& view) {
 inline bytes_opt to_bytes_opt(const cql3::raw_value& value) {
     return to_bytes_opt(value.view());
 }
+
+template <> struct fmt::formatter<cql3::raw_value> : fmt::ostream_formatter {};
+template <> struct fmt::formatter<cql3::raw_value_view> : fmt::ostream_formatter {};

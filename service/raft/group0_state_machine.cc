@@ -40,6 +40,7 @@
 #include "utils/overloaded_functor.hh"
 #include <boost/range/algorithm/transform.hpp>
 #include <optional>
+#include <fmt/std.h>
 #include "db/config.hh"
 #include "replica/database.hh"
 #include "service/raft/group0_state_machine_merger.hh"

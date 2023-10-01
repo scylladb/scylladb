@@ -8,6 +8,7 @@
 
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/iostream.hh>
+#include <fmt/std.h>
 #include "partition_reversing_data_source.hh"
 #include "reader_permit.hh"
 #include "sstables/consumer.hh"

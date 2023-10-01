@@ -2697,6 +2697,12 @@ static std::ostream& operator<<(std::ostream& out, const attribute_path_map_node
     return out;
 }
 
+}
+
+template <> struct fmt::formatter<alternator::attribute_path_map_node<alternator::parsed::update_expression::action>> : fmt::ostream_formatter {};
+
+namespace alternator {
+
 // Apply the hierarchy of actions in an attribute_path_map_node<action> to a
 // JSON object which uses DynamoDB's serialization conventions. The complete,
 // unmodified, previous_item is also necessary for the right-hand sides of the

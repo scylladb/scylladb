@@ -65,3 +65,5 @@ void fail(cause c) {
 }
 
 }
+
+template <> struct fmt::formatter<unimplemented::cause> : fmt::ostream_formatter {};

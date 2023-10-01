@@ -10,6 +10,7 @@
 
 #include <cstdint>
 #include <iosfwd>
+#include <fmt/ostream.h>
 
 namespace db {
 
@@ -21,3 +22,5 @@ enum class operation_type : uint8_t {
 std::ostream& operator<<(std::ostream& os, operation_type op_type);
 
 }
+
+template <> struct fmt::formatter<db::operation_type> : fmt::ostream_formatter {};

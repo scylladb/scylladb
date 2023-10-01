@@ -11,6 +11,7 @@
 #include <map>
 #include <memory>
 #include <iosfwd>
+#include <fmt/ostream.h>
 #include "replica/database_fwd.hh"
 #include "dht/i_partitioner.hh"
 #include "schema/schema_fwd.hh"
@@ -293,3 +294,6 @@ public:
 };
 
 }
+
+template <> struct fmt::formatter<replica::memtable_entry> : fmt::ostream_formatter {};
+template <> struct fmt::formatter<replica::memtable> : fmt::ostream_formatter {};

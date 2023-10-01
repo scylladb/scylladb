@@ -23,6 +23,7 @@
 #include <seastar/util/optimized_optional.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
+#include <fmt/ostream.h>
 
 struct mutation_consume_cookie {
     using crs_iterator_type = mutation_partition::rows_type::iterator;
@@ -461,3 +462,5 @@ boost::iterator_range<std::vector<mutation>::const_iterator> slice(
 // Reverses the mutation as if it was created with a schema with reverse
 // clustering order. The resulting mutation will contain a reverse schema too.
 mutation reverse(mutation mut);
+
+template <> struct fmt::formatter<mutation> : fmt::ostream_formatter {};

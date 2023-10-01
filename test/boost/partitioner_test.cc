@@ -122,7 +122,7 @@ SEASTAR_THREAD_TEST_CASE(test_ring_position_ordering) {
     keys[2]._token = keys[3]._token = keys[4]._token;
     std::sort(keys.begin() + 2, keys.begin() + 5, dht::ring_position_less_comparator(*table.schema()));
 
-    testlog.info("Keys: {}", keys);
+    testlog.info("Keys: {}", fmt::join(keys, ", "));
 
     auto positions = boost::copy_range<std::vector<dht::ring_position>>(keys);
     auto ext_positions = boost::copy_range<std::vector<dht::ring_position_ext>>(keys);
@@ -673,9 +673,9 @@ SEASTAR_THREAD_TEST_CASE(test_dht_subtract_ranges) {
 
     auto res = dht::subtract_ranges(schema, ranges, ranges_to_subtract).get();
 
-    testlog.trace("ranges={}", ranges);
-    testlog.trace("ranges_to_subtract={}", ranges_to_subtract);
-    testlog.trace("res={}", res);
+    testlog.trace("ranges={}", fmt::join(ranges, ", "));
+    testlog.trace("ranges_to_subtract={}", fmt::join(ranges_to_subtract, ", "));
+    testlog.trace("res={}", fmt::join(res, ", "));
 
     auto cmp = dht::ring_position_comparator(schema);
     for (const auto& r : res) {

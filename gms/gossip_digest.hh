@@ -8,9 +8,10 @@
  * SPDX-License-Identifier: (AGPL-3.0-or-later and Apache-2.0)
  */
 
-#pragma once
 
+#pragma once
 #include <seastar/core/sstring.hh>
+#include <fmt/ostream.h>
 #include "utils/serialization.hh"
 #include "gms/inet_address.hh"
 #include "gms/generation-number.hh"
@@ -63,3 +64,5 @@ public:
 }; // class gossip_digest
 
 } // namespace gms
+
+template <> struct fmt::formatter<gms::gossip_digest> : fmt::ostream_formatter {};

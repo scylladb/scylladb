@@ -7,6 +7,7 @@
 #include "utils/phased_barrier.hh"
 #include "mutation/mutation_fragment.hh"
 #include "readers/mutation_fragment_v1_stream.hh"
+#include <fmt/ostream.h>
 
 class repair_reader {
 public:
@@ -87,3 +88,5 @@ public:
 
     void pause();
 };
+
+template <> struct fmt::formatter<repair_reader::read_strategy> : fmt::ostream_formatter {};

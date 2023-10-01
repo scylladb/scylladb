@@ -32,6 +32,7 @@
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/coroutine/exception.hh>
 #include <chrono>
+#include <fmt/std.h>
 #include "db/config.hh"
 #include "locator/host_id.hh"
 #include <boost/range/algorithm/set_algorithm.hpp>
@@ -2024,7 +2025,7 @@ future<> gossiper::do_shadow_round(std::unordered_set<gms::inet_address> nodes) 
         std::list<gms::gossip_get_endpoint_states_response> responses;
         for (;;) {
             parallel_for_each(nodes.begin(), nodes.end(), [this, &request, &responses, &nodes_talked, &nodes_down, &fall_back_to_syn_msg] (gms::inet_address node) {
-                logger.debug("Sent get_endpoint_states request to {}, request={}", node, request.application_states);
+                logger.debug("Sent get_endpoint_states request to {}, request={}", node, fmt::join(request.application_states, ", "));
                 return _messaging.send_gossip_get_endpoint_states(msg_addr(node), std::chrono::milliseconds(5000), request).then(
                         [node, &nodes_talked, &responses] (gms::gossip_get_endpoint_states_response response) {
                     logger.debug("Got get_endpoint_states response from {}, response={}", node, response.endpoint_state_map);

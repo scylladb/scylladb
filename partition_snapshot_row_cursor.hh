@@ -13,6 +13,7 @@
 #include "utils/small_vector.hh"
 #include <boost/algorithm/cxx11/any_of.hpp>
 #include <boost/range/algorithm/heap_algorithm.hpp>
+#include <fmt/ostream.h>
 
 class partition_snapshot_row_cursor;
 
@@ -811,3 +812,5 @@ partition_snapshot_row_weakref& partition_snapshot_row_weakref::operator=(const 
     new (this) partition_snapshot_row_weakref(std::move(tmp));
     return *this;
 }
+
+template <> struct fmt::formatter<partition_snapshot_row_cursor> : fmt::ostream_formatter {};

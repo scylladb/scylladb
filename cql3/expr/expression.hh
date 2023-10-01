@@ -9,6 +9,7 @@
 #pragma once
 
 #include <fmt/core.h>
+#include <fmt/ostream.h>
 #include <ostream>
 #include <seastar/core/shared_ptr.hh>
 #include <variant>
@@ -560,3 +561,5 @@ struct fmt::formatter<cql3::expr::column_mutation_attribute::attribute_kind> : f
         return fmt::format_to(ctx.out(), "unrecognized_attribute_kind({})", static_cast<int>(k));
     }
 };
+
+template <> struct fmt::formatter<cql3::expr::oper_t> : fmt::ostream_formatter {};

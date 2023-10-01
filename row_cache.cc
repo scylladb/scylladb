@@ -7,6 +7,7 @@
  */
 
 #include "row_cache.hh"
+#include "seastarx.hh"
 #include <seastar/core/memory.hh>
 #include <seastar/core/do_with.hh>
 #include <seastar/core/future-util.hh>

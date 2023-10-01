@@ -15,6 +15,7 @@
 #include <seastar/core/sharded.hh>
 #include <seastar/core/sstring.hh>
 #include <seastar/core/metrics_registration.hh>
+#include <fmt/ostream.h>
 #include "gc_clock.hh"
 #include "utils/UUID.hh"
 #include "gms/inet_address.hh"
@@ -665,3 +666,5 @@ inline span_id span_id::make_span_id() {
     return 1 + (tracing::get_local_tracing_instance().get_next_rand_uint64() << 1);
 }
 }
+
+template <> struct fmt::formatter<tracing::span_id> : fmt::ostream_formatter {};

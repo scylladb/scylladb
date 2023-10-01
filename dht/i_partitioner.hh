@@ -20,6 +20,7 @@
 #include <utility>
 #include <vector>
 #include <compare>
+#include <fmt/ostream.h>
 #include "range.hh"
 #include <byteswap.h>
 #include "dht/token.hh"
@@ -687,3 +688,10 @@ struct hash<dht::decorated_key> {
 
 
 }
+
+template <> struct fmt::formatter<dht::ring_position> : fmt::ostream_formatter {};
+template <> struct fmt::formatter<dht::ring_position_view> : fmt::ostream_formatter {};
+template <> struct fmt::formatter<dht::ring_position_ext> : fmt::ostream_formatter {};
+template <> struct fmt::formatter<dht::decorated_key> : fmt::ostream_formatter {};
+template <> struct fmt::formatter<dht::i_partitioner> : fmt::ostream_formatter {};
+template <> struct fmt::formatter<dht::partition_ranges_view> : fmt::ostream_formatter {};

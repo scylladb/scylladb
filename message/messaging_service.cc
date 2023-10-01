@@ -258,9 +258,9 @@ future<> messaging_service::start() {
     if (_credentials_builder && !_credentials) {
         return _credentials_builder->build_reloadable_server_credentials([](const std::unordered_set<sstring>& files, std::exception_ptr ep) {
             if (ep) {
-                mlogger.warn("Exception loading {}: {}", files, ep);
+                mlogger.warn("Exception loading {}: {}", fmt::join(files, ", "), ep);
             } else {
-                mlogger.info("Reloaded {}", files);
+                mlogger.info("Reloaded {}", fmt::join(files, ", "));
             }
         }).then([this](shared_ptr<seastar::tls::server_credentials> creds) {
             _credentials = std::move(creds);

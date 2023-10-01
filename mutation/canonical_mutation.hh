@@ -13,6 +13,7 @@
 #include "replica/database_fwd.hh"
 #include "bytes_ostream.hh"
 #include <iosfwd>
+#include <fmt/ostream.h>
 
 // Immutable mutation form which can be read using any schema version of the same table.
 // Safe to access from other shards via const&.
@@ -41,3 +42,5 @@ public:
 
     friend std::ostream& operator<<(std::ostream& os, const canonical_mutation& cm);
 };
+
+template <> struct fmt::formatter<canonical_mutation> : fmt::ostream_formatter {};

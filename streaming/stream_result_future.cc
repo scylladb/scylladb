@@ -26,7 +26,7 @@ future<stream_state> stream_result_future::init_sending_side(stream_manager& mgr
         sr->add_event_listener(listener);
     }
 
-    sslog.info("[Stream #{}] Executing streaming plan for {} with peers={}, master", plan_id_,  description_, coordinator_->get_peers());
+    sslog.info("[Stream #{}] Executing streaming plan for {} with peers={}, master", plan_id_,  description_, fmt::join(coordinator_->get_peers(), ", "));
 
     // Initialize and start all sessions
     for (auto& session : coordinator_->get_all_stream_sessions()) {
@@ -106,10 +106,10 @@ void stream_result_future::maybe_complete() {
             _mgr.remove_stream(plan_id);
             auto final_state = get_current_state();
             if (final_state.has_failed_session()) {
-                sslog.warn("[Stream #{}] Streaming plan for {} failed, peers={}, {}", plan_id, description, _coordinator->get_peers(), *stats);
+                sslog.warn("[Stream #{}] Streaming plan for {} failed, peers={}, {}", plan_id, description, fmt::join(_coordinator->get_peers(), ", "), *stats);
                 _done.set_exception(stream_exception(final_state, "Stream failed"));
             } else {
-                sslog.info("[Stream #{}] Streaming plan for {} succeeded, peers={}, {}", plan_id, description, _coordinator->get_peers(), *stats);
+                sslog.info("[Stream #{}] Streaming plan for {} succeeded, peers={}, {}", plan_id, description, fmt::join(_coordinator->get_peers(), ", "), *stats);
                 _done.set_value(final_state);
             }
         });

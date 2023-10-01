@@ -11,6 +11,7 @@
 
 #include <fmt/format.h>
 #include <fmt/ostream.h>
+#include <fmt/ranges.h>
 #include <unordered_map>
 #include <iosfwd>
 #include <string_view>
@@ -221,7 +222,7 @@ public:
         }
         MyType & operator()(T&& t, config_source src = config_source::Internal) {
             if (!_allowed_values.empty() && std::find(_allowed_values.begin(), _allowed_values.end(), t) == _allowed_values.end()) {
-                throw std::invalid_argument(format("Invalid value for {}: got {} which is not inside the set of allowed values {}", name(), t, _allowed_values));
+                throw std::invalid_argument(format("Invalid value for {}: got {} which is not inside the set of allowed values {}", name(), t, fmt::join(_allowed_values, ", ")));
             }
             the_value().set(std::move(t));
             if (src > config_source::None) {

@@ -12,6 +12,7 @@
 
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/sstring.hh>
+#include <fmt/ostream.h>
 #include "seastarx.hh"
 #include "bytes.hh"
 
@@ -45,3 +46,5 @@ public:
 };
 
 }
+
+template <> struct fmt::formatter<cql3::ut_name> : fmt::ostream_formatter {};

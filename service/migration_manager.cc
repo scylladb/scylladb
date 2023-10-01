@@ -12,6 +12,7 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
+#include <fmt/std.h>
 #include "auth/resource.hh"
 #include "schema/schema_registry.hh"
 #include "service/migration_manager.hh"

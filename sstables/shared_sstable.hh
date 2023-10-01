@@ -14,6 +14,7 @@
 #include <unordered_set>
 
 #include <fmt/format.h>
+#include <fmt/ostream.h>
 
 #include <seastar/core/shared_ptr.hh>
 

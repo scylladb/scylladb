@@ -58,3 +58,6 @@ public:
     };
     friend std::ostream& operator<<(std::ostream&, const printer&);
 };
+
+template <> struct fmt::formatter<atomic_cell_or_collection> : fmt::ostream_formatter {};
+template <> struct fmt::formatter<atomic_cell_or_collection::printer> : fmt::ostream_formatter {};

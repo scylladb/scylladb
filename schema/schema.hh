@@ -15,6 +15,7 @@
 #include <boost/range/join.hpp>
 #include <boost/lexical_cast.hpp>
 #include <boost/dynamic_bitset.hpp>
+#include <fmt/ostream.h>
 
 #include "cql3/column_specification.hh"
 #include <seastar/core/shared_ptr.hh>
@@ -1053,3 +1054,10 @@ inline void check_schema_version(table_schema_version expected, const schema& ac
         throw_with_backtrace<schema_mismatch_error>(expected, access);
     }
 }
+
+template <> struct fmt::formatter<ordinal_column_id> : fmt::ostream_formatter {};
+template <> struct fmt::formatter<column_definition> : fmt::ostream_formatter {};
+template <> struct fmt::formatter<column_mapping> : fmt::ostream_formatter {};
+template <> struct fmt::formatter<raw_view_info> : fmt::ostream_formatter {};
+template <> struct fmt::formatter<schema> : fmt::ostream_formatter {};
+template <> struct fmt::formatter<view_ptr> : fmt::ostream_formatter {};

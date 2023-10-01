@@ -150,9 +150,9 @@ server::listen(socket_address addr, std::shared_ptr<seastar::tls::credentials_bu
     if (creds) {
         f = creds->build_reloadable_server_credentials([this](const std::unordered_set<sstring>& files, std::exception_ptr ep) {
             if (ep) {
-                _logger.warn("Exception loading {}: {}", files, ep);
+                _logger.warn("Exception loading {}: {}", fmt::join(files, ","), ep);
             } else {
-                _logger.info("Reloaded {}", files);
+                _logger.info("Reloaded {}", fmt::join(files, ", "));
             }
         });
     }

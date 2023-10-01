@@ -13,6 +13,7 @@
 #include <vector>
 #include <unordered_set>
 #include <string_view>
+#include <fmt/ostream.h>
 
 #include <seastar/util/noncopyable_function.hh>
 
@@ -77,6 +78,12 @@ inline std::ostream& operator<<(std::ostream& out, calculate_value_caller caller
     }
     return out;
 }
+
+}
+
+template <> struct fmt::formatter<alternator::calculate_value_caller> : fmt::ostream_formatter {};
+
+namespace alternator {
 
 rjson::value calculate_value(const parsed::value& v,
         calculate_value_caller caller,

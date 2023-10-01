@@ -15,6 +15,7 @@
 #include "gms/inet_address.hh"
 #include "gms/endpoint_state.hh"
 #include "utils/chunked_vector.hh"
+#include <fmt/ostream.h>
 
 namespace gms {
 
@@ -52,3 +53,5 @@ public:
 };
 
 }
+
+template <> struct fmt::formatter<gms::gossip_digest_ack> : fmt::ostream_formatter {};

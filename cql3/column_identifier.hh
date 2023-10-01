@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <functional>
 #include <iosfwd>
+#include <fmt/ostream.h>
 
 namespace cql3 {
 
@@ -123,3 +124,6 @@ struct hash<cql3::column_identifier_raw> {
 };
 
 }
+
+template <> struct fmt::formatter<cql3::column_identifier> : fmt::ostream_formatter {};
+template <> struct fmt::formatter<cql3::column_identifier_raw> : fmt::ostream_formatter {};

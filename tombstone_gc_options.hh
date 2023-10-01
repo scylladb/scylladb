@@ -11,6 +11,7 @@
 #include <map>
 #include <chrono>
 #include <seastar/core/sstring.hh>
+#include <fmt/ostream.h>
 
 enum class tombstone_gc_mode : uint8_t { timeout, disabled, immediate, repair };
 
@@ -31,3 +32,6 @@ public:
 };
 
 std::ostream& operator<<(std::ostream& os, const tombstone_gc_mode& m);
+
+template <> struct fmt::formatter<tombstone_gc_options> : fmt::ostream_formatter {};
+template <> struct fmt::formatter<tombstone_gc_mode> : fmt::ostream_formatter {};

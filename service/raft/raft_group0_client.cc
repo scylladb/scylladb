@@ -10,6 +10,7 @@
 
 #include <optional>
 #include <seastar/core/coroutine.hh>
+#include <fmt/std.h>
 #include "raft_group0_client.hh"
 
 #include "frozen_schema.hh"

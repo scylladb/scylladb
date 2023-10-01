@@ -12,6 +12,9 @@
 #include "auth/authenticated_user.hh"
 #include "auth/permissions_cache.hh"
 
+#include <fmt/ranges.h>
+#include <fmt/ostream.h>
+
 namespace cql3 {
 
 struct authorized_prepared_statements_cache_size {
@@ -185,3 +188,5 @@ inline std::ostream& operator<<(std::ostream& out, const cql3::authorized_prepar
     return out;
 }
 }
+
+template <> struct fmt::formatter<cql3::authorized_prepared_statements_cache_key> : fmt::ostream_formatter {};

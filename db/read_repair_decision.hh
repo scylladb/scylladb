@@ -11,6 +11,7 @@
 #pragma once
 
 #include <iostream>
+#include <fmt/ostream.h>
 
 namespace db {
 
@@ -31,3 +32,5 @@ inline std::ostream&  operator<<(std::ostream& out, db::read_repair_decision d) 
 }
 
 }
+
+template <> struct fmt::formatter<db::read_repair_decision> : fmt::ostream_formatter {};

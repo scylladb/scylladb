@@ -14,6 +14,7 @@
 #include "mutation/atomic_cell.hh"
 #include <iosfwd>
 #include <forward_list>
+#include <fmt/ostream.h>
 
 class abstract_type;
 class compaction_garbage_collector;
@@ -130,3 +131,5 @@ collection_mutation difference(const abstract_type&, collection_mutation_view, c
 
 // Serializes the given collection of cells to a sequence of bytes ready to be sent over the CQL protocol.
 bytes_ostream serialize_for_cql(const abstract_type&, collection_mutation_view);
+
+template <> struct fmt::formatter<collection_mutation_view::printer> : fmt::ostream_formatter {};

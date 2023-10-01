@@ -12,6 +12,7 @@
 #include <functional>
 #include <iosfwd>
 #include <optional>
+#include <fmt/ostream.h>
 
 #include <seastar/core/sstring.hh>
 
@@ -45,3 +46,5 @@ struct hash<auth::role_or_anonymous> {
 };
 
 }
+
+template <> struct fmt::formatter<auth::role_or_anonymous> : fmt::ostream_formatter {};

@@ -154,7 +154,7 @@ future<> sstables_loader::load_and_stream(sstring ks_name, sstring cf_name,
         }
 
         llog.info("load_and_stream: started ops_uuid={}, process [{}-{}] out of {} sstables={}",
-                ops_uuid, nr_sst_current, nr_sst_current + sst_processed.size(), nr_sst_total, sst_names);
+                ops_uuid, nr_sst_current, nr_sst_current + sst_processed.size(), nr_sst_total, fmt::join(sst_names, ", "));
 
         auto start_time = std::chrono::steady_clock::now();
         inet_address_vector_replica_set current_targets;
@@ -180,7 +180,7 @@ future<> sstables_loader::load_and_stream(sstring ks_name, sstring cf_name,
                         current_targets.resize(1);
                     }
                     llog.trace("load_and_stream: ops_uuid={}, current_dk={}, current_targets={}", ops_uuid,
-                            current_dk.token(), current_targets);
+                            current_dk.token(), fmt::join(current_targets, ", "));
                     for (auto& node : current_targets) {
                         if (!metas.contains(node)) {
                             auto [sink, source] = co_await ms.make_sink_and_source_for_stream_mutation_fragments(reader.schema()->version(),
@@ -219,7 +219,7 @@ future<> sstables_loader::load_and_stream(sstring ks_name, sstring cf_name,
             try {
                 co_await coroutine::parallel_for_each(sst_processed, [&] (sstables::shared_sstable& sst) {
                     llog.debug("load_and_stream: ops_uuid={}, ks={}, table={}, remove sst={}",
-                            ops_uuid, ks_name, cf_name, sst->component_filenames());
+                            ops_uuid, ks_name, cf_name, fmt::join(sst->component_filenames(), ", "));
                     return sst->unlink();
                 });
             } catch (...) {

@@ -13,6 +13,7 @@
 #include <boost/algorithm/string/predicate.hpp>
 #include <seastar/core/thread.hh>
 #include <seastar/core/metrics.hh>
+#include <fmt/std.h>
 
 #include "cdc/log.hh"
 #include "cdc/generation.hh"

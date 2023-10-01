@@ -15,6 +15,7 @@
 #include <iostream>
 #include <sstream>
 #include <type_traits>
+#include <fmt/ostream.h>
 
 template<typename T>
 concept HasMapInterface = requires(T t) {
@@ -115,3 +116,5 @@ class enum_option {
         }
     }
 };
+
+template <typename Mapper> struct fmt::formatter<enum_option<Mapper>> : fmt::ostream_formatter {};

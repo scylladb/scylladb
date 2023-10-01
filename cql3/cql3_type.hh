@@ -14,6 +14,7 @@
 #include "data_dictionary/data_dictionary.hh"
 #include "exceptions/exceptions.hh"
 #include <iosfwd>
+#include <fmt/ostream.h>
 #include "enum_set.hh"
 
 namespace data_dictionary {
@@ -358,3 +359,6 @@ inline bool operator==(const cql3_type& a, const cql3_type& b) {
 #endif
 
 }
+
+template <> struct fmt::formatter<cql3::cql3_type> : fmt::ostream_formatter {};
+template <> struct fmt::formatter<cql3::cql3_type::raw> : fmt::ostream_formatter {};

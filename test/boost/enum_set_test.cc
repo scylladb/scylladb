@@ -20,16 +20,6 @@
 
 enum class fruit { apple = 3, pear = 7, banana = 8 };
 
-static std::ostream& operator<<(std::ostream& os, fruit f) {
-    switch (f) {
-        case fruit::apple: os << "apple"; break;
-        case fruit::pear: os << "pear"; break;
-        case fruit::banana: os << "banana"; break;
-    }
-
-    return os;
-}
-
 using fruit_enum = super_enum<fruit, fruit::apple, fruit::pear, fruit::banana>;
 
 //
@@ -108,7 +98,7 @@ BOOST_AUTO_TEST_CASE(set_iterator) {
     std::unordered_set<fruit> us1;
     std::copy(fs1.begin(), fs1.end(), std::inserter(us1, us1.begin()));
 
-    BOOST_REQUIRE_EQUAL(us1, (std::unordered_set<fruit>{fruit::pear, fruit::banana}));
+    BOOST_REQUIRE(us1 == (std::unordered_set<fruit>{fruit::pear, fruit::banana}));
 
     //
     // Empty set.

@@ -9,6 +9,7 @@
 #pragma once
 #include "dht/i_partitioner.hh"
 #include "mutation/position_in_partition.hh"
+#include <fmt/ostream.h>
 
 // Represent a position of a mutation_fragment read from a flat mutation
 // reader. Repair nodes negotiate a small range identified by two
@@ -34,4 +35,4 @@ struct repair_sync_boundary {
     }
 };
 
-
+template <> struct fmt::formatter<repair_sync_boundary> : fmt::ostream_formatter {};
