@@ -94,8 +94,6 @@ private:
         state::draining_all,
         state::stopping>>;
 
-    using ep_managers_map_type = std::unordered_map<endpoint_id, hint_endpoint_manager>;
-
 public:
     static inline const std::string FILENAME_PREFIX{"HintsLog" + commitlog::descriptor::SEPARATOR};
     // Non-const - can be modified with an error injection.
@@ -120,7 +118,7 @@ private:
 
     resource_manager& _resource_manager;
 
-    ep_managers_map_type _ep_managers;
+    std::unordered_map<endpoint_id, hint_endpoint_manager> _ep_managers;
     hint_stats _stats;
     seastar::metrics::metric_groups _metrics;
     std::unordered_set<endpoint_id> _eps_with_pending_hints;
