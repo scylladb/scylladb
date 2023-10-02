@@ -38,6 +38,7 @@
 #include "utils/disk-error-handler.hh"
 #include "utils/div_ceil.hh"
 #include "utils/error_injection.hh"
+#include "utils/fb_utilities.hh"
 #include "utils/lister.hh"
 #include "utils/runtime.hh"
 #include "converting_mutation_partition_applier.hh"
@@ -463,48 +464,62 @@ bool manager::check_dc_for(endpoint_id ep) const noexcept {
     }
 }
 
-future<> manager::drain_for(endpoint_id endpoint) {
+future<> manager::drain_for(endpoint_id endpoint) noexcept {
     if (!started() || stopping() || draining_all()) {
-        return make_ready_future<>();
+        co_return;
     }
 
     manager_logger.trace("on_leave_cluster: {} is removed/decommissioned", endpoint);
 
-    return with_gate(_draining_eps_gate, [this, endpoint] {
-        return with_semaphore(_drain_lock, 1, [this, endpoint] {
-            return futurize_invoke([this, endpoint] () {
-                if (utils::fb_utilities::is_me(endpoint)) {
-                    set_draining_all();
-                    return parallel_for_each(_ep_managers, [] (auto& pair) {
-                        return pair.second.stop(drain::yes).finally([&pair] {
-                            return pair.second.with_file_update_mutex([&pair] {
-                                return remove_file(pair.second.hints_dir().c_str());
-                            });
-                        });
-                    }).finally([this] {
-                        _ep_managers.clear();
-                    });
-                } else {
-                    ep_managers_map_type::iterator ep_manager_it = _ep_managers.find(endpoint);
-                    if (ep_manager_it != _ep_managers.end()) {
-                        return ep_manager_it->second.stop(drain::yes).finally([this, endpoint, &ep_man = ep_manager_it->second] {
-                            return ep_man.with_file_update_mutex([&ep_man] {
-                                return remove_file(ep_man.hints_dir().c_str());
-                            }).finally([this, endpoint] {
-                                _ep_managers.erase(endpoint);
-                            });
-                        });
-                    }
+    const auto holder = seastar::gate::holder{_draining_eps_gate};
+    const auto sem_unit = co_await seastar::get_units(_drain_lock, 1);
 
-                    return make_ready_future<>();
-                }
-            }).handle_exception([endpoint] (auto eptr) {
-                manager_logger.error("Exception when draining {}: {}", endpoint, eptr);
+    // After an endpoint has been drained, we remove its directory with all of its contents.
+    auto drain_ep_manager = [] (hint_endpoint_manager& ep_man) -> future<> {
+        return ep_man.stop(drain::yes).finally([&] {
+            return ep_man.with_file_update_mutex([&ep_man] {
+                return remove_file(ep_man.hints_dir().native());
             });
         });
-    }).finally([endpoint] {
-        manager_logger.trace("drain_for: finished draining {}", endpoint);
-    });
+    };
+
+    std::exception_ptr eptr = nullptr;
+
+    if (utils::fb_utilities::is_me(endpoint)) {
+        set_draining_all();
+        
+        try {
+            co_await coroutine::parallel_for_each(_ep_managers | boost::adaptors::map_values,
+                    [&drain_ep_manager] (hint_endpoint_manager& ep_man) {
+                return drain_ep_manager(ep_man);
+            });
+        } catch (...) {
+            eptr = std::current_exception();
+        }
+
+        _ep_managers.clear();
+    } else {
+        auto it = _ep_managers.find(endpoint);
+        
+        if (it != _ep_managers.end()) {
+            try {
+                co_await drain_ep_manager(it->second);
+            } catch (...) {
+                eptr = std::current_exception();
+            }
+
+            // We can't provide the function with `it` here because we co_await above,
+            // so iterators could have been invalidated.
+            // This never throws.
+            _ep_managers.erase(endpoint);
+        }
+    }
+
+    if (eptr) {
+        manager_logger.error("Exception when draining {}: {}", endpoint, eptr);
+    }
+
+    manager_logger.trace("drain_for: finished draining {}", endpoint);
 }
 
 void manager::update_backlog(size_t backlog, size_t max_backlog) {
