@@ -74,7 +74,6 @@ private:
     using hint_stats = internal::hint_stats;
     using drain = internal::drain;
 
-    friend class space_watchdog;
     friend class internal::hint_endpoint_manager;
     friend class internal::hint_sender;
 
@@ -285,9 +284,9 @@ public:
     /// \param endpoint node that left the cluster
     future<> drain_for(endpoint_id endpoint) noexcept;
 
-private:
     void update_backlog(size_t backlog, size_t max_backlog);
 
+private:
     bool stopping() const noexcept {
         return _state.contains(state::stopping);
     }
