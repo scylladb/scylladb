@@ -179,14 +179,14 @@ future<> create_keyspace_if_not_exists_impl(seastar::sharded<service::storage_pr
 
     std::vector<lw_shared_ptr<keyspace_metadata>> ksms;
     for (auto& ks_name: ks_names) {
-            cql3::statements::ks_prop_defs attrs;
-            attrs.add_property(cql3::statements::ks_prop_defs::KW_DURABLE_WRITES, "true");
-            std::map<sstring, sstring> replication_properties;
-            for (auto&& option : keyspace_replication_strategy_options) {
-                replication_properties.emplace(option.first, option.second);
-            }
-            attrs.add_property(cql3::statements::ks_prop_defs::KW_REPLICATION, replication_properties);
-            attrs.validate();
+        cql3::statements::ks_prop_defs attrs;
+        attrs.add_property(cql3::statements::ks_prop_defs::KW_DURABLE_WRITES, "true");
+        std::map<sstring, sstring> replication_properties;
+        for (auto&& option : keyspace_replication_strategy_options) {
+            replication_properties.emplace(option.first, option.second);
+        }
+        attrs.add_property(cql3::statements::ks_prop_defs::KW_REPLICATION, replication_properties);
+        attrs.validate();
 
         ksms.push_back(attrs.as_ks_metadata(ks_name, *tm));
     }
