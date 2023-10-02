@@ -81,10 +81,12 @@ private:
     using node_to_hint_store_factory_type = internal::node_to_hint_store_factory_type;
 
     enum class state {
-        started,                // hinting is currently allowed (start() call is complete)
-        replay_allowed,         // replaying (hints sending) is allowed
-        draining_all,           // hinting is not allowed - all ep managers are being stopped because this node is leaving the cluster
-        stopping                // hinting is not allowed - stopping is in progress (stop() method has been called)
+        started,        // Hinting is currently allowed (start() has completed).
+        replay_allowed, // Replaying (sending) hints is allowed.
+        draining_all,   // Accepting new hints is not allowed. All endpoint managers
+                        // are being drained because the node is leaving the cluster.
+        stopping        // Accepting new hints is not allowed. Stopping this manager
+                        // is in progress (stop() has been called).
     };
 
     using state_set = enum_set<super_enum<state,
