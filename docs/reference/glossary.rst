@@ -160,7 +160,7 @@ Glossary
       The total range of potential unique identifiers supported by the partitioner. By default, each Scylla node in the cluster handles 256 token ranges. Each token range corresponds to a Vnode. Each range of hashes in turn is a segment of the total range of a given hash function. See :doc:`Ring Architecture </architecture/ringarchitecture/index>`.
 
     Tombstone
-      A marker that indicates that data has been deleted. A large number of tombstones may impact read performance and disk usage, so an efficient tombstone garbage collection strategy should be employed. See :ref:`Tombstones GC options <ddl-tombstones-gc>`.
+      A marker that indicates that data has been deleted. A large number of tombstones may impact read performance and disk usage, so an efficient tombstone garbage collection strategy should be employed. See :doc:`Tombstone Garbage Collection (GC) </cql/tombstone-gc>`.
     
     Tunable Consistency
       The possibility for unique, per-query, Consistency Level settings. These are incremental and override fixed database settings intended to enforce data consistency. Such settings may be set directly from a CQL statement when response speed for a given query or operation is more important. See :doc:`Fault Tolerance </architecture/architecture-fault-tolerance>`.

@@ -845,6 +845,8 @@ The following modes are available:
    * - ``immediate``
      - Tombstone GC is immediately performed. There is no wait time or repair requirement. This mode is useful for a table that uses the TWCS compaction strategy with no user deletes. After data is expired after TTL, ScyllaDB can perform compaction to drop the expired data immediately.
 
+See :doc:`Tombstone Garbage Collection (GC) </cql/tombstone-gc>`.
+
 Other considerations:
 #####################
 

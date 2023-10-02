@@ -16,6 +16,7 @@ CQL Reference
    definitions
    secondary-indexes
    time-to-live
+   tombstone-gc
    functions
    wasm
    json
@@ -47,6 +48,7 @@ It allows you to create keyspaces and tables, insert and query tables, and more.
   * :doc:`Definitions </cql/definitions>`
   * :doc:`Global Secondary Indexes </cql/secondary-indexes>`
   * :doc:`Expiring Data with Time to Live (TTL) </cql/time-to-live>`
+  * :doc:`Tombstone Garbage Collection (GC) </cql/tombstone-gc>`
   * :doc:`Functions </cql/functions>`
   * :doc:`JSON Support </cql/json>`
   * :doc:`Materialized Views </cql/mv>`
