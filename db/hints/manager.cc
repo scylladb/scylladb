@@ -257,8 +257,9 @@ void manager::forbid_hints_for_eps_with_pending_hints() {
     }
 }
 
-sync_point::shard_rps manager::calculate_current_sync_point(const std::vector<endpoint_id>& target_eps) const {
+sync_point::shard_rps manager::calculate_current_sync_point(std::span<const endpoint_id> target_eps) const {
     sync_point::shard_rps rps;
+
     for (auto addr : target_eps) {
         auto it = _ep_managers.find(addr);
         if (it != _ep_managers.end()) {
@@ -266,6 +267,7 @@ sync_point::shard_rps manager::calculate_current_sync_point(const std::vector<en
             rps[ep_man.end_point_key()] = ep_man.last_written_replay_position();
         }
     }
+
     return rps;
 }
 
