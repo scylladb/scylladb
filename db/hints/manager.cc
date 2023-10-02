@@ -240,7 +240,9 @@ void manager::allow_hints() {
 }
 
 void manager::forbid_hints() {
-    boost::for_each(_ep_managers, [] (auto& pair) { pair.second.forbid_hints(); });
+    for (auto& [_, ep_man] : _ep_managers) {
+        ep_man.forbid_hints();
+    }
 }
 
 void manager::forbid_hints_for_eps_with_pending_hints() {
