@@ -322,14 +322,15 @@ future<> manager::wait_for_sync_point(abort_source& as, const sync_point::shard_
 }
 
 hint_endpoint_manager& manager::get_ep_manager(endpoint_id ep) {
-    auto it = _ep_managers.find(ep);
-    if (it == _ep_managers.end()) {
-        manager_logger.trace("Creating an ep_manager for {}", ep);
-        hint_endpoint_manager& ep_man = _ep_managers.emplace(ep, hint_endpoint_manager(ep, *this)).first->second;
-        ep_man.start();
-        return ep_man;
+    auto [it, emplaced] = _ep_managers.try_emplace(ep, ep, *this);
+    hint_endpoint_manager& ep_man = it->second;
+
+    if (emplaced) {
+        manager_logger.trace("Created an endpoint manager for {}", ep);
+        ep_man.start();    
     }
-    return it->second;
+
+    return ep_man;
 }
 
 bool manager::have_ep_manager(endpoint_id ep) const noexcept {
