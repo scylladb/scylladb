@@ -17,6 +17,7 @@
 #include <seastar/core/seastar.hh>
 #include <seastar/core/semaphore.hh>
 #include <seastar/core/sleep.hh>
+#include <seastar/core/smp.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 
 // Boost features.
@@ -135,8 +136,9 @@ future<> directory_initializer::ensure_rebalanced() {
     });
 }
 
-manager::manager(service::storage_proxy& proxy, sstring hints_directory, host_filter filter, int64_t max_hint_window_ms, resource_manager& res_manager, distributed<replica::database>& db)
-    : _hints_dir(fs::path(hints_directory) / format("{:d}", this_shard_id()))
+manager::manager(service::storage_proxy& proxy, sstring hints_directory, host_filter filter, int64_t max_hint_window_ms,
+        resource_manager& res_manager, distributed<replica::database>& db)
+    : _hints_dir(fs::path(hints_directory) / fmt::to_string(this_shard_id()))
     , _host_filter(std::move(filter))
     , _proxy(proxy)
     , _max_hint_window_us(max_hint_window_ms * 1000)
