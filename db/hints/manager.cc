@@ -208,22 +208,18 @@ future<> manager::start(shared_ptr<gms::gossiper> gossiper_ptr) {
 }
 
 future<> manager::stop() {
-    manager_logger.info("Asked to stop");
+    manager_logger.info("Asked to stop a shard hint manager");
 
-  auto f = make_ready_future<>();
-
-  return f.finally([this] {
     set_stopping();
 
     return _draining_eps_gate.close().finally([this] {
-        return parallel_for_each(_ep_managers, [] (auto& pair) {
-            return pair.second.stop();
+        return parallel_for_each(_ep_managers | boost::adaptors::map_values, [] (hint_endpoint_manager& ep_man) {
+            return ep_man.stop();
         }).finally([this] {
             _ep_managers.clear();
-            manager_logger.info("Stopped");
-        }).discard_result();
+            manager_logger.info("Shard hint manager has stopped");
+        });
     });
-  });
 }
 
 future<> manager::compute_hints_dir_device_id() {
