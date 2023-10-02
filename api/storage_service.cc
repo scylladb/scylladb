@@ -8,6 +8,7 @@
 
 #include "storage_service.hh"
 #include "api/api-doc/storage_service.json.hh"
+#include "api/api-doc/storage_proxy.json.hh"
 #include "db/config.hh"
 #include "db/schema_tables.hh"
 #include "utils/hash.hh"
@@ -42,7 +43,6 @@
 #include "thrift/controller.hh"
 #include "locator/token_metadata.hh"
 #include "cdc/generation_service.hh"
-#include "service/storage_proxy.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "sstables_loader.hh"
 #include "db/view/view_builder.hh"
@@ -55,6 +55,7 @@ extern logging::logger apilog;
 namespace api {
 
 namespace ss = httpd::storage_service_json;
+namespace sp = httpd::storage_proxy_json;
 using namespace json;
 
 sstring validate_keyspace(http_context& ctx, sstring ks_name) {
@@ -1346,6 +1347,19 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         });
         co_return json_void();
     });
+
+    sp::get_schema_versions.set(r, [&ss](std::unique_ptr<http::request> req)  {
+        return ss.local().describe_schema_versions().then([] (auto result) {
+            std::vector<sp::mapper_list> res;
+            for (auto e : result) {
+                sp::mapper_list entry;
+                entry.key = std::move(e.first);
+                entry.value = std::move(e.second);
+                res.emplace_back(std::move(entry));
+            }
+            return make_ready_future<json::json_return_type>(std::move(res));
+        });
+    });
 }
 
 void unset_storage_service(http_context& ctx, routes& r) {
@@ -1435,6 +1449,7 @@ void unset_storage_service(http_context& ctx, routes& r) {
     ss::get_ownership.unset(r);
     ss::get_effective_ownership.unset(r);
     ss::sstable_info.unset(r);
+    sp::get_schema_versions.unset(r);
 }
 
 enum class scrub_status {

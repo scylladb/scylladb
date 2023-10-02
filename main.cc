@@ -829,6 +829,14 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             }
             const auto hinted_handoff_enabled = cfg->hinted_handoff_enabled();
 
+            auto api_addr = utils::resolve(cfg->api_address || cfg->rpc_address, family, preferred).get0();
+            supervisor::notify("starting API server");
+            ctx.http_server.start("API").get();
+            auto stop_http_server = defer_verbose_shutdown("API server", [&ctx] {
+                ctx.http_server.stop().get();
+            });
+            api::set_server_init(ctx).get();
+
             supervisor::notify("starting prometheus API server");
             std::any stop_prometheus;
             if (cfg->prometheus_port()) {
@@ -1054,6 +1062,10 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             // #293 - do not stop anything
             // engine().at_exit([&proxy] { return proxy.stop(); });
+            api::set_server_storage_proxy(ctx, proxy).get();
+            auto stop_sp_api = defer_verbose_shutdown("storage proxy API", [&ctx] {
+                api::unset_server_storage_proxy(ctx).get();
+            });
 
             static sharded<cql3::cql_config> cql_config;
             cql_config.start(std::ref(*cfg)).get();
@@ -1084,13 +1096,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 tracing::tracing::tracing_instance().stop().get();
             });
 
-            auto api_addr = utils::resolve(cfg->api_address || cfg->rpc_address, family, preferred).get0();
-            supervisor::notify("starting API server");
-            ctx.http_server.start("API").get();
-            auto stop_http_server = defer_verbose_shutdown("API server", [&ctx] {
-                ctx.http_server.stop().get();
-            });
-            api::set_server_init(ctx).get();
             with_scheduling_group(maintenance_scheduling_group, [&] {
                 return ctx.http_server.listen(socket_address{api_addr, cfg->api_port()});
             }).get();
@@ -1491,10 +1496,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             api::set_server_snitch(ctx, snitch).get();
             auto stop_snitch_api = defer_verbose_shutdown("snitch API", [&ctx] {
                 api::unset_server_snitch(ctx).get();
-            });
-            api::set_server_storage_proxy(ctx, ss).get();
-            auto stop_sp_api = defer_verbose_shutdown("storage proxy API", [&ctx] {
-                api::unset_server_storage_proxy(ctx).get();
             });
             api::set_server_load_sstable(ctx, sys_ks).get();
             auto stop_cf_api = defer_verbose_shutdown("column family API", [&ctx] {
