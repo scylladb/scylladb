@@ -234,7 +234,9 @@ future<> manager::compute_hints_dir_device_id() {
 }
 
 void manager::allow_hints() {
-    boost::for_each(_ep_managers, [] (auto& pair) { pair.second.allow_hints(); });
+    for (auto& [_, ep_man] : _ep_managers) {
+        ep_man.allow_hints();
+    }
 }
 
 void manager::forbid_hints() {
