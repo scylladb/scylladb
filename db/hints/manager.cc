@@ -410,46 +410,65 @@ bool manager::can_hint_for(endpoint_id ep) const noexcept {
 
 future<> manager::change_host_filter(host_filter filter) {
     if (!started()) {
-        return make_exception_future<>(std::logic_error("change_host_filter: called before the hints_manager was started"));
+        co_await coroutine::return_exception(
+                std::logic_error{"change_host_filter: called before the hints_manager was started"});
     }
 
-    return with_gate(_draining_eps_gate, [this, filter = std::move(filter)] () mutable {
-        return with_semaphore(_drain_lock, 1, [this, filter = std::move(filter)] () mutable {
-            if (draining_all()) {
-                return make_exception_future<>(std::logic_error("change_host_filter: cannot change the configuration because hints all hints were drained"));
+    const auto holder = seastar::gate::holder{_draining_eps_gate};
+    const auto sem_unit = co_await seastar::get_units(_drain_lock, 1);
+
+    if (draining_all()) {
+        co_await coroutine::return_exception(std::logic_error{
+                "change_host_filter: cannot change the configuration because hints all hints were drained"});
+    }
+
+    manager_logger.debug("change_host_filter: changing from {} to {}", _host_filter, filter);
+
+    // Change the host_filter now and save the old one so that we can
+    // roll back in case of failure
+    std::swap(_host_filter, filter);
+    std::exception_ptr eptr = nullptr;
+
+    try {
+        // Iterate over existing hint directories and see if we can enable an endpoint manager
+        // for some of them
+        co_await lister::scan_dir(_hints_dir, lister::dir_entry_types::of<directory_entry_type::directory>(),
+                [this] (fs::path datadir, directory_entry de) {
+            const endpoint_id ep = endpoint_id{de.name};
+
+            const auto& topology = _proxy.get_token_metadata_ptr()->get_topology();
+            if (_ep_managers.contains(ep) || !_host_filter.can_hint_for(topology, ep)) {
+                return make_ready_future();
             }
 
-            manager_logger.debug("change_host_filter: changing from {} to {}", _host_filter, filter);
+            return get_ep_manager(ep).populate_segments_to_replay();
+        });
+    } catch (...) {
+        // Revert the changes in the filter. The code below will stop the additional managers
+        // that were started so far.
+        _host_filter = std::move(filter);
+        eptr = std::current_exception();
+    }
+    
+    try {
+        // Remove endpoint managers which are rejected by the filter.
+        co_await coroutine::parallel_for_each(_ep_managers, [this] (auto& pair) {
+            auto& [ep, ep_man] = pair;
 
-            // Change the host_filter now and save the old one so that we can
-            // roll back in case of failure
-            std::swap(_host_filter, filter);
-
-            // Iterate over existing hint directories and see if we can enable an endpoint manager
-            // for some of them
-            return lister::scan_dir(_hints_dir, lister::dir_entry_types::of<directory_entry_type::directory>(), [this] (fs::path datadir, directory_entry de) {
-                const endpoint_id ep = endpoint_id(de.name);
-                if (_ep_managers.contains(ep) || !_host_filter.can_hint_for(_proxy.get_token_metadata_ptr()->get_topology(), ep)) {
-                    return make_ready_future<>();
-                }
-                return get_ep_manager(ep).populate_segments_to_replay();
-            }).handle_exception([this, filter = std::move(filter)] (auto ep) mutable {
-                // Bring back the old filter. The finally() block will cause us to stop
-                // the additional hint_endpoint_managers that we started
-                _host_filter = std::move(filter);
-            }).finally([this] {
-                // Remove endpoint managers which are rejected by the filter
-                return parallel_for_each(_ep_managers, [this] (auto& pair) {
-                    if (_host_filter.can_hint_for(_proxy.get_token_metadata_ptr()->get_topology(), pair.first)) {
-                        return make_ready_future<>();
-                    }
-                    return pair.second.stop(drain::no).finally([this, ep = pair.first] {
-                        _ep_managers.erase(ep);
-                    });
-                });
+            if (_host_filter.can_hint_for(_proxy.get_token_metadata_ptr()->get_topology(), ep)) {
+                return make_ready_future<>();
+            }
+            
+            return ep_man.stop(drain::no).finally([this, ep] {
+                _ep_managers.erase(ep);
             });
         });
-    });
+    } catch (...) {
+        if (eptr) {
+            std::throw_with_nested(eptr);
+        }
+        throw;
+    }
 }
 
 bool manager::check_dc_for(endpoint_id ep) const noexcept {
