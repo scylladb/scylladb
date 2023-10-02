@@ -389,7 +389,7 @@ future<> manager::change_host_filter(host_filter filter) {
     }
 
     return with_gate(_draining_eps_gate, [this, filter = std::move(filter)] () mutable {
-        return with_semaphore(drain_lock(), 1, [this, filter = std::move(filter)] () mutable {
+        return with_semaphore(_drain_lock, 1, [this, filter = std::move(filter)] () mutable {
             if (draining_all()) {
                 return make_exception_future<>(std::logic_error("change_host_filter: cannot change the configuration because hints all hints were drained"));
             }
@@ -447,7 +447,7 @@ future<> manager::drain_for(endpoint_id endpoint) {
     manager_logger.trace("on_leave_cluster: {} is removed/decommissioned", endpoint);
 
     return with_gate(_draining_eps_gate, [this, endpoint] {
-        return with_semaphore(drain_lock(), 1, [this, endpoint] {
+        return with_semaphore(_drain_lock, 1, [this, endpoint] {
             return futurize_invoke([this, endpoint] () {
                 if (utils::fb_utilities::is_me(endpoint)) {
                     set_draining_all();
