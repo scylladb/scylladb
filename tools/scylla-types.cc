@@ -245,12 +245,9 @@ const std::vector<operation_option> global_options{
     typed_option<unsigned>("ignore-msb-bits", 12u, "number of shards (only relevant for shardof action)"),
 };
 
-static auto get_global_positional_options() {
-    static const std::vector<app_template::positional_option> options{
-        {"value", bpo::value<std::vector<sstring>>(), "value(s) to process, can also be provided as positional arguments", -1}
-    };
-    return &options;
-}
+const std::vector<operation_option> global_positional_options{
+    typed_option<std::vector<sstring>>("value", "value(s) to process, can also be provided as positional arguments", -1),
+};
 
 const std::map<operation, operation_func_variant> operations_with_func = {
     {{"serialize", "serialize the value and print it in hex encoded form",
@@ -380,7 +377,7 @@ $ scylla types {{action}} --help
                 [] (const operation& op) { return format("* {} - {}", op.name(), op.summary()); } ), "\n")),
         .operations = std::move(operations),
         .global_options = &global_options,
-        .global_positional_options = get_global_positional_options(),
+        .global_positional_options = &global_positional_options,
     };
     tool_app_template app(std::move(app_cfg));
 

@@ -107,7 +107,7 @@ int tool_app_template::run_async(int argc, char** argv, noncopyable_function<int
     }
     if (_cfg.global_positional_options) {
         for (const auto& gpo : *_cfg.global_positional_options) {
-            app.add_positional_options({gpo});
+            app.add_positional_options({gpo.to_positional_option()});
         }
     }
 
@@ -117,7 +117,7 @@ int tool_app_template::run_async(int argc, char** argv, noncopyable_function<int
             opt.add_option(op_desc);
         }
         for (const auto& opt : found_op->positional_options()) {
-            app.add_positional_options({opt});
+            app.add_positional_options({opt.to_positional_option()});
         }
         if (!found_op->options().empty()) {
             app.get_options_description().add(op_desc);

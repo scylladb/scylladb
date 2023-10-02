@@ -191,7 +191,7 @@ Fore more information, see: https://opensource.docs.scylladb.com/stable/operatin
                     typed_option<sstring>("partition", "String representation of the partition key to compact (unused)"),
                 },
                 {
-                    {"compaction_arg", bpo::value<std::vector<sstring>>(), "[<keyspace> <tables>...] or [<SStable files>...] ", -1},
+                    typed_option<std::vector<sstring>>("compaction_arg", "[<keyspace> <tables>...] or [<SStable files>...] ", -1),
                 }
             },
             compact_operation
