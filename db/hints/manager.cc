@@ -18,6 +18,7 @@
 #include <seastar/core/semaphore.hh>
 #include <seastar/core/sleep.hh>
 #include <seastar/core/smp.hh>
+#include <seastar/coroutine/exception.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 
 // Boost features.
@@ -285,36 +286,39 @@ future<> manager::wait_for_sync_point(abort_source& as, const sync_point::shard_
     }
 
     bool was_aborted = false;
-    co_await coroutine::parallel_for_each(_ep_managers, [&was_aborted, &rps, &local_as] (auto& p) {
-        const auto addr = p.first;
-        auto& ep_man = p.second;
+    co_await coroutine::parallel_for_each(_ep_managers,
+            coroutine::lambda([&rps, &local_as, &was_aborted] (auto& pair) -> future<> {
+        auto& [ep, ep_man] = pair;
 
-        db::replay_position rp;
-        auto it = rps.find(addr);
-        if (it != rps.end()) {
-            rp = it->second;
-        }
-
-        return ep_man.wait_until_hints_are_replayed_up_to(local_as, rp).handle_exception([&local_as, &was_aborted] (auto eptr) {
+        // When `rps` doesn't specify a replay position for a given endpoint, we use
+        // its default value. Normally, it should be equal to returning a ready future here.
+        // However, foreign segments (i.e. segments that were moved from another shard at start-up)
+        // are treated differently from "regular" segments -- we can think of their replay positions
+        // as equal to negative infinity or simply smaller from any other replay position, which
+        // also includes the default value. Because of that, we don't have a choice -- we have to
+        // pass either rps[ep] or the default replay position to the endpoint manager because
+        // some hints MIGHT need to be sent.
+        const replay_position rp = [&] {
+            auto it = rps.find(ep);
+            if (it == rps.end()) {
+                return replay_position{};
+            }
+            return it->second;
+        } ();
+        
+        try {
+            co_await ep_man.wait_until_hints_are_replayed_up_to(local_as, rp);
+        } catch (abort_requested_exception&) {
             if (!local_as.abort_requested()) {
                 local_as.request_abort();
             }
-            try {
-                std::rethrow_exception(std::move(eptr));
-            } catch (abort_requested_exception&) {
-                was_aborted = true;
-            } catch (...) {
-                return make_exception_future<>(std::current_exception());
-            }
-            return make_ready_future();
-        });
-    });
+            was_aborted = true;
+        }
+    }));
 
     if (was_aborted) {
-        throw abort_requested_exception();
+        co_await coroutine::return_exception(abort_requested_exception{});
     }
-
-    co_return;
 }
 
 hint_endpoint_manager& manager::get_ep_manager(endpoint_id ep) {
