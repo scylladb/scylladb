@@ -245,6 +245,7 @@ future<> system_distributed_keyspace::start() {
     auto db = _sp.data_dictionary();
     auto tables = ensured_tables();
 
+    while (true) {
     // Check if there is any work to do before taking the group 0 guard.
     bool keyspaces_setup = db.has_keyspace(NAME) && db.has_keyspace(NAME_EVERYWHERE);
     bool tables_setup = std::all_of(tables.begin(), tables.end(), [db] (schema_ptr t) { return db.has_schema(t->ks_name(), t->cf_name()); } );
@@ -313,10 +314,17 @@ future<> system_distributed_keyspace::start() {
     }
 
     if (!mutations.empty()) {
-        co_await _mm.announce(std::move(mutations), std::move(group0_guard), description);
+        try {
+            co_await _mm.announce(std::move(mutations), std::move(group0_guard), description);
+        } catch (service::group0_concurrent_modification&) {
+            dlogger.info("Concurrent operation is detected while starting, retrying.");
+            continue;
+        }
     }
 
     _started = true;
+    co_return;
+    }
 }
 
 future<> system_distributed_keyspace::stop() {
