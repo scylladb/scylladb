@@ -162,6 +162,7 @@ future<> create_keyspace_if_not_exists_impl(seastar::sharded<service::storage_pr
             boost::irange<unsigned>(0, config.redis_database_count()) |
             boost::adaptors::transformed([] (unsigned i) { return fmt::format("REDIS_{}", i); }));
 
+    while (true) {
     bool schema_ok = boost::algorithm::all_of(ks_names, [&] (auto& ks_name) {
         auto check = [&] (table t) {
             return db.has_schema(ks_name, t.name);
@@ -221,8 +222,16 @@ future<> create_keyspace_if_not_exists_impl(seastar::sharded<service::storage_pr
         }).discard_result();
     });
 
-    if (!mutations.empty()) {
-        co_await mml.announce(std::move(mutations), std::move(group0_guard), "keyspace-utils: create default keyspaces and databases for redis");
+        if (mutations.empty()) {
+            co_return;
+        }
+
+        try {
+            co_return co_await mml.announce(std::move(mutations), std::move(group0_guard),
+                    "keyspace-utils: create default keyspaces and databases for redis");
+        } catch (service::group0_concurrent_modification&) {
+            logger.info("Concurrent operation is detected while creating default databases for redis, retrying.");
+        }
     }
 }
 
