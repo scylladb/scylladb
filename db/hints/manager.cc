@@ -247,14 +247,14 @@ void manager::forbid_hints() {
 
 void manager::forbid_hints_for_eps_with_pending_hints() {
     manager_logger.trace("space_watchdog: Going to block hints to: {}", _eps_with_pending_hints);
-    boost::for_each(_ep_managers, [this] (auto& pair) {
-        hint_endpoint_manager& ep_man = pair.second;
+    
+    for (auto& [_, ep_man] : _ep_managers) {
         if (has_ep_with_pending_hints(ep_man.end_point_key())) {
             ep_man.forbid_hints();
         } else {
             ep_man.allow_hints();
         }
-    });
+    }
 }
 
 sync_point::shard_rps manager::calculate_current_sync_point(const std::vector<endpoint_id>& target_eps) const {
