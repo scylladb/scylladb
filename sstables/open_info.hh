@@ -36,7 +36,9 @@ struct entry_descriptor {
         : sstdir(sstdir), ks(ks), cf(cf), generation(generation), version(version), format(format), component(component) {}
 };
 
-entry_descriptor parse_path(const std::filesystem::path& sst_path);
+// Parses sstable file path extracting entry_descriptor from it. Returns the descriptor
+// and the keyspace.table pair of strings.
+std::tuple<entry_descriptor, sstring, sstring> parse_path(const std::filesystem::path& sst_path);
 
 // Use the given ks and cf and don't attempt to extract it from the dir path.
 // This allows loading sstables from any path, but the filename still has to be valid.

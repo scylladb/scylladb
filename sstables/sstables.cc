@@ -2163,8 +2163,9 @@ static entry_descriptor make_entry_descriptor(std::string_view sstdir, std::stri
     return entry_descriptor(sstdir, ks, cf, generation_type::from_string(generation), version, format_from_string(format), sstable::component_from_sstring(version, component));
 }
 
-entry_descriptor parse_path(const std::filesystem::path& sst_path) {
-    return make_entry_descriptor(sst_path.parent_path().native(), sst_path.filename().native(), nullptr, nullptr);
+std::tuple<entry_descriptor, sstring, sstring> parse_path(const std::filesystem::path& sst_path) {
+    auto desc = make_entry_descriptor(sst_path.parent_path().native(), sst_path.filename().native(), nullptr, nullptr);
+    return std::make_tuple(desc, desc.ks, desc.cf);
 }
 
 entry_descriptor parse_path(const std::filesystem::path& sst_path, sstring ks, sstring cf) {

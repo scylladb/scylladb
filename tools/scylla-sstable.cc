@@ -215,7 +215,7 @@ std::optional<schema_with_source> try_load_schema_autodetect(const bpo::variable
     if (app_config.count("sstables")) {
         try {
             auto sst_path = std::filesystem::path(app_config["sstables"].as<std::vector<sstring>>().front());
-            auto ed = sstables::parse_path(sst_path);
+            auto [ed, ks, cf] = sstables::parse_path(sst_path);
             const auto sst_dir_path = std::filesystem::path(sst_path).remove_filename();
             std::filesystem::path data_dir_path;
             // Detect whether sstable is in root table directory, or in a sub-directory
