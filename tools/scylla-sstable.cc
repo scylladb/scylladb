@@ -151,7 +151,7 @@ struct schema_with_source {
     sstring obtained_from;
 };
 
-std::optional<schema_with_source> try_load_schema_from_user_provided_source(const bpo::variables_map& app_config) {
+std::optional<schema_with_source> try_load_schema_from_user_provided_source(const bpo::variables_map& app_config, db::config& cfg) {
     sstring schema_source_opt;
     try {
         if (!app_config["schema-file"].defaulted()) {
@@ -180,9 +180,6 @@ std::optional<schema_with_source> try_load_schema_from_user_provided_source(cons
         }
         if (app_config.contains("scylla-yaml-file")) {
             schema_source_opt = "schema-tables";
-            // Place on heap to avoid wasting stack space
-            auto pcfg = std::make_unique<db::config>();
-            auto& cfg = *pcfg;
             const auto scylla_yaml_path = app_config["scylla-yaml-file"].as<sstring>();
             cfg.read_from_file(scylla_yaml_path).get();
             cfg.setup_directories();
@@ -201,7 +198,7 @@ std::optional<schema_with_source> try_load_schema_from_user_provided_source(cons
     return {};
 }
 
-std::optional<schema_with_source> try_load_schema_autodetect(const bpo::variables_map& app_config) {
+std::optional<schema_with_source> try_load_schema_autodetect(const bpo::variables_map& app_config, db::config& cfg) {
     try {
         const auto schema_file_path = std::filesystem::path(app_config["schema-file"].as<sstring>());
         return schema_with_source{.schema = tools::load_one_schema_from_file(schema_file_path).get(),
@@ -239,9 +236,6 @@ std::optional<schema_with_source> try_load_schema_autodetect(const bpo::variable
 
     try {
         auto scylla_yaml_file = db::config::get_conf_sub("scylla.yaml").string();
-        // Place on heap to avoid wasting stack space
-        auto pcfg = std::make_unique<db::config>();
-        auto& cfg = *pcfg;
         cfg.read_from_file(scylla_yaml_file).get();
         cfg.setup_directories();
         auto [keyspace_name, table_name] = get_keyspace_and_table_options(app_config);
@@ -2895,12 +2889,17 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
             .lsa_segment_pool_backend_size_mb = 100,
             .operations = std::move(operations),
             .global_options = &global_options,
-            .global_positional_options = &global_positional_options};
+            .global_positional_options = &global_positional_options,
+            .db_cfg_ext = db_config_and_extensions()
+    };
     tool_app_template app(std::move(app_cfg));
 
-    return app.run_async(argc, argv, [] (const operation& operation, const bpo::variables_map& app_config) {
+    return app.run_async(argc, argv, [&app] (const operation& operation, const bpo::variables_map& app_config) {
         schema_ptr schema;
         std::optional<schema_with_source> schema_with_source;
+
+        auto& dbcfg = *app.cfg().db_cfg_ext->db_cfg;
+
         {
             unsigned schema_sources = 0;
             schema_sources += !app_config["schema-file"].defaulted();
@@ -2910,10 +2909,10 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
 
             if (!schema_sources) {
                 sst_log.debug("No user-provided schema source, attempting to auto-detect it");
-                schema_with_source = try_load_schema_autodetect(app_config);
+                schema_with_source = try_load_schema_autodetect(app_config, dbcfg);
             } else if (schema_sources == 1) {
                 sst_log.debug("Single schema source provided");
-                schema_with_source = try_load_schema_from_user_provided_source(app_config);
+                schema_with_source = try_load_schema_from_user_provided_source(app_config, dbcfg);
             } else {
                 fmt::print(std::cerr, "Multiple schema sources provided, please provide exactly one of: --schema-file, --system-schema, --scylla-data-dir or --scylla-yaml-file (with the accompanying --keyspace and --table if necessary)\n");
             }
@@ -2928,9 +2927,6 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
             return 1;
         }
 
-        // Place on heap to avoid wasting stack space
-        auto pdbcfg = std::make_unique<db::config>();
-        auto& dbcfg = *pdbcfg;
         gms::feature_service feature_service(gms::feature_config_from_db_config(dbcfg));
         cache_tracker tracker;
         sstables::directory_semaphore dir_sem(1);
