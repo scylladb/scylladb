@@ -239,6 +239,25 @@ void statusgossip_operation(scylla_rest_client& client, const bpo::variables_map
     fmt::print(std::cout, "{}\n", status.GetBool() ? "running" : "not running");
 }
 
+void stop_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    if (vm.count("id")) {
+        throw std::invalid_argument("stopping compactions by id is not implemented");
+    }
+    if (!vm.count("compaction_type")) {
+        throw std::invalid_argument("missing required parameter: compaction_type");
+    }
+
+    static const std::vector<std::string_view> recognized_compaction_types{"COMPACTION", "CLEANUP", "SCRUB", "RESHAPE", "RESHARD", "UPGRADE"};
+
+    const auto compaction_type = vm["compaction_type"].as<sstring>();
+
+    if (std::ranges::find(recognized_compaction_types, compaction_type) == recognized_compaction_types.end()) {
+        throw std::invalid_argument(fmt::format("invalid compaction type: {}", compaction_type));
+    }
+
+    client.post("/compaction_manager/stop_compaction", {{"type", compaction_type}});
+}
+
 void version_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     auto version_json = client.get("/storage_service/release_version");
     fmt::print(std::cout, "ReleaseVersion: {}\n", rjson::to_string_view(version_json));
@@ -260,6 +279,7 @@ const std::map<std::string_view, std::string_view> option_substitutions{
     {"-pp", "--print-port"},
     {"-st", "--start-token"},
     {"-et", "--end-token"},
+    {"-id", "--id"},
 };
 
 std::map<operation, operation_func> get_operations_with_func() {
@@ -444,6 +464,24 @@ Fore more information, see: https://opensource.docs.scylladb.com/stable/operatin
 )",
             },
             statusgossip_operation
+        },
+        {
+            {
+                "stop",
+                "Stops a compaction operation",
+R"(
+This command is usually used to stop compaction that has a negative impact on the performance of a node.
+
+Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/stop.html
+)",
+                {
+                    typed_option<int>("id", "The id of the compaction operation to stop (not implemented)"),
+                },
+                {
+                    typed_option<sstring>("compaction_type", "The type of compaction to be stopped", 1),
+                },
+            },
+            stop_operation
         },
         {
             {
