@@ -57,6 +57,32 @@ VALIDATE                                                              Read-only 
                                                                       By default, corrupt SSTables are moved into a "quarantine" subdirectory so they will not be subject to compaction.
 ====================================================================  ==================================================================================================================
 
+SCRUB PROCEDURE
+...............
+
+Other compaction operations can interefere with scrub, resulting in some sstables not being scrubbed and the problem that scrub was intended to solve will presist.
+To avoid this, it is recommended to disable autocompaction and stop any ongoing compaction before running scrub:
+
+.. code-block:: shell
+
+   # Disable auto compaction for the table
+   > nodetool disableautocompaction <keyspace> <table>
+
+   # Either wait for any running compactions to finish, or stop all compaction (see below), note this will affect *all* tables.
+   > nodetool stop COMPACTION
+
+   # Run the scrub
+   > nodetool scrub --mode=<scrub_mode> <keyspace> <table>
+
+   # Re-enable auto compaction for the table
+   > nodetool enableautocompaction <keyspace> <table>
+
+
+Also be mindful of the fact that scrub creates a snapshot by default, just before starting. This might be desirable, to allow restoring the data in case scrub goes wrong, just be mindful of the space requirements.
+
+The default scrub mode is ABORT, which is not really useful for solving problems. Consider using SEGREGATE or VALIDATE. VALIDATE can be used as a non-intrusive way to check for the presence of problems, or gaguge the impact of a known problem. Note that while this does not modify sstables, it still has a significant CPU cost and might affect production workload. SEGREGATE mode is the one that is able to fix sstables with out-of-order data or bad indexes.
+
+
 Examples
 ........
 
