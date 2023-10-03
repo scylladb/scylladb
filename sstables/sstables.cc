@@ -2104,7 +2104,7 @@ sstable::make_crawling_reader(
     return kl::make_crawling_reader(shared_from_this(), std::move(schema), std::move(permit), std::move(trace_state), monitor);
 }
 
-static entry_descriptor make_entry_descriptor(std::string_view sstdir, std::string_view fname, sstring* const provided_ks, sstring* const provided_cf) {
+static std::tuple<entry_descriptor, sstring, sstring> make_entry_descriptor(std::string_view sstdir, std::string_view fname, sstring* const provided_ks, sstring* const provided_cf) {
     // examples of fname look like
     //   la-42-big-Data.db
     //   ka-42-big-Data.db
@@ -2160,16 +2160,16 @@ static entry_descriptor make_entry_descriptor(std::string_view sstdir, std::stri
     } else {
         throw malformed_sstable_exception(seastar::format("invalid version for file {}. Name doesn't match any known version.", fname));
     }
-    return entry_descriptor(sstdir, ks, cf, generation_type::from_string(generation), version, format_from_string(format), sstable::component_from_sstring(version, component));
+    return std::make_tuple(entry_descriptor(sstdir, ks, cf, generation_type::from_string(generation), version, format_from_string(format), sstable::component_from_sstring(version, component)), ks, cf);
 }
 
 std::tuple<entry_descriptor, sstring, sstring> parse_path(const std::filesystem::path& sst_path) {
-    auto desc = make_entry_descriptor(sst_path.parent_path().native(), sst_path.filename().native(), nullptr, nullptr);
-    return std::make_tuple(desc, desc.ks, desc.cf);
+    return make_entry_descriptor(sst_path.parent_path().native(), sst_path.filename().native(), nullptr, nullptr);
 }
 
 entry_descriptor parse_path(const std::filesystem::path& sst_path, sstring ks, sstring cf) {
-    return make_entry_descriptor(sst_path.parent_path().native(), sst_path.filename().native(), &ks, &cf);
+    auto full = make_entry_descriptor(sst_path.parent_path().native(), sst_path.filename().native(), &ks, &cf);
+    return std::get<0>(full);
 }
 
 sstable_version_types version_from_string(std::string_view s) {
