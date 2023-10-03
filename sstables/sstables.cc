@@ -1445,6 +1445,10 @@ future<foreign_sstable_open_info> sstable::get_open_info() & {
     });
 }
 
+entry_descriptor sstable::get_descriptor(component_type c) const {
+    return entry_descriptor(_generation, _version, _format, c);
+}
+
 future<>
 sstable::load_owner_shards(const dht::sharder& sharder) {
     if (!_shards.empty()) {

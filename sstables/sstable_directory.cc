@@ -444,8 +444,7 @@ sstable_directory::collect_output_unshared_sstables(std::vector<sstables::shared
         }
 
         dirlog.trace("Collected output SSTable {} is remote. Storing it", sst->get_filename());
-        auto [ desc, ks, cf ] = sstables::parse_path(_sstable_dir / sst->component_basename(component_type::Data));
-        _unshared_remote_sstables[shard].push_back(std::move(desc));
+        _unshared_remote_sstables[shard].push_back(sst->get_descriptor(component_type::Data));
         return make_ready_future<>();
     });
 }
