@@ -2163,11 +2163,11 @@ static entry_descriptor make_entry_descriptor(std::string_view sstdir, std::stri
     return entry_descriptor(sstdir, ks, cf, generation_type::from_string(generation), version, format_from_string(format), sstable::component_from_sstring(version, component));
 }
 
-entry_descriptor entry_descriptor::make_descriptor(const std::filesystem::path& sst_path) {
+entry_descriptor parse_path(const std::filesystem::path& sst_path) {
     return make_entry_descriptor(sst_path.parent_path().native(), sst_path.filename().native(), nullptr, nullptr);
 }
 
-entry_descriptor entry_descriptor::make_descriptor(const std::filesystem::path& sst_path, sstring ks, sstring cf) {
+entry_descriptor parse_path(const std::filesystem::path& sst_path, sstring ks, sstring cf) {
     return make_entry_descriptor(sst_path.parent_path().native(), sst_path.filename().native(), &ks, &cf);
 }
 
