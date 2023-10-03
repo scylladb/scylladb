@@ -1093,8 +1093,8 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             supervisor::notify("creating tracing");
             sharded<tracing::tracing>& tracing = tracing::tracing::tracing_instance();
             tracing.start(sstring("trace_keyspace_helper")).get();
-            auto destroy_tracing = defer_verbose_shutdown("tracing instance", [] {
-                tracing::tracing::tracing_instance().stop().get();
+            auto destroy_tracing = defer_verbose_shutdown("tracing instance", [&tracing] {
+                tracing.stop().get();
             });
 
             with_scheduling_group(maintenance_scheduling_group, [&] {
