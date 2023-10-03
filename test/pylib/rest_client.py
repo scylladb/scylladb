@@ -230,6 +230,10 @@ class ScyllaRESTAPIClient():
         assert level in ["debug", "info", "warning", "trace"]
         await self.client.post(f"/system/logger/{logger}?level={level}", host=node_ip)
 
+    async def flush_keyspace(self, node_ip: str, ks: str) -> None:
+        """Flush keyspace"""
+        await self.client.post(f"/storage_service/keyspace_flush/{ks}", host=node_ip)
+
 
 class ScyllaMetrics:
     def __init__(self, lines: list[str]):
