@@ -2,15 +2,20 @@
 Backup your Data
 ================
 
-Even though Scylla is a fault-tolerant system, it is recommended to regularly back up the data to external storage.
-Backup is a per-node procedure. Make sure to back up each node in your cluster.
-The backup includes two procedures. These are:
+Even though ScyllaDB is a fault-tolerant system, it is recommended to regularly back up the data to external storage.
 
-* :ref:`Full Backup <backup-full-backup-snapshots>` - copy the entire data of a node
+* Backup is a per-node procedure. Make sure to back up each node in your 
+  cluster. For cluster-wide backup and restore, see `ScyllaDB Manager <https://manager.docs.scylladb.com/stable/restore/>`_.
+* Backup works the same for non-encrypted and encrypted SStables. You can use 
+  `Encryption at Rest <https://enterprise.docs.scylladb.com/stable/operating-scylla/security/encryption-at-rest.html>`_ 
+  available in ScyllaDB Enterprise without affecting the backup procedure.
 
-* :ref:`Incremental <backup-incremental-backup>` - updates (delta) - flushed SSTables
+You can choose one of the following:
 
-.. include:: _common/manager.rst
+* :ref:`Full Backup <backup-full-backup-snapshots>` - Copy the entire data of a node.
+
+* :ref:`Incremental Backup <backup-incremental-backup>` - Updates (delta) - flushed SSTables.
+
 
 .. _backup-full-backup-snapshots:
 
