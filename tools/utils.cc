@@ -10,8 +10,11 @@
 #include <boost/algorithm/string/join.hpp>
 #include <boost/range/adaptor/transformed.hpp>
 
+#include "db/config.hh"
+#include "db/extensions.hh"
 #include "tools/utils.hh"
 #include "utils/logalloc.hh"
+#include "init.hh"
 
 namespace tools::utils {
 
@@ -80,6 +83,18 @@ void configure_tool_mode(app_template::seastar_options& opts, const sstring& log
 
 } // anonymous namespace
 
+db_config_and_extensions::db_config_and_extensions() 
+    : extensions(std::make_shared<db::extensions>())
+    , db_cfg(std::make_unique<db::config>(extensions))
+{}
+
+db_config_and_extensions::db_config_and_extensions(db_config_and_extensions&&) = default;
+db_config_and_extensions::~db_config_and_extensions() = default;
+
+tool_app_template::tool_app_template(config cfg)
+    : _cfg(std::move(cfg))
+{}
+
 int tool_app_template::run_async(int argc, char** argv, noncopyable_function<int(const operation&, const boost::program_options::variables_map&)> main_func) {
     const operation* found_op = nullptr;
     if (std::strncmp(argv[1], "--help", 6) != 0 && std::strcmp(argv[1], "-h") != 0) {
@@ -124,11 +139,28 @@ int tool_app_template::run_async(int argc, char** argv, noncopyable_function<int
         }
     }
 
+    if (_cfg.db_cfg_ext) {
+        auto init = app.get_options_description().add_options();
+        configurable::append_all(*_cfg.db_cfg_ext->db_cfg, init);
+    }
+
     return app.run(argc, argv, [this, &main_func, &app, found_op] {
         return async([this, &main_func, &app, found_op] {
+            configurable::notify_set ns;
+
+            if (_cfg.db_cfg_ext) {
+                ns = configurable::init_all(*_cfg.db_cfg_ext->db_cfg, *_cfg.db_cfg_ext->extensions).get0();
+            }
+
+            ns.notify_all(configurable::system_state::started).get();
+
             logalloc::use_standard_allocator_segment_pool_backend(_cfg.lsa_segment_pool_backend_size_mb * 1024 * 1024).get();
             assert(found_op);
-            return main_func(*found_op, app.configuration());
+            auto res = main_func(*found_op, app.configuration());
+
+            ns.notify_all(configurable::system_state::stopped).get();
+
+            return res;
         });
     });
 }
