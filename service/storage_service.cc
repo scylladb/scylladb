@@ -2594,7 +2594,7 @@ public:
 
         // Processing of the response is done in `join_node_response_handler`.
         // Wait for it to complete.
-        co_await _ss._join_node_response_done.get_shared_future(lowres_clock::now() + std::chrono::seconds(30));
+        co_await _ss._join_node_response_done.get_shared_future(lowres_clock::now() + std::chrono::minutes(3));
         slogger.info("raft topology: join: success");
         co_return true;
     }
