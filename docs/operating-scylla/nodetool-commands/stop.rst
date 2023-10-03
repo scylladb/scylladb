@@ -16,8 +16,8 @@ For example:
 
 .. code:: sh
 
-    nodetool stop compaction
+    nodetool stop COMPACTION
 
-    nodetool stop compaction RESHAPE
+    nodetool stop RESHAPE
 
 .. include:: nodetool-index.rst
