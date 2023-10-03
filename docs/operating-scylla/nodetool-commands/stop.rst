@@ -8,16 +8,17 @@ Usage
 .. code:: sh
 
           nodetool <options> stop -- <compaction_type>
-   
-   Supported compaction types: COMPACTION, CLEANUP, VALIDATION, SCRUB, RESHARD, RESHAPE
 
+Supported compaction types: COMPACTION, CLEANUP, SCRUB, RESHAPE
+
+Stopping a compaction by id (``--id <id>``) is not implemented.
 
 For example:
 
 .. code:: sh
 
-    nodetool stop compaction
+    nodetool stop COMPACTION
 
-    nodetool stop compaction RESHAPE
+    nodetool stop RESHAPE
 
 .. include:: nodetool-index.rst

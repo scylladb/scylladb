@@ -119,7 +119,7 @@ Operations that are not listed below are currently not available.
 * :doc:`statusbinary </operating-scylla/nodetool-commands/statusbinary/>` - Status of native transport (binary protocol).
 * :doc:`statusgossip </operating-scylla/nodetool-commands/statusgossip/>` - Status of gossip.
 * :doc:`status </operating-scylla/nodetool-commands/status/>` - Print cluster information.
-* :doc:`stop compaction </operating-scylla/nodetool-commands/stop/>` - Stop compaction operation.
+* :doc:`stop </operating-scylla/nodetool-commands/stop/>` - Stop compaction operation.
 * **tablehistograms** see :doc:`cfhistograms <nodetool-commands/cfhistograms/>`
 * :doc:`tablestats </operating-scylla/nodetool-commands/tablestats/>` - Provides in-depth diagnostics regard table. 
 * :doc:`toppartitions </operating-scylla/nodetool-commands/toppartitions/>` - Samples cluster writes and reads and reports the most active partitions in a specified table and time frame.
