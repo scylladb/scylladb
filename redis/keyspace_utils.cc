@@ -163,64 +163,64 @@ future<> create_keyspace_if_not_exists_impl(seastar::sharded<service::storage_pr
             boost::adaptors::transformed([] (unsigned i) { return fmt::format("REDIS_{}", i); }));
 
     while (true) {
-    bool schema_ok = boost::algorithm::all_of(ks_names, [&] (auto& ks_name) {
-        auto check = [&] (table t) {
-            return db.has_schema(ks_name, t.name);
-        };
-        return db.has_keyspace(ks_name) && boost::algorithm::all_of(tables, check);
-    });
+        bool schema_ok = boost::algorithm::all_of(ks_names, [&] (auto& ks_name) {
+            auto check = [&] (table t) {
+                return db.has_schema(ks_name, t.name);
+            };
+            return db.has_keyspace(ks_name) && boost::algorithm::all_of(tables, check);
+        });
 
-    if (schema_ok) {
-        logger.info("Redis schema is already up-to-date");
-        co_return; // if schema is created already do nothing
-    }
-
-    auto& mml = mm.local();
-    auto tm = proxy.local().get_token_metadata_ptr();
-
-    std::vector<lw_shared_ptr<keyspace_metadata>> ksms;
-    for (auto& ks_name: ks_names) {
-        cql3::statements::ks_prop_defs attrs;
-        attrs.add_property(cql3::statements::ks_prop_defs::KW_DURABLE_WRITES, "true");
-        std::map<sstring, sstring> replication_properties;
-        for (auto&& option : keyspace_replication_strategy_options) {
-            replication_properties.emplace(option.first, option.second);
-        }
-        attrs.add_property(cql3::statements::ks_prop_defs::KW_REPLICATION, replication_properties);
-        attrs.validate();
-
-        ksms.push_back(attrs.as_ks_metadata(ks_name, *tm));
-    }
-
-    auto group0_guard = co_await mml.start_group0_operation();
-    auto ts = group0_guard.write_timestamp();
-    std::vector<mutation> mutations;
-
-    for (auto ksm: ksms) {
-        if (db.has_keyspace(ksm->name())) {
-            continue;
+        if (schema_ok) {
+            logger.info("Redis schema is already up-to-date");
+            co_return; // if schema is created already do nothing
         }
 
-        auto muts = service::prepare_new_keyspace_announcement(db.real_database(), ksm, ts);
-        std::move(muts.begin(), muts.end(), std::back_inserter(mutations));
-    }
+        auto& mml = mm.local();
+        auto tm = proxy.local().get_token_metadata_ptr();
 
-    auto table_gen = std::bind_front(
-            [] (data_dictionary::database db, service::storage_proxy& sp, std::vector<mutation>& mutations,
-                api::timestamp_type ts, const keyspace_metadata& ksm, sstring cf_name, schema_ptr schema) -> future<> {
-        if (db.has_schema(ksm.name(), cf_name)) {
-            co_return;
+        std::vector<lw_shared_ptr<keyspace_metadata>> ksms;
+        for (auto& ks_name: ks_names) {
+            cql3::statements::ks_prop_defs attrs;
+            attrs.add_property(cql3::statements::ks_prop_defs::KW_DURABLE_WRITES, "true");
+            std::map<sstring, sstring> replication_properties;
+            for (auto&& option : keyspace_replication_strategy_options) {
+                replication_properties.emplace(option.first, option.second);
+            }
+            attrs.add_property(cql3::statements::ks_prop_defs::KW_REPLICATION, replication_properties);
+            attrs.validate();
+
+            ksms.push_back(attrs.as_ks_metadata(ks_name, *tm));
         }
 
-        logger.info("Create keyspace: {}, table: {} for redis.", ksm.name(), cf_name);
-        co_await service::prepare_new_column_family_announcement(mutations, sp, ksm, schema, ts);
-    }, db, std::ref(proxy.local()), std::ref(mutations), ts);
+        auto group0_guard = co_await mml.start_group0_operation();
+        auto ts = group0_guard.write_timestamp();
+        std::vector<mutation> mutations;
 
-    co_await coroutine::parallel_for_each(ksms, [table_gen = std::move(table_gen)] (const lw_shared_ptr<keyspace_metadata> ksm) mutable {
-        return parallel_for_each(tables, [ksm, table_gen = std::move(table_gen)] (table t) {
-            return table_gen(*ksm, t.name, t.schema(ksm->name()));
-        }).discard_result();
-    });
+        for (auto ksm: ksms) {
+            if (db.has_keyspace(ksm->name())) {
+                continue;
+            }
+
+            auto muts = service::prepare_new_keyspace_announcement(db.real_database(), ksm, ts);
+            std::move(muts.begin(), muts.end(), std::back_inserter(mutations));
+        }
+
+        auto table_gen = std::bind_front(
+                [] (data_dictionary::database db, service::storage_proxy& sp, std::vector<mutation>& mutations,
+                    api::timestamp_type ts, const keyspace_metadata& ksm, sstring cf_name, schema_ptr schema) -> future<> {
+            if (db.has_schema(ksm.name(), cf_name)) {
+                co_return;
+            }
+
+            logger.info("Create keyspace: {}, table: {} for redis.", ksm.name(), cf_name);
+            co_await service::prepare_new_column_family_announcement(mutations, sp, ksm, schema, ts);
+        }, db, std::ref(proxy.local()), std::ref(mutations), ts);
+
+        co_await coroutine::parallel_for_each(ksms, [table_gen = std::move(table_gen)] (const lw_shared_ptr<keyspace_metadata> ksm) mutable {
+            return parallel_for_each(tables, [ksm, table_gen = std::move(table_gen)] (table t) {
+                return table_gen(*ksm, t.name, t.schema(ksm->name()));
+            }).discard_result();
+        });
 
         if (mutations.empty()) {
             co_return;
