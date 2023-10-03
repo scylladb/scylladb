@@ -2788,7 +2788,7 @@ future<> system_keyspace::sstables_registry_list(sstring location, sstable_regis
         auto gen = sstables::generation_type(row.get_as<utils::UUID>("generation"));
         auto ver = sstables::version_from_string(row.get_as<sstring>("version"));
         auto fmt = sstables::format_from_string(row.get_as<sstring>("format"));
-        sstables::entry_descriptor desc("", "", "", gen, ver, fmt, sstables::component_type::TOC);
+        sstables::entry_descriptor desc(gen, ver, fmt, sstables::component_type::TOC);
         co_await consumer(std::move(uuid), std::move(status), std::move(desc));
         co_return stop_iteration::no;
     });

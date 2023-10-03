@@ -2160,7 +2160,7 @@ static std::tuple<entry_descriptor, sstring, sstring> make_entry_descriptor(std:
     } else {
         throw malformed_sstable_exception(seastar::format("invalid version for file {}. Name doesn't match any known version.", fname));
     }
-    return std::make_tuple(entry_descriptor(sstdir, ks, cf, generation_type::from_string(generation), version, format_from_string(format), sstable::component_from_sstring(version, component)), ks, cf);
+    return std::make_tuple(entry_descriptor(generation_type::from_string(generation), version, format_from_string(format), sstable::component_from_sstring(version, component)), ks, cf);
 }
 
 std::tuple<entry_descriptor, sstring, sstring> parse_path(const std::filesystem::path& sst_path) {
