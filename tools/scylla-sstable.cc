@@ -221,12 +221,12 @@ std::optional<schema_with_source> try_load_schema_autodetect(const bpo::variable
             // Detect whether sstable is in root table directory, or in a sub-directory
             // The last component is "" due to the trailing "/" left by "remove_filename()" above.
             // So we need to go back 2 more, to find the supposed keyspace component.
-            if (ed.ks == std::prev(sst_dir_path.end(), 3)->native()) {
+            if (ks == std::prev(sst_dir_path.end(), 3)->native()) {
                 data_dir_path = sst_dir_path / ".." / "..";
             } else {
                 data_dir_path = sst_dir_path / ".." / ".." / "..";
             }
-            return schema_with_source{.schema = tools::load_schema_from_schema_tables(data_dir_path, ed.ks, ed.cf).get(),
+            return schema_with_source{.schema = tools::load_schema_from_schema_tables(data_dir_path, ks, cf).get(),
                 .source = "schema-tables",
                 .path = data_dir_path,
                 .obtained_from = format("sstable path ({})", sst_path)};
