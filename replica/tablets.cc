@@ -200,7 +200,7 @@ future<> save_tablet_metadata(replica::database& db, const tablet_metadata& tm, 
         // FIXME: Should we ignore missing tables? Currently doesn't matter because this is only used in tests.
         auto s = db.find_schema(id);
         muts.emplace_back(
-                co_await tablet_map_to_mutation(tablets, id, s->ks_name(), s->cf_name(), ts));
+                co_await tablet_map_to_mutation(*tablets, id, s->ks_name(), s->cf_name(), ts));
     }
     co_await db.apply(freeze(muts), db::no_timeout);
 }

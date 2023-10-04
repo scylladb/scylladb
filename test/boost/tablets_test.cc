@@ -138,8 +138,7 @@ SEASTAR_TEST_CASE(test_tablet_metadata_persistence) {
             verify_tablet_metadata_persistence(e, tm, ts);
 
             // Increase RF of table2
-            {
-                auto&& tmap = tm.get_tablet_map(table2);
+            tm.mutate_tablet_map(table2, [&] (tablet_map& tmap) {
                 auto tb = tmap.first_tablet();
                 tb = *tmap.next_tablet(tb);
 
@@ -164,7 +163,7 @@ SEASTAR_TEST_CASE(test_tablet_metadata_persistence) {
                     tablet_replica {h1, 4},
                     session_id(utils::UUID_gen::get_time_UUID())
                 });
-            }
+            });
 
             verify_tablet_metadata_persistence(e, tm, ts);
 
@@ -935,12 +934,13 @@ SEASTAR_THREAD_TEST_CASE(test_token_ownership_splitting) {
 static
 void apply_resize_plan(token_metadata& tm, const migration_plan& plan) {
     for (auto [table_id, resize_decision] : plan.resize_plan().resize) {
-        tablet_map& tmap = tm.tablets().get_tablet_map(table_id);
-        resize_decision.sequence_number = tmap.resize_decision().sequence_number + 1;
-        tmap.set_resize_decision(resize_decision);
+        tm.tablets().mutate_tablet_map(table_id, [&] (tablet_map& tmap) {
+            resize_decision.sequence_number = tmap.resize_decision().sequence_number + 1;
+            tmap.set_resize_decision(resize_decision);
+        });
     }
     for (auto table_id : plan.resize_plan().finalize_resize) {
-        auto& old_tmap = tm.tablets().get_tablet_map(table_id);
+        const auto& old_tmap = tm.tablets().get_tablet_map(table_id);
         testlog.info("Setting new tablet map of size {}", old_tmap.tablet_count() * 2);
         tablet_map tmap(old_tmap.tablet_count() * 2);
         tm.tablets().set_tablet_map(table_id, std::move(tmap));
@@ -951,10 +951,11 @@ void apply_resize_plan(token_metadata& tm, const migration_plan& plan) {
 static
 void apply_plan(token_metadata& tm, const migration_plan& plan) {
     for (auto&& mig : plan.migrations()) {
-        tablet_map& tmap = tm.tablets().get_tablet_map(mig.tablet.table);
-        auto tinfo = tmap.get_tablet_info(mig.tablet.tablet);
-        tinfo.replicas = replace_replica(tinfo.replicas, mig.src, mig.dst);
-        tmap.set_tablet(mig.tablet.tablet, tinfo);
+        tm.tablets().mutate_tablet_map(mig.tablet.table, [&] (tablet_map& tmap) {
+            auto tinfo = tmap.get_tablet_info(mig.tablet.tablet);
+            tinfo.replicas = replace_replica(tinfo.replicas, mig.src, mig.dst);
+            tmap.set_tablet(mig.tablet.tablet, tinfo);
+        });
     }
     apply_resize_plan(tm, plan);
 }
@@ -963,9 +964,10 @@ void apply_plan(token_metadata& tm, const migration_plan& plan) {
 static
 void apply_plan_as_in_progress(token_metadata& tm, const migration_plan& plan) {
     for (auto&& mig : plan.migrations()) {
-        tablet_map& tmap = tm.tablets().get_tablet_map(mig.tablet.table);
-        auto tinfo = tmap.get_tablet_info(mig.tablet.tablet);
-        tmap.set_tablet_transition_info(mig.tablet.tablet, migration_to_transition_info(tinfo, mig));
+        tm.tablets().mutate_tablet_map(mig.tablet.table, [&] (tablet_map& tmap) {
+            auto tinfo = tmap.get_tablet_info(mig.tablet.tablet);
+            tmap.set_tablet_transition_info(mig.tablet.tablet, migration_to_transition_info(tinfo, mig));
+        });
     }
     apply_resize_plan(tm, plan);
 }
@@ -974,7 +976,7 @@ static
 size_t get_tablet_count(const tablet_metadata& tm) {
     size_t count = 0;
     for (auto& [table, tmap] : tm.all_tables()) {
-        count += std::accumulate(tmap.tablets().begin(), tmap.tablets().end(), size_t(0),
+        count += std::accumulate(tmap->tablets().begin(), tmap->tablets().end(), size_t(0),
              [] (size_t accumulator, const locator::tablet_info& info) {
                  return accumulator + info.replicas.size();
              });
@@ -1020,13 +1022,14 @@ static
 void execute_transitions(shared_token_metadata& stm) {
     stm.mutate_token_metadata([&] (token_metadata& tm) {
         for (auto&& [tablet, tmap_] : tm.tablets().all_tables()) {
-            auto& tmap = tmap_;
-            for (auto&& [tablet, trinfo]: tmap.transitions()) {
-                auto ti = tmap.get_tablet_info(tablet);
-                ti.replicas = trinfo.next;
-                tmap.set_tablet(tablet, ti);
-            }
-            tmap.clear_transitions();
+            tm.tablets().mutate_tablet_map(tablet, [&] (tablet_map& tmap) {
+                for (auto&& [tablet, trinfo]: tmap.transitions()) {
+                    auto ti = tmap.get_tablet_info(tablet);
+                    ti.replicas = trinfo.next;
+                    tmap.set_tablet(tablet, ti);
+                }
+                tmap.clear_transitions();
+            });
         }
         return make_ready_future<>();
     }).get();
@@ -1951,7 +1954,7 @@ SEASTAR_THREAD_TEST_CASE(test_drained_node_is_not_balanced_internally) {
 static
 void check_tablet_invariants(const tablet_metadata& tmeta) {
     for (auto&& [table, tmap] : tmeta.all_tables()) {
-        tmap.for_each_tablet([&](auto tid, const tablet_info& tinfo) -> future<> {
+        tmap->for_each_tablet([&](auto tid, const tablet_info& tinfo) -> future<> {
             std::unordered_set<host_id> hosts;
             // Uniqueness of hosts
             for (const auto& replica: tinfo.replicas) {

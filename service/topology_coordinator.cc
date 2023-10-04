@@ -1005,10 +1005,10 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         for (auto&& [table, tmap] : tm->tablets().all_tables()) {
             co_await coroutine::maybe_yield();
             auto s = _db.find_schema(table);
-            for (auto&& [tablet, trinfo]: tmap.transitions()) {
+            for (auto&& [tablet, trinfo]: tmap->transitions()) {
                 co_await coroutine::maybe_yield();
                 auto gid = locator::global_tablet_id {table, tablet};
-                func(tmap, s, gid, trinfo);
+                func(*tmap, s, gid, trinfo);
             }
         }
     }
@@ -1018,7 +1018,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     }
 
     void generate_migration_update(std::vector<canonical_mutation>& out, const group0_guard& guard, const tablet_migration_info& mig) {
-        auto& tmap = get_token_metadata_ptr()->tablets().get_tablet_map(mig.tablet.table);
+        const auto& tmap = get_token_metadata_ptr()->tablets().get_tablet_map(mig.tablet.table);
         auto last_token = tmap.get_last_token(mig.tablet.tablet);
         if (tmap.get_tablet_transition_info(mig.tablet.tablet)) {
             rtlogger.warn("Tablet already in transition, ignoring migration: {}", mig);
@@ -1035,7 +1035,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     void generate_resize_update(std::vector<canonical_mutation>& out, const group0_guard& guard, table_id table_id, locator::resize_decision resize_decision) {
             // FIXME: indent.
             auto s = _db.find_schema(table_id);
-            auto& tmap = get_token_metadata_ptr()->tablets().get_tablet_map(table_id);
+            const auto& tmap = get_token_metadata_ptr()->tablets().get_tablet_map(table_id);
             // Sequence number is monotonically increasing, globally. Therefore, it can be used to identify a decision.
             resize_decision.sequence_number = tmap.resize_decision().next_sequence_number();
             rtlogger.debug("Generating resize decision for table {} of type {} and sequence number {}",
