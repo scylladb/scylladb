@@ -15,7 +15,7 @@ Syntax
 -------
 .. code-block:: console
 
-   nodetool [options] compact [--partition <partition_key>] [<keyspace> [<cfnames>]...]
+   nodetool [options] compact [<keyspace> [<cfnames>]...]
 
 Options
 --------
@@ -23,8 +23,6 @@ Options
 * ``-h <host>`` or  ``--host <host>`` - Node hostname or IP address.
 
 * ``-p <port>`` or ``--port <port>`` - Remote JMX agent port number.
-
-* ``--partition <partition_key>`` - String representation of the partition key.
 
 * ``-pp`` or ``--print-port`` - Operate in 4.0 mode with hosts disambiguated by port number.
 
@@ -36,7 +34,7 @@ Options
 
 * ``--`` - Separates command-line options from the list of argument(useful when an argument might be mistaken for a command-line option).
 
-The following options are NOT supported:
+The following options are available in Cassandra's nodetool, but are NOT implemented in ScyllaDB's nodetool:
 
 * ``-st`` or ``--start-token``
 * ``-et`` or ``--end-token``
