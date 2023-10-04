@@ -7,6 +7,7 @@
  */
 
 #include <seastar/core/condition-variable.hh>
+#include <seastar/core/gate.hh>
 
 #include "database_fwd.hh"
 #include "compaction/compaction_descriptor.hh"
@@ -48,6 +49,8 @@ class compaction_group {
     // that may delete data in these sstables:
     std::vector<sstables::shared_sstable> _sstables_compacted_but_not_deleted;
     seastar::condition_variable _staging_done_condition;
+    // Gates async operations confined to a single group.
+    seastar::gate _async_gate;
 private:
     // Adds new sstable to the set of sstables
     // Doesn't update the cache. The cache must be synchronized in order for reads to see
@@ -70,8 +73,14 @@ public:
         return _group_id;
     }
 
-    // Will stop ongoing compaction on behalf of this group, etc.
+    // Stops all activity in the group, synchronizes with in-flight writes, before
+    // flushing memtable(s), so all data can be found in the SSTable set.
     future<> stop() noexcept;
+
+    // This removes all the storage belonging to the group. In order to avoid data
+    // resurrection, makes sure that all data is flushed into SSTables before
+    // proceeding with atomic deletion on them.
+    future<> cleanup();
 
     // Clear sstable sets
     void clear_sstables();
@@ -79,7 +88,7 @@ public:
     // Clear memtable(s) content
     future<> clear_memtables();
 
-    future<> flush();
+    future<> flush() noexcept;
     bool can_flush() const;
 
     const dht::token_range& token_range() const noexcept {
@@ -130,6 +139,10 @@ public:
 
     seastar::condition_variable& get_staging_done_condition() noexcept {
         return _staging_done_condition;
+    }
+
+    seastar::gate& async_gate() noexcept {
+        return _async_gate;
     }
 };
 

@@ -579,7 +579,7 @@ public:
 
             auto shard = tmap.get_shard(tid, tm.get_my_id());
             if (shard && *shard == this_shard_id()) {
-                tlogger.debug("Tablet with id {} present for {}.{}", tid, schema()->ks_name(), schema()->cf_name());
+                tlogger.debug("Tablet with id {} and range {} present for {}.{}", tid, range, schema()->ks_name(), schema()->cf_name());
             }
             // FIXME: don't allocate compaction groups for tablets that aren't present in this shard.
             ret.emplace_back(std::make_unique<compaction_group>(_t, tid.value(), std::move(range)));
@@ -988,7 +988,7 @@ table::try_flush_memtable_to_sstable(compaction_group& cg, lw_shared_ptr<memtabl
         metadata.max_timestamp = old->get_max_timestamp();
         auto estimated_partitions = _compaction_strategy.adjust_partition_estimate(metadata, old->partition_count());
 
-        if (!_async_gate.is_closed()) {
+        if (!cg.async_gate().is_closed()) {
             co_await _compaction_manager.maybe_wait_for_sstable_count_reduction(cg.as_table_state());
         }
 
@@ -1190,6 +1190,12 @@ void table::rebuild_statistics() {
     }
 }
 
+void table::subtract_compaction_group_from_stats(const compaction_group& cg) noexcept {
+    _stats.live_disk_space_used -= cg.live_disk_space_used();
+    _stats.total_disk_space_used -= cg.total_disk_space_used();
+    _stats.live_sstable_count -= cg.live_sstable_count();
+}
+
 future<lw_shared_ptr<sstables::sstable_set>>
 table::sstable_list_builder::build_new_list(const sstables::sstable_set& current_sstables,
                               sstables::sstable_set new_sstable_list,
@@ -1383,7 +1389,7 @@ void table::try_trigger_compaction(compaction_group& cg) noexcept {
 
 void compaction_group::trigger_compaction() {
     // But not if we're locked out or stopping
-    if (!_t._async_gate.is_closed()) {
+    if (!_async_gate.is_closed()) {
         _t._compaction_manager.submit(as_table_state());
     }
 }
@@ -1627,14 +1633,12 @@ compaction_group::compaction_group(table& t, size_t group_id, dht::token_range t
 }
 
 future<> compaction_group::stop() noexcept {
-    try {
-        // FIXME: make memtable_list::flush() noexcept too.
-        return _memtables->flush().finally([this] {
-            return _t._compaction_manager.remove(as_table_state());
-        });
-    } catch (...) {
-        return current_exception_as_future<>();
+    if (_async_gate.is_closed()) {
+        co_return;
     }
+    co_await _async_gate.close();
+    co_await flush();
+    co_await _t._compaction_manager.remove(as_table_state());
 }
 
 void compaction_group::clear_sstables() {
@@ -1930,8 +1934,12 @@ future<std::unordered_map<sstring, table::snapshot_details>> table::get_snapshot
     });
 }
 
-future<> compaction_group::flush() {
-    return _memtables->flush();
+future<> compaction_group::flush() noexcept {
+    try {
+        return _memtables->flush();
+    } catch (...) {
+        return current_exception_as_future<>();
+    }
 }
 
 bool compaction_group::can_flush() const {
@@ -2392,8 +2400,8 @@ db::replay_position table::set_low_replay_position_mark() {
 
 template<typename... Args>
 void table::do_apply(compaction_group& cg, db::rp_handle&& h, Args&&... args) {
-    if (_async_gate.is_closed()) {
-        on_internal_error(tlogger, "Table async_gate is closed");
+    if (cg.async_gate().is_closed()) [[unlikely]] {
+        on_internal_error(tlogger, "async_gate of table's compaction group is closed");
     }
 
     utils::latency_counter lc;
@@ -2411,8 +2419,10 @@ void table::do_apply(compaction_group& cg, db::rp_handle&& h, Args&&... args) {
 }
 
 future<> table::apply(const mutation& m, db::rp_handle&& h, db::timeout_clock::time_point timeout) {
-    return dirty_memory_region_group().run_when_memory_available([this, &m, h = std::move(h)] () mutable {
-        do_apply(compaction_group_for_token(m.token()), std::move(h), m);
+    auto& cg = compaction_group_for_token(m.token());
+    auto holder = cg.async_gate().hold();
+    return dirty_memory_region_group().run_when_memory_available([this, &m, h = std::move(h), &cg, holder = std::move(holder)] () mutable {
+        do_apply(cg, std::move(h), m);
     }, timeout);
 }
 
@@ -2423,8 +2433,11 @@ future<> table::apply(const frozen_mutation& m, schema_ptr m_schema, db::rp_hand
         return (*_virtual_writer)(m);
     }
 
-    return dirty_memory_region_group().run_when_memory_available([this, &m, m_schema = std::move(m_schema), h = std::move(h)]() mutable {
-        do_apply(compaction_group_for_key(m.key(), m_schema), std::move(h), m, m_schema);
+    auto& cg = compaction_group_for_key(m.key(), m_schema);
+    auto holder = cg.async_gate().hold();
+
+    return dirty_memory_region_group().run_when_memory_available([this, &m, m_schema = std::move(m_schema), h = std::move(h), &cg, holder = std::move(holder)]() mutable {
+        do_apply(cg, std::move(h), m, m_schema);
     }, timeout);
 }
 
@@ -2983,9 +2996,69 @@ bool table::requires_cleanup(const sstables::sstable_set& set) const {
     }));
 }
 
-future<> table::cleanup_tablet(locator::tablet_id) {
-    co_await flush();
-    // FIXME: Remove sstables
+future<> compaction_group::cleanup() {
+    class compaction_group_cleaner : public row_cache::external_updater_impl {
+        table& _t;
+        compaction_group& _cg;
+        const lw_shared_ptr<sstables::sstable_set> _empty_main_set;
+        const lw_shared_ptr<sstables::sstable_set> _empty_maintenance_set;
+    private:
+        lw_shared_ptr<sstables::sstable_set> empty_sstable_set() const {
+            return make_lw_shared<sstables::sstable_set>(_t._compaction_strategy.make_sstable_set(_t._schema));
+        }
+    public:
+        explicit compaction_group_cleaner(compaction_group& cg)
+                : _t(cg._t)
+                , _cg(cg)
+                , _empty_main_set(empty_sstable_set())
+                , _empty_maintenance_set(empty_sstable_set())
+        {
+        }
+        virtual future<> prepare() override {
+            // Capture SSTables after flush, and with compaction disabled, to avoid missing any.
+            auto set = _cg.make_compound_sstable_set();
+            std::vector<sstables::shared_sstable> all_sstables;
+            all_sstables.reserve(set->size());
+            set->for_each_sstable([&all_sstables] (const sstables::shared_sstable& sst) mutable {
+                all_sstables.push_back(sst);
+            });
+            return _cg.delete_sstables_atomically(std::move(all_sstables));
+        }
+
+        virtual void execute() override {
+            _t.subtract_compaction_group_from_stats(_cg);
+            _cg.set_main_sstables(std::move(_empty_main_set));
+            _cg.set_maintenance_sstables(std::move(_empty_maintenance_set));
+        }
+    };
+
+    auto updater = row_cache::external_updater(std::make_unique<compaction_group_cleaner>(*this));
+
+    auto p_range = to_partition_range(token_range());
+    tlogger.debug("Invalidating range {} for compaction group {} of table {} during cleanup.",
+                  p_range, group_id(), _t.schema()->ks_name(), _t.schema()->cf_name());
+    co_await _t._cache.invalidate(std::move(updater), p_range);
+}
+
+future<> table::cleanup_tablet(locator::tablet_id tid) {
+    auto holder = async_gate().hold();
+
+    auto& cg_ptr = _compaction_groups[tid.value()];
+
+    if (!cg_ptr) {
+        throw std::runtime_error(format("Cannot cleanup tablet {} of table {}.{} because it is not allocated in this shard",
+                                        tid, _schema->ks_name(), _schema->cf_name()));
+    }
+
+    // Synchronizes with in-flight writes if any, and also takes care of flushing if needed.
+    // FIXME: to be able to stop group and provide guarantee above, we must first be able to reallocate a new group if tablet is migrated back.
+    //co_await _cg.stop();
+    co_await cg_ptr->flush();
+    co_await cg_ptr->cleanup();
+
+    tlogger.info("Cleaned up tablet {} of table {}.{} successfully.", tid, _schema->ks_name(), _schema->cf_name());
+
+    // FIXME: Deallocate compaction group in this shard
 }
 
 } // namespace replica
