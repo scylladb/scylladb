@@ -5,6 +5,7 @@ Cluster and Node
    :hidden:
    :maxdepth: 2 
 
+   Handling Node Failures </troubleshooting/handling-node-failures>
    Failed Decommission Problem </troubleshooting/failed-decommission/>
    Cluster Timeouts </troubleshooting/timeouts>
    Node Joined With No Data </troubleshooting/node-joined-without-any-data>
@@ -21,6 +22,7 @@ Cluster and Node
               </div>
               <div class="medium-9 columns">
 
+* :doc:`Handling Node Failures </troubleshooting/handling-node-failures>`
 * :doc:`Failed Decommission Problem </troubleshooting/failed-decommission/>`
 * :doc:`Cluster Timeouts </troubleshooting/timeouts>`
 * :doc:`Node Joined With No Data </troubleshooting/node-joined-without-any-data>`
