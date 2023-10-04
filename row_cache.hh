@@ -278,6 +278,7 @@ private:
     void upgrade_entry(cache_entry&);
     void invalidate_locked(const dht::decorated_key&);
     void clear_now() noexcept;
+    void clear_on_destruction() noexcept;
 
     struct previous_entry_pointer {
         std::optional<dht::decorated_key> _key;

@@ -766,7 +766,7 @@ row_cache::make_reader_opt(schema_ptr s,
     }
 }
 
-row_cache::~row_cache() {
+void row_cache::clear_on_destruction() noexcept {
     with_allocator(_tracker.allocator(), [this] {
         _partitions.clear_and_dispose([this] (cache_entry* p) mutable noexcept {
             if (!p->is_dummy_entry()) {
@@ -775,6 +775,10 @@ row_cache::~row_cache() {
             p->evict(_tracker);
         });
     });
+}
+
+row_cache::~row_cache() {
+    clear_on_destruction();
 }
 
 void row_cache::clear_now() noexcept {
@@ -1178,12 +1182,20 @@ row_cache::row_cache(schema_ptr s, snapshot_source src, cache_tracker& tracker, 
     , _underlying(src())
     , _snapshot_source(std::move(src))
 {
+  try {
     with_allocator(_tracker.allocator(), [this, cont] {
         cache_entry entry(cache_entry::dummy_entry_tag{});
         entry.set_continuous(bool(cont));
         auto raw_token = entry.position().token().raw();
         _partitions.insert(raw_token, std::move(entry), dht::ring_position_comparator{*_schema});
     });
+  } catch (...) {
+    // The code above might have allocated something in _partitions.
+    // The destructor of _partitions will be called with the wrong allocator,
+    // so we have to clear _partitions manually here, before it is destroyed.
+    clear_on_destruction();
+    throw;
+  }
 }
 
 cache_entry::cache_entry(cache_entry&& o) noexcept
