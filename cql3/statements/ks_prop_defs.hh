@@ -12,6 +12,7 @@
 
 #include "cql3/statements/property_definitions.hh"
 #include "data_dictionary/storage_options.hh"
+#include "locator/host_id.hh"
 
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/sstring.hh>
@@ -20,9 +21,15 @@
 namespace data_dictionary {
 class keyspace_metadata;
 }
+namespace gms {
+    class inet_address;
+}
 
 namespace locator {
-    class token_metadata;
+    template <typename NodeId>
+    class generic_token_metadata;
+    using token_metadata = generic_token_metadata<gms::inet_address>;
+    using token_metadata2 = generic_token_metadata<host_id>;
     class shared_token_metadata;
     struct snitch_ptr;
     class abstract_replication_strategy;

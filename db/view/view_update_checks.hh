@@ -10,6 +10,7 @@
 
 #include <seastar/core/future.hh>
 #include "streaming/stream_reason.hh"
+#include "locator/host_id.hh"
 #include "seastarx.hh"
 
 namespace replica {
@@ -23,7 +24,10 @@ class system_distributed_keyspace;
 }
 
 namespace locator {
-class token_metadata;
+template <typename NodeId>
+class generic_token_metadata;
+using token_metadata = generic_token_metadata<gms::inet_address>;
+using token_metadata2 = generic_token_metadata<host_id>;
 }
 
 namespace db::view {

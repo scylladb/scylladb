@@ -29,13 +29,17 @@
 #include "timestamp.hh"
 #include "tracing/trace_state.hh"
 #include "utils/UUID.hh"
+#include "locator/host_id.hh"
 
 class schema;
 using schema_ptr = seastar::lw_shared_ptr<const schema>;
 
 namespace locator {
 
-class token_metadata;
+template <typename NodeId>
+class generic_token_metadata;
+using token_metadata = generic_token_metadata<gms::inet_address>;
+using token_metadata2 = generic_token_metadata<host_id>;
 
 } // namespace locator
 

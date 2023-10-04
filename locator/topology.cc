@@ -491,6 +491,17 @@ bool topology::remove_endpoint(inet_address ep)
     return false;
 }
 
+bool topology::remove_endpoint(locator::host_id host_id)
+{
+    auto node = find_node(host_id);
+    tlogger.debug("topology[{}]: remove_endpoint: host_id={}: {}", fmt::ptr(this), host_id, debug_format(node));
+    if (node) {
+        remove_node(node);
+        return true;
+    }
+    return false;
+}
+
 bool topology::has_node(host_id id) const noexcept {
     auto node = find_node(id);
     tlogger.trace("topology[{}]: has_node: host_id={}: {}", fmt::ptr(this), id, debug_format(node));

@@ -258,6 +258,8 @@ public:
      */
     bool remove_endpoint(inet_address ep);
 
+    bool remove_endpoint(locator::host_id ep);
+
     /**
      * Returns true iff contains given endpoint.
      */
@@ -422,6 +424,7 @@ private:
         return _nodes_by_endpoint;
     };
 
+    template <typename NodeId>
     friend class token_metadata_impl;
 public:
     void test_compare_endpoints(const inet_address& address, const inet_address& a1, const inet_address& a2) const;

@@ -43,7 +43,10 @@ class abstract_replication_strategy;
 
 using token = dht::token;
 
-class token_metadata;
+template <typename NodeId>
+class generic_token_metadata;
+using token_metadata = generic_token_metadata<gms::inet_address>;
+using token_metadata2 = generic_token_metadata<locator::host_id>;
 class tablet_metadata;
 
 struct host_id_or_endpoint {
@@ -68,14 +71,16 @@ struct host_id_or_endpoint {
 
     // Map the host_id to endpoint based on whichever of them is set,
     // using the token_metadata
-    void resolve(const token_metadata& tm);
+    template <typename NodeId>
+    void resolve(const generic_token_metadata<NodeId>& tm);
 };
 
+template <typename NodeId>
 class token_metadata_impl;
+template <typename NodeId = gms::inet_address>
 struct topology_change_info;
 
-class token_metadata final {
-    std::unique_ptr<token_metadata_impl> _impl;
+class generic_token_metadata_base {
 public:
     struct config {
         topology::config topo_cfg;
@@ -83,6 +88,11 @@ public:
     using inet_address = gms::inet_address;
     using version_t = service::topology::version_t;
     using version_tracker_t = utils::phased_barrier::operation;
+};
+
+template <typename NodeId = gms::inet_address>
+class generic_token_metadata final: public generic_token_metadata_base {
+    std::unique_ptr<token_metadata_impl<NodeId>> _impl;
 private:
     friend class token_metadata_ring_splitter;
     class tokens_iterator {
@@ -94,24 +104,24 @@ private:
         using reference = token&;
     public:
         tokens_iterator() = default;
-        tokens_iterator(const token& start, const token_metadata_impl* token_metadata);
+        tokens_iterator(const token& start, const token_metadata_impl<NodeId>* token_metadata);
         bool operator==(const tokens_iterator& it) const;
         const token& operator*() const;
         tokens_iterator& operator++();
     private:
         std::vector<token>::const_iterator _cur_it;
         size_t _remaining = 0;
-        const token_metadata_impl* _token_metadata = nullptr;
+        const token_metadata_impl<NodeId>* _token_metadata = nullptr;
 
-        friend class token_metadata_impl;
+        friend class token_metadata_impl<NodeId>;
     };
 
 public:
-    token_metadata(config cfg);
-    explicit token_metadata(std::unique_ptr<token_metadata_impl> impl);
-    token_metadata(token_metadata&&) noexcept; // Can't use "= default;" - hits some static_assert in unique_ptr
-    token_metadata& operator=(token_metadata&&) noexcept;
-    ~token_metadata();
+    generic_token_metadata(config cfg);
+    explicit generic_token_metadata(std::unique_ptr<token_metadata_impl<NodeId>> impl);
+    generic_token_metadata(generic_token_metadata&&) noexcept; // Can't use "= default;" - hits some static_assert in unique_ptr
+    generic_token_metadata& operator=(generic_token_metadata&&) noexcept;
+    ~generic_token_metadata();
     const std::vector<token>& sorted_tokens() const;
     const tablet_metadata& tablets() const;
     tablet_metadata& tablets();
@@ -121,19 +131,19 @@ public:
     //
     // Note: the function is not exception safe!
     // It must be called only on a temporary copy of the token_metadata
-    future<> update_normal_tokens(std::unordered_set<token> tokens, inet_address endpoint);
+    future<> update_normal_tokens(std::unordered_set<token> tokens, NodeId endpoint);
     const token& first_token(const token& start) const;
     size_t first_token_index(const token& start) const;
-    std::optional<inet_address> get_endpoint(const token& token) const;
-    std::vector<token> get_tokens(const inet_address& addr) const;
-    const std::unordered_map<token, inet_address>& get_token_to_endpoint() const;
-    const std::unordered_set<inet_address>& get_leaving_endpoints() const;
-    const std::unordered_map<token, inet_address>& get_bootstrap_tokens() const;
+    std::optional<NodeId> get_endpoint(const token& token) const;
+    std::vector<token> get_tokens(const NodeId& addr) const;
+    const std::unordered_map<token, NodeId>& get_token_to_endpoint() const;
+    const std::unordered_set<NodeId>& get_leaving_endpoints() const;
+    const std::unordered_map<token, NodeId>& get_bootstrap_tokens() const;
 
     /**
      * Update or add endpoint given its inet_address and endpoint_dc_rack.
      */
-    void update_topology(inet_address ep, std::optional<endpoint_dc_rack> opt_dr, std::optional<node::state> opt_st = std::nullopt,
+    void update_topology(NodeId ep, std::optional<endpoint_dc_rack> opt_dr, std::optional<node::state> opt_st = std::nullopt,
                          std::optional<shard_id> shard_count = std::nullopt);
     /**
      * Creates an iterable range of the sorted tokens starting at the token t
@@ -182,39 +192,39 @@ public:
     /// Returns host_id of the local node.
     host_id get_my_id() const;
 
-    void add_bootstrap_token(token t, inet_address endpoint);
+    void add_bootstrap_token(token t, NodeId endpoint);
 
-    void add_bootstrap_tokens(std::unordered_set<token> tokens, inet_address endpoint);
+    void add_bootstrap_tokens(std::unordered_set<token> tokens, NodeId endpoint);
 
     void remove_bootstrap_tokens(std::unordered_set<token> tokens);
 
-    void add_leaving_endpoint(inet_address endpoint);
-    void del_leaving_endpoint(inet_address endpoint);
+    void add_leaving_endpoint(NodeId endpoint);
+    void del_leaving_endpoint(NodeId endpoint);
 
-    void remove_endpoint(inet_address endpoint);
+    void remove_endpoint(NodeId endpoint);
 
     // Checks if the node is part of the token ring. If yes, the node is one of
     // the nodes that owns the tokens and inside the set _normal_token_owners.
-    bool is_normal_token_owner(inet_address endpoint) const;
+    bool is_normal_token_owner(NodeId endpoint) const;
 
-    bool is_leaving(inet_address endpoint) const;
+    bool is_leaving(NodeId endpoint) const;
 
     // Is this node being replaced by another node
-    bool is_being_replaced(inet_address endpoint) const;
+    bool is_being_replaced(NodeId endpoint) const;
 
     // Is any node being replaced by another node
     bool is_any_node_being_replaced() const;
 
-    void add_replacing_endpoint(inet_address existing_node, inet_address replacing_node);
+    void add_replacing_endpoint(NodeId existing_node, NodeId replacing_node);
 
-    void del_replacing_endpoint(inet_address existing_node);
+    void del_replacing_endpoint(NodeId existing_node);
 
     /**
      * Create a full copy of token_metadata using asynchronous continuations.
      * The caller must ensure that the cloned object will not change if
      * the function yields.
      */
-    future<token_metadata> clone_async() const noexcept;
+    future<generic_token_metadata> clone_async() const noexcept;
 
     /**
      * Create a copy of TokenMetadata with only tokenToEndpointMap. That is, pending ranges,
@@ -222,7 +232,7 @@ public:
      * The caller must ensure that the cloned object will not change if
      * the function yields.
      */
-    future<token_metadata> clone_only_token_map() const noexcept;
+    future<generic_token_metadata> clone_only_token_map() const noexcept;
     /**
      * Create a copy of TokenMetadata with tokenToEndpointMap reflecting situation after all
      * current leave operations have finished.
@@ -231,7 +241,7 @@ public:
      *
      * @return a future holding a new token metadata
      */
-    future<token_metadata> clone_after_all_left() const noexcept;
+    future<generic_token_metadata> clone_after_all_left() const noexcept;
 
     /**
      * Gently clear the token_metadata members.
@@ -251,13 +261,13 @@ public:
     static boost::icl::interval<token>::interval_type range_to_interval(range<dht::token> r);
     static range<dht::token> interval_to_range(boost::icl::interval<token>::interval_type i);
 
-    future<> update_topology_change_info(dc_rack_fn<gms::inet_address>& get_dc_rack);
+    future<> update_topology_change_info(dc_rack_fn<NodeId>& get_dc_rack);
 
-    const std::optional<topology_change_info>& get_topology_change_info() const;
+    const std::optional<topology_change_info<NodeId>>& get_topology_change_info() const;
 
     token get_predecessor(token t) const;
 
-    const std::unordered_set<inet_address>& get_all_endpoints() const;
+    const std::unordered_set<NodeId>& get_all_endpoints() const;
 
     /* Returns the number of different endpoints that own tokens in the ring.
      * Bootstrapping tokens are not taken into account. */
@@ -275,7 +285,7 @@ public:
      * @return a (stable copy, won't be modified) Token to Endpoint map for all the normal and bootstrapping nodes
      *         in the cluster.
      */
-    std::map<token, inet_address> get_normal_and_bootstrapping_token_to_endpoint_map() const;
+    std::map<token, NodeId> get_normal_and_bootstrapping_token_to_endpoint_map() const;
 
     long get_ring_version() const;
     void invalidate_cached_rings();
@@ -283,20 +293,26 @@ public:
     version_t get_version() const;
     void set_version(version_t version);
 
-    friend class token_metadata_impl;
+    friend class token_metadata_impl<NodeId>;
     friend class shared_token_metadata;
 private:
     void set_version_tracker(version_tracker_t tracker);
 };
 
+extern template class generic_token_metadata<locator::host_id>;
+extern template class generic_token_metadata<gms::inet_address>;
+extern template void host_id_or_endpoint::resolve(const token_metadata& tm);
+extern template void host_id_or_endpoint::resolve(const token_metadata2& tm);
+
+template <typename NodeId>
 struct topology_change_info {
-    token_metadata_ptr target_token_metadata;
-    token_metadata_ptr base_token_metadata;
+    lw_shared_ptr<generic_token_metadata<NodeId>> target_token_metadata;
+    lw_shared_ptr<generic_token_metadata<NodeId>> base_token_metadata;
     std::vector<dht::token> all_tokens;
     token_metadata::read_new_t read_new;
 
-    topology_change_info(token_metadata_ptr target_token_metadata_,
-        token_metadata_ptr base_token_metadata_,
+    topology_change_info(lw_shared_ptr<generic_token_metadata<NodeId>> target_token_metadata_,
+        lw_shared_ptr<generic_token_metadata<NodeId>> base_token_metadata_,
         std::vector<dht::token> all_tokens_,
         token_metadata::read_new_t read_new_);
     future<> clear_gently();
@@ -308,6 +324,11 @@ using token_metadata_lock_func = noncopyable_function<future<token_metadata_lock
 template <typename... Args>
 mutable_token_metadata_ptr make_token_metadata_ptr(Args... args) {
     return make_lw_shared<token_metadata>(std::forward<Args>(args)...);
+}
+
+template <typename... Args>
+mutable_token_metadata2_ptr make_token_metadata2_ptr(Args... args) {
+    return make_lw_shared<token_metadata2>(std::forward<Args>(args)...);
 }
 
 class shared_token_metadata {
