@@ -9,15 +9,19 @@
 #include <boost/algorithm/string/join.hpp>
 #include <boost/make_shared.hpp>
 #include <boost/range/adaptor/map.hpp>
+#include <fmt/chrono.h>
 #include <seastar/core/thread.hh>
 #include <seastar/http/exception.hh>
 #include <seastar/http/request.hh>
 #include <seastar/util/short_streams.hh>
+#include <yaml-cpp/yaml.h>
 
+#include "db_clock.hh"
 #include "log.hh"
 #include "tools/utils.hh"
 #include "utils/http.hh"
 #include "utils/rjson.hh"
+#include "utils/UUID.hh"
 
 namespace bpo = boost::program_options;
 
@@ -117,6 +121,133 @@ void compact_operation(scylla_rest_client& client, const bpo::variables_map& vm)
         for (const auto& keyspace : all_keyspaces) {
             client.post(format("/storage_service/keyspace_compaction/{}", keyspace));
         }
+    }
+}
+
+void compactionhistory_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    const auto format = vm["format"].as<sstring>();
+
+    static const std::vector<std::string_view> recognized_formats{"text", "json", "yaml"};
+    if (std::ranges::find(recognized_formats, format) == recognized_formats.end()) {
+        throw std::invalid_argument(fmt::format("invalid format {}, valid formats are: {}", format, recognized_formats));
+    }
+
+    const auto history_json = client.get("/compaction_manager/compaction_history");
+
+    struct history_entry {
+        utils::UUID id;
+        std::string table;
+        std::string keyspace;
+        int64_t compacted_at;
+        int64_t bytes_in;
+        int64_t bytes_out;
+    };
+    std::vector<history_entry> history;
+
+    for (const auto& history_entry_json : history_json.GetArray()) {
+        const auto& history_entry_json_object = history_entry_json.GetObject();
+
+        history.emplace_back(history_entry{
+                .id = utils::UUID(rjson::to_string_view(history_entry_json_object["id"])),
+                .table = std::string(rjson::to_string_view(history_entry_json_object["cf"])),
+                .keyspace = std::string(rjson::to_string_view(history_entry_json_object["ks"])),
+                .compacted_at = history_entry_json_object["compacted_at"].GetInt64(),
+                .bytes_in = history_entry_json_object["bytes_in"].GetInt64(),
+                .bytes_out = history_entry_json_object["bytes_out"].GetInt64()});
+    }
+
+    std::ranges::sort(history, [] (const history_entry& a, const history_entry& b) { return a.compacted_at > b.compacted_at; });
+
+    const auto format_compacted_at = [] (int64_t compacted_at) {
+        const auto compacted_at_time = std::time_t(compacted_at / 1000);
+        const auto milliseconds = compacted_at % 1000;
+        return fmt::format("{:%FT%T}.{}", fmt::localtime(compacted_at_time), milliseconds);
+    };
+
+    if (format == "text") {
+        std::array<std::string, 7> header_row{"id", "keyspace_name", "columnfamily_name", "compacted_at", "bytes_in", "bytes_out", "rows_merged"};
+        std::array<size_t, 7> max_column_length{};
+        for (size_t c = 0; c < header_row.size(); ++c) {
+            max_column_length[c] = header_row[c].size();
+        }
+
+        std::vector<std::array<std::string, 7>> rows;
+        rows.reserve(history.size());
+        for (const auto& e : history) {
+            rows.push_back({fmt::to_string(e.id), e.keyspace, e.table, format_compacted_at(e.compacted_at), fmt::to_string(e.bytes_in),
+                    fmt::to_string(e.bytes_out), ""});
+            for (size_t c = 0; c < rows.back().size(); ++c) {
+                max_column_length[c] = std::max(max_column_length[c], rows.back()[c].size());
+            }
+        }
+
+        const auto header_row_format = fmt::format("{{:<{}}} {{:<{}}} {{:<{}}} {{:<{}}} {{:<{}}} {{:<{}}} {{:<{}}}\n", max_column_length[0],
+                max_column_length[1], max_column_length[2], max_column_length[3], max_column_length[4], max_column_length[5], max_column_length[6]);
+        const auto regular_row_format = fmt::format("{{:<{}}} {{:<{}}} {{:<{}}} {{:<{}}} {{:>{}}} {{:>{}}} {{:>{}}}\n", max_column_length[0],
+                max_column_length[1], max_column_length[2], max_column_length[3], max_column_length[4], max_column_length[5], max_column_length[6]);
+
+        fmt::print(std::cout, "Compaction History:\n");
+        fmt::print(std::cout, fmt::runtime(header_row_format.c_str()), header_row[0], header_row[1], header_row[2], header_row[3], header_row[4],
+                header_row[5], header_row[6]);
+        for (const auto& r : rows) {
+            fmt::print(std::cout, fmt::runtime(regular_row_format.c_str()), r[0], r[1], r[2], r[3], r[4], r[5], r[6]);
+        }
+    } else if (format == "json") {
+        rjson::streaming_writer writer;
+
+        writer.StartObject();
+        writer.Key("CompactionHistory");
+        writer.StartArray();
+
+        for (const auto& e : history) {
+            writer.StartObject();
+            writer.Key("id");
+            writer.String(fmt::to_string(e.id));
+            writer.Key("columnfamily_name");
+            writer.String(e.table);
+            writer.Key("keyspace_name");
+            writer.String(e.keyspace);
+            writer.Key("compacted_at");
+            writer.String(format_compacted_at(e.compacted_at));
+            writer.Key("bytes_in");
+            writer.Int64(e.bytes_in);
+            writer.Key("bytes_out");
+            writer.Int64(e.bytes_out);
+            writer.Key("rows_merged");
+            writer.String("");
+            writer.EndObject();
+        }
+
+        writer.EndArray();
+        writer.EndObject();
+    } else if (format == "yaml") {
+        YAML::Emitter yout(std::cout);
+
+        yout << YAML::BeginMap;
+        yout << YAML::Key << "CompactionHistory";
+        yout << YAML::BeginSeq;
+
+        for (const auto& e : history) {
+            yout << YAML::BeginMap;
+            yout << YAML::Key << "id";
+            yout << YAML::Value << fmt::to_string(e.id);
+            yout << YAML::Key << "columnfamily_name";
+            yout << YAML::Value << e.table;
+            yout << YAML::Key << "keyspace_name";
+            yout << YAML::Value << e.keyspace;
+            yout << YAML::Key << "compacted_at";
+            yout << YAML::Value << YAML::SingleQuoted << format_compacted_at(e.compacted_at);
+            yout << YAML::Key << "bytes_in";
+            yout << YAML::Value << e.bytes_in;
+            yout << YAML::Key << "bytes_out";
+            yout << YAML::Value << e.bytes_out;
+            yout << YAML::Key << "rows_merged";
+            yout << YAML::Value << YAML::SingleQuoted << "";
+            yout << YAML::EndMap;
+        }
+
+        yout << YAML::EndSeq;
+        yout << YAML::EndMap;
     }
 }
 
@@ -312,6 +443,19 @@ Fore more information, see: https://opensource.docs.scylladb.com/stable/operatin
                 }
             },
             compact_operation
+        },
+        {
+            {
+                "compactionhistory",
+                "Provides the history of compaction operations",
+R"(
+Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/compactionhistory.html
+)",
+                {
+                    typed_option<sstring>("format,F", "text", "Output format, one of: (json, yaml or text); defaults to text"),
+                },
+            },
+            compactionhistory_operation
         },
         {
             {
