@@ -2514,8 +2514,14 @@ SEASTAR_TEST_CASE(test_exception_safety_of_update_from_memtable) {
         orig.push_back(muts[3]);
         orig.push_back(muts[4]);
 
+        bool succeeded = false;
+
         memtable_snapshot_source underlying(s.schema());
         memory::with_allocation_failures([&] {
+            if (succeeded) {
+                return;
+            }
+
             for (auto&& m : orig) {
                 memory::scoped_critical_alloc_section dfg;
                 underlying.apply(m);
@@ -2573,6 +2579,9 @@ SEASTAR_TEST_CASE(test_exception_safety_of_update_from_memtable) {
             }), *mt).get();
 
             d.cancel();
+
+            memory::scoped_critical_alloc_section dfg;
+            succeeded = true;
 
             assert_that(cache.make_reader(cache.schema(), semaphore.make_permit()))
                 .produces(muts2)
