@@ -6,6 +6,7 @@ Cluster and Node
    :maxdepth: 2 
 
    Handling Node Failures </troubleshooting/handling-node-failures>
+   Failure to Add, Remove, or Replace a Node </troubleshooting/failed-add-remove-replace>
    Failed Decommission Problem </troubleshooting/failed-decommission/>
    Cluster Timeouts </troubleshooting/timeouts>
    Node Joined With No Data </troubleshooting/node-joined-without-any-data>
@@ -23,6 +24,7 @@ Cluster and Node
               <div class="medium-9 columns">
 
 * :doc:`Handling Node Failures </troubleshooting/handling-node-failures>`
+* :doc:`Failure to Add, Remove, or Replace a Node </troubleshooting/failed-add-remove-replace>`
 * :doc:`Failed Decommission Problem </troubleshooting/failed-decommission/>`
 * :doc:`Cluster Timeouts </troubleshooting/timeouts>`
 * :doc:`Node Joined With No Data </troubleshooting/node-joined-without-any-data>`
