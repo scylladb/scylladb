@@ -67,14 +67,6 @@ def test_token_range_compatibility_argument(nodetool):
     nodetool("compact", "system_schema", "--start-token", "0", "--end-token", "1000", expected_requests=dummy_request)
 
 
-def test_partition_compatibility_argument(nodetool):
-    dummy_request = [
-            expected_request("GET", "/storage_service/keyspaces", multiple=True, response=["system", "system_schema"]),
-            expected_request("POST", "/storage_service/keyspace_compaction/system_schema")]
-
-    nodetool("compact", "system_schema", "--partition", "0", expected_requests=dummy_request)
-
-
 def test_user_defined(nodetool, scylla_only):
     with pytest.raises(subprocess.CalledProcessError) as e:
         nodetool("compact", "--user-defined", "/var/lib/scylla/data/system/local-7ad54392bcdd35a684174e047860b377/"

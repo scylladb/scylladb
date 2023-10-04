@@ -159,7 +159,6 @@ Fore more information, see: https://opensource.docs.scylladb.com/stable/operatin
                     typed_option<>("user-defined", "Submit listed SStable files for user-defined compaction (unused)"),
                     typed_option<int64_t>("start-token", "Specify a token at which the compaction range starts (unused)"),
                     typed_option<int64_t>("end-token", "Specify a token at which the compaction range end (unused)"),
-                    typed_option<sstring>("partition", "String representation of the partition key to compact (unused)"),
                 },
                 {
                     typed_option<std::vector<sstring>>("compaction_arg", "[<keyspace> <tables>...] or [<SStable files>...] ", -1),
