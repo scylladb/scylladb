@@ -73,7 +73,7 @@ public:
         const topology& topo = _tm->get_topology();
         co_await utils::clear_gently(_nodes);
         for (auto&& [table, tmap_] : _tm->tablets().all_tables()) {
-            auto& tmap = tmap_;
+            auto& tmap = *tmap_;
             co_await tmap.for_each_tablet([&] (tablet_id tid, const tablet_info& ti) {
                 for (auto&& replica : get_replicas_for_tablet_load(ti, tmap.get_tablet_transition_info(tid))) {
                     if (host && *host != replica.host) {

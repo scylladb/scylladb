@@ -132,8 +132,7 @@ SEASTAR_TEST_CASE(test_tablet_metadata_persistence) {
             verify_tablet_metadata_persistence(e, tm);
 
             // Increase RF of table2
-            {
-                auto&& tmap = tm.get_tablet_map(table2);
+            tm.mutate_tablet_map(table2, [&] (tablet_map& tmap) {
                 auto tb = tmap.first_tablet();
                 tb = *tmap.next_tablet(tb);
 
@@ -155,7 +154,7 @@ SEASTAR_TEST_CASE(test_tablet_metadata_persistence) {
                     },
                     tablet_replica {h1, 4}
                 });
-            }
+            });
 
             verify_tablet_metadata_persistence(e, tm);
 
@@ -593,10 +592,11 @@ SEASTAR_THREAD_TEST_CASE(test_token_ownership_splitting) {
 static
 void apply_plan(token_metadata& tm, const migration_plan& plan) {
     for (auto&& mig : plan.migrations()) {
-        tablet_map& tmap = tm.tablets().get_tablet_map(mig.tablet.table);
-        auto tinfo = tmap.get_tablet_info(mig.tablet.tablet);
-        tinfo.replicas = replace_replica(tinfo.replicas, mig.src, mig.dst);
-        tmap.set_tablet(mig.tablet.tablet, tinfo);
+        tm.tablets().mutate_tablet_map(mig.tablet.table, [&] (tablet_map& tmap) {
+            auto tinfo = tmap.get_tablet_info(mig.tablet.tablet);
+            tinfo.replicas = replace_replica(tinfo.replicas, mig.src, mig.dst);
+            tmap.set_tablet(mig.tablet.tablet, tinfo);
+        });
     }
 }
 
@@ -613,9 +613,10 @@ tablet_transition_info migration_to_transition_info(const tablet_migration_info&
 static
 void apply_plan_as_in_progress(token_metadata& tm, const migration_plan& plan) {
     for (auto&& mig : plan.migrations()) {
-        tablet_map& tmap = tm.tablets().get_tablet_map(mig.tablet.table);
-        auto tinfo = tmap.get_tablet_info(mig.tablet.tablet);
-        tmap.set_tablet_transition_info(mig.tablet.tablet, migration_to_transition_info(mig, tinfo));
+        tm.tablets().mutate_tablet_map(mig.tablet.table, [&] (tablet_map& tmap) {
+            auto tinfo = tmap.get_tablet_info(mig.tablet.tablet);
+            tmap.set_tablet_transition_info(mig.tablet.tablet, migration_to_transition_info(mig, tinfo));
+        });
     }
 }
 
@@ -652,13 +653,14 @@ static
 void execute_transitions(shared_token_metadata& stm) {
     stm.mutate_token_metadata([&] (token_metadata& tm) {
         for (auto&& [tablet, tmap_] : tm.tablets().all_tables()) {
-            auto& tmap = tmap_;
+          tm.tablets().mutate_tablet_map(tablet, [&] (tablet_map& tmap) {
             for (auto&& [tablet, trinfo]: tmap.transitions()) {
                 auto ti = tmap.get_tablet_info(tablet);
                 ti.replicas = trinfo.next;
                 tmap.set_tablet(tablet, ti);
             }
             tmap.clear_transitions();
+          });
         }
         return make_ready_future<>();
     }).get();

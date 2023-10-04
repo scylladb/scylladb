@@ -1534,7 +1534,8 @@ class topology_coordinator {
                                                            locator::global_tablet_id,
                                                            const locator::tablet_transition_info&)> func) {
         auto tm = get_token_metadata_ptr();
-        for (auto&& [table, tmap] : tm->tablets().all_tables()) {
+        for (auto&& [table, _tmap] : tm->tablets().all_tables()) {
+            const auto& tmap = *_tmap;
             co_await coroutine::maybe_yield();
             auto s = _db.find_schema(table);
             for (auto&& [tablet, trinfo]: tmap.transitions()) {

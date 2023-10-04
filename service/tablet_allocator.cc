@@ -357,7 +357,7 @@ public:
         // Compute tablet load on nodes.
 
         for (auto&& [table, tmap_] : _tm->tablets().all_tables()) {
-            auto& tmap = tmap_;
+            auto& tmap = *tmap_;
             co_await tmap.for_each_tablet([&, table = table] (tablet_id tid, const tablet_info& ti) {
                 auto trinfo = tmap.get_tablet_transition_info(tid);
 
@@ -442,7 +442,7 @@ public:
         // Compute per-shard load and candidate tablets.
 
         for (auto&& [table, tmap_] : _tm->tablets().all_tables()) {
-            auto& tmap = tmap_;
+            auto& tmap = *tmap_;
             co_await tmap.for_each_tablet([&, table = table] (tablet_id tid, const tablet_info& ti) {
                 auto trinfo = tmap.get_tablet_transition_info(tid);
 

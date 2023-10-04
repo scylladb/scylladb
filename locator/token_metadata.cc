@@ -372,7 +372,7 @@ future<std::unique_ptr<token_metadata_impl>> token_metadata_impl::clone_only_tok
         ret->_sorted_tokens = _sorted_tokens;
         co_await coroutine::maybe_yield();
     }
-    ret->_tablets = _tablets;
+    ret->_tablets = co_await _tablets.copy();
     ret->_read_new = _read_new;
     co_return ret;
 }
