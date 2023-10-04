@@ -94,9 +94,9 @@ private:
     struct shallow_copy {};
 public:
     token_metadata_impl(shallow_copy, const token_metadata_impl& o) noexcept
-        : _topology(topology::config{})
+        : _topology(topology::config{}, topology::key_kind::inet_address)
     {}
-    token_metadata_impl(token_metadata::config cfg) noexcept : _topology(std::move(cfg.topo_cfg)) {};
+    token_metadata_impl(token_metadata::config cfg) noexcept : _topology(std::move(cfg.topo_cfg), topology::key_kind::inet_address) {};
     token_metadata_impl(const token_metadata_impl&) = delete; // it's too huge for direct copy, use clone_async()
     token_metadata_impl(token_metadata_impl&&) noexcept = default;
     const std::vector<token>& sorted_tokens() const;

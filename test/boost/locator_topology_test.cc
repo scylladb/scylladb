@@ -36,7 +36,7 @@ SEASTAR_THREAD_TEST_CASE(test_add_node) {
         .local_dc_rack = endpoint_dc_rack::default_location,
     };
 
-    auto topo = topology(cfg);
+    auto topo = topology(cfg, topology::key_kind::inet_address);
 
     set_abort_on_internal_error(false);
     auto reset_on_internal_abort = seastar::defer([] {
@@ -73,7 +73,7 @@ SEASTAR_THREAD_TEST_CASE(test_moving) {
         .local_dc_rack = endpoint_dc_rack::default_location,
     };
 
-    auto topo = topology(cfg);
+    auto topo = topology(cfg, topology::key_kind::inet_address);
 
     topo.add_node(id1, ep1, endpoint_dc_rack::default_location, node::state::normal);
 
@@ -102,7 +102,7 @@ SEASTAR_THREAD_TEST_CASE(test_update_node) {
         .local_dc_rack = endpoint_dc_rack::default_location,
     };
 
-    auto topo = topology(cfg);
+    auto topo = topology(cfg, topology::key_kind::inet_address);
 
     set_abort_on_internal_error(false);
     auto reset_on_internal_abort = seastar::defer([] {
@@ -171,6 +171,38 @@ SEASTAR_THREAD_TEST_CASE(test_update_node) {
     BOOST_REQUIRE_EQUAL(node->get_state(), locator::node::state::left);
 }
 
+SEASTAR_THREAD_TEST_CASE(test_add_or_update_by_host_id) {
+    auto id1 = host_id::create_random_id();
+    auto id2 = host_id::create_random_id();
+    auto ep1 = gms::inet_address("127.0.0.1");
+
+    // In this test we check that add_or_update_endpoint searches by host_id first.
+    // We create two nodes, one matches by id, another - by ip,
+    // and assert that add_or_update_endpoint updates the first.
+    // We need to make the second node 'being_decommissioned', so that
+    // it gets removed from ip index and we don't get the non-unique IP error.
+
+    auto topo = topology({}, topology::key_kind::host_id);
+    //auto topo = topology({});
+    topo.add_node(id1, gms::inet_address{}, endpoint_dc_rack::default_location, node::state::normal);
+    topo.add_node(id2, ep1, endpoint_dc_rack::default_location, node::state::being_decommissioned);
+
+    topo.add_or_update_endpoint(ep1, id1, std::nullopt, node::state::bootstrapping);
+
+    auto* n = topo.find_node(id1);
+    BOOST_REQUIRE_EQUAL(n->get_state(), node::state::bootstrapping);
+    BOOST_REQUIRE_EQUAL(n->host_id(), id1);
+    BOOST_REQUIRE_EQUAL(n->endpoint(), ep1);
+
+    auto* n2 = topo.find_node(ep1);
+    BOOST_REQUIRE_EQUAL(n, n2);
+
+    auto* n3 = topo.find_node(id2);
+    BOOST_REQUIRE_EQUAL(n3->get_state(), node::state::being_decommissioned);
+    BOOST_REQUIRE_EQUAL(n3->host_id(), id2);
+    BOOST_REQUIRE_EQUAL(n3->endpoint(), ep1);
+}
+
 SEASTAR_THREAD_TEST_CASE(test_remove_endpoint) {
     using dc_endpoints_t = std::unordered_map<sstring, std::unordered_set<inet_address>>;
     using dc_racks_t = std::unordered_map<sstring, std::unordered_map<sstring, std::unordered_set<inet_address>>>;
@@ -194,7 +226,7 @@ SEASTAR_THREAD_TEST_CASE(test_remove_endpoint) {
         .local_dc_rack = dc_rack1
     };
 
-    auto topo = topology(cfg);
+    auto topo = topology(cfg, topology::key_kind::inet_address);
 
     topo.add_node(id1, ep1, dc_rack1, node::state::normal);
     topo.add_node(id2, ep2, dc_rack2, node::state::normal);

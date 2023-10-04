@@ -159,6 +159,11 @@ private:
 
 class topology {
 public:
+    enum class key_kind {
+        inet_address,
+        host_id,
+    };
+
     struct config {
         inet_address this_endpoint;
         inet_address this_cql_address;   // corresponds to broadcast_rpc_address
@@ -168,7 +173,7 @@ public:
 
         bool operator==(const config&) const = default;
     };
-    topology(config cfg);
+    topology(config cfg, key_kind k);
     topology(topology&&) noexcept;
 
     topology& operator=(topology&&) noexcept;
@@ -234,7 +239,7 @@ public:
      *
      * Adds or updates a node with given endpoint
      */
-    const node* add_or_update_endpoint(inet_address ep, std::optional<host_id> opt_id,
+    const node* add_or_update_endpoint(std::optional<inet_address> ep, std::optional<host_id> opt_id,
                                        std::optional<endpoint_dc_rack> opt_dr,
                                        std::optional<node::state> opt_st,
                                        std::optional<shard_id> shard_count = std::nullopt);
@@ -408,6 +413,8 @@ private:
 
     // pre-calculated
     std::unordered_set<sstring> _datacenters;
+
+    key_kind _key_kind;
 
     void calculate_datacenters();
 
