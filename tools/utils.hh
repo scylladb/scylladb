@@ -21,6 +21,7 @@ public:
     basic_option(const char* name, const char* description) : name(name), description(description) { }
 
     virtual void add_option(boost::program_options::options_description& opts) const = 0;
+    virtual app_template::positional_option to_positional_option() const = 0;
 };
 
 template <typename T = std::monostate>
@@ -35,6 +36,13 @@ class typed_option : public basic_option {
             opts.add_options()(name, boost::program_options::value<T>(), description);
         }
     }
+    virtual app_template::positional_option to_positional_option() const override {
+        if (_default_value) {
+            return {name, boost::program_options::value<T>()->default_value(*_default_value), description, _count};
+        } else {
+            return {name, boost::program_options::value<T>(), description, _count};
+        }
+    }
 
 public:
     typed_option(const char* name, const char* description) : basic_option(name, description) { }
@@ -46,6 +54,9 @@ template <>
 class typed_option<std::monostate> : public basic_option {
     virtual void add_option(boost::program_options::options_description& opts) const override {
         opts.add_options()(name, description);
+    }
+    virtual app_template::positional_option to_positional_option() const override {
+        throw std::runtime_error(fmt::format("typed_option<> (option {}) cannot be used as positional option", name));
     }
 public:
     typed_option(const char* name, const char* description) : basic_option(name, description) { }
@@ -61,34 +72,51 @@ public:
     const char* name() const { return _opt->name; }
     const char* description() const { return _opt->description; }
     void add_option(boost::program_options::options_description& opts) const { _opt->add_option(opts); }
+    app_template::positional_option to_positional_option() const { return _opt->to_positional_option(); }
 };
 
 class operation {
     std::string _name;
+    std::vector<std::string> _aliases;
     std::string _summary;
     std::string _description;
     std::vector<operation_option> _options;
-    std::vector<app_template::positional_option> _positional_options;
+    std::vector<operation_option> _positional_options;
 
 public:
     operation(
             std::string name,
+            std::vector<std::string> aliases,
             std::string summary,
             std::string description,
             std::vector<operation_option> options = {},
-            std::vector<app_template::positional_option> positional_options = {})
+            std::vector<operation_option> positional_options = {})
         : _name(std::move(name))
+        , _aliases(std::move(aliases))
         , _summary(std::move(summary))
         , _description(std::move(description))
         , _options(std::move(options))
         , _positional_options(std::move(positional_options)) {
     }
 
+    operation(
+            std::string name,
+            std::string summary,
+            std::string description,
+            std::vector<operation_option> options = {},
+            std::vector<operation_option> positional_options = {})
+        : operation(std::move(name), {}, std::move(summary), std::move(description), std::move(options), std::move(positional_options))
+    {}
+
     const std::string& name() const { return _name; }
+    const std::vector<std::string> aliases() const { return _aliases; }
     const std::string& summary() const { return _summary; }
     const std::string& description() const { return _description; }
     const std::vector<operation_option>& options() const { return _options; }
-    const std::vector<app_template::positional_option>& positional_options() const { return _positional_options; }
+    const std::vector<operation_option>& positional_options() const { return _positional_options; }
+
+    // Does the name or any of the aliases matches the provided name?
+    bool matches(std::string_view name) const;
 };
 
 inline bool operator<(const operation& a, const operation& b) {
@@ -104,7 +132,7 @@ public:
         size_t lsa_segment_pool_backend_size_mb = 1;
         std::vector<operation> operations;
         const std::vector<operation_option>* global_options = nullptr;
-        const std::vector<app_template::positional_option>* global_positional_options = nullptr;
+        const std::vector<operation_option>* global_positional_options = nullptr;
     };
 
 private:
@@ -114,6 +142,8 @@ public:
     tool_app_template(config cfg)
         : _cfg(std::move(cfg))
     { }
+
+    const config& get_config() const { return _cfg; }
 
     int run_async(int argc, char** argv, noncopyable_function<int(const operation&, const boost::program_options::variables_map&)> main_func);
 };

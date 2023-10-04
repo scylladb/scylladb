@@ -169,4 +169,6 @@ def nodetool(request, jmx, nodetool_path, rest_api_mock_server):
         res.check_returncode()
         assert len(unconsumed_expected_requests) == 0
 
+        return res.stdout
+
     return invoker

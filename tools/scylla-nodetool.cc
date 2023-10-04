@@ -7,8 +7,10 @@
  */
 
 #include <boost/algorithm/string/join.hpp>
+#include <boost/make_shared.hpp>
 #include <boost/range/adaptor/map.hpp>
 #include <seastar/core/thread.hh>
+#include <seastar/http/exception.hh>
 #include <seastar/http/request.hh>
 #include <seastar/util/short_streams.hh>
 
@@ -35,15 +37,21 @@ class scylla_rest_client {
 
     rjson::value do_request(sstring type, sstring path, std::unordered_map<sstring, sstring> params) {
         auto req = http::request::make(type, _host_name, path);
-        req.query_parameters = std::move(params);
+        auto url = req.get_url();
+        req.query_parameters = params;
 
-        nlog.trace("Making {} request to {} with parameters {}", type, req.get_url(), req.query_parameters);
+        nlog.trace("Making {} request to {} with parameters {}", type, url, params);
 
         sstring res;
 
-        _api_client.make_request(std::move(req), seastar::coroutine::lambda([&] (const http::reply&, input_stream<char> body) -> future<> {
-            res = co_await util::read_entire_stream_contiguous(body);
-        })).get();
+        try {
+            _api_client.make_request(std::move(req), seastar::coroutine::lambda([&] (const http::reply&, input_stream<char> body) -> future<> {
+                res = co_await util::read_entire_stream_contiguous(body);
+            })).get();
+        } catch (httpd::unexpected_status_error& e) {
+            throw std::runtime_error(fmt::format("error executing {} request to {} with parameters {}: remote replied with {}", type, url, params,
+                        e.status()));
+        }
 
         if (res.empty()) {
             return rjson::null_value();
@@ -71,50 +79,16 @@ public:
     rjson::value get(sstring path, std::unordered_map<sstring, sstring> params = {}) {
         return do_request("GET", std::move(path), std::move(params));
     }
+
+    // delete is a reserved keyword, using del instead
+    rjson::value del(sstring path, std::unordered_map<sstring, sstring> params = {}) {
+        return do_request("DELETE", std::move(path), std::move(params));
+    }
 };
 
 using operation_func = void(*)(scylla_rest_client&, const bpo::variables_map&);
 
-enum class json_type {
-    null, boolean, object, array, string, number
-};
-
-const rjson::value& check_json_type(const rjson::value& value, json_type type) {
-    bool ok = false;
-    sstring type_name = "unknown";
-    switch (type) {
-        case json_type::null:
-            ok = value.IsNull();
-            type_name = "null";
-            break;
-        case json_type::boolean:
-            ok = value.IsBool();
-            type_name = "bool";
-            break;
-        case json_type::object:
-            ok = value.IsObject();
-            type_name = "object";
-            break;
-        case json_type::array:
-            ok = value.IsArray();
-            type_name = "array";
-            break;
-        case json_type::string:
-            ok = value.IsString();
-            type_name = "string";
-            break;
-        case json_type::number:
-            ok = value.IsNumber();
-            type_name = "number";
-            break;
-        default:
-            throw std::runtime_error(fmt::format("check_json_type(): unknown type: {}", static_cast<int>(type)));
-    }
-    if (!ok) {
-        throw std::runtime_error(fmt::format("check_json_type(): json value is not of the expected type: {}", type_name));
-    }
-    return value;
-}
+std::map<operation, operation_func> get_operations_with_func();
 
 void compact_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     if (vm.count("user-defined")) {
@@ -123,8 +97,8 @@ void compact_operation(scylla_rest_client& client, const bpo::variables_map& vm)
 
     auto keyspaces_json = client.get("/storage_service/keyspaces", {});
     std::vector<sstring> all_keyspaces;
-    for (const auto& keyspace_json : check_json_type(keyspaces_json, json_type::array).GetArray()) {
-        all_keyspaces.emplace_back(rjson::to_string_view(check_json_type(keyspace_json, json_type::string)));
+    for (const auto& keyspace_json : keyspaces_json.GetArray()) {
+        all_keyspaces.emplace_back(rjson::to_string_view(keyspace_json));
     }
 
     if (vm.count("compaction_arg")) {
@@ -146,6 +120,130 @@ void compact_operation(scylla_rest_client& client, const bpo::variables_map& vm)
     }
 }
 
+void disablebackup_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    client.post("/storage_service/incremental_backups", {{"value", "false"}});
+}
+
+void disablebinary_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    client.del("/storage_service/native_transport");
+}
+
+void disablegossip_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    client.del("/storage_service/gossiping");
+}
+
+void enablebackup_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    client.post("/storage_service/incremental_backups", {{"value", "true"}});
+}
+
+void enablebinary_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    client.post("/storage_service/native_transport");
+}
+
+void enablegossip_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    client.post("/storage_service/gossiping");
+}
+
+void gettraceprobability_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    auto res = client.get("/storage_service/trace_probability");
+    fmt::print(std::cout, "Current trace probability: {}\n", res.GetDouble());
+}
+
+void help_operation(const tool_app_template::config& cfg, const bpo::variables_map& vm) {
+    if (vm.count("command")) {
+        const auto command = vm["command"].as<sstring>();
+        auto ops = get_operations_with_func();
+        auto keys = ops | boost::adaptors::map_keys;
+        auto it = std::ranges::find_if(keys, [&] (const operation& op) { return op.name() == command; });
+        if (it == keys.end()) {
+            throw std::invalid_argument(fmt::format("unknown command {}", command));
+        }
+
+        const auto& op = *it;
+
+        fmt::print(std::cout, "{}\n\n", op.summary());
+        fmt::print(std::cout, "{}\n\n", op.description());
+
+        // FIXME
+        // The below code is needed because we don't have complete access to the
+        // internal options descriptions inside the app-template.
+        // This will be addressed once https://github.com/scylladb/seastar/pull/1762
+        // goes in.
+
+        bpo::options_description opts_desc(fmt::format("{} options", app_name));
+        opts_desc.add_options()
+                ("help,h", "show help message")
+                ;
+        opts_desc.add_options()
+                ("help-seastar", "show help message about seastar options")
+                ;
+        opts_desc.add_options()
+                ("help-loggers", "print a list of logger names and exit")
+                ;
+        if (cfg.global_options) {
+            for (const auto& go : *cfg.global_options) {
+                go.add_option(opts_desc);
+            }
+        }
+        if (cfg.global_positional_options) {
+            for (const auto& gpo : *cfg.global_positional_options) {
+                gpo.add_option(opts_desc);
+            }
+        }
+
+        bpo::options_description op_opts_desc(op.name());
+        for (const auto& opt : op.options()) {
+            opt.add_option(op_opts_desc);
+        }
+        for (const auto& opt : op.positional_options()) {
+            opt.add_option(opts_desc);
+        }
+        if (!op.options().empty()) {
+            opts_desc.add(op_opts_desc);
+        }
+
+        fmt::print(std::cout, "{}\n", opts_desc);
+    } else {
+        fmt::print(std::cout, "usage: nodetool [(-p <port> | --port <port>)] [(-h <host> | --host <host>)] <command> [<args>]\n\n");
+        fmt::print(std::cout, "The most commonly used nodetool commands are:\n");
+        for (auto [op, _] : get_operations_with_func()) {
+            fmt::print(std::cout, "    {:<26} {}\n", op.name(), op.summary());
+        }
+        fmt::print(std::cout, "\nSee 'nodetool help <command>' for more information on a specific command.\n\n");
+    }
+}
+
+void settraceprobability_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    if (!vm.count("trace_probability")) {
+        throw std::invalid_argument("required parameters are missing: trace_probability");
+    }
+    const auto value = vm["trace_probability"].as<double>();
+    if (value < 0.0 or value > 1.0) {
+        throw std::invalid_argument("trace probability must be between 0 and 1");
+    }
+    client.post("/storage_service/trace_probability", {{"probability", fmt::to_string(value)}});
+}
+
+void statusbackup_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    auto status = client.get("/storage_service/incremental_backups");
+    fmt::print(std::cout, "{}\n", status.GetBool() ? "running" : "not running");
+}
+
+void statusbinary_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    auto status = client.get("/storage_service/native_transport");
+    fmt::print(std::cout, "{}\n", status.GetBool() ? "running" : "not running");
+}
+
+void statusgossip_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    auto status = client.get("/storage_service/gossiping");
+    fmt::print(std::cout, "{}\n", status.GetBool() ? "running" : "not running");
+}
+
+void version_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    auto version_json = client.get("/storage_service/release_version");
+    fmt::print(std::cout, "ReleaseVersion: {}\n", rjson::to_string_view(version_json));
+}
+
 const std::vector<operation_option> global_options{
     typed_option<sstring>("host,h", "localhost", "the hostname or ip address of the ScyllaDB node"),
     typed_option<uint16_t>("port,p", 10000, "the port of the REST API of the ScyllaDB node"),
@@ -164,7 +262,7 @@ const std::map<std::string_view, std::string_view> option_substitutions{
     {"-et", "--end-token"},
 };
 
-auto get_operations_with_func() {
+std::map<operation, operation_func> get_operations_with_func() {
 
     const static std::map<operation, operation_func> operations_with_func {
         {
@@ -188,13 +286,178 @@ Fore more information, see: https://opensource.docs.scylladb.com/stable/operatin
                     typed_option<>("user-defined", "Submit listed SStable files for user-defined compaction (unused)"),
                     typed_option<int64_t>("start-token", "Specify a token at which the compaction range starts (unused)"),
                     typed_option<int64_t>("end-token", "Specify a token at which the compaction range end (unused)"),
-                    typed_option<sstring>("partition", "String representation of the partition key to compact (unused)"),
                 },
                 {
-                    {"compaction_arg", bpo::value<std::vector<sstring>>(), "[<keyspace> <tables>...] or [<SStable files>...] ", -1},
+                    typed_option<std::vector<sstring>>("compaction_arg", "[<keyspace> <tables>...] or [<SStable files>...] ", -1),
                 }
             },
             compact_operation
+        },
+        {
+            {
+                "disablebackup",
+                "Disables incremental backup",
+R"(
+Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/disablebackup.html
+)",
+            },
+            disablebackup_operation
+        },
+        {
+            {
+                "disablebinary",
+                "Disable the CQL native protocol",
+R"(
+Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/disablebinary.html
+)",
+            },
+            disablebinary_operation
+        },
+        {
+            {
+                "disablegossip",
+                "Disable the gossip protocol",
+R"(
+Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/disablegossip.html
+)",
+            },
+            disablegossip_operation
+        },
+        {
+            {
+                "enablebackup",
+                "Enables incremental backup",
+R"(
+Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/enablebackup.html
+)",
+            },
+            enablebackup_operation
+        },
+        {
+            {
+                "enablebinary",
+                "Enables the CQL native protocol",
+R"(
+The native protocol is enabled by default.
+
+Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/enablebinary.html
+)",
+            },
+            enablebinary_operation
+        },
+        {
+            {
+                "enablegossip",
+                "Enables the gossip protocol",
+R"(
+The gossip protocol is enabled by default.
+
+Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/enablegossip.html
+)",
+            },
+            enablegossip_operation
+        },
+        {
+            {
+                "gettraceprobability",
+                "Displays the current trace probability value",
+R"(
+This value is the probability for tracing a request. To change this value see settraceprobability.
+
+Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/gettraceprobability.html
+)",
+            },
+            gettraceprobability_operation
+        },
+        {
+            {
+                "help",
+                "Displays the list of all available nodetool commands",
+                "",
+                { },
+                {
+                    typed_option<sstring>("command", "The command to get more information about", 1),
+                },
+            },
+            [] (scylla_rest_client&, const bpo::variables_map&) {}
+        },
+        {
+            {
+                "settraceprobability",
+                "Sets the probability for tracing a request",
+R"(
+Value is trace probability between 0 and 1. 0 the trace will never happen and 1
+the trace will always happen. Anything in between is a percentage of the time,
+converted into a decimal. For example, 60% would be 0.6.
+
+Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/settraceprobability.html
+)",
+                { },
+                {
+                    typed_option<double>("trace_probability", "trace probability value, must between 0 and 1, e.g. 0.2", 1),
+                },
+            },
+            settraceprobability_operation
+        },
+        {
+            {
+                "statusbackup",
+                "Displays the incremental backup status",
+R"(
+Results can be one of the following: `running` or `not running`.
+
+By default, the incremental backup status is `not running`.
+
+Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/statusbackup.html
+)",
+            },
+            statusbackup_operation
+        },
+        {
+            {
+                "statusbinary",
+                "Displays the incremental backup status",
+R"(
+Provides the status of native transport - CQL (binary protocol).
+In case that you don’t want to use CQL you can disable it using the disablebinary
+command.
+Results can be one of the following: `running` or `not running`.
+
+By default, the native transport is `running`.
+
+Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/statusbinary.html
+)",
+            },
+            statusbinary_operation
+        },
+        {
+            {
+                "statusgossip",
+                "Displays the gossip status",
+R"(
+Provides the status of gossip.
+Results can be one of the following: `running` or `not running`.
+
+By default, the gossip protocol is `running`.
+
+Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/statusgossip.html
+)",
+            },
+            statusgossip_operation
+        },
+        {
+            {
+                "version",
+                "Displays the Apache Cassandra version which your version of Scylla is most compatible with",
+R"(
+Displays the Apache Cassandra version which your version of Scylla is most
+compatible with, not your current Scylla version. To display the Scylla version,
+run `scylla --version`.
+
+For more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/version.html
+)",
+            },
+            version_operation
         },
     };
 
@@ -282,11 +545,18 @@ For more information, see: https://opensource.docs.scylladb.com/stable/operating
             .global_options = &global_options};
     tool_app_template app(std::move(app_cfg));
 
-    return app.run_async(replacement_argv.size(), replacement_argv.data(), [] (const operation& operation, const bpo::variables_map& app_config) {
-        scylla_rest_client client(app_config["host"].as<sstring>(), app_config["port"].as<uint16_t>());
-
+    return app.run_async(replacement_argv.size(), replacement_argv.data(), [&app] (const operation& operation, const bpo::variables_map& app_config) {
         try {
-            get_operations_with_func().at(operation)(client, app_config);
+            // Help operation is special (and weird), add special path for it
+            // instead of making all other commands:
+            // * make client param optional
+            // * take an additional param
+            if (operation.name() == "help") {
+                help_operation(app.get_config(), app_config);
+            } else {
+                scylla_rest_client client(app_config["host"].as<sstring>(), app_config["port"].as<uint16_t>());
+                get_operations_with_func().at(operation)(client, app_config);
+            }
         } catch (std::invalid_argument& e) {
             fmt::print(std::cerr, "error processing arguments: {}\n", e.what());
             return 1;

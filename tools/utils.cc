@@ -15,6 +15,10 @@
 
 namespace tools::utils {
 
+bool operation::matches(std::string_view name) const {
+    return _name == name || std::ranges::find(_aliases, name) != _aliases.end();
+}
+
 namespace {
 
 // Extract the operation from the argv.
@@ -30,7 +34,7 @@ const operation& get_selected_operation(int& ac, char**& av, const std::vector<o
 
     const char* op_name = av[1];
     if (auto found = std::ranges::find_if(operations, [op_name] (auto& op) {
-                         return op.name() == op_name;
+            return op.matches(op_name);
         });
         found != operations.end()) {
         std::shift_left(av + 1, av + ac, 1);
@@ -38,7 +42,13 @@ const operation& get_selected_operation(int& ac, char**& av, const std::vector<o
         return *found;
     }
 
-    const auto all_operation_names = boost::algorithm::join(operations | boost::adaptors::transformed([] (const operation op) { return op.name(); } ), ", ");
+    std::vector<std::string_view> all_operation_names;
+    for (const auto& op : operations) {
+        all_operation_names.push_back(op.name());
+        for (const auto& alias : op.aliases()) {
+            all_operation_names.push_back(alias);
+        }
+    }
 
     fmt::print(std::cerr, "error: unrecognized {} argument: expected one of ({}), got {}\n", alias, all_operation_names, op_name);
     exit(100);
@@ -97,7 +107,7 @@ int tool_app_template::run_async(int argc, char** argv, noncopyable_function<int
     }
     if (_cfg.global_positional_options) {
         for (const auto& gpo : *_cfg.global_positional_options) {
-            app.add_positional_options({gpo});
+            app.add_positional_options({gpo.to_positional_option()});
         }
     }
 
@@ -107,7 +117,7 @@ int tool_app_template::run_async(int argc, char** argv, noncopyable_function<int
             opt.add_option(op_desc);
         }
         for (const auto& opt : found_op->positional_options()) {
-            app.add_positional_options({opt});
+            app.add_positional_options({opt.to_positional_option()});
         }
         if (!found_op->options().empty()) {
             app.get_options_description().add(op_desc);
