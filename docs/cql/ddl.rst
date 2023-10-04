@@ -8,6 +8,12 @@ CQL stores data in *tables*, whose schema defines the layout of said data in the
 which is the replication strategy used by the keyspace. An application can have only one keyspace. However, it is also possible to 
 have multiple keyspaces in case your application has different replication requirements. 
 
+.. note::
+
+    Schema updates require at least a quorum of nodes in a cluster to be available. 
+    If the quorum is lost, it must be restored before a schema is updated. 
+    See :doc:`Handling Node Failures </troubleshooting/handling-node-failures>` for details. 
+
 This section describes the statements used to create, modify, and remove keyspaces and tables.
 
 :ref:`CREATE KEYSPACE <create-keyspace-statement>`

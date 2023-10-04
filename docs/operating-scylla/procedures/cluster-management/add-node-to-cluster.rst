@@ -5,6 +5,11 @@ Adding a New Node Into an Existing ScyllaDB Cluster (Out Scale)
 When you add a new node, other nodes in the cluster stream data to the new node. This operation is called bootstrapping and may
 be time-consuming, depending on the data size and network bandwidth. If using a :ref:`multi-availability-zone <faq-best-scenario-node-multi-availability-zone>`, make sure they are balanced.
 
+.. note::
+
+    Adding a new node requires at least a quorum of nodes in a cluster to be available. 
+    If the quorum is lost, it must be restored before a new node is added. 
+    See :doc:`Handling Node Failures </troubleshooting/handling-node-failures>` for details. 
 
 Prerequisites
 -------------

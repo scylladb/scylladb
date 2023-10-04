@@ -5,6 +5,12 @@ Replace dead node operation will cause the other nodes in the cluster to stream 
 
 This procedure is for replacing one dead node. To replace more than one dead node, run the full procedure to completion one node at a time.
 
+.. note::
+
+    Replacing a node requires at least a quorum of nodes in a cluster to be available. 
+    If the quorum is lost, it must be restored before a node is replaced. 
+    See :doc:`Handling Node Failures </troubleshooting/handling-node-failures>` for details. 
+
 -------------
 Prerequisites
 -------------

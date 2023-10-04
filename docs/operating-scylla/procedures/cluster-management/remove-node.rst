@@ -4,6 +4,12 @@ Remove a Node from a ScyllaDB Cluster (Down Scale)
 
 You can remove nodes from your cluster to reduce its size.
 
+.. note::
+
+    Removing a node requires at least a quorum of nodes in a cluster to be available. 
+    If the quorum is lost, it must be restored before a node is removed. 
+    See :doc:`Handling Node Failures </troubleshooting/handling-node-failures>` for details. 
+
 -----------------------
 Removing a Running Node
 -----------------------

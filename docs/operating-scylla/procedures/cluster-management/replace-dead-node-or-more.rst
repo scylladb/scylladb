@@ -2,7 +2,11 @@
 Replace More Than One Dead Node In A ScyllaDB Cluster
 ******************************************************
 
-Scylla is a fault-tolerant system. A cluster can be available even when more than one node is down.
+.. note::
+
+    Replacing a node requires at least a quorum of nodes in a cluster to be available. 
+    If the quorum is lost, it must be restored before a node is replaced. 
+    See :doc:`Handling Node Failures </troubleshooting/handling-node-failures>` for details. 
 
 Prerequisites
 -------------
