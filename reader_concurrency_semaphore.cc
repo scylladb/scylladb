@@ -21,6 +21,7 @@
 #include "utils/exceptions.hh"
 #include "schema/schema.hh"
 #include "utils/human_readable.hh"
+#include "utils/memory_limit_reached.hh"
 
 logger rcslog("reader_concurrency_semaphore");
 
@@ -956,7 +957,7 @@ void reader_concurrency_semaphore::consume(reader_permit::impl& permit, resource
             ++_stats.total_reads_killed_due_to_kill_limit;
         }
         maybe_dump_reader_permit_diagnostics(*this, "kill limit triggered");
-        throw std::bad_alloc();
+        throw utils::memory_limit_reached(format("kill limit triggered on semaphore {} by permit {}", _name, permit.description()));
     }
     _resources -= r;
 }
