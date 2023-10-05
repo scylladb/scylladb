@@ -634,7 +634,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
     sharded<service::storage_service> ss;
     sharded<service::migration_manager> mm;
     sharded<tasks::task_manager> task_manager;
-    api::http_context ctx(db, proxy, load_meter, token_metadata, task_manager);
+    api::http_context ctx(db, load_meter, token_metadata, task_manager);
     httpd::http_server_control prometheus_server;
     std::optional<utils::directories> dirs = {};
     sharded<gms::feature_service> feature_service;

@@ -68,15 +68,13 @@ struct http_context {
     sstring api_doc;
     httpd::http_server_control http_server;
     distributed<replica::database>& db;
-    distributed<service::storage_proxy>& sp;
     service::load_meter& lmeter;
     const sharded<locator::shared_token_metadata>& shared_token_metadata;
     sharded<tasks::task_manager>& tm;
 
     http_context(distributed<replica::database>& _db,
-            distributed<service::storage_proxy>& _sp,
             service::load_meter& _lm, const sharded<locator::shared_token_metadata>& _stm, sharded<tasks::task_manager>& _tm)
-            : db(_db), sp(_sp), lmeter(_lm), shared_token_metadata(_stm), tm(_tm) {
+            : db(_db), lmeter(_lm), shared_token_metadata(_stm), tm(_tm) {
     }
 
     const locator::token_metadata& get_token_metadata();
