@@ -13,7 +13,6 @@
 #include "api/api-doc/hinted_handoff.json.hh"
 
 #include "gms/inet_address.hh"
-#include "gms/gossiper.hh"
 #include "service/storage_proxy.hh"
 
 namespace api {
@@ -23,17 +22,12 @@ using namespace seastar::httpd;
 namespace hh = httpd::hinted_handoff_json;
 
 void set_hinted_handoff(http_context& ctx, routes& r, gms::gossiper& g) {
-    hh::create_hints_sync_point.set(r, [&ctx, &g] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
-        auto parse_hosts_list = [&g] (sstring arg) {
+    hh::create_hints_sync_point.set(r, [&ctx] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
+        auto parse_hosts_list = [] (sstring arg) {
             std::vector<sstring> hosts_str = split(arg, ",");
             std::vector<gms::inet_address> hosts;
             hosts.reserve(hosts_str.size());
 
-            if (hosts_str.empty()) {
-                // No target_hosts specified means that we should wait for hints for all nodes to be sent
-                const auto members_set = g.get_live_members();
-                std::copy(members_set.begin(), members_set.end(), std::back_inserter(hosts));
-            } else {
                 for (const auto& host_str : hosts_str) {
                     try {
                         gms::inet_address host;
@@ -43,7 +37,7 @@ void set_hinted_handoff(http_context& ctx, routes& r, gms::gossiper& g) {
                         throw httpd::bad_param_exception(format("Failed to parse host address {}: {}", host_str, e.what()));
                     }
                 }
-            }
+
             return hosts;
         };
 

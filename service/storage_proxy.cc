@@ -6378,11 +6378,16 @@ const db::hints::host_filter& storage_proxy::get_hints_host_filter() const {
     return _hints_manager.get_host_filter();
 }
 
-future<db::hints::sync_point> storage_proxy::create_hint_sync_point(const std::vector<gms::inet_address> target_hosts) const {
+future<db::hints::sync_point> storage_proxy::create_hint_sync_point(std::vector<gms::inet_address> target_hosts) const {
     db::hints::sync_point spoint;
     spoint.regular_per_shard_rps.resize(smp::count);
     spoint.mv_per_shard_rps.resize(smp::count);
     spoint.host_id = get_token_metadata_ptr()->get_my_id();
+    if (target_hosts.empty()) {
+        // No target_hosts specified means that we should wait for hints for all nodes to be sent
+        const auto members_set = remote().gossiper().get_live_members();
+        std::copy(members_set.begin(), members_set.end(), std::back_inserter(target_hosts));
+    }
     co_await coroutine::parallel_for_each(boost::irange<unsigned>(0, smp::count), [this, &target_hosts, &spoint] (unsigned shard) -> future<> {
         const auto& sharded_sp = container();
         // sharded::invoke_on does not have a const-method version, so we cannot use it here
