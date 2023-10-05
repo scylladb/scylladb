@@ -1175,6 +1175,7 @@ class ScyllaClusterManager:
             assert server_id in self.cluster.stopped, f"_cluster_remove_node: {server_id} unknown"
         to_remove = self.cluster.servers[server_id]
         initiator = self.cluster.servers[initiator_id]
+        expected_error = data["expected_error"]
         self.logger.info("_cluster_remove_node %s with initiator %s", to_remove, initiator)
 
         # initate remove
@@ -1182,27 +1183,57 @@ class ScyllaClusterManager:
             await self.cluster.api.remove_node(initiator.ip_addr, to_remove.host_id, ignore_dead,
                                                timeout=ScyllaServer.TOPOLOGY_TIMEOUT)
         except (RuntimeError, HTTPError) as exc:
-            raise RuntimeError(
-                f"removenode failed (initiator: {initiator}, to_remove: {to_remove},"
-                f" ignore_dead: {ignore_dead}), check log file at {initiator.log_filename},"
-                f" error: \"{exc}\"")
+            if expected_error:
+                if expected_error not in str(exc):
+                    raise RuntimeError(
+                        f"removenode failed (initiator: {initiator}, to_remove: {to_remove},"
+                        f" ignore_dead: {ignore_dead}) but did not contain expected error (\"{expected_error}\"),"
+                        f"check log file at {initiator.log_filename}, error: \"{exc}\"")
+            else:
+                raise RuntimeError(
+                    f"removenode failed (initiator: {initiator}, to_remove: {to_remove},"
+                    f" ignore_dead: {ignore_dead}), check log file at {initiator.log_filename},"
+                    f" error: \"{exc}\"")
+        else:
+            if expected_error:
+                self.cluster.server_mark_removed(server_id)
+                raise RuntimeError(
+                    f"removenode succeeded when it should have failed (initiator: {initiator},"
+                    f"to_remove: {to_remove}, ignore_dead: {ignore_dead}, expected error: \"{expected_error}\"),"
+                    f" check log file at {initiator.log_filename}")
+
         self.cluster.server_mark_removed(server_id)
 
     async def _cluster_decommission_node(self, request) -> None:
         """Run decommission node on Scylla REST API for a specified server"""
         assert self.cluster
+        data = await request.json()
         server_id = ServerNum(int(request.match_info["server_id"]))
         self.logger.info("_cluster_decommission_node %s", server_id)
         assert server_id in self.cluster.running, "Can't decommission not running node"
         if len(self.cluster.running) == 1:
             self.logger.warning("_cluster_decommission_node %s is only running node left", server_id)
         server = self.cluster.running[server_id]
+        expected_error = data["expected_error"]
         try:
             await self.cluster.api.decommission_node(server.ip_addr, timeout=ScyllaServer.TOPOLOGY_TIMEOUT)
         except (RuntimeError, HTTPError) as exc:
-            raise RuntimeError(
-                f"decommission failed (server: {server}), check log at {server.log_filename},"
-                f" error: \"{exc}\"")
+            if expected_error:
+                if expected_error not in str(exc):
+                    raise RuntimeError(
+                        f"decommission failed (server: {server}) but did not contain expected error"
+                        f"(\"{expected_error}\", check log file at {server.log_filename}, error: \"{exc}\"")
+            else:
+                raise RuntimeError(
+                    f"decommission failed (server: {server}), check log at {server.log_filename},"
+                    f" error: \"{exc}\"")
+        else:
+            if expected_error:
+                await self.cluster.server_stop(server_id, gracefully=True)
+                raise RuntimeError(
+                    f"decommission succeeded when it should have failed (server: {server},"
+                    f" expected_error: \"{expected_error}\"), check log file at {server.log_filename}")
+
         await self.cluster.server_stop(server_id, gracefully=True)
 
     async def _cluster_rebuild_node(self, request) -> None:

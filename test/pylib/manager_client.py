@@ -203,18 +203,21 @@ class ManagerClient():
         return s_info
 
     async def remove_node(self, initiator_id: ServerNum, server_id: ServerNum,
-                          ignore_dead: List[IPAddress] | List[HostID] = list[IPAddress]()) -> None:
+                          ignore_dead: List[IPAddress] | List[HostID] = list[IPAddress](),
+                          expected_error: str | None = None) -> None:
         """Invoke remove node Scylla REST API for a specified server"""
         logger.debug("ManagerClient remove node %s on initiator %s", server_id, initiator_id)
-        data = {"server_id": server_id, "ignore_dead": ignore_dead}
+        data = {"server_id": server_id, "ignore_dead": ignore_dead, "expected_error": expected_error}
         await self.client.put_json(f"/cluster/remove-node/{initiator_id}", data,
                                    timeout=ScyllaServer.TOPOLOGY_TIMEOUT)
         self._driver_update()
 
-    async def decommission_node(self, server_id: ServerNum) -> None:
+    async def decommission_node(self, server_id: ServerNum,
+                                expected_error: str | None = None) -> None:
         """Tell a node to decommission with Scylla REST API"""
         logger.debug("ManagerClient decommission %s", server_id)
-        await self.client.put_json(f"/cluster/decommission-node/{server_id}",
+        data = {"expected_error": expected_error}
+        await self.client.put_json(f"/cluster/decommission-node/{server_id}", data,
                                    timeout=ScyllaServer.TOPOLOGY_TIMEOUT)
         self._driver_update()
 
