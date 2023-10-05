@@ -885,6 +885,7 @@ public:
     // get sstable open info from a loaded sstable, which can be used to quickly open a sstable
     // at another shard.
     future<foreign_sstable_open_info> get_open_info() &;
+    entry_descriptor get_descriptor(component_type c) const;
 
     sstables_stats& get_stats() {
         return _stats;

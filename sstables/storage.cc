@@ -488,7 +488,7 @@ future<> s3_storage::ensure_remote_prefix(const sstable& sst) {
 
 void s3_storage::open(sstable& sst) {
     auto uuid = utils::UUID_gen::get_time_UUID();
-    entry_descriptor desc("", "", "", sst._generation, sst._version, sst._format, component_type::TOC);
+    entry_descriptor desc(sst._generation, sst._version, sst._format, component_type::TOC);
     sst.manager().system_keyspace().sstables_registry_create_entry(_location, uuid, status_creating, std::move(desc)).get();
     _remote_prefix = uuid.to_sstring();
 

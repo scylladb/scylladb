@@ -1909,7 +1909,7 @@ future<std::unordered_map<sstring, table::snapshot_details>> table::get_snapshot
                         // All the others should just generate an exception: there is something wrong, so don't blindly
                         // add it to the size.
                         if (name != "manifest.json" && name != "schema.cql") {
-                            sstables::entry_descriptor::make_descriptor(snapshot_dir / name);
+                            sstables::parse_path(snapshot_dir / name);
                             all_snapshots.at(snapshot_name).total += size;
                         } else {
                             size = 0;

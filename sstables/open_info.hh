@@ -22,25 +22,24 @@
 namespace sstables {
 
 struct entry_descriptor {
-    sstring sstdir;
-    sstring ks;
-    sstring cf;
     generation_type generation;
     sstable_version_types version;
     sstable_format_types format;
     component_type component;
 
-    static entry_descriptor make_descriptor(const std::filesystem::path& sst_path);
-
-    // Use the given ks and cf and don't attempt to extract it from the dir path.
-    // This allows loading sstables from any path, but the filename still has to be valid.
-    static entry_descriptor make_descriptor(const std::filesystem::path& sst_path, sstring ks, sstring cf);
-
-    entry_descriptor(std::string_view sstdir, sstring ks, sstring cf, generation_type generation,
+    entry_descriptor(generation_type generation,
                      sstable_version_types version, sstable_format_types format,
                      component_type component)
-        : sstdir(sstdir), ks(ks), cf(cf), generation(generation), version(version), format(format), component(component) {}
+        : generation(generation), version(version), format(format), component(component) {}
 };
+
+// Parses sstable file path extracting entry_descriptor from it. Returns the descriptor
+// and the keyspace.table pair of strings.
+std::tuple<entry_descriptor, sstring, sstring> parse_path(const std::filesystem::path& sst_path);
+
+// Use the given ks and cf and don't attempt to extract it from the dir path.
+// This allows loading sstables from any path, but the filename still has to be valid.
+entry_descriptor parse_path(const std::filesystem::path& sst_path, sstring ks, sstring cf);
 
 // contains data for loading a sstable using components shared by a single shard;
 // can be moved across shards
