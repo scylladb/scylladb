@@ -87,10 +87,14 @@ def kill_with_dir(old_pid, run_dir):
 
 
 class Cluster:
-    def __init__(self, cql, ip: str):
+    def __init__(self, cql, ip: str, pid):
         self.cql = cql
         self.ip = ip
         self.api = ScyllaRESTAPIClient()
+        self.pid = pid
+
+    def reload_config(self):
+        os.kill(self.pid, signal.SIGHUP)
 
 
 @contextmanager
@@ -104,7 +108,7 @@ def managed_cluster(run_dir, ssl, s3_server):
     run.wait_for_services(pid, [check_with_cql(ip, ssl)])
     cluster = run.get_cql_cluster(ip)
     try:
-        yield Cluster(cluster, ip)
+        yield Cluster(cluster, ip, pid)
     finally:
         cluster.shutdown()
         kill_with_dir(pid, run_dir)
