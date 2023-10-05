@@ -328,13 +328,17 @@ db_clock::time_point timestamp_type_impl::from_sstring(sstring_view s) {
 
 simple_date_type_impl::simple_date_type_impl() : simple_type_impl{kind::simple_date, simple_date_type_name, {}} {}
 
-static date::year_month_day get_simple_date_time(const boost::smatch& sm) {
+template <typename ConstIterator>
+requires requires (ConstIterator it) {
+    { it[0] } -> std::same_as<const char&>;
+}
+static date::year_month_day get_simple_date_time(const boost::match_results<ConstIterator>& sm) {
     auto year = boost::lexical_cast<long>(sm[1]);
     auto month = boost::lexical_cast<unsigned>(sm[2]);
     auto day = boost::lexical_cast<unsigned>(sm[3]);
     return date::year_month_day{date::year{year}, date::month{month}, date::day{day}};
 }
-static uint32_t serialize(const std::string& input, int64_t days) {
+static uint32_t serialize(sstring_view input, int64_t days) {
     if (days < std::numeric_limits<int32_t>::min()) {
         throw marshal_exception(format("Input date {} is less than min supported date -5877641-06-23", input));
     }
@@ -350,14 +354,13 @@ uint32_t simple_date_type_impl::from_sstring(sstring_view s) {
     if (end == s.begin() + s.size()) {
         return v;
     }
-    auto str = std::string(s); // FIXME: this copy probably can be avoided
     static const boost::regex date_re("^(-?\\d+)-(\\d+)-(\\d+)");
-    boost::smatch dsm;
-    if (!boost::regex_match(str, dsm, date_re)) {
-        throw marshal_exception(format("Unable to coerce '{}' to a formatted date (long)", str));
+    boost::match_results<sstring_view::const_iterator> dsm;
+    if (!boost::regex_match(s.begin(), s.end(), dsm, date_re)) {
+        throw marshal_exception(format("Unable to coerce '{}' to a formatted date (long)", s));
     }
     auto t = get_simple_date_time(dsm);
-    return serialize(str, date::local_days(t).time_since_epoch().count());
+    return serialize(s, date::local_days(t).time_since_epoch().count());
 }
 
 time_type_impl::time_type_impl() : simple_type_impl{kind::time, time_type_name, {}} {}
