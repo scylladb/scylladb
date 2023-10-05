@@ -1186,7 +1186,7 @@ class ScyllaClusterManager:
         try:
             await self.cluster.api.remove_node(initiator.ip_addr, to_remove.host_id, ignore_dead,
                                                timeout=ScyllaServer.TOPOLOGY_TIMEOUT)
-        except RuntimeError as exc:
+        except (RuntimeError, HTTPError) as exc:
             raise RuntimeError(
                 f"removenode failed (initiator: {initiator}, to_remove: {to_remove},"
                 f" ignore_dead: {ignore_dead}), check log file at {initiator.log_filename},"
@@ -1205,7 +1205,7 @@ class ScyllaClusterManager:
         server = self.cluster.running[server_id]
         try:
             await self.cluster.api.decommission_node(server.ip_addr, timeout=ScyllaServer.TOPOLOGY_TIMEOUT)
-        except RuntimeError as exc:
+        except (RuntimeError, HTTPError) as exc:
             raise RuntimeError(
                 f"decommission failed (server: {server}), check log at {server.log_filename},"
                 f" error: \"{exc}\"")
@@ -1221,7 +1221,7 @@ class ScyllaClusterManager:
         server = self.cluster.running[server_id]
         try:
             await self.cluster.api.rebuild_node(server.ip_addr, timeout=ScyllaServer.TOPOLOGY_TIMEOUT)
-        except RuntimeError as exc:
+        except (RuntimeError, HTTPError) as exc:
             raise RuntimeError(
                 f"rebuild failed (server: {server}), check log at {server.log_filename},"
                 f" error: \"{exc}\"")
