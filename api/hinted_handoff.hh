@@ -8,17 +8,14 @@
 
 #pragma once
 
+#include <seastar/core/sharded.hh>
 #include "api.hh"
 
-namespace gms {
-
-class gossiper;
-
-}
+namespace service { class storage_proxy; }
 
 namespace api {
 
-void set_hinted_handoff(http_context& ctx, httpd::routes& r, gms::gossiper& g);
+void set_hinted_handoff(http_context& ctx, httpd::routes& r, sharded<service::storage_proxy>& p);
 void unset_hinted_handoff(http_context& ctx, httpd::routes& r);
 
 }

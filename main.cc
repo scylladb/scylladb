@@ -1761,7 +1761,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             supervisor::notify("allow replaying hints");
             proxy.invoke_on_all(&service::storage_proxy::allow_replaying_hints).get();
 
-            api::set_hinted_handoff(ctx, gossiper).get();
+            api::set_hinted_handoff(ctx, proxy).get();
             auto stop_hinted_handoff_api = defer_verbose_shutdown("hinted handoff API", [&ctx] {
                 api::unset_hinted_handoff(ctx).get();
             });

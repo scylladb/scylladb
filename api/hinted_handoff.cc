@@ -21,7 +21,7 @@ using namespace json;
 using namespace seastar::httpd;
 namespace hh = httpd::hinted_handoff_json;
 
-void set_hinted_handoff(http_context& ctx, routes& r, gms::gossiper& g) {
+void set_hinted_handoff(http_context& ctx, routes& r, sharded<service::storage_proxy>& proxy) {
     hh::create_hints_sync_point.set(r, [&ctx] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         auto parse_hosts_list = [] (sstring arg) {
             std::vector<sstring> hosts_str = split(arg, ",");
