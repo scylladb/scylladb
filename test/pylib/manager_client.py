@@ -86,7 +86,7 @@ class ManagerClient():
         if dirty:
             self.driver_close()  # Close driver connection to old cluster
         try:
-            cluster_str = await self.client.get_text(f"/cluster/before-test/{test_case_name}", timeout=600)
+            cluster_str = await self.client.put_json(f"/cluster/before-test/{test_case_name}", timeout=600)
             logger.info(f"Using cluster: {cluster_str} for test {test_case_name}")
         except aiohttp.ClientError as exc:
             raise RuntimeError(f"Failed before test check {exc}") from exc
@@ -99,7 +99,7 @@ class ManagerClient():
     async def after_test(self, test_case_name: str, success: bool) -> None:
         """Tell harness this test finished"""
         logger.debug("after_test for %s (success: %s)", test_case_name, success)
-        cluster_str = await self.client.get_text(f"/cluster/after-test/{success}")
+        cluster_str = await self.client.put_json(f"/cluster/after-test/{success}")
         logger.info("Cluster after test %s: %s", test_case_name, cluster_str)
 
     async def is_manager_up(self) -> bool:
@@ -135,24 +135,24 @@ class ManagerClient():
     async def mark_dirty(self) -> None:
         """Manually mark current cluster dirty.
            To be used when a server was modified outside of this API."""
-        await self.client.get_text("/cluster/mark-dirty")
+        await self.client.put_json("/cluster/mark-dirty")
 
     async def server_stop(self, server_id: ServerNum) -> None:
         """Stop specified server"""
         logger.debug("ManagerClient stopping %s", server_id)
-        await self.client.get_text(f"/cluster/server/{server_id}/stop")
+        await self.client.put_json(f"/cluster/server/{server_id}/stop")
 
     async def server_stop_gracefully(self, server_id: ServerNum) -> None:
         """Stop specified server gracefully"""
         logger.debug("ManagerClient stopping gracefully %s", server_id)
-        await self.client.get_text(f"/cluster/server/{server_id}/stop_gracefully")
+        await self.client.put_json(f"/cluster/server/{server_id}/stop_gracefully")
 
     async def server_start(self, server_id: ServerNum, expected_error: Optional[str] = None,
                            wait_others: int = 0, wait_interval: float = 45) -> None:
         """Start specified server and optionally wait for it to learn of other servers"""
         logger.debug("ManagerClient starting %s", server_id)
         params = {'expected_error': expected_error} if expected_error is not None else None
-        await self.client.get_text(f"/cluster/server/{server_id}/start", params=params)
+        await self.client.put_json(f"/cluster/server/{server_id}/start", params=params)
         await self.server_sees_others(server_id, wait_others, interval = wait_interval)
         self._driver_update()
 
@@ -160,19 +160,19 @@ class ManagerClient():
                              wait_interval: float = 45) -> None:
         """Restart specified server and optionally wait for it to learn of other servers"""
         logger.debug("ManagerClient restarting %s", server_id)
-        await self.client.get_text(f"/cluster/server/{server_id}/restart")
+        await self.client.put_json(f"/cluster/server/{server_id}/restart")
         await self.server_sees_others(server_id, wait_others, interval = wait_interval)
         self._driver_update()
 
     async def server_pause(self, server_id: ServerNum) -> None:
         """Pause the specified server."""
         logger.debug("ManagerClient pausing %s", server_id)
-        await self.client.get(f"/cluster/server/{server_id}/pause")
+        await self.client.put_json(f"/cluster/server/{server_id}/pause")
 
     async def server_unpause(self, server_id: ServerNum) -> None:
         """Unpause the specified server."""
         logger.debug("ManagerClient unpausing %s", server_id)
-        await self.client.get(f"/cluster/server/{server_id}/unpause")
+        await self.client.put_json(f"/cluster/server/{server_id}/unpause")
 
     async def server_add(self, replace_cfg: Optional[ReplaceConfig] = None,
                          cmdline: Optional[List[str]] = None,
@@ -218,14 +218,14 @@ class ManagerClient():
     async def decommission_node(self, server_id: ServerNum) -> None:
         """Tell a node to decommission with Scylla REST API"""
         logger.debug("ManagerClient decommission %s", server_id)
-        await self.client.get_text(f"/cluster/decommission-node/{server_id}",
+        await self.client.put_json(f"/cluster/decommission-node/{server_id}",
                                    timeout=ScyllaServer.TOPOLOGY_TIMEOUT)
         self._driver_update()
 
     async def rebuild_node(self, server_id: ServerNum) -> None:
         """Tell a node to rebuild with Scylla REST API"""
         logger.debug("ManagerClient rebuild %s", server_id)
-        await self.client.get_text(f"/cluster/rebuild-node/{server_id}",
+        await self.client.put_json(f"/cluster/rebuild-node/{server_id}",
                                    timeout=ScyllaServer.TOPOLOGY_TIMEOUT)
         self._driver_update()
 
