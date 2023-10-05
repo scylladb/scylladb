@@ -16,17 +16,11 @@
 
 future<> do_with_tracing_env(std::function<future<>(cql_test_env&)> func, cql_test_config cfg_in = {}) {
     return do_with_cql_env_thread([func](auto &env) {
-        tracing::tracing::create_tracing("trace_keyspace_helper").get();
-
-        tracing::tracing::start_tracing(env.qp(), env.migration_manager()).get();
-
-        func(env).finally([]() {
-            return tracing::tracing::tracing_instance().invoke_on_all([](tracing::tracing &local_tracing) {
-                return local_tracing.shutdown();
-            }).finally([]() {
-                return tracing::tracing::tracing_instance().stop();
-            });
-        }).get();
+        sharded<tracing::tracing>& tracing = tracing::tracing::tracing_instance();
+        tracing.start(sstring("trace_keyspace_helper")).get();
+        auto stop = defer([&tracing] { tracing.stop().get(); });
+        tracing.invoke_on_all(&tracing::tracing::start, std::ref(env.qp()), std::ref(env.migration_manager())).get();
+        func(env).get();
     }, std::move(cfg_in));
 }
 

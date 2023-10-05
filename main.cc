@@ -1091,9 +1091,10 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // });
 
             supervisor::notify("creating tracing");
-            tracing::tracing::create_tracing("trace_keyspace_helper").get();
-            auto destroy_tracing = defer_verbose_shutdown("tracing instance", [] {
-                tracing::tracing::tracing_instance().stop().get();
+            sharded<tracing::tracing>& tracing = tracing::tracing::tracing_instance();
+            tracing.start(sstring("trace_keyspace_helper")).get();
+            auto destroy_tracing = defer_verbose_shutdown("tracing instance", [&tracing] {
+                tracing.stop().get();
             });
 
             with_scheduling_group(maintenance_scheduling_group, [&] {
@@ -1671,9 +1672,9 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             }).get();
 
             supervisor::notify("starting tracing");
-            tracing::tracing::start_tracing(qp, mm).get();
-            auto stop_tracing = defer_verbose_shutdown("tracing", [] {
-                tracing::tracing::stop_tracing().get();
+            tracing.invoke_on_all(&tracing::tracing::start, std::ref(qp), std::ref(mm)).get();
+            auto stop_tracing = defer_verbose_shutdown("tracing", [&tracing] {
+                tracing.invoke_on_all(&tracing::tracing::shutdown).get();
             });
 
             startlog.info("SSTable data integrity checker is {}.",

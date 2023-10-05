@@ -8,6 +8,7 @@
  * SPDX-License-Identifier: (AGPL-3.0-or-later and Apache-2.0)
  */
 #include <seastar/core/metrics.hh>
+#include <seastar/core/coroutine.hh>
 #include "tracing/tracing.hh"
 #include "tracing/trace_state.hh"
 #include "utils/class_registrator.hh"
@@ -64,23 +65,6 @@ tracing::tracing(sstring tracing_backend_helper_class_name)
         sm::make_gauge("flushing_records", _flushing_records,
                         sm::description(seastar::format("Holds a number of tracing records that currently being written to the I/O backend. "
                                                         "If sum of this metric, cached_records and pending_for_write_records is close to {} we are likely to start dropping tracing records.", max_pending_trace_records + write_event_records_threshold))),
-    });
-}
-
-future<> tracing::create_tracing(sstring tracing_backend_class_name) {
-    return tracing_instance().start(std::move(tracing_backend_class_name));
-}
-
-future<> tracing::start_tracing(sharded<cql3::query_processor>& qp, sharded<service::migration_manager>& mm) {
-    return tracing_instance().invoke_on_all([&qp, &mm] (tracing& local_tracing) {
-        return local_tracing.start(qp.local(), mm.local());
-    });
-}
-
-future<> tracing::stop_tracing() {
-    return tracing_instance().invoke_on_all([] (tracing& local_tracing) {
-        // It might have been shut down while draining
-        return local_tracing._down ? make_ready_future<>() : local_tracing.shutdown();
     });
 }
 
@@ -155,10 +139,9 @@ future<> tracing::start(cql3::query_processor& qp, service::migration_manager& m
         throw;
     }
 
-    return _tracing_backend_helper_ptr->start(qp, mm).then([this] {
-        _down = false;
-        _write_timer.arm(write_period);
-    });
+    co_await _tracing_backend_helper_ptr->start(qp, mm);
+    _down = false;
+    _write_timer.arm(write_period);
 }
 
 void tracing::write_timer_callback() {
@@ -172,25 +155,20 @@ void tracing::write_timer_callback() {
 }
 
 future<> tracing::shutdown() {
-    tracing_logger.info("Asked to shut down");
     if (_down) {
-        throw std::logic_error("tracing: shutdown() called for the service that is already down");
+        co_return;
     }
 
+    tracing_logger.info("Asked to shut down");
     write_pending_records();
     _down = true;
     _write_timer.cancel();
-    return _tracing_backend_helper_ptr->stop().then([] {
-        tracing_logger.info("Tracing is down");
-    });
+    co_await _tracing_backend_helper_ptr->shutdown();
+    tracing_logger.info("Tracing is down");
 }
 
 future<> tracing::stop() {
-    if (!_down) {
-        throw std::logic_error("tracing: stop() called before shutdown()");
-    }
-
-    return make_ready_future<>();
+    co_await shutdown();
 }
 
 void tracing::set_trace_probability(double p) {
