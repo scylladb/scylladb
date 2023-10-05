@@ -207,7 +207,7 @@ class ManagerClient():
         return s_info
 
     async def remove_node(self, initiator_id: ServerNum, server_id: ServerNum,
-                          ignore_dead: List[IPAddress] | List[HostID] = []) -> None:
+                          ignore_dead: List[IPAddress] | List[HostID] = list[IPAddress]()) -> None:
         """Invoke remove node Scylla REST API for a specified server"""
         logger.debug("ManagerClient remove node %s on initiator %s", server_id, initiator_id)
         data = {"server_id": server_id, "ignore_dead": ignore_dead}

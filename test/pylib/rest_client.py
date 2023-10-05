@@ -94,7 +94,7 @@ class RESTClient(metaclass=ABCMeta):
 
     async def post(self, resource_uri: str, host: Optional[str] = None,
                    port: Optional[int] = None, params: Optional[Mapping[str, str]] = None,
-                   json: Mapping = None, timeout: Optional[float] = None) -> None:
+                   json: Optional[Mapping] = None, timeout: Optional[float] = None) -> None:
         await self._fetch("POST", resource_uri, host = host, port = port, params = params,
                           json = json, timeout = timeout)
 
@@ -107,7 +107,7 @@ class RESTClient(metaclass=ABCMeta):
 
     async def delete(self, resource_uri: str, host: Optional[str] = None,
                      port: Optional[int] = None, params: Optional[dict[str, str]] = None,
-                     json: Mapping = None) -> None:
+                     json: Optional[Mapping] = None) -> None:
         await self._fetch("DELETE", resource_uri, host = host, port = port, params = params,
                           json = json)
 
