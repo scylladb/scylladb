@@ -22,7 +22,7 @@ using namespace seastar::httpd;
 namespace hh = httpd::hinted_handoff_json;
 
 void set_hinted_handoff(http_context& ctx, routes& r, sharded<service::storage_proxy>& proxy) {
-    hh::create_hints_sync_point.set(r, [&ctx] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
+    hh::create_hints_sync_point.set(r, [&proxy] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         auto parse_hosts_list = [] (sstring arg) {
             std::vector<sstring> hosts_str = split(arg, ",");
             std::vector<gms::inet_address> hosts;
@@ -42,12 +42,12 @@ void set_hinted_handoff(http_context& ctx, routes& r, sharded<service::storage_p
         };
 
         std::vector<gms::inet_address> target_hosts = parse_hosts_list(req->get_query_param("target_hosts"));
-        return ctx.sp.local().create_hint_sync_point(std::move(target_hosts)).then([] (db::hints::sync_point sync_point) {
+        return proxy.local().create_hint_sync_point(std::move(target_hosts)).then([] (db::hints::sync_point sync_point) {
             return json::json_return_type(sync_point.encode());
         });
     });
 
-    hh::get_hints_sync_point.set(r, [&ctx] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
+    hh::get_hints_sync_point.set(r, [&proxy] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         db::hints::sync_point sync_point;
         const sstring encoded = req->get_query_param("id");
         try {
@@ -81,7 +81,7 @@ void set_hinted_handoff(http_context& ctx, routes& r, sharded<service::storage_p
         using return_type = hh::ns_get_hints_sync_point::get_hints_sync_point_return_type;
         using return_type_wrapper = hh::ns_get_hints_sync_point::return_type_wrapper;
 
-        return ctx.sp.local().wait_for_hint_sync_point(std::move(sync_point), deadline).then([] {
+        return proxy.local().wait_for_hint_sync_point(std::move(sync_point), deadline).then([] {
             return json::json_return_type(return_type_wrapper(return_type::DONE));
         }).handle_exception_type([] (const timed_out_error&) {
             return json::json_return_type(return_type_wrapper(return_type::IN_PROGRESS));
