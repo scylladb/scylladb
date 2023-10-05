@@ -167,19 +167,19 @@ if __name__ == '__main__':
 
     uuidpath = f'/dev/disk/by-uuid/{uuid}'
 
-    after = 'local-fs.target'
+    after = ''
     wants = ''
     if raid and args.raid_level != '0':
-        after += f' {md_service}'
-        wants = f'\nWants={md_service}'
+        after = wants = 'md_service'
     opt_discard = ''
     if args.online_discard:
         opt_discard = ',discard'
     unit_data = f'''
 [Unit]
 Description=Scylla data directory
-Before=scylla-server.service
-After={after}{wants}
+Before=local-fs.target scylla-server.service
+After={after}
+Wants={wants}
 DefaultDependencies=no
 
 [Mount]
@@ -189,7 +189,7 @@ Type=xfs
 Options=noatime{opt_discard}
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=local-fs.target
 '''[1:-1]
     with open(f'/etc/systemd/system/{mntunit_bn}', 'w') as f:
         f.write(unit_data)
