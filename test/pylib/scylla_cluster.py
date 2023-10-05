@@ -1151,7 +1151,8 @@ class ScyllaClusterManager:
         """Start a specified server (must be stopped)"""
         assert self.cluster
         server_id = ServerNum(int(request.match_info["server_id"]))
-        expected_error = request.query.get("expected_error")
+        data = await request.json()
+        expected_error = data["expected_error"]
         ret = await self.cluster.server_start(server_id, expected_error)
         return aiohttp.web.Response(status=200 if ret[0] else 500, text=ret[1])
 

@@ -151,8 +151,8 @@ class ManagerClient():
                            wait_others: int = 0, wait_interval: float = 45) -> None:
         """Start specified server and optionally wait for it to learn of other servers"""
         logger.debug("ManagerClient starting %s", server_id)
-        params = {'expected_error': expected_error} if expected_error is not None else None
-        await self.client.put_json(f"/cluster/server/{server_id}/start", params=params)
+        data = {"expected_error": expected_error}
+        await self.client.put_json(f"/cluster/server/{server_id}/start", data)
         await self.server_sees_others(server_id, wait_others, interval = wait_interval)
         self._driver_update()
 
