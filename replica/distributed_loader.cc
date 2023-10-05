@@ -440,7 +440,9 @@ future<> table_populator::populate_subdir(sstables::sstable_state state, allow_o
     });
 }
 
-future<> distributed_loader::populate_keyspace(distributed<replica::database>& db, keyspace& ks, sstring ks_name) {
+future<> distributed_loader::populate_keyspace(distributed<replica::database>& db,
+        sharded<db::system_keyspace>& sys_ks, keyspace& ks, sstring ks_name)
+{
     dblog.info("Populating Keyspace {}", ks_name);
 
     co_await coroutine::parallel_for_each(ks.metadata()->cf_meta_data() | boost::adaptors::map_values, [&] (schema_ptr s) -> future<> {
@@ -490,6 +492,35 @@ future<> distributed_loader::populate_keyspace(distributed<replica::database>& d
             });
         }
     });
+
+    // here we can be sure that the 'truncated' table is loaded,
+    // now we load and initialize the truncation times for the tables
+    {
+        const auto truncation_times = co_await sys_ks.local().load_truncation_times();
+        co_await smp::invoke_on_all([&] {
+            db.local().get_tables_metadata().for_each_table([&](table_id id, lw_shared_ptr<table> table) {
+                if (table->schema()->ks_name() != ks_name) {
+                    return;
+                }
+                const auto it = truncation_times.find(id);
+                const auto truncation_time = it == truncation_times.end()
+                    ? db_clock::time_point::min()
+                    : it->second;
+                if (this_shard_id() == 0 && table->schema()->ks_name() == db::schema_tables::NAME &&
+                    truncation_time != db_clock::time_point::min()) {
+                    // replay_position stored in the truncation record may belong to
+                    // the old (default) commitlog domain. It's not safe to interpret
+                    // that replay position in the schema commitlog domain.
+                    // Refuse to boot in this case. We assume no one truncated schema tables.
+                    // We will hit this during rolling upgrade, in which case the user will
+                    // roll back and let us know.
+                    throw std::runtime_error(format("Schema table {}.{} has a truncation record. Booting is not safe.",
+                        table->schema()->ks_name(), table->schema()->cf_name()));
+                }
+                table->set_truncation_time(truncation_time);
+            });
+        });
+    }
 }
 
 future<> distributed_loader::init_system_keyspace(sharded<db::system_keyspace>& sys_ks, distributed<locator::effective_replication_map_factory>& erm_factory, distributed<replica::database>& db) {
@@ -504,7 +535,7 @@ future<> distributed_loader::init_system_keyspace(sharded<db::system_keyspace>& 
             auto& ks = db.local().get_keyspaces();
             auto i = ks.find(ksname);
             if (i != ks.end()) {
-                distributed_loader::populate_keyspace(db, i->second, sstring(ksname)).get();
+                distributed_loader::populate_keyspace(db, sys_ks, i->second, sstring(ksname)).get();
             }
         }
     });
@@ -539,7 +570,7 @@ future<> distributed_loader::init_non_system_keyspaces(distributed<replica::data
                     continue;
                 }
 
-                futures.emplace_back(distributed_loader::populate_keyspace(db, ks.second, ks_name));
+                futures.emplace_back(distributed_loader::populate_keyspace(db, sys_ks, ks.second, ks_name));
             }
 
             when_all_succeed(futures.begin(), futures.end()).discard_result().get();

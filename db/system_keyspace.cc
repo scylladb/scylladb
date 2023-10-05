@@ -1481,26 +1481,18 @@ future<truncation_record> system_keyspace::get_truncation_record(table_id cf_id)
 }
 
 // Read system.truncate table and cache last truncation time in `table` object for each table on every shard
-future<> system_keyspace::load_truncation_times() {
-    if (_db.get_config().ignore_truncation_record.is_set()) {
-        return make_ready_future<>();
+future<std::unordered_map<table_id, db_clock::time_point>> system_keyspace::load_truncation_times() {
+    std::unordered_map<table_id, db_clock::time_point> result;
+    if (!_db.get_config().ignore_truncation_record.is_set()) {
+        sstring req = format("SELECT DISTINCT table_uuid, truncated_at from system.{}", TRUNCATED);
+        auto result_set = co_await execute_cql(req);
+        for (const auto& row: *result_set) {
+            const auto table_uuid = table_id(row.get_as<utils::UUID>("table_uuid"));
+            const auto ts = row.get_as<db_clock::time_point>("truncated_at");
+            result[table_uuid] = ts;
+        }
     }
-    sstring req = format("SELECT DISTINCT table_uuid, truncated_at from system.{}", TRUNCATED);
-    return execute_cql(req).then([this] (::shared_ptr<cql3::untyped_result_set> rs) {
-        return parallel_for_each(rs->begin(), rs->end(), [this] (const cql3::untyped_result_set_row& row) {
-            auto table_uuid = table_id(row.get_as<utils::UUID>("table_uuid"));
-            auto ts = row.get_as<db_clock::time_point>("truncated_at");
-
-            return _db.container().invoke_on_all([table_uuid, ts] (replica::database& db) mutable {
-                try {
-                    replica::table& cf = db.find_column_family(table_uuid);
-                    cf.set_truncation_time(ts);
-                } catch (replica::no_such_column_family&) {
-                    slogger.debug("Skip caching truncation time for {} since the table is no longer present", table_uuid);
-                }
-            });
-        });
-    });
+    co_return result;
 }
 
 future<> system_keyspace::save_truncation_record(const replica::column_family& cf, db_clock::time_point truncated_at, db::replay_position rp) {

@@ -248,7 +248,7 @@ public:
     static table_schema_version generate_schema_version(table_id table_id, uint16_t offset = 0);
 
     future<> build_bootstrap_info();
-    future<> load_truncation_times();
+    future<std::unordered_map<table_id, db_clock::time_point>> load_truncation_times();
     future<> update_schema_version(table_schema_version version);
 
     /*
