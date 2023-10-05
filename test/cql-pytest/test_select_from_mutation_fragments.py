@@ -418,3 +418,30 @@ def test_ck_in_query(cql, test_table):
         for col_name, expected_value in zip(columns, expected_row):
             assert hasattr(row, col_name)
             assert getattr(row, col_name) == expected_value
+
+
+def test_many_partitions(cql, test_keyspace, scylla_only):
+    num_partitions = 5000
+    with util.new_test_table(cql, test_keyspace, 'pk int PRIMARY KEY, v int') as table:
+        delete_id = cql.prepare(f"DELETE FROM {table} WHERE pk = ?")
+        for pk in range(num_partitions):
+            cql.execute(delete_id, (pk,))
+
+        res = list(cql.execute(f"SELECT * FROM MUTATION_FRAGMENTS({table})"))
+        pks = set()
+        partition_starts = 0
+        partition_ends = 0
+        for row in res:
+            assert row.pk >= 0 and row.pk < num_partitions
+            if row.mutation_fragment_kind == "partition start":
+                partition_starts += 1
+                pks.add(row.pk)
+            elif row.mutation_fragment_kind == "partition end":
+                partition_ends += 1
+                assert row.pk in pks
+            else:
+                pytest.fail(f"Unexpected mutation fragment kind: {row.mutation_fragment_kind}")
+
+        assert partition_starts == num_partitions
+        assert partition_ends == num_partitions
+        assert len(pks) == num_partitions

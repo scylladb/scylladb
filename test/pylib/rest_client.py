@@ -234,6 +234,24 @@ class ScyllaRESTAPIClient():
         """Flush keyspace"""
         await self.client.post(f"/storage_service/keyspace_flush/{ks}", host=node_ip)
 
+    async def load_new_sstables(self, node_ip: str, keyspace: str, table: str) -> None:
+        """Load sstables from upload directory"""
+        await self.client.post(f"/storage_service/sstables/{keyspace}?cf={table}", host=node_ip)
+
+    async def keyspace_flush(self, node_ip: str, keyspace: str, table: Optional[str] = None) -> None:
+        """Flush the specified or all tables in the keyspace"""
+        url = f"/storage_service/keyspace_flush/{keyspace}"
+        if table is not None:
+            url += "?cf={table}"
+        await self.client.post(url, host=node_ip)
+
+    async def keyspace_compaction(self, node_ip: str, keyspace: str, table: Optional[str] = None) -> None:
+        """Compact the specified or all tables in the keyspace"""
+        url = f"/storage_service/keyspace_compaction/{keyspace}"
+        if table is not None:
+            url += "?cf={table}"
+        await self.client.post(url, host=node_ip)
+
 
 class ScyllaMetrics:
     def __init__(self, lines: list[str]):
