@@ -63,13 +63,19 @@ Nodetool generic options
 ========================
 All options are supported:
 
-.. code-block:: shell
 
-   ( -h | --host ) <host name> | <ip address>
-   ( -p | --port ) <port number>
-   ( -pw | --password ) <password >
-   ( -u | --username ) <user name>
-   ( -pwf <passwordFilePath | --password-file <passwordFilePath> )
+
+* ``-p <port>`` or ``--port <port>`` - Remote JMX agent port number.
+
+* ``-pp`` or ``--print-port`` - Operate in 4.0 mode with hosts disambiguated by port number.
+
+* ``-pw <password>`` or ``--password <password>`` - Remote JMX agent password.
+
+* ``-pwf <passwordFilePath>`` or ``--password-file <passwordFilePath>`` - Path to the JMX password file.
+
+* ``-u <username>`` or ``--username <username>`` - Remote JMX agent username.
+
+* ``--`` - Separates command-line options from the list of argument(useful when an argument might be mistaken for a command-line option).
 
 Supported Nodetool operations
 =============================

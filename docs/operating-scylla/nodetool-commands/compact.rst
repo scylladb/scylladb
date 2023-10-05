@@ -20,20 +20,6 @@ Syntax
 Options
 --------
 
-* ``-h <host>`` or  ``--host <host>`` - Node hostname or IP address.
-
-* ``-p <port>`` or ``--port <port>`` - Remote JMX agent port number.
-
-* ``-pp`` or ``--print-port`` - Operate in 4.0 mode with hosts disambiguated by port number.
-
-* ``-pw <password>`` or ``--password <password>`` - Remote JMX agent password.
-
-* ``-pwf <passwordFilePath>`` or ``--password-file <passwordFilePath>`` - Path to the JMX password file.
-
-* ``-u <username>`` or ``--username <username>`` - Remote JMX agent username.
-
-* ``--`` - Separates command-line options from the list of argument(useful when an argument might be mistaken for a command-line option).
-
 The following options are available in Cassandra's nodetool, but are NOT implemented in ScyllaDB's nodetool:
 
 * ``-st`` or ``--start-token``
