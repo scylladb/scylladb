@@ -1053,21 +1053,21 @@ class ScyllaClusterManager:
         add_get('/cluster/server/{server_id}/exe', self._server_get_exe)
 
     async def _manager_up(self, _request) -> aiohttp.web.Response:
-        return aiohttp.web.Response(text=f"{self.is_running}")
+        return aiohttp.web.json_response(self.is_running)
 
     async def _cluster_up(self, _request) -> aiohttp.web.Response:
         """Is cluster running"""
-        return aiohttp.web.Response(text=f"{self.cluster is not None and self.cluster.is_running}")
+        return aiohttp.web.json_response(self.cluster is not None and self.cluster.is_running)
 
     async def _is_dirty(self, _request) -> aiohttp.web.Response:
         """Report if current cluster is dirty"""
         assert self.cluster
-        return aiohttp.web.Response(text=f"{self.cluster.is_dirty}")
+        return aiohttp.web.json_response(self.cluster.is_dirty)
 
     async def _cluster_replicas(self, _request) -> aiohttp.web.Response:
         """Return cluster's configured number of replicas (replication factor)"""
         assert self.cluster
-        return aiohttp.web.Response(text=f"{self.cluster.replicas}")
+        return aiohttp.web.json_response(self.cluster.replicas)
 
     async def _cluster_running_servers(self, _request) -> aiohttp.web.Response:
         """Return a dict of running server ids to IPs"""
@@ -1076,16 +1076,16 @@ class ScyllaClusterManager:
     async def _cluster_server_ip_addr(self, request) -> aiohttp.web.Response:
         """IP address of a server"""
         server_id = ServerNum(int(request.match_info["server_id"]))
-        return aiohttp.web.Response(text=f"{self.cluster.servers[server_id].ip_addr}")
+        return aiohttp.web.json_response(self.cluster.servers[server_id].ip_addr)
 
     async def _cluster_host_id(self, request) -> aiohttp.web.Response:
         """IP address of a server"""
         server_id = ServerNum(int(request.match_info["server_id"]))
-        return aiohttp.web.Response(text=f"{self.cluster.servers[server_id].host_id}")
+        return aiohttp.web.json_response(self.cluster.servers[server_id].host_id)
 
     async def _before_test_req(self, request) -> aiohttp.web.Response:
         cluster_str = await self._before_test(request.match_info['test_case_name'])
-        return aiohttp.web.Response(text=cluster_str)
+        return aiohttp.web.json_response(cluster_str)
 
     async def _after_test(self, _request) -> aiohttp.web.Response:
         assert self.cluster is not None
@@ -1099,13 +1099,13 @@ class ScyllaClusterManager:
             self.current_test_case_full_name = ''
         self.is_after_test_ok = True
         cluster_str = str(self.cluster)
-        return aiohttp.web.Response(text=cluster_str)
+        return aiohttp.web.json_response(cluster_str)
 
     async def _mark_dirty(self, _request) -> aiohttp.web.Response:
         """Mark current cluster dirty"""
         assert self.cluster
         self.cluster.is_dirty = True
-        return aiohttp.web.Response(text="OK")
+        return aiohttp.web.Response()
 
     async def _server_stop(self, request: aiohttp.web.Request, gracefully: bool) \
                         -> aiohttp.web.Response:
@@ -1192,7 +1192,7 @@ class ScyllaClusterManager:
                 f" ignore_dead: {ignore_dead}), check log file at {initiator.log_filename},"
                 f" error: \"{exc}\"")
         self.cluster.server_mark_removed(server_id)
-        return aiohttp.web.Response(text="OK")
+        return aiohttp.web.Response()
 
     async def _cluster_decommission_node(self, request) -> aiohttp.web.Response:
         """Run decommission node on Scylla REST API for a specified server"""
@@ -1210,7 +1210,7 @@ class ScyllaClusterManager:
                 f"decommission failed (server: {server}), check log at {server.log_filename},"
                 f" error: \"{exc}\"")
         await self.cluster.server_stop(server_id, gracefully=True)
-        return aiohttp.web.Response(text="OK")
+        return aiohttp.web.Response()
 
     async def _cluster_rebuild_node(self, request) -> aiohttp.web.Response:
         """Run rebuild node on Scylla REST API for a specified server"""
@@ -1226,7 +1226,7 @@ class ScyllaClusterManager:
                 f"rebuild failed (server: {server}), check log at {server.log_filename},"
                 f" error: \"{exc}\"")
         await self.cluster.server_stop(server_id, gracefully=True)
-        return aiohttp.web.Response(text="OK")
+        return aiohttp.web.Response()
 
     async def _server_get_config(self, request: aiohttp.web.Request) -> aiohttp.web.Response:
         """Get conf/scylla.yaml of the given server as a dictionary."""
@@ -1252,7 +1252,7 @@ class ScyllaClusterManager:
         return aiohttp.web.json_response({"ip_addr": ip_addr})
 
     async def _server_get_attribute(self, request: aiohttp.web.Request, attribute: str) -> aiohttp.web.Response:
-        """Generic request handler which gets a particular attribute of a ScyllaServer instance
+        """Generic request handler which gets a particular attribute of a ScyllaServer instance as a string.
 
         To be used to implement concrete handlers, not for direct use.
         """
@@ -1260,7 +1260,7 @@ class ScyllaClusterManager:
         server_id = ServerNum(int(request.match_info["server_id"]))
         assert server_id in self.cluster.servers, f"Server {server_id} unknown"
         server = self.cluster.servers[server_id]
-        return aiohttp.web.Response(text=f"{getattr(server, attribute)}")
+        return aiohttp.web.json_response(str(getattr(server, attribute)))
 
     async def _server_get_log_filename(self, request: aiohttp.web.Request) -> aiohttp.web.Response:
         return await self._server_get_attribute(request, "log_filename")

@@ -104,23 +104,19 @@ class ManagerClient():
 
     async def is_manager_up(self) -> bool:
         """Check if Manager server is up"""
-        ret = await self.client.get_text("/up")
-        return ret == "True"
+        return await self.client.get_json("/up")
 
     async def is_cluster_up(self) -> bool:
         """Check if cluster is up"""
-        ret = await self.client.get_text("/cluster/up")
-        return ret == "True"
+        return await self.client.get_json("/cluster/up")
 
     async def is_dirty(self) -> bool:
         """Check if current cluster dirty."""
-        dirty = await self.client.get_text("/cluster/is-dirty")
-        return dirty == "True"
+        return await self.client.get_json("/cluster/is-dirty")
 
     async def replicas(self) -> int:
         """Get number of configured replicas for the cluster (replication factor)"""
-        resp = await self.client.get_text("/cluster/replicas")
-        return int(resp)
+        return await self.client.get_json("/cluster/replicas")
 
     async def running_servers(self) -> List[ServerInfo]:
         """Get List of server info (id and IP address) of running servers"""
@@ -264,7 +260,7 @@ class ManagerClient():
     async def get_host_ip(self, server_id: ServerNum) -> IPAddress:
         """Get host IP Address"""
         try:
-            server_ip = await self.client.get_text(f"/cluster/host-ip/{server_id}")
+            server_ip = await self.client.get_json(f"/cluster/host-ip/{server_id}")
         except Exception as exc:
             raise Exception(f"Failed to get host IP address for server {server_id}") from exc
         return IPAddress(server_ip)
@@ -272,7 +268,7 @@ class ManagerClient():
     async def get_host_id(self, server_id: ServerNum) -> HostID:
         """Get local host id of a server"""
         try:
-            host_id = await self.client.get_text(f"/cluster/host-id/{server_id}")
+            host_id = await self.client.get_json(f"/cluster/host-id/{server_id}")
         except Exception as exc:
             raise Exception(f"Failed to get local host id address for server {server_id}") from exc
         return HostID(host_id)
@@ -308,11 +304,11 @@ class ManagerClient():
 
     async def server_open_log(self, server_id: ServerNum) -> ScyllaLogFile:
         logger.debug("ManagerClient getting log filename for %s", server_id)
-        log_filename = await self.client.get_text(f"/cluster/server/{server_id}/get_log_filename")
+        log_filename = await self.client.get_json(f"/cluster/server/{server_id}/get_log_filename")
         return ScyllaLogFile(self.thread_pool, log_filename)
 
     async def server_get_workdir(self, server_id: ServerNum) -> str:
-        return await self.client.get_text(f"/cluster/server/{server_id}/workdir")
+        return await self.client.get_json(f"/cluster/server/{server_id}/workdir")
 
     async def server_get_exe(self, server_id: ServerNum) -> str:
-        return await self.client.get_text(f"/cluster/server/{server_id}/exe")
+        return await self.client.get_json(f"/cluster/server/{server_id}/exe")
