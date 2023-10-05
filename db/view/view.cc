@@ -1738,7 +1738,7 @@ future<> view_update_generator::mutate_MV(
 
                     // Printing an error on every failed view mutation would cause log spam, so a rate limit is needed.
                     static thread_local logger::rate_limit view_update_error_rate_limit(std::chrono::seconds(4));
-                    vlogger.log(log_level::error, view_update_error_rate_limit,
+                    vlogger.log(log_level::warn, view_update_error_rate_limit,
                                 "Error applying view update to {} (view: {}.{}, base token: {}, view token: {}): {}",
                                 *target_endpoint, s->ks_name(), s->cf_name(), base_token, view_token, ep);
                     return apply_update_synchronously ? make_exception_future<>(std::move(ep)) : make_ready_future<>();
