@@ -830,8 +830,7 @@ class ScyllaCluster:
         self.logger.info("Cluster %s stopping server %s", self, server_id)
         if server_id in self.stopped:
             return
-        if server_id not in self.running:
-            raise RuntimeError(f"Server {server_id} unknown")
+        assert server_id in self.running, f"Server {server_id} unknown"
         self.is_dirty = True
         server = self.running[server_id]
         # Remove the server from `running` only after we successfully stop it.
@@ -852,8 +851,7 @@ class ScyllaCluster:
         """Start a server. No-op if already running."""
         if server_id in self.running:
             return
-        if server_id not in self.stopped:
-            raise RuntimeError(f"Server {server_id} unknown")
+        assert server_id in self.stopped, f"Server {server_id} unknown"
         self.is_dirty = True
         server = self.stopped.pop(server_id)
         self.logger.info("Cluster %s starting server %s ip %s", self,
@@ -891,8 +889,7 @@ class ScyllaCluster:
     def get_config(self, server_id: ServerNum) -> dict[str, object]:
         """Get conf/scylla.yaml of the given server as a dictionary.
            Fails if the server cannot be found."""
-        if not server_id in self.servers:
-            raise RuntimeError(f"Server {server_id} unknown")
+        assert server_id in self.servers, f"Server {server_id} unknown"
         return self.servers[server_id].get_config()
 
     def update_config(self, server_id: ServerNum, key: str, value: object) -> None:
@@ -900,8 +897,7 @@ class ScyllaCluster:
            If the server is running, reload the config with a SIGHUP.
            Marks the cluster as dirty.
            Fails if the server cannot be found."""
-        if not server_id in self.servers:
-            raise RuntimeError(f"Server {server_id} unknown")
+        assert server_id in self.servers, f"Server {server_id} unknown"
         self.is_dirty = True
         self.servers[server_id].update_config(key, value)
 
@@ -919,11 +915,9 @@ class ScyllaCluster:
         original IP is released at the end of the test to avoid an
         immediate recycle within the same cluster. The server must be
         stopped before its ip is changed."""
-        if server_id not in self.servers:
-            raise RuntimeError(f"Server {server_id} unknown")
+        assert server_id in self.servers, f"Server {server_id} unknown"
         server = self.servers[server_id]
-        if server.is_running:
-            raise RuntimeError(f"Server {server_id} is running: stop it first and then change its ip")
+        assert not server.is_running, f"Server {server_id} is running: stop it first and then change its ip"
         self.is_dirty = True
         ip_addr = IPAddress(await self.host_registry.lease_host())
         self.leased_ips.add(ip_addr)
@@ -1179,8 +1173,7 @@ class ScyllaClusterManager:
         server_id = ServerNum(int(data["server_id"]))
         assert isinstance(data["ignore_dead"], list), "Invalid list of dead IP addresses"
         ignore_dead = [IPAddress(ip_addr) for ip_addr in data["ignore_dead"]]
-        if not initiator_id in self.cluster.running:
-            raise RuntimeError(f"Initiator {initiator_id} is not running")
+        assert initiator_id in self.cluster.running, f"Initiator {initiator_id} is not running"
         if server_id in self.cluster.running:
             self.logger.warning("_cluster_remove_node %s is a running node", server_id)
         else:
@@ -1265,6 +1258,7 @@ class ScyllaClusterManager:
         """
         assert self.cluster
         server_id = ServerNum(int(request.match_info["server_id"]))
+        assert server_id in self.cluster.servers, f"Server {server_id} unknown"
         server = self.cluster.servers[server_id]
         return aiohttp.web.Response(text=f"{getattr(server, attribute)}")
 
