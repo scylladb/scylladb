@@ -28,15 +28,15 @@ void set_hinted_handoff(http_context& ctx, routes& r, gms::gossiper& g) {
             std::vector<gms::inet_address> hosts;
             hosts.reserve(hosts_str.size());
 
-                for (const auto& host_str : hosts_str) {
-                    try {
-                        gms::inet_address host;
-                        host = gms::inet_address(host_str);
-                        hosts.push_back(host);
-                    } catch (std::exception& e) {
-                        throw httpd::bad_param_exception(format("Failed to parse host address {}: {}", host_str, e.what()));
-                    }
+            for (const auto& host_str : hosts_str) {
+                try {
+                    gms::inet_address host;
+                    host = gms::inet_address(host_str);
+                    hosts.push_back(host);
+                } catch (std::exception& e) {
+                    throw httpd::bad_param_exception(format("Failed to parse host address {}: {}", host_str, e.what()));
                 }
+            }
 
             return hosts;
         };
