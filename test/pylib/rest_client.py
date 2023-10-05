@@ -98,7 +98,7 @@ class RESTClient(metaclass=ABCMeta):
         await self._fetch("POST", resource_uri, host = host, port = port, params = params,
                           json = json, timeout = timeout)
 
-    async def put_json(self, resource_uri: str, data: Mapping, host: Optional[str] = None,
+    async def put_json(self, resource_uri: str, data: Optional[Mapping] = None, host: Optional[str] = None,
                        port: Optional[int] = None, params: Optional[dict[str, str]] = None,
                        response_type: Optional[str] = None, timeout: Optional[float] = None) -> Any:
         ret = await self._fetch("PUT", resource_uri, response_type = response_type, host = host,
