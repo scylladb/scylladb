@@ -220,10 +220,10 @@ future<> set_server_cache(http_context& ctx) {
             "The cache service API", set_cache_service);
 }
 
-future<> set_hinted_handoff(http_context& ctx, sharded<gms::gossiper>& g) {
+future<> set_hinted_handoff(http_context& ctx, sharded<service::storage_proxy>& proxy) {
     return register_api(ctx, "hinted_handoff",
-                "The hinted handoff API", [&g] (http_context& ctx, routes& r) {
-                    set_hinted_handoff(ctx, r, g.local());
+                "The hinted handoff API", [&proxy] (http_context& ctx, routes& r) {
+                    set_hinted_handoff(ctx, r, proxy);
                 });
 }
 

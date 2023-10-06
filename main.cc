@@ -634,7 +634,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
     sharded<service::storage_service> ss;
     sharded<service::migration_manager> mm;
     sharded<tasks::task_manager> task_manager;
-    api::http_context ctx(db, proxy, load_meter, token_metadata, task_manager);
+    api::http_context ctx(db, load_meter, token_metadata, task_manager);
     httpd::http_server_control prometheus_server;
     std::optional<utils::directories> dirs = {};
     sharded<gms::feature_service> feature_service;
@@ -1761,7 +1761,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             supervisor::notify("allow replaying hints");
             proxy.invoke_on_all(&service::storage_proxy::allow_replaying_hints).get();
 
-            api::set_hinted_handoff(ctx, gossiper).get();
+            api::set_hinted_handoff(ctx, proxy).get();
             auto stop_hinted_handoff_api = defer_verbose_shutdown("hinted handoff API", [&ctx] {
                 api::unset_hinted_handoff(ctx).get();
             });
