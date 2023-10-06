@@ -181,12 +181,6 @@ distributed_loader::process_upload_dir(distributed<replica::database>& db, distr
     return seastar::async(std::move(attr), [&db, &view_update_generator, &sys_dist_ks, ks = std::move(ks), cf = std::move(cf)] {
         auto global_table = get_table_on_all_shards(db, ks, cf).get0();
 
-        sharded<locator::effective_replication_map_ptr> erms;
-        erms.start(sharded_parameter([&global_table] {
-            return global_table->get_effective_replication_map();
-        })).get();
-        auto stop_erms = deferred_stop(erms);
-
         sharded<sstables::sstable_directory> directory;
         directory.start(global_table.as_sharded_parameter(),
             sstables::sstable_state::upload, &error_handler_gen_for_upload_dir
@@ -250,12 +244,6 @@ distributed_loader::get_sstables_from_upload_dir(distributed<replica::database>&
         sharded<sstables::sstable_directory> directory;
         auto table_id = global_table->schema()->id();
 
-        sharded<locator::effective_replication_map_ptr> erms;
-        erms.start(sharded_parameter([&global_table] {
-            return global_table->get_effective_replication_map();
-        })).get();
-        auto stop_erms = deferred_stop(erms);
-
         directory.start(global_table.as_sharded_parameter(),
             sstables::sstable_state::upload, &error_handler_gen_for_upload_dir
         ).get();
@@ -289,7 +277,6 @@ class table_populator {
     std::unordered_map<sstables::sstable_state, lw_shared_ptr<sharded<sstables::sstable_directory>>> _sstable_directories;
     sstables::sstable_version_types _highest_version = sstables::oldest_writable_sstable_format;
     sstables::generation_type _highest_generation;
-    sharded<locator::effective_replication_map_ptr> _erms;
 
 public:
     table_populator(global_table_ptr& ptr, distributed<replica::database>& db, sstring ks, sstring cf, sstring datadir)
@@ -311,10 +298,6 @@ public:
     future<> start() {
         assert(this_shard_id() == 0);
 
-        co_await _erms.start(sharded_parameter([this] {
-            return _global_table->get_effective_replication_map();
-        }));
-
         for (auto state : { sstables::sstable_state::normal, sstables::sstable_state::staging, sstables::sstable_state::quarantine }) {
             co_await start_subdir(state);
         }
@@ -330,7 +313,6 @@ public:
     }
 
     future<> stop() {
-        co_await _erms.stop();
         for (auto it = _sstable_directories.begin(); it != _sstable_directories.end(); it = _sstable_directories.erase(it)) {
             co_await it->second->stop();
         }
