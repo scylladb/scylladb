@@ -1879,8 +1879,7 @@ std::vector<schema_ptr> system_keyspace::all_tables(const db::config& cfg) {
 
 static bool maybe_write_in_user_memory(schema_ptr s) {
     return (s.get() == system_keyspace::batchlog().get()) || (s.get() == system_keyspace::paxos().get())
-            || s == system_keyspace::v3::scylla_views_builds_in_progress()
-            || s == system_keyspace::raft();
+            || s == system_keyspace::v3::scylla_views_builds_in_progress();
 }
 
 future<> system_keyspace::make(
