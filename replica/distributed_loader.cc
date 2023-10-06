@@ -188,12 +188,8 @@ distributed_loader::process_upload_dir(distributed<replica::database>& db, distr
         auto stop_erms = deferred_stop(erms);
 
         sharded<sstables::sstable_directory> directory;
-        directory.start(
-            sharded_parameter([&global_table] { return std::ref(global_table->get_sstables_manager()); }),
-            sharded_parameter([&global_table] { return global_table->schema(); }),
-            sharded_parameter([&global_table, &erms] { return std::ref(erms.local()->get_sharder(*global_table->schema())); }),
-            sharded_parameter([&global_table] { return global_table->get_storage_options_ptr(); }),
-            global_table->dir(), sstables::sstable_state::upload, &error_handler_gen_for_upload_dir
+        directory.start(global_table.as_sharded_parameter(),
+            sstables::sstable_state::upload, &error_handler_gen_for_upload_dir
         ).get();
 
         auto stop_directory = deferred_stop(directory);
@@ -260,12 +256,8 @@ distributed_loader::get_sstables_from_upload_dir(distributed<replica::database>&
         })).get();
         auto stop_erms = deferred_stop(erms);
 
-        directory.start(
-            sharded_parameter([&global_table] { return std::ref(global_table->get_sstables_manager()); }),
-            sharded_parameter([&global_table] { return global_table->schema(); }),
-            sharded_parameter([&global_table, &erms] { return std::ref(erms.local()->get_sharder(*global_table->schema())); }),
-            sharded_parameter([&global_table] { return global_table->get_storage_options_ptr(); }),
-            global_table->dir(), sstables::sstable_state::upload, &error_handler_gen_for_upload_dir
+        directory.start(global_table.as_sharded_parameter(),
+            sstables::sstable_state::upload, &error_handler_gen_for_upload_dir
         ).get();
 
         auto stop = deferred_stop(directory);
@@ -356,12 +348,8 @@ future<> table_populator::start_subdir(sstables::sstable_state state) {
     auto& directory = *dptr;
     auto& global_table = _global_table;
     auto& db = _db;
-    co_await directory.start(
-        sharded_parameter([&global_table] { return std::ref(global_table->get_sstables_manager()); }),
-        sharded_parameter([&global_table] { return global_table->schema(); }),
-        sharded_parameter([this] { return std::ref(_erms.local()->get_sharder(*_global_table->schema())); }),
-        sharded_parameter([&global_table] { return global_table->get_storage_options_ptr(); }),
-        global_table->dir(), state,
+    co_await directory.start(_global_table.as_sharded_parameter(),
+        state,
         default_io_error_handler_gen()
     );
 
