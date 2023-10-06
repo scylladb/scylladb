@@ -346,12 +346,7 @@ private:
 future<> table_populator::start_subdir(sstables::sstable_state state) {
     auto dptr = make_lw_shared<sharded<sstables::sstable_directory>>();
     auto& directory = *dptr;
-    auto& global_table = _global_table;
-    auto& db = _db;
-    co_await directory.start(_global_table.as_sharded_parameter(),
-        state,
-        default_io_error_handler_gen()
-    );
+    co_await directory.start(_global_table.as_sharded_parameter(), state, default_io_error_handler_gen());
 
     // directory must be stopped using table_populator::stop below
     _sstable_directories[state] = dptr;
@@ -360,7 +355,7 @@ future<> table_populator::start_subdir(sstables::sstable_state state) {
 
     sstables::sstable_directory::process_flags flags {
         .throw_on_missing_toc = true,
-        .enable_dangerous_direct_import_of_cassandra_counters = db.local().get_config().enable_dangerous_direct_import_of_cassandra_counters(),
+        .enable_dangerous_direct_import_of_cassandra_counters = _db.local().get_config().enable_dangerous_direct_import_of_cassandra_counters(),
         .allow_loading_materialized_view = true,
         .garbage_collect = true,
     };
@@ -371,7 +366,7 @@ future<> table_populator::start_subdir(sstables::sstable_state state) {
     // in the system tables. In that case we'll rely on what we find on disk: we'll
     // at least not downgrade any files. If we already know that we support a higher
     // format than the one we see then we use that.
-    auto sys_format = global_table->get_sstables_manager().get_highest_supported_format();
+    auto sys_format = _global_table->get_sstables_manager().get_highest_supported_format();
     auto sst_version = co_await highest_version_seen(directory, sys_format);
     auto generation = co_await highest_generation_seen(directory);
 
