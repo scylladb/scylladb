@@ -61,4 +61,18 @@ extern boost::test_tools::assertion_result has_scylla_test_env(boost::unit_test:
 future<bool> compare_files(std::string fa, std::string fb);
 future<> touch_file(std::string name);
 
+extern std::mutex boost_logger_mutex;
+
+#define THREADSAFE_BOOST_CHECK( BOOST_CHECK_EXPR ) {                    \
+        std::lock_guard<std::mutex> guard(tests::boost_logger_mutex);   \
+        BOOST_CHECK_EXPR;                                               \
+    }
+
+// Thread-safe variants of BOOST macros for unit tests
+// This is required to address lack of synchronization in boost test logger, which is susceptible to races
+// in multi-threaded tests. Boost's XML printer (see boost/test/utils/xml_printer.hpp) can generate
+// unreadable XML files, and therefore cause failure when parsing its content.
+#define THREADSAFE_BOOST_REQUIRE( P ) THREADSAFE_BOOST_CHECK(BOOST_REQUIRE( P ))
+#define THREADSAFE_BOOST_REQUIRE_EQUAL( L, R ) THREADSAFE_BOOST_CHECK(BOOST_REQUIRE_EQUAL( L, R ))
+
 }
