@@ -1133,15 +1133,7 @@ static future<executor::request_return_type> create_table_on_shard0(tracing::tra
         // This should never happen, the ID is supposed to be unique
         co_return api_error::internal(format("Table with ID {} already exists", schema->id()));
     }
-    db::schema_tables::add_table_or_view_to_schema_mutation(schema, ts, true, schema_mutations);
-    // we must call before_create_column_family callbacks - which allow
-    // listeners to modify our schema_mutations. For example, CDC may add
-    // another table (the CDC log table) to the same keyspace.
-    // Unfortunately the convention is that this callback must be run in
-    // a Seastar thread.
-    co_await seastar::async([&] {
-        mm.get_notifier().before_create_column_family(*schema, schema_mutations, ts);
-    });
+    co_await service::prepare_new_column_family_announcement(schema_mutations, sp, *ksm, schema, ts);
     for (schema_builder& view_builder : view_builders) {
         db::schema_tables::add_table_or_view_to_schema_mutation(
             view_ptr(view_builder.build()), ts, true, schema_mutations);
