@@ -98,4 +98,6 @@ future<> touch_file(std::string name) {
     co_await f.close();
 }
 
+std::mutex boost_logger_mutex;
+
 }
