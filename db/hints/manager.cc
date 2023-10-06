@@ -7,49 +7,141 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#include <algorithm>
-#include <seastar/core/future.hh>
-#include <seastar/core/seastar.hh>
-#include <seastar/core/sleep.hh>
-#include <seastar/core/gate.hh>
+#include "db/hints/manager.hh"
+
+// Seastar features.
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/coroutine.hh>
+#include <seastar/core/future.hh>
+#include <seastar/core/gate.hh>
+#include <seastar/core/seastar.hh>
+#include <seastar/core/semaphore.hh>
+#include <seastar/core/sleep.hh>
+#include <seastar/core/smp.hh>
+#include <seastar/coroutine/exception.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
+
+// Boost features.
 #include <boost/range/adaptors.hpp>
-#include "utils/div_ceil.hh"
+
+// Scylla includes.
+#include "db/hints/internal/hint_logger.hh"
 #include "db/extensions.hh"
-#include "service/storage_proxy.hh"
-#include "gms/versioned_value.hh"
-#include "gms/gossiper.hh"
-#include "seastarx.hh"
-#include "converting_mutation_partition_applier.hh"
-#include "utils/disk-error-handler.hh"
-#include "utils/lister.hh"
 #include "db/timeout_clock.hh"
-#include "replica/database.hh"
-#include "service_permit.hh"
-#include "utils/directories.hh"
+#include "gms/gossiper.hh"
+#include "gms/versioned_value.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "mutation/mutation_partition_view.hh"
-#include "utils/runtime.hh"
+#include "replica/database.hh"
+#include "service/storage_proxy.hh"
+#include "utils/directories.hh"
+#include "utils/disk-error-handler.hh"
+#include "utils/div_ceil.hh"
 #include "utils/error_injection.hh"
-#include "db/hints/internal/hint_logger.hh"
+#include "utils/fb_utilities.hh"
+#include "utils/lister.hh"
+#include "utils/runtime.hh"
+#include "converting_mutation_partition_applier.hh"
+#include "seastarx.hh"
+#include "service_permit.hh"
 
-using namespace std::literals::chrono_literals;
+// STD.
+#include <algorithm>
+#include <exception>
 
-namespace db {
-namespace hints {
+namespace db::hints {
 
 using namespace internal;
 
-const std::string manager::FILENAME_PREFIX("HintsLog" + commitlog::descriptor::SEPARATOR);
+class directory_initializer::impl {
+private:
+    enum class state {
+        uninitialized,
+        created_and_validated,
+        rebalanced
+    };
 
-const std::chrono::seconds manager::hint_file_write_timeout = std::chrono::seconds(2);
-std::chrono::seconds manager::hints_flush_period = std::chrono::seconds(10);
+private:
+    utils::directories& _dirs;
+    sstring _hints_directory;
+    state _state = state::uninitialized;
+    seastar::named_semaphore _lock = {1, named_semaphore_exception_factory{"hints directory initialization lock"}};
 
-manager::manager(sstring hints_directory, host_filter filter, int64_t max_hint_window_ms, resource_manager& res_manager, distributed<replica::database>& db)
-    : _hints_dir(fs::path(hints_directory) / format("{:d}", this_shard_id()))
+public:
+    impl(utils::directories& dirs, sstring hints_directory)
+        : _dirs(dirs)
+        , _hints_directory(std::move(hints_directory))
+    { }
+
+public:
+    future<> ensure_created_and_verified() {
+        if (_state != state::uninitialized) {
+            co_return;
+        }
+
+        const auto units = co_await seastar::get_units(_lock, 1);
+        
+        utils::directories::set dir_set;
+        dir_set.add_sharded(_hints_directory);
+        
+        manager_logger.debug("Creating and validating hint directories: {}", _hints_directory);
+        co_await _dirs.create_and_verify(std::move(dir_set));
+        
+        _state = state::created_and_validated;
+    }
+
+    future<> ensure_rebalanced() {
+        if (_state == state::uninitialized) {
+            throw std::logic_error("hints directory needs to be created and validated before rebalancing");
+        }
+
+        if (_state == state::rebalanced) {
+            co_return;
+        }
+
+        const auto units = co_await seastar::get_units(_lock, 1);
+        
+        manager_logger.debug("Rebalancing hints in {}", _hints_directory);
+        co_await rebalance_hints(fs::path{_hints_directory});
+
+        _state = state::rebalanced;
+    }
+};
+
+directory_initializer::directory_initializer(std::shared_ptr<directory_initializer::impl> impl)
+        : _impl(std::move(impl))
+{ }
+
+future<directory_initializer> directory_initializer::make(utils::directories& dirs, sstring hints_directory) {
+    return smp::submit_to(0, [&dirs, hints_directory = std::move(hints_directory)] () mutable {
+        auto impl = std::make_shared<directory_initializer::impl>(dirs, std::move(hints_directory));
+        return make_ready_future<directory_initializer>(directory_initializer(std::move(impl)));
+    });
+}
+
+future<> directory_initializer::ensure_created_and_verified() {
+    if (!_impl) {
+        return make_ready_future<>();
+    }
+    return smp::submit_to(0, [impl = this->_impl] () mutable {
+        return impl->ensure_created_and_verified().then([impl] {});
+    });
+}
+
+future<> directory_initializer::ensure_rebalanced() {
+    if (!_impl) {
+        return make_ready_future<>();
+    }
+    return smp::submit_to(0, [impl = this->_impl] () mutable {
+        return impl->ensure_rebalanced().then([impl] {});
+    });
+}
+
+manager::manager(service::storage_proxy& proxy, sstring hints_directory, host_filter filter, int64_t max_hint_window_ms,
+        resource_manager& res_manager, distributed<replica::database>& db)
+    : _hints_dir(fs::path(hints_directory) / fmt::to_string(this_shard_id()))
     , _host_filter(std::move(filter))
+    , _proxy(proxy)
     , _max_hint_window_us(max_hint_window_ms * 1000)
     , _local_db(db.local())
     , _resource_manager(res_manager)
@@ -57,10 +149,6 @@ manager::manager(sstring hints_directory, host_filter filter, int64_t max_hint_w
     if (utils::get_local_injector().enter("decrease_hints_flush_period")) {
         hints_flush_period = std::chrono::seconds{1};
     }
-}
-
-manager::~manager() {
-    assert(_ep_managers.empty());
 }
 
 void manager::register_metrics(const sstring& group_name) {
@@ -101,72 +189,77 @@ void manager::register_metrics(const sstring& group_name) {
     });
 }
 
-future<> manager::start(shared_ptr<service::storage_proxy> proxy_ptr, shared_ptr<gms::gossiper> gossiper_ptr) {
-    _proxy_anchor = std::move(proxy_ptr);
+future<> manager::start(shared_ptr<gms::gossiper> gossiper_ptr) {
     _gossiper_anchor = std::move(gossiper_ptr);
-    return lister::scan_dir(_hints_dir, lister::dir_entry_types::of<directory_entry_type::directory>(), [this] (fs::path datadir, directory_entry de) {
-        endpoint_id ep = endpoint_id(de.name);
+
+
+    co_await lister::scan_dir(_hints_dir, lister::dir_entry_types::of<directory_entry_type::directory>(),
+            [this] (fs::path datadir, directory_entry de) {
+        endpoint_id ep = endpoint_id{de.name};
+
         if (!check_dc_for(ep)) {
             return make_ready_future<>();
         }
+
         return get_ep_manager(ep).populate_segments_to_replay();
-    }).then([this] {
-        return compute_hints_dir_device_id();
-    }).then([this] {
-        set_started();
     });
+    
+    co_await compute_hints_dir_device_id();
+    set_started();
 }
 
 future<> manager::stop() {
-    manager_logger.info("Asked to stop");
+    manager_logger.info("Asked to stop a shard hint manager");
 
-  auto f = make_ready_future<>();
-
-  return f.finally([this] {
     set_stopping();
 
     return _draining_eps_gate.close().finally([this] {
-        return parallel_for_each(_ep_managers, [] (auto& pair) {
-            return pair.second.stop();
+        return parallel_for_each(_ep_managers | boost::adaptors::map_values, [] (hint_endpoint_manager& ep_man) {
+            return ep_man.stop();
         }).finally([this] {
             _ep_managers.clear();
-            manager_logger.info("Stopped");
-        }).discard_result();
+            manager_logger.info("Shard hint manager has stopped");
+        });
     });
-  });
 }
 
 future<> manager::compute_hints_dir_device_id() {
-    return get_device_id(_hints_dir.native()).then([this](dev_t device_id) {
-        _hints_dir_device_id = device_id;
-    }).handle_exception([this](auto ep) {
-        manager_logger.warn("Failed to stat directory {} for device id: {}", _hints_dir.native(), ep);
-        return make_exception_future<>(ep);
-    });
+    try {
+        _hints_dir_device_id = co_await get_device_id(_hints_dir.native());
+    } catch (...) {
+        manager_logger.warn("Failed to stat directory {} for device id: {}",
+                _hints_dir.native(), std::current_exception());
+        throw;
+    }
 }
 
 void manager::allow_hints() {
-    boost::for_each(_ep_managers, [] (auto& pair) { pair.second.allow_hints(); });
+    for (auto& [_, ep_man] : _ep_managers) {
+        ep_man.allow_hints();
+    }
 }
 
 void manager::forbid_hints() {
-    boost::for_each(_ep_managers, [] (auto& pair) { pair.second.forbid_hints(); });
+    for (auto& [_, ep_man] : _ep_managers) {
+        ep_man.forbid_hints();
+    }
 }
 
 void manager::forbid_hints_for_eps_with_pending_hints() {
     manager_logger.trace("space_watchdog: Going to block hints to: {}", _eps_with_pending_hints);
-    boost::for_each(_ep_managers, [this] (auto& pair) {
-        hint_endpoint_manager& ep_man = pair.second;
+    
+    for (auto& [_, ep_man] : _ep_managers) {
         if (has_ep_with_pending_hints(ep_man.end_point_key())) {
             ep_man.forbid_hints();
         } else {
             ep_man.allow_hints();
         }
-    });
+    }
 }
 
-sync_point::shard_rps manager::calculate_current_sync_point(const std::vector<endpoint_id>& target_eps) const {
+sync_point::shard_rps manager::calculate_current_sync_point(std::span<const endpoint_id> target_eps) const {
     sync_point::shard_rps rps;
+
     for (auto addr : target_eps) {
         auto it = _ep_managers.find(addr);
         if (it != _ep_managers.end()) {
@@ -174,6 +267,7 @@ sync_point::shard_rps manager::calculate_current_sync_point(const std::vector<en
             rps[ep_man.end_point_key()] = ep_man.last_written_replay_position();
         }
     }
+
     return rps;
 }
 
@@ -191,54 +285,60 @@ future<> manager::wait_for_sync_point(abort_source& as, const sync_point::shard_
     }
 
     bool was_aborted = false;
-    co_await coroutine::parallel_for_each(_ep_managers, [&was_aborted, &rps, &local_as] (auto& p) {
-        const auto addr = p.first;
-        auto& ep_man = p.second;
+    co_await coroutine::parallel_for_each(_ep_managers,
+            coroutine::lambda([&rps, &local_as, &was_aborted] (auto& pair) -> future<> {
+        auto& [ep, ep_man] = pair;
 
-        db::replay_position rp;
-        auto it = rps.find(addr);
-        if (it != rps.end()) {
-            rp = it->second;
-        }
-
-        return ep_man.wait_until_hints_are_replayed_up_to(local_as, rp).handle_exception([&local_as, &was_aborted] (auto eptr) {
+        // When `rps` doesn't specify a replay position for a given endpoint, we use
+        // its default value. Normally, it should be equal to returning a ready future here.
+        // However, foreign segments (i.e. segments that were moved from another shard at start-up)
+        // are treated differently from "regular" segments -- we can think of their replay positions
+        // as equal to negative infinity or simply smaller from any other replay position, which
+        // also includes the default value. Because of that, we don't have a choice -- we have to
+        // pass either rps[ep] or the default replay position to the endpoint manager because
+        // some hints MIGHT need to be sent.
+        const replay_position rp = [&] {
+            auto it = rps.find(ep);
+            if (it == rps.end()) {
+                return replay_position{};
+            }
+            return it->second;
+        } ();
+        
+        try {
+            co_await ep_man.wait_until_hints_are_replayed_up_to(local_as, rp);
+        } catch (abort_requested_exception&) {
             if (!local_as.abort_requested()) {
                 local_as.request_abort();
             }
-            try {
-                std::rethrow_exception(std::move(eptr));
-            } catch (abort_requested_exception&) {
-                was_aborted = true;
-            } catch (...) {
-                return make_exception_future<>(std::current_exception());
-            }
-            return make_ready_future();
-        });
-    });
+            was_aborted = true;
+        }
+    }));
 
     if (was_aborted) {
-        throw abort_requested_exception();
+        co_await coroutine::return_exception(abort_requested_exception{});
     }
-
-    co_return;
 }
 
 hint_endpoint_manager& manager::get_ep_manager(endpoint_id ep) {
-    auto it = find_ep_manager(ep);
-    if (it == ep_managers_end()) {
-        manager_logger.trace("Creating an ep_manager for {}", ep);
-        hint_endpoint_manager& ep_man = _ep_managers.emplace(ep, hint_endpoint_manager(ep, *this)).first->second;
-        ep_man.start();
-        return ep_man;
+    auto [it, emplaced] = _ep_managers.try_emplace(ep, ep, *this);
+    hint_endpoint_manager& ep_man = it->second;
+
+    if (emplaced) {
+        manager_logger.trace("Created an endpoint manager for {}", ep);
+        ep_man.start();    
     }
-    return it->second;
+
+    return ep_man;
 }
 
-inline bool manager::have_ep_manager(endpoint_id ep) const noexcept {
-    return find_ep_manager(ep) != ep_managers_end();
+bool manager::have_ep_manager(endpoint_id ep) const noexcept {
+    return _ep_managers.contains(ep);
 }
 
-bool manager::store_hint(endpoint_id ep, schema_ptr s, lw_shared_ptr<const frozen_mutation> fm, tracing::trace_state_ptr tr_state) noexcept {
+bool manager::store_hint(endpoint_id ep, schema_ptr s, lw_shared_ptr<const frozen_mutation> fm,
+        tracing::trace_state_ptr tr_state) noexcept
+{
     if (stopping() || draining_all() || !started() || !can_hint_for(ep)) {
         manager_logger.trace("Can't store a hint to {}", ep);
         ++_stats.dropped;
@@ -260,9 +360,12 @@ bool manager::store_hint(endpoint_id ep, schema_ptr s, lw_shared_ptr<const froze
 }
 
 bool manager::too_many_in_flight_hints_for(endpoint_id ep) const noexcept {
-    // There is no need to check the DC here because if there is an in-flight hint for this end point then this means that
-    // its DC has already been checked and found to be ok.
-    return _stats.size_of_hints_in_progress > max_size_of_hints_in_progress && !utils::fb_utilities::is_me(ep) && hints_in_progress_for(ep) > 0 && local_gossiper().get_endpoint_downtime(ep) <= _max_hint_window_us;
+    // There is no need to check the DC here because if there is an in-flight hint for this
+    // endpoint, then this means that its DC has already been checked and found to be ok.
+    return _stats.size_of_hints_in_progress > MAX_SIZE_OF_HINTS_IN_PROGRESS
+            && !utils::fb_utilities::is_me(ep)
+            && hints_in_progress_for(ep) > 0
+            && local_gossiper().get_endpoint_downtime(ep) <= _max_hint_window_us;
 }
 
 bool manager::can_hint_for(endpoint_id ep) const noexcept {
@@ -270,29 +373,33 @@ bool manager::can_hint_for(endpoint_id ep) const noexcept {
         return false;
     }
 
-    auto it = find_ep_manager(ep);
-    if (it != ep_managers_end() && (it->second.stopping() || !it->second.can_hint())) {
+    auto it = _ep_managers.find(ep);
+    if (it != _ep_managers.end() && (it->second.stopping() || !it->second.can_hint())) {
         return false;
     }
 
-    // Don't allow more than one in-flight (to the store) hint to a specific destination when the total size of in-flight
-    // hints is more than the maximum allowed value.
+    // Don't allow more than one in-flight (to the store) hint to a specific destination when
+    // the total size of in-flight hints is more than the maximum allowed value.
     //
-    // In the worst case there's going to be (_max_size_of_hints_in_progress + N - 1) in-flight hints, where N is the total number Nodes in the cluster.
-    if (_stats.size_of_hints_in_progress > max_size_of_hints_in_progress && hints_in_progress_for(ep) > 0) {
-        manager_logger.trace("size_of_hints_in_progress {} hints_in_progress_for({}) {}", _stats.size_of_hints_in_progress, ep, hints_in_progress_for(ep));
+    // In the worst case there's going to be (_max_size_of_hints_in_progress + N - 1) in-flight
+    // hints where N is the total number nodes in the cluster.
+    const auto hipf = hints_in_progress_for(ep);
+    if (_stats.size_of_hints_in_progress > MAX_SIZE_OF_HINTS_IN_PROGRESS && hipf > 0) {
+        manager_logger.trace("size_of_hints_in_progress {} hints_in_progress_for({}) {}",
+                _stats.size_of_hints_in_progress, ep, hipf);
         return false;
     }
 
-    // check that the destination DC is "hintable"
+    // Check that the destination DC is "hintable".
     if (!check_dc_for(ep)) {
         manager_logger.trace("{}'s DC is not hintable", ep);
         return false;
     }
 
-    // check if the end point has been down for too long
-    if (local_gossiper().get_endpoint_downtime(ep) > _max_hint_window_us) {
-        manager_logger.trace("{} is down for {}, not hinting", ep, local_gossiper().get_endpoint_downtime(ep));
+    // Check if the endpoint has been down for too long.
+    const auto ep_downtime = local_gossiper().get_endpoint_downtime(ep);
+    if (ep_downtime > _max_hint_window_us) {
+        manager_logger.trace("{} has been down for {}, not hinting", ep, ep_downtime);
         return false;
     }
 
@@ -301,46 +408,65 @@ bool manager::can_hint_for(endpoint_id ep) const noexcept {
 
 future<> manager::change_host_filter(host_filter filter) {
     if (!started()) {
-        return make_exception_future<>(std::logic_error("change_host_filter: called before the hints_manager was started"));
+        co_await coroutine::return_exception(
+                std::logic_error{"change_host_filter: called before the hints_manager was started"});
     }
 
-    return with_gate(_draining_eps_gate, [this, filter = std::move(filter)] () mutable {
-        return with_semaphore(drain_lock(), 1, [this, filter = std::move(filter)] () mutable {
-            if (draining_all()) {
-                return make_exception_future<>(std::logic_error("change_host_filter: cannot change the configuration because hints all hints were drained"));
+    const auto holder = seastar::gate::holder{_draining_eps_gate};
+    const auto sem_unit = co_await seastar::get_units(_drain_lock, 1);
+
+    if (draining_all()) {
+        co_await coroutine::return_exception(std::logic_error{
+                "change_host_filter: cannot change the configuration because hints all hints were drained"});
+    }
+
+    manager_logger.debug("change_host_filter: changing from {} to {}", _host_filter, filter);
+
+    // Change the host_filter now and save the old one so that we can
+    // roll back in case of failure
+    std::swap(_host_filter, filter);
+    std::exception_ptr eptr = nullptr;
+
+    try {
+        // Iterate over existing hint directories and see if we can enable an endpoint manager
+        // for some of them
+        co_await lister::scan_dir(_hints_dir, lister::dir_entry_types::of<directory_entry_type::directory>(),
+                [this] (fs::path datadir, directory_entry de) {
+            const endpoint_id ep = endpoint_id{de.name};
+
+            const auto& topology = _proxy.get_token_metadata_ptr()->get_topology();
+            if (_ep_managers.contains(ep) || !_host_filter.can_hint_for(topology, ep)) {
+                return make_ready_future();
             }
 
-            manager_logger.debug("change_host_filter: changing from {} to {}", _host_filter, filter);
+            return get_ep_manager(ep).populate_segments_to_replay();
+        });
+    } catch (...) {
+        // Revert the changes in the filter. The code below will stop the additional managers
+        // that were started so far.
+        _host_filter = std::move(filter);
+        eptr = std::current_exception();
+    }
+    
+    try {
+        // Remove endpoint managers which are rejected by the filter.
+        co_await coroutine::parallel_for_each(_ep_managers, [this] (auto& pair) {
+            auto& [ep, ep_man] = pair;
 
-            // Change the host_filter now and save the old one so that we can
-            // roll back in case of failure
-            std::swap(_host_filter, filter);
-
-            // Iterate over existing hint directories and see if we can enable an endpoint manager
-            // for some of them
-            return lister::scan_dir(_hints_dir, lister::dir_entry_types::of<directory_entry_type::directory>(), [this] (fs::path datadir, directory_entry de) {
-                const endpoint_id ep = endpoint_id(de.name);
-                if (_ep_managers.contains(ep) || !_host_filter.can_hint_for(_proxy_anchor->get_token_metadata_ptr()->get_topology(), ep)) {
-                    return make_ready_future<>();
-                }
-                return get_ep_manager(ep).populate_segments_to_replay();
-            }).handle_exception([this, filter = std::move(filter)] (auto ep) mutable {
-                // Bring back the old filter. The finally() block will cause us to stop
-                // the additional hint_endpoint_managers that we started
-                _host_filter = std::move(filter);
-            }).finally([this] {
-                // Remove endpoint managers which are rejected by the filter
-                return parallel_for_each(_ep_managers, [this] (auto& pair) {
-                    if (_host_filter.can_hint_for(_proxy_anchor->get_token_metadata_ptr()->get_topology(), pair.first)) {
-                        return make_ready_future<>();
-                    }
-                    return pair.second.stop(drain::no).finally([this, ep = pair.first] {
-                        _ep_managers.erase(ep);
-                    });
-                });
+            if (_host_filter.can_hint_for(_proxy.get_token_metadata_ptr()->get_topology(), ep)) {
+                return make_ready_future<>();
+            }
+            
+            return ep_man.stop(drain::no).finally([this, ep] {
+                _ep_managers.erase(ep);
             });
         });
-    });
+    } catch (...) {
+        if (eptr) {
+            std::throw_with_nested(eptr);
+        }
+        throw;
+    }
 }
 
 bool manager::check_dc_for(endpoint_id ep) const noexcept {
@@ -348,56 +474,69 @@ bool manager::check_dc_for(endpoint_id ep) const noexcept {
         // If target's DC is not a "hintable" DCs - don't hint.
         // If there is an end point manager then DC has already been checked and found to be ok.
         return _host_filter.is_enabled_for_all() || have_ep_manager(ep) ||
-               _host_filter.can_hint_for(_proxy_anchor->get_token_metadata_ptr()->get_topology(), ep);
+               _host_filter.can_hint_for(_proxy.get_token_metadata_ptr()->get_topology(), ep);
     } catch (...) {
         // if we failed to check the DC - block this hint
         return false;
     }
 }
 
-void manager::drain_for(endpoint_id endpoint) {
+future<> manager::drain_for(endpoint_id endpoint) noexcept {
     if (!started() || stopping() || draining_all()) {
-        return;
+        co_return;
     }
 
     manager_logger.trace("on_leave_cluster: {} is removed/decommissioned", endpoint);
 
-    // Future is waited on indirectly in `stop()` (via `_draining_eps_gate`).
-    (void)with_gate(_draining_eps_gate, [this, endpoint] {
-        return with_semaphore(drain_lock(), 1, [this, endpoint] {
-            return futurize_invoke([this, endpoint] () {
-                if (utils::fb_utilities::is_me(endpoint)) {
-                    set_draining_all();
-                    return parallel_for_each(_ep_managers, [] (auto& pair) {
-                        return pair.second.stop(drain::yes).finally([&pair] {
-                            return with_file_update_mutex(pair.second, [&pair] {
-                                return remove_file(pair.second.hints_dir().c_str());
-                            });
-                        });
-                    }).finally([this] {
-                        _ep_managers.clear();
-                    });
-                } else {
-                    ep_managers_map_type::iterator ep_manager_it = find_ep_manager(endpoint);
-                    if (ep_manager_it != ep_managers_end()) {
-                        return ep_manager_it->second.stop(drain::yes).finally([this, endpoint, &ep_man = ep_manager_it->second] {
-                            return with_file_update_mutex(ep_man, [&ep_man] {
-                                return remove_file(ep_man.hints_dir().c_str());
-                            }).finally([this, endpoint] {
-                                _ep_managers.erase(endpoint);
-                            });
-                        });
-                    }
+    const auto holder = seastar::gate::holder{_draining_eps_gate};
+    const auto sem_unit = co_await seastar::get_units(_drain_lock, 1);
 
-                    return make_ready_future<>();
-                }
-            }).handle_exception([endpoint] (auto eptr) {
-                manager_logger.error("Exception when draining {}: {}", endpoint, eptr);
+    // After an endpoint has been drained, we remove its directory with all of its contents.
+    auto drain_ep_manager = [] (hint_endpoint_manager& ep_man) -> future<> {
+        return ep_man.stop(drain::yes).finally([&] {
+            return ep_man.with_file_update_mutex([&ep_man] {
+                return remove_file(ep_man.hints_dir().native());
             });
         });
-    }).finally([endpoint] {
-        manager_logger.trace("drain_for: finished draining {}", endpoint);
-    });
+    };
+
+    std::exception_ptr eptr = nullptr;
+
+    if (utils::fb_utilities::is_me(endpoint)) {
+        set_draining_all();
+        
+        try {
+            co_await coroutine::parallel_for_each(_ep_managers | boost::adaptors::map_values,
+                    [&drain_ep_manager] (hint_endpoint_manager& ep_man) {
+                return drain_ep_manager(ep_man);
+            });
+        } catch (...) {
+            eptr = std::current_exception();
+        }
+
+        _ep_managers.clear();
+    } else {
+        auto it = _ep_managers.find(endpoint);
+        
+        if (it != _ep_managers.end()) {
+            try {
+                co_await drain_ep_manager(it->second);
+            } catch (...) {
+                eptr = std::current_exception();
+            }
+
+            // We can't provide the function with `it` here because we co_await above,
+            // so iterators could have been invalidated.
+            // This never throws.
+            _ep_managers.erase(endpoint);
+        }
+    }
+
+    if (eptr) {
+        manager_logger.error("Exception when draining {}: {}", endpoint, eptr);
+    }
+
+    manager_logger.trace("drain_for: finished draining {}", endpoint);
 }
 
 void manager::update_backlog(size_t backlog, size_t max_backlog) {
@@ -408,92 +547,8 @@ void manager::update_backlog(size_t backlog, size_t max_backlog) {
     }
 }
 
-class directory_initializer::impl {
-    enum class state {
-        uninitialized = 0,
-        created_and_validated = 1,
-        rebalanced = 2,
-    };
-
-    utils::directories& _dirs;
-    sstring _hints_directory;
-    state _state = state::uninitialized;
-    seastar::named_semaphore _lock = {1, named_semaphore_exception_factory{"hints directory initialization lock"}};
-
-public:
-    impl(utils::directories& dirs, sstring hints_directory)
-            : _dirs(dirs)
-            , _hints_directory(std::move(hints_directory))
-    { }
-
-    future<> ensure_created_and_verified() {
-        if (_state > state::uninitialized) {
-            return make_ready_future<>();
-        }
-
-        return with_semaphore(_lock, 1, [this] () {
-            utils::directories::set dir_set;
-            dir_set.add_sharded(_hints_directory);
-            return _dirs.create_and_verify(std::move(dir_set)).then([this] {
-                manager_logger.debug("Creating and validating hint directories: {}", _hints_directory);
-                _state = state::created_and_validated;
-            });
-        });
-    }
-
-    future<> ensure_rebalanced() {
-        if (_state < state::created_and_validated) {
-            return make_exception_future<>(std::logic_error("hints directory needs to be created and validated before rebalancing"));
-        }
-
-        if (_state > state::created_and_validated) {
-            return make_ready_future<>();
-        }
-
-        return with_semaphore(_lock, 1, [this] () {
-            manager_logger.debug("Rebalancing hints in {}", _hints_directory);
-            return rebalance_hints(fs::path{_hints_directory}).then([this] {
-                _state = state::rebalanced;
-            });
-        });
-    }
-};
-
-directory_initializer::directory_initializer(std::shared_ptr<directory_initializer::impl> impl)
-        : _impl(std::move(impl))
-{ }
-
-directory_initializer::~directory_initializer()
-{ }
-
-directory_initializer directory_initializer::make_dummy() {
-    return directory_initializer{nullptr};
+future<> manager::with_file_update_mutex_for(endpoint_id ep, noncopyable_function<future<> ()> func) {
+    return _ep_managers.at(ep).with_file_update_mutex(std::move(func));
 }
 
-future<directory_initializer> directory_initializer::make(utils::directories& dirs, sstring hints_directory) {
-    return smp::submit_to(0, [&dirs, hints_directory = std::move(hints_directory)] () mutable {
-        auto impl = std::make_shared<directory_initializer::impl>(dirs, std::move(hints_directory));
-        return make_ready_future<directory_initializer>(directory_initializer(std::move(impl)));
-    });
-}
-
-future<> directory_initializer::ensure_created_and_verified() {
-    if (!_impl) {
-        return make_ready_future<>();
-    }
-    return smp::submit_to(0, [impl = this->_impl] () mutable {
-        return impl->ensure_created_and_verified().then([impl] {});
-    });
-}
-
-future<> directory_initializer::ensure_rebalanced() {
-    if (!_impl) {
-        return make_ready_future<>();
-    }
-    return smp::submit_to(0, [impl = this->_impl] () mutable {
-        return impl->ensure_rebalanced().then([impl] {});
-    });
-}
-
-}
-}
+} // namespace db::hints

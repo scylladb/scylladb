@@ -9,43 +9,43 @@
 
 #pragma once
 
-#include <unordered_map>
-#include <vector>
-#include <list>
-#include <chrono>
-#include <optional>
-#include <map>
-#include <seastar/core/gate.hh>
-#include <seastar/core/sharded.hh>
-#include <seastar/core/timer.hh>
-#include <seastar/core/lowres_clock.hh>
-#include <seastar/core/shared_mutex.hh>
+// Seastar features.
 #include <seastar/core/abort_source.hh>
-#include "inet_address_vectors.hh"
+#include <seastar/core/gate.hh>
+#include <seastar/core/lowres_clock.hh>
+#include <seastar/core/sharded.hh>
+#include <seastar/core/shared_mutex.hh>
+#include <seastar/core/timer.hh>
+#include <seastar/util/noncopyable_function.hh>
+
+// Scylla includes.
 #include "db/commitlog/commitlog.hh"
-#include "utils/loading_shared_values.hh"
+#include "db/hints/internal/common.hh"
+#include "db/hints/internal/hint_storage.hh"
+#include "db/hints/internal/hint_endpoint_manager.hh"
 #include "db/hints/resource_manager.hh"
 #include "db/hints/host_filter.hh"
 #include "db/hints/sync_point.hh"
 #include "locator/abstract_replication_strategy.hh"
-#include "db/hints/internal/common.hh"
-#include "db/hints/internal/hint_storage.hh"
-#include "db/hints/internal/hint_endpoint_manager.hh"
+#include "utils/loading_shared_values.hh"
+#include "inet_address_vectors.hh"
+
+// STD.
+#include <chrono>
+#include <span>
+#include <unordered_map>
 
 class fragmented_temporary_buffer;
 
 namespace utils {
 class directories;
-}
+} // namespace utils
 
 namespace gms {
 class gossiper;
-}
+} // namespace gms
 
-namespace db {
-namespace hints {
-
-using timer_clock_type = seastar::lowres_clock;
+namespace db::hints {
 
 /// A helper class which tracks hints directory creation
 /// and allows to perform hints directory initialization lazily.
@@ -58,10 +58,11 @@ private:
 
 public:
     /// Creates an initializer that does nothing. Useful in tests.
-    static directory_initializer make_dummy();
+    static directory_initializer make_dummy() noexcept {
+        return {nullptr};
+    }
     static future<directory_initializer> make(utils::directories& dirs, sstring hints_directory);
 
-    ~directory_initializer();
     future<> ensure_created_and_verified();
     future<> ensure_rebalanced();
 };
@@ -73,19 +74,19 @@ private:
     using hint_stats = internal::hint_stats;
     using drain = internal::drain;
 
-    friend class space_watchdog;
     friend class internal::hint_endpoint_manager;
     friend class internal::hint_sender;
 
     using hint_endpoint_manager = internal::hint_endpoint_manager;
     using node_to_hint_store_factory_type = internal::node_to_hint_store_factory_type;
 
-public:
     enum class state {
-        started,                // hinting is currently allowed (start() call is complete)
-        replay_allowed,         // replaying (hints sending) is allowed
-        draining_all,           // hinting is not allowed - all ep managers are being stopped because this node is leaving the cluster
-        stopping                // hinting is not allowed - stopping is in progress (stop() method has been called)
+        started,        // Hinting is currently allowed (start() has completed).
+        replay_allowed, // Replaying (sending) hints is allowed.
+        draining_all,   // Accepting new hints is not allowed. All endpoint managers
+                        // are being drained because the node is leaving the cluster.
+        stopping        // Accepting new hints is not allowed. Stopping this manager
+                        // is in progress (stop() has been called).
     };
 
     using state_set = enum_set<super_enum<state,
@@ -94,24 +95,22 @@ public:
         state::draining_all,
         state::stopping>>;
 
-private:
-    using ep_managers_map_type = std::unordered_map<endpoint_id, hint_endpoint_manager>;
-
 public:
-    static const std::string FILENAME_PREFIX;
+    static inline const std::string FILENAME_PREFIX{"HintsLog" + commitlog::descriptor::SEPARATOR};
     // Non-const - can be modified with an error injection.
-    static std::chrono::seconds hints_flush_period;
-    static const std::chrono::seconds hint_file_write_timeout;
+    static inline std::chrono::seconds hints_flush_period = std::chrono::seconds(10);
+    static constexpr std::chrono::seconds HINT_FILE_WRITE_TIMEOUT = std::chrono::seconds(2);
+private:
+    static constexpr uint64_t MAX_SIZE_OF_HINTS_IN_PROGRESS = 10 * 1024 * 1024; // 10MB
 
 private:
-    static constexpr uint64_t max_size_of_hints_in_progress = 10 * 1024 * 1024; // 10MB
     state_set _state;
     const fs::path _hints_dir;
     dev_t _hints_dir_device_id = 0;
 
     node_to_hint_store_factory_type _store_factory;
     host_filter _host_filter;
-    shared_ptr<service::storage_proxy> _proxy_anchor;
+    service::storage_proxy& _proxy;
     shared_ptr<gms::gossiper> _gossiper_anchor;
     int64_t _max_hint_window_us = 0;
     replica::database& _local_db;
@@ -120,19 +119,29 @@ private:
 
     resource_manager& _resource_manager;
 
-    ep_managers_map_type _ep_managers;
+    std::unordered_map<endpoint_id, hint_endpoint_manager> _ep_managers;
     hint_stats _stats;
     seastar::metrics::metric_groups _metrics;
     std::unordered_set<endpoint_id> _eps_with_pending_hints;
     seastar::named_semaphore _drain_lock = {1, named_semaphore_exception_factory{"drain lock"}};
 
 public:
-    manager(sstring hints_directory, host_filter filter, int64_t max_hint_window_ms, resource_manager&res_manager, sharded<replica::database>& db);
-    virtual ~manager();
+    manager(service::storage_proxy& proxy, sstring hints_directory, host_filter filter,
+            int64_t max_hint_window_ms, resource_manager& res_manager, sharded<replica::database>& db);
+    
+    manager(const manager&) = delete;
+    manager& operator=(const manager&) = delete;
+
     manager(manager&&) = delete;
     manager& operator=(manager&&) = delete;
+    
+    ~manager() noexcept {
+        assert(_ep_managers.empty());
+    }
+
+public:
     void register_metrics(const sstring& group_name);
-    future<> start(shared_ptr<service::storage_proxy> proxy_ptr, shared_ptr<gms::gossiper> gossiper_ptr);
+    future<> start(shared_ptr<gms::gossiper> gossiper_ptr);
     future<> stop();
     bool store_hint(endpoint_id ep, schema_ptr s, lw_shared_ptr<const frozen_mutation> fm, tracing::trace_state_ptr tr_state) noexcept;
 
@@ -171,6 +180,15 @@ public:
     /// \return TRUE if hints are allowed to be generated to \param ep.
     bool check_dc_for(endpoint_id ep) const noexcept;
 
+    /// Execute a given functor while having an endpoint's file update mutex locked.
+    ///
+    /// The caller must ensure that the passed endpoint_id is valid, i.e. this manager instance
+    /// really manages an endpoint manager corresponding to it. See @ref have_ep_manager.
+    ///
+    /// \param ep endpoint whose file update mutex should be locked
+    /// \param func functor to be executed
+    future<> with_file_update_mutex_for(endpoint_id ep, noncopyable_function<future<> ()> func);
+
     /// \brief Checks if hints are disabled for all endpoints
     /// \return TRUE if hints are disabled.
     bool is_disabled_for_all() const noexcept {
@@ -186,8 +204,8 @@ public:
     /// \param ep End point identificator
     /// \return Number of hints in-flight to \param ep.
     uint64_t hints_in_progress_for(endpoint_id ep) const noexcept {
-        auto it = find_ep_manager(ep);
-        if (it == ep_managers_end()) {
+        auto it = _ep_managers.find(ep);
+        if (it == _ep_managers.end()) {
             return 0;
         }
         return it->second.hints_in_progress();
@@ -218,10 +236,6 @@ public:
         return _hints_dir_device_id;
     }
 
-    seastar::named_semaphore& drain_lock() noexcept {
-        return _drain_lock;
-    }
-
     void allow_hints();
     void forbid_hints();
     void forbid_hints_for_eps_with_pending_hints();
@@ -231,16 +245,10 @@ public:
     }
 
     /// \brief Returns a set of replay positions for hint queues towards endpoints from the `target_eps`.
-    sync_point::shard_rps calculate_current_sync_point(const std::vector<endpoint_id>& target_eps) const;
+    sync_point::shard_rps calculate_current_sync_point(std::span<const endpoint_id> target_eps) const;
 
     /// \brief Waits until hint replay reach replay positions described in `rps`.
     future<> wait_for_sync_point(abort_source& as, const sync_point::shard_rps& rps);
-
-    /// \brief Creates an object which aids in hints directory initialization.
-    /// This object can saafely be copied and used from any shard.
-    /// \arg dirs The utils::directories object, used to create and lock hints directories
-    /// \arg hints_directory The directory with hints which should be initialized
-    directory_initializer make_directory_initializer(utils::directories& dirs, fs::path hints_directory);
 
 private:
     future<> compute_hints_dir_device_id();
@@ -250,7 +258,7 @@ private:
     }
 
     service::storage_proxy& local_storage_proxy() const noexcept {
-        return *_proxy_anchor;
+        return _proxy;
     }
 
     gms::gossiper& local_gossiper() const noexcept {
@@ -262,6 +270,8 @@ private:
     }
 
     hint_endpoint_manager& get_ep_manager(endpoint_id ep);
+
+public:
     bool have_ep_manager(endpoint_id ep) const noexcept;
 
 public:
@@ -274,11 +284,11 @@ public:
     /// corresponding hint_endpoint_manager objects.
     ///
     /// \param endpoint node that left the cluster
-    void drain_for(endpoint_id endpoint);
+    future<> drain_for(endpoint_id endpoint) noexcept;
 
-private:
     void update_backlog(size_t backlog, size_t max_backlog);
 
+private:
     bool stopping() const noexcept {
         return _state.contains(state::stopping);
     }
@@ -306,24 +316,6 @@ private:
     bool draining_all() noexcept {
         return _state.contains(state::draining_all);
     }
-
-public:
-    ep_managers_map_type::iterator find_ep_manager(endpoint_id ep_key) noexcept {
-        return _ep_managers.find(ep_key);
-    }
-
-    ep_managers_map_type::const_iterator find_ep_manager(endpoint_id ep_key) const noexcept {
-        return _ep_managers.find(ep_key);
-    }
-
-    ep_managers_map_type::iterator ep_managers_end() noexcept {
-        return _ep_managers.end();
-    }
-
-    ep_managers_map_type::const_iterator ep_managers_end() const noexcept {
-        return _ep_managers.end();
-    }
 };
 
-}
-}
+} // namespace db::hints
