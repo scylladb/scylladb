@@ -631,7 +631,13 @@ private:
                 _sys_ks.local().save_local_info(std::move(linfo), _snitch.local()->get_location()).get();
             }
             locator::shared_token_metadata::mutate_on_all_shards(_token_metadata, [hostid = host_id] (locator::token_metadata& tm) {
-                tm.get_topology().set_host_id_cfg(hostid);
+                auto& topo = tm.get_topology();
+                topo.set_host_id_cfg(hostid);
+                topo.add_or_update_endpoint(utils::fb_utilities::get_broadcast_address(),
+                                            hostid,
+                                            std::nullopt,
+                                            locator::node::state::normal,
+                                            smp::count);
                 return make_ready_future<>();
             }).get();
 
