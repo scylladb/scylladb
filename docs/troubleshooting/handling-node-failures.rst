@@ -1,6 +1,16 @@
 Handling Node Failures
 ------------------------
 
+.. note::
+
+    This page applies to ScyllaDB clusters that use Raft to ensure consistency. 
+    You can verify that Raft-based consistent management is enabled for your 
+    cluster in the ``scylla.yaml`` file (enabled by default): 
+    ``consistent_cluster_management: true``
+
+ .. REMOVE IN FUTURE VERSIONS - Remove the above note when Raft is mandatory
+    and default for both new and existing clusters.
+
 ScyllaDB relies on the Raft consensus algorithm, which requires at least a quorum 
 of nodes in a cluster to be available. If one or more nodes are down, but the quorum 
 is live, reads, writes, and schema updates proceed unaffected. When the node that 
