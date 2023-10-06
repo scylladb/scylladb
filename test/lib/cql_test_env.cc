@@ -749,6 +749,11 @@ private:
                 std::ref(_cdc_generation_service)).get();
             auto stop_storage_service = defer([this] { _ss.stop().get(); });
 
+            _mnotifier.local().register_listener(&_ss.local());
+            auto stop_mm_listener = defer([this] {
+                _mnotifier.local().unregister_listener(&_ss.local()).get();
+            });
+
             _ss.invoke_on_all([this] (service::storage_service& ss) {
                 ss.set_query_processor(_qp.local());
             }).get();
