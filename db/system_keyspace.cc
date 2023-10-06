@@ -2839,8 +2839,7 @@ static void install_virtual_readers(db::system_keyspace& sys_ks, replica::databa
 
 static bool maybe_write_in_user_memory(schema_ptr s) {
     return (s.get() == system_keyspace::batchlog().get()) || (s.get() == system_keyspace::paxos().get())
-            || s == system_keyspace::v3::scylla_views_builds_in_progress()
-            || s == system_keyspace::raft();
+            || s == system_keyspace::v3::scylla_views_builds_in_progress();
 }
 
 future<> system_keyspace_make(db::system_keyspace& sys_ks, distributed<replica::database>& dist_db, distributed<service::storage_service>& dist_ss, sharded<gms::gossiper>& dist_gossiper, distributed<service::raft_group_registry>& dist_raft_gr, db::config& cfg, table_selector& tables) {
