@@ -25,6 +25,9 @@ public:
     void assign(table& t);
     table* operator->() const noexcept;
     table& operator*() const noexcept;
+    auto as_sharded_parameter() {
+        return sharded_parameter([this] { return std::ref(**this); });
+    }
 };
 
 future<global_table_ptr> get_table_on_all_shards(sharded<database>& db, table_id uuid);
