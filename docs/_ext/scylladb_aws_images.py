@@ -118,6 +118,7 @@ class AMIVersionsTemplateDirective(Directive):
     option_spec = {
         "version": directives.unchanged,
         "exclude": directives.unchanged,
+        "only_latest": directives.flag,
     }
 
     def _extract_version_from_filename(self, filename):
@@ -169,6 +170,8 @@ class AMIVersionsTemplateDirective(Directive):
             LOGGER.warning(
                 f"No files match in directory '{download_directory}' with version pattern '{version_pattern}'."
             )
+        elif "only_latest" in self.options:
+            files = [files[0]]
 
         output = []
         for file in files:

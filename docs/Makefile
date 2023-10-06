@@ -91,7 +91,7 @@ redirects: setup
 # Preview commands
 .PHONY: preview
 preview: setup
-	$(POETRY) run sphinx-autobuild -b dirhtml $(ALLSPHINXOPTS) $(BUILDDIR)/dirhtml --host $(PREVIEW_HOST) --port 5500 --ignore '_data/*'
+	$(POETRY) run sphinx-autobuild -b dirhtml $(ALLSPHINXOPTS) $(BUILDDIR)/dirhtml --host $(PREVIEW_HOST) --port 5500 --ignore *.csv --ignore *.yaml
 
 .PHONY: multiversionpreview
 multiversionpreview: multiversion
