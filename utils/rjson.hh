@@ -65,6 +65,7 @@ public:
 #include <rapidjson/stringbuffer.h>
 #include <rapidjson/error/en.h>
 #include <rapidjson/allocators.h>
+#include <rapidjson/ostreamwrapper.h>
 #include <seastar/core/sstring.hh>
 #include "seastarx.hh"
 
@@ -337,6 +338,39 @@ sstring quote_json_string(const sstring& value);
 inline bytes base64_decode(const value& v) {
     return ::base64_decode(std::string_view(v.GetString(), v.GetStringLength()));
 }
+
+// A writer which allows writing json into an std::ostream in a streamin manner.
+//
+// It is a wrapper around rapidjson::Writer, with a more convenient API.
+class streaming_writer {
+    using stream = rapidjson::BasicOStreamWrapper<std::ostream>;
+    using writer = rapidjson::Writer<stream, rjson::encoding, rjson::encoding, rjson::allocator>;
+
+    stream _stream;
+    writer _writer;
+
+public:
+    streaming_writer(std::ostream& os = std::cout) : _stream(os), _writer(_stream)
+    { }
+
+    writer& rjson_writer() { return _writer; }
+
+    // following the rapidjson method names here
+    bool Null() { return _writer.Null(); }
+    bool Bool(bool b) { return _writer.Bool(b); }
+    bool Int(int i) { return _writer.Int(i); }
+    bool Uint(unsigned i) { return _writer.Uint(i); }
+    bool Int64(int64_t i) { return _writer.Int64(i); }
+    bool Uint64(uint64_t i) { return _writer.Uint64(i); }
+    bool Double(double d) { return _writer.Double(d); }
+    bool RawNumber(std::string_view str) { return _writer.RawNumber(str.data(), str.size(), false); }
+    bool String(std::string_view str) { return _writer.String(str.data(), str.size(), false); }
+    bool StartObject() { return _writer.StartObject(); }
+    bool Key(std::string_view str) { return _writer.Key(str.data(), str.size(), false); }
+    bool EndObject(rapidjson::SizeType memberCount = 0) { return _writer.EndObject(memberCount); }
+    bool StartArray() { return _writer.StartArray(); }
+    bool EndArray(rapidjson::SizeType elementCount = 0) { return _writer.EndArray(elementCount); }
+};
 
 } // end namespace rjson
 
