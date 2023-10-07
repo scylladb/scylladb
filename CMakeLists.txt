@@ -78,7 +78,6 @@ target_sources(scylla-main
     debug.cc
     init.cc
     keys.cc
-    message/messaging_service.cc
     multishard_mutation_query.cc
     mutation_query.cc
     partition_slice_builder.cc
@@ -124,6 +123,7 @@ add_subdirectory(index)
 add_subdirectory(interface)
 add_subdirectory(lang)
 add_subdirectory(locator)
+add_subdirectory(message)
 add_subdirectory(mutation)
 add_subdirectory(mutation_writer)
 add_subdirectory(node_ops)
@@ -165,6 +165,7 @@ target_link_libraries(scylla PRIVATE
     index
     lang
     locator
+    message
     mutation
     mutation_writer
     raft
