@@ -9,7 +9,8 @@ add_scylla_test(gossip
 add_scylla_test(manual_hint_test
   SOURCES hint_test.cc
   KIND SEASTAR)
-add_scylla_test(message
+add_scylla_test(message_test
+  SOURCES message.cc
   KIND SEASTAR)
 add_scylla_test(partition_data_test
   KIND SEASTAR)

@@ -37,6 +37,7 @@ target_link_libraries(test-lib
     idl
     index # used by cql3
     locator
+    message
     schema
     scylla_version
     service
