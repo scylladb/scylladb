@@ -18,6 +18,8 @@
 #include "sstables/generation_type.hh"
 #include "sstables/sstables.hh"
 #include "sstables/key.hh"
+#include "sstables/open_info.hh"
+#include "sstables/version.hh"
 #include "test/lib/sstable_utils.hh"
 #include "test/lib/reader_concurrency_semaphore.hh"
 #include "test/lib/scylla_test_case.hh"
@@ -809,4 +811,123 @@ BOOST_AUTO_TEST_CASE(test_empty_key_view_comparison) {
     auto lf = empty_partition_key_view.legacy_form(s);
     BOOST_CHECK_EQUAL(0, lf.size());
     BOOST_CHECK(lf.begin() == lf.end());
+}
+
+template <typename T> concept Formattable = fmt::is_formattable<T>::value;
+
+namespace sstables {
+
+template <Formattable T>
+std::ostream& boost_test_print_type(std::ostream& os, const T& v) {
+    fmt::print(os, "{}", v);
+    return os;
+}
+
+std::ostream& boost_test_print_type(std::ostream& os, sstable_format_types format_type) {
+    return os << static_cast<int>(format_type);
+}
+
+}
+
+// Test that sstables::parse_path is able to parse the paths of sstables
+BOOST_AUTO_TEST_CASE(test_parse_path_good) {
+    struct sstable_case {
+        std::string_view path;
+        std::string_view ks;
+        std::string_view cf;
+        sstables::entry_descriptor desc;
+    };
+    const sstable_case sstables[] = {
+        {
+            "/scylla/system/truncated-38c19fd0fb863310a4b70d0cc66628aa/mc-2-big-Data.db",
+            "system",
+            "truncated",
+            entry_descriptor{
+                generation_type{2},
+                sstable_version_types::mc,
+                sstable_format_types::big,
+                component_type::Data
+            }
+        },
+        {
+            "/scylla/system/scylla_local-2972ec7ffb2038ddaac1d876f2e3fcbd/mc-3-big-Summary.db",
+            "system",
+            "scylla_local",
+            entry_descriptor{
+                generation_type{3},
+                sstable_version_types::mc,
+                sstable_format_types::big,
+                component_type::Summary
+            }
+        },
+        {
+            "/scylla/system_distributed/cdc_generation_timestamps-fdf455c4cfec3e009719d7a45436c89d/me-3g9p_0938_0ecz429c6f019i7yuf-big-Index.db",
+            "system_distributed",
+            "cdc_generation_timestamps",
+            entry_descriptor{
+                generation_type::from_string("3g9p_0938_0ecz429c6f019i7yuf"),
+                sstable_version_types::me,
+                sstable_format_types::big,
+                component_type::Index
+            }
+         },
+         {
+            "/system_schema/columns-24101c25a2ae3af787c1b40ee1aca33f/md-3g9r_04ux_4be4w2d7t8bg6u7nok-big-Statistics.db",
+            "system_schema",
+            "columns",
+            entry_descriptor{
+                generation_type::from_string("3g9r_04ux_4be4w2d7t8bg6u7nok"),
+                sstable_version_types::md,
+                sstable_format_types::big,
+                component_type::Statistics
+            }
+        },
+        {
+            "/system_schema/columns-24101c25a2ae3af787c1b40ee1aca33f/md-3g9r_04ux_4be4w2d7t8bg6u7nok-big-ReallyBigData.db",
+            "system_schema",
+            "columns",
+            entry_descriptor{
+                generation_type::from_string("3g9r_04ux_4be4w2d7t8bg6u7nok"),
+                sstable_version_types::md,
+                sstable_format_types::big,
+                component_type::Unknown
+            }
+        }
+    };
+    for (auto& [path, expected_ks, expected_cf, expected_desc] : sstables) {
+        auto [desc, ks, cf] = parse_path(path);
+        BOOST_CHECK_EQUAL(ks, expected_ks);
+        BOOST_CHECK_EQUAL(cf, expected_cf);
+        BOOST_CHECK_EQUAL(expected_desc.generation, desc.generation);
+        BOOST_CHECK_EQUAL(expected_desc.version, desc.version);
+        BOOST_CHECK_EQUAL(expected_desc.format, desc.format);
+        BOOST_CHECK_EQUAL(expected_desc.component, desc.component);
+    }
+}
+
+// Test that sstables::parse_path throws at seeing malformed sstable names
+BOOST_AUTO_TEST_CASE(test_parse_path_bad) {
+    const std::string_view paths[] = {
+        "",
+        "/",
+        "=",
+        "hmm",
+        "//-/-",
+        "mc-2-big-Data.db",
+        "truncated~38c19fd0fb863310a4b70d0cc66628aa/",
+        "truncated-38c19fd0fb863310a4b70d0cc66628aa/mc-2-big-Data.db",
+        "truncated~38c19fd0fb863310a4b70d0cc66628aa/mc-2-big-Data.db",
+        "/scylla/system/truncated~38c19fd0fb863310a4b70d0cc66628aa/404.db",
+        "/scylla/system/truncated~38c19fd0fb863310a4b70d0cc66628aa/mc/foo/bar.db",
+        "/scylla/system/truncated~38c19fd0fb863310a4b70d0cc66628aa/mc/-------",
+        "/scylla/system/truncated~38c19fd0fb863310a4b70d0cc66628aa/mc-2-big-Data.db",
+        "/scylla/system/truncated-38c19fd0fb863310a4b70d0cc66628aa/zz-2-big-Data.db",
+        "/scylla/system/truncated-38c19fd0fb863310a4b70d0cc66628aa/mc-x-big-Data.db",
+        "/scylla/system/truncated-38c19fd0fb863310a4b70d0cc66628aa/mc-i~am~not~an~id-big-Data.db",
+        "/scylla/system/truncated~38c19fd0fb863310a4b70d0cc66628aa/mc-2--Data.db",
+        "/scylla/system/truncated~38c19fd0fb863310a4b70d0cc66628aa/mc-2-grand-Data.db",
+    };
+    for (auto path : paths) {
+        BOOST_CHECK_THROW(parse_path(path), std::exception);
+    }
 }
