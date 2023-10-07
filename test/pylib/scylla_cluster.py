@@ -516,6 +516,8 @@ class ScyllaServer:
             wait_task = self.cmd.wait()
             try:
                 await asyncio.wait_for(wait_task, timeout=STOP_TIMEOUT_SECONDS)
+                if self.cmd.returncode != 0:
+                    raise RuntimeError(f"Server {self} exited with non-zero exit code: {self.cmd.returncode}")
             except asyncio.TimeoutError:
                 self.cmd.kill()
                 await self.cmd.wait()
