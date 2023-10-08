@@ -27,16 +27,6 @@ tempfile.tempdir = f"{outdir}/tmp"
 
 configure_args = str.join(' ', [shlex.quote(x) for x in sys.argv[1:] if not x.startswith('--out=')])
 
-employ_ld_trickery = True
-
-# distro-specific setup
-def distro_setup_nix():
-    global employ_ld_trickery
-    employ_ld_trickery = False
-
-if os.environ.get('NIX_CC'):
-        distro_setup_nix()
-
 # distribution "internationalization", converting package names.
 # Fedora name is key, values is distro -> package name dict.
 i18n_xlat = {
@@ -1650,6 +1640,12 @@ for m, mode_config in modes.items():
 def dynamic_linker_option():
     gcc_linker_output = subprocess.check_output(['gcc', '-###', '/dev/null', '-o', 't'], stderr=subprocess.STDOUT).decode('utf-8')
     original_dynamic_linker = re.search('-dynamic-linker ([^ ]*)', gcc_linker_output).groups()[0]
+
+    employ_ld_trickery = True
+    # distro-specific setup
+    if os.environ.get('NIX_CC'):
+        employ_ld_trickery = False
+
     if employ_ld_trickery:
         # gdb has a SO_NAME_MAX_PATH_SIZE of 512, so limit the path size to
         # that. The 512 includes the null at the end, hence the 511 bellow.
