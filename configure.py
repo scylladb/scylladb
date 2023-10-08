@@ -1647,15 +1647,16 @@ for m, mode_config in modes.items():
 # At the end of the build we check that the build-id is indeed in the
 # first page. At install time we check that patchelf doesn't modify
 # the program headers.
-
-gcc_linker_output = subprocess.check_output(['gcc', '-###', '/dev/null', '-o', 't'], stderr=subprocess.STDOUT).decode('utf-8')
-original_dynamic_linker = re.search('-dynamic-linker ([^ ]*)', gcc_linker_output).groups()[0]
-if employ_ld_trickery:
-    # gdb has a SO_NAME_MAX_PATH_SIZE of 512, so limit the path size to
-    # that. The 512 includes the null at the end, hence the 511 bellow.
-    dynamic_linker = '/' * (511 - len(original_dynamic_linker)) + original_dynamic_linker
-else:
-    dynamic_linker = original_dynamic_linker
+def dynamic_linker_option():
+    gcc_linker_output = subprocess.check_output(['gcc', '-###', '/dev/null', '-o', 't'], stderr=subprocess.STDOUT).decode('utf-8')
+    original_dynamic_linker = re.search('-dynamic-linker ([^ ]*)', gcc_linker_output).groups()[0]
+    if employ_ld_trickery:
+        # gdb has a SO_NAME_MAX_PATH_SIZE of 512, so limit the path size to
+        # that. The 512 includes the null at the end, hence the 511 bellow.
+        dynamic_linker = '/' * (511 - len(original_dynamic_linker)) + original_dynamic_linker
+    else:
+        dynamic_linker = original_dynamic_linker
+    return f'--dynamic-linker={dynamic_linker}'
 
 forced_ldflags = '-Wl,'
 
@@ -1665,7 +1666,7 @@ forced_ldflags = '-Wl,'
 # explicitly ask for SHA1 build-ids.
 forced_ldflags += '--build-id=sha1,'
 
-forced_ldflags += f'--dynamic-linker={dynamic_linker}'
+forced_ldflags += dynamic_linker_option()
 
 user_ldflags = forced_ldflags + ' ' + args.user_ldflags
 
