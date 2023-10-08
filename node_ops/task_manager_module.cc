@@ -369,7 +369,7 @@ future<> join_token_ring_task_impl::run() {
     }
 
     _ss.set_mode(service::storage_service::mode::JOINING);
-
+    tasks::task_info parent_info{_status.id, _status.shard};
     if (raft_server) { // Raft is enabled. Check if we need to bootstrap ourself using raft
         tasks::tmlogger.info("topology changes are using raft");
 
@@ -385,7 +385,7 @@ future<> join_token_ring_task_impl::run() {
         // on their behalf by an existing node in the cluster during the handshake.
         // Discovery leaders on the other need to insert the join request themselves,
         // we do that here.
-        co_await _ss.raft_initialize_discovery_leader(*raft_server, join_params);
+        co_await _ss.raft_initialize_discovery_leader(*raft_server, join_params, parent_info);
 
         // Wait until we enter one of the final states
         co_await _ss._topology_state_machine.event.when([&ss = _ss, raft_server] {
@@ -570,6 +570,162 @@ future<> join_token_ring_task_impl::run() {
     assert(group0);
     co_await group0->finish_setup_after_join(_ss, *_ss._qp, _ss._migration_manager.local());
     co_await _ss._cdc_gens.local().after_join(std::move(cdc_gen_id));
+}
+
+raft_joining_entry_task_impl::raft_joining_entry_task_impl(tasks::task_manager::module_ptr module,
+        std::string entity,
+        streaming::stream_reason reason,
+        service::storage_service& ss,
+        const service::join_node_request_params& params) noexcept
+    : node_ops_task_impl(std::move(module), tasks::task_id::create_random_id(), ss.get_task_manager_module().new_sequence_number(),
+        "raft entry", std::move(entity), tasks::task_id::create_null_id(), reason, ss)
+    , _params(params)
+{}
+
+future<> raft_joining_entry_task_impl::run() {
+    if (_params.cluster_name != _ss._db.local().get_config().cluster_name()) {
+        throw join_node_request_rejected(::format("Cluster name check failed. This node cannot join the cluster "
+                                                        "because it expected cluster name \"{}\" and not \"{}\"",
+                                                        _params.cluster_name,
+                                                        _ss._db.local().get_config().cluster_name()));
+    }
+
+    if (_params.snitch_name != _ss._db.local().get_snitch_name()) {
+        throw join_node_request_rejected(::format("Snitch name check failed. This node cannot join the cluster "
+                                                        "because it uses \"{}\" and not \"{}\"",
+                                                        _params.snitch_name,
+                                                        _ss._db.local().get_snitch_name()));
+    }
+
+    co_await _ss._topology_state_machine.event.when([&ss = _ss] {
+        // The first node defines the cluster and inserts its entry to the
+        // `system.topology` without checking anything. It is unlikely but
+        // possible that the `join_node_request_handler` fires before the first
+        // node inserts its entry, therefore we might need to wait
+        // until that happens, here.
+        return !ss._topology_state_machine._topology.is_empty();
+    });
+
+    auto& g0_server = _ss._group0->group0_server();
+    if (_params.replaced_id && *_params.replaced_id == g0_server.current_leader()) {
+        // There is a peculiar case that can happen if the leader is killed
+        // and then replaced very quickly:
+        //
+        // - Cluster with nodes `A`, `B`, `C` - `A` is the topology
+        //   coordinator/group0 leader,
+        // - `A` is killed,
+        // - New node `D` attempts to replace `A` with the same IP as `A`,
+        //   sends `join_node_request` rpc to node `B`,
+        // - Node `B` handles the RPC and wants to perform group0 operation
+        //   and wants to perform a barrier - still thinks that `A`
+        //   is the leader and is alive, sends an RPC to its IP,
+        // - `D` accidentally receives the request that was meant to `A`
+        //   but throws an exception because of host_id mismatch,
+        // - Failure is propagated back to `B`, and then to `D` - and `D`
+        //   fails the replace operation.
+        //
+        // We can try to detect if this failure might happen: if the new node
+        // is going to replace but the ID of the replaced node is the same
+        // as the leader, wait for a short while until a reelection happens.
+        // If replaced ID == leader ID, then this indicates either the situation
+        // above or an operator error (actually trying to replace a live node).
+
+        const auto timeout = std::chrono::seconds(10);
+
+        tasks::tmlogger.warn("raft topology: the node {} which was requested to be"
+                " replaced has the same ID as the current group 0 leader ({});"
+                " this looks like an attempt to join a node with the same IP"
+                " as a leader which might have just crashed; waiting for"
+                " a reelection",
+                _params.host_id, g0_server.current_leader());
+
+        abort_source as;
+        timer<lowres_clock> t;
+        t.set_callback([&as] {
+            as.request_abort();
+        });
+        t.arm(timeout);
+
+        try {
+            while (!g0_server.current_leader() || *_params.replaced_id == g0_server.current_leader()) {
+                // FIXME: Wait for the next term instead of sleeping in a loop
+                // Waiting for state change is not enough because a new leader
+                // might be chosen without us going through the candidate state.
+                co_await sleep_abortable(std::chrono::milliseconds(100), as);
+            }
+        } catch (abort_requested_exception&) {
+            tasks::tmlogger.warn("raft topology: the node {} tries to replace the"
+                    " current leader {} but the leader didn't change within"
+                    " {}s. Rejecting the node",
+                    _params.host_id,
+                    *_params.replaced_id,
+                    std::chrono::duration_cast<std::chrono::seconds>(timeout).count());
+
+            throw join_node_request_rejected(format(
+                        "It is only allowed to replace dead nodes, however the"
+                        " node that was requested to be replaced is still seen"
+                        " as the group0 leader after {}s, which indicates that"
+                        " it might be still alive. You are either trying to replace"
+                        " a live node or trying to replace a node very quickly"
+                        " after it went down and reelection didn't happen within"
+                        " the timeout. Refusing to continue",
+                        std::chrono::duration_cast<std::chrono::seconds>(timeout).count()));
+        }
+    }
+
+    while (true) {
+        auto guard = co_await _ss._group0->client().start_operation(&_ss._abort_source);
+
+        if (const auto *p = _ss._topology_state_machine._topology.find(_params.host_id)) {
+            const auto& rs = p->second;
+            if (rs.state == service::node_state::left) {
+                tasks::tmlogger.warn("raft topology: the node {} attempted to join",
+                        " but it was removed from the cluster. Rejecting"
+                        " the node",
+                        _params.host_id);
+                throw join_node_request_rejected("The node has already been removed from the cluster");
+            } else {
+                tasks::tmlogger.warn("raft topology: the node {} attempted to join",
+                        " again after an unfinished attempt but it is no longer"
+                        " allowed to do so. Rejecting the node",
+                        _params.host_id);
+                throw join_node_request_rejected("The node requested to join before but didn't finish the procedure. "
+                                                "Please clear the data directory and restart.");
+            }
+        }
+
+        auto mutation = _ss.build_mutation_from_join_params(_params, guard);
+
+        service::topology_change change{{std::move(mutation)}};
+        service::group0_command g0_cmd = _ss._group0->client().prepare_command(std::move(change), guard,
+                format("raft topology: placing join request for {}", _params.host_id));
+        try {
+            co_await _ss._group0->client().add_entry(std::move(g0_cmd), std::move(guard), &_ss._abort_source);
+            break;
+        } catch (service::group0_concurrent_modification&) {
+            tasks::tmlogger.info("raft topology: join_node_request: concurrent operation is detected, retrying.");
+        }
+    }
+}
+
+future<> raft_first_bootstrap_task_impl::run() {
+    while (_ss._topology_state_machine._topology.is_empty()) {
+        if (_params.replaced_id.has_value()) {
+            throw std::runtime_error(::format("Cannot perform a replace operation because this is the first node in the cluster"));
+        }
+
+        tasks::tmlogger.info("raft topology: adding myself as the first node to the topology");
+        auto guard = co_await _ss._group0->client().start_operation(&_ss._abort_source);
+
+        auto change = _ss.build_joining_topology_change(guard, _params);
+        service::group0_command g0_cmd = _ss._group0->client().prepare_command(std::move(change), guard,
+                "bootstrap: adding myself as the first node to the topology");
+        try {
+            co_await _ss._group0->client().add_entry(std::move(g0_cmd), std::move(guard), &_ss._abort_source);
+        } catch (service::group0_concurrent_modification&) {
+            tasks::tmlogger.info("raft topology: bootstrap: concurrent operation is detected, retrying.");
+        }
+    }
 }
 
 start_rebuild_task_impl::start_rebuild_task_impl(tasks::task_manager::module_ptr module,

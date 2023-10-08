@@ -95,6 +95,8 @@ class start_remove_node_task_impl;
 class raft_rebuild_entry_task_impl;
 class raft_decommission_entry_task_impl;
 class raft_remove_node_entry_task_impl;
+class raft_joining_entry_task_impl;
+class raft_first_bootstrap_task_impl;
 }
 
 namespace service {
@@ -804,10 +806,11 @@ private:
 
     future<raft_topology_cmd_result> raft_topology_cmd_handler(sharded<db::system_distributed_keyspace>& sys_dist_ks, raft::term_t term, uint64_t cmd_index, const raft_topology_cmd& cmd);
 
-    future<> raft_initialize_discovery_leader(raft::server&, const join_node_request_params& params);
+    future<> raft_initialize_discovery_leader(raft::server&, const join_node_request_params& params, tasks::task_info parent_info);
     topology_change build_decommission_topology_change(raft::server& raft_server, group0_guard& guard);
     topology_change build_remove_topology_change(group0_guard& guard, raft::server_id id, std::unordered_set<raft::server_id> ignored_ids);
     topology_change build_rebuild_topology_change(raft::server& raft_server, group0_guard& guard, sstring& source_dc);
+    topology_change build_joining_topology_change(group0_guard& guard, const service::join_node_request_params& params);
     future<> raft_check_and_repair_cdc_streams();
     future<> update_topology_with_local_metadata(raft::server&);
 
@@ -842,6 +845,8 @@ private:
     friend class node_ops::raft_rebuild_entry_task_impl;
     friend class node_ops::raft_decommission_entry_task_impl;
     friend class node_ops::raft_remove_node_entry_task_impl;
+    friend class node_ops::raft_joining_entry_task_impl;
+    friend class node_ops::raft_first_bootstrap_task_impl;
 };
 
 }

@@ -25,11 +25,26 @@ class host_id_or_endpoint;
 }
 
 namespace service {
+struct join_node_request_params;
+struct join_node_request_result;
 class storage_service;
 class storage_proxy;
 }
 
 namespace node_ops {
+
+class join_node_request_rejected : public std::exception {
+private:
+    sstring _reason;
+public:
+    join_node_request_rejected(sstring reason)
+        : _reason(std::move(reason))
+    {}
+
+    const char* what() const noexcept override {
+        return _reason.c_str();
+    }
+};
 
 class node_ops_task_impl : public tasks::task_manager::task::impl {
 protected:
@@ -156,6 +171,36 @@ private:
     bool is_replacing();
     lw_shared_ptr<const locator::token_metadata> get_token_metadata_ptr() const noexcept;
     const locator::token_metadata& get_token_metadata() const noexcept;
+protected:
+    virtual future<> run() override;
+};
+
+class raft_joining_entry_task_impl : public node_ops_task_impl {
+private:
+    const service::join_node_request_params& _params;
+public:
+    raft_joining_entry_task_impl(tasks::task_manager::module_ptr module,
+        std::string entity,
+        streaming::stream_reason reason,
+        service::storage_service& ss,
+        const service::join_node_request_params& params) noexcept;
+protected:
+    virtual future<> run() override;
+};
+
+class raft_first_bootstrap_task_impl : public bootstrap_node_task_impl {
+private:
+    const service::join_node_request_params& _params;
+public:
+    raft_first_bootstrap_task_impl(tasks::task_manager::module_ptr module,
+        tasks::task_id parent_id,
+        streaming::stream_reason reason,
+        service::storage_service& ss,
+        const service::join_node_request_params& params) noexcept
+    : bootstrap_node_task_impl(std::move(module), tasks::task_id::create_random_id(), 0, "raft entry",
+        "first node bootstrap", parent_id, ss)
+    , _params(params)
+    {}
 protected:
     virtual future<> run() override;
 };

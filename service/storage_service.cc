@@ -2608,35 +2608,25 @@ public:
     }
 };
 
-future<> storage_service::raft_initialize_discovery_leader(raft::server& raft_server, const join_node_request_params& params) {
+topology_change storage_service::build_joining_topology_change(group0_guard& guard, const service::join_node_request_params& params) {
+    auto insert_join_request_mutation = build_mutation_from_join_params(params, guard);
+
+    // We are the first node and we define the cluster.
+    // Set the enabled_features field to our features.
+    topology_mutation_builder builder(guard.write_timestamp());
+    builder.add_enabled_features(boost::copy_range<std::set<sstring>>(params.supported_features));
+    auto enable_features_mutation = builder.build();
+
+    return topology_change{{std::move(enable_features_mutation), std::move(insert_join_request_mutation)}};
+}
+
+future<> storage_service::raft_initialize_discovery_leader(raft::server& raft_server, const join_node_request_params& params, tasks::task_info parent_info) {
     if (_topology_state_machine._topology.is_empty()) {
         co_await raft_server.read_barrier(&_abort_source);
-    }
 
-    while (_topology_state_machine._topology.is_empty()) {
-        if (params.replaced_id.has_value()) {
-            throw std::runtime_error(::format("Cannot perform a replace operation because this is the first node in the cluster"));
-        }
-
-        slogger.info("raft topology: adding myself as the first node to the topology");
-        auto guard = co_await _group0->client().start_operation(&_abort_source);
-
-        auto insert_join_request_mutation = build_mutation_from_join_params(params, guard);
-
-        // We are the first node and we define the cluster.
-        // Set the enabled_features field to our features.
-        topology_mutation_builder builder(guard.write_timestamp());
-        builder.add_enabled_features(boost::copy_range<std::set<sstring>>(params.supported_features));
-        auto enable_features_mutation = builder.build();
-
-        topology_change change{{std::move(enable_features_mutation), std::move(insert_join_request_mutation)}};
-        group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard,
-                "bootstrap: adding myself as the first node to the topology");
-        try {
-            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), &_abort_source);
-        } catch (group0_concurrent_modification&) {
-            slogger.info("raft topology: bootstrap: concurrent operation is detected, retrying.");
-        }
+        auto task = co_await get_task_manager_module().make_and_start_task<node_ops::raft_first_bootstrap_task_impl>(parent_info,
+            parent_info.id, streaming::stream_reason::bootstrap, *this, params);
+        co_await task->done();
     }
 }
 
@@ -5448,142 +5438,15 @@ future<join_node_request_result> storage_service::join_node_request_handler(join
     join_node_request_result result;
     slogger.info("raft topology: received request to join from host_id: {}", params.host_id);
 
-    if (params.cluster_name != _db.local().get_config().cluster_name()) {
-        result.result = join_node_request_result::rejected{
-            .reason = ::format("Cluster name check failed. This node cannot join the cluster "
-                                "because it expected cluster name \"{}\" and not \"{}\"",
-                                params.cluster_name,
-                                _db.local().get_config().cluster_name()),
+    auto task = co_await get_task_manager_module().make_and_start_task<node_ops::raft_joining_entry_task_impl>({}, "",
+        params.replaced_id ? streaming::stream_reason::replace : streaming::stream_reason::bootstrap, *this, params);
+    try {
+        co_await task->done();
+    } catch (const node_ops::join_node_request_rejected& e) {
+        result.result = service::join_node_request_result::rejected{
+            .reason = e.what(),
         };
         co_return result;
-    }
-
-    if (params.snitch_name != _db.local().get_snitch_name()) {
-        result.result = join_node_request_result::rejected{
-            .reason = ::format("Snitch name check failed. This node cannot join the cluster "
-                                "because it uses \"{}\" and not \"{}\"",
-                                params.snitch_name,
-                                _db.local().get_snitch_name()),
-        };
-        co_return result;
-    }
-
-    co_await _topology_state_machine.event.when([this] {
-        // The first node defines the cluster and inserts its entry to the
-        // `system.topology` without checking anything. It is unlikely but
-        // possible that the `join_node_request_handler` fires before the first
-        // node inserts its entry, therefore we might need to wait
-        // until that happens, here.
-        return !_topology_state_machine._topology.is_empty();
-    });
-
-    auto& g0_server = _group0->group0_server();
-    if (params.replaced_id && *params.replaced_id == g0_server.current_leader()) {
-        // There is a peculiar case that can happen if the leader is killed
-        // and then replaced very quickly:
-        //
-        // - Cluster with nodes `A`, `B`, `C` - `A` is the topology
-        //   coordinator/group0 leader,
-        // - `A` is killed,
-        // - New node `D` attempts to replace `A` with the same IP as `A`,
-        //   sends `join_node_request` rpc to node `B`,
-        // - Node `B` handles the RPC and wants to perform group0 operation
-        //   and wants to perform a barrier - still thinks that `A`
-        //   is the leader and is alive, sends an RPC to its IP,
-        // - `D` accidentally receives the request that was meant to `A`
-        //   but throws an exception because of host_id mismatch,
-        // - Failure is propagated back to `B`, and then to `D` - and `D`
-        //   fails the replace operation.
-        //
-        // We can try to detect if this failure might happen: if the new node
-        // is going to replace but the ID of the replaced node is the same
-        // as the leader, wait for a short while until a reelection happens.
-        // If replaced ID == leader ID, then this indicates either the situation
-        // above or an operator error (actually trying to replace a live node).
-
-        const auto timeout = std::chrono::seconds(10);
-
-        slogger.warn("raft topology: the node {} which was requested to be"
-                " replaced has the same ID as the current group 0 leader ({});"
-                " this looks like an attempt to join a node with the same IP"
-                " as a leader which might have just crashed; waiting for"
-                " a reelection",
-                params.host_id, g0_server.current_leader());
-
-        abort_source as;
-        timer<lowres_clock> t;
-        t.set_callback([&as] {
-            as.request_abort();
-        });
-        t.arm(timeout);
-
-        try {
-            while (!g0_server.current_leader() || *params.replaced_id == g0_server.current_leader()) {
-                // FIXME: Wait for the next term instead of sleeping in a loop
-                // Waiting for state change is not enough because a new leader
-                // might be chosen without us going through the candidate state.
-                co_await sleep_abortable(std::chrono::milliseconds(100), as);
-            }
-        } catch (abort_requested_exception&) {
-            slogger.warn("raft topology: the node {} tries to replace the"
-                    " current leader {} but the leader didn't change within"
-                    " {}s. Rejecting the node",
-                    params.host_id,
-                    *params.replaced_id,
-                    std::chrono::duration_cast<std::chrono::seconds>(timeout).count());
-
-            result.result = join_node_request_result::rejected{
-                .reason = format(
-                        "It is only allowed to replace dead nodes, however the"
-                        " node that was requested to be replaced is still seen"
-                        " as the group0 leader after {}s, which indicates that"
-                        " it might be still alive. You are either trying to replace"
-                        " a live node or trying to replace a node very quickly"
-                        " after it went down and reelection didn't happen within"
-                        " the timeout. Refusing to continue",
-                        std::chrono::duration_cast<std::chrono::seconds>(timeout).count()),
-            };
-            co_return result;
-        }
-    }
-
-    while (true) {
-        auto guard = co_await _group0->client().start_operation(&_abort_source);
-
-        if (const auto *p = _topology_state_machine._topology.find(params.host_id)) {
-            const auto& rs = p->second;
-            if (rs.state == node_state::left) {
-                slogger.warn("raft topology: the node {} attempted to join",
-                        " but it was removed from the cluster. Rejecting"
-                        " the node",
-                        params.host_id);
-                result.result = join_node_request_result::rejected{
-                    .reason = "The node has already been removed from the cluster",
-                };
-            } else {
-                slogger.warn("raft topology: the node {} attempted to join",
-                        " again after an unfinished attempt but it is no longer"
-                        " allowed to do so. Rejecting the node",
-                        params.host_id);
-                result.result = join_node_request_result::rejected{
-                    .reason = "The node requested to join before but didn't finish the procedure. "
-                              "Please clear the data directory and restart.",
-                };
-            }
-            co_return result;
-        }
-
-        auto mutation = build_mutation_from_join_params(params, guard);
-
-        topology_change change{{std::move(mutation)}};
-        group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard,
-                format("raft topology: placing join request for {}", params.host_id));
-        try {
-            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), &_abort_source);
-            break;
-        } catch (group0_concurrent_modification&) {
-            slogger.info("raft topology: join_node_request: concurrent operation is detected, retrying.");
-        }
     }
 
     slogger.info("raft topology: placed join request for {}", params.host_id);
