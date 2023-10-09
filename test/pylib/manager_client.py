@@ -86,7 +86,8 @@ class ManagerClient():
         if dirty:
             self.driver_close()  # Close driver connection to old cluster
         try:
-            cluster_str = await self.client.put_json(f"/cluster/before-test/{test_case_name}", timeout=600)
+            cluster_str = await self.client.put_json(f"/cluster/before-test/{test_case_name}", timeout=600,
+                                                     response_type = "json")
             logger.info(f"Using cluster: {cluster_str} for test {test_case_name}")
         except aiohttp.ClientError as exc:
             raise RuntimeError(f"Failed before test check {exc}") from exc
@@ -99,7 +100,8 @@ class ManagerClient():
     async def after_test(self, test_case_name: str, success: bool) -> None:
         """Tell harness this test finished"""
         logger.debug("after_test for %s (success: %s)", test_case_name, success)
-        cluster_str = await self.client.put_json(f"/cluster/after-test/{success}")
+        cluster_str = await self.client.put_json(f"/cluster/after-test/{success}",
+                                                 response_type = "json")
         logger.info("Cluster after test %s: %s", test_case_name, cluster_str)
 
     async def is_manager_up(self) -> bool:
