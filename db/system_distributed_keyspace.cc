@@ -224,15 +224,15 @@ static schema_ptr get_current_service_levels(data_dictionary::database db) {
 static schema_ptr get_updated_service_levels(data_dictionary::database db) {
     assert(this_shard_id() == 0);
     auto schema = get_current_service_levels(db);
-        schema_builder b(schema);
-        for (const auto& col : new_columns) {
-            auto& [col_name, col_type] = col;
-            bytes options_name = to_bytes(col_name.data());
-            if (schema->get_column_definition(options_name)) {
-                continue;
-            }
-            b.with_column(options_name, col_type, column_kind::regular_column);
+    schema_builder b(schema);
+    for (const auto& col : new_columns) {
+        auto& [col_name, col_type] = col;
+        bytes options_name = to_bytes(col_name.data());
+        if (schema->get_column_definition(options_name)) {
+            continue;
         }
+        b.with_column(options_name, col_type, column_kind::regular_column);
+    }
     return b.build();
 }
 
@@ -255,16 +255,16 @@ future<> system_distributed_keyspace::start() {
         co_return;
     }
 
-        auto group0_guard = co_await _mm.start_group0_operation();
-        auto ts = group0_guard.write_timestamp();
+    auto group0_guard = co_await _mm.start_group0_operation();
+    auto ts = group0_guard.write_timestamp();
     std::vector<mutation> mutations;
     sstring description;
 
     auto sd_ksm = keyspace_metadata::new_keyspace(
-                    NAME,
-                    "org.apache.cassandra.locator.SimpleStrategy",
-                    {{"replication_factor", "3"}},
-                    true /* durable_writes */);
+            NAME,
+            "org.apache.cassandra.locator.SimpleStrategy",
+            {{"replication_factor", "3"}},
+            true /* durable_writes */);
     if (!db.has_keyspace(NAME)) {
         mutations = service::prepare_new_keyspace_announcement(db.real_database(), sd_ksm, ts);
         description += format(" create {} keyspace;", NAME);
@@ -273,10 +273,10 @@ future<> system_distributed_keyspace::start() {
     }
 
     auto sde_ksm = keyspace_metadata::new_keyspace(
-                    NAME_EVERYWHERE,
-                    "org.apache.cassandra.locator.EverywhereStrategy",
-                    {},
-                    true /* durable_writes */);
+            NAME_EVERYWHERE,
+            "org.apache.cassandra.locator.EverywhereStrategy",
+            {},
+            true /* durable_writes */);
     if (!db.has_keyspace(NAME_EVERYWHERE)) {
         auto sde_mutations = service::prepare_new_keyspace_announcement(db.real_database(), sde_ksm, ts);
         std::move(sde_mutations.begin(), sde_mutations.end(), std::back_inserter(mutations));
