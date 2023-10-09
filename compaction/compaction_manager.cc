@@ -1628,7 +1628,11 @@ future<> compaction_manager::perform_cleanup(owned_ranges_ptr sorted_owned_range
         };
 
         cmlog.debug("perform_cleanup: waiting for sstables to become eligible for cleanup");
-        co_await t.get_staging_done_condition().when(sleep_duration, [&] { return has_sstables_eligible_for_compaction(); });
+        try {
+            co_await t.get_staging_done_condition().when(sleep_duration, [&] { return has_sstables_eligible_for_compaction(); });
+        } catch (const seastar::condition_variable_timed_out&) {
+            // Ignored.  Keep retrying for max_idle_duration
+        }
 
         if (!has_sstables_eligible_for_compaction()) {
             continue;
