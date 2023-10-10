@@ -471,51 +471,37 @@ def test_storage_service_keyspace_cleanup_with_no_owned_ranges(cql, this_dc, res
             stmt = cql.prepare(f"INSERT INTO {t0} (p, v) VALUES (?, ?)")
             cql.execute(stmt, [0, 'hello'])
 
-            # the node fixture may hold snapshots from other tests
-            # so keep the tags of the snapshots explicitly taken by this instance
-            my_snapshot_tags = dict()
-
             def make_snapshot_tag(name):
                 tag = f"{int(time.time())}-{name}"
-                my_snapshot_tags[name] = tag
                 return tag
-
-            def snapshot_tag(name):
-                return my_snapshot_tags[name]
 
             resp = rest_api.send("POST", f"storage_service/keyspace_flush/{keyspace}")
             resp.raise_for_status()
-            resp = rest_api.send("POST", "storage_service/snapshots", {'kn': keyspace, 'tag': make_snapshot_tag('after-flush')})
-            resp.raise_for_status()
+            with new_test_snapshot(rest_api, keyspaces=keyspace, tag=make_snapshot_tag('after-flush')) as after_flush_tag:
+                cql.execute(f"ALTER KEYSPACE {keyspace} WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 0 }}")
+                with new_test_snapshot(rest_api, keyspaces=keyspace, tag=make_snapshot_tag('after-alter-keyspace')) as after_alter_keyspace_tag:
+                    resp = rest_api.send("POST", f"storage_service/keyspace_cleanup/{keyspace}")
+                    resp.raise_for_status()
+                    with new_test_snapshot(rest_api, keyspaces=keyspace, tag=make_snapshot_tag('after-cleanup')) as after_cleanup_tag:
+                        resp = rest_api.send("GET", "storage_service/snapshots")
+                        resp.raise_for_status()
+                        snapshots = dict()
+                        for p in resp.json():
+                            key = p['key']
+                            assert isinstance(key, str), f"key is expected to be a string: {p}"
+                            if key in [after_flush_tag, after_alter_keyspace_tag, after_cleanup_tag]:
+                                value = p['value']
+                                if isinstance(value, list):
+                                    assert len(value) == 1, f"Expecting a single value in {p}"
+                                    value = value[0]
+                                assert isinstance(value, dict), f"value is expected to be a dict: {p}"
+                                snapshots[key] = value
 
-            cql.execute(f"ALTER KEYSPACE {keyspace} WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 0 }}")
-            resp = rest_api.send("POST", "storage_service/snapshots", {'kn': keyspace, 'tag': make_snapshot_tag('after-alter-keyspace')})
-            resp.raise_for_status()
+                        print(f"snapshot metadata: {snapshots}")
 
-            resp = rest_api.send("POST", f"storage_service/keyspace_cleanup/{keyspace}")
-            resp.raise_for_status()
-            resp = rest_api.send("POST", "storage_service/snapshots", {'kn': keyspace, 'tag': make_snapshot_tag('after-cleanup')})
-            resp.raise_for_status()
-
-            resp = rest_api.send("GET", "storage_service/snapshots")
-            resp.raise_for_status()
-            snapshots = dict()
-            for p in resp.json():
-                key = p['key']
-                assert isinstance(key, str), f"key is expected to be a string: {p}"
-                if key in my_snapshot_tags.values():
-                    value = p['value']
-                    if isinstance(value, list):
-                        assert len(value) == 1, f"Expecting a single value in {p}"
-                        value = value[0]
-                    assert isinstance(value, dict), f"value is expected to be a dict: {p}"
-                    snapshots[key] = value
-
-            print(f"snapshot metadata: {snapshots}")
-
-            assert snapshots[snapshot_tag('after-flush')]['total'] > 0, f"snapshots after flush should have non-zero data: {snapshots}"
-            assert snapshots[snapshot_tag('after-alter-keyspace')]['total'] == snapshots[snapshot_tag('after-flush')]['total'], f"snapshots after alter-keyspace should have the same data as after flush: {snapshots}"
-            assert snapshots[snapshot_tag('after-cleanup')]['total'] == 0, f"snapshots after clean should have no data: {snapshots}"
+                        assert snapshots[after_flush_tag]['total'] > 0, f"snapshots after flush should have non-zero data: {snapshots}"
+                        assert snapshots[after_alter_keyspace_tag]['total'] == snapshots[after_flush_tag]['total'], f"snapshots after alter-keyspace should have the same data as after flush: {snapshots}"
+                        assert snapshots[after_cleanup_tag]['total'] == 0, f"snapshots after clean should have no data: {snapshots}"
 
 def test_storage_service_keyspace_upgrade_sstables(cql, this_dc, rest_api):
     with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 1 }}") as keyspace:
