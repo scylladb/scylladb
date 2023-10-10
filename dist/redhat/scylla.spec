@@ -64,7 +64,6 @@ License:        AGPLv3
 URL:            http://www.scylladb.com/
 Requires:       %{product}-conf = %{version}-%{release}
 Requires:       %{product}-python3 = %{version}-%{release}
-Conflicts:      abrt
 AutoReqProv:    no
 
 %description server

@@ -28,6 +28,14 @@ if __name__ == '__main__':
                         help='enable compress on systemd-coredump')
     args = parser.parse_args()
 
+    # abrt-ccpp.service needs to stop before enabling systemd-coredump,
+    # since both will try to install kernel coredump handler
+    # (This will only requires for abrt < 2.14)
+    if systemd_unit.available('abrt-ccpp.service'):
+        abrt_ccpp = systemd_unit('abrt-ccpp.service')
+        abrt_ccpp.disable()
+        abrt_ccpp.stop()
+
 # Gentoo may uses OpenRC
     if is_gentoo():
         run('sysctl -p /etc/sysctl.d/99-scylla-coredump.conf', shell=True, check=True)
@@ -85,7 +93,7 @@ WantedBy=multi-user.target
             run('sysctl -p /usr/lib/sysctl.d/50-coredump.conf', shell=True, check=True)
         else:
             with open('/etc/sysctl.d/99-scylla-coredump.conf', 'w') as f:
-                f.write('kernel.core_pattern=|/usr/lib/systemd/systemd-coredump %p %u %g %s %t %e"')
+                f.write('kernel.core_pattern=|/usr/lib/systemd/systemd-coredump %p %u %g %s %t %e')
             run('sysctl -p /etc/sysctl.d/99-scylla-coredump.conf', shell=True, check=True)
 
         fp = tempfile.NamedTemporaryFile()

@@ -3,6 +3,8 @@ Description=Scylla Server
 Wants=scylla-jmx.service
 Wants=scylla-housekeeping-restart.timer
 Wants=scylla-housekeeping-daily.timer
+# This will only requires for abrt < 2.14
+Conflicts=abrt-ccpp.service
 
 [Service]
 PermissionsStartOnly=true
