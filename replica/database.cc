@@ -860,7 +860,7 @@ future<> database::parse_system_tables(distributed<service::storage_proxy>& prox
                 v_to_add = fixed_v;
                 auto&& keyspace = find_keyspace(v->ks_name()).metadata();
                 auto mutations = db::schema_tables::make_update_view_mutations(keyspace, view_ptr(v), fixed_v, api::new_timestamp(), true);
-                co_await db::schema_tables::merge_schema(sys_ks, proxy, _feat, std::move(mutations), false);
+                co_await db::schema_tables::merge_schema(sys_ks, proxy, _feat, std::move(mutations));
             }
         });
     }));

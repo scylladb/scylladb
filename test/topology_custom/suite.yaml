@@ -10,10 +10,8 @@ skip_in_release:
   - test_replace_ignore_nodes
   - test_old_ip_notification_repro
   - test_different_group0_ids
-  - test_group0_schema_versioning
 skip_in_debug:
   - test_shutdown_hang
   - test_replace_ignore_nodes
   - test_old_ip_notification_repro
   - test_different_group0_ids
-  - test_group0_schema_versioning

@@ -75,7 +75,7 @@ class ScyllaLogFile():
                         await asyncio.sleep(0.01)
 
     async def grep(self, expr: str | re.Pattern, filter_expr: Optional[str | re.Pattern] = None,
-             from_mark: Optional[int] = None) -> list[tuple[str, re.Match[str]]]:
+             from_mark: Optional[int] = None) -> list[(str, re.Match[str])]:
         """
         Returns a list of lines matching the regular expression in the Scylla log.
         The list contains tuples of (line, match), where line is the full line

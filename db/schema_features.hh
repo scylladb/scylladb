@@ -28,9 +28,6 @@ enum class schema_feature {
     // When enabled, schema_mutations::digest() will skip empty mutations (with only tombstones),
     // so that the digest remains the same after schema tables are compacted.
     TABLE_DIGEST_INSENSITIVE_TO_EXPIRY,
-
-    // When enabled we'll add a new column to the `system_schema.scylla_tables` table.
-    GROUP0_SCHEMA_VERSIONING,
 };
 
 using schema_features = enum_set<super_enum<schema_feature,
@@ -41,8 +38,7 @@ using schema_features = enum_set<super_enum<schema_feature,
     schema_feature::PER_TABLE_PARTITIONERS,
     schema_feature::SCYLLA_KEYSPACES,
     schema_feature::SCYLLA_AGGREGATES,
-    schema_feature::TABLE_DIGEST_INSENSITIVE_TO_EXPIRY,
-    schema_feature::GROUP0_SCHEMA_VERSIONING
+    schema_feature::TABLE_DIGEST_INSENSITIVE_TO_EXPIRY
     >>;
 
 }

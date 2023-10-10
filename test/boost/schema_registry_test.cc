@@ -166,7 +166,7 @@ SEASTAR_THREAD_TEST_CASE(test_table_is_attached) {
             std::vector<mutation> muts;
             sm0.copy_to(muts);
             db::schema_tables::merge_schema(e.get_system_keyspace(), e.get_storage_proxy(),
-                                            e.get_feature_service().local(), muts, false).get();
+                                            e.get_feature_service().local(), muts).get();
         }
 
         // This should attach the table
