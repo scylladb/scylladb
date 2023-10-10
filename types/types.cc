@@ -2691,7 +2691,7 @@ struct from_string_visitor {
         if (utils::ascii::validate(bv)) {
             return to_bytes(bv);
         } else {
-            throw marshal_exception(format("Value not compatible with type {}: '{}'", ascii_type_name, s));
+            throw marshal_exception(format("Invalid ASCII character in string literal: '{}'", s));
         }
     }
     bytes operator()(const string_type_impl&) {
