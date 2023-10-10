@@ -79,9 +79,10 @@ feature_config feature_config_from_db_config(const db::config& cfg, std::set<sst
     if (!cfg.check_experimental(db::experimental_features_t::feature::ALTERNATOR_STREAMS)) {
         fcfg._disabled_features.insert("ALTERNATOR_STREAMS"s);
     }
+    // FIXME: temporarily disabled -- user type definitions may be not updated properly (#15530)
+    fcfg._disabled_features.insert("GROUP0_SCHEMA_VERSIONING"s);
     if (!cfg.consistent_cluster_management()) {
         fcfg._disabled_features.insert("SUPPORTS_RAFT_CLUSTER_MANAGEMENT"s);
-        fcfg._disabled_features.insert("GROUP0_SCHEMA_VERSIONING"s);
     }
     if (!cfg.check_experimental(db::experimental_features_t::feature::KEYSPACE_STORAGE_OPTIONS)) {
         fcfg._disabled_features.insert("KEYSPACE_STORAGE_OPTIONS"s);
