@@ -219,9 +219,10 @@ def pid_to_ip(pid):
 import cassandra.cluster
 import ssl
 
-# Find a Scylla executable. By default, we take the latest build/*/scylla
-# next to the location of this script, but this can be overridden by setting
-# a SCYLLA environment variable:
+# Find a Scylla executable. By default, we take the build/*/scylla
+# executable next to the location of this script, provided it's the
+# only one that matches this wildcard, but this can be overridden
+# by setting a SCYLLA environment variable:
 source_path = os.path.realpath(os.path.join(__file__, '../../..'))
 scylla = None
 def find_scylla():
@@ -236,7 +237,10 @@ def find_scylla():
         if not scyllas:
             print("Can't find a Scylla executable in {}.\nPlease build Scylla or set SCYLLA to the path of a Scylla executable.".format(source_path))
             exit(1)
-        scylla = max(scyllas, key=os.path.getmtime)
+        if len(scyllas) > 1:
+            print("Found several scylla executables and cannot chose one.\nPlease set SCYLLA to one of the following paths:\n{}".format('\n'.join(scyllas)))
+            exit(1)
+        scylla = scyllas[0]
     if not os.access(scylla, os.X_OK):
         print("Cannot execute '{}'.\nPlease set SCYLLA to the path of a Scylla executable.".format(scylla))
         exit(1)
