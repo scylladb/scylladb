@@ -914,7 +914,7 @@ class PythonTest(Test):
             self.args.insert(0, "--host={}".format(cluster.endpoint()))
             self.is_before_test_ok = True
             cluster.take_log_savepoint()
-            status = await run_test(self, options)
+            status = await run_test(self, options, env=self.suite.scylla_env)
             if self.shortname in self.suite.dirties_cluster:
                 cluster.is_dirty = True
             cluster.after_test(self.uname, status)
