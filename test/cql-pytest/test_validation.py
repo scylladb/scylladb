@@ -321,6 +321,7 @@ def test_validation_ascii_bound_column(cql, table1):
 #    itself. The request itself is valid (it just needs to be UTF-8), but
 #    the non-ASCII insertion should be refused.
 # Reproduces issue #5421.
+# Reproduces issue #14320.
 def test_validation_ascii_query(cql, table1):
     for s in good_ascii:
         print(s)
@@ -330,11 +331,7 @@ def test_validation_ascii_query(cql, table1):
         assert results[0].k == 1 and results[0].a == s
     for s in bad_ascii:
         print(s)
-        # Scylla prints "marshaling error: Value not compatible with type
-        # org.apache.cassandra.db.marshal.AsciiType: '...'". Cassandra prints
-        # "Invalid ASCII character in string literal". The only thing in common
-        # is the word "ascii"...
-        with pytest.raises(InvalidRequest, match=re.compile('ascii', re.IGNORECASE)):
+        with pytest.raises(InvalidRequest, match='Invalid ASCII character'):
             cql.execute(f"INSERT INTO {table1} (k, a) VALUES (1, '{s}')")
 
 # 4. The invalid ASCII can be the result of a user-defined function in Lua,
