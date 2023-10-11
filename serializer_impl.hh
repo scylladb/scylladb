@@ -13,6 +13,7 @@
 #include "utils/small_vector.hh"
 #include <absl/container/btree_set.h>
 #include <seastar/core/shared_ptr.hh>
+#include <seastar/core/temporary_buffer.hh>
 #include <seastar/core/on_internal_error.hh>
 #include "log.hh"
 
@@ -507,6 +508,28 @@ public:
         return v;
     }
 };
+
+template<>
+struct serializer<temporary_buffer<char>> {
+    template<typename Input>
+    static temporary_buffer<char> read(Input& in) {
+        auto sz = deserialize(in, boost::type<uint32_t>());
+		auto v = temporary_buffer<char>(sz);
+        in.read(reinterpret_cast<char*>(v.get_write()), sz);
+        return v;
+    }
+    template<typename Output>
+    static void write(Output& out, const temporary_buffer<char>& v) {
+        safe_serialize_as_uint32(out, uint32_t(v.size()));
+        out.write(reinterpret_cast<const char*>(v.get()), v.size());
+    }
+    template<typename Input>
+    static void skip(Input& in) {
+        auto sz = deserialize(in, boost::type<uint32_t>());
+        in.skip(sz);
+    }
+};
+
 
 template<>
 struct serializer<bytes> {
