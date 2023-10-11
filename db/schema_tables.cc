@@ -3680,8 +3680,8 @@ view_ptr maybe_fix_legacy_secondary_index_mv_schema(replica::database& db, const
     }
 
     // If the first clustering key part of a view is a column with name not found in base schema,
-    // it implies it might be backing an index created before computed columns were introduced,
-    // and as such it must be recreated properly.
+    // and the column is not computed (which we checked above), then it must be backing an index
+    // created before computed columns were introduced, and as such it must be recreated properly.
     if (!base_schema->columns_by_name().contains(first_view_ck.name())) {
         schema_builder builder{schema_ptr(v)};
         builder.mark_column_computed(first_view_ck.name(), std::make_unique<legacy_token_column_computation>());
