@@ -65,6 +65,19 @@ def pytest_runtest_makereport(item, call):
     item.stash[FAILED_KEY] = report.when == "call" and report.failed
 
 
+conn_logger = logging.getLogger("conn_messages")
+conn_logger.setLevel(logging.INFO)
+
+class CustomConnection(Cluster.connection_class):
+    def send_msg(self, *args, **argv):
+        conn_logger.debug(f"send_msg: ({id(self)}): {args} {argv}")
+        return super(CustomConnection, self).send_msg(*args, **argv)
+
+    def process_msg(self, msg, protocol_version):
+        conn_logger.debug(f"process_msg: ({id(self)}): {msg}")
+        return super(CustomConnection, self).process_msg(msg, protocol_version)
+
+
 # cluster_con helper: set up client object for communicating with the CQL API.
 def cluster_con(hosts: List[IPAddress], port: int, use_ssl: bool):
     """Create a CQL Cluster connection object according to configuration.
@@ -120,7 +133,10 @@ def cluster_con(hosts: List[IPAddress], port: int, use_ssl: bool):
                    # where a node can be unavailable for an extended period of time,
                    # this can cause the reconnection retry interval to get very large,
                    # longer than a test timeout.
-                   reconnection_policy = ExponentialReconnectionPolicy(1.0, 4.0)
+                   reconnection_policy = ExponentialReconnectionPolicy(1.0, 4.0),
+
+                   # Capture messages for debugging purposes.
+                   connection_class=CustomConnection
                    )
 
 
