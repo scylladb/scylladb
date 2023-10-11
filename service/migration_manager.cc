@@ -1105,15 +1105,11 @@ static future<schema_ptr> get_schema_definition(table_schema_version v, netw::me
             // That means the column mapping for the schema should always be inserted
             // with TTL (refresh TTL in case column mapping already existed prior to that).
             auto us = s.unfreeze(db::schema_ctxt(proxy));
-            // if this is a view - we might need to fix it's schema before registering it.
+            // if this is a view - sanity check that its schema doesn't need fixing.
             if (us->is_view()) {
                 auto& db = proxy.local().local_db();
                 schema_ptr base_schema = db.find_schema(us->view_info()->base_id());
-                auto fixed_view = db::schema_tables::maybe_fix_legacy_secondary_index_mv_schema(db, view_ptr(us), base_schema,
-                        db::schema_tables::preserve_version::yes);
-                if (fixed_view) {
-                    us = fixed_view;
-                }
+                db::schema_tables::check_no_legacy_secondary_index_mv_schema(db, view_ptr(us), base_schema);
             }
             return db::schema_tables::store_column_mapping(proxy, us, true).then([us] {
                 return frozen_schema{us};

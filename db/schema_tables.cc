@@ -1482,12 +1482,10 @@ static future<> merge_tables_and_views(distributed<service::storage_proxy>& prox
             base_schema = proxy.local().local_db().find_schema(vp->ks_name(), vp->view_info()->base_name());
         }
 
-        // Now when we have a referenced base - just in case we are registering an old view (this can happen in a mixed cluster)
-        // lets make it write enabled by updating it's compute columns.
-        view_ptr fixed_vp = maybe_fix_legacy_secondary_index_mv_schema(proxy.local().get_db().local(), vp, base_schema, preserve_version::yes);
-        if(fixed_vp) {
-            vp = fixed_vp;
-        }
+        // Now when we have a referenced base - sanity check that we're not registering an old view
+        // (this could happen when we skip multiple major versions in upgrade, which is unsupported.)
+        check_no_legacy_secondary_index_mv_schema(proxy.local().get_db().local(), vp, base_schema);
+
         vp->view_info()->set_base_info(vp->view_info()->make_base_dependent_view_info(*base_schema));
         return vp;
     });
@@ -3659,20 +3657,20 @@ std::vector<sstring> all_table_names(schema_features features) {
            boost::adaptors::transformed([] (auto schema) { return schema->cf_name(); }));
 }
 
-view_ptr maybe_fix_legacy_secondary_index_mv_schema(replica::database& db, const view_ptr& v, schema_ptr base_schema, preserve_version preserve_version) {
+void check_no_legacy_secondary_index_mv_schema(replica::database& db, const view_ptr& v, schema_ptr base_schema) {
     // Legacy format for a secondary index used a hardcoded "token" column, which ensured a proper
-    // order for indexed queries. This "token" column is now implemented as a computed column,
-    // but for the sake of compatibility we assume that there might be indexes created in the legacy
-    // format, where "token" is not marked as computed. Once we're sure that all indexes have their
-    // columns marked as computed (because they were either created on a node that supports computed
-    // columns or were fixed by this utility function), it's safe to remove this function altogether.
+    // order for indexed queries. This "token" column is has been implemented as a computed column
+    // for a long time now, and migration code has been / will be executed on all reasonable Scylla
+    // deployments (which don't do unsupported upgrades).
+    //
+    // This function is now used as a sanity check that we're not dealing with the legacy format anymore.
     if (v->clustering_key_size() == 0) {
-        return view_ptr(nullptr);
+        return;
     }
     const auto ck_cols = v->clustering_key_columns();
     const column_definition& first_view_ck = ck_cols.front();
     if (first_view_ck.is_computed()) {
-        return view_ptr(nullptr);
+        return;
     }
 
     if (!base_schema) {
@@ -3681,16 +3679,15 @@ view_ptr maybe_fix_legacy_secondary_index_mv_schema(replica::database& db, const
 
     // If the first clustering key part of a view is a column with name not found in base schema,
     // and the column is not computed (which we checked above), then it must be backing an index
-    // created before computed columns were introduced, and as such it must be recreated properly.
+    // created before computed columns were introduced.
     if (!base_schema->columns_by_name().contains(first_view_ck.name())) {
-        schema_builder builder{schema_ptr(v)};
-        builder.mark_column_computed(first_view_ck.name(), std::make_unique<legacy_token_column_computation>());
-        if (preserve_version) {
-            builder.with_version(v->version());
-        }
-        return view_ptr(builder.build());
+        on_fatal_internal_error(slogger, format(
+            "Materialized view {}.{}: first clustering key column ({}) is not computed and does not have a corresponding"
+            " column in the base table. This materialized view must therefore be a secondary index created"
+            " using legacy method (without computed columns) that wasn't migrated properly to new method."
+            " Make sure that you perform rolling upgrade according to documented procedure without skipping"
+            " major Scylla versions.", v->ks_name(), v->cf_name(), first_view_ck.name_as_text()));
     }
-    return view_ptr(nullptr);
 }
 
 
