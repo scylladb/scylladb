@@ -603,6 +603,7 @@ future<> gossiper::do_apply_state_locally(gms::inet_address node, endpoint_state
             if (remote_host_id) {
                 if (local_host_id != remote_host_id) {
                     logger.info("Node {}/{} is replaced by {}/{} with same IP address", local_host_id, addr, remote_host_id, addr);
+                    co_return co_await this->handle_major_state_change(node, std::move(remote_state), permit.id());
                 }
             }
         }
