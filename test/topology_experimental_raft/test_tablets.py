@@ -34,7 +34,14 @@ async def test_tablet_metadata_propagates_with_schema_changes_in_snapshot_mode(m
     """Test that you can create a table and insert and query data"""
 
     logger.info("Bootstrapping cluster")
-    servers = [await manager.server_add(), await manager.server_add(), await manager.server_add()]
+    cmdline = [
+        '--logger-log-level', 'storage_proxy=trace',
+        '--logger-log-level', 'cql_server=trace',
+        '--logger-log-level', 'query_processor=trace',
+        ]
+    servers = [await manager.server_add(cmdline=cmdline),
+               await manager.server_add(cmdline=cmdline),
+               await manager.server_add(cmdline=cmdline)]
 
     s0 = servers[0].server_id
     not_s0 = servers[1:]
@@ -76,21 +83,26 @@ async def test_tablet_metadata_propagates_with_schema_changes_in_snapshot_mode(m
     for r in rows:
         assert r.c == 2
 
-    # Check that after rolling restart the tablet metadata is still there
-    for s in servers:
-        await manager.server_restart(s.server_id, wait_others=2)
+    conn_logger = logging.getLogger("conn_messages")
+    conn_logger.setLevel(logging.DEBUG)
+    try:
+        # Check that after rolling restart the tablet metadata is still there
+        for s in servers:
+            await manager.server_restart(s.server_id, wait_others=2)
 
-    cql = await reconnect_driver(manager)
+        cql = await reconnect_driver(manager)
 
-    await wait_for_cql_and_get_hosts(cql, [servers[0]], time.time() + 60)
+        await wait_for_cql_and_get_hosts(cql, [servers[0]], time.time() + 60)
 
-    await asyncio.gather(*[cql.run_async(f"INSERT INTO test.test (pk, c) VALUES ({k}, 3);", execution_profile='whitelist')
-                           for k in keys])
+        await asyncio.gather(*[cql.run_async(f"INSERT INTO test.test (pk, c) VALUES ({k}, 3);", execution_profile='whitelist')
+                               for k in keys])
 
-    rows = await cql.run_async("SELECT * FROM test.test;")
-    assert len(rows) == len(keys)
-    for r in rows:
-        assert r.c == 3
+        rows = await cql.run_async("SELECT * FROM test.test;")
+        assert len(rows) == len(keys)
+        for r in rows:
+            assert r.c == 3
+    finally:
+        conn_logger.setLevel(logging.INFO)
 
     await cql.run_async("DROP KEYSPACE test;")
     await cql.run_async("DROP KEYSPACE test_dummy;")
