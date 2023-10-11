@@ -577,7 +577,7 @@ private:
     const std::optional<clustering_or_static_row>& _existing;
 
 public:
-    value_getter(const schema& base, const partition_key& base_key, const clustering_or_static_row& update, const std::optional<clustering_or_static_row>& existing, bool backing_secondary_index)
+    value_getter(const schema& base, const partition_key& base_key, const clustering_or_static_row& update, const std::optional<clustering_or_static_row>& existing)
         : _base(base)
         , _base_key(base_key)
         , _update(update)
@@ -647,7 +647,7 @@ private:
 
 std::vector<view_updates::view_row_entry>
 view_updates::get_view_rows(const partition_key& base_key, const clustering_or_static_row& update, const std::optional<clustering_or_static_row>& existing) {
-    value_getter getter(*_base, base_key, update, existing, _backing_secondary_index);
+    value_getter getter(*_base, base_key, update, existing);
     auto get_value = boost::adaptors::transformed(std::ref(getter));
 
 
@@ -1452,8 +1452,7 @@ view_update_builder make_view_update_builder(
                                               " base schema version of the view ({}) for view {}.{} of {}.{}",
                 base->version(), v.base->base_schema()->version(), v.view->ks_name(), v.view->cf_name(), base->ks_name(), base->cf_name()));
         }
-        bool is_index = base_table.get_index_manager().is_index(v.view);
-        return view_updates(std::move(v), is_index);
+        return view_updates(std::move(v));
     }));
     return view_update_builder(std::move(db), base_table, base, std::move(vs), std::move(updates), std::move(existings), now);
 }
