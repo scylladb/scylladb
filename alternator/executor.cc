@@ -448,7 +448,6 @@ static rjson::value fill_table_description(schema_ptr schema, table_status tbl_s
     rjson::add(table_description, "TableName", rjson::from_string(schema->cf_name()));
     // FIXME: take the tables creation time, not the current time!
     size_t creation_date_seconds = std::chrono::duration_cast<std::chrono::seconds>(gc_clock::now().time_since_epoch()).count();
-    rjson::add(table_description, "CreationDateTime", rjson::value(creation_date_seconds));
     // FIXME: In DynamoDB the CreateTable implementation is asynchronous, and
     // the table may be in "Creating" state until creating is finished.
     // We don't currently do this in Alternator - instead CreateTable waits
@@ -470,54 +469,58 @@ static rjson::value fill_table_description(schema_ptr schema, table_status tbl_s
     rjson::add(table_description["ProvisionedThroughput"], "WriteCapacityUnits", 0);
     rjson::add(table_description["ProvisionedThroughput"], "NumberOfDecreasesToday", 0);
 
-    std::unordered_map<std::string,std::string> key_attribute_types;
-    // Add base table's KeySchema and collect types for AttributeDefinitions:
-    executor::describe_key_schema(table_description, *schema, key_attribute_types);
+   
 
     data_dictionary::table t = proxy.data_dictionary().find_column_family(schema);
-    if (!t.views().empty()) {
-        rjson::value gsi_array = rjson::empty_array();
-        rjson::value lsi_array = rjson::empty_array();
-        for (const view_ptr& vptr : t.views()) {
-            rjson::value view_entry = rjson::empty_object();
-            const sstring& cf_name = vptr->cf_name();
-            size_t delim_it = cf_name.find(':');
-            if (delim_it == sstring::npos) {
-                elogger.error("Invalid internal index table name: {}", cf_name);
-                continue;
+    
+    if (tbl_status != table_status::deleting) {
+        rjson::add(table_description, "CreationDateTime", rjson::value(creation_date_seconds));
+        std::unordered_map<std::string,std::string> key_attribute_types;
+        // Add base table's KeySchema and collect types for AttributeDefinitions:
+        executor::describe_key_schema(table_description, *schema, key_attribute_types);
+        if (!t.views().empty()) {
+            rjson::value gsi_array = rjson::empty_array();
+            rjson::value lsi_array = rjson::empty_array();
+            for (const view_ptr& vptr : t.views()) {
+                rjson::value view_entry = rjson::empty_object();
+                const sstring& cf_name = vptr->cf_name();
+                size_t delim_it = cf_name.find(':');
+                if (delim_it == sstring::npos) {
+                    elogger.error("Invalid internal index table name: {}", cf_name);
+                    continue;
+                }
+                sstring index_name = cf_name.substr(delim_it + 1);
+                rjson::add(view_entry, "IndexName", rjson::from_string(index_name));
+                rjson::add(view_entry, "IndexArn", generate_arn_for_index(*schema, index_name));
+                // Add indexes's KeySchema and collect types for AttributeDefinitions:
+                executor::describe_key_schema(view_entry, *vptr, key_attribute_types);
+                // Add projection type
+                rjson::value projection = rjson::empty_object();
+                rjson::add(projection, "ProjectionType", "ALL");
+                // FIXME: we have to get ProjectionType from the schema when it is added
+                rjson::add(view_entry, "Projection", std::move(projection));
+                // Local secondary indexes are marked by an extra '!' sign occurring before the ':' delimiter
+                rjson::value& index_array = (delim_it > 1 && cf_name[delim_it-1] == '!') ? lsi_array : gsi_array;
+                rjson::push_back(index_array, std::move(view_entry));
             }
-            sstring index_name = cf_name.substr(delim_it + 1);
-            rjson::add(view_entry, "IndexName", rjson::from_string(index_name));
-            rjson::add(view_entry, "IndexArn", generate_arn_for_index(*schema, index_name));
-            // Add indexes's KeySchema and collect types for AttributeDefinitions:
-            executor::describe_key_schema(view_entry, *vptr, key_attribute_types);
-            // Add projection type
-            rjson::value projection = rjson::empty_object();
-            rjson::add(projection, "ProjectionType", "ALL");
-            // FIXME: we have to get ProjectionType from the schema when it is added
-            rjson::add(view_entry, "Projection", std::move(projection));
-            // Local secondary indexes are marked by an extra '!' sign occurring before the ':' delimiter
-            rjson::value& index_array = (delim_it > 1 && cf_name[delim_it-1] == '!') ? lsi_array : gsi_array;
-            rjson::push_back(index_array, std::move(view_entry));
+            if (!lsi_array.Empty()) {
+                rjson::add(table_description, "LocalSecondaryIndexes", std::move(lsi_array));
+            }
+            if (!gsi_array.Empty()) {
+                rjson::add(table_description, "GlobalSecondaryIndexes", std::move(gsi_array));
+            }
         }
-        if (!lsi_array.Empty()) {
-            rjson::add(table_description, "LocalSecondaryIndexes", std::move(lsi_array));
+        // Use map built by describe_key_schema() for base and indexes to produce
+        // AttributeDefinitions for all key columns:
+        rjson::value attribute_definitions = rjson::empty_array();
+        for (auto& type : key_attribute_types) {
+            rjson::value key = rjson::empty_object();
+            rjson::add(key, "AttributeName", rjson::from_string(type.first));
+            rjson::add(key, "AttributeType", rjson::from_string(type.second));
+            rjson::push_back(attribute_definitions, std::move(key));
         }
-        if (!gsi_array.Empty()) {
-            rjson::add(table_description, "GlobalSecondaryIndexes", std::move(gsi_array));
-        }
+        rjson::add(table_description, "AttributeDefinitions", std::move(attribute_definitions));
     }
-    // Use map built by describe_key_schema() for base and indexes to produce
-    // AttributeDefinitions for all key columns:
-    rjson::value attribute_definitions = rjson::empty_array();
-    for (auto& type : key_attribute_types) {
-        rjson::value key = rjson::empty_object();
-        rjson::add(key, "AttributeName", rjson::from_string(type.first));
-        rjson::add(key, "AttributeType", rjson::from_string(type.second));
-        rjson::push_back(attribute_definitions, std::move(key));
-    }
-    rjson::add(table_description, "AttributeDefinitions", std::move(attribute_definitions));
-
     executor::supplement_table_stream_info(table_description, *schema, proxy);
 
     // FIXME: still missing some response fields (issue #5026)

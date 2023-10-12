@@ -618,35 +618,18 @@ def test_delete_table_description(dynamodb):
 
     assert got['TableName'] == table_name
     assert got['TableStatus'] == 'DELETING'
-
-    # as far as we still return incorrect CreationDateTime we check only field existence (issue #5013)
-    # when fix #5013 add CreationDateTime value checking here.
-    # Seems currently DynamoDB doesn't return CreationDateTime on DeleteTable so we disabled this assertion temporarily.
-    # Check when DynamoDB will support it later and re-enable the field's verification.
-
-    # assert 'CreationDateTime' in got
-
     assert 'TableId' in got
     assert fullmatch('[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}', got['TableId'])
 
     assert 'TableArn' in got and got['TableArn'].startswith('arn:')
 
-    expected_schema = {
-        'KeySchema': [ { 'AttributeName': 'p', 'KeyType': 'HASH' },
-                    { 'AttributeName': 'c', 'KeyType': 'RANGE' }
-        ],
-        'AttributeDefinitions': [
-                    { 'AttributeName': 'p', 'AttributeType': 'S' },
-                    { 'AttributeName': 'c', 'AttributeType': 'S' },
-        ]
-    }
-    assert got['KeySchema'] == expected_schema['KeySchema']
-    # The list of attribute definitions may be arbitrarily reordered
-    assert multiset(got['AttributeDefinitions']) == multiset(expected_schema['AttributeDefinitions'])
+    assert not 'CreationDateTime' in got
+    assert not 'KeySchema' in got 
+    assert not 'AttributeDefinitions' in got
 
     assert got['BillingModeSummary']['BillingMode'] == 'PAY_PER_REQUEST'
     assert 'LastUpdateToPayPerRequestDateTime' in got['BillingModeSummary']
-    assert got['BillingModeSummary']['LastUpdateToPayPerRequestDateTime'] == got['CreationDateTime']
+    assert got['BillingModeSummary']['LastUpdateToPayPerRequestDateTime'] != None
 
     assert got['ProvisionedThroughput']['NumberOfDecreasesToday'] == 0
     assert got['ProvisionedThroughput']['WriteCapacityUnits'] == 0
@@ -663,4 +646,41 @@ def test_delete_table_description_missing_fields(dynamodb):
     got = table.delete()['TableDescription']
 
     assert 'TableSizeBytes' in got
-    assert 'ItemCount' in got
+    assert 'ItemCount' in got    
+
+# Above in test_delete_table_description() we tested the correctness of the
+# return value of DeleteTable, and in particular that it doesn't include all
+# the fields available in DescribeTable. The table in that test did not have
+# secondary indexes, so in the following test we check the case of a table
+# which does have secondary indexes. We note that whereas DescribeTable
+# returns a description of the indexes (in fields "GlobalSecondaryIndexes"
+# and "LocalSecondaryIndexes"), DeleteTable doesn't.
+def test_delete_table_description_with_si(dynamodb):
+    table = create_test_table(dynamodb,
+        KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'},
+                   {'AttributeName': 'c', 'KeyType': 'RANGE'}],
+        AttributeDefinitions=[ { 'AttributeName': 'p', 'AttributeType': 'S' },
+                               { 'AttributeName': 'c', 'AttributeType': 'S' },
+                               { 'AttributeName': 'x', 'AttributeType': 'S' }],
+        GlobalSecondaryIndexes=[
+            {   'IndexName': 'hello',
+                'KeySchema': [{ 'AttributeName': 'x', 'KeyType': 'HASH' }],
+                'Projection': { 'ProjectionType': 'ALL' }
+            }],
+        LocalSecondaryIndexes=[
+            {   'IndexName': 'hithere',
+                'KeySchema': [{'AttributeName': 'p', 'KeyType': 'HASH'},
+                              {'AttributeName': 'x', 'KeyType': 'RANGE'}],
+                'Projection': { 'ProjectionType': 'ALL' }
+            }]
+    )
+    # Check that DescribeTable returns the table's KeySchema,
+    # AttributeDefinitions, GlobalSecondaryIndexes and LocalSecondaryIndexes,
+    # but DeleteTable does *not* return those, even though it could.
+    got_describe = table.meta.client.describe_table(TableName=table.name)['Table']
+    got_delete = table.delete()['TableDescription']
+    assert got_describe['TableName'] == table.name
+    assert got_delete['TableName'] == table.name
+    for i in ['KeySchema', 'AttributeDefinitions', 'GlobalSecondaryIndexes', 'LocalSecondaryIndexes']:
+        assert i in got_describe
+        assert not i in got_delete
