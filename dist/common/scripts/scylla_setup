@@ -15,6 +15,7 @@ import shutil
 import io
 import stat
 import distro
+import platform
 from scylla_util import *
 from subprocess import run, DEVNULL
 
@@ -166,6 +167,9 @@ def warn_offline(setup):
 
 def warn_offline_missing_pkg(setup, pkg):
     colorprint('{red}{setup} disabled by default, since {pkg} not available.{nocolor}', setup=setup, pkg=pkg)
+
+def is_rhel7_old_kernel():
+    return is_redhat_variant() and distro.major_version() == '7' and platform.release().startswith('3.10')
 
 if __name__ == '__main__':
     if not is_nonroot() and os.getuid() > 0:
@@ -325,6 +329,14 @@ if __name__ == '__main__':
         return when_interactive_ask_service(interactive, msg1, msg2, default)
 
     if not is_nonroot():
+        if is_rhel7_old_kernel():
+            colorprint('{red}RHEL/CentOS7 default kernel detected.{nocolor}')
+            colorprint('{red}To get optimal performance, please install kernel-ml kernel.{nocolor}')
+            continue_setup = interactive_ask_service('Do you want to continue the setup with current kernel?', 'Yes - continue the setup, No - abort the setup.', False)
+            if not continue_setup:
+                colorprint('{red}Setup aborted.{nocolor}')
+                sys.exit(1)
+
         kernel_check = interactive_ask_service('Do you want to run check your kernel version?', 'Yes - runs a  script to verify that the kernel for this instance qualifies to run Scylla. No - skips the kernel check.', kernel_check)
         args.no_kernel_check = not kernel_check
         if kernel_check:
