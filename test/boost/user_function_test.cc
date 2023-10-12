@@ -1097,7 +1097,7 @@ SEASTAR_TEST_CASE(test_user_function_filtering) {
         auto reset_on_internal_abort = defer([] {
             set_abort_on_internal_error(true);
         });
-        BOOST_REQUIRE_EXCEPTION(e.execute_cql("SELECT val FROM my_table WHERE key = 'foo' AND t < toTimestamp(now()) AND t >= minutesAgo(1, toTimestamp(now())) ALLOW FILTERING;").get(),
+        BOOST_REQUIRE_EXCEPTION(e.execute_cql("SELECT val FROM my_table WHERE key = 'foo' AND t <= toTimestamp(now()) AND t >= minutesAgo(1, toTimestamp(now())) ALLOW FILTERING;").get(),
                                 std::runtime_error, message_contains("User function cannot be executed in this context"));
     });
 }
