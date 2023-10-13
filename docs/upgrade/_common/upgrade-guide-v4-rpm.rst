@@ -69,7 +69,7 @@ Stop ScyllaDB
 
 Download and install the new release
 ------------------------------------
-Before upgrading, check what version you are running now using ``rpm -qa | grep scylla-server``. You should use the same version as this version in case you want to :ref:`rollback <rollback-procedure>` the upgrade. If you are not running a |SRC_VERSION|.x version, stop right here! This guide only covers |SRC_VERSION|.x to |NEW_VERSION|.y upgrades.
+Before upgrading, check what version you are running now using ``rpm -qa | grep scylla-server``. You should use the same version as this version in case you want to :ref:`rollback <rollback-procedure-v4>` the upgrade. If you are not running a |SRC_VERSION|.x version, stop right here! This guide only covers |SRC_VERSION|.x to |NEW_VERSION|.y upgrades.
 
 To upgrade:
 
@@ -97,6 +97,8 @@ Validate
 Once you are sure the node upgrade was successful, move to the next node in the cluster.
 
 See |Scylla_METRICS|_ for more information..
+
+.. _rollback-procedure-v4:
 
 Rollback Procedure
 ==================
