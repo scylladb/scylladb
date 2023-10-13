@@ -34,7 +34,7 @@ The following example shows the upgrade path for a 3-node cluster from version 4
 #. Upgrade all three nodes to version 4.6.
 
 
-Upgrading to each patch version by following the :doc:`Scylla Maintenance Release Upgrade Guide </upgrade/upgrade-opensource/upgrade-guide-from-4.x.y-to-4.x.z/index>` 
+Upgrading to each patch version by following the Maintenance Release Upgrade Guide 
 is optional. However, we recommend upgrading to the latest patch release for your version before upgrading to a new version. 
 For example, upgrade to patch 4.4.8 before upgrading to version 4.5.
 
