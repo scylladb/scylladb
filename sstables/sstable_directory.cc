@@ -208,12 +208,12 @@ future<> sstable_directory::prepare(process_flags flags) {
 }
 
 future<> sstable_directory::filesystem_components_lister::prepare(sstable_directory& dir, process_flags flags, storage& st) {
-    if (!co_await file_exists(_directory.native())) {
-        if (dir._state == sstable_state::quarantine) {
+    if (dir._state == sstable_state::quarantine) {
+        if (!co_await file_exists(_directory.native())) {
             co_return;
         }
-        co_await io_check([this] { return recursive_touch_directory(_directory.native()); });
-    } else {
+    }
+
         // verify owner and mode on the sstables directory
         // and all its subdirectories, except for "snapshots"
         // as there could be a race with scylla-manager that might
@@ -224,7 +224,6 @@ future<> sstable_directory::filesystem_components_lister::prepare(sstable_direct
                 co_await utils::directories::verify_owner_and_mode(dir / de.name, utils::directories::recursive::yes);
             }
         });
-    }
 
     if (flags.garbage_collect) {
         co_await garbage_collect(st);
