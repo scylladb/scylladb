@@ -456,6 +456,7 @@ future<> storage_service::topology_state_load() {
 
             switch (rs.state) {
             case node_state::bootstrapping:
+                if (rs.ring.has_value()) {
                 if (!utils::fb_utilities::is_me(ip)) {
                     // Save ip -> id mapping in peers table because we need it on restart, but do not save tokens until owned
                     co_await _sys_ks.local().update_tokens(ip, {});
@@ -472,6 +473,7 @@ future<> storage_service::topology_state_load() {
                     tmptr->add_bootstrap_tokens(rs.ring.value().tokens, ip);
                     co_await update_topology_change_info(tmptr, ::format("bootstrapping node {}/{}", id, ip));
                 }
+                }
                 break;
             case node_state::decommissioning:
             case node_state::removing:
@@ -481,6 +483,7 @@ future<> storage_service::topology_state_load() {
                 co_await update_topology_change_info(tmptr, ::format("{} {}/{}", rs.state, id, ip));
                 break;
             case node_state::replacing: {
+                if (rs.ring.has_value()) {
                 assert(_topology_state_machine._topology.req_param.contains(id));
                 auto replaced_id = std::get<replace_param>(_topology_state_machine._topology.req_param[id]).replaced_id;
                 auto existing_ip = am.find(replaced_id);
@@ -495,6 +498,7 @@ future<> storage_service::topology_state_load() {
                 update_topology(ip == existing_ip ? locator::host_id(replaced_id.uuid()) : host_id, ip, rs);
                 tmptr->add_replacing_endpoint(*existing_ip, ip);
                 co_await update_topology_change_info(tmptr, ::format("replacing {}/{} by {}/{}", replaced_id, *existing_ip, id, ip));
+                }
             }
                 break;
             case node_state::rebuilding:

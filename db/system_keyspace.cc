@@ -2554,7 +2554,12 @@ future<service::topology> system_keyspace::load_topology_state() {
             map = &ret.new_nodes;
         } else {
             map = &ret.transition_nodes;
-            if (nstate != service::node_state::left_token_ring && !ring_slice) {
+            // Bootstrapping and replacing nodes don't have tokens at first,
+            // they are inserted only at some point during bootstrap/replace
+            if (!ring_slice
+                    && nstate != service::node_state::left_token_ring
+                    && nstate != service::node_state::bootstrapping
+                    && nstate != service::node_state::replacing) {
                 on_fatal_internal_error(slogger, format(
                     "load_topology_state: node {} in transitioning state but missing ring slice", host_id));
             }
