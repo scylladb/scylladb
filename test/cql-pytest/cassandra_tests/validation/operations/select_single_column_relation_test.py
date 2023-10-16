@@ -522,7 +522,7 @@ def testInvalidSliceRestrictionOnPartitionKey(cql, test_keyspace):
         # ALLOW FILTERING, while Scylla *also* tells you that this
         # query would have worked with EQ or IN relations or with token().
         # The word "filtering" is common to both messages.
-        assert_invalid_message(cql, table, 'filtering',
+        assert_invalid_message(cql, table, 'FILTERING',
                              "SELECT * FROM %s WHERE a >= 1 and a < 4")
         # Again, different error messages. Cassandra says "Multi-column
         # relations can only be applied to clustering columns but was
