@@ -457,22 +457,22 @@ future<> storage_service::topology_state_load() {
             switch (rs.state) {
             case node_state::bootstrapping:
                 if (rs.ring.has_value()) {
-                if (!utils::fb_utilities::is_me(ip)) {
-                    // Save ip -> id mapping in peers table because we need it on restart, but do not save tokens until owned
-                    co_await _sys_ks.local().update_tokens(ip, {});
-                    co_await _sys_ks.local().update_peer_info(ip, "host_id", id.uuid());
-                }
-                update_topology(host_id, ip, rs);
-                if (_topology_state_machine._topology.normal_nodes.empty()) {
-                    // This is the first node in the cluster. Insert the tokens as normal to the token ring early
-                    // so we can perform writes to regular 'distributed' tables during the bootstrap procedure
-                    // (such as the CDC generation write).
-                    // It doesn't break anything to set the tokens to normal early in this single-node case.
-                    co_await tmptr->update_normal_tokens(rs.ring.value().tokens, ip);
-                } else {
-                    tmptr->add_bootstrap_tokens(rs.ring.value().tokens, ip);
-                    co_await update_topology_change_info(tmptr, ::format("bootstrapping node {}/{}", id, ip));
-                }
+                    if (!utils::fb_utilities::is_me(ip)) {
+                        // Save ip -> id mapping in peers table because we need it on restart, but do not save tokens until owned
+                        co_await _sys_ks.local().update_tokens(ip, {});
+                        co_await _sys_ks.local().update_peer_info(ip, "host_id", id.uuid());
+                    }
+                    update_topology(host_id, ip, rs);
+                    if (_topology_state_machine._topology.normal_nodes.empty()) {
+                        // This is the first node in the cluster. Insert the tokens as normal to the token ring early
+                        // so we can perform writes to regular 'distributed' tables during the bootstrap procedure
+                        // (such as the CDC generation write).
+                        // It doesn't break anything to set the tokens to normal early in this single-node case.
+                        co_await tmptr->update_normal_tokens(rs.ring.value().tokens, ip);
+                    } else {
+                        tmptr->add_bootstrap_tokens(rs.ring.value().tokens, ip);
+                        co_await update_topology_change_info(tmptr, ::format("bootstrapping node {}/{}", id, ip));
+                    }
                 }
                 break;
             case node_state::decommissioning:
@@ -484,20 +484,20 @@ future<> storage_service::topology_state_load() {
                 break;
             case node_state::replacing: {
                 if (rs.ring.has_value()) {
-                assert(_topology_state_machine._topology.req_param.contains(id));
-                auto replaced_id = std::get<replace_param>(_topology_state_machine._topology.req_param[id]).replaced_id;
-                auto existing_ip = am.find(replaced_id);
-                if (!existing_ip) {
-                    // FIXME: What if not known?
-                    on_fatal_internal_error(slogger, ::format("Cannot map id of a node being replaced {} to its ip", replaced_id));
-                }
-                assert(existing_ip);
-                // FIXME: Topology cannot hold two IPs with different host ids yet so
-                // when replacing we must advertise the replaced_id for the ip, otherwise
-                // topology will complain about host id of a local node changing and fail.
-                update_topology(ip == existing_ip ? locator::host_id(replaced_id.uuid()) : host_id, ip, rs);
-                tmptr->add_replacing_endpoint(*existing_ip, ip);
-                co_await update_topology_change_info(tmptr, ::format("replacing {}/{} by {}/{}", replaced_id, *existing_ip, id, ip));
+                    assert(_topology_state_machine._topology.req_param.contains(id));
+                    auto replaced_id = std::get<replace_param>(_topology_state_machine._topology.req_param[id]).replaced_id;
+                    auto existing_ip = am.find(replaced_id);
+                    if (!existing_ip) {
+                        // FIXME: What if not known?
+                        on_fatal_internal_error(slogger, ::format("Cannot map id of a node being replaced {} to its ip", replaced_id));
+                    }
+                    assert(existing_ip);
+                    // FIXME: Topology cannot hold two IPs with different host ids yet so
+                    // when replacing we must advertise the replaced_id for the ip, otherwise
+                    // topology will complain about host id of a local node changing and fail.
+                    update_topology(ip == existing_ip ? locator::host_id(replaced_id.uuid()) : host_id, ip, rs);
+                    tmptr->add_replacing_endpoint(*existing_ip, ip);
+                    co_await update_topology_change_info(tmptr, ::format("replacing {}/{} by {}/{}", replaced_id, *existing_ip, id, ip));
                 }
             }
                 break;
