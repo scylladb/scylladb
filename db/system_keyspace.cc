@@ -2508,15 +2508,17 @@ future<service::topology> system_keyspace::load_topology_state() {
                 }
                 ret.req_param.emplace(host_id, service::rebuild_param{*rebuild_option});
                 break;
-            case service::topology_request::join:
-                ret.req_param.emplace(host_id, service::join_param{num_tokens});
-                break;
             default:
                 // no parameters for other requests
                 break;
             }
         } else {
             switch (nstate) {
+            case service::node_state::bootstrapping:
+                // The tokens aren't generated right away when we enter the `bootstrapping` node state.
+                // Therefore we need to know the number of tokens when we generate them during the bootstrap process.
+                ret.req_param.emplace(host_id, service::join_param{num_tokens});
+                break;
             case service::node_state::removing:
                 // If a node is removing we need to know which nodes are ignored
                 ret.req_param.emplace(host_id, service::removenode_param{std::move(ignored_ids)});

@@ -1798,30 +1798,44 @@ class topology_coordinator {
                 node = co_await finish_accepting_node(std::move(node));
                 switch (node.rs->state) {
                     case node_state::bootstrapping: {
-                        assert(node.rs->ring);
+                        assert(!node.rs->ring);
+                        auto num_tokens = std::get<join_param>(node.req_param.value()).num_tokens;
+                        // A node have just been accepted and does not have tokens assigned yet
+                        // Need to assign random tokens to the node
                         auto tmptr = get_token_metadata_ptr();
+                        auto bootstrap_tokens = dht::boot_strapper::get_random_bootstrap_tokens(
+                                tmptr, num_tokens, dht::check_token_endpoint::yes);
+
                         auto [gen_uuid, guard, mutation] = co_await prepare_and_broadcast_cdc_generation_data(
-                                tmptr, take_guard(std::move(node)), bootstrapping_info{node.rs->ring->tokens, *node.rs});
+                                tmptr, take_guard(std::move(node)), bootstrapping_info{bootstrap_tokens, *node.rs});
 
                         topology_mutation_builder builder(guard.write_timestamp());
 
                         // Write the new CDC generation data through raft.
                         builder.set_transition_state(topology::transition_state::commit_cdc_generation)
-                               .set_new_cdc_generation_data_uuid(gen_uuid);
+                               .set_new_cdc_generation_data_uuid(gen_uuid)
+                               .with_node(node.id)
+                               .set("tokens", bootstrap_tokens);
                         auto reason = ::format(
-                            "bootstrap: insert CDC generation data (UUID: {})", gen_uuid);
+                            "bootstrap: insert tokens and CDC generation data (UUID: {})", gen_uuid);
                         co_await update_topology_state(std::move(guard), {std::move(mutation), builder.build()}, reason);
                     }
                         break;
                     case node_state::replacing: {
-                        assert(node.rs->ring);
+                        assert(!node.rs->ring);
+                        auto replaced_id = std::get<replace_param>(node.req_param.value()).replaced_id;
+                        auto it = _topo_sm._topology.normal_nodes.find(replaced_id);
+                        assert(it != _topo_sm._topology.normal_nodes.end());
+                        assert(it->second.ring && it->second.state == node_state::normal);
 
                         topology_mutation_builder builder(node.guard.write_timestamp());
 
                         builder.set_transition_state(topology::transition_state::tablet_draining)
-                               .set_version(_topo_sm._topology.version + 1);
+                               .set_version(_topo_sm._topology.version + 1)
+                               .with_node(node.id)
+                               .set("tokens", it->second.ring->tokens);
                         co_await update_topology_state(take_guard(std::move(node)), {builder.build()},
-                                "replace: transition to tablet_draining");
+                                "replace: transition to tablet_draining and take ownership of the replaced node's tokens");
                     }
                         break;
                     default:
@@ -2129,20 +2143,12 @@ class topology_coordinator {
                 switch (node.request.value()) {
                     case topology_request::join: {
                         assert(!node.rs->ring);
-                        auto num_tokens = std::get<join_param>(node.req_param.value()).num_tokens;
-                        // A node just joined and does not have tokens assigned yet
-                        // Need to assign random tokens to the node
-                        auto tmptr = get_token_metadata_ptr();
-                        auto bootstrap_tokens = dht::boot_strapper::get_random_bootstrap_tokens(
-                                tmptr, num_tokens, dht::check_token_endpoint::yes);
-
                         // Write chosen tokens through raft.
                         builder.set_transition_state(topology::transition_state::join_group0)
                                .with_node(node.id)
                                .set("node_state", node_state::bootstrapping)
-                               .del("topology_request")
-                               .set("tokens", bootstrap_tokens);
-                        auto reason = ::format("bootstrap: accept node and assign tokens");
+                               .del("topology_request");
+                        auto reason = ::format("bootstrap: accept node");
                         co_await update_topology_state(std::move(node.guard), {builder.build()}, reason);
                         break;
                         }
@@ -2171,17 +2177,12 @@ class topology_coordinator {
                         break;
                     case topology_request::replace: {
                         assert(!node.rs->ring);
-                        auto replaced_id = std::get<replace_param>(node.req_param.value()).replaced_id;
-                        auto it = _topo_sm._topology.normal_nodes.find(replaced_id);
-                        assert(it != _topo_sm._topology.normal_nodes.end());
-                        assert(it->second.ring && it->second.state == node_state::normal);
                         builder.set_transition_state(topology::transition_state::join_group0)
                                .with_node(node.id)
                                .set("node_state", node_state::replacing)
-                               .del("topology_request")
-                               .set("tokens", it->second.ring->tokens);
+                               .del("topology_request");
                         co_await update_topology_state(take_guard(std::move(node)), {builder.build()},
-                                "replace: accept node and take ownership of the replaced node's tokens");
+                                                       "replace: accept node");
                         break;
                         }
                     case topology_request::rebuild: {
