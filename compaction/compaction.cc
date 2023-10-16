@@ -439,6 +439,8 @@ protected:
     const uint32_t _sstable_level;
     uint64_t _start_size = 0;
     uint64_t _end_size = 0;
+    // fully expired files, which are skipped, aren't taken into account.
+    uint64_t _compacting_data_file_size = 0;
     uint64_t _estimated_partitions = 0;
     uint64_t _bloom_filter_checks = 0;
     db::replay_position _rp;
@@ -501,7 +503,7 @@ protected:
     virtual uint64_t partitions_per_sstable() const {
         // some tests use _max_sstable_size == 0 for force many one partition per sstable
         auto max_sstable_size = std::max<uint64_t>(_max_sstable_size, 1);
-        uint64_t estimated_sstables = std::max(1UL, uint64_t(ceil(double(_start_size) / max_sstable_size)));
+        uint64_t estimated_sstables = std::max(1UL, uint64_t(ceil(double(_compacting_data_file_size) / max_sstable_size)));
         return std::min(uint64_t(ceil(double(_estimated_partitions) / estimated_sstables)),
                         _table_s.get_compaction_strategy().adjust_partition_estimate(_ms_metadata, _estimated_partitions));
     }
@@ -710,6 +712,7 @@ private:
             // for a better estimate for the number of partitions in the merged
             // sstable than just adding up the lengths of individual sstables.
             _estimated_partitions += sst->get_estimated_key_count();
+            _compacting_data_file_size += sst->ondisk_data_size();
             // TODO:
             // Note that this is not fully correct. Since we might be merging sstables that originated on
             // another shard (#cpu changed), we might be comparing RP:s with differing shard ids,

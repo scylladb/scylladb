@@ -5257,3 +5257,54 @@ SEASTAR_TEST_CASE(test_sstables_excluding_staging_correctness) {
         }
     });
 }
+
+// Reproducer for https://github.com/scylladb/scylladb/issues/15726.
+SEASTAR_TEST_CASE(produces_optimal_filter_by_estimating_correctly_partitions_per_sstable) {
+    return test_env::do_with_async([] (test_env& env) {
+        auto builder = schema_builder("tests", "test")
+                .with_column("id", utf8_type, column_kind::partition_key)
+                .with_column("value", int32_type);
+        builder.set_compressor_params(compression_parameters::no_compression());
+        auto s = builder.build();
+        auto sst_gen = env.make_sst_factory(s);
+
+        auto compact = [&, s] (std::vector<shared_sstable> c, uint64_t max_size) -> compaction_result {
+            auto t = env.make_table_for_tests(s);
+            auto stop = deferred_stop(t);
+            t->disable_auto_compaction().get();
+            auto desc = sstables::compaction_descriptor(std::move(c));
+            desc.max_sstable_bytes = max_size;
+            return compact_sstables(std::move(desc), t, sst_gen).get0();
+        };
+
+        auto make_insert = [&] (partition_key key) {
+            mutation m(s, key);
+            m.set_clustered_cell(clustering_key::make_empty(), bytes("value"), data_value(int32_t(1)), api::new_timestamp());
+            return m;
+        };
+
+        const sstring shared_key_prefix = "832193982198319823hsdjahdashjdsa81923189381931829sdajidjkas812938219jdsalljdadsajk319820";
+
+        std::vector<mutation> muts;
+        constexpr int keys = 200;
+        muts.reserve(keys);
+        for (auto i = 0; i < keys; i++) {
+            muts.push_back(make_insert(partition_key::from_exploded(*s, {to_bytes(shared_key_prefix + to_sstring(i))})));
+        }
+        auto sst = make_sstable_containing(sst_gen, std::move(muts));
+
+        testlog.info("index size: {}, data_size: {}", sst->index_size(), sst->ondisk_data_size());
+
+        uint64_t max_sstable_size = std::ceil(double(sst->ondisk_data_size()) / 10);
+        auto ret = compact({sst}, max_sstable_size);
+
+        uint64_t partitions_per_sstable = keys / ret.new_sstables.size();
+        auto filter = utils::i_filter::get_filter(partitions_per_sstable, s->bloom_filter_fp_chance(), utils::filter_format::m_format);
+
+        auto comp = ret.new_sstables.front()->get_open_info().get0();
+
+        // Filter for SSTable generated cannot be lower than the one expected
+        testlog.info("filter size: actual={}, expected>={}", comp.components->filter->memory_size(), filter->memory_size());
+        BOOST_REQUIRE(comp.components->filter->memory_size() >= filter->memory_size());
+    });
+}
