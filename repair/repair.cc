@@ -1272,7 +1272,7 @@ future<> repair::user_requested_repair_task_impl::run() {
         });
 
         if (rs.get_repair_module().is_aborted(id.uuid())) {
-            throw std::runtime_error("aborted by user request");
+            throw abort_requested_exception();
         }
 
         auto ranges_parallelism = _ranges_parallelism;
@@ -1304,8 +1304,11 @@ future<> repair::user_requested_repair_task_impl::run() {
             }
             return make_ready_future<>();
         }).get();
-    }).handle_exception([id] (std::exception_ptr ep) {
+    }).handle_exception([id, &rs] (std::exception_ptr ep) {
         rlogger.warn("repair[{}]: user-requested repair failed: {}", id.uuid(), ep);
+        // If abort was requested, throw abort_requested_exception instead of wrapped exceptions from all shards,
+        // so that it could be properly handled by callers.
+        rs.get_repair_module().check_in_shutdown();
         return make_exception_future<>(ep);
     });
 }
@@ -1390,7 +1393,7 @@ future<> repair::data_sync_repair_task_impl::run() {
         std::vector<future<>> repair_results;
         repair_results.reserve(smp::count);
         if (rs.get_repair_module().is_aborted(id.uuid())) {
-            throw std::runtime_error("aborted by user request");
+            throw abort_requested_exception();
         }
         for (auto shard : boost::irange(unsigned(0), smp::count)) {
             auto f = rs.container().invoke_on(shard, [keyspace, table_ids, id, ranges, neighbors, reason, germs, parent_data = get_repair_uniq_id().task_info] (repair_service& local_repair) mutable -> future<> {
@@ -1428,12 +1431,15 @@ future<> repair::data_sync_repair_task_impl::run() {
         }).get();
     }).then([id, keyspace] {
         rlogger.info("repair[{}]: sync data for keyspace={}, status=succeeded", id.uuid(), keyspace);
-    }).handle_exception([&db, id, keyspace] (std::exception_ptr ep) {
+    }).handle_exception([&db, id, keyspace, &rs] (std::exception_ptr ep) {
         if (!db.has_keyspace(keyspace)) {
             rlogger.warn("repair[{}]: sync data for keyspace={}, status=failed: keyspace does not exist any more, ignoring it, {}", id.uuid(), keyspace, ep);
             return make_ready_future<>();
         }
         rlogger.warn("repair[{}]: sync data for keyspace={}, status=failed: {}", id.uuid(), keyspace,  ep);
+        // If abort was requested, throw abort_requested_exception instead of wrapped exceptions from all shards,
+        // so that it could be properly handled by callers.
+        rs.get_repair_module().check_in_shutdown();
         return make_exception_future<>(ep);
     });
 }
