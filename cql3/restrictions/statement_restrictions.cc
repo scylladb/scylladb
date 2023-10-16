@@ -668,7 +668,7 @@ void statement_restrictions::add_single_column_parition_key_restriction(const ex
     if (restr.op != expr::oper_t::EQ && restr.op != expr::oper_t::IN && !allow_filtering && !for_view) {
         throw exceptions::invalid_request_exception(
                 "Only EQ and IN relation are supported on the partition key "
-                "(unless you use the token() function or allow filtering)");
+                "(unless you use the token() function or ALLOW FILTERING)");
     }
     if (has_token_restrictions()) {
         throw exceptions::invalid_request_exception(
@@ -1048,7 +1048,7 @@ dht::partition_range_vector partition_ranges_from_singles(
                 } else {
                     throw exceptions::invalid_request_exception(
                             "Only EQ and IN relation are supported on the partition key "
-                            "(unless you use the token() function or allow filtering)");
+                            "(unless you use the token() function or ALLOW FILTERING)");
                 }
             }
         }

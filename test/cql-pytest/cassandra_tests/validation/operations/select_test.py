@@ -1322,10 +1322,10 @@ def testAllowFilteringOnPartitionKeyWithDistinct(cql, test_keyspace):
             execute(cql, table, "INSERT INTO %s (pk0, pk1, ck0, val) VALUES (?, ?, 1, 1)", i, i)
 
         for _ in before_and_after_flush(cql, table):
-            assert_invalid_message(cql, table, 'filtering',
+            assert_invalid_message(cql, table, 'FILTERING',
                     "SELECT DISTINCT pk0, pk1 FROM %s WHERE pk1 = 1 LIMIT 3")
 
-            assert_invalid_message(cql, table, 'filtering',
+            assert_invalid_message(cql, table, 'FILTERING',
                     "SELECT DISTINCT pk0, pk1 FROM %s WHERE pk0 > 0 AND pk1 = 1 LIMIT 3")
 
             assert_rows(execute(cql, table, "SELECT DISTINCT pk0, pk1 FROM %s WHERE pk0 = 1 LIMIT 1 ALLOW FILTERING"),
@@ -1527,7 +1527,7 @@ def testAllowFilteringOnPartitionAndClusteringKey(cql, test_keyspace):
             # "Clustering column \"d\" cannot be restricted (preceding column
             # \"c\" is restricted by a non-EQ relation)", while Scylla says:
             # "Only EQ and IN relation are supported on the partition key
-            # (unless you use the token() function or allow filtering)
+            # (unless you use the token() function or ALLOW FILTERING)
             assert_invalid(cql, table,
                     "SELECT * FROM %s WHERE a <= 11 AND c > 15 AND d >= 16")
 
@@ -1856,7 +1856,7 @@ def dotestContainsOnPartitionKey(cql, test_keyspace, schema):
         execute(cql, table, "INSERT INTO %s (pk, ck, v) VALUES (?, ?, ?)", {5: 6}, 5, 5)
         execute(cql, table, "INSERT INTO %s (pk, ck, v) VALUES (?, ?, ?)", {7: 8}, 6, 6)
 
-        assert_invalid_message_re(cql, table, 'allow filtering|ALLOW FILTERING',
+        assert_invalid_message(cql, table, 'ALLOW FILTERING',
                              "SELECT * FROM %s WHERE pk CONTAINS KEY 1")
 
         for _ in before_and_after_flush(cql, table):

@@ -3271,7 +3271,7 @@ def testFilteringOnCompactTablesWithoutIndicesAndWithMaps(cql, test_keyspace):
                        row(1, 3, {6: 2}),
                        row(2, 3, {7: 1}))
 
-            assertInvalidMessage(cql, table, 'filtering',
+            assertInvalidMessage(cql, table, 'FILTERING',
                                  "SELECT * FROM %s WHERE b <= 3 AND c < {6 : 2}")
 
             assert_rows(execute(cql, table, "SELECT * FROM %s WHERE b <= 3 AND c < {6 : 2} ALLOW FILTERING"),

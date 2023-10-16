@@ -417,11 +417,11 @@ OK
 > SELECT * FROM test_filter WHERE k1 = 0;
 Error from server: code=2200 [Invalid query] message="Cannot execute this query as it might involve data filtering and thus may have unpredictable performance. If you want to execute this query despite the performance unpredictability, use ALLOW FILTERING"
 > SELECT * FROM test_filter WHERE k1 = 0 AND k2 > 0;
-Error from server: code=2200 [Invalid query] message="Only EQ and IN relation are supported on the partition key (unless you use the token() function or allow filtering)"
+Error from server: code=2200 [Invalid query] message="Only EQ and IN relation are supported on the partition key (unless you use the token() function or ALLOW FILTERING)"
 > SELECT * FROM test_filter WHERE k1 >= 0 AND k2 in (0,1,2);
-Error from server: code=2200 [Invalid query] message="Only EQ and IN relation are supported on the partition key (unless you use the token() function or allow filtering)"
+Error from server: code=2200 [Invalid query] message="Only EQ and IN relation are supported on the partition key (unless you use the token() function or ALLOW FILTERING)"
 > SELECT * FROM test_filter WHERE k2 > 0;
-Error from server: code=2200 [Invalid query] message="Only EQ and IN relation are supported on the partition key (unless you use the token() function or allow filtering)"
+Error from server: code=2200 [Invalid query] message="Only EQ and IN relation are supported on the partition key (unless you use the token() function or ALLOW FILTERING)"
 > DROP TABLE test_filter;
 OK
 > 

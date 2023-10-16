@@ -2823,12 +2823,12 @@ OK
 Error from server: code=2200 [Invalid query] message="Columns "ColumnDefinition{name=a, type=org.apache.cassandra.db.marshal.Int32Type, kind=PARTITION_KEY, componentIndex=0, droppedAt=-9223372036854775808}" cannot be restricted by both a normal relation and a token relation"
 > -- error: can't use eq and non-eq restriction
 > update lwt set c = 1 where a = 1 and b = 1 and a < 0 if c = 1;
-Error from server: code=2200 [Invalid query] message="Only EQ and IN relation are supported on the partition key (unless you use the token() function or allow filtering)"
+Error from server: code=2200 [Invalid query] message="Only EQ and IN relation are supported on the partition key (unless you use the token() function or ALLOW FILTERING)"
 > update lwt set c = 1 where a = 1 and b = 1 and a < 0 if c = 1;
-Error from server: code=2200 [Invalid query] message="Only EQ and IN relation are supported on the partition key (unless you use the token() function or allow filtering)"
+Error from server: code=2200 [Invalid query] message="Only EQ and IN relation are supported on the partition key (unless you use the token() function or ALLOW FILTERING)"
 > -- error: partition key must be fully restricted
 > update lwt set c = 1 where a > 0 and a < 0 and b = 1 if c = 1;
-Error from server: code=2200 [Invalid query] message="Only EQ and IN relation are supported on the partition key (unless you use the token() function or allow filtering)"
+Error from server: code=2200 [Invalid query] message="Only EQ and IN relation are supported on the partition key (unless you use the token() function or ALLOW FILTERING)"
 > -- error: partition key and IN is not supported
 > update lwt set c = 1 where a in () and b = 1 if c = 1;
 Error from server: code=2200 [Invalid query] message="IN on the partition key is not supported with conditional updates"
