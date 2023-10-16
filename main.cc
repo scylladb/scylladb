@@ -691,7 +691,8 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // disable reactor stall detection during startup
             auto blocked_reactor_notify_ms = engine().get_blocked_reactor_notify_ms();
             smp::invoke_on_all([] {
-                engine().update_blocked_reactor_notify_ms(std::chrono::milliseconds(1000000));
+                using namespace std::chrono;
+                engine().update_blocked_reactor_notify_ms(duration_cast<milliseconds>(10000h));
             }).get();
 
             ::stop_signal stop_signal; // we can move this earlier to support SIGINT during initialization
@@ -1026,10 +1027,15 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             db.local().init_commitlog().get();
             db.invoke_on_all(&replica::database::start).get();
 
+// FIXME: The stall detector uses glibc backtrace function to
+// collect backtraces, this causes ASAN failures on ARM.
+// For now we just disable the stall detector in this configuration,
+// the ticket about migrating to libunwind: scylladb/seastar#1878
+#if !defined(SEASTAR_DEBUG) || !defined(__aarch64__)
             smp::invoke_on_all([blocked_reactor_notify_ms] {
                 engine().update_blocked_reactor_notify_ms(blocked_reactor_notify_ms);
             }).get();
-
+#endif
             debug::the_storage_proxy = &proxy;
             supervisor::notify("starting storage proxy");
             service::storage_proxy::config spcfg {
