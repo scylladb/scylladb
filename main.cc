@@ -1035,6 +1035,8 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             smp::invoke_on_all([blocked_reactor_notify_ms] {
                 engine().update_blocked_reactor_notify_ms(blocked_reactor_notify_ms);
             }).get();
+#else
+            (void)blocked_reactor_notify_ms;
 #endif
             debug::the_storage_proxy = &proxy;
             supervisor::notify("starting storage proxy");
