@@ -502,7 +502,7 @@ private:
 
     // This field cashes the last truncation time for the table.
     // The master resides in system.truncated table
-    db_clock::time_point _truncated_at = db_clock::time_point::min();
+    std::optional<db_clock::time_point> _truncated_at;
 
     bool _is_bootstrap_or_replace = false;
     sstables::shared_sstable make_sstable(sstables::sstable_state state);
@@ -517,12 +517,10 @@ public:
     future<> add_sstables_and_update_cache(const std::vector<sstables::shared_sstable>& ssts);
     future<> move_sstables_from_staging(std::vector<sstables::shared_sstable>);
     sstables::shared_sstable make_sstable();
-    void cache_truncation_record(db_clock::time_point truncated_at) {
+    void set_truncation_time(db_clock::time_point truncated_at) noexcept {
         _truncated_at = truncated_at;
     }
-    db_clock::time_point get_truncation_record() {
-        return _truncated_at;
-    }
+    db_clock::time_point get_truncation_time() const;
 
     void notify_bootstrap_or_replace_start();
 
@@ -1575,7 +1573,8 @@ public:
             schema_ptr table, bool write_in_user_memory, locator::effective_replication_map_factory&);
 
     void maybe_init_schema_commitlog();
-    future<> add_column_family_and_make_directory(schema_ptr schema, bool readonly);
+    using is_new_cf = bool_class<struct is_new_cf_tag>;
+    future<> add_column_family_and_make_directory(schema_ptr schema, is_new_cf is_new);
 
     /* throws no_such_column_family if missing */
     table_id find_uuid(std::string_view ks, std::string_view cf) const;
@@ -1743,7 +1742,7 @@ public:
 public:
     bool update_column_family(schema_ptr s);
 private:
-    future<> add_column_family(keyspace& ks, schema_ptr schema, column_family::config cfg, bool readonly);
+    future<> add_column_family(keyspace& ks, schema_ptr schema, column_family::config cfg, is_new_cf is_new);
     future<> detach_column_family(table& cf);
 
     struct table_truncate_state;

@@ -837,7 +837,7 @@ future<> database::parse_system_tables(distributed<service::storage_proxy>& prox
     co_await do_parse_schema_tables(proxy, db::schema_tables::TABLES, coroutine::lambda([&] (schema_result_value_type &v) -> future<> {
         std::map<sstring, schema_ptr> tables = co_await create_tables_from_tables_partition(proxy, v.second);
         co_await coroutine::parallel_for_each(tables.begin(), tables.end(), [&] (auto& t) -> future<> {
-            co_await this->add_column_family_and_make_directory(t.second, true);
+            co_await this->add_column_family_and_make_directory(t.second, replica::database::is_new_cf::no);
             auto s = t.second;
             // Recreate missing column mapping entries in case
             // we failed to persist them for some reason after a schema change
@@ -855,7 +855,7 @@ future<> database::parse_system_tables(distributed<service::storage_proxy>& prox
             // we fix here the schema in place in oreder to avoid races (write commands comming from other coordinators).
             view_ptr fixed_v = maybe_fix_legacy_secondary_index_mv_schema(*this, v, nullptr, preserve_version::yes);
             view_ptr v_to_add = fixed_v ? fixed_v : v;
-            co_await this->add_column_family_and_make_directory(v_to_add, true);
+            co_await this->add_column_family_and_make_directory(v_to_add, replica::database::is_new_cf::no);
             if (bool(fixed_v)) {
                 v_to_add = fixed_v;
                 auto&& keyspace = find_keyspace(v->ks_name()).metadata();
@@ -1003,7 +1003,7 @@ future<> database::create_local_system_table(
         cfg.memtable_scheduling_group = default_scheduling_group();
         cfg.memtable_to_cache_scheduling_group = default_scheduling_group();
     }
-    co_await add_column_family(ks, table, std::move(cfg), true);
+    co_await add_column_family(ks, table, std::move(cfg), replica::database::is_new_cf::no);
 }
 
 db::commitlog* database::commitlog_for(const schema_ptr& schema) {
@@ -1012,7 +1012,7 @@ db::commitlog* database::commitlog_for(const schema_ptr& schema) {
         : _commitlog.get();
 }
 
-future<> database::add_column_family(keyspace& ks, schema_ptr schema, column_family::config cfg, bool readonly) {
+future<> database::add_column_family(keyspace& ks, schema_ptr schema, column_family::config cfg, is_new_cf is_new) {
     schema = local_schema_registry().learn(schema);
     schema->registry_entry()->mark_synced();
     auto&& rs = ks.get_replication_strategy();
@@ -1027,8 +1027,9 @@ future<> database::add_column_family(keyspace& ks, schema_ptr schema, column_fam
     auto cf = make_lw_shared<column_family>(schema, std::move(cfg), ks.metadata()->get_storage_options_ptr(), _compaction_manager, sst_manager, *_cl_stats, _row_cache_tracker, erm);
     cf->set_durable_writes(ks.metadata()->durable_writes());
 
-    if (!readonly) {
+    if (is_new) {
         cf->mark_ready_for_writes(commitlog_for(schema));
+        cf->set_truncation_time(db_clock::time_point::min());
     }
 
     auto uuid = schema->id();
@@ -1070,9 +1071,9 @@ future<> database::add_column_family(keyspace& ks, schema_ptr schema, column_fam
     }
 }
 
-future<> database::add_column_family_and_make_directory(schema_ptr schema, bool readonly) {
+future<> database::add_column_family_and_make_directory(schema_ptr schema, is_new_cf is_new) {
     auto& ks = find_keyspace(schema->ks_name());
-    co_await add_column_family(ks, schema, ks.make_column_family_config(*schema, *this), readonly);
+    co_await add_column_family(ks, schema, ks.make_column_family_config(*schema, *this), is_new);
     auto& cf = find_column_family(schema);
     cf.get_index_manager().reload();
     co_await cf.init_storage();
@@ -2672,7 +2673,7 @@ future<> database::truncate(db::system_keyspace& sys_ks, column_family& cf, cons
     // save_truncation_record() may actually fail after we cached the truncation time
     // but this is not be worse that if failing without caching: at least the correct time
     // will be available until next reboot and a client will have to retry truncation anyway.
-    cf.cache_truncation_record(truncated_at);
+    cf.set_truncation_time(truncated_at);
     co_await sys_ks.save_truncation_record(cf, truncated_at, rp);
 
     auto& gc_state = get_compaction_manager().get_tombstone_gc_state();

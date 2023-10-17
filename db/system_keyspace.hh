@@ -91,7 +91,6 @@ struct local_cache;
 using system_keyspace_view_name = std::pair<sstring, sstring>;
 class system_keyspace_view_build_progress;
 
-struct truncation_record;
 struct replay_position;
 typedef std::vector<db::replay_position> replay_positions;
 
@@ -248,7 +247,7 @@ public:
     static table_schema_version generate_schema_version(table_id table_id, uint16_t offset = 0);
 
     future<> build_bootstrap_info();
-    future<> cache_truncation_record();
+    future<std::unordered_map<table_id, db_clock::time_point>> load_truncation_times();
     future<> update_schema_version(table_schema_version version);
 
     /*
@@ -354,12 +353,8 @@ public:
     using repair_history_consumer = noncopyable_function<future<>(const repair_history_entry&)>;
     future<> get_repair_history(table_id, repair_history_consumer f);
 
-    typedef std::vector<db::replay_position> replay_positions;
-
-    future<> save_truncation_record(table_id, db_clock::time_point truncated_at, db::replay_position);
     future<> save_truncation_record(const replica::column_family&, db_clock::time_point truncated_at, db::replay_position);
-    future<replay_positions> get_truncated_position(table_id);
-    future<db_clock::time_point> get_truncated_at(table_id);
+    future<replay_positions> get_truncated_positions(table_id);
 
     /**
      * Return a map of stored tokens to IP addresses
@@ -414,9 +409,6 @@ public:
 
     future<local_info> load_local_info();
     future<> save_local_info(local_info, locator::endpoint_dc_rack);
-private:
-    future<truncation_record> get_truncation_record(table_id cf_id);
-
 public:
     static api::timestamp_type schema_creation_timestamp();
 

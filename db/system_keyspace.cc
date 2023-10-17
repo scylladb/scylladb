@@ -1446,85 +1446,47 @@ future<> system_keyspace::build_bootstrap_info() {
     });
 }
 
-struct truncation_record {
-    static constexpr uint32_t current_magic = 0x53435452; // 'S' 'C' 'T' 'R'
-
-    uint32_t magic;
-    std::vector<db::replay_position> positions;
-    db_clock::time_point time_stamp;
-};
-
 }
 
 namespace db {
 
-future<truncation_record> system_keyspace::get_truncation_record(table_id cf_id) {
-    if (_db.get_config().ignore_truncation_record.is_set()) {
-        truncation_record r{truncation_record::current_magic};
-        return make_ready_future<truncation_record>(std::move(r));
-    }
-    sstring req = format("SELECT * from system.{} WHERE table_uuid = ?", TRUNCATED);
-    return execute_cql(req, {cf_id.uuid()}).then([](::shared_ptr<cql3::untyped_result_set> rs) {
-        truncation_record r{truncation_record::current_magic};
-
-        for (const cql3::untyped_result_set_row& row : *rs) {
-            auto shard = row.get_as<int32_t>("shard");
-            auto ts = row.get_as<db_clock::time_point>("truncated_at");
-            auto pos = row.get_as<int32_t>("position");
-            auto id = row.get_as<int64_t>("segment_id");
-
-            r.time_stamp = ts;
-            r.positions.emplace_back(replay_position(shard, id, pos));
-        }
-        return make_ready_future<truncation_record>(std::move(r));
-    });
-}
-
 // Read system.truncate table and cache last truncation time in `table` object for each table on every shard
-future<> system_keyspace::cache_truncation_record() {
-    if (_db.get_config().ignore_truncation_record.is_set()) {
-        return make_ready_future<>();
+future<std::unordered_map<table_id, db_clock::time_point>> system_keyspace::load_truncation_times() {
+    std::unordered_map<table_id, db_clock::time_point> result;
+    if (!_db.get_config().ignore_truncation_record.is_set()) {
+        sstring req = format("SELECT DISTINCT table_uuid, truncated_at from system.{}", TRUNCATED);
+        auto result_set = co_await execute_cql(req);
+        for (const auto& row: *result_set) {
+            const auto table_uuid = table_id(row.get_as<utils::UUID>("table_uuid"));
+            const auto ts = row.get_as<db_clock::time_point>("truncated_at");
+            result[table_uuid] = ts;
+        }
     }
-    sstring req = format("SELECT DISTINCT table_uuid, truncated_at from system.{}", TRUNCATED);
-    return execute_cql(req).then([this] (::shared_ptr<cql3::untyped_result_set> rs) {
-        return parallel_for_each(rs->begin(), rs->end(), [this] (const cql3::untyped_result_set_row& row) {
-            auto table_uuid = table_id(row.get_as<utils::UUID>("table_uuid"));
-            auto ts = row.get_as<db_clock::time_point>("truncated_at");
-
-            return _db.container().invoke_on_all([table_uuid, ts] (replica::database& db) mutable {
-                try {
-                    replica::table& cf = db.find_column_family(table_uuid);
-                    cf.cache_truncation_record(ts);
-                } catch (replica::no_such_column_family&) {
-                    slogger.debug("Skip caching truncation time for {} since the table is no longer present", table_uuid);
-                }
-            });
-        });
-    });
+    co_return result;
 }
 
-future<> system_keyspace::save_truncation_record(table_id id, db_clock::time_point truncated_at, db::replay_position rp) {
+future<> system_keyspace::save_truncation_record(const replica::column_family& cf, db_clock::time_point truncated_at, db::replay_position rp) {
     sstring req = format("INSERT INTO system.{} (table_uuid, shard, position, segment_id, truncated_at) VALUES(?,?,?,?,?)", TRUNCATED);
-    co_await _qp.execute_internal(req, {id.uuid(), int32_t(rp.shard_id()), int32_t(rp.pos), int64_t(rp.base_id()), truncated_at}, cql3::query_processor::cache_internal::yes);
+    co_await _qp.execute_internal(req, {cf.schema()->id().uuid(), int32_t(rp.shard_id()), int32_t(rp.pos), int64_t(rp.base_id()), truncated_at}, cql3::query_processor::cache_internal::yes);
     // Flush the table so that the value is available on boot before commitlog replay.
     // Commit log replay depends on truncation records to determine the minimum replay position.
     co_await force_blocking_flush(TRUNCATED);
 }
 
-future<> system_keyspace::save_truncation_record(const replica::column_family& cf, db_clock::time_point truncated_at, db::replay_position rp) {
-    return save_truncation_record(cf.schema()->id(), truncated_at, rp);
-}
-
-future<replay_positions> system_keyspace::get_truncated_position(table_id cf_id) {
-    return get_truncation_record(cf_id).then([](truncation_record e) {
-        return make_ready_future<replay_positions>(e.positions);
-    });
-}
-
-future<db_clock::time_point> system_keyspace::get_truncated_at(table_id cf_id) {
-    return get_truncation_record(cf_id).then([](truncation_record e) {
-        return make_ready_future<db_clock::time_point>(e.time_stamp);
-    });
+future<replay_positions> system_keyspace::get_truncated_positions(table_id cf_id) {
+    replay_positions result;
+    if (_db.get_config().ignore_truncation_record.is_set()) {
+        co_return result;
+    }
+    const auto req = format("SELECT * from system.{} WHERE table_uuid = ?", TRUNCATED);
+    auto result_set = co_await execute_cql(req, {cf_id.uuid()});
+    result.reserve(result_set->size());
+    for (const auto& row: *result_set) {
+        result.emplace_back(row.get_as<int32_t>("shard"),
+            row.get_as<int64_t>("segment_id"),
+            row.get_as<int32_t>("position"));
+    }
+    co_return result;
 }
 
 static set_type_impl::native_type deserialize_set_column(const schema& s, const cql3::untyped_result_set_row& row, const char* name) {

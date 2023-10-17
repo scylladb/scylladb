@@ -73,7 +73,7 @@ class distributed_loader {
     static future<size_t> make_sstables_available(sstables::sstable_directory& dir,
             sharded<replica::database>& db, sharded<db::view::view_update_generator>& view_update_generator,
             bool needs_view_update, sstring ks, sstring cf);
-    static future<> populate_keyspace(distributed<replica::database>& db, keyspace& ks, sstring ks_name);
+    static future<> populate_keyspace(distributed<replica::database>& db, sharded<db::system_keyspace>& sys_ks, keyspace& ks, sstring ks_name);
 
 public:
     static future<> init_system_keyspace(sharded<db::system_keyspace>&, distributed<locator::effective_replication_map_factory>&, distributed<replica::database>&);
