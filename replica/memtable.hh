@@ -111,8 +111,8 @@ private:
     mutation_cleaner _cleaner;
     memtable_list *_memtable_list;
     schema_ptr _schema;
-    logalloc::allocating_section _read_section;
-    logalloc::allocating_section _allocating_section;
+    logalloc::allocating_section& _read_section;
+    logalloc::allocating_section& _allocating_section;
     partitions_type partitions;
     size_t nr_partitions = 0;
     db::replay_position _replay_position;
@@ -171,7 +171,10 @@ private:
     void clear() noexcept;
     uint64_t dirty_size() const;
 public:
-    explicit memtable(schema_ptr schema, dirty_memory_manager&, replica::table_stats& table_stats, memtable_list *memtable_list = nullptr,
+    explicit memtable(schema_ptr schema, dirty_memory_manager&,
+            logalloc::allocating_section& read_section,
+            logalloc::allocating_section& allocating_section,
+            replica::table_stats& table_stats, memtable_list *memtable_list = nullptr,
             seastar::scheduling_group compaction_scheduling_group = seastar::current_scheduling_group());
     // Used for testing that want to control the flush process.
     explicit memtable(schema_ptr schema);

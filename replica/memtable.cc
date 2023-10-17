@@ -114,7 +114,10 @@ void memtable::memtable_encoding_stats_collector::update(const ::schema& s, cons
     }
 }
 
-memtable::memtable(schema_ptr schema, dirty_memory_manager& dmm, replica::table_stats& table_stats,
+memtable::memtable(schema_ptr schema, dirty_memory_manager& dmm,
+    logalloc::allocating_section& read_section,
+    logalloc::allocating_section& allocating_section,
+    replica::table_stats& table_stats,
     memtable_list* memtable_list, seastar::scheduling_group compaction_scheduling_group)
         : dirty_memory_manager_logalloc::size_tracked_region()
         , _dirty_mgr(dmm)
@@ -122,6 +125,8 @@ memtable::memtable(schema_ptr schema, dirty_memory_manager& dmm, replica::table_
                    [this] (size_t freed) { remove_flushed_memory(freed); })
         , _memtable_list(memtable_list)
         , _schema(std::move(schema))
+        , _read_section(read_section)
+        , _allocating_section(allocating_section)
         , partitions(dht::raw_token_less_comparator{})
         , _table_stats(table_stats) {
     logalloc::region::listen(&dmm.region_group());
@@ -129,9 +134,12 @@ memtable::memtable(schema_ptr schema, dirty_memory_manager& dmm, replica::table_
 
 static thread_local dirty_memory_manager mgr_for_tests;
 static thread_local replica::table_stats stats_for_tests;
+static thread_local logalloc::allocating_section memtable_read_section_for_tests;
+static thread_local logalloc::allocating_section memtable_allocating_section_for_tests;
 
 memtable::memtable(schema_ptr schema)
-        : memtable(std::move(schema), mgr_for_tests, stats_for_tests)
+        : memtable(std::move(schema), mgr_for_tests,
+                 memtable_read_section_for_tests, memtable_allocating_section_for_tests, stats_for_tests)
 { }
 
 memtable::~memtable() {
