@@ -1,14 +1,14 @@
-.. |OS| replace:: Ubuntu 20.04
-.. |ROLLBACK| replace:: rollback
-.. _ROLLBACK: ./#rollback-procedure
-.. |SRC_VERSION| replace:: 4.6
-.. |NEW_VERSION| replace:: 5.0
-.. |SCYLLA_NAME| replace:: Scylla Image (EC2, GCP, Azure)
-.. |PKG_NAME| replace:: scylla
-.. |SCYLLA_REPO| replace:: Scylla deb repo
-.. _SCYLLA_REPO: https://www.scylladb.com/download/?platform=ubuntu-20.04&version=scylla-5.0
-.. |SCYLLA_METRICS| replace:: Scylla Metrics Update - Scylla 4.6 to 5.0
-.. _SCYLLA_METRICS: ../metric-update-4.6-to-5.0
-.. include:: /upgrade/_common/upgrade-guide-v5-ubuntu-and-debian-p1.rst
-.. include:: /upgrade/_common/upgrade-image-opensource.rst
-.. include:: /upgrade/_common/upgrade-guide-v5-ubuntu-and-debian-p2.rst
+======================================================================
+Upgrade Guide - ScyllaDB Image (EC2, GCP, Azure) 4.6 to 5.0
+======================================================================
+
+
+If you are running a ScyllaDB official image (for EC2 AMI, GCP, or Azure), you 
+need to:
+
+* Download and install the new ScyllaDB release for Ubuntu. See 
+  the :doc:`upgrade guide for Ubuntu 20.04 <upgrade-guide-from-4.6-to-5.0-ubuntu-20-04>` 
+  for instructions.
+* Update underlying OS packages.
+
+See :doc:`Upgrade ScyllaDB Image </upgrade/ami-upgrade>` for details.
