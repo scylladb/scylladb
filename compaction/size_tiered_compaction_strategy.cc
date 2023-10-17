@@ -243,7 +243,7 @@ size_tiered_compaction_strategy::get_sstables_for_compaction(table_state& table_
     for (auto&& sstables : buckets | boost::adaptors::reversed) {
         // filter out sstables which droppable tombstone ratio isn't greater than the defined threshold.
         auto e = boost::range::remove_if(sstables, [this, compaction_time, &table_s] (const sstables::shared_sstable& sst) -> bool {
-            return !worth_dropping_tombstones(sst, compaction_time, table_s.get_tombstone_gc_state());
+            return !worth_dropping_tombstones(sst, compaction_time, table_s);
         });
         sstables.erase(e, sstables.end());
         if (sstables.empty()) {

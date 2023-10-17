@@ -51,7 +51,7 @@ std::vector<compaction_descriptor> compaction_strategy_impl::get_cleanup_compact
     }));
 }
 
-bool compaction_strategy_impl::worth_dropping_tombstones(const shared_sstable& sst, gc_clock::time_point compaction_time, const tombstone_gc_state& gc_state) {
+bool compaction_strategy_impl::worth_dropping_tombstones(const shared_sstable& sst, gc_clock::time_point compaction_time, const table_state& t) {
     if (_disable_tombstone_compaction) {
         return false;
     }
@@ -62,7 +62,7 @@ bool compaction_strategy_impl::worth_dropping_tombstones(const shared_sstable& s
     if (db_clock::now()-_tombstone_compaction_interval < sst->data_file_write_time()) {
         return false;
     }
-    auto gc_before = sst->get_gc_before_for_drop_estimation(compaction_time, gc_state);
+    auto gc_before = sst->get_gc_before_for_drop_estimation(compaction_time, t.get_tombstone_gc_state(), t.schema());
     return sst->estimate_droppable_tombstone_ratio(gc_before) >= _tombstone_threshold;
 }
 
