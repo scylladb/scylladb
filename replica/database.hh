@@ -169,6 +169,8 @@ private:
     seal_immediate_fn_type _seal_immediate_fn;
     std::function<schema_ptr()> _current_schema;
     replica::dirty_memory_manager* _dirty_memory_manager;
+    logalloc::allocating_section _read_section;
+    logalloc::allocating_section _allocating_section;
     std::optional<shared_future<>> _flush_coalescing;
     seastar::scheduling_group _compaction_scheduling_group;
     replica::table_stats& _table_stats;
