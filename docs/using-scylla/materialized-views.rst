@@ -2,8 +2,6 @@
 ScyllaDB Materialized Views
 ============================
 
-Materialized Views is available as a production ready feature in Scylla Open Source 3.0. and Scylla Enterprise 2019.1. 
-
 Occasionally, the same information record needs to be queried based on more than one key.  For example, when:
 
 * user data includes ``name`` and ``ID`` fields, and needs to be queried once by ``name`` and once by ``ID``;
@@ -79,10 +77,6 @@ Note that, although each materialized view is a separate table, a user cannot mo
 	InvalidRequest: code=2200 [Invalid query] message="Cannot directly modify a materialized view"
 
 To modify views, remember that you must instead modify the base table associated with the view.
-
-For more examples and current constraints, read the original blog_ on materialized views in Scylla.
-
-.. _blog: http://www.scylladb.com/2017/07/27/materialized-views-preview-scylla-2-0/
 
 Compaction Strategies with Materialized Views
 ---------------------------------------------
