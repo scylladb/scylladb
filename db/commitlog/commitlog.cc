@@ -460,6 +460,9 @@ public:
     void discard_unused_segments() noexcept;
     void discard_completed_segments(const cf_id_type&) noexcept;
     void discard_completed_segments(const cf_id_type&, const rp_set&) noexcept;
+    
+    future<> force_new_active_segment() noexcept;
+
     void on_timer();
     void sync();
     void arm(uint32_t extra = 0) {
@@ -479,6 +482,8 @@ public:
 
     future<std::vector<descriptor>> list_descriptors(sstring dir) const;
     future<std::vector<sstring>> get_segments_to_replay() const;
+
+    gc_clock::time_point min_gc_time(const cf_id_type&) const;
 
     flush_handler_id add_flush_handler(flush_handler h) {
         auto id = ++_flush_ids;
@@ -689,6 +694,7 @@ class db::commitlog::segment : public enable_shared_from_this<segment>, public c
     buffer_type _buffer;
     fragmented_temporary_buffer::ostream _buffer_ostream;
     std::unordered_map<cf_id_type, uint64_t> _cf_dirty;
+    std::unordered_map<cf_id_type, gc_clock::time_point> _cf_min_time;
     time_point _sync_time;
     utils::flush_queue<replay_position, std::less<replay_position>, clock_type> _pending_ops;
 
@@ -1194,6 +1200,7 @@ public:
             auto es = entry_size + entry_overhead_size;
 
             _cf_dirty[id]++; // increase use count for cf.
+            _cf_min_time.emplace(id, gc_clock::now()); // if value already exists this does nothing.
 
             rp_handle h(static_pointer_cast<cf_holder>(shared_from_this()), std::move(id), rp);
 
@@ -1296,6 +1303,10 @@ public:
     }
     sstring get_segment_name() const {
         return _desc.filename();
+    }
+    gc_clock::time_point min_time(const cf_id_type& id) const {
+        auto i = _cf_min_time.find(id);
+        return i == _cf_min_time.end() ? gc_clock::time_point::max() : i->second;
     }
 };
 
@@ -1481,6 +1492,14 @@ future<std::vector<sstring>> db::commitlog::segment_manager::get_segments_to_rep
         }
     }
     co_return segments_to_replay;
+}
+
+gc_clock::time_point db::commitlog::segment_manager::min_gc_time(const cf_id_type& id) const {
+    auto res = gc_clock::time_point::max();
+    for (auto& s : _segments) {
+        res = std::min(res, s->min_time(id));
+    }
+    return res;
 }
 
 future<> db::commitlog::segment_manager::init() {
@@ -1897,6 +1916,18 @@ void db::commitlog::segment_manager::discard_completed_segments(const cf_id_type
         s->mark_clean(id);
     }
     discard_unused_segments();
+}
+
+future<> db::commitlog::segment_manager::force_new_active_segment() noexcept {
+    if (_segments.empty() || !_segments.back()->is_still_allocating()) {
+        co_return;
+    }
+
+    auto& s = _segments.back();
+    if (s->position()) { // check used.
+        co_await s->close();
+        discard_unused_segments();
+    }
 }
 
 namespace db {
@@ -2517,6 +2548,10 @@ void db::commitlog::discard_completed_segments(const cf_id_type& id) {
     _segment_manager->discard_completed_segments(id);
 }
 
+future<> db::commitlog::force_new_active_segment() noexcept {
+    co_await _segment_manager->force_new_active_segment();
+}
+
 future<> db::commitlog::sync_all_segments() {
     return _segment_manager->sync_all_segments();
 }
@@ -2966,6 +3001,10 @@ future<std::vector<sstring>> db::commitlog::list_existing_segments(const sstring
         });
         return make_ready_future<std::vector<sstring>>(std::move(paths));
     });
+}
+
+gc_clock::time_point db::commitlog::min_gc_time(const cf_id_type& id) const {
+    return _segment_manager->min_gc_time(id);
 }
 
 future<std::vector<sstring>> db::commitlog::get_segments_to_replay() const {

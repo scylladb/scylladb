@@ -1428,6 +1428,24 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // making compaction manager api available, after system keyspace has already been established.
             api::set_server_compaction_manager(ctx).get();
 
+            cm.invoke_on_all([&](compaction_manager& cm) {
+                auto cl = db.local().commitlog();
+                auto scl = db.local().schema_commitlog();
+                if (cl && scl) {
+                    cm.get_tombstone_gc_state().set_gc_time_min_source([cl, scl](const table_id& id) {
+                        return std::min(cl->min_gc_time(id), scl->min_gc_time(id));
+                    });
+                } else if (cl) {
+                    cm.get_tombstone_gc_state().set_gc_time_min_source([cl](const table_id& id) {
+                        return cl->min_gc_time(id);
+                    });
+                } else if (scl) {
+                    cm.get_tombstone_gc_state().set_gc_time_min_source([scl](const table_id& id) {
+                        return scl->min_gc_time(id);
+                    });
+                }
+            }).get();
+
             supervisor::notify("loading tablet metadata");
             ss.local().load_tablet_metadata().get();
 

@@ -68,7 +68,7 @@ tombstone_gc_state::get_gc_before_for_range_result tombstone_gc_state::get_gc_be
     switch (options.mode()) {
     case tombstone_gc_mode::timeout: {
         dblog.trace("Get gc_before for ks={}, table={}, range={}, mode=timeout", s->ks_name(), s->cf_name(), range);
-        auto gc_before = saturating_subtract(query_time, s->gc_grace_seconds());
+        auto gc_before = check_min(s, saturating_subtract(query_time, s->gc_grace_seconds()));
         return {gc_before, gc_before, knows_entire_range};
     }
     case tombstone_gc_mode::disabled: {
@@ -77,7 +77,8 @@ tombstone_gc_state::get_gc_before_for_range_result tombstone_gc_state::get_gc_be
     }
     case tombstone_gc_mode::immediate: {
         dblog.trace("Get gc_before for ks={}, table={}, range={}, mode=immediate", s->ks_name(), s->cf_name(), range);
-        return {query_time, query_time, knows_entire_range};
+        auto t = check_min(s, query_time);
+        return {t, t, knows_entire_range};
     }
     case tombstone_gc_mode::repair: {
         const std::chrono::seconds& propagation_delay = options.propagation_delay_in_seconds();
@@ -109,8 +110,8 @@ tombstone_gc_state::get_gc_before_for_range_result tombstone_gc_state::get_gc_be
                 min_repair_timestamp = min;
                 max_repair_timestamp = max;
             }
-            min_gc_before = saturating_subtract(min_repair_timestamp, propagation_delay);
-            max_gc_before = saturating_subtract(max_repair_timestamp, propagation_delay);
+            min_gc_before = check_min(s, saturating_subtract(min_repair_timestamp, propagation_delay));
+            max_gc_before = check_min(s, saturating_subtract(max_repair_timestamp, propagation_delay));
         };
         dblog.trace("Get gc_before for ks={}, table={}, range={}, mode=repair, min_repair_timestamp={}, max_repair_timestamp={}, propagation_delay={}, min_gc_before={}, max_gc_before={}, hits={}, knows_entire_range={}",
                 s->ks_name(), s->cf_name(), range, min_repair_timestamp, max_repair_timestamp, propagation_delay.count(), min_gc_before, max_gc_before, hits, knows_entire_range);
@@ -124,6 +125,13 @@ bool tombstone_gc_state::cheap_to_get_gc_before(const schema& s) const noexcept 
     return s.tombstone_gc_options().mode() != tombstone_gc_mode::repair;
 }
 
+gc_clock::time_point tombstone_gc_state::check_min(schema_ptr s, gc_clock::time_point t) const {
+    if (_gc_min_source && t != gc_clock::time_point::min()) {
+        return std::min(t, _gc_min_source(s->id()));
+    }
+    return t;
+}
+
 gc_clock::time_point tombstone_gc_state::get_gc_before_for_key(schema_ptr s, const dht::decorated_key& dk, const gc_clock::time_point& query_time) const {
     // if mode = timeout    // default option, if user does not specify tombstone_gc options
     // if mode = disabled   // never gc tombstone
@@ -133,13 +141,13 @@ gc_clock::time_point tombstone_gc_state::get_gc_before_for_key(schema_ptr s, con
     switch (options.mode()) {
     case tombstone_gc_mode::timeout:
         dblog.trace("Get gc_before for ks={}, table={}, dk={}, mode=timeout", s->ks_name(), s->cf_name(), dk);
-        return saturating_subtract(query_time, s->gc_grace_seconds());
+        return check_min(s, saturating_subtract(query_time, s->gc_grace_seconds()));
     case tombstone_gc_mode::disabled:
         dblog.trace("Get gc_before for ks={}, table={}, dk={}, mode=disabled", s->ks_name(), s->cf_name(), dk);
         return gc_clock::time_point::min();
     case tombstone_gc_mode::immediate:
         dblog.trace("Get gc_before for ks={}, table={}, dk={}, mode=immediate", s->ks_name(), s->cf_name(), dk);
-        return query_time;
+        return check_min(s, query_time);
     case tombstone_gc_mode::repair:
         const std::chrono::seconds& propagation_delay = options.propagation_delay_in_seconds();
         auto gc_before = gc_clock::time_point::min();
@@ -154,6 +162,7 @@ gc_clock::time_point tombstone_gc_state::get_gc_before_for_key(schema_ptr s, con
                 gc_before = saturating_subtract(repair_timestamp, propagation_delay);
             }
         }
+        gc_before = check_min(s, gc_before);
         dblog.trace("Get gc_before for ks={}, table={}, dk={}, mode=repair, repair_timestamp={}, propagation_delay={}, gc_before={}",
                 s->ks_name(), s->cf_name(), dk, repair_timestamp, propagation_delay.count(), gc_before);
         return gc_before;

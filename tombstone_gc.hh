@@ -34,14 +34,22 @@ using per_table_history_maps = std::unordered_map<table_id, seastar::lw_shared_p
 
 class tombstone_gc_options;
 
+using gc_time_min_source = std::function<gc_clock::time_point(const table_id&)>;
+
 class tombstone_gc_state {
+    gc_time_min_source _gc_min_source;
     per_table_history_maps* _repair_history_maps;
+    gc_clock::time_point check_min(schema_ptr, gc_clock::time_point) const;
 public:
     tombstone_gc_state() = delete;
     tombstone_gc_state(per_table_history_maps* maps) noexcept : _repair_history_maps(maps) {}
 
     explicit operator bool() const noexcept {
         return _repair_history_maps != nullptr;
+    }
+
+    void set_gc_time_min_source(gc_time_min_source src) {
+        _gc_min_source = std::move(src);
     }
 
     // Returns true if it's cheap to retrieve gc_before, e.g. the mode will not require accessing a system table.
