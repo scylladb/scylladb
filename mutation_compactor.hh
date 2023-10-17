@@ -226,12 +226,27 @@ private:
         }
     }
 
+    bool satisfy_grace_period(const gc_clock::time_point& deletion_time) {
+        return deletion_time < get_gc_before();
+    }
+
+    bool can_purge_tombstone(const tombstone& t, const gc_clock::time_point deletion_time) {
+        if (cheap_to_get_gc_before(_schema)) {
+            // if retrieval of grace period is cheap, can_gc() will only be
+            // called for tombstones that are older than grace period, in
+            // order to avoid unnecessary bloom filter checks when calculating
+            // max purgeable timestamp.
+            return satisfy_grace_period(deletion_time) && can_gc(t);
+        }
+        return can_gc(t) && satisfy_grace_period(deletion_time);
+    }
+
     bool can_purge_tombstone(const tombstone& t) {
-        return can_gc(t) && t.deletion_time < get_gc_before();
+        return can_purge_tombstone(t, t.deletion_time);
     };
 
     bool can_purge_tombstone(const row_tombstone& t) {
-        return can_gc(t.tomb()) && t.max_deletion_time() < get_gc_before();
+        return can_purge_tombstone(t.tomb(), t.max_deletion_time());
     };
 
     gc_clock::time_point get_gc_before() {
