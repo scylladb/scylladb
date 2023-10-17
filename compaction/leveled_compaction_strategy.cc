@@ -51,15 +51,15 @@ compaction_descriptor leveled_compaction_strategy::get_sstables_for_compaction(t
         auto& sstables = manifest.get_level(level);
         // filter out sstables which droppable tombstone ratio isn't greater than the defined threshold.
         auto e = boost::range::remove_if(sstables, [this, compaction_time, &table_s] (const sstables::shared_sstable& sst) -> bool {
-            return !worth_dropping_tombstones(sst, compaction_time, table_s.get_tombstone_gc_state());
+            return !worth_dropping_tombstones(sst, compaction_time, table_s);
         });
         sstables.erase(e, sstables.end());
         if (sstables.empty()) {
             continue;
         }
         auto& sst = *std::max_element(sstables.begin(), sstables.end(), [&] (auto& i, auto& j) {
-            auto gc_before1 = i->get_gc_before_for_drop_estimation(compaction_time, table_s.get_tombstone_gc_state());
-            auto gc_before2 = j->get_gc_before_for_drop_estimation(compaction_time, table_s.get_tombstone_gc_state());
+            auto gc_before1 = i->get_gc_before_for_drop_estimation(compaction_time, table_s.get_tombstone_gc_state(), table_s.schema());
+            auto gc_before2 = j->get_gc_before_for_drop_estimation(compaction_time, table_s.get_tombstone_gc_state(), table_s.schema());
             return i->estimate_droppable_tombstone_ratio(gc_before1) < j->estimate_droppable_tombstone_ratio(gc_before2);
         });
         return sstables::compaction_descriptor({ sst }, sst->get_sstable_level());

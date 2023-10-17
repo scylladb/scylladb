@@ -3029,8 +3029,7 @@ std::optional<large_data_stats_entry> sstable::get_large_data_stat(large_data_ty
 // gc_before for all the partitions that have record in repair history map. It
 // is fine that some of the partitions inside the sstable does not have a
 // record.
-gc_clock::time_point sstable::get_gc_before_for_drop_estimation(const gc_clock::time_point& compaction_time, const tombstone_gc_state& gc_state) const {
-    auto s = get_schema();
+gc_clock::time_point sstable::get_gc_before_for_drop_estimation(const gc_clock::time_point& compaction_time, const tombstone_gc_state& gc_state, const schema_ptr& s) const {
     auto start = get_first_decorated_key().token();
     auto end = get_last_decorated_key().token();
     auto range = dht::token_range(dht::token_range::bound(start, true), dht::token_range::bound(end, true));
@@ -3046,9 +3045,8 @@ gc_clock::time_point sstable::get_gc_before_for_drop_estimation(const gc_clock::
 // in the repair history map, we can not drop the sstable, in such case we
 // return gc_clock::time_point::min() as gc_before. Otherwise, return the
 // gc_before from the repair history map.
-gc_clock::time_point sstable::get_gc_before_for_fully_expire(const gc_clock::time_point& compaction_time, const tombstone_gc_state& gc_state) const {
+gc_clock::time_point sstable::get_gc_before_for_fully_expire(const gc_clock::time_point& compaction_time, const tombstone_gc_state& gc_state, const schema_ptr& s) const {
     auto deletion_time = get_max_local_deletion_time();
-    auto s = get_schema();
     // No need to query gc_before for the sstable if the max_deletion_time is max()
     if (deletion_time == gc_clock::time_point(gc_clock::duration(std::numeric_limits<int>::max()))) {
         sstlog.trace("sstable={}, ks={}, cf={}, get_max_local_deletion_time={}, min_timestamp={}, gc_grace_seconds={}, shortcut",
