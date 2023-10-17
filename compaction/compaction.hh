@@ -92,12 +92,15 @@ struct compaction_stats {
     uint64_t start_size = 0;
     uint64_t end_size = 0;
     uint64_t validation_errors = 0;
+    // Bloom filter checks during max purgeable calculation
+    uint64_t bloom_filter_checks = 0;
 
     compaction_stats& operator+=(const compaction_stats& r) {
         ended_at = std::max(ended_at, r.ended_at);
         start_size += r.start_size;
         end_size += r.end_size;
         validation_errors += r.validation_errors;
+        bloom_filter_checks += r.bloom_filter_checks;
         return *this;
     }
     friend compaction_stats operator+(const compaction_stats& l, const compaction_stats& r) {

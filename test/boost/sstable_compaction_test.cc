@@ -5169,3 +5169,56 @@ SEASTAR_TEST_CASE(test_sstables_excluding_staging_correctness) {
         }
     });
 }
+
+// Check that tombstone newer than grace period won't trigger bloom filter check
+// against uncompacting sstable, during compaction.
+SEASTAR_TEST_CASE(compaction_optimization_to_avoid_bloom_filter_checks) {
+    return test_env::do_with_async([] (test_env& env) {
+        auto builder = schema_builder("tests", "tombstone_purge")
+                .with_column("id", utf8_type, column_kind::partition_key)
+                .with_column("value", int32_type);
+        builder.set_gc_grace_seconds(10000);
+        auto s = builder.build();
+        auto tmp = tmpdir();
+        auto sst_gen = [&env, s, &tmp, gen = make_lw_shared<unsigned>(1)] () {
+            return env.make_sstable(s, tmp.path().string(), (*gen)++, sstables::get_highest_sstable_version(), big);
+        };
+
+        auto compact = [&, s] (std::vector<shared_sstable> all, std::vector<shared_sstable> c) -> compaction_result {
+            auto t = table_for_tests(env.manager(), s, tmp.path().string());
+            auto stop = deferred_stop(t);
+            t->disable_auto_compaction().get();
+            for (auto& sst : all) {
+                column_family_test(t).add_sstable(sst).get();
+            }
+            auto desc = sstables::compaction_descriptor(std::move(c), default_priority_class());
+            desc.enable_garbage_collection(t->get_sstable_set());
+            return compact_sstables(std::move(desc), t, sst_gen).get0();
+        };
+
+        auto make_insert = [&] (partition_key key) {
+            mutation m(s, key);
+            m.set_clustered_cell(clustering_key::make_empty(), bytes("value"), data_value(int32_t(1)), api::new_timestamp());
+            return m;
+        };
+        auto make_delete = [&] (partition_key key) {
+            mutation m(s, key);
+            tombstone tomb(api::new_timestamp(), gc_clock::now());
+            m.partition().apply(tomb);
+            return m;
+        };
+
+        auto uncompacting = make_sstable_containing(sst_gen, { make_insert(partition_key::from_exploded(*s, {to_bytes("pk1")}) )});
+        auto compacting = make_sstable_containing(sst_gen, { make_delete(partition_key::from_exploded(*s, {to_bytes("pk1")}) )});
+
+        auto result = compact({uncompacting, compacting}, {compacting});
+        BOOST_REQUIRE_EQUAL(1, result.new_sstables.size());
+        BOOST_REQUIRE_EQUAL(0, result.stats.bloom_filter_checks);
+
+        forward_jump_clocks(std::chrono::seconds(s->gc_grace_seconds()) + 1s);
+
+        result = compact({uncompacting, compacting}, {compacting});
+        BOOST_REQUIRE_EQUAL(1, result.new_sstables.size());
+        BOOST_REQUIRE_EQUAL(1, result.stats.bloom_filter_checks);
+    });
+}

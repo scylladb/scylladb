@@ -119,6 +119,10 @@ tombstone_gc_state::get_gc_before_for_range_result tombstone_gc_state::get_gc_be
     std::abort();
 }
 
+bool tombstone_gc_state::cheap_to_get_gc_before(const schema& s) const noexcept {
+    return s.tombstone_gc_options().mode() != tombstone_gc_mode::repair;
+}
+
 gc_clock::time_point tombstone_gc_state::get_gc_before_for_key(schema_ptr s, const dht::decorated_key& dk, const gc_clock::time_point& query_time) const {
     // if mode = timeout    // default option, if user does not specify tombstone_gc options
     // if mode = disabled   // never gc tombstone
