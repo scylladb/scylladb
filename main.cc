@@ -691,8 +691,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // disable reactor stall detection during startup
             auto blocked_reactor_notify_ms = engine().get_blocked_reactor_notify_ms();
             smp::invoke_on_all([] {
-                using namespace std::chrono;
-                engine().update_blocked_reactor_notify_ms(duration_cast<milliseconds>(10000h));
+                engine().update_blocked_reactor_notify_ms(10000h);
             }).get();
 
             ::stop_signal stop_signal; // we can move this earlier to support SIGINT during initialization
