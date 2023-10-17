@@ -139,72 +139,16 @@ Download and install the new release
                sudo yum clean all
                sudo yum update scylla\* -y
 
-   .. group-tab:: EC2/GCP/Azure Ubuntu Image
+.. note::
 
-        Before upgrading, check what version you are running now using ``dpkg -s scylla-server``. You should use the same version as this version in case you want to |ROLLBACK|_ the upgrade. If you are not running a |SRC_VERSION|.x version, stop right here! This guide only covers |SRC_VERSION|.x to |NEW_VERSION|.y upgrades.
+   If you are running a ScyllaDB official image (for EC2 AMI, GCP, or Azure), 
+   you need to:
 
-        There are two alternative upgrade procedures:
-
-        * :ref:`Upgrading ScyllaDB and simultaneously updating 3rd party and OS packages <upgrade-image-recommended-procedure>`. It is recommended if you are running a ScyllaDB official image (EC2 AMI, GCP, and Azure images), which is based on Ubuntu 20.04.
-
-        * :ref:`Upgrading ScyllaDB without updating any external packages <upgrade-image-upgrade-guide-regular-procedure>`.
-
-        .. _upgrade-image-recommended-procedure:
-
-        **To upgrade ScyllaDB and update 3rd party and OS packages (RECOMMENDED):**
-
-        Choosing this upgrade procedure allows you to upgrade your ScyllaDB version and update the 3rd party and OS packages using one command.
-
-        #. Update the |SCYLLA_DEB_NEW_REPO| to |NEW_VERSION|.
-
-        #. Load the new repo:
-
-            .. code:: sh
-
-               sudo apt-get update
-
-
-        #. Run the following command to update the manifest file:
-
-            .. code:: sh
-
-               cat scylla-packages-<version>-<arch>.txt | sudo xargs -n1 apt-get install -y
-
-            Where:
-
-              * ``<version>`` - The ScyllaDB version to which you are upgrading ( |NEW_VERSION| ).
-              * ``<arch>`` - Architecture type: ``x86_64`` or ``aarch64``.
-
-            The file is included in the ScyllaDB packages downloaded in the previous step. The file location is ``http://downloads.scylladb.com/downloads/scylla/aws/manifest/scylla-packages-<version>-<arch>.txt``
-
-            Example:
-
-                .. code:: sh
-
-                   cat scylla-packages-5.1.2-x86_64.txt | sudo xargs -n1 apt-get install -y
-
-                .. note::
-
-                   Alternatively, you can update the manifest file with the following command:
-
-                   ``sudo apt-get install $(awk '{print $1'} scylla-packages-<version>-<arch>.txt) -y``
-
-        .. _upgrade-image-upgrade-guide-regular-procedure:
-
-        **To upgrade ScyllaDB:**
-
-        #. Update the |SCYLLA_DEB_NEW_REPO| to |NEW_VERSION|.
-
-        #. Install the new ScyllaDB version:
-
-            .. code-block:: console
-
-               sudo apt-get clean all
-               sudo apt-get update
-               sudo apt-get dist-upgrade scylla
-
-
-        Answer ‘y’ to the first two questions.
+    * Download and install the new ScyllaDB release for Ubuntu; see 
+      the Debian/Ubuntu tab above for instructions.
+    * Update underlying OS packages.
+ 
+	See :doc:`Upgrade ScyllaDB Image </upgrade/ami-upgrade>` for details.  
 
 
 Start the node
