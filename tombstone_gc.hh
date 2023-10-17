@@ -50,3 +50,6 @@ gc_clock::time_point get_gc_before_for_key(schema_ptr s, const dht::decorated_ke
 void update_repair_time(schema_ptr s, const dht::token_range& range, gc_clock::time_point repair_time);
 
 void validate_tombstone_gc_options(const tombstone_gc_options* options, data_dictionary::database db, sstring ks_name);
+
+// Returns true if it's cheap to retrieve gc_before, e.g. the mode will not require accessing a system table.
+bool cheap_to_get_gc_before(const schema& s) noexcept;

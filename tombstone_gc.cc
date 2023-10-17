@@ -183,3 +183,7 @@ void validate_tombstone_gc_options(const tombstone_gc_options* options, data_dic
         throw exceptions::configuration_exception("tombstone_gc option with mode = repair not supported for table with RF one or local replication strategy");
     }
 }
+
+bool cheap_to_get_gc_before(const schema& s) noexcept {
+    return s.tombstone_gc_options().mode() != tombstone_gc_mode::repair;
+}
