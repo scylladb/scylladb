@@ -119,6 +119,7 @@ future<> set_server_cache(http_context& ctx);
 future<> set_server_compaction_manager(http_context& ctx);
 future<> set_server_done(http_context& ctx);
 future<> set_server_task_manager(http_context& ctx, sharded<tasks::task_manager>& tm, lw_shared_ptr<db::config> cfg);
+future<> unset_server_task_manager(http_context& ctx);
 future<> set_server_task_manager_test(http_context& ctx, sharded<tasks::task_manager>& tm);
 
 }

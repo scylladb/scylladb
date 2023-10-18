@@ -264,4 +264,14 @@ void set_task_manager(http_context& ctx, routes& r, sharded<tasks::task_manager>
     });
 }
 
+void unset_task_manager(http_context& ctx, routes& r) {
+    tm::get_modules.unset(r);
+    tm::get_tasks.unset(r);
+    tm::get_task_status.unset(r);
+    tm::abort_task.unset(r);
+    tm::wait_task.unset(r);
+    tm::get_task_status_recursively.unset(r);
+    tm::get_and_update_ttl.unset(r);
+}
+
 }

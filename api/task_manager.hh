@@ -19,5 +19,6 @@ namespace tasks {
 namespace api {
 
 void set_task_manager(http_context& ctx, httpd::routes& r, sharded<tasks::task_manager>& tm, db::config& cfg);
+void unset_task_manager(http_context& ctx, httpd::routes& r);
 
 }

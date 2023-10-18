@@ -280,6 +280,10 @@ future<> set_server_task_manager(http_context& ctx, sharded<tasks::task_manager>
     });
 }
 
+future<> unset_server_task_manager(http_context& ctx) {
+    return ctx.http_server.set_routes([&ctx] (routes& r) { unset_task_manager(ctx, r); });
+}
+
 #ifndef SCYLLA_BUILD_MODE_RELEASE
 
 future<> set_server_task_manager_test(http_context& ctx, sharded<tasks::task_manager>& tm) {

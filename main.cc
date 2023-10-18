@@ -1592,6 +1592,9 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             });
 
             api::set_server_task_manager(ctx, task_manager, cfg).get();
+            auto stop_tm_api = defer_verbose_shutdown("task manager API", [&ctx] {
+                api::unset_server_task_manager(ctx).get();
+            });
 #ifndef SCYLLA_BUILD_MODE_RELEASE
             api::set_server_task_manager_test(ctx, task_manager).get();
 #endif
