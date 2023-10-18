@@ -9,6 +9,7 @@
 
 #include <seastar/core/smp.hh>
 #include <seastar/core/sstring.hh>
+#include <seastar/util/file.hh>
 #include "sstables/generation_type.hh"
 #include "test/lib/scylla_test_case.hh"
 #include "sstables/shared_sstable.hh"
@@ -718,5 +719,62 @@ SEASTAR_THREAD_TEST_CASE(test_multiple_data_dirs) {
             { utf8_type->decompose("one"), int32_type->decompose(1) },
             { utf8_type->decompose("two"), int32_type->decompose(2) }
         });
+    }, cfg).get();
+}
+
+fs::path table_dirname(cql_test_env& e, const fs::path& root, sstring ks, sstring cf) {
+    auto id = e.local_db().find_uuid(ks, cf);
+    sstring uuid_sstring = id.to_sstring();
+    boost::erase_all(uuid_sstring, "-");
+    return root / ks / (cf + "-" + uuid_sstring);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_user_datadir_layout) {
+    sstring ks = "ks";
+    sstring cf = "test";
+    tmpdir data_dir;
+    fs::path tbl_dirname;
+    cql_test_config cfg;
+    cfg.db_config->data_file_directories({
+        data_dir.path().native(),
+    }, db::config::config_source::CommandLine);
+
+    do_with_cql_env_thread([&] (cql_test_env& e) {
+        e.execute_cql(format("create table {}.{} (p text PRIMARY KEY, c int)", ks, cf)).get();
+        tbl_dirname = table_dirname(e, data_dir.path(), ks, cf);
+        testlog.info("Checking {}.{}: {}", ks, cf, tbl_dirname);
+    }, cfg).get();
+
+    BOOST_REQUIRE(file_exists(tbl_dirname.native()).get());
+    BOOST_REQUIRE(file_exists((tbl_dirname / sstables::upload_dir).native()).get());
+    BOOST_REQUIRE(file_exists((tbl_dirname / sstables::staging_dir).native()).get());
+
+    seastar::recursive_remove_directory(tbl_dirname.native()).get();
+    do_with_cql_env_thread([&] (cql_test_env& e) { /* nothing -- just populate */ }, cfg).get();
+
+    BOOST_REQUIRE(file_exists(tbl_dirname.native()).get());
+    BOOST_REQUIRE(file_exists((tbl_dirname / sstables::upload_dir).native()).get());
+    BOOST_REQUIRE(file_exists((tbl_dirname / sstables::staging_dir).native()).get());
+}
+
+SEASTAR_THREAD_TEST_CASE(test_system_datadir_layout) {
+    tmpdir data_dir;
+    cql_test_config cfg;
+    cfg.db_config->data_file_directories({
+        data_dir.path().native(),
+    }, db::config::config_source::CommandLine);
+
+    do_with_cql_env_thread([&] (cql_test_env& e) {
+        auto tbl_dirname = table_dirname(e, data_dir.path(), "system", "local");
+        testlog.info("Checking system.local: {}", tbl_dirname);
+
+        BOOST_REQUIRE(file_exists(tbl_dirname.native()).get());
+        BOOST_REQUIRE(file_exists((tbl_dirname / sstables::upload_dir).native()).get());
+        BOOST_REQUIRE(file_exists((tbl_dirname / sstables::staging_dir).native()).get());
+
+        tbl_dirname = table_dirname(e, data_dir.path(), "system", "config");
+        testlog.info("Checking system.config: {}", tbl_dirname);
+
+        BOOST_REQUIRE(!file_exists(tbl_dirname.native()).get());
     }, cfg).get();
 }
