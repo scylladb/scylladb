@@ -48,7 +48,6 @@ public:
     static constexpr const char* STATUS_BOOTSTRAPPING = "BOOT";
     static constexpr const char* STATUS_NORMAL = "NORMAL";
     static constexpr const char* STATUS_LEFT = "LEFT";
-    static constexpr const char* STATUS_MOVING = "MOVING";
 
     static constexpr const char* REMOVED_TOKEN = "removed";
 
@@ -130,12 +129,6 @@ public:
         return versioned_value(version_string({sstring(versioned_value::STATUS_LEFT),
                                                make_token_string(tokens),
                                                std::to_string(expire_time)}));
-    }
-
-    static versioned_value moving(dht::token t) {
-        std::unordered_set<dht::token> tokens = {t};
-        return versioned_value(version_string({sstring(versioned_value::STATUS_MOVING),
-                                               make_token_string(tokens)}));
     }
 
     static versioned_value host_id(const locator::host_id& host_id) {
