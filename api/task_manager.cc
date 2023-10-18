@@ -111,7 +111,7 @@ future<full_task_status> retrieve_status(const tasks::task_manager::foreign_task
     co_return s;
 }
 
-void set_task_manager(http_context& ctx, routes& r, db::config& cfg) {
+void set_task_manager(http_context& ctx, routes& r, sharded<tasks::task_manager>& tm, db::config& cfg) {
     tm::get_modules.set(r, [&ctx] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         std::vector<std::string> v = boost::copy_range<std::vector<std::string>>(ctx.tm.local().get_modules() | boost::adaptors::map_keys);
         co_return v;

@@ -1591,7 +1591,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 api::unset_server_repair(ctx).get();
             });
 
-            api::set_server_task_manager(ctx, cfg).get();
+            api::set_server_task_manager(ctx, task_manager, cfg).get();
 #ifndef SCYLLA_BUILD_MODE_RELEASE
             api::set_server_task_manager_test(ctx).get();
 #endif
