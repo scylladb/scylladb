@@ -115,6 +115,10 @@ bool task_manager::task::impl::is_complete() const noexcept {
     return _status.state == tasks::task_manager::task_state::done || _status.state == tasks::task_manager::task_state::failed;
 }
 
+bool task_manager::task::impl::is_done() const noexcept {
+    return _status.state == tasks::task_manager::task_state::done;
+}
+
 void task_manager::task::impl::run_to_completion() {
     (void)run().then_wrapped([this] (auto f) {
         if (f.failed()) {

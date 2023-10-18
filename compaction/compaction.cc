@@ -325,16 +325,21 @@ public:
     void consume_end_of_stream();
 };
 
+using use_backlog_tracker = bool_class<class use_backlog_tracker_tag>;
+
 struct compaction_read_monitor_generator final : public read_monitor_generator {
     class compaction_read_monitor final : public  sstables::read_monitor, public backlog_read_progress_manager {
         sstables::shared_sstable _sst;
         table_state& _table_s;
         const sstables::reader_position_tracker* _tracker = nullptr;
         uint64_t _last_position_seen = 0;
+        use_backlog_tracker _use_backlog_tracker;
     public:
         virtual void on_read_started(const sstables::reader_position_tracker& tracker) override {
             _tracker = &tracker;
-            _table_s.get_backlog_tracker().register_compacting_sstable(_sst, *this);
+            if (_use_backlog_tracker) {
+                _table_s.get_backlog_tracker().register_compacting_sstable(_sst, *this);
+            }
         }
 
         virtual void on_read_completed() override {
@@ -352,19 +357,19 @@ struct compaction_read_monitor_generator final : public read_monitor_generator {
         }
 
         void remove_sstable() {
-            if (_sst) {
+            if (_sst && _use_backlog_tracker) {
                 _table_s.get_backlog_tracker().revert_charges(_sst);
             }
             _sst = {};
         }
 
-        compaction_read_monitor(sstables::shared_sstable sst, table_state& table_s)
-            : _sst(std::move(sst)), _table_s(table_s) { }
+        compaction_read_monitor(sstables::shared_sstable sst, table_state& table_s, use_backlog_tracker use_backlog_tracker)
+            : _sst(std::move(sst)), _table_s(table_s), _use_backlog_tracker(use_backlog_tracker) { }
 
         ~compaction_read_monitor() {
             // We failed to finish handling this SSTable, so we have to update the backlog_tracker
             // about it.
-            if (_sst) {
+            if (_sst && _use_backlog_tracker) {
                 _table_s.get_backlog_tracker().revert_charges(_sst);
             }
         }
@@ -373,12 +378,16 @@ struct compaction_read_monitor_generator final : public read_monitor_generator {
     };
 
     virtual sstables::read_monitor& operator()(sstables::shared_sstable sst) override {
-        auto p = _generated_monitors.emplace(sst->generation(), compaction_read_monitor(sst, _table_s));
+        auto p = _generated_monitors.emplace(sst->generation(), compaction_read_monitor(sst, _table_s, _use_backlog_tracker));
         return p.first->second;
     }
 
-    explicit compaction_read_monitor_generator(table_state& table_s)
-        : _table_s(table_s) {}
+    explicit compaction_read_monitor_generator(table_state& table_s, use_backlog_tracker use_backlog_tracker = use_backlog_tracker::yes)
+        : _table_s(table_s), _use_backlog_tracker(use_backlog_tracker) {}
+
+    uint64_t compacted() const {
+        return boost::accumulate(_generated_monitors | boost::adaptors::map_values | boost::adaptors::transformed([](auto& monitor) { return monitor.compacted(); }), uint64_t(0));
+    }
 
     void remove_exhausted_sstables(const std::vector<sstables::shared_sstable>& exhausted_sstables) {
         for (auto& sst : exhausted_sstables) {
@@ -391,7 +400,33 @@ struct compaction_read_monitor_generator final : public read_monitor_generator {
 private:
     table_state& _table_s;
     std::unordered_map<generation_type, compaction_read_monitor> _generated_monitors;
+    use_backlog_tracker _use_backlog_tracker;
+
+    friend class compaction_progress_monitor;
 };
+
+static compaction_progress_monitor default_noop_compaction_progress_monitor;
+compaction_progress_monitor& default_compaction_progress_monitor() {
+    return default_noop_compaction_progress_monitor;
+}
+
+void compaction_progress_monitor::set_generator(std::unique_ptr<read_monitor_generator> generator) {
+    _generator = std::move(generator);
+}
+
+void compaction_progress_monitor::reset_generator() {
+    if (_generator) {
+        _progress = dynamic_cast<compaction_read_monitor_generator&>(*_generator).compacted();
+    }
+    _generator = nullptr;
+}
+
+uint64_t compaction_progress_monitor::get_progress() const {
+    if (_generator) {
+        return dynamic_cast<compaction_read_monitor_generator&>(*_generator).compacted();
+    }
+    return _progress;
+}
 
 class formatted_sstables_list {
     bool _include_origin = true;
@@ -466,12 +501,15 @@ protected:
     std::vector<shared_sstable> _used_garbage_collected_sstables;
     utils::observable<> _stop_request_observable;
 private:
+    // Keeps track of monitors for input sstable.
+    // If _update_backlog_tracker is set to true, monitors are responsible for adjusting backlog as compaction progresses.
+    compaction_progress_monitor& _progress_monitor;
     compaction_data& init_compaction_data(compaction_data& cdata, const compaction_descriptor& descriptor) const {
         cdata.compaction_fan_in = descriptor.fan_in();
         return cdata;
     }
 protected:
-    compaction(table_state& table_s, compaction_descriptor descriptor, compaction_data& cdata)
+    compaction(table_state& table_s, compaction_descriptor descriptor, compaction_data& cdata, compaction_progress_monitor& progress_monitor, use_backlog_tracker use_backlog_tracker)
         : _cdata(init_compaction_data(cdata, descriptor))
         , _table_s(table_s)
         , _sstable_creator(std::move(descriptor.creator))
@@ -490,6 +528,7 @@ protected:
         , _owned_ranges(std::move(descriptor.owned_ranges))
         , _sharder(descriptor.sharder)
         , _owned_ranges_checker(_owned_ranges ? std::optional<dht::incremental_owned_ranges_checker>(*_owned_ranges) : std::nullopt)
+        , _progress_monitor(progress_monitor)
     {
         for (auto& sst : _sstables) {
             _stats_collector.update(sst->get_encoding_stats_for_compaction());
@@ -498,6 +537,14 @@ protected:
         _contains_multi_fragment_runs = std::any_of(_sstables.begin(), _sstables.end(), [&ssts_run_ids] (shared_sstable& sst) {
             return !ssts_run_ids.insert(sst->run_identifier()).second;
         });
+        _progress_monitor.set_generator(std::make_unique<compaction_read_monitor_generator>(_table_s, use_backlog_tracker));
+    }
+
+    read_monitor_generator& unwrap_monitor_generator() const {
+        if (_progress_monitor._generator) {
+            return *_progress_monitor._generator;
+        }
+        return default_read_monitor_generator();
     }
 
     virtual uint64_t partitions_per_sstable() const {
@@ -621,6 +668,7 @@ public:
     compaction& operator=(compaction&& other) = delete;
 
     virtual ~compaction() {
+        _progress_monitor.reset_generator();
     }
 private:
     // Default range sstable reader that will only return mutation that belongs to current shard.
@@ -706,6 +754,7 @@ private:
                 continue;
             }
 
+            _cdata.compaction_size += sst->data_size();
             // We also capture the sstable, so we keep it alive while the read isn't done
             ssts->insert(sst);
             // FIXME: If the sstables have cardinality estimation bitmaps, use that
@@ -1042,13 +1091,10 @@ void compacted_fragments_writer::consume_end_of_stream() {
 }
 
 class regular_compaction : public compaction {
-    // keeps track of monitors for input sstable, which are responsible for adjusting backlog as compaction progresses.
-    mutable compaction_read_monitor_generator _monitor_generator;
     seastar::semaphore _replacer_lock = {1};
 public:
-    regular_compaction(table_state& table_s, compaction_descriptor descriptor, compaction_data& cdata)
-        : compaction(table_s, std::move(descriptor), cdata)
-        , _monitor_generator(_table_s)
+    regular_compaction(table_state& table_s, compaction_descriptor descriptor, compaction_data& cdata, compaction_progress_monitor& progress_monitor, use_backlog_tracker use_backlog_tracker = use_backlog_tracker::yes)
+        : compaction(table_s, std::move(descriptor), cdata, progress_monitor, use_backlog_tracker)
     {
     }
 
@@ -1066,7 +1112,7 @@ public:
                 std::move(trace),
                 sm_fwd,
                 mr_fwd,
-                _monitor_generator);
+                unwrap_monitor_generator());
     }
 
     std::string_view report_start_desc() const override {
@@ -1137,7 +1183,7 @@ private:
             log_debug("Replacing earlier exhausted sstable(s) {} by new sstable(s) {}", formatted_sstables_list(exhausted_ssts, false), formatted_sstables_list(_new_unused_sstables, true));
             _replacer(get_compaction_completion_desc(exhausted_ssts, std::move(_new_unused_sstables)));
             _sstables.erase(exhausted, _sstables.end());
-            _monitor_generator.remove_exhausted_sstables(exhausted_ssts);
+            dynamic_cast<compaction_read_monitor_generator&>(unwrap_monitor_generator()).remove_exhausted_sstables(exhausted_ssts);
         }
     }
 
@@ -1184,8 +1230,8 @@ private:
         return bool(_replacer);
     }
 public:
-    reshape_compaction(table_state& table_s, compaction_descriptor descriptor, compaction_data& cdata)
-            : regular_compaction(table_s, std::move(descriptor), cdata) {
+    reshape_compaction(table_state& table_s, compaction_descriptor descriptor, compaction_data& cdata, compaction_progress_monitor& progress_monitor)
+        : regular_compaction(table_s, std::move(descriptor), cdata, progress_monitor, use_backlog_tracker::no) {
     }
 
     virtual sstables::sstable_set make_sstable_set_for_input() const override {
@@ -1211,7 +1257,7 @@ public:
                 std::move(trace),
                 sm_fwd,
                 mr_fwd,
-                default_read_monitor_generator());
+                unwrap_monitor_generator());
     }
 
     std::string_view report_start_desc() const override {
@@ -1271,8 +1317,8 @@ protected:
     }
 
 public:
-    cleanup_compaction(table_state& table_s, compaction_descriptor descriptor, compaction_data& cdata)
-        : regular_compaction(table_s, std::move(descriptor), cdata)
+    cleanup_compaction(table_state& table_s, compaction_descriptor descriptor, compaction_data& cdata, compaction_progress_monitor& progress_monitor)
+        : regular_compaction(table_s, std::move(descriptor), cdata, progress_monitor)
     {
     }
 
@@ -1501,8 +1547,8 @@ private:
     mutable uint64_t _validation_errors = 0;
 
 public:
-    scrub_compaction(table_state& table_s, compaction_descriptor descriptor, compaction_data& cdata, compaction_type_options::scrub options)
-        : regular_compaction(table_s, std::move(descriptor), cdata)
+    scrub_compaction(table_state& table_s, compaction_descriptor descriptor, compaction_data& cdata, compaction_type_options::scrub options, compaction_progress_monitor& progress_monitor)
+        : regular_compaction(table_s, std::move(descriptor), cdata, progress_monitor, use_backlog_tracker::no)
         , _options(options)
         , _scrub_start_description(fmt::format("Scrubbing in {} mode", _options.operation_mode))
         , _scrub_finish_description(fmt::format("Finished scrubbing in {} mode", _options.operation_mode)) {
@@ -1529,7 +1575,7 @@ public:
         if (!range.is_full()) {
             on_internal_error(clogger, fmt::format("Scrub compaction in mode {} expected full partition range, but got {} instead", _options.operation_mode, range));
         }
-        auto crawling_reader = _compacting->make_crawling_reader(std::move(s), std::move(permit), nullptr);
+        auto crawling_reader = _compacting->make_crawling_reader(std::move(s), std::move(permit), nullptr, unwrap_monitor_generator());
         return make_flat_mutation_reader_v2<reader>(std::move(crawling_reader), _options.operation_mode, _validation_errors);
     }
 
@@ -1598,8 +1644,8 @@ private:
                 _table_s.get_compaction_strategy().adjust_partition_estimate(_ms_metadata, _estimation_per_shard[s].estimated_partitions));
     }
 public:
-    resharding_compaction(table_state& table_s, sstables::compaction_descriptor descriptor, compaction_data& cdata)
-        : compaction(table_s, std::move(descriptor), cdata)
+    resharding_compaction(table_state& table_s, sstables::compaction_descriptor descriptor, compaction_data& cdata, compaction_progress_monitor& progress_monitor)
+        : compaction(table_s, std::move(descriptor), cdata, progress_monitor, use_backlog_tracker::no)
         , _estimation_per_shard(smp::count)
         , _run_identifiers(smp::count)
     {
@@ -1633,7 +1679,8 @@ public:
                 slice,
                 nullptr,
                 sm_fwd,
-                mr_fwd);
+                mr_fwd,
+                unwrap_monitor_generator());
 
     }
 
@@ -1705,47 +1752,49 @@ compaction_type compaction_type_options::type() const {
     return index_to_type[_options.index()];
 }
 
-static std::unique_ptr<compaction> make_compaction(table_state& table_s, sstables::compaction_descriptor descriptor, compaction_data& cdata) {
+static std::unique_ptr<compaction> make_compaction(table_state& table_s, sstables::compaction_descriptor descriptor, compaction_data& cdata, compaction_progress_monitor& progress_monitor) {
     struct {
         table_state& table_s;
         sstables::compaction_descriptor&& descriptor;
         compaction_data& cdata;
+        compaction_progress_monitor& progress_monitor;
 
         std::unique_ptr<compaction> operator()(compaction_type_options::reshape) {
-            return std::make_unique<reshape_compaction>(table_s, std::move(descriptor), cdata);
+            return std::make_unique<reshape_compaction>(table_s, std::move(descriptor), cdata, progress_monitor);
         }
         std::unique_ptr<compaction> operator()(compaction_type_options::reshard) {
-            return std::make_unique<resharding_compaction>(table_s, std::move(descriptor), cdata);
+            return std::make_unique<resharding_compaction>(table_s, std::move(descriptor), cdata, progress_monitor);
         }
         std::unique_ptr<compaction> operator()(compaction_type_options::regular) {
-            return std::make_unique<regular_compaction>(table_s, std::move(descriptor), cdata);
+            return std::make_unique<regular_compaction>(table_s, std::move(descriptor), cdata, progress_monitor);
         }
         std::unique_ptr<compaction> operator()(compaction_type_options::cleanup) {
-            return std::make_unique<cleanup_compaction>(table_s, std::move(descriptor), cdata);
+            return std::make_unique<cleanup_compaction>(table_s, std::move(descriptor), cdata, progress_monitor);
         }
         std::unique_ptr<compaction> operator()(compaction_type_options::upgrade) {
-            return std::make_unique<cleanup_compaction>(table_s, std::move(descriptor), cdata);
+            return std::make_unique<cleanup_compaction>(table_s, std::move(descriptor), cdata, progress_monitor);
         }
         std::unique_ptr<compaction> operator()(compaction_type_options::scrub scrub_options) {
-            return std::make_unique<scrub_compaction>(table_s, std::move(descriptor), cdata, scrub_options);
+            return std::make_unique<scrub_compaction>(table_s, std::move(descriptor), cdata, scrub_options, progress_monitor);
         }
-    } visitor_factory{table_s, std::move(descriptor), cdata};
+    } visitor_factory{table_s, std::move(descriptor), cdata, progress_monitor};
 
     return descriptor.options.visit(visitor_factory);
 }
 
-static future<compaction_result> scrub_sstables_validate_mode(sstables::compaction_descriptor descriptor, compaction_data& cdata, table_state& table_s) {
+static future<compaction_result> scrub_sstables_validate_mode(sstables::compaction_descriptor descriptor, compaction_data& cdata, table_state& table_s, read_monitor_generator& monitor_generator) {
     auto schema = table_s.schema();
     auto permit = table_s.make_compaction_reader_permit();
 
     uint64_t validation_errors = 0;
+    cdata.compaction_size = boost::accumulate(descriptor.sstables | boost::adaptors::transformed([] (auto& sst) { return sst->data_size(); }), int64_t(0));
 
     for (const auto& sst : descriptor.sstables) {
         clogger.info("Scrubbing in validate mode {}", sst->get_filename());
 
         validation_errors += co_await sst->validate(permit, cdata.abort, [&schema] (sstring what) {
             scrub_compaction::report_validation_error(compaction_type::Scrub, *schema, what);
-        });
+        }, monitor_generator(sst));
         // Did validation actually finish because aborted?
         if (cdata.is_stop_requested()) {
             // Compaction manager will catch this exception and re-schedule the compaction.
@@ -1771,8 +1820,15 @@ static future<compaction_result> scrub_sstables_validate_mode(sstables::compacti
     };
 }
 
+future<compaction_result> scrub_sstables_validate_mode(sstables::compaction_descriptor descriptor, compaction_data& cdata, table_state& table_s, compaction_progress_monitor& progress_monitor = default_compaction_progress_monitor()) {
+    progress_monitor.set_generator(std::make_unique<compaction_read_monitor_generator>(table_s, use_backlog_tracker::no));
+    auto d = defer([&] { progress_monitor.reset_generator(); });
+    auto res = co_await scrub_sstables_validate_mode(descriptor, cdata, table_s, *progress_monitor._generator);
+    co_return res;
+}
+
 future<compaction_result>
-compact_sstables(sstables::compaction_descriptor descriptor, compaction_data& cdata, table_state& table_s) {
+compact_sstables(sstables::compaction_descriptor descriptor, compaction_data& cdata, table_state& table_s, compaction_progress_monitor& progress_monitor) {
     if (descriptor.sstables.empty()) {
         return make_exception_future<compaction_result>(std::runtime_error(format("Called {} compaction with empty set on behalf of {}.{}",
                 compaction_name(descriptor.options.type()), table_s.schema()->ks_name(), table_s.schema()->cf_name())));
@@ -1780,9 +1836,9 @@ compact_sstables(sstables::compaction_descriptor descriptor, compaction_data& cd
     if (descriptor.options.type() == compaction_type::Scrub
             && std::get<compaction_type_options::scrub>(descriptor.options.options()).operation_mode == compaction_type_options::scrub::mode::validate) {
         // Bypass the usual compaction machinery for dry-mode scrub
-        return scrub_sstables_validate_mode(std::move(descriptor), cdata, table_s);
+        return scrub_sstables_validate_mode(std::move(descriptor), cdata, table_s, progress_monitor);
     }
-    return compaction::run(make_compaction(table_s, std::move(descriptor), cdata));
+    return compaction::run(make_compaction(table_s, std::move(descriptor), cdata, progress_monitor));
 }
 
 std::unordered_set<sstables::shared_sstable>

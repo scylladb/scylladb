@@ -156,7 +156,7 @@ future<> reshard(sstables::sstable_directory& dir, sstables::sstable_directory::
     // jobs. But only one will run in parallel at a time
     auto& t = table.as_table_state();
     co_await coroutine::parallel_for_each(buckets, [&] (std::vector<sstables::shared_sstable>& sstlist) mutable {
-        return table.get_compaction_manager().run_custom_job(table.as_table_state(), sstables::compaction_type::Reshard, "Reshard compaction", [&] (sstables::compaction_data& info) -> future<> {
+        return table.get_compaction_manager().run_custom_job(table.as_table_state(), sstables::compaction_type::Reshard, "Reshard compaction", [&] (sstables::compaction_data& info, sstables::compaction_progress_monitor& progress_monitor) -> future<> {
             auto erm = table.get_effective_replication_map(); // keep alive around compaction.
 
             sstables::compaction_descriptor desc(sstlist);
@@ -165,7 +165,7 @@ future<> reshard(sstables::sstable_directory& dir, sstables::sstable_directory::
             desc.sharder = &erm->get_sharder(*table.schema());
             desc.owned_ranges = owned_ranges_ptr;
 
-            auto result = co_await sstables::compact_sstables(std::move(desc), info, t);
+            auto result = co_await sstables::compact_sstables(std::move(desc), info, t, progress_monitor);
             // input sstables are moved, to guarantee their resources are released once we're done
             // resharding them.
             co_await when_all_succeed(dir.collect_output_unshared_sstables(std::move(result.new_sstables), sstables::sstable_directory::can_be_remote::yes), dir.remove_sstables(std::move(sstlist))).discard_result();
@@ -252,6 +252,17 @@ future<> run_table_tasks(replica::database& db, std::vector<table_tasks_info> ta
         }
         co_await coroutine::return_exception_ptr(std::move(ex));
     }
+}
+
+future<tasks::task_manager::task::progress> compaction_task_impl::get_progress(const sstables::compaction_data& cdata, const sstables::compaction_progress_monitor& progress_monitor) const {
+    if (cdata.compaction_size == 0) {
+        co_return get_binary_progress();
+    }
+
+    co_return tasks::task_manager::task::progress{
+        .completed = is_done() ? cdata.compaction_size : progress_monitor.get_progress(),   // Consider tasks which skip all files.
+        .total = cdata.compaction_size
+    };
 }
 
 future<> major_keyspace_compaction_task_impl::run() {
@@ -452,8 +463,8 @@ future<> shard_reshaping_compaction_task_impl::run() {
 
         std::exception_ptr ex;
         try {
-            co_await table.get_compaction_manager().run_custom_job(table.as_table_state(), sstables::compaction_type::Reshape, "Reshape compaction", [&dir = _dir, &table, sstlist = std::move(sstlist), desc = std::move(desc)] (sstables::compaction_data& info) mutable -> future<> {
-                sstables::compaction_result result = co_await sstables::compact_sstables(std::move(desc), info, table.as_table_state());
+            co_await table.get_compaction_manager().run_custom_job(table.as_table_state(), sstables::compaction_type::Reshape, "Reshape compaction", [&dir = _dir, &table, sstlist = std::move(sstlist), desc = std::move(desc)] (sstables::compaction_data& info, sstables::compaction_progress_monitor& progress_monitor) mutable -> future<> {
+                sstables::compaction_result result = co_await sstables::compact_sstables(std::move(desc), info, table.as_table_state(), progress_monitor);
                 co_await dir.remove_unshared_sstables(std::move(sstlist));
                 co_await dir.collect_output_unshared_sstables(std::move(result.new_sstables), sstables::sstable_directory::can_be_remote::no);
             }, info, throw_if_stopping::yes);

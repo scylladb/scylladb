@@ -2050,7 +2050,8 @@ future<uint64_t> validate(
         shared_sstable sstable,
         reader_permit permit,
         abort_source& abort,
-        std::function<void(sstring)> error_handler) {
+        std::function<void(sstring)> error_handler,
+        sstables::read_monitor& monitor) {
     auto schema = sstable->get_schema();
     validating_consumer consumer(schema, permit, sstable, std::move(error_handler));
     auto context = data_consume_rows<data_consume_rows_context_m<validating_consumer>>(*schema, sstable, consumer);
@@ -2059,6 +2060,7 @@ future<uint64_t> validate(
     idx_reader.emplace(sstable, permit, tracing::trace_state_ptr{}, sstables::use_caching::no, false);
 
     try {
+        monitor.on_read_started(context->reader_position());
         while (!context->eof() && !abort.abort_requested()) {
             uint64_t current_partition_pos = 0;
             clustered_index_cursor* idx_cursor = nullptr;
@@ -2151,6 +2153,7 @@ future<uint64_t> validate(
         consumer.report_error(format("unexpected exception: {}", std::current_exception()));
     }
 
+    monitor.on_read_completed();
     if (idx_reader) {
         co_await idx_reader->close();
     }

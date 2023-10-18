@@ -305,7 +305,7 @@ public:
     // (e.g. parse error), it will return with validation error count seen up to
     // the abort. In the latter case it will call the error-handler before doing so.
     future<uint64_t> validate(reader_permit permit, abort_source& abort,
-            std::function<void(sstring)> error_handler);
+            std::function<void(sstring)> error_handler, sstables::read_monitor& monitor = default_read_monitor());
 
     encoding_stats get_encoding_stats_for_compaction() const;
 
