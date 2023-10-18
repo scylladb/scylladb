@@ -20,6 +20,7 @@ class task_manager;
 namespace api {
 
 void set_task_manager_test(http_context& ctx, httpd::routes& r, sharded<tasks::task_manager>& tm);
+void unset_task_manager_test(http_context& ctx, httpd::routes& r);
 
 }
 

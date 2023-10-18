@@ -105,6 +105,14 @@ void set_task_manager_test(http_context& ctx, routes& r, sharded<tasks::task_man
     });
 }
 
+void unset_task_manager_test(http_context& ctx, routes& r) {
+    tmt::register_test_module.unset(r);
+    tmt::unregister_test_module.unset(r);
+    tmt::register_test_task.unset(r);
+    tmt::unregister_test_task.unset(r);
+    tmt::finish_test_task.unset(r);
+}
+
 }
 
 #endif
