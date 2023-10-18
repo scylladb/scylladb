@@ -609,6 +609,7 @@ class ScyllaCluster:
         self.start_exception: Optional[Exception] = None
         self.keyspace_count = 0
         self.api = ScyllaRESTAPIClient()
+        self.stop_lock = asyncio.Lock()
         self.logger.info("Created new cluster %s", self.name)
 
     async def install_and_start(self) -> None:
@@ -647,14 +648,18 @@ class ScyllaCluster:
 
     async def stop(self) -> None:
         """Stop all running servers ASAP"""
-        if self.is_running:
-            self.is_running = False
-            self.logger.info("Cluster %s stopping", self)
-            self.is_dirty = True
-            # If self.running is empty, no-op
-            await asyncio.gather(*(server.stop() for server in self.running.values()))
-            self.stopped.update(self.running)
-            self.running.clear()
+        # FIXME: the lock is necessary because test.py calls `stop()` and `uninstall()` concurrently
+        # (from exit artifacts), which leads to issues (#15755). A more elegant solution would be
+        # to prevent that instead of using a lock here.
+        async with self.stop_lock:
+            if self.is_running:
+                self.is_running = False
+                self.logger.info("Cluster %s stopping", self)
+                self.is_dirty = True
+                # If self.running is empty, no-op
+                await asyncio.gather(*(server.stop() for server in self.running.values()))
+                self.stopped.update(self.running)
+                self.running.clear()
 
     async def stop_gracefully(self) -> None:
         """Stop all running servers in a clean way"""
