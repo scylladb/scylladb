@@ -181,19 +181,9 @@ distributed_loader::process_upload_dir(distributed<replica::database>& db, distr
     return seastar::async(std::move(attr), [&db, &view_update_generator, &sys_dist_ks, ks = std::move(ks), cf = std::move(cf)] {
         auto global_table = get_table_on_all_shards(db, ks, cf).get0();
 
-        sharded<locator::effective_replication_map_ptr> erms;
-        erms.start(sharded_parameter([&global_table] {
-            return global_table->get_effective_replication_map();
-        })).get();
-        auto stop_erms = deferred_stop(erms);
-
         sharded<sstables::sstable_directory> directory;
-        directory.start(
-            sharded_parameter([&global_table] { return std::ref(global_table->get_sstables_manager()); }),
-            sharded_parameter([&global_table] { return global_table->schema(); }),
-            sharded_parameter([&global_table, &erms] { return std::ref(erms.local()->get_sharder(*global_table->schema())); }),
-            sharded_parameter([&global_table] { return global_table->get_storage_options_ptr(); }),
-            global_table->dir(), sstables::sstable_state::upload, &error_handler_gen_for_upload_dir
+        directory.start(global_table.as_sharded_parameter(),
+            sstables::sstable_state::upload, &error_handler_gen_for_upload_dir
         ).get();
 
         auto stop_directory = deferred_stop(directory);
@@ -254,18 +244,8 @@ distributed_loader::get_sstables_from_upload_dir(distributed<replica::database>&
         sharded<sstables::sstable_directory> directory;
         auto table_id = global_table->schema()->id();
 
-        sharded<locator::effective_replication_map_ptr> erms;
-        erms.start(sharded_parameter([&global_table] {
-            return global_table->get_effective_replication_map();
-        })).get();
-        auto stop_erms = deferred_stop(erms);
-
-        directory.start(
-            sharded_parameter([&global_table] { return std::ref(global_table->get_sstables_manager()); }),
-            sharded_parameter([&global_table] { return global_table->schema(); }),
-            sharded_parameter([&global_table, &erms] { return std::ref(erms.local()->get_sharder(*global_table->schema())); }),
-            sharded_parameter([&global_table] { return global_table->get_storage_options_ptr(); }),
-            global_table->dir(), sstables::sstable_state::upload, &error_handler_gen_for_upload_dir
+        directory.start(global_table.as_sharded_parameter(),
+            sstables::sstable_state::upload, &error_handler_gen_for_upload_dir
         ).get();
 
         auto stop = deferred_stop(directory);
@@ -297,7 +277,6 @@ class table_populator {
     std::unordered_map<sstables::sstable_state, lw_shared_ptr<sharded<sstables::sstable_directory>>> _sstable_directories;
     sstables::sstable_version_types _highest_version = sstables::oldest_writable_sstable_format;
     sstables::generation_type _highest_generation;
-    sharded<locator::effective_replication_map_ptr> _erms;
 
 public:
     table_populator(global_table_ptr& ptr, distributed<replica::database>& db, sstring ks, sstring cf, sstring datadir)
@@ -319,10 +298,6 @@ public:
     future<> start() {
         assert(this_shard_id() == 0);
 
-        co_await _erms.start(sharded_parameter([this] {
-            return _global_table->get_effective_replication_map();
-        }));
-
         for (auto state : { sstables::sstable_state::normal, sstables::sstable_state::staging, sstables::sstable_state::quarantine }) {
             co_await start_subdir(state);
         }
@@ -338,7 +313,6 @@ public:
     }
 
     future<> stop() {
-        co_await _erms.stop();
         for (auto it = _sstable_directories.begin(); it != _sstable_directories.end(); it = _sstable_directories.erase(it)) {
             co_await it->second->stop();
         }
@@ -354,16 +328,7 @@ private:
 future<> table_populator::start_subdir(sstables::sstable_state state) {
     auto dptr = make_lw_shared<sharded<sstables::sstable_directory>>();
     auto& directory = *dptr;
-    auto& global_table = _global_table;
-    auto& db = _db;
-    co_await directory.start(
-        sharded_parameter([&global_table] { return std::ref(global_table->get_sstables_manager()); }),
-        sharded_parameter([&global_table] { return global_table->schema(); }),
-        sharded_parameter([this] { return std::ref(_erms.local()->get_sharder(*_global_table->schema())); }),
-        sharded_parameter([&global_table] { return global_table->get_storage_options_ptr(); }),
-        global_table->dir(), state,
-        default_io_error_handler_gen()
-    );
+    co_await directory.start(_global_table.as_sharded_parameter(), state, default_io_error_handler_gen());
 
     // directory must be stopped using table_populator::stop below
     _sstable_directories[state] = dptr;
@@ -372,7 +337,7 @@ future<> table_populator::start_subdir(sstables::sstable_state state) {
 
     sstables::sstable_directory::process_flags flags {
         .throw_on_missing_toc = true,
-        .enable_dangerous_direct_import_of_cassandra_counters = db.local().get_config().enable_dangerous_direct_import_of_cassandra_counters(),
+        .enable_dangerous_direct_import_of_cassandra_counters = _db.local().get_config().enable_dangerous_direct_import_of_cassandra_counters(),
         .allow_loading_materialized_view = true,
         .garbage_collect = true,
     };
@@ -383,7 +348,7 @@ future<> table_populator::start_subdir(sstables::sstable_state state) {
     // in the system tables. In that case we'll rely on what we find on disk: we'll
     // at least not downgrade any files. If we already know that we support a higher
     // format than the one we see then we use that.
-    auto sys_format = global_table->get_sstables_manager().get_highest_supported_format();
+    auto sys_format = _global_table->get_sstables_manager().get_highest_supported_format();
     auto sst_version = co_await highest_version_seen(directory, sys_format);
     auto generation = co_await highest_generation_seen(directory);
 

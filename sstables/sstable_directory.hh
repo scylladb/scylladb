@@ -192,6 +192,9 @@ private:
     future<foreign_sstable_open_info> get_open_info_for_this_sstable(const sstables::entry_descriptor& desc) const;
 
 public:
+    sstable_directory(replica::table& table,
+            sstable_state state,
+            io_error_handler_gen error_handler_gen);
     sstable_directory(sstables_manager& manager,
             schema_ptr schema,
             const dht::sharder& sharder,

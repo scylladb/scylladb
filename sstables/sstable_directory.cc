@@ -61,6 +61,20 @@ sstable_directory::make_components_lister() {
     }, _storage_opts->value);
 }
 
+sstable_directory::sstable_directory(replica::table& table,
+        sstable_state state,
+        io_error_handler_gen error_handler_gen)
+    : sstable_directory(
+        table.get_sstables_manager(),
+        table.schema(),
+        table.get_effective_replication_map()->get_sharder(*table.schema()),
+        table.get_storage_options_ptr(),
+        table.dir(),
+        std::move(state),
+        std::move(error_handler_gen)
+    )
+{}
+
 sstable_directory::sstable_directory(sstables_manager& manager,
         schema_ptr schema,
         const dht::sharder& sharder,
