@@ -197,6 +197,7 @@ concept LeafExpression
 /// A column, usually encountered on the left side of a restriction.
 /// An expression like `mycol < 5` would be expressed as a binary_operator
 /// with column_value on the left hand side.
+/// The column_definition* points inside the schema_ptr used during preparation.
 struct column_value {
     const column_definition* col;
 
@@ -207,8 +208,8 @@ struct column_value {
 
 /// A subscripted value, eg list_colum[2], val[sub]
 struct subscript {
-    expression val;
-    expression sub;
+    expression val; // The value that is being subscripted
+    expression sub; // The value between the square braces
     data_type type; // may be null before prepare
 
     friend bool operator==(const subscript&, const subscript&) = default;
@@ -235,7 +236,8 @@ enum class null_handling_style {
     lwt_nulls,     // evaluate(NULL = NULL) -> TRUE, evaluate(NULL < x) -> exception
 };
 
-/// Operator restriction: LHS op RHS.
+// An operation on two items (left hand side and right hand side).
+// For example: "col = 2", "(col1, col2) = (?, 3)"
 struct binary_operator {
     expression lhs;
     oper_t op;
@@ -248,14 +250,18 @@ struct binary_operator {
     friend bool operator==(const binary_operator&, const binary_operator&) = default;
 };
 
-/// A conjunction of restrictions.
+// A conjunction of expressions separated by the AND keyword.
+// For example: "a < 3 AND col1 = ? AND pk IN (1, 2)"
 struct conjunction {
     std::vector<expression> children;
 
     friend bool operator==(const conjunction&, const conjunction&) = default;
 };
 
-// Gets resolved eventually into a column_value.
+// A string that represents a column name.
+// It's not validated in any way, it's just a name that someone wrote.
+// During preparation it's resolved and converted into a validated column_value.
+// For example "my_col", "pk1"
 struct unresolved_identifier {
     ::shared_ptr<column_identifier_raw> ident;
 
@@ -265,6 +271,7 @@ struct unresolved_identifier {
 };
 
 // An attribute attached to a column mutation: writetime or ttl
+// For example: "WRITETIME(my_col)", "TTL(some_col)"
 struct column_mutation_attribute {
     enum class attribute_kind { writetime, ttl };
 
@@ -276,7 +283,11 @@ struct column_mutation_attribute {
     friend bool operator==(const column_mutation_attribute&, const column_mutation_attribute&) = default;
 };
 
+// Function call.
+// For example: "some_func(123, 456)", "token(col1, col2)"
 struct function_call {
+    // Before preparation "func" is a function_name.
+    // During preparation it's converted into db::functions::function
     std::variant<functions::function_name, shared_ptr<db::functions::function>> func;
     std::vector<expression> args;
 
@@ -312,8 +323,14 @@ struct function_call {
     friend bool operator==(const function_call&, const function_call&) = default;
 };
 
+// Represents casting an expression to a given type.
+// There are two types of casts - C style and SQL style.
+// For example: "(text)ascii_column", "CAST(int_column as blob)"
 struct cast {
-    enum class cast_style { c, sql };
+    enum class cast_style {
+        c,  // (int)arg
+        sql // CAST(arg as int)
+    };
     cast_style style;
     expression arg;
     std::variant<data_type, shared_ptr<cql3_type::raw>> type;
@@ -321,6 +338,8 @@ struct cast {
     friend bool operator==(const cast&, const cast&) = default;
 };
 
+// Represents accessing a field inside a struct (user defined type).
+// For example: "udt_val.udt_field"
 struct field_selection {
     expression structure;
     shared_ptr<column_identifier_raw> field;
@@ -330,7 +349,12 @@ struct field_selection {
     friend bool operator==(const field_selection&, const field_selection&) = default;
 };
 
+// Represents a bind marker, both named and unnamed.
+// For example: "?", ":myvar"
+// It contains only the index, for named bind markers the names are kept inside query_options.
 struct bind_variable {
+    // Index of this bind marker inside the query string.
+    // Consecutive bind markers are numbered 0, 1, 2, 3, ...
     int32_t bind_index;
 
     // Describes where this bound value will be assigned.
@@ -342,6 +366,8 @@ struct bind_variable {
 
 // A constant which does not yet have a date type. It is partially typed
 // (we know if it's floating or int) but not sized.
+// For example: "123", "1.341", "null"
+// During preparation it's assigned an exact type and converted into expr::constant.
 struct untyped_constant {
     enum type_class { integer, floating_point, string, boolean, duration, uuid, hex, null };
     type_class partial_type;
@@ -354,7 +380,9 @@ untyped_constant make_untyped_null();
 
 // Represents a constant value with known value and type
 // For null and unset the type can sometimes be set to empty_type
+// For example: "123", "abcddef", "[1, 2, 3, 4, 5]"
 struct constant {
+    // The CQL value, serialized to binary representation.
     cql3::raw_value value;
 
     // Never nullptr, for NULL and UNSET might be empty_type
@@ -374,7 +402,9 @@ struct constant {
     friend bool operator==(const constant&, const constant&) = default;
 };
 
-// Denotes construction of a tuple from its elements, e.g.  ('a', ?, some_column) in CQL.
+// Denotes construction of a tuple from its elements.
+// For example: "('a', ?, some_column)"
+// During preparation tuple constructors with constant values are converted to expr::constant.
 struct tuple_constructor {
     std::vector<expression> elements;
 
@@ -386,9 +416,13 @@ struct tuple_constructor {
 };
 
 // Constructs a collection of same-typed elements
+// For example: "[1, 2, ?]", "{5, 6, 7}", {1: 2, 3: 4}"
+// During preparation collection constructors with constant values are converted to expr::constant.
 struct collection_constructor {
     enum class style_type { list, set, map };
     style_type style;
+
+    // For map constructors, elements is a list of key-pair tuples.
     std::vector<expression> elements;
 
     // Might be nullptr before prepare.
@@ -399,6 +433,8 @@ struct collection_constructor {
 };
 
 // Constructs an object of a user-defined type
+// For example: "{field1: 23343, field2: ?}"
+// During preparation usertype constructors with constant values are converted to expr::constant.
 struct usertype_constructor {
     using elements_map_type = std::unordered_map<column_identifier, expression>;
     elements_map_type elements;
