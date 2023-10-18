@@ -282,13 +282,13 @@ future<> set_server_task_manager(http_context& ctx, sharded<tasks::task_manager>
 
 #ifndef SCYLLA_BUILD_MODE_RELEASE
 
-future<> set_server_task_manager_test(http_context& ctx) {
+future<> set_server_task_manager_test(http_context& ctx, sharded<tasks::task_manager>& tm) {
     auto rb = std::make_shared < api_registry_builder > (ctx.api_doc);
 
-    return ctx.http_server.set_routes([rb, &ctx](routes& r) mutable {
+    return ctx.http_server.set_routes([rb, &ctx, &tm](routes& r) mutable {
         rb->register_function(r, "task_manager_test",
                 "The task manager test API");
-        set_task_manager_test(ctx, r);
+        set_task_manager_test(ctx, r, tm);
     });
 }
 

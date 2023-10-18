@@ -10,11 +10,16 @@
 
 #pragma once
 
+#include <seastar/core/sharded.hh>
 #include "api.hh"
+
+namespace tasks {
+class task_manager;
+}
 
 namespace api {
 
-void set_task_manager_test(http_context& ctx, httpd::routes& r);
+void set_task_manager_test(http_context& ctx, httpd::routes& r, sharded<tasks::task_manager>& tm);
 
 }
 

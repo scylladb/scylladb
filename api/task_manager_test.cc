@@ -20,7 +20,7 @@ namespace tmt = httpd::task_manager_test_json;
 using namespace json;
 using namespace seastar::httpd;
 
-void set_task_manager_test(http_context& ctx, routes& r) {
+void set_task_manager_test(http_context& ctx, routes& r, sharded<tasks::task_manager>& tm) {
     tmt::register_test_module.set(r, [&ctx] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         co_await ctx.tm.invoke_on_all([] (tasks::task_manager& tm) {
             auto m = make_shared<tasks::test_module>(tm);
