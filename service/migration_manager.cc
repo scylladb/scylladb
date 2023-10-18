@@ -126,7 +126,9 @@ void migration_manager::init_messaging_service()
         }
         // Start a new fiber.
         (void)do_with(std::move(*cm), [this, src] (const std::vector<canonical_mutation>& mutations) {
-            return merge_schema_in_background(src, mutations);
+            return with_gate(_background_tasks, [this, src, &mutations] {
+                return merge_schema_from(src, mutations);
+            });
         }).then_wrapped([src] (auto&& f) {
             if (f.failed()) {
                 mlogger.error("Failed to update definitions from {}: {}", src, f.get_exception());

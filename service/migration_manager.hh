@@ -50,9 +50,6 @@ namespace service {
 
 class storage_proxy;
 
-template<typename M>
-concept MergeableMutation = std::is_same<M, canonical_mutation>::value || std::is_same<M, frozen_mutation>::value;
-
 class migration_manager : public seastar::async_sharded_service<migration_manager>,
                             public gms::i_endpoint_state_change_subscriber,
                             public seastar::peering_sharded_service<migration_manager> {
@@ -119,14 +116,6 @@ public:
     future<> merge_schema_from(netw::msg_addr src, const std::vector<canonical_mutation>& mutations);
     // Incremented each time the function above is called. Needed by tests.
     size_t canonical_mutation_merge_count = 0;
-
-    template<typename M>
-    requires MergeableMutation<M>
-    future<> merge_schema_in_background(netw::msg_addr src, const std::vector<M>& mutations) {
-        return with_gate(_background_tasks, [this, src, &mutations] {
-            return merge_schema_from(src, mutations);
-        });
-    }
 
     bool should_pull_schema_from(const gms::inet_address& endpoint);
     bool has_compatible_schema_tables_version(const gms::inet_address& endpoint);
