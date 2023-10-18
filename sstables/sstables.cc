@@ -557,10 +557,6 @@ future<summary_entry&> sstable::read_summary_entry(size_t i) {
     return make_ready_future<summary_entry&>(_components->summary.entries[i]);
 }
 
-future<> parse(const schema& s, sstable_version_types v, random_access_reader& in, deletion_time& d) {
-    return parse(s, v, in, d.local_deletion_time, d.marked_for_delete_at);
-}
-
 template <typename Child>
 future<> parse(const schema& s, sstable_version_types v, random_access_reader& in, std::unique_ptr<metadata>& p) {
     p.reset(new Child);
