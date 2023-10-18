@@ -389,27 +389,6 @@ future<> migration_manager::reload_schema() {
     return db::schema_tables::merge_schema(_sys_ks, _storage_proxy.container(), _feat, std::move(mutations), true);
 }
 
-future<> migration_manager::merge_schema_from(netw::messaging_service::msg_addr src, const std::vector<frozen_mutation>& mutations)
-{
-    if (_as.abort_requested()) {
-        return make_exception_future<>(abort_requested_exception());
-    }
-
-    mlogger.debug("Applying schema mutations from {}", src);
-    return map_reduce(mutations, [this, src](const frozen_mutation& fm) {
-        // schema table's schema is not syncable so just use get_schema_definition()
-        return get_schema_definition(fm.schema_version(), src, _messaging, _storage_proxy).then([&fm](schema_ptr s) {
-            s->registry_entry()->mark_synced();
-            return fm.unfreeze(std::move(s));
-        });
-    }, std::vector<mutation>(), [](std::vector<mutation>&& all, mutation&& m) {
-        all.emplace_back(std::move(m));
-        return std::move(all);
-    }).then([this](std::vector<mutation> schema) {
-        return db::schema_tables::merge_schema(_sys_ks, _storage_proxy.container(), _feat, std::move(schema));
-    });
-}
-
 bool migration_manager::has_compatible_schema_tables_version(const gms::inet_address& endpoint) {
     auto* version = _gossiper.get_application_state_ptr(endpoint, gms::application_state::SCHEMA_TABLES_VERSION);
     return version && version->value() == db::schema_tables::version;

@@ -119,8 +119,6 @@ public:
     future<> merge_schema_from(netw::msg_addr src, const std::vector<canonical_mutation>& mutations);
     // Incremented each time the function above is called. Needed by tests.
     size_t canonical_mutation_merge_count = 0;
-    // Deprecated. The canonical mutation should be used instead.
-    future<> merge_schema_from(netw::msg_addr src, const std::vector<frozen_mutation>& mutations);
 
     template<typename M>
     requires MergeableMutation<M>
