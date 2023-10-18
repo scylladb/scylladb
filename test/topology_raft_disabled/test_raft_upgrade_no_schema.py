@@ -18,6 +18,18 @@ from test.topology_raft_disabled.util import restart, enable_raft, \
 
 @pytest.mark.asyncio
 @log_run_time
+async def test_durability_with_no_schema_commitlog (manager: ManagerClient):
+    new_server_info = await manager.server_add(config={
+        'consistent_cluster_management': False,
+        'force_schema_commit_log': False,
+        'flush_schema_tables_after_modification': True
+    })
+    await manager.server_stop(new_server_info.server_id)
+    await manager.server_start(new_server_info.server_id)
+
+
+@pytest.mark.asyncio
+@log_run_time
 async def test_upgrade_with_no_schema_commitlog(manager: ManagerClient, random_tables: RandomTables):
     # RAFT without schema_commit_log should produce error at node startup
     # We can't test this on the already running nodes, since schema commitlog feature

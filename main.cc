@@ -1167,7 +1167,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // Mark all the system tables writable and assign the proper commitlog to them.
             sys_ks.invoke_on_all(&db::system_keyspace::mark_writable).get();
 
-            supervisor::notify("starting schema commit log");
             auto sch_cl = db.local().schema_commitlog();
             if (sch_cl != nullptr) {
               auto paths = sch_cl->get_segments_to_replay().get();
@@ -1176,7 +1175,12 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                   auto rp = db::commitlog_replayer::create_replayer(db, sys_ks).get0();
                   rp.recover(paths, db::schema_tables::COMMITLOG_FILENAME_PREFIX).get();
                   supervisor::notify("replaying schema commit log - flushing memtables");
-                  db.invoke_on_all(&replica::database::flush_all_memtables).get();
+                  // The schema commitlog lives only on the null shard.
+                  // This is enforced when the table is marked to use
+                  // it - schema_static_props::enable_schema_commitlog function
+                  // also sets the use_null_sharder property.
+                  // This means only the local memtables need to be flushed.
+                  db.local().flush_all_memtables().get();
                   supervisor::notify("replaying schema commit log - removing old commitlog segments");
                   //FIXME: discarded future
                   (void)sch_cl->delete_segments(std::move(paths));
@@ -1473,6 +1477,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                     (void)cl->delete_segments(std::move(paths));
                 }
             }
+
+            // Once stuff is replayed, we can empty RP:s from truncation records. 
+            // This ensures we can't mis-mash older records with a newer crashed run.
+            // I.e: never keep replay_positions alive across a restart cycle.
+            sys_ks.local().drop_truncation_rp_records().get();
 
             db.invoke_on_all([] (replica::database& db) {
                 db.get_tables_metadata().for_each_table([] (table_id, lw_shared_ptr<replica::table> table) {
