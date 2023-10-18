@@ -47,7 +47,6 @@ public:
     static constexpr const char* STATUS_UNKNOWN = "UNKNOWN";
     static constexpr const char* STATUS_BOOTSTRAPPING = "BOOT";
     static constexpr const char* STATUS_NORMAL = "NORMAL";
-    static constexpr const char* STATUS_LEAVING = "LEAVING";
     static constexpr const char* STATUS_LEFT = "LEFT";
     static constexpr const char* STATUS_MOVING = "MOVING";
 
@@ -125,11 +124,6 @@ public:
 
     static versioned_value schema(const table_schema_version& new_version) {
         return versioned_value(new_version.to_sstring());
-    }
-
-    static versioned_value leaving(const std::unordered_set<dht::token>& tokens) {
-        return versioned_value(version_string({sstring(versioned_value::STATUS_LEAVING),
-                                               make_token_string(tokens)}));
     }
 
     static versioned_value left(const std::unordered_set<dht::token>& tokens, int64_t expire_time) {

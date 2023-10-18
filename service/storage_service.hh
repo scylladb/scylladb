@@ -446,8 +446,6 @@ public:
      *   if bootstrapping. stays this way until all files are received.
      * STATUS_NORMAL,token
      *   ready to serve reads and writes.
-     * STATUS_LEAVING,token
-     *   get ready to leave the cluster as part of a decommission
      * STATUS_LEFT,token
      *   set after decommission is completed.
      *
@@ -522,13 +520,6 @@ private:
      * @param endpoint node
      */
     future<> handle_state_normal(inet_address endpoint, gms::permit_id);
-
-    /**
-     * Handle node preparing to leave the ring
-     *
-     * @param endpoint node
-     */
-    future<> handle_state_leaving(inet_address endpoint, gms::permit_id);
 
     /**
      * Handle node leaving the ring. This will happen when a node is decommissioned

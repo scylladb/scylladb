@@ -3564,43 +3564,6 @@ future<> storage_service::handle_state_normal(inet_address endpoint, gms::permit
     _normal_state_handled_on_boot.insert(endpoint);
 }
 
-future<> storage_service::handle_state_leaving(inet_address endpoint, gms::permit_id pid) {
-    slogger.debug("endpoint={} handle_state_leaving: permit_id={}", endpoint, pid);
-
-    auto tokens = get_tokens_for(endpoint);
-
-    slogger.debug("Node {} state leaving, tokens {}", endpoint, tokens);
-
-    // If the node is previously unknown or tokens do not match, update tokenmetadata to
-    // have this node as 'normal' (it must have been using this token before the
-    // leave). This way we'll get pending ranges right.
-    auto tmlock = co_await get_token_metadata_lock();
-    auto tmptr = co_await get_mutable_token_metadata_ptr();
-    if (!tmptr->is_normal_token_owner(endpoint)) {
-        // FIXME: this code should probably resolve token collisions too, like handle_state_normal
-        slogger.info("Node {} state jump to leaving", endpoint);
-
-        tmptr->update_topology(endpoint, get_dc_rack_for(endpoint), locator::node::state::being_decommissioned);
-        co_await tmptr->update_normal_tokens(tokens, endpoint);
-    } else {
-        auto tokens_ = tmptr->get_tokens(endpoint);
-        std::set<token> tmp(tokens.begin(), tokens.end());
-        if (!std::includes(tokens_.begin(), tokens_.end(), tmp.begin(), tmp.end())) {
-            slogger.warn("Node {} 'leaving' token mismatch. Long network partition?", endpoint);
-            slogger.debug("tokens_={}, tokens={}", tokens_, tmp);
-
-            co_await tmptr->update_normal_tokens(tokens, endpoint);
-        }
-    }
-
-    // at this point the endpoint is certainly a member with this token, so let's proceed
-    // normally
-    tmptr->add_leaving_endpoint(endpoint);
-
-    co_await update_topology_change_info(tmptr, ::format("handle_state_leaving", endpoint));
-    co_await replicate_to_all_cores(std::move(tmptr));
-}
-
 future<> storage_service::handle_state_left(inet_address endpoint, std::vector<sstring> pieces, gms::permit_id pid) {
 
     if (_raft_topology_change_enabled) {
@@ -3699,8 +3662,6 @@ future<> storage_service::on_change(inet_address endpoint, application_state sta
             co_await handle_state_normal(endpoint, pid);
         } else if (move_name == sstring(versioned_value::REMOVED_TOKEN)) {
             co_await handle_state_removed(endpoint, std::move(pieces), pid);
-        } else if (move_name == sstring(versioned_value::STATUS_LEAVING)) {
-            co_await handle_state_leaving(endpoint, pid);
         } else if (move_name == sstring(versioned_value::STATUS_LEFT)) {
             co_await handle_state_left(endpoint, std::move(pieces), pid);
         } else if (move_name == sstring(versioned_value::STATUS_MOVING)) {
@@ -4138,7 +4099,6 @@ future<> storage_service::check_for_endpoint_collision(std::unordered_set<gms::i
                     }
                     slogger.debug("Checking bootstrapping/leaving/moving nodes: node={}, status={} (check_for_endpoint_collision)", addr, state);
                     if (state == sstring(versioned_value::STATUS_BOOTSTRAPPING) ||
-                        state == sstring(versioned_value::STATUS_LEAVING) ||
                         state == sstring(versioned_value::STATUS_MOVING)) {
                         if (gms::gossiper::clk::now() > t + std::chrono::seconds(60)) {
                             throw std::runtime_error("Other bootstrapping/leaving/moving nodes detected, cannot bootstrap while consistent_rangemovement is true (check_for_endpoint_collision)");

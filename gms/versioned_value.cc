@@ -24,7 +24,6 @@ constexpr const char versioned_value::DELIMITER_STR[];
 constexpr const char* versioned_value::STATUS_UNKNOWN;
 constexpr const char* versioned_value::STATUS_BOOTSTRAPPING;
 constexpr const char* versioned_value::STATUS_NORMAL;
-constexpr const char* versioned_value::STATUS_LEAVING;
 constexpr const char* versioned_value::STATUS_LEFT;
 constexpr const char* versioned_value::STATUS_MOVING;
 constexpr const char* versioned_value::REMOVED_TOKEN;
