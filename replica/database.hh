@@ -1229,7 +1229,7 @@ public:
      * boom, it is replaced.
      */
     lw_shared_ptr<keyspace_metadata> metadata() const;
-    future<> create_replication_strategy(const locator::shared_token_metadata& stm, const locator::replication_strategy_config_options& options);
+    future<> create_replication_strategy(const locator::shared_token_metadata& stm);
     void update_effective_replication_map(locator::vnode_effective_replication_map_ptr erm);
 
     /**
