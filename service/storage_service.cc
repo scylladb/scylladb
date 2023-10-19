@@ -6345,11 +6345,13 @@ future<join_node_request_result> storage_service::join_node_request_handler(join
 
     co_await _topology_state_machine.event.when([this] {
         // The first node defines the cluster and inserts its entry to the
-        // `system.topology` without checking anything. It is unlikely but
-        // possible that the `join_node_request_handler` fires before the first
-        // node inserts its entry, therefore we might need to wait
-        // until that happens, here.
-        return !_topology_state_machine._topology.is_empty();
+        // `system.topology` without checking anything. It is possible that the
+        // `join_node_request_handler` fires before the first node sets itself
+        // as a normal node, therefore we might need to wait until that happens,
+        // here. If we didn't do it, the topology coordinator could handle the
+        // joining node as the first one and skip the necessary join node
+        // handshake.
+        return !_topology_state_machine._topology.normal_nodes.empty();
     });
 
     auto& g0_server = _group0->group0_server();
