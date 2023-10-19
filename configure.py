@@ -27,16 +27,6 @@ tempfile.tempdir = f"{outdir}/tmp"
 
 configure_args = str.join(' ', [shlex.quote(x) for x in sys.argv[1:] if not x.startswith('--out=')])
 
-employ_ld_trickery = True
-
-# distro-specific setup
-def distro_setup_nix():
-    global employ_ld_trickery
-    employ_ld_trickery = False
-
-if os.environ.get('NIX_CC'):
-        distro_setup_nix()
-
 # distribution "internationalization", converting package names.
 # Fedora name is key, values is distro -> package name dict.
 i18n_xlat = {
@@ -1313,8 +1303,6 @@ idls = ['idl/gossip_digest.idl.hh',
         'idl/utils.idl.hh',
         ]
 
-headers = find_headers('.', excluded_dirs=['idl', 'build', 'seastar', '.git'])
-
 scylla_tests_generic_dependencies = [
     'test/lib/cql_test_env.cc',
     'test/lib/test_services.cc',
@@ -1648,15 +1636,22 @@ for m, mode_config in modes.items():
 # At the end of the build we check that the build-id is indeed in the
 # first page. At install time we check that patchelf doesn't modify
 # the program headers.
+def dynamic_linker_option():
+    gcc_linker_output = subprocess.check_output(['gcc', '-###', '/dev/null', '-o', 't'], stderr=subprocess.STDOUT).decode('utf-8')
+    original_dynamic_linker = re.search('-dynamic-linker ([^ ]*)', gcc_linker_output).groups()[0]
 
-gcc_linker_output = subprocess.check_output(['gcc', '-###', '/dev/null', '-o', 't'], stderr=subprocess.STDOUT).decode('utf-8')
-original_dynamic_linker = re.search('-dynamic-linker ([^ ]*)', gcc_linker_output).groups()[0]
-if employ_ld_trickery:
-    # gdb has a SO_NAME_MAX_PATH_SIZE of 512, so limit the path size to
-    # that. The 512 includes the null at the end, hence the 511 bellow.
-    dynamic_linker = '/' * (511 - len(original_dynamic_linker)) + original_dynamic_linker
-else:
-    dynamic_linker = original_dynamic_linker
+    employ_ld_trickery = True
+    # distro-specific setup
+    if os.environ.get('NIX_CC'):
+        employ_ld_trickery = False
+
+    if employ_ld_trickery:
+        # gdb has a SO_NAME_MAX_PATH_SIZE of 512, so limit the path size to
+        # that. The 512 includes the null at the end, hence the 511 bellow.
+        dynamic_linker = '/' * (511 - len(original_dynamic_linker)) + original_dynamic_linker
+    else:
+        dynamic_linker = original_dynamic_linker
+    return f'--dynamic-linker={dynamic_linker}'
 
 forced_ldflags = '-Wl,'
 
@@ -1666,7 +1661,7 @@ forced_ldflags = '-Wl,'
 # explicitly ask for SHA1 build-ids.
 forced_ldflags += '--build-id=sha1,'
 
-forced_ldflags += f'--dynamic-linker={dynamic_linker}'
+forced_ldflags += dynamic_linker_option()
 
 user_ldflags = forced_ldflags + ' ' + args.user_ldflags
 
@@ -2070,6 +2065,8 @@ def write_build_file(f,
                 objs=' '.join(compiles)
             )
         )
+
+        headers = find_headers('.', excluded_dirs=['idl', 'build', 'seastar', '.git'])
         f.write(
             'build {mode}-headers: phony {header_objs}\n'.format(
                 mode=mode,
