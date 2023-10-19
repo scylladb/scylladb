@@ -52,7 +52,7 @@ Read Latency                                      The average read latency
 ------------------------------------------------  ---------------------------------------------------------------------------------
 Write Count                                       The total number of writes since last boot
 ------------------------------------------------  ---------------------------------------------------------------------------------
-Write Latency                                     The average read latency
+Write Latency                                     The average write latency
 ------------------------------------------------  ---------------------------------------------------------------------------------
 Pending Flushes                                   Number of flushes that start but did not finished yet
 ------------------------------------------------  ---------------------------------------------------------------------------------
@@ -76,7 +76,7 @@ Number of keys (estimate)                         The estimated row count (based
 ------------------------------------------------  ---------------------------------------------------------------------------------
 Memtable cell count                               memtable column count
 ------------------------------------------------  ---------------------------------------------------------------------------------
-Memtable data size                                Used space of lived memetable
+Memtable data size                                Used space of lived memtable
 ------------------------------------------------  ---------------------------------------------------------------------------------
 Memtable off heap memory used                     Memory taken by all memtable. In syclla, all memory is off heap
 ------------------------------------------------  ---------------------------------------------------------------------------------
@@ -92,7 +92,7 @@ Local write latency                               Mean write operation time
 ------------------------------------------------  ---------------------------------------------------------------------------------
 Pending flushes                                   Number of sstables waiting to be flushed
 ------------------------------------------------  ---------------------------------------------------------------------------------
-Bloom filter false positives                      Number of false positive made by the bloom filter
+Bloom filter false positives                      Number of false positives made by the bloom filter
 ------------------------------------------------  ---------------------------------------------------------------------------------
 Bloom filter false ratio                          The ratio between the false positive and overall attempts
 ------------------------------------------------  ---------------------------------------------------------------------------------
