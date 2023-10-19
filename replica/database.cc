@@ -1331,13 +1331,14 @@ bool database::column_family_exists(const table_id& uuid) const {
 }
 
 future<>
-keyspace::create_replication_strategy(const locator::shared_token_metadata& stm, const locator::replication_strategy_config_options& options) {
+keyspace::create_replication_strategy(const locator::shared_token_metadata& stm) {
     using namespace locator;
 
     _replication_strategy =
             abstract_replication_strategy::create_replication_strategy(
-                _metadata->strategy_name(), options);
-    rslogger.debug("replication strategy for keyspace {} is {}, opts={}", _metadata->name(), _metadata->strategy_name(), options);
+                _metadata->strategy_name(), _metadata->strategy_options());
+    rslogger.debug("replication strategy for keyspace {} is {}, opts={}",
+            _metadata->name(), _metadata->strategy_name(), _metadata->strategy_options());
     if (!_replication_strategy->is_per_table()) {
         auto erm = co_await _erm_factory.create_effective_replication_map(_replication_strategy, stm.get());
         update_effective_replication_map(std::move(erm));
@@ -1356,7 +1357,7 @@ keyspace::get_replication_strategy() const {
 
 future<> keyspace::update_from(const locator::shared_token_metadata& stm, ::lw_shared_ptr<keyspace_metadata> ksm) {
     _metadata = std::move(ksm);
-   return create_replication_strategy(stm, _metadata->strategy_options());
+   return create_replication_strategy(stm);
 }
 
 column_family::config
@@ -1476,7 +1477,7 @@ future<> database::create_in_memory_keyspace(const lw_shared_ptr<keyspace_metada
         kscfg.dirty_memory_manager = &_system_dirty_memory_manager;
     }
     keyspace ks(ksm, std::move(kscfg), erm_factory);
-    co_await ks.create_replication_strategy(get_shared_token_metadata(), ksm->strategy_options());
+    co_await ks.create_replication_strategy(get_shared_token_metadata());
     _keyspaces.emplace(ksm->name(), std::move(ks));
 }
 
