@@ -2883,7 +2883,7 @@ public:
             rlogger.debug(">>> Started Row Level Repair (Master): local={}, peers={}, repair_meta_id={}, keyspace={}, cf={}, schema_version={}, range={}, seed={}, max_row_buf_size={}",
                     master.myip(), _all_live_peer_nodes, master.repair_meta_id(), _shard_task.get_keyspace(), _cf_name, schema_version, _range, _seed, max_row_buf_size);
 
-
+            std::exception_ptr ex = nullptr;
             std::vector<gms::inet_address> nodes_to_stop;
             nodes_to_stop.reserve(master.all_nodes().size());
             try {
@@ -2934,6 +2934,7 @@ public:
                         _shard_task.global_repair_id.uuid(), this_shard_id(), _shard_task.get_keyspace(), _cf_name, _range, e);
                 // In case the repair process fail, we need to call repair_row_level_stop to clean up repair followers
                 _failed = true;
+                ex = std::current_exception();
             }
 
             parallel_for_each(nodes_to_stop, [&] (const gms::inet_address& node) {
@@ -2948,7 +2949,8 @@ public:
                 if (table_dropped) {
                     throw replica::no_such_column_family(_shard_task.get_keyspace(),  _cf_name);
                 } else {
-                    throw std::runtime_error(format("Failed to repair for keyspace={}, cf={}, range={}", _shard_task.get_keyspace(), _cf_name, _range));
+                    throw nested_exception(std::make_exception_ptr(std::runtime_error(format("Failed to repair for keyspace={}, cf={}, range={}", _shard_task.get_keyspace(),
+                                            _cf_name, _range))), std::move(ex));
                 }
             } else {
                 update_system_repair_table().get();
