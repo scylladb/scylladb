@@ -38,6 +38,10 @@ async def test_tablet_metadata_propagates_with_schema_changes_in_snapshot_mode(m
         '--logger-log-level', 'storage_proxy=trace',
         '--logger-log-level', 'cql_server=trace',
         '--logger-log-level', 'query_processor=trace',
+        '--logger-log-level', 'gossip=trace',
+        '--logger-log-level', 'storage_service=trace',
+        '--logger-log-level', 'messaging_service=trace',
+        '--logger-log-level', 'rpc=trace',
         ]
     servers = [await manager.server_add(cmdline=cmdline),
                await manager.server_add(cmdline=cmdline),
