@@ -2535,6 +2535,17 @@ future<service::topology> system_keyspace::load_topology_state() {
                 }
                 ret.req_param.emplace(host_id, service::rebuild_param{*rebuild_option});
                 break;
+            case service::node_state::left_token_ring:
+                // If replacenode fails the bootstraping node is moved to left_token_ring state where it executes the metadata
+                // barrier. It needs to know which nodes to ignore during the barrier, so put them here into the replace_param.
+                // Note that if the replacenode does not fail and later the node is decommissioned it will move to the left_token_ring
+                // state at some point and replace_param will be created here as well (we do not remove replaced_id, and ignored_ids
+                // when we move to normal state). But this is OK because we allow to ignore nodes during topology operations only if they
+                // are permanently dead.
+                if (replaced_id) {
+                    ret.req_param.emplace(host_id, service::replace_param{*replaced_id, std::move(ignored_ids)});
+                }
+                break;
             default:
                 // no parameters for other operations
                 break;

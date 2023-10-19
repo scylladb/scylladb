@@ -1004,18 +1004,25 @@ class topology_coordinator {
     };
 
     raft::server_id parse_replaced_node(const node_to_work_on& node) {
-        if (node.rs->state == node_state::replacing) {
-            return std::get<replace_param>(node.req_param.value()).replaced_id;
+        if (node.req_param) {
+            auto *param = std::get_if<replace_param>(&*node.req_param);
+            if (param) {
+                return param->replaced_id;
+            }
         }
         return {};
     }
 
     std::unordered_set<raft::server_id> parse_ignore_nodes(const node_to_work_on& node) {
-        if (node.rs->state == node_state::removing) {
-            return std::get<removenode_param>(node.req_param.value()).ignored_ids;
-        }
-        if (node.rs->state == node_state::replacing) {
-            return std::get<replace_param>(node.req_param.value()).ignored_ids;
+        if (node.req_param) {
+            auto* remove_param = std::get_if<removenode_param>(&*node.req_param);
+            if (remove_param) {
+                return remove_param->ignored_ids;
+            }
+            auto* rep_param = std::get_if<replace_param>(&*node.req_param);
+            if (rep_param) {
+                return rep_param->ignored_ids;
+            }
         }
         return {};
     }
