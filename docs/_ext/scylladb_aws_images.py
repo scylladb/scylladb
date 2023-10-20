@@ -218,3 +218,9 @@ def setup(app: Sphinx):
     app.connect("builder-inited",  AMIInformationDownloader().run)
 
     app.add_directive("scylladb_aws_images_template", AMIVersionsTemplateDirective)
+   
+    return {
+        "version": "0.1",
+        "parallel_read_safe": True,
+        "parallel_write_safe": True,
+    }

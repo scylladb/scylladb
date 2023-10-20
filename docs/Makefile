@@ -1,7 +1,7 @@
 # Global variables
 # You can set these variables from the command line.
 POETRY        := poetry
-SPHINXOPTS    :=
+SPHINXOPTS    := -j auto
 SPHINXBUILD   := $(POETRY) run sphinx-build
 PAPER         :=
 BUILDDIR      := _build
@@ -20,12 +20,6 @@ PAPEROPT_letter := -D latex_paper_size=letter
 ALLSPHINXOPTS   := -d $(BUILDDIR)/doctrees $(PAPEROPT_$(PAPER)) $(SPHINXOPTS) $(SOURCEDIR) -t $(FLAG) -c $(CONF_PATH)
 TESTSPHINXOPTS  := $(ALLSPHINXOPTS) -W --keep-going
 PROD_OPTS       := -D html_theme_options.collapse_navigation='false' -D html_theme_options.navigation_depth=3 -t $(FLAG) -c $(CONF_PATH)
-
-
-# Windows variables
-ifeq ($(OS),Windows_NT)
-    POETRY = $(APPDATA)\Python\Scripts\poetry
-endif
 
 .PHONY: all
 all: dirhtml

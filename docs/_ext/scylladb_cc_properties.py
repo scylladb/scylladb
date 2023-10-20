@@ -181,3 +181,9 @@ def setup(app: Sphinx):
     )
     app.connect("builder-inited", db_parser.run)
     app.add_directive("scylladb_config_template", DBConfigTemplateDirective)
+
+    return {
+        "version": "0.1",
+        "parallel_read_safe": True,
+        "parallel_write_safe": True,
+    }
