@@ -47,6 +47,9 @@ class S3_Server:
             MinioServer.create_conf_file(self.address, self.port, self.acc_key, self.secret_key, self.region, conffile)
         return conffile
 
+    def __repr__(self):
+        return f"[unknown] {self.address}:{self.port}/{self.bucket_name}@{self.config_file}"
+
     async def start(self):
         pass
 
