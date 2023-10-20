@@ -2121,13 +2121,17 @@ void gossiper::build_seeds_list() {
     }
 }
 
-future<> gossiper::add_saved_endpoint(locator::host_id host_id, inet_address ep, permit_id pid) {
+future<> gossiper::add_saved_endpoint(locator::host_id host_id, gms::loaded_endpoint_state st, permit_id pid) {
     if (host_id == my_host_id()) {
         logger.debug("Attempt to add self as saved endpoint");
         co_return;
     }
+    const auto& ep = st.endpoint;
     if (!host_id) {
         on_internal_error(logger, format("Attempt to add {} with null host_id as saved endpoint", ep));
+    }
+    if (ep == inet_address{}) {
+        on_internal_error(logger, format("Attempt to add {} with null inet_address as saved endpoint", host_id));
     }
     if (ep == get_broadcast_address()) {
         on_internal_error(logger, format("Attempt to add {} with broadcast_address {} as saved endpoint", host_id, ep));
@@ -2157,6 +2161,10 @@ future<> gossiper::add_saved_endpoint(locator::host_id host_id, inet_address ep,
     if (!tokens.empty()) {
         std::unordered_set<dht::token> tokens_set(tokens.begin(), tokens.end());
         ep_state.add_application_state(gms::application_state::TOKENS, versioned_value::tokens(tokens_set));
+    }
+    if (st.opt_dc_rack) {
+        ep_state.add_application_state(gms::application_state::DC, gms::versioned_value::datacenter(st.opt_dc_rack->dc));
+        ep_state.add_application_state(gms::application_state::RACK, gms::versioned_value::datacenter(st.opt_dc_rack->rack));
     }
     auto generation = ep_state.get_heart_beat_state().get_generation();
     co_await replicate(ep, std::move(ep_state), permit.id());
