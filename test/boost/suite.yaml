@@ -42,5 +42,7 @@ custom_args:
         - '-c2 -m3G'
     cache_algorithm_test:
         - '-c1 -m256M'
+    s3_test:
+        - '--logger-log-level http=debug --logger-log-level s3=debug'
 run_in_debug:
     - logalloc_standard_allocator_segment_pool_backend_test
