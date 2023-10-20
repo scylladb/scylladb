@@ -1580,6 +1580,7 @@ pkgs = []
 pkgs.append('lua53' if have_pkg('lua53') else 'lua')
 
 pkgs.append('libsystemd')
+pkgs.append('jsoncpp')
 
 has_sanitize_address_use_after_scope = try_compile(compiler=args.cxx, flags=['-fsanitize-address-use-after-scope'], source='int f() {}')
 
@@ -1773,8 +1774,7 @@ abseil_pkgs = [
 
 pkgs += abseil_pkgs
 
-user_cflags += " " + pkg_config('jsoncpp', '--cflags')
-libs = ' '.join([maybe_static(args.staticyamlcpp, '-lyaml-cpp'), '-latomic', '-llz4', '-lz', '-lsnappy', pkg_config('jsoncpp', '--libs'),
+libs = ' '.join([maybe_static(args.staticyamlcpp, '-lyaml-cpp'), '-latomic', '-llz4', '-lz', '-lsnappy',
                  ' -lstdc++fs', ' -lcrypt', ' -lcryptopp', ' -lpthread',
                  # Must link with static version of libzstd, since
                  # experimental APIs that we use are only present there.
