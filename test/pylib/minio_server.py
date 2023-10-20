@@ -54,6 +54,9 @@ class MinioServer:
         self.secret_key = ''.join(random.choice(string.hexdigits) for i in range(32))
         self.log_filename = (self.tempdir / 'minio').with_suffix(".log")
 
+    def __repr__(self):
+        return f"[minio] {self.address}:{self.port}/{self.bucket_name}@{self.config_file}"
+
     def check_server(self, port):
         s = socket.socket()
         try:
