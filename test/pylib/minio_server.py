@@ -184,6 +184,14 @@ class MinioServer:
 
         return cmd
 
+    def _set_environ(self):
+        os.environ[self.ENV_CONFFILE] = f'{self.config_file}'
+        os.environ[self.ENV_ADDRESS] = f'{self.address}'
+        os.environ[self.ENV_PORT] = f'{self.port}'
+        os.environ[self.ENV_BUCKET] = f'{self.bucket_name}'
+        os.environ[self.ENV_ACCESS_KEY] = f'{self.access_key}'
+        os.environ[self.ENV_SECRET_KEY] = f'{self.secret_key}'
+
     async def start(self):
         if self.srv_exe is None:
             self.logger.info("Minio not installed, get it from https://dl.minio.io/server/minio/release/linux-amd64/minio and put into PATH")
@@ -206,12 +214,7 @@ class MinioServer:
             return
 
         self.create_conf_file(self.address, self.port, self.access_key, self.secret_key, self.DEFAULT_REGION, self.config_file)
-        os.environ[self.ENV_CONFFILE] = f'{self.config_file}'
-        os.environ[self.ENV_ADDRESS] = f'{self.address}'
-        os.environ[self.ENV_PORT] = f'{self.port}'
-        os.environ[self.ENV_BUCKET] = f'{self.bucket_name}'
-        os.environ[self.ENV_ACCESS_KEY] = f'{self.access_key}'
-        os.environ[self.ENV_SECRET_KEY] = f'{self.secret_key}'
+        self._set_environ()
 
         try:
             alias = 'local'
