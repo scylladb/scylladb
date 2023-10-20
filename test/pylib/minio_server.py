@@ -198,6 +198,10 @@ class MinioServer:
                 self.ENV_ACCESS_KEY,
                 self.ENV_SECRET_KEY]
 
+    def _unset_environ(self):
+        for env in self._get_environs():
+            del os.environ[env]
+
     def print_environ(self):
         msgs = []
         for key in self._get_environs():
@@ -254,6 +258,9 @@ class MinioServer:
         if not self.cmd:
             return
 
+        # so the test's process environment is not polluted by a test case
+        # which launches the MinioServer by itself.
+        self._unset_environ()
         try:
             self.cmd.kill()
         except ProcessLookupError:
