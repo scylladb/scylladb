@@ -21,10 +21,8 @@ import shutil
 import time
 import tempfile
 import socket
-import yaml
-import json
-import random
 import string
+import yaml
 from io import BufferedWriter
 
 class MinioServer:
