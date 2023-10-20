@@ -93,6 +93,7 @@ public:
 template <typename NodeId = gms::inet_address>
 class generic_token_metadata final: public generic_token_metadata_base {
     std::unique_ptr<token_metadata_impl<NodeId>> _impl;
+    std::variant<std::monostate, lw_shared_ptr<token_metadata2>, lw_shared_ptr<const token_metadata2>> _new_value;
 private:
     friend class token_metadata_ring_splitter;
     class tokens_iterator {
@@ -119,6 +120,12 @@ private:
 public:
     generic_token_metadata(config cfg);
     explicit generic_token_metadata(std::unique_ptr<token_metadata_impl<NodeId>> impl);
+    template <typename T = NodeId>
+    requires std::is_same_v<T, gms::inet_address>
+    generic_token_metadata(std::unique_ptr<token_metadata_impl<NodeId>> impl, token_metadata2 new_value);
+    template <typename T = NodeId>
+    requires std::is_same_v<T, gms::inet_address>
+    generic_token_metadata(lw_shared_ptr<const token_metadata2> new_value);
     generic_token_metadata(generic_token_metadata&&) noexcept; // Can't use "= default;" - hits some static_assert in unique_ptr
     generic_token_metadata& operator=(generic_token_metadata&&) noexcept;
     ~generic_token_metadata();
@@ -139,6 +146,39 @@ public:
     const std::unordered_map<token, NodeId>& get_token_to_endpoint() const;
     const std::unordered_set<NodeId>& get_leaving_endpoints() const;
     const std::unordered_map<token, NodeId>& get_bootstrap_tokens() const;
+
+    template <typename T = NodeId>
+    requires std::is_same_v<T, gms::inet_address>
+    token_metadata2* get_new() {
+        if (holds_alternative<lw_shared_ptr<token_metadata2>>(_new_value)) {
+            return get<lw_shared_ptr<token_metadata2>>(_new_value).get();
+        }
+        throw_with_backtrace<std::runtime_error>("no mutable new value");
+    }
+
+    template <typename T = NodeId>
+    requires std::is_same_v<T, gms::inet_address>
+    const token_metadata2* get_new() const {
+        if (holds_alternative<lw_shared_ptr<token_metadata2>>(_new_value)) {
+            return get<lw_shared_ptr<token_metadata2>>(_new_value).get();
+        }
+        if (holds_alternative<lw_shared_ptr<const token_metadata2>>(_new_value)) {
+            return get<lw_shared_ptr<const token_metadata2>>(_new_value).get();
+        }
+        throw_with_backtrace<std::runtime_error>("no new value");
+    }
+
+    template <typename T = NodeId>
+    requires std::is_same_v<T, gms::inet_address>
+    lw_shared_ptr<const token_metadata2> get_new_strong() const {
+        if (holds_alternative<lw_shared_ptr<token_metadata2>>(_new_value)) {
+            return get<lw_shared_ptr<token_metadata2>>(_new_value);
+        }
+        if (holds_alternative<lw_shared_ptr<const token_metadata2>>(_new_value)) {
+            return get<lw_shared_ptr<const token_metadata2>>(_new_value);
+        }
+        throw_with_backtrace<std::runtime_error>("no new value");
+    }
 
     /**
      * Update or add endpoint given its inet_address and endpoint_dc_rack.

@@ -917,12 +917,36 @@ future<> topology_change_info<NodeId>::clear_gently() {
 
 template <typename NodeId>
 generic_token_metadata<NodeId>::generic_token_metadata(std::unique_ptr<token_metadata_impl<NodeId>> impl)
-    : _impl(std::move(impl)) {
+    : _impl(std::move(impl))
+{
+}
+
+template <typename NodeId>
+template <typename T>
+requires std::is_same_v<T, gms::inet_address>
+generic_token_metadata<NodeId>::generic_token_metadata(std::unique_ptr<token_metadata_impl<NodeId>> impl,
+    token_metadata2 new_value)
+    : _impl(std::move(impl))
+    , _new_value(make_token_metadata2_ptr(std::move(new_value)))
+{
+}
+
+template <typename NodeId>
+template <typename T>
+requires std::is_same_v<T, gms::inet_address>
+generic_token_metadata<NodeId>::generic_token_metadata(token_metadata2_ptr new_value)
+    : _impl(nullptr)
+    , _new_value(std::move(new_value))
+{
 }
 
 template <typename NodeId>
 generic_token_metadata<NodeId>::generic_token_metadata(config cfg)
-        : _impl(std::make_unique<token_metadata_impl<NodeId>>(std::move(cfg))) {
+        : _impl(std::make_unique<token_metadata_impl<NodeId>>(cfg))
+{
+    if constexpr (std::is_same_v<NodeId, gms::inet_address>) {
+        _new_value = make_token_metadata2_ptr(std::move(cfg));
+    }
 }
 
 template <typename NodeId>
@@ -1163,30 +1187,47 @@ void generic_token_metadata<NodeId>::del_replacing_endpoint(NodeId existing_node
 
 template <typename NodeId>
 future<generic_token_metadata<NodeId>> generic_token_metadata<NodeId>::clone_async() const noexcept {
-    return _impl->clone_async().then([] (std::unique_ptr<token_metadata_impl<NodeId>> impl) {
-        return make_ready_future<generic_token_metadata>(std::move(impl));
-    });
+    if constexpr (std::is_same_v<NodeId, gms::inet_address>) {
+        co_return !holds_alternative<std::monostate>(_new_value)
+                  ? generic_token_metadata(co_await _impl->clone_async(), co_await get_new()->clone_async())
+                  : generic_token_metadata(co_await _impl->clone_async());
+    } else {
+        co_return generic_token_metadata(co_await _impl->clone_async());
+    }
 }
 
 template <typename NodeId>
 future<generic_token_metadata<NodeId>>
 generic_token_metadata<NodeId>::clone_only_token_map() const noexcept {
-    return _impl->clone_only_token_map().then([] (std::unique_ptr<token_metadata_impl<NodeId>> impl) {
-        return generic_token_metadata(std::move(impl));
-    });
+    if constexpr (std::is_same_v<NodeId, gms::inet_address>) {
+        co_return !holds_alternative<std::monostate>(_new_value)
+                  ? generic_token_metadata(co_await _impl->clone_only_token_map(), co_await get_new()->clone_only_token_map())
+                  : generic_token_metadata(co_await _impl->clone_only_token_map());
+    } else {
+        co_return generic_token_metadata(co_await _impl->clone_only_token_map());
+    }
 }
 
 template <typename NodeId>
 future<generic_token_metadata<NodeId>>
 generic_token_metadata<NodeId>::clone_after_all_left() const noexcept {
-    return _impl->clone_after_all_left().then([] (std::unique_ptr<token_metadata_impl<NodeId>> impl) {
-        return generic_token_metadata(std::move(impl));
-    });
+    if constexpr (std::is_same_v<NodeId, gms::inet_address>) {
+        co_return !holds_alternative<std::monostate>(_new_value)
+                  ? generic_token_metadata(co_await _impl->clone_after_all_left(), co_await get_new()->clone_after_all_left())
+                  : generic_token_metadata(co_await _impl->clone_after_all_left());
+    } else {
+        co_return generic_token_metadata(co_await _impl->clone_after_all_left());
+    }
 }
 
 template <typename NodeId>
 future<> generic_token_metadata<NodeId>::clear_gently() noexcept {
-    return _impl->clear_gently();
+    co_await _impl->clear_gently();
+    if constexpr (std::is_same_v<NodeId, gms::inet_address>) {
+        if (holds_alternative<lw_shared_ptr<token_metadata2>>(_new_value)) {
+            co_await get_new()->clear_gently();
+        }
+    }
 }
 
 template <typename NodeId>
@@ -1409,5 +1450,10 @@ template class generic_token_metadata<locator::host_id>;
 template class generic_token_metadata<gms::inet_address>;
 template void host_id_or_endpoint::resolve(const token_metadata& tm);
 template void host_id_or_endpoint::resolve(const token_metadata2& tm);
+template token_metadata2* generic_token_metadata<gms::inet_address>::get_new<>();
+template const token_metadata2* generic_token_metadata<gms::inet_address>::get_new<>() const;
+template lw_shared_ptr<const token_metadata2> generic_token_metadata<gms::inet_address>::get_new_strong<>() const;
+template generic_token_metadata<gms::inet_address>::generic_token_metadata(std::unique_ptr<token_metadata_impl<gms::inet_address>>, token_metadata2);
+template generic_token_metadata<gms::inet_address>::generic_token_metadata(token_metadata2_ptr);
 
 } // namespace locator
