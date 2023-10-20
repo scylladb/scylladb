@@ -17,7 +17,7 @@ using namespace locator;
 namespace {
     const auto ks_name = sstring("test-ks");
 
-    endpoint_dc_rack get_dc_rack(inet_address) {
+    endpoint_dc_rack get_dc_rack(gms::inet_address) {
         return {
             .dc = "unk-dc",
             .rack = "unk-rack"
@@ -36,7 +36,7 @@ namespace {
 
     template <typename Strategy>
     mutable_vnode_erm_ptr create_erm(mutable_token_metadata_ptr tmptr, replication_strategy_config_options opts = {}) {
-        dc_rack_fn get_dc_rack_fn = get_dc_rack;
+        dc_rack_fn<gms::inet_address> get_dc_rack_fn = get_dc_rack;
         tmptr->update_topology_change_info(get_dc_rack_fn).get();
         auto strategy = seastar::make_shared<Strategy>(std::move(opts));
         return calculate_effective_replication_map(std::move(strategy), std::move(tmptr)).get0();

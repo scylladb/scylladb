@@ -31,6 +31,7 @@ struct endpoint_dc_rack {
     bool operator==(const endpoint_dc_rack&) const = default;
 };
 
-using dc_rack_fn = seastar::noncopyable_function<std::optional<endpoint_dc_rack>(inet_address)>;
+template <typename NodeId>
+using dc_rack_fn = seastar::noncopyable_function<std::optional<endpoint_dc_rack>(NodeId)>;
 
 } // namespace locator

@@ -236,7 +236,7 @@ public:
     static range<dht::token> interval_to_range(boost::icl::interval<token>::interval_type i);
 
 public:
-    future<> update_topology_change_info(dc_rack_fn& get_dc_rack);
+    future<> update_topology_change_info(dc_rack_fn<gms::inet_address>& get_dc_rack);
     const std::optional<topology_change_info>& get_topology_change_info() const {
         return _topology_change_info;
     }
@@ -723,7 +723,7 @@ token_metadata_impl::interval_to_range(boost::icl::interval<token>::interval_typ
     return range<dht::token>({{i.lower(), start_inclusive}}, {{i.upper(), end_inclusive}});
 }
 
-future<> token_metadata_impl::update_topology_change_info(dc_rack_fn& get_dc_rack) {
+future<> token_metadata_impl::update_topology_change_info(dc_rack_fn<gms::inet_address>& get_dc_rack) {
     if (_bootstrap_tokens.empty() && _leaving_endpoints.empty() && _replacing_endpoints.empty()) {
         co_await utils::clear_gently(_topology_change_info);
         _topology_change_info.reset();
@@ -1115,7 +1115,7 @@ token_metadata::interval_to_range(boost::icl::interval<token>::interval_type i) 
 }
 
 future<>
-token_metadata::update_topology_change_info(dc_rack_fn& get_dc_rack) {
+token_metadata::update_topology_change_info(dc_rack_fn<gms::inet_address>& get_dc_rack) {
     return _impl->update_topology_change_info(get_dc_rack);
 }
 
