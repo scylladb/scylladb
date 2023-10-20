@@ -1743,10 +1743,7 @@ if not args.dist_only:
     for mode, mode_config in build_modes.items():
         configure_seastar(outdir, mode, mode_config)
 
-pc = {mode: f'{outdir}/{mode}/seastar/seastar.pc' for mode in build_modes}
-
-def query_seastar_flags(pc_file, link_static_cxx=False):
-    use_shared_libs = modes[mode]['build_seastar_shared_libs']
+def query_seastar_flags(pc_file, use_shared_libs, link_static_cxx=False):
     if use_shared_libs:
         opt = '--shared'
     else:
@@ -1759,13 +1756,11 @@ def query_seastar_flags(pc_file, link_static_cxx=False):
     if link_static_cxx:
         libs = libs.replace('-lstdc++ ', '')
 
-    return cflags, libs
+    testing_libs = pkg_config(pc_file.replace('seastar.pc', 'seastar-testing.pc'), '--libs', '--static')
+    return {'seastar_cflags': cflags,
+            'seastar_libs': libs,
+            'seastar_testing_libs': testing_libs}
 
-for mode in build_modes:
-    seastar_pc_cflags, seastar_pc_libs = query_seastar_flags(pc[mode], link_static_cxx=args.staticcxx)
-    modes[mode]['seastar_cflags'] = seastar_pc_cflags
-    modes[mode]['seastar_libs'] = seastar_pc_libs
-    modes[mode]['seastar_testing_libs'] = pkg_config(pc[mode].replace('seastar.pc', 'seastar-testing.pc'), '--libs', '--static')
 
 abseil_pkgs = [
     'absl_raw_hash_set',
@@ -1906,8 +1901,13 @@ def write_build_file(f,
         else:
             f.write(f'build $builddir/{wasm}: c2wasm {src}\n')
         f.write(f'build $builddir/{binary}: wasm2wat $builddir/{wasm}\n')
+
     for mode in build_modes:
         modeval = modes[mode]
+        modeval.update(query_seastar_flags(f'{outdir}/{mode}/seastar/seastar.pc',
+                                           modeval['build_seastar_shared_libs'],
+                                           args.staticcxx))
+
         fmt_lib = 'fmt'
         f.write(textwrap.dedent('''\
             cxx_ld_flags_{mode} = {cxx_ld_flags}
