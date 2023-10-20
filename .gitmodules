@@ -8,7 +8,7 @@
 	ignore = dirty
 [submodule "scylla-jmx"]
 	path = tools/jmx
-	url = ../scylla-jmx
+	url = ../../avelanarius/scylla-jmx
 [submodule "scylla-tools"]
 	path = tools/java
 	url = ../scylla-tools-java
