@@ -1500,26 +1500,29 @@ wasm_deps['wasm/test_UDA_final.wat'] = 'test/resource/wasm/c/test_UDA_final.c'
 wasm_deps['wasm/test_UDA_scalar.wat'] = 'test/resource/wasm/c/test_UDA_scalar.c'
 wasm_deps['wasm/test_word_double.wat'] = 'test/resource/wasm/c/test_word_double.c'
 
-warnings = [
-    '-Wall',
-    '-Werror',
-    '-Wimplicit-fallthrough',
-    '-Wno-mismatched-tags',  # clang-only
-    '-Wno-c++11-narrowing',
-    '-Wno-overloaded-virtual',
-    '-Wno-unused-command-line-argument',
-    '-Wno-unsupported-friend',
-    '-Wno-implicit-int-float-conversion',
-    # https://gcc.gnu.org/bugzilla/show_bug.cgi?id=77728
-    '-Wno-psabi',
-    '-Wno-narrowing',
-]
 
-warnings = [w
-            for w in warnings
-            if flag_supported(flag=w, compiler=args.cxx)]
+def get_warning_options(cxx):
+    warnings = [
+        '-Wall',
+        '-Werror',
+        '-Wimplicit-fallthrough',
+        '-Wno-mismatched-tags',  # clang-only
+        '-Wno-c++11-narrowing',
+        '-Wno-overloaded-virtual',
+        '-Wno-unused-command-line-argument',
+        '-Wno-unsupported-friend',
+        '-Wno-implicit-int-float-conversion',
+        # https://gcc.gnu.org/bugzilla/show_bug.cgi?id=77728
+        '-Wno-psabi',
+        '-Wno-narrowing',
+    ]
 
-warnings = ' '.join(warnings + ['-Wno-error=deprecated-declarations'])
+    warnings = [w
+                for w in warnings
+                if flag_supported(flag=w, compiler=cxx)]
+
+    return ' '.join(warnings + ['-Wno-error=deprecated-declarations'])
+
 
 def get_clang_inline_threshold():
     if args.clang_inline_threshold != -1:
@@ -1808,6 +1811,7 @@ def write_build_file(f,
                      scylla_version,
                      scylla_release,
                      args):
+    warnings = get_warning_options(args.cxx)
     f.write(textwrap.dedent('''\
         configure_args = {configure_args}
         builddir = {outdir}
