@@ -20,17 +20,17 @@ namespace tmt = httpd::task_manager_test_json;
 using namespace json;
 using namespace seastar::httpd;
 
-void set_task_manager_test(http_context& ctx, routes& r) {
-    tmt::register_test_module.set(r, [&ctx] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
-        co_await ctx.tm.invoke_on_all([] (tasks::task_manager& tm) {
+void set_task_manager_test(http_context& ctx, routes& r, sharded<tasks::task_manager>& tm) {
+    tmt::register_test_module.set(r, [&tm] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
+        co_await tm.invoke_on_all([] (tasks::task_manager& tm) {
             auto m = make_shared<tasks::test_module>(tm);
             tm.register_module("test", m);
         });
         co_return json_void();
     });
 
-    tmt::unregister_test_module.set(r, [&ctx] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
-        co_await ctx.tm.invoke_on_all([] (tasks::task_manager& tm) -> future<> {
+    tmt::unregister_test_module.set(r, [&tm] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
+        co_await tm.invoke_on_all([] (tasks::task_manager& tm) -> future<> {
             auto module_name = "test";
             auto module = tm.find_module(module_name);
             co_await module->stop();
@@ -38,8 +38,8 @@ void set_task_manager_test(http_context& ctx, routes& r) {
         co_return json_void();
     });
 
-    tmt::register_test_task.set(r, [&ctx] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
-        sharded<tasks::task_manager>& tms = ctx.tm;
+    tmt::register_test_task.set(r, [&tm] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
+        sharded<tasks::task_manager>& tms = tm;
         auto it = req->query_parameters.find("task_id");
         auto id = it != req->query_parameters.end() ? tasks::task_id{utils::UUID{it->second}} : tasks::task_id::create_null_id();
         it = req->query_parameters.find("shard");
@@ -54,7 +54,7 @@ void set_task_manager_test(http_context& ctx, routes& r) {
         tasks::task_info data;
         if (it != req->query_parameters.end()) {
             data.id = tasks::task_id{utils::UUID{it->second}};
-            auto parent_ptr = co_await tasks::task_manager::lookup_task_on_all_shards(ctx.tm, data.id);
+            auto parent_ptr = co_await tasks::task_manager::lookup_task_on_all_shards(tm, data.id);
             data.shard = parent_ptr->get_status().shard;
         }
 
@@ -69,10 +69,10 @@ void set_task_manager_test(http_context& ctx, routes& r) {
         co_return id.to_sstring();
     });
 
-    tmt::unregister_test_task.set(r, [&ctx] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
+    tmt::unregister_test_task.set(r, [&tm] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         auto id = tasks::task_id{utils::UUID{req->query_parameters["task_id"]}};
         try {
-            co_await tasks::task_manager::invoke_on_task(ctx.tm, id, [] (tasks::task_manager::task_ptr task) -> future<> {
+            co_await tasks::task_manager::invoke_on_task(tm, id, [] (tasks::task_manager::task_ptr task) -> future<> {
                 tasks::test_task test_task{task};
                 co_await test_task.unregister_task();
             });
@@ -82,14 +82,14 @@ void set_task_manager_test(http_context& ctx, routes& r) {
         co_return json_void();
     });
 
-    tmt::finish_test_task.set(r, [&ctx] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
+    tmt::finish_test_task.set(r, [&tm] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         auto id = tasks::task_id{utils::UUID{req->param["task_id"]}};
         auto it = req->query_parameters.find("error");
         bool fail = it != req->query_parameters.end();
         std::string error = fail ? it->second : "";
 
         try {
-            co_await tasks::task_manager::invoke_on_task(ctx.tm, id, [fail, error = std::move(error)] (tasks::task_manager::task_ptr task) {
+            co_await tasks::task_manager::invoke_on_task(tm, id, [fail, error = std::move(error)] (tasks::task_manager::task_ptr task) {
                 tasks::test_task test_task{task};
                 if (fail) {
                     test_task.finish_failed(std::make_exception_ptr(std::runtime_error(error)));
@@ -103,6 +103,14 @@ void set_task_manager_test(http_context& ctx, routes& r) {
         }
         co_return json_void();
     });
+}
+
+void unset_task_manager_test(http_context& ctx, routes& r) {
+    tmt::register_test_module.unset(r);
+    tmt::unregister_test_module.unset(r);
+    tmt::register_test_task.unset(r);
+    tmt::unregister_test_task.unset(r);
+    tmt::finish_test_task.unset(r);
 }
 
 }

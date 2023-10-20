@@ -61,6 +61,10 @@ class gossiper;
 
 namespace auth { class service; }
 
+namespace tasks {
+class task_manager;
+}
+
 namespace api {
 
 struct http_context {
@@ -70,11 +74,10 @@ struct http_context {
     distributed<replica::database>& db;
     service::load_meter& lmeter;
     const sharded<locator::shared_token_metadata>& shared_token_metadata;
-    sharded<tasks::task_manager>& tm;
 
     http_context(distributed<replica::database>& _db,
-            service::load_meter& _lm, const sharded<locator::shared_token_metadata>& _stm, sharded<tasks::task_manager>& _tm)
-            : db(_db), lmeter(_lm), shared_token_metadata(_stm), tm(_tm) {
+            service::load_meter& _lm, const sharded<locator::shared_token_metadata>& _stm)
+            : db(_db), lmeter(_lm), shared_token_metadata(_stm) {
     }
 
     const locator::token_metadata& get_token_metadata();
@@ -115,7 +118,9 @@ future<> set_server_gossip_settle(http_context& ctx, sharded<gms::gossiper>& g);
 future<> set_server_cache(http_context& ctx);
 future<> set_server_compaction_manager(http_context& ctx);
 future<> set_server_done(http_context& ctx);
-future<> set_server_task_manager(http_context& ctx, lw_shared_ptr<db::config> cfg);
-future<> set_server_task_manager_test(http_context& ctx);
+future<> set_server_task_manager(http_context& ctx, sharded<tasks::task_manager>& tm, lw_shared_ptr<db::config> cfg);
+future<> unset_server_task_manager(http_context& ctx);
+future<> set_server_task_manager_test(http_context& ctx, sharded<tasks::task_manager>& tm);
+future<> unset_server_task_manager_test(http_context& ctx);
 
 }

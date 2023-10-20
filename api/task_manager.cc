@@ -111,16 +111,16 @@ future<full_task_status> retrieve_status(const tasks::task_manager::foreign_task
     co_return s;
 }
 
-void set_task_manager(http_context& ctx, routes& r, db::config& cfg) {
-    tm::get_modules.set(r, [&ctx] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
-        std::vector<std::string> v = boost::copy_range<std::vector<std::string>>(ctx.tm.local().get_modules() | boost::adaptors::map_keys);
+void set_task_manager(http_context& ctx, routes& r, sharded<tasks::task_manager>& tm, db::config& cfg) {
+    tm::get_modules.set(r, [&tm] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
+        std::vector<std::string> v = boost::copy_range<std::vector<std::string>>(tm.local().get_modules() | boost::adaptors::map_keys);
         co_return v;
     });
 
-    tm::get_tasks.set(r, [&ctx] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
+    tm::get_tasks.set(r, [&tm] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         using chunked_stats = utils::chunked_vector<task_stats>;
         auto internal = tasks::is_internal{req_param<bool>(*req, "internal", false)};
-        std::vector<chunked_stats> res = co_await ctx.tm.map([&req, internal] (tasks::task_manager& tm) {
+        std::vector<chunked_stats> res = co_await tm.map([&req, internal] (tasks::task_manager& tm) {
             chunked_stats local_res;
             tasks::task_manager::module_ptr module;
             try {
@@ -156,11 +156,11 @@ void set_task_manager(http_context& ctx, routes& r, db::config& cfg) {
         co_return std::move(f);
     });
 
-    tm::get_task_status.set(r, [&ctx] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
+    tm::get_task_status.set(r, [&tm] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         auto id = tasks::task_id{utils::UUID{req->param["task_id"]}};
         tasks::task_manager::foreign_task_ptr task;
         try {
-            task = co_await tasks::task_manager::invoke_on_task(ctx.tm, id, std::function([] (tasks::task_manager::task_ptr task) -> future<tasks::task_manager::foreign_task_ptr> {
+            task = co_await tasks::task_manager::invoke_on_task(tm, id, std::function([] (tasks::task_manager::task_ptr task) -> future<tasks::task_manager::foreign_task_ptr> {
                 if (task->is_complete()) {
                     task->unregister_task();
                 }
@@ -173,10 +173,10 @@ void set_task_manager(http_context& ctx, routes& r, db::config& cfg) {
         co_return make_status(s);
     });
 
-    tm::abort_task.set(r, [&ctx] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
+    tm::abort_task.set(r, [&tm] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         auto id = tasks::task_id{utils::UUID{req->param["task_id"]}};
         try {
-            co_await tasks::task_manager::invoke_on_task(ctx.tm, id, [] (tasks::task_manager::task_ptr task) -> future<> {
+            co_await tasks::task_manager::invoke_on_task(tm, id, [] (tasks::task_manager::task_ptr task) -> future<> {
                 if (!task->is_abortable()) {
                     co_await coroutine::return_exception(std::runtime_error("Requested task cannot be aborted"));
                 }
@@ -188,11 +188,11 @@ void set_task_manager(http_context& ctx, routes& r, db::config& cfg) {
         co_return json_void();
     });
 
-    tm::wait_task.set(r, [&ctx] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
+    tm::wait_task.set(r, [&tm] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         auto id = tasks::task_id{utils::UUID{req->param["task_id"]}};
         tasks::task_manager::foreign_task_ptr task;
         try {
-            task = co_await tasks::task_manager::invoke_on_task(ctx.tm, id, std::function([] (tasks::task_manager::task_ptr task) {
+            task = co_await tasks::task_manager::invoke_on_task(tm, id, std::function([] (tasks::task_manager::task_ptr task) {
                 return task->done().then_wrapped([task] (auto f) {
                     task->unregister_task();
                     // done() is called only because we want the task to be complete before getting its status.
@@ -208,8 +208,8 @@ void set_task_manager(http_context& ctx, routes& r, db::config& cfg) {
         co_return make_status(s);
     });
 
-    tm::get_task_status_recursively.set(r, [&ctx] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
-        auto& _ctx = ctx;
+    tm::get_task_status_recursively.set(r, [&_tm = tm] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
+        auto& tm = _tm;
         auto id = tasks::task_id{utils::UUID{req->param["task_id"]}};
         std::queue<tasks::task_manager::foreign_task_ptr> q;
         utils::chunked_vector<full_task_status> res;
@@ -217,7 +217,7 @@ void set_task_manager(http_context& ctx, routes& r, db::config& cfg) {
         tasks::task_manager::foreign_task_ptr task;
         try {
             // Get requested task.
-            task = co_await tasks::task_manager::invoke_on_task(_ctx.tm, id, std::function([] (tasks::task_manager::task_ptr task) -> future<tasks::task_manager::foreign_task_ptr> {
+            task = co_await tasks::task_manager::invoke_on_task(tm, id, std::function([] (tasks::task_manager::task_ptr task) -> future<tasks::task_manager::foreign_task_ptr> {
                 if (task->is_complete()) {
                     task->unregister_task();
                 }
@@ -262,6 +262,16 @@ void set_task_manager(http_context& ctx, routes& r, db::config& cfg) {
         }
         co_return json::json_return_type(ttl);
     });
+}
+
+void unset_task_manager(http_context& ctx, routes& r) {
+    tm::get_modules.unset(r);
+    tm::get_tasks.unset(r);
+    tm::get_task_status.unset(r);
+    tm::abort_task.unset(r);
+    tm::wait_task.unset(r);
+    tm::get_task_status_recursively.unset(r);
+    tm::get_and_update_ttl.unset(r);
 }
 
 }

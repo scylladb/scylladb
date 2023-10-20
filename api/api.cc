@@ -270,26 +270,34 @@ future<> set_server_done(http_context& ctx) {
     });
 }
 
-future<> set_server_task_manager(http_context& ctx, lw_shared_ptr<db::config> cfg) {
+future<> set_server_task_manager(http_context& ctx, sharded<tasks::task_manager>& tm, lw_shared_ptr<db::config> cfg) {
     auto rb = std::make_shared < api_registry_builder > (ctx.api_doc);
 
-    return ctx.http_server.set_routes([rb, &ctx, &cfg = *cfg](routes& r) {
+    return ctx.http_server.set_routes([rb, &ctx, &tm, &cfg = *cfg](routes& r) {
         rb->register_function(r, "task_manager",
                 "The task manager API");
-        set_task_manager(ctx, r, cfg);
+        set_task_manager(ctx, r, tm, cfg);
     });
+}
+
+future<> unset_server_task_manager(http_context& ctx) {
+    return ctx.http_server.set_routes([&ctx] (routes& r) { unset_task_manager(ctx, r); });
 }
 
 #ifndef SCYLLA_BUILD_MODE_RELEASE
 
-future<> set_server_task_manager_test(http_context& ctx) {
+future<> set_server_task_manager_test(http_context& ctx, sharded<tasks::task_manager>& tm) {
     auto rb = std::make_shared < api_registry_builder > (ctx.api_doc);
 
-    return ctx.http_server.set_routes([rb, &ctx](routes& r) mutable {
+    return ctx.http_server.set_routes([rb, &ctx, &tm](routes& r) mutable {
         rb->register_function(r, "task_manager_test",
                 "The task manager test API");
-        set_task_manager_test(ctx, r);
+        set_task_manager_test(ctx, r, tm);
     });
+}
+
+future<> unset_server_task_manager_test(http_context& ctx) {
+    return ctx.http_server.set_routes([&ctx] (routes& r) { unset_task_manager_test(ctx, r); });
 }
 
 #endif
