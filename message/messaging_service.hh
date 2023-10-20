@@ -528,6 +528,8 @@ private:
 
     bool is_host_banned(locator::host_id);
 
+    sstring client_metrics_domain(unsigned idx, inet_address addr) const;
+
 public:
     // Return rpc::protocol::client for a shard which is a ip + cpuid pair.
     shared_ptr<rpc_protocol_client_wrapper> get_rpc_client(messaging_verb verb, msg_addr id);

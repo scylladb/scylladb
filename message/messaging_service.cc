@@ -294,6 +294,27 @@ bool messaging_service::is_same_rack(inet_address addr) const {
     return topo.get_rack(addr) == topo.get_rack();
 }
 
+// The socket metrics domain defines the way RPC metrics are grouped
+// for different sockets. Thus, the domain includes:
+//
+// - Target datacenter name, because it's pointless to merge networking
+//   statis for connections that are in advance known to have different
+//   timings and rates
+// - The verb-idx to tell different RPC channels from each other. For
+//   that the isolation cookie suits very well, because these cookies
+//   are different for different indices and are more informative than
+//   plain numbers
+sstring messaging_service::client_metrics_domain(unsigned idx, inet_address addr) const {
+    sstring ret = _scheduling_info_for_connection_index[idx].isolation_cookie;
+    if (_token_metadata) {
+        const auto& topo = _token_metadata->get()->get_topology();
+        if (topo.has_endpoint(addr)) {
+            ret += ":" + topo.get_datacenter(addr);
+        }
+    }
+    return ret;
+}
+
 future<> messaging_service::ban_host(locator::host_id id) {
     return container().invoke_on_all([id] (messaging_service& ms) {
         if (ms._banned_hosts.contains(id) || ms.is_shutting_down()) {
@@ -884,6 +905,7 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
     opts.tcp_nodelay = must_tcp_nodelay;
     opts.reuseaddr = true;
     opts.isolation_cookie = _scheduling_info_for_connection_index[idx].isolation_cookie;
+    opts.metrics_domain = client_metrics_domain(idx, id.addr); // not just `addr` as the latter may be internal IP
 
     assert(!must_encrypt || _credentials);
 
