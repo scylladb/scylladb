@@ -10,9 +10,6 @@
 #include "schema/schema_fwd.hh"
 #include "utils/rjson.hh"
 
-// has to be below the utils/rjson.hh include
-#include <rapidjson/ostreamwrapper.h>
-
 /*
  * Utilities for converting mutations, mutation-fragments and their parts into json.
  */
@@ -27,34 +24,9 @@ struct collection_mutation_view_description;
 
 namespace mutation_json {
 
-class json_writer {
-    using stream = rapidjson::BasicOStreamWrapper<std::ostream>;
-    using writer = rapidjson::Writer<stream, rjson::encoding, rjson::encoding, rjson::allocator>;
-
-    stream _stream;
-    writer _writer;
-
+class json_writer : public rjson::streaming_writer {
 public:
-    json_writer(std::ostream& os = std::cout) : _stream(os), _writer(_stream)
-    { }
-
-    writer& rjson_writer() { return _writer; }
-
-    // following the rapidjson method names here
-    bool Null() { return _writer.Null(); }
-    bool Bool(bool b) { return _writer.Bool(b); }
-    bool Int(int i) { return _writer.Int(i); }
-    bool Uint(unsigned i) { return _writer.Uint(i); }
-    bool Int64(int64_t i) { return _writer.Int64(i); }
-    bool Uint64(uint64_t i) { return _writer.Uint64(i); }
-    bool Double(double d) { return _writer.Double(d); }
-    bool RawNumber(std::string_view str) { return _writer.RawNumber(str.data(), str.size(), false); }
-    bool String(std::string_view str) { return _writer.String(str.data(), str.size(), false); }
-    bool StartObject() { return _writer.StartObject(); }
-    bool Key(std::string_view str) { return _writer.Key(str.data(), str.size(), false); }
-    bool EndObject(rapidjson::SizeType memberCount = 0) { return _writer.EndObject(memberCount); }
-    bool StartArray() { return _writer.StartArray(); }
-    bool EndArray(rapidjson::SizeType elementCount = 0) { return _writer.EndArray(elementCount); }
+    using rjson::streaming_writer::streaming_writer;
 
     // scylla-specific extensions (still following rapidjson naming scheme for consistency)
     template <typename T>

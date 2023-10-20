@@ -21,12 +21,13 @@ logger = logging.getLogger(__name__)
 
 class expected_request:
     def __init__(self, method: str, path: str, params: dict = {}, multiple: bool = False,
-                 response: Dict[str, Any] = None):
+                 response: Dict[str, Any] = None, response_status: int = 200):
         self.method = method
         self.path = path
         self.params = params
         self.multiple = multiple
         self.response = response
+        self.response_status = response_status
 
         self.hit = 0
 
@@ -36,7 +37,8 @@ class expected_request:
                 "path": self.path,
                 "multiple": self.multiple,
                 "params": self.params,
-                "response": self.response}
+                "response": self.response,
+                "response_status": self.response_status}
 
     def __eq__(self, o):
         return self.method == o.method and self.path == o.path and self.params == o.params
@@ -51,7 +53,8 @@ def _make_expected_request(req_json):
             req_json["path"],
             params=req_json.get("params", dict()),
             multiple=req_json.get("multiple", False),
-            response=req_json.get("response"))
+            response=req_json.get("response"),
+            response_status=req_json.get("response_status", 200))
 
 
 class handler_match_info(aiohttp.abc.AbstractMatchInfo):
@@ -146,7 +149,7 @@ class rest_server(aiohttp.abc.AbstractRouter):
             return aiohttp.web.json_response({})
         else:
             logger.info(f"expected_request: {expected_req}, response: {expected_req.response}")
-            return aiohttp.web.json_response(expected_req.response)
+            return aiohttp.web.json_response(expected_req.response, status=expected_req.response_status)
 
 
 async def run_server(ip, port):
