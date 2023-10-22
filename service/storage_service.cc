@@ -3668,21 +3668,29 @@ future<> storage_service::handle_state_bootstrap(inet_address endpoint, gms::per
     // continue.
     auto tmlock = co_await get_token_metadata_lock();
     auto tmptr = co_await get_mutable_token_metadata_ptr();
-    if (tmptr->is_normal_token_owner(endpoint)) {
-        // If isLeaving is false, we have missed both LEAVING and LEFT. However, if
-        // isLeaving is true, we have only missed LEFT. Waiting time between completing
-        // leave operation and rebootstrapping is relatively short, so the latter is quite
-        // common (not enough time for gossip to spread). Therefore we report only the
-        // former in the log.
-        if (!tmptr->is_leaving(endpoint)) {
-            slogger.info("Node {} state jump to bootstrap", endpoint);
+    auto update_tm = [&]<typename NodeId>(locator::generic_token_metadata<NodeId>& tm, NodeId n, std::optional<locator::endpoint_dc_rack> dc_rack) {
+        if (tm.is_normal_token_owner(n)) {
+            // If isLeaving is false, we have missed both LEAVING and LEFT. However, if
+            // isLeaving is true, we have only missed LEFT. Waiting time between completing
+            // leave operation and rebootstrapping is relatively short, so the latter is quite
+            // common (not enough time for gossip to spread). Therefore we report only the
+            // former in the log.
+            if (!tm.is_leaving(n)) {
+                slogger.info("Node {} state jump to bootstrap", n);
+            }
+            tm.remove_endpoint(n);
         }
-        tmptr->remove_endpoint(endpoint);
-    }
 
-    tmptr->update_topology(endpoint, get_dc_rack_for(endpoint), locator::node::state::bootstrapping);
-    tmptr->add_bootstrap_tokens(tokens, endpoint);
-    tmptr->update_host_id(_gossiper.get_host_id(endpoint), endpoint);
+        tm.update_topology(n, dc_rack, locator::node::state::bootstrapping);
+        tm.add_bootstrap_tokens(tokens, n);
+    };
+    const auto dc_rack = get_dc_rack_for(endpoint);
+    const auto host_id = _gossiper.get_host_id(endpoint);
+    update_tm(*tmptr, endpoint, dc_rack);
+    update_tm(*tmptr->get_new(), host_id, dc_rack);
+    tmptr->update_host_id(host_id, endpoint);
+    tmptr->get_new()->update_host_id(host_id, endpoint);
+
     co_await update_topology_change_info(tmptr, ::format("handle_state_bootstrap {}", endpoint));
     co_await replicate_to_all_cores(std::move(tmptr));
 }
