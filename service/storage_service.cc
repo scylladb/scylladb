@@ -6022,6 +6022,10 @@ future<> storage_service::excise(std::unordered_set<token> tokens, inet_address 
     auto tmptr = co_await get_mutable_token_metadata_ptr();
     tmptr->remove_endpoint(endpoint);
     tmptr->remove_bootstrap_tokens(tokens);
+    if (const auto host_id = tmptr->get_new()->get_host_id_if_known(endpoint); host_id) {
+        tmptr->get_new()->remove_endpoint(*host_id);
+    }
+    tmptr->get_new()->remove_bootstrap_tokens(tokens);
 
     co_await update_topology_change_info(tmptr, ::format("excise {}", endpoint));
     co_await replicate_to_all_cores(std::move(tmptr));
