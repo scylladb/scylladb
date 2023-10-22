@@ -3701,11 +3701,7 @@ future<> storage_service::handle_state_normal(inet_address endpoint, gms::permit
         // In all of these cases host_id is retained, only the IP addresses are changed.
         // That's why we don't need to call remove_endpoint on tmptr->get_new().
         // However, it will be called eventually through the chain storage_service::remove_endpoint ->
-        // _gossiper.remove_endpoint -> storage_service::on_remove, and we should handle
-        // the case when we wouldn't be able to find endpoint -> ip mapping in tm->get_new().
-        // This could happen e.g. when the new endpoint has bigger generation - the code
-        // below will remap host_id to new IP and we won't find old IP in storage_service::on_remove.
-        // We should just skip the remove in that case.
+        // _gossiper.remove_endpoint -> storage_service::on_remove.
 
         tmptr->remove_endpoint(node);
         endpoints_to_remove.insert(node);
@@ -4061,6 +4057,13 @@ future<> storage_service::on_remove(gms::inet_address endpoint, gms::permit_id p
     auto tmlock = co_await get_token_metadata_lock();
     auto tmptr = co_await get_mutable_token_metadata_ptr();
     tmptr->remove_endpoint(endpoint);
+    // We should handle the case when we aren't able to find endpoint -> ip mapping in tm->get_new().
+    // This could happen e.g. when the new endpoint has bigger generation in handle_state_normal - the code
+    // in handle_state_normal will remap host_id to the new IP and we won't find
+    // old IP here. We should just skip the remove in that case.
+    if (const auto host_id = tmptr->get_new()->get_host_id_if_known(endpoint); host_id) {
+        tmptr->get_new()->remove_endpoint(*host_id);
+    }
     co_await update_topology_change_info(tmptr, ::format("on_remove {}", endpoint));
     co_await replicate_to_all_cores(std::move(tmptr));
 }
