@@ -1129,7 +1129,6 @@ private:
             return !sst->requires_view_building();
         }));
         std::vector<sstables::shared_sstable> reshape_candidates = old_sstables;
-        std::vector<sstables::shared_sstable> sstables_to_remove;
         std::unordered_set<sstables::shared_sstable> new_unused_sstables;
 
         auto cleanup_new_unused_sstables_on_failure = defer([&new_unused_sstables] {
@@ -1179,8 +1178,6 @@ private:
                 if (can_remove_now(sst)) {
                     co_await sst->unlink();
                     new_unused_sstables.erase(std::move(sst));
-                } else {
-                    sstables_to_remove.push_back(std::move(sst));
                 }
             }
         }
@@ -1193,12 +1190,6 @@ private:
         co_await t.on_compaction_completion(std::move(completion_desc), sstables::offstrategy::yes);
 
         cleanup_new_unused_sstables_on_failure.cancel();
-        // By marking input sstables for deletion instead, the ones which require view building will stay in the staging
-        // directory until they're moved to the main dir when the time comes. Also, that allows view building to resume
-        // on restart if there's a crash midway.
-        for (auto& sst : sstables_to_remove) {
-            sst->mark_for_deletion();
-        }
         if (err) {
             co_await coroutine::return_exception_ptr(std::move(err));
         }
