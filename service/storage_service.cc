@@ -3575,6 +3575,8 @@ future<> storage_service::bootstrap(std::unordered_set<token>& bootstrap_tokens,
                     auto endpoint = get_broadcast_address();
                     tmptr->update_topology(endpoint, _snitch.local()->get_location(), locator::node::state::bootstrapping);
                     tmptr->add_bootstrap_tokens(bootstrap_tokens, endpoint);
+                    tmptr->get_new()->update_topology(tmptr->get_new()->get_my_id(), _snitch.local()->get_location(), locator::node::state::bootstrapping);
+                    tmptr->get_new()->add_bootstrap_tokens(bootstrap_tokens, tmptr->get_new()->get_my_id());
                     return update_topology_change_info(std::move(tmptr), ::format("bootstrapping node {}", endpoint));
                 }).get();
             }
