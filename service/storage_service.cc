@@ -4260,11 +4260,17 @@ future<> storage_service::join_cluster(sharded<db::system_distributed_keyspace>&
                 // entry has been mistakenly added, delete it
                 co_await _sys_ks.local().remove_endpoint(ep);
             } else {
-                tmptr->update_topology(ep, get_dc_rack(ep), locator::node::state::normal);
+                const auto dc_rack = get_dc_rack(ep);
+                tmptr->update_topology(ep, dc_rack, locator::node::state::normal);
                 co_await tmptr->update_normal_tokens(tokens, ep);
-                if (loaded_host_ids.contains(ep)) {
-                    tmptr->update_host_id(loaded_host_ids.at(ep), ep);
+                const auto hostIdIt = loaded_host_ids.find(ep);
+                if (hostIdIt == loaded_host_ids.end()) {
+                    on_internal_error(slogger, format("can't find host_id for ep {}", ep));
                 }
+                tmptr->update_host_id(hostIdIt->second, ep);
+                tmptr->get_new()->update_topology(hostIdIt->second, dc_rack, locator::node::state::normal);
+                co_await tmptr->get_new()->update_normal_tokens(tokens, hostIdIt->second);
+                tmptr->get_new()->update_host_id(hostIdIt->second, ep);
                 loaded_endpoints.insert(ep);
                 co_await _gossiper.add_saved_endpoint(ep);
             }
