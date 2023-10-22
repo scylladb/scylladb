@@ -6345,6 +6345,7 @@ future<> storage_service::snitch_reconfigured() {
     co_await mutate_token_metadata([&] (mutable_token_metadata_ptr tmptr) -> future<> {
         // re-read local rack and DC info
         tmptr->update_topology(get_broadcast_address(), snitch->get_location());
+        tmptr->get_new()->update_topology(tmptr->get_new()->get_my_id(), snitch->get_location());
         return make_ready_future<>();
     });
 
