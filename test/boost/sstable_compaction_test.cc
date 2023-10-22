@@ -5101,8 +5101,8 @@ SEASTAR_TEST_CASE(test_compaction_strategy_cleanup_method) {
     });
 }
 
-SEASTAR_TEST_CASE(cleanup_incremental_compaction_test) {
-    return test_env::do_with_async([] (test_env& env) {
+static future<> run_incremental_compaction_test(sstables::offstrategy offstrategy, std::function<future<>(column_family_for_tests&, owned_ranges_ptr)> run_compaction) {
+    return test_env::do_with_async([run_compaction = std::move(run_compaction), offstrategy] (test_env& env) {
         auto builder = schema_builder("tests", "test")
                 .with_column("id", utf8_type, column_kind::partition_key)
                 .with_column("value", int32_type);
@@ -5114,7 +5114,7 @@ SEASTAR_TEST_CASE(cleanup_incremental_compaction_test) {
         builder.set_compaction_strategy_options(std::move(opts));
         auto s = builder.build();
         auto tmp = tmpdir();
-        auto sst_gen = [&env, s, &tmp, gen = make_lw_shared<unsigned>(1)] () {
+        auto sst_gen = [&env, s, &tmp, gen = make_lw_shared<unsigned>(1)] () mutable {
             return env.make_sstable(s, tmp.path().string(), (*gen)++, sstables::get_highest_sstable_version(), big);
         };
 
@@ -5128,12 +5128,12 @@ SEASTAR_TEST_CASE(cleanup_incremental_compaction_test) {
         std::vector<shared_sstable> ssts;
         size_t sstables_closed = 0;
         size_t sstables_closed_during_cleanup = 0;
-        static constexpr size_t sstables_nr = 10;
+        const size_t sstables_nr = s->max_compaction_threshold() * 2;
 
         dht::token_range_vector owned_token_ranges;
 
         std::set<mutation, mutation_decorated_key_less_comparator> merged;
-        for (auto i = 0; i < sstables_nr * 2; i++) {
+        for (unsigned i = 0; i < sstables_nr * 2; i++) {
             merged.insert(make_insert(partition_key::from_exploded(*s, {to_bytes(to_sstring(i))})));
         }
 
@@ -5150,7 +5150,7 @@ SEASTAR_TEST_CASE(cleanup_incremental_compaction_test) {
                 std::move(mut2)
             });
             sstables::test(sst).set_run_identifier(run_identifier); // in order to produce multi-fragment run.
-            sst->set_sstable_level(1);
+            sst->set_sstable_level(offstrategy ? 0 : 1);
 
             // every sstable will be eligible for cleanup, by having both an owned and unowned token.
             owned_token_ranges.push_back(dht::token_range::make_singular(sst->get_last_decorated_key().token()));
@@ -5167,7 +5167,8 @@ SEASTAR_TEST_CASE(cleanup_incremental_compaction_test) {
             const dht::token_range_vector empty_owned_ranges;
             for (auto&& sst : ssts) {
                 testlog.info("run id {}", sst->run_identifier());
-                column_family_test(t).add_sstable(sst);
+                t->add_sstable_and_update_cache(sst, offstrategy).get();
+                testlog.info("run id {}, refcount = {}", sst->run_identifier(), sst.use_count());
                 column_family_test::update_sstables_known_generation(*t, sst->generation().value());
                 observers.push_back(sst->add_on_closed_handler([&] (sstable& sst) mutable {
                     auto sstables = t->get_sstables();
@@ -5177,7 +5178,7 @@ SEASTAR_TEST_CASE(cleanup_incremental_compaction_test) {
 
                     testlog.info("Closing sstable of generation {}, table set size: {}", sst.generation(), input_sstable_count);
                     sstables_closed++;
-                    if (input_sstable_count < last_input_sstable_count) {
+                    if (std::cmp_less(input_sstable_count, last_input_sstable_count)) {
                         sstables_closed_during_cleanup++;
                         last_input_sstable_count = input_sstable_count;
                     }
@@ -5185,7 +5186,7 @@ SEASTAR_TEST_CASE(cleanup_incremental_compaction_test) {
             }
             ssts = {}; // releases references
             auto owned_ranges_ptr = make_lw_shared<const dht::token_range_vector>(std::move(owned_token_ranges));
-            t->perform_cleanup_compaction(std::move(owned_ranges_ptr)).get();
+            run_compaction(t, std::move(owned_ranges_ptr)).get();
             testlog.info("Cleanup has finished");
         }
 
@@ -5197,6 +5198,19 @@ SEASTAR_TEST_CASE(cleanup_incremental_compaction_test) {
 
         BOOST_REQUIRE(sstables_closed == sstables_nr);
         BOOST_REQUIRE(sstables_closed_during_cleanup >= sstables_nr / 2);
+    });
+}
+
+SEASTAR_TEST_CASE(cleanup_incremental_compaction_test) {
+    return run_incremental_compaction_test(sstables::offstrategy::no, [] (column_family_for_tests& t, owned_ranges_ptr owned_ranges) -> future<> {
+        return t->perform_cleanup_compaction(std::move(owned_ranges));
+    });
+}
+
+SEASTAR_TEST_CASE(offstrategy_incremental_compaction_test) {
+    return run_incremental_compaction_test(sstables::offstrategy::yes, [] (column_family_for_tests& t, owned_ranges_ptr owned_ranges) -> future<> {
+        bool performed = co_await t->perform_offstrategy_compaction();
+        BOOST_REQUIRE(performed);
     });
 }
 
