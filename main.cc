@@ -1212,6 +1212,8 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
               // still be found in the config.
               tm.get_topology().set_host_id_cfg(host_id);
               tm.get_topology().add_or_update_endpoint(endpoint, host_id);
+              tm.get_new()->get_topology().set_host_id_cfg(host_id);
+              tm.get_new()->get_topology().add_or_update_endpoint(endpoint, host_id);
               return make_ready_future<>();
           }).get();
 

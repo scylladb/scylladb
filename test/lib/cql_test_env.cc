@@ -648,6 +648,13 @@ private:
                                             std::nullopt,
                                             locator::node::state::normal,
                                             smp::count);
+                auto& topo_new = tm.get_new()->get_topology();
+                topo_new.set_host_id_cfg(hostid);
+                topo_new.add_or_update_endpoint(utils::fb_utilities::get_broadcast_address(),
+                                                hostid,
+                                                std::nullopt,
+                                                locator::node::state::normal,
+                                                smp::count);
                 return make_ready_future<>();
             }).get();
 
