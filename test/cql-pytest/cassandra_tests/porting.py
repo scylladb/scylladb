@@ -138,6 +138,8 @@ def assert_invalid_syntax_message(cql, table, message, cmd, *args):
     with pytest.raises(SyntaxException, match=re.escape(message)):
         execute(cql, table, cmd, *args)
 
+assertInvalidSyntaxMessage = assert_invalid_syntax_message
+
 def assert_invalid_message_re(cql, table, message, cmd, *args):
     with pytest.raises(InvalidRequest, match=message):
         execute(cql, table, cmd, *args)
