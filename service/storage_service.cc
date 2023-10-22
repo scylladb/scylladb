@@ -4007,7 +4007,11 @@ future<> storage_service::on_alive(gms::inet_address endpoint, gms::endpoint_sta
     } else {
         auto tmlock = co_await get_token_metadata_lock();
         auto tmptr = co_await get_mutable_token_metadata_ptr();
-        tmptr->update_topology(endpoint, get_dc_rack_for(endpoint));
+        const auto dc_rack = get_dc_rack_for(endpoint);
+        tmptr->update_topology(endpoint, dc_rack);
+        const auto host_id = _gossiper.get_host_id(endpoint);
+        tmptr->get_new()->update_host_id(host_id, endpoint);
+        tmptr->get_new()->update_topology(host_id, dc_rack);
         co_await replicate_to_all_cores(std::move(tmptr));
     }
 }
