@@ -6101,6 +6101,7 @@ future<> storage_service::leave_ring() {
     co_await mutate_token_metadata([this] (mutable_token_metadata_ptr tmptr) {
         auto endpoint = get_broadcast_address();
         tmptr->remove_endpoint(endpoint);
+        tmptr->get_new()->remove_endpoint(tmptr->get_new()->get_my_id());
         return update_topology_change_info(std::move(tmptr), ::format("leave_ring {}", endpoint));
     });
 
