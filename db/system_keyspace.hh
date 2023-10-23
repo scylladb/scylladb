@@ -498,11 +498,10 @@ public:
     // Assumes that the history table exists, i.e. Raft experimental feature is enabled.
     static future<mutation> get_group0_history(distributed<replica::database>&);
 
-    future<> sstables_registry_create_entry(sstring location, utils::UUID uuid, sstring status, sstables::entry_descriptor desc);
-    future<utils::UUID> sstables_registry_lookup_entry(sstring location, sstables::generation_type gen);
+    future<> sstables_registry_create_entry(sstring location, sstring status, sstables::entry_descriptor desc);
     future<> sstables_registry_update_entry_status(sstring location, sstables::generation_type gen, sstring status);
     future<> sstables_registry_delete_entry(sstring location, sstables::generation_type gen);
-    using sstable_registry_entry_consumer = noncopyable_function<future<>(utils::UUID uuid, sstring state, sstables::entry_descriptor desc)>;
+    using sstable_registry_entry_consumer = noncopyable_function<future<>(sstring state, sstables::entry_descriptor desc)>;
     future<> sstables_registry_list(sstring location, sstable_registry_entry_consumer consumer);
 
     future<std::optional<sstring>> load_group0_upgrade_state();

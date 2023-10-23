@@ -12,6 +12,7 @@
 #include <boost/algorithm/string.hpp>
 
 #include <exception>
+#include <stdexcept>
 #include <seastar/coroutine/exception.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/http/exception.hh>
@@ -73,7 +74,7 @@ public:
     virtual noncopyable_function<future<>(std::vector<shared_sstable>)> atomic_deleter() const override {
         return sstable_directory::delete_with_pending_deletion_log;
     }
-    virtual future<> remove_by_registry_entry(utils::UUID uuid, entry_descriptor desc) override;
+    virtual future<> remove_by_registry_entry(entry_descriptor desc) override;
 
     virtual sstring prefix() const override { return _dir; }
 };
@@ -427,7 +428,7 @@ future<> filesystem_storage::wipe(const sstable& sst, sync_dir sync) noexcept {
     }
 }
 
-future<> filesystem_storage::remove_by_registry_entry(utils::UUID uuid, entry_descriptor desc) {
+future<> filesystem_storage::remove_by_registry_entry(entry_descriptor desc) {
     on_internal_error(sstlog, "Filesystem storage doesn't keep its entries in registry");
 }
 
@@ -435,15 +436,12 @@ class s3_storage : public sstables::storage {
     shared_ptr<s3::client> _client;
     sstring _bucket;
     sstring _location;
-    std::optional<sstring> _remote_prefix;
 
     static constexpr auto status_creating = "creating";
     static constexpr auto status_sealed = "sealed";
     static constexpr auto status_removing = "removing";
 
     sstring make_s3_object_name(const sstable& sst, component_type type) const;
-
-    future<> ensure_remote_prefix(const sstable& sst);
 
     static future<> delete_with_system_keyspace(std::vector<shared_sstable>);
 
@@ -470,27 +468,21 @@ public:
     virtual noncopyable_function<future<>(std::vector<shared_sstable>)> atomic_deleter() const override {
         return delete_with_system_keyspace;
     }
-    virtual future<> remove_by_registry_entry(utils::UUID uuid, entry_descriptor desc) override;
+    virtual future<> remove_by_registry_entry(entry_descriptor desc) override;
 
     virtual sstring prefix() const override { return _location; }
 };
 
 sstring s3_storage::make_s3_object_name(const sstable& sst, component_type type) const {
-    return format("/{}/{}/{}", _bucket, *_remote_prefix, sstable_version_constants::get_component_map(sst.get_version()).at(type));
-}
-
-future<> s3_storage::ensure_remote_prefix(const sstable& sst) {
-    if (!_remote_prefix) {
-        auto uuid = co_await sst.manager().system_keyspace().sstables_registry_lookup_entry(_location, sst.generation());
-        _remote_prefix = uuid.to_sstring();
+    if (!sst.generation().is_uuid_based()) {
+        throw std::runtime_error("'S3' STORAGE only works with uuid_sstable_identifier enabled");
     }
+    return format("/{}/{}/{}", _bucket, sst.generation(), sstable_version_constants::get_component_map(sst.get_version()).at(type));
 }
 
 void s3_storage::open(sstable& sst) {
-    auto uuid = utils::UUID_gen::get_time_UUID();
     entry_descriptor desc(sst._generation, sst._version, sst._format, component_type::TOC);
-    sst.manager().system_keyspace().sstables_registry_create_entry(_location, uuid, status_creating, std::move(desc)).get();
-    _remote_prefix = uuid.to_sstring();
+    sst.manager().system_keyspace().sstables_registry_create_entry(_location, status_creating, std::move(desc)).get();
 
     memory_data_sink_buffers bufs;
     sst.write_toc(
@@ -506,19 +498,16 @@ void s3_storage::open(sstable& sst) {
 }
 
 future<file> s3_storage::open_component(const sstable& sst, component_type type, open_flags flags, file_open_options options, bool check_integrity) {
-    co_await ensure_remote_prefix(sst);
     co_return _client->make_readable_file(make_s3_object_name(sst, type));
 }
 
 future<data_sink> s3_storage::make_data_or_index_sink(sstable& sst, component_type type) {
     assert(type == component_type::Data || type == component_type::Index);
-    co_await ensure_remote_prefix(sst);
     // FIXME: if we have file size upper bound upfront, it's better to use make_upload_sink() instead
     co_return _client->make_upload_jumbo_sink(make_s3_object_name(sst, type));
 }
 
 future<data_sink> s3_storage::make_component_sink(sstable& sst, component_type type, open_flags oflags, file_output_stream_options options) {
-    co_await ensure_remote_prefix(sst);
     co_return _client->make_upload_sink(make_s3_object_name(sst, type));
 }
 
@@ -545,8 +534,8 @@ future<> s3_storage::wipe(const sstable& sst, sync_dir) noexcept {
     co_await sys_ks.sstables_registry_delete_entry(_location, sst.generation());
 }
 
-future<> s3_storage::remove_by_registry_entry(utils::UUID uuid, entry_descriptor desc) {
-    auto prefix = format("/{}/{}", _bucket, uuid);
+future<> s3_storage::remove_by_registry_entry(entry_descriptor desc) {
+    auto prefix = format("/{}/{}", _bucket, desc.generation);
     std::optional<temporary_buffer<char>> toc;
     std::vector<sstring> components;
 

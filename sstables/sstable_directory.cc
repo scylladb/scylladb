@@ -351,7 +351,7 @@ future<> sstable_directory::filesystem_components_lister::process(sstable_direct
 }
 
 future<> sstable_directory::system_keyspace_components_lister::process(sstable_directory& directory, process_flags flags) {
-    return _sys_ks.sstables_registry_list(_location, [this, flags, &directory] (utils::UUID uuid, sstring status, entry_descriptor desc) {
+    return _sys_ks.sstables_registry_list(_location, [this, flags, &directory] (sstring status, entry_descriptor desc) {
         if (status != "sealed") {
             // FIXME -- handle
             return make_ready_future<>();
@@ -360,7 +360,7 @@ future<> sstable_directory::system_keyspace_components_lister::process(sstable_d
             return make_ready_future<>();
         }
 
-        dirlog.debug("Processing {} entry from {}", uuid, _location);
+        dirlog.debug("Processing {} entry from {}", desc.generation, _location);
         return directory.process_descriptor(std::move(desc), flags);
     });
 }
@@ -383,14 +383,14 @@ future<> sstable_directory::system_keyspace_components_lister::commit() {
 
 future<> sstable_directory::system_keyspace_components_lister::garbage_collect(storage& st) {
     return do_with(std::set<generation_type>(), [this, &st] (auto& gens_to_remove) {
-        return _sys_ks.sstables_registry_list(_location, [&st, &gens_to_remove] (utils::UUID uuid, sstring status, entry_descriptor desc) {
+        return _sys_ks.sstables_registry_list(_location, [&st, &gens_to_remove] (sstring status, entry_descriptor desc) {
             if (status == "sealed") {
                 return make_ready_future<>();
             }
 
-            dirlog.info("Removing dangling {} {} entry", status, uuid);
+            dirlog.info("Removing dangling {} {} entry", desc.generation, status);
             gens_to_remove.insert(desc.generation);
-            return st.remove_by_registry_entry(uuid, std::move(desc));
+            return st.remove_by_registry_entry(std::move(desc));
         }).then([this, &gens_to_remove] {
             return parallel_for_each(gens_to_remove, [this] (auto gen) {
                 return _sys_ks.sstables_registry_delete_entry(_location, gen);
