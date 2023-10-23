@@ -107,7 +107,8 @@ void run_sstable_resharding_test(sstables::test_env& env) {
         return env.make_sstable(cf->schema(), gen, version);
     };
     auto cdata = compaction_manager::create_compaction_data();
-    auto res = sstables::compact_sstables(std::move(descriptor), cdata, cf.as_table_state()).get0();
+    compaction_progress_monitor progress_monitor;
+    auto res = sstables::compact_sstables(std::move(descriptor), cdata, cf.as_table_state(), progress_monitor).get0();
     sst->destroy().get();
 
     auto new_sstables = std::move(res.new_sstables);

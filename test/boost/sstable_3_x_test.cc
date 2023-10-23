@@ -3031,7 +3031,8 @@ static flat_mutation_reader_v2 compacted_sstable_reader(test_env& env, schema_pt
     };
     desc.replacer = replacer_fn_no_op();
     auto cdata = compaction_manager::create_compaction_data();
-    sstables::compact_sstables(std::move(desc), cdata, cf->as_table_state()).get();
+    compaction_progress_monitor progress_monitor;
+    sstables::compact_sstables(std::move(desc), cdata, cf->as_table_state(), progress_monitor).get();
 
     return compacted_sst->as_mutation_source().make_reader_v2(s, env.make_reader_permit(), query::full_partition_range, s->full_slice());
 }

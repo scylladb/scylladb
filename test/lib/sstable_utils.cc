@@ -122,8 +122,10 @@ future<compaction_result> compact_sstables(compaction_manager& cm, sstables::com
     auto cmt = compaction_manager_test(cm);
     sstables::compaction_result ret;
     co_await cmt.run(descriptor.run_identifier, table_s, [&] (sstables::compaction_data& cdata) {
-        return sstables::compact_sstables(std::move(descriptor), cdata, table_s).then([&] (sstables::compaction_result res) {
-            ret = std::move(res);
+        return do_with(compaction_progress_monitor{}, [&] (compaction_progress_monitor& progress_monitor) {
+            return sstables::compact_sstables(std::move(descriptor), cdata, table_s, progress_monitor).then([&] (sstables::compaction_result res) {
+                ret = std::move(res);
+            });
         });
     });
     co_return ret;
