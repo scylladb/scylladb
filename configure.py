@@ -1568,15 +1568,6 @@ perf_tests_link_rule = 'link' if args.perf_tests_debuginfo else 'link_stripped'
 # debug info from the libraries we static link with
 regular_link_rule = 'link' if args.debuginfo else 'link_stripped'
 
-pkgs = []
-
-# Lua can be provided by lua53 package on Debian-like
-# systems and by Lua on others.
-pkgs.append('lua53' if have_pkg('lua53') else 'lua')
-
-pkgs.append('libsystemd')
-pkgs.append('jsoncpp')
-
 has_sanitize_address_use_after_scope = try_compile(compiler=args.cxx, flags=['-fsanitize-address-use-after-scope'], source='int f() {}')
 
 defines = ' '.join(['-D' + d for d in defines])
@@ -1757,13 +1748,14 @@ def query_seastar_flags(pc_file, use_shared_libs, link_static_cxx=False):
             'seastar_libs': libs,
             'seastar_testing_libs': testing_libs}
 
+pkgs = ['libsystemd',
+        'jsoncpp',
+        'absl_raw_hash_set',
+        'absl_hash']
+# Lua can be provided by lua53 package on Debian-like
+# systems and by Lua on others.
+pkgs.append('lua53' if have_pkg('lua53') else 'lua')
 
-abseil_pkgs = [
-    'absl_raw_hash_set',
-    'absl_hash',
-]
-
-pkgs += abseil_pkgs
 
 libs = ' '.join([maybe_static(args.staticyamlcpp, '-lyaml-cpp'), '-latomic', '-llz4', '-lz', '-lsnappy',
                  ' -lstdc++fs', ' -lcrypt', ' -lcryptopp', ' -lpthread',
