@@ -920,7 +920,7 @@ def testCreateIndexOnCompactTableWithoutClusteringColumns(cql, test_keyspace):
 
 # DeleteTest
 
-@pytest.mark.xfail(reason="issue #12474")
+
 @pytest.mark.parametrize("forceFlush", [False, True])
 def testDeleteWithNoClusteringColumns(cql, test_keyspace, forceFlush):
     with create_table(cql, test_keyspace, "(partitionkey int PRIMARY KEY, value int) WITH COMPACT STORAGE") as table:
@@ -972,7 +972,7 @@ def testDeleteWithNoClusteringColumns(cql, test_keyspace, forceFlush):
 
         # Non primary key in the where clause
         # Reproduces #12474:
-        assertInvalidMessage(cql, table, "Non PRIMARY KEY columns found in where clause: value",
+        assertInvalidMessage(cql, table, "where clause",
                              "DELETE FROM %s WHERE partitionKey = ? AND value = ?", 0, 1)
 
 

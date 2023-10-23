@@ -261,7 +261,7 @@ private:
     void add_multi_column_clustering_key_restriction(const expr::binary_operator& restr);
     void add_single_column_nonprimary_key_restriction(const expr::binary_operator& restr);
 
-    void process_partition_key_restrictions(bool for_view, bool allow_filtering);
+    void process_partition_key_restrictions(bool for_view, bool allow_filtering, statements::statement_type type);
 
     /**
      * Processes the clustering column restrictions.

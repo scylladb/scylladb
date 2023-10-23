@@ -54,7 +54,7 @@ OK
 +-----+-----+
 > -- update if exists with a scan: proper error message
 > update lwt set b = 2 where b = 1 if exists;
-Error from server: code=2200 [Invalid query] message="Cannot execute this query as it might involve data filtering and thus may have unpredictable performance. If you want to execute this query despite the performance unpredictability, use ALLOW FILTERING"
+Error from server: code=2200 [Invalid query] message="Invalid where clause contains non PRIMARY KEY columns: b"
 > select * from lwt allow filtering;
 +-----+-----+
 | a   | b   |
