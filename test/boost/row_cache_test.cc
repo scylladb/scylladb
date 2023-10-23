@@ -2613,8 +2613,21 @@ SEASTAR_TEST_CASE(test_exception_safety_of_reads) {
         row_cache cache(s, snapshot_source([&] { return underlying(); }), tracker);
 
         auto run_queries = [&] {
+            auto singular_pr = dht::partition_range::make_singular(mut.decorated_key());
             auto slice = partition_slice_builder(*s).with_ranges(gen.make_random_ranges(3)).build();
             auto&& ranges = slice.row_ranges(*s, mut.key());
+
+            memory::with_allocation_failures([&] {
+                auto rd = cache.make_reader(s, semaphore.make_permit(), singular_pr, slice);
+                auto close_rd = deferred_close(rd);
+                auto got_opt = read_mutation_from_flat_mutation_reader(rd).get0();
+                BOOST_REQUIRE(got_opt);
+                BOOST_REQUIRE(!read_mutation_from_flat_mutation_reader(rd).get0());
+
+                assert_that(*got_opt).is_equal_to_compacted(mut, ranges);
+                assert_that(cache.make_reader(s, semaphore.make_permit(), singular_pr, slice))
+                    .produces(mut, ranges);
+            });
 
             memory::with_allocation_failures([&] {
                 auto rd = cache.make_reader(s, semaphore.make_permit(), query::full_partition_range, slice);

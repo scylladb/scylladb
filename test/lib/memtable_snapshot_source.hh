@@ -80,9 +80,17 @@ public:
         : _s(s)
         , _compactor(seastar::async([this] () noexcept {
             while (!_closed) {
-                // condition_variable::wait() also allocates memory
+                std::optional<future<>> f;
+                {
+                    memory::scoped_critical_alloc_section dfg;
+                    // condition_variable::wait() also allocates memory
+                    f = _should_compact.wait();
+                }
+
+                // Waiting on the future should not be covered by critical section.
+                f->get();
+
                 memory::scoped_critical_alloc_section dfg;
-                _should_compact.wait().get();
                 while (should_compact()) {
                     compact();
                 }

@@ -778,7 +778,7 @@ row_cache::make_reader_opt(schema_ptr s,
                        mutation_reader::forwarding fwd_mr)
 {
     auto make_context = [&] {
-        return std::make_unique<read_context>(*this, s, std::move(permit), range, slice, gc_state, trace_state, fwd_mr);
+        return std::make_unique<read_context>(*this, s, permit, range, slice, gc_state, trace_state, fwd_mr);
     };
 
     if (query::is_single_partition(range) && !fwd_mr) {
