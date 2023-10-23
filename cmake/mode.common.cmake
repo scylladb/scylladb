@@ -11,7 +11,7 @@ foreach(warning ${disabled_warnings})
   endif()
 endforeach()
 list(TRANSFORM _supported_warnings PREPEND "-Wno-")
-string(JOIN " " CMAKE_CXX_FLAGS
+add_compile_options(
   "-Wall"
   "-Werror"
   "-Wno-error=deprecated-declarations"
@@ -80,18 +80,18 @@ endfunction()
 
 default_target_arch(target_arch)
 if(target_arch)
-    string(APPEND CMAKE_CXX_FLAGS " -march=${target_arch}")
+  add_compile_options("-march=${target_arch}")
 endif()
 
 math(EXPR _stack_usage_threshold_in_bytes "${stack_usage_threshold_in_KB} * 1024")
 set(_stack_usage_threshold_flag "-Wstack-usage=${_stack_usage_threshold_in_bytes}")
 check_cxx_compiler_flag(${_stack_usage_threshold_flag} _stack_usage_flag_supported)
 if(_stack_usage_flag_supported)
-  string(APPEND CMAKE_CXX_FLAGS " ${_stack_usage_threshold_flag}")
+  add_compile_options("${_stack_usage_threshold_flag}")
 endif()
 
 # Force SHA1 build-id generation
-set(default_linker_flags "-Wl,--build-id=sha1")
+add_link_options("LINKER:--build-id=sha1")
 include(CheckLinkerFlag)
 set(Scylla_USE_LINKER
     ""
@@ -108,7 +108,7 @@ foreach(linker ${linkers})
     set(linker_flag "-fuse-ld=${linker}")
     check_linker_flag(CXX ${linker_flag} "CXX_LINKER_HAVE_${linker}")
     if(CXX_LINKER_HAVE_${linker})
-        string(APPEND default_linker_flags " ${linker_flag}")
+        add_link_options("${linker_flag}")
         break()
     elseif(Scylla_USE_LINKER)
         message(FATAL_ERROR "${Scylla_USE_LINKER} is not supported.")
@@ -122,5 +122,4 @@ else()
   # that. The 512 includes the null at the end, hence the 511 bellow.
   get_padded_dynamic_linker_option(dynamic_linker_option 511)
 endif()
-string(APPEND default_linker_flags " ${dynamic_linker_option}")
-set(CMAKE_EXE_LINKER_FLAGS "${default_linker_flags}" CACHE INTERNAL "")
+add_link_options("${dynamic_linker_option}")
