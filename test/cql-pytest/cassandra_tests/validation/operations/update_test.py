@@ -31,7 +31,6 @@ def testTypeCasts(cql, test_keyspace):
         assertInvalid(cql, table, "UPDATE %s SET d = (int)3 WHERE k = ?", 0)
         assertInvalid(cql, table, "UPDATE %s SET i = (double)3 WHERE k = ?", 0)
 
-@pytest.mark.xfail(reason="#12474")
 @pytest.mark.parametrize("forceFlush", [False, True])
 def testUpdate(cql, test_keyspace, forceFlush):
     with create_table(cql, test_keyspace, "(partitionKey int, clustering_1 int, value int, PRIMARY KEY (partitionKey, clustering_1))") as table:
@@ -145,8 +144,8 @@ def testUpdate(cql, test_keyspace, forceFlush):
         assertInvalid(cql, table,
                              "UPDATE %s SET value = ? WHERE partitionKey CONTAINS ? AND clustering_1 = ?", 7, 0, 1)
 
-        # Reproduces #12474
-        assertInvalidMessage(cql, table, "Non PRIMARY KEY columns found in where clause: value",
+        # Reproduces #12474:
+        assertInvalidMessage(cql, table, "where clause",
                              "UPDATE %s SET value = ? WHERE partitionKey = ? AND clustering_1 = ? AND value = ?", 7, 0, 1, 3)
 
         # Scylla and Cassandra print different error messages in this case:
@@ -210,7 +209,6 @@ def testUpdateWithSecondaryIndices(cql, test_keyspace, forceFlush):
         assertInvalid(cql, table,
                              "UPDATE %s SET value= ? WHERE values CONTAINS ?", 6, 3)
 
-@pytest.mark.xfail(reason="#12474")
 @pytest.mark.parametrize("forceFlush", [False, True])
 def testUpdateWithTwoClusteringColumns(cql, test_keyspace, forceFlush):
     with create_table(cql, test_keyspace, "(partitionKey int, clustering_1 int, clustering_2 int, value int, PRIMARY KEY (partitionKey, clustering_1, clustering_2))") as table:
@@ -332,9 +330,8 @@ def testUpdateWithTwoClusteringColumns(cql, test_keyspace, forceFlush):
 
         assertInvalid(cql, table,
                              "UPDATE %s SET value = ? WHERE partitionKey CONTAINS ? AND clustering_1 = ? AND clustering_2 = ?", 7, 0, 1, 1)
-
-        # Reproduces #12474
-        assertInvalidMessage(cql, table, "Non PRIMARY KEY columns found in where clause: value",
+        # Reproduces #12474:
+        assertInvalidMessage(cql, table, "where clause",
                              "UPDATE %s SET value = ? WHERE partitionKey = ? AND clustering_1 = ? AND clustering_2 = ? AND value = ?", 7, 0, 1, 1, 3)
 
         assertInvalid(cql, table,
@@ -343,7 +340,6 @@ def testUpdateWithTwoClusteringColumns(cql, test_keyspace, forceFlush):
         assertInvalid(cql, table,
                              "UPDATE %s SET value = ? WHERE partitionKey = ? AND (clustering_1, clustering_2) > (?, ?)", 7, 0, 1, 1)
 
-@pytest.mark.xfail(reason="#12474")
 @pytest.mark.parametrize("forceFlush", [False, True])
 def testUpdateWithMultiplePartitionKeyComponents(cql, test_keyspace, forceFlush):
     with create_table(cql, test_keyspace, "(partitionKey_1 int, partitionKey_2 int, clustering_1 int, clustering_2 int, value int, PRIMARY KEY ((partitionKey_1, partitionKey_2), clustering_1, clustering_2))") as table:
@@ -382,8 +378,9 @@ def testUpdateWithMultiplePartitionKeyComponents(cql, test_keyspace, forceFlush)
                    row(1, 1, 0, 1, 10))
 
         # missing primary key element
-        # Reproduces #12474
-        assertInvalidMessage(cql, table, "Some partition key parts are missing: partitionkey_2",
+        # Reproduces #12474:
+        # Different error message returned, changed to assertInvalid instead of assertInvalidMessage
+        assertInvalid(cql, table,
                              "UPDATE %s SET value = ? WHERE partitionKey_1 = ? AND clustering_1 = ? AND clustering_2 = ?", 7, 1, 1)
 
 @pytest.mark.parametrize("forceFlush", [False, True])

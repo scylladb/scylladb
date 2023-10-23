@@ -399,7 +399,7 @@ statement_restrictions::statement_restrictions(data_dictionary::database db,
     }
 
     // At this point, the select statement if fully constructed, but we still have a few things to validate
-    process_partition_key_restrictions(for_view, allow_filtering);
+    process_partition_key_restrictions(for_view, allow_filtering, type);
 
     // Some but not all of the partition key columns have been specified;
     // hence we need turn these restrictions into index expressions.
@@ -444,7 +444,7 @@ statement_restrictions::statement_restrictions(data_dictionary::database db,
     if (!expr::is_empty_restriction(_nonprimary_key_restrictions)) {
         if (_has_queriable_regular_index && _partition_range_is_simple) {
             _uses_secondary_indexing = true;
-        } else if (!allow_filtering) {
+        } else if (!allow_filtering && !type.is_delete() && !type.is_update()) {
             throw exceptions::invalid_request_exception("Cannot execute this query as it might involve data filtering and "
                 "thus may have unpredictable performance. If you want to execute "
                 "this query despite the performance unpredictability, use ALLOW FILTERING");
@@ -790,7 +790,7 @@ void statement_restrictions::add_single_column_nonprimary_key_restriction(const 
     _nonprimary_key_restrictions = expr::make_conjunction(_nonprimary_key_restrictions, restr);
 }
 
-void statement_restrictions::process_partition_key_restrictions(bool for_view, bool allow_filtering) {
+void statement_restrictions::process_partition_key_restrictions(bool for_view, bool allow_filtering, statements::statement_type type) {
     // If there is a queryable index, no special condition are required on the other restrictions.
     // But we still need to know 2 things:
     // - If we don't have a queryable index, is the query ok
@@ -805,7 +805,7 @@ void statement_restrictions::process_partition_key_restrictions(bool for_view, b
     }
 
     if (pk_restrictions_need_filtering()) {
-        if (!allow_filtering && !for_view && !_has_queriable_pk_index) {
+        if (!allow_filtering && !for_view && !_has_queriable_pk_index && !type.is_delete() && !type.is_update()) {
             throw exceptions::invalid_request_exception("Cannot execute this query as it might involve data filtering and "
                 "thus may have unpredictable performance. If you want to execute "
                 "this query despite the performance unpredictability, use ALLOW FILTERING");
