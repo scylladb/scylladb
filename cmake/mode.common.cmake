@@ -11,7 +11,7 @@ foreach(warning ${disabled_warnings})
   endif()
 endforeach()
 list(TRANSFORM _supported_warnings PREPEND "-Wno-")
-string(JOIN " " CMAKE_CXX_FLAGS
+add_compile_options(
   "-Wall"
   "-Werror"
   "-Wno-error=deprecated-declarations"
@@ -80,14 +80,14 @@ endfunction()
 
 default_target_arch(target_arch)
 if(target_arch)
-    string(APPEND CMAKE_CXX_FLAGS " -march=${target_arch}")
+  add_compile_options("-march=${target_arch}")
 endif()
 
 math(EXPR _stack_usage_threshold_in_bytes "${stack_usage_threshold_in_KB} * 1024")
 set(_stack_usage_threshold_flag "-Wstack-usage=${_stack_usage_threshold_in_bytes}")
 check_cxx_compiler_flag(${_stack_usage_threshold_flag} _stack_usage_flag_supported)
 if(_stack_usage_flag_supported)
-  string(APPEND CMAKE_CXX_FLAGS " ${_stack_usage_threshold_flag}")
+  add_compile_options("${_stack_usage_threshold_flag}")
 endif()
 
 # Force SHA1 build-id generation
