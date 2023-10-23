@@ -41,10 +41,45 @@ inline void require(bool condition, seastar::compat::source_location sl = seasta
     do_require(condition, sl, {});
 }
 
+template <typename LHS, typename RHS, typename Compare>
+void do_require_relation(
+        const LHS& lhs,
+        const RHS& rhs,
+        const Compare& relation,
+        const char* relation_operator,
+        seastar::compat::source_location sl) {
+    const auto condition = relation(lhs, rhs);
+    do_require(condition, sl, fmt::format("assertion {} {} {} failed", lhs, relation_operator, rhs));
+}
+
+template <typename LHS, typename RHS>
+void require_less(const LHS& lhs, const RHS& rhs, seastar::compat::source_location sl = seastar::compat::source_location::current()) {
+    do_require_relation(lhs, rhs, std::less<LHS>{}, "<", sl);
+}
+
+template <typename LHS, typename RHS>
+void require_less_equal(const LHS& lhs, const RHS& rhs, seastar::compat::source_location sl = seastar::compat::source_location::current()) {
+    do_require_relation(lhs, rhs, std::less_equal<LHS>{}, "<=", sl);
+}
+
 template <typename LHS, typename RHS>
 void require_equal(const LHS& lhs, const RHS& rhs, seastar::compat::source_location sl = seastar::compat::source_location::current()) {
-    const auto condition = (lhs == rhs);
-    do_require(condition, sl, fmt::format("{} {}= {}", lhs, condition ? "=" : "!", rhs));
+    do_require_relation(lhs, rhs, std::equal_to<LHS>{}, "==", sl);
+}
+
+template <typename LHS, typename RHS>
+void require_not_equal(const LHS& lhs, const RHS& rhs, seastar::compat::source_location sl = seastar::compat::source_location::current()) {
+    do_require_relation(lhs, rhs, std::not_equal_to<LHS>{}, "!=", sl);
+}
+
+template <typename LHS, typename RHS>
+void require_greater_equal(const LHS& lhs, const RHS& rhs, seastar::compat::source_location sl = seastar::compat::source_location::current()) {
+    do_require_relation(lhs, rhs, std::greater_equal<LHS>{}, ">=", sl);
+}
+
+template <typename LHS, typename RHS>
+void require_greater(const LHS& lhs, const RHS& rhs, seastar::compat::source_location sl = seastar::compat::source_location::current()) {
+    do_require_relation(lhs, rhs, std::greater<LHS>{}, ">", sl);
 }
 
 void fail(std::string_view msg, seastar::compat::source_location sl = seastar::compat::source_location::current());
