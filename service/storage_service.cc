@@ -2399,7 +2399,7 @@ future<> topology_coordinator::fence_previous_coordinator() {
     // Topology state machine moves to state S while RPC R is still running.
     // If RPC is idempotent that should not be a problem since second one executed by B will do nothing,
     // but better to be safe and cut off previous write attempt
-    while (true) {
+    while (!_as.abort_requested()) {
         try {
             auto guard = co_await start_operation();
             topology_mutation_builder builder(guard.write_timestamp());
@@ -2410,8 +2410,8 @@ future<> topology_coordinator::fence_previous_coordinator() {
             continue;
         } catch (...) {
             slogger.error("raft topology: failed to fence previous coordinator {}", std::current_exception());
-            throw;
         }
+        co_await seastar::sleep_abortable(std::chrono::seconds(1), _as);
     }
 }
 
