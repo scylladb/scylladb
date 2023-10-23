@@ -2339,7 +2339,7 @@ class topology_coordinator {
         co_await _topo_sm.event.when();
     }
 
-    future<> fence_previous_coordinator();
+    future<> fence_previous_coordinator() noexcept;
 
 public:
     topology_coordinator(
@@ -2358,7 +2358,7 @@ public:
         , _ring_delay(ring_delay)
     {}
 
-    future<> run();
+    future<> run() noexcept;
 };
 
 future<bool> topology_coordinator::maybe_start_tablet_migration(group0_guard guard) {
@@ -2385,7 +2385,7 @@ future<bool> topology_coordinator::maybe_start_tablet_migration(group0_guard gua
     co_return true;
 }
 
-future<> topology_coordinator::fence_previous_coordinator() {
+future<> topology_coordinator::fence_previous_coordinator() noexcept {
     // Write empty change to make sure that a guard taken by any previous coordinator cannot
     // be used to do a successful write any more. Otherwise the following can theoretically happen
     // while a coordinator tries to execute RPC R and move to state S.
@@ -2415,7 +2415,7 @@ future<> topology_coordinator::fence_previous_coordinator() {
     }
 }
 
-future<> topology_coordinator::run() {
+future<> topology_coordinator::run() noexcept {
     slogger.info("raft topology: start topology coordinator fiber");
 
     auto abort = _as.subscribe([this] () noexcept {
