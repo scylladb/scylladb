@@ -314,7 +314,7 @@ elif [ "$ID" = "fedora" ]; then
     pip3 install traceback-with-variables
     pip3 install scylla-api-client
 
-    cargo install cxxbridge-cmd --root /usr/local
+    cargo install cxxbridge-cmd --root /usr/local --version 1.0.61
     if [ -f "$(node_exporter_fullpath)" ] && node_exporter_checksum; then
         echo "$(node_exporter_filename) already exists, skipping download"
     else
