@@ -19,8 +19,6 @@ import tempfile
 import textwrap
 from distutils.spawn import find_executable
 
-curdir = os.getcwd()
-
 outdir = 'build'
 
 tempfile.tempdir = f"{outdir}/tmp"
@@ -1670,6 +1668,7 @@ forced_ldflags += dynamic_linker_option()
 
 user_ldflags = forced_ldflags + ' ' + args.user_ldflags
 
+curdir = os.getcwd()
 user_cflags = args.user_cflags + f" -ffile-prefix-map={curdir}=."
 
 if args.target != '':
