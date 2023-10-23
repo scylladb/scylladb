@@ -1780,10 +1780,6 @@ user_cflags += ' -fvisibility=hidden'
 user_ldflags += ' -fvisibility=hidden'
 if args.staticcxx:
     user_ldflags += " -static-libstdc++"
-if args.staticthrift:
-    thrift_libs = "-Wl,-Bstatic -lthrift -Wl,-Bdynamic"
-else:
-    thrift_libs = "-lthrift"
 
 os.makedirs(outdir, exist_ok=True)
 
@@ -2004,7 +2000,8 @@ def write_build_file(f,
                 objs.append('$builddir/' + mode +'/rust-' + mode + '/librust_combined.a')
             local_libs = '$seastar_libs_{} $libs'.format(mode)
             if has_thrift:
-                local_libs += ' ' + thrift_libs + ' ' + maybe_static(args.staticboost, '-lboost_system')
+                local_libs += ' ' + maybe_static(args.staticthrift, '-lthrift')
+                local_libs += ' ' + maybe_static(args.staticboost, '-lboost_system')
             if binary in tests:
                 if binary in pure_boost_tests:
                     local_libs += ' ' + maybe_static(args.staticboost, '-lboost_unit_test_framework')
