@@ -1568,10 +1568,6 @@ perf_tests_link_rule = 'link' if args.perf_tests_debuginfo else 'link_stripped'
 # debug info from the libraries we static link with
 regular_link_rule = 'link' if args.debuginfo else 'link_stripped'
 
-# a list element means a list of alternative packages to consider
-# the first element becomes the HAVE_pkg define
-# a string element is a package name with no alternatives
-optional_packages = [[]]
 pkgs = []
 
 # Lua can be provided by lua53 package on Debian-like
