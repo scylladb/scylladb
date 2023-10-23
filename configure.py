@@ -1500,26 +1500,29 @@ wasm_deps['wasm/test_UDA_final.wat'] = 'test/resource/wasm/c/test_UDA_final.c'
 wasm_deps['wasm/test_UDA_scalar.wat'] = 'test/resource/wasm/c/test_UDA_scalar.c'
 wasm_deps['wasm/test_word_double.wat'] = 'test/resource/wasm/c/test_word_double.c'
 
-warnings = [
-    '-Wall',
-    '-Werror',
-    '-Wimplicit-fallthrough',
-    '-Wno-mismatched-tags',  # clang-only
-    '-Wno-c++11-narrowing',
-    '-Wno-overloaded-virtual',
-    '-Wno-unused-command-line-argument',
-    '-Wno-unsupported-friend',
-    '-Wno-implicit-int-float-conversion',
-    # https://gcc.gnu.org/bugzilla/show_bug.cgi?id=77728
-    '-Wno-psabi',
-    '-Wno-narrowing',
-]
 
-warnings = [w
-            for w in warnings
-            if flag_supported(flag=w, compiler=args.cxx)]
+def get_warning_options(cxx):
+    warnings = [
+        '-Wall',
+        '-Werror',
+        '-Wimplicit-fallthrough',
+        '-Wno-mismatched-tags',  # clang-only
+        '-Wno-c++11-narrowing',
+        '-Wno-overloaded-virtual',
+        '-Wno-unused-command-line-argument',
+        '-Wno-unsupported-friend',
+        '-Wno-implicit-int-float-conversion',
+        # https://gcc.gnu.org/bugzilla/show_bug.cgi?id=77728
+        '-Wno-psabi',
+        '-Wno-narrowing',
+    ]
 
-warnings = ' '.join(warnings + ['-Wno-error=deprecated-declarations'])
+    warnings = [w
+                for w in warnings
+                if flag_supported(flag=w, compiler=cxx)]
+
+    return ' '.join(warnings + ['-Wno-error=deprecated-declarations'])
+
 
 def get_clang_inline_threshold():
     if args.clang_inline_threshold != -1:
@@ -1577,6 +1580,7 @@ pkgs = []
 pkgs.append('lua53' if have_pkg('lua53') else 'lua')
 
 pkgs.append('libsystemd')
+pkgs.append('jsoncpp')
 
 has_sanitize_address_use_after_scope = try_compile(compiler=args.cxx, flags=['-fsanitize-address-use-after-scope'], source='int f() {}')
 
@@ -1739,10 +1743,7 @@ if not args.dist_only:
     for mode, mode_config in build_modes.items():
         configure_seastar(outdir, mode, mode_config)
 
-pc = {mode: f'{outdir}/{mode}/seastar/seastar.pc' for mode in build_modes}
-
-def query_seastar_flags(pc_file, link_static_cxx=False):
-    use_shared_libs = modes[mode]['build_seastar_shared_libs']
+def query_seastar_flags(pc_file, use_shared_libs, link_static_cxx=False):
     if use_shared_libs:
         opt = '--shared'
     else:
@@ -1755,13 +1756,11 @@ def query_seastar_flags(pc_file, link_static_cxx=False):
     if link_static_cxx:
         libs = libs.replace('-lstdc++ ', '')
 
-    return cflags, libs
+    testing_libs = pkg_config(pc_file.replace('seastar.pc', 'seastar-testing.pc'), '--libs', '--static')
+    return {'seastar_cflags': cflags,
+            'seastar_libs': libs,
+            'seastar_testing_libs': testing_libs}
 
-for mode in build_modes:
-    seastar_pc_cflags, seastar_pc_libs = query_seastar_flags(pc[mode], link_static_cxx=args.staticcxx)
-    modes[mode]['seastar_cflags'] = seastar_pc_cflags
-    modes[mode]['seastar_libs'] = seastar_pc_libs
-    modes[mode]['seastar_testing_libs'] = pkg_config(pc[mode].replace('seastar.pc', 'seastar-testing.pc'), '--libs', '--static')
 
 abseil_pkgs = [
     'absl_raw_hash_set',
@@ -1770,8 +1769,7 @@ abseil_pkgs = [
 
 pkgs += abseil_pkgs
 
-user_cflags += " " + pkg_config('jsoncpp', '--cflags')
-libs = ' '.join([maybe_static(args.staticyamlcpp, '-lyaml-cpp'), '-latomic', '-llz4', '-lz', '-lsnappy', pkg_config('jsoncpp', '--libs'),
+libs = ' '.join([maybe_static(args.staticyamlcpp, '-lyaml-cpp'), '-latomic', '-llz4', '-lz', '-lsnappy',
                  ' -lstdc++fs', ' -lcrypt', ' -lcryptopp', ' -lpthread',
                  # Must link with static version of libzstd, since
                  # experimental APIs that we use are only present there.
@@ -1808,6 +1806,7 @@ def write_build_file(f,
                      scylla_version,
                      scylla_release,
                      args):
+    warnings = get_warning_options(args.cxx)
     f.write(textwrap.dedent('''\
         configure_args = {configure_args}
         builddir = {outdir}
@@ -1902,8 +1901,13 @@ def write_build_file(f,
         else:
             f.write(f'build $builddir/{wasm}: c2wasm {src}\n')
         f.write(f'build $builddir/{binary}: wasm2wat $builddir/{wasm}\n')
+
     for mode in build_modes:
         modeval = modes[mode]
+        modeval.update(query_seastar_flags(f'{outdir}/{mode}/seastar/seastar.pc',
+                                           modeval['build_seastar_shared_libs'],
+                                           args.staticcxx))
+
         fmt_lib = 'fmt'
         f.write(textwrap.dedent('''\
             cxx_ld_flags_{mode} = {cxx_ld_flags}
@@ -1964,7 +1968,7 @@ def write_build_file(f,
               command = CARGO_BUILD_DEP_INFO_BASEDIR='.' cargo build --locked --manifest-path=rust/Cargo.toml --target-dir=$builddir/{mode} --profile=rust-{mode} $
                         && touch $out
               description = RUST_LIB $out
-            ''').format(mode=mode, antlr3_exec=args.antlr3_exec, fmt_lib=fmt_lib, test_repeat=test_repeat, test_timeout=test_timeout, **modeval))
+            ''').format(mode=mode, antlr3_exec=args.antlr3_exec, fmt_lib=fmt_lib, test_repeat=args.test_repeat, test_timeout=args.test_timeout, **modeval))
         f.write(
             'build {mode}-build: phony {artifacts} {wasms}\n'.format(
                 mode=mode,
