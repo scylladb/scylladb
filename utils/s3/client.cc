@@ -9,7 +9,11 @@
 #include <initializer_list>
 #include <memory>
 #include <stdexcept>
+#if __has_include(<rapidxml.h>)
 #include <rapidxml.h>
+#else
+#include <rapidxml/rapidxml.hpp>
+#endif
 #include <boost/algorithm/string/split.hpp>
 #include <boost/algorithm/string/classification.hpp>
 #include <boost/range/adaptor/map.hpp>
