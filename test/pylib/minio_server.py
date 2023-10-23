@@ -21,10 +21,8 @@ import shutil
 import time
 import tempfile
 import socket
-import yaml
-import json
-import random
 import string
+import yaml
 from io import BufferedWriter
 
 class MinioServer:
@@ -184,6 +182,29 @@ class MinioServer:
 
         return cmd
 
+    def _set_environ(self):
+        os.environ[self.ENV_CONFFILE] = f'{self.config_file}'
+        os.environ[self.ENV_ADDRESS] = f'{self.address}'
+        os.environ[self.ENV_PORT] = f'{self.port}'
+        os.environ[self.ENV_BUCKET] = f'{self.bucket_name}'
+        os.environ[self.ENV_ACCESS_KEY] = f'{self.access_key}'
+        os.environ[self.ENV_SECRET_KEY] = f'{self.secret_key}'
+
+    def _get_environs(self):
+        return [self.ENV_CONFFILE,
+                self.ENV_ADDRESS,
+                self.ENV_PORT,
+                self.ENV_BUCKET,
+                self.ENV_ACCESS_KEY,
+                self.ENV_SECRET_KEY]
+
+    def print_environ(self):
+        msgs = []
+        for key in self._get_environs():
+            value = os.environ[key]
+            msgs.append(f'export {key}={value}')
+        print('\n'.join(msgs))
+
     async def start(self):
         if self.srv_exe is None:
             self.logger.info("Minio not installed, get it from https://dl.minio.io/server/minio/release/linux-amd64/minio and put into PATH")
@@ -206,12 +227,7 @@ class MinioServer:
             return
 
         self.create_conf_file(self.address, self.port, self.access_key, self.secret_key, self.DEFAULT_REGION, self.config_file)
-        os.environ[self.ENV_CONFFILE] = f'{self.config_file}'
-        os.environ[self.ENV_ADDRESS] = f'{self.address}'
-        os.environ[self.ENV_PORT] = f'{self.port}'
-        os.environ[self.ENV_BUCKET] = f'{self.bucket_name}'
-        os.environ[self.ENV_ACCESS_KEY] = f'{self.access_key}'
-        os.environ[self.ENV_SECRET_KEY] = f'{self.secret_key}'
+        self._set_environ()
 
         try:
             alias = 'local'
@@ -260,11 +276,7 @@ async def main():
             print(f'{tempdir=}')
         server = MinioServer(tempdir, args.host, logging.getLogger('minio'))
         await server.start()
-        print(f'export S3_SERVER_ADDRESS_FOR_TEST={server.address}')
-        print(f'export S3_SERVER_PORT_FOR_TEST={server.port}')
-        print(f'export S3_BUCKET_FOR_TEST={server.bucket_name}')
-        print(f'export AWS_ACCESS_KEY_ID={server.access_key}')
-        print(f'export AWS_SECRET_ACCESS_KEY={server.secret_key}')
+        server.print_environ()
         print(f'Please run scylla with: --object-storage-config-file {server.config_file}')
         try:
             _ = input('server started. press any key to stop: ')
