@@ -116,14 +116,12 @@ public:
     friend future<compaction_result> scrub_sstables_validate_mode(sstables::compaction_descriptor, compaction_data&, table_state&, compaction_progress_monitor&);
 };
 
-compaction_progress_monitor& default_compaction_progress_monitor();
-
 // Compact a list of N sstables into M sstables.
 // Returns info about the finished compaction, which includes vector to new sstables.
 //
 // compaction_descriptor is responsible for specifying the type of compaction, and influencing
 // compaction behavior through its available member fields.
-future<compaction_result> compact_sstables(sstables::compaction_descriptor descriptor, compaction_data& cdata, table_state& table_s, compaction_progress_monitor& progress_monitor = default_compaction_progress_monitor());
+future<compaction_result> compact_sstables(sstables::compaction_descriptor descriptor, compaction_data& cdata, table_state& table_s, compaction_progress_monitor& progress_monitor);
 
 // Return list of expired sstables for column family cf.
 // A sstable is fully expired *iff* its max_local_deletion_time precedes gc_before and its

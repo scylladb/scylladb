@@ -405,11 +405,6 @@ private:
     friend class compaction_progress_monitor;
 };
 
-static compaction_progress_monitor default_noop_compaction_progress_monitor;
-compaction_progress_monitor& default_compaction_progress_monitor() {
-    return default_noop_compaction_progress_monitor;
-}
-
 void compaction_progress_monitor::set_generator(std::unique_ptr<read_monitor_generator> generator) {
     _generator = std::move(generator);
 }
@@ -1820,7 +1815,7 @@ static future<compaction_result> scrub_sstables_validate_mode(sstables::compacti
     };
 }
 
-future<compaction_result> scrub_sstables_validate_mode(sstables::compaction_descriptor descriptor, compaction_data& cdata, table_state& table_s, compaction_progress_monitor& progress_monitor = default_compaction_progress_monitor()) {
+future<compaction_result> scrub_sstables_validate_mode(sstables::compaction_descriptor descriptor, compaction_data& cdata, table_state& table_s, compaction_progress_monitor& progress_monitor) {
     progress_monitor.set_generator(std::make_unique<compaction_read_monitor_generator>(table_s, use_backlog_tracker::no));
     auto d = defer([&] { progress_monitor.reset_generator(); });
     auto res = co_await scrub_sstables_validate_mode(descriptor, cdata, table_s, *progress_monitor._generator);

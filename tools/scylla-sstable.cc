@@ -966,7 +966,8 @@ void scrub_operation(schema_ptr schema, reader_permit permit, const std::vector<
 
     auto compaction_data = sstables::compaction_data{};
 
-    sstables::compact_sstables(std::move(compaction_descriptor), compaction_data, table_state).get();
+    compaction_progress_monitor progress_monitor;
+    sstables::compact_sstables(std::move(compaction_descriptor), compaction_data, table_state, progress_monitor).get();
 }
 
 void dump_index_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
