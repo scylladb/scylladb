@@ -1,4 +1,5 @@
 find_package(cryptopp REQUIRED)
+find_package(rapidxml REQUIRED)
 
 add_library(utils STATIC)
 target_sources(utils
@@ -55,4 +56,5 @@ target_link_libraries(utils
     xxHash::xxhash
   PRIVATE
     Boost::regex
-    cryptopp)
+    cryptopp
+    rapidxml::rapidxml)
