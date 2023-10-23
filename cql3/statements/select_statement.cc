@@ -1660,7 +1660,7 @@ schema_ptr mutation_fragments_select_statement::generate_output_schema(schema_pt
 
 future<exceptions::coordinator_result<service::storage_proxy_coordinator_query_result>>
 mutation_fragments_select_statement::do_query(
-        const locator::node* this_node,
+        locator::host_id this_node,
         service::storage_proxy& sp,
         schema_ptr schema,
         lw_shared_ptr<query::read_command> cmd,
@@ -1670,7 +1670,7 @@ mutation_fragments_select_statement::do_query(
     auto res = co_await replica::mutation_dump::dump_mutations(sp.get_db(), schema, _underlying_schema, partition_ranges, *cmd, optional_params.timeout(sp));
     service::replicas_per_token_range last_replicas;
     if (this_node) {
-        last_replicas.emplace(dht::token_range::make_open_ended_both_sides(), std::vector<locator::host_id>{this_node->host_id()});
+        last_replicas.emplace(dht::token_range::make_open_ended_both_sides(), std::vector<locator::host_id>{this_node});
     }
     co_return service::storage_proxy_coordinator_query_result{std::move(res), std::move(last_replicas), {}};
 }
@@ -1750,14 +1750,14 @@ mutation_fragments_select_statement::do_execute(query_processor& qp, service::qu
         }));
     }
 
-    const locator::node* this_node = nullptr;
+    locator::host_id this_node;
     {
         auto& topo = erm_keepalive->get_topology();
-        this_node = topo.this_node();
+        this_node = topo.this_node()->host_id();
         auto state = options.get_paging_state();
         if (state && !state->get_last_replicas().empty()) {
             auto last_host = state->get_last_replicas().begin()->second.front();
-            if (last_host != this_node->host_id()) {
+            if (last_host != this_node) {
                 const auto last_node = topo.find_node(last_host);
                 throw exceptions::invalid_request_exception(format(
                             "Moving between coordinators is not allowed in SELECT FROM MUTATION_FRAGMENTS() statements, last page's coordinator was {}{}",

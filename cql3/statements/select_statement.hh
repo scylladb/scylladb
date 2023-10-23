@@ -19,10 +19,7 @@
 #include "index/secondary_index_manager.hh"
 #include "exceptions/exceptions.hh"
 #include "exceptions/coordinator_result.hh"
-
-namespace locator {
-    class node;
-} // namespace locator
+#include "locator/host_id.hh"
 
 namespace service {
     class client_state;
@@ -341,7 +338,7 @@ public:
 private:
     future<exceptions::coordinator_result<service::storage_proxy_coordinator_query_result>>
     do_query(
-            const locator::node* this_node,
+            locator::host_id this_node,
             service::storage_proxy& sp,
             schema_ptr schema,
             lw_shared_ptr<query::read_command> cmd,
