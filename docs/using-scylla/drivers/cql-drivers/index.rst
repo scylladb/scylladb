@@ -66,7 +66,6 @@ You can find the third-party driver documentation on the GitHub pages for each d
 * `DataStax C++ Driver <https://github.com/datastax/cpp-driver/>`_
 * `DataStax PHP Driver (Supported versions: 7.1)  <https://github.com/datastax/php-driver>`_
 * `He4rt PHP Driver (Supported versions: 8.1 and 8.2)  <https://github.com/he4rt/scylladb-php-driver/>`_
-* `Rust <https://github.com/AlexPikalov/cdrs>`_
 * `Scala Phantom Project <https://github.com/outworkers/phantom>`_
 * `Xandra Elixir Driver <https://github.com/lexhide/xandra>`_
 
