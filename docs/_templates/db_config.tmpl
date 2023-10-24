@@ -13,8 +13,8 @@
 
 {% for item in group.properties %}
 {% if item.value_status == value_status %}
-``{{ item.name }}``
-{{ '=' * (item.name|length + 4) }}
+{{ item.name }}
+{{ '=' * (item.name|length) }}
 
    .. raw:: html
 
@@ -24,6 +24,9 @@
    {% if item.default %}* **Default value:** ``{{ item.default }}``{% endif %}
    {% if item.liveness %}* **Liveness** :term:`* <Liveness>` **:** ``{{ item.liveness }}``{% endif %}
 
+.. raw:: html
+
+   <hr/>
 {% endif %}
 {% endfor %}
 {% endif %}
