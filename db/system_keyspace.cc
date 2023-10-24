@@ -2739,7 +2739,7 @@ future<> system_keyspace::sstables_registry_create_entry(sstring location, sstri
 
 future<> system_keyspace::sstables_registry_update_entry_status(sstring location, sstables::generation_type gen, sstring status) {
     static const auto req = format("UPDATE system.{} SET status = ? WHERE location = ? AND generation = ?", SSTABLES_REGISTRY);
-    slogger.trace("Updating {}.{} -> {} in {}", location, gen, status, SSTABLES_REGISTRY);
+    slogger.trace("Updating {}.{} -> status={} in {}", location, gen, status, SSTABLES_REGISTRY);
     co_await execute_cql(req, status, location, gen).discard_result();
 }
 
