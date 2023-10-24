@@ -5224,7 +5224,7 @@ SEASTAR_TEST_CASE(test_sstables_excluding_staging_correctness) {
         sorted_muts.insert(make_mut(pks[0]));
         sorted_muts.insert(make_mut(pks[1]));
 
-        auto t = env.make_table_for_tests(s, env.tempdir().path().string());
+        auto t = env.make_table_for_tests(s);
         auto close_t = deferred_stop(t);
 
         auto sst_gen = env.make_sst_factory(s);
