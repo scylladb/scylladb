@@ -1,5 +1,5 @@
 ==========
-AWS images
+AWS Images
 ==========
 
 .. scylladb_aws_images_template::
