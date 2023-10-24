@@ -14,6 +14,9 @@
 #include "sstables/sstables.hh"
 #include "sstables/sstable_directory.hh"
 #include "utils/pretty_printers.hh"
+#include "db/config.hh"
+
+using namespace std::chrono_literals;
 
 namespace replica {
 
@@ -263,11 +266,35 @@ sstring major_compaction_task_impl::to_string(flush_mode fm) {
     __builtin_unreachable();
 }
 
+static future<bool> maybe_flush_all_tables(sharded<replica::database>& db) {
+    auto interval = db.local().get_config().compaction_flush_all_tables_before_major_seconds();
+    if (interval) {
+        auto when = db_clock::now() - interval * 1s;
+        if (co_await replica::database::get_all_tables_flushed_at(db) <= when) {
+            co_await db.invoke_on_all([&] (replica::database& db) -> future<> {
+                co_await db.flush_all_tables();
+            });
+            co_return true;
+        }
+    }
+    co_return false;
+}
+
 future<> major_keyspace_compaction_task_impl::run() {
+    // TODO: implement a `compact_all_keyspaces` api
+    // that will flush all tables once for all keyspaces
+    // rather than for each keyspace, using a mechanism similar to `run_table_tasks`.
+    // It can be called from `scylla-nodetool compact` with keyspace arg.
+    bool flushed_all_tables = false;
+    if (_flush_mode == flush_mode::all_tables) {
+        flushed_all_tables = co_await maybe_flush_all_tables(_db);
+    }
+
+    flush_mode fm = flushed_all_tables ? flush_mode::skip : _flush_mode;
     co_await _db.invoke_on_all([&] (replica::database& db) -> future<> {
         tasks::task_info parent_info{_status.id, _status.shard};
         auto& module = db.get_compaction_manager().get_task_manager_module();
-        auto task = co_await module.make_and_start_task<shard_major_keyspace_compaction_task_impl>(parent_info, _status.keyspace, _status.id, db, _table_infos, _flush_mode);
+        auto task = co_await module.make_and_start_task<shard_major_keyspace_compaction_task_impl>(parent_info, _status.keyspace, _status.id, db, _table_infos, fm);
         co_await task->done();
     });
 }

@@ -50,7 +50,6 @@ public:
     enum class flush_mode {
         skip,               // Skip flushing.  Useful when application explicitly flushes all tables prior to compaction
         compacted_tables,   // Flush only the compacted keyspace/tables
-        // FIXME: flushing all_tables is not implemented yet
         all_tables          // Flush all tables in the database prior to compaction
     };
 
