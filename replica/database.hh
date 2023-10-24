@@ -1448,6 +1448,8 @@ private:
     serialized_action _update_memtable_flush_static_shares_action;
     utils::observer<float> _memtable_flush_static_shares_observer;
 
+    db_clock::time_point _all_tables_flushed_at;
+
 public:
     data_dictionary::database as_data_dictionary() const;
     db::commitlog* commitlog_for(const schema_ptr& schema);
@@ -1743,6 +1745,8 @@ public:
     // Note: force_new_active_segment in the commitlog, so that
     // flushing all tables will allow reclaiming of all commitlog segments
     future<> flush_all_tables();
+
+    static future<db_clock::time_point> get_all_tables_flushed_at(sharded<database>& sharded_db);
 
     static future<> drop_cache_for_table_on_all_shards(sharded<database>& sharded_db, table_id id);
     static future<> drop_cache_for_keyspace_on_all_shards(sharded<database>& sharded_db, std::string_view ks_name);
