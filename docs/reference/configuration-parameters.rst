@@ -1,5 +1,5 @@
 ========================
-Configuration parameters
+Configuration Parameters
 ========================
 
 This section contains a list of properties that can be configured in ``scylla.yaml`` - the main configuration file for ScyllaDB.
