@@ -243,18 +243,18 @@ network_topology_strategy::calculate_natural_endpoints(
     const token& search_token, const token_metadata& tm, bool use_host_id) const {
 
     return select_tm([&]<typename NodeId>(const generic_token_metadata<NodeId>& tm) -> future<natural_ep_type> {
-    natural_endpoints_tracker<NodeId> tracker(tm, _dc_rep_factor);
+        natural_endpoints_tracker<NodeId> tracker(tm, _dc_rep_factor);
 
-    for (auto& next : tm.ring_range(search_token)) {
-        co_await coroutine::maybe_yield();
+        for (auto& next : tm.ring_range(search_token)) {
+            co_await coroutine::maybe_yield();
 
-        NodeId ep = *tm.get_endpoint(next);
-        if (tracker.add_endpoint_and_check_if_done(ep)) {
-            break;
+            NodeId ep = *tm.get_endpoint(next);
+            if (tracker.add_endpoint_and_check_if_done(ep)) {
+                break;
+            }
         }
-    }
 
-    co_return std::move(tracker.replicas());
+        co_return std::move(tracker.replicas());
     }, tm, use_host_id);
 }
 

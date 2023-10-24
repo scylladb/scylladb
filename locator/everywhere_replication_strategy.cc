@@ -22,12 +22,12 @@ everywhere_replication_strategy::everywhere_replication_strategy(const replicati
 
 future<natural_ep_type> everywhere_replication_strategy::calculate_natural_endpoints(const token& search_token, const token_metadata& tm, bool use_host_id) const {
     return select_tm([this]<typename NodeId>(const generic_token_metadata<NodeId>& tm) -> future<natural_ep_type> {
-    if (tm.sorted_tokens().empty()) {
+        if (tm.sorted_tokens().empty()) {
             set_type<NodeId> result{vector_type<NodeId>({this->get_self_id<NodeId>(tm)})};
-        return make_ready_future<natural_ep_type>(std::move(result));
-    }
-    const auto& all_endpoints = tm.get_all_endpoints();
-    return make_ready_future<natural_ep_type>(set_type<NodeId>(all_endpoints.begin(), all_endpoints.end()));
+            return make_ready_future<natural_ep_type>(std::move(result));
+        }
+        const auto& all_endpoints = tm.get_all_endpoints();
+        return make_ready_future<natural_ep_type>(set_type<NodeId>(all_endpoints.begin(), all_endpoints.end()));
     }, tm, use_host_id);
 }
 

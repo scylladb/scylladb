@@ -35,33 +35,33 @@ simple_strategy::simple_strategy(const replication_strategy_config_options& conf
 
 future<natural_ep_type> simple_strategy::calculate_natural_endpoints(const token& t, const token_metadata& tm, bool use_host_id) const {
     return select_tm([&]<typename NodeId>(const generic_token_metadata<NodeId>& tm) -> future<natural_ep_type> {
-    const std::vector<token>& tokens = tm.sorted_tokens();
+        const std::vector<token>& tokens = tm.sorted_tokens();
 
-    if (tokens.empty()) {
-        co_return set_type<NodeId>{};
-    }
-
-    size_t replicas = _replication_factor;
-    set_type<NodeId> endpoints;
-    endpoints.reserve(replicas);
-
-    for (auto& token : tm.ring_range(t)) {
-        // If the number of nodes in the cluster is smaller than the desired
-        // replication factor we should return the loop when endpoints already
-        // contains all the nodes in the cluster because no more nodes could be
-        // added to endpoints lists.
-        if (endpoints.size() == replicas || endpoints.size() == tm.count_normal_token_owners()) {
-           break;
+        if (tokens.empty()) {
+            co_return set_type<NodeId>{};
         }
 
-        auto ep = tm.get_endpoint(token);
-        assert(ep);
+        size_t replicas = _replication_factor;
+        set_type<NodeId> endpoints;
+        endpoints.reserve(replicas);
 
-        endpoints.push_back(*ep);
-        co_await coroutine::maybe_yield();
-    }
+        for (auto& token : tm.ring_range(t)) {
+            // If the number of nodes in the cluster is smaller than the desired
+            // replication factor we should return the loop when endpoints already
+            // contains all the nodes in the cluster because no more nodes could be
+            // added to endpoints lists.
+            if (endpoints.size() == replicas || endpoints.size() == tm.count_normal_token_owners()) {
+               break;
+            }
 
-    co_return endpoints;
+            auto ep = tm.get_endpoint(token);
+            assert(ep);
+
+            endpoints.push_back(*ep);
+            co_await coroutine::maybe_yield();
+        }
+
+        co_return endpoints;
     }, tm, use_host_id);
 }
 
