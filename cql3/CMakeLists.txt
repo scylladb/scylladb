@@ -7,7 +7,35 @@ generate_cql_grammar(
   SOURCES cql_grammar_srcs)
 set_source_files_properties(${cql_grammar_srcs}
   PROPERTIES
-    COMPILE_FLAGS "-Wno-uninitialized -Wno-parentheses-equality")
+    COMPILE_OPTIONS "-Wno-uninitialized;-Wno-parentheses-equality")
+
+set(cql_parser_srcs ${cql_grammar_srcs})
+list(FILTER cql_parser_srcs INCLUDE REGEX "Parser.cpp$")
+
+set(unoptimized_levels "0" "g" "s")
+if(Seastar_OptimizationLevel_${build_mode} IN_LIST unoptimized_levels)
+    # Unoptimized parsers end up using huge amounts of stack space and
+    # overflowing their stack
+    list(APPEND cql_parser_compile_options
+        "-O1")
+endif()
+
+include(CheckCXXCompilerFlag)
+check_cxx_compiler_flag("-fsanitize-address-use-after-scope"
+    _sanitize_address_use_after_scope_supported)
+if(_sanitize_address_use_after_scope_supported)
+    # use-after-scope sanitizer also uses large amount of stack space
+    # and overflows the stack of CqlParser
+    list(APPEND cql_parser_compile_options
+        "-fno-sanitize-address-use-after-scope")
+endif()
+
+if(DEFINED cql_parser_compile_options)
+    set_property(
+        SOURCE ${cql_parser_srcs}
+        APPEND
+        PROPERTY COMPILE_OPTIONS ${cql_parser_compile_options})
+endif()
 
 add_library(cql3 STATIC)
 target_sources(cql3
