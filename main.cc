@@ -773,15 +773,15 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             //});
 
             schema::set_default_partitioner(cfg->partitioner(), cfg->murmur3_partitioner_ignore_msb_bits());
-            auto make_sched_group = [&] (sstring name, unsigned shares) {
+            auto make_sched_group = [&] (sstring name, sstring short_name, unsigned shares) {
                 if (cfg->cpu_scheduler()) {
-                    return seastar::create_scheduling_group(name, shares).get0();
+                    return seastar::create_scheduling_group(name, short_name, shares).get0();
                 } else {
                     return seastar::scheduling_group();
                 }
             };
-            auto background_reclaim_scheduling_group = make_sched_group("background_reclaim", 50);
-            auto maintenance_scheduling_group = make_sched_group("streaming", 200);
+            auto background_reclaim_scheduling_group = make_sched_group("background_reclaim", "bgre", 50);
+            auto maintenance_scheduling_group = make_sched_group("streaming", "strm", 200);
 
             smp::invoke_on_all([&cfg, background_reclaim_scheduling_group] {
                 logalloc::tracker::config st_cfg;
@@ -965,14 +965,14 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             // Note: changed from using a move here, because we want the config object intact.
             replica::database_config dbcfg;
-            dbcfg.compaction_scheduling_group = make_sched_group("compaction", 1000);
-            dbcfg.memory_compaction_scheduling_group = make_sched_group("mem_compaction", 1000);
+            dbcfg.compaction_scheduling_group = make_sched_group("compaction", "comp", 1000);
+            dbcfg.memory_compaction_scheduling_group = make_sched_group("mem_compaction", "mcmp", 1000);
             dbcfg.streaming_scheduling_group = maintenance_scheduling_group;
-            dbcfg.statement_scheduling_group = make_sched_group("statement", 1000);
-            dbcfg.memtable_scheduling_group = make_sched_group("memtable", 1000);
-            dbcfg.memtable_to_cache_scheduling_group = make_sched_group("memtable_to_cache", 200);
-            dbcfg.gossip_scheduling_group = make_sched_group("gossip", 1000);
-            dbcfg.commitlog_scheduling_group = make_sched_group("commitlog", 1000);
+            dbcfg.statement_scheduling_group = make_sched_group("statement", "stmt", 1000);
+            dbcfg.memtable_scheduling_group = make_sched_group("memtable", "mt", 1000);
+            dbcfg.memtable_to_cache_scheduling_group = make_sched_group("memtable_to_cache", "mt2c", 200);
+            dbcfg.gossip_scheduling_group = make_sched_group("gossip", "gms", 1000);
+            dbcfg.commitlog_scheduling_group = make_sched_group("commitlog", "clog", 1000);
             dbcfg.available_memory = memory::stats().total_memory();
 
             supervisor::notify("starting compaction_manager");
