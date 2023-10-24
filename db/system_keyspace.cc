@@ -1054,6 +1054,7 @@ schema_ptr system_keyspace::sstables_registry() {
             .with_column("location", utf8_type, column_kind::partition_key)
             .with_column("generation", timeuuid_type, column_kind::clustering_key)
             .with_column("status", utf8_type)
+            .with_column("state", utf8_type)
             .with_column("version", utf8_type)
             .with_column("format", utf8_type)
             .set_comment("SSTables ownership table")
@@ -2731,10 +2732,10 @@ mutation system_keyspace::make_cleanup_candidate_mutation(std::optional<cdc::gen
     return m;
 }
 
-future<> system_keyspace::sstables_registry_create_entry(sstring location, sstring status, sstables::entry_descriptor desc) {
-    static const auto req = format("INSERT INTO system.{} (location, generation, status, version, format) VALUES (?, ?, ?, ?, ?)", SSTABLES_REGISTRY);
+future<> system_keyspace::sstables_registry_create_entry(sstring location, sstring status, sstables::sstable_state state, sstables::entry_descriptor desc) {
+    static const auto req = format("INSERT INTO system.{} (location, generation, status, state, version, format) VALUES (?, ?, ?, ?, ?, ?)", SSTABLES_REGISTRY);
     slogger.trace("Inserting {}.{} into {}", location, desc.generation, SSTABLES_REGISTRY);
-    co_await execute_cql(req, location, desc.generation, status, fmt::to_string(desc.version), fmt::to_string(desc.format)).discard_result();
+    co_await execute_cql(req, location, desc.generation, status, sstables::state_to_dir(state), fmt::to_string(desc.version), fmt::to_string(desc.format)).discard_result();
 }
 
 future<> system_keyspace::sstables_registry_update_entry_status(sstring location, sstables::generation_type gen, sstring status) {
@@ -2750,16 +2751,17 @@ future<> system_keyspace::sstables_registry_delete_entry(sstring location, sstab
 }
 
 future<> system_keyspace::sstables_registry_list(sstring location, sstable_registry_entry_consumer consumer) {
-    static const auto req = format("SELECT status, generation, version, format FROM system.{} WHERE location = ?", SSTABLES_REGISTRY);
+    static const auto req = format("SELECT status, state, generation, version, format FROM system.{} WHERE location = ?", SSTABLES_REGISTRY);
     slogger.trace("Listing {} entries from {}", location, SSTABLES_REGISTRY);
 
     co_await _qp.query_internal(req, db::consistency_level::ONE, { location }, 1000, [ consumer = std::move(consumer) ] (const cql3::untyped_result_set::row& row) -> future<stop_iteration> {
         auto status = row.get_as<sstring>("status");
+        auto state = sstables::state_from_dir(row.get_as<sstring>("state"));
         auto gen = sstables::generation_type(row.get_as<utils::UUID>("generation"));
         auto ver = sstables::version_from_string(row.get_as<sstring>("version"));
         auto fmt = sstables::format_from_string(row.get_as<sstring>("format"));
         sstables::entry_descriptor desc(gen, ver, fmt, sstables::component_type::TOC);
-        co_await consumer(std::move(status), std::move(desc));
+        co_await consumer(std::move(status), std::move(state), std::move(desc));
         co_return stop_iteration::no;
     });
 }

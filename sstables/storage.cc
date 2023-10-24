@@ -482,7 +482,7 @@ sstring s3_storage::make_s3_object_name(const sstable& sst, component_type type)
 
 void s3_storage::open(sstable& sst) {
     entry_descriptor desc(sst._generation, sst._version, sst._format, component_type::TOC);
-    sst.manager().system_keyspace().sstables_registry_create_entry(_location, status_creating, std::move(desc)).get();
+    sst.manager().system_keyspace().sstables_registry_create_entry(_location, status_creating, sst._state, std::move(desc)).get();
 
     memory_data_sink_buffers bufs;
     sst.write_toc(
