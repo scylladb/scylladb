@@ -7278,58 +7278,7 @@ future<sstring> storage_service::get_removal_status() {
 }
 
 future<> storage_service::force_remove_completion() {
-    if (raft_topology_change_enabled()) {
-        return make_exception_future<>(std::runtime_error("The unsafe nodetool removenode force is not supported anymore"));
-    }
-
-    slogger.warn("The unsafe nodetool removenode force is deprecated and will not be supported in future releases");
-    return run_with_no_api_lock([] (storage_service& ss) -> future<> {
-        while (!ss._operation_in_progress.empty()) {
-            if (ss._operation_in_progress != sstring("removenode")) {
-                throw std::runtime_error(::format("Operation {} is in progress, try again", ss._operation_in_progress));
-            }
-
-            // This flag will make removenode stop waiting for the confirmation,
-            // wait it to complete
-            slogger.info("Operation removenode is in progress, wait for it to complete");
-            co_await sleep_abortable(std::chrono::seconds(1), ss._abort_source);
-        }
-        ss._operation_in_progress = sstring("removenode_force");
-
-        try {
-            const auto& tm = ss.get_token_metadata();
-            if (!tm.get_leaving_endpoints().empty()) {
-                auto leaving = tm.get_leaving_endpoints();
-                slogger.warn("Removal not confirmed, Leaving={}", leaving);
-                for (auto host_id : leaving) {
-                    const auto endpoint = ss._address_map.find(host_id);
-                    if (!endpoint) {
-                        slogger.warn("No endpoint is found for host_id {}", host_id);
-                        continue;
-                    }
-                    auto tokens = tm.get_tokens(host_id);
-                    auto permit = co_await ss._gossiper.lock_endpoint(*endpoint, gms::null_permit_id);
-                    const auto& pid = permit.id();
-                    co_await ss._gossiper.advertise_token_removed(*endpoint, host_id, pid);
-                    std::unordered_set<token> tokens_set(tokens.begin(), tokens.end());
-                    co_await ss.excise(tokens_set, *endpoint, host_id, pid);
-
-                    slogger.info("force_remove_completion: removing endpoint {} from group 0", *endpoint);
-                    SCYLLA_ASSERT(ss._group0);
-                    bool raft_available = co_await ss._group0->wait_for_raft();
-                    if (raft_available) {
-                        co_await ss._group0->remove_from_group0(raft::server_id{host_id.uuid()});
-                    }
-                }
-            } else {
-                slogger.warn("No tokens to force removal on, call 'removenode' first");
-            }
-            ss._operation_in_progress = {};
-        } catch (...) {
-            ss._operation_in_progress = {};
-            throw;
-        }
-    });
+    return make_exception_future<>(std::runtime_error("The unsafe nodetool removenode force is not supported anymore"));
 }
 
 /**
