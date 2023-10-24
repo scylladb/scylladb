@@ -1362,7 +1362,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             // FIXME -- this can happen next to token_metadata start, but it needs "storage_service"
             // API register, so it comes that late for now
-            api::set_server_token_metadata(ctx, ss).get();
+            api::set_server_token_metadata(ctx, token_metadata).get();
             auto stop_tokens_api = defer_verbose_shutdown("token metadata API", [&ctx] {
                 api::unset_server_token_metadata(ctx).get();
             });

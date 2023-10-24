@@ -11,11 +11,11 @@
 #include <seastar/core/sharded.hh>
 #include "api.hh"
 
-namespace service { class storage_service; }
+namespace locator { class shared_token_metadata; }
 
 namespace api {
 
-void set_token_metadata(http_context& ctx, httpd::routes& r, sharded<service::storage_service>& ss);
+void set_token_metadata(http_context& ctx, httpd::routes& r, sharded<locator::shared_token_metadata>& tm);
 void unset_token_metadata(http_context& ctx, httpd::routes& r);
 
 }
