@@ -18,8 +18,10 @@ local_strategy::local_strategy(const replication_strategy_config_options& config
     _natural_endpoints_depend_on_token = false;
 }
 
-future<endpoint_set> local_strategy::calculate_natural_endpoints(const token& t, const token_metadata& tm) const {
-    return make_ready_future<endpoint_set>(endpoint_set({tm.get_topology().my_address()}));
+future<natural_ep_type> local_strategy::calculate_natural_endpoints(const token& t, const token_metadata& tm, bool use_host_id) const {
+    return select_tm([this]<typename NodeId>(const generic_token_metadata<NodeId>& tm) -> future<natural_ep_type> {
+        return make_ready_future<natural_ep_type>(set_type<NodeId>({this->get_self_id<NodeId>(tm)}));
+    }, tm, use_host_id);
 }
 
 void local_strategy::validate_options(const gms::feature_service&) const {

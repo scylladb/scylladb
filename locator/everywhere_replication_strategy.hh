@@ -18,7 +18,7 @@ class everywhere_replication_strategy : public abstract_replication_strategy {
 public:
     everywhere_replication_strategy(const replication_strategy_config_options& config_options);
 
-    virtual future<endpoint_set> calculate_natural_endpoints(const token& search_token, const token_metadata& tm) const override;
+    virtual future<natural_ep_type> calculate_natural_endpoints(const token& search_token, const token_metadata& tm, bool host_id) const override;
 
     virtual void validate_options(const gms::feature_service&) const override { /* noop */ }
 

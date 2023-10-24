@@ -5960,7 +5960,7 @@ storage_service::get_changed_ranges_for_leaving(locator::vnode_effective_replica
     const auto& rs = erm->get_replication_strategy();
     for (auto& r : ranges) {
         auto end_token = r.end() ? r.end()->value() : dht::maximum_token();
-        auto new_replica_endpoints = co_await rs.calculate_natural_endpoints(end_token, temp);
+        auto new_replica_endpoints = get<locator::endpoint_set>(co_await rs.calculate_natural_endpoints(end_token, temp, false));
 
         auto rg = current_replica_endpoints.equal_range(r);
         for (auto it = rg.first; it != rg.second; it++) {

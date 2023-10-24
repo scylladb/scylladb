@@ -26,7 +26,7 @@ public:
         return true;
     }
 
-    virtual future<endpoint_set> calculate_natural_endpoints(const token& search_token, const token_metadata& tm) const override;
+    virtual future<natural_ep_type> calculate_natural_endpoints(const token& search_token, const token_metadata& tm, bool host_id) const override;
 private:
     size_t _replication_factor = 1;
 };

@@ -50,8 +50,8 @@ protected:
      * calculate endpoints in one pass through the tokens by tracking our
      * progress in each DC, rack etc.
      */
-    virtual future<endpoint_set> calculate_natural_endpoints(
-        const token& search_token, const token_metadata& tm) const override;
+    virtual future<natural_ep_type> calculate_natural_endpoints(
+        const token& search_token, const token_metadata& tm, bool host_id) const override;
 
     virtual void validate_options(const gms::feature_service&) const override;
 

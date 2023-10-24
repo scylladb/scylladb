@@ -1719,7 +1719,7 @@ future<> repair_service::do_decommission_removenode_with_repair(locator::token_m
             // Find (for each range) all nodes that store replicas for these ranges as well
             for (auto& r : ranges) {
                 auto end_token = r.end() ? r.end()->value() : dht::maximum_token();
-                auto eps = strat.calculate_natural_endpoints(end_token, *tmptr).get0();
+                auto eps = get<locator::endpoint_set>(strat.calculate_natural_endpoints(end_token, *tmptr, false).get0());
                 current_replica_endpoints.emplace(r, std::move(eps));
                 seastar::thread::maybe_yield();
             }
@@ -1738,7 +1738,7 @@ future<> repair_service::do_decommission_removenode_with_repair(locator::token_m
                     ops->check_abort();
                 }
                 auto end_token = r.end() ? r.end()->value() : dht::maximum_token();
-                const auto new_eps = strat.calculate_natural_endpoints(end_token, temp).get0();
+                const auto new_eps = get<locator::endpoint_set>(strat.calculate_natural_endpoints(end_token, temp, false).get0());
                 const auto& current_eps = current_replica_endpoints[r];
                 std::unordered_set<inet_address> neighbors_set = new_eps.get_set();
                 bool skip_this_range = false;
@@ -1929,7 +1929,7 @@ future<> repair_service::do_rebuild_replace_with_repair(locator::token_metadata_
                 auto& r = *it;
                 seastar::thread::maybe_yield();
                 auto end_token = r.end() ? r.end()->value() : dht::maximum_token();
-                auto neighbors = boost::copy_range<std::vector<gms::inet_address>>(strat.calculate_natural_endpoints(end_token, *tmptr).get0() |
+                auto neighbors = boost::copy_range<std::vector<gms::inet_address>>(get<locator::endpoint_set>(strat.calculate_natural_endpoints(end_token, *tmptr, false).get0()) |
                     boost::adaptors::filtered([myip, &source_dc, &topology, &ignore_nodes] (const gms::inet_address& node) {
                         if (node == myip) {
                             return false;

@@ -19,6 +19,18 @@
 
 namespace locator {
 
+static endpoint_set resolve_endpoints(const host_id_set& host_ids, const token_metadata2& tm) {
+    endpoint_set result{};
+    result.reserve(host_ids.size());
+    for (const auto& host_id: host_ids) {
+        // Empty host_id is used as a marker for local address.
+        // The reason for this hack is that we need local_strategy to
+        // work before the local host_id is loaded from the system.local table.
+        result.push_back(host_id ? tm.get_endpoint_for_host_id(host_id) : tm.get_topology().my_address());
+    }
+    return result;
+}
+
 logging::logger rslogger("replication_strategy");
 
 abstract_replication_strategy::abstract_replication_strategy(
@@ -54,6 +66,11 @@ void abstract_replication_strategy::validate_replication_strategy(const sstring&
             }
         }
     }
+}
+
+future<endpoint_set> abstract_replication_strategy::calculate_natural_ips(const token& search_token, const token_metadata2_ptr& tm) const {
+    const auto host_ids = co_await calculate_natural_endpoints(search_token, token_metadata(tm), true);
+    co_return resolve_endpoints(get<host_id_set>(host_ids), *tm);
 }
 
 using strategy_class_registry = class_registry<
@@ -261,7 +278,7 @@ abstract_replication_strategy::get_ranges(inet_address ep, const token_metadata&
             // Using the common path would make the function quadratic in the number of endpoints.
             should_add = true;
         } else {
-            auto eps = co_await calculate_natural_endpoints(tok, tm);
+            auto eps = get<endpoint_set>(co_await calculate_natural_endpoints(tok, tm, false));
             should_add = eps.contains(ep);
         }
         if (should_add) {
@@ -326,7 +343,7 @@ abstract_replication_strategy::get_range_addresses(const token_metadata& tm) con
     std::unordered_map<dht::token_range, inet_address_vector_replica_set> ret;
     for (auto& t : tm.sorted_tokens()) {
         dht::token_range_vector ranges = tm.get_primary_ranges_for(t);
-        auto eps = co_await calculate_natural_endpoints(t, tm);
+        auto eps = get<endpoint_set>(co_await calculate_natural_endpoints(t, tm, false));
         for (auto& r : ranges) {
             ret.emplace(r, eps.get_vector());
         }
@@ -341,7 +358,7 @@ abstract_replication_strategy::get_pending_address_ranges(const token_metadata_p
     temp.update_topology(pending_address, std::move(dr));
     co_await temp.update_normal_tokens(pending_tokens, pending_address);
     for (const auto& t : temp.sorted_tokens()) {
-        auto eps = co_await calculate_natural_endpoints(t, temp);
+        auto eps = get<endpoint_set>(co_await calculate_natural_endpoints(t, temp, false));
         if (eps.contains(pending_address)) {
             dht::token_range_vector r = temp.get_primary_ranges_for(t);
             rslogger.debug("get_pending_address_ranges: token={} primary_range={} endpoint={}", t, r, pending_address);
@@ -372,8 +389,8 @@ future<mutable_vnode_effective_replication_map_ptr> calculate_effective_replicat
 
             const auto token = all_tokens[i];
 
-            auto current_endpoints = co_await rs->calculate_natural_endpoints(token, base_token_metadata);
-            auto target_endpoints = co_await rs->calculate_natural_endpoints(token, *topology_changes->target_token_metadata);
+            auto current_endpoints = get<endpoint_set>(co_await rs->calculate_natural_endpoints(token, base_token_metadata, false));
+            auto target_endpoints = get<endpoint_set>(co_await rs->calculate_natural_endpoints(token, *topology_changes->target_token_metadata, false));
 
             auto add_mapping = [&](ring_mapping& target, std::unordered_set<inet_address>&& endpoints) {
                 using interval = ring_mapping::interval_type;
@@ -422,11 +439,11 @@ future<mutable_vnode_effective_replication_map_ptr> calculate_effective_replicat
         }
     } else if (depend_on_token) {
         for (const auto &t : sorted_tokens) {
-            auto eps = co_await rs->calculate_natural_endpoints(t, *tmptr);
+            auto eps = get<endpoint_set>(co_await rs->calculate_natural_endpoints(t, *tmptr, false));
             replication_map.emplace(t, std::move(eps).extract_vector());
         }
     } else {
-        auto eps = co_await rs->calculate_natural_endpoints(default_replication_map_key, *tmptr);
+        auto eps = get<endpoint_set>(co_await rs->calculate_natural_endpoints(default_replication_map_key, *tmptr, false));
         replication_map.emplace(default_replication_map_key, std::move(eps).extract_vector());
     }
 
