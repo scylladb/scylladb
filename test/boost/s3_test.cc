@@ -162,6 +162,34 @@ SEASTAR_THREAD_TEST_CASE(test_client_multipart_copy_upload) {
     do_test_client_multipart_upload(true);
 }
 
+SEASTAR_THREAD_TEST_CASE(test_client_multipart_upload_fallback) {
+    const sstring name(fmt::format("/{}/testfbobject-{}", tests::getenv_safe("S3_BUCKET_FOR_TEST"), ::getpid()));
+
+    testlog.info("Make client");
+    semaphore mem(0);
+    mem.broken(); // so that any attempt to use it throws
+    auto cln = s3::client::make(tests::getenv_safe("S3_SERVER_ADDRESS_FOR_TEST"), make_minio_config(), mem);
+    auto close_client = deferred_close(*cln);
+
+    testlog.info("Upload object");
+    auto out = output_stream<char>(cln->make_upload_sink(name));
+    auto close = seastar::deferred_close(out);
+
+    temporary_buffer<char> data = sstring("1A3B5C7890").release();
+    out.write(reinterpret_cast<const char*>(data.begin()), data.size()).get();
+
+    testlog.info("Flush upload");
+    out.flush().get(); // if it tries to do regular flush, memory claim would throw
+    auto delete_object = deferred_delete_object(cln, name);
+
+    testlog.info("Closing");
+    close.close_now();
+
+    testlog.info("Get object content");
+    temporary_buffer<char> res = cln->get_object_contiguous(name).get0();
+    BOOST_REQUIRE_EQUAL(to_sstring(std::move(res)), to_sstring(std::move(data)));
+}
+
 SEASTAR_THREAD_TEST_CASE(test_client_readable_file) {
     const sstring name(fmt::format("/{}/testroobject-{}", tests::getenv_safe("S3_BUCKET_FOR_TEST"), ::getpid()));
 
