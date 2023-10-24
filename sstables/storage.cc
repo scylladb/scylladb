@@ -516,10 +516,13 @@ future<> s3_storage::seal(const sstable& sst) {
 }
 
 future<> s3_storage::change_state(const sstable& sst, sstable_state state, generation_type generation, delayed_commit_changes* delay) {
-    // FIXME -- this "move" means changing sstable state, e.g. move from staging
-    // or upload to base. To make this work the "status" part of the entry location
-    // must be detached from the entry location itself, see PR#12707
-    co_await coroutine::return_exception(std::runtime_error("Moving S3 objects not implemented"));
+    if (generation != sst._generation) {
+        // The 'generation' field is clustering key in system.sstables and cannot be
+        // changed. However, that's fine, state AND generation change means the sstable
+        // is moved from upload directory and this is another issue for S3 (#13018)
+        co_await coroutine::return_exception(std::runtime_error("Cannot change state and generation of an S3 object"));
+    }
+    co_await sst.manager().system_keyspace().sstables_registry_update_entry_state(_location, sst.generation(), state);
 }
 
 future<> s3_storage::wipe(const sstable& sst, sync_dir) noexcept {

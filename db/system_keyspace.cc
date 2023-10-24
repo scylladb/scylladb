@@ -2744,6 +2744,13 @@ future<> system_keyspace::sstables_registry_update_entry_status(sstring location
     co_await execute_cql(req, status, location, gen).discard_result();
 }
 
+future<> system_keyspace::sstables_registry_update_entry_state(sstring location, sstables::generation_type gen, sstables::sstable_state state) {
+    static const auto req = format("UPDATE system.{} SET state = ? WHERE location = ? AND generation = ?", SSTABLES_REGISTRY);
+    auto new_state = sstables::state_to_dir(state);
+    slogger.trace("Updating {}.{} -> state={} in {}", location, gen, new_state, SSTABLES_REGISTRY);
+    co_await execute_cql(req, new_state, location, gen).discard_result();
+}
+
 future<> system_keyspace::sstables_registry_delete_entry(sstring location, sstables::generation_type gen) {
     static const auto req = format("DELETE FROM system.{} WHERE location = ? AND generation = ?", SSTABLES_REGISTRY);
     slogger.trace("Removing {}.{} from {}", location, gen, SSTABLES_REGISTRY);
