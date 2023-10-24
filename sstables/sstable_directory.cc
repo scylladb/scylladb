@@ -353,7 +353,7 @@ future<> sstable_directory::filesystem_components_lister::process(sstable_direct
 future<> sstable_directory::system_keyspace_components_lister::process(sstable_directory& directory, process_flags flags) {
     return _sys_ks.sstables_registry_list(_location, [this, flags, &directory] (sstring status, entry_descriptor desc) {
         if (status != "sealed") {
-            // FIXME -- handle
+            dirlog.warn("Skip processing {} {} entry from {} (must have been picked up by garbage collector)", status, desc.generation, _location);
             return make_ready_future<>();
         }
         if (!sstable_generation_generator::maybe_owned_by_this_shard(desc.generation)) {
