@@ -103,6 +103,8 @@ future<> set_server_authorization_cache(http_context& ctx, sharded<auth::service
 future<> unset_server_authorization_cache(http_context& ctx);
 future<> set_server_snapshot(http_context& ctx, sharded<db::snapshot_ctl>& snap_ctl);
 future<> unset_server_snapshot(http_context& ctx);
+future<> set_server_token_metadata(http_context& ctx, sharded<service::storage_service>& ss);
+future<> unset_server_token_metadata(http_context& ctx);
 future<> set_server_gossip(http_context& ctx, sharded<gms::gossiper>& g);
 future<> set_server_load_sstable(http_context& ctx, sharded<db::system_keyspace>& sys_ks);
 future<> unset_server_load_sstable(http_context& ctx);

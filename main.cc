@@ -1360,6 +1360,13 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 api::unset_server_storage_service(ctx).get();
             });
 
+            // FIXME -- this can happen next to token_metadata start, but it needs "storage_service"
+            // API register, so it comes that late for now
+            api::set_server_token_metadata(ctx, ss).get();
+            auto stop_tokens_api = defer_verbose_shutdown("token metadata API", [&ctx] {
+                api::unset_server_token_metadata(ctx).get();
+            });
+
             supervisor::notify("initializing virtual tables");
             smp::invoke_on_all([&] {
                 return db::initialize_virtual_tables(db, ss, gossiper, raft_gr, sys_ks, *cfg);

@@ -11,6 +11,7 @@
 #include <seastar/http/transformers.hh>
 #include <seastar/http/api_docs.hh>
 #include "storage_service.hh"
+#include "token_metadata.hh"
 #include "commitlog.hh"
 #include "gossiper.hh"
 #include "failure_detector.hh"
@@ -153,6 +154,14 @@ future<> set_server_snapshot(http_context& ctx, sharded<db::snapshot_ctl>& snap_
 
 future<> unset_server_snapshot(http_context& ctx) {
     return ctx.http_server.set_routes([&ctx] (routes& r) { unset_snapshot(ctx, r); });
+}
+
+future<> set_server_token_metadata(http_context& ctx, sharded<service::storage_service>& ss) {
+    return ctx.http_server.set_routes([&ctx, &ss] (routes& r) { set_token_metadata(ctx, r, ss); });
+}
+
+future<> unset_server_token_metadata(http_context& ctx) {
+    return ctx.http_server.set_routes([&ctx] (routes& r) { unset_token_metadata(ctx, r); });
 }
 
 future<> set_server_snitch(http_context& ctx, sharded<locator::snitch_ptr>& snitch) {
