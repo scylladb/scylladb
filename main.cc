@@ -1037,6 +1037,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             storage_proxy_smp_service_group_config.max_nonlocal_requests = 5000;
             spcfg.read_smp_service_group = create_smp_service_group(storage_proxy_smp_service_group_config).get0();
             spcfg.write_smp_service_group = create_smp_service_group(storage_proxy_smp_service_group_config).get0();
+            spcfg.write_mv_smp_service_group = create_smp_service_group(storage_proxy_smp_service_group_config).get0();
             spcfg.hints_write_smp_service_group = create_smp_service_group(storage_proxy_smp_service_group_config).get0();
             spcfg.write_ack_smp_service_group = create_smp_service_group(storage_proxy_smp_service_group_config).get0();
             static db::view::node_update_backlog node_backlog(smp::count, 10ms);
