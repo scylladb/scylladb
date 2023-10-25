@@ -39,7 +39,14 @@ std::set<gms::inet_address> get_seeds_from_db_config(const db::config& cfg, gms:
         }
     }
     if (seeds.empty()) {
-        seeds.emplace(gms::inet_address("127.0.0.1"));
+        auto localhost = gms::inet_address("127.0.0.1");
+        // Single node cluster?
+        if (cfg.developer_mode() || (listen == localhost && broadcast_address == localhost)) {
+            seeds.emplace(localhost);
+        } else {
+            startlog.error("Bad configuration: no 'seeds' provided");
+            throw bad_configuration_error();
+        }
     }
     startlog.info("seeds={{{}}}, listen_address={}, broadcast_address={}",
             fmt::join(seeds, ", "), listen, broadcast_address);
