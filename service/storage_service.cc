@@ -10,6 +10,7 @@
  */
 
 #include "storage_service.hh"
+#include "service/session.hh"
 #include "dht/boot_strapper.hh"
 #include <seastar/core/distributed.hh>
 #include <seastar/util/defer.hh>

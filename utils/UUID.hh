@@ -211,7 +211,7 @@ struct tagged_uuid {
     }
     static tagged_uuid create_random_id() noexcept { return tagged_uuid{utils::make_random_uuid()}; }
     static constexpr tagged_uuid create_null_id() noexcept { return tagged_uuid{}; }
-    explicit tagged_uuid(const utils::UUID& uuid) noexcept : id(uuid) {}
+    explicit constexpr tagged_uuid(const utils::UUID& uuid) noexcept : id(uuid) {}
     constexpr tagged_uuid() = default;
 
     const utils::UUID& uuid() const noexcept {
