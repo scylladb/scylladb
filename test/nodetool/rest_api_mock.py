@@ -20,8 +20,12 @@ logger = logging.getLogger(__name__)
 
 
 class expected_request:
-    def __init__(self, method: str, path: str, params: dict = {}, multiple: bool = False,
-                 response: Dict[str, Any] = None):
+    ANY = -1  # allow for any number of requests (including no requests at all), similar to the `*` quantity in regexp
+    ONE = 0  # exactly one request is allowed
+    MULTIPLE = 1  # one or more request is allowed
+
+    def __init__(self, method: str, path: str, params: dict = {}, multiple: int = ONE,
+                 response: Dict[str, Any] = None, response_status: int = 200):
         self.method = method
         self.path = path
         self.params = params
@@ -50,8 +54,9 @@ def _make_expected_request(req_json):
             req_json["method"],
             req_json["path"],
             params=req_json.get("params", dict()),
-            multiple=req_json.get("multiple", False),
-            response=req_json.get("response"))
+            multiple=req_json.get("multiple", expected_request.ONE),
+            response=req_json.get("response"),
+            response_status=req_json.get("response_status", 200))
 
 
 class handler_match_info(aiohttp.abc.AbstractMatchInfo):
@@ -127,19 +132,24 @@ class rest_server(aiohttp.abc.AbstractRouter):
             return aiohttp.web.Response(status=500, text="Expected no requests, got {this_req}")
 
         expected_req = self.expected_requests[0]
-        if this_req != expected_req:
-            if expected_req.multiple and expected_req.hit > 0 and \
-                    len(self.expected_requests) > 1 and self.expected_requests[1] == this_req:
+        while this_req != expected_req:
+            if expected_req.multiple == expected_request.ANY or (
+                    expected_req.multiple >= expected_request.MULTIPLE and expected_req.hit >= expected_req.multiple):
+                logger.info(f"popping multi request {expected_req}")
                 del self.expected_requests[0]
                 expected_req = self.expected_requests[0]
-            else:
-                logger.error(f"unexpected request, expected {expected_req}, got {this_req}")
-                return aiohttp.web.Response(status=500, text="Expected {expected_req}, got {this_req}")
 
-        if not expected_req.multiple:
+                if len(self.expected_requests) > 0:
+                    expected_req = self.expected_requests[0]
+                    continue
+
+            logger.error(f"unexpected request, expected {expected_req}, got {this_req}")
+            return aiohttp.web.Response(status=500, text="Expected {expected_req}, got {this_req}")
+
+        if expected_req.multiple == expected_request.ONE:
             del self.expected_requests[0]
-
-        expected_req.hit += 1
+        else:
+            expected_req.hit += 1
 
         if expected_req.response is None:
             logger.info(f"expected_request: {expected_req}, no response")
