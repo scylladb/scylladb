@@ -229,7 +229,7 @@ public:
         auto cfg = make_table_config();
         cfg.datadir = dir;
         cfg.enable_commitlog = false;
-        return table_for_tests(manager(), s, std::move(cfg), _impl->storage);
+        return table_for_tests(manager(), _impl->cmgr->get_compaction_manager(), s, std::move(cfg), _impl->storage);
     }
 
     table_for_tests make_table_for_tests(schema_ptr s = nullptr) {
@@ -237,7 +237,7 @@ public:
         auto cfg = make_table_config();
         cfg.datadir = _impl->dir.path().native();
         cfg.enable_commitlog = false;
-        return table_for_tests(manager(), s, std::move(cfg), _impl->storage);
+        return table_for_tests(manager(), _impl->cmgr->get_compaction_manager(), s, std::move(cfg), _impl->storage);
     }
 };
 

@@ -40,8 +40,6 @@ struct table_for_tests {
         schema_ptr s;
         replica::cf_stats cf_stats{0};
         cell_locker_stats cl_stats;
-        tasks::task_manager tm;
-        compaction_manager cm{tm, compaction_manager::for_testing_tag{}};
         lw_shared_ptr<replica::column_family> cf;
         std::unique_ptr<table_state> table_s;
         data_dictionary::storage_options storage;
@@ -52,7 +50,7 @@ struct table_for_tests {
 
     static schema_ptr make_default_schema();
 
-    explicit table_for_tests(sstables::sstables_manager& sstables_manager, schema_ptr s, replica::table::config cfg, data_dictionary::storage_options storage = {});
+    explicit table_for_tests(sstables::sstables_manager& sstables_manager, compaction_manager& cm, schema_ptr s, replica::table::config cfg, data_dictionary::storage_options storage = {});
 
     schema_ptr schema() { return _data->s; }
 
