@@ -215,6 +215,11 @@ test_env::impl::impl(test_env_config cfg, sstables::storage_manager* sstm)
     }
 }
 
+future<> test_env::stop() {
+    co_await _impl->mgr.close();
+    co_await _impl->semaphore.stop();
+}
+
 future<> test_env::do_with_async(noncopyable_function<void (test_env&)> func, test_env_config cfg) {
     if (!cfg.storage.is_local_type()) {
         struct test_env_with_cql {

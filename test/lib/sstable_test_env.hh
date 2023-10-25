@@ -79,11 +79,7 @@ public:
 
     explicit test_env(test_env_config cfg = {}, sstables::storage_manager* sstm = nullptr) : _impl(std::make_unique<impl>(std::move(cfg), sstm)) { }
 
-    future<> stop() {
-        return _impl->mgr.close().finally([this] {
-            return _impl->semaphore.stop();
-        });
-    }
+    future<> stop();
 
     sstables::generation_type new_generation() noexcept {
         return _impl->new_generation();
