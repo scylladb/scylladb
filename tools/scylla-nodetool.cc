@@ -58,8 +58,10 @@ class scylla_rest_client {
         }
 
         if (res.empty()) {
+            nlog.trace("Got empty response");
             return rjson::null_value();
         } else {
+            nlog.trace("Got response:\n{}", res);
             return rjson::parse(res);
         }
     }
