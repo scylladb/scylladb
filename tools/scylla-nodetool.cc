@@ -131,6 +131,31 @@ void cleanup_operation(scylla_rest_client& client, const bpo::variables_map& vm)
     }
 }
 
+void clearsnapshot_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    std::unordered_map<sstring, sstring> params;
+
+    if (vm.count("keyspaces")) {
+        std::vector<sstring> keyspaces;
+        const auto all_keyspaces = get_keyspaces(client);
+        for (const auto& keyspace : vm["keyspaces"].as<std::vector<sstring>>()) {
+            if (std::ranges::find(all_keyspaces, keyspace) == all_keyspaces.end()) {
+                throw std::invalid_argument(fmt::format("keyspace {} does not exist", keyspace));
+            }
+            keyspaces.push_back(keyspace);
+        }
+
+        if (!keyspaces.empty()) {
+            params["kn"] = fmt::to_string(fmt::join(keyspaces.begin(), keyspaces.end(), ","));
+        }
+    }
+
+    if (vm.count("tag")) {
+        params["tag"] = vm["tag"].as<sstring>();
+    }
+
+    client.del("/storage_service/snapshots", std::move(params));
+}
+
 void compact_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     if (vm.count("user-defined")) {
         throw std::invalid_argument("--user-defined flag is unsupported");
@@ -471,6 +496,24 @@ Fore more information, see: https://opensource.docs.scylladb.com/stable/operatin
                 }
             },
             cleanup_operation
+        },
+        {
+            {
+                "clearsnapshot",
+                "Remove snapshots",
+R"(
+By default all snapshots are removed for all keyspaces.
+
+Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/clearsnapshot.html
+)",
+                {
+                    typed_option<sstring>("tag,t", "The snapshot to remove"),
+                },
+                {
+                    typed_option<std::vector<sstring>>("keyspaces", "[<keyspaces>...]", -1),
+                }
+            },
+            clearsnapshot_operation
         },
         {
             {
