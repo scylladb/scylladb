@@ -4453,8 +4453,8 @@ SEASTAR_TEST_CASE(test_major_does_not_miss_data_in_memtable) {
     });
 }
 
-SEASTAR_TEST_CASE(simple_backlog_controller_test) {
-    auto run_controller_test = [] (sstables::compaction_strategy_type compaction_strategy_type, test_env& env) {
+future<> run_controller_test(sstables::compaction_strategy_type compaction_strategy_type) {
+    return test_env::do_with_async([compaction_strategy_type] (test_env& env) {
         /////////////
         // settings
         static constexpr float disk_memory_ratio = 78.125; /* AWS I3en is ~78.125 */
@@ -4564,13 +4564,19 @@ SEASTAR_TEST_CASE(simple_backlog_controller_test) {
             auto max_expected = compaction_strategy_type == sstables::compaction_strategy_type::leveled ? 0.4f : 0.0f;
             BOOST_REQUIRE(r.normalized_backlog <= max_expected);
         }
-    };
-
-    return test_env::do_with_async([run_controller_test] (test_env& env) {
-       run_controller_test(sstables::compaction_strategy_type::size_tiered, env);
-       run_controller_test(sstables::compaction_strategy_type::time_window, env);
-       run_controller_test(sstables::compaction_strategy_type::leveled, env);
     });
+}
+
+SEASTAR_TEST_CASE(simple_backlog_controller_test_size_tiered) {
+    return run_controller_test(sstables::compaction_strategy_type::size_tiered);
+}
+
+SEASTAR_TEST_CASE(simple_backlog_controller_test_time_window) {
+    return run_controller_test(sstables::compaction_strategy_type::time_window);
+}
+
+SEASTAR_TEST_CASE(simple_backlog_controller_test_leveled) {
+    return run_controller_test(sstables::compaction_strategy_type::leveled);
 }
 
 SEASTAR_TEST_CASE(test_compaction_strategy_cleanup_method) {
