@@ -108,6 +108,12 @@ namespace service {
 
 static logging::logger slogger("storage_service");
 
+static thread_local session_manager topology_session_manager;
+
+session_manager& get_topology_session_manager() {
+    return topology_session_manager;
+}
+
 static constexpr std::chrono::seconds wait_for_live_nodes_timeout{30};
 
 storage_service::storage_service(abort_source& abort_source,
