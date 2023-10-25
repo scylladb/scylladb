@@ -38,7 +38,6 @@ struct table_for_tests {
     class table_state;
     struct data {
         schema_ptr s;
-        reader_concurrency_semaphore semaphore;
         replica::cf_stats cf_stats{0};
         cell_locker_stats cl_stats;
         tasks::task_manager tm;

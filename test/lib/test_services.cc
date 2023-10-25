@@ -26,7 +26,6 @@ static const sstring some_keyspace("ks");
 static const sstring some_column_family("cf");
 
 table_for_tests::data::data()
-    : semaphore(reader_concurrency_semaphore::no_limits{}, "table_for_tests")
 { }
 
 table_for_tests::data::~data() {}
@@ -146,7 +145,7 @@ compaction::table_state& table_for_tests::as_table_state() noexcept {
 future<> table_for_tests::stop() {
     auto data = _data;
     co_await data->cm.remove(*data->table_s);
-    co_await when_all_succeed(data->cm.stop(), data->semaphore.stop()).discard_result();
+    co_await data->cm.stop();
 }
 
 void table_for_tests::set_tombstone_gc_enabled(bool tombstone_gc_enabled) noexcept {
