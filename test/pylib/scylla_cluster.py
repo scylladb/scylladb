@@ -665,14 +665,18 @@ class ScyllaCluster:
 
     async def stop_gracefully(self) -> None:
         """Stop all running servers in a clean way"""
-        if self.is_running:
-            self.is_running = False
-            self.logger.info("Cluster %s stopping gracefully", self)
-            self.is_dirty = True
-            # If self.running is empty, no-op
-            await asyncio.gather(*(server.stop_gracefully() for server in self.running.values()))
-            self.stopped.update(self.running)
-            self.running.clear()
+        # FIXME: the lock is necessary because test.py calls `stop()` and `uninstall()` concurrently
+        # (from exit artifacts), which leads to issues (#15755). A more elegant solution would be
+        # to prevent that instead of using a lock here.
+        async with self.stop_lock:
+            if self.is_running:
+                self.is_running = False
+                self.logger.info("Cluster %s stopping gracefully", self)
+                self.is_dirty = True
+                # If self.running is empty, no-op
+                await asyncio.gather(*(server.stop_gracefully() for server in self.running.values()))
+                self.stopped.update(self.running)
+                self.running.clear()
 
     def _seeds(self) -> List[str]:
         return [server.ip_addr for server in self.running.values()]
