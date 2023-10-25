@@ -111,6 +111,86 @@ static void create_alternator_table(http::experimental::client& cli) {
     )").get();
 }
 
+static void create_alternator_table_with_gsi(http::experimental::client& cli) {
+    delete_alternator_table(cli); // cleanup in case of leftovers
+    make_request(cli, "CreateTable", R"(
+        {
+            "AttributeDefinitions": [{
+                    "AttributeName": "p",
+                    "AttributeType": "S"
+                },
+                {
+                    "AttributeName": "c",
+                    "AttributeType": "S"
+                },
+                {
+                    "AttributeName": "C0",
+                    "AttributeType": "S"
+                },
+                {
+                    "AttributeName": "C1",
+                    "AttributeType": "S"
+                },
+                {
+                    "AttributeName": "C2",
+                    "AttributeType": "S"
+                },
+                {
+                    "AttributeName": "C3",
+                    "AttributeType": "S"
+                },
+                {
+                    "AttributeName": "C4",
+                    "AttributeType": "S"
+                }
+            ],
+            "TableName": "workloads_test",
+            "BillingMode": "PAY_PER_REQUEST",
+            "KeySchema": [{
+                    "AttributeName": "p",
+                    "KeyType": "HASH"
+                },
+                {
+                    "AttributeName": "c",
+                    "KeyType": "RANGE"
+                }
+            ],
+            "GlobalSecondaryIndexes": [
+                {   "IndexName": "idx_C0",
+                    "KeySchema": [
+                        { "AttributeName": "C0", "KeyType": "HASH" }
+                    ],
+                    "Projection": { "ProjectionType": "ALL" }
+                },
+                {   "IndexName": "idx_C1",
+                    "KeySchema": [
+                        { "AttributeName": "C1", "KeyType": "HASH" }
+                    ],
+                    "Projection": { "ProjectionType": "ALL" }
+                },
+                {   "IndexName": "idx_C2",
+                    "KeySchema": [
+                        { "AttributeName": "C2", "KeyType": "HASH" }
+                    ],
+                    "Projection": { "ProjectionType": "ALL" }
+                },
+                {   "IndexName": "idx_C3",
+                    "KeySchema": [
+                        { "AttributeName": "C3", "KeyType": "HASH" }
+                    ],
+                    "Projection": { "ProjectionType": "ALL" }
+                },
+                {   "IndexName": "idx_C4",
+                    "KeySchema": [
+                        { "AttributeName": "C4", "KeyType": "HASH" }
+                    ],
+                    "Projection": { "ProjectionType": "ALL" }
+                }
+            ]
+        }
+    )").get();
+}
+
 // Exercise various types documented here: https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_AttributeValue.html
 auto update_item_suffix = R"(
         "UpdateExpression": "set C0 = :C0, C1 = :C1, C2 = :C2, C3 = :C3, C4 = :C4, C5 = :C5, C6 = :C6, C7 = :C7, C8 = :C8, C9 = :C9",
@@ -164,6 +244,40 @@ static future<> update_item(const test_config& _, http::experimental::client& cl
             }},)", seq, seq);
 
     return make_request(cli, "UpdateItem", prefix + format(update_item_suffix, ""));
+}
+
+static future<> update_item_gsi(const test_config& _, http::experimental::client& cli, uint64_t seq) {
+    auto prefix = format(R"({{
+            "TableName": "workloads_test",
+            "Key": {{
+                "p": {{
+                    "S": "{}"
+                }},
+                "c": {{
+                    "S": "{}"
+                }}
+            }},
+            "UpdateExpression": "set C0 = :C0, C1 = :C1, C2 = :C2, C3 = :C3, C4 = :C4",
+            "ExpressionAttributeValues": {{
+                ":C0": {{
+                    "S": "{}"
+                }},
+                ":C1": {{
+                    "S": "{}"
+                }},
+                ":C2": {{
+                    "S": "{}"
+                }},
+                ":C3": {{
+                    "S": "{}"
+                }},
+                ":C4": {{
+                    "S": "{}"
+                }}
+            }},
+        "ReturnValues": "NONE"
+    }})", seq, seq, seq>>1, seq>>2, seq>>3, seq>>4, seq>>5); // different values so that some gsi (mv) updates will land on different shards
+    return make_request(cli, "UpdateItem", prefix);
 }
 
 static future<> update_item_rmw(const test_config& _, http::experimental::client& cli, uint64_t seq) {
@@ -261,13 +375,18 @@ void workload_main(const test_config& c) {
         delete_alternator_table(cli);
         cli.close().get();
     });
+    if (c.workload != "write_gsi") {
+        create_alternator_table(cli);
+    } else {
+        create_alternator_table_with_gsi(cli);
+    }
 
-    create_alternator_table(cli);
     using fun_t = std::function<future<>(const test_config&, http::experimental::client&, uint64_t)>;
     std::map<std::string, fun_t> workloads = {
         {"read",  get_item},
         {"scan", scan},
         {"write", update_item},
+        {"write_gsi", update_item_gsi},
         // needs to be executed together with --alternator-write-isolation only_rmw_uses_lwt
         // for realistic scenario
         {"write_rmw", update_item_rmw},
