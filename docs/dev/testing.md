@@ -15,6 +15,9 @@ To run `test.py`, Python 3.7 or higher is required.
 modules. If `install-dependencies.sh` does not support your distribution,
 please manually install all Python modules it lists with `pip`.
 
+Additionally, `toolchain/dbuid` could be used to run `test.py`. In this
+case you don't need to run `./install-dependencies.sh`
+
 
 ## Usage
 
@@ -22,6 +25,10 @@ In order to invoke `test.py`, you need to build first. `./test.py` will
 run all existing tests in all configured build modes:
 
     $ ./test.py
+
+In order to invoke `test.py` with `toolchain/dbuild`, you need to run
+
+    $ ./tools/toolchain/dbuild ./test.py
 
 If you want to specify a specific build mode:
 
