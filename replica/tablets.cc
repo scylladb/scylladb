@@ -239,6 +239,10 @@ tablet_id process_one_row(table_id table, tablet_map& map, tablet_id tid, const 
             throw std::runtime_error(format("Too many pending replicas for table {} tablet {}: {}",
                                             table, tid, pending));
         }
+        if (pending.empty()) {
+            throw std::runtime_error(format("No pending replicas for table {} tablet {}, in stage {}",
+                                            table, tid, stage));
+        }
         map.set_tablet_transition_info(tid, tablet_transition_info{stage,
                 std::move(new_tablet_replicas), *pending.begin()});
     }
