@@ -37,13 +37,6 @@ schema_ptr table_for_tests::make_default_schema() {
         .build();
 }
 
-table_for_tests::table_for_tests(sstables::sstables_manager& sstables_manager)
-    : table_for_tests(
-        sstables_manager,
-        make_default_schema()
-    )
-{ }
-
 class table_for_tests::table_state : public compaction::table_state {
     table_for_tests::data& _data;
     sstables::sstables_manager& _sstables_manager;
