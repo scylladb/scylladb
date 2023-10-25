@@ -1660,7 +1660,7 @@ schema_ptr mutation_fragments_select_statement::generate_output_schema(schema_pt
 
 future<exceptions::coordinator_result<service::storage_proxy_coordinator_query_result>>
 mutation_fragments_select_statement::do_query(
-        const locator::node* this_node,
+        locator::host_id this_node,
         service::storage_proxy& sp,
         schema_ptr schema,
         lw_shared_ptr<query::read_command> cmd,
@@ -1670,7 +1670,7 @@ mutation_fragments_select_statement::do_query(
     auto res = co_await replica::mutation_dump::dump_mutations(sp.get_db(), schema, _underlying_schema, partition_ranges, *cmd, optional_params.timeout(sp));
     service::replicas_per_token_range last_replicas;
     if (this_node) {
-        last_replicas.emplace(dht::token_range::make_open_ended_both_sides(), std::vector<locator::host_id>{this_node->host_id()});
+        last_replicas.emplace(dht::token_range::make_open_ended_both_sides(), std::vector<locator::host_id>{this_node});
     }
     co_return service::storage_proxy_coordinator_query_result{std::move(res), std::move(last_replicas), {}};
 }
@@ -1731,12 +1731,17 @@ mutation_fragments_select_statement::do_execute(query_processor& qp, service::qu
     auto timeout_duration = get_timeout(state.get_client_state(), options);
     auto timeout = db::timeout_clock::now() + timeout_duration;
 
+    auto& tbl = qp.proxy().local_db().find_column_family(_underlying_schema);
+
+    // Since this query doesn't go through storage-proxy, we have to take care of pinning erm here.
+    auto erm_keepalive = tbl.get_effective_replication_map();
+
     if (!aggregate && !_restrictions_need_filtering && (page_size <= 0
             || !service::pager::query_pagers::may_need_paging(*_schema, page_size,
                     *command, key_ranges))) {
         return do_query({}, qp.proxy(), _schema, command, std::move(key_ranges), cl,
                 {timeout, state.get_permit(), state.get_client_state(), state.get_trace_state(), {}, {}})
-        .then(wrap_result_to_error_message([&, this] (service::storage_proxy_coordinator_query_result&& qr) {
+        .then(wrap_result_to_error_message([&, this, erm_keepalive] (service::storage_proxy_coordinator_query_result&& qr) {
             cql3::selection::result_set_builder builder(*_selection, now);
             query::result_view::consume(*qr.query_result, std::move(slice),
                     cql3::selection::result_set_builder::visitor(builder, *_schema, *_selection));
@@ -1745,16 +1750,14 @@ mutation_fragments_select_statement::do_execute(query_processor& qp, service::qu
         }));
     }
 
-    const locator::node* this_node = nullptr;
+    locator::host_id this_node;
     {
-        auto& tbl = qp.proxy().local_db().find_column_family(_underlying_schema);
-        auto& erm = tbl.get_effective_replication_map();
-        auto& topo = erm->get_topology();
-        this_node = topo.this_node();
+        auto& topo = erm_keepalive->get_topology();
+        this_node = topo.this_node()->host_id();
         auto state = options.get_paging_state();
         if (state && !state->get_last_replicas().empty()) {
             auto last_host = state->get_last_replicas().begin()->second.front();
-            if (last_host != this_node->host_id()) {
+            if (last_host != this_node) {
                 const auto last_node = topo.find_node(last_host);
                 throw exceptions::invalid_request_exception(format(
                             "Moving between coordinators is not allowed in SELECT FROM MUTATION_FRAGMENTS() statements, last page's coordinator was {}{}",
@@ -1774,7 +1777,10 @@ mutation_fragments_select_statement::do_execute(query_processor& qp, service::qu
             command,
             std::move(key_ranges),
             _restrictions_need_filtering ? _restrictions : nullptr,
-            std::bind_front(&mutation_fragments_select_statement::do_query, this, this_node));
+            [this, erm_keepalive, this_node] (service::storage_proxy& sp, schema_ptr schema, lw_shared_ptr<query::read_command> cmd, dht::partition_range_vector partition_ranges,
+                    db::consistency_level cl, service::storage_proxy_coordinator_query_options optional_params) {
+                return do_query(this_node, sp, std::move(schema), std::move(cmd), std::move(partition_ranges), cl, std::move(optional_params));
+            });
 
     if (_selection->is_trivial() && !_restrictions_need_filtering && !_per_partition_limit) {
         return p->fetch_page_generator_result(page_size, now, timeout, _stats).then(wrap_result_to_error_message([this, p = std::move(p)] (result_generator&& generator) {
