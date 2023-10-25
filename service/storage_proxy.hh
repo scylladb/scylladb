@@ -132,6 +132,7 @@ public:
         size_t available_memory;
         smp_service_group read_smp_service_group = default_smp_service_group();
         smp_service_group write_smp_service_group = default_smp_service_group();
+        smp_service_group write_mv_smp_service_group = default_smp_service_group();
         smp_service_group hints_write_smp_service_group = default_smp_service_group();
         // Write acknowledgments might not be received on the correct shard, and
         // they need a separate smp_service_group to prevent an ABBA deadlock
@@ -229,6 +230,7 @@ private:
     locator::effective_replication_map_factory& _erm_factory;
     smp_service_group _read_smp_service_group;
     smp_service_group _write_smp_service_group;
+    smp_service_group _write_mv_smp_service_group;
     smp_service_group _hints_write_smp_service_group;
     smp_service_group _write_ack_smp_service_group;
     response_id_type _next_response_id;
@@ -506,6 +508,11 @@ public:
     // Resolves with timed_out_error when timeout is reached.
     future<> mutate_locally(const schema_ptr& s, const frozen_mutation& m, tracing::trace_state_ptr tr_state, db::commitlog::force_sync sync, clock_type::time_point timeout = clock_type::time_point::max(), db::per_partition_rate_limit::info rate_limit_info = std::monostate()) {
         return mutate_locally(s, m, tr_state, sync, timeout, _write_smp_service_group, rate_limit_info);
+    }
+    // Applies materialized view mutation on this node.
+    // Resolves with timed_out_error when timeout is reached.
+    future<> mutate_mv_locally(const schema_ptr& s, const frozen_mutation& m, tracing::trace_state_ptr tr_state, db::commitlog::force_sync sync, clock_type::time_point timeout = clock_type::time_point::max(), db::per_partition_rate_limit::info rate_limit_info = std::monostate()) {
+        return mutate_locally(s, m, tr_state, sync, timeout, _write_mv_smp_service_group, rate_limit_info);
     }
     // Applies mutations on this node.
     // Resolves with timed_out_error when timeout is reached.
