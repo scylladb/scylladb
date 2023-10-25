@@ -2308,11 +2308,15 @@ class topology_coordinator {
                 }
                 switch(node.rs->state) {
                 case node_state::bootstrapping: {
+                    std::vector<canonical_mutation> muts;
+                    // Since after bootstrapping a new node some nodes lost some ranges they need to cleanup
+                    muts = mark_nodes_as_cleanup_needed(node, false);
                     topology_mutation_builder builder(node.guard.write_timestamp());
                     builder.del_transition_state()
                            .with_node(node.id)
                            .set("node_state", node_state::normal);
-                    co_await update_topology_state(take_guard(std::move(node)), {builder.build()},
+                    muts.emplace_back(builder.build());
+                    co_await update_topology_state(take_guard(std::move(node)), std::move(muts),
                                                    "bootstrap: read fence completed");
                     }
                     break;
@@ -2884,10 +2888,17 @@ future<> topology_coordinator::rollback_current_topology_op(group0_guard&& guard
            .with_node(node.id)
            .set("node_state", state);
 
-    auto str = fmt::format("rollback {} after {} failure to state {}", node.id, node.rs->state, state);
+    std::vector<canonical_mutation> muts;
+    // We are in the process of aborting remove or decommission which may have streamed some
+    // ranges to other nodes. Cleanup is needed.
+    muts = mark_nodes_as_cleanup_needed(node, true);
+    muts.emplace_back(builder.build());
+
+
+    auto str = fmt::format("rollback {} after {} failure to state {} and setting cleanup flag", node.id, node.rs->state, state);
 
     slogger.info("{}", str);
-    co_await update_topology_state(std::move(node.guard), {builder.build()}, str);
+    co_await update_topology_state(std::move(node.guard), std::move(muts), str);
 }
 
 future<> topology_coordinator::run() {
