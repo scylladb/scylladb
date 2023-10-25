@@ -58,6 +58,25 @@ void verify_tablet_metadata_persistence(cql_test_env& env, const tablet_metadata
 }
 
 static
+void verify_tablet_metadata_update(cql_test_env& env, tablet_metadata& tm, std::vector<mutation> muts) {
+    testlog.trace("verify_tablet_metadata_update(): {}", muts);
+
+    auto& db = env.local_db();
+
+    db.apply(freeze(muts), db::no_timeout).get();
+
+    locator::tablet_metadata_change_hint hint;
+    for (const auto& mut : muts) {
+        update_tablet_metadata_change_hint(hint, mut);
+    }
+
+    update_tablet_metadata(env.local_qp(), tm, hint).get();
+
+    auto tm_reload = read_tablet_metadata(env.local_qp()).get();
+    BOOST_REQUIRE_EQUAL(tm, tm_reload);
+}
+
+static
 cql_test_config tablet_cql_test_config() {
     cql_test_config c;
     c.db_config->enable_tablets(true);
@@ -317,6 +336,397 @@ SEASTAR_TEST_CASE(test_read_required_hosts) {
         BOOST_REQUIRE_EQUAL(std::unordered_set<locator::host_id>({h1, h2, h3}),
                             read_required_hosts(e.local_qp()).get());
     }, cfg);
+}
+
+// Check that updating tablet-metadata and reloading only modified parts from
+// disk yields the correct metadata.
+SEASTAR_TEST_CASE(test_tablet_metadata_update) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        auto h1 = host_id(utils::UUID_gen::get_time_UUID());
+        auto h2 = host_id(utils::UUID_gen::get_time_UUID());
+        auto h3 = host_id(utils::UUID_gen::get_time_UUID());
+
+        auto& db = e.local_db();
+
+        auto table1 = add_table(e).get();
+        auto table1_schema = db.find_schema(table1);
+        auto table2 = add_table(e).get();
+        auto table2_schema = db.find_schema(table2);
+
+        testlog.trace("table1: {}", table1);
+        testlog.trace("table2: {}", table2);
+
+        tablet_metadata tm = read_tablet_metadata(e.local_qp()).get();
+        auto ts = current_timestamp(e);
+
+        // Add table1
+        {
+            testlog.trace("add table1");
+
+            tablet_map tmap(1);
+            tmap.set_tablet(tmap.first_tablet(), tablet_info {
+                tablet_replica_set {
+                    tablet_replica {h1, 0},
+                    tablet_replica {h2, 3},
+                    tablet_replica {h3, 1},
+                }
+            });
+
+            verify_tablet_metadata_update(e, tm, {
+                    tablet_map_to_mutation(tmap, table1, table1_schema->ks_name(), table1_schema->cf_name(), ++ts).get(),
+            });
+        }
+
+        // Add table2
+        {
+            testlog.trace("add table2");
+
+            tablet_map tmap(4);
+            auto tb = tmap.first_tablet();
+            tmap.set_tablet(tb, tablet_info {
+                tablet_replica_set {
+                    tablet_replica {h1, 0},
+                }
+            });
+            tb = *tmap.next_tablet(tb);
+            tmap.set_tablet(tb, tablet_info {
+                tablet_replica_set {
+                    tablet_replica {h3, 3},
+                }
+            });
+            tb = *tmap.next_tablet(tb);
+            tmap.set_tablet(tb, tablet_info {
+                tablet_replica_set {
+                    tablet_replica {h2, 2},
+                }
+            });
+            tb = *tmap.next_tablet(tb);
+            tmap.set_tablet(tb, tablet_info {
+                tablet_replica_set {
+                    tablet_replica {h1, 1},
+                }
+            });
+
+            verify_tablet_metadata_update(e, tm, {
+                    tablet_map_to_mutation(tmap, table2, table2_schema->ks_name(), table2_schema->cf_name(), ++ts).get(),
+            });
+        }
+
+        // Increase RF of table2
+        {
+            testlog.trace("increates RF of table2");
+
+            const auto& tmap = tm.get_tablet_map(table2);
+            auto tb = tmap.first_tablet();
+
+            replica::tablet_mutation_builder builder(ts++, table2);
+
+            tb = *tmap.next_tablet(tb);
+            builder.set_new_replicas(tmap.get_last_token(tb),
+                tablet_replica_set {
+                    tablet_replica {h1, 7},
+                }
+            );
+            builder.set_stage(tmap.get_last_token(tb), tablet_transition_stage::allow_write_both_read_old);
+            builder.set_transition(tmap.get_last_token(tb), tablet_transition_kind::migration);
+
+            tb = *tmap.next_tablet(tb);
+            builder.set_new_replicas(tmap.get_last_token(tb),
+                tablet_replica_set {
+                    tablet_replica {h1, 4},
+                }
+            );
+            builder.set_stage(tmap.get_last_token(tb), tablet_transition_stage::use_new);
+            builder.set_transition(tmap.get_last_token(tb), tablet_transition_kind::migration);
+
+            verify_tablet_metadata_update(e, tm, {
+                    builder.build(),
+            });
+        }
+
+        // Reduce RF for table1, increasing tablet count
+        {
+            testlog.trace("reduce RF for table1, increasing tablet count");
+
+            tablet_map tmap(2);
+            auto tb = tmap.first_tablet();
+            tmap.set_tablet(tb, tablet_info {
+                tablet_replica_set {
+                    tablet_replica {h3, 7},
+                }
+            });
+            tb = *tmap.next_tablet(tb);
+            tmap.set_tablet(tb, tablet_info {
+                tablet_replica_set {
+                    tablet_replica {h1, 3},
+                }
+            });
+
+            verify_tablet_metadata_update(e, tm, {
+                    tablet_map_to_mutation(tmap, table1, table1_schema->ks_name(), table1_schema->cf_name(), ++ts).get(),
+            });
+        }
+
+
+        // Reduce tablet count for table1
+        {
+            testlog.trace("reduce tablet count for table1");
+
+            tablet_map tmap(1);
+            auto tb = tmap.first_tablet();
+            tmap.set_tablet(tb, tablet_info {
+                tablet_replica_set {
+                    tablet_replica {h1, 3},
+                }
+            });
+
+            verify_tablet_metadata_update(e, tm, {
+                    tablet_map_to_mutation(tmap, table1, table1_schema->ks_name(), table1_schema->cf_name(), ++ts).get(),
+            });
+        }
+
+        // Change replica of table1
+        {
+            testlog.trace("change replica of table1");
+
+            replica::tablet_mutation_builder builder(ts++, table1);
+
+            const auto& tmap = tm.get_tablet_map(table1);
+            auto tb = tmap.first_tablet();
+            builder.set_replicas(tmap.get_last_token(tb),
+                tablet_replica_set {
+                    tablet_replica {h3, 7},
+                }
+            );
+
+            verify_tablet_metadata_update(e, tm, {
+                    builder.build(),
+            });
+        }
+
+        // Migrate all tablets of table2
+        {
+            testlog.trace("stream all tablets of table2");
+
+            const auto& tmap = tm.get_tablet_map(table2);
+
+            std::vector<mutation> muts;
+            for (std::optional<tablet_id> tb = tmap.first_tablet(); tb; tb = tmap.next_tablet(*tb)) {
+                replica::tablet_mutation_builder builder(ts++, table2);
+
+                const auto token = tmap.get_last_token(*tb);
+
+                builder.set_new_replicas(token,
+                    tablet_replica_set {
+                        tablet_replica {h2, 7},
+                    }
+                );
+                builder.set_stage(token, tablet_transition_stage::streaming);
+                builder.set_transition(token, tablet_transition_kind::rebuild);
+
+                muts.emplace_back(builder.build());
+            }
+
+            verify_tablet_metadata_update(e, tm, std::move(muts));
+        }
+
+        // Remove transitions from tablets of table2
+        {
+            testlog.trace("stream all tablets of table2");
+
+            const auto& tmap = tm.get_tablet_map(table2);
+
+            std::vector<mutation> muts;
+            for (std::optional<tablet_id> tb = tmap.first_tablet(); tb; tb = tmap.next_tablet(*tb)) {
+                replica::tablet_mutation_builder builder(ts++, table2);
+
+                const auto token = tmap.get_last_token(*tb);
+
+                builder.set_replicas(token,
+                    tablet_replica_set {
+                        tablet_replica {h2, 7},
+                    }
+                );
+                builder.del_transition(token);
+
+                muts.emplace_back(builder.build());
+            }
+
+            verify_tablet_metadata_update(e, tm, std::move(muts));
+        }
+
+        // Drop table2
+        {
+            testlog.trace("drop table2");
+
+            verify_tablet_metadata_update(e, tm, {
+                    make_drop_tablet_map_mutation(table2, ts++)
+            });
+        }
+    }, tablet_cql_test_config());
+}
+
+SEASTAR_TEST_CASE(test_tablet_metadata_hint) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        auto h2 = host_id(utils::UUID_gen::get_time_UUID());
+        auto h3 = host_id(utils::UUID_gen::get_time_UUID());
+
+        auto table1 = add_table(e).get();
+        auto table2 = add_table(e).get();
+
+        testlog.trace("table1: {}", table1);
+        testlog.trace("table2: {}", table2);
+
+        tablet_metadata tm = read_tablet_metadata(e.local_qp()).get();
+        auto ts = current_timestamp(e);
+
+        auto check_hint = [&] (locator::tablet_metadata_change_hint& incremental_hint, std::vector<canonical_mutation>& muts, mutation new_mut,
+                const locator::tablet_metadata_change_hint& expected_hint, std::source_location sl = std::source_location::current()) {
+            testlog.info("check_hint() called from {}:{}", sl.file_name(), sl.line());
+
+            replica::update_tablet_metadata_change_hint(incremental_hint, new_mut);
+
+            muts.emplace_back(new_mut);
+            auto full_hint_opt = replica::get_tablet_metadata_change_hint(muts);
+
+            if (expected_hint) {
+                BOOST_REQUIRE(full_hint_opt);
+                BOOST_REQUIRE_EQUAL(*full_hint_opt, incremental_hint);
+            } else {
+                BOOST_REQUIRE(!full_hint_opt);
+            }
+            BOOST_REQUIRE_EQUAL(incremental_hint, expected_hint);
+        };
+
+        auto make_hint = [&] (std::initializer_list<std::pair<table_id, std::vector<token>>> tablets) {
+            locator::tablet_metadata_change_hint hint;
+            for (const auto& [tid, tokens] : tablets) {
+                hint.tables.emplace(tid, locator::tablet_metadata_change_hint::table_hint{.table_id = tid, .tokens = tokens});
+            }
+            return hint;
+        };
+
+        // Unrelated mutation generates no hint
+        {
+            std::vector<canonical_mutation> muts;
+            locator::tablet_metadata_change_hint hint;
+
+            simple_schema s;
+            auto mut = s.new_mutation("pk1");
+            s.add_row(mut, s.make_ckey(1), "v");
+
+            check_hint(hint, muts, std::move(mut), {});
+        }
+
+        // Incremental update of hint
+        {
+            std::vector<canonical_mutation> muts;
+            locator::tablet_metadata_change_hint hint;
+
+            const auto& tmap = tm.get_tablet_map(table1);
+            std::vector<token> tokens;
+
+            for (std::optional<tablet_id> tid = tmap.first_tablet(); tid; tid = tmap.next_tablet(*tid)) {
+                const auto token = tmap.get_last_token(*tid);
+
+                tokens.push_back(token);
+
+                replica::tablet_mutation_builder builder(ts++, table1);
+                builder.set_replicas(token,
+                    tablet_replica_set {
+                        tablet_replica {h2, 7},
+                    }
+                );
+
+                check_hint(hint, muts, builder.build(), make_hint({{table1, tokens}}));
+            }
+        }
+        tm = read_tablet_metadata(e.local_qp()).get();
+
+        // Deletions (and static rows) should generate a partition hint.
+        // Furthermore, if the partition had any row hints before, those should
+        // be cleared, to force a full partition reload.
+        auto check_delete_scenario = [&] (const char* scenario, std::function<void(table_id, mutation&, api::timestamp_type)> apply_delete) {
+            testlog.info("check_delete_scenario({})", scenario);
+
+            std::vector<canonical_mutation> muts;
+            locator::tablet_metadata_change_hint hint;
+
+            // Check that a deletion generates only a partiton hint
+            {
+                const auto delete_ts = ts++;
+                replica::tablet_mutation_builder builder(delete_ts, table1);
+                auto mut = builder.build();
+                apply_delete(table1, mut, delete_ts);
+
+                check_hint(hint, muts, std::move(mut), make_hint({{table1, {}}}));
+            }
+
+            // First add a row, to check that the deletion will clear the tokens
+            // vector -- convert the row hints to a partition hint
+            {
+                // Add a row which will add a row hint
+                {
+                    const auto tokens = tm.get_tablet_map(table2).get_sorted_tokens().get();
+
+                    replica::tablet_mutation_builder builder(ts++, table2);
+                    builder.set_replicas(tokens.front(),
+                        tablet_replica_set {
+                            tablet_replica {h3, 7},
+                        }
+                    );
+
+                    check_hint(hint, muts, builder.build(), make_hint({{table1, {}}, {table2, {tokens.front()}}}));
+                }
+
+                // Apply the deletion which should clear the row hint, but leave the partition hint
+                {
+                    const auto delete_ts = ts++;
+                    replica::tablet_mutation_builder builder(delete_ts, table2);
+                    auto mut = builder.build();
+                    apply_delete(table2, mut, delete_ts);
+
+                    check_hint(hint, muts, std::move(mut), make_hint({{table1, {}}, {table2, {}}}));
+                }
+            }
+
+            tm = read_tablet_metadata(e.local_qp()).get();
+        };
+
+        // Not a real deletion, but it should act the same way as a delete.
+        check_delete_scenario("static row", [&e] (table_id tbl, mutation& mut, api::timestamp_type delete_ts) {
+            auto tbl_s = e.local_db().find_column_family(tbl).schema();
+            mut.set_static_cell("keyspace_name", data_value(tbl_s->ks_name()), delete_ts);
+        });
+
+        check_delete_scenario("range tombstone", [&tm] (table_id tbl, mutation& mut, api::timestamp_type delete_ts) {
+            auto s = db::system_keyspace::tablets();
+
+            const auto tokens = tm.get_tablet_map(tbl).get_sorted_tokens().get();
+            BOOST_REQUIRE_GE(tokens.size(), 2);
+
+            const auto ck1 = clustering_key::from_single_value(*s, data_value(dht::token::to_int64(tokens[0])).serialize_nonnull());
+            const auto ck2 = clustering_key::from_single_value(*s, data_value(dht::token::to_int64(tokens[1])).serialize_nonnull());
+
+            mut.partition().apply_delete(*s, range_tombstone(ck1, bound_kind::excl_start, ck2, bound_kind::excl_end, tombstone(delete_ts, gc_clock::now())));
+        });
+
+        check_delete_scenario("row tombstone", [&tm] (table_id tbl, mutation& mut, api::timestamp_type delete_ts) {
+            auto s = db::system_keyspace::tablets();
+
+            const auto tokens = tm.get_tablet_map(tbl).get_sorted_tokens().get();
+            const auto ck = clustering_key::from_single_value(*s, data_value(dht::token::to_int64(tokens[0])).serialize_nonnull());
+
+            mut.partition().apply_delete(*s, ck, tombstone(delete_ts, gc_clock::now()));
+        });
+
+        // This will effectively drop both tables
+        check_delete_scenario("partition tombstone", [] (table_id tbl, mutation& mut, api::timestamp_type delete_ts) {
+            auto s = db::system_keyspace::tablets();
+
+            mut.partition().apply(tombstone(delete_ts, gc_clock::now()));
+        });
+    }, tablet_cql_test_config());
 }
 
 SEASTAR_TEST_CASE(test_get_shard) {
