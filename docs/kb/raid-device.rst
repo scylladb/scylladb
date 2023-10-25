@@ -6,7 +6,8 @@ Scylla creates a RAID device on all storage devices assigned to it as part of Sc
 To recreate your RAID devices, run this script:
 
 .. code-block:: shell
-
+   sudo rm /etc/systemd/system/var-lib-scylla.mount
+   sudo systemctl daemon-reload
    scylla_raid_setup --raiddev /dev/md0 --disks <comma-separated list of disks>
 
 After this step the storage will be mounted, formatted, and /var/lib/scylla created.
