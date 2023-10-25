@@ -2825,6 +2825,7 @@ storage_proxy::storage_proxy(distributed<replica::database>& db, storage_proxy::
     , _erm_factory(erm_factory)
     , _read_smp_service_group(cfg.read_smp_service_group)
     , _write_smp_service_group(cfg.write_smp_service_group)
+    , _write_mv_smp_service_group(cfg.write_mv_smp_service_group)
     , _hints_write_smp_service_group(cfg.hints_write_smp_service_group)
     , _write_ack_smp_service_group(cfg.write_ack_smp_service_group)
     , _next_response_id(std::chrono::system_clock::now().time_since_epoch()/1ms)
