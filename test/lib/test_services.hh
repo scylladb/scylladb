@@ -39,7 +39,6 @@ struct table_for_tests {
     struct data {
         schema_ptr s;
         reader_concurrency_semaphore semaphore;
-        cache_tracker tracker;
         replica::cf_stats cf_stats{0};
         replica::column_family::config cfg;
         cell_locker_stats cl_stats;

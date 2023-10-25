@@ -136,7 +136,7 @@ table_for_tests::table_for_tests(sstables::sstables_manager& sstables_manager, s
     _data->cfg.cf_stats = &_data->cf_stats;
     _data->cfg.enable_commitlog = false;
     _data->cm.enable();
-    _data->cf = make_lw_shared<replica::column_family>(_data->s, _data->cfg, make_lw_shared<replica::storage_options>(), _data->cm, sstables_manager, _data->cl_stats, _data->tracker, nullptr);
+    _data->cf = make_lw_shared<replica::column_family>(_data->s, _data->cfg, make_lw_shared<replica::storage_options>(), _data->cm, sstables_manager, _data->cl_stats, sstables_manager.get_cache_tracker(), nullptr);
     _data->cf->mark_ready_for_writes(nullptr);
     _data->table_s = std::make_unique<table_state>(*_data, sstables_manager);
     _data->cm.add(*_data->table_s);
