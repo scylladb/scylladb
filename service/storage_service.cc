@@ -401,7 +401,7 @@ future<> storage_service::sync_raft_topology_nodes(mutable_token_metadata_ptr tm
         auto ip = am.find(id);
 
         slogger.trace("raft topology: loading topology: raft id={} ip={} node state={} dc={} rack={} tokens state={} tokens={} shards={}",
-                      id, ip, rs.state, rs.datacenter, rs.rack, _topology_state_machine._topology.tstate, rs.ring.value().tokens, rs.shard_count);
+                      id, ip, rs.state, rs.datacenter, rs.rack, _topology_state_machine._topology.tstate, rs.ring.value().tokens, rs.shard_count, rs.cleanup);
         // Save tokens, not needed for raft topology management, but needed by legacy
         // Also ip -> id mapping is needed for address map recreation on reboot
         if (is_me(host_id)) {
@@ -786,6 +786,7 @@ public:
     requires std::constructible_from<sstring, S>
     topology_node_mutation_builder& set(const char* cell, const std::set<S>& value);
     topology_node_mutation_builder& set(const char* cell, const uint32_t& value);
+    topology_node_mutation_builder& set(const char* cell, cleanup_status value);
     topology_node_mutation_builder& set(const char* cell, const utils::UUID& value);
     topology_node_mutation_builder& del(const char* cell);
     canonical_mutation build();
@@ -921,6 +922,10 @@ topology_node_mutation_builder& topology_node_mutation_builder::set(const char* 
 
 topology_node_mutation_builder& topology_node_mutation_builder::set(const char* cell, const uint32_t& value) {
     return apply_atomic(cell, int32_t(value));
+}
+
+topology_node_mutation_builder& topology_node_mutation_builder::set(const char* cell, cleanup_status value) {
+    return apply_atomic(cell, sstring{::format("{}", value)});
 }
 
 topology_node_mutation_builder& topology_node_mutation_builder::set(
@@ -3009,6 +3014,7 @@ canonical_mutation storage_service::build_mutation_from_join_params(const join_n
         .set("num_tokens", params.num_tokens)
         .set("shard_count", params.shard_count)
         .set("ignore_msb", params.ignore_msb)
+        .set("cleanup_status", cleanup_status::clean)
         .set("supported_features", boost::copy_range<std::set<sstring>>(params.supported_features));
 
     if (params.replaced_id) {

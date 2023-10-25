@@ -47,6 +47,12 @@ enum class topology_request: uint16_t {
     rebuild
 };
 
+enum class cleanup_status : uint16_t {
+    clean,
+    needed,
+    running,
+};
+
 struct join_param {
     uint32_t num_tokens;
 };
@@ -83,6 +89,7 @@ struct replica_state {
     size_t shard_count;
     uint8_t ignore_msb;
     std::set<sstring> supported_features;
+    cleanup_status cleanup;
 };
 
 struct topology_features {
@@ -233,4 +240,6 @@ topology_request topology_request_from_string(const sstring& s);
 std::ostream& operator<<(std::ostream&, const global_topology_request&);
 global_topology_request global_topology_request_from_string(const sstring&);
 std::ostream& operator<<(std::ostream& os, const raft_topology_cmd::command& cmd);
+std::ostream& operator<<(std::ostream& os, cleanup_status s);
+cleanup_status cleanup_status_from_string(const sstring& s);
 }

@@ -217,4 +217,25 @@ std::ostream& operator<<(std::ostream& os, const raft_topology_cmd::command& cmd
     }
     return os;
 }
+
+static std::unordered_map<cleanup_status, sstring> cleanup_status_to_name_map = {
+    {cleanup_status::clean, "clean"},
+    {cleanup_status::needed, "needed"},
+    {cleanup_status::running, "running"},
+};
+
+std::ostream& operator<<(std::ostream& os, cleanup_status status) {
+    os << cleanup_status_to_name_map[status];
+    return os;
+}
+
+cleanup_status cleanup_status_from_string(const sstring& s) {
+    for (auto&& e : cleanup_status_to_name_map) {
+        if (e.second == s) {
+            return e.first;
+        }
+    }
+    throw std::runtime_error(fmt::format("cannot map name {} to cleanup_status", s));
+}
+
 }
