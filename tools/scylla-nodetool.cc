@@ -86,20 +86,51 @@ public:
     }
 };
 
+std::vector<sstring> get_keyspaces(scylla_rest_client& client, std::optional<sstring> type = {}) {
+    std::unordered_map<sstring, sstring> params;
+    if (type) {
+        params["type"] = *type;
+    }
+    auto keyspaces_json = client.get("/storage_service/keyspaces", std::move(params));
+    std::vector<sstring> keyspaces;
+    for (const auto& keyspace_json : keyspaces_json.GetArray()) {
+        keyspaces.emplace_back(rjson::to_string_view(keyspace_json));
+    }
+    return keyspaces;
+}
+
 using operation_func = void(*)(scylla_rest_client&, const bpo::variables_map&);
 
 std::map<operation, operation_func> get_operations_with_func();
+
+void cleanup_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    if (vm.count("cleanup_arg")) {
+        const auto all_keyspaces = get_keyspaces(client);
+
+        auto args = vm["cleanup_arg"].as<std::vector<sstring>>();
+        std::unordered_map<sstring, sstring> params;
+        const auto keyspace = args[0];
+        if (std::ranges::find(all_keyspaces, keyspace) == all_keyspaces.end()) {
+            throw std::invalid_argument(fmt::format("keyspace {} does not exist", keyspace));
+        }
+
+        if (args.size() > 1) {
+            params["cf"] = fmt::to_string(fmt::join(args.begin() + 1, args.end(), ","));
+        }
+        client.post(format("/storage_service/keyspace_cleanup/{}", keyspace), std::move(params));
+    } else {
+        for (const auto& keyspace : get_keyspaces(client, "non_local_strategy")) {
+            client.post(format("/storage_service/keyspace_cleanup/{}", keyspace));
+        }
+    }
+}
 
 void compact_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     if (vm.count("user-defined")) {
         throw std::invalid_argument("--user-defined flag is unsupported");
     }
 
-    auto keyspaces_json = client.get("/storage_service/keyspaces", {});
-    std::vector<sstring> all_keyspaces;
-    for (const auto& keyspace_json : keyspaces_json.GetArray()) {
-        all_keyspaces.emplace_back(rjson::to_string_view(keyspace_json));
-    }
+    const auto all_keyspaces = get_keyspaces(client);
 
     if (vm.count("compaction_arg")) {
         auto args = vm["compaction_arg"].as<std::vector<sstring>>();
@@ -265,6 +296,29 @@ const std::map<std::string_view, std::string_view> option_substitutions{
 std::map<operation, operation_func> get_operations_with_func() {
 
     const static std::map<operation, operation_func> operations_with_func {
+        {
+            {
+                "cleanup",
+                "Triggers removal of data that the node no longer owns",
+R"(
+You should run nodetool cleanup whenever you scale-out (expand) your cluster, and
+new nodes are added to the same DC. The scale out process causes the token ring
+to get re-distributed. As a result, some of the nodes will have replicas for
+tokens that they are no longer responsible for (taking up disk space). This data
+continues to consume diskspace until you run nodetool cleanup. The cleanup
+operation deletes these replicas and frees up disk space.
+
+Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/cleanup.html
+)",
+                {
+                    typed_option<int64_t>("jobs,j", "The number of compaction jobs to be used for the cleanup (unused)"),
+                },
+                {
+                    typed_option<std::vector<sstring>>("cleanup_arg", "[<keyspace> <tables>...]", -1),
+                }
+            },
+            cleanup_operation
+        },
         {
             {
                 "compact",
