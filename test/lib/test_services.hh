@@ -40,7 +40,6 @@ struct table_for_tests {
         schema_ptr s;
         reader_concurrency_semaphore semaphore;
         replica::cf_stats cf_stats{0};
-        replica::column_family::config cfg;
         cell_locker_stats cl_stats;
         tasks::task_manager tm;
         compaction_manager cm{tm, compaction_manager::for_testing_tag{}};
