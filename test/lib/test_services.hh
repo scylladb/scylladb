@@ -53,7 +53,7 @@ struct table_for_tests {
 
     static schema_ptr make_default_schema();
 
-    explicit table_for_tests(sstables::sstables_manager& sstables_manager, schema_ptr s, std::optional<sstring> datadir = {}, data_dictionary::storage_options storage = {});
+    explicit table_for_tests(sstables::sstables_manager& sstables_manager, schema_ptr s, replica::table::config cfg, data_dictionary::storage_options storage = {});
 
     schema_ptr schema() { return _data->s; }
 

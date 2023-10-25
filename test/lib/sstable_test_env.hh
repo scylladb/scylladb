@@ -209,11 +209,17 @@ public:
     }
 
     table_for_tests make_table_for_tests(schema_ptr s, sstring dir) {
-        return table_for_tests(manager(), s, std::move(dir), _impl->storage);
+        auto cfg = make_table_config();
+        cfg.datadir = dir;
+        cfg.enable_commitlog = false;
+        return table_for_tests(manager(), s, std::move(cfg), _impl->storage);
     }
 
     table_for_tests make_table_for_tests(schema_ptr s = nullptr) {
-        return table_for_tests(manager(), s, tempdir().path().native(), _impl->storage);
+        auto cfg = make_table_config();
+        cfg.datadir = _impl->dir.path().native();
+        cfg.enable_commitlog = false;
+        return table_for_tests(manager(), s, std::move(cfg), _impl->storage);
     }
 };
 

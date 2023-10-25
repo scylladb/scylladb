@@ -126,16 +126,11 @@ public:
     }
 };
 
-table_for_tests::table_for_tests(sstables::sstables_manager& sstables_manager, schema_ptr s, std::optional<sstring> datadir, data_dictionary::storage_options storage)
+table_for_tests::table_for_tests(sstables::sstables_manager& sstables_manager, schema_ptr s, replica::table::config cfg, data_dictionary::storage_options storage)
     : _data(make_lw_shared<data>())
 {
-    _data->s = s ? s : make_default_schema();
-    replica::table::config cfg;
-    cfg = replica::table::config{.compaction_concurrency_semaphore = &_data->semaphore};
-    cfg.enable_disk_writes = bool(datadir);
-    cfg.datadir = datadir.value_or(sstring());
     cfg.cf_stats = &_data->cf_stats;
-    cfg.enable_commitlog = false;
+    _data->s = s ? s : make_default_schema();
     _data->cm.enable();
     _data->cf = make_lw_shared<replica::column_family>(_data->s, std::move(cfg), make_lw_shared<replica::storage_options>(), _data->cm, sstables_manager, _data->cl_stats, sstables_manager.get_cache_tracker(), nullptr);
     _data->cf->mark_ready_for_writes(nullptr);
