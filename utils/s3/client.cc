@@ -678,6 +678,13 @@ public:
 
     virtual future<> flush() override {
         if (_bufs.size() != 0) {
+            // This is handy for small objects that are uploaded via the sink. It makes
+            // upload happen in one REST call, instead of three (create + PUT + wrap-up)
+            if (!upload_started()) {
+                s3l.trace("Sink fallback to plain PUT for {}", _object_name);
+                co_return co_await _client->put_object(_object_name, std::move(_bufs));
+            }
+
             co_await upload_part(std::move(_bufs));
         }
         if (upload_started()) {
