@@ -35,6 +35,7 @@ private:
     plan_id _plan_id;
     sstring _description;
     stream_reason _reason;
+    service::frozen_topology_guard _topo_guard;
     std::vector<stream_event_handler*> _handlers;
     shared_ptr<stream_coordinator> _coordinator;
     bool _range_added = false;
@@ -46,11 +47,13 @@ public:
      *
      * @param description Stream type that describes this StreamPlan
      */
-    stream_plan(stream_manager& mgr, sstring description, stream_reason reason = stream_reason::unspecified)
+    stream_plan(stream_manager& mgr, sstring description, stream_reason reason = stream_reason::unspecified,
+                service::frozen_topology_guard topo_guard = {})
         : _mgr(mgr)
         , _plan_id(plan_id{utils::UUID_gen::get_time_UUID()})
         , _description(description)
         , _reason(reason)
+        , _topo_guard(topo_guard)
         , _coordinator(make_shared<stream_coordinator>())
     {
     }

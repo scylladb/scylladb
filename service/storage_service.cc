@@ -10,6 +10,7 @@
  */
 
 #include "storage_service.hh"
+#include "service/topology_guard.hh"
 #include "service/session.hh"
 #include "dht/boot_strapper.hh"
 #include <seastar/core/distributed.hh>
@@ -3539,7 +3540,7 @@ future<> storage_service::bootstrap(std::unordered_set<token>& bootstrap_tokens,
                 _gossiper.wait_for_range_setup().get();
                 dht::boot_strapper bs(_db, _stream_manager, _abort_source, get_broadcast_address(), _snitch.local()->get_location(), bootstrap_tokens, get_token_metadata_ptr());
                 slogger.info("Starting to bootstrap...");
-                bs.bootstrap(streaming::stream_reason::bootstrap, _gossiper).get();
+                bs.bootstrap(streaming::stream_reason::bootstrap, _gossiper, null_topology_guard).get();
             } else {
                 // Even with RBNO bootstrap we need to announce the new CDC generation immediately after it's created.
                 _gossiper.add_local_application_state({
@@ -4965,7 +4966,7 @@ void storage_service::run_replace_ops(std::unordered_set<token>& bootstrap_token
         } else {
             slogger.info("replace[{}]: Using streaming based node ops to sync data", uuid);
             dht::boot_strapper bs(_db, _stream_manager, _abort_source, get_broadcast_address(), _snitch.local()->get_location(), bootstrap_tokens, get_token_metadata_ptr());
-            bs.bootstrap(streaming::stream_reason::replace, _gossiper, replace_address).get();
+            bs.bootstrap(streaming::stream_reason::replace, _gossiper, null_topology_guard, replace_address).get();
         }
         on_streaming_finished();
 
@@ -5289,6 +5290,7 @@ void storage_service::node_ops_insert(node_ops_id ops_uuid,
 future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_address coordinator, node_ops_cmd_request req) {
     return seastar::async([this, coordinator, req = std::move(req)] () mutable {
         auto ops_uuid = req.ops_uuid;
+        auto topo_guard = null_topology_guard;
         slogger.debug("node_ops_cmd_handler cmd={}, ops_uuid={}", req.cmd, ops_uuid);
 
         if (req.cmd == node_ops_cmd::query_pending_ops) {
@@ -5360,7 +5362,7 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
                     _repair.local().removenode_with_repair(get_token_metadata_ptr(), node, ops).get();
                 } else {
                     slogger.info("removenode[{}]: Started to sync data for removing node={} using stream, coordinator={}", req.ops_uuid, node, coordinator);
-                    removenode_with_stream(node, as).get();
+                    removenode_with_stream(node, topo_guard, as).get();
                 }
             }
         } else if (req.cmd == node_ops_cmd::removenode_abort) {
@@ -5661,7 +5663,7 @@ future<> storage_service::rebuild(sstring source_dc) {
                 co_await ss._repair.local().rebuild_with_repair(tmptr, std::move(source_dc));
             } else {
                 auto streamer = make_lw_shared<dht::range_streamer>(ss._db, ss._stream_manager, tmptr, ss._abort_source,
-                        ss.get_broadcast_address(), ss._snitch.local()->get_location(), "Rebuild", streaming::stream_reason::rebuild);
+                        ss.get_broadcast_address(), ss._snitch.local()->get_location(), "Rebuild", streaming::stream_reason::rebuild, null_topology_guard);
                 streamer->add_source_filter(std::make_unique<dht::range_streamer::failure_detector_source_filter>(ss._gossiper.get_unreachable_members()));
                 if (source_dc != "") {
                     streamer->add_source_filter(std::make_unique<dht::range_streamer::single_datacenter_filter>(source_dc));
@@ -5820,8 +5822,10 @@ future<> storage_service::removenode_add_ranges(lw_shared_ptr<dht::range_streame
     }
 }
 
-future<> storage_service::removenode_with_stream(gms::inet_address leaving_node, shared_ptr<abort_source> as_ptr) {
-    return seastar::async([this, leaving_node, as_ptr] {
+future<> storage_service::removenode_with_stream(gms::inet_address leaving_node,
+                                                 frozen_topology_guard topo_guard,
+                                                 shared_ptr<abort_source> as_ptr) {
+    return seastar::async([this, leaving_node, as_ptr, topo_guard] {
         auto tmptr = get_token_metadata_ptr();
         abort_source as;
         auto sub = _abort_source.subscribe([&as] () noexcept {
@@ -5837,7 +5841,7 @@ future<> storage_service::removenode_with_stream(gms::inet_address leaving_node,
                 as.request_abort();
             }
         });
-        auto streamer = make_lw_shared<dht::range_streamer>(_db, _stream_manager, tmptr, as, get_broadcast_address(), _snitch.local()->get_location(), "Removenode", streaming::stream_reason::removenode);
+        auto streamer = make_lw_shared<dht::range_streamer>(_db, _stream_manager, tmptr, as, get_broadcast_address(), _snitch.local()->get_location(), "Removenode", streaming::stream_reason::removenode, topo_guard);
         removenode_add_ranges(streamer, leaving_node).get();
         try {
             streamer->stream_async().get();
@@ -5888,7 +5892,12 @@ future<> storage_service::leave_ring() {
 
 future<>
 storage_service::stream_ranges(std::unordered_map<sstring, std::unordered_multimap<dht::token_range, inet_address>> ranges_to_stream_by_keyspace) {
-    auto streamer = dht::range_streamer(_db, _stream_manager, get_token_metadata_ptr(), _abort_source, get_broadcast_address(), _snitch.local()->get_location(), "Unbootstrap", streaming::stream_reason::decommission);
+    auto streamer = dht::range_streamer(_db, _stream_manager, get_token_metadata_ptr(), _abort_source,
+                                        get_broadcast_address(),
+                                        _snitch.local()->get_location(),
+                                        "Unbootstrap",
+                                        streaming::stream_reason::decommission,
+                                        null_topology_guard);
     for (auto& entry : ranges_to_stream_by_keyspace) {
         const auto& keyspace = entry.first;
         auto& ranges_with_endpoints = entry.second;
@@ -6246,7 +6255,7 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                                 } else {
                                     dht::boot_strapper bs(_db, _stream_manager, _abort_source, get_broadcast_address(),
                                         locator::endpoint_dc_rack{rs.datacenter, rs.rack}, rs.ring.value().tokens, get_token_metadata_ptr());
-                                    co_await bs.bootstrap(streaming::stream_reason::bootstrap, _gossiper);
+                                    co_await bs.bootstrap(streaming::stream_reason::bootstrap, _gossiper, null_topology_guard);
                                 }
                             }));
                         }
@@ -6273,7 +6282,7 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                                 auto replaced_id = std::get<replace_param>(_topology_state_machine._topology.req_param[raft_server.id()]).replaced_id;
                                 auto existing_ip = _group0->address_map().find(replaced_id);
                                 assert(existing_ip);
-                                co_await bs.bootstrap(streaming::stream_reason::replace, _gossiper, *existing_ip);
+                                co_await bs.bootstrap(streaming::stream_reason::replace, _gossiper, null_topology_guard, *existing_ip);
                             }
                         }));
                     }
@@ -6325,7 +6334,7 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                             auto ops = seastar::make_shared<node_ops_info>(node_ops_id::create_random_id(), as, std::move(ignored_ips));
                             return _repair.local().removenode_with_repair(get_token_metadata_ptr(), *ip, ops);
                         } else {
-                            return removenode_with_stream(*ip, as);
+                            return removenode_with_stream(*ip, null_topology_guard, as);
                         }
                     }));
                     result.status = raft_topology_cmd_result::command_status::success;
@@ -6340,7 +6349,8 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                             co_await _repair.local().rebuild_with_repair(tmptr, std::move(source_dc));
                         } else {
                             auto streamer = make_lw_shared<dht::range_streamer>(_db, _stream_manager, tmptr, _abort_source,
-                                    get_broadcast_address(), _snitch.local()->get_location(), "Rebuild", streaming::stream_reason::rebuild);
+                                    get_broadcast_address(), _snitch.local()->get_location(), "Rebuild", streaming::stream_reason::rebuild,
+                                    null_topology_guard);
                             streamer->add_source_filter(std::make_unique<dht::range_streamer::failure_detector_source_filter>(_gossiper.get_unreachable_members()));
                             if (source_dc != "") {
                                 streamer->add_source_filter(std::make_unique<dht::range_streamer::single_datacenter_filter>(source_dc));
@@ -6527,7 +6537,7 @@ future<> storage_service::stream_tablet(locator::global_tablet_id tablet) {
         std::vector<sstring> tables = {table.schema()->cf_name()};
         auto streamer = make_lw_shared<dht::range_streamer>(_db, _stream_manager, std::move(tm), guard.get_abort_source(),
                get_broadcast_address(), _snitch.local()->get_location(),
-               "Tablet migration", streaming::stream_reason::tablet_migration, std::move(tables));
+               "Tablet migration", streaming::stream_reason::tablet_migration, null_topology_guard, std::move(tables));
         streamer->add_source_filter(std::make_unique<dht::range_streamer::failure_detector_source_filter>(
                 _gossiper.get_unreachable_members()));
 

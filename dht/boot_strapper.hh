@@ -14,6 +14,7 @@
 #include <unordered_set>
 #include "replica/database_fwd.hh"
 #include "streaming/stream_reason.hh"
+#include "service/topology_guard.hh"
 #include <seastar/core/distributed.hh>
 #include <seastar/core/abort_source.hh>
 
@@ -52,7 +53,7 @@ public:
         , _token_metadata_ptr(std::move(tmptr)) {
     }
 
-    future<> bootstrap(streaming::stream_reason reason, gms::gossiper& gossiper, inet_address replace_address = {});
+    future<> bootstrap(streaming::stream_reason reason, gms::gossiper& gossiper, service::frozen_topology_guard, inet_address replace_address = {});
 
     /**
      * if initialtoken was specified, use that (split on comma).

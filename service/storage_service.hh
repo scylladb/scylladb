@@ -14,6 +14,7 @@
 #include <seastar/core/shared_future.hh>
 #include "gms/i_endpoint_state_change_subscriber.hh"
 #include "service/endpoint_lifecycle_subscriber.hh"
+#include "service/topology_guard.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "locator/tablets.hh"
 #include "locator/tablet_metadata_guard.hh"
@@ -538,7 +539,7 @@ private:
      */
     future<std::unordered_multimap<inet_address, dht::token_range>> get_new_source_ranges(locator::vnode_effective_replication_map_ptr erm, const dht::token_range_vector& ranges) const;
 
-    future<> removenode_with_stream(gms::inet_address leaving_node, shared_ptr<abort_source> as_ptr);
+    future<> removenode_with_stream(gms::inet_address leaving_node, frozen_topology_guard, shared_ptr<abort_source> as_ptr);
     future<> removenode_add_ranges(lw_shared_ptr<dht::range_streamer> streamer, gms::inet_address leaving_node);
 
     // needs to be modified to accept either a keyspace or ARS.

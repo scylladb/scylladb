@@ -8,6 +8,7 @@
 
 #include "sstables/sstable_set.hh"
 #include "streaming/stream_reason.hh"
+#include "service/topology_guard.hh"
 
 namespace replica {
 class database;
@@ -28,6 +29,7 @@ std::function<future<>(flat_mutation_reader_v2)> make_streaming_consumer(sstring
     sharded<db::view::view_update_generator>& vug,
     uint64_t estimated_partitions,
     stream_reason reason,
-    sstables::offstrategy offstrategy);
+    sstables::offstrategy offstrategy,
+    service::frozen_topology_guard);
 
 }

@@ -27,7 +27,8 @@ static logging::logger blogger("boot_strapper");
 
 namespace dht {
 
-future<> boot_strapper::bootstrap(streaming::stream_reason reason, gms::gossiper& gossiper, inet_address replace_address) {
+future<> boot_strapper::bootstrap(streaming::stream_reason reason, gms::gossiper& gossiper, service::frozen_topology_guard topo_guard,
+                                  inet_address replace_address) {
     blogger.debug("Beginning bootstrap process: sorted_tokens={}", get_token_metadata().sorted_tokens());
     sstring description;
     if (reason == streaming::stream_reason::bootstrap) {
@@ -38,7 +39,7 @@ future<> boot_strapper::bootstrap(streaming::stream_reason reason, gms::gossiper
         throw std::runtime_error("Wrong stream_reason provided: it can only be replace or bootstrap");
     }
     try {
-        auto streamer = make_lw_shared<range_streamer>(_db, _stream_manager, _token_metadata_ptr, _abort_source, _tokens, _address, _dr, description, reason);
+        auto streamer = make_lw_shared<range_streamer>(_db, _stream_manager, _token_metadata_ptr, _abort_source, _tokens, _address, _dr, description, reason, topo_guard);
         auto nodes_to_filter = gossiper.get_unreachable_members();
         if (reason == streaming::stream_reason::replace) {
             nodes_to_filter.insert(std::move(replace_address));

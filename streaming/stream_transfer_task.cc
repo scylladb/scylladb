@@ -16,6 +16,7 @@
 #include "streaming/stream_manager.hh"
 #include "streaming/stream_reason.hh"
 #include "streaming/stream_mutation_fragments_cmd.hh"
+#include "service/topology_guard.hh"
 #include "readers/mutation_fragment_v1_stream.hh"
 #include "mutation/mutation_fragment_stream_validator.hh"
 #include "mutation/frozen_mutation.hh"
@@ -50,6 +51,7 @@ struct send_info {
     netw::messaging_service::msg_addr id;
     uint32_t dst_cpu_id;
     stream_reason reason;
+    service::frozen_topology_guard topo_guard;
     size_t mutations_nr{0};
     semaphore mutations_done{0};
     bool error_logged = false;
@@ -60,13 +62,15 @@ struct send_info {
     noncopyable_function<void(size_t)> update;
     send_info(netw::messaging_service& ms_, streaming::plan_id plan_id_, replica::table& tbl_, reader_permit permit_,
               dht::token_range_vector ranges_, netw::messaging_service::msg_addr id_,
-              uint32_t dst_cpu_id_, stream_reason reason_, noncopyable_function<void(size_t)> update_fn)
+              uint32_t dst_cpu_id_, stream_reason reason_, service::frozen_topology_guard topo_guard_,
+              noncopyable_function<void(size_t)> update_fn)
         : ms(ms_)
         , plan_id(plan_id_)
         , cf_id(tbl_.schema()->id())
         , id(id_)
         , dst_cpu_id(dst_cpu_id_)
         , reason(reason_)
+        , topo_guard(topo_guard_)
         , cf(tbl_)
         , ranges(std::move(ranges_))
         , prs(dht::to_partition_ranges(ranges))
@@ -116,7 +120,7 @@ future<> send_mutation_fragments(lw_shared_ptr<send_info> si) {
   }
   return si->estimate_partitions().then([si] (size_t estimated_partitions) {
     sslog.info("[Stream #{}] Start sending ks={}, cf={}, estimated_partitions={}, with new rpc streaming", si->plan_id, si->cf.schema()->ks_name(), si->cf.schema()->cf_name(), estimated_partitions);
-    return si->ms.make_sink_and_source_for_stream_mutation_fragments(si->reader.schema()->version(), si->plan_id, si->cf_id, estimated_partitions, si->reason, si->id).then_unpack([si] (rpc::sink<frozen_mutation_fragment, stream_mutation_fragments_cmd> sink, rpc::source<int32_t> source) mutable {
+    return si->ms.make_sink_and_source_for_stream_mutation_fragments(si->reader.schema()->version(), si->plan_id, si->cf_id, estimated_partitions, si->reason, si->topo_guard, si->id).then_unpack([si] (rpc::sink<frozen_mutation_fragment, stream_mutation_fragments_cmd> sink, rpc::source<int32_t> source) mutable {
         auto got_error_from_peer = make_lw_shared<bool>(false);
         auto table_is_dropped = make_lw_shared<bool>(false);
 
@@ -205,10 +209,11 @@ future<> stream_transfer_task::execute() {
     sort_and_merge_ranges();
     auto reason = session->get_reason();
     auto& sm = session->manager();
-    return sm.container().invoke_on_all([plan_id, cf_id, id, dst_cpu_id, ranges=this->_ranges, reason] (stream_manager& sm) mutable {
+    auto topo_guard = session->topo_guard();
+    return sm.container().invoke_on_all([plan_id, cf_id, id, dst_cpu_id, ranges=this->_ranges, reason, topo_guard] (stream_manager& sm) mutable {
         auto& tbl = sm.db().find_column_family(cf_id);
-      return sm.db().obtain_reader_permit(tbl, "stream-transfer-task", db::no_timeout, {}).then([&sm, &tbl, plan_id, cf_id, id, dst_cpu_id, ranges=std::move(ranges), reason] (reader_permit permit) mutable {
-        auto si = make_lw_shared<send_info>(sm.ms(), plan_id, tbl, std::move(permit), std::move(ranges), id, dst_cpu_id, reason, [&sm, plan_id, addr = id.addr] (size_t sz) {
+      return sm.db().obtain_reader_permit(tbl, "stream-transfer-task", db::no_timeout, {}).then([&sm, &tbl, plan_id, cf_id, id, dst_cpu_id, ranges=std::move(ranges), reason, topo_guard] (reader_permit permit) mutable {
+        auto si = make_lw_shared<send_info>(sm.ms(), plan_id, tbl, std::move(permit), std::move(ranges), id, dst_cpu_id, reason, topo_guard, [&sm, plan_id, addr = id.addr] (size_t sz) {
             sm.update_progress(plan_id, addr, streaming::progress_info::direction::OUT, sz);
         });
         return si->has_relevant_range_on_this_shard().then([si, plan_id, cf_id] (bool has_relevant_range_on_this_shard) {
