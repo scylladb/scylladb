@@ -357,7 +357,7 @@ is not perfect and the actual rate of accepted requests may be higher up to
 a factor of keyspace's `RF`. This feature should not be used to enforce precise
 limits but rather serve as an overload protection feature.
 
-_NOTE): This feature works best when shard-aware drivers are used (rejected
+_NOTE_: This feature works best when shard-aware drivers are used (rejected
 requests have the least cost).
 
 Limits are configured separately for reads and writes. Some examples:
