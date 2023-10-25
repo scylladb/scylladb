@@ -639,6 +639,15 @@ class ScyllaCluster:
         await asyncio.gather(*(self.host_registry.release_host(Host(ip))
                                for ip in self.leased_ips))
 
+    async def uninstall_gracefully(self) -> None:
+        """Stop running servers in a clean way and uninstall all servers"""
+        self.is_dirty = True
+        self.logger.info("Uninstalling cluster %s gracefully", self)
+        await self.stop_gracefully()
+        await asyncio.gather(*(srv.uninstall() for srv in self.stopped.values()))
+        await asyncio.gather(*(self.host_registry.release_host(Host(ip))
+                               for ip in self.leased_ips))
+
     async def release_ips(self) -> None:
         """Release all IPs leased from the host registry by this cluster.
         Call this function only if the cluster is stopped and will not be started again."""
