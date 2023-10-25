@@ -146,6 +146,7 @@ future<> table_for_tests::stop() {
     auto data = _data;
     co_await data->cm.remove(*data->table_s);
     co_await data->cm.stop();
+    co_await data->cf->stop();
 }
 
 void table_for_tests::set_tombstone_gc_enabled(bool tombstone_gc_enabled) noexcept {
