@@ -204,7 +204,17 @@ test_env::impl::impl(test_env_config cfg, sstables::storage_manager* sstm)
     }
 }
 
+void test_env::maybe_start_compaction_manager() {
+    if (!_impl->cmgr) {
+        _impl->cmgr = std::make_unique<test_env_compaction_manager>();
+        _impl->cmgr->get_compaction_manager().enable();
+    }
+}
+
 future<> test_env::stop() {
+    if (_impl->cmgr) {
+        co_await _impl->cmgr->get_compaction_manager().stop();
+    }
     co_await _impl->mgr.close();
     co_await _impl->semaphore.stop();
 }

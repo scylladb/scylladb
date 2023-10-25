@@ -20,6 +20,7 @@
 #include "sstables/version.hh"
 #include "sstables/sstable_directory.hh"
 #include "replica/database.hh"
+#include "compaction/compaction_manager.hh"
 
 #include "test/lib/tmpdir.hh"
 #include "test/lib/test_services.hh"
@@ -44,6 +45,18 @@ public:
     }
 };
 
+class test_env_compaction_manager {
+    tasks::task_manager _tm;
+    compaction_manager _cm;
+
+public:
+    test_env_compaction_manager()
+        : _cm(_tm, compaction_manager::for_testing_tag{})
+    {}
+
+    compaction_manager& get_compaction_manager() { return _cm; }
+};
+
 struct test_env_config {
     db::large_data_handler* large_data_handler = nullptr;
     data_dictionary::storage_options storage; // will be local by default
@@ -61,6 +74,7 @@ class test_env {
         gms::feature_service feature_service;
         db::nop_large_data_handler nop_ld_handler;
         test_env_sstables_manager mgr;
+        std::unique_ptr<test_env_compaction_manager> cmgr;
         reader_concurrency_semaphore semaphore;
         sstables::sstable_generation_generator gen{0};
         sstables::uuid_identifiers use_uuid;
@@ -75,6 +89,8 @@ class test_env {
         }
     };
     std::unique_ptr<impl> _impl;
+
+    void maybe_start_compaction_manager();
 public:
 
     explicit test_env(test_env_config cfg = {}, sstables::storage_manager* sstm = nullptr) : _impl(std::make_unique<impl>(std::move(cfg), sstm)) { }
@@ -209,6 +225,7 @@ public:
     }
 
     table_for_tests make_table_for_tests(schema_ptr s, sstring dir) {
+        maybe_start_compaction_manager();
         auto cfg = make_table_config();
         cfg.datadir = dir;
         cfg.enable_commitlog = false;
@@ -216,6 +233,7 @@ public:
     }
 
     table_for_tests make_table_for_tests(schema_ptr s = nullptr) {
+        maybe_start_compaction_manager();
         auto cfg = make_table_config();
         cfg.datadir = _impl->dir.path().native();
         cfg.enable_commitlog = false;
