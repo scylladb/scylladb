@@ -634,7 +634,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
     sharded<service::storage_service> ss;
     sharded<service::migration_manager> mm;
     sharded<tasks::task_manager> task_manager;
-    api::http_context ctx(db, load_meter, token_metadata);
+    api::http_context ctx(db, load_meter);
     httpd::http_server_control prometheus_server;
     std::optional<utils::directories> dirs = {};
     sharded<gms::feature_service> feature_service;
@@ -1358,6 +1358,13 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             api::set_server_storage_service(ctx, ss, group0_client).get();
             auto stop_ss_api = defer_verbose_shutdown("storage service API", [&ctx] {
                 api::unset_server_storage_service(ctx).get();
+            });
+
+            // FIXME -- this can happen next to token_metadata start, but it needs "storage_service"
+            // API register, so it comes that late for now
+            api::set_server_token_metadata(ctx, token_metadata).get();
+            auto stop_tokens_api = defer_verbose_shutdown("token metadata API", [&ctx] {
+                api::unset_server_token_metadata(ctx).get();
             });
 
             supervisor::notify("initializing virtual tables");

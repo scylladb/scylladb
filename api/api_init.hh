@@ -73,14 +73,12 @@ struct http_context {
     httpd::http_server_control http_server;
     distributed<replica::database>& db;
     service::load_meter& lmeter;
-    const sharded<locator::shared_token_metadata>& shared_token_metadata;
 
     http_context(distributed<replica::database>& _db,
-            service::load_meter& _lm, const sharded<locator::shared_token_metadata>& _stm)
-            : db(_db), lmeter(_lm), shared_token_metadata(_stm) {
+            service::load_meter& _lm)
+            : db(_db), lmeter(_lm)
+    {
     }
-
-    const locator::token_metadata& get_token_metadata();
 };
 
 future<> set_server_init(http_context& ctx);
@@ -103,6 +101,8 @@ future<> set_server_authorization_cache(http_context& ctx, sharded<auth::service
 future<> unset_server_authorization_cache(http_context& ctx);
 future<> set_server_snapshot(http_context& ctx, sharded<db::snapshot_ctl>& snap_ctl);
 future<> unset_server_snapshot(http_context& ctx);
+future<> set_server_token_metadata(http_context& ctx, sharded<locator::shared_token_metadata>& tm);
+future<> unset_server_token_metadata(http_context& ctx);
 future<> set_server_gossip(http_context& ctx, sharded<gms::gossiper>& g);
 future<> set_server_load_sstable(http_context& ctx, sharded<db::system_keyspace>& sys_ks);
 future<> unset_server_load_sstable(http_context& ctx);

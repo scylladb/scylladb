@@ -463,24 +463,6 @@ static future<json::json_return_type> describe_ring_as_json(sharded<service::sto
 }
 
 void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_service>& ss, service::raft_group0_client& group0_client) {
-    ss::local_hostid.set(r, [&ss](std::unique_ptr<http::request> req) {
-        auto id = ss.local().get_token_metadata().get_my_id();
-        return make_ready_future<json::json_return_type>(id.to_sstring());
-    });
-
-    ss::get_tokens.set(r, [&ss] (std::unique_ptr<http::request> req) {
-        return make_ready_future<json::json_return_type>(stream_range_as_array(ss.local().get_token_metadata().sorted_tokens(), [](const dht::token& i) {
-           return fmt::to_string(i);
-        }));
-    });
-
-    ss::get_node_tokens.set(r, [&ss] (std::unique_ptr<http::request> req) {
-        gms::inet_address addr(req->param["endpoint"]);
-        return make_ready_future<json::json_return_type>(stream_range_as_array(ss.local().get_token_metadata().get_tokens(addr), [](const dht::token& i) {
-           return fmt::to_string(i);
-       }));
-    });
-
     ss::get_commitlog.set(r, [&ctx](const_req req) {
         return ctx.db.local().commitlog()->active_config().commit_log_location;
     });
@@ -542,24 +524,6 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         return seastar::do_with(db::toppartitions_query(ctx.db, std::move(table_filters), std::move(keyspace_filters), duration.value, list_size, capacity), [&ctx] (db::toppartitions_query& q) {
             return run_toppartitions_query(q, ctx);
         });
-    });
-
-    ss::get_leaving_nodes.set(r, [&ss](const_req req) {
-        return container_to_vec(ss.local().get_token_metadata().get_leaving_endpoints());
-    });
-
-    ss::get_moving_nodes.set(r, [](const_req req) {
-        std::unordered_set<sstring> addr;
-        return container_to_vec(addr);
-    });
-
-    ss::get_joining_nodes.set(r, [&ss](const_req req) {
-        auto points = ss.local().get_token_metadata().get_bootstrap_tokens();
-        std::unordered_set<sstring> addr;
-        for (auto i: points) {
-            addr.insert(fmt::to_string(i.second));
-        }
-        return container_to_vec(addr);
     });
 
     ss::get_release_version.set(r, [&ss](const_req req) {
@@ -624,11 +588,6 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
 
     ss::describe_ring.set(r, [&ctx, &ss](std::unique_ptr<http::request> req) {
         return describe_ring_as_json(ss, validate_keyspace(ctx, req->param));
-    });
-
-    ss::get_host_id_map.set(r, [&ss](const_req req) {
-        std::vector<ss::mapper> res;
-        return map_to_key_value(ss.local().get_token_metadata().get_endpoint_to_host_id_map_for_reading(), res);
     });
 
     ss::get_load.set(r, [&ctx](std::unique_ptr<http::request> req) {
@@ -1363,15 +1322,9 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
 }
 
 void unset_storage_service(http_context& ctx, routes& r) {
-    ss::local_hostid.unset(r);
-    ss::get_tokens.unset(r);
-    ss::get_node_tokens.unset(r);
     ss::get_commitlog.unset(r);
     ss::get_token_endpoint.unset(r);
     ss::toppartitions_generic.unset(r);
-    ss::get_leaving_nodes.unset(r);
-    ss::get_moving_nodes.unset(r);
-    ss::get_joining_nodes.unset(r);
     ss::get_release_version.unset(r);
     ss::get_scylla_release_version.unset(r);
     ss::get_schema_version.unset(r);
@@ -1381,7 +1334,6 @@ void unset_storage_service(http_context& ctx, routes& r) {
     ss::get_pending_range_to_endpoint_map.unset(r);
     ss::describe_any_ring.unset(r);
     ss::describe_ring.unset(r);
-    ss::get_host_id_map.unset(r);
     ss::get_load.unset(r);
     ss::get_load_map.unset(r);
     ss::get_current_generation_number.unset(r);
