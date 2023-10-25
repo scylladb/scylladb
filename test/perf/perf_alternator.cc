@@ -39,6 +39,7 @@ struct test_config {
     unsigned scan_total_segments;
     bool flush;
     std::string remote_host;
+    bool continue_after_error;
 };
 
 std::ostream& operator<<(std::ostream& os, const test_config& cfg) {
@@ -287,7 +288,7 @@ void workload_main(const test_config& c) {
         static thread_local auto cli_iter = -1;
         auto seq = tests::random::get_int<uint64_t>(c.partitions - 1);
         return fun(c, sharded_cli_pool[++cli_iter % c.concurrency], seq);
-    }, c.concurrency, c.duration_in_seconds);
+    }, c.concurrency, c.duration_in_seconds, 0, !c.continue_after_error);
 
     std::cout << aggregated_perf_results(results) << std::endl;
 }
@@ -316,6 +317,7 @@ std::function<int(int, char**)> alternator(std::function<int(int, char**)> scyll
             ("flush", bpo::value<bool>()->default_value(true), "flush memtables before test")
             ("remote-host", bpo::value<std::string>()->default_value(""), "address of remote alternator service, use localhost by default")
             ("scan-total-segments", bpo::value<unsigned>()->default_value(10), "single scan operation will retreive 1/scan-total-segments portion of a table")
+            ("continue-after-error", bpo::value<bool>()->default_value(false), "continue test after failed request")
         ;
         bpo::variables_map opts;
         bpo::store(bpo::command_line_parser(ac, av).options(opts_desc).allow_unregistered().run(), opts);
@@ -327,6 +329,7 @@ std::function<int(int, char**)> alternator(std::function<int(int, char**)> scyll
         c.flush = opts["flush"].as<bool>();
         c.remote_host = opts["remote-host"].as<std::string>();
         c.scan_total_segments = opts["scan-total-segments"].as<unsigned>();
+        c.continue_after_error = opts["continue-after-error"].as<bool>();
 
         if (c.scan_total_segments < 1 || c.scan_total_segments > 1'000'000) {
             throw std::invalid_argument("scan-total-segments must be between 1 and 1'000'000");
