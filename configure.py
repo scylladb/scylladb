@@ -1574,18 +1574,24 @@ if args.artifacts:
 else:
     build_artifacts = all_artifacts
 
-date_stamp = f"--date-stamp {args.date_stamp}" if args.date_stamp else ""
-status = subprocess.call(f"./SCYLLA-VERSION-GEN {date_stamp}", shell=True)
-if status != 0:
-    print('Version file generation failed')
-    sys.exit(1)
 
-file = open(f'{outdir}/SCYLLA-VERSION-FILE', 'r')
-scylla_version = file.read().strip().replace('-', '~')
-file = open(f'{outdir}/SCYLLA-RELEASE-FILE', 'r')
-scylla_release = file.read().strip()
-file = open(f'{outdir}/SCYLLA-PRODUCT-FILE', 'r')
-scylla_product = file.read().strip()
+def generate_version(date_stamp):
+    date_stamp_opt = ''
+    if date_stamp:
+        date_stamp_opt = f'--date-stamp {date_stamp}'
+    status = subprocess.call(f"./SCYLLA-VERSION-GEN {date_stamp_opt}", shell=True)
+    if status != 0:
+        print('Version file generation failed')
+        sys.exit(1)
+
+    with open(f'{outdir}/SCYLLA-VERSION-FILE', 'r') as f:
+        scylla_version = f.read().strip().replace('-', '~')
+    with open(f'{outdir}/SCYLLA-RELEASE-FILE', 'r') as f:
+        scylla_release = f.read().strip()
+    with open(f'{outdir}/SCYLLA-PRODUCT-FILE', 'r') as f:
+        scylla_product = f.read().strip()
+    return scylla_product, scylla_version, scylla_release
+
 
 # The relocatable package includes its own dynamic linker. We don't
 # know the path it will be installed to, so for now use a very long
@@ -2377,6 +2383,7 @@ check_for_boost(args.cxx)
 check_for_lz4(args.cxx, args.user_cflags)
 ninja = find_ninja()
 with open(buildfile, 'w') as f:
+    scylla_product, scylla_version, scylla_release = generate_version(args.date_stamp)
     arch = platform.machine()
     write_build_file(f,
                      arch,
