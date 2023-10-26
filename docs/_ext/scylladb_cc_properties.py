@@ -62,23 +62,12 @@ class DBConfigParser:
         self.config_file_path = config_file_path
         self.config_header_file_path = config_header_file_path
 
-    @staticmethod
-    def _clean_description(description):
-        return (
-            description.replace("\\n", "")
-            .replace('<', '&lt;')
-            .replace('>', '&gt;')
-            .replace("\n", "<br>")
-            .replace("\\t", "- ")
-            .replace('"', "")
-        )
-    
     def _clean_comments(self, content):
         return re.sub(self.COMMENT_PATTERN, "", content, flags=re.DOTALL | re.MULTILINE)
 
     def _parse_group(self, group_match, config_group_content):
         group_name = group_match.group(1).strip()
-        group_description = self._clean_description(group_match.group(2).strip()) if group_match.group(2) else ""
+        group_description = group_match.group(2).strip() if group_match.group(2) else ""
 
         current_group = {
             "name": group_name,
@@ -113,7 +102,7 @@ class DBConfigParser:
                 "value_status": match[4].strip(),
                 "default": match[5].strip(),
                 "liveness": "True" if match[3] else "False",
-                "description": self._clean_description(match[6].strip()),
+                "description": match[6].strip(),
             }
             properties.append(property_data)
             DBConfigParser.all_properties[name] = property_data
@@ -161,6 +150,23 @@ class DBConfigParser:
         return DBConfigParser.all_properties[name]
 
 
+def readable_desc(description: str) -> str:
+    return (
+        description.replace("\\n", "")
+        .replace('<', '&lt;')
+        .replace('>', '&gt;')
+        .replace("\n", "<br>")
+        .replace("\\t", "- ")
+        .replace('"', "")
+    )
+
+
+def maybe_add_filters(builder):
+    env = builder.templates.environment
+    if 'readable_desc' not in env.filters:
+        env.filters['readable_desc'] = readable_desc
+
+
 class ConfigOption(ObjectDescription):
     has_content = True
     required_arguments = 1
@@ -192,12 +198,19 @@ class ConfigOption(ObjectDescription):
         # normalize whitespace like XRefRole does
         return ws_re.sub(' ', sig)
 
+    @property
+    def env(self):
+        document = self.state.document
+        return document.settings.env
+
+    def before_content(self) -> None:
+        maybe_add_filters(self.env.app.builder)
+
     def _render(self, name) -> str:
         item = DBConfigParser.get(name)
         if item is None:
             raise self.error(f'Option "{name}" not found!')
-        env = self.state.document.settings.env
-        builder = env.app.builder
+        builder = self.env.app.builder
         template = self.config.scylladb_cc_properties_option_tmpl
         return builder.templates.render(template, item)
 
@@ -261,6 +274,7 @@ class ConfigOptionList(SphinxDirective):
                     value_status=value_status)
 
     def run(self) -> List[nodes.Node]:
+        maybe_add_filters(self.env.app.builder)
         rendered = self._render(self._make_context())
         contents = StringList(rendered.splitlines())
         node = nodes.section()
