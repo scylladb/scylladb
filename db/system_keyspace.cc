@@ -2553,6 +2553,9 @@ future<service::topology> system_keyspace::load_topology_state() {
                 }
                 ret.req_param.emplace(host_id, service::rebuild_param{*rebuild_option});
                 break;
+            case service::topology_request::remove:
+                ret.req_param.emplace(host_id, service::removenode_param{std::move(ignored_ids)});
+                break;
             default:
                 // no parameters for other requests
                 break;
