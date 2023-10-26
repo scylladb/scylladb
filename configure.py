@@ -1587,10 +1587,6 @@ scylla_release = file.read().strip()
 file = open(f'{outdir}/SCYLLA-PRODUCT-FILE', 'r')
 scylla_product = file.read().strip()
 
-for mode_config in modes.values():
-    cxxflags = "-DSCYLLA_VERSION=\"\\\"" + scylla_version + "\\\"\" -DSCYLLA_RELEASE=\"\\\"" + scylla_release + "\\\"\""
-    mode_config["per_src_extra_cxxflags"]["release.cc"] = cxxflags
-
 # The relocatable package includes its own dynamic linker. We don't
 # know the path it will be installed to, so for now use a very long
 # path so that patchelf doesn't need to edit the program headers.  The
@@ -1793,6 +1789,13 @@ def get_extra_cxxflags(mode, mode_config, cxx, debuginfo):
     return cxxflags
 
 
+def get_release_cxxflags(scylla_version,
+                         scylla_release):
+    definitions = {'SCYLLA_VERSION': scylla_version,
+                   'SCYLLA_RELEASE': scylla_release}
+    return [f'-D{name}="\\"{value}\\""' for name, value in definitions.items()]
+
+
 def write_build_file(f,
                      arch,
                      ninja,
@@ -1905,6 +1908,9 @@ def write_build_file(f,
 
         extra_cxxflags = ' '.join(get_extra_cxxflags(mode, modeval, args.cxx, args.debuginfo))
         modeval['cxxflags'] += f' {extra_cxxflags}'
+
+        modeval['per_src_extra_cxxflags']['release.cc'] = ' '.join(get_release_cxxflags(scylla_version,
+                                                                                        scylla_release))
 
         fmt_lib = 'fmt'
         f.write(textwrap.dedent('''\
