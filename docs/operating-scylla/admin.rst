@@ -73,7 +73,7 @@ The following addresses can be configured in scylla.yaml:
    * - broadcast_rpc_address
      - Address that is broadcasted to tell the clients to connect to. Related to rpc_address.
    * - seeds
-     - The broadcast_addresses of the existing nodes. You must specify the address of at least one existing node.
+     - The broadcast_address of an existing node. Typically, the first node in the cluster.
    * - endpoint_snitch
      - Node's address resolution helper.
    * - api_address
