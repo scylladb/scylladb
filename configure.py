@@ -1705,9 +1705,6 @@ def configure_seastar(build_dir, mode, mode_config):
     os.makedirs(seastar_build_dir, exist_ok=True)
     subprocess.check_call(seastar_cmd, shell=False, cwd=cmake_dir)
 
-if not args.dist_only:
-    for mode, mode_config in build_modes.items():
-        configure_seastar(outdir, mode, mode_config)
 
 def query_seastar_flags(pc_file, use_shared_libs, link_static_cxx=False):
     if use_shared_libs:
@@ -2381,6 +2378,14 @@ def write_build_file(f,
 check_for_minimal_compiler_version(args.cxx)
 check_for_boost(args.cxx)
 check_for_lz4(args.cxx, args.user_cflags)
+
+if not args.dist_only:
+    # args.buildfile builds seastar with the rules of
+    # {outdir}/{mode}/seastar/build.ninja, and
+    # {outdir}/{mode}/seastar/seastar.pc is queried for building flags
+    for mode, mode_config in build_modes.items():
+        configure_seastar(outdir, mode, mode_config)
+
 ninja = find_ninja()
 with open(args.buildfile, 'w') as f:
     scylla_product, scylla_version, scylla_release = generate_version(args.date_stamp)
