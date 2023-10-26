@@ -16,6 +16,8 @@
 #include "replica/database.hh"
 #include "service/migration_manager.hh"
 
+static logging::logger tlogger("table_helper");
+
 static schema_ptr parse_new_cf_statement(cql3::query_processor& qp, const sstring& create_cql) {
     auto db = qp.db();
 
