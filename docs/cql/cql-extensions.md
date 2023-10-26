@@ -93,12 +93,12 @@ and it's formatted as a map of options - similarly to how replication strategy i
 Examples:
 ```cql
 CREATE KEYSPACE ks
-    WITH REPLICATION = { 'class' : 'SimpleStrategy', 'replication_factor' : 3 }
+    WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 3 }
     AND STORAGE = { 'type' : 'S3', 'bucket' : '/tmp/b1', 'endpoint' : 'localhost' } ;
 ```
 
 ```cql
-ALTER KEYSPACE ks WITH REPLICATION = { 'class' : 'SimpleStrategy', 'replication_factor' : 3 }
+ALTER KEYSPACE ks WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 3 }
     AND STORAGE = { 'type' : 'S3', 'bucket': '/tmp/b2', 'endpoint' : 'localhost' } ;
 ```
 
