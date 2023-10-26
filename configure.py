@@ -2373,28 +2373,33 @@ def write_build_file(f,
         ''').format(**globals()))
 
 
-check_for_minimal_compiler_version(args.cxx)
-check_for_boost(args.cxx)
-check_for_lz4(args.cxx, args.user_cflags)
+def create_building_system(args):
+    check_for_minimal_compiler_version(args.cxx)
+    check_for_boost(args.cxx)
+    check_for_lz4(args.cxx, args.user_cflags)
 
-os.makedirs(outdir, exist_ok=True)
+    os.makedirs(outdir, exist_ok=True)
 
-if not args.dist_only:
-    # args.buildfile builds seastar with the rules of
-    # {outdir}/{mode}/seastar/build.ninja, and
-    # {outdir}/{mode}/seastar/seastar.pc is queried for building flags
-    for mode, mode_config in build_modes.items():
-        configure_seastar(outdir, mode, mode_config)
+    if not args.dist_only:
+        # args.buildfile builds seastar with the rules of
+        # {outdir}/{mode}/seastar/build.ninja, and
+        # {outdir}/{mode}/seastar/seastar.pc is queried for building flags
+        for mode, mode_config in build_modes.items():
+            configure_seastar(outdir, mode, mode_config)
 
-ninja = find_ninja()
-with open(args.buildfile, 'w') as f:
-    scylla_product, scylla_version, scylla_release = generate_version(args.date_stamp)
-    arch = platform.machine()
-    write_build_file(f,
-                     arch,
-                     ninja,
-                     scylla_product,
-                     scylla_version,
-                     scylla_release,
-                     args)
-generate_compdb('compile_commands.json', ninja, args.buildfile, selected_modes)
+    ninja = find_ninja()
+    with open(args.buildfile, 'w') as f:
+        scylla_product, scylla_version, scylla_release = generate_version(args.date_stamp)
+        arch = platform.machine()
+        write_build_file(f,
+                         arch,
+                         ninja,
+                         scylla_product,
+                         scylla_version,
+                         scylla_release,
+                         args)
+    generate_compdb('compile_commands.json', ninja, args.buildfile, selected_modes)
+
+
+if __name__ == '__main__':
+    create_building_system(args)
