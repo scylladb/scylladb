@@ -28,3 +28,7 @@ h3 .pre {
 hr {
     max-width: 100%;
 }
+
+dl dt:hover > a.headerlink {
+    visibility: visible;
+}

@@ -11,12 +11,13 @@ from sphinx.directives import ObjectDescription
 from sphinx.util import logging, status_iterator, ws_re
 from sphinx.util.docfields import Field
 from sphinx.util.docutils import switch_source_input, SphinxDirective
-from sphinx.util.nodes import nested_parse_with_titles
+from sphinx.util.nodes import make_id, nested_parse_with_titles
 from sphinx.jinja2glue import BuiltinTemplateLoader
 from docutils import nodes
 from docutils.parsers.rst import directives
 from docutils.statemachine import StringList
 
+logger = logging.getLogger(__name__)
 
 class DBConfigParser:
 
@@ -155,6 +156,74 @@ class DBConfigParser:
 
         return groups
 
+    @classmethod
+    def get(cls, name: str):
+        return DBConfigParser.all_properties[name]
+
+
+class ConfigOption(ObjectDescription):
+    has_content = True
+    required_arguments = 1
+    optional_arguments = 0
+    final_argument_whitespace = False
+
+    # TODO: instead of overriding transform_content(), render option properties
+    #       as a field list.
+    doc_field_types = [
+        Field('type',
+              label='Type',
+              has_arg=False,
+              names=('type',)),
+        Field('default',
+              label='Default value',
+              has_arg=False,
+              names=('default',)),
+        Field('liveness',
+              label='Liveness',
+              has_arg=False,
+              names=('liveness',)),
+    ]
+
+    def handle_signature(self,
+                         sig: str,
+                         signode: addnodes.desc_signature) -> str:
+        signode.clear()
+        signode += addnodes.desc_name(sig, sig)
+        # normalize whitespace like XRefRole does
+        return ws_re.sub(' ', sig)
+
+    def _render(self, name) -> str:
+        item = DBConfigParser.get(name)
+        if item is None:
+            raise self.error(f'Option "{name}" not found!')
+        env = self.state.document.settings.env
+        builder = env.app.builder
+        template = self.config.scylladb_cc_properties_option_tmpl
+        return builder.templates.render(template, item)
+
+    def transform_content(self,
+                          contentnode: addnodes.desc_content) -> None:
+        name = self.arguments[0]
+        # the source is always None here
+        _, lineno = self.get_source_info()
+        source = f'scylla_config:{lineno}:<{name}>'
+        fields = StringList(self._render(name).splitlines(),
+                            source=source, parent_offset=lineno)
+        with switch_source_input(self.state, fields):
+            self.state.nested_parse(fields, 0, contentnode)
+
+    def add_target_and_index(self,
+                             name: str,
+                             sig: str,
+                             signode: addnodes.desc_signature) -> None:
+        node_id = make_id(self.env, self.state.document, self.objtype, name)
+        signode['ids'].append(node_id)
+        self.state.document.note_explicit_target(signode)
+        entry = f'{name}; configuration option'
+        self.indexnode['entries'].append(('pair', entry, node_id, '', None))
+        std = self.env.get_domain('std')
+        std.note_object(self.objtype, name, node_id, location=signode)
+
 
 class ConfigOptionList(SphinxDirective):
     has_content = False
@@ -201,6 +270,27 @@ class ConfigOptionList(SphinxDirective):
 
 
 def setup(app: Sphinx) -> Dict[str, Any]:
+    app.add_config_value(
+        'scylladb_cc_properties_option_tmpl',
+        default='db_option.tmpl',
+        rebuild='html',
+        types=[str])
+
+    app.add_object_type(
+        'confgroup',
+        'confgroup',
+        objname='configuration group',
+        indextemplate='pair: %s; configuration group',
+        doc_field_types=[
+            Field('example',
+                  label='Example',
+                  has_arg=False)
+        ])
+    app.add_object_type(
+        'confval',
+        'confval',
+        objname='configuration option')
+    app.add_directive_to_domain('std', 'confval', ConfigOption, override=True)
     app.add_directive('scylladb_config_list', ConfigOptionList)
 
     return {
