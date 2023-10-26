@@ -8,7 +8,7 @@
 {% if group.description %}
 .. raw:: html
 
-   <p>{{ group.description }}</p>
+   <p>{{ group.description | readable_desc }}</p>
 {% endif %}
 
 {% for item in group.properties %}
