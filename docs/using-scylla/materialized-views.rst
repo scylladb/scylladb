@@ -78,6 +78,8 @@ Note that, although each materialized view is a separate table, a user cannot mo
 
 To modify views, remember that you must instead modify the base table associated with the view.
 
+See the :doc:`CQL Reference for Materialized Views </cql/mv>` for more examples.
+
 Compaction Strategies with Materialized Views
 ---------------------------------------------
 
@@ -108,6 +110,7 @@ For example:
 More information 
 ................
 
+* :doc:`CQL Reference for Materialized Views </cql/mv>`
 * Learn more about Materialized Views with Scylla University (Free, registration required)
 
   - `Materialized Views, Secondary Indexes, and Filtering Lesson <https://university.scylladb.com/courses/data-modeling/lessons/materialized-views-secondary-indexes-and-filtering/>`_
