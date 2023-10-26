@@ -311,7 +311,7 @@ This will create a suffix for the node location for example:
 
 The problem may also arise if you are using some :code:`DC-aware snitch`, e.g. :code:`Ec2MultiRegionSnitch`, and a :code:`SimpleStrategy` in a multi-DC cluster.
 
-Please, make sure that both a snitch and a replication strategy of a keyspace are either both of a :code:`Simple` kind or both are :code:`DC-aware`.
+Please make sure that both the snitch and the replication strategy of the keyspace are :code:`DC-aware`.
 
 After that, if you are using a :code:`DC-aware` configuration, make sure that the replication strategy uses the proper data centers' names. Verify the data centers names in your cluster using a :code:`nodetool status` command.
 

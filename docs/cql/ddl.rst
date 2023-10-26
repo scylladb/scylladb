@@ -107,12 +107,6 @@ For example:
    WITH replication = {'class': 'NetworkTopologyStrategy', 'DC1' : 1, 'DC2' : 3}
    AND durable_writes = true;
 
-
-.. code-block:: cql
-
-   CREATE KEYSPACE Excelsior
-   WITH replication = {'class': 'SimpleStrategy', 'replication_factor' : 3};
-
 .. TODO Add a link to the description of minimum_keyspace_rf when the ScyllaDB options section is added to the docs.
 
 You can configure the minimum acceptable replication factor using the ``minimum_keyspace_rf`` option. 
@@ -232,11 +226,6 @@ For instance::
 
   ALTER KEYSPACE Excelsior 
    WITH replication = { 'class' : 'NetworkTopologyStrategy', 'dc1' : 3, 'dc2' : 0};
-
-
-  ALTER KEYSPACE Excelsior
-   WITH replication = {'class': 'SimpleStrategy', 'replication_factor' : 4};
-
 
 
 The supported options are the same as :ref:`creating a keyspace <create-keyspace-statement>`.

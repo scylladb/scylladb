@@ -44,7 +44,7 @@ issuing the following CQL query and insert some example data:
 
 .. code-block:: cql
 
-   CREATE KEYSPACE quickstart_keyspace WITH REPLICATION = {'class': 'SimpleStrategy', 'replication_factor': 1};
+   CREATE KEYSPACE quickstart_keyspace WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1};
 
    CREATE TABLE quickstart_keyspace.orders(
       customer_id int, 
