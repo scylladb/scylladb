@@ -82,6 +82,23 @@ class feature_service;
 class gossiper;
 };
 
+namespace tasks {
+class task_manager;
+}
+
+namespace node_ops {
+class task_manager_module;
+class join_token_ring_task_impl;
+class start_rebuild_task_impl;
+class start_decommission_task_impl;
+class start_remove_node_task_impl;
+class raft_rebuild_entry_task_impl;
+class raft_decommission_entry_task_impl;
+class raft_remove_node_entry_task_impl;
+class raft_joining_entry_task_impl;
+class raft_first_bootstrap_task_impl;
+}
+
 namespace service {
 
 class storage_service;
@@ -89,6 +106,7 @@ class storage_proxy;
 class migration_manager;
 class raft_group0;
 class group0_info;
+class group0_handshaker;
 
 struct join_node_request_params;
 struct join_node_request_result;
@@ -98,6 +116,10 @@ struct join_node_response_result;
 enum class disk_error { regular, commit };
 
 class node_ops_meta_data;
+
+future<> set_gossip_tokens(gms::gossiper& g,
+        const std::unordered_set<dht::token>& tokens, std::optional<cdc::generation_id> cdc_gen_id);
+void on_streaming_finished();
 
 /**
  * This abstraction contains the token/identifier of this node
@@ -154,6 +176,7 @@ private:
     seastar::condition_variable _node_ops_abort_cond;
     named_semaphore _node_ops_abort_sem{1, named_semaphore_exception_factory{"node_ops_abort_sem"}};
     future<> _node_ops_abort_thread;
+    shared_ptr<node_ops::task_manager_module> _task_manager_module;
     void node_ops_insert(node_ops_id, gms::inet_address coordinator, std::list<inet_address> ignore_nodes,
                          std::function<future<>()> abort_func);
     future<> node_ops_update_heartbeat(node_ops_id ops_uuid);
@@ -182,8 +205,10 @@ public:
         sharded<db::batchlog_manager>& bm,
         sharded<locator::snitch_ptr>& snitch,
         sharded<service::tablet_allocator>& tablet_allocator,
-        sharded<cdc::generation_service>& cdc_gs);
+        sharded<cdc::generation_service>& cdc_gs,
+        tasks::task_manager& tm);
 
+    node_ops::task_manager_module& get_task_manager_module() noexcept;
     // Needed by distributed<>
     future<> stop();
     void init_messaging_service(sharded<db::system_distributed_keyspace>& sys_dist_ks, bool raft_topology_change_enabled);
@@ -365,16 +390,9 @@ private:
     bool should_bootstrap();
     bool is_replacing();
     bool is_first_node();
-    future<> join_token_ring(sharded<db::system_distributed_keyspace>& sys_dist_ks,
-            sharded<service::storage_proxy>& proxy,
-            std::unordered_set<gms::inet_address> initial_contact_nodes,
-            std::unordered_set<gms::inet_address> loaded_endpoints,
-            std::unordered_map<gms::inet_address, sstring> loaded_peer_features,
-            std::chrono::milliseconds);
     future<> start_sys_dist_ks();
 public:
-
-    future<> rebuild(sstring source_dc);
+    ::shared_ptr<service::group0_handshaker> make_join_handshaker(service::join_node_request_params& join_params);
 
 private:
     void set_mode(mode m);
@@ -631,8 +649,6 @@ public:
             const sstring& cf_name,
             range<dht::token> range,
             uint32_t keys_per_split);
-public:
-    future<> decommission();
 
 private:
     /**
@@ -671,16 +687,6 @@ public:
     future<> force_remove_completion();
 
 public:
-    /**
-     * Remove a node that has died, attempting to restore the replica count.
-     * If the node is alive, decommission should be attempted.  If decommission
-     * fails, then removeToken should be called.  If we fail while trying to
-     * restore the replica count, finally forceRemoveCompleteion should be
-     * called to forcibly remove the node without regard to replica count.
-     *
-     * @param hostIdString token for the node
-     */
-    future<> removenode(locator::host_id host_id, std::list<locator::host_id_or_endpoint> ignore_nodes);
     future<node_ops_cmd_response> node_ops_cmd_handler(gms::inet_address coordinator, node_ops_cmd_request req);
     void node_ops_cmd_check(gms::inet_address coordinator, const node_ops_cmd_request& req);
     future<> node_ops_cmd_heartbeat_updater(node_ops_cmd cmd, node_ops_id uuid, std::list<gms::inet_address> nodes, lw_shared_ptr<bool> heartbeat_updater_done);
@@ -791,10 +797,11 @@ private:
 
     future<raft_topology_cmd_result> raft_topology_cmd_handler(sharded<db::system_distributed_keyspace>& sys_dist_ks, raft::term_t term, uint64_t cmd_index, const raft_topology_cmd& cmd);
 
-    future<> raft_initialize_discovery_leader(raft::server&, const join_node_request_params& params);
-    future<> raft_decomission();
-    future<> raft_removenode(locator::host_id host_id, std::list<locator::host_id_or_endpoint> ignore_nodes_params);
-    future<> raft_rebuild(sstring source_dc);
+    future<> raft_initialize_discovery_leader(raft::server&, const join_node_request_params& params, tasks::task_info parent_info);
+    topology_change build_decommission_topology_change(raft::server& raft_server, group0_guard& guard);
+    topology_change build_remove_topology_change(group0_guard& guard, raft::server_id id, std::unordered_set<raft::server_id> ignored_ids);
+    topology_change build_rebuild_topology_change(raft::server& raft_server, group0_guard& guard, sstring& source_dc);
+    topology_change build_joining_topology_change(group0_guard& guard, const service::join_node_request_params& params);
     future<> raft_check_and_repair_cdc_streams();
     future<> update_topology_with_local_metadata(raft::server&);
 
@@ -822,6 +829,15 @@ private:
     semaphore _join_node_response_handler_mutex{1};
 
     friend class join_node_rpc_handshaker;
+    friend class node_ops::join_token_ring_task_impl;
+    friend class node_ops::start_rebuild_task_impl;
+    friend class node_ops::start_decommission_task_impl;
+    friend class node_ops::start_remove_node_task_impl;
+    friend class node_ops::raft_rebuild_entry_task_impl;
+    friend class node_ops::raft_decommission_entry_task_impl;
+    friend class node_ops::raft_remove_node_entry_task_impl;
+    friend class node_ops::raft_joining_entry_task_impl;
+    friend class node_ops::raft_first_bootstrap_task_impl;
 };
 
 }

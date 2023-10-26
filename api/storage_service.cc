@@ -46,6 +46,7 @@
 #include "locator/abstract_replication_strategy.hh"
 #include "sstables_loader.hh"
 #include "db/view/view_builder.hh"
+#include "node_ops/task_manager_module.hh"
 
 using namespace seastar::httpd;
 using namespace std::chrono_literals;
@@ -716,11 +717,11 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     });
 
 
-    ss::decommission.set(r, [&ss](std::unique_ptr<http::request> req) {
+    ss::decommission.set(r, [&ss](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         apilog.info("decommission");
-        return ss.local().decommission().then([] {
-            return make_ready_future<json::json_return_type>(json_void());
-        });
+        auto task = co_await ss.local().get_task_manager_module().make_and_start_task<node_ops::start_decommission_task_impl>({}, "", ss.local());
+        co_await task->done();
+        co_return json_void();
     });
 
     ss::move.set(r, [&ss] (std::unique_ptr<http::request> req) {
@@ -730,7 +731,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         });
     });
 
-    ss::remove_node.set(r, [&ss](std::unique_ptr<http::request> req) {
+    ss::remove_node.set(r, [&ss](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         auto host_id = validate_host_id(req->get_query_param("host_id"));
         std::vector<sstring> ignore_nodes_strs = utils::split_comma_separated_list(req->get_query_param("ignore_nodes"));
         apilog.info("remove_node: host_id={} ignore_nodes={}", host_id, ignore_nodes_strs);
@@ -746,9 +747,9 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
                 throw std::runtime_error(format("Failed to parse ignore_nodes parameter: ignore_nodes={}, node={}: {}", ignore_nodes_strs, n, std::current_exception()));
             }
         }
-        return ss.local().removenode(host_id, std::move(ignore_nodes)).then([] {
-            return make_ready_future<json::json_return_type>(json_void());
-        });
+        auto task = co_await ss.local().get_task_manager_module().make_and_start_task<node_ops::start_remove_node_task_impl>({}, "", ss.local(), host_id, std::move(ignore_nodes));
+        co_await task->done();
+        co_return json_void();
     });
 
     ss::get_removal_status.set(r, [&ss](std::unique_ptr<http::request> req) {
@@ -935,12 +936,12 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         });
     });
 
-    ss::rebuild.set(r, [&ss](std::unique_ptr<http::request> req) {
+    ss::rebuild.set(r, [&ss](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         auto source_dc = req->get_query_param("source_dc");
         apilog.info("rebuild: source_dc={}", source_dc);
-        return ss.local().rebuild(std::move(source_dc)).then([] {
-            return make_ready_future<json::json_return_type>(json_void());
-        });
+        auto task = co_await ss.local().get_task_manager_module().make_and_start_task<node_ops::start_rebuild_task_impl>({}, "", ss.local(), std::move(source_dc));
+        co_await task->done();
+        co_return json_void();
     });
 
     ss::bulk_load.set(r, [](std::unique_ptr<http::request> req) {
