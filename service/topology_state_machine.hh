@@ -39,11 +39,15 @@ enum class node_state: uint16_t {
     rollback_to_normal,  // the node rolls back failed decommission/remove node operation
 };
 
+// The order of the requests is a priority
+// order in which requests are executes in case
+// there are multiple requests in the queue.
+// The order tries to minimize the amount of cleanups.
 enum class topology_request: uint16_t {
-    join,
-    leave,
-    remove,
     replace,
+    join,
+    remove,
+    leave,
     rebuild
 };
 
