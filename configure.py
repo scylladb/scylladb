@@ -2382,7 +2382,7 @@ check_for_minimal_compiler_version(args.cxx)
 check_for_boost(args.cxx)
 check_for_lz4(args.cxx, args.user_cflags)
 ninja = find_ninja()
-with open(buildfile, 'w') as f:
+with open(args.buildfile, 'w') as f:
     scylla_product, scylla_version, scylla_release = generate_version(args.date_stamp)
     arch = platform.machine()
     write_build_file(f,
@@ -2392,4 +2392,4 @@ with open(buildfile, 'w') as f:
                      scylla_version,
                      scylla_release,
                      args)
-generate_compdb('compile_commands.json', ninja, buildfile, selected_modes)
+generate_compdb('compile_commands.json', ninja, args.buildfile, selected_modes)
