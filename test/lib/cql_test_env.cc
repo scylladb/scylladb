@@ -385,8 +385,9 @@ public:
         });
     }
 
-    future<> create_keyspace(std::string_view name) {
-        auto query = format("create keyspace {} with replication = {{ 'class' : 'org.apache.cassandra.locator.NetworkTopologyStrategy', 'replication_factor' : 1 }};", name);
+    future<> create_keyspace(const cql_test_config& cfg, std::string_view name) {
+        auto query = format("create keyspace {} with replication = {{ 'class' : 'org.apache.cassandra.locator.NetworkTopologyStrategy', 'replication_factor' : 1{}}};", name,
+                            cfg.initial_tablets ? format(", 'initial_tablets' : {}", *cfg.initial_tablets) : "");
         return execute_cql(query).discard_result();
     }
 
@@ -631,7 +632,13 @@ private:
                 _sys_ks.local().save_local_info(std::move(linfo), _snitch.local()->get_location()).get();
             }
             locator::shared_token_metadata::mutate_on_all_shards(_token_metadata, [hostid = host_id] (locator::token_metadata& tm) {
-                tm.get_topology().set_host_id_cfg(hostid);
+                auto& topo = tm.get_topology();
+                topo.set_host_id_cfg(hostid);
+                topo.add_or_update_endpoint(utils::fb_utilities::get_broadcast_address(),
+                                            hostid,
+                                            std::nullopt,
+                                            locator::node::state::normal,
+                                            smp::count);
                 return make_ready_future<>();
             }).get();
 
@@ -742,6 +749,11 @@ private:
                 std::ref(_tablet_allocator),
                 std::ref(_cdc_generation_service)).get();
             auto stop_storage_service = defer([this] { _ss.stop().get(); });
+
+            _mnotifier.local().register_listener(&_ss.local());
+            auto stop_mm_listener = defer([this] {
+                _mnotifier.local().unregister_listener(&_ss.local()).get();
+            });
 
             _ss.invoke_on_all([this] (service::storage_service& ss) {
                 ss.set_query_processor(_qp.local());
@@ -925,7 +937,7 @@ private:
             auto stop_core_local = defer([this] { _core_local.stop().get(); });
 
             if (!local_db().has_keyspace(ks_name)) {
-                create_keyspace(ks_name).get();
+                create_keyspace(cfg_in, ks_name).get();
             }
 
             with_scheduling_group(dbcfg.statement_scheduling_group, [&func, this] {

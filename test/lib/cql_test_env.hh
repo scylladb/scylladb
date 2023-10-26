@@ -92,6 +92,7 @@ public:
     std::set<sstring> disabled_features;
     std::optional<cql3::query_processor::memory_config> qp_mcfg;
     bool need_remote_proxy = false;
+    std::optional<uint64_t> initial_tablets; // When engaged, the default keyspace will use tablets.
     locator::host_id host_id;
 
     cql_test_config();

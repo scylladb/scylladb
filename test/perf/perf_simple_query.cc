@@ -514,6 +514,8 @@ int scylla_simple_query_main(int argc, char** argv) {
         ("concurrency", bpo::value<unsigned>()->default_value(100), "workers per core")
         ("operations-per-shard", bpo::value<unsigned>(), "run this many operations per shard (overrides duration)")
         ("counters", "test counters")
+        ("tablets", "use tablets")
+        ("initial-tablets", bpo::value<unsigned>()->default_value(128), "initial number of tablets")
         ("flush", "flush memtables before test")
         ("json-result", bpo::value<std::string>(), "name of the json result file")
         ("enable-cache", bpo::value<bool>()->default_value(true), "enable row cache")
@@ -539,8 +541,13 @@ int scylla_simple_query_main(int argc, char** argv) {
             const auto enable_cache = app.configuration()["enable-cache"].as<bool>();
             std::cout << "enable-cache=" << enable_cache << '\n';
             db_cfg->enable_cache(enable_cache);
-
             cql_test_config cfg(db_cfg);
+            if (app.configuration().contains("tablets")) {
+                cfg.db_config->experimental_features({db::experimental_features_t::feature::TABLETS},
+                                                      db::config::config_source::CommandLine);
+                cfg.db_config->consistent_cluster_management(true);
+                cfg.initial_tablets = app.configuration()["initial-tablets"].as<unsigned>();
+            }
           return do_with_cql_env_thread([&app] (auto&& env) {
             auto cfg = test_config();
             cfg.partitions = app.configuration()["partitions"].as<unsigned>();
