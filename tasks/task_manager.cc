@@ -349,6 +349,7 @@ task_manager::task_manager(config cfg, class abort_source& as) noexcept
 task_manager::task_manager() noexcept
     : _update_task_ttl_action([this] { return update_task_ttl(); })
     , _task_ttl_observer(_cfg.task_ttl.observe(_update_task_ttl_action.make_observer()))
+    , _task_ttl(0)
 {}
 
 task_manager::modules& task_manager::get_modules() noexcept {
