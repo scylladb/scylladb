@@ -1757,8 +1757,6 @@ user_ldflags += ' -fvisibility=hidden'
 if args.staticcxx:
     user_ldflags += " -static-libstdc++"
 
-os.makedirs(outdir, exist_ok=True)
-
 
 def get_extra_cxxflags(mode, mode_config, cxx, debuginfo):
     cxxflags = []
@@ -2378,6 +2376,8 @@ def write_build_file(f,
 check_for_minimal_compiler_version(args.cxx)
 check_for_boost(args.cxx)
 check_for_lz4(args.cxx, args.user_cflags)
+
+os.makedirs(outdir, exist_ok=True)
 
 if not args.dist_only:
     # args.buildfile builds seastar with the rules of
