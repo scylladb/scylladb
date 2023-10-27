@@ -213,7 +213,7 @@ If you then immediately create a CDC-enabled table and attempt to make an insert
 
 .. code-block:: cql
 
-   CREATE KEYSPACE ks WITH replication = {'class':'SimpleStrategy', 'replication_factor': 1};
+   CREATE KEYSPACE ks WITH replication = {'class':'NetworkTopologyStrategy', 'replication_factor': 3};
    CREATE TABLE ks.t (pk int, ck int, v int, PRIMARY KEY (pk, ck)) WITH cdc = {'enabled': true};
    INSERT INTO ks.t (pk, ck, v) values (0, 0, 0);
 

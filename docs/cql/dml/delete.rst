@@ -67,7 +67,7 @@ For example, suppose your data set for events at Madison Square Garden includes:
 
 .. code-block:: none
 
-   CREATE KEYSPACE mykeyspace WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'}  AND durable_writes = true;
+   CREATE KEYSPACE mykeyspace WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '3'}  AND durable_writes = true;
    use mykeyspace ;
    CREATE TABLE events ( id text, created_at date, content text, PRIMARY KEY (id, created_at) );
    

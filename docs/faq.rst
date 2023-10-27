@@ -265,8 +265,6 @@ Which snitch or replication strategy should I use?
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 If you are creating a production cluster or if your cluster is going to have more than one data center you need to use a **DC-aware** snitch, e.g. :code:`GossipingPropertyFileSnitch` or :code:`Ec2MultiRegionSnitch`. You will also need to use a **DC-aware** replication strategy, e.g. :code:`NetworkTopologyStrategy`.
 
-However, if you are going to create your first cluster or want to try something simple, if your cluster is going to have a single data center then you may use a :code:`SimpleSnitch` and then use a :code:`SimpleStrategy` for your keyspaces.
-
 Our general recommendation is to always use a :code:`NetworkTopologyStrategy` and use :code:`Ec2XXX` snitches on AWS based clusters and :code:`GossipingPropertyFileSnitch` in all other cases.
 
 A description of all snitch options we support may be found here: `Snitches <https://github.com/scylladb/scylla/wiki/Snitches>`_.

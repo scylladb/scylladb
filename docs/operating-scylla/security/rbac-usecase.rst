@@ -87,9 +87,9 @@ If you proceed with the following example without authorization, you will see th
 
 .. code-block:: cql
 
-   CREATE KEYSPACE IF NOT EXISTS customer WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 };
+   CREATE KEYSPACE IF NOT EXISTS customer WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 3 };
    CREATE TABLE IF NOT EXISTS customer.info (ssid UUID, name text, DOB text, telephone text, email text, memberid text, PRIMARY KEY (ssid,  name, memberid));
-   CREATE KEYSPACE IF NOT EXISTS schedule WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 };
+   CREATE KEYSPACE IF NOT EXISTS schedule WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 3 };
    CREATE TABLE IF NOT EXISTS schedule.cust (memberid UUID, ssid text, class text, meeting_day text, meeting_time text, PRIMARY KEY (memberid, ssid));
    CREATE TABLE IF NOT EXISTS schedule.train (trainerid UUID, class text, meeting_day text, meeting_time text, PRIMARY KEY (trainerid));
 

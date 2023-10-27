@@ -27,14 +27,18 @@ environments, please refer to the :doc:`Install Scylla page </getting-started/in
    .. code-block:: bash
 
       docker run --name scylla-cdc-quickstart --hostname scylla-cdc-quickstart -d scylladb/scylla
+      docker run --name scylla-cdc-quickstart-2 --hostname scylla-cdc-quickstart-2 -d scylladb/scylla --seeds="$(docker inspect --format='{{ .NetworkSettings.IPAddress }}' scylla-cdc-quickstart)"
+      docker run --name scylla-cdc-quickstart-3 --hostname scylla-cdc-quickstart-3 -d scylladb/scylla --seeds="$(docker inspect --format='{{ .NetworkSettings.IPAddress }}' scylla-cdc-quickstart)"
 
 #. Run ``docker ps`` to show the exposed ports. The output should be similar to this example:
 
    .. code-block:: none
 
-      docker ps 
-      CONTAINER ID        IMAGE               COMMAND                  CREATED             STATUS              PORTS                                                            NAMES
-      4fca02217055        scylladb/scylla     "/docker-entrypoint.…"   8 seconds ago       Up 7 seconds        22/tcp, 7000-7001/tcp, 9042/tcp, 9160/tcp, 9180/tcp, 10000/tcp   scylla-cdc-quickstart
+      docker ps
+      CONTAINER ID   IMAGE                 COMMAND                  CREATED              STATUS              PORTS                                                            NAMES
+      b72f341f53c0   scylladb/scylla       "/docker-entrypoint.…"   12 seconds ago       Up 11 seconds       22/tcp, 7000-7001/tcp, 9042/tcp, 9160/tcp, 9180/tcp, 10000/tcp   scylla-cdc-quickstart-3
+      e1ac1ccb4d12   scylladb/scylla       "/docker-entrypoint.…"   16 seconds ago       Up 15 seconds       22/tcp, 7000-7001/tcp, 9042/tcp, 9160/tcp, 9180/tcp, 10000/tcp   scylla-cdc-quickstart-2
+      f1668fba1e7b   scylladb/scylla       "/docker-entrypoint.…"   About a minute ago   Up About a minute   22/tcp, 7000-7001/tcp, 9042/tcp, 9160/tcp, 9180/tcp, 10000/tcp   scylla-cdc-quickstart
 
 Creating a CDC-enabled table
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -44,7 +48,7 @@ issuing the following CQL query and insert some example data:
 
 .. code-block:: cql
 
-   CREATE KEYSPACE quickstart_keyspace WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1};
+   CREATE KEYSPACE quickstart_keyspace WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3};
 
    CREATE TABLE quickstart_keyspace.orders(
       customer_id int, 
