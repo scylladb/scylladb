@@ -4,7 +4,10 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
 
-from rest_api_mock import expected_request
+from rest_api_mock import expected_request, approximate_value
+import pytest
+import re
+import time
 import utils
 
 
@@ -99,3 +102,201 @@ Total TrueDiskSpaceUsed: 923 KiB
         assert res == scylla_expected_output
     else:
         assert res == cassandra_expected_output
+
+
+def check_snapshot_out(res, tag, ktlist, skip_flush):
+    """Check that the output of nodetool snapshot contains the expected messages"""
+
+    if len(ktlist) == 0:
+        keyspaces = "all keyspaces"
+    else:
+        keyspaces = ", ?".join(ktlist)
+
+    pattern = re.compile("Requested creating snapshot\\(s\\)"
+                         f" for \\[{keyspaces}\\]"
+                         f" with snapshot name \\[(.+)\\]"
+                         f" and options \\{{skipFlush={str(skip_flush).lower()}\\}}")
+
+    print(res)
+
+    lines = res.split("\n")
+    assert len(lines) == 3
+
+    match = pattern.fullmatch(lines[0])
+    assert match
+    actual_tag = match.group(1)
+    if type(tag) is int:
+        # The tag is a timestamp in millis.
+        # Allow for 30s worth of divergence between actual and expected tag value.
+        assert abs(int(actual_tag) - tag) <= 30000
+    else:
+        # The tag was provided by the user, we expect an exact match
+        assert actual_tag == tag
+
+    assert lines[1] == f"Snapshot directory: {actual_tag}"
+    assert lines[2] == ''
+
+
+def test_snapshot_keyspace(nodetool):
+    tag = "my_snapshot"
+
+    res = nodetool("snapshot", "--tag", tag, "ks1", expected_requests=[
+        expected_request("POST", "/storage_service/snapshots",
+                         params={"tag": tag, "sf": "false", "kn": "ks1"})
+    ])
+    check_snapshot_out(res, tag, ["ks1"], False)
+
+    res = nodetool("snapshot", "--tag", tag, "ks1", "ks2", expected_requests=[
+        expected_request("POST", "/storage_service/snapshots",
+                         params={"tag": tag, "sf": "false", "kn": "ks1,ks2"})
+    ])
+    check_snapshot_out(res, tag, ["ks1", "ks2"], False)
+
+
+@pytest.mark.parametrize("option_name", ("-cf", "--column-family", "--table"))
+def test_snapshot_keyspace_with_table(nodetool, option_name):
+    tag = "my_snapshot"
+
+    res = nodetool("snapshot", "--tag", tag, "ks1", option_name, "tbl", expected_requests=[
+        expected_request("POST", "/storage_service/snapshots",
+                         params={"tag": tag, "sf": "false", "kn": "ks1", "cf": "tbl"})
+    ])
+    check_snapshot_out(res, tag, ["ks1"], False)
+
+    res = nodetool("snapshot", "--tag", tag, "ks1", option_name, "tbl1,tbl2", expected_requests=[
+        expected_request("POST", "/storage_service/snapshots",
+                         params={"tag": tag, "sf": "false", "kn": "ks1", "cf": "tbl1,tbl2"})
+    ])
+    check_snapshot_out(res, tag, ["ks1"], False)
+
+
+@pytest.mark.parametrize("option_name", ("-kt", "--kt-list", "-kc", "--kc.list"))
+def test_snapshot_ktlist(nodetool, option_name):
+    tag = "my_snapshot"
+
+    res = nodetool("snapshot", "--tag", tag, option_name, "ks1.tbl1", expected_requests=[
+        expected_request("POST", "/storage_service/snapshots",
+                         params={"tag": tag, "sf": "false", "kn": "ks1", "cf": "tbl1"})
+    ])
+    check_snapshot_out(res, tag, ["ks1.tbl1"], False)
+
+    res = nodetool("snapshot", "--tag", tag, option_name, "ks1.tbl1,ks2.tbl2", expected_requests=[
+        expected_request("POST", "/storage_service/snapshots",
+                         params={"tag": tag, "sf": "false", "kn": "ks1.tbl1,ks2.tbl2"})
+    ])
+    check_snapshot_out(res, tag, ["ks1.tbl1", "ks2.tbl2"], False)
+
+
+@pytest.mark.parametrize("tag", [None, "my_snapshot_tag"])
+@pytest.mark.parametrize("ktlist", [
+    {},
+    {"ks": ["ks.tbl1"]},
+    {"ks": ["ks1.tbl1", "ks2.tbl2"]},
+    {"ks": ["ks1"], "tbl": ["tbl1"]},
+    {"ks": ["ks1"], "tbl": ["tbl1", "tbl2"]},
+    {"ks": ["ks1", "ks2"], "tbl": []},
+])
+@pytest.mark.parametrize("skip_flush", [False, True])
+def test_snapshot_options_matrix(nodetool, tag, ktlist, skip_flush):
+    cmd = ["snapshot"]
+    params = {}
+
+    if tag is None:
+        tag = int(time.time() * 1000)
+        params["tag"] = approximate_value(value=tag, delta=99999).to_json()
+    else:
+        cmd += ["--tag", tag]
+        params["tag"] = tag
+
+    if skip_flush:
+        cmd.append("--skip-flush")
+
+    params["sf"] = str(skip_flush).lower()
+
+    if ktlist:
+        if "tbl" in ktlist:
+            if len(ktlist["tbl"]) > 0:
+                keyspaces = ktlist["ks"]
+                cmd += ["--table", ",".join(ktlist["tbl"])]
+                cmd += keyspaces
+                params["kn"] = keyspaces[0]
+                params["cf"] = ",".join(ktlist["tbl"])
+            else:
+                keyspaces = ktlist["ks"]
+                cmd += keyspaces
+                params["kn"] = ",".join(keyspaces)
+        else:
+            keyspaces = ktlist["ks"]
+            cmd += ["-kt", ",".join(keyspaces)]
+            if len(keyspaces) == 1:
+                ks, tbl = keyspaces[0].split(".")
+                params["kn"] = ks
+                params["cf"] = tbl
+            elif len(keyspaces) > 1:
+                params["kn"] = ",".join(keyspaces)
+    else:
+        keyspaces = []
+
+    res = nodetool(*cmd, expected_requests=[
+        expected_request("POST", "/storage_service/snapshots", params=params)
+    ])
+
+    check_snapshot_out(res, tag, keyspaces, skip_flush)
+
+
+def test_snapshot_multiple_keyspace_with_table(nodetool):
+    utils.check_nodetool_fails_with(
+            nodetool,
+            ("snapshot", "--table", "tbl1", "ks1", "ks2"),
+            {"expected_requests": []},
+            ["error: When specifying the table for a snapshot, you must specify one and only one keyspace",
+             "error processing arguments: when specifying the table for the snapshot,"
+             " you must specify one and only one keyspace"])
+
+
+def test_snapshot_table_with_ktlist(nodetool):
+    utils.check_nodetool_fails_with(
+            nodetool,
+            ("snapshot", "--table", "tbl1", "-kt", "ks1.tbl1"),
+            {"expected_requests": []},
+            ["error: When specifying the Keyspace columfamily list for a snapshot,"
+             " you should not specify columnfamily",
+             "error processing arguments: when specifying the keyspace-table list for a snapshot,"
+             " you should not specify table(s)"])
+
+
+def test_snapshot_keyspace_with_ktlist(nodetool):
+    utils.check_nodetool_fails_with(
+            nodetool,
+            ("snapshot", "-kt", "ks1.tbl1", "ks1"),
+            {"expected_requests": []},
+            ["error: When specifying the Keyspace columfamily list for a snapshot,"
+             " you should not specify columnfamily",
+             "error processing arguments: when specifying the keyspace-table list for a snapshot,"
+             " you should not specify keyspace(s)"])
+
+
+def test_snapshot_keyspace_with_tables(nodetool, scylla_only):
+    utils.check_nodetool_fails_with(
+            nodetool,
+            ("snapshot", "--table", "tbl1", "-cf", "tbl2", "ks1"),
+            {"expected_requests": []},
+            ["error: option '--table' cannot be specified more than once"])
+
+
+def test_snapshot_keyspace_bad_ktlist_too_many_dots(nodetool, scylla_only):
+    utils.check_nodetool_fails_with(
+            nodetool,
+            ("snapshot", "-kt", "ks1.tbl2.ss,ks2.tbl2"),
+            {"expected_requests": []},
+            ["error processing arguments: invalid keyspace.table: ks1.tbl2.ss, "
+             "keyspace and table must be separated by exactly one dot"])
+
+
+def test_snapshot_keyspace_bad_ktlist_no_dot(nodetool, scylla_only):
+    utils.check_nodetool_fails_with(
+            nodetool,
+            ("snapshot", "-kt", "ks1.tbl1,ks2"),
+            {"expected_requests": []},
+            ["error processing arguments: invalid keyspace.table: ks2, "
+             "keyspace and table must be separated by exactly one dot"])

@@ -6,7 +6,9 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include <boost/algorithm/string/classification.hpp>
 #include <boost/algorithm/string/join.hpp>
+#include <boost/algorithm/string/split.hpp>
 #include <boost/make_shared.hpp>
 #include <boost/range/adaptor/map.hpp>
 #include <fmt/chrono.h>
@@ -462,6 +464,82 @@ void settraceprobability_operation(scylla_rest_client& client, const bpo::variab
     client.post("/storage_service/trace_probability", {{"probability", fmt::to_string(value)}});
 }
 
+void snapshot_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    std::unordered_map<sstring, sstring> params;
+
+    sstring kn_msg;
+
+    if (vm.count("keyspace-table-list")) {
+        if (vm.count("table")) {
+            throw std::invalid_argument("when specifying the keyspace-table list for a snapshot, you should not specify table(s)");
+        }
+        if (vm.count("keyspaces")) {
+            throw std::invalid_argument("when specifying the keyspace-table list for a snapshot, you should not specify keyspace(s)");
+        }
+
+        const auto kt_list_str = vm["keyspace-table-list"].as<sstring>();
+        std::vector<sstring> kt_list;
+        boost::split(kt_list, kt_list_str, boost::algorithm::is_any_of(","));
+
+        std::vector<sstring> components;
+        for (const auto& kt : kt_list) {
+            components.clear();
+            boost::split(components, kt, boost::algorithm::is_any_of("."));
+            if (components.size() != 2) {
+                throw std::invalid_argument(fmt::format("invalid keyspace.table: {}, keyspace and table must be separated by exactly one dot", kt));
+            }
+        }
+
+        if (kt_list.size() == 1) {
+            params["kn"] = components[0];
+            params["cf"] = components[1];
+            kn_msg = format("{}.{}", params["kn"], params["cf"]);
+        } else {
+            params["kn"] = kt_list_str;
+        }
+    } else {
+        if (vm.count("keyspaces")) {
+            const auto keyspaces = vm["keyspaces"].as<std::vector<sstring>>();
+
+            if (keyspaces.size() > 1 && vm.count("table")) {
+                throw std::invalid_argument("when specifying the table for the snapshot, you must specify one and only one keyspace");
+            }
+
+            params["kn"] = fmt::to_string(fmt::join(keyspaces.begin(), keyspaces.end(), ","));
+        } else {
+            kn_msg = "all keyspaces";
+        }
+
+        if (vm.count("table")) {
+            params["cf"] = vm["table"].as<sstring>();
+        }
+    }
+
+    if (vm.count("tag")) {
+        params["tag"] = vm["tag"].as<sstring>();
+    } else {
+        params["tag"] = fmt::to_string(db_clock::now().time_since_epoch().count());
+    }
+
+    if (vm.count("skip-flush")) {
+        params["sf"] = "true";
+    } else {
+        params["sf"] = "false";
+    }
+
+    client.post("/storage_service/snapshots", params);
+
+    if (kn_msg.empty()) {
+        kn_msg = params["kn"];
+    }
+
+    fmt::print(std::cout, "Requested creating snapshot(s) for [{}] with snapshot name [{}] and options {{skipFlush={}}}\n",
+            kn_msg,
+            params["tag"],
+            params["sf"]);
+    fmt::print(std::cout, "Snapshot directory: {}\n", params["tag"]);
+}
+
 void statusbackup_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     auto status = client.get("/storage_service/incremental_backups");
     fmt::print(std::cout, "{}\n", status.GetBool() ? "running" : "not running");
@@ -518,6 +596,12 @@ const std::map<std::string_view, std::string_view> option_substitutions{
     {"-st", "--start-token"},
     {"-et", "--end-token"},
     {"-id", "--id"},
+    {"-cf", "--table"},
+    {"--column-family", "--table"},
+    {"-kt", "--keyspace-table-list"},
+    {"--kt-list", "--keyspace-table-list"},
+    {"-kc", "--keyspace-table-list"},
+    {"--kc.list", "--keyspace-table-list"},
 };
 
 std::map<operation, operation_func> get_operations_with_func() {
@@ -724,6 +808,25 @@ Fore more information, see: https://opensource.docs.scylladb.com/stable/operatin
                 },
             },
             settraceprobability_operation
+        },
+        {
+            {
+                "snapshot",
+                "Take a snapshot of specified keyspaces or a snapshot of the specified table",
+R"(
+Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/snapshot.html
+)",
+                {
+                    typed_option<sstring>("table", "The table(s) to snapshot, multiple ones can be joined with ','"),
+                    typed_option<sstring>("keyspace-table-list", "The keyspace.table pair(s) to snapshot, multiple ones can be joined with ','"),
+                    typed_option<sstring>("tag,t", "The name of the snapshot"),
+                    typed_option<>("skip-flush", "Do not flush memtables before snapshotting (snapshot will not contain unflushed data)"),
+                },
+                {
+                    typed_option<std::vector<sstring>>("keyspaces", "The keyspaces to snapshot", -1),
+                },
+            },
+            snapshot_operation
         },
         {
             {
