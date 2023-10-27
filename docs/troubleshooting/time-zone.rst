@@ -25,7 +25,7 @@ This example creates a table, inserts data with a time zone timestamp, and then 
 .. code-block:: cql 
 
    CREATE KEYSPACE IF NOT EXISTS mykeyspace 
-      WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 };
+      WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 3 };
    USE mykeyspace;
    CREATE TABLE heartrate (
       pet_chip_id uuid,

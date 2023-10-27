@@ -28,7 +28,7 @@ create a new keyspace for our tests and make it the current one.
 
 ::
 
-    CREATE KEYSPACE spark_example WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1};
+    CREATE KEYSPACE spark_example WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3};
     USE spark_example;
 
 Then, tables both for input and output data need to be created:
