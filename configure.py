@@ -19,8 +19,6 @@ import tempfile
 import textwrap
 from distutils.spawn import find_executable
 
-curdir = os.getcwd()
-
 outdir = 'build'
 
 tempfile.tempdir = f"{outdir}/tmp"
@@ -1541,47 +1539,14 @@ for mode_level in args.mode_o_levels:
         raise Exception(f'Mode {mode} is missing, cannot configure optimization level for it')
     modes[mode]['optimization-level'] = level
 
-for mode in modes:
-    modes[mode]['cxxflags'] += f' -O{modes[mode]["optimization-level"]}'
-
-optimization_flags = [
-    '--param inline-unit-growth=300', # gcc
-    f'-mllvm -inline-threshold={get_clang_inline_threshold()}',  # clang
-    # clang generates 16-byte loads that break store-to-load forwarding
-    # gcc also has some trouble: https://gcc.gnu.org/bugzilla/show_bug.cgi?id=103554
-    '-fno-slp-vectorize',
-]
-optimization_flags = [o
-                      for o in optimization_flags
-                      if flag_supported(flag=o, compiler=args.cxx)]
-modes['release']['cxxflags'] += ' ' + ' '.join(optimization_flags)
-
-if flag_supported(flag='-Wstack-usage=4096', compiler=args.cxx):
-    for mode in modes:
-        modes[mode]['cxxflags'] += f' -Wstack-usage={modes[mode]["stack-usage-threshold"]} -Wno-error=stack-usage='
-
 linker_flags = linker_flags(compiler=args.cxx)
 
-dbgflag = '-g -gz' if args.debuginfo else ''
 tests_link_rule = 'link' if args.tests_debuginfo else 'link_stripped'
 perf_tests_link_rule = 'link' if args.perf_tests_debuginfo else 'link_stripped'
 
 # Strip if debuginfo is disabled, otherwise we end up with partial
 # debug info from the libraries we static link with
 regular_link_rule = 'link' if args.debuginfo else 'link_stripped'
-
-# a list element means a list of alternative packages to consider
-# the first element becomes the HAVE_pkg define
-# a string element is a package name with no alternatives
-optional_packages = [[]]
-pkgs = []
-
-# Lua can be provided by lua53 package on Debian-like
-# systems and by Lua on others.
-pkgs.append('lua53' if have_pkg('lua53') else 'lua')
-
-pkgs.append('libsystemd')
-pkgs.append('jsoncpp')
 
 has_sanitize_address_use_after_scope = try_compile(compiler=args.cxx, flags=['-fsanitize-address-use-after-scope'], source='int f() {}')
 
@@ -1609,25 +1574,24 @@ if args.artifacts:
 else:
     build_artifacts = all_artifacts
 
-date_stamp = f"--date-stamp {args.date_stamp}" if args.date_stamp else ""
-status = subprocess.call(f"./SCYLLA-VERSION-GEN {date_stamp}", shell=True)
-if status != 0:
-    print('Version file generation failed')
-    sys.exit(1)
 
-file = open(f'{outdir}/SCYLLA-VERSION-FILE', 'r')
-scylla_version = file.read().strip().replace('-', '~')
-file = open(f'{outdir}/SCYLLA-RELEASE-FILE', 'r')
-scylla_release = file.read().strip()
-file = open(f'{outdir}/SCYLLA-PRODUCT-FILE', 'r')
-scylla_product = file.read().strip()
+def generate_version(date_stamp):
+    date_stamp_opt = ''
+    if date_stamp:
+        date_stamp_opt = f'--date-stamp {date_stamp}'
+    status = subprocess.call(f"./SCYLLA-VERSION-GEN {date_stamp_opt}", shell=True)
+    if status != 0:
+        print('Version file generation failed')
+        sys.exit(1)
 
-for m, mode_config in modes.items():
-    mode_config['cxxflags'] += f" -DSCYLLA_BUILD_MODE={m}"
-    cxxflags = "-DSCYLLA_VERSION=\"\\\"" + scylla_version + "\\\"\" -DSCYLLA_RELEASE=\"\\\"" + scylla_release + "\\\"\""
-    mode_config["per_src_extra_cxxflags"]["release.cc"] = cxxflags
-    if mode_config["can_have_debug_info"]:
-        mode_config['cxxflags'] += ' ' + dbgflag
+    with open(f'{outdir}/SCYLLA-VERSION-FILE', 'r') as f:
+        scylla_version = f.read().strip().replace('-', '~')
+    with open(f'{outdir}/SCYLLA-RELEASE-FILE', 'r') as f:
+        scylla_release = f.read().strip()
+    with open(f'{outdir}/SCYLLA-PRODUCT-FILE', 'r') as f:
+        scylla_product = f.read().strip()
+    return scylla_product, scylla_version, scylla_release
+
 
 # The relocatable package includes its own dynamic linker. We don't
 # know the path it will be installed to, so for now use a very long
@@ -1670,6 +1634,7 @@ forced_ldflags += dynamic_linker_option()
 
 user_ldflags = forced_ldflags + ' ' + args.user_ldflags
 
+curdir = os.getcwd()
 user_cflags = args.user_cflags + f" -ffile-prefix-map={curdir}=."
 
 if args.target != '':
@@ -1740,9 +1705,6 @@ def configure_seastar(build_dir, mode, mode_config):
     os.makedirs(seastar_build_dir, exist_ok=True)
     subprocess.check_call(seastar_cmd, shell=False, cwd=cmake_dir)
 
-if not args.dist_only:
-    for mode, mode_config in build_modes.items():
-        configure_seastar(outdir, mode, mode_config)
 
 def query_seastar_flags(pc_file, use_shared_libs, link_static_cxx=False):
     if use_shared_libs:
@@ -1762,13 +1724,14 @@ def query_seastar_flags(pc_file, use_shared_libs, link_static_cxx=False):
             'seastar_libs': libs,
             'seastar_testing_libs': testing_libs}
 
+pkgs = ['libsystemd',
+        'jsoncpp',
+        'absl_raw_hash_set',
+        'absl_hash']
+# Lua can be provided by lua53 package on Debian-like
+# systems and by Lua on others.
+pkgs.append('lua53' if have_pkg('lua53') else 'lua')
 
-abseil_pkgs = [
-    'absl_raw_hash_set',
-    'absl_hash',
-]
-
-pkgs += abseil_pkgs
 
 libs = ' '.join([maybe_static(args.staticyamlcpp, '-lyaml-cpp'), '-latomic', '-llz4', '-lz', '-lsnappy',
                  ' -lstdc++fs', ' -lcrypt', ' -lcryptopp', ' -lpthread',
@@ -1793,12 +1756,46 @@ user_cflags += ' -fvisibility=hidden'
 user_ldflags += ' -fvisibility=hidden'
 if args.staticcxx:
     user_ldflags += " -static-libstdc++"
-if args.staticthrift:
-    thrift_libs = "-Wl,-Bstatic -lthrift -Wl,-Bdynamic"
-else:
-    thrift_libs = "-lthrift"
 
-os.makedirs(outdir, exist_ok=True)
+
+def get_extra_cxxflags(mode, mode_config, cxx, debuginfo):
+    cxxflags = []
+
+    optimization_level = mode_config['optimization-level']
+    cxxflags.append(f'-O{optimization_level}')
+
+    if mode == 'release':
+        optimization_flags = [
+            '--param inline-unit-growth=300', # gcc
+            f'-mllvm -inline-threshold={get_clang_inline_threshold()}',  # clang
+            # clang generates 16-byte loads that break store-to-load forwarding
+            # gcc also has some trouble: https://gcc.gnu.org/bugzilla/show_bug.cgi?id=103554
+            '-fno-slp-vectorize',
+        ]
+        optimization_flags = [o
+                              for o in optimization_flags
+                              if flag_supported(flag=o, compiler=cxx)]
+        cxxflags += optimization_flags
+
+    if flag_supported(flag='-Wstack-usage=4096', compiler=cxx):
+        stack_usage_threshold = mode_config['stack-usage-threshold']
+        cxxflags += [f'-Wstack-usage={stack_usage_threshold}',
+                     '-Wno-error=stack-usage=']
+
+    cxxflags.append(f'-DSCYLLA_BUILD_MODE={mode}')
+
+    if debuginfo and mode_config['can_have_debug_info']:
+        cxxflags += ['-g', '-gz']
+
+    return cxxflags
+
+
+def get_release_cxxflags(scylla_version,
+                         scylla_release):
+    definitions = {'SCYLLA_VERSION': scylla_version,
+                   'SCYLLA_RELEASE': scylla_release}
+    return [f'-D{name}="\\"{value}\\""' for name, value in definitions.items()]
+
 
 def write_build_file(f,
                      arch,
@@ -1905,9 +1902,16 @@ def write_build_file(f,
 
     for mode in build_modes:
         modeval = modes[mode]
+
         modeval.update(query_seastar_flags(f'{outdir}/{mode}/seastar/seastar.pc',
                                            modeval['build_seastar_shared_libs'],
                                            args.staticcxx))
+
+        extra_cxxflags = ' '.join(get_extra_cxxflags(mode, modeval, args.cxx, args.debuginfo))
+        modeval['cxxflags'] += f' {extra_cxxflags}'
+
+        modeval['per_src_extra_cxxflags']['release.cc'] = ' '.join(get_release_cxxflags(scylla_version,
+                                                                                        scylla_release))
 
         fmt_lib = 'fmt'
         f.write(textwrap.dedent('''\
@@ -2017,7 +2021,8 @@ def write_build_file(f,
                 objs.append('$builddir/' + mode +'/rust-' + mode + '/librust_combined.a')
             local_libs = '$seastar_libs_{} $libs'.format(mode)
             if has_thrift:
-                local_libs += ' ' + thrift_libs + ' ' + maybe_static(args.staticboost, '-lboost_system')
+                local_libs += ' ' + maybe_static(args.staticthrift, '-lthrift')
+                local_libs += ' ' + maybe_static(args.staticboost, '-lboost_system')
             if binary in tests:
                 if binary in pure_boost_tests:
                     local_libs += ' ' + maybe_static(args.staticboost, '-lboost_unit_test_framework')
@@ -2368,17 +2373,33 @@ def write_build_file(f,
         ''').format(**globals()))
 
 
-check_for_minimal_compiler_version(args.cxx)
-check_for_boost(args.cxx)
-check_for_lz4(args.cxx, args.user_cflags)
-ninja = find_ninja()
-with open(buildfile, 'w') as f:
-    arch = platform.machine()
-    write_build_file(f,
-                     arch,
-                     ninja,
-                     scylla_product,
-                     scylla_version,
-                     scylla_release,
-                     args)
-generate_compdb('compile_commands.json', ninja, buildfile, selected_modes)
+def create_building_system(args):
+    check_for_minimal_compiler_version(args.cxx)
+    check_for_boost(args.cxx)
+    check_for_lz4(args.cxx, args.user_cflags)
+
+    os.makedirs(outdir, exist_ok=True)
+
+    if not args.dist_only:
+        # args.buildfile builds seastar with the rules of
+        # {outdir}/{mode}/seastar/build.ninja, and
+        # {outdir}/{mode}/seastar/seastar.pc is queried for building flags
+        for mode, mode_config in build_modes.items():
+            configure_seastar(outdir, mode, mode_config)
+
+    ninja = find_ninja()
+    with open(args.buildfile, 'w') as f:
+        scylla_product, scylla_version, scylla_release = generate_version(args.date_stamp)
+        arch = platform.machine()
+        write_build_file(f,
+                         arch,
+                         ninja,
+                         scylla_product,
+                         scylla_version,
+                         scylla_release,
+                         args)
+    generate_compdb('compile_commands.json', ninja, args.buildfile, selected_modes)
+
+
+if __name__ == '__main__':
+    create_building_system(args)
