@@ -360,14 +360,19 @@ public:
             }
         }
 
+    // Strong exception guarantees.
     position_in_partition& operator=(position_in_partition_view view) {
-        _type = view._type;
-        _bound_weight = view._bound_weight;
+        // The copy assigment to _ck can throw (because it allocates),
+        // but assignments to _type and _bound_weight can't throw.
+        // Thus, to achieve strong exception guarantees,
+        // we only need to perform the _ck assigmnent before others.
         if (view._ck) {
             _ck = *view._ck;
         } else {
             _ck.reset();
         }
+        _type = view._type;
+        _bound_weight = view._bound_weight;
         return *this;
     }
 
