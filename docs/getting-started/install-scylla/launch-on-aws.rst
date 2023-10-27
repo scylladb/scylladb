@@ -8,8 +8,15 @@ as-a-service, see `ScyllaDB Cloud documentation <https://cloud.docs.scylladb.com
 Launching Instances from ScyllaDB AMI 
 ---------------------------------------
 
-#. Go to `Amazon EC2 AMIs – ScyllaDB <https://www.scylladb.com/download/?platform=aws#open-source>`_ in ScyllaDB's download center, 
-   choose your region, and click the **Node** link to open the EC2 instance creation wizard.
+#. Choose your region, and click the **Node** link to open the EC2 instance creation wizard.
+   
+   The following table shows the latest patch release. See :doc:`AWS Images </reference/aws-images/>` for earlier releases.
+
+   .. scylladb_aws_images_template::
+      :version: 5.2
+      :exclude: rc,dev
+      :only_latest:
+
 #. Choose the instance type. See :ref:`Cloud Instance Recommendations for AWS <system-requirements-aws>` for the list of recommended instances.
 
    Other instance types will work, but with lesser performance. If you choose an instance type other than the recommended ones, make sure to run the :ref:`scylla_setup <system-configuration-scripts>` script.
