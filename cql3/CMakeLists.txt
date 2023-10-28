@@ -20,14 +20,17 @@ if(Seastar_OptimizationLevel_${build_mode} IN_LIST unoptimized_levels)
         "-O1")
 endif()
 
-include(CheckCXXCompilerFlag)
-check_cxx_compiler_flag("-fsanitize-address-use-after-scope"
-    _sanitize_address_use_after_scope_supported)
-if(_sanitize_address_use_after_scope_supported)
-    # use-after-scope sanitizer also uses large amount of stack space
-    # and overflows the stack of CqlParser
-    list(APPEND cql_parser_compile_options
-        "-fno-sanitize-address-use-after-scope")
+set(SANITIZE_MODES "Debug" "Sanitize")
+if(CMAKE_BUILD_TYPE IN_LIST SANITIZE_MODES)
+    include(CheckCXXCompilerFlag)
+    check_cxx_compiler_flag("-fsanitize-address-use-after-scope"
+        _sanitize_address_use_after_scope_supported)
+    if(_sanitize_address_use_after_scope_supported)
+        # use-after-scope sanitizer also uses large amount of stack space
+        # and overflows the stack of CqlParser
+        list(APPEND cql_parser_compile_options
+            "-fno-sanitize-address-use-after-scope")
+    endif()
 endif()
 
 if(DEFINED cql_parser_compile_options)
