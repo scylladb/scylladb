@@ -251,13 +251,21 @@ void simple_test() {
 
     // Initialize the token_metadata
     stm.mutate_token_metadata([&] (token_metadata& tm) -> future<> {
-        auto& topo = tm.get_topology();
-        for (const auto& [ring_point, endpoint, id] : ring_points) {
-            std::unordered_set<token> tokens;
-            tokens.insert({dht::token::kind::key, d2t(ring_point / ring_points.size())});
-            topo.add_node(id, endpoint, make_endpoint_dc_rack(endpoint), locator::node::state::normal);
-            co_await tm.update_normal_tokens(std::move(tokens), endpoint);
-        }
+        auto update_tm = [&]<typename NodeId>(generic_token_metadata<NodeId>& tm) -> future<> {
+            auto& topo = tm.get_topology();
+            for (const auto& [ring_point, endpoint, id] : ring_points) {
+                std::unordered_set<token> tokens;
+                tokens.insert({dht::token::kind::key, d2t(ring_point / ring_points.size())});
+                topo.add_node(id, endpoint, make_endpoint_dc_rack(endpoint), locator::node::state::normal);
+                if constexpr(std::is_same_v<NodeId, gms::inet_address>) {
+                    co_await tm.update_normal_tokens(std::move(tokens), endpoint);
+                } else {
+                    co_await tm.update_normal_tokens(std::move(tokens), id);
+                }
+            }
+        };
+        co_await update_tm(tm);
+        co_await update_tm(*tm.get_new());
     }).get();
 
     /////////////////////////////////////
@@ -294,6 +302,7 @@ void simple_test() {
     //
     stm.mutate_token_metadata([] (token_metadata& tm) {
         tm.invalidate_cached_rings();
+        tm.get_new()->invalidate_cached_rings();
         return make_ready_future<>();
     }).get();
     full_ring_check(ring_points, options320, ars_ptr, stm.get());
@@ -358,11 +367,19 @@ void heavy_origin_test() {
     }
 
     stm.mutate_token_metadata([&] (token_metadata& tm) -> future<> {
-        auto& topo = tm.get_topology();
-        for (const auto& [ring_point, endpoint, id] : ring_points) {
-            topo.add_node(id, endpoint, make_endpoint_dc_rack(endpoint), locator::node::state::normal);
-            co_await tm.update_normal_tokens(std::move(tokens[endpoint]), endpoint);
-        }
+        auto update_tm = [&]<typename NodeId>(generic_token_metadata<NodeId>& tm) -> future<> {
+            auto& topo = tm.get_topology();
+            for (const auto& [ring_point, endpoint, id] : ring_points) {
+                topo.add_node(id, endpoint, make_endpoint_dc_rack(endpoint), locator::node::state::normal);
+                if constexpr (std::is_same_v<NodeId, gms::inet_address>) {
+                    co_await tm.update_normal_tokens(tokens[endpoint], endpoint);
+                } else {
+                    co_await tm.update_normal_tokens(tokens[endpoint], id);
+                }
+            }
+        };
+        co_await update_tm(tm);
+        co_await update_tm(*tm.get_new());
     }).get();
 
     auto ars_ptr = abstract_replication_strategy::create_replication_strategy(
