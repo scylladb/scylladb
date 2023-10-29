@@ -215,10 +215,6 @@ future<std::vector<mutation>> prepare_column_family_update_announcement(storage_
         schema_ptr cfm, bool from_thrift, std::vector<view_ptr> view_updates, api::timestamp_type ts);
 
 future<std::vector<mutation>> prepare_new_column_family_announcement(storage_proxy& sp, schema_ptr cfm, api::timestamp_type timestamp);
-// The ksm parameter can describe a keyspace that hasn't been created yet.
-// This function allows announcing a new keyspace together with its tables at once.
-future<> prepare_new_column_family_announcement(std::vector<mutation>& mutations,
-        storage_proxy& sp, const keyspace_metadata& ksm, schema_ptr cfm, api::timestamp_type timestamp);
 
 future<std::vector<mutation>> prepare_new_type_announcement(storage_proxy& sp, user_type new_type, api::timestamp_type ts);
 

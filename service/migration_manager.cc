@@ -614,11 +614,11 @@ future<> migration_notifier::drop_aggregate(const db::functions::function_name& 
     });
 }
 
-void migration_notifier::before_create_column_family(const keyspace_metadata& ksm,
-        const schema& schema, std::vector<mutation>& mutations, api::timestamp_type timestamp) {
-    _listeners.thread_for_each([&ksm, &schema, &mutations, timestamp] (migration_listener* listener) {
+void migration_notifier::before_create_column_family(const schema& schema,
+        std::vector<mutation>& mutations, api::timestamp_type timestamp) {
+    _listeners.thread_for_each([&mutations, &schema, timestamp] (migration_listener* listener) {
         // allow exceptions. so a listener can effectively kill a create-table
-        listener->on_before_create_column_family(ksm, schema, mutations, timestamp);
+        listener->on_before_create_column_family(schema, mutations, timestamp);
     });
 }
 
@@ -679,47 +679,33 @@ static future<std::vector<mutation>> include_keyspace(
     co_return std::move(mutations);
 }
 
-static future<std::vector<mutation>> do_prepare_new_column_family_announcement(storage_proxy& sp,
-        const keyspace_metadata& ksm, schema_ptr cfm, api::timestamp_type timestamp) {
-    auto& db = sp.local_db();
-    if (db.has_schema(cfm->ks_name(), cfm->cf_name())) {
-        throw exceptions::already_exists_exception(cfm->ks_name(), cfm->cf_name());
-    }
-    if (db.column_family_exists(cfm->id())) {
-        throw exceptions::invalid_request_exception(format("Table with ID {} already exists: {}", cfm->id(), db.find_schema(cfm->id())));
-    }
-
-    mlogger.info("Create new ColumnFamily: {}", cfm);
-
-    return seastar::async([&db, &ksm, cfm, timestamp] {
-        auto mutations = db::schema_tables::make_create_table_mutations(cfm, timestamp);
-        db.get_notifier().before_create_column_family(ksm, *cfm, mutations, timestamp);
-        return mutations;
-    }).then([&sp, &ksm](std::vector<mutation> mutations) {
-        return include_keyspace(sp, ksm, std::move(mutations));
-    });
-}
-
 future<std::vector<mutation>> prepare_new_column_family_announcement(storage_proxy& sp, schema_ptr cfm, api::timestamp_type timestamp) {
 #if 0
     cfm.validate();
 #endif
     try {
         auto& db = sp.get_db().local();
-        auto ksm = db.find_keyspace(cfm->ks_name()).metadata();
-        return do_prepare_new_column_family_announcement(sp, *ksm, cfm, timestamp);
+        auto&& keyspace = db.find_keyspace(cfm->ks_name());
+        if (db.has_schema(cfm->ks_name(), cfm->cf_name())) {
+            throw exceptions::already_exists_exception(cfm->ks_name(), cfm->cf_name());
+        }
+        if (db.column_family_exists(cfm->id())) {
+            throw exceptions::invalid_request_exception(format("Table with ID {} already exists: {}", cfm->id(), db.find_schema(cfm->id())));
+        }
+
+        mlogger.info("Create new ColumnFamily: {}", cfm);
+
+        auto ksm = keyspace.metadata();
+        return seastar::async([&db, cfm, timestamp, ksm] {
+            auto mutations = db::schema_tables::make_create_table_mutations(cfm, timestamp);
+            db.get_notifier().before_create_column_family(*cfm, mutations, timestamp);
+            return mutations;
+        }).then([&sp, ksm](std::vector<mutation> mutations) {
+            return include_keyspace(sp, *ksm, std::move(mutations));
+        });
     } catch (const replica::no_such_keyspace& e) {
         throw exceptions::configuration_exception(format("Cannot add table '{}' to non existing keyspace '{}'.", cfm->cf_name(), cfm->ks_name()));
     }
-}
-
-future<> prepare_new_column_family_announcement(std::vector<mutation>& mutations,
-        storage_proxy& sp, const keyspace_metadata& ksm, schema_ptr cfm, api::timestamp_type timestamp) {
-    auto& db = sp.local_db();
-    // If the keyspace exists, ensure that we use the current metadata.
-    const auto& current_ksm = db.has_keyspace(ksm.name()) ? *db.find_keyspace(ksm.name()).metadata() : ksm;
-    auto new_mutations = co_await do_prepare_new_column_family_announcement(sp, current_ksm, cfm, timestamp);
-    std::move(new_mutations.begin(), new_mutations.end(), std::back_inserter(mutations));
 }
 
 future<std::vector<mutation>> prepare_column_family_update_announcement(storage_proxy& sp,

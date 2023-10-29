@@ -29,7 +29,6 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/future-util.hh>
 #include <seastar/coroutine/maybe_yield.hh>
-#include <seastar/coroutine/parallel_for_each.hh>
 
 #include <boost/range/adaptor/transformed.hpp>
 
@@ -215,25 +214,54 @@ static thread_local std::pair<std::string_view, data_type> new_columns[] {
     {"workload_type", utf8_type}
 };
 
-static schema_ptr get_current_service_levels(data_dictionary::database db) {
-    return db.has_schema(system_distributed_keyspace::NAME, system_distributed_keyspace::SERVICE_LEVELS)
-            ? db.find_schema(system_distributed_keyspace::NAME, system_distributed_keyspace::SERVICE_LEVELS)
-            : service_levels();
+static bool has_missing_columns(data_dictionary::database db) noexcept {
+    assert(this_shard_id() == 0);
+    try {
+        auto schema = db.find_schema(system_distributed_keyspace::NAME, system_distributed_keyspace::SERVICE_LEVELS);
+        for (const auto& col : new_columns) {
+            auto& [col_name, col_type] = col;
+            bytes options_name = to_bytes(col_name.data());
+            if (schema->get_column_definition(options_name)) {
+                continue;
+            }
+            return true;
+        }
+    } catch (...) {
+        dlogger.warn("Failed to update options column in the role attributes table: {}", std::current_exception());
+        return true;
+    }
+
+    return false;
 }
 
-static schema_ptr get_updated_service_levels(data_dictionary::database db) {
+static future<> add_new_columns_if_missing(replica::database& db, ::service::migration_manager& mm, ::service::group0_guard group0_guard) noexcept {
     assert(this_shard_id() == 0);
-    auto schema = get_current_service_levels(db);
-    schema_builder b(schema);
-    for (const auto& col : new_columns) {
-        auto& [col_name, col_type] = col;
-        bytes options_name = to_bytes(col_name.data());
-        if (schema->get_column_definition(options_name)) {
-            continue;
+    try {
+        auto schema = db.find_schema(system_distributed_keyspace::NAME, system_distributed_keyspace::SERVICE_LEVELS);
+        schema_builder b(schema);
+        bool updated = false;
+        for (const auto& col : new_columns) {
+            auto& [col_name, col_type] = col;
+            bytes options_name = to_bytes(col_name.data());
+            if (schema->get_column_definition(options_name)) {
+                continue;
+            }
+            updated = true;
+            b.with_column(options_name, col_type, column_kind::regular_column);
         }
-        b.with_column(options_name, col_type, column_kind::regular_column);
+        if (updated) {
+            schema_ptr table = b.build();
+            try {
+                auto ts = group0_guard.write_timestamp();
+                co_return co_await mm.announce(co_await service::prepare_column_family_update_announcement(mm.get_storage_proxy(), table, false,
+                        std::vector<view_ptr>(), ts), std::move(group0_guard), "Add new columns to system_distributed.service_levels");
+            } catch (...) {}
+        }
+    } catch (...) {
+        // FIXME: do we really want to allow the node to boot if the table fails to update?
+        // Will this not prevent other components from working correctly?
+        dlogger.warn("Failed to update options column in the role attributes table: {}", std::current_exception());
     }
-    return b.build();
 }
 
 future<> system_distributed_keyspace::start() {
@@ -242,81 +270,79 @@ future<> system_distributed_keyspace::start() {
         co_return;
     }
 
-    auto db = _sp.data_dictionary();
-    auto tables = ensured_tables();
+    // FIXME: fix this code to `announce` once
 
-    // Check if there is any work to do before taking the group 0 guard.
-    bool keyspaces_setup = db.has_keyspace(NAME) && db.has_keyspace(NAME_EVERYWHERE);
-    bool tables_setup = std::all_of(tables.begin(), tables.end(), [db] (schema_ptr t) { return db.has_schema(t->ks_name(), t->cf_name()); } );
-    bool service_levels_up_to_date = get_current_service_levels(db)->equal_columns(*get_updated_service_levels(db));
-    if (keyspaces_setup && tables_setup && service_levels_up_to_date) {
-        dlogger.info("system_distributed(_everywhere) keyspaces and tables are up-to-date. Not creating");
-        _started = true;
-        co_return;
-    }
+    if (!_sp.get_db().local().has_keyspace(NAME)) {
+        auto group0_guard = co_await _mm.start_group0_operation();
+        auto ts = group0_guard.write_timestamp();
 
-    auto group0_guard = co_await _mm.start_group0_operation();
-    auto ts = group0_guard.write_timestamp();
-    std::vector<mutation> mutations;
-    sstring description;
-
-    auto sd_ksm = keyspace_metadata::new_keyspace(
-            NAME,
-            "org.apache.cassandra.locator.SimpleStrategy",
-            {{"replication_factor", "3"}},
-            true /* durable_writes */);
-    if (!db.has_keyspace(NAME)) {
-        mutations = service::prepare_new_keyspace_announcement(db.real_database(), sd_ksm, ts);
-        description += format(" create {} keyspace;", NAME);
+        try {
+            auto ksm = keyspace_metadata::new_keyspace(
+                    NAME,
+                    "org.apache.cassandra.locator.SimpleStrategy",
+                    {{"replication_factor", "3"}},
+                    true /* durable_writes */);
+            co_await _mm.announce(service::prepare_new_keyspace_announcement(_sp.local_db(), ksm, ts), std::move(group0_guard),
+                    "Create system_distributed keyspace");
+        } catch (exceptions::already_exists_exception&) {}
     } else {
         dlogger.info("{} keyspace is already present. Not creating", NAME);
     }
 
-    auto sde_ksm = keyspace_metadata::new_keyspace(
-            NAME_EVERYWHERE,
-            "org.apache.cassandra.locator.EverywhereStrategy",
-            {},
-            true /* durable_writes */);
-    if (!db.has_keyspace(NAME_EVERYWHERE)) {
-        auto sde_mutations = service::prepare_new_keyspace_announcement(db.real_database(), sde_ksm, ts);
-        std::move(sde_mutations.begin(), sde_mutations.end(), std::back_inserter(mutations));
-        description += format(" create {} keyspace;", NAME_EVERYWHERE);
+    if (!_sp.get_db().local().has_keyspace(NAME_EVERYWHERE)) {
+        auto group0_guard = co_await _mm.start_group0_operation();
+        auto ts = group0_guard.write_timestamp();
+
+        try {
+            auto ksm = keyspace_metadata::new_keyspace(
+                    NAME_EVERYWHERE,
+                    "org.apache.cassandra.locator.EverywhereStrategy",
+                    {},
+                    true /* durable_writes */);
+            co_await _mm.announce(service::prepare_new_keyspace_announcement(_sp.local_db(), ksm, ts), std::move(group0_guard),
+                    "Create system_distributed_everywhere keyspace");
+        } catch (exceptions::already_exists_exception&) {}
     } else {
         dlogger.info("{} keyspace is already present. Not creating", NAME_EVERYWHERE);
     }
 
-    // Get mutations for creating and updating tables.
-    auto num_keyspace_mutations = mutations.size();
-    co_await coroutine::parallel_for_each(ensured_tables(),
-            [this, &mutations, db, ts, sd_ksm, sde_ksm] (auto&& table) -> future<> {
-        auto ksm = table->ks_name() == NAME ? sd_ksm : sde_ksm;
-
-        // Ensure that the service_levels table contains new columns.
-        if (table->cf_name() == SERVICE_LEVELS) {
-            table = get_updated_service_levels(db);
-        }
-
-        if (!db.has_schema(table->ks_name(), table->cf_name())) {
-            co_return co_await service::prepare_new_column_family_announcement(mutations, _sp, *ksm, std::move(table), ts);
-        }
-
-        // The service_levels table exists. Update it if it lacks new columns.
-        if (table->cf_name() == SERVICE_LEVELS && !get_current_service_levels(db)->equal_columns(*table)) {
-            auto update_mutations = co_await service::prepare_column_family_update_announcement(_sp, table, false, std::vector<view_ptr>(), ts);
-            std::move(update_mutations.begin(), update_mutations.end(), std::back_inserter(mutations));
-        }
+    auto tables = ensured_tables();
+    bool exist = std::all_of(tables.begin(), tables.end(), [this] (schema_ptr s) {
+        return _sp.get_db().local().has_schema(s->ks_name(), s->cf_name());
     });
-    if (mutations.size() > num_keyspace_mutations) {
-        description += " create and update system_distributed(_everywhere) tables";
-    } else {
-        dlogger.info("All tables are present and up-to-date on start");
-    }
 
-    if (!mutations.empty()) {
-        co_await _mm.announce(std::move(mutations), std::move(group0_guard), description);
+    if (!exist) {
+        auto group0_guard = co_await _mm.start_group0_operation();
+        auto ts = group0_guard.write_timestamp();
+
+        auto m = co_await map_reduce(tables,
+        /* Mapper */ [this, ts] (auto&& table) -> future<std::vector<mutation>> {
+            try {
+                co_return co_await service::prepare_new_column_family_announcement(_sp, std::move(table), ts);
+            } catch (exceptions::already_exists_exception&) {
+                co_return std::vector<mutation>();
+            }
+        },
+        /* Initial value*/ std::vector<mutation>(),
+        /* Reducer */ [] (std::vector<mutation> m1, std::vector<mutation> m2) {
+            std::move(m2.begin(), m2.end(), std::back_inserter(m1));
+            return m1;
+        });
+        if (m.size()) {
+            co_await _mm.announce(std::move(m), std::move(group0_guard),
+                    "Create system_distributed(_everywhere) tables");
+        }
+    } else {
+        dlogger.info("All tables are present on start");
     }
 
     _started = true;
+    if (has_missing_columns(_qp.db())) {
+        auto group0_guard = co_await _mm.start_group0_operation();
+        co_await add_new_columns_if_missing(_qp.db().real_database(), _mm, std::move(group0_guard));
+    } else {
+        dlogger.info("All schemas are uptodate on start");
+    }
 }
 
 future<> system_distributed_keyspace::stop() {

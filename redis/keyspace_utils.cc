@@ -174,55 +174,60 @@ future<> create_keyspace_if_not_exists_impl(seastar::sharded<service::storage_pr
         co_return; // if schema is created already do nothing
     }
 
+    // FIXME: fix this code to `announce` once
+
     auto& mml = mm.local();
     auto tm = proxy.local().get_token_metadata_ptr();
 
-    std::vector<lw_shared_ptr<keyspace_metadata>> ksms;
-    for (auto& ks_name: ks_names) {
-        cql3::statements::ks_prop_defs attrs;
-        attrs.add_property(cql3::statements::ks_prop_defs::KW_DURABLE_WRITES, "true");
-        std::map<sstring, sstring> replication_properties;
-        for (auto&& option : keyspace_replication_strategy_options) {
-            replication_properties.emplace(option.first, option.second);
-        }
-        attrs.add_property(cql3::statements::ks_prop_defs::KW_REPLICATION, replication_properties);
-        attrs.validate();
+    {
+        auto group0_guard = co_await mml.start_group0_operation();
+        auto ts = group0_guard.write_timestamp();
+        std::vector<mutation> ks_mutations;
+        for (auto& ks_name: ks_names) {
+            if (db.has_keyspace(ks_name)) {
+                continue;
+            }
 
-        ksms.push_back(attrs.as_ks_metadata(ks_name, *tm));
+            cql3::statements::ks_prop_defs attrs;
+            attrs.add_property(cql3::statements::ks_prop_defs::KW_DURABLE_WRITES, "true");
+            std::map<sstring, sstring> replication_properties;
+            for (auto&& option : keyspace_replication_strategy_options) {
+                replication_properties.emplace(option.first, option.second);
+            }
+            attrs.add_property(cql3::statements::ks_prop_defs::KW_REPLICATION, replication_properties);
+            attrs.validate();
+
+            auto muts = service::prepare_new_keyspace_announcement(db.real_database(), attrs.as_ks_metadata(ks_name, *tm), ts);
+            std::move(muts.begin(), muts.end(), std::back_inserter(ks_mutations));
+        }
+
+        if (!ks_mutations.empty()) {
+            co_await mml.announce(std::move(ks_mutations), std::move(group0_guard), "keyspace-utils: create keyspaces for redis");
+        }
     }
 
     auto group0_guard = co_await mml.start_group0_operation();
-    auto ts = group0_guard.write_timestamp();
-    std::vector<mutation> mutations;
-
-    for (auto ksm: ksms) {
-        if (db.has_keyspace(ksm->name())) {
-            continue;
-        }
-
-        auto muts = service::prepare_new_keyspace_announcement(db.real_database(), ksm, ts);
-        std::move(muts.begin(), muts.end(), std::back_inserter(mutations));
-    }
-
+    std::vector<mutation> table_mutations;
     auto table_gen = std::bind_front(
-            [] (data_dictionary::database db, service::storage_proxy& sp, std::vector<mutation>& mutations,
-                api::timestamp_type ts, const keyspace_metadata& ksm, sstring cf_name, schema_ptr schema) -> future<> {
-        if (db.has_schema(ksm.name(), cf_name)) {
+            [] (data_dictionary::database db, service::storage_proxy& sp, std::vector<mutation>& table_mutations,
+                api::timestamp_type ts, sstring ks_name, sstring cf_name, schema_ptr schema) -> future<> {
+        if (db.has_schema(ks_name, cf_name)) {
             co_return;
         }
+        logger.info("Create keyspace: {}, table: {} for redis.", ks_name, cf_name);
+        auto muts = co_await service::prepare_new_column_family_announcement(sp, schema, ts);
+        std::move(muts.begin(), muts.end(), std::back_inserter(table_mutations));
+    }, db, std::ref(proxy.local()), std::ref(table_mutations), group0_guard.write_timestamp());
 
-        logger.info("Create keyspace: {}, table: {} for redis.", ksm.name(), cf_name);
-        co_await service::prepare_new_column_family_announcement(mutations, sp, ksm, schema, ts);
-    }, db, std::ref(proxy.local()), std::ref(mutations), ts);
-
-    co_await coroutine::parallel_for_each(ksms, [table_gen = std::move(table_gen)] (const lw_shared_ptr<keyspace_metadata> ksm) mutable {
-        return parallel_for_each(tables, [ksm, table_gen = std::move(table_gen)] (table t) {
-            return table_gen(*ksm, t.name, t.schema(ksm->name()));
+    co_await coroutine::parallel_for_each(ks_names, [table_gen = std::move(table_gen)] (const sstring& ks_name) mutable {
+        return parallel_for_each(tables, [ks_name, table_gen = std::move(table_gen)] (table t) {
+            return table_gen(ks_name, t.name, t.schema(ks_name));
         }).discard_result();
     });
 
-    if (!mutations.empty()) {
-        co_await mml.announce(std::move(mutations), std::move(group0_guard), "keyspace-utils: create default keyspaces and databases for redis");
+    // create default databases for redis.
+    if (!table_mutations.empty()) {
+        co_await mml.announce(std::move(table_mutations), std::move(group0_guard), "keyspace-utils: create default databases for redis");
     }
 }
 
