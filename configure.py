@@ -291,15 +291,16 @@ def generate_compdb(compdb, ninja, buildfile, modes):
                 subprocess.run(['./scripts/merge-compdb.py', 'build/' + mode,
                                 ninja_compdb.name] + submodule_compdbs, stdout=combined_mode_specific_compdb)
 
-    # make sure there is a valid compile_commands.json link in the source root
-    if os.path.exists(compdb):
-        return
-
     # sort modes by supposed indexing speed
     for mode in ['dev', 'debug', 'release', 'sanitize']:
         compdb_target = outdir + '/' + mode + '/' + compdb
         if os.path.exists(compdb_target):
-            os.symlink(compdb_target, compdb)
+            try:
+                os.symlink(compdb_target, compdb)
+            except FileExistsError:
+                # if there is already a valid compile_commands.json link in the
+                # source root, we are done.
+                pass
             return
 
 
