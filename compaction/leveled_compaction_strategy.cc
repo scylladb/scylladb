@@ -144,6 +144,8 @@ leveled_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> input
 
     auto max_sstable_size_in_bytes = _max_sstable_size_in_mb * 1024 * 1024;
 
+    leveled_manifest::logger.debug("get_reshaping_job: mode={} input.size={} max_sstable_size_in_bytes={}", mode == reshape_mode::relaxed ? "relaxed" : "strict", input.size(), max_sstable_size_in_bytes);
+
     for (auto& sst : input) {
         auto sst_level = sst->get_sstable_level();
         if (sst_level > leveled_manifest::MAX_LEVELS - 1) {
@@ -227,6 +229,9 @@ leveled_compaction_strategy::get_cleanup_compaction_jobs(table_state& table_s, s
 }
 
 unsigned leveled_compaction_strategy::ideal_level_for_input(const std::vector<sstables::shared_sstable>& input, uint64_t max_sstable_size) {
+    if (!max_sstable_size) {
+        return 1;
+    }
     auto log_fanout = [fanout = leveled_manifest::leveled_fan_out] (double x) {
         double inv_log_fanout = 1.0f / std::log(fanout);
         return log(x) * inv_log_fanout;

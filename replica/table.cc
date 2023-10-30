@@ -1032,6 +1032,19 @@ table::sstable_list_builder::build_new_list(const sstables::sstable_set& current
 }
 
 future<>
+compaction_group::delete_sstables_atomically(std::vector<sstables::shared_sstable> sstables_to_remove) {
+    return seastar::try_with_gate(_t._sstable_deletion_gate, [this, sstables_to_remove = std::move(sstables_to_remove)] () mutable {
+        return with_semaphore(_t._sstable_deletion_sem, 1, [sstables_to_remove = std::move(sstables_to_remove)] () mutable {
+            return sstables::sstable_directory::delete_atomically(std::move(sstables_to_remove));
+        });
+    }).handle_exception([] (std::exception_ptr ex) {
+        // There is nothing more we can do here.
+        // Any remaining SSTables will eventually be re-compacted and re-deleted.
+        tlogger.error("Compacted SSTables deletion failed: {}. Ignored.", std::move(ex));
+    });
+}
+
+future<>
 compaction_group::update_sstable_lists_on_off_strategy_completion(sstables::compaction_completion_desc desc) {
     class sstable_lists_updater : public row_cache::external_updater_impl {
         using sstables_t = std::vector<sstables::shared_sstable>;
@@ -1073,6 +1086,16 @@ compaction_group::update_sstable_lists_on_off_strategy_completion(sstables::comp
     co_await _t.get_row_cache().invalidate(std::move(updater), std::move(empty_ranges));
     _t.get_row_cache().refresh_snapshot();
     _t.rebuild_statistics();
+
+    std::unordered_set<sstables::shared_sstable> output(desc.new_sstables.begin(), desc.new_sstables.end());
+    // Input SSTables that weren't added to the main SSTable set, can be unlinked.
+    // An input SSTable remains linked if it hadn't gone through reshape compaction. Such a SSTable
+    // will only be moved from maintenance (source) to main (destination) set.
+    auto sstables_to_remove = boost::copy_range<std::vector<sstables::shared_sstable>>(desc.old_sstables
+            | boost::adaptors::filtered([&output] (const sstables::shared_sstable& input_sst) {
+                return !output.contains(input_sst);
+            }));
+    co_await delete_sstables_atomically(std::move(sstables_to_remove));
 }
 
 future<>
@@ -1151,19 +1174,7 @@ compaction_group::update_main_sstable_list_on_compaction_completion(sstables::co
 
     _t.rebuild_statistics();
 
-    auto f = seastar::try_with_gate(_t._sstable_deletion_gate, [this, sstables_to_remove = desc.old_sstables] {
-       return with_semaphore(_t._sstable_deletion_sem, 1, [sstables_to_remove = std::move(sstables_to_remove)] {
-           return sstables::sstable_directory::delete_atomically(std::move(sstables_to_remove));
-       });
-    });
-
-    try {
-        co_await std::move(f);
-    } catch (...) {
-        // There is nothing more we can do here.
-        // Any remaining SSTables will eventually be re-compacted and re-deleted.
-        tlogger.error("Compacted SSTables deletion failed: {}. Ignored.", std::current_exception());
-    }
+    co_await delete_sstables_atomically(std::move(desc.old_sstables));
 }
 
 future<>

@@ -55,6 +55,8 @@ private:
                    enable_backlog_tracker backlog_tracker);
     // Update compaction backlog tracker with the same changes applied to the underlying sstable set.
     void backlog_tracker_adjust_charges(const std::vector<sstables::shared_sstable>& old_sstables, const std::vector<sstables::shared_sstable>& new_sstables);
+
+    future<> delete_sstables_atomically(std::vector<sstables::shared_sstable> sstables_to_remove);
 public:
     compaction_group(table& t);
 
