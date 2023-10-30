@@ -381,6 +381,9 @@ seastar::future<> raft_group_registry::stop() {
     if (!_is_enabled) {
         co_return;
     }
+    if (!_group0_started.available()) {
+        _group0_started.set_exception(std::runtime_error("raft_group_registry is being destroyed"));
+    }
     co_await drain_on_shutdown();
     co_await uninit_rpc_verbs();
     _direct_fd_subscription.reset();
@@ -445,6 +448,10 @@ raft::server& raft_group_registry::group0() {
     return get_server(*_group0_id);
 }
 
+seastar::future<> raft_group_registry::wait_for_group0() {
+    return _group0_started.get_shared_future();
+}
+
 future<> raft_group_registry::start_server_for_group(raft_server_for_group new_grp) {
     auto gid = new_grp.gid;
 
@@ -474,6 +481,7 @@ future<> raft_group_registry::start_server_for_group(raft_server_for_group new_g
                         *_group0_id, gid));
             }
             _group0_id = gid;
+            _group0_started.set_value();
         }
 
         it->second.ticker->arm_periodic(raft_tick_interval);

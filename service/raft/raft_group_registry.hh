@@ -8,6 +8,7 @@
 #pragma once
 
 #include <seastar/core/future.hh>
+#include <seastar/core/shared_future.hh>
 #include <seastar/core/sharded.hh>
 #include <seastar/core/gate.hh>
 
@@ -96,6 +97,9 @@ private:
     // Group 0 id, valid only on shard 0 after boot/upgrade is over
     std::optional<raft::group_id> _group0_id;
 
+    // Used to wait until the group0 server is started
+    seastar::shared_promise<> _group0_started;
+
     // My Raft ID. Shared between different Raft groups.
     raft::server_id _my_id;
 
@@ -146,6 +150,9 @@ public:
     // Return an instance of group 0. Valid only on shard 0,
     // after boot/upgrade is complete
     raft::server& group0();
+
+    // Waits until group0 server is started.
+    seastar::future<> wait_for_group0();
 
     // Start raft server instance, store in the map of raft servers and
     // arm the associated timer to tick the server.
