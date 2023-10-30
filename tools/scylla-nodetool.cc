@@ -20,6 +20,7 @@
 #include "log.hh"
 #include "tools/utils.hh"
 #include "utils/http.hh"
+#include "utils/human_readable.hh"
 #include "utils/rjson.hh"
 #include "utils/UUID.hh"
 
@@ -58,8 +59,10 @@ class scylla_rest_client {
         }
 
         if (res.empty()) {
+            nlog.trace("Got empty response");
             return rjson::null_value();
         } else {
+            nlog.trace("Got response:\n{}", res);
             return rjson::parse(res);
         }
     }
@@ -90,20 +93,76 @@ public:
     }
 };
 
+std::vector<sstring> get_keyspaces(scylla_rest_client& client, std::optional<sstring> type = {}) {
+    std::unordered_map<sstring, sstring> params;
+    if (type) {
+        params["type"] = *type;
+    }
+    auto keyspaces_json = client.get("/storage_service/keyspaces", std::move(params));
+    std::vector<sstring> keyspaces;
+    for (const auto& keyspace_json : keyspaces_json.GetArray()) {
+        keyspaces.emplace_back(rjson::to_string_view(keyspace_json));
+    }
+    return keyspaces;
+}
+
 using operation_func = void(*)(scylla_rest_client&, const bpo::variables_map&);
 
 std::map<operation, operation_func> get_operations_with_func();
+
+void cleanup_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    if (vm.count("cleanup_arg")) {
+        const auto all_keyspaces = get_keyspaces(client);
+
+        auto args = vm["cleanup_arg"].as<std::vector<sstring>>();
+        std::unordered_map<sstring, sstring> params;
+        const auto keyspace = args[0];
+        if (std::ranges::find(all_keyspaces, keyspace) == all_keyspaces.end()) {
+            throw std::invalid_argument(fmt::format("keyspace {} does not exist", keyspace));
+        }
+
+        if (args.size() > 1) {
+            params["cf"] = fmt::to_string(fmt::join(args.begin() + 1, args.end(), ","));
+        }
+        client.post(format("/storage_service/keyspace_cleanup/{}", keyspace), std::move(params));
+    } else {
+        for (const auto& keyspace : get_keyspaces(client, "non_local_strategy")) {
+            client.post(format("/storage_service/keyspace_cleanup/{}", keyspace));
+        }
+    }
+}
+
+void clearsnapshot_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    std::unordered_map<sstring, sstring> params;
+
+    if (vm.count("keyspaces")) {
+        std::vector<sstring> keyspaces;
+        const auto all_keyspaces = get_keyspaces(client);
+        for (const auto& keyspace : vm["keyspaces"].as<std::vector<sstring>>()) {
+            if (std::ranges::find(all_keyspaces, keyspace) == all_keyspaces.end()) {
+                throw std::invalid_argument(fmt::format("keyspace {} does not exist", keyspace));
+            }
+            keyspaces.push_back(keyspace);
+        }
+
+        if (!keyspaces.empty()) {
+            params["kn"] = fmt::to_string(fmt::join(keyspaces.begin(), keyspaces.end(), ","));
+        }
+    }
+
+    if (vm.count("tag")) {
+        params["tag"] = vm["tag"].as<sstring>();
+    }
+
+    client.del("/storage_service/snapshots", std::move(params));
+}
 
 void compact_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     if (vm.count("user-defined")) {
         throw std::invalid_argument("--user-defined flag is unsupported");
     }
 
-    auto keyspaces_json = client.get("/storage_service/keyspaces", {});
-    std::vector<sstring> all_keyspaces;
-    for (const auto& keyspace_json : keyspaces_json.GetArray()) {
-        all_keyspaces.emplace_back(rjson::to_string_view(keyspace_json));
-    }
+    const auto all_keyspaces = get_keyspaces(client);
 
     if (vm.count("compaction_arg")) {
         auto args = vm["compaction_arg"].as<std::vector<sstring>>();
@@ -280,6 +339,54 @@ void gettraceprobability_operation(scylla_rest_client& client, const bpo::variab
     fmt::print(std::cout, "Current trace probability: {}\n", res.GetDouble());
 }
 
+void listsnapshots_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    const auto snapshots = client.get("/storage_service/snapshots");
+    const auto true_size = client.get("/storage_service/snapshots/size/true").GetInt64();
+
+    std::array<std::string, 5> header_row{"Snapshot name", "Keyspace name", "Column family name", "True size", "Size on disk"};
+    std::array<size_t, 5> max_column_length{};
+    for (size_t c = 0; c < header_row.size(); ++c) {
+        max_column_length[c] = header_row[c].size();
+    }
+
+    auto format_hr_size = [] (const utils::human_readable_value hrv) {
+        if (!hrv.suffix || hrv.suffix == 'B') {
+            return fmt::format("{} B  ", hrv.value);
+        }
+        return fmt::format("{} {}iB", hrv.value, hrv.suffix);
+    };
+
+    std::vector<std::array<std::string, 5>> rows;
+    for (const auto& snapshot_by_name : snapshots.GetArray()) {
+        const auto snapshot_name = std::string(rjson::to_string_view(snapshot_by_name.GetObject()["key"]));
+        for (const auto& snapshot : snapshot_by_name.GetObject()["value"].GetArray()) {
+            rows.push_back({
+                    snapshot_name,
+                    std::string(rjson::to_string_view(snapshot["ks"])),
+                    std::string(rjson::to_string_view(snapshot["cf"])),
+                    format_hr_size(utils::to_hr_size(snapshot["live"].GetInt64())),
+                    format_hr_size(utils::to_hr_size(snapshot["total"].GetInt64()))});
+
+            for (size_t c = 0; c < rows.back().size(); ++c) {
+                max_column_length[c] = std::max(max_column_length[c], rows.back()[c].size());
+            }
+        }
+    }
+
+    const auto header_row_format = fmt::format("{{:<{}}} {{:<{}}} {{:<{}}} {{:<{}}} {{:<{}}}\n", max_column_length[0],
+            max_column_length[1], max_column_length[2], max_column_length[3], max_column_length[4]);
+    const auto regular_row_format = fmt::format("{{:<{}}} {{:<{}}} {{:<{}}} {{:>{}}} {{:>{}}}\n", max_column_length[0],
+            max_column_length[1], max_column_length[2], max_column_length[3], max_column_length[4]);
+
+    fmt::print(std::cout, "Snapshot Details:\n");
+    fmt::print(std::cout, fmt::runtime(header_row_format.c_str()), header_row[0], header_row[1], header_row[2], header_row[3], header_row[4]);
+    for (const auto& r : rows) {
+        fmt::print(std::cout, fmt::runtime(regular_row_format.c_str()), r[0], r[1], r[2], r[3], r[4]);
+    }
+
+    fmt::print(std::cout, "\nTotal TrueDiskSpaceUsed: {}\n\n", format_hr_size(utils::to_hr_size(true_size)));
+}
+
 void help_operation(const tool_app_template::config& cfg, const bpo::variables_map& vm) {
     if (vm.count("command")) {
         const auto command = vm["command"].as<sstring>();
@@ -418,6 +525,47 @@ std::map<operation, operation_func> get_operations_with_func() {
     const static std::map<operation, operation_func> operations_with_func {
         {
             {
+                "cleanup",
+                "Triggers removal of data that the node no longer owns",
+R"(
+You should run nodetool cleanup whenever you scale-out (expand) your cluster, and
+new nodes are added to the same DC. The scale out process causes the token ring
+to get re-distributed. As a result, some of the nodes will have replicas for
+tokens that they are no longer responsible for (taking up disk space). This data
+continues to consume diskspace until you run nodetool cleanup. The cleanup
+operation deletes these replicas and frees up disk space.
+
+Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/cleanup.html
+)",
+                {
+                    typed_option<int64_t>("jobs,j", "The number of compaction jobs to be used for the cleanup (unused)"),
+                },
+                {
+                    typed_option<std::vector<sstring>>("cleanup_arg", "[<keyspace> <tables>...]", -1),
+                }
+            },
+            cleanup_operation
+        },
+        {
+            {
+                "clearsnapshot",
+                "Remove snapshots",
+R"(
+By default all snapshots are removed for all keyspaces.
+
+Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/clearsnapshot.html
+)",
+                {
+                    typed_option<sstring>("tag,t", "The snapshot to remove"),
+                },
+                {
+                    typed_option<std::vector<sstring>>("keyspaces", "[<keyspaces>...]", -1),
+                }
+            },
+            clearsnapshot_operation
+        },
+        {
+            {
                 "compact",
                 "Force a (major) compaction on one or more tables",
 R"(
@@ -544,6 +692,20 @@ Fore more information, see: https://opensource.docs.scylladb.com/stable/operatin
                 },
             },
             [] (scylla_rest_client&, const bpo::variables_map&) {}
+        },
+        {
+            {
+                "listsnapshots",
+                "Lists all the snapshots along with the size on disk and true size",
+R"(
+Dropped tables (column family) will not be part of the listsnapshots.
+
+Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/listsnapshots.html
+)",
+                { },
+                { },
+            },
+            listsnapshots_operation
         },
         {
             {
