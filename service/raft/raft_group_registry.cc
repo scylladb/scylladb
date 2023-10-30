@@ -190,6 +190,11 @@ void raft_group_registry::init_rpc_verbs() {
 
         return container().invoke_on(shard_for_group(gid),
                 [addr = netw::messaging_service::get_source(cinfo).addr, from, gid, handler] (raft_group_registry& self) mutable {
+            future<> f_wait_for_server = self._group0_id && self._group0_id == gid
+                    ? self.wait_for_group0()
+                    : make_ready_future<>();
+
+            return f_wait_for_server.then([addr, from, gid, handler, &self] () mutable {
             // Update the address mappings for the rpc module
             // in case the sender is encountered for the first time
             auto& rpc = self.get_rpc(gid);
@@ -206,6 +211,7 @@ void raft_group_registry::init_rpc_verbs() {
             } else {
                 return handler(rpc);
             }
+            });
         });
     };
 
