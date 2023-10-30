@@ -63,13 +63,19 @@ Nodetool generic options
 ========================
 All options are supported:
 
-.. code-block:: shell
 
-   ( -h | --host ) <host name> | <ip address>
-   ( -p | --port ) <port number>
-   ( -pw | --password ) <password >
-   ( -u | --username ) <user name>
-   ( -pwf <passwordFilePath | --password-file <passwordFilePath> )
+
+* ``-p <port>`` or ``--port <port>`` - Remote JMX agent port number.
+
+* ``-pp`` or ``--print-port`` - Operate in 4.0 mode with hosts disambiguated by port number.
+
+* ``-pw <password>`` or ``--password <password>`` - Remote JMX agent password.
+
+* ``-pwf <passwordFilePath>`` or ``--password-file <passwordFilePath>`` - Path to the JMX password file.
+
+* ``-u <username>`` or ``--username <username>`` - Remote JMX agent username.
+
+* ``--`` - Separates command-line options from the list of argument(useful when an argument might be mistaken for a command-line option).
 
 Supported Nodetool operations
 =============================
@@ -119,7 +125,7 @@ Operations that are not listed below are currently not available.
 * :doc:`statusbinary </operating-scylla/nodetool-commands/statusbinary/>` - Status of native transport (binary protocol).
 * :doc:`statusgossip </operating-scylla/nodetool-commands/statusgossip/>` - Status of gossip.
 * :doc:`status </operating-scylla/nodetool-commands/status/>` - Print cluster information.
-* :doc:`stop compaction </operating-scylla/nodetool-commands/stop/>` - Stop compaction operation.
+* :doc:`stop </operating-scylla/nodetool-commands/stop/>` - Stop compaction operation.
 * **tablehistograms** see :doc:`cfhistograms <nodetool-commands/cfhistograms/>`
 * :doc:`tablestats </operating-scylla/nodetool-commands/tablestats/>` - Provides in-depth diagnostics regard table. 
 * :doc:`toppartitions </operating-scylla/nodetool-commands/toppartitions/>` - Samples cluster writes and reads and reports the most active partitions in a specified table and time frame.
