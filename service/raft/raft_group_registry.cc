@@ -297,15 +297,27 @@ void raft_group_registry::init_rpc_verbs() {
         // XXX: update address map here as well?
 
         if (_my_id != dst) {
-            co_return direct_fd_ping_reply {
+            return make_ready_future<direct_fd_ping_reply>(direct_fd_ping_reply {
                 .result = wrong_destination {
                     .reached_id = _my_id,
                 },
-            };
+            });
         }
-        co_return direct_fd_ping_reply {
-            .result = std::monostate{},
-        };
+
+        return container().invoke_on(0, [] (raft_group_registry& me) -> future<direct_fd_ping_reply> {
+            bool group0_alive = false;
+            if (me._group0_id) {
+                auto* group0_server = me.find_server(*me._group0_id);
+                if (group0_server && group0_server->is_alive()) {
+                    group0_alive = true;
+                }
+            }
+            co_return direct_fd_ping_reply {
+                .result = service::group_liveness_info{
+                    .group0_alive = group0_alive,
+                }
+            };
+        });
     });
 }
 
@@ -513,6 +525,8 @@ future<bool> direct_fd_pinger::ping(direct_failure_detector::pinger::endpoint_id
             rslog.trace("ping(id = {}, ip_addr = {}): wrong destination (reached {})",
                         dst_id, *addr, wrong_dst->reached_id);
             co_return false;
+        } else if (auto* info = std::get_if<group_liveness_info>(&reply.result)) {
+            co_return info->group0_alive;
         }
     } catch (seastar::rpc::closed_error&) {
         co_return false;
