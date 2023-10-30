@@ -195,22 +195,22 @@ void raft_group_registry::init_rpc_verbs() {
                     : make_ready_future<>();
 
             return f_wait_for_server.then([addr, from, gid, handler, &self] () mutable {
-            // Update the address mappings for the rpc module
-            // in case the sender is encountered for the first time
-            auto& rpc = self.get_rpc(gid);
-            // The address learnt from a probably unknown server should
-            // eventually expire. Do not use it to update
-            // a previously learned gossiper address: otherwise an RPC from
-            // a node outside of the config could permanently
-            // change the address map of a healthy cluster.
-            self._address_map.opt_add_entry(from, std::move(addr));
-            // Execute the actual message handling code
-            if constexpr (is_one_way) {
-                handler(rpc);
-                return netw::messaging_service::no_wait();
-            } else {
-                return handler(rpc);
-            }
+                // Update the address mappings for the rpc module
+                // in case the sender is encountered for the first time
+                auto& rpc = self.get_rpc(gid);
+                // The address learnt from a probably unknown server should
+                // eventually expire. Do not use it to update
+                // a previously learned gossiper address: otherwise an RPC from
+                // a node outside of the config could permanently
+                // change the address map of a healthy cluster.
+                self._address_map.opt_add_entry(from, std::move(addr));
+                // Execute the actual message handling code
+                if constexpr (is_one_way) {
+                    handler(rpc);
+                    return netw::messaging_service::no_wait();
+                } else {
+                    return handler(rpc);
+                }
             });
         });
     };
