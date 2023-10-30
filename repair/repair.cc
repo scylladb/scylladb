@@ -944,8 +944,14 @@ future<> shard_repair_task_impl::do_repair_ranges() {
         // repair all the ranges in limited parallelism
         rlogger.info("repair[{}]: Started to repair {} out of {} tables in keyspace={}, table={}, table_id={}, repair_reason={}",
                 id.uuid(), idx + 1, table_ids.size(), _status.keyspace, table_name, table_id, _reason);
-        co_await coroutine::parallel_for_each(ranges, [this, table_id] (auto&& range) {
-            return with_semaphore(rs.get_repair_module().range_parallelism_semaphore(), 1, [this, &range, table_id] {
+        co_await coroutine::parallel_for_each(ranges, [this, table_id] (auto&& range) -> future<> {
+            // It is possible that most of the ranges are skipped. In this case
+            // this lambda will just log a message and exit. With a lot of
+            // ranges, this can result in stalls, as there are no opportunities
+            // to yield when ranges are skipped. The yield below is meant to
+            // prevent this.
+            co_await coroutine::maybe_yield();
+            co_await with_semaphore(rs.get_repair_module().range_parallelism_semaphore(), 1, [this, &range, table_id] {
                 return repair_range(range, table_id).then([this] {
                     if (_reason == streaming::stream_reason::bootstrap) {
                         rs.get_metrics().bootstrap_finished_ranges++;
