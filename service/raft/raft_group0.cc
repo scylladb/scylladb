@@ -462,6 +462,7 @@ future<> raft_group0::join_group0(std::vector<gms::inet_address> seeds, shared_p
                 // See #14066.
                 nontrivial_snapshot = true;
             } else {
+                _raft_gr.declare_group0_id(group0_id);
                 co_await handshaker->pre_server_start(g0_info);
             }
             // Bootstrap the initial configuration

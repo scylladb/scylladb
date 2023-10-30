@@ -428,6 +428,16 @@ std::vector<raft::group_id> raft_group_registry::all_groups() const {
     return result;
 }
 
+void raft_group_registry::declare_group0_id(raft::group_id id) {
+    if (this_shard_id() != 0) {
+        on_internal_error(rslog, "declared_group0_id(): must only be called on shard 0");
+    }
+    if (_group0_id) {
+        on_internal_error(rslog, "declared_group0_id(): called after _group0_id was set");
+    }
+    _group0_id = id;
+}
+
 raft::server& raft_group_registry::group0() {
     if (!_group0_id) {
         on_internal_error(rslog, "group0(): _group0_id not present");
@@ -459,6 +469,10 @@ future<> raft_group_registry::start_server_for_group(raft_server_for_group new_g
         auto [it, inserted] = _servers.emplace(std::move(gid), std::move(new_grp));
 
         if (_servers.size() == 1 && this_shard_id() == 0) {
+            if (_group0_id && *_group0_id != gid) {
+                on_internal_error(rslog, format("Group0 ID was declared to be {}, but the first server has group id {}",
+                        *_group0_id, gid));
+            }
             _group0_id = gid;
         }
 

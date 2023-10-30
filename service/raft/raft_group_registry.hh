@@ -136,6 +136,13 @@ public:
     // Returns the list of all Raft groups on this shard by their IDs.
     std::vector<raft::group_id> all_groups() const;
 
+    // Declares that given group ID will be the group0's ID.
+    // It can only be called before the first server is started and added
+    // to the registry via `start_server_for_group`.
+    // After being called, the first server in the registry must have this
+    // exact group id.
+    void declare_group0_id(raft::group_id);
+
     // Return an instance of group 0. Valid only on shard 0,
     // after boot/upgrade is complete
     raft::server& group0();
