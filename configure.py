@@ -772,7 +772,7 @@ arg_parser.add_argument('--clang-inline-threshold', action='store', type=int, de
 arg_parser.add_argument('--list-artifacts', dest='list_artifacts', action='store_true', default=False,
                         help='List all available build artifacts, that can be passed to --with')
 arg_parser.add_argument('--date-stamp', dest='date_stamp', type=str,
-                        help='Set datestamp for SCYLLA-VERSION-GEN')
+                        help='This option is kept only for backward compatibility')
 args = arg_parser.parse_args()
 
 if args.list_artifacts:
@@ -1575,11 +1575,8 @@ else:
     build_artifacts = all_artifacts
 
 
-def generate_version(date_stamp):
-    date_stamp_opt = ''
-    if date_stamp:
-        date_stamp_opt = f'--date-stamp {date_stamp}'
-    status = subprocess.call(f"./SCYLLA-VERSION-GEN {date_stamp_opt}", shell=True)
+def generate_version():
+    status = subprocess.call("./SCYLLA-VERSION-GEN", shell=True)
     if status != 0:
         print('Version file generation failed')
         sys.exit(1)
@@ -2389,7 +2386,7 @@ def create_building_system(args):
 
     ninja = find_ninja()
     with open(args.buildfile, 'w') as f:
-        scylla_product, scylla_version, scylla_release = generate_version(args.date_stamp)
+        scylla_product, scylla_version, scylla_release = generate_version()
         arch = platform.machine()
         write_build_file(f,
                          arch,
