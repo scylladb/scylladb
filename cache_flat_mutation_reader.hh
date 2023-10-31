@@ -506,7 +506,7 @@ bool cache_flat_mutation_reader::ensure_population_lower_bound() {
         rows_entry::tri_compare cmp(*_schema);
         partition_snapshot_row_cursor cur(*_schema, *_snp, false, _read_context.is_reversed());
 
-        if (!cur.advance_to(_last_row.position())) {
+        if (!cur.advance_to(to_query_domain(_last_row.position()))) {
             return false;
         }
 
@@ -532,7 +532,7 @@ void cache_flat_mutation_reader::maybe_update_continuity() {
     position_in_partition::equal_compare eq(*_schema);
     if (can_populate()
             && ensure_population_lower_bound()
-            && !eq(_last_row.position(), _next_row.position())) {
+            && !eq(_last_row.position(), _next_row.table_position())) {
         with_allocator(_snp->region().allocator(), [&] {
             rows_entry& e = _next_row.ensure_entry_in_latest().row;
             auto& rows = _snp->version()->partition().mutable_clustered_rows();
@@ -696,7 +696,11 @@ bool cache_flat_mutation_reader::maybe_add_to_cache(const range_tombstone_change
         if (ensure_population_lower_bound()) {
             // underlying may emit range_tombstone_change fragments with the same position.
             // In such case, the range to which the tombstone from the first fragment applies is empty and should be ignored.
-            if (q_cmp(_last_row.position(), it->position()) < 0) {
+            //
+            // Note: we are using a query schema comparator to compare table schema positions here,
+            // but this is okay because we are only checking for equality,
+            // which is preserved by schema reversals.
+            if (q_cmp(_last_row.position(), it->position()) != 0) {
                 if (_read_context.is_reversed()) [[unlikely]] {
                     clogger.trace("csm {}: set_continuous({}), rt={}", fmt::ptr(this), _last_row.position(), prev);
                     set_rows_entry_continuous(*_last_row);
