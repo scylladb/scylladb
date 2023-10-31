@@ -245,6 +245,8 @@ future<authenticated_user> password_authenticator::authenticate(
             std::throw_with_nested(exceptions::authentication_exception(e.what()));
         } catch (exceptions::authentication_exception& e) {
             std::throw_with_nested(e);
+        } catch (exceptions::unavailable_exception& e) {
+            std::throw_with_nested(exceptions::authentication_exception(e.get_message()));
         } catch (...) {
             std::throw_with_nested(exceptions::authentication_exception("authentication failed"));
         }
