@@ -176,9 +176,19 @@ public:
     class external_updater_impl {
     public:
         virtual ~external_updater_impl() {}
+        // Prepare may return an exceptional future
+        // and the error is propagated to the row_cache::update caller.
+        // Hence, it must provide strong exception safety guarantees.
+        //
+        // Typically, `prepare` creates only temporary state
+        // to be atomically applied by `execute`, or, alternatively
+        // it must undo any side-effects on failure.
         virtual future<> prepare() { return make_ready_future<>(); }
         // FIXME: make execute() noexcept, that will require every updater to make execution exception safe,
         // also change function signature.
+        // See https://github.com/scylladb/scylladb/issues/15576
+        //
+        // For now, scylla aborts on any exception from `execute` 
         virtual void execute() = 0;
     };
 

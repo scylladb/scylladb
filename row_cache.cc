@@ -1440,10 +1440,15 @@ future<> row_cache::do_update(row_cache::external_updater eu, row_cache::interna
         return get_units(_update_sem, 1);
     }).then([this, &eu, &iu] (auto permit) mutable {
       return eu.prepare().then([this, &eu, &iu, permit = std::move(permit)] () mutable {
-        auto pos = dht::ring_position::min();
-        eu.execute();
+        try {
+            eu.execute();
+        } catch (...) {
+            // Any error from execute is considered fatal
+            // to enforce exception safety.
+            on_fatal_internal_error(clogger, fmt::format("Fatal error during cache update: {}", std::current_exception()));
+        }
         [&] () noexcept {
-            _prev_snapshot_pos = std::move(pos);
+            _prev_snapshot_pos = dht::ring_position::min();
             _prev_snapshot = std::exchange(_underlying, _snapshot_source());
             ++_underlying_phase;
         }();
