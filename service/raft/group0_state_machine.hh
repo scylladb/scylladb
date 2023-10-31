@@ -90,11 +90,12 @@ class group0_state_machine : public raft_state_machine {
     raft_address_map& _address_map;
     seastar::gate _gate;
     abort_source _abort_source;
+    bool _topology_change_enabled;
 
     future<> merge_and_apply(group0_state_machine_merger& merger);
 public:
-    group0_state_machine(raft_group0_client& client, migration_manager& mm, storage_proxy& sp, storage_service& ss, raft_address_map& address_map)
-            : _client(client), _mm(mm), _sp(sp), _ss(ss), _address_map(address_map) {}
+    group0_state_machine(raft_group0_client& client, migration_manager& mm, storage_proxy& sp, storage_service& ss, raft_address_map& address_map, bool topology_change_enabled)
+            : _client(client), _mm(mm), _sp(sp), _ss(ss), _address_map(address_map), _topology_change_enabled(topology_change_enabled) {}
     future<> apply(std::vector<raft::command_cref> command) override;
     future<raft::snapshot_id> take_snapshot() override;
     void drop_snapshot(raft::snapshot_id id) override;

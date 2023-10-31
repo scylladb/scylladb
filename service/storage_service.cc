@@ -2976,7 +2976,7 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
             ? ::make_shared<join_node_rpc_handshaker>(*this, join_params)
             : _group0->make_legacy_handshaker(false);
     co_await _group0->setup_group0(_sys_ks.local(), initial_contact_nodes, std::move(handshaker),
-            raft_replace_info, *this, *_qp, _migration_manager.local());
+            raft_replace_info, *this, *_qp, _migration_manager.local(), _raft_topology_change_enabled);
 
     raft::server* raft_server = co_await [this] () -> future<raft::server*> {
         if (!_raft_topology_change_enabled) {
@@ -3041,7 +3041,7 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
             throw std::runtime_error(err);
         }
 
-        co_await _group0->finish_setup_after_join(*this, *_qp, _migration_manager.local());
+        co_await _group0->finish_setup_after_join(*this, *_qp, _migration_manager.local(), _raft_topology_change_enabled);
         co_return;
     }
 
@@ -3199,7 +3199,7 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
     }
 
     assert(_group0);
-    co_await _group0->finish_setup_after_join(*this, *_qp, _migration_manager.local());
+    co_await _group0->finish_setup_after_join(*this, *_qp, _migration_manager.local(), _raft_topology_change_enabled);
     co_await _cdc_gens.local().after_join(std::move(cdc_gen_id));
 }
 
@@ -6605,10 +6605,6 @@ void storage_service::init_messaging_service(sharded<db::system_distributed_keys
     });
     ser::storage_service_rpc_verbs::register_raft_pull_topology_snapshot(&_messaging.local(), [handle_raft_rpc] (raft::server_id dst_id, raft_topology_pull_params params) {
         return handle_raft_rpc(dst_id, [] (storage_service& ss) -> future<raft_topology_snapshot> {
-            if (!ss._raft_topology_change_enabled) {
-               co_return raft_topology_snapshot{};
-            }
-
             std::vector<canonical_mutation> topology_mutations;
             {
                 // FIXME: make it an rwlock, here we only need to lock for reads,
