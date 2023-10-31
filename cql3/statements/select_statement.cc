@@ -1003,16 +1003,12 @@ static void append_base_key_to_index_ck(std::vector<managed_bytes_view>& explode
 
 bytes indexed_table_select_statement::compute_idx_token(const partition_key& key) const {
     const column_definition& cdef = *_view_schema->clustering_key_columns().begin();
-    clustering_row empty_row(clustering_key_prefix::make_empty());
-    bytes computed_value;
     if (!cdef.is_computed()) {
-        // FIXME(pgrabowski): this legacy code is here for backward compatibility and should be removed
-        // once "computed_columns feature" is supported by every node
-        computed_value = legacy_token_column_computation().compute_value(*_schema, key);
-    } else {
-        computed_value = cdef.get_computation().compute_value(*_schema, key);
+        throw std::logic_error{format(
+            "Detected legacy non-computed token column {} in table {}.{}",
+            cdef.name_as_text(), _schema->ks_name(), _schema->cf_name())};
     }
-    return computed_value;
+    return cdef.get_computation().compute_value(*_schema, key);
 }
 
 lw_shared_ptr<const service::pager::paging_state> indexed_table_select_statement::generate_view_paging_state_from_base_query_results(lw_shared_ptr<const service::pager::paging_state> paging_state,

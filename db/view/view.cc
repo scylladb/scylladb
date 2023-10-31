@@ -575,15 +575,13 @@ private:
     const partition_key& _base_key;
     const clustering_or_static_row& _update;
     const std::optional<clustering_or_static_row>& _existing;
-    const bool _backing_secondary_index;
 
 public:
-    value_getter(const schema& base, const partition_key& base_key, const clustering_or_static_row& update, const std::optional<clustering_or_static_row>& existing, bool backing_secondary_index)
+    value_getter(const schema& base, const partition_key& base_key, const clustering_or_static_row& update, const std::optional<clustering_or_static_row>& existing)
         : _base(base)
         , _base_key(base_key)
         , _update(update)
         , _existing(existing)
-        , _backing_secondary_index(backing_secondary_index)
     {
     }
 
@@ -616,22 +614,18 @@ public:
 
 private:
     vector_type handle_computed_column(const column_definition& cdef) {
-        bytes computed_value;
         if (!cdef.is_computed()) {
-            //FIXME(sarna): this legacy code is here for backward compatibility and should be removed
-            // once "computed_columns feature" is supported by every node
-            if (!_backing_secondary_index) {
-                throw std::logic_error(format("Column {} doesn't exist in base and this view is not backing a secondary index", cdef.name_as_text()));
-            }
-            computed_value = legacy_token_column_computation().compute_value(_base, _base_key);
-        } else {
-            auto& computation = cdef.get_computation();
-            if (auto* collection_computation = dynamic_cast<const collection_column_computation*>(&computation)) {
-                return handle_collection_column_computation(collection_computation);
-            }
-            computed_value = computation.compute_value(_base, _base_key);
+            throw std::logic_error{format(
+                "Detected legacy non-computed token column {} in view for table {}.{}",
+                cdef.name_as_text(), _base.ks_name(), _base.cf_name())};
         }
 
+        auto& computation = cdef.get_computation();
+        if (auto* collection_computation = dynamic_cast<const collection_column_computation*>(&computation)) {
+            return handle_collection_column_computation(collection_computation);
+        }
+
+        auto computed_value = computation.compute_value(_base, _base_key);
         return {managed_bytes_view(linearized_values.emplace_back(std::move(computed_value)))};
     }
 
@@ -653,7 +647,7 @@ private:
 
 std::vector<view_updates::view_row_entry>
 view_updates::get_view_rows(const partition_key& base_key, const clustering_or_static_row& update, const std::optional<clustering_or_static_row>& existing) {
-    value_getter getter(*_base, base_key, update, existing, _backing_secondary_index);
+    value_getter getter(*_base, base_key, update, existing);
     auto get_value = boost::adaptors::transformed(std::ref(getter));
 
 
@@ -1458,8 +1452,7 @@ view_update_builder make_view_update_builder(
                                               " base schema version of the view ({}) for view {}.{} of {}.{}",
                 base->version(), v.base->base_schema()->version(), v.view->ks_name(), v.view->cf_name(), base->ks_name(), base->cf_name()));
         }
-        bool is_index = base_table.get_index_manager().is_index(v.view);
-        return view_updates(std::move(v), is_index);
+        return view_updates(std::move(v));
     }));
     return view_update_builder(std::move(db), base_table, base, std::move(vs), std::move(updates), std::move(existings), now);
 }

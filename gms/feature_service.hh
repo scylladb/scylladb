@@ -87,7 +87,6 @@ public:
     gms::feature me_sstable { *this, "ME_SSTABLE_FORMAT"sv };
     gms::feature view_virtual_columns { *this, "VIEW_VIRTUAL_COLUMNS"sv };
     gms::feature digest_insensitive_to_expiry { *this, "DIGEST_INSENSITIVE_TO_EXPIRY"sv };
-    gms::feature computed_columns { *this, "COMPUTED_COLUMNS"sv };
     gms::feature cdc { *this, "CDC"sv };
     gms::feature nonfrozen_udts { *this, "NONFROZEN_UDTS"sv };
     gms::feature hinted_handoff_separate_connection { *this, "HINTED_HANDOFF_SEPARATE_CONNECTION"sv };

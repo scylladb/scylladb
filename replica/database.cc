@@ -852,17 +852,8 @@ future<> database::parse_system_tables(distributed<service::storage_proxy>& prox
     co_await do_parse_schema_tables(proxy, db::schema_tables::VIEWS, coroutine::lambda([&] (schema_result_value_type &v) -> future<> {
         std::vector<view_ptr> views = co_await create_views_from_schema_partition(proxy, v.second);
         co_await coroutine::parallel_for_each(views.begin(), views.end(), [&] (auto&& v) -> future<> {
-            // TODO: Remove once computed columns are guaranteed to be featured in the whole cluster.
-            // we fix here the schema in place in oreder to avoid races (write commands comming from other coordinators).
-            view_ptr fixed_v = maybe_fix_legacy_secondary_index_mv_schema(*this, v, nullptr, preserve_version::yes);
-            view_ptr v_to_add = fixed_v ? fixed_v : v;
-            co_await this->add_column_family_and_make_directory(v_to_add, replica::database::is_new_cf::no);
-            if (bool(fixed_v)) {
-                v_to_add = fixed_v;
-                auto&& keyspace = find_keyspace(v->ks_name()).metadata();
-                auto mutations = db::schema_tables::make_update_view_mutations(keyspace, view_ptr(v), fixed_v, api::new_timestamp(), true);
-                co_await db::schema_tables::merge_schema(sys_ks, proxy, _feat, std::move(mutations));
-            }
+            check_no_legacy_secondary_index_mv_schema(*this, v, nullptr);
+            co_await this->add_column_family_and_make_directory(v, replica::database::is_new_cf::no);
         });
     }));
 }

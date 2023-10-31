@@ -138,6 +138,7 @@ std::set<std::string_view> feature_service::supported_feature_set() const {
         "CORRECT_STATIC_COMPACT_IN_MC"sv,
         "UNBOUNDED_RANGE_TOMBSTONES"sv,
         "MC_SSTABLE_FORMAT"sv,
+        "COMPUTED_COLUMNS"sv,
     };
 
     if (is_test_only_feature_deprecated()) {
@@ -195,7 +196,7 @@ db::schema_features feature_service::cluster_schema_features() const {
     db::schema_features f;
     f.set_if<db::schema_feature::VIEW_VIRTUAL_COLUMNS>(view_virtual_columns);
     f.set_if<db::schema_feature::DIGEST_INSENSITIVE_TO_EXPIRY>(digest_insensitive_to_expiry);
-    f.set_if<db::schema_feature::COMPUTED_COLUMNS>(computed_columns);
+    f.set<db::schema_feature::COMPUTED_COLUMNS>();
     f.set_if<db::schema_feature::CDC_OPTIONS>(cdc);
     f.set_if<db::schema_feature::PER_TABLE_PARTITIONERS>(per_table_partitioners);
     f.set_if<db::schema_feature::SCYLLA_KEYSPACES>(keyspace_storage_options);
