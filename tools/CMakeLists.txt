@@ -27,10 +27,23 @@ build_submodule(tools java
   NOARCH)
 build_submodule(jmx jmx
   NOARCH)
+
+execute_process(
+  COMMAND "${CMAKE_SOURCE_DIR}/install-dependencies.sh" --print-python3-runtime-packages
+  OUTPUT_VARIABLE python3_dependencies
+  OUTPUT_STRIP_TRAILING_WHITESPACE)
+execute_process(
+  COMMAND "${CMAKE_SOURCE_DIR}/install-dependencies.sh" --print-pip-runtime-packages
+  OUTPUT_VARIABLE pip_dependencies
+  OUTPUT_STRIP_TRAILING_WHITESPACE)
+execute_process(
+  COMMAND "${CMAKE_SOURCE_DIR}/install-dependencies.sh" --print-pip-symlinks
+  OUTPUT_VARIABLE pip_symlinks
+  OUTPUT_STRIP_TRAILING_WHITESPACE)
 build_submodule(python3 python3
   --packages
-  "python3-pyyaml python3-urwid python3-pyparsing python3-requests python3-pyudev python3-setuptools python3-psutil python3-distro python3-click python3-six"
+  "${python3_dependencies}"
   --pip-packages
-  "scylla-driver geomet traceback-with-variables scylla-api-client"
+  "${pip_dependencies}"
   --pip-symlinks
-  "scylla-api-client")
+  "${pip_symlinks}")
