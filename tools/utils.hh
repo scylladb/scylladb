@@ -10,6 +10,11 @@
 #include <seastar/core/app-template.hh>
 #include "seastarx.hh"
 
+namespace db {
+    class extensions;
+    class config;
+}
+
 namespace tools::utils {
 
 class basic_option {
@@ -123,6 +128,17 @@ inline bool operator<(const operation& a, const operation& b) {
     return a.name() < b.name();
 }
 
+// Add these to tool config to have and init the db extensions
+// needed for some operations, say, decoding all sstables
+struct db_config_and_extensions {
+    db_config_and_extensions();
+    db_config_and_extensions(db_config_and_extensions&&);
+    ~db_config_and_extensions();
+
+    std::shared_ptr<db::extensions> extensions;
+    std::unique_ptr<db::config> db_cfg;
+};
+
 class tool_app_template {
 public:
     struct config {
@@ -133,15 +149,17 @@ public:
         std::vector<operation> operations;
         const std::vector<operation_option>* global_options = nullptr;
         const std::vector<operation_option>* global_positional_options = nullptr;
+        std::optional<db_config_and_extensions> db_cfg_ext = std::nullopt;
     };
 
 private:
     config _cfg;
-
 public:
-    tool_app_template(config cfg)
-        : _cfg(std::move(cfg))
-    { }
+    tool_app_template(config);
+
+    const config& cfg() const {
+        return _cfg;
+    }
 
     const config& get_config() const { return _cfg; }
 
