@@ -114,7 +114,7 @@ static future<compaction_result>
 compact_sstables(sstables::compaction_descriptor descriptor, table_for_tests t,
                  std::function<shared_sstable()> creator, sstables::compaction_sstable_replacer_fn replacer = sstables::replacer_fn_no_op(),
                  can_purge_tombstones can_purge = can_purge_tombstones::yes) {
-    return compact_sstables(t.get_compaction_manager(), std::move(descriptor), t.as_table_state(), std::move(creator), std::move(replacer), can_purge);
+    return compact_sstables(t->get_compaction_manager(), std::move(descriptor), t.as_table_state(), std::move(creator), std::move(replacer), can_purge);
 }
 
 class strategy_control_for_test : public strategy_control {
@@ -164,7 +164,7 @@ SEASTAR_TEST_CASE(compaction_manager_basic_test) {
         {{"p1", utf8_type}}, {{"c1", utf8_type}}, {{"r1", int32_type}}, {}, utf8_type);
 
     auto cf = env.make_table_for_tests(s);
-    auto& cm = cf.get_compaction_manager();
+    auto& cm = cf->get_compaction_manager();
     auto close_cf = deferred_stop(cf);
     cf->set_compaction_strategy(sstables::compaction_strategy_type::size_tiered);
     auto sst_gen = cf.make_sst_factory();
@@ -2123,7 +2123,7 @@ SEASTAR_TEST_CASE(sstable_scrub_validate_mode_test) {
                 sstables::compaction_type_options::scrub opts = {
                     .operation_mode = sstables::compaction_type_options::scrub::mode::validate,
                 };
-                table.get_compaction_manager().perform_sstable_scrub(ts, opts).get();
+                table->get_compaction_manager().perform_sstable_scrub(ts, opts).get();
 
                 BOOST_REQUIRE(sst->is_quarantined());
                 BOOST_REQUIRE(in_strategy_sstables(ts).empty());
@@ -2284,7 +2284,7 @@ SEASTAR_TEST_CASE(sstable_scrub_skip_mode_test) {
             auto table = env.make_table_for_tests(schema);
             auto close_cf = deferred_stop(table);
             table->start();
-            auto& compaction_manager = table.get_compaction_manager();
+            auto& compaction_manager = table->get_compaction_manager();
 
             table->add_sstable_and_update_cache(sst).get();
 
@@ -2375,7 +2375,7 @@ SEASTAR_TEST_CASE(sstable_scrub_segregate_mode_test) {
             auto table = env.make_table_for_tests(schema);
             auto close_cf = deferred_stop(table);
             table->start();
-            auto& compaction_manager = table.get_compaction_manager();
+            auto& compaction_manager = table->get_compaction_manager();
 
             table->add_sstable_and_update_cache(sst).get();
 
@@ -2481,7 +2481,7 @@ SEASTAR_TEST_CASE(sstable_scrub_quarantine_mode_test) {
                 auto table = env.make_table_for_tests(schema);
                 auto close_cf = deferred_stop(table);
                 table->start();
-                auto& compaction_manager = table.get_compaction_manager();
+                auto& compaction_manager = table->get_compaction_manager();
 
                 table->add_sstable_and_update_cache(sst).get();
 
@@ -2812,7 +2812,7 @@ SEASTAR_TEST_CASE(sstable_run_based_compaction_test) {
         cf->start();
         cf->set_compaction_strategy(sstables::compaction_strategy_type::size_tiered);
         auto compact = [&, s] (std::vector<shared_sstable> all, auto replacer) -> std::vector<shared_sstable> {
-            return compact_sstables(cf.get_compaction_manager(), sstables::compaction_descriptor(std::move(all), 1, 0), cf.as_table_state(), sst_gen, replacer).get0().new_sstables;
+            return compact_sstables(cf->get_compaction_manager(), sstables::compaction_descriptor(std::move(all), 1, 0), cf.as_table_state(), sst_gen, replacer).get0().new_sstables;
         };
         auto make_insert = [&] (const dht::decorated_key& key) {
             mutation m(s, key);
@@ -2835,7 +2835,7 @@ SEASTAR_TEST_CASE(sstable_run_based_compaction_test) {
                 sstables.insert(new_sst);
             }
             column_family_test(cf).rebuild_sstable_list(cf.as_table_state(), new_sstables, old_sstables).get();
-            compaction_manager_test(cf.get_compaction_manager()).propagate_replacement(cf.as_table_state(), old_sstables, new_sstables);
+            compaction_manager_test(cf->get_compaction_manager()).propagate_replacement(cf.as_table_state(), old_sstables, new_sstables);
         };
 
         auto do_incremental_replace = [&] (auto old_sstables, auto new_sstables, auto& expected_sst, auto& closed_sstables_tracker) {
@@ -3008,7 +3008,7 @@ SEASTAR_TEST_CASE(backlog_tracker_correctness_after_changing_compaction_strategy
             BOOST_REQUIRE(ret.new_sstables.size() == 1);
         }
         // triggers code that iterates through registered compactions.
-        cf._data->cm.backlog();
+        cf->get_compaction_manager().backlog();
         cf.as_table_state().get_backlog_tracker().backlog();
     });
 }
@@ -3044,7 +3044,7 @@ SEASTAR_TEST_CASE(partial_sstable_run_filtered_out_test) {
         BOOST_REQUIRE(generation_exists(partial_sstable_run_sst->generation()));
 
         // register partial sstable run
-        auto cm_test = compaction_manager_test(cf.get_compaction_manager());
+        auto cm_test = compaction_manager_test(cf->get_compaction_manager());
         cm_test.run(partial_sstable_run_identifier, cf.as_table_state(), [&cf] (sstables::compaction_data&) {
             return cf->compact_all_sstables();
         }).get();
@@ -3383,7 +3383,7 @@ SEASTAR_TEST_CASE(autocompaction_control_test) {
                 .build();
 
         auto cf = env.make_table_for_tests(s);
-        auto& cm = cf.get_compaction_manager();
+        auto& cm = cf->get_compaction_manager();
         auto close_cf = deferred_stop(cf);
         cf->set_compaction_strategy(sstables::compaction_strategy_type::size_tiered);
 
@@ -4453,8 +4453,8 @@ SEASTAR_TEST_CASE(test_major_does_not_miss_data_in_memtable) {
     });
 }
 
-SEASTAR_TEST_CASE(simple_backlog_controller_test) {
-    auto run_controller_test = [] (sstables::compaction_strategy_type compaction_strategy_type, test_env& env) {
+future<> run_controller_test(sstables::compaction_strategy_type compaction_strategy_type) {
+    return test_env::do_with_async([compaction_strategy_type] (test_env& env) {
         /////////////
         // settings
         static constexpr float disk_memory_ratio = 78.125; /* AWS I3en is ~78.125 */
@@ -4564,13 +4564,19 @@ SEASTAR_TEST_CASE(simple_backlog_controller_test) {
             auto max_expected = compaction_strategy_type == sstables::compaction_strategy_type::leveled ? 0.4f : 0.0f;
             BOOST_REQUIRE(r.normalized_backlog <= max_expected);
         }
-    };
-
-    return test_env::do_with_async([run_controller_test] (test_env& env) {
-       run_controller_test(sstables::compaction_strategy_type::size_tiered, env);
-       run_controller_test(sstables::compaction_strategy_type::time_window, env);
-       run_controller_test(sstables::compaction_strategy_type::leveled, env);
     });
+}
+
+SEASTAR_TEST_CASE(simple_backlog_controller_test_size_tiered) {
+    return run_controller_test(sstables::compaction_strategy_type::size_tiered);
+}
+
+SEASTAR_TEST_CASE(simple_backlog_controller_test_time_window) {
+    return run_controller_test(sstables::compaction_strategy_type::time_window);
+}
+
+SEASTAR_TEST_CASE(simple_backlog_controller_test_leveled) {
+    return run_controller_test(sstables::compaction_strategy_type::leveled);
 }
 
 SEASTAR_TEST_CASE(test_compaction_strategy_cleanup_method) {

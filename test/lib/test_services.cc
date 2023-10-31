@@ -26,7 +26,6 @@ static const sstring some_keyspace("ks");
 static const sstring some_column_family("cf");
 
 table_for_tests::data::data()
-    : semaphore(reader_concurrency_semaphore::no_limits{}, "table_for_tests")
 { }
 
 table_for_tests::data::~data() {}
@@ -36,13 +35,6 @@ schema_ptr table_for_tests::make_default_schema() {
         .with_column(utf8_type->decompose("p1"), utf8_type, column_kind::partition_key)
         .build();
 }
-
-table_for_tests::table_for_tests(sstables::sstables_manager& sstables_manager)
-    : table_for_tests(
-        sstables_manager,
-        make_default_schema()
-    )
-{ }
 
 class table_for_tests::table_state : public compaction::table_state {
     table_for_tests::data& _data;
@@ -95,7 +87,7 @@ public:
         return _compaction_strategy_state;
     }
     reader_permit make_compaction_reader_permit() const override {
-        return _data.semaphore.make_tracking_only_permit(&*schema(), "table_for_tests::table_state", db::no_timeout, {});
+        return table().compaction_concurrency_semaphore().make_tracking_only_permit(&*schema(), "table_for_tests::table_state", db::no_timeout, {});
     }
     sstables::sstables_manager& get_sstables_manager() noexcept override {
         return _sstables_manager;
@@ -133,20 +125,15 @@ public:
     }
 };
 
-table_for_tests::table_for_tests(sstables::sstables_manager& sstables_manager, schema_ptr s, std::optional<sstring> datadir, data_dictionary::storage_options storage)
+table_for_tests::table_for_tests(sstables::sstables_manager& sstables_manager, compaction_manager& cm, schema_ptr s, replica::table::config cfg, data_dictionary::storage_options storage)
     : _data(make_lw_shared<data>())
 {
+    cfg.cf_stats = &_data->cf_stats;
     _data->s = s ? s : make_default_schema();
-    _data->cfg = replica::table::config{.compaction_concurrency_semaphore = &_data->semaphore};
-    _data->cfg.enable_disk_writes = bool(datadir);
-    _data->cfg.datadir = datadir.value_or(sstring());
-    _data->cfg.cf_stats = &_data->cf_stats;
-    _data->cfg.enable_commitlog = false;
-    _data->cm.enable();
-    _data->cf = make_lw_shared<replica::column_family>(_data->s, _data->cfg, make_lw_shared<replica::storage_options>(), _data->cm, sstables_manager, _data->cl_stats, _data->tracker, nullptr);
+    _data->cf = make_lw_shared<replica::column_family>(_data->s, std::move(cfg), make_lw_shared<replica::storage_options>(), cm, sstables_manager, _data->cl_stats, sstables_manager.get_cache_tracker(), nullptr);
     _data->cf->mark_ready_for_writes(nullptr);
     _data->table_s = std::make_unique<table_state>(*_data, sstables_manager);
-    _data->cm.add(*_data->table_s);
+    cm.add(*_data->table_s);
     _data->storage = std::move(storage);
 }
 
@@ -156,8 +143,8 @@ compaction::table_state& table_for_tests::as_table_state() noexcept {
 
 future<> table_for_tests::stop() {
     auto data = _data;
-    co_await data->cm.remove(*data->table_s);
-    co_await when_all_succeed(data->cm.stop(), data->semaphore.stop()).discard_result();
+    co_await data->cf->get_compaction_manager().remove(*data->table_s);
+    co_await data->cf->stop();
 }
 
 void table_for_tests::set_tombstone_gc_enabled(bool tombstone_gc_enabled) noexcept {
@@ -213,6 +200,21 @@ test_env::impl::impl(test_env_config cfg, sstables::storage_manager* sstm)
         // remote storage requires uuid-based identifier for naming sstables
         assert(use_uuid == uuid_identifiers::yes);
     }
+}
+
+void test_env::maybe_start_compaction_manager() {
+    if (!_impl->cmgr) {
+        _impl->cmgr = std::make_unique<test_env_compaction_manager>();
+        _impl->cmgr->get_compaction_manager().enable();
+    }
+}
+
+future<> test_env::stop() {
+    if (_impl->cmgr) {
+        co_await _impl->cmgr->get_compaction_manager().stop();
+    }
+    co_await _impl->mgr.close();
+    co_await _impl->semaphore.stop();
 }
 
 future<> test_env::do_with_async(noncopyable_function<void (test_env&)> func, test_env_config cfg) {
