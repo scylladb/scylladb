@@ -4981,7 +4981,9 @@ protected:
         data_resolver_ptr data_resolver = ::make_shared<data_read_resolver>(_schema, cl, _targets.size(), timeout);
         auto exec = shared_from_this();
 
-        cmd->slice.options.set<query::partition_slice::option::allow_mutation_read_page_without_live_row>();
+        if (_proxy->features().empty_replica_mutation_pages) {
+            cmd->slice.options.set<query::partition_slice::option::allow_mutation_read_page_without_live_row>();
+        }
 
         // Waited on indirectly.
         make_mutation_data_requests(cmd, data_resolver, _targets.begin(), _targets.end(), timeout);
