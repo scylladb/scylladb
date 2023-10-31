@@ -510,7 +510,7 @@ bool cache_flat_mutation_reader::ensure_population_lower_bound() {
             return false;
         }
 
-        if (cmp(cur.position(), _last_row.position()) != 0) {
+        if (cmp(cur.table_position(), _last_row.position()) != 0) {
             return false;
         }
 
