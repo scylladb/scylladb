@@ -3665,8 +3665,6 @@ future<> storage_service::on_change(inet_address endpoint, application_state sta
             co_await handle_state_removed(endpoint, std::move(pieces), pid);
         } else if (move_name == sstring(versioned_value::STATUS_LEFT)) {
             co_await handle_state_left(endpoint, std::move(pieces), pid);
-        } else if (move_name == sstring(versioned_value::HIBERNATE)) {
-            slogger.warn("endpoint={} went into HIBERNATE state, this is no longer supported.  Use a new version to perform the replace operation.", endpoint);
         } else {
             co_return; // did nothing.
         }

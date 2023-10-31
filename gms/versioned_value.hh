@@ -51,7 +51,6 @@ public:
 
     static constexpr const char* REMOVED_TOKEN = "removed";
 
-    static constexpr const char* HIBERNATE = "hibernate";
     static constexpr const char* SHUTDOWN = "shutdown";
 
     // values for ApplicationState.REMOVAL_COORDINATOR
