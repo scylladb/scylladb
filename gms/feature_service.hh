@@ -116,6 +116,7 @@ public:
     gms::feature separate_page_size_and_safety_limit { *this, "SEPARATE_PAGE_SIZE_AND_SAFETY_LIMIT"sv };
     // Replica is allowed to send back empty pages to coordinator on queries.
     gms::feature empty_replica_pages { *this, "EMPTY_REPLICA_PAGES"sv };
+    gms::feature empty_replica_mutation_pages { *this, "EMPTY_REPLICA_MUTATION_PAGES"sv };
     gms::feature supports_raft_cluster_mgmt { *this, "SUPPORTS_RAFT_CLUSTER_MANAGEMENT"sv };
     gms::feature tombstone_gc_options { *this, "TOMBSTONE_GC_OPTIONS"sv };
     gms::feature parallelized_aggregation { *this, "PARALLELIZED_AGGREGATION"sv };
