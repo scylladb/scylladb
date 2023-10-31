@@ -566,14 +566,14 @@ future<> server::init(net::inet_address addr, std::optional<uint16_t> port, std:
             set_routes(_https_server._routes);
             _https_server.set_content_length_limit(server::content_length_limit);
             _https_server.set_content_streaming(true);
-            _https_server.set_tls_credentials(creds->build_reloadable_server_credentials([](const std::unordered_set<sstring>& files, std::exception_ptr ep) {
+            auto server_creds = creds->build_reloadable_server_credentials([](const std::unordered_set<sstring>& files, std::exception_ptr ep) {
                 if (ep) {
                     slogger.warn("Exception loading {}: {}", files, ep);
                 } else {
                     slogger.info("Reloaded {}", files);
                 }
-            }).get0());
-            _https_server.listen(socket_address{addr, *https_port}).get();
+            }).get0();
+            _https_server.listen(socket_address{addr, *https_port}, std::move(server_creds)).get();
             _enabled_servers.push_back(std::ref(_https_server));
         }
     });
