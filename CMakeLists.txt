@@ -43,6 +43,10 @@ add_subdirectory(seastar)
 # System libraries dependencies
 find_package(Boost REQUIRED
     COMPONENTS filesystem program_options system thread regex unit_test_framework)
+target_link_libraries(Boost::regex
+  INTERFACE
+    ICU::i18n
+    ICU::uc)
 find_package(Lua REQUIRED)
 find_package(ZLIB REQUIRED)
 find_package(ICU COMPONENTS uc i18n REQUIRED)
@@ -186,10 +190,6 @@ target_link_libraries(scylla PRIVATE
     transport
     types
     utils)
-target_link_libraries(Boost::regex
-  INTERFACE
-    ICU::i18n
-    ICU::uc)
 
 target_link_libraries(scylla PRIVATE
     seastar
