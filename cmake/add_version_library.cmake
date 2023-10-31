@@ -1,3 +1,9 @@
+set(Scylla_DATE_STAMP
+  ""
+  CACHE
+  STRING
+  "Set datestamp for SCYLLA-VERSION-GEN (like YYYYMMDD, for instance, 20230314)")
+
 ###
 ### Generate version file and supply appropriate compile definitions for release.cc
 ###
@@ -5,8 +11,14 @@ function(generate_scylla_version)
   set(version_file ${CMAKE_CURRENT_BINARY_DIR}/SCYLLA-VERSION-FILE)
   set(release_file ${CMAKE_CURRENT_BINARY_DIR}/SCYLLA-RELEASE-FILE)
   set(product_file ${CMAKE_CURRENT_BINARY_DIR}/SCYLLA-PRODUCT-FILE)
+  if(NOT "${Scylla_DATE_STAMP}" STREQUAL "")
+    set(version_gen_args
+      --date-stamp "${Scylla_DATE_STAMP}")
+  endif()
   execute_process(
-    COMMAND ${CMAKE_SOURCE_DIR}/SCYLLA-VERSION-GEN --output-dir "${CMAKE_CURRENT_BINARY_DIR}"
+    COMMAND ${CMAKE_SOURCE_DIR}/SCYLLA-VERSION-GEN
+      ${version_gen_args}
+      --output-dir "${CMAKE_CURRENT_BINARY_DIR}"
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 
   file(STRINGS ${version_file} scylla_version)
