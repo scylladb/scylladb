@@ -87,7 +87,6 @@ then
 else
 	SCYLLA_VERSION=$VERSION
 	if [ -z "$SCYLLA_RELEASE" ]; then
-		DATE=$(date --utc +%Y%m%d)
 		GIT_COMMIT=$(git -C "$SCRIPT_DIR" log --pretty=format:'%h' -n 1 --abbrev=12)
 		# For custom package builds, replace "0" with "counter.your_name",
 		# where counter starts at 1 and increments for successive versions.
