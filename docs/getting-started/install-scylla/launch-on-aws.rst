@@ -13,7 +13,6 @@ Launching Instances from ScyllaDB AMI
    The following table shows the latest patch release. See :doc:`AWS Images </reference/aws-images/>` for earlier releases.
 
    .. scylladb_aws_images_template::
-      :version: 5.2
       :exclude: rc,dev
       :only_latest:
 

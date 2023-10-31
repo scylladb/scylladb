@@ -145,10 +145,28 @@ class AMIVersionsTemplateDirective(Directive):
         version = self._extract_version_from_filename(filename)
         return tuple(map(int, version.split("."))) if version else (0,)
 
+    def _get_current_version(self, current_version, stable_version):
+        prefix = 'branch-'
+        version = current_version
+
+        if current_version.startswith(prefix):
+            version = current_version
+        elif not stable_version.startswith(prefix):
+            LOGGER.error("Invalid stable_version format in conf.py. It should start with 'branch-'")
+        else:
+            version = stable_version
+
+        return version.replace(prefix, '')
 
     def run(self):
         app = self.state.document.settings.env.app
-        version_pattern = self.options.get("version", "")
+        current_version = os.environ.get('SPHINX_MULTIVERSION_NAME', '')
+        stable_version = app.config.smv_latest_version
+
+        version_pattern = self._get_current_version(current_version, stable_version)
+        version_options = self.options.get("version", "")
+        if version_options:
+            version_pattern = version_options
         exclude_patterns = self.options.get("exclude", "").split(",")
 
         download_directory = os.path.join(
