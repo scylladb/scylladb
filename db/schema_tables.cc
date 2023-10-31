@@ -1150,13 +1150,11 @@ static future<> do_merge_schema(distributed<service::storage_proxy>& proxy, std:
     co_await merge_aggregates(proxy, std::move(old_aggregates), std::move(new_aggregates), std::move(old_scylla_aggregates), std::move(new_scylla_aggregates));
     co_await types_to_drop.drop();
 
-    co_await proxy.local().get_db().invoke_on_all([&] (replica::database& db) -> future<> {
-        // it is safe to drop a keyspace only when all nested ColumnFamilies where deleted
-        for (auto keyspace_to_drop : keyspaces_to_drop) {
-            db.drop_keyspace(keyspace_to_drop);
-            co_await db.get_notifier().drop_keyspace(keyspace_to_drop);
-        }
-    });
+    auto& sharded_db = proxy.local().get_db();
+    // it is safe to drop a keyspace only when all nested ColumnFamilies where deleted
+    for (auto keyspace_to_drop : keyspaces_to_drop) {
+        co_await replica::database::drop_keyspace_on_all_shards(sharded_db, keyspace_to_drop);
+    }
 }
 
 future<lw_shared_ptr<query::result_set>> extract_scylla_specific_keyspace_info(distributed<service::storage_proxy>& proxy, const schema_result_value_type& partition) {
@@ -1205,19 +1203,18 @@ future<std::set<sstring>> merge_keyspaces(distributed<service::storage_proxy>& p
         slogger.info("Altering keyspace {}", key);
         altered.emplace_back(key);
     }
-    co_await proxy.local().get_db().invoke_on_all([&] (replica::database& db) -> future<> {
-        for (auto&& val : created) {
-            auto scylla_specific_rs = co_await extract_scylla_specific_keyspace_info(proxy, val);
-            auto ksm = create_keyspace_from_schema_partition(val, std::move(scylla_specific_rs));
-            co_await db.create_keyspace(ksm, proxy.local().get_erm_factory());
-            co_await db.get_notifier().create_keyspace(ksm);
-        }
-        {
-            for (auto& name : altered) {
-                co_await db.update_keyspace(proxy, name);
-            };
-        }
-    });
+    auto& sharded_db = proxy.local().get_db();
+    for (auto&& val : created) {
+        auto scylla_specific_rs = co_await extract_scylla_specific_keyspace_info(proxy, val);
+        auto ksm = create_keyspace_from_schema_partition(val, std::move(scylla_specific_rs));
+        co_await replica::database::create_keyspace_on_all_shards(sharded_db, proxy, *ksm);
+    }
+    for (auto& name : altered) {
+        auto v = co_await db::schema_tables::read_schema_partition_for_keyspace(proxy, db::schema_tables::KEYSPACES, name);
+        auto scylla_specific_rs = co_await db::schema_tables::extract_scylla_specific_keyspace_info(proxy, v);
+        auto tmp_ksm = db::schema_tables::create_keyspace_from_schema_partition(v, scylla_specific_rs);
+        co_await replica::database::update_keyspace_on_all_shards(sharded_db, proxy, *tmp_ksm);
+    }
     co_return dropped;
 }
 

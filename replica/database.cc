@@ -869,13 +869,23 @@ database::init_commitlog() {
     });
 }
 
-future<> database::update_keyspace(sharded<service::storage_proxy>& proxy, const sstring& name) {
-    auto v = co_await db::schema_tables::read_schema_partition_for_keyspace(proxy, db::schema_tables::KEYSPACES, name);
-    auto& ks = find_keyspace(name);
+future<> database::modify_keyspace_on_all_shards(sharded<database>& sharded_db, std::function<future<>(replica::database&)> func, std::function<future<>(replica::database&)> notifier) {
+    // Run func first on shard 0
+    // to allow "seeding" of the effective_replication_map
+    // with a new e_r_m instance.
+    co_await sharded_db.invoke_on(0, func);
+    co_await sharded_db.invoke_on_all([&] (replica::database& db) {
+        if (this_shard_id() == 0) {
+            return make_ready_future<>();
+        }
+        return func(db);
+    });
+    co_await sharded_db.invoke_on_all(notifier);
+}
 
-    auto scylla_specific_rs = co_await db::schema_tables::extract_scylla_specific_keyspace_info(proxy, v);
-    auto tmp_ksm = db::schema_tables::create_keyspace_from_schema_partition(v, scylla_specific_rs);
-    auto new_ksm = ::make_lw_shared<keyspace_metadata>(tmp_ksm->name(), tmp_ksm->strategy_name(), tmp_ksm->strategy_options(), tmp_ksm->durable_writes(),
+future<> database::update_keyspace(sharded<service::storage_proxy>& proxy, const keyspace_metadata& tmp_ksm) {
+    auto& ks = find_keyspace(tmp_ksm.name());
+    auto new_ksm = ::make_lw_shared<keyspace_metadata>(tmp_ksm.name(), tmp_ksm.strategy_name(), tmp_ksm.strategy_options(), tmp_ksm.durable_writes(),
                     boost::copy_range<std::vector<schema_ptr>>(ks.metadata()->cf_meta_data() | boost::adaptors::map_values), std::move(ks.metadata()->user_types()));
 
     bool old_durable_writes = ks.metadata()->durable_writes();
@@ -888,11 +898,28 @@ future<> database::update_keyspace(sharded<service::storage_proxy>& proxy, const
     }
 
     co_await ks.update_from(get_shared_token_metadata(), std::move(new_ksm));
-    co_await get_notifier().update_keyspace(ks.metadata());
+}
+
+future<> database::update_keyspace_on_all_shards(sharded<database>& sharded_db, sharded<service::storage_proxy>& proxy, const keyspace_metadata& ksm) {
+    return modify_keyspace_on_all_shards(sharded_db, [&] (replica::database& db) {
+        return db.update_keyspace(proxy, ksm);
+    }, [&] (replica::database& db) {
+        const auto& ks = db.find_keyspace(ksm.name());
+        return db.get_notifier().update_keyspace(ks.metadata());
+    });
 }
 
 void database::drop_keyspace(const sstring& name) {
     _keyspaces.erase(name);
+}
+
+future<> database::drop_keyspace_on_all_shards(sharded<database>& sharded_db, const sstring& name) {
+    return modify_keyspace_on_all_shards(sharded_db, [&] (replica::database& db) {
+        db.drop_keyspace(name);
+        return make_ready_future<>();
+    }, [&] (replica::database& db) {
+        return db.get_notifier().drop_keyspace(name);
+    });
 }
 
 static bool is_system_table(const schema& s) {
@@ -1360,11 +1387,6 @@ future<> database::create_in_memory_keyspace(const lw_shared_ptr<keyspace_metada
 }
 
 future<>
-database::create_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm, locator::effective_replication_map_factory& erm_factory) {
-    return create_keyspace(ksm, erm_factory, false, system_keyspace::no);
-}
-
-future<>
 database::create_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm, locator::effective_replication_map_factory& erm_factory, bool is_bootstrap, system_keyspace system) {
     if (_keyspaces.contains(ksm->name())) {
         co_return;
@@ -1383,6 +1405,16 @@ database::create_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm, locator::
     if (datadir != "") {
         co_await io_check([&datadir] { return touch_directory(datadir); });
     }
+}
+
+future<> database::create_keyspace_on_all_shards(sharded<database>& sharded_db, sharded<service::storage_proxy>& proxy, const keyspace_metadata& ks_metadata) {
+    co_await modify_keyspace_on_all_shards(sharded_db, [&] (replica::database& db) -> future<> {
+        auto ksm = keyspace_metadata::new_keyspace(ks_metadata);
+        co_await db.create_keyspace(ksm, proxy.local().get_erm_factory(), false, system_keyspace::no);
+    }, [&] (replica::database& db) -> future<> {
+        const auto& ks = db.find_keyspace(ks_metadata.name());
+        co_await db.get_notifier().create_keyspace(ks.metadata());
+    });
 }
 
 future<>
