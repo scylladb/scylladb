@@ -6587,6 +6587,7 @@ void storage_service::init_messaging_service(sharded<db::system_distributed_keys
             return ss.node_ops_cmd_handler(coordinator, std::move(req));
         });
     });
+    if (raft_topology_change_enabled) {
     auto handle_raft_rpc = [&cont = container()] (raft::server_id dst_id, auto handler) {
         return cont.invoke_on(0, [dst_id, handler = std::move(handler)] (auto& ss) mutable {
             if (!ss._group0 || !ss._group0->joined_group0()) {
@@ -6658,7 +6659,6 @@ void storage_service::init_messaging_service(sharded<db::system_distributed_keys
             return ss.cleanup_tablet(tablet);
         });
     });
-    if (raft_topology_change_enabled) {
         ser::join_node_rpc_verbs::register_join_node_request(&_messaging.local(), [handle_raft_rpc] (raft::server_id dst_id, service::join_node_request_params params) {
             return handle_raft_rpc(dst_id, [params = std::move(params)] (auto& ss) mutable {
                 return ss.join_node_request_handler(std::move(params));
