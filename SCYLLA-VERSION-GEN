@@ -1,12 +1,11 @@
 #!/bin/sh
 
 USAGE=$(cat <<-END
-Usage: $(basename "$0") [-h|--help] [-o|--output-dir PATH] [--date-stamp DATE] -- generate Scylla version and build information files.
+Usage: $(basename "$0") [-h|--help] [-o|--output-dir PATH] -- generate Scylla version and build information files.
 
 Options:
   -h|--help show this help message.
   -o|--output-dir PATH specify destination path at which the version files are to be created.
-  -d|--date-stamp DATE manually set date for release parameter
   -v|--verbose also print out the version number
 
 By default, the script will attempt to parse 'version' file
@@ -33,7 +32,6 @@ using '-o PATH' option.
 END
 )
 
-DATE=""
 PRINT_VERSION=false
 
 while [ $# -gt 0 ]; do
@@ -45,11 +43,6 @@ while [ $# -gt 0 ]; do
 			;;
 		-o|--output-dir)
 			OUTPUT_DIR="$2"
-			shift
-			shift
-			;;
-		--date-stamp)
-			DATE="$2"
 			shift
 			shift
 			;;
@@ -70,10 +63,6 @@ SCRIPT_DIR="$(dirname "$0")"
 
 if [ -z "$OUTPUT_DIR" ]; then
 	OUTPUT_DIR="$SCRIPT_DIR/build"
-fi
-
-if [ -z "$DATE" ]; then
-  DATE=$(date --utc +%Y%m%d)
 fi
 
 # Default scylla product/version tags
