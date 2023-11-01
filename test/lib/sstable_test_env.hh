@@ -89,9 +89,9 @@ class test_env {
         }
     };
     std::unique_ptr<impl> _impl;
-
-    void maybe_start_compaction_manager();
 public:
+
+    void maybe_start_compaction_manager(bool enable = true);
 
     explicit test_env(test_env_config cfg = {}, sstables::storage_manager* sstm = nullptr) : _impl(std::make_unique<impl>(std::move(cfg), sstm)) { }
 

@@ -202,10 +202,12 @@ test_env::impl::impl(test_env_config cfg, sstables::storage_manager* sstm)
     }
 }
 
-void test_env::maybe_start_compaction_manager() {
+void test_env::maybe_start_compaction_manager(bool enable) {
     if (!_impl->cmgr) {
         _impl->cmgr = std::make_unique<test_env_compaction_manager>();
-        _impl->cmgr->get_compaction_manager().enable();
+        if (enable) {
+            _impl->cmgr->get_compaction_manager().enable();
+        }
     }
 }
 
