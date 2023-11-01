@@ -21,6 +21,7 @@
 #include "dht/token.hh"
 #include "raft/raft.hh"
 #include "utils/UUID.hh"
+#include "service/session.hh"
 #include "mutation/canonical_mutation.hh"
 
 namespace service {
@@ -145,6 +146,9 @@ struct topology {
 
     // Set of features that are considered to be enabled by the cluster.
     std::set<sstring> enabled_features;
+
+    // Session used to create topology_guard for operations like streaming.
+    session_id session;
 
     // Find only nodes in non 'left' state
     const std::pair<const raft::server_id, replica_state>* find(raft::server_id id) const;

@@ -659,6 +659,7 @@ public:
     topology_mutation_builder& set_transition_state(topology::transition_state);
     topology_mutation_builder& set_version(topology::version_t);
     topology_mutation_builder& set_fence_version(topology::version_t);
+    topology_mutation_builder& set_session(session_id);
     topology_mutation_builder& set_current_cdc_generation_id(const cdc::generation_id_v2&);
     topology_mutation_builder& set_new_cdc_generation_data_uuid(const utils::UUID& value);
     topology_mutation_builder& set_unpublished_cdc_generations(const std::vector<cdc::generation_id_v2>& values);
@@ -668,6 +669,7 @@ public:
     topology_mutation_builder& add_enabled_features(const std::set<S>& value);
     topology_mutation_builder& add_unpublished_cdc_generation(const cdc::generation_id_v2& value);
     topology_mutation_builder& del_transition_state();
+    topology_mutation_builder& del_session();
     topology_mutation_builder& del_global_topology_request();
     topology_node_mutation_builder& with_node(raft::server_id);
     canonical_mutation build() { return canonical_mutation{std::move(_m)}; }
@@ -819,8 +821,17 @@ topology_mutation_builder& topology_mutation_builder::set_fence_version(topology
     return *this;
 }
 
+topology_mutation_builder& topology_mutation_builder::set_session(session_id value) {
+    _m.set_static_cell("session", value.uuid(), _ts);
+    return *this;
+}
+
 topology_mutation_builder& topology_mutation_builder::del_transition_state() {
     return del("transition_state");
+}
+
+topology_mutation_builder& topology_mutation_builder::del_session() {
+    return del("session");
 }
 
 topology_mutation_builder& topology_mutation_builder::set_current_cdc_generation_id(
@@ -1801,6 +1812,7 @@ class topology_coordinator {
             updates.emplace_back(
                 topology_mutation_builder(guard.write_timestamp())
                     .set_transition_state(topology::transition_state::write_both_read_old)
+                    .set_session(session_id(guard.new_group0_state_id()))
                     .set_version(_topo_sm._topology.version + 1)
                     .build());
         } else {
@@ -2009,6 +2021,7 @@ class topology_coordinator {
                     builder.del_transition_state();
                 } else {
                     builder.set_transition_state(topology::transition_state::write_both_read_old);
+                    builder.set_session(session_id(guard.new_group0_state_id()));
                     builder.set_version(_topo_sm._topology.version + 1);
                 }
                 auto str = ::format("committed new CDC generation, ID: {}", cdc_gen_id);
@@ -2102,6 +2115,7 @@ class topology_coordinator {
                 topology_mutation_builder builder(node.guard.write_timestamp());
                 builder
                     .set_transition_state(topology::transition_state::write_both_read_new)
+                    .del_session()
                     .set_version(_topo_sm._topology.version + 1);
                 auto str = ::format("{}: streaming completed for node {}", node.rs->state, node.id);
                 co_await update_topology_state(take_guard(std::move(node)), {builder.build()}, std::move(str));
@@ -4189,6 +4203,11 @@ future<> storage_service::replicate_to_all_cores(mutable_token_metadata_ptr tmpt
 
     // Collect open sessions
     {
+        auto session = _topology_state_machine._topology.session;
+        if (session) {
+            open_sessions.insert(session);
+        }
+
         for (auto&& [table_id, tmap]: tmptr->tablets().all_tables()) {
             for (auto&& [tid, trinfo]: tmap.transitions()) {
                 if (trinfo.session_id) {
@@ -6291,7 +6310,7 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                                 } else {
                                     dht::boot_strapper bs(_db, _stream_manager, _abort_source, get_broadcast_address(),
                                         locator::endpoint_dc_rack{rs.datacenter, rs.rack}, rs.ring.value().tokens, get_token_metadata_ptr());
-                                    co_await bs.bootstrap(streaming::stream_reason::bootstrap, _gossiper, null_topology_guard);
+                                    co_await bs.bootstrap(streaming::stream_reason::bootstrap, _gossiper, _topology_state_machine._topology.session);
                                 }
                             }));
                         }
@@ -6318,7 +6337,7 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                                 auto replaced_id = std::get<replace_param>(_topology_state_machine._topology.req_param[raft_server.id()]).replaced_id;
                                 auto existing_ip = _group0->address_map().find(replaced_id);
                                 assert(existing_ip);
-                                co_await bs.bootstrap(streaming::stream_reason::replace, _gossiper, null_topology_guard, *existing_ip);
+                                co_await bs.bootstrap(streaming::stream_reason::replace, _gossiper, _topology_state_machine._topology.session, *existing_ip);
                             }
                         }));
                     }
@@ -6370,7 +6389,7 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                             auto ops = seastar::make_shared<node_ops_info>(node_ops_id::create_random_id(), as, std::move(ignored_ips));
                             return _repair.local().removenode_with_repair(get_token_metadata_ptr(), *ip, ops);
                         } else {
-                            return removenode_with_stream(*ip, null_topology_guard, as);
+                            return removenode_with_stream(*ip, _topology_state_machine._topology.session, as);
                         }
                     }));
                     result.status = raft_topology_cmd_result::command_status::success;
@@ -6386,7 +6405,7 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                         } else {
                             auto streamer = make_lw_shared<dht::range_streamer>(_db, _stream_manager, tmptr, _abort_source,
                                     get_broadcast_address(), _snitch.local()->get_location(), "Rebuild", streaming::stream_reason::rebuild,
-                                    null_topology_guard);
+                                    _topology_state_machine._topology.session);
                             streamer->add_source_filter(std::make_unique<dht::range_streamer::failure_detector_source_filter>(_gossiper.get_unreachable_members()));
                             if (source_dc != "") {
                                 streamer->add_source_filter(std::make_unique<dht::range_streamer::single_datacenter_filter>(source_dc));
