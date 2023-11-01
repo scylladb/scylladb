@@ -11,3 +11,6 @@ target_link_libraries(repair
     idl
     Seastar::seastar
     xxHash::xxhash)
+
+check_headers(check-headers repair
+  GLOB_RECURSE ${CMAKE_CURRENT_SOURCE_DIR}/*.hh)

@@ -14,3 +14,6 @@ target_link_libraries(readers
     xxHash::xxhash
   PRIVATE
     schema)
+
+check_headers(check-headers readers
+  GLOB_RECURSE ${CMAKE_CURRENT_SOURCE_DIR}/*.hh)

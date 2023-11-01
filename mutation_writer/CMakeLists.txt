@@ -15,3 +15,6 @@ target_link_libraries(mutation_writer
     xxHash::xxhash
   PRIVATE
     schema)
+
+check_headers(check-headers mutation_writer
+  GLOB_RECURSE ${CMAKE_CURRENT_SOURCE_DIR}/*.hh)

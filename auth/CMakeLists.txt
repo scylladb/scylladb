@@ -35,3 +35,6 @@ target_link_libraries(scylla_auth
     libxcrypt::libxcrypt)
 
 add_whole_archive(auth scylla_auth)
+
+check_headers(check-headers scylla_auth
+  GLOB_RECURSE ${CMAKE_CURRENT_SOURCE_DIR}/*.hh)

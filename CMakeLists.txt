@@ -121,6 +121,17 @@ target_link_libraries(scylla-main
     Snappy::snappy
     systemd
     ZLIB::ZLIB)
+
+option(Scylla_CHECK_HEADERS
+  "Add check-headers target for checking the self-containness of headers")
+if(Scylla_CHECK_HEADERS)
+    add_custom_target(check-headers)
+endif()
+
+include(check_headers)
+check_headers(check-headers scylla-main
+  GLOB ${CMAKE_CURRENT_SOURCE_DIR}/*.hh)
+
 add_subdirectory(api)
 add_subdirectory(alternator)
 add_subdirectory(db)

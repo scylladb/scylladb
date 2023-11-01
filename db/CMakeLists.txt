@@ -47,3 +47,6 @@ target_link_libraries(db
   PRIVATE
     data_dictionary
     cql3)
+
+check_headers(check-headers db
+  GLOB_RECURSE ${CMAKE_CURRENT_SOURCE_DIR}/*.hh)

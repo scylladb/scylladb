@@ -47,3 +47,6 @@ build_submodule(python3 python3
   "${pip_dependencies}"
   --pip-symlinks
   "${pip_symlinks}")
+
+check_headers(check-headers tools
+  GLOB_RECURSE ${CMAKE_CURRENT_SOURCE_DIR}/*.hh)
