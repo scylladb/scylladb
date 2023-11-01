@@ -10,3 +10,6 @@ target_link_libraries(types
     idl
     Seastar::seastar
     xxHash::xxhash)
+
+check_headers(check-headers types
+  GLOB_RECURSE ${CMAKE_CURRENT_SOURCE_DIR}/*.hh)

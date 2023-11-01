@@ -17,3 +17,6 @@ target_link_libraries(transport
   PRIVATE
     cql3
     Snappy::snappy)
+
+check_headers(check-headers transport
+  GLOB_RECURSE ${CMAKE_CURRENT_SOURCE_DIR}/*.hh)

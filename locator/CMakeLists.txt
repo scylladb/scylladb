@@ -32,3 +32,6 @@ target_link_libraries(scylla_locator
     db)
 
 add_whole_archive(locator scylla_locator)
+
+check_headers(check-headers scylla_locator
+  GLOB_RECURSE ${CMAKE_CURRENT_SOURCE_DIR}/*.hh)

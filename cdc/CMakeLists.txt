@@ -15,3 +15,6 @@ target_link_libraries(cdc
     xxHash::xxhash
   PRIVATE
     replica)
+
+check_headers(check-headers cdc
+  GLOB_RECURSE ${CMAKE_CURRENT_SOURCE_DIR}/*.hh)

@@ -77,3 +77,7 @@ add_dependencies(idl idl-sources)
 target_include_directories(idl
   INTERFACE
     ${scylla_gen_build_dir})
+
+# *.idl.hh headers are not C++ headers but the ones
+# to be processed by the idl compiler, so we don't
+# check their self-containness.

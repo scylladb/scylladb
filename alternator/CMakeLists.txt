@@ -28,3 +28,6 @@ target_link_libraries(alternator
   idl
   Seastar::seastar
   xxHash::xxhash)
+
+check_headers(check-headers alternator
+  GLOB_RECURSE ${CMAKE_CURRENT_SOURCE_DIR}/*.hh)

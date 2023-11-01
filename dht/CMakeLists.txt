@@ -19,3 +19,6 @@ target_link_libraries(scylla_dht
     replica)
 
 add_whole_archive(dht scylla_dht)
+
+check_headers(check-headers scylla_dht
+  GLOB_RECURSE ${CMAKE_CURRENT_SOURCE_DIR}/*.hh)

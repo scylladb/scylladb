@@ -58,3 +58,6 @@ target_link_libraries(utils
     Boost::regex
     cryptopp
     rapidxml::rapidxml)
+
+check_headers(check-headers utils
+  GLOB_RECURSE ${CMAKE_CURRENT_SOURCE_DIR}/*.hh)

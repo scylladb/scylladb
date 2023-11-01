@@ -15,3 +15,6 @@ target_link_libraries(thrift
   PRIVATE
     interface
     Thrift::thrift)
+
+check_headers(check-headers thrift
+  GLOB_RECURSE ${CMAKE_CURRENT_SOURCE_DIR}/*.hh)

@@ -18,3 +18,6 @@ target_link_libraries(scylla_tracing
     service)
 
 add_whole_archive(tracing scylla_tracing)
+
+check_headers(check-headers scylla_tracing
+  GLOB_RECURSE ${CMAKE_CURRENT_SOURCE_DIR}/*.hh)

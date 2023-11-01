@@ -18,3 +18,6 @@ target_link_libraries(compaction
   PRIVATE
     mutation_writer
     replica)
+
+check_headers(check-headers compaction
+  GLOB_RECURSE ${CMAKE_CURRENT_SOURCE_DIR}/*.hh)

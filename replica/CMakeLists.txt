@@ -21,3 +21,6 @@ target_link_libraries(replica
     xxHash::xxhash
   PRIVATE
     absl::raw_hash_set)
+
+check_headers(check-headers replica
+  GLOB_RECURSE ${CMAKE_CURRENT_SOURCE_DIR}/*.hh)
