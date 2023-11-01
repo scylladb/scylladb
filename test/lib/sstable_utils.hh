@@ -239,35 +239,6 @@ future<> for_each_sstable_version(AsyncAction action) {
 
 } // namespace sstables
 
-// Must be used in a seastar thread
-class compaction_manager_for_testing {
-    struct wrapped_compaction_manager {
-        tasks::task_manager tm;
-        compaction_manager cm;
-        explicit wrapped_compaction_manager(bool enabled);
-        // Must run in a seastar thread
-        ~wrapped_compaction_manager();
-    };
-
-    lw_shared_ptr<wrapped_compaction_manager> _wcm;
-public:
-    explicit compaction_manager_for_testing(bool enabled = true) : _wcm(make_lw_shared<wrapped_compaction_manager>(enabled)) {}
-
-    compaction_manager& operator*() noexcept {
-        return _wcm->cm;
-    }
-    const compaction_manager& operator*() const noexcept {
-        return _wcm->cm;
-    }
-
-    compaction_manager* operator->() noexcept {
-        return &_wcm->cm;
-    }
-    const compaction_manager* operator->() const noexcept {
-        return &_wcm->cm;
-    }
-};
-
 class compaction_manager_test {
     compaction_manager& _cm;
 public:

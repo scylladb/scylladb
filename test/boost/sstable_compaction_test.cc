@@ -2806,7 +2806,6 @@ SEASTAR_TEST_CASE(sstable_run_based_compaction_test) {
 
         auto sst_gen = env.make_sst_factory(s);
 
-        auto tracker = make_lw_shared<cache_tracker>();
         auto cf = env.make_table_for_tests(s);
         auto close_cf = deferred_stop(cf);
         cf->start();
@@ -4112,11 +4111,6 @@ SEASTAR_TEST_CASE(max_ongoing_compaction_test) {
             return builder.build();
         };
 
-        auto cm = compaction_manager_for_testing();
-
-        auto cl_stats = make_lw_shared<cell_locker_stats>();
-        auto tracker = make_lw_shared<cache_tracker>();
-
         auto next_timestamp = [] (auto step) {
             using namespace std::chrono;
             return (gc_clock::now().time_since_epoch() - duration_cast<microseconds>(step)).count();
@@ -4134,7 +4128,7 @@ SEASTAR_TEST_CASE(max_ongoing_compaction_test) {
 
         constexpr size_t num_tables = 10;
         std::vector<schema_ptr> schemas;
-        std::vector<lw_shared_ptr<replica::column_family>> tables;
+        std::vector<table_for_tests> tables;
         auto stop_tables = defer([&tables] {
             for (auto& t : tables) {
                 t->stop().get();
@@ -4152,9 +4146,7 @@ SEASTAR_TEST_CASE(max_ongoing_compaction_test) {
             cfg.enable_commitlog = false;
             cfg.enable_incremental_backups = false;
 
-            auto cf = make_lw_shared<replica::column_family>(s, cfg, make_lw_shared<replica::storage_options>(), *cm, env.manager(), *cl_stats, *tracker, nullptr);
-            cf->start();
-            cf->mark_ready_for_writes(nullptr);
+            auto cf = env.make_table_for_tests(s);
             tables.push_back(cf);
         }
 
@@ -4186,24 +4178,25 @@ SEASTAR_TEST_CASE(max_ongoing_compaction_test) {
             }
 
             size_t max_ongoing_compaction = 0;
+            auto& cm = env.test_compaction_manager().get_compaction_manager();
 
             // wait for submitted jobs to finish.
-            auto end = [cm, &tables, expected_after] {
-                return cm->get_stats().pending_tasks == 0 && cm->get_stats().active_tasks == 0
+            auto end = [&cm, &tables, expected_after] {
+                return cm.get_stats().pending_tasks == 0 && cm.get_stats().active_tasks == 0
                     && boost::algorithm::all_of(tables, [expected_after] (auto& t) { return t->sstables_count() == expected_after; });
             };
             while (!end()) {
-                if (!cm->get_stats().pending_tasks && !cm->get_stats().active_tasks) {
+                if (!cm.get_stats().pending_tasks && !cm.get_stats().active_tasks) {
                     for (auto& t : tables) {
                         if (t->sstables_count()) {
                             t->trigger_compaction();
                         }
                     }
                 }
-                max_ongoing_compaction = std::max(cm->get_stats().active_tasks, max_ongoing_compaction);
+                max_ongoing_compaction = std::max(cm.get_stats().active_tasks, max_ongoing_compaction);
                 yield().get();
             }
-            BOOST_REQUIRE(cm->get_stats().errors == 0);
+            BOOST_REQUIRE(cm.get_stats().errors == 0);
             return max_ongoing_compaction;
         };
 

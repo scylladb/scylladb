@@ -3013,12 +3013,9 @@ static std::vector<sstables::shared_sstable> open_sstables(test_env& env, schema
 // Must be called in a seastar thread.
 static flat_mutation_reader_v2 compacted_sstable_reader(test_env& env, schema_ptr s,
                      sstring table_name, std::vector<sstables::generation_type::int_t> gen_values) {
+    env.maybe_start_compaction_manager(false);
+    auto cf = env.make_table_for_tests(s);
     auto generations = generations_from_values(gen_values);
-    auto cm = make_lw_shared<compaction_manager_for_testing>(false);
-    auto cl_stats = make_lw_shared<cell_locker_stats>();
-    auto tracker = make_lw_shared<cache_tracker>();
-    auto cf = make_lw_shared<replica::column_family>(s, env.make_table_config(), make_lw_shared<replica::storage_options>(), **cm, env.manager(), *cl_stats, *tracker, nullptr);
-    cf->mark_ready_for_writes(nullptr);
     lw_shared_ptr<replica::memtable> mt = make_lw_shared<replica::memtable>(s);
 
     auto sstables = open_sstables(env, s, format("test/resource/sstables/3.x/uncompressed/{}", table_name), generations);

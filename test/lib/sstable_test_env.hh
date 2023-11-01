@@ -89,9 +89,9 @@ class test_env {
         }
     };
     std::unique_ptr<impl> _impl;
-
-    void maybe_start_compaction_manager();
 public:
+
+    void maybe_start_compaction_manager(bool enable = true);
 
     explicit test_env(test_env_config cfg = {}, sstables::storage_manager* sstm = nullptr) : _impl(std::make_unique<impl>(std::move(cfg), sstm)) { }
 
@@ -179,6 +179,7 @@ public:
     }
 
     test_env_sstables_manager& manager() { return _impl->mgr; }
+    test_env_compaction_manager& test_compaction_manager() { return *_impl->cmgr; }
     reader_concurrency_semaphore& semaphore() { return _impl->semaphore; }
     db::config& db_config() { return *_impl->db_config; }
     tmpdir& tempdir() noexcept { return _impl->dir; }
