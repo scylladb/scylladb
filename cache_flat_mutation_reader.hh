@@ -581,11 +581,11 @@ void cache_flat_mutation_reader::maybe_update_continuity() {
                         if (insert_result.second) {
                             clogger.trace("csm {}: L{}: inserted dummy at {}", fmt::ptr(this), __LINE__, insert_result.first->position());
                             _snp->tracker()->insert(*insert_result.first);
+                            clogger.trace("csm {}: set_continuous({}), prev={}, rt={}", fmt::ptr(this), insert_result.first->position(),
+                                          _last_row.position(), _current_tombstone);
+                            set_rows_entry_continuous(*insert_result.first);
+                            insert_result.first->set_range_tombstone(_current_tombstone);
                         }
-                        clogger.trace("csm {}: set_continuous({}), prev={}, rt={}", fmt::ptr(this), insert_result.first->position(),
-                                      _last_row.position(), _current_tombstone);
-                        set_rows_entry_continuous(*insert_result.first);
-                        insert_result.first->set_range_tombstone(_current_tombstone);
                         clogger.trace("csm {}: set_continuous({})", fmt::ptr(this), e.position());
                         set_rows_entry_continuous(e);
                     });
