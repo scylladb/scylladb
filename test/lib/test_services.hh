@@ -60,6 +60,7 @@ struct table_for_tests {
 
     replica::column_family& operator*() { return *_data->cf; }
     replica::column_family* operator->() { return _data->cf.get(); }
+    const replica::column_family* operator->() const { return _data->cf.get(); }
 
     compaction::table_state& as_table_state() noexcept;
 
