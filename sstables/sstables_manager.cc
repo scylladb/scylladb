@@ -15,6 +15,7 @@
 #include "gms/feature_service.hh"
 #include "db/system_keyspace.hh"
 #include "utils/s3/client.hh"
+#include <memory>
 
 namespace sstables {
 
@@ -224,7 +225,16 @@ void sstables_manager::validate_new_keyspace_storage_options(const data_dictiona
             if (!is_known_endpoint(so.endpoint)) {
                 throw exceptions::configuration_exception(format("Endpoint {} not configured", so.endpoint));
             }
-        }
+        },
+        [this] (const data_dictionary::storage_options::mirrored& so) {
+            if (!_features.keyspace_storage_options) {
+                throw exceptions::invalid_request_exception("Keyspace storage options not supported in the cluster");
+            }
+            // It's non-system keyspace
+            if (!is_known_endpoint(so.endpoint)) {
+                throw exceptions::configuration_exception(format("Endpoint {} not configured", so.endpoint));
+            }
+        },
     }, so.value);
 }
 

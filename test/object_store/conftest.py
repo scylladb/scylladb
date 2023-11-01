@@ -16,6 +16,12 @@ from test.pylib.cql_repl import conftest
 def pytest_addoption(parser):
     parser.addoption('--keep-tmp', action='store_true',
                      help="keep the whole temp path")
+
+    all_storage_types = ['s3', 'mirrored']
+    parser.addoption('--storage', action='store', nargs='*',
+                     default=all_storage_types,
+                     choices=all_storage_types)
+
     conftest.pytest_addoption(parser)
     # reserved for tests with real S3
     s3_options = parser.getgroup("s3-server", description="S3 Server settings")
@@ -25,6 +31,13 @@ def pytest_addoption(parser):
     s3_options.addoption('--aws-secret-key')
     s3_options.addoption('--aws-region')
     s3_options.addoption('--s3-server-bucket')
+
+
+def pytest_generate_tests(metafunc):
+    if 'storage_type' in metafunc.fixturenames:
+        storage_types = [storage.upper()
+                         for storage in metafunc.config.getoption('--storage')]
+        metafunc.parametrize('storage_type', storage_types)
 
 
 class S3_Server:

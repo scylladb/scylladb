@@ -18,6 +18,7 @@ target_sources(sstables
     sstables_manager.cc
     sstable_version.cc
     storage.cc
+    mirrored_storage.cc
     writer.cc)
 target_include_directories(sstables
   PUBLIC

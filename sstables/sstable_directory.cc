@@ -8,6 +8,7 @@
 
 #include <type_traits>
 #include <seastar/core/coroutine.hh>
+#include <seastar/core/when_all.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/util/file.hh>
 #include <boost/range/adaptor/map.hpp>
@@ -56,6 +57,9 @@ sstable_directory::make_components_lister() {
             return std::make_unique<sstable_directory::filesystem_components_lister>(_sstable_dir);
         },
         [this] (const data_dictionary::storage_options::s3& os) mutable -> std::unique_ptr<sstable_directory::components_lister> {
+            return std::make_unique<sstable_directory::system_keyspace_components_lister>(_manager.system_keyspace(), _sstable_dir.native());
+        },
+        [this] (const data_dictionary::storage_options::mirrored& mirrored) mutable -> std::unique_ptr<sstable_directory::components_lister> {
             return std::make_unique<sstable_directory::system_keyspace_components_lister>(_manager.system_keyspace(), _sstable_dir.native());
         }
     }, _storage_opts->value);
@@ -332,8 +336,7 @@ future<> sstable_directory::filesystem_components_lister::process(sstable_direct
     co_await directory.parallel_for_each_restricted(descriptors, [this, flags, &directory] (std::pair<const generation_type, sstables::entry_descriptor>& t) {
         auto& desc = std::get<1>(t);
         _state->generations_found.erase(desc.generation);
-        // This will try to pre-load this file and throw an exception if it is invalid
-        return directory.process_descriptor(std::move(desc), flags);
+        return process_one(directory, std::move(desc), flags);
     });
 
     // For files missing TOC, it depends on where this is coming from.
@@ -348,6 +351,13 @@ future<> sstable_directory::filesystem_components_lister::process(sstable_direct
             _state->files_for_removal.insert(path.native());
         }
     }
+}
+
+future<> sstable_directory::filesystem_components_lister::process_one(sstable_directory& directory,
+                                                                      entry_descriptor desc,
+                                                                      process_flags flags) {
+    // This will try to pre-load this file and throw an exception if it is invalid
+    return directory.process_descriptor(std::move(desc), flags);
 }
 
 future<> sstable_directory::system_keyspace_components_lister::process(sstable_directory& directory, process_flags flags) {

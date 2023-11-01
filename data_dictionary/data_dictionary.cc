@@ -322,18 +322,50 @@ std::map<sstring, sstring> storage_options::s3::to_map() const {
             {"endpoint", endpoint}};
 }
 
+storage_options::mirrored storage_options::mirrored::from_map(const std::map<sstring, sstring>& values) {
+    unsigned num_recognized_values = 0;
+    auto get_value = [&](sstring key, sstring default_value = {}) {
+        auto found = values.find(key);
+        if (found != values.end()) {
+            num_recognized_values++;
+            return found->second;
+        }
+        if (default_value.empty()) {
+            throw std::runtime_error(seastar::format("Missing {} option: {}", name, key));
+        }
+        return default_value;
+    };
+    mirrored options {
+        .bucket = get_value("bucket"),
+        .endpoint = get_value("endpoint"),
+    };
+    if (values.size() > num_recognized_values) {
+        throw std::runtime_error(seastar::format("Extraneous options for {}: {}",
+                                        name, fmt::join(values | boost::adaptors::map_keys, ",")));
+    }
+    return options;
+}
+
+std::map<sstring, sstring> storage_options::mirrored::to_map() const {
+    return {{"bucket", bucket},
+            {"endpoint", endpoint}};
+}
+
 bool storage_options::is_local_type() const noexcept {
     return std::holds_alternative<local>(value);
 }
 
 storage_options::value_type storage_options::from_map(std::string_view type, std::map<sstring, sstring> values) {
     if (type == local::name) {
-        return local::from_map(values);
+         return local::from_map(values);
     }
     if (type == s3::name) {
         return s3::from_map(values);
     }
-    throw std::runtime_error(format("Unknown storage type: {}", type));
+    if (type == mirrored::name) {
+        return mirrored::from_map(values);
+    }
+    throw std::runtime_error(seastar::format("Unknown storage type: {}", type));
 }
 
 std::string_view storage_options::type_string() const {

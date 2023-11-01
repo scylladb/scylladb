@@ -79,7 +79,7 @@ public:
         virtual ~components_lister() {}
     };
 
-    class filesystem_components_lister final : public components_lister {
+    class filesystem_components_lister : public components_lister {
         struct scan_state {
             using scan_multimap = std::unordered_multimap<generation_type, std::filesystem::path>;
             using scan_descriptors = utils::chunked_vector<sstables::entry_descriptor>;
@@ -113,6 +113,8 @@ public:
         virtual future<> process(sstable_directory& directory, process_flags flags) override;
         virtual future<> commit() override;
         virtual future<> prepare(sstable_directory&, process_flags, storage&) override;
+    private:
+        virtual future<> process_one(sstable_directory&, sstables::entry_descriptor desc, process_flags);
     };
 
     class system_keyspace_components_lister final : public components_lister {

@@ -110,18 +110,20 @@ def managed_cluster(run_dir, ssl, s3_server):
         kill_with_dir(pid, run_dir)
 
 
-def create_ks_and_cf(cql, s3_server):
+def create_ks_and_cf(cql, s3_server, storage_type):
     ks = 'test_ks'
     cf = 'test_cf'
 
-    replication_opts = format_tuples({'class': 'NetworkTopologyStrategy',
-                                      'replication_factor': '1'})
-    storage_opts = format_tuples(type='S3',
-                                 endpoint=s3_server.address,
-                                 bucket=s3_server.bucket_name)
+    replication_opts = {'class': 'NetworkTopologyStrategy',
+                        'replication_factor': '1'}
+    storage_opts = {'type': storage_type,
+                    'endpoint': s3_server.address,
+                    'bucket': s3_server.bucket_name}
 
-    cql.execute((f"CREATE KEYSPACE {ks} WITH"
-                  f" REPLICATION = {replication_opts} AND STORAGE = {storage_opts};"))
+    cql.execute(f"CREATE KEYSPACE {ks} WITH"
+                " REPLICATION = {replication_opts} AND STORAGE = {storage_opts};".format(
+                    replication_opts=format_tuples(replication_opts),
+                    storage_opts=format_tuples(storage_opts)))
     cql.execute(f"CREATE TABLE {ks}.{cf} ( name text primary key, value text );")
 
     rows = [('0', 'zero'),
@@ -135,13 +137,13 @@ def create_ks_and_cf(cql, s3_server):
 
 
 @pytest.mark.asyncio
-async def test_basic(test_tempdir, s3_server, ssl):
+async def test_basic(test_tempdir, s3_server, ssl, storage_type):
     '''verify ownership table is updated, and tables written to S3 can be read after scylla restarts'''
 
     with managed_cluster(test_tempdir, ssl, s3_server) as cluster:
         print(f'Create keyspace (minio listening at {s3_server.address})')
         conn = cluster.cql.connect()
-        ks, cf = create_ks_and_cf(conn, s3_server)
+        ks, cf = create_ks_and_cf(conn, s3_server, storage_type)
 
         assert not os.path.exists(os.path.join(test_tempdir, f'data/{ks}')), "S3-backed keyspace has local directory created"
         # Sanity check that the path is constructed correctly
@@ -203,7 +205,7 @@ async def test_garbage_collect(test_tempdir, s3_server, ssl):
     with managed_cluster(test_tempdir, ssl, s3_server) as cluster:
         print(f'Create keyspace (minio listening at {s3_server.address})')
         conn = cluster.cql.connect()
-        ks, cf = create_ks_and_cf(conn, s3_server)
+        ks, cf = create_ks_and_cf(conn, s3_server, 'S3')
 
         await cluster.api.flush_keyspace(cluster.ip, ks)
         # Mark the sstables as "removing" to simulate the problem

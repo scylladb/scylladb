@@ -24,6 +24,8 @@
 #include "sstables/sstable_version.hh"
 #include "sstables/integrity_checked_file_impl.hh"
 #include "sstables/writer.hh"
+#include "sstables/mirrored_storage.hh"
+
 #include "db/system_keyspace.hh"
 #include "utils/lister.hh"
 #include "utils/overloaded_functor.hh"
@@ -585,6 +587,11 @@ std::unique_ptr<sstables::storage> make_storage(sstables_manager& manager, const
         },
         [dir, &manager] (const data_dictionary::storage_options::s3& os) mutable -> std::unique_ptr<sstables::storage> {
             return std::make_unique<sstables::s3_storage>(manager.get_endpoint_client(os.endpoint), os.bucket, std::move(dir));
+        },
+        [dir, &manager] (const data_dictionary::storage_options::mirrored& mirrored) mutable -> std::unique_ptr<sstables::storage> {
+            return std::make_unique<mirrored_storage>(manager.get_endpoint_client(mirrored.endpoint),
+                                                    mirrored.bucket,
+                                                    std::move(dir));
         }
     }, s_opts.value);
 }
@@ -598,7 +605,10 @@ future<> init_table_storage(const data_dictionary::storage_options& so, sstring 
         },
         [] (const data_dictionary::storage_options::s3&) -> future<> {
             co_return;
-        }
+        },
+        [&dir] (const data_dictionary::storage_options::mirrored&) -> future<> {
+            co_await io_check([&dir] { return recursive_touch_directory(dir); });
+        },
     }, so.value);
 }
 
@@ -609,6 +619,9 @@ future<> init_keyspace_storage(const data_dictionary::storage_options& so, sstri
         },
         [] (const data_dictionary::storage_options::s3&) -> future<> {
             co_return;
+        },
+        [&dir] (const data_dictionary::storage_options::mirrored&) -> future<> {
+            co_await io_check([&dir] { return touch_directory(dir); });
         }
     }, so.value);
 }
@@ -620,7 +633,10 @@ future<> destroy_table_storage(const data_dictionary::storage_options& so, sstri
         },
         [] (const data_dictionary::storage_options::s3&) -> future<> {
             co_return;
-        }
+        },
+        [&dir] (const data_dictionary::storage_options::mirrored&) -> future<> {
+            co_await sstables::remove_table_directory_if_has_no_snapshots(fs::path(dir));
+        },
     }, so.value);
 }
 
