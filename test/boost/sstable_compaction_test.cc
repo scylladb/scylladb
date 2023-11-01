@@ -2806,7 +2806,6 @@ SEASTAR_TEST_CASE(sstable_run_based_compaction_test) {
 
         auto sst_gen = env.make_sst_factory(s);
 
-        auto tracker = make_lw_shared<cache_tracker>();
         auto cf = env.make_table_for_tests(s);
         auto close_cf = deferred_stop(cf);
         cf->start();
