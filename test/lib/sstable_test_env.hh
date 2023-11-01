@@ -179,6 +179,7 @@ public:
     }
 
     test_env_sstables_manager& manager() { return _impl->mgr; }
+    test_env_compaction_manager& test_compaction_manager() { return *_impl->cmgr; }
     reader_concurrency_semaphore& semaphore() { return _impl->semaphore; }
     db::config& db_config() { return *_impl->db_config; }
     tmpdir& tempdir() noexcept { return _impl->dir; }
