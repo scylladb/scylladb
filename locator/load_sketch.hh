@@ -56,7 +56,7 @@ class load_sketch {
         }
     };
     std::unordered_map<host_id, node_load> _nodes;
-    token_metadata_ptr _tm;
+    token_metadata2_ptr _tm;
 private:
     tablet_replica_set get_replicas_for_tablet_load(const tablet_info& ti, const tablet_transition_info* trinfo) const {
         // We reflect migrations in the load as if they already happened,
@@ -65,7 +65,7 @@ private:
     }
 
 public:
-    load_sketch(token_metadata_ptr tm)
+    load_sketch(token_metadata2_ptr tm)
         : _tm(std::move(tm)) {
     }
 

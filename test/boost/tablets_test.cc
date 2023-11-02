@@ -433,7 +433,7 @@ SEASTAR_TEST_CASE(test_sharder) {
 
         auto table1 = table_id(utils::UUID_gen::get_time_UUID());
 
-        token_metadata tokm(token_metadata::config{ .topo_cfg{ .this_host_id = h1 } });
+        token_metadata2 tokm(token_metadata::config{ .topo_cfg{ .this_host_id = h1 } });
         tokm.get_topology().add_or_update_endpoint(tokm.get_topology().my_address(), h1);
 
         std::vector<tablet_id> tablet_ids;
@@ -591,7 +591,7 @@ SEASTAR_THREAD_TEST_CASE(test_token_ownership_splitting) {
 
 // Reflects the plan in a given token metadata as if the migrations were fully executed.
 static
-void apply_plan(token_metadata& tm, const migration_plan& plan) {
+void apply_plan(token_metadata2& tm, const migration_plan& plan) {
     for (auto&& mig : plan.migrations()) {
         tablet_map& tmap = tm.tablets().get_tablet_map(mig.tablet.table);
         auto tinfo = tmap.get_tablet_info(mig.tablet.tablet);
@@ -611,7 +611,7 @@ tablet_transition_info migration_to_transition_info(const tablet_migration_info&
 
 // Reflects the plan in a given token metadata as if the migrations were started but not yet executed.
 static
-void apply_plan_as_in_progress(token_metadata& tm, const migration_plan& plan) {
+void apply_plan_as_in_progress(token_metadata2& tm, const migration_plan& plan) {
     for (auto&& mig : plan.migrations()) {
         tablet_map& tmap = tm.tablets().get_tablet_map(mig.tablet.table);
         auto tinfo = tmap.get_tablet_info(mig.tablet.tablet);
@@ -622,12 +622,12 @@ void apply_plan_as_in_progress(token_metadata& tm, const migration_plan& plan) {
 static
 void rebalance_tablets(tablet_allocator& talloc, shared_token_metadata& stm) {
     while (true) {
-        auto plan = talloc.balance_tablets(stm.get()).get0();
+        auto plan = talloc.balance_tablets(stm.get()->get_new_strong()).get0();
         if (plan.empty()) {
             break;
         }
         stm.mutate_token_metadata([&] (token_metadata& tm) {
-            apply_plan(tm, plan);
+            apply_plan(*tm.get_new(), plan);
             return make_ready_future<>();
         }).get();
     }
@@ -636,12 +636,12 @@ void rebalance_tablets(tablet_allocator& talloc, shared_token_metadata& stm) {
 static
 void rebalance_tablets_as_in_progress(tablet_allocator& talloc, shared_token_metadata& stm) {
     while (true) {
-        auto plan = talloc.balance_tablets(stm.get()).get0();
+        auto plan = talloc.balance_tablets(stm.get()->get_new_strong()).get0();
         if (plan.empty()) {
             break;
         }
         stm.mutate_token_metadata([&] (token_metadata& tm) {
-            apply_plan_as_in_progress(tm, plan);
+            apply_plan_as_in_progress(*tm.get_new(), plan);
             return make_ready_future<>();
         }).get();
     }
@@ -651,7 +651,7 @@ void rebalance_tablets_as_in_progress(tablet_allocator& talloc, shared_token_met
 static
 void execute_transitions(shared_token_metadata& stm) {
     stm.mutate_token_metadata([&] (token_metadata& tm) {
-        for (auto&& [tablet, tmap_] : tm.tablets().all_tables()) {
+        for (auto&& [tablet, tmap_] : tm.get_new()->tablets().all_tables()) {
             auto& tmap = tmap_;
             for (auto&& [tablet, trinfo]: tmap.transitions()) {
                 auto ti = tmap.get_tablet_info(tablet);
@@ -690,12 +690,12 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_empty_node) {
     });
 
     stm.mutate_token_metadata([&] (auto& tm) {
-        tm.update_host_id(host1, ip1);
-        tm.update_host_id(host2, ip2);
-        tm.update_host_id(host3, ip3);
-        tm.update_topology(ip1, locator::endpoint_dc_rack::default_location, std::nullopt, shard_count);
-        tm.update_topology(ip2, locator::endpoint_dc_rack::default_location, std::nullopt, shard_count);
-        tm.update_topology(ip3, locator::endpoint_dc_rack::default_location, std::nullopt, shard_count);
+        tm.get_new()->update_host_id(host1, ip1);
+        tm.get_new()->update_host_id(host2, ip2);
+        tm.get_new()->update_host_id(host3, ip3);
+        tm.get_new()->update_topology(host1, locator::endpoint_dc_rack::default_location, std::nullopt, shard_count);
+        tm.get_new()->update_topology(host2, locator::endpoint_dc_rack::default_location, std::nullopt, shard_count);
+        tm.get_new()->update_topology(host3, locator::endpoint_dc_rack::default_location, std::nullopt, shard_count);
 
         tablet_map tmap(4);
         auto tid = tmap.first_tablet();
@@ -728,13 +728,13 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_empty_node) {
         });
         tablet_metadata tmeta;
         tmeta.set_tablet_map(table1, std::move(tmap));
-        tm.set_tablets(std::move(tmeta));
+        tm.get_new()->set_tablets(std::move(tmeta));
         return make_ready_future<>();
     }).get();
 
     // Sanity check
     {
-        load_sketch load(stm.get());
+        load_sketch load(stm.get()->get_new_strong());
         load.populate().get();
         BOOST_REQUIRE_EQUAL(load.get_load(host1), 4);
         BOOST_REQUIRE_EQUAL(load.get_avg_shard_load(host1), 2);
@@ -747,7 +747,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_empty_node) {
     rebalance_tablets(e.get_tablet_allocator().local(), stm);
 
     {
-        load_sketch load(stm.get());
+        load_sketch load(stm.get()->template get_new_strong());
         load.populate().get();
 
         for (auto h : {host1, host2, host3}) {
@@ -786,12 +786,12 @@ SEASTAR_THREAD_TEST_CASE(test_decommission_rf_met) {
         stm.mutate_token_metadata([&](auto& tm) {
             const unsigned shard_count = 2;
 
-            tm.update_host_id(host1, ip1);
-            tm.update_host_id(host2, ip2);
-            tm.update_host_id(host3, ip3);
-            tm.update_topology(ip1, locator::endpoint_dc_rack::default_location, std::nullopt, shard_count);
-            tm.update_topology(ip2, locator::endpoint_dc_rack::default_location, std::nullopt, shard_count);
-            tm.update_topology(ip3, locator::endpoint_dc_rack::default_location, node::state::being_decommissioned,
+            tm.get_new()->update_host_id(host1, ip1);
+            tm.get_new()->update_host_id(host2, ip2);
+            tm.get_new()->update_host_id(host3, ip3);
+            tm.get_new()->update_topology(host1, locator::endpoint_dc_rack::default_location, std::nullopt, shard_count);
+            tm.get_new()->update_topology(host2, locator::endpoint_dc_rack::default_location, std::nullopt, shard_count);
+            tm.get_new()->update_topology(host3, locator::endpoint_dc_rack::default_location, node::state::being_decommissioned,
                                shard_count);
 
             tablet_map tmap(4);
@@ -825,14 +825,14 @@ SEASTAR_THREAD_TEST_CASE(test_decommission_rf_met) {
             });
             tablet_metadata tmeta;
             tmeta.set_tablet_map(table1, std::move(tmap));
-            tm.set_tablets(std::move(tmeta));
+            tm.get_new()->set_tablets(std::move(tmeta));
             return make_ready_future<>();
         }).get();
 
         rebalance_tablets(e.get_tablet_allocator().local(), stm);
 
         {
-            load_sketch load(stm.get());
+            load_sketch load(stm.get()->get_new_strong());
             load.populate().get();
             BOOST_REQUIRE(load.get_avg_shard_load(host1) == 2);
             BOOST_REQUIRE(load.get_avg_shard_load(host2) == 2);
@@ -840,14 +840,14 @@ SEASTAR_THREAD_TEST_CASE(test_decommission_rf_met) {
         }
 
         stm.mutate_token_metadata([&](auto& tm) {
-            tm.update_topology(ip3, locator::endpoint_dc_rack::default_location, node::state::left);
+            tm.get_new()->update_topology(host3, locator::endpoint_dc_rack::default_location, node::state::left);
             return make_ready_future<>();
         }).get();
 
         rebalance_tablets(e.get_tablet_allocator().local(), stm);
 
         {
-            load_sketch load(stm.get());
+            load_sketch load(stm.get()->get_new_strong());
             load.populate().get();
             BOOST_REQUIRE(load.get_avg_shard_load(host1) == 2);
             BOOST_REQUIRE(load.get_avg_shard_load(host2) == 2);
@@ -888,14 +888,14 @@ SEASTAR_THREAD_TEST_CASE(test_decommission_two_racks) {
         stm.mutate_token_metadata([&](auto& tm) {
             const unsigned shard_count = 1;
 
-            tm.update_host_id(host1, ip1);
-            tm.update_host_id(host2, ip2);
-            tm.update_host_id(host3, ip3);
-            tm.update_host_id(host4, ip4);
-            tm.update_topology(ip1, racks[0], std::nullopt, shard_count);
-            tm.update_topology(ip2, racks[1], std::nullopt, shard_count);
-            tm.update_topology(ip3, racks[0], std::nullopt, shard_count);
-            tm.update_topology(ip4, racks[1], node::state::being_decommissioned,
+            tm.get_new()->update_host_id(host1, ip1);
+            tm.get_new()->update_host_id(host2, ip2);
+            tm.get_new()->update_host_id(host3, ip3);
+            tm.get_new()->update_host_id(host4, ip4);
+            tm.get_new()->update_topology(host1, racks[0], std::nullopt, shard_count);
+            tm.get_new()->update_topology(host2, racks[1], std::nullopt, shard_count);
+            tm.get_new()->update_topology(host3, racks[0], std::nullopt, shard_count);
+            tm.get_new()->update_topology(host4, racks[1], node::state::being_decommissioned,
                                shard_count);
 
             tablet_map tmap(4);
@@ -929,14 +929,14 @@ SEASTAR_THREAD_TEST_CASE(test_decommission_two_racks) {
             });
             tablet_metadata tmeta;
             tmeta.set_tablet_map(table1, std::move(tmap));
-            tm.set_tablets(std::move(tmeta));
+            tm.get_new()->set_tablets(std::move(tmeta));
             return make_ready_future<>();
         }).get();
 
         rebalance_tablets(e.get_tablet_allocator().local(), stm);
 
         {
-            load_sketch load(stm.get());
+            load_sketch load(stm.get()->get_new_strong());
             load.populate().get();
             BOOST_REQUIRE(load.get_avg_shard_load(host1) >= 2);
             BOOST_REQUIRE(load.get_avg_shard_load(host2) >= 2);
@@ -947,10 +947,10 @@ SEASTAR_THREAD_TEST_CASE(test_decommission_two_racks) {
         // Verify replicas are not collocated on racks
         {
             auto tm = stm.get();
-            auto& tmap = tm->tablets().get_tablet_map(table1);
+            auto& tmap = tm->get_new()->tablets().get_tablet_map(table1);
             tmap.for_each_tablet([&](auto tid, auto& tinfo) {
-                auto rack1 = tm->get_topology().get_rack(tinfo.replicas[0].host);
-                auto rack2 = tm->get_topology().get_rack(tinfo.replicas[1].host);
+                auto rack1 = tm->get_new()->get_topology().get_rack(tinfo.replicas[0].host);
+                auto rack2 = tm->get_new()->get_topology().get_rack(tinfo.replicas[1].host);
                 BOOST_REQUIRE(rack1 != rack2);
             }).get();
         }
@@ -989,14 +989,14 @@ SEASTAR_THREAD_TEST_CASE(test_decommission_rack_load_failure) {
         stm.mutate_token_metadata([&](auto& tm) {
             const unsigned shard_count = 1;
 
-            tm.update_host_id(host1, ip1);
-            tm.update_host_id(host2, ip2);
-            tm.update_host_id(host3, ip3);
-            tm.update_host_id(host4, ip4);
-            tm.update_topology(ip1, racks[0], std::nullopt, shard_count);
-            tm.update_topology(ip2, racks[0], std::nullopt, shard_count);
-            tm.update_topology(ip3, racks[0], std::nullopt, shard_count);
-            tm.update_topology(ip4, racks[1], node::state::being_decommissioned,
+            tm.get_new()->update_host_id(host1, ip1);
+            tm.get_new()->update_host_id(host2, ip2);
+            tm.get_new()->update_host_id(host3, ip3);
+            tm.get_new()->update_host_id(host4, ip4);
+            tm.get_new()->update_topology(host1, racks[0], std::nullopt, shard_count);
+            tm.get_new()->update_topology(host2, racks[0], std::nullopt, shard_count);
+            tm.get_new()->update_topology(host3, racks[0], std::nullopt, shard_count);
+            tm.get_new()->update_topology(host4, racks[1], node::state::being_decommissioned,
                                shard_count);
 
             tablet_map tmap(4);
@@ -1030,7 +1030,7 @@ SEASTAR_THREAD_TEST_CASE(test_decommission_rack_load_failure) {
             });
             tablet_metadata tmeta;
             tmeta.set_tablet_map(table1, std::move(tmap));
-            tm.set_tablets(std::move(tmeta));
+            tm.get_new()->set_tablets(std::move(tmeta));
             return make_ready_future<>();
         }).get();
 
@@ -1063,12 +1063,12 @@ SEASTAR_THREAD_TEST_CASE(test_decommission_rf_not_met) {
         stm.mutate_token_metadata([&](auto& tm) {
             const unsigned shard_count = 2;
 
-            tm.update_host_id(host1, ip1);
-            tm.update_host_id(host2, ip2);
-            tm.update_host_id(host3, ip3);
-            tm.update_topology(ip1, locator::endpoint_dc_rack::default_location, std::nullopt, shard_count);
-            tm.update_topology(ip2, locator::endpoint_dc_rack::default_location, std::nullopt, shard_count);
-            tm.update_topology(ip3, locator::endpoint_dc_rack::default_location, node::state::being_decommissioned,
+            tm.get_new()->update_host_id(host1, ip1);
+            tm.get_new()->update_host_id(host2, ip2);
+            tm.get_new()->update_host_id(host3, ip3);
+            tm.get_new()->update_topology(host1, locator::endpoint_dc_rack::default_location, std::nullopt, shard_count);
+            tm.get_new()->update_topology(host2, locator::endpoint_dc_rack::default_location, std::nullopt, shard_count);
+            tm.get_new()->update_topology(host3, locator::endpoint_dc_rack::default_location, node::state::being_decommissioned,
                                shard_count);
 
             tablet_map tmap(1);
@@ -1082,7 +1082,7 @@ SEASTAR_THREAD_TEST_CASE(test_decommission_rf_not_met) {
             });
             tablet_metadata tmeta;
             tmeta.set_tablet_map(table1, std::move(tmap));
-            tm.set_tablets(std::move(tmeta));
+            tm.get_new()->set_tablets(std::move(tmeta));
             return make_ready_future<>();
         }).get();
 
@@ -1118,12 +1118,12 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_works_with_in_progress_transitions)
     });
 
     stm.mutate_token_metadata([&] (auto& tm) {
-        tm.update_host_id(host1, ip1);
-        tm.update_host_id(host2, ip2);
-        tm.update_host_id(host3, ip3);
-        tm.update_topology(ip1, locator::endpoint_dc_rack::default_location, std::nullopt, 1);
-        tm.update_topology(ip2, locator::endpoint_dc_rack::default_location, std::nullopt, 1);
-        tm.update_topology(ip3, locator::endpoint_dc_rack::default_location, std::nullopt, 2);
+        tm.get_new()->update_host_id(host1, ip1);
+        tm.get_new()->update_host_id(host2, ip2);
+        tm.get_new()->update_host_id(host3, ip3);
+        tm.get_new()->update_topology(host1, locator::endpoint_dc_rack::default_location, std::nullopt, 1);
+        tm.get_new()->update_topology(host2, locator::endpoint_dc_rack::default_location, std::nullopt, 1);
+        tm.get_new()->update_topology(host3, locator::endpoint_dc_rack::default_location, std::nullopt, 2);
 
         tablet_map tmap(4);
         std::optional<tablet_id> tid = tmap.first_tablet();
@@ -1146,7 +1146,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_works_with_in_progress_transitions)
         });
         tablet_metadata tmeta;
         tmeta.set_tablet_map(table1, std::move(tmap));
-        tm.set_tablets(std::move(tmeta));
+        tm.get_new()->set_tablets(std::move(tmeta));
         return make_ready_future<>();
     }).get();
 
@@ -1154,7 +1154,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_works_with_in_progress_transitions)
     execute_transitions(stm);
 
     {
-        load_sketch load(stm.get());
+        load_sketch load(stm.get()->get_new_strong());
         load.populate().get();
 
         for (auto h : {host1, host2, host3}) {
@@ -1187,12 +1187,12 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancer_shuffle_mode) {
     });
 
     stm.mutate_token_metadata([&] (auto& tm) {
-        tm.update_host_id(host1, ip1);
-        tm.update_host_id(host2, ip2);
-        tm.update_host_id(host3, ip3);
-        tm.update_topology(ip1, locator::endpoint_dc_rack::default_location, std::nullopt, 1);
-        tm.update_topology(ip2, locator::endpoint_dc_rack::default_location, std::nullopt, 1);
-        tm.update_topology(ip3, locator::endpoint_dc_rack::default_location, std::nullopt, 2);
+        tm.get_new()->update_host_id(host1, ip1);
+        tm.get_new()->update_host_id(host2, ip2);
+        tm.get_new()->update_host_id(host3, ip3);
+        tm.get_new()->update_topology(host1, locator::endpoint_dc_rack::default_location, std::nullopt, 1);
+        tm.get_new()->update_topology(host2, locator::endpoint_dc_rack::default_location, std::nullopt, 1);
+        tm.get_new()->update_topology(host3, locator::endpoint_dc_rack::default_location, std::nullopt, 2);
 
         tablet_map tmap(4);
         std::optional<tablet_id> tid = tmap.first_tablet();
@@ -1207,20 +1207,20 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancer_shuffle_mode) {
         }
         tablet_metadata tmeta;
         tmeta.set_tablet_map(table1, std::move(tmap));
-        tm.set_tablets(std::move(tmeta));
+        tm.get_new()->set_tablets(std::move(tmeta));
         return make_ready_future<>();
     }).get();
 
     rebalance_tablets(e.get_tablet_allocator().local(), stm);
 
-    BOOST_REQUIRE(e.get_tablet_allocator().local().balance_tablets(stm.get()).get0().empty());
+    BOOST_REQUIRE(e.get_tablet_allocator().local().balance_tablets(stm.get()->get_new_strong()).get0().empty());
 
     utils::get_local_injector().enable("tablet_allocator_shuffle");
     auto disable_injection = seastar::defer([&] {
         utils::get_local_injector().disable("tablet_allocator_shuffle");
     });
 
-    BOOST_REQUIRE(!e.get_tablet_allocator().local().balance_tablets(stm.get()).get0().empty());
+    BOOST_REQUIRE(!e.get_tablet_allocator().local().balance_tablets(stm.get()->get_new_strong()).get0().empty());
   }).get();
 }
 #endif
@@ -1250,14 +1250,14 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_two_empty_nodes) {
     });
 
     stm.mutate_token_metadata([&] (auto& tm) {
-        tm.update_host_id(host1, ip1);
-        tm.update_host_id(host2, ip2);
-        tm.update_host_id(host3, ip3);
-        tm.update_host_id(host4, ip4);
-        tm.update_topology(ip1, locator::endpoint_dc_rack::default_location, std::nullopt, shard_count);
-        tm.update_topology(ip2, locator::endpoint_dc_rack::default_location, std::nullopt, shard_count);
-        tm.update_topology(ip3, locator::endpoint_dc_rack::default_location, std::nullopt, shard_count);
-        tm.update_topology(ip4, locator::endpoint_dc_rack::default_location, std::nullopt, shard_count);
+        tm.get_new()->update_host_id(host1, ip1);
+        tm.get_new()->update_host_id(host2, ip2);
+        tm.get_new()->update_host_id(host3, ip3);
+        tm.get_new()->update_host_id(host4, ip4);
+        tm.get_new()->update_topology(host1, locator::endpoint_dc_rack::default_location, std::nullopt, shard_count);
+        tm.get_new()->update_topology(host2, locator::endpoint_dc_rack::default_location, std::nullopt, shard_count);
+        tm.get_new()->update_topology(host3, locator::endpoint_dc_rack::default_location, std::nullopt, shard_count);
+        tm.get_new()->update_topology(host4, locator::endpoint_dc_rack::default_location, std::nullopt, shard_count);
 
         tablet_map tmap(16);
         for (auto tid : tmap.tablet_ids()) {
@@ -1270,14 +1270,14 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_two_empty_nodes) {
         }
         tablet_metadata tmeta;
         tmeta.set_tablet_map(table1, std::move(tmap));
-        tm.set_tablets(std::move(tmeta));
+        tm.get_new()->set_tablets(std::move(tmeta));
         return make_ready_future<>();
     }).get();
 
     rebalance_tablets(e.get_tablet_allocator().local(), stm);
 
     {
-        load_sketch load(stm.get());
+        load_sketch load(stm.get()->get_new_strong());
         load.populate().get();
 
         for (auto h : {host1, host2, host3, host4}) {
@@ -1312,8 +1312,8 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancer_disabling) {
         stm.mutate_token_metadata([&] (auto& tm) {
             tm.update_host_id(host1, ip1);
             tm.update_host_id(host2, ip2);
-            tm.update_topology(ip1, locator::endpoint_dc_rack::default_location, std::nullopt, shard_count);
-            tm.update_topology(ip2, locator::endpoint_dc_rack::default_location, std::nullopt, shard_count);
+            tm.update_topology(host1, locator::endpoint_dc_rack::default_location, std::nullopt, shard_count);
+            tm.update_topology(host2, locator::endpoint_dc_rack::default_location, std::nullopt, shard_count);
 
             tablet_map tmap(16);
             for (auto tid : tmap.tablet_ids()) {
@@ -1399,6 +1399,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_random_load) {
         shared_token_metadata stm([&sem]() noexcept { return get_units(sem, 1); }, locator::token_metadata::config {
                 locator::topology::config {
                         .this_endpoint = inet_address("192.168.0.1"),
+                        .this_host_id = hosts[0],
                         .local_dc_rack = racks[1]
                 }
         });
@@ -1411,9 +1412,9 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_random_load) {
             for (auto h : hosts) {
                 auto ip = inet_address(format("192.168.0.{}", ++i));
                 auto shard_count = 2;
-                tm.update_host_id(h, ip);
+                tm.get_new()->update_host_id(h, ip);
                 auto rack = racks[i % racks.size()];
-                tm.update_topology(ip, rack, std::nullopt, shard_count);
+                tm.get_new()->update_topology(h, rack, std::nullopt, shard_count);
                 if (h != hosts[0]) {
                     // Leave the first host empty by making it invisible to allocation algorithm.
                     hosts_by_rack[rack.rack].push_back(h);
@@ -1444,7 +1445,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_random_load) {
                     }
                     tablet_replica_set replicas;
                     for (auto h : replica_hosts) {
-                        auto shard_count = tm.get_topology().find_node(h)->get_shard_count();
+                        auto shard_count = tm.get_new()->get_topology().find_node(h)->get_shard_count();
                         auto shard = tests::random::get_int<shard_id>(0, shard_count - 1);
                         replicas.push_back(tablet_replica {h, shard});
                     }
@@ -1453,17 +1454,17 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_random_load) {
                 total_tablet_count += tmap.tablet_count();
                 tmeta.set_tablet_map(table, std::move(tmap));
             }
-            tm.set_tablets(std::move(tmeta));
+            tm.get_new()->set_tablets(std::move(tmeta));
             return make_ready_future<>();
         }).get();
 
-        testlog.debug("tablet metadata: {}", stm.get()->tablets());
+        testlog.debug("tablet metadata: {}", stm.get()->get_new()->tablets());
         testlog.info("Total tablet count: {}, hosts: {}", total_tablet_count, hosts.size());
 
         rebalance_tablets(e.get_tablet_allocator().local(), stm);
 
         {
-            load_sketch load(stm.get());
+            load_sketch load(stm.get()->get_new_strong());
             load.populate().get();
 
             min_max_tracker<unsigned> min_max_load;
@@ -1473,7 +1474,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_random_load) {
                 min_max_load.update(l);
             }
 
-            testlog.debug("tablet metadata: {}", stm.get()->tablets());
+            testlog.debug("tablet metadata: {}", stm.get()->get_new()->tablets());
             testlog.debug("Min load: {}, max load: {}", min_max_load.min(), min_max_load.max());
 
 //          FIXME: The algorithm cannot achieve balance in all cases yet, so we only check that it stops.

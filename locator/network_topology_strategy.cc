@@ -300,23 +300,23 @@ future<tablet_map> network_topology_strategy::allocate_tablets_for_new_table(sch
     }
 
     tablet_map tablets(tablet_count);
-    load_sketch load(tm);
+    load_sketch load(tm->get_new_strong());
     co_await load.populate();
 
     // FIXME: Don't use tokens to distribute nodes.
     // The following reuses the existing token-based algorithm used by NetworkTopologyStrategy.
-    assert(!tm->sorted_tokens().empty());
-    auto token_range = tm->ring_range(dht::token::get_random_token());
+    assert(!tm->get_new()->sorted_tokens().empty());
+    auto token_range = tm->get_new()->ring_range(dht::token::get_random_token());
 
     for (tablet_id tb : tablets.tablet_ids()) {
-        natural_endpoints_tracker<gms::inet_address> tracker(*tm, _dc_rep_factor);
+        natural_endpoints_tracker<locator::host_id> tracker(*tm->get_new(), _dc_rep_factor);
 
         while (true) {
             co_await coroutine::maybe_yield();
             if (token_range.begin() == token_range.end()) {
-                token_range = tm->ring_range(dht::minimum_token());
+                token_range = tm->get_new()->ring_range(dht::minimum_token());
             }
-            inet_address ep = *tm->get_endpoint(*token_range.begin());
+            locator::host_id ep = *tm->get_new()->get_endpoint(*token_range.begin());
             token_range.drop_front();
             if (tracker.add_endpoint_and_check_if_done(ep)) {
                 break;
@@ -325,8 +325,7 @@ future<tablet_map> network_topology_strategy::allocate_tablets_for_new_table(sch
 
         tablet_replica_set replicas;
         for (auto&& ep : tracker.replicas()) {
-            auto host = tm->get_host_id(ep);
-            replicas.emplace_back(tablet_replica{host, load.next_shard(host)});
+            replicas.emplace_back(tablet_replica{ep, load.next_shard(ep)});
         }
 
         tablets.set_tablet(tb, tablet_info{std::move(replicas)});

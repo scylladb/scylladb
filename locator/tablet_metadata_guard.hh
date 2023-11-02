@@ -52,7 +52,7 @@ public:
     /// Returns tablet_map for the table of the tablet associated with this guard.
     /// The result is valid until the next deferring point.
     const locator::tablet_map& get_tablet_map() {
-        return get_token_metadata()->tablets().get_tablet_map(_tablet.table);
+        return get_token_metadata()->get_new()->tablets().get_tablet_map(_tablet.table);
     }
 };
 

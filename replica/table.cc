@@ -569,7 +569,7 @@ private:
     const locator::tablet_map& tablet_map() const {
         // FIXME: cheaper way to retrieve tablet_map than looking up every time in tablet_metadata's map.
         auto& tm = erm()->get_token_metadata();
-        return tm.tablets().get_tablet_map(schema()->id());
+        return tm.get_new()->tablets().get_tablet_map(schema()->id());
     }
 public:
     tablet_compaction_group_manager(replica::table& t) : _t(t) {}

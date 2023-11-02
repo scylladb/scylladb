@@ -221,7 +221,7 @@ insert_token_range_to_sorted_container_while_unwrapping(
 dht::token_range_vector
 vnode_effective_replication_map::do_get_ranges(noncopyable_function<stop_iteration(bool&, const inet_address&)> consider_range_for_endpoint) const {
     dht::token_range_vector ret;
-    const auto& tm = *_tmptr;
+    const auto& tm = *_tmptr->get_new();
     const auto& sorted_tokens = tm.sorted_tokens();
     if (sorted_tokens.empty()) {
         on_internal_error(rslogger, "Token metadata is empty");
@@ -305,7 +305,7 @@ vnode_effective_replication_map::get_primary_ranges(inet_address ep) const {
 
 dht::token_range_vector
 vnode_effective_replication_map::get_primary_ranges_within_dc(inet_address ep) const {
-    const topology& topo = _tmptr->get_topology();
+    const topology& topo = _tmptr->get_new()->get_topology();
     sstring local_dc = topo.get_datacenter(ep);
     std::unordered_set<inet_address> local_dc_nodes = topo.get_datacenter_endpoints().at(local_dc);
     // The callback function below is called for each endpoint
