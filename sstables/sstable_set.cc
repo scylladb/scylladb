@@ -15,7 +15,7 @@
 
 #include "sstables.hh"
 
-#include "compatible_ring_position.hh"
+#include "dht/ring_position.hh"
 #include "compaction/compaction_strategy_impl.hh"
 #include "compaction/leveled_compaction_strategy.hh"
 #include "compaction/time_window_compaction_strategy.hh"
@@ -222,8 +222,8 @@ sstable_set::make_incremental_selector() const {
 
 partitioned_sstable_set::interval_type partitioned_sstable_set::make_interval(const schema& s, const dht::partition_range& range) {
     return interval_type::closed(
-            compatible_ring_position_or_view(s, dht::ring_position_view(range.start()->value())),
-            compatible_ring_position_or_view(s, dht::ring_position_view(range.end()->value())));
+            dht::compatible_ring_position_or_view(s, dht::ring_position_view(range.start()->value())),
+            dht::compatible_ring_position_or_view(s, dht::ring_position_view(range.end()->value())));
 }
 
 partitioned_sstable_set::interval_type partitioned_sstable_set::make_interval(const dht::partition_range& range) const {
@@ -232,8 +232,8 @@ partitioned_sstable_set::interval_type partitioned_sstable_set::make_interval(co
 
 partitioned_sstable_set::interval_type partitioned_sstable_set::make_interval(const schema_ptr& s, const sstable& sst) {
     return interval_type::closed(
-            compatible_ring_position_or_view(s, dht::ring_position(sst.get_first_decorated_key())),
-            compatible_ring_position_or_view(s, dht::ring_position(sst.get_last_decorated_key())));
+            dht::compatible_ring_position_or_view(s, dht::ring_position(sst.get_first_decorated_key())),
+            dht::compatible_ring_position_or_view(s, dht::ring_position(sst.get_last_decorated_key())));
 }
 
 partitioned_sstable_set::interval_type partitioned_sstable_set::make_interval(const sstable& sst) {
@@ -243,7 +243,7 @@ partitioned_sstable_set::interval_type partitioned_sstable_set::make_interval(co
 partitioned_sstable_set::interval_type partitioned_sstable_set::singular(const dht::ring_position& rp) const {
     // We should use the view here, since this is used for queries.
     auto rpv = dht::ring_position_view(rp);
-    auto crp = compatible_ring_position_or_view(*_schema, std::move(rpv));
+    auto crp = dht::compatible_ring_position_or_view(*_schema, std::move(rpv));
     return interval_type::closed(crp, crp);
 }
 
@@ -267,7 +267,7 @@ bool partitioned_sstable_set::store_as_unleveled(const shared_sstable& sst) cons
     return _use_level_metadata && sst->get_sstable_level() == 0;
 }
 
-dht::ring_position partitioned_sstable_set::to_ring_position(const compatible_ring_position_or_view& crp) {
+dht::ring_position partitioned_sstable_set::to_ring_position(const dht::compatible_ring_position_or_view& crp) {
     // Ring position views, representing bounds of sstable intervals are
     // guaranteed to have key() != nullptr;
     const auto& pos = crp.position();
@@ -432,14 +432,14 @@ private:
             return dht::ring_position_ext(next_position, dht::ring_position_ext::after_key(!boost::icl::is_left_closed(it->first.bounds())));
         }
     }
-    static bool is_before_interval(const compatible_ring_position_or_view& crp, const interval_type& interval) {
+    static bool is_before_interval(const dht::compatible_ring_position_or_view& crp, const interval_type& interval) {
         if (boost::icl::is_left_closed(interval.bounds())) {
             return crp < interval.lower();
         } else {
             return crp <= interval.lower();
         }
     }
-    void maybe_invalidate_iterator(const compatible_ring_position_or_view& crp) {
+    void maybe_invalidate_iterator(const dht::compatible_ring_position_or_view& crp) {
         if (_last_known_leveled_sstables_change_cnt != _leveled_sstables_change_cnt) {
             _it = _leveled_sstables.lower_bound(interval_type::closed(crp, crp));
             _last_known_leveled_sstables_change_cnt = _leveled_sstables_change_cnt;
@@ -456,7 +456,7 @@ public:
         , _it(leveled_sstables.begin()) {
     }
     virtual std::tuple<dht::partition_range, std::vector<shared_sstable>, dht::ring_position_ext> select(const dht::ring_position_view& pos) override {
-        auto crp = compatible_ring_position_or_view(*_schema, pos);
+        auto crp = dht::compatible_ring_position_or_view(*_schema, pos);
         auto ssts = _unleveled_sstables;
         using namespace dht;
 

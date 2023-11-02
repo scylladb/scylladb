@@ -10,7 +10,7 @@
 
 #include <boost/icl/interval_map.hpp>
 
-#include "compatible_ring_position.hh"
+#include "dht/ring_position.hh"
 #include "sstable_set.hh"
 #include "readers/clustering_combined.hh"
 #include "sstables/types_fwd.hh"
@@ -21,7 +21,7 @@ namespace sstables {
 // e.g. leveled compaction strategy
 class partitioned_sstable_set : public sstable_set_impl {
     using value_set = std::unordered_set<shared_sstable>;
-    using interval_map_type = boost::icl::interval_map<compatible_ring_position_or_view, value_set>;
+    using interval_map_type = boost::icl::interval_map<dht::compatible_ring_position_or_view, value_set>;
     using interval_type = interval_map_type::interval_type;
     using map_iterator = interval_map_type::const_iterator;
 private:
@@ -44,7 +44,7 @@ private:
     // SSTables are stored separately to avoid interval map's fragmentation issue when level 0 falls behind.
     bool store_as_unleveled(const shared_sstable& sst) const;
 public:
-    static dht::ring_position to_ring_position(const compatible_ring_position_or_view& crp);
+    static dht::ring_position to_ring_position(const dht::compatible_ring_position_or_view& crp);
     static dht::partition_range to_partition_range(const interval_type& i);
     static dht::partition_range to_partition_range(const dht::ring_position_view& pos, const interval_type& i);
 
