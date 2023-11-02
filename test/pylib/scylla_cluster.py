@@ -362,6 +362,7 @@ class ScyllaServer:
                          contact_points=[self.ip_addr],
                          # This is the latest version Scylla supports
                          protocol_version=4,
+                         control_connection_timeout=self.TOPOLOGY_TIMEOUT,
                          auth_provider=auth) as cluster:
                 with cluster.connect() as session:
                     connected = True
@@ -371,6 +372,7 @@ class ScyllaServer:
                     self.control_cluster = Cluster(execution_profiles=
                                                         {EXEC_PROFILE_DEFAULT: profile},
                                                    contact_points=[self.ip_addr],
+                                                   control_connection_timeout=self.TOPOLOGY_TIMEOUT,
                                                    auth_provider=auth)
                     self.control_connection = self.control_cluster.connect()
                     return CqlUpState.QUERIED
