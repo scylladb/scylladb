@@ -227,6 +227,17 @@ stop_iteration partition_snapshot::merge_partition_versions(mutation_application
             if (!_version_merging_state) {
                 _version_merging_state = apply_resume();
             }
+            if (prev->prev() && prev->prev()->_is_being_upgraded) [[unlikely]] {
+                // Give up.
+                //
+                // While `prev->prev()` is being upgraded into `prev`,
+                // `prev`'s last dummy violates the usual eviction order.
+                // Merging it into `current` could break the "older versions are evicted first".
+                //
+                // There is no harm in giving up here. After the upgrade finishes,
+                // `prev`'s snapshot will slide to `current` and pick up where we left.
+                return stop_iteration::yes;
+            }
             if (!prev->_is_being_upgraded && prev->get_schema()->version() != current->get_schema()->version()) {
                 // The versions we are attempting to merge have different schemas.
                 // In this scenario the older version has to be upgraded before
