@@ -15,7 +15,6 @@
 #include <unordered_map>
 #include "gms/inet_address.hh"
 #include "dht/i_partitioner.hh"
-#include "locator/token_range_splitter.hh"
 #include "inet_address_vectors.hh"
 #include <optional>
 #include <memory>
@@ -31,6 +30,7 @@
 
 #include "locator/types.hh"
 #include "locator/topology.hh"
+#include "locator/token_metadata_fwd.hh"
 
 // forward declaration since replica/database.hh includes this file
 namespace replica {
@@ -304,8 +304,6 @@ struct topology_change_info {
     future<> clear_gently();
 };
 
-using token_metadata_ptr = lw_shared_ptr<const token_metadata>;
-using mutable_token_metadata_ptr = lw_shared_ptr<token_metadata>;
 using token_metadata_lock = semaphore_units<>;
 using token_metadata_lock_func = noncopyable_function<future<token_metadata_lock>() noexcept>;
 
@@ -394,7 +392,5 @@ public:
     // Must be called on shard 0.
     static future<> mutate_on_all_shards(sharded<shared_token_metadata>& stm, seastar::noncopyable_function<future<> (token_metadata&)> func);
 };
-
-std::unique_ptr<locator::token_range_splitter> make_splitter(token_metadata_ptr);
 
 }
