@@ -85,17 +85,6 @@ sstables::shared_sstable make_sstable_containing(sstables::shared_sstable sst, s
     return sst;
 }
 
-shared_sstable make_sstable(sstables::test_env& env, schema_ptr s, sstring dir, std::vector<mutation> mutations,
-        sstable_writer_config cfg, sstables::sstable::version_types version, gc_clock::time_point query_time) {
-    fs::path dir_path(dir);
-    auto mt = make_memtable(s, mutations);
-    auto sst = env.make_sstable(s, dir_path.string(), env.new_generation(), version, sstable_format_types::big, default_sstable_buffer_size, query_time);
-    auto mr = mt->make_flat_reader(s, env.make_reader_permit());
-    sst->write_components(std::move(mr), mutations.size(), s, cfg, mt->get_encoding_stats()).get();
-    sst->load(s->get_sharder()).get();
-    return sst;
-}
-
 shared_sstable make_sstable_easy(test_env& env, flat_mutation_reader_v2 rd, sstable_writer_config cfg,
         sstables::generation_type gen, const sstables::sstable::version_types version, int expected_partition, gc_clock::time_point query_time) {
     auto s = rd.schema();
