@@ -33,6 +33,7 @@
 #include "test/lib/log.hh"
 #include "test/lib/reader_concurrency_semaphore.hh"
 #include "test/lib/random_utils.hh"
+#include "test/lib/sstable_utils.hh"
 #include "utils/throttle.hh"
 
 #include <boost/range/algorithm/min_element.hpp>
@@ -376,11 +377,7 @@ SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_only_once_multiple_mutation
         partitions.pop_back();
 
         cache_tracker tracker;
-        auto mt = make_lw_shared<replica::memtable>(s);
-
-        for (auto&& m : partitions) {
-            mt->apply(m);
-        }
+        auto mt = make_memtable(s, partitions);
 
         auto make_cache = [&tracker, &mt](schema_ptr s, int& secondary_calls_count) -> lw_shared_ptr<row_cache> {
             auto secondary = mutation_source([&mt, &secondary_calls_count] (schema_ptr s, reader_permit permit, const dht::partition_range& range,
@@ -552,10 +549,7 @@ SEASTAR_TEST_CASE(test_query_of_incomplete_range_goes_to_underlying) {
 
         std::vector<mutation> mutations = make_ring(s, 3);
 
-        auto mt = make_lw_shared<replica::memtable>(s);
-        for (auto&& m : mutations) {
-            mt->apply(m);
-        }
+        auto mt = make_memtable(s, mutations);
 
         cache_tracker tracker;
         row_cache cache(s, snapshot_source_from_snapshot(mt->as_data_source()), tracker);
@@ -600,13 +594,8 @@ SEASTAR_TEST_CASE(test_single_key_queries_after_population_in_reverse_order) {
         auto s = make_schema();
         tests::reader_concurrency_semaphore_wrapper semaphore;
 
-        auto mt = make_lw_shared<replica::memtable>(s);
-
         std::vector<mutation> mutations = make_ring(s, 3);
-
-        for (auto&& m : mutations) {
-            mt->apply(m);
-        }
+        auto mt = make_memtable(s, mutations);
 
         cache_tracker tracker;
         row_cache cache(s, snapshot_source_from_snapshot(mt->as_data_source()), tracker);
@@ -642,11 +631,7 @@ SEASTAR_TEST_CASE(test_partition_range_population_with_concurrent_memtable_flush
         tests::reader_concurrency_semaphore_wrapper semaphore;
 
         std::vector<mutation> mutations = make_ring(s, 3);
-
-        auto mt = make_lw_shared<replica::memtable>(s);
-        for (auto&& m : mutations) {
-            mt->apply(m);
-        }
+        auto mt = make_memtable(s, mutations);
 
         cache_tracker tracker;
         row_cache cache(s, snapshot_source_from_snapshot(mt->as_data_source()), tracker);
@@ -701,12 +686,7 @@ SEASTAR_TEST_CASE(test_row_cache_conforms_to_mutation_source) {
         cache_tracker tracker;
 
         run_mutation_source_tests([&tracker](schema_ptr s, const std::vector<mutation>& mutations) -> mutation_source {
-            auto mt = make_lw_shared<replica::memtable>(s);
-
-            for (auto&& m : mutations) {
-                mt->apply(m);
-            }
-
+            auto mt = make_memtable(s, mutations);
             auto cache = make_lw_shared<row_cache>(s, snapshot_source_from_snapshot(mt->as_data_source()), tracker);
             return mutation_source([cache] (schema_ptr s,
                     reader_permit permit,
@@ -1285,12 +1265,9 @@ SEASTAR_TEST_CASE(test_continuity_flag_and_invalidate_race) {
     return seastar::async([] {
         auto s = make_schema();
         tests::reader_concurrency_semaphore_wrapper semaphore;
-        lw_shared_ptr<replica::memtable> mt = make_lw_shared<replica::memtable>(s);
 
         auto ring = make_ring(s, 4);
-        for (auto&& m : ring) {
-            mt->apply(m);
-        }
+        auto mt = make_memtable(s, ring);
 
         cache_tracker tracker;
         row_cache cache(s, snapshot_source_from_snapshot(mt->as_data_source()), tracker);
@@ -1348,20 +1325,14 @@ SEASTAR_TEST_CASE(test_cache_population_and_update_race) {
         });
         cache_tracker tracker;
 
-        auto mt1 = make_lw_shared<replica::memtable>(s);
         auto ring = make_ring(s, 3);
-        for (auto&& m : ring) {
-            mt1->apply(m);
-        }
+        auto mt1 = make_memtable(s, ring);
         memtables.apply(*mt1);
 
         row_cache cache(s, cache_source, tracker);
 
-        auto mt2 = make_lw_shared<replica::memtable>(s);
         auto ring2 = updated_ring(ring);
-        for (auto&& m : ring2) {
-            mt2->apply(m);
-        }
+        auto mt2 = make_memtable(s, ring2);
 
         auto f = thr.block();
 
@@ -1487,20 +1458,14 @@ SEASTAR_TEST_CASE(test_cache_population_and_clear_race) {
         });
         cache_tracker tracker;
 
-        auto mt1 = make_lw_shared<replica::memtable>(s);
         auto ring = make_ring(s, 3);
-        for (auto&& m : ring) {
-            mt1->apply(m);
-        }
+        auto mt1 = make_memtable(s, ring);
         memtables.apply(*mt1);
 
         row_cache cache(s, std::move(cache_source), tracker);
 
-        auto mt2 = make_lw_shared<replica::memtable>(s);
         auto ring2 = updated_ring(ring);
-        for (auto&& m : ring2) {
-            mt2->apply(m);
-        }
+        auto mt2 = make_memtable(s, ring2);
 
         auto f = thr.block();
 
@@ -1660,9 +1625,7 @@ SEASTAR_TEST_CASE(test_slicing_mutation_reader) {
                                  to_bytes("v"), data_value(i), api::new_timestamp());
         }
 
-        auto mt = make_lw_shared<replica::memtable>(s);
-        mt->apply(m);
-
+        auto mt = make_memtable(s, {m});
         cache_tracker tracker;
         row_cache cache(s, snapshot_source_from_snapshot(mt->as_data_source()), tracker);
 
@@ -2559,10 +2522,7 @@ SEASTAR_TEST_CASE(test_exception_safety_of_update_from_memtable) {
                     .produces_end_of_stream();
             });
 
-            auto mt = make_lw_shared<replica::memtable>(cache.schema());
-            for (auto&& m : muts2) {
-                mt->apply(m);
-            }
+            auto mt = make_memtable(cache.schema(), muts2);
 
             // Make snapshot on pkeys[2]
             auto pr = dht::partition_range::make_singular(pkeys[2]);
@@ -2571,10 +2531,7 @@ SEASTAR_TEST_CASE(test_exception_safety_of_update_from_memtable) {
             snap->fill_buffer().get();
 
             cache.update(row_cache::external_updater([&] {
-                auto mt2 = make_lw_shared<replica::memtable>(cache.schema());
-                for (auto&& m : muts2) {
-                    mt2->apply(m);
-                }
+                auto mt2 = make_memtable(cache.schema(), muts2);
                 underlying.apply(std::move(mt2));
             }), *mt).get();
 

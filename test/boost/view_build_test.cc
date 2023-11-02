@@ -837,11 +837,7 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_buffering) {
 
         auto permit = sem.obtain_permit(schema.get(), get_name(), replica::new_reader_base_cost, db::no_timeout, {}).get0();
 
-        auto mt = make_lw_shared<replica::memtable>(schema);
-        for (const auto& mut : muts) {
-            mt->apply(mut);
-        }
-
+        auto mt = make_memtable(schema, muts);
         auto p = make_manually_paused_evictable_reader_v2(
                 mt->as_data_source(),
                 schema,
@@ -939,8 +935,7 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_buffering_with_random_mutati
     reader_concurrency_semaphore sem(reader_concurrency_semaphore::for_tests{}, get_name(), 1, replica::new_reader_base_cost);
     auto stop_sem = deferred_stop(sem);
     const abort_source as;
-    auto mt = make_lw_shared<replica::memtable>(schema);
-    mt->apply(mut);
+    auto mt = make_memtable(schema, {mut});
     auto permit = sem.obtain_permit(schema.get(), get_name(), replica::new_reader_base_cost, db::no_timeout, {}).get0();
     auto p = make_manually_paused_evictable_reader_v2(
             mt->as_data_source(),
