@@ -2181,10 +2181,7 @@ SEASTAR_TEST_CASE(sstable_validate_test) {
         auto rd = make_flat_mutation_reader_from_fragments(schema, permit, std::move(frags));
         auto config = env.manager().configure_writer();
         config.validation_level = mutation_fragment_stream_validation_level::partition_region; // this test violates key order on purpose
-        auto sst = env.make_sstable(schema);
-        sst->write_components(std::move(rd), local_keys.size(), schema, config, encoding_stats{}).get();
-        sst->load(sst->get_schema()->get_sharder()).get();
-        return sst;
+        return make_sstable_easy(env, std::move(rd), std::move(config), sstables::get_highest_sstable_version(), local_keys.size());
     };
 
     auto info = make_lw_shared<compaction_data>();

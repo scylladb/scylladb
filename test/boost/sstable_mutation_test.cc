@@ -1611,10 +1611,7 @@ SEASTAR_TEST_CASE(writer_handles_subsequent_range_tombstone_changes_without_tomb
             deferred_close dc1{input_reader};
             sstable_writer_config cfg = env.manager().configure_writer();
             auto _ = env.tempdir().make_sweeper();
-            shared_sstable sstable = env.make_sstable(s);
-            encoding_stats es;
-            sstable->write_components(std::move(input_reader), 1, s, cfg, es).get();
-            sstable->load(sstable->get_schema()->get_sharder()).get();
+            auto sstable = make_sstable_easy(env, std::move(input_reader), cfg);
 
             mutation_fragment_stream_validating_filter f{"mutation_order_violation_test", *s, mutation_fragment_stream_validation_level::clustering_key};
             auto sstable_reader = sstable->make_reader(s, sem.make_permit(), query::full_partition_range, s->full_slice());
