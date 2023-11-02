@@ -11,6 +11,7 @@
 #include "dht/token.hh"
 #include "utils/small_vector.hh"
 #include "locator/host_id.hh"
+#include "service/session.hh"
 #include "dht/i_partitioner_fwd.hh"
 #include "schema/schema_fwd.hh"
 #include "utils/chunked_vector.hh"
@@ -171,10 +172,12 @@ struct tablet_transition_info {
     tablet_transition_stage stage;
     tablet_replica_set next;
     tablet_replica pending_replica; // Optimization (next - tablet_info::replicas)
+    service::session_id session_id;
     write_replica_set_selector writes;
     read_replica_set_selector reads;
 
-    tablet_transition_info(tablet_transition_stage stage, tablet_replica_set next, tablet_replica pending_replica);
+    tablet_transition_info(tablet_transition_stage stage, tablet_replica_set next, tablet_replica pending_replica,
+                           service::session_id session_id = {});
 
     bool operator==(const tablet_transition_info&) const = default;
 };

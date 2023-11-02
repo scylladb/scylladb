@@ -153,7 +153,8 @@ SEASTAR_TEST_CASE(test_tablet_metadata_persistence) {
                         tablet_replica {h1, 4},
                         tablet_replica {h2, 2},
                     },
-                    tablet_replica {h1, 4}
+                    tablet_replica {h1, 4},
+                    session_id(utils::UUID_gen::get_time_UUID())
                 });
             }
 

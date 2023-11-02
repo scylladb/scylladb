@@ -71,10 +71,14 @@ read_replica_set_selector get_selector_for_reads(tablet_transition_stage stage) 
     on_internal_error(tablet_logger, format("Invalid tablet transition stage: {}", static_cast<int>(stage)));
 }
 
-tablet_transition_info::tablet_transition_info(tablet_transition_stage stage, tablet_replica_set next, tablet_replica pending_replica)
+tablet_transition_info::tablet_transition_info(tablet_transition_stage stage,
+                                               tablet_replica_set next,
+                                               tablet_replica pending_replica,
+                                               service::session_id session_id)
     : stage(stage)
     , next(std::move(next))
     , pending_replica(std::move(pending_replica))
+    , session_id(session_id)
     , writes(get_selector_for_writes(stage))
     , reads(get_selector_for_reads(stage))
 { }
@@ -280,6 +284,9 @@ std::ostream& operator<<(std::ostream& out, const tablet_map& r) {
         out << format("\n    [{}]: last_token={}, replicas={}", tid, r.get_last_token(tid), tablet.replicas);
         if (auto tr = r.get_tablet_transition_info(tid)) {
             out << format(", stage={}, new_replicas={}, pending={}", tr->stage, tr->next, tr->pending_replica);
+            if (tr->session_id) {
+                out << format(", session={}", tr->session_id);
+            }
         }
         first = false;
         tid = *r.next_tablet(tid);
