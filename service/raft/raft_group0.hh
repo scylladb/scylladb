@@ -163,7 +163,7 @@ public:
     //
     // Also make sure to call `finish_setup_after_join` after the node has joined the cluster and entered NORMAL state.
     future<> setup_group0(db::system_keyspace&, const std::unordered_set<gms::inet_address>& initial_contact_nodes, shared_ptr<group0_handshaker> handshaker,
-                          std::optional<replace_info>, service::storage_service& ss, cql3::query_processor& qp, service::migration_manager& mm);
+                          std::optional<replace_info>, service::storage_service& ss, cql3::query_processor& qp, service::migration_manager& mm, bool topology_change_enabled);
 
     // Call during the startup procedure before networking is enabled.
     //
@@ -174,7 +174,7 @@ public:
     //
     // Cannot be called twice.
     //
-    future<> setup_group0_if_exist(db::system_keyspace&, service::storage_service& ss, cql3::query_processor& qp, service::migration_manager& mm);
+    future<> setup_group0_if_exist(db::system_keyspace&, service::storage_service& ss, cql3::query_processor& qp, service::migration_manager& mm, bool topology_change_enabled);
 
     // Call at the end of the startup procedure, after the node entered NORMAL state.
     // `setup_group0()` must have finished earlier.
@@ -183,7 +183,7 @@ public:
     //
     // If the node has just upgraded, enables a feature listener for the RAFT feature
     // which will start a procedure to create group 0 and switch administrative operations to use it.
-    future<> finish_setup_after_join(service::storage_service& ss, cql3::query_processor& qp, service::migration_manager& mm);
+    future<> finish_setup_after_join(service::storage_service& ss, cql3::query_processor& qp, service::migration_manager& mm, bool topology_change_enabled);
 
     // If Raft is disabled or in RECOVERY mode, returns `false`.
     // Otherwise:
@@ -282,7 +282,7 @@ private:
     future<group0_peer_exchange> peer_exchange(discovery::peer_list peers);
 
     raft_server_for_group create_server_for_group0(raft::group_id id, raft::server_id my_id, service::storage_service& ss, cql3::query_processor& qp,
-        service::migration_manager& mm);
+        service::migration_manager& mm, bool topology_change_enabled);
 
     // Run the discovery algorithm.
     //
@@ -302,10 +302,10 @@ private:
     // from places which must not block.
     //
     // Precondition: the SUPPORTS_RAFT cluster feature is enabled.
-    future<> upgrade_to_group0(service::storage_service& ss, cql3::query_processor& qp, service::migration_manager& mm);
+    future<> upgrade_to_group0(service::storage_service& ss, cql3::query_processor& qp, service::migration_manager& mm, bool topology_change_enabled);
 
     // Blocking part of `upgrade_to_group0`, runs in background.
-    future<> do_upgrade_to_group0(group0_upgrade_state start_state, service::storage_service& ss, cql3::query_processor& qp, service::migration_manager& mm);
+    future<> do_upgrade_to_group0(group0_upgrade_state start_state, service::storage_service& ss, cql3::query_processor& qp, service::migration_manager& mm, bool topology_change_enabled);
 
     // Start a Raft server for the cluster-wide group 0 and join it to the group.
     // Called during bootstrap or upgrade.
@@ -334,7 +334,7 @@ private:
     // Preconditions: Raft local feature enabled
     // and we haven't initialized group 0 yet after last Scylla start (`joined_group0()` is false).
     // Postcondition: `joined_group0()` is true.
-    future<> join_group0(std::vector<gms::inet_address> seeds, shared_ptr<group0_handshaker> handshaker, service::storage_service& ss, cql3::query_processor& qp, service::migration_manager& mm, db::system_keyspace& sys_ks);
+    future<> join_group0(std::vector<gms::inet_address> seeds, shared_ptr<group0_handshaker> handshaker, service::storage_service& ss, cql3::query_processor& qp, service::migration_manager& mm, db::system_keyspace& sys_ks, bool topology_change_enabled);
 
     // Start an existing Raft server for the cluster-wide group 0.
     // Assumes the server was already added to the group earlier so we don't attempt to join it again.
@@ -347,7 +347,7 @@ private:
     // XXX: perhaps it would be good to make this function callable multiple times,
     // if we want to handle crashes of the group 0 server without crashing the entire Scylla process
     // (we could then try restarting the server internally).
-    future<> start_server_for_group0(raft::group_id group0_id, service::storage_service& ss, cql3::query_processor& qp, service::migration_manager& mm);
+    future<> start_server_for_group0(raft::group_id group0_id, service::storage_service& ss, cql3::query_processor& qp, service::migration_manager& mm, bool topology_change_enabled);
 
     // Make the given server a non-voter in Raft group 0 configuration.
     // Retries on raft::commit_status_unknown.

@@ -1651,7 +1651,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // Need to do it before allowing incomming messaging service connections since
             // storage proxy's and migration manager's verbs may access group0.
             // This will also disable migration manager schema pulls if needed.
-            group0_service.setup_group0_if_exist(sys_ks.local(), ss.local(), qp.local(), mm.local()).get();
+            group0_service.setup_group0_if_exist(sys_ks.local(), ss.local(), qp.local(), mm.local(), raft_topology_change_enabled).get();
 
             // It's essential to load fencing_version prior to starting the messaging service,
             // since incoming messages may require fencing.
