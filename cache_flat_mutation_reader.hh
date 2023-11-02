@@ -148,6 +148,7 @@ class cache_flat_mutation_reader final : public flat_mutation_reader_v2::impl {
     void maybe_add_to_cache(const static_row& sr);
     void maybe_set_static_row_continuous();
     void set_rows_entry_continuous(rows_entry& e);
+    void restore_continuity_after_insertion(const mutation_partition::rows_type::iterator&);
     void finish_reader() {
         push_mutation_fragment(*_schema, _permit, partition_end());
         _end_of_stream = true;
@@ -464,6 +465,7 @@ future<> cache_flat_mutation_reader::read_from_underlying() {
                                 if (insert_result.second) {
                                     clogger.trace("csm {}: L{}: inserted dummy at {}", fmt::ptr(this), __LINE__, _upper_bound);
                                     _snp->tracker()->insert(*insert_result.first);
+                                    restore_continuity_after_insertion(insert_result.first);
                                 }
                                 if (_read_context.is_reversed()) [[unlikely]] {
                                     clogger.trace("csm {}: set_continuous({}), prev={}, rt={}", fmt::ptr(this), _last_row.position(), insert_result.first->position(), _current_tombstone);
@@ -626,6 +628,7 @@ void cache_flat_mutation_reader::maybe_add_to_cache(const clustering_row& cr) {
         it = insert_result.first;
         if (insert_result.second) {
             _snp->tracker()->insert(*it);
+            restore_continuity_after_insertion(it);
         }
 
         rows_entry& e = *it;
@@ -690,6 +693,7 @@ bool cache_flat_mutation_reader::maybe_add_to_cache(const range_tombstone_change
         it = insert_result.first;
         if (insert_result.second) {
             _snp->tracker()->insert(*it);
+            restore_continuity_after_insertion(it);
         }
 
         rows_entry& e = *it;
@@ -1057,6 +1061,14 @@ void cache_flat_mutation_reader::set_rows_entry_continuous(rows_entry& e) {
     e.set_continuous(true);
     if (!e.is_linked()) [[unlikely]] {
         _snp->tracker()->touch(e);
+    }
+}
+
+inline
+void cache_flat_mutation_reader::restore_continuity_after_insertion(const mutation_partition::rows_type::iterator& it) {
+    if (auto x = std::next(it); x->continuous()) {
+        it->set_continuous(true);
+        it->set_range_tombstone(x->range_tombstone());
     }
 }
 
