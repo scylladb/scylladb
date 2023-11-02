@@ -14,7 +14,6 @@
 #include <seastar/core/sstring.hh>
 #include "gms/inet_address.hh"
 #include "query-request.hh"
-#include "dht/i_partitioner.hh"
 #include "streaming/stream_fwd.hh"
 #include "streaming/stream_coordinator.hh"
 #include "streaming/stream_detail.hh"

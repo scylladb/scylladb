@@ -19,6 +19,7 @@
 #include "schema/schema_builder.hh"
 #include "replica/memtable.hh"
 #include "test/lib/reader_concurrency_semaphore.hh"
+#include "dht/i_partitioner.hh"
 
 static
 partition_key new_key(schema_ptr s) {

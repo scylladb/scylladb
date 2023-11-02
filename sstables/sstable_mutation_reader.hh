@@ -12,14 +12,12 @@
 #include "keys.hh"
 #include <seastar/core/do_with.hh>
 #include "unimplemented.hh"
-#include "dht/i_partitioner.hh"
 #include <seastar/core/byteorder.hh>
 #include "index_reader.hh"
 #include "counters.hh"
 #include "utils/data_input.hh"
 #include "clustering_ranges_walker.hh"
 #include "binary_search.hh"
-#include "../dht/i_partitioner.hh"
 #include "sstables/mx/partition_reversing_data_source.hh"
 
 namespace sstables {

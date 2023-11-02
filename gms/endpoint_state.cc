@@ -11,6 +11,7 @@
 #include "gms/endpoint_state.hh"
 #include <optional>
 #include <ostream>
+#include <boost/lexical_cast.hpp>
 
 namespace gms {
 

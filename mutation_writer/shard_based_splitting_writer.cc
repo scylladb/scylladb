@@ -12,6 +12,7 @@
 #include <boost/range/adaptor/transformed.hpp>
 #include <boost/range/algorithm/min_element.hpp>
 #include <seastar/core/shared_mutex.hh>
+#include "dht/i_partitioner.hh"
 
 namespace mutation_writer {
 

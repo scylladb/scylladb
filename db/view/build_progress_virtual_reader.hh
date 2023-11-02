@@ -9,7 +9,6 @@
 #include "replica/database.hh"
 #include "db/system_keyspace.hh"
 #include "db/timeout_clock.hh"
-#include "dht/i_partitioner.hh"
 #include "readers/flat_mutation_reader_v2.hh"
 #include "mutation/mutation_fragment.hh"
 #include "query-request.hh"

@@ -23,6 +23,7 @@ namespace dht {
 class decorated_key;
 class ring_position;
 class token;
+class sharder;
 
 using partition_range = nonwrapping_range<ring_position>;
 using token_range = nonwrapping_range<token>;

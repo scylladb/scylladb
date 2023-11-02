@@ -6,7 +6,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#include "dht/i_partitioner.hh"
+#include "dht/i_partitioner_fwd.hh"
 #include "service/pager/paging_state.hh"
 
 #include "idl/range.idl.hh"

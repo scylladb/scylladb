@@ -18,6 +18,7 @@
 #include "version.hh"
 #include "counters.hh"
 #include "utils/bit_cast.hh"
+#include "dht/i_partitioner_fwd.hh"
 
 namespace db {
 

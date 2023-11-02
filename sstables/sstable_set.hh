@@ -13,7 +13,7 @@
 #include "sstables/progress_monitor.hh"
 #include "sstables/types_fwd.hh"
 #include "shared_sstable.hh"
-#include "dht/i_partitioner.hh"
+#include "dht/ring_position.hh"
 #include <seastar/core/shared_ptr.hh>
 #include <type_traits>
 #include <vector>

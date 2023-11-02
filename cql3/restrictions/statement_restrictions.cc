@@ -32,6 +32,7 @@
 #include "types/list.hh"
 #include "types/map.hh"
 #include "types/set.hh"
+#include "dht/i_partitioner.hh"
 
 namespace {
 struct maybe_column_definition {

@@ -8,7 +8,7 @@
 
 #pragma once
 
-#include "dht/i_partitioner.hh"
+#include "dht/ring_position.hh"
 #include "dht/token.hh"
 #include "locator/token_metadata_fwd.hh"
 

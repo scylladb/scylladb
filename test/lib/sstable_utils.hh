@@ -17,7 +17,6 @@
 #include "sstables/writer.hh"
 #include "compaction/compaction_manager.hh"
 #include "replica/memtable-sstable.hh"
-#include "dht/i_partitioner.hh"
 #include "test/lib/test_services.hh"
 #include "test/lib/sstable_test_env.hh"
 #include "test/lib/reader_concurrency_semaphore.hh"

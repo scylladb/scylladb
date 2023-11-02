@@ -8,7 +8,7 @@
 
 #pragma once
 
-#include "dht/i_partitioner.hh"
+#include "dht/i_partitioner_fwd.hh"
 #include "locator/token_metadata.hh"
 #include "locator/token_range_splitter.hh"
 #include "schema/schema.hh"

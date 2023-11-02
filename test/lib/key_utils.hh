@@ -8,7 +8,10 @@
 
 #pragma once
 
-#include "dht/i_partitioner.hh"
+#include <seastar/core/smp.hh>
+
+#include "dht/decorated_key.hh"
+#include "seastarx.hh"
 
 struct local_shard_only_tag { };
 using local_shard_only = bool_class<local_shard_only_tag>;

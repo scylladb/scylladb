@@ -21,6 +21,7 @@
 #include "readers/combined.hh"
 #include "readers/mutation_fragment_v1_stream.hh"
 #include "replica/memtable.hh"
+#include "dht/i_partitioner.hh"
 #include "test/perf/perf.hh"
 #include "test/lib/reader_concurrency_semaphore.hh"
 

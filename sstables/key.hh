@@ -13,7 +13,7 @@
 #include "replica/database_fwd.hh"
 #include "keys.hh"
 #include "compound_compat.hh"
-#include "dht/i_partitioner.hh"
+#include "dht/token.hh"
 
 namespace sstables {
 

@@ -22,6 +22,7 @@
 #include "tools/lua_sstable_consumer.hh"
 #include "types/collection.hh"
 #include "types/tuple.hh"
+#include "dht/i_partitioner.hh"
 
 namespace {
 

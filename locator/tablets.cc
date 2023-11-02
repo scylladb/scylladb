@@ -11,7 +11,6 @@
 #include "locator/tablet_metadata_guard.hh"
 #include "locator/tablet_sharder.hh"
 #include "locator/token_range_splitter.hh"
-#include "dht/i_partitioner.hh"
 #include "types/types.hh"
 #include "types/tuple.hh"
 #include "types/set.hh"

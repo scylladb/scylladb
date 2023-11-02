@@ -27,7 +27,7 @@
 
 #include "db/timeout_clock.hh"
 #include "schema/schema_fwd.hh"
-#include "dht/i_partitioner.hh"
+#include "dht/i_partitioner_fwd.hh"
 #include "query-request.hh"
 #include "utils/estimated_histogram.hh"
 #include "utils/latency.hh"

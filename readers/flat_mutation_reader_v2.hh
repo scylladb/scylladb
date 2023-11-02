@@ -12,11 +12,11 @@
 #include <seastar/core/future.hh>
 #include <seastar/core/circular_buffer.hh>
 
-#include "dht/i_partitioner.hh"
 #include "mutation/mutation_fragment_v2.hh"
 #include "mutation/mutation.hh"
 #include "mutation/mutation_consumer_concepts.hh"
 #include "reader_permit.hh"
+#include "utils/maybe_yield.hh"
 
 using seastar::future;
 

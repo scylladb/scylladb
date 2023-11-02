@@ -16,7 +16,7 @@
 #include "db/functions/function.hh"
 #include "db/functions/aggregate_function.hh"
 #include "keys.hh"
-#include "dht/i_partitioner.hh"
+#include "dht/ring_position.hh"
 #include "enum_set.hh"
 #include "range.hh"
 #include "tracing/tracing.hh"

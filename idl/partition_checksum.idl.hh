@@ -6,14 +6,15 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#include "dht/i_partitioner.hh"
+#include "dht/decorated_key.hh"
 #include "gms/inet_address_serializer.hh"
+#include "node_ops/id.hh"
 
 #include "idl/keys.idl.hh"
+#include "idl/position_in_partition.idl.hh"
 #include "idl/uuid.idl.hh"
 #include "idl/frozen_mutation.idl.hh"
 #include "idl/token.idl.hh"
-#include "node_ops/id.hh"
 
 class repair_hash {
     uint64_t hash;

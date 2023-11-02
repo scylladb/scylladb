@@ -14,7 +14,7 @@
 #include <unordered_set>
 #include <unordered_map>
 #include "gms/inet_address.hh"
-#include "dht/i_partitioner.hh"
+#include "dht/ring_position.hh"
 #include "inet_address_vectors.hh"
 #include <optional>
 #include <memory>

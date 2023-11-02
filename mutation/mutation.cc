@@ -11,6 +11,7 @@
 #include "mutation_rebuilder.hh"
 #include "mutation/json.hh"
 #include "types/tuple.hh"
+#include "dht/i_partitioner.hh"
 
 mutation::data::data(dht::decorated_key&& key, schema_ptr&& schema)
     : _schema(std::move(schema))
