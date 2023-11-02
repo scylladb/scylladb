@@ -165,7 +165,7 @@ future<> service::create_keyspace_if_missing(::service::migration_manager& mm) c
     assert(this_shard_id() == 0); // once_among_shards makes sure a function is executed on shard 0 only
     auto db = _qp.db();
 
-    if (!db.has_keyspace(meta::AUTH_KS)) {
+    while (!db.has_keyspace(meta::AUTH_KS)) {
         auto group0_guard = co_await mm.start_group0_operation();
         auto ts = group0_guard.write_timestamp();
 
@@ -178,8 +178,12 @@ future<> service::create_keyspace_if_missing(::service::migration_manager& mm) c
                     opts,
                     true);
 
-            co_return co_await mm.announce(::service::prepare_new_keyspace_announcement(db.real_database(), ksm, ts),
-                    std::move(group0_guard), format("auth_service: create {} keyspace", meta::AUTH_KS));
+            try {
+                co_return co_await mm.announce(::service::prepare_new_keyspace_announcement(db.real_database(), ksm, ts),
+                        std::move(group0_guard), format("auth_service: create {} keyspace", meta::AUTH_KS));
+            } catch (::service::group0_concurrent_modification&) {
+                log.info("Concurrent operation is detected while creating {} keyspace, retrying.", meta::AUTH_KS);
+            }
         }
     }
 }
