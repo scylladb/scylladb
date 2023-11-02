@@ -1,0 +1,9 @@
+type: Topology
+pool_size: 4
+cluster:
+  initial_size: 2
+extra_scylla_config_options:
+    authenticator: AllowAllAuthenticator
+    authorizer: AllowAllAuthorizer
+extra_scylla_cmdline_options:
+  - "--task-ttl-in-seconds=10000000"
