@@ -8,7 +8,8 @@
 
 #pragma once
 
-#include "i_partitioner.hh"
+#include "dht/ring_position.hh"
+#include "dht/token-sharding.hh"
 #include "range.hh"
 
 #include <vector>
