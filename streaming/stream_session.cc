@@ -183,9 +183,14 @@ void stream_manager::init_messaging_service_handler(abort_source& as) {
                     if (try_catch<seastar::rpc::stream_closed>(ex)) {
                         level = seastar::log_level::debug;
                     }
+                    status = -1;
+                    // The status code -2 means error and the table is dropped
+                    if (try_catch<data_dictionary::no_such_column_family>(ex)) {
+                        level = seastar::log_level::debug;
+                        status = -2;
+                    }
                     sslog.log(level, "[Stream #{}] Failed to handle STREAM_MUTATION_FRAGMENTS (receive and distribute phase) for ks={}, cf={}, peer={}: {}",
                             plan_id, s->ks_name(), s->cf_name(), from.addr, ex);
-                    status = -1;
                 } else {
                     received_partitions = f.get0();
                 }
