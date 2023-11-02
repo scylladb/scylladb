@@ -70,7 +70,10 @@ public:
               ///< "Used" options are added to the command line options,
               ///< and can be specified with command line.
         Unused, ///< an option inherited or deprecated, or not yet implemented.
-                ///< we just silently ignore these options at seeing them.
+                ///< We want to minimize their "visibility" from user. So
+                ///< despite that they are still accepted in the config file,
+                ///< they are not considered as valid options if specified
+                ///< using the command line anymore.
                 ///< initially, we had loads of these options from Cassandra.
                 ///< they are also used for options supported by the older
                 ///< versions of Scylla.
