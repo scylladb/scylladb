@@ -229,7 +229,10 @@ future<> group0_state_machine::transfer_snapshot(raft::server_id from_id, raft::
         on_internal_error(slogger, "Expected MIGRATION_REQUEST to return canonical mutations");
     }
 
-    auto topology_snp = co_await ser::storage_service_rpc_verbs::send_raft_pull_topology_snapshot(&_mm._messaging, addr, as, from_id, service::raft_topology_pull_params{});
+    std::optional<service::raft_topology_snapshot> topology_snp;
+    if (_topology_change_enabled) {
+        topology_snp = co_await ser::storage_service_rpc_verbs::send_raft_pull_topology_snapshot(&_mm._messaging, addr, as, from_id, service::raft_topology_pull_params{});
+    }
 
     auto history_mut = extract_history_mutation(*cm, _sp.data_dictionary());
 
@@ -239,8 +242,8 @@ future<> group0_state_machine::transfer_snapshot(raft::server_id from_id, raft::
 
     co_await _mm.merge_schema_from(addr, std::move(*cm));
 
-    if (!topology_snp.topology_mutations.empty()) {
-        co_await _ss.merge_topology_snapshot(std::move(topology_snp));
+    if (topology_snp && !topology_snp->topology_mutations.empty()) {
+        co_await _ss.merge_topology_snapshot(std::move(*topology_snp));
         // Flush so that current supported and enabled features are readable before commitlog replay
         co_await _sp.get_db().local().flush(db::system_keyspace::NAME, db::system_keyspace::TOPOLOGY);
     }

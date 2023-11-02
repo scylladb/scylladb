@@ -3030,7 +3030,7 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
             ? ::make_shared<join_node_rpc_handshaker>(*this, join_params)
             : _group0->make_legacy_handshaker(false);
     co_await _group0->setup_group0(_sys_ks.local(), initial_contact_nodes, std::move(handshaker),
-            raft_replace_info, *this, *_qp, _migration_manager.local());
+            raft_replace_info, *this, *_qp, _migration_manager.local(), _raft_topology_change_enabled);
 
     raft::server* raft_server = co_await [this] () -> future<raft::server*> {
         if (!_raft_topology_change_enabled) {
@@ -3104,7 +3104,7 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
             throw std::runtime_error(err);
         }
 
-        co_await _group0->finish_setup_after_join(*this, *_qp, _migration_manager.local());
+        co_await _group0->finish_setup_after_join(*this, *_qp, _migration_manager.local(), _raft_topology_change_enabled);
         co_return;
     }
 
@@ -3262,7 +3262,7 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
     }
 
     assert(_group0);
-    co_await _group0->finish_setup_after_join(*this, *_qp, _migration_manager.local());
+    co_await _group0->finish_setup_after_join(*this, *_qp, _migration_manager.local(), _raft_topology_change_enabled);
     co_await _cdc_gens.local().after_join(std::move(cdc_gen_id));
 }
 
@@ -6700,82 +6700,78 @@ void storage_service::init_messaging_service(sharded<db::system_distributed_keys
             return ss.node_ops_cmd_handler(coordinator, std::move(req));
         });
     });
-    auto handle_raft_rpc = [&cont = container()] (raft::server_id dst_id, auto handler) {
-        return cont.invoke_on(0, [dst_id, handler = std::move(handler)] (auto& ss) mutable {
-            if (!ss._group0 || !ss._group0->joined_group0()) {
-                throw std::runtime_error("The node did not join group 0 yet");
-            }
-            if (ss._group0->load_my_id() != dst_id) {
-                throw raft_destination_id_not_correct(ss._group0->load_my_id(), dst_id);
-            }
-            return handler(ss);
-        });
-    };
-    ser::storage_service_rpc_verbs::register_raft_topology_cmd(&_messaging.local(), [&sys_dist_ks, handle_raft_rpc] (raft::server_id dst_id, raft::term_t term, uint64_t cmd_index, raft_topology_cmd cmd) {
-        return handle_raft_rpc(dst_id, [&sys_dist_ks, cmd = std::move(cmd), term, cmd_index] (auto& ss) {
-            return ss.raft_topology_cmd_handler(sys_dist_ks, term, cmd_index, cmd);
-        });
-    });
-    ser::storage_service_rpc_verbs::register_raft_pull_topology_snapshot(&_messaging.local(), [handle_raft_rpc] (raft::server_id dst_id, raft_topology_pull_params params) {
-        return handle_raft_rpc(dst_id, [] (storage_service& ss) -> future<raft_topology_snapshot> {
-            if (!ss._raft_topology_change_enabled) {
-               co_return raft_topology_snapshot{};
-            }
-
-            std::vector<canonical_mutation> topology_mutations;
-            {
-                // FIXME: make it an rwlock, here we only need to lock for reads,
-                // might be useful if multiple nodes are trying to pull concurrently.
-                auto read_apply_mutex_holder = co_await ss._group0->client().hold_read_apply_mutex();
-                auto rs = co_await db::system_keyspace::query_mutations(
-                    ss._db, db::system_keyspace::NAME, db::system_keyspace::TOPOLOGY);
-                auto s = ss._db.local().find_schema(db::system_keyspace::NAME, db::system_keyspace::TOPOLOGY);
-                topology_mutations.reserve(rs->partitions().size());
-                boost::range::transform(
-                        rs->partitions(), std::back_inserter(topology_mutations), [s] (const partition& p) {
-                    return canonical_mutation{p.mut().unfreeze(s)};
-                });
-            }
-
-            std::vector<canonical_mutation> cdc_generation_mutations;
-            {
-                // FIXME: when we bootstrap nodes in quick succession, the timestamp of the newest CDC generation
-                // may be for some time larger than the clocks of our nodes. The last bootstrapped node will only
-                // read the newest CDC generation into memory and not earlier ones, so it will only be able
-                // to coordinate writes to CDC-enabled tables after its clock advances to reach the newest
-                // generation's timestamp. In other words, it may not be able to coordinate writes for some
-                // time after bootstrapping and drivers connecting to it will receive errors.
-                // To fix that, we could store in topology a small history of recent CDC generation IDs
-                // (garbage-collected with time) instead of just the last one, and load all of them.
-                // Alternatively, a node would wait for some time before switching to normal state.
-                auto read_apply_mutex_holder = co_await ss._group0->client().hold_read_apply_mutex();
-                auto rs = co_await db::system_keyspace::query_mutations(
-                    ss._db, db::system_keyspace::NAME, db::system_keyspace::CDC_GENERATIONS_V3);
-                auto s = ss._db.local().find_schema(db::system_keyspace::NAME, db::system_keyspace::CDC_GENERATIONS_V3);
-                cdc_generation_mutations.reserve(rs->partitions().size());
-                boost::range::transform(
-                        rs->partitions(), std::back_inserter(cdc_generation_mutations), [s] (const partition& p) {
-                    return canonical_mutation{p.mut().unfreeze(s)};
-                });
-            }
-
-            co_return raft_topology_snapshot{
-                .topology_mutations = std::move(topology_mutations),
-                .cdc_generation_mutations = std::move(cdc_generation_mutations),
-            };
-        });
-    });
-    ser::storage_service_rpc_verbs::register_tablet_stream_data(&_messaging.local(), [handle_raft_rpc] (raft::server_id dst_id, locator::global_tablet_id tablet) {
-        return handle_raft_rpc(dst_id, [tablet] (auto& ss) {
-            return ss.stream_tablet(tablet);
-        });
-    });
-    ser::storage_service_rpc_verbs::register_tablet_cleanup(&_messaging.local(), [handle_raft_rpc] (raft::server_id dst_id, locator::global_tablet_id tablet) {
-        return handle_raft_rpc(dst_id, [tablet] (auto& ss) {
-            return ss.cleanup_tablet(tablet);
-        });
-    });
     if (raft_topology_change_enabled) {
+        auto handle_raft_rpc = [&cont = container()] (raft::server_id dst_id, auto handler) {
+            return cont.invoke_on(0, [dst_id, handler = std::move(handler)] (auto& ss) mutable {
+                if (!ss._group0 || !ss._group0->joined_group0()) {
+                    throw std::runtime_error("The node did not join group 0 yet");
+                }
+                if (ss._group0->load_my_id() != dst_id) {
+                    throw raft_destination_id_not_correct(ss._group0->load_my_id(), dst_id);
+                }
+                return handler(ss);
+            });
+        };
+        ser::storage_service_rpc_verbs::register_raft_topology_cmd(&_messaging.local(), [&sys_dist_ks, handle_raft_rpc] (raft::server_id dst_id, raft::term_t term, uint64_t cmd_index, raft_topology_cmd cmd) {
+            return handle_raft_rpc(dst_id, [&sys_dist_ks, cmd = std::move(cmd), term, cmd_index] (auto& ss) {
+                return ss.raft_topology_cmd_handler(sys_dist_ks, term, cmd_index, cmd);
+            });
+        });
+        ser::storage_service_rpc_verbs::register_raft_pull_topology_snapshot(&_messaging.local(), [handle_raft_rpc] (raft::server_id dst_id, raft_topology_pull_params params) {
+            return handle_raft_rpc(dst_id, [] (storage_service& ss) -> future<raft_topology_snapshot> {
+                std::vector<canonical_mutation> topology_mutations;
+                {
+                    // FIXME: make it an rwlock, here we only need to lock for reads,
+                    // might be useful if multiple nodes are trying to pull concurrently.
+                    auto read_apply_mutex_holder = co_await ss._group0->client().hold_read_apply_mutex();
+                    auto rs = co_await db::system_keyspace::query_mutations(
+                        ss._db, db::system_keyspace::NAME, db::system_keyspace::TOPOLOGY);
+                    auto s = ss._db.local().find_schema(db::system_keyspace::NAME, db::system_keyspace::TOPOLOGY);
+                    topology_mutations.reserve(rs->partitions().size());
+                    boost::range::transform(
+                            rs->partitions(), std::back_inserter(topology_mutations), [s] (const partition& p) {
+                        return canonical_mutation{p.mut().unfreeze(s)};
+                    });
+                }
+
+                std::vector<canonical_mutation> cdc_generation_mutations;
+                {
+                    // FIXME: when we bootstrap nodes in quick succession, the timestamp of the newest CDC generation
+                    // may be for some time larger than the clocks of our nodes. The last bootstrapped node will only
+                    // read the newest CDC generation into memory and not earlier ones, so it will only be able
+                    // to coordinate writes to CDC-enabled tables after its clock advances to reach the newest
+                    // generation's timestamp. In other words, it may not be able to coordinate writes for some
+                    // time after bootstrapping and drivers connecting to it will receive errors.
+                    // To fix that, we could store in topology a small history of recent CDC generation IDs
+                    // (garbage-collected with time) instead of just the last one, and load all of them.
+                    // Alternatively, a node would wait for some time before switching to normal state.
+                    auto read_apply_mutex_holder = co_await ss._group0->client().hold_read_apply_mutex();
+                    auto rs = co_await db::system_keyspace::query_mutations(
+                        ss._db, db::system_keyspace::NAME, db::system_keyspace::CDC_GENERATIONS_V3);
+                    auto s = ss._db.local().find_schema(db::system_keyspace::NAME, db::system_keyspace::CDC_GENERATIONS_V3);
+                    cdc_generation_mutations.reserve(rs->partitions().size());
+                    boost::range::transform(
+                            rs->partitions(), std::back_inserter(cdc_generation_mutations), [s] (const partition& p) {
+                        return canonical_mutation{p.mut().unfreeze(s)};
+                    });
+                }
+
+                co_return raft_topology_snapshot{
+                    .topology_mutations = std::move(topology_mutations),
+                    .cdc_generation_mutations = std::move(cdc_generation_mutations),
+                };
+            });
+        });
+        ser::storage_service_rpc_verbs::register_tablet_stream_data(&_messaging.local(), [handle_raft_rpc] (raft::server_id dst_id, locator::global_tablet_id tablet) {
+            return handle_raft_rpc(dst_id, [tablet] (auto& ss) {
+                return ss.stream_tablet(tablet);
+            });
+        });
+        ser::storage_service_rpc_verbs::register_tablet_cleanup(&_messaging.local(), [handle_raft_rpc] (raft::server_id dst_id, locator::global_tablet_id tablet) {
+            return handle_raft_rpc(dst_id, [tablet] (auto& ss) {
+                return ss.cleanup_tablet(tablet);
+            });
+        });
         ser::join_node_rpc_verbs::register_join_node_request(&_messaging.local(), [handle_raft_rpc] (raft::server_id dst_id, service::join_node_request_params params) {
             return handle_raft_rpc(dst_id, [params = std::move(params)] (auto& ss) mutable {
                 return ss.join_node_request_handler(std::move(params));
