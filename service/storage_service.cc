@@ -1644,10 +1644,13 @@ class topology_coordinator {
             auto& tablet_state = _tablets[gid];
             table_id table = s->id();
 
+            auto get_mutation_builder = [&] () {
+                return replica::tablet_mutation_builder(guard.write_timestamp(), s->ks_name(), table);
+            };
+
             auto transition_to = [&] (locator::tablet_transition_stage stage) {
                 slogger.trace("raft topology: Will set tablet {} stage to {}", gid, stage);
-                updates.emplace_back(
-                    replica::tablet_mutation_builder(guard.write_timestamp(), s->ks_name(), table)
+                updates.emplace_back(get_mutation_builder()
                         .set_stage(last_token, stage)
                         .build());
             };
@@ -1667,7 +1670,15 @@ class topology_coordinator {
 
             switch (trinfo.stage) {
                 case locator::tablet_transition_stage::allow_write_both_read_old:
-                    transition_to_with_barrier(locator::tablet_transition_stage::write_both_read_old);
+                    if (do_barrier()) {
+                        slogger.trace("raft topology: Will set tablet {} stage to {}", gid, locator::tablet_transition_stage::write_both_read_old);
+                        updates.emplace_back(get_mutation_builder()
+                            .set_stage(last_token, locator::tablet_transition_stage::write_both_read_old)
+                            // Create session a bit earlier to avoid adding barrier
+                            // to the streaming stage to create sessions on replicas.
+                            .set_session(last_token, session_id(utils::UUID_gen::get_time_UUID()))
+                            .build());
+                    }
                     break;
                 case locator::tablet_transition_stage::write_both_read_old:
                     transition_to_with_barrier(locator::tablet_transition_stage::streaming);
@@ -1686,7 +1697,11 @@ class topology_coordinator {
                         return ser::storage_service_rpc_verbs::send_tablet_stream_data(&_messaging,
                                    netw::msg_addr(id2ip(dst)), _as, raft::server_id(dst.uuid()), gid);
                     })) {
-                        transition_to(locator::tablet_transition_stage::write_both_read_new);
+                        slogger.trace("raft topology: Will set tablet {} stage to {}", gid, locator::tablet_transition_stage::write_both_read_new);
+                        updates.emplace_back(get_mutation_builder()
+                            .set_stage(last_token, locator::tablet_transition_stage::write_both_read_new)
+                            .del_session(last_token)
+                            .build());
                     }
                     break;
                 case locator::tablet_transition_stage::write_both_read_new:
@@ -1710,8 +1725,7 @@ class topology_coordinator {
                     // See do_tablet_operation() doc.
                     if (do_barrier()) {
                         _tablets.erase(gid);
-                        updates.emplace_back(
-                            replica::tablet_mutation_builder(guard.write_timestamp(), s->ks_name(), table)
+                        updates.emplace_back(get_mutation_builder()
                                 .del_transition(last_token)
                                 .set_replicas(last_token, trinfo.next)
                                 .build());
@@ -4171,6 +4185,20 @@ future<> storage_service::replicate_to_all_cores(mutable_token_metadata_ptr tmpt
     std::vector<std::unordered_map<table_id, locator::effective_replication_map_ptr>> pending_table_erms;
     pending_table_erms.resize(smp::count);
 
+    std::unordered_set<session_id> open_sessions;
+
+    // Collect open sessions
+    {
+        for (auto&& [table_id, tmap]: tmptr->tablets().all_tables()) {
+            for (auto&& [tid, trinfo]: tmap.transitions()) {
+                if (trinfo.session_id) {
+                    auto id = session_id(trinfo.session_id);
+                    open_sessions.insert(id);
+                }
+            }
+        }
+    }
+
     try {
         auto base_shard = this_shard_id();
         pending_token_metadata_ptr[base_shard] = tmptr;
@@ -4262,6 +4290,12 @@ future<> storage_service::replicate_to_all_cores(mutable_token_metadata_ptr tmpt
                 auto& cf = db.find_column_family(it->first);
                 cf.update_effective_replication_map(std::move(it->second));
                 it = table_erms.erase(it);
+            }
+
+            auto& session_mgr = get_topology_session_manager();
+            session_mgr.initiate_close_of_sessions_except(open_sessions);
+            for (auto id : open_sessions) {
+                session_mgr.create_session(id);
             }
         });
     } catch (...) {
@@ -6219,6 +6253,8 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                     }
 
                     co_await ss._shared_token_metadata.stale_versions_in_use();
+                    co_await get_topology_session_manager().drain_closing_sessions();
+
                     slogger.debug("raft_topology_cmd::barrier_and_drain done");
                 });
                 result.status = raft_topology_cmd_result::command_status::success;
@@ -6518,6 +6554,10 @@ future<> storage_service::stream_tablet(locator::global_tablet_id tablet) {
         if (trinfo->stage != locator::tablet_transition_stage::streaming) {
             throw std::runtime_error(format("Tablet {} stage is not at streaming", tablet));
         }
+        auto topo_guard = trinfo->session_id;
+        if (!trinfo->session_id) {
+            throw std::runtime_error(format("Tablet {} session is not set", tablet));
+        }
         if (trinfo->pending_replica.host != tm->get_my_id()) {
             throw std::runtime_error(format("Tablet {} has pending replica different than this one", tablet));
         }
@@ -6537,7 +6577,7 @@ future<> storage_service::stream_tablet(locator::global_tablet_id tablet) {
         std::vector<sstring> tables = {table.schema()->cf_name()};
         auto streamer = make_lw_shared<dht::range_streamer>(_db, _stream_manager, std::move(tm), guard.get_abort_source(),
                get_broadcast_address(), _snitch.local()->get_location(),
-               "Tablet migration", streaming::stream_reason::tablet_migration, null_topology_guard, std::move(tables));
+               "Tablet migration", streaming::stream_reason::tablet_migration, topo_guard, std::move(tables));
         streamer->add_source_filter(std::make_unique<dht::range_streamer::failure_detector_source_filter>(
                 _gossiper.get_unreachable_members()));
 
