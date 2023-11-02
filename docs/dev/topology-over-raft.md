@@ -6,7 +6,7 @@ their state, properties (topology, tokens, etc) and requested actions.
 Node state can be one of those:
 - `none`             - the new node joined group0 but did not bootstraped yet (has no tokens and data to serve)
 - `bootstrapping`    - the node is currently in the process of streaming its part of the ring
-- `decommissioning`  - the node is being decomissioned and stream its data to nodes that took over
+- `decommissioning`  - the node is being decommissioned and stream its data to nodes that took over
 - `removing`         - the node is being removed and its data is streamed to nodes that took over from still alive owners
 - `replacing`        - the node replaces another dead node in the cluster and it data is being streamed to it
 - `rebuilding`       - the node is being rebuild and is streaming data from other replicas

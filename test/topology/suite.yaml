@@ -12,5 +12,6 @@ run_first:
     - test_tablets
 skip_in_release:
     - test_cluster_features
+    - test_topology_failure_recovery
 run_in_release:
     - test_gossiper

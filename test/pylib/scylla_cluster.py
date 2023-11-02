@@ -1230,6 +1230,8 @@ class ScyllaClusterManager:
                     raise RuntimeError(
                         f"decommission failed (server: {server}) but did not contain expected error"
                         f"(\"{expected_error}\", check log file at {server.log_filename}, error: \"{exc}\"")
+                else:
+                    return
             else:
                 raise RuntimeError(
                     f"decommission failed (server: {server}), check log at {server.log_filename},"

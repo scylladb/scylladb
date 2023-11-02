@@ -22,6 +22,7 @@
 #include <seastar/core/metrics.hh>
 #include <seastar/rpc/rpc_types.hh>
 #include <absl/container/flat_hash_map.h>
+#include <seastar/core/gate.hh>
 
 #include "fsm.hh"
 #include "log.hh"
@@ -288,6 +289,8 @@ private:
     std::optional<shared_promise<>> _tick_promise;
     future<> wait_for_next_tick(seastar::abort_source* as);
 
+
+    seastar::gate _do_on_leader_gate;
     // Call a function on a current leader until it returns stop_iteration::yes.
     // Handles aborts and leader changes, adds a delay between
     // iterations to protect against tight loops.
@@ -594,6 +597,9 @@ requires requires (server_id& leader, AsyncAction aa) {
 }
 future<> server_impl::do_on_leader_with_retries(seastar::abort_source* as, AsyncAction&& action) {
     server_id leader = _fsm->current_leader(), prev_leader{};
+
+    check_not_aborted();
+    auto gh = _do_on_leader_gate.hold();
 
     while (true) {
         if (as && as->abort_requested()) {
@@ -1287,6 +1293,9 @@ future<> server_impl::wait_for_apply(index_t idx, abort_source* as) {
     if (as && as->abort_requested()) {
         throw request_aborted();
     }
+
+    check_not_aborted();
+
     if (idx > _applied_idx) {
         // The index is not applied yet. Wait for it.
         // This will be signalled when read_idx is applied
@@ -1481,7 +1490,11 @@ future<> server_impl::abort(sstring reason) {
 
     auto all_futures = boost::range::join(snp_futures, append_futures);
 
-    co_await seastar::when_all_succeed(all_futures.begin(), all_futures.end()).discard_result();
+    std::array<future<>, 1> gate{_do_on_leader_gate.close()};
+
+    auto all_with_gate = boost::range::join(all_futures, gate);
+
+    co_await seastar::when_all_succeed(all_with_gate.begin(), all_with_gate.end()).discard_result();
 }
 
 future<> server_impl::set_configuration(config_member_set c_new, seastar::abort_source* as) {
