@@ -24,14 +24,8 @@
 #include <byteswap.h>
 #include "dht/token.hh"
 #include "dht/token-sharding.hh"
+#include "dht/i_partitioner_fwd.hh"
 #include "utils/maybe_yield.hh"
-
-namespace sstables {
-
-class key_view;
-class decorated_key_view;
-
-}
 
 namespace dht {
 
@@ -43,15 +37,6 @@ namespace dht {
 //
 // We'll fold all of that into the token class and push all of the variations
 // into its users.
-
-class decorated_key;
-class ring_position;
-
-using partition_range = nonwrapping_range<ring_position>;
-using token_range = nonwrapping_range<token>;
-
-using partition_range_vector = std::vector<partition_range>;
-using token_range_vector = std::vector<token_range>;
 
 // Wraps partition_key with its corresponding token.
 //
