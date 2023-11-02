@@ -51,7 +51,7 @@ public:
     // Data size of the whole run, meaning it's a sum of the data size of all its fragments.
     uint64_t data_size() const;
     const sstable_set& all() const { return _all; }
-    double estimate_droppable_tombstone_ratio(gc_clock::time_point gc_before) const;
+    double estimate_droppable_tombstone_ratio(const gc_clock::time_point& compaction_time, const tombstone_gc_state& gc_state, const schema_ptr& s) const;
     run_id run_identifier() const;
 };
 

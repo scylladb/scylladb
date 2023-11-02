@@ -1233,7 +1233,9 @@ future<> sstable::load_first_and_last_position_in_partition() {
     _last_partition_last_position = std::move(*last_pos_opt);
 }
 
-double sstable::estimate_droppable_tombstone_ratio(gc_clock::time_point gc_before) const {
+double sstable::estimate_droppable_tombstone_ratio(const gc_clock::time_point& compaction_time, const tombstone_gc_state& gc_state, const schema_ptr& s) const {
+    auto gc_before = get_gc_before_for_drop_estimation(compaction_time, gc_state, s);
+
     auto& st = get_stats_metadata();
     auto estimated_count = st.estimated_cells_count.mean() * st.estimated_cells_count.count();
     if (estimated_count > 0) {
