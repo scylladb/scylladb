@@ -824,10 +824,9 @@ public:
         co_return co_await lb.make_plan();
     }
 
-    void on_before_create_column_family(const schema& s, std::vector<mutation>& muts, api::timestamp_type ts) override {
-        keyspace& ks = _db.find_keyspace(s.ks_name());
-        auto&& rs = ks.get_replication_strategy();
-        if (auto&& tablet_rs = rs.maybe_as_tablet_aware()) {
+    void on_before_create_column_family(const keyspace_metadata& ksm, const schema& s, std::vector<mutation>& muts, api::timestamp_type ts) override {
+        auto rs = abstract_replication_strategy::create_replication_strategy(ksm.strategy_name(), ksm.strategy_options());
+        if (auto&& tablet_rs = rs->maybe_as_tablet_aware()) {
             auto tm = _db.get_shared_token_metadata().get();
             auto map = tablet_rs->allocate_tablets_for_new_table(s.shared_from_this(), tm).get0();
             muts.emplace_back(tablet_map_to_mutation(map, s.id(), s.keypace_name(), s.cf_name(), ts).get0());

@@ -80,7 +80,7 @@ static sstring_view table_status_to_sstring(table_status tbl_status) {
     return "UKNOWN";
 }
 
-static future<std::vector<mutation>> create_keyspace(std::string_view keyspace_name, service::storage_proxy& sp, gms::gossiper& gossiper, api::timestamp_type);
+static lw_shared_ptr<keyspace_metadata> create_keyspace_metadata(std::string_view keyspace_name, service::storage_proxy& sp, gms::gossiper& gossiper, api::timestamp_type);
 
 static map_type attrs_type() {
     static thread_local auto t = map_type_impl::get_instance(utf8_type, bytes_type, true);
@@ -1121,8 +1121,9 @@ static future<executor::request_return_type> create_table_on_shard0(tracing::tra
     auto group0_guard = co_await mm.start_group0_operation();
     auto ts = group0_guard.write_timestamp();
     std::vector<mutation> schema_mutations;
+    auto ksm = create_keyspace_metadata(keyspace_name, sp, gossiper, ts);
     try {
-        schema_mutations = co_await create_keyspace(keyspace_name, sp, gossiper, ts);
+        schema_mutations = service::prepare_new_keyspace_announcement(sp.local_db(), ksm, ts);
     } catch (exceptions::already_exists_exception&) {
         if (sp.data_dictionary().has_schema(keyspace_name, table_name)) {
             co_return api_error::resource_in_use(format("Table {} already exists", table_name));
@@ -1132,15 +1133,7 @@ static future<executor::request_return_type> create_table_on_shard0(tracing::tra
         // This should never happen, the ID is supposed to be unique
         co_return api_error::internal(format("Table with ID {} already exists", schema->id()));
     }
-    db::schema_tables::add_table_or_view_to_schema_mutation(schema, ts, true, schema_mutations);
-    // we must call before_create_column_family callbacks - which allow
-    // listeners to modify our schema_mutations. For example, CDC may add
-    // another table (the CDC log table) to the same keyspace.
-    // Unfortunately the convention is that this callback must be run in
-    // a Seastar thread.
-    co_await seastar::async([&] {
-        mm.get_notifier().before_create_column_family(*schema, schema_mutations, ts);
-    });
+    co_await service::prepare_new_column_family_announcement(schema_mutations, sp, *ksm, schema, ts);
     for (schema_builder& view_builder : view_builders) {
         db::schema_tables::add_table_or_view_to_schema_mutation(
             view_ptr(view_builder.build()), ts, true, schema_mutations);
@@ -4464,25 +4457,23 @@ future<executor::request_return_type> executor::describe_continuous_backups(clie
     co_return make_jsonable(std::move(response));
 }
 
-// Create the keyspace in which we put the alternator table, if it doesn't
-// already exist.
+// Create the metadata for the keyspace in which we put the alternator
+// table if it doesn't already exist.
 // Currently, we automatically configure the keyspace based on the number
 // of nodes in the cluster: A cluster with 3 or more live nodes, gets RF=3.
 // A smaller cluster (presumably, a test only), gets RF=1. The user may
 // manually create the keyspace to override this predefined behavior.
-static future<std::vector<mutation>> create_keyspace(std::string_view keyspace_name, service::storage_proxy& sp, gms::gossiper& gossiper, api::timestamp_type ts) {
-    sstring keyspace_name_str(keyspace_name);
+static lw_shared_ptr<keyspace_metadata> create_keyspace_metadata(std::string_view keyspace_name, service::storage_proxy& sp, gms::gossiper& gossiper, api::timestamp_type ts) {
     int endpoint_count = gossiper.num_endpoints();
     int rf = 3;
     if (endpoint_count < rf) {
         rf = 1;
         elogger.warn("Creating keyspace '{}' for Alternator with unsafe RF={} because cluster only has {} nodes.",
-                keyspace_name_str, rf, endpoint_count);
+                keyspace_name, rf, endpoint_count);
     }
     auto opts = get_network_topology_options(sp, gossiper, rf);
-    auto ksm = keyspace_metadata::new_keyspace(keyspace_name_str, "org.apache.cassandra.locator.NetworkTopologyStrategy", std::move(opts), true);
 
-    co_return service::prepare_new_keyspace_announcement(sp.local_db(), ksm, ts);
+    return keyspace_metadata::new_keyspace(keyspace_name, "org.apache.cassandra.locator.NetworkTopologyStrategy", std::move(opts), true);
 }
 
 future<> executor::start() {
