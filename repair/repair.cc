@@ -1492,7 +1492,7 @@ std::optional<double> repair::data_sync_repair_task_impl::expected_children_numb
     return smp::count;
 }
 
-future<> repair_service::bootstrap_with_repair(locator::token_metadata_ptr tmptr, std::unordered_set<dht::token> bootstrap_tokens) {
+future<> repair_service::bootstrap_with_repair(locator::token_metadata2_ptr tmptr, std::unordered_set<dht::token> bootstrap_tokens) {
     assert(this_shard_id() == 0);
     using inet_address = gms::inet_address;
     return seastar::async([this, tmptr = std::move(tmptr), tokens = std::move(bootstrap_tokens)] () mutable {
@@ -1500,7 +1500,7 @@ future<> repair_service::bootstrap_with_repair(locator::token_metadata_ptr tmptr
         auto ks_erms = db.get_non_local_strategy_keyspaces_erms();
         auto& topology = tmptr->get_topology();
         auto myloc = topology.get_location();
-        auto myip = topology.my_address();
+        auto myid = tmptr->get_my_id();
         auto reason = streaming::stream_reason::bootstrap;
         // Calculate number of ranges to sync data
         size_t nr_ranges_total = 0;
@@ -1509,7 +1509,7 @@ future<> repair_service::bootstrap_with_repair(locator::token_metadata_ptr tmptr
                 continue;
             }
             auto& strat = erm->get_replication_strategy();
-            dht::token_range_vector desired_ranges = strat.get_pending_address_ranges(tmptr, tokens, myip, myloc).get0();
+            dht::token_range_vector desired_ranges = strat.get_pending_address_ranges(tmptr, tokens, myid, myloc).get0();
             seastar::thread::maybe_yield();
             auto nr_tables = get_nr_tables(db, keyspace_name);
             nr_ranges_total += desired_ranges.size() * nr_tables;
@@ -1525,20 +1525,20 @@ future<> repair_service::bootstrap_with_repair(locator::token_metadata_ptr tmptr
                 continue;
             }
             auto& strat = erm->get_replication_strategy();
-            dht::token_range_vector desired_ranges = strat.get_pending_address_ranges(tmptr, tokens, myip, myloc).get0();
+            dht::token_range_vector desired_ranges = strat.get_pending_address_ranges(tmptr, tokens, myid, myloc).get0();
             bool find_node_in_local_dc_only = strat.get_type() == locator::replication_strategy_type::network_topology;
             bool everywhere_topology = strat.get_type() == locator::replication_strategy_type::everywhere_topology;
             auto replication_factor = erm->get_replication_factor();
 
             //Active ranges
-            auto metadata_clone = tmptr->clone_only_token_map().get0();
-            auto range_addresses = strat.get_range_addresses(metadata_clone).get0();
+            auto metadata_clone = locator::make_token_metadata2_ptr(tmptr->clone_only_token_map().get0());
+            auto range_addresses = strat.get_range_addresses(locator::token_metadata(metadata_clone)).get0();
 
             //Pending ranges
-            metadata_clone.update_topology(myip, myloc, locator::node::state::bootstrapping);
-            metadata_clone.update_normal_tokens(tokens, myip).get();
-            auto pending_range_addresses = strat.get_range_addresses(metadata_clone).get0();
-            metadata_clone.clear_gently().get();
+            metadata_clone->update_topology(myid, myloc, locator::node::state::bootstrapping);
+            metadata_clone->update_normal_tokens(tokens, myid).get();
+            auto pending_range_addresses = strat.get_range_addresses(locator::token_metadata(metadata_clone)).get0();
+            metadata_clone->clear_gently().get();
 
             //Collects the source that will have its range moved to the new node
             std::unordered_map<dht::token_range, repair_neighbors> range_sources;

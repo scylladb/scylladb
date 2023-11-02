@@ -88,6 +88,7 @@ range_streamer::get_all_ranges_with_sources_for(const sstring& keyspace_name, lo
     logger.debug("keyspace={}, desired_ranges.size={}, range_addresses.size={}", keyspace_name, desired_ranges.size(), range_addresses.size());
 
     std::unordered_map<dht::token_range, std::vector<inet_address>> range_sources;
+    const auto address_ep = get_token_metadata().get_endpoint_for_host_id(_address);
     for (auto& desired_range : desired_ranges) {
         auto found = false;
         for (auto& x : range_addresses) {
@@ -97,7 +98,7 @@ range_streamer::get_all_ranges_with_sources_for(const sstring& keyspace_name, lo
             const range<token>& src_range = x.first;
             if (src_range.contains(desired_range, dht::operator<=>)) {
                 inet_address_vector_replica_set preferred(x.second.begin(), x.second.end());
-                get_token_metadata().get_topology().sort_by_proximity(_address, preferred);
+                get_token_metadata().get_topology().sort_by_proximity(address_ep, preferred);
                 for (inet_address& p : preferred) {
                     range_sources[desired_range].push_back(p);
                 }
@@ -122,14 +123,14 @@ range_streamer::get_all_ranges_with_strict_sources_for(const sstring& keyspace_n
     auto& strat = erm->get_replication_strategy();
 
     //Active ranges
-    auto metadata_clone = get_token_metadata().clone_only_token_map().get0();
-    auto range_addresses = strat.get_range_addresses(metadata_clone).get0();
+    auto metadata_clone = locator::make_token_metadata2_ptr(get_token_metadata().clone_only_token_map().get0());
+    auto range_addresses = strat.get_range_addresses(token_metadata(metadata_clone)).get0();
 
     //Pending ranges
-    metadata_clone.update_topology(_address, _dr);
-    metadata_clone.update_normal_tokens(_tokens, _address).get();
-    auto pending_range_addresses  = strat.get_range_addresses(metadata_clone).get0();
-    metadata_clone.clear_gently().get();
+    metadata_clone->update_topology(_address, _dr);
+    metadata_clone->update_normal_tokens(_tokens, _address).get();
+    auto pending_range_addresses  = strat.get_range_addresses(token_metadata(metadata_clone)).get0();
+    metadata_clone->clear_gently().get();
 
     //Collects the source that will have its range moved to the new node
     std::unordered_map<dht::token_range, std::vector<inet_address>> range_sources;

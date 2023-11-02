@@ -342,9 +342,10 @@ vnode_effective_replication_map::get_range_addresses() const {
 future<std::unordered_map<dht::token_range, inet_address_vector_replica_set>>
 abstract_replication_strategy::get_range_addresses(const token_metadata& tm) const {
     std::unordered_map<dht::token_range, inet_address_vector_replica_set> ret;
-    for (auto& t : tm.sorted_tokens()) {
-        dht::token_range_vector ranges = tm.get_primary_ranges_for(t);
-        auto eps = get<endpoint_set>(co_await calculate_natural_endpoints(t, tm, false));
+    auto tm_new = tm.get_new_strong();
+    for (auto& t : tm_new->sorted_tokens()) {
+        dht::token_range_vector ranges = tm_new->get_primary_ranges_for(t);
+        auto eps = co_await calculate_natural_ips(t, tm_new);
         for (auto& r : ranges) {
             ret.emplace(r, eps.get_vector());
         }
@@ -353,20 +354,20 @@ abstract_replication_strategy::get_range_addresses(const token_metadata& tm) con
 }
 
 future<dht::token_range_vector>
-abstract_replication_strategy::get_pending_address_ranges(const token_metadata_ptr tmptr, std::unordered_set<token> pending_tokens, inet_address pending_address, locator::endpoint_dc_rack dr) const {
+abstract_replication_strategy::get_pending_address_ranges(const token_metadata2_ptr tmptr, std::unordered_set<token> pending_tokens, locator::host_id pending_address, locator::endpoint_dc_rack dr) const {
     dht::token_range_vector ret;
-    token_metadata temp = co_await tmptr->clone_only_token_map();
-    temp.update_topology(pending_address, std::move(dr));
-    co_await temp.update_normal_tokens(pending_tokens, pending_address);
-    for (const auto& t : temp.sorted_tokens()) {
-        auto eps = get<endpoint_set>(co_await calculate_natural_endpoints(t, temp, false));
+    auto temp = make_token_metadata2_ptr(co_await tmptr->clone_only_token_map());
+    temp->update_topology(pending_address, std::move(dr));
+    co_await temp->update_normal_tokens(pending_tokens, pending_address);
+    for (const auto& t : temp->sorted_tokens()) {
+        auto eps = get<host_id_set>(co_await calculate_natural_endpoints(t, token_metadata(temp), true));
         if (eps.contains(pending_address)) {
-            dht::token_range_vector r = temp.get_primary_ranges_for(t);
+            dht::token_range_vector r = temp->get_primary_ranges_for(t);
             rslogger.debug("get_pending_address_ranges: token={} primary_range={} endpoint={}", t, r, pending_address);
             ret.insert(ret.end(), r.begin(), r.end());
         }
     }
-    co_await temp.clear_gently();
+    co_await temp->clear_gently();
     co_return ret;
 }
 

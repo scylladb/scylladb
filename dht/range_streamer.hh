@@ -37,7 +37,9 @@ class range_streamer {
 public:
     using inet_address = gms::inet_address;
     using token_metadata = locator::token_metadata;
+    using token_metadata2 = locator::token_metadata2;
     using token_metadata_ptr = locator::token_metadata_ptr;
+    using token_metadata2_ptr = locator::token_metadata2_ptr;
     using stream_plan = streaming::stream_plan;
     using stream_state = streaming::stream_state;
 public:
@@ -77,8 +79,8 @@ public:
         }
     };
 
-    range_streamer(distributed<replica::database>& db, sharded<streaming::stream_manager>& sm, const token_metadata_ptr tmptr, abort_source& abort_source, std::unordered_set<token> tokens,
-            inet_address address, locator::endpoint_dc_rack dr, sstring description, streaming::stream_reason reason,
+    range_streamer(distributed<replica::database>& db, sharded<streaming::stream_manager>& sm, const token_metadata2_ptr tmptr, abort_source& abort_source, std::unordered_set<token> tokens,
+            locator::host_id address, locator::endpoint_dc_rack dr, sstring description, streaming::stream_reason reason,
             service::frozen_topology_guard topo_guard,
             std::vector<sstring> tables = {})
         : _db(db)
@@ -96,8 +98,8 @@ public:
         _abort_source.check();
     }
 
-    range_streamer(distributed<replica::database>& db, sharded<streaming::stream_manager>& sm, const token_metadata_ptr tmptr, abort_source& abort_source,
-            inet_address address, locator::endpoint_dc_rack dr, sstring description, streaming::stream_reason reason, service::frozen_topology_guard topo_guard, std::vector<sstring> tables = {})
+    range_streamer(distributed<replica::database>& db, sharded<streaming::stream_manager>& sm, const token_metadata2_ptr tmptr, abort_source& abort_source,
+            locator::host_id address, locator::endpoint_dc_rack dr, sstring description, streaming::stream_reason reason, service::frozen_topology_guard topo_guard, std::vector<sstring> tables = {})
         : range_streamer(db, sm, std::move(tmptr), abort_source, std::unordered_set<token>(), address, std::move(dr), description, reason, std::move(topo_guard), std::move(tables)) {
     }
 
@@ -145,7 +147,7 @@ private:
 #endif
 
     // Can be called only before stream_async().
-    const token_metadata& get_token_metadata() {
+    const token_metadata2& get_token_metadata() {
         return *_token_metadata_ptr;
     }
 public:
@@ -154,10 +156,10 @@ public:
 private:
     distributed<replica::database>& _db;
     sharded<streaming::stream_manager>& _stream_manager;
-    token_metadata_ptr _token_metadata_ptr;
+    token_metadata2_ptr _token_metadata_ptr;
     abort_source& _abort_source;
     std::unordered_set<token> _tokens;
-    inet_address _address;
+    locator::host_id _address;
     locator::endpoint_dc_rack _dr;
     sstring _description;
     streaming::stream_reason _reason;

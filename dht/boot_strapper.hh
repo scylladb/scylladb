@@ -29,21 +29,23 @@ using check_token_endpoint = bool_class<struct check_token_endpoint_tag>;
 class boot_strapper {
     using inet_address = gms::inet_address;
     using token_metadata = locator::token_metadata;
+    using token_metadata2 = locator::token_metadata2;
     using token_metadata_ptr = locator::token_metadata_ptr;
+    using token_metadata2_ptr = locator::token_metadata2_ptr;
     using token = dht::token;
     distributed<replica::database>& _db;
     sharded<streaming::stream_manager>& _stream_manager;
     abort_source& _abort_source;
     /* endpoint that needs to be bootstrapped */
-    inet_address _address;
+    locator::host_id _address;
     /* its DC/RACK info */
     locator::endpoint_dc_rack _dr;
     /* token of the node being bootstrapped. */
     std::unordered_set<token> _tokens;
-    const token_metadata_ptr _token_metadata_ptr;
+    const locator::token_metadata2_ptr _token_metadata_ptr;
 public:
     boot_strapper(distributed<replica::database>& db, sharded<streaming::stream_manager>& sm, abort_source& abort_source,
-            inet_address addr, locator::endpoint_dc_rack dr, std::unordered_set<token> tokens, const token_metadata_ptr tmptr)
+            locator::host_id addr, locator::endpoint_dc_rack dr, std::unordered_set<token> tokens, const token_metadata2_ptr tmptr)
         : _db(db)
         , _stream_manager(sm)
         , _abort_source(abort_source)
@@ -91,7 +93,7 @@ public:
 #endif
 
 private:
-    const token_metadata& get_token_metadata() {
+    const token_metadata2& get_token_metadata() {
         return *_token_metadata_ptr;
     }
 };

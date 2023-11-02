@@ -174,7 +174,7 @@ public:
     // Caller must ensure that token_metadata will not change throughout the call.
     future<std::unordered_map<dht::token_range, inet_address_vector_replica_set>> get_range_addresses(const token_metadata& tm) const;
 
-    future<dht::token_range_vector> get_pending_address_ranges(const token_metadata_ptr tmptr, std::unordered_set<token> pending_tokens, inet_address pending_address, locator::endpoint_dc_rack dr) const;
+    future<dht::token_range_vector> get_pending_address_ranges(const token_metadata2_ptr tmptr, std::unordered_set<token> pending_tokens, locator::host_id pending_address, locator::endpoint_dc_rack dr) const;
 };
 
 using ring_mapping = boost::icl::interval_map<token, std::unordered_set<inet_address>>;
