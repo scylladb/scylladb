@@ -41,11 +41,6 @@ inline future<> write_memtable_to_sstable_for_test(replica::memtable& mt, sstabl
 shared_sstable make_sstable(sstables::test_env& env, schema_ptr s, sstring dir, std::vector<mutation> mutations,
         sstable_writer_config cfg, sstables::sstable::version_types version, gc_clock::time_point query_time = gc_clock::now());
 
-inline shared_sstable make_sstable(sstables::test_env& env, schema_ptr s, std::vector<mutation> mutations,
-        sstable_writer_config cfg, sstables::sstable::version_types version, gc_clock::time_point query_time = gc_clock::now()) {
-    return make_sstable(env, std::move(s), env.tempdir().path().native(), std::move(mutations), std::move(cfg), version, query_time);
-}
-
 namespace sstables {
 
 using sstable_ptr = shared_sstable;
