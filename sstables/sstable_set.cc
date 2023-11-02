@@ -92,8 +92,8 @@ uint64_t sstable_run::data_size() const {
     return boost::accumulate(_all | boost::adaptors::transformed(std::mem_fn(&sstable::data_size)), uint64_t(0));
 }
 
-double sstable_run::estimate_droppable_tombstone_ratio(gc_clock::time_point gc_before) const {
-    auto estimate_sum = boost::accumulate(_all | boost::adaptors::transformed(std::bind(&sstable::estimate_droppable_tombstone_ratio, std::placeholders::_1, gc_before)), double(0));
+double sstable_run::estimate_droppable_tombstone_ratio(const gc_clock::time_point& compaction_time, const tombstone_gc_state& gc_state, const schema_ptr& s) const {
+    auto estimate_sum = boost::accumulate(_all | boost::adaptors::transformed(std::bind(&sstable::estimate_droppable_tombstone_ratio, std::placeholders::_1, compaction_time, gc_state, s)), double(0));
     return _all.size() ? estimate_sum / _all.size() : double(0);
 }
 

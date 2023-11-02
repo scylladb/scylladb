@@ -66,8 +66,8 @@ bool compaction_strategy_impl::worth_dropping_tombstones(const shared_sstable& s
     if (db_clock::now()-_tombstone_compaction_interval < sst->data_file_write_time()) {
         return false;
     }
-    auto gc_before = sst->get_gc_before_for_drop_estimation(compaction_time, t.get_tombstone_gc_state(), t.schema());
-    return sst->estimate_droppable_tombstone_ratio(gc_before) >= _tombstone_threshold;
+    auto droppable_ratio = sst->estimate_droppable_tombstone_ratio(compaction_time, t.get_tombstone_gc_state(), t.schema());
+    return droppable_ratio >= _tombstone_threshold;
 }
 
 uint64_t compaction_strategy_impl::adjust_partition_estimate(const mutation_source_metadata& ms_meta, uint64_t partition_estimate, schema_ptr schema) const {

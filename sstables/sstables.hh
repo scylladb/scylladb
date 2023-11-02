@@ -899,8 +899,9 @@ public:
     }
 
     // Gets ratio of droppable tombstone. A tombstone is considered droppable here
-    // for cells expired before gc_before and regular tombstones older than gc_before.
-    double estimate_droppable_tombstone_ratio(gc_clock::time_point gc_before) const;
+    // for cells and tombstones expired before the time point "GC before", which
+    // is the point before which expiring data can be purged.
+    double estimate_droppable_tombstone_ratio(const gc_clock::time_point& compaction_time, const tombstone_gc_state& gc_state, const schema_ptr& s) const;
 
     // get sstable open info from a loaded sstable, which can be used to quickly open a sstable
     // at another shard.
