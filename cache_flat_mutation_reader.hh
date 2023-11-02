@@ -98,7 +98,16 @@ class cache_flat_mutation_reader final : public flat_mutation_reader_v2::impl {
     bool _next_row_in_range = false;
     bool _has_rt = false;
 
-    // True iff current population interval, since the previous clustering row, starts before all clustered rows.
+    // True iff current population interval starts at before_all_clustered_rows
+    // and _last_row is unset. (And the read isn't reverse).
+    //
+    // Rationale: in the "most general" step of cache population,
+    // we mark the `(_last_row, ...] `range as continuous, which can involve doing something to `_last_row`.
+    // But when populating the range `(before_all_clustered_rows, ...)`,
+    // a rows_entry at `before_all_clustered_rows` needn't exist.
+    // Thus this case needs a special treatment which doesn't involve `_last_row`.
+    // And for that, this case it has to be recognized (via this flag).
+    //
     // We cannot just look at _lower_bound, because emission of range tombstones changes _lower_bound and
     // because we mark clustering intervals as continuous when consuming a clustering_row, it would prevent
     // us from marking the interval as continuous.
@@ -343,7 +352,7 @@ future<> cache_flat_mutation_reader::do_fill_buffer() {
             });
         }
         _state = state::reading_from_underlying;
-        _population_range_starts_before_all_rows = _lower_bound.is_before_all_clustered_rows(*_schema) && !_read_context.is_reversed();
+        _population_range_starts_before_all_rows = _lower_bound.is_before_all_clustered_rows(*_schema) && !_read_context.is_reversed() && !_last_row;
         _underlying_upper_bound = _next_row_in_range ? position_in_partition::before_key(_next_row.position())
                                                      : position_in_partition(_upper_bound);
         if (!_read_context.partition_exists()) {
