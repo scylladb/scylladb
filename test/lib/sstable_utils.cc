@@ -57,24 +57,24 @@ sstables::shared_sstable make_sstable_containing(std::function<sstables::shared_
 }
 
 sstables::shared_sstable make_sstable_containing(sstables::shared_sstable sst, std::vector<mutation> muts, validate do_validate) {
-    tests::reader_concurrency_semaphore_wrapper semaphore;
-
     schema_ptr s = muts[0].schema();
     make_sstable_containing(sst, make_memtable(s, muts));
 
-    std::set<mutation, mutation_decorated_key_less_comparator> merged;
-    for (auto&& m : muts) {
-        auto it = merged.find(m);
-        if (it == merged.end()) {
-            merged.insert(std::move(m));
-        } else {
-            auto old = merged.extract(it);
-            old.value().apply(std::move(m));
-            merged.insert(std::move(old));
-        }
-    }
-
     if (do_validate) {
+        tests::reader_concurrency_semaphore_wrapper semaphore;
+
+        std::set<mutation, mutation_decorated_key_less_comparator> merged;
+        for (auto&& m : muts) {
+            auto it = merged.find(m);
+            if (it == merged.end()) {
+                merged.insert(std::move(m));
+            } else {
+                auto old = merged.extract(it);
+                old.value().apply(std::move(m));
+                merged.insert(std::move(old));
+            }
+        }
+
         // validate the sstable
         auto rd = assert_that(sst->as_mutation_source().make_reader_v2(s, semaphore.make_permit()));
         for (auto&& m : merged) {
