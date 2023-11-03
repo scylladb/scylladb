@@ -99,23 +99,40 @@ std::vector<sstring> get_keyspaces(scylla_rest_client& client, std::optional<sst
     return keyspaces;
 }
 
+struct keyspace_and_tables {
+    sstring keyspace;
+    std::vector<sstring> tables;
+};
+
+keyspace_and_tables parse_keyspace_and_tables(scylla_rest_client& client, const bpo::variables_map& vm, const char* common_keyspace_table_arg_name) {
+    keyspace_and_tables ret;
+
+    const auto args = vm[common_keyspace_table_arg_name].as<std::vector<sstring>>();
+
+    ret.keyspace = args.at(0);
+
+    const auto all_keyspaces = get_keyspaces(client);
+    if (std::ranges::find(all_keyspaces, ret.keyspace) == all_keyspaces.end()) {
+        throw std::invalid_argument(fmt::format("keyspace {} does not exist", ret.keyspace));
+    }
+
+    if (args.size() > 1) {
+        ret.tables.insert(ret.tables.end(), args.begin() + 1, args.end());
+    }
+
+    return ret;
+}
+
 using operation_func = void(*)(scylla_rest_client&, const bpo::variables_map&);
 
 std::map<operation, operation_func> get_operations_with_func();
 
 void cleanup_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     if (vm.count("cleanup_arg")) {
-        const auto all_keyspaces = get_keyspaces(client);
-
-        auto args = vm["cleanup_arg"].as<std::vector<sstring>>();
+        const auto [keyspace, tables] = parse_keyspace_and_tables(client, vm, "cleanup_arg");
         std::unordered_map<sstring, sstring> params;
-        const auto keyspace = args[0];
-        if (std::ranges::find(all_keyspaces, keyspace) == all_keyspaces.end()) {
-            throw std::invalid_argument(fmt::format("keyspace {} does not exist", keyspace));
-        }
-
-        if (args.size() > 1) {
-            params["cf"] = fmt::to_string(fmt::join(args.begin() + 1, args.end(), ","));
+        if (!tables.empty()) {
+            params["cf"] = fmt::to_string(fmt::join(tables.begin(), tables.end(), ","));
         }
         client.post(format("/storage_service/keyspace_cleanup/{}", keyspace), std::move(params));
     } else {
@@ -130,22 +147,15 @@ void compact_operation(scylla_rest_client& client, const bpo::variables_map& vm)
         throw std::invalid_argument("--user-defined flag is unsupported");
     }
 
-    const auto all_keyspaces = get_keyspaces(client);
-
     if (vm.count("compaction_arg")) {
-        auto args = vm["compaction_arg"].as<std::vector<sstring>>();
+        const auto [keyspace, tables] = parse_keyspace_and_tables(client, vm, "compaction_arg");
         std::unordered_map<sstring, sstring> params;
-        const auto keyspace = args[0];
-        if (std::ranges::find(all_keyspaces, keyspace) == all_keyspaces.end()) {
-            throw std::invalid_argument(fmt::format("keyspace {} does not exist", keyspace));
-        }
-
-        if (args.size() > 1) {
-            params["cf"] = fmt::to_string(fmt::join(args.begin() + 1, args.end(), ","));
+        if (!tables.empty()) {
+            params["cf"] = fmt::to_string(fmt::join(tables.begin(), tables.end(), ","));
         }
         client.post(format("/storage_service/keyspace_compaction/{}", keyspace), std::move(params));
     } else {
-        for (const auto& keyspace : all_keyspaces) {
+        for (const auto& keyspace : get_keyspaces(client)) {
             client.post(format("/storage_service/keyspace_compaction/{}", keyspace));
         }
     }
