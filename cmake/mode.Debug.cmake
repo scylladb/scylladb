@@ -24,4 +24,4 @@ endforeach()
 set(CMAKE_CXX_FLAGS_DEBUG
   " -O${Seastar_OptimizationLevel_DEBUG} -g -gz")
 
-set(stack_usage_threshold_in_KB 40)
+maybe_limit_stack_usage_in_KB(40 Debug)

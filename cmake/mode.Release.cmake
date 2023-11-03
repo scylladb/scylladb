@@ -25,4 +25,4 @@ endif()
 
 add_link_options($<$<CONFIG:Release>:LINKER:--gc-sections>)
 
-set(stack_usage_threshold_in_KB 13)
+maybe_limit_stack_usage_in_KB(13 Release)
