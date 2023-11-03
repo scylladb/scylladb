@@ -324,6 +324,10 @@ void disablegossip_operation(scylla_rest_client& client, const bpo::variables_ma
     client.del("/storage_service/gossiping");
 }
 
+void drain_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    client.post("/storage_service/drain");
+}
+
 void enablebackup_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     client.post("/storage_service/incremental_backups", {{"value", "true"}});
 }
@@ -718,6 +722,23 @@ Fore more information, see: https://opensource.docs.scylladb.com/stable/operatin
 )",
             },
             disablegossip_operation
+        },
+        {
+            {
+                "drain",
+                "Drain the node (stop accepting writes and flush all tables)",
+R"(
+Flushes all memtables from a node to the SSTables that are on the disk. Scylla
+stops listening for connections from the client and other nodes. You need to
+restart Scylla after running this command. This command is usually executed
+before upgrading a node to a new version or before any maintenance action is
+performed. When you want to simply flush memtables to disk, use the nodetool
+flush command.
+
+Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/drain.html
+)",
+            },
+            drain_operation
         },
         {
             {
