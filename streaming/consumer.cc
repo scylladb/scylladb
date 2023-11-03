@@ -33,9 +33,10 @@ std::function<future<> (flat_mutation_reader_v2)> make_streaming_consumer(sstrin
             //FIXME: for better estimations this should be transmitted from remote
             auto metadata = mutation_source_metadata{};
             auto& cs = cf->get_compaction_strategy();
-            const auto adjusted_estimated_partitions = cs.adjust_partition_estimate(metadata, estimated_partitions);
+            // Data segregation is postponed to happen during off-strategy if latter is enabled, which
+            // means partition estimation shouldn't be adjusted.
+            const auto adjusted_estimated_partitions = (offstrategy) ? estimated_partitions : cs.adjust_partition_estimate(metadata, estimated_partitions);
             auto make_interposer_consumer = [&cs, offstrategy] (const mutation_source_metadata& ms_meta, reader_consumer_v2 end_consumer) mutable {
-                // postpone data segregation to off-strategy compaction if enabled
                 if (offstrategy) {
                     return end_consumer;
                 }
