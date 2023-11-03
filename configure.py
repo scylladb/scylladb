@@ -2374,7 +2374,7 @@ def write_build_file(f,
         ''').format(**globals()))
 
 
-def create_building_system(args):
+def create_build_system(args):
     check_for_minimal_compiler_version(args.cxx)
     check_for_boost(args.cxx)
     check_for_lz4(args.cxx, args.user_cflags)
@@ -2403,4 +2403,4 @@ def create_building_system(args):
 
 
 if __name__ == '__main__':
-    create_building_system(args)
+    create_build_system(args)
