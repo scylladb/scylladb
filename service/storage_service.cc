@@ -1795,8 +1795,23 @@ class topology_coordinator {
 
         switch (*tstate) {
             case topology::transition_state::join_group0: {
-                auto node = get_node_to_work_on(std::move(guard));
-                node = co_await finish_accepting_node(std::move(node));
+                auto [node, accepted] = co_await finish_accepting_node(get_node_to_work_on(std::move(guard)));
+
+                // If responding to the joining node failed, move the node to the left state and
+                // stop the topology transition.
+                if (!accepted) {
+                    topology_mutation_builder builder(node.guard.write_timestamp());
+                    builder.del_transition_state()
+                           .with_node(node.id)
+                           .set("node_state", node_state::left);
+                    auto reason = ::format("bootstrap: failed to accept {}", node.id);
+                    co_await update_topology_state(std::move(node.guard), {builder.build()}, reason);
+
+                    slogger.info("raft topology: node {} moved to left state", node.id);
+
+                    break;
+                }
+
                 switch (node.rs->state) {
                     case node_state::bootstrapping: {
                         assert(!node.rs->ring);
@@ -2109,24 +2124,15 @@ class topology_coordinator {
 
                         slogger.info("raft topology: rejected node moved to left state {}", node.id);
 
-                        // Keep trying to send the rejection to the node, give up after some time.
-                        const auto send_reject_deadline = lowres_clock::now() + std::chrono::seconds(30);
-                        while (true) {
                             try {
                                 co_await respond_to_joining_node(node.id, join_node_response_params{
                                     .response = std::move(validation_result),
                                 });
-                                break;
                             } catch (const std::runtime_error& e) {
-                                slogger.warn("raft topology: attempt to send rejection response to {} failed: {}.", node.id, e.what());
+                                slogger.warn("raft topology: attempt to send rejection response to {} failed: {}. "
+                                             "The node may hang. It's safe to shut it down manually now.",
+                                             node.id, e.what());
                             }
-                            if (lowres_clock::now() > send_reject_deadline) {
-                                co_await sleep_abortable(std::chrono::seconds(1), _as);
-                            } else {
-                                slogger.warn("raft topology: failed to deliver rejection response to {} within {}s. Will not retry.", node.id, 30);
-                                break;
-                            }
-                        }
 
                         break;
                     }
@@ -2304,10 +2310,15 @@ class topology_coordinator {
         return join_node_response_params::accepted {};
     }
 
-    future<node_to_work_on> finish_accepting_node(node_to_work_on&& node) {
+    // Tries to finish accepting the joining node by updating the cluster
+    // configuration and sending the acceptance response.
+    //
+    // Returns the retaken node and information on whether responding to the
+    // join request succeeded.
+    future<std::tuple<node_to_work_on, bool>> finish_accepting_node(node_to_work_on&& node) {
         if (_topo_sm._topology.normal_nodes.empty()) {
             // This is the first node, it joins without the handshake.
-            co_return std::move(node);
+            co_return std::tuple{std::move(node), true};
         }
 
         auto id = node.id;
@@ -2318,10 +2329,20 @@ class topology_coordinator {
         }
 
         release_node(std::move(node));
+
+        auto responded = false;
+        try {
         co_await respond_to_joining_node(id, join_node_response_params{
             .response = join_node_response_params::accepted{},
         });
-        co_return retake_node(co_await start_operation(), id);
+            responded = true;
+        } catch (const std::runtime_error& e) {
+            slogger.warn("raft topology: attempt to send acceptance response to {} failed: {}. "
+                         "The node may hang. It's safe to shut it down manually now.",
+                         node.id, e.what());
+        }
+
+        co_return std::tuple{retake_node(co_await start_operation(), id), responded};
     }
 
     future<> respond_to_joining_node(raft::server_id id, join_node_response_params&& params) {
