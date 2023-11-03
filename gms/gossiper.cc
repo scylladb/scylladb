@@ -2033,8 +2033,9 @@ future<> gossiper::do_shadow_round(std::unordered_set<gms::inet_address> nodes, 
                     auto err = format("Node {} does not support get_endpoint_states verb", node);
                     logger.error("{}", err);
                     throw std::runtime_error{err};
-                }).handle_exception_type([node] (seastar::rpc::timeout_error&) {
-                    logger.warn("The get_endpoint_states verb to node {} was timeout", node);
+                }).handle_exception_type([node, &nodes_down] (seastar::rpc::timeout_error&) {
+                    nodes_down++;
+                    logger.warn("The get_endpoint_states verb to node {} timed out", node);
                 }).handle_exception_type([node, &nodes_down] (seastar::rpc::closed_error&) {
                     nodes_down++;
                     logger.warn("Node {} is down for get_endpoint_states verb", node);
