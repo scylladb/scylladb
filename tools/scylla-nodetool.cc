@@ -132,6 +132,23 @@ keyspace_and_tables parse_keyspace_and_tables(scylla_rest_client& client, const 
     return ret;
 }
 
+keyspace_and_tables parse_keyspace_and_tables(scylla_rest_client& client, const bpo::variables_map& vm) {
+    keyspace_and_tables ret;
+
+    ret.keyspace = vm["keyspace"].as<sstring>();
+
+    const auto all_keyspaces = get_keyspaces(client);
+    if (std::ranges::find(all_keyspaces, ret.keyspace) == all_keyspaces.end()) {
+        throw std::invalid_argument(fmt::format("keyspace {} does not exist", ret.keyspace));
+    }
+
+    if (vm.count("table")) {
+        ret.tables = vm["table"].as<std::vector<sstring>>();
+    }
+
+    return ret;
+}
+
 using operation_func = void(*)(scylla_rest_client&, const bpo::variables_map&);
 
 std::map<operation, operation_func> get_operations_with_func();
@@ -348,6 +365,15 @@ void enablebinary_operation(scylla_rest_client& client, const bpo::variables_map
 
 void enablegossip_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     client.post("/storage_service/gossiping");
+}
+
+void flush_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    const auto [keyspace, tables] = parse_keyspace_and_tables(client, vm);
+    std::unordered_map<sstring, sstring> params;
+    if (!tables.empty()) {
+        params["cf"] = fmt::to_string(fmt::join(tables.begin(), tables.end(), ","));
+    }
+    client.post(format("/storage_service/keyspace_flush/{}", keyspace), std::move(params));
 }
 
 void gettraceprobability_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
@@ -783,6 +809,24 @@ Fore more information, see: https://opensource.docs.scylladb.com/stable/operatin
 )",
             },
             enablegossip_operation
+        },
+        {
+            {
+                "flush",
+                "Flush one or more tables",
+R"(
+Specify a keyspace and one or more tables that you want to flush from the
+memtable to on disk SSTables.
+
+Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/flush.html
+)",
+                { },
+                {
+                    typed_option<sstring>("keyspace", "The keyspace to flush", 1),
+                    typed_option<std::vector<sstring>>("table", "The table(s) to flush", -1),
+                }
+            },
+            flush_operation
         },
         {
             {
