@@ -2652,8 +2652,10 @@ public:
         _ss._join_node_group0_started.set_value();
 
         // Processing of the response is done in `join_node_response_handler`.
-        // Wait for it to complete.
-        co_await _ss._join_node_response_done.get_shared_future(lowres_clock::now() + std::chrono::minutes(3));
+        // Wait for it to complete. If the topology coordinator fails to
+        // deliver the rejection, it won't complete. In such a case, the
+        // operator is responsible for shutting down the joining node.
+        co_await _ss._join_node_response_done.get_shared_future(as);
         slogger.info("raft topology: join: success");
         co_return true;
     }

@@ -484,7 +484,6 @@ future<> raft_group0::join_group0(std::vector<gms::inet_address> seeds, shared_p
             break;
         }
 
-        // TODO: aborts?
         if (co_await handshaker->post_server_start(g0_info, _abort_source)) {
             break;
         }
