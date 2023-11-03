@@ -12,5 +12,9 @@ set(Seastar_DEFINITIONS_DEV
   DEVEL
   SEASTAR_ENABLE_ALLOC_FAILURE_INJECTION
   SCYLLA_ENABLE_ERROR_INJECTION)
+foreach(definition ${Seastar_DEFINITIONS_DEV})
+  add_compile_definitions(
+    $<$<CONFIG:Dev>:${definition}>)
+endforeach()
 
 set(stack_usage_threshold_in_KB 21)

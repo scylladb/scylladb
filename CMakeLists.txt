@@ -25,7 +25,6 @@ string(TOUPPER "${CMAKE_BUILD_TYPE}" build_mode)
 include(mode.${build_mode})
 include(mode.common)
 add_compile_definitions(
-    ${Seastar_DEFINITIONS_${build_mode}}
     FMT_DEPRECATED_OSTREAM)
 include(limit_jobs)
 # Configure Seastar compile options to align with Scylla

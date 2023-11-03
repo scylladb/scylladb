@@ -8,11 +8,15 @@ string(APPEND CMAKE_CXX_FLAGS_COVERAGE
   " -O${Seastar_OptimizationLevel_SANITIZE}")
 
 set(Seastar_DEFINITIONS_COVERAGE
-  SCYLLA_BUILD_MODE=debug
+  SCYLLA_BUILD_MODE=coverage
   DEBUG
   SANITIZE
   DEBUG_LSA_SANITIZER
   SCYLLA_ENABLE_ERROR_INJECTION)
+foreach(definition ${Seastar_DEFINITIONS_COVERAGE})
+  add_compile_definitions(
+    $<$<CONFIG:Coverage>:${definition}>)
+endforeach()
 
 set(CMAKE_CXX_FLAGS_COVERAGE
   " -O${Seastar_OptimizationLevel_COVERAGE} -fprofile-instr-generate -fcoverage-mapping -g -gz")

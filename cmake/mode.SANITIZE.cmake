@@ -13,5 +13,9 @@ set(Seastar_DEFINITIONS_SANITIZE
   SANITIZE
   DEBUG_LSA_SANITIZER
   SCYLLA_ENABLE_ERROR_INJECTION)
+foreach(definition ${Seastar_DEFINITIONS_SANITIZE})
+  add_compile_definitions(
+    $<$<CONFIG:Sanitize>:${definition}>)
+endforeach()
 
 set(stack_usage_threshold_in_KB 50)
