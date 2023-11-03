@@ -2124,15 +2124,15 @@ class topology_coordinator {
 
                         slogger.info("raft topology: rejected node moved to left state {}", node.id);
 
-                            try {
-                                co_await respond_to_joining_node(node.id, join_node_response_params{
-                                    .response = std::move(validation_result),
-                                });
-                            } catch (const std::runtime_error& e) {
-                                slogger.warn("raft topology: attempt to send rejection response to {} failed: {}. "
-                                             "The node may hang. It's safe to shut it down manually now.",
-                                             node.id, e.what());
-                            }
+                        try {
+                            co_await respond_to_joining_node(node.id, join_node_response_params{
+                                .response = std::move(validation_result),
+                            });
+                        } catch (const std::runtime_error& e) {
+                            slogger.warn("raft topology: attempt to send rejection response to {} failed: {}. "
+                                         "The node may hang. It's safe to shut it down manually now.",
+                                         node.id, e.what());
+                        }
 
                         break;
                     }
@@ -2332,9 +2332,9 @@ class topology_coordinator {
 
         auto responded = false;
         try {
-        co_await respond_to_joining_node(id, join_node_response_params{
-            .response = join_node_response_params::accepted{},
-        });
+            co_await respond_to_joining_node(id, join_node_response_params{
+                .response = join_node_response_params::accepted{},
+            });
             responded = true;
         } catch (const std::runtime_error& e) {
             slogger.warn("raft topology: attempt to send acceptance response to {} failed: {}. "
