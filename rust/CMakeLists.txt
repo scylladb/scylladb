@@ -3,19 +3,19 @@ find_program(CARGO cargo
 
 function(add_rust_library name)
   # use for profiles defined in Cargo.toml
-  set(mode ${CMAKE_BUILD_TYPE})
-  string(TOLOWER ${CMAKE_BUILD_TYPE} mode)
+  set(mode $<LOWER_CASE:$<CONFIG>>)
   set(target_dir ${CMAKE_CURRENT_BINARY_DIR})
   set(profile "rust-${mode}")
-  set(library ${target_dir}/${profile}/lib${name}.a)
+  set(library ${target_dir}/lib${name}.a)
   add_custom_command(
     OUTPUT ${library}
     COMMAND ${CMAKE_COMMAND} -E env CARGO_BUILD_DEP_INFO_BASEDIR=. ${CARGO} build --locked --target-dir=${target_dir} --profile=rust-${mode}
+    COMMAND ${CMAKE_COMMAND} -E copy ${target_dir}/${profile}/lib${name}.a ${library}
     DEPENDS Cargo.lock
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
     COMMENT "Building Rust library: ${library}")
   add_custom_target(rust-${name}
-    DEPENDS ${library})
+    DEPENDS ${target_dir}/lib${name}.a)
   add_library(Rust::${name} STATIC IMPORTED)
   add_dependencies(Rust::${name} rust-${name})
   set_target_properties(Rust::${name} PROPERTIES
