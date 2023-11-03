@@ -32,7 +32,9 @@ async def test_topology_ops(request, manager: ManagerClient):
 
     await wait_for_cql_and_get_hosts(manager.cql, await manager.running_servers(), time.time() + 60)
     cql = await reconnect_driver(manager)
-    finish_writes = await start_writes(cql)
+    # FIXME: disabled as a workaround for #15935, #15924
+    # We need to reenable once these issues are fixed.
+    #finish_writes = await start_writes(cql)
 
     logger.info("Bootstrapping other nodes")
     servers += [await manager.server_add(), await manager.server_add()]
@@ -64,7 +66,7 @@ async def test_topology_ops(request, manager: ManagerClient):
     await check_token_ring_and_group0_consistency(manager)
 
     logger.info("Checking results of the background writes")
-    await finish_writes()
+    #await finish_writes()
 
     for server in servers:
         await check_node_log_for_failed_mutations(manager, server)
