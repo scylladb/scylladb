@@ -2018,10 +2018,10 @@ future<> gossiper::do_shadow_round(std::unordered_set<gms::inet_address> nodes, 
             gms::application_state::SNITCH_NAME}};
         logger.info("Gossip shadow round started with nodes={}", nodes);
         std::unordered_set<gms::inet_address> nodes_talked;
-        size_t nodes_down = 0;
         auto start_time = clk::now();
         std::list<gms::gossip_get_endpoint_states_response> responses;
         for (;;) {
+            size_t nodes_down = 0;
             parallel_for_each(nodes.begin(), nodes.end(), [this, &request, &responses, &nodes_talked, &nodes_down] (gms::inet_address node) {
                 logger.debug("Sent get_endpoint_states request to {}, request={}", node, request.application_states);
                 return _messaging.send_gossip_get_endpoint_states(msg_addr(node), std::chrono::milliseconds(5000), request).then(
