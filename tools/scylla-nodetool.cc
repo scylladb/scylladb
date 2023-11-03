@@ -339,6 +339,21 @@ void compactionhistory_operation(scylla_rest_client& client, const bpo::variable
     }
 }
 
+void disableautocompaction_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    if (!vm.count("keyspace")) {
+        for (const auto& keyspace :  get_keyspaces(client)) {
+            client.del(format("/storage_service/auto_compaction/{}", keyspace));
+        }
+    } else {
+        const auto [keyspace, tables] = parse_keyspace_and_tables(client, vm);
+        std::unordered_map<sstring, sstring> params;
+        if (!tables.empty()) {
+            params["cf"] = fmt::to_string(fmt::join(tables.begin(), tables.end(), ","));
+        }
+        client.del(format("/storage_service/auto_compaction/{}", keyspace), std::move(params));
+    }
+}
+
 void disablebackup_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     client.post("/storage_service/incremental_backups", {{"value", "false"}});
 }
@@ -728,6 +743,21 @@ Fore more information, see: https://opensource.docs.scylladb.com/stable/operatin
                 },
             },
             compactionhistory_operation
+        },
+        {
+            {
+                "disableautocompaction",
+                "Disables automatic compaction for the given keyspace and table(s)",
+R"(
+Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/disableautocompaction.html
+)",
+                { },
+                {
+                    typed_option<sstring>("keyspace", "The keyspace to disable automatic compaction for", 1),
+                    typed_option<std::vector<sstring>>("table", "The table(s) to disable automatic compaction for", -1),
+                }
+            },
+            disableautocompaction_operation
         },
         {
             {
