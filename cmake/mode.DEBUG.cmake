@@ -16,6 +16,10 @@ set(Seastar_DEFINITIONS_DEBUG
   SANITIZE
   DEBUG_LSA_SANITIZER
   SCYLLA_ENABLE_ERROR_INJECTION)
+foreach(definition ${Seastar_DEFINITIONS_DEBUG})
+  add_compile_definitions(
+    $<$<CONFIG:Debug>:${definition}>)
+endforeach()
 
 set(CMAKE_CXX_FLAGS_DEBUG
   " -O${Seastar_OptimizationLevel_DEBUG} -g -gz")
