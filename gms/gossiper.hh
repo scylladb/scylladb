@@ -592,7 +592,7 @@ public:
     /**
      *  Do a single 'shadow' round of gossip, where we do not modify any state
      */
-    future<> do_shadow_round(std::unordered_set<gms::inet_address> nodes = {});
+    future<> do_shadow_round(std::unordered_set<gms::inet_address> nodes);
 
 private:
     void build_seeds_list();
