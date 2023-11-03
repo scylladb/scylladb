@@ -370,6 +370,21 @@ void drain_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     client.post("/storage_service/drain");
 }
 
+void enableautocompaction_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    if (!vm.count("keyspace")) {
+        for (const auto& keyspace :  get_keyspaces(client)) {
+            client.post(format("/storage_service/auto_compaction/{}", keyspace));
+        }
+    } else {
+        const auto [keyspace, tables] = parse_keyspace_and_tables(client, vm);
+        std::unordered_map<sstring, sstring> params;
+        if (!tables.empty()) {
+            params["cf"] = fmt::to_string(fmt::join(tables.begin(), tables.end(), ","));
+        }
+        client.post(format("/storage_service/auto_compaction/{}", keyspace), std::move(params));
+    }
+}
+
 void enablebackup_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     client.post("/storage_service/incremental_backups", {{"value", "true"}});
 }
@@ -805,6 +820,21 @@ Fore more information, see: https://opensource.docs.scylladb.com/stable/operatin
 )",
             },
             drain_operation
+        },
+        {
+            {
+                "enableautocompaction",
+                "Enables automatic compaction for the given keyspace and table(s)",
+R"(
+Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/enableautocompaction.html
+)",
+                { },
+                {
+                    typed_option<sstring>("keyspace", "The keyspace to enable automatic compaction for", 1),
+                    typed_option<std::vector<sstring>>("table", "The table(s) to enable automatic compaction for", -1),
+                }
+            },
+            enableautocompaction_operation
         },
         {
             {
