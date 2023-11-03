@@ -12,33 +12,18 @@ set_source_files_properties(${cql_grammar_srcs}
 set(cql_parser_srcs ${cql_grammar_srcs})
 list(FILTER cql_parser_srcs INCLUDE REGEX "Parser.cpp$")
 
-set(unoptimized_levels "0" "g" "s")
-if(Seastar_OptimizationLevel_${CMAKE_BUILD_TYPE} IN_LIST unoptimized_levels)
-    # Unoptimized parsers end up using huge amounts of stack space and
-    # overflowing their stack
-    list(APPEND cql_parser_compile_options
-        "-O1")
-endif()
-
-set(SANITIZE_MODES "Debug" "Sanitize")
-if(CMAKE_BUILD_TYPE IN_LIST SANITIZE_MODES)
-    include(CheckCXXCompilerFlag)
-    check_cxx_compiler_flag("-fsanitize-address-use-after-scope"
-        _sanitize_address_use_after_scope_supported)
-    if(_sanitize_address_use_after_scope_supported)
-        # use-after-scope sanitizer also uses large amount of stack space
-        # and overflows the stack of CqlParser
-        list(APPEND cql_parser_compile_options
-            "-fno-sanitize-address-use-after-scope")
-    endif()
-endif()
-
-if(DEFINED cql_parser_compile_options)
-    set_property(
-        SOURCE ${cql_parser_srcs}
-        APPEND
-        PROPERTY COMPILE_OPTIONS ${cql_parser_compile_options})
-endif()
+set(unoptimized_modes "Coverage" "Debug" "Sanitize")
+set(sanitized_modes "Debug" "Sanitize")
+set_property(
+    SOURCE ${cql_parser_srcs}
+    APPEND
+    PROPERTY COMPILE_OPTIONS
+      # Unoptimized parsers end up using huge amounts of stack space and
+      # overflowing their stack
+      $<$<IN_LIST:$<CONFIG>,${unoptimized_modes}>:-O1>
+      # use-after-scope sanitizer also uses large amount of stack space
+      # and overflows the stack of CqlParser
+      $<$<IN_LIST:$<CONFIG>,${sanitized_modes}>:-fsanitize-address-use-after-scope>)
 
 add_library(cql3 STATIC)
 target_sources(cql3
