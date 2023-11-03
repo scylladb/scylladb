@@ -23,8 +23,16 @@ if(DEFINED CMAKE_BUILD_TYPE)
             "Following types are supported: ${scylla_build_types}")
     endif()
 endif(DEFINED CMAKE_BUILD_TYPE)
+
 include(mode.common)
-include(mode.${CMAKE_BUILD_TYPE})
+if(CMAKE_CONFIGURATION_TYPES)
+    foreach(config ${CMAKE_CONFIGURATION_TYPES})
+        include(mode.${config})
+    endforeach()
+else()
+    include(mode.${CMAKE_BUILD_TYPE})
+endif()
+
 add_compile_definitions(
     FMT_DEPRECATED_OSTREAM)
 include(limit_jobs)
