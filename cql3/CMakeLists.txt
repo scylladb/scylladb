@@ -13,7 +13,7 @@ set(cql_parser_srcs ${cql_grammar_srcs})
 list(FILTER cql_parser_srcs INCLUDE REGEX "Parser.cpp$")
 
 set(unoptimized_levels "0" "g" "s")
-if(Seastar_OptimizationLevel_${build_mode} IN_LIST unoptimized_levels)
+if(Seastar_OptimizationLevel_${CMAKE_BUILD_TYPE} IN_LIST unoptimized_levels)
     # Unoptimized parsers end up using huge amounts of stack space and
     # overflowing their stack
     list(APPEND cql_parser_compile_options
