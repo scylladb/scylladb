@@ -35,7 +35,7 @@ std::function<future<> (flat_mutation_reader_v2)> make_streaming_consumer(sstrin
             auto& cs = cf->get_compaction_strategy();
             // Data segregation is postponed to happen during off-strategy if latter is enabled, which
             // means partition estimation shouldn't be adjusted.
-            const auto adjusted_estimated_partitions = (offstrategy) ? estimated_partitions : cs.adjust_partition_estimate(metadata, estimated_partitions);
+            const auto adjusted_estimated_partitions = (offstrategy) ? estimated_partitions : cs.adjust_partition_estimate(metadata, estimated_partitions, cf->schema());
             auto make_interposer_consumer = [&cs, offstrategy] (const mutation_source_metadata& ms_meta, reader_consumer_v2 end_consumer) mutable {
                 if (offstrategy) {
                     return end_consumer;

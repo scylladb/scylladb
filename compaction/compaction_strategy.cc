@@ -66,7 +66,7 @@ bool compaction_strategy_impl::worth_dropping_tombstones(const shared_sstable& s
     return sst->estimate_droppable_tombstone_ratio(gc_before) >= _tombstone_threshold;
 }
 
-uint64_t compaction_strategy_impl::adjust_partition_estimate(const mutation_source_metadata& ms_meta, uint64_t partition_estimate) const {
+uint64_t compaction_strategy_impl::adjust_partition_estimate(const mutation_source_metadata& ms_meta, uint64_t partition_estimate, schema_ptr schema) const {
     return partition_estimate;
 }
 
@@ -704,8 +704,8 @@ compaction_strategy::get_reshaping_job(std::vector<shared_sstable> input, schema
     return _compaction_strategy_impl->get_reshaping_job(std::move(input), schema, mode);
 }
 
-uint64_t compaction_strategy::adjust_partition_estimate(const mutation_source_metadata& ms_meta, uint64_t partition_estimate) const {
-    return _compaction_strategy_impl->adjust_partition_estimate(ms_meta, partition_estimate);
+uint64_t compaction_strategy::adjust_partition_estimate(const mutation_source_metadata& ms_meta, uint64_t partition_estimate, schema_ptr schema) const {
+    return _compaction_strategy_impl->adjust_partition_estimate(ms_meta, partition_estimate, std::move(schema));
 }
 
 reader_consumer_v2 compaction_strategy::make_interposer_consumer(const mutation_source_metadata& ms_meta, reader_consumer_v2 end_consumer) const {
