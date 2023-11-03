@@ -2005,8 +2005,8 @@ future<> gossiper::advertise_to_nodes(generation_for_nodes advertise_to_nodes) {
     });
 }
 
-future<> gossiper::do_shadow_round(std::unordered_set<gms::inet_address> nodes) {
-    return seastar::async([this, g = this->shared_from_this(), nodes = std::move(nodes)] () mutable {
+future<> gossiper::do_shadow_round(std::unordered_set<gms::inet_address> nodes, mandatory is_mandatory) {
+    return seastar::async([this, g = this->shared_from_this(), nodes = std::move(nodes), is_mandatory] () mutable {
         nodes.erase(get_broadcast_address());
         gossip_get_endpoint_states_request request{{
             gms::application_state::STATUS,
@@ -2046,7 +2046,7 @@ future<> gossiper::do_shadow_round(std::unordered_set<gms::inet_address> nodes) 
             if (!nodes_talked.empty()) {
                 break;
             }
-            if (nodes_down == nodes.size()) {
+            if (nodes_down == nodes.size() && !is_mandatory) {
                 logger.warn("All nodes={} are down for get_endpoint_states verb. Skip ShadowRound.", nodes);
                 break;
             }
