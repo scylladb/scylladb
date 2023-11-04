@@ -90,7 +90,7 @@ inet_address_vector_replica_set vnode_effective_replication_map::get_natural_end
 void maybe_remove_node_being_replaced(const token_metadata& tm,
                                       const abstract_replication_strategy& rs,
                                       inet_address_vector_replica_set& natural_endpoints) {
-    if (tm.is_any_node_being_replaced() &&
+    if (tm.get_new()->is_any_node_being_replaced() &&
         rs.allow_remove_node_being_replaced_from_natural_endpoints()) {
         // When a new node is started to replace an existing dead node, we want
         // to make the replacing node take writes but do not count it for
@@ -104,7 +104,8 @@ void maybe_remove_node_being_replaced(const token_metadata& tm,
         // as the natural_endpoints and the node will not appear in the
         // pending_endpoints.
         auto it = boost::range::remove_if(natural_endpoints, [&] (gms::inet_address& p) {
-            return tm.is_being_replaced(p);
+            const auto host_id = tm.get_new()->get_host_id(p);
+            return tm.get_new()->is_being_replaced(host_id);
         });
         natural_endpoints.erase(it, natural_endpoints.end());
     }
@@ -376,21 +377,22 @@ future<mutable_vnode_effective_replication_map_ptr> calculate_effective_replicat
     ring_mapping pending_endpoints;
     ring_mapping read_endpoints;
     const auto depend_on_token = rs->natural_endpoints_depend_on_token();
-    const auto& sorted_tokens = tmptr->sorted_tokens();
+    auto tmpr_new = tmptr->get_new_strong();
+    const auto& sorted_tokens = tmpr_new->sorted_tokens();
     replication_map.reserve(depend_on_token ? sorted_tokens.size() : 1);
-    if (const auto& topology_changes = tmptr->get_topology_change_info(); topology_changes) {
+    if (const auto& topology_changes = tmpr_new->get_topology_change_info(); topology_changes) {
         const auto& all_tokens = topology_changes->all_tokens;
         const auto& base_token_metadata = topology_changes->base_token_metadata
-            ? *topology_changes->base_token_metadata
-            : *tmptr;
-        const auto& current_tokens = tmptr->get_token_to_endpoint();
+            ? topology_changes->base_token_metadata
+            : tmpr_new;
+        const auto& current_tokens = tmpr_new->get_token_to_endpoint();
         for (size_t i = 0, size = all_tokens.size(); i < size; ++i) {
             co_await coroutine::maybe_yield();
 
             const auto token = all_tokens[i];
 
-            auto current_endpoints = get<endpoint_set>(co_await rs->calculate_natural_endpoints(token, base_token_metadata, false));
-            auto target_endpoints = get<endpoint_set>(co_await rs->calculate_natural_endpoints(token, *topology_changes->target_token_metadata, false));
+            auto current_endpoints = co_await rs->calculate_natural_endpoints(token, *base_token_metadata);
+            auto target_endpoints = co_await rs->calculate_natural_endpoints(token, *topology_changes->target_token_metadata);
 
             auto add_mapping = [&](ring_mapping& target, std::unordered_set<inet_address>&& endpoints) {
                 using interval = ring_mapping::interval_type;
@@ -413,37 +415,37 @@ future<mutable_vnode_effective_replication_map_ptr> calculate_effective_replicat
             };
 
             {
-                std::unordered_set<inet_address> endpoints_diff;
+                host_id_set endpoints_diff;
                 for (const auto& e: target_endpoints) {
                     if (!current_endpoints.contains(e)) {
                         endpoints_diff.insert(e);
                     }
                 }
                 if (!endpoints_diff.empty()) {
-                    add_mapping(pending_endpoints, std::move(endpoints_diff));
+                    add_mapping(pending_endpoints, resolve_endpoints(endpoints_diff, *base_token_metadata).extract_set());
                 }
             }
 
             // in order not to waste memory, we update read_endpoints only if the
             // new endpoints differs from the old one
             if (topology_changes->read_new && target_endpoints.get_vector() != current_endpoints.get_vector()) {
-                add_mapping(read_endpoints, std::move(target_endpoints).extract_set());
+                add_mapping(read_endpoints, resolve_endpoints(target_endpoints, *base_token_metadata).extract_set());
             }
 
             if (!depend_on_token) {
-                replication_map.emplace(default_replication_map_key, std::move(current_endpoints).extract_vector());
+                replication_map.emplace(default_replication_map_key, resolve_endpoints(current_endpoints, *base_token_metadata).extract_vector());
                 break;
             } else if (current_tokens.contains(token)) {
-                replication_map.emplace(token, std::move(current_endpoints).extract_vector());
+                replication_map.emplace(token, resolve_endpoints(current_endpoints, *base_token_metadata).extract_vector());
             }
         }
     } else if (depend_on_token) {
         for (const auto &t : sorted_tokens) {
-            auto eps = get<endpoint_set>(co_await rs->calculate_natural_endpoints(t, *tmptr, false));
+            auto eps = co_await rs->calculate_natural_ips(t, tmpr_new);
             replication_map.emplace(t, std::move(eps).extract_vector());
         }
     } else {
-        auto eps = get<endpoint_set>(co_await rs->calculate_natural_endpoints(default_replication_map_key, *tmptr, false));
+        auto eps = co_await rs->calculate_natural_ips(default_replication_map_key, tmpr_new);
         replication_map.emplace(default_replication_map_key, std::move(eps).extract_vector());
     }
 
@@ -476,7 +478,7 @@ const inet_address_vector_replica_set& vnode_effective_replication_map::do_get_n
     bool is_vnode) const
 {
     const token& key_token = _rs->natural_endpoints_depend_on_token()
-        ? (is_vnode ? tok : _tmptr->first_token(tok))
+        ? (is_vnode ? tok : _tmptr->get_new()->first_token(tok))
         : default_replication_map_key;
     const auto it = _replication_map.find(key_token);
     return it->second;
