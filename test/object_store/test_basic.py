@@ -20,6 +20,7 @@ def get_scylla_with_s3_cmd(ssl, s3_server):
     '''return a function which in turn returns the command for running scylla'''
     scylla = run.find_scylla()
     print('Scylla under test:', scylla)
+
     def make_run_cmd(pid, d):
         '''return the command args and environmental variables for running scylla'''
         if ssl:
