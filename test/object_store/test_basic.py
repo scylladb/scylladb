@@ -148,7 +148,7 @@ async def test_basic(test_tempdir, s3_server, ssl):
     with managed_cluster(test_tempdir, ssl, s3_server) as cluster:
         conn = cluster.cql.connect()
         res = conn.execute(f"SELECT * FROM {ks}.{cf};")
-        have_res = { x.name: x.value for x in res }
+        have_res = {x.name: x.value for x in res}
         assert have_res == dict(rows), f'Unexpected table content: {have_res}'
 
         print('Drop table')
@@ -210,7 +210,7 @@ async def test_garbage_collect(test_tempdir, s3_server, ssl):
     with managed_cluster(test_tempdir, ssl, s3_server) as cluster:
         conn = cluster.cql.connect()
         res = conn.execute(f"SELECT * FROM {ks}.{cf};")
-        have_res = { x.name: x.value for x in res }
+        have_res = {x.name: x.value for x in res}
         # Must be empty as no sstables should have been picked up
         assert not have_res, f'Sstables not cleaned, got {have_res}'
         # Make sure objects also disappeared
