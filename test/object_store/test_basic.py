@@ -204,7 +204,8 @@ async def test_garbage_collect(test_tempdir, s3_server, ssl):
             sstable_entries.append((row.location, row.generation))
         print(f'Found entries: {[ str(ent[1]) for ent in sstable_entries ]}')
         for loc, gen in sstable_entries:
-            conn.execute(f"UPDATE system.sstables SET status = 'removing' WHERE location = '{loc}' AND generation = {gen};")
+            conn.execute("UPDATE system.sstables SET status = 'removing'"
+                         f" WHERE location = '{loc}' AND generation = {gen};")
 
     print('Restart scylla')
     with managed_cluster(test_tempdir, ssl, s3_server) as cluster:
