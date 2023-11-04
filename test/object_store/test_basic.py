@@ -15,6 +15,7 @@ import xml.etree.ElementTree as ET
 from contextlib import contextmanager
 from test.pylib.rest_client import ScyllaRESTAPIClient
 
+
 def get_scylla_with_s3_cmd(ssl, s3_server):
     '''return a function which in turn returns the command for running scylla'''
     scylla = run.find_scylla()
@@ -155,6 +156,7 @@ async def test_basic(test_tempdir, s3_server, ssl):
         res = conn.execute("SELECT * FROM system.sstables;")
         rows = "\n".join(f"{row.location} {row.status}" for row in res)
         assert not rows, 'Unexpected entries in registry'
+
 
 @pytest.mark.asyncio
 async def test_garbage_collect(test_tempdir, s3_server, ssl):
