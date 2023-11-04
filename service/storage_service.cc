@@ -2413,7 +2413,14 @@ future<> topology_coordinator::fence_previous_coordinator() noexcept {
         } catch (...) {
             slogger.error("raft topology: failed to fence previous coordinator {}", std::current_exception());
         }
-        co_await seastar::sleep_abortable(std::chrono::seconds(1), _as);
+        try {
+            co_await seastar::sleep_abortable(std::chrono::seconds(1), _as);
+        } catch (abort_requested_exception&) {
+            // Abort was requested. Break the loop
+            break;
+        } catch (...) {
+            slogger.debug("raft topology: sleep failed while fencing previous coordinator: {}", std::current_exception());
+        }
     }
 }
 
