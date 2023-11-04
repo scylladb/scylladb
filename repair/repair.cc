@@ -1669,13 +1669,14 @@ future<> repair_service::bootstrap_with_repair(locator::token_metadata2_ptr tmpt
     });
 }
 
-future<> repair_service::do_decommission_removenode_with_repair(locator::token_metadata_ptr tmptr, gms::inet_address leaving_node, shared_ptr<node_ops_info> ops) {
+future<> repair_service::do_decommission_removenode_with_repair(locator::token_metadata2_ptr tmptr, gms::inet_address leaving_node, shared_ptr<node_ops_info> ops) {
     assert(this_shard_id() == 0);
     using inet_address = gms::inet_address;
     return seastar::async([this, tmptr = std::move(tmptr), leaving_node = std::move(leaving_node), ops] () mutable {
         auto& db = get_db().local();
         auto& topology = tmptr->get_topology();
         auto myip = topology.my_address();
+        const auto leaving_node_id = tmptr->get_host_id(leaving_node);
         auto ks_erms = db.get_non_local_strategy_keyspaces_erms();
         auto local_dc = topology.get_datacenter();
         bool is_removenode = myip != leaving_node;
@@ -1719,15 +1720,15 @@ future<> repair_service::do_decommission_removenode_with_repair(locator::token_m
             // Find (for each range) all nodes that store replicas for these ranges as well
             for (auto& r : ranges) {
                 auto end_token = r.end() ? r.end()->value() : dht::maximum_token();
-                auto eps = get<locator::endpoint_set>(strat.calculate_natural_endpoints(end_token, *tmptr, false).get0());
+                auto eps = strat.calculate_natural_ips(end_token, tmptr).get0();
                 current_replica_endpoints.emplace(r, std::move(eps));
                 seastar::thread::maybe_yield();
             }
-            auto temp = tmptr->clone_after_all_left().get0();
+            auto temp = locator::make_token_metadata2_ptr(tmptr->clone_after_all_left().get0());
             // leaving_node might or might not be 'leaving'. If it was not leaving (that is, removenode
             // command was used), it is still present in temp and must be removed.
-            if (temp.is_normal_token_owner(leaving_node)) {
-                temp.remove_endpoint(leaving_node);
+            if (temp->is_normal_token_owner(leaving_node_id)) {
+                temp->remove_endpoint(leaving_node_id);
             }
             std::unordered_map<dht::token_range, repair_neighbors> range_sources;
             dht::token_range_vector ranges_for_removenode;
@@ -1738,7 +1739,7 @@ future<> repair_service::do_decommission_removenode_with_repair(locator::token_m
                     ops->check_abort();
                 }
                 auto end_token = r.end() ? r.end()->value() : dht::maximum_token();
-                const auto new_eps = get<locator::endpoint_set>(strat.calculate_natural_endpoints(end_token, temp, false).get0());
+                const auto new_eps = strat.calculate_natural_ips(end_token, temp).get0();
                 const auto& current_eps = current_replica_endpoints[r];
                 std::unordered_set<inet_address> neighbors_set = new_eps.get_set();
                 bool skip_this_range = false;
@@ -1842,7 +1843,7 @@ future<> repair_service::do_decommission_removenode_with_repair(locator::token_m
                     }
                 }
             }
-            temp.clear_gently().get();
+            temp->clear_gently().get();
             if (reason == streaming::stream_reason::decommission) {
                 container().invoke_on_all([nr_ranges_skipped] (repair_service& rs) {
                     rs.get_metrics().decommission_finished_ranges += nr_ranges_skipped;
@@ -1864,13 +1865,13 @@ future<> repair_service::do_decommission_removenode_with_repair(locator::token_m
     });
 }
 
-future<> repair_service::decommission_with_repair(locator::token_metadata_ptr tmptr) {
+future<> repair_service::decommission_with_repair(locator::token_metadata2_ptr tmptr) {
     assert(this_shard_id() == 0);
     auto my_address = tmptr->get_topology().my_address();
     return do_decommission_removenode_with_repair(std::move(tmptr), my_address, {});
 }
 
-future<> repair_service::removenode_with_repair(locator::token_metadata_ptr tmptr, gms::inet_address leaving_node, shared_ptr<node_ops_info> ops) {
+future<> repair_service::removenode_with_repair(locator::token_metadata2_ptr tmptr, gms::inet_address leaving_node, shared_ptr<node_ops_info> ops) {
     assert(this_shard_id() == 0);
     return do_decommission_removenode_with_repair(std::move(tmptr), std::move(leaving_node), std::move(ops)).then([this] {
         rlogger.debug("Triggering off-strategy compaction for all non-system tables on removenode completion");

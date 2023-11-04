@@ -5548,7 +5548,7 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
             for (auto& node : req.leaving_nodes) {
                 if (is_repair_based_node_ops_enabled(streaming::stream_reason::removenode)) {
                     slogger.info("removenode[{}]: Started to sync data for removing node={} using repair, coordinator={}", req.ops_uuid, node, coordinator);
-                    _repair.local().removenode_with_repair(get_token_metadata_ptr(), node, ops).get();
+                    _repair.local().removenode_with_repair(get_token_metadata_ptr()->get_new_strong(), node, ops).get();
                 } else {
                     slogger.info("removenode[{}]: Started to sync data for removing node={} using stream, coordinator={}", req.ops_uuid, node, coordinator);
                     removenode_with_stream(node, topo_guard, as).get();
@@ -5999,7 +5999,7 @@ future<> storage_service::unbootstrap() {
     slogger.info("Finished batchlog replay for decommission");
 
     if (is_repair_based_node_ops_enabled(streaming::stream_reason::decommission)) {
-        co_await _repair.local().decommission_with_repair(get_token_metadata_ptr());
+        co_await _repair.local().decommission_with_repair(get_token_metadata_ptr()->get_new_strong());
     } else {
         std::unordered_map<sstring, std::unordered_multimap<dht::token_range, inet_address>> ranges_to_stream;
 
@@ -6583,7 +6583,7 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                                 ignored_ips.push_back(*ip);
                             }
                             auto ops = seastar::make_shared<node_ops_info>(node_ops_id::create_random_id(), as, std::move(ignored_ips));
-                            return _repair.local().removenode_with_repair(get_token_metadata_ptr(), *ip, ops);
+                            return _repair.local().removenode_with_repair(get_token_metadata_ptr()->get_new_strong(), *ip, ops);
                         } else {
                             return removenode_with_stream(*ip, _topology_state_machine._topology.session, as);
                         }
