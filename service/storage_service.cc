@@ -2410,6 +2410,10 @@ future<> topology_coordinator::fence_previous_coordinator() noexcept {
         } catch (group0_concurrent_modification&) {
             // If we failed to write because of concurrent modification lets retry
             continue;
+        } catch (raft::request_aborted&) {
+            // Abort was requested. Break the loop
+            slogger.debug("raft topology: request to fence previous coordinator was aborted");
+            break;
         } catch (...) {
             slogger.error("raft topology: failed to fence previous coordinator {}", std::current_exception());
         }
