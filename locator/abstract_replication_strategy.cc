@@ -256,18 +256,18 @@ vnode_effective_replication_map::get_ranges(inet_address ep) const {
 
 // Caller must ensure that token_metadata will not change throughout the call.
 future<dht::token_range_vector>
-abstract_replication_strategy::get_ranges(inet_address ep, token_metadata_ptr tmptr) const {
+abstract_replication_strategy::get_ranges(locator::host_id ep, token_metadata_ptr tmptr) const {
     co_return co_await get_ranges(ep, *tmptr);
 }
 
 // Caller must ensure that token_metadata will not change throughout the call.
 future<dht::token_range_vector>
-abstract_replication_strategy::get_ranges(inet_address ep, const token_metadata& tm) const {
+abstract_replication_strategy::get_ranges(locator::host_id ep, const token_metadata& tm) const {
     dht::token_range_vector ret;
-    if (!tm.is_normal_token_owner(ep)) {
+    if (!tm.get_new()->is_normal_token_owner(ep)) {
         co_return ret;
     }
-    const auto& sorted_tokens = tm.sorted_tokens();
+    const auto& sorted_tokens = tm.get_new()->sorted_tokens();
     if (sorted_tokens.empty()) {
         on_internal_error(rslogger, "Token metadata is empty");
     }
@@ -279,7 +279,7 @@ abstract_replication_strategy::get_ranges(inet_address ep, const token_metadata&
             // Using the common path would make the function quadratic in the number of endpoints.
             should_add = true;
         } else {
-            auto eps = get<endpoint_set>(co_await calculate_natural_endpoints(tok, tm, false));
+            auto eps = get<host_id_set>(co_await calculate_natural_endpoints(tok, tm, true));
             should_add = eps.contains(ep);
         }
         if (should_add) {

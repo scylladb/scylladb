@@ -5149,7 +5149,7 @@ void storage_service::run_replace_ops(std::unordered_set<token>& bootstrap_token
         // Step 7: Sync data for replace
         if (is_repair_based_node_ops_enabled(streaming::stream_reason::replace)) {
             slogger.info("replace[{}]: Using repair based node ops to sync data", uuid);
-            _repair.local().replace_with_repair(get_token_metadata_ptr(), bootstrap_tokens, ctl.ignore_nodes).get();
+            _repair.local().replace_with_repair(get_token_metadata_ptr()->get_new_strong(), bootstrap_tokens, ctl.ignore_nodes).get();
         } else {
             slogger.info("replace[{}]: Using streaming based node ops to sync data", uuid);
             dht::boot_strapper bs(_db, _stream_manager, _abort_source, get_token_metadata_ptr()->get_new()->get_my_id(), _snitch.local()->get_location(), bootstrap_tokens, get_token_metadata_ptr()->get_new_strong());
@@ -5890,7 +5890,7 @@ future<> storage_service::rebuild(sstring source_dc) {
             slogger.info("rebuild from dc: {}", source_dc == "" ? "(any dc)" : source_dc);
             auto tmptr = ss.get_token_metadata_ptr();
             if (ss.is_repair_based_node_ops_enabled(streaming::stream_reason::rebuild)) {
-                co_await ss._repair.local().rebuild_with_repair(tmptr, std::move(source_dc));
+                co_await ss._repair.local().rebuild_with_repair(tmptr->get_new_strong(), std::move(source_dc));
             } else {
                 auto streamer = make_lw_shared<dht::range_streamer>(ss._db, ss._stream_manager, tmptr->get_new_strong(), ss._abort_source,
                         tmptr->get_new()->get_my_id(), ss._snitch.local()->get_location(), "Rebuild", streaming::stream_reason::rebuild, null_topology_guard);
@@ -6526,7 +6526,7 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                                     }
                                     ignored_ips.insert(*ip);
                                 }
-                                co_await _repair.local().replace_with_repair(get_token_metadata_ptr(), rs.ring.value().tokens, std::move(ignored_ips));
+                                co_await _repair.local().replace_with_repair(get_token_metadata_ptr()->get_new_strong(), rs.ring.value().tokens, std::move(ignored_ips));
                             } else {
                                 dht::boot_strapper bs(_db, _stream_manager, _abort_source, get_token_metadata_ptr()->get_new()->get_my_id(),
                                                       locator::endpoint_dc_rack{rs.datacenter, rs.rack}, rs.ring.value().tokens, get_token_metadata_ptr()->get_new_strong());
@@ -6597,7 +6597,7 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                     co_await retrier(_rebuild_result, [&] () -> future<> {
                         auto tmptr = get_token_metadata_ptr();
                         if (is_repair_based_node_ops_enabled(streaming::stream_reason::rebuild)) {
-                            co_await _repair.local().rebuild_with_repair(tmptr, std::move(source_dc));
+                            co_await _repair.local().rebuild_with_repair(tmptr->get_new_strong(), std::move(source_dc));
                         } else {
                             auto streamer = make_lw_shared<dht::range_streamer>(_db, _stream_manager, tmptr->get_new_strong(), _abort_source,
                                     tmptr->get_new()->get_my_id(), _snitch.local()->get_location(), "Rebuild", streaming::stream_reason::rebuild, _topology_state_machine._topology.session);
