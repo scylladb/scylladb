@@ -452,6 +452,15 @@ def test_create_on_single_function(cql):
                 with pytest.raises(SyntaxException):
                     grant(cql, 'CREATE', f'FUNCTION {keyspace}.{fun}(int, int)', user)
 
+# Test that user can be granted permissions to change the password for a superuser. This behavior matches Cassandra's.
+# Reproduces ScyllaDB OSS #14277
+def test_grant_all_allows_superuser_password_change(cql):
+    with new_user(cql) as username:
+        with new_user(cql, with_superuser_privileges=True) as superuser:
+            grant(cql, 'ALTER', 'ALL ROLES', username)
+            with new_session(cql, username) as user_session:
+                user_session.execute(f"ALTER ROLE {superuser} WITH PASSWORD = '{superuser}2'")
+
 # Test that permissions on a table are not granted to a user as a creator if the table already exists when the user
 # tries to create it. Reproduces GHSA-ww5v-p45p-3vhq
 def test_create_on_existing_table(cql):
