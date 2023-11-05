@@ -14,6 +14,8 @@ from test.pylib.cql_repl import conftest
 
 
 def pytest_addoption(parser):
+    parser.addoption('--keep-tmp', action='store_true',
+                     help="keep the whole temp path")
     conftest.pytest_addoption(parser)
     # reserved for tests with real S3
     s3_options = parser.getgroup("s3-server", description="S3 Server settings")
@@ -79,11 +81,13 @@ def _remove_all_but(tempdir, to_preserve):
 
 
 @pytest.fixture(scope="function")
-def test_tempdir(tmpdir):
+def test_tempdir(tmpdir, request):
     tempdir = tmpdir.strpath
     try:
         yield tempdir
     finally:
+        if request.config.getoption('--keep-tmp'):
+            return
         _remove_all_but(tempdir, 'log')
 
 
