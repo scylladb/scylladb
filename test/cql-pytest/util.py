@@ -197,10 +197,10 @@ def cql_session(host, port, is_ssl, username, password):
     cluster.shutdown()
 
 @contextmanager
-def new_user(cql, username=''):
+def new_user(cql, username='', with_superuser_privileges=False):
     if not username:
         username = unique_name()
-    cql.execute(f"CREATE ROLE {username} WITH PASSWORD = '{username}' AND LOGIN = true")
+    cql.execute(f"CREATE ROLE {username} WITH PASSWORD = '{username}' AND SUPERUSER = {with_superuser_privileges} AND LOGIN = true")
     try:
         yield username
     finally:
