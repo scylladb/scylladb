@@ -9,7 +9,7 @@
 
 #pragma once
 
-#include "dht/i_partitioner.hh"
+#include "dht/ring_position.hh"
 
 // Wraps ring_position or ring_position_view so either is compatible with old-style C++: default
 // constructor, stateless comparators, yada yada.

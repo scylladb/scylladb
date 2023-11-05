@@ -9,7 +9,7 @@
 #pragma once
 #include "utils/xx_hasher.hh"
 #include "repair/hash.hh"
-#include "dht/i_partitioner.hh"
+#include "dht/decorated_key.hh"
 
 class decorated_key_with_hash {
 public:

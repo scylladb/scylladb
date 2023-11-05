@@ -7,7 +7,7 @@
  */
 
 #pragma once
-#include "dht/i_partitioner.hh"
+#include "dht/decorated_key.hh"
 #include "mutation/position_in_partition.hh"
 
 // Represent a position of a mutation_fragment read from a flat mutation

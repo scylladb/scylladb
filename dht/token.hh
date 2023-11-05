@@ -18,6 +18,7 @@
 #include <functional>
 #include <utility>
 #include <compare>
+#include <byteswap.h>
 
 namespace dht {
 
@@ -260,3 +261,17 @@ struct fmt::formatter<dht::token> : fmt::formatter<std::string_view> {
         }
     }
 };
+
+namespace std {
+
+template<>
+struct hash<dht::token> {
+    size_t operator()(const dht::token& t) const {
+        // We have to reverse the bytes here to keep compatibility with
+        // the behaviour that was here when tokens were represented as
+        // sequence of bytes.
+        return bswap_64(t._data);
+    }
+};
+
+} // namespace std
