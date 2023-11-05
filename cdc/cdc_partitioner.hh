@@ -14,7 +14,6 @@
 #include "dht/i_partitioner.hh"
 
 class schema;
-class partition_key_view;
 
 namespace sstables {
 
