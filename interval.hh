@@ -97,7 +97,7 @@ public:
         , _end()
         , _singular(true)
     { }
-    wrapping_interval() : wrapping_interval({}, {}) { }
+    constexpr wrapping_interval() : wrapping_interval({}, {}) { }
 private:
     // Bound wrappers for compile-time dispatch and safety.
     struct start_bound_ref { const optional<bound>& b; };
@@ -201,7 +201,7 @@ public:
     static wrapping_interval make(bound start, bound end) {
         return wrapping_interval({std::move(start)}, {std::move(end)});
     }
-    static wrapping_interval make_open_ended_both_sides() {
+    static constexpr wrapping_interval make_open_ended_both_sides() {
         return {{}, {}};
     }
     static wrapping_interval make_singular(T value) {
@@ -457,7 +457,7 @@ public:
     nonwrapping_interval(T value)
         : _interval(std::move(value))
     { }
-    nonwrapping_interval() : nonwrapping_interval({}, {}) { }
+    constexpr nonwrapping_interval() : nonwrapping_interval({}, {}) { }
     // Can only be called if start <= end. IDL ctor.
     nonwrapping_interval(optional<bound> start, optional<bound> end, bool singular = false)
         : _interval(std::move(start), std::move(end), singular)
@@ -501,7 +501,7 @@ public:
     static nonwrapping_interval make(bound start, bound end) {
         return nonwrapping_interval({std::move(start)}, {std::move(end)});
     }
-    static nonwrapping_interval make_open_ended_both_sides() {
+    static constexpr nonwrapping_interval make_open_ended_both_sides() {
         return {{}, {}};
     }
     static nonwrapping_interval make_singular(T value) {
