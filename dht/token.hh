@@ -240,6 +240,11 @@ token bias(uint64_t n);
 size_t compaction_group_of(unsigned most_significant_bits, const token& t);
 token last_token_of_compaction_group(unsigned most_significant_bits, size_t group);
 
+struct token_comparator {
+    // Return values are those of a trichotomic comparison.
+    std::strong_ordering operator()(const token& t1, const token& t2) const;
+};
+
 } // namespace dht
 
 template <>
