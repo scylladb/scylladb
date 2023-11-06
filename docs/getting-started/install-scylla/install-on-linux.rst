@@ -1,10 +1,11 @@
-.. |UBUNTU_SCYLLADB_LIST| replace:: scylla-5.2.list
-.. |CENTOS_SCYLLADB_REPO| replace:: scylla-5.2.repo
+.. |UBUNTU_SCYLLADB_LIST| replace:: scylla-5.4.list
+.. |CENTOS_SCYLLADB_REPO| replace:: scylla-5.4.repo
 
 .. The |RHEL_EPEL| variable needs to be adjuster per release, depening on support for RHEL.
-.. 5.2 supports Rocky/RHEL 8
-.. When RHEL 9 is supported, add https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm
-.. |RHEL_EPEL| replace:: https://dl.fedoraproject.org/pub/epel/epel-release-latest-8.noarch.rpm
+.. 5.2 supports Rocky/RHEL 8 only
+.. 5.4 supports Rocky/RHEL 8 and 9
+.. |RHEL_EPEL_8| replace:: https://dl.fedoraproject.org/pub/epel/epel-release-latest-8.noarch.rpm
+.. |RHEL_EPEL_9| replace:: https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm
 
 ======================================
 Install ScyllaDB Linux Packages
@@ -113,13 +114,20 @@ Install ScyllaDB
                sudo yum install epel-release
 
 
-           RHEL:
+           Rocky/RHEL 8
 
             .. code-block:: console
                :substitutions:
     
-               sudo yum -y install |RHEL_EPEL|
+               sudo yum -y install |RHEL_EPEL_8|
 
+
+           Rocky/RHEL 9
+
+            .. code-block:: console
+               :substitutions:
+    
+               sudo yum -y install |RHEL_EPEL_9|
 
         #. Add the ScyllaDB RPM repository to your system.
 
