@@ -19,41 +19,41 @@ namespace fd = httpd::failure_detector_json;
 void set_failure_detector(http_context& ctx, routes& r, gms::gossiper& g) {
     fd::get_all_endpoint_states.set(r, [&g](std::unique_ptr<request> req) {
         return g.container().invoke_on(0, [] (gms::gossiper& g) {
-        std::vector<fd::endpoint_state> res;
-        res.reserve(g.num_endpoints());
-        g.for_each_endpoint_state([&] (const gms::inet_address& addr, const gms::endpoint_state& eps) {
-            fd::endpoint_state val;
-            val.addrs = fmt::to_string(addr);
-            val.is_alive = g.is_alive(addr);
-            val.generation = eps.get_heart_beat_state().get_generation().value();
-            val.version = eps.get_heart_beat_state().get_heart_beat_version().value();
-            val.update_time = eps.get_update_timestamp().time_since_epoch().count();
-            for (const auto& [as_type, app_state] : eps.get_application_state_map()) {
-                fd::version_value version_val;
-                // We return the enum index and not it's name to stay compatible to origin
-                // method that the state index are static but the name can be changed.
-                version_val.application_state = static_cast<std::underlying_type<gms::application_state>::type>(as_type);
-                version_val.value = app_state.value();
-                version_val.version = app_state.version().value();
-                val.application_state.push(version_val);
-            }
-            res.emplace_back(std::move(val));
-        });
-        return make_ready_future<json::json_return_type>(res);
+            std::vector<fd::endpoint_state> res;
+            res.reserve(g.num_endpoints());
+            g.for_each_endpoint_state([&] (const gms::inet_address& addr, const gms::endpoint_state& eps) {
+                fd::endpoint_state val;
+                val.addrs = fmt::to_string(addr);
+                val.is_alive = g.is_alive(addr);
+                val.generation = eps.get_heart_beat_state().get_generation().value();
+                val.version = eps.get_heart_beat_state().get_heart_beat_version().value();
+                val.update_time = eps.get_update_timestamp().time_since_epoch().count();
+                for (const auto& [as_type, app_state] : eps.get_application_state_map()) {
+                    fd::version_value version_val;
+                    // We return the enum index and not it's name to stay compatible to origin
+                    // method that the state index are static but the name can be changed.
+                    version_val.application_state = static_cast<std::underlying_type<gms::application_state>::type>(as_type);
+                    version_val.value = app_state.value();
+                    version_val.version = app_state.version().value();
+                    val.application_state.push(version_val);
+                }
+                res.emplace_back(std::move(val));
+            });
+            return make_ready_future<json::json_return_type>(res);
         });
     });
 
     fd::get_up_endpoint_count.set(r, [&g](std::unique_ptr<request> req) {
         return g.container().invoke_on(0, [] (gms::gossiper& g) {
-        int res = g.get_up_endpoint_count();
-        return make_ready_future<json::json_return_type>(res);
+            int res = g.get_up_endpoint_count();
+            return make_ready_future<json::json_return_type>(res);
         });
     });
 
     fd::get_down_endpoint_count.set(r, [&g](std::unique_ptr<request> req) {
         return g.container().invoke_on(0, [] (gms::gossiper& g) {
-        int res = g.get_down_endpoint_count();
-        return make_ready_future<json::json_return_type>(res);
+            int res = g.get_down_endpoint_count();
+            return make_ready_future<json::json_return_type>(res);
         });
     });
 
@@ -63,11 +63,11 @@ void set_failure_detector(http_context& ctx, routes& r, gms::gossiper& g) {
 
     fd::get_simple_states.set(r, [&g] (std::unique_ptr<request> req) {
         return g.container().invoke_on(0, [] (gms::gossiper& g) {
-        std::map<sstring, sstring> nodes_status;
-        g.for_each_endpoint_state([&] (const gms::inet_address& node, const gms::endpoint_state&) {
-            nodes_status.emplace(node.to_sstring(), g.is_alive(node) ? "UP" : "DOWN");
-        });
-        return make_ready_future<json::json_return_type>(map_to_key_value<fd::mapper>(nodes_status));
+            std::map<sstring, sstring> nodes_status;
+            g.for_each_endpoint_state([&] (const gms::inet_address& node, const gms::endpoint_state&) {
+                nodes_status.emplace(node.to_sstring(), g.is_alive(node) ? "UP" : "DOWN");
+            });
+            return make_ready_future<json::json_return_type>(map_to_key_value<fd::mapper>(nodes_status));
         });
     });
 
@@ -80,13 +80,13 @@ void set_failure_detector(http_context& ctx, routes& r, gms::gossiper& g) {
 
     fd::get_endpoint_state.set(r, [&g] (std::unique_ptr<request> req) {
         return g.container().invoke_on(0, [req = std::move(req)] (gms::gossiper& g) {
-        auto state = g.get_endpoint_state_ptr(gms::inet_address(req->param["addr"]));
-        if (!state) {
-            return make_ready_future<json::json_return_type>(format("unknown endpoint {}", req->param["addr"]));
-        }
-        std::stringstream ss;
-        g.append_endpoint_state(ss, *state);
-        return make_ready_future<json::json_return_type>(sstring(ss.str()));
+            auto state = g.get_endpoint_state_ptr(gms::inet_address(req->param["addr"]));
+            if (!state) {
+                return make_ready_future<json::json_return_type>(format("unknown endpoint {}", req->param["addr"]));
+            }
+            std::stringstream ss;
+            g.append_endpoint_state(ss, *state);
+            return make_ready_future<json::json_return_type>(sstring(ss.str()));
         });
     });
 
