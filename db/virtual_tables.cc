@@ -65,7 +65,7 @@ public:
 
     future<> execute(std::function<void(mutation)> mutation_sink) override {
         return _ss.get_ownership().then([&, mutation_sink] (std::map<gms::inet_address, float> ownership) {
-            const locator::token_metadata& tm = _ss.get_token_metadata();
+            const locator::token_metadata2& tm = _ss.get_token_metadata();
 
             _gossiper.for_each_endpoint_state([&] (const gms::inet_address& endpoint, const gms::endpoint_state&) {
                 mutation m(schema(), partition_key::from_single_value(*schema(), data_value(endpoint).serialize_nonnull()));
@@ -80,7 +80,7 @@ public:
                     set_cell(cr, "host_id", hostid->uuid());
                 }
 
-                if (tm.is_normal_token_owner(endpoint)) {
+                if (hostid && tm.is_normal_token_owner(*hostid)) {
                     sstring dc = tm.get_topology().get_location(endpoint).dc;
                     set_cell(cr, "dc", dc);
                 }
@@ -89,7 +89,7 @@ public:
                     set_cell(cr, "owns", ownership[endpoint]);
                 }
 
-                set_cell(cr, "tokens", int32_t(tm.get_tokens(endpoint).size()));
+                set_cell(cr, "tokens", int32_t(hostid ? tm.get_tokens(*hostid).size() : 0));
 
                 mutation_sink(std::move(m));
             });

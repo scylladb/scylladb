@@ -113,9 +113,12 @@ private:
     using endpoint_details = dht::endpoint_details;
     using boot_strapper = dht::boot_strapper;
     using token_metadata = locator::token_metadata;
+    using token_metadata2 = locator::token_metadata2;
     using shared_token_metadata = locator::shared_token_metadata;
     using token_metadata_ptr = locator::token_metadata_ptr;
+    using token_metadata2_ptr = locator::token_metadata2_ptr;
     using mutable_token_metadata_ptr = locator::mutable_token_metadata_ptr;
+    using mutable_token_metadata2_ptr = locator::mutable_token_metadata2_ptr;
     using token_metadata_lock = locator::token_metadata_lock;
     using application_state = gms::application_state;
     using inet_address = gms::inet_address;
@@ -223,7 +226,7 @@ private:
     future<> snitch_reconfigured();
 
     future<mutable_token_metadata_ptr> get_mutable_token_metadata_ptr() noexcept {
-        return get_token_metadata_ptr()->clone_async().then([] (token_metadata tm) {
+        return _shared_token_metadata.get()->clone_async().then([] (token_metadata tm) {
             // bump the token_metadata ring_version
             // to invalidate cached token/replication mappings
             // when the modified token_metadata is committed.
@@ -255,12 +258,12 @@ public:
         return _erm_factory;
     }
 
-    token_metadata_ptr get_token_metadata_ptr() const noexcept {
-        return _shared_token_metadata.get();
+    token_metadata2_ptr get_token_metadata_ptr() const noexcept {
+        return _shared_token_metadata.get()->get_new_strong();
     }
 
-    const locator::token_metadata& get_token_metadata() const noexcept {
-        return *_shared_token_metadata.get();
+    const locator::token_metadata2& get_token_metadata() const noexcept {
+        return *_shared_token_metadata.get()->get_new();
     }
 
 private:
@@ -325,7 +328,7 @@ private:
 
 public:
 
-    static std::unordered_set<gms::inet_address> parse_node_list(sstring comma_separated_list, const locator::token_metadata& tm);
+    static std::unordered_set<gms::inet_address> parse_node_list(sstring comma_separated_list, const locator::token_metadata2& tm);
 
     future<> check_for_endpoint_collision(std::unordered_set<gms::inet_address> initial_contact_nodes,
             const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features);

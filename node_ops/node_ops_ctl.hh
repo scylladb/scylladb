@@ -139,7 +139,7 @@ public:
     sstring desc;
     locator::host_id host_id;   // Host ID of the node operand (i.e. added, replaced, or leaving node)
     gms::inet_address endpoint;      // IP address of the node operand (i.e. added, replaced, or leaving node)
-    lw_shared_ptr<const locator::token_metadata> tmptr;
+    lw_shared_ptr<const locator::token_metadata2> tmptr;
     std::unordered_set<gms::inet_address> sync_nodes;
     std::unordered_set<gms::inet_address> ignore_nodes;
     node_ops_cmd_request req;
