@@ -5942,12 +5942,12 @@ storage_service::get_changed_ranges_for_leaving(locator::vnode_effective_replica
         co_await coroutine::maybe_yield();
     }
 
-    auto temp = co_await get_token_metadata_ptr()->clone_after_all_left();
+    auto temp = locator::make_token_metadata2_ptr(co_await get_token_metadata_ptr()->get_new()->clone_after_all_left());
 
     // endpoint might or might not be 'leaving'. If it was not leaving (that is, removenode
     // command was used), it is still present in temp and must be removed.
-    if (temp.is_normal_token_owner(endpoint)) {
-        temp.remove_endpoint(endpoint);
+    if (const auto host_id = temp->get_host_id_if_known(endpoint); host_id && temp->is_normal_token_owner(*host_id)) {
+        temp->remove_endpoint(*host_id);
     }
 
     std::unordered_multimap<dht::token_range, inet_address> changed_ranges;
@@ -5960,7 +5960,7 @@ storage_service::get_changed_ranges_for_leaving(locator::vnode_effective_replica
     const auto& rs = erm->get_replication_strategy();
     for (auto& r : ranges) {
         auto end_token = r.end() ? r.end()->value() : dht::maximum_token();
-        auto new_replica_endpoints = get<locator::endpoint_set>(co_await rs.calculate_natural_endpoints(end_token, temp, false));
+        auto new_replica_endpoints = co_await rs.calculate_natural_ips(end_token, temp);
 
         auto rg = current_replica_endpoints.equal_range(r);
         for (auto it = rg.first; it != rg.second; it++) {
@@ -5988,7 +5988,7 @@ storage_service::get_changed_ranges_for_leaving(locator::vnode_effective_replica
         // E.g. everywhere_replication_strategy
         co_await coroutine::maybe_yield();
     }
-    co_await temp.clear_gently();
+    co_await temp->clear_gently();
 
     co_return changed_ranges;
 }
