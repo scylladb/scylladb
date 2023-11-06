@@ -32,11 +32,10 @@ protected:
     lw_shared_ptr<state> _state;
     shared_future<> _done;
 
-    future<> initialize(bool use_https) {
-        auto state = _state;
-
+    // This method can out-live the factory instance, in case `make()` is never called before the instance is destroyed.
+    static future<> initialize(lw_shared_ptr<state> state, std::string host, int port, bool use_https, logging::logger& logger) {
         co_await coroutine::all(
-            [state, host = _host, port = _port] () -> future<> {
+            [state, host, port] () -> future<> {
                 auto hent = co_await net::dns::get_host_by_name(host, net::inet_address::family::INET);
                 state->addr = socket_address(hent.addr_list.front(), port);
             },
@@ -50,7 +49,7 @@ protected:
         );
 
         state->initialized = true;
-        _logger.debug("Initialized factory, address={} tls={}", state->addr, state->creds == nullptr ? "no" : "yes");
+        logger.debug("Initialized factory, address={} tls={}", state->addr, state->creds == nullptr ? "no" : "yes");
     }
 
 public:
@@ -59,7 +58,7 @@ public:
         , _port(port)
         , _logger(logger)
         , _state(make_lw_shared<state>())
-        , _done(initialize(use_https))
+        , _done(initialize(_state, _host, _port, use_https, _logger))
     {
     }
 
