@@ -2287,7 +2287,7 @@ class topology_coordinator {
 
     std::variant<join_node_response_params::accepted, join_node_response_params::rejected>
     validate_joining_node(const node_to_work_on& node) {
-        if (node.rs->state == node_state::replacing) {
+        if (*node.request == topology_request::replace) {
             auto replaced_id = std::get<replace_param>(node.req_param.value()).replaced_id;
             if (!_topo_sm._topology.normal_nodes.contains(replaced_id)) {
                 return join_node_response_params::rejected {
