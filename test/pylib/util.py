@@ -10,7 +10,7 @@ import pathlib
 import os
 import pytest
 
-from typing import Callable, Awaitable, Optional, TypeVar, Generic
+from typing import Callable, Awaitable, Optional, TypeVar, Any
 
 from cassandra.cluster import NoHostAvailable, Session, Cluster # type: ignore # pylint: disable=no-name-in-module
 from cassandra.protocol import InvalidRequest # type: ignore # pylint: disable=no-name-in-module
@@ -40,13 +40,17 @@ def unique_name():
 
 async def wait_for(
         pred: Callable[[], Awaitable[Optional[T]]],
-        deadline: float, period: float = 1) -> T:
+        deadline: float,
+        period: float = 1,
+        before_retry: Optional[Callable[[], Any]] = None) -> T:
     while True:
         assert(time.time() < deadline), "Deadline exceeded, failing test."
         res = await pred()
         if res is not None:
             return res
         await asyncio.sleep(period)
+        if before_retry:
+            before_retry()
 
 
 async def wait_for_cql(cql: Session, host: Host, deadline: float) -> None:
@@ -65,7 +69,7 @@ async def wait_for_cql_and_get_hosts(cql: Session, servers: list[ServerInfo], de
     """Wait until every server in `servers` is available through `cql`
        and translate `servers` to a list of Cassandra `Host`s.
     """
-    ip_set = set(str(srv.ip_addr) for srv in servers)
+    ip_set = set(str(srv.rpc_address) for srv in servers)
     async def get_hosts() -> Optional[list[Host]]:
         hosts = cql.cluster.metadata.all_hosts()
         remaining = ip_set - {h.address for h in hosts}
@@ -74,7 +78,11 @@ async def wait_for_cql_and_get_hosts(cql: Session, servers: list[ServerInfo], de
 
         logging.info(f"Driver hasn't yet learned about hosts: {remaining}")
         return None
-    hosts = await wait_for(get_hosts, deadline)
+    hosts = await wait_for(
+        pred=get_hosts,
+        deadline=deadline,
+        before_retry=lambda: cql.cluster.refresh_nodes(force_token_rebuild=True),
+    )
 
     # Take only hosts from `ip_set` (there may be more)
     hosts = [h for h in hosts if h.address in ip_set]
