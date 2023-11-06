@@ -1461,7 +1461,16 @@ class topology_coordinator {
     }
 
     future<group0_guard> global_token_metadata_barrier(group0_guard&& guard, std::unordered_set<raft::server_id> exclude_nodes = {}) {
-        guard = co_await exec_global_command(std::move(guard), raft_topology_cmd::command::barrier_and_drain, exclude_nodes, drop_guard_and_retake::yes);
+        bool drain_failed = false;
+        try {
+            guard = co_await exec_global_command(std::move(guard), raft_topology_cmd::command::barrier_and_drain, exclude_nodes, drop_guard_and_retake::yes);
+        } catch (...) {
+            slogger.error("raft topology: drain rpc failed, proceed to fence old writes: {}", std::current_exception());
+            drain_failed = true;
+        }
+        if (drain_failed) {
+            guard = co_await start_operation();
+        }
         guard = co_await exec_global_command(std::move(guard), raft_topology_cmd::command::fence, exclude_nodes, drop_guard_and_retake::yes);
         co_return std::move(guard);
     }
