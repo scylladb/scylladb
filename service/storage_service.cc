@@ -2295,6 +2295,13 @@ class topology_coordinator {
                     .reason = ::format("Cannot replace node {} because it is not in the 'normal' state", replaced_id),
                 };
             }
+
+            auto replaced_ip = id2ip(locator::host_id(replaced_id.uuid()));
+            if (_gossiper.is_alive(replaced_ip)) {
+                return join_node_response_params::rejected {
+                    .reason = ::format("Cannot replace node {} because it is considered alive", replaced_id),
+                };
+            }
         }
 
         std::vector<sstring> unsupported_features;
