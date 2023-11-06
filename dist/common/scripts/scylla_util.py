@@ -14,6 +14,7 @@ import yaml
 import sys
 from pathlib import Path, PurePath
 from subprocess import run, DEVNULL
+from datetime import datetime, timedelta
 
 import distro
 from scylla_sysconfdir import SYSCONFDIR
@@ -301,9 +302,20 @@ def yum_install(pkg):
         pkg_error_exit(pkg)
     return run(f'yum install -y {pkg}', shell=True, check=True)
 
+def apt_is_updated():
+    if os.path.exists('/var/lib/apt/periodic/update-success-stamp'):
+        cache_mtime = os.stat('/var/lib/apt/periodic/update-success-stamp').st_mtime
+    elif os.path.exists('/var/lib/apt/lists'):
+        cache_mtime = os.stat('/var/lib/apt/lists').st_mtime
+    else:
+        return False
+    return datetime.now() - datetime.fromtimestamp(cache_mtime) <= timedelta(days=1)
+
 def apt_install(pkg):
     if is_offline():
         pkg_error_exit(pkg)
+    if not apt_is_updated():
+        run('apt-get update', shell=True, check=True)
     apt_env = os.environ.copy()
     apt_env['DEBIAN_FRONTEND'] = 'noninteractive'
     return run(f'apt-get install -y {pkg}', shell=True, check=True, env=apt_env)
