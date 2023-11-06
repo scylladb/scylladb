@@ -2457,7 +2457,7 @@ future<> topology_coordinator::rollback_current_topology_op(group0_guard&& guard
     auto str = fmt::format("rollback {} after {} failure to state {}", node.id, node.rs->state, state);
 
     co_await update_topology_state(std::move(node.guard), {builder.build()}, str);
-    slogger.info(str.c_str());
+    slogger.info("{}", str);
     // Try to run metadata barrier to wait for all double writes to complete
     // but ignore failures
     try {
@@ -4551,7 +4551,7 @@ future<> storage_service::raft_decommission() {
         // Need to set it otherwise gossiper will try to send shutdown on exit
         co_await _gossiper.add_local_application_state({{ gms::application_state::STATUS, gms::versioned_value::left({}, _gossiper.now().time_since_epoch().count()) }});
     } else {
-        const auto err = "Decommission failed. See earlier errors";
+        constexpr auto err = "Decommission failed. See earlier errors";
         slogger.error(err);
         throw std::runtime_error(err);
     }
@@ -4911,7 +4911,7 @@ future<> storage_service::raft_removenode(locator::host_id host_id, std::list<lo
             slogger.info("raft topology removenode: already removed from the raft config by the topology coordinator");
         }
     } else {
-        const auto err = "Removenode failed. See earlier errors";
+        constexpr auto err = "Removenode failed. See earlier errors";
         slogger.error(err);
         throw std::runtime_error(err);
     }
