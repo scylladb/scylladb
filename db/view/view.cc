@@ -2573,7 +2573,7 @@ update_backlog node_update_backlog::add_fetch(unsigned shard, update_backlog bac
     return std::max(backlog, _max.load(std::memory_order_relaxed));
 }
 
-future<bool> check_view_build_ongoing(db::system_distributed_keyspace& sys_dist_ks, const locator::token_metadata& tm, const sstring& ks_name,
+future<bool> check_view_build_ongoing(db::system_distributed_keyspace& sys_dist_ks, const locator::token_metadata2& tm, const sstring& ks_name,
         const sstring& cf_name) {
     using view_statuses_type = std::unordered_map<locator::host_id, sstring>;
     return sys_dist_ks.view_status(ks_name, cf_name).then([&tm] (view_statuses_type&& view_statuses) {
@@ -2584,7 +2584,7 @@ future<bool> check_view_build_ongoing(db::system_distributed_keyspace& sys_dist_
     });
 }
 
-future<bool> check_needs_view_update_path(db::system_distributed_keyspace& sys_dist_ks, const locator::token_metadata& tm, const replica::table& t,
+future<bool> check_needs_view_update_path(db::system_distributed_keyspace& sys_dist_ks, const locator::token_metadata2& tm, const replica::table& t,
         streaming::stream_reason reason) {
     if (is_internal_keyspace(t.schema()->ks_name())) {
         return make_ready_future<bool>(false);

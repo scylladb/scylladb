@@ -1237,7 +1237,7 @@ future<> repair::user_requested_repair_task_impl::run() {
             participants = get_hosts_participating_in_repair(germs->get(), keyspace, ranges, data_centers, hosts, ignore_nodes).get();
         }
         if (needs_flush_before_repair) {
-            auto waiting_nodes = db.get_token_metadata().get_all_endpoints();
+            auto waiting_nodes = db.get_token_metadata().get_all_ips();
             std::erase_if(waiting_nodes, [&] (const auto& addr) {
                 return ignore_nodes.contains(addr);
             });

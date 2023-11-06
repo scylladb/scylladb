@@ -181,7 +181,7 @@ static bool needs_repair_before_gc(const replica::database& db, sstring ks_name)
     auto& ks = db.find_keyspace(ks_name);
     auto& rs = ks.get_replication_strategy();
     bool needs_repair = rs.get_type() != locator::replication_strategy_type::local
-            && rs.get_replication_factor(*db.get_token_metadata().get_new()) != 1;
+            && rs.get_replication_factor(db.get_token_metadata()) != 1;
     return needs_repair;
 }
 
