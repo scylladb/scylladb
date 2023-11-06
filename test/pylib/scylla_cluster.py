@@ -251,6 +251,17 @@ class ScyllaServer:
         self.config["alternator_address"] = ip_addr
         self._write_config_file()
 
+    @property
+    def rpc_address(self) -> IPAddress:
+        return self.config["rpc_address"]
+
+    def change_rpc_address(self, rpc_address: IPAddress) -> None:
+        """Change RPC IP address of the current server. Pre: the server is
+        stopped"""
+        if self.is_running:
+            raise RuntimeError(f"Can't change RPC IP of a running server {self.config['rpc_address']}.")
+        self.config["rpc_address"] = rpc_address
+        self._write_config_file()
 
     async def install_and_start(self, api: ScyllaRESTAPIClient, expected_error: Optional[str] = None) -> None:
         """Setup and start this server"""
@@ -353,7 +364,7 @@ class ScyllaServer:
         # words, even after CQL port is up, Scylla may still be
         # initializing. When the role is ready, queries begin to
         # work, so rely on this "side effect".
-        profile = ExecutionProfile(load_balancing_policy=WhiteListRoundRobinPolicy([self.ip_addr]),
+        profile = ExecutionProfile(load_balancing_policy=WhiteListRoundRobinPolicy([self.rpc_address]),
                                    request_timeout=self.TOPOLOGY_TIMEOUT)
         connected = False
         try:
@@ -362,7 +373,7 @@ class ScyllaServer:
             # point, so make sure we execute the checks strictly via
             # this connection
             with Cluster(execution_profiles={EXEC_PROFILE_DEFAULT: profile},
-                         contact_points=[self.ip_addr],
+                         contact_points=[self.rpc_address],
                          # This is the latest version Scylla supports
                          protocol_version=4,
                          control_connection_timeout=self.TOPOLOGY_TIMEOUT,
@@ -374,7 +385,7 @@ class ScyllaServer:
                     session.execute("SELECT key FROM system.local where key = 'local'")
                     self.control_cluster = Cluster(execution_profiles=
                                                         {EXEC_PROFILE_DEFAULT: profile},
-                                                   contact_points=[self.ip_addr],
+                                                   contact_points=[self.rpc_address],
                                                    control_connection_timeout=self.TOPOLOGY_TIMEOUT,
                                                    auth_provider=auth)
                     self.control_connection = self.control_cluster.connect()
@@ -768,7 +779,7 @@ class ScyllaCluster:
         else:
             self.stopped[server.server_id] = server
         self.logger.info("Cluster %s added %s", self, server)
-        return ServerInfo(server.server_id, server.ip_addr)
+        return ServerInfo(server.server_id, server.ip_addr, server.rpc_address)
 
     async def add_servers(self, servers_num: int = 1,
                           cmdline: Optional[List[str]] = None,
@@ -812,9 +823,9 @@ class ScyllaCluster:
         stopped = ", ".join(str(server) for server in self.stopped.values())
         return f"ScyllaCluster(name: {self.name}, running: {running}, stopped: {stopped})"
 
-    def running_servers(self) -> List[Tuple[ServerNum, IPAddress]]:
+    def running_servers(self) -> list[tuple[ServerNum, IPAddress, IPAddress]]:
         """Get a list of tuples of server id and IP address of running servers (and not removed)"""
-        return [(server.server_id, server.ip_addr) for server in self.running.values()
+        return [(server.server_id, server.ip_addr, server.rpc_address) for server in self.running.values()
                 if server.server_id not in self.removed]
 
     def _get_keyspace_count(self) -> int:
@@ -962,6 +973,21 @@ class ScyllaCluster:
         server.change_ip(ip_addr)
         return ip_addr
 
+    async def change_rpc_address(self, server_id: ServerNum) -> IPAddress:
+        """Lease a new IP address and update conf/scylla.yaml with it. The
+        original IP is released at the end of the test to avoid an
+        immediate recycle within the same cluster. The server must be
+        stopped before its ip is changed."""
+        assert server_id in self.servers, f"Server {server_id} unknown"
+        server = self.servers[server_id]
+        assert not server.is_running, f"Server {server_id} is running: stop it first and then change its ip"
+        self.is_dirty = True
+        rpc_address = IPAddress(await self.host_registry.lease_host())
+        self.leased_ips.add(rpc_address)
+        logging.info("Cluster %s changed server %s RPC IP from %s to %s", self.name,
+                     server_id, server.config["rpc_address"], rpc_address)
+        server.change_rpc_address(rpc_address)
+        return rpc_address
 
 class ScyllaClusterManager:
     """Manages a Scylla cluster for running test cases
@@ -1088,6 +1114,7 @@ class ScyllaClusterManager:
         add_get('/cluster/server/{server_id}/get_config', self._server_get_config)
         add_put('/cluster/server/{server_id}/update_config', self._server_update_config)
         add_put('/cluster/server/{server_id}/change_ip', self._server_change_ip)
+        add_put('/cluster/server/{server_id}/change_rpc_address', self._server_change_rpc_address)
         add_get('/cluster/server/{server_id}/get_log_filename', self._server_get_log_filename)
         add_get('/cluster/server/{server_id}/workdir', self._server_get_workdir)
         add_get('/cluster/server/{server_id}/exe', self._server_get_exe)
@@ -1109,7 +1136,7 @@ class ScyllaClusterManager:
         assert self.cluster
         return self.cluster.replicas
 
-    async def _cluster_running_servers(self, _request) -> list[tuple[ServerNum, IPAddress]]:
+    async def _cluster_running_servers(self, _request) -> list[tuple[ServerNum, IPAddress, IPAddress]]:
         """Return a dict of running server ids to IPs"""
         return self.cluster.running_servers()
 
@@ -1196,7 +1223,7 @@ class ScyllaClusterManager:
         s_info = await self.cluster.add_server(replace_cfg, data.get('cmdline'), data.get('config'),
                                                data.get('property_file'), data.get('start', True),
                                                data.get('expected_error', None))
-        return {"server_id" : s_info.server_id, "ip_addr": s_info.ip_addr}
+        return {"server_id": s_info.server_id, "ip_addr": s_info.ip_addr, "rpc_address": s_info.rpc_address}
 
     async def _cluster_servers_add(self, request) -> list[dict[str, object]]:
         """Add new servers concurrently"""
@@ -1205,7 +1232,10 @@ class ScyllaClusterManager:
         s_infos = await self.cluster.add_servers(data.get('servers_num'), data.get('cmdline'), data.get('config'),
                                                  data.get('property_file'), data.get('start', True),
                                                  data.get('expected_error', None))
-        return [{"server_id" : s_info.server_id, "ip_addr": s_info.ip_addr} for s_info in s_infos]
+        return [
+            {"server_id": s_info.server_id, "ip_addr": s_info.ip_addr, "rpc_address": s_info.rpc_address}
+            for s_info in s_infos
+        ]
 
     async def _cluster_remove_node(self, request: aiohttp.web.Request) -> None:
         """Run remove node on Scylla REST API for a specified server"""
@@ -1320,6 +1350,13 @@ class ScyllaClusterManager:
         server_id = ServerNum(int(request.match_info["server_id"]))
         ip_addr = await self.cluster.change_ip(server_id)
         return {"ip_addr": ip_addr}
+
+    async def _server_change_rpc_address(self, request: aiohttp.web.Request) -> dict[str, object]:
+        """Pass change_ip command for the given server to the cluster"""
+        assert self.cluster
+        server_id = ServerNum(int(request.match_info["server_id"]))
+        rpc_address = await self.cluster.change_rpc_address(server_id)
+        return {"rpc_address": rpc_address}
 
     async def _server_get_attribute(self, request: aiohttp.web.Request, attribute: str):
         """Generic request handler which gets a particular attribute of a ScyllaServer instance

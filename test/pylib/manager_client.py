@@ -57,7 +57,7 @@ class ManagerClient():
     async def driver_connect(self, server: Optional[ServerInfo] = None) -> None:
         """Connect to cluster"""
         targets = [server] if server else await self.running_servers()
-        servers = [s_info.ip_addr for s_info in targets]
+        servers = [s_info.rpc_address for s_info in targets]
         logger.debug("driver connecting to %s", servers)
         self.ccluster = self.con_gen(servers, self.port, self.use_ssl, self.auth_provider)
         self.cql = self.ccluster.connect()
@@ -122,14 +122,14 @@ class ManagerClient():
         """Get number of configured replicas for the cluster (replication factor)"""
         return await self.client.get_json("/cluster/replicas")
 
-    async def running_servers(self) -> List[ServerInfo]:
+    async def running_servers(self) -> list[ServerInfo]:
         """Get List of server info (id and IP address) of running servers"""
         try:
             server_info_list = await self.client.get_json("/cluster/running-servers")
         except RuntimeError as exc:
             raise Exception("Failed to get list of running servers") from exc
         assert isinstance(server_info_list, list), "running_servers got unknown data type"
-        return [ServerInfo(ServerNum(int(info[0])), IPAddress(info[1]))
+        return [ServerInfo(ServerNum(int(info[0])), IPAddress(info[1]), IPAddress(info[2]))
                 for info in server_info_list]
 
     async def mark_dirty(self) -> None:
@@ -218,7 +218,8 @@ class ManagerClient():
             raise Exception("Failed to add server") from exc
         try:
             s_info = ServerInfo(ServerNum(int(server_info["server_id"])),
-                                IPAddress(server_info["ip_addr"]))
+                                IPAddress(server_info["ip_addr"]),
+                                IPAddress(server_info["rpc_address"]))
         except Exception as exc:
             raise RuntimeError(f"server_add got invalid server data {server_info}") from exc
         logger.debug("ManagerClient added %s", s_info)
@@ -251,7 +252,8 @@ class ManagerClient():
         for server_info in server_infos:
             try:
                 s_info = ServerInfo(ServerNum(int(server_info["server_id"])),
-                                    IPAddress(server_info["ip_addr"]))
+                                    IPAddress(server_info["ip_addr"]),
+                                    IPAddress(server_info["rpc_address"]))
                 s_infos.append(s_info)
             except Exception as exc:
                 raise RuntimeError(f"servers_add got invalid server data {server_info}") from exc
@@ -303,6 +305,21 @@ class ManagerClient():
         ret = await self.client.put_json(f"/cluster/server/{server_id}/change_ip", {},
                                          response_type="json")
         return IPAddress(ret["ip_addr"])
+
+    async def server_change_rpc_address(self, server_id: ServerNum) -> IPAddress:
+        """Change server RPC IP address.
+
+        Applicable only to a stopped server.
+        """
+        ret = await self.client.put_json(
+            resource_uri=f"/cluster/server/{server_id}/change_rpc_address",
+            data={},
+            response_type="json",
+        )
+        rpc_address = ret["rpc_address"]
+
+        logger.debug("ManagerClient has changed RPC IP for server %s to %s", server_id, rpc_address)
+        return IPAddress(rpc_address)
 
     async def wait_for_host_known(self, dst_server_ip: IPAddress, expect_host_id: HostID,
                                   deadline: Optional[float] = None) -> None:

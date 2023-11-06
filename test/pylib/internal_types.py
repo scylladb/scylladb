@@ -18,5 +18,7 @@ class ServerInfo(NamedTuple):
     """Server id (test local) and IP address"""
     server_id: ServerNum
     ip_addr: IPAddress
+    rpc_address: IPAddress
+
     def __str__(self):
-        return f"Server({self.server_id}, {self.ip_addr})"
+        return f"Server({self.server_id}, {self.ip_addr}, {self.rpc_address})"
