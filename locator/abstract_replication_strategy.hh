@@ -17,7 +17,7 @@
 #include "gms/feature_service.hh"
 #include "locator/snitch_base.hh"
 #include "locator/token_range_splitter.hh"
-#include "dht/i_partitioner.hh"
+#include "dht/token-sharding.hh"
 #include "token_metadata.hh"
 #include "snitch_base.hh"
 #include <seastar/util/bool_class.hh>

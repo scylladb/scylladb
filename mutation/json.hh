@@ -6,8 +6,8 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#include "dht/i_partitioner.hh"
-#include "schema/schema_fwd.hh"
+#include "dht/token.hh"
+#include "schema/schema.hh"
 #include "utils/rjson.hh"
 
 /*

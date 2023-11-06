@@ -27,7 +27,6 @@
 #include "view_info.hh"
 #include "partition_slice_builder.hh"
 #include "replica/database.hh"
-#include "dht/i_partitioner.hh"
 #include "dht/token-sharding.hh"
 #include "cdc/cdc_extension.hh"
 #include "tombstone_gc_extension.hh"

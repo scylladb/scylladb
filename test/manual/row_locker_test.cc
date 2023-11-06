@@ -12,6 +12,7 @@
 
 #include "db/view/row_locking.hh"
 #include "schema/schema_builder.hh"
+#include "dht/i_partitioner.hh"
 
 static row_locker::stats row_locker_stats;
 

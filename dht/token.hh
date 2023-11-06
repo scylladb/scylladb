@@ -18,6 +18,7 @@
 #include <functional>
 #include <utility>
 #include <compare>
+#include <byteswap.h>
 
 namespace dht {
 
@@ -240,6 +241,11 @@ token bias(uint64_t n);
 size_t compaction_group_of(unsigned most_significant_bits, const token& t);
 token last_token_of_compaction_group(unsigned most_significant_bits, size_t group);
 
+struct token_comparator {
+    // Return values are those of a trichotomic comparison.
+    std::strong_ordering operator()(const token& t1, const token& t2) const;
+};
+
 } // namespace dht
 
 template <>
@@ -255,3 +261,17 @@ struct fmt::formatter<dht::token> : fmt::formatter<std::string_view> {
         }
     }
 };
+
+namespace std {
+
+template<>
+struct hash<dht::token> {
+    size_t operator()(const dht::token& t) const {
+        // We have to reverse the bytes here to keep compatibility with
+        // the behaviour that was here when tokens were represented as
+        // sequence of bytes.
+        return bswap_64(t._data);
+    }
+};
+
+} // namespace std

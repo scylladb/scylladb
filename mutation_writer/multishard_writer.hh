@@ -10,7 +10,7 @@
 
 #include "schema/schema_fwd.hh"
 #include "readers/flat_mutation_reader_v2.hh"
-#include "dht/i_partitioner.hh"
+#include "dht/i_partitioner_fwd.hh"
 #include "utils/phased_barrier.hh"
 
 namespace mutation_writer {

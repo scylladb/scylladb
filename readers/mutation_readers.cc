@@ -8,7 +8,6 @@
 
 #include "clustering_key_filter.hh"
 #include "clustering_ranges_walker.hh"
-#include "dht/i_partitioner.hh"
 #include "mutation/mutation.hh"
 #include "mutation/mutation_partition.hh"
 #include "mutation/mutation_compactor.hh"

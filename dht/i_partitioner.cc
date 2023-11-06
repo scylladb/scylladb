@@ -303,10 +303,6 @@ std::strong_ordering ring_position::tri_compare(const schema& s, const ring_posi
     return ring_position_comparator(s)(*this, o);
 }
 
-std::strong_ordering token_comparator::operator()(const token& t1, const token& t2) const {
-    return t1 <=> t2;
-}
-
 bool ring_position::equal(const schema& s, const ring_position& other) const {
     return tri_compare(s, other) == 0;
 }

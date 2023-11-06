@@ -15,6 +15,7 @@
 #include "log.hh"
 #include "clustering_interval_set.hh"
 #include "mutation/mutation_partition_v2.hh"
+#include "dht/i_partitioner.hh"
 
 extern logging::logger testlog;
 

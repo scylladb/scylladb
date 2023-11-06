@@ -23,7 +23,6 @@
 #include "streaming/stream_reason.hh"
 #include "streaming/session_info.hh"
 #include "query-request.hh"
-#include "dht/i_partitioner.hh"
 #include <map>
 #include <vector>
 #include <memory>

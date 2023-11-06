@@ -15,6 +15,7 @@
 #include "log.hh"
 #include "schema/schema_builder.hh"
 #include "tools/utils.hh"
+#include "dht/i_partitioner.hh"
 
 using namespace seastar;
 using namespace tools::utils;

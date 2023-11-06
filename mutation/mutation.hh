@@ -13,7 +13,6 @@
 #include "mutation_partition.hh"
 #include "keys.hh"
 #include "schema/schema_fwd.hh"
-#include "dht/i_partitioner.hh"
 #include "utils/hashing.hh"
 #include "mutation_fragment_v2.hh"
 #include "mutation_consumer.hh"

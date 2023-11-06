@@ -8,7 +8,6 @@
 
 #pragma once
 
-#include "dht/i_partitioner.hh"
 #include "query-request.hh"
 #include "tracing/trace_state.hh"
 #include "readers/flat_mutation_reader_fwd.hh"

@@ -9,7 +9,7 @@
 
 #pragma once
 
-#include "dht/i_partitioner.hh"
+#include "dht/i_partitioner_fwd.hh"
 #include "readers/flat_mutation_reader_v2.hh"
 
 namespace dht {

@@ -14,7 +14,6 @@
 #include "schema/schema_fwd.hh"
 #include <vector>
 #include "range.hh"
-#include "dht/i_partitioner.hh"
 
 namespace streaming {
 

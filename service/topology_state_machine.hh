@@ -21,7 +21,6 @@
 #include "dht/token.hh"
 #include "raft/raft.hh"
 #include "utils/UUID.hh"
-#include "dht/i_partitioner.hh"
 #include "mutation/canonical_mutation.hh"
 
 namespace service {

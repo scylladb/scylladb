@@ -13,6 +13,7 @@
 #include "readers/reversing_v2.hh"
 #include "readers/forwardable_v2.hh"
 #include "readers/slicing_filtering.hh"
+#include "dht/i_partitioner.hh"
 
 namespace db {
 

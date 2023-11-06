@@ -8,7 +8,6 @@
 
 #pragma once
 
-#include "dht/i_partitioner.hh"
 #include "gc_clock.hh"
 #include "query-request.hh"
 #include "schema/schema_fwd.hh"

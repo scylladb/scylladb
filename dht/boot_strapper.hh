@@ -10,7 +10,7 @@
 #pragma once
 #include "gms/inet_address.hh"
 #include "locator/token_metadata.hh"
-#include "dht/i_partitioner.hh"
+#include "dht/token.hh"
 #include <unordered_set>
 #include "replica/database_fwd.hh"
 #include "streaming/stream_reason.hh"

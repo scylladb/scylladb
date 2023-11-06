@@ -8,7 +8,7 @@
 
 #pragma once
 
-#include "dht/i_partitioner.hh"
+#include "dht/i_partitioner_fwd.hh"
 #include "readers/flat_mutation_reader_fwd.hh"
 #include "schema/schema_fwd.hh"
 #include "seastarx.hh"
@@ -18,6 +18,10 @@ class mutation_source;
 
 namespace tracing {
 class trace_state_ptr;
+}
+
+namespace query {
+class partition_slice;
 }
 
 /// Make an auto-paused evictable reader.

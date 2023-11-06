@@ -8,8 +8,9 @@
 
 #pragma once
 
-#include "dht/i_partitioner.hh"
+#include "dht/ring_position.hh"
 #include "dht/token.hh"
+#include "locator/token_metadata_fwd.hh"
 
 #include <optional>
 
@@ -38,5 +39,7 @@ public:
     /// If std::nullopt is returned it means that the ring space was exhausted.
     virtual std::optional<dht::token> next_token() = 0;
 };
+
+std::unique_ptr<locator::token_range_splitter> make_splitter(token_metadata_ptr);
 
 }

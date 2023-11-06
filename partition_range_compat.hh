@@ -11,7 +11,7 @@
 
 #include <vector>
 #include "range.hh"
-#include "dht/i_partitioner.hh"
+#include "dht/ring_position.hh"
 #include "query-request.hh"
 
 namespace compat {

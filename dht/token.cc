@@ -51,6 +51,10 @@ std::strong_ordering operator<=>(const token& t1, const token& t2) {
     return std::strong_ordering::equal;
 }
 
+std::strong_ordering token_comparator::operator()(const token& t1, const token& t2) const {
+    return t1 <=> t2;
+}
+
 std::ostream& operator<<(std::ostream& out, const token& t) {
     fmt::print(out, "{}", t);
     return out;

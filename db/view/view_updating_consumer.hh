@@ -8,7 +8,6 @@
 
 #pragma once
 
-#include "dht/i_partitioner.hh"
 #include "schema/schema_fwd.hh"
 #include "mutation/mutation_fragment.hh"
 #include "sstables/shared_sstable.hh"

@@ -6,7 +6,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#include "dht/i_partitioner.hh"
+#include "dht/i_partitioner_fwd.hh"
 
 #include "idl/read_command.idl.hh"
 #include "idl/consistency_level.idl.hh"

@@ -44,6 +44,10 @@ namespace gms {
 class gossiper;
 }
 
+namespace replica {
+class database;
+}
+
 namespace streaming {
 
 struct stream_bytes {

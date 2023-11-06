@@ -20,6 +20,7 @@
 #include "utils/managed_ref.hh"
 #include "utils/managed_bytes.hh"
 #include "utils/managed_vector.hh"
+#include "dht/i_partitioner.hh"
 
 #include <seastar/core/fstream.hh>
 

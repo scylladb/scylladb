@@ -8,7 +8,8 @@
 
 #pragma once
 
-#include "dht/i_partitioner.hh"
+#include "schema/schema_fwd.hh"
+#include "dht/ring_position.hh"
 #include "readers/flat_mutation_reader_fwd.hh"
 
 class reader_permit;
