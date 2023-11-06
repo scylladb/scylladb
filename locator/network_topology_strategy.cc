@@ -281,14 +281,14 @@ std::optional<std::unordered_set<sstring>> network_topology_strategy::recognized
     return opts;
 }
 
-effective_replication_map_ptr network_topology_strategy::make_replication_map(table_id table, token_metadata_ptr tm) const {
+effective_replication_map_ptr network_topology_strategy::make_replication_map(table_id table, token_metadata2_ptr tm) const {
     if (!uses_tablets()) {
         on_internal_error(rslogger, format("make_replication_map() called for table {} but replication strategy not configured to use tablets", table));
     }
     return do_make_replication_map(table, shared_from_this(), std::move(tm), _rep_factor);
 }
 
-future<tablet_map> network_topology_strategy::allocate_tablets_for_new_table(schema_ptr s, token_metadata_ptr tm) const {
+future<tablet_map> network_topology_strategy::allocate_tablets_for_new_table(schema_ptr s, token_metadata2_ptr tm) const {
     auto tablet_count = get_initial_tablets();
     auto aligned_tablet_count = 1ul << log2ceil(tablet_count);
     if (tablet_count != aligned_tablet_count) {
@@ -297,23 +297,23 @@ future<tablet_map> network_topology_strategy::allocate_tablets_for_new_table(sch
     }
 
     tablet_map tablets(tablet_count);
-    load_sketch load(tm->get_new_strong());
+    load_sketch load(tm);
     co_await load.populate();
 
     // FIXME: Don't use tokens to distribute nodes.
     // The following reuses the existing token-based algorithm used by NetworkTopologyStrategy.
-    assert(!tm->get_new()->sorted_tokens().empty());
-    auto token_range = tm->get_new()->ring_range(dht::token::get_random_token());
+    assert(!tm->sorted_tokens().empty());
+    auto token_range = tm->ring_range(dht::token::get_random_token());
 
     for (tablet_id tb : tablets.tablet_ids()) {
-        natural_endpoints_tracker tracker(*tm->get_new(), _dc_rep_factor);
+        natural_endpoints_tracker tracker(*tm, _dc_rep_factor);
 
         while (true) {
             co_await coroutine::maybe_yield();
             if (token_range.begin() == token_range.end()) {
-                token_range = tm->get_new()->ring_range(dht::minimum_token());
+                token_range = tm->ring_range(dht::minimum_token());
             }
-            locator::host_id ep = *tm->get_new()->get_endpoint(*token_range.begin());
+            locator::host_id ep = *tm->get_endpoint(*token_range.begin());
             token_range.drop_front();
             if (tracker.add_endpoint_and_check_if_done(ep)) {
                 break;

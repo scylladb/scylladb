@@ -221,7 +221,7 @@ static std::vector<gms::inet_address> get_neighbors(
     dht::token tok = range.end() ? range.end()->value() : dht::maximum_token();
     auto ret = erm.get_natural_endpoints(tok);
     if (small_table_optimization) {
-        auto normal_nodes = erm.get_token_metadata().get_all_endpoints();
+        auto normal_nodes = erm.get_token_metadata().get_all_ips();
         ret = inet_address_vector_replica_set(normal_nodes.begin(), normal_nodes.end());
     }
     auto my_address = erm.get_topology().my_address();
@@ -1231,7 +1231,7 @@ future<> repair::user_requested_repair_task_impl::run() {
         bool hints_batchlog_flushed = false;
         std::list<gms::inet_address> participants;
         if (_small_table_optimization) {
-            auto normal_nodes = germs->get().get_token_metadata().get_all_endpoints();
+            auto normal_nodes = germs->get().get_token_metadata().get_all_ips();
             participants = std::list<gms::inet_address>(normal_nodes.begin(), normal_nodes.end());
         } else {
             participants = get_hosts_participating_in_repair(germs->get(), keyspace, ranges, data_centers, hosts, ignore_nodes).get();

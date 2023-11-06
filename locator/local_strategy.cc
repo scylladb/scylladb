@@ -30,7 +30,7 @@ std::optional<std::unordered_set<sstring>> local_strategy::recognized_options(co
     return {};
 }
 
-size_t local_strategy::get_replication_factor(const token_metadata&) const {
+size_t local_strategy::get_replication_factor(const token_metadata2&) const {
     return 1;
 }
 

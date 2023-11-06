@@ -998,7 +998,7 @@ future<> database::add_column_family(keyspace& ks, schema_ptr schema, column_fam
     auto&& rs = ks.get_replication_strategy();
     locator::effective_replication_map_ptr erm;
     if (auto pt_rs = rs.maybe_as_per_table()) {
-        erm = pt_rs->make_replication_map(schema->id(), _shared_token_metadata.get());
+        erm = pt_rs->make_replication_map(schema->id(), _shared_token_metadata.get()->get_new_strong());
     } else {
         erm = ks.get_effective_replication_map();
     }
@@ -1313,7 +1313,7 @@ keyspace::create_replication_strategy(const locator::shared_token_metadata& stm)
     rslogger.debug("replication strategy for keyspace {} is {}, opts={}",
             _metadata->name(), _metadata->strategy_name(), _metadata->strategy_options());
     if (!_replication_strategy->is_per_table()) {
-        auto erm = co_await _erm_factory.create_effective_replication_map(_replication_strategy, stm.get());
+        auto erm = co_await _erm_factory.create_effective_replication_map(_replication_strategy, stm.get()->get_new_strong());
         update_effective_replication_map(std::move(erm));
     }
 }

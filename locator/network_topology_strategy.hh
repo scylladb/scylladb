@@ -25,7 +25,7 @@ public:
     network_topology_strategy(
         const replication_strategy_config_options& config_options);
 
-    virtual size_t get_replication_factor(const token_metadata&) const override {
+    virtual size_t get_replication_factor(const token_metadata2&) const override {
         return _rep_factor;
     }
 
@@ -43,8 +43,8 @@ public:
     }
 
 public: // tablet_aware_replication_strategy
-    virtual effective_replication_map_ptr make_replication_map(table_id, token_metadata_ptr) const override;
-    virtual future<tablet_map> allocate_tablets_for_new_table(schema_ptr, token_metadata_ptr) const override;
+    virtual effective_replication_map_ptr make_replication_map(table_id, token_metadata2_ptr) const override;
+    virtual future<tablet_map> allocate_tablets_for_new_table(schema_ptr, token_metadata2_ptr) const override;
 protected:
     /**
      * calculate endpoints in one pass through the tokens by tracking our

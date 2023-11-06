@@ -63,7 +63,7 @@ future<host_id_set> simple_strategy::calculate_natural_endpoints(const token& t,
     co_return endpoints;
 }
 
-size_t simple_strategy::get_replication_factor(const token_metadata&) const {
+size_t simple_strategy::get_replication_factor(const token_metadata2&) const {
     return _replication_factor;
 }
 

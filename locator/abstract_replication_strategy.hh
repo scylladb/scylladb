@@ -119,7 +119,7 @@ public:
 
     virtual void validate_options(const gms::feature_service&) const = 0;
     virtual std::optional<std::unordered_set<sstring>> recognized_options(const topology&) const = 0;
-    virtual size_t get_replication_factor(const token_metadata& tm) const = 0;
+    virtual size_t get_replication_factor(const token_metadata2& tm) const = 0;
     // Decide if the replication strategy allow removing the node being
     // replaced from the natural endpoints when a node is being replaced in the
     // cluster. LocalStrategy is the not allowed to do so because it always
@@ -175,17 +175,17 @@ using mutable_replication_strategy_ptr = seastar::shared_ptr<abstract_replicatio
 class effective_replication_map {
 protected:
     replication_strategy_ptr _rs;
-    token_metadata_ptr _tmptr;
+    token_metadata2_ptr _tmptr;
     size_t _replication_factor;
     std::unique_ptr<abort_source> _validity_abort_source;
 public:
-    effective_replication_map(replication_strategy_ptr, token_metadata_ptr, size_t replication_factor) noexcept;
+    effective_replication_map(replication_strategy_ptr, token_metadata2_ptr, size_t replication_factor) noexcept;
     effective_replication_map(effective_replication_map&&) noexcept = default;
     virtual ~effective_replication_map() = default;
 
     const abstract_replication_strategy& get_replication_strategy() const noexcept { return *_rs; }
-    const token_metadata& get_token_metadata() const noexcept { return *_tmptr; }
-    const token_metadata_ptr& get_token_metadata_ptr() const noexcept { return _tmptr; }
+    const token_metadata2& get_token_metadata() const noexcept { return *_tmptr; }
+    const token_metadata2_ptr& get_token_metadata_ptr() const noexcept { return _tmptr; }
     const topology& get_topology() const noexcept { return _tmptr->get_topology(); }
     size_t get_replication_factor() const noexcept { return _replication_factor; }
 
@@ -255,7 +255,7 @@ protected:
     }
 public:
     virtual ~per_table_replication_strategy() = default;
-    virtual effective_replication_map_ptr make_replication_map(table_id, token_metadata_ptr) const = 0;
+    virtual effective_replication_map_ptr make_replication_map(table_id, token_metadata2_ptr) const = 0;
 };
 
 // Holds the full replication_map resulting from applying the
@@ -302,7 +302,7 @@ public: // effective_replication_map
     std::unique_ptr<token_range_splitter> make_splitter() const override;
     const dht::sharder& get_sharder(const schema& s) const override;
 public:
-    explicit vnode_effective_replication_map(replication_strategy_ptr rs, token_metadata_ptr tmptr, replication_map replication_map,
+    explicit vnode_effective_replication_map(replication_strategy_ptr rs, token_metadata2_ptr tmptr, replication_map replication_map,
             ring_mapping pending_endpoints, ring_mapping read_endpoints, size_t replication_factor) noexcept
         : effective_replication_map(std::move(rs), std::move(tmptr), replication_factor)
         , _replication_map(std::move(replication_map))
@@ -357,7 +357,7 @@ private:
     const inet_address_vector_replica_set& do_get_natural_endpoints(const token& tok, bool is_vnode) const;
 
 public:
-    static factory_key make_factory_key(const replication_strategy_ptr& rs, const token_metadata_ptr& tmptr);
+    static factory_key make_factory_key(const replication_strategy_ptr& rs, const token_metadata2_ptr& tmptr);
 
     const factory_key& get_factory_key() const noexcept {
         return *_factory_key;
@@ -382,7 +382,7 @@ using mutable_vnode_effective_replication_map_ptr = shared_ptr<vnode_effective_r
 using vnode_erm_ptr = vnode_effective_replication_map_ptr;
 using mutable_vnode_erm_ptr = mutable_vnode_effective_replication_map_ptr;
 
-inline mutable_vnode_erm_ptr make_effective_replication_map(replication_strategy_ptr rs, token_metadata_ptr tmptr, replication_map replication_map, ring_mapping pending_endpoints,
+inline mutable_vnode_erm_ptr make_effective_replication_map(replication_strategy_ptr rs, token_metadata2_ptr tmptr, replication_map replication_map, ring_mapping pending_endpoints,
     ring_mapping read_endpoints, size_t replication_factor) {
     return seastar::make_shared<vnode_effective_replication_map>(
             std::move(rs), std::move(tmptr), std::move(replication_map),
@@ -390,7 +390,7 @@ inline mutable_vnode_erm_ptr make_effective_replication_map(replication_strategy
 }
 
 // Apply the replication strategy over the current configuration and the given token_metadata.
-future<mutable_vnode_erm_ptr> calculate_effective_replication_map(replication_strategy_ptr rs, token_metadata_ptr tmptr);
+future<mutable_vnode_erm_ptr> calculate_effective_replication_map(replication_strategy_ptr rs, token_metadata2_ptr tmptr);
 
 // Class to hold a coherent view of a keyspace
 // effective replication map on all shards
@@ -478,7 +478,7 @@ public:
     // vnode_effective_replication_map for the local shard.
     //
     // Therefore create should be called first on shard 0, then on all other shards.
-    future<vnode_erm_ptr> create_effective_replication_map(replication_strategy_ptr rs, token_metadata_ptr tmptr);
+    future<vnode_erm_ptr> create_effective_replication_map(replication_strategy_ptr rs, token_metadata2_ptr tmptr);
 
     future<> stop() noexcept;
 
@@ -497,7 +497,7 @@ private:
     friend class vnode_effective_replication_map;
 };
 
-void maybe_remove_node_being_replaced(const token_metadata&,
+void maybe_remove_node_being_replaced(const token_metadata2&,
                                       const abstract_replication_strategy&,
                                       inet_address_vector_replica_set& natural_endpoints);
 

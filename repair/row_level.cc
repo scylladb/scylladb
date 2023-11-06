@@ -669,7 +669,7 @@ void flush_rows(schema_ptr s, std::list<repair_row>& rows, lw_shared_ptr<repair_
     lw_shared_ptr<const decorated_key_with_hash> last_dk;
     bool do_small_table_optimization = erm && small_table_optimization;
     auto* strat = do_small_table_optimization ? &erm->get_replication_strategy() : nullptr;
-    auto* tm = do_small_table_optimization ? &erm->get_token_metadata() : nullptr;
+    auto tm = do_small_table_optimization ? erm->get_token_metadata_ptr() : nullptr;
     auto myip = do_small_table_optimization ? erm->get_topology().my_address() : gms::inet_address();
     for (auto& r : rows) {
         thread::maybe_yield();
@@ -679,7 +679,7 @@ void flush_rows(schema_ptr s, std::list<repair_row>& rows, lw_shared_ptr<repair_
         const auto& dk = r.get_dk_with_hash()->dk;
         if (do_small_table_optimization) {
             // Check if the token is owned by the node
-            auto eps = strat->calculate_natural_endpoints(dk.token(), *tm).get0();
+            auto eps = strat->calculate_natural_ips(dk.token(), tm).get0();
             if (!eps.contains(myip)) {
                 rlogger.trace("master: ignore row, token={}", dk.token());
                 continue;
@@ -1900,12 +1900,12 @@ public:
         }
         if (small_table_optimization) {
             auto& strat = erm.get_replication_strategy();
-            auto& tm = erm.get_token_metadata();
+            auto& tm = erm.get_token_metadata_ptr();
             std::list<repair_row> tmp;
             for (auto& row : row_diff) {
                 repair_row r = std::move(row);
                 const auto& dk = r.get_dk_with_hash()->dk;
-                auto eps = co_await strat.calculate_natural_endpoints(dk.token(), tm);
+                auto eps = co_await strat.calculate_natural_ips(dk.token(), tm);
                 if (eps.contains(remote_node)) {
                     tmp.push_back(std::move(r));
                 } else {

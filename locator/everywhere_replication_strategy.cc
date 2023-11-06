@@ -29,8 +29,8 @@ future<host_id_set> everywhere_replication_strategy::calculate_natural_endpoints
     return make_ready_future<host_id_set>(host_id_set(all_endpoints.begin(), all_endpoints.end()));
 }
 
-size_t everywhere_replication_strategy::get_replication_factor(const token_metadata& tm) const {
-    return tm.get_new()->sorted_tokens().empty() ? 1 : tm.get_new()->count_normal_token_owners();
+size_t everywhere_replication_strategy::get_replication_factor(const token_metadata2& tm) const {
+    return tm.sorted_tokens().empty() ? 1 : tm.count_normal_token_owners();
 }
 
 using registry = class_registrator<abstract_replication_strategy, everywhere_replication_strategy, const replication_strategy_config_options&>;

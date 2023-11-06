@@ -38,13 +38,13 @@ protected:
     size_t get_initial_tablets() const { return _initial_tablets; }
     effective_replication_map_ptr do_make_replication_map(table_id,
                                                           replication_strategy_ptr,
-                                                          token_metadata_ptr,
+                                                          token_metadata2_ptr,
                                                           size_t replication_factor) const;
 
 public:
     /// Generates tablet_map for a new table.
     /// Runs under group0 guard.
-    virtual future<tablet_map> allocate_tablets_for_new_table(schema_ptr, token_metadata_ptr) const = 0;
+    virtual future<tablet_map> allocate_tablets_for_new_table(schema_ptr, token_metadata2_ptr) const = 0;
 };
 
 } // namespace locator

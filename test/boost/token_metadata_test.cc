@@ -42,7 +42,7 @@ namespace {
         dc_rack_fn<host_id> get_dc_rack_fn = get_dc_rack;
         tmptr->update_topology_change_info(get_dc_rack_fn).get();
         auto strategy = seastar::make_shared<Strategy>(std::move(opts));
-        return calculate_effective_replication_map(std::move(strategy), make_token_metadata_ptr(tmptr)).get0();
+        return calculate_effective_replication_map(std::move(strategy), tmptr).get0();
     }
 }
 

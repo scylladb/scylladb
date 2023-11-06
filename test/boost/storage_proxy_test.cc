@@ -41,7 +41,7 @@ SEASTAR_TEST_CASE(test_get_restricted_ranges) {
 
             std::vector<dht::ring_position> ring = make_ring(s, 10);
 
-            auto check = [&s](locator::token_metadata_ptr tmptr, dht::partition_range input,
+            auto check = [&s](locator::token_metadata2_ptr tmptr, dht::partition_range input,
                               dht::partition_range_vector expected) {
                 query_ranges_to_vnodes_generator ranges_to_vnodes(locator::make_splitter(tmptr), s, {input});
                 auto actual = ranges_to_vnodes(1000);
@@ -54,9 +54,10 @@ SEASTAR_TEST_CASE(test_get_restricted_ranges) {
 
             {
                 // Ring with minimum token
-                auto tmptr = locator::make_token_metadata_ptr(locator::token_metadata::config{});
-                tmptr->update_topology(gms::inet_address("10.0.0.1"), locator::endpoint_dc_rack{"dc1", "rack1"});
-                tmptr->update_normal_tokens(std::unordered_set<dht::token>({dht::minimum_token()}), gms::inet_address("10.0.0.1")).get();
+                auto tmptr = locator::make_token_metadata2_ptr(locator::token_metadata::config{});
+                const auto host_id = locator::host_id{utils::UUID(0, 1)};
+                tmptr->update_topology(host_id, locator::endpoint_dc_rack{"dc1", "rack1"});
+                tmptr->update_normal_tokens(std::unordered_set<dht::token>({dht::minimum_token()}), host_id).get();
 
                 check(tmptr, dht::partition_range::make_singular(ring[0]), {
                         dht::partition_range::make_singular(ring[0])
@@ -68,11 +69,13 @@ SEASTAR_TEST_CASE(test_get_restricted_ranges) {
             }
 
             {
-                auto tmptr = locator::make_token_metadata_ptr(locator::token_metadata::config{});
-                tmptr->update_topology(gms::inet_address("10.0.0.1"), locator::endpoint_dc_rack{"dc1", "rack1"});
-                tmptr->update_normal_tokens(std::unordered_set<dht::token>({ring[2].token()}), gms::inet_address("10.0.0.1")).get();
-                tmptr->update_topology(gms::inet_address("10.0.0.2"), locator::endpoint_dc_rack{"dc1", "rack1"});
-                tmptr->update_normal_tokens(std::unordered_set<dht::token>({ring[5].token()}), gms::inet_address("10.0.0.2")).get();
+                auto tmptr = locator::make_token_metadata2_ptr(locator::token_metadata::config{});
+                const auto id1 = locator::host_id{utils::UUID(0, 1)};
+                const auto id2 = locator::host_id{utils::UUID(0, 2)};
+                tmptr->update_topology(id1, locator::endpoint_dc_rack{"dc1", "rack1"});
+                tmptr->update_normal_tokens(std::unordered_set<dht::token>({ring[2].token()}), id1).get();
+                tmptr->update_topology(id2, locator::endpoint_dc_rack{"dc1", "rack1"});
+                tmptr->update_normal_tokens(std::unordered_set<dht::token>({ring[5].token()}), id2).get();
 
                 check(tmptr, dht::partition_range::make_singular(ring[0]), {
                         dht::partition_range::make_singular(ring[0])

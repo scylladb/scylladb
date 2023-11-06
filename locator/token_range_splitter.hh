@@ -40,6 +40,6 @@ public:
     virtual std::optional<dht::token> next_token() = 0;
 };
 
-std::unique_ptr<locator::token_range_splitter> make_splitter(token_metadata_ptr);
+std::unique_ptr<locator::token_range_splitter> make_splitter(token_metadata2_ptr);
 
 }

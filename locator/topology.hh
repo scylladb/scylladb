@@ -326,7 +326,7 @@ public:
     }
 
     auto get_local_dc_filter() const noexcept {
-        return [ this, local_dc = get_datacenter() ] (inet_address ep) {
+        return [ this, local_dc = get_datacenter() ] (auto ep) {
             return get_datacenter(ep) == local_dc;
         };
     };

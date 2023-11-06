@@ -1030,13 +1030,13 @@ generic_token_metadata<NodeId>::ring_range(dht::ring_position_view start) const 
 }
 
 class token_metadata_ring_splitter : public locator::token_range_splitter {
-    token_metadata_ptr _tmptr;
-    boost::iterator_range<token_metadata::tokens_iterator> _range;
+    token_metadata2_ptr _tmptr;
+    boost::iterator_range<token_metadata2::tokens_iterator> _range;
 public:
-    token_metadata_ring_splitter(token_metadata_ptr tmptr)
+    token_metadata_ring_splitter(token_metadata2_ptr tmptr)
         : _tmptr(std::move(tmptr))
         , _range(_tmptr->sorted_tokens().empty() // ring_range() throws if the ring is empty
-                ? boost::make_iterator_range(token_metadata::tokens_iterator(), token_metadata::tokens_iterator())
+                ? boost::make_iterator_range(token_metadata2::tokens_iterator(), token_metadata2::tokens_iterator())
                 : _tmptr->ring_range(dht::minimum_token()))
     { }
 
@@ -1054,7 +1054,7 @@ public:
     }
 };
 
-std::unique_ptr<locator::token_range_splitter> make_splitter(token_metadata_ptr tmptr) {
+std::unique_ptr<locator::token_range_splitter> make_splitter(token_metadata2_ptr tmptr) {
     return std::make_unique<token_metadata_ring_splitter>(std::move(tmptr));
 }
 

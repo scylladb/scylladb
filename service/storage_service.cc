@@ -4389,7 +4389,7 @@ future<> storage_service::replicate_to_all_cores(mutable_token_metadata_ptr tmpt
             if (rs->is_per_table()) {
                 continue;
             }
-            auto erm = co_await get_erm_factory().create_effective_replication_map(rs, tmptr);
+            auto erm = co_await get_erm_factory().create_effective_replication_map(rs, tmptr->get_new_strong());
             pending_effective_replication_maps[base_shard].emplace(ks_name, std::move(erm));
         }
         co_await container().invoke_on_others([&] (storage_service& ss) -> future<> {
@@ -4400,7 +4400,7 @@ future<> storage_service::replicate_to_all_cores(mutable_token_metadata_ptr tmpt
                     continue;
                 }
                 auto tmptr = pending_token_metadata_ptr[this_shard_id()];
-                auto erm = co_await ss.get_erm_factory().create_effective_replication_map(rs, std::move(tmptr));
+                auto erm = co_await ss.get_erm_factory().create_effective_replication_map(rs, tmptr->get_new_strong());
                 pending_effective_replication_maps[this_shard_id()].emplace(ks_name, std::move(erm));
             }
         });
@@ -4412,7 +4412,7 @@ future<> storage_service::replicate_to_all_cores(mutable_token_metadata_ptr tmpt
                 auto rs = db.find_keyspace(table->schema()->keypace_name()).get_replication_strategy_ptr();
                 locator::effective_replication_map_ptr erm;
                 if (auto pt_rs = rs->maybe_as_per_table()) {
-                    erm = pt_rs->make_replication_map(id, tmptr);
+                    erm = pt_rs->make_replication_map(id, tmptr->get_new_strong());
                 } else {
                     erm = pending_effective_replication_maps[this_shard_id()][table->schema()->keypace_name()];
                 }
@@ -6814,8 +6814,8 @@ future<> storage_service::stream_tablet(locator::global_tablet_id tablet) {
 
         auto& table = _db.local().find_column_family(tablet.table);
         std::vector<sstring> tables = {table.schema()->cf_name()};
-        auto streamer = make_lw_shared<dht::range_streamer>(_db, _stream_manager, tm->get_new_strong(), guard.get_abort_source(),
-               tm->get_new()->get_my_id(), _snitch.local()->get_location(),
+        auto streamer = make_lw_shared<dht::range_streamer>(_db, _stream_manager, tm, guard.get_abort_source(),
+               tm->get_my_id(), _snitch.local()->get_location(),
                "Tablet migration", streaming::stream_reason::tablet_migration, topo_guard, std::move(tables));
         streamer->add_source_filter(std::make_unique<dht::range_streamer::failure_detector_source_filter>(
                 _gossiper.get_unreachable_members()));

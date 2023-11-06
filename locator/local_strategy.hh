@@ -25,7 +25,7 @@ class local_strategy : public abstract_replication_strategy {
 public:
     local_strategy(const replication_strategy_config_options& config_options);
     virtual ~local_strategy() {};
-    virtual size_t get_replication_factor(const token_metadata&) const override;
+    virtual size_t get_replication_factor(const token_metadata2&) const override;
 
     virtual future<host_id_set> calculate_natural_endpoints(const token& search_token, const token_metadata2& tm) const override;
 

@@ -87,10 +87,10 @@ inet_address_vector_replica_set vnode_effective_replication_map::get_natural_end
     return natural_endpoints;
 }
 
-void maybe_remove_node_being_replaced(const token_metadata& tm,
+void maybe_remove_node_being_replaced(const token_metadata2& tm,
                                       const abstract_replication_strategy& rs,
                                       inet_address_vector_replica_set& natural_endpoints) {
-    if (tm.get_new()->is_any_node_being_replaced() &&
+    if (tm.is_any_node_being_replaced() &&
         rs.allow_remove_node_being_replaced_from_natural_endpoints()) {
         // When a new node is started to replace an existing dead node, we want
         // to make the replacing node take writes but do not count it for
@@ -104,8 +104,8 @@ void maybe_remove_node_being_replaced(const token_metadata& tm,
         // as the natural_endpoints and the node will not appear in the
         // pending_endpoints.
         auto it = boost::range::remove_if(natural_endpoints, [&] (gms::inet_address& p) {
-            const auto host_id = tm.get_new()->get_host_id(p);
-            return tm.get_new()->is_being_replaced(host_id);
+            const auto host_id = tm.get_host_id(p);
+            return tm.is_being_replaced(host_id);
         });
         natural_endpoints.erase(it, natural_endpoints.end());
     }
@@ -221,7 +221,7 @@ insert_token_range_to_sorted_container_while_unwrapping(
 dht::token_range_vector
 vnode_effective_replication_map::do_get_ranges(noncopyable_function<stop_iteration(bool&, const inet_address&)> consider_range_for_endpoint) const {
     dht::token_range_vector ret;
-    const auto& tm = *_tmptr->get_new();
+    const auto& tm = *_tmptr;
     const auto& sorted_tokens = tm.sorted_tokens();
     if (sorted_tokens.empty()) {
         on_internal_error(rslogger, "Token metadata is empty");
@@ -305,7 +305,7 @@ vnode_effective_replication_map::get_primary_ranges(inet_address ep) const {
 
 dht::token_range_vector
 vnode_effective_replication_map::get_primary_ranges_within_dc(inet_address ep) const {
-    const topology& topo = _tmptr->get_new()->get_topology();
+    const topology& topo = _tmptr->get_topology();
     sstring local_dc = topo.get_datacenter(ep);
     std::unordered_set<inet_address> local_dc_nodes = topo.get_datacenter_endpoints().at(local_dc);
     // The callback function below is called for each endpoint
@@ -327,7 +327,7 @@ vnode_effective_replication_map::get_primary_ranges_within_dc(inet_address ep) c
 
 future<std::unordered_map<dht::token_range, inet_address_vector_replica_set>>
 vnode_effective_replication_map::get_range_addresses() const {
-    const token_metadata& tm = *_tmptr;
+    const token_metadata2& tm = *_tmptr;
     std::unordered_map<dht::token_range, inet_address_vector_replica_set> ret;
     for (auto& t : tm.sorted_tokens()) {
         dht::token_range_vector ranges = tm.get_primary_ranges_for(t);
@@ -373,20 +373,19 @@ abstract_replication_strategy::get_pending_address_ranges(const token_metadata2_
 
 static const auto default_replication_map_key = dht::token::from_int64(0);
 
-future<mutable_vnode_effective_replication_map_ptr> calculate_effective_replication_map(replication_strategy_ptr rs, token_metadata_ptr tmptr) {
+future<mutable_vnode_effective_replication_map_ptr> calculate_effective_replication_map(replication_strategy_ptr rs, token_metadata2_ptr tmptr) {
     replication_map replication_map;
     ring_mapping pending_endpoints;
     ring_mapping read_endpoints;
     const auto depend_on_token = rs->natural_endpoints_depend_on_token();
-    auto tmpr_new = tmptr->get_new_strong();
-    const auto& sorted_tokens = tmpr_new->sorted_tokens();
+    const auto& sorted_tokens = tmptr->sorted_tokens();
     replication_map.reserve(depend_on_token ? sorted_tokens.size() : 1);
-    if (const auto& topology_changes = tmpr_new->get_topology_change_info(); topology_changes) {
+    if (const auto& topology_changes = tmptr->get_topology_change_info(); topology_changes) {
         const auto& all_tokens = topology_changes->all_tokens;
         const auto& base_token_metadata = topology_changes->base_token_metadata
             ? topology_changes->base_token_metadata
-            : tmpr_new;
-        const auto& current_tokens = tmpr_new->get_token_to_endpoint();
+            : tmptr;
+        const auto& current_tokens = tmptr->get_token_to_endpoint();
         for (size_t i = 0, size = all_tokens.size(); i < size; ++i) {
             co_await coroutine::maybe_yield();
 
@@ -442,11 +441,11 @@ future<mutable_vnode_effective_replication_map_ptr> calculate_effective_replicat
         }
     } else if (depend_on_token) {
         for (const auto &t : sorted_tokens) {
-            auto eps = co_await rs->calculate_natural_ips(t, tmpr_new);
+            auto eps = co_await rs->calculate_natural_ips(t, tmptr);
             replication_map.emplace(t, std::move(eps).extract_vector());
         }
     } else {
-        auto eps = co_await rs->calculate_natural_ips(default_replication_map_key, tmpr_new);
+        auto eps = co_await rs->calculate_natural_ips(default_replication_map_key, tmptr);
         replication_map.emplace(default_replication_map_key, std::move(eps).extract_vector());
     }
 
@@ -479,7 +478,7 @@ const inet_address_vector_replica_set& vnode_effective_replication_map::do_get_n
     bool is_vnode) const
 {
     const token& key_token = _rs->natural_endpoints_depend_on_token()
-        ? (is_vnode ? tok : _tmptr->get_new()->first_token(tok))
+        ? (is_vnode ? tok : _tmptr->first_token(tok))
         : default_replication_map_key;
     const auto it = _replication_map.find(key_token);
     return it->second;
@@ -513,7 +512,7 @@ vnode_effective_replication_map::~vnode_effective_replication_map() {
 }
 
 effective_replication_map::effective_replication_map(replication_strategy_ptr rs,
-                                                     token_metadata_ptr tmptr,
+                                                     token_metadata2_ptr tmptr,
                                                      size_t replication_factor) noexcept
         : _rs(std::move(rs))
         , _tmptr(std::move(tmptr))
@@ -521,11 +520,11 @@ effective_replication_map::effective_replication_map(replication_strategy_ptr rs
         , _validity_abort_source(std::make_unique<abort_source>())
 { }
 
-vnode_effective_replication_map::factory_key vnode_effective_replication_map::make_factory_key(const replication_strategy_ptr& rs, const token_metadata_ptr& tmptr) {
+vnode_effective_replication_map::factory_key vnode_effective_replication_map::make_factory_key(const replication_strategy_ptr& rs, const token_metadata2_ptr& tmptr) {
     return factory_key(rs->get_type(), rs->get_config_options(), tmptr->get_ring_version());
 }
 
-future<vnode_effective_replication_map_ptr> effective_replication_map_factory::create_effective_replication_map(replication_strategy_ptr rs, token_metadata_ptr tmptr) {
+future<vnode_effective_replication_map_ptr> effective_replication_map_factory::create_effective_replication_map(replication_strategy_ptr rs, token_metadata2_ptr tmptr) {
     // lookup key on local shard
     auto key = vnode_effective_replication_map::make_factory_key(rs, tmptr);
     auto erm = find_effective_replication_map(key);

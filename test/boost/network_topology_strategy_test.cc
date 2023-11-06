@@ -90,7 +90,7 @@ void strategy_sanity_check(
         total_rf += rf;
     }
 
-    BOOST_CHECK(ars_ptr->get_replication_factor(token_metadata(tm)) == total_rf);
+    BOOST_CHECK(ars_ptr->get_replication_factor(*tm) == total_rf);
 }
 
 void endpoints_check(
@@ -111,7 +111,7 @@ void endpoints_check(
 
     // Check the total RF
     BOOST_CHECK(endpoints.size() == total_rf);
-    BOOST_CHECK(total_rf <= ars_ptr->get_replication_factor(token_metadata(tm)));
+    BOOST_CHECK(total_rf <= ars_ptr->get_replication_factor(*tm));
 
     // Check the uniqueness
     std::unordered_set<inet_address> ep_set(endpoints.begin(), endpoints.end());
@@ -161,7 +161,7 @@ void full_ring_check(const std::vector<ring_point>& ring_points,
     const auto& topo = tm.get_topology();
     strategy_sanity_check(ars_ptr, tmptr, options);
 
-    auto erm = calculate_effective_replication_map(ars_ptr, make_token_metadata_ptr(tmptr)).get0();
+    auto erm = calculate_effective_replication_map(ars_ptr, tmptr).get0();
 
     for (auto& rp : ring_points) {
         double cur_point1 = rp.point - 0.5;
@@ -444,7 +444,7 @@ SEASTAR_THREAD_TEST_CASE(NetworkTopologyStrategy_tablets_test) {
         .with_column("v", utf8_type)
         .build();
 
-    auto tmap = tab_awr_ptr->allocate_tablets_for_new_table(s, stm.get()).get0();
+    auto tmap = tab_awr_ptr->allocate_tablets_for_new_table(s, stm.get()->get_new_strong()).get0();
     full_ring_check(tmap, options323, ars_ptr, stm.get()->get_new_strong());
 
     ///////////////
@@ -461,7 +461,7 @@ SEASTAR_THREAD_TEST_CASE(NetworkTopologyStrategy_tablets_test) {
     tab_awr_ptr = ars_ptr->maybe_as_tablet_aware();
     BOOST_REQUIRE(tab_awr_ptr);
 
-    tmap = tab_awr_ptr->allocate_tablets_for_new_table(s, stm.get()).get0();
+    tmap = tab_awr_ptr->allocate_tablets_for_new_table(s, stm.get()->get_new_strong()).get0();
     full_ring_check(tmap, options320, ars_ptr, stm.get()->get_new_strong());
 
     // Test the case of not enough nodes to meet RF in DC 102
@@ -477,7 +477,7 @@ SEASTAR_THREAD_TEST_CASE(NetworkTopologyStrategy_tablets_test) {
     tab_awr_ptr = ars_ptr->maybe_as_tablet_aware();
     BOOST_REQUIRE(tab_awr_ptr);
 
-    tmap = tab_awr_ptr->allocate_tablets_for_new_table(s, stm.get()).get0();
+    tmap = tab_awr_ptr->allocate_tablets_for_new_table(s, stm.get()->get_new_strong()).get0();
     full_ring_check(tmap, options324, ars_ptr, stm.get()->get_new_strong());
 }
 

@@ -338,21 +338,21 @@ private:
         inet_address_vector_replica_set result;
         result.reserve(replicas.size());
         for (auto&& replica : replicas) {
-            result.emplace_back(_tmptr->get_new()->get_endpoint_for_host_id(replica.host));
+            result.emplace_back(_tmptr->get_endpoint_for_host_id(replica.host));
         }
         return result;
     }
     const tablet_map& get_tablet_map() const {
-        return _tmptr->get_new()->tablets().get_tablet_map(_table);
+        return _tmptr->tablets().get_tablet_map(_table);
     }
 public:
     tablet_effective_replication_map(table_id table,
                                      replication_strategy_ptr rs,
-                                     token_metadata_ptr tmptr,
+                                     token_metadata2_ptr tmptr,
                                      size_t replication_factor)
             : effective_replication_map(std::move(rs), std::move(tmptr), replication_factor)
             , _table(table)
-            , _sharder(*_tmptr->get_new(), table)
+            , _sharder(*_tmptr, table)
     { }
 
     virtual ~tablet_effective_replication_map() = default;
@@ -399,7 +399,7 @@ public:
             case write_replica_set_selector::both:
                 tablet_logger.trace("get_pending_endpoints({}): table={}, tablet={}, replica={}",
                                     search_token, _table, tablet, info->pending_replica);
-                return {_tmptr->get_new()->get_endpoint_for_host_id(info->pending_replica.host)};
+                return {_tmptr->get_endpoint_for_host_id(info->pending_replica.host)};
             case write_replica_set_selector::next:
                 return {};
         }
@@ -466,7 +466,7 @@ public:
     }
 
     virtual bool has_pending_ranges(inet_address endpoint) const override {
-        const auto host_id = _tmptr->get_new()->get_host_id_if_known(endpoint);
+        const auto host_id = _tmptr->get_host_id_if_known(endpoint);
         if (!host_id.has_value()) {
             return false;
         }
@@ -502,7 +502,7 @@ public:
                 return t;
             }
         };
-        return std::make_unique<splitter>(_tmptr->get_new_strong(), get_tablet_map());
+        return std::make_unique<splitter>(_tmptr, get_tablet_map());
     }
 
     const dht::sharder& get_sharder(const schema& s) const override {
@@ -548,13 +548,13 @@ std::unordered_set<sstring> tablet_aware_replication_strategy::recognized_tablet
 }
 
 effective_replication_map_ptr tablet_aware_replication_strategy::do_make_replication_map(
-        table_id table, replication_strategy_ptr rs, token_metadata_ptr tm, size_t replication_factor) const {
+        table_id table, replication_strategy_ptr rs, token_metadata2_ptr tm, size_t replication_factor) const {
     return seastar::make_shared<tablet_effective_replication_map>(table, std::move(rs), std::move(tm), replication_factor);
 }
 
 void tablet_metadata_guard::check() noexcept {
     auto erm = _table->get_effective_replication_map();
-    auto& tmap = erm->get_token_metadata_ptr()->get_new()->tablets().get_tablet_map(_tablet.table);
+    auto& tmap = erm->get_token_metadata_ptr()->tablets().get_tablet_map(_tablet.table);
     auto* trinfo = tmap.get_tablet_transition_info(_tablet.tablet);
     if (bool(_stage) != bool(trinfo) || (_stage && _stage != trinfo->stage)) {
         _abort_source.request_abort();
