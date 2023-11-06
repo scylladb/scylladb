@@ -14,6 +14,7 @@ from test.pylib.manager_client import ManagerClient, IPAddress
 from test.pylib.async_cql import event_loop, run_async
 import logging
 import pytest
+from cassandra.auth import PlainTextAuthProvider                         # type: ignore # pylint: disable=no-name-in-module
 from cassandra.cluster import Session                                    # type: ignore # pylint: disable=no-name-in-module
 from cassandra.cluster import Cluster, ConsistencyLevel                  # type: ignore # pylint: disable=no-name-in-module
 from cassandra.cluster import ExecutionProfile, EXEC_PROFILE_DEFAULT     # type: ignore # pylint: disable=no-name-in-module
@@ -44,6 +45,10 @@ def pytest_addoption(parser):
                      help='CQL server port to connect to')
     parser.addoption('--ssl', action='store_true',
                      help='Connect to CQL via an encrypted TLSv1.2 connection')
+    parser.addoption('--auth_username', action='store', default=None,
+                        help='username for authentication')
+    parser.addoption('--auth_password', action='store', default=None,
+                        help='password for authentication')
 
 
 # This is a constant used in `pytest_runtest_makereport` below to store a flag
@@ -79,7 +84,7 @@ class CustomConnection(Cluster.connection_class):
 
 
 # cluster_con helper: set up client object for communicating with the CQL API.
-def cluster_con(hosts: List[IPAddress], port: int, use_ssl: bool):
+def cluster_con(hosts: List[IPAddress], port: int, use_ssl: bool, auth_provider=None):
     """Create a CQL Cluster connection object according to configuration.
        It does not .connect() yet."""
     assert len(hosts) > 0, "python driver connection needs at least one host to connect to"
@@ -135,6 +140,7 @@ def cluster_con(hosts: List[IPAddress], port: int, use_ssl: bool):
                    # longer than a test timeout.
                    reconnection_policy = ExponentialReconnectionPolicy(1.0, 4.0),
 
+                   auth_provider=auth_provider,
                    # Capture messages for debugging purposes.
                    connection_class=CustomConnection
                    )
@@ -149,7 +155,13 @@ async def manager_internal(event_loop, request):
     """
     port = int(request.config.getoption('port'))
     use_ssl = bool(request.config.getoption('ssl'))
-    manager_int = ManagerClient(request.config.getoption('manager_api'), port, use_ssl, cluster_con)
+    auth_username = request.config.getoption('auth_username', default=None)
+    auth_password = request.config.getoption('auth_password', default=None)
+    if auth_username is not None and auth_password is not None:
+        auth_provider = PlainTextAuthProvider(username=auth_username, password=auth_password)
+    else:
+        auth_provider = None
+    manager_int = ManagerClient(request.config.getoption('manager_api'), port, use_ssl, auth_provider, cluster_con)
     yield manager_int
     await manager_int.stop()  # Stop client session and close driver after last test
 

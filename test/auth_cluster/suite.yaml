@@ -1,0 +1,4 @@
+type: Topology
+pool_size: 2
+cluster:
+  initial_size: 0
