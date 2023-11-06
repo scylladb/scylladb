@@ -2563,7 +2563,27 @@ future<> storage_service::raft_state_monitor_fiber(raft::server& raft, sharded<d
                     std::bind_front(&storage_service::raft_topology_cmd_handler, this),
                     _tablet_allocator.local(),
                     get_ring_delay()),
-                [] (std::unique_ptr<topology_coordinator>& coordinator) { return coordinator->run(); });
+                    std::ref(raft),
+                [] (std::unique_ptr<topology_coordinator>& coordinator, raft::server& raft) -> future<> {
+                    std::exception_ptr ex;
+                    try {
+                        co_await coordinator->run();
+                    } catch (...) {
+                        ex = std::current_exception();
+                    }
+                    if (ex) {
+                        try {
+                            if (raft.is_leader()) {
+                                slogger.warn("raft topology: unhandled exception in topology_coordinator::run: {}; stepping down as a leader", ex);
+                                const auto stepdown_timeout_ticks = std::chrono::seconds(5) / raft_tick_interval;
+                                co_await raft.stepdown(raft::logical_clock::duration(stepdown_timeout_ticks));
+                            }
+                        } catch (...) {
+                            slogger.error("raft topology: failed to step down before aborting: {}", std::current_exception());
+                        }
+                        on_fatal_internal_error(slogger, format("raft topology: unhandled exception in topology_coordinator::run: {}", ex));
+                    }
+                });
         }
     } catch (...) {
         slogger.info("raft_state_monitor_fiber aborted with {}", std::current_exception());
