@@ -365,7 +365,7 @@ class PythonTestSuite(TestSuite):
                which would delete the log file and directory - we might want to preserve
                these if it came from a failed test.
             """
-            await cluster.stop()
+            await cluster.stop_gracefully()
             await cluster.release_ips()
 
         self.clusters = Pool(pool_size, self.create_cluster, recycle_cluster)
@@ -406,7 +406,7 @@ class PythonTestSuite(TestSuite):
             cluster = ScyllaCluster(logger, self.hosts, cluster_size, create_server)
 
             async def stop() -> None:
-                await cluster.stop()
+                await cluster.stop_gracefully()
 
             # Suite artifacts are removed when
             # the entire suite ends successfully.
@@ -414,7 +414,7 @@ class PythonTestSuite(TestSuite):
             if not self.options.save_log_on_success:
                 # If a test fails, we might want to keep the data dirs.
                 async def uninstall() -> None:
-                    await cluster.uninstall()
+                    await cluster.uninstall_gracefully()
 
                 self.artifacts.add_suite_artifact(self, uninstall)
             self.artifacts.add_exit_artifact(self, stop)
