@@ -755,8 +755,9 @@ future<> gossiper::do_status_check() {
 
         // check for dead state removal
         auto expire_time = get_expire_time_for_endpoint(endpoint);
+        const auto host_id = get_host_id(endpoint);
         if (!is_alive && (now > expire_time)
-             && (!get_token_metadata_ptr()->is_normal_token_owner(endpoint))) {
+             && (!get_token_metadata_ptr()->is_normal_token_owner(host_id))) {
             logger.debug("time is expiring for endpoint : {} ({})", endpoint, expire_time.time_since_epoch().count());
             co_await evict_from_membership(endpoint, pid);
         }
@@ -1138,7 +1139,7 @@ std::set<inet_address> gossiper::get_live_members() const {
 
 std::set<inet_address> gossiper::get_live_token_owners() const {
     std::set<inet_address> token_owners;
-    auto normal_token_owners = get_token_metadata_ptr()->get_all_endpoints();
+    auto normal_token_owners = get_token_metadata_ptr()->get_all_ips();
     for (auto& node: normal_token_owners) {
         if (is_alive(node)) {
             token_owners.insert(node);
@@ -1149,7 +1150,7 @@ std::set<inet_address> gossiper::get_live_token_owners() const {
 
 std::set<inet_address> gossiper::get_unreachable_token_owners() const {
     std::set<inet_address> token_owners;
-    auto normal_token_owners = get_token_metadata_ptr()->get_all_endpoints();
+    auto normal_token_owners = get_token_metadata_ptr()->get_all_ips();
     for (auto& node: normal_token_owners) {
         if (!is_alive(node)) {
             token_owners.insert(node);
@@ -1306,7 +1307,8 @@ future<> gossiper::assassinate_endpoint(sstring address) {
         std::vector<dht::token> tokens;
         logger.warn("Assassinating {} via gossip", endpoint);
         if (es) {
-            tokens = gossiper.get_token_metadata_ptr()->get_tokens(endpoint);
+            const auto host_id = gossiper.get_host_id(endpoint);
+            tokens = gossiper.get_token_metadata_ptr()->get_tokens(host_id);
             if (tokens.empty()) {
                 logger.warn("Unable to calculate tokens for {}.  Will use a random one", address);
                 throw std::runtime_error(format("Unable to calculate tokens for {}", endpoint));
@@ -1391,7 +1393,8 @@ bool gossiper::is_gossip_only_member(inet_address endpoint) const {
     if (!es) {
         return false;
     }
-    return !is_dead_state(*es) && !get_token_metadata_ptr()->is_normal_token_owner(endpoint);
+    const auto host_id = get_host_id(endpoint);
+    return !is_dead_state(*es) && !get_token_metadata_ptr()->is_normal_token_owner(host_id);
 }
 
 clk::time_point gossiper::get_expire_time_for_endpoint(inet_address endpoint) const noexcept {
@@ -2088,14 +2091,14 @@ future<> gossiper::add_saved_endpoint(inet_address ep) {
         ep_state.set_heart_beat_state_and_update_timestamp(heart_beat_state());
     }
     const auto tmptr = get_token_metadata_ptr();
-    auto tokens = tmptr->get_tokens(ep);
-    if (!tokens.empty()) {
-        std::unordered_set<dht::token> tokens_set(tokens.begin(), tokens.end());
-        ep_state.add_application_state(gms::application_state::TOKENS, versioned_value::tokens(tokens_set));
-    }
     auto host_id = tmptr->get_host_id_if_known(ep);
     if (host_id) {
         ep_state.add_application_state(gms::application_state::HOST_ID, versioned_value::host_id(host_id.value()));
+        auto tokens = tmptr->get_tokens(*host_id);
+        if (!tokens.empty()) {
+            std::unordered_set<dht::token> tokens_set(tokens.begin(), tokens.end());
+            ep_state.add_application_state(gms::application_state::TOKENS, versioned_value::tokens(tokens_set));
+        }
     }
     auto generation = ep_state.get_heart_beat_state().get_generation();
     co_await replicate(ep, std::move(ep_state), permit.id());
@@ -2631,8 +2634,8 @@ void gossiper::append_endpoint_state(std::stringstream& ss, const endpoint_state
     }
 }
 
-locator::token_metadata_ptr gossiper::get_token_metadata_ptr() const noexcept {
-    return _shared_token_metadata.get();
+locator::token_metadata2_ptr gossiper::get_token_metadata_ptr() const noexcept {
+    return _shared_token_metadata.get()->get_new_strong();
 }
 
 } // namespace gms
