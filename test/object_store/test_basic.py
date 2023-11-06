@@ -15,10 +15,12 @@ import xml.etree.ElementTree as ET
 from contextlib import contextmanager
 from test.pylib.rest_client import ScyllaRESTAPIClient
 
+
 def get_scylla_with_s3_cmd(ssl, s3_server):
     '''return a function which in turn returns the command for running scylla'''
     scylla = run.find_scylla()
     print('Scylla under test:', scylla)
+
     def make_run_cmd(pid, d):
         '''return the command args and environmental variables for running scylla'''
         if ssl:
@@ -146,7 +148,7 @@ async def test_basic(test_tempdir, s3_server, ssl):
     with managed_cluster(test_tempdir, ssl, s3_server) as cluster:
         conn = cluster.cql.connect()
         res = conn.execute(f"SELECT * FROM {ks}.{cf};")
-        have_res = { x.name: x.value for x in res }
+        have_res = {x.name: x.value for x in res}
         assert have_res == dict(rows), f'Unexpected table content: {have_res}'
 
         print('Drop table')
@@ -155,6 +157,7 @@ async def test_basic(test_tempdir, s3_server, ssl):
         res = conn.execute("SELECT * FROM system.sstables;")
         rows = "\n".join(f"{row.location} {row.status}" for row in res)
         assert not rows, 'Unexpected entries in registry'
+
 
 @pytest.mark.asyncio
 async def test_garbage_collect(test_tempdir, s3_server, ssl):
@@ -198,16 +201,17 @@ async def test_garbage_collect(test_tempdir, s3_server, ssl):
         # Mark the sstables as "removing" to simulate the problem
         res = conn.execute("SELECT * FROM system.sstables;")
         for row in res:
-            sstable_entries.append(tuple((row.location, row.generation)))
+            sstable_entries.append((row.location, row.generation))
         print(f'Found entries: {[ str(ent[1]) for ent in sstable_entries ]}')
-        for sst in sstable_entries:
-            conn.execute(f"UPDATE system.sstables SET status = 'removing' WHERE location = '{sst[0]}' AND generation = {sst[1]};")
+        for loc, gen in sstable_entries:
+            conn.execute("UPDATE system.sstables SET status = 'removing'"
+                         f" WHERE location = '{loc}' AND generation = {gen};")
 
     print('Restart scylla')
     with managed_cluster(test_tempdir, ssl, s3_server) as cluster:
         conn = cluster.cql.connect()
         res = conn.execute(f"SELECT * FROM {ks}.{cf};")
-        have_res = { x.name: x.value for x in res }
+        have_res = {x.name: x.value for x in res}
         # Must be empty as no sstables should have been picked up
         assert not have_res, f'Sstables not cleaned, got {have_res}'
         # Make sure objects also disappeared
