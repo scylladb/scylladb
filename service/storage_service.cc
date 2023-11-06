@@ -843,6 +843,7 @@ using raft_topology_cmd_handler_type = noncopyable_function<future<raft_topology
 
 class topology_coordinator {
     sharded<db::system_distributed_keyspace>& _sys_dist_ks;
+    gms::gossiper& _gossiper;
     netw::messaging_service& _messaging;
     locator::shared_token_metadata& _shared_tm;
     db::system_keyspace& _sys_ks;
@@ -2366,14 +2367,15 @@ class topology_coordinator {
 
 public:
     topology_coordinator(
-            sharded<db::system_distributed_keyspace>& sys_dist_ks,
+            sharded<db::system_distributed_keyspace>& sys_dist_ks, gms::gossiper& gossiper,
             netw::messaging_service& messaging, locator::shared_token_metadata& shared_tm,
             db::system_keyspace& sys_ks, replica::database& db, service::raft_group0& group0,
             service::topology_state_machine& topo_sm, abort_source& as, raft::server& raft_server,
             raft_topology_cmd_handler_type raft_topology_cmd_handler,
             tablet_allocator& tablet_allocator,
             std::chrono::milliseconds ring_delay)
-        : _sys_dist_ks(sys_dist_ks), _messaging(messaging), _shared_tm(shared_tm), _sys_ks(sys_ks), _db(db)
+        : _sys_dist_ks(sys_dist_ks), _gossiper(gossiper), _messaging(messaging)
+        , _shared_tm(shared_tm), _sys_ks(sys_ks), _db(db)
         , _group0(group0), _address_map(_group0.address_map()), _topo_sm(topo_sm), _as(as)
         , _raft(raft_server), _term(raft_server.get_current_term())
         , _raft_topology_cmd_handler(std::move(raft_topology_cmd_handler))
@@ -2579,7 +2581,7 @@ future<> storage_service::raft_state_monitor_fiber(raft::server& raft, sharded<d
             // start topology change coordinator in the background
             _topology_change_coordinator = do_with(
                 std::make_unique<topology_coordinator>(
-                    sys_dist_ks, _messaging.local(), _shared_token_metadata,
+                    sys_dist_ks, _gossiper, _messaging.local(), _shared_token_metadata,
                     _sys_ks.local(), _db.local(), *_group0, _topology_state_machine, *as, raft,
                     std::bind_front(&storage_service::raft_topology_cmd_handler, this),
                     _tablet_allocator.local(),
