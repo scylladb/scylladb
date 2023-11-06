@@ -137,7 +137,7 @@ bool should_propose_first_generation(const gms::inet_address& me, const gms::gos
  * Checks if the CDC generation is optimal, which is true if its `topology_description` is consistent
  * with `token_metadata`.
 */
-bool is_cdc_generation_optimal(const cdc::topology_description& gen, const locator::token_metadata& tm);
+bool is_cdc_generation_optimal(const cdc::topology_description& gen, const locator::token_metadata2& tm);
 
 /*
  * Generate a set of CDC stream identifiers such that for each shard
@@ -157,7 +157,7 @@ bool is_cdc_generation_optimal(const cdc::topology_description& gen, const locat
 cdc::topology_description make_new_generation_description(
     const std::unordered_set<dht::token>& bootstrap_tokens,
     const noncopyable_function<std::pair<size_t, uint8_t> (dht::token)>& get_sharding_info,
-    const locator::token_metadata_ptr);
+    const locator::token_metadata2_ptr);
 
 db_clock::time_point new_generation_timestamp(bool add_delay, std::chrono::milliseconds ring_delay);
 

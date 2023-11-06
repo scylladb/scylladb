@@ -192,7 +192,7 @@ bool should_propose_first_generation(const gms::inet_address& me, const gms::gos
     }) == stop_iteration::no;
 }
 
-bool is_cdc_generation_optimal(const cdc::topology_description& gen, const locator::token_metadata& tm) {
+bool is_cdc_generation_optimal(const cdc::topology_description& gen, const locator::token_metadata2& tm) {
     if (tm.sorted_tokens().size() != gen.entries().size()) {
         // We probably have garbage streams from old generations
         cdc_log.info("Generation size does not match the token ring");
@@ -324,7 +324,7 @@ topology_description limit_number_of_streams_if_needed(topology_description&& de
 }
 
 // Compute a set of tokens that split the token ring into vnodes.
-static auto get_tokens(const std::unordered_set<dht::token>& bootstrap_tokens, const locator::token_metadata_ptr tmptr) {
+static auto get_tokens(const std::unordered_set<dht::token>& bootstrap_tokens, const locator::token_metadata2_ptr tmptr) {
     auto tokens = tmptr->sorted_tokens();
     auto it = tokens.insert(tokens.end(), bootstrap_tokens.begin(), bootstrap_tokens.end());
     std::sort(it, tokens.end());
@@ -352,7 +352,7 @@ static token_range_description create_token_range_description(
 cdc::topology_description make_new_generation_description(
         const std::unordered_set<dht::token>& bootstrap_tokens,
         const noncopyable_function<std::pair<size_t, uint8_t>(dht::token)>& get_sharding_info,
-        const locator::token_metadata_ptr tmptr) {
+        const locator::token_metadata2_ptr tmptr) {
     const auto tokens = get_tokens(bootstrap_tokens, tmptr);
 
     utils::chunked_vector<token_range_description> vnode_descriptions;
@@ -378,7 +378,7 @@ db_clock::time_point new_generation_timestamp(bool add_delay, std::chrono::milli
 }
 
 future<cdc::generation_id> generation_service::legacy_make_new_generation(const std::unordered_set<dht::token>& bootstrap_tokens, bool add_delay) {
-    const locator::token_metadata_ptr tmptr = _token_metadata.get();
+    const locator::token_metadata2_ptr tmptr = _token_metadata.get()->get_new_strong();
 
     // Fetch sharding parameters for a node that owns vnode ending with this token
     // using gossiped application states.
@@ -391,8 +391,9 @@ future<cdc::generation_id> generation_service::legacy_make_new_generation(const 
                 throw std::runtime_error(
                         format("Can't find endpoint for token {}", end));
             }
-            auto sc = get_shard_count(*endpoint, _gossiper);
-            return {sc > 0 ? sc : 1, get_sharding_ignore_msb(*endpoint, _gossiper)};
+            const auto ep = tmptr->get_endpoint_for_host_id(*endpoint);
+            auto sc = get_shard_count(ep, _gossiper);
+            return {sc > 0 ? sc : 1, get_sharding_ignore_msb(ep, _gossiper)};
         }
     };
 
@@ -845,7 +846,7 @@ future<> generation_service::check_and_repair_cdc_streams() {
         }
     });
 
-    auto tmptr = _token_metadata.get();
+    auto tmptr = _token_metadata.get()->get_new_strong();
     auto sys_dist_ks = get_sys_dist_ks();
 
     bool should_regenerate = false;
@@ -987,7 +988,7 @@ future<> generation_service::legacy_handle_cdc_generation(std::optional<cdc::gen
     if (using_this_gen) {
         cdc_log.info("Starting to use generation {}", *gen_id);
         co_await update_streams_description(*gen_id, get_sys_dist_ks(),
-                [tmptr = _token_metadata.get()] { return tmptr->count_normal_token_owners(); },
+                [tmptr = _token_metadata.get()->get_new_strong()] { return tmptr->count_normal_token_owners(); },
                 _abort_src);
     }
 }
@@ -1004,7 +1005,7 @@ void generation_service::legacy_async_handle_cdc_generation(cdc::generation_id g
                 if (using_this_gen) {
                     cdc_log.info("Starting to use generation {}", gen_id);
                     co_await update_streams_description(gen_id, svc->get_sys_dist_ks(),
-                            [tmptr = svc->_token_metadata.get()] { return tmptr->count_normal_token_owners(); },
+                            [tmptr = svc->_token_metadata.get()->get_new_strong()] { return tmptr->count_normal_token_owners(); },
                             svc->_abort_src);
                 }
                 co_return;

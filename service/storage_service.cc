@@ -1208,7 +1208,7 @@ class topology_coordinator {
     // If there's a bootstrapping node, its tokens should be included in the new generation.
     // Pass them and a reference to the bootstrapping node's replica_state through `binfo`.
     future<std::pair<utils::UUID, utils::chunked_vector<mutation>>> prepare_new_cdc_generation_data(
-            locator::token_metadata_ptr tmptr, const group0_guard& guard, std::optional<bootstrapping_info> binfo) {
+            locator::token_metadata2_ptr tmptr, const group0_guard& guard, std::optional<bootstrapping_info> binfo) {
         auto get_sharding_info = [&] (dht::token end) -> std::pair<size_t, uint8_t> {
             if (binfo && binfo->bootstrap_tokens.contains(end)) {
                 return {binfo->rs.shard_count, binfo->rs.ignore_msb};
@@ -1223,18 +1223,11 @@ class topology_coordinator {
                         " can't find endpoint for token {}", end));
                 }
 
-                auto id = tmptr->get_host_id_if_known(*ep);
-                if (!id) {
-                    on_internal_error(slogger, ::format(
-                        "raft topology: make_new_cdc_generation_data: get_sharding_info:"
-                        " can't find host ID for endpoint {}, owner of token {}", *ep, end));
-                }
-
-                auto ptr = _topo_sm._topology.find(raft::server_id{id->uuid()});
+                auto ptr = _topo_sm._topology.find(raft::server_id{ep->uuid()});
                 if (!ptr) {
                     on_internal_error(slogger, ::format(
                         "raft topology: make_new_cdc_generation_data: get_sharding_info:"
-                        " couldn't find node {} in topology, owner of token {}", *id, end));
+                        " couldn't find node {} in topology, owner of token {}", *ep, end));
                 }
 
                 auto& rs = ptr->second;
@@ -1277,7 +1270,7 @@ class topology_coordinator {
     // (bootstrapping is quick if there is no data in the cluster, but usually if one has 100 nodes they
     // have tons of data, so indeed streaming/repair will take much longer (hours/days)).
     future<std::tuple<utils::UUID, group0_guard, canonical_mutation>> prepare_and_broadcast_cdc_generation_data(
-            locator::token_metadata_ptr tmptr, group0_guard guard, std::optional<bootstrapping_info> binfo) {
+            locator::token_metadata2_ptr tmptr, group0_guard guard, std::optional<bootstrapping_info> binfo) {
         auto [gen_uuid, gen_mutations] = co_await prepare_new_cdc_generation_data(tmptr, guard, binfo);
 
         if (gen_mutations.empty()) {
@@ -1450,7 +1443,7 @@ class topology_coordinator {
         case global_topology_request::new_cdc_generation: {
             slogger.info("raft topology: new CDC generation requested");
 
-            auto tmptr = get_token_metadata_ptr();
+            auto tmptr = get_token_metadata_ptr()->get_new_strong();
             auto [gen_uuid, guard_, mutation] = co_await prepare_and_broadcast_cdc_generation_data(tmptr, std::move(guard), std::nullopt);
             guard = std::move(guard_);
 
@@ -1920,7 +1913,7 @@ class topology_coordinator {
                         auto num_tokens = std::get<join_param>(node.req_param.value()).num_tokens;
                         // A node have just been accepted and does not have tokens assigned yet
                         // Need to assign random tokens to the node
-                        auto tmptr = get_token_metadata_ptr();
+                        auto tmptr = get_token_metadata_ptr()->get_new_strong();
                         auto bootstrap_tokens = dht::boot_strapper::get_random_bootstrap_tokens(
                                 tmptr, num_tokens, dht::check_token_endpoint::yes);
 
@@ -3363,9 +3356,9 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
         co_await wait_for_ring_to_settle();
 
         if (!replace_address) {
-            auto tmptr = get_token_metadata_ptr();
+            auto tmptr = get_token_metadata_ptr()->get_new_strong();
 
-            if (tmptr->is_normal_token_owner(get_broadcast_address())) {
+            if (tmptr->is_normal_token_owner(tmptr->get_my_id())) {
                 throw std::runtime_error("This node is already a member of the token ring; bootstrap aborted. (If replacing a dead node, remove the old one from the ring first.)");
             }
             slogger.info("getting bootstrap token");
@@ -3415,7 +3408,7 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
         co_await sys_dist_ks.invoke_on_all(&db::system_distributed_keyspace::start);
         bootstrap_tokens = co_await _sys_ks.local().get_saved_tokens();
         if (bootstrap_tokens.empty()) {
-            bootstrap_tokens = boot_strapper::get_bootstrap_tokens(get_token_metadata_ptr(), _db.local().get_config(), dht::check_token_endpoint::no);
+            bootstrap_tokens = boot_strapper::get_bootstrap_tokens(get_token_metadata_ptr()->get_new_strong(), _db.local().get_config(), dht::check_token_endpoint::no);
             co_await _sys_ks.local().update_tokens(bootstrap_tokens);
         } else {
             size_t num_tokens = _db.local().get_config().num_tokens();
@@ -5855,7 +5848,7 @@ future<> storage_service::raft_check_and_repair_cdc_streams() {
             slogger.error("check_and_repair_cdc_streams: no current CDC generation, requesting a new one.");
         } else {
             auto gen = co_await _sys_ks.local().read_cdc_generation(curr_gen->id);
-            if (cdc::is_cdc_generation_optimal(gen, get_token_metadata())) {
+            if (cdc::is_cdc_generation_optimal(gen, *get_token_metadata().get_new())) {
                 cdc_log.info("CDC generation {} does not need repair", curr_gen);
                 co_return;
             }
