@@ -62,8 +62,11 @@ def print_non_interactive_suggestion_message(args):
         print('\nAlso, to avoid the time-consuming I/O tuning you can add --no-io-setup and copy the contents of /etc/scylla.d/io*')
         print('Only do that if you are moving the files into machines with the exact same hardware')
 
+def is_hw_nic_or_bonding(netdev):
+    return os.path.exists(f'{netdev}/device') or os.path.exists(f'{netdev}/bonding')
+
 def interactive_choose_nic():
-    nics = [os.path.basename(n) for n in glob.glob('/sys/class/net/*') if n != '/sys/class/net/lo']
+    nics = [os.path.basename(n) for n in glob.glob('/sys/class/net/*') if is_hw_nic_or_bonding(n)]
     if len(nics) == 0:
         print('A NIC was not found.')
         sys.exit(1)
