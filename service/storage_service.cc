@@ -2063,7 +2063,7 @@ class topology_coordinator {
                 break;
             case topology::transition_state::write_both_read_new: {
                 auto node = get_node_to_work_on(std::move(guard));
-
+                bool barrier_failed = false;
                 // In this state writes goes to old and new replicas but reads start to be done from new replicas
                 // Before we stop writing to old replicas we need to wait for all previous reads to complete
                 try {
@@ -2076,7 +2076,15 @@ class topology_coordinator {
                     slogger.error("raft topology: transition_state::write_both_read_new, "
                                     "global_token_metadata_barrier failed, error {}",
                                     std::current_exception());
-                    break;
+                    barrier_failed = true;
+                }
+                if (barrier_failed) {
+                    // If barrier above failed it means there may be unfenced reads from old replicas.
+                    // Lets wait for the ring delay for those writes to complete or fence to propagate
+                    // before continuing.
+                    // FIXME: nodes that cannot be reached need to be isolated either automatically or
+                    // by an administrator
+                    co_await sleep_abortable(_ring_delay, _as);
                 }
                 switch(node.rs->state) {
                 case node_state::bootstrapping: {
