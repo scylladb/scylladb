@@ -12,6 +12,9 @@ run_first:
     - test_tablets
 skip_in_release:
     - test_cluster_features
+    - test_replace_alive_node
     - test_topology_failure_recovery
+skip_in_debug:
+    - test_replace_alive_node
 run_in_release:
     - test_gossiper
