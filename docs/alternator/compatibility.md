@@ -314,8 +314,3 @@ they should be easy to detect. Here is a list of these unimplemented features:
   that can be used to forbid table deletion. This table option was added to
   DynamoDB in March 2023.
   <https://github.com/scylladb/scylla/issues/14482>
-
-* Alternator does not support the ReturnValuesOnConditionCheckFailure
-  option on writes added to DynamoDB in June 2023. The older ReturnValues
-  is supported.
-  <https://github.com/scylladb/scylla/issues/14481>

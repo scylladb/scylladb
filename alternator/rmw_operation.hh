@@ -69,7 +69,11 @@ protected:
     enum class returnvalues {
         NONE, ALL_OLD, UPDATED_OLD, ALL_NEW, UPDATED_NEW
     } _returnvalues;
+    enum class returnvalues_on_condition_check_failure {
+        NONE, ALL_OLD
+    } _returnvalues_on_condition_check_failure;
     static returnvalues parse_returnvalues(const rjson::value& request);
+    static returnvalues_on_condition_check_failure parse_returnvalues_on_condition_check_failure(const rjson::value& request);
     // When _returnvalues != NONE, apply() should store here, in JSON form,
     // the values which are to be returned in the "Attributes" field.
     // The default null JSON means do not return an Attributes field at all.
@@ -77,6 +81,8 @@ protected:
     // it (see explanation below), but note that because apply() may be
     // called more than once, if apply() will sometimes set this field it
     // must set it (even if just to the default empty value) every time.
+    // Additionaly when _returnvalues_on_condition_check_failure is ALL_OLD
+    // then condition check failure will also result in storing values here.
     mutable rjson::value _return_attributes;
 public:
     // The constructor of a rmw_operation subclass should parse the request

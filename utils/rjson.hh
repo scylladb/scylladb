@@ -166,6 +166,29 @@ inline std::string_view to_string_view(const rjson::value& v) {
 // Copies given JSON value - involves allocation
 rjson::value copy(const rjson::value& value);
 
+// copyable_value can be used when seamless copying of value is needed
+class copyable_value : public value {
+public:
+    copyable_value() noexcept : value() {
+    }
+    copyable_value(const copyable_value& v) : value(copy(v)) {
+    }
+    copyable_value(copyable_value&& v) noexcept : value(std::move(v)) {
+    }
+    copyable_value(value&& v) noexcept : value(std::move(v)) {
+    }
+    copyable_value& operator=(const copyable_value& v) {
+        if (this != &v) {
+            *this = copy(v);
+        }
+        return *this;
+    }
+    copyable_value& operator=(copyable_value&& v) noexcept {
+        value::operator=(value(std::move(v)));
+        return *this;
+    }
+};
+
 // Parses a JSON value from given string or raw character array.
 // The string/char array liveness does not need to be persisted,
 // as parse() will allocate member names and values.

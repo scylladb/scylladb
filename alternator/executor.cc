@@ -1489,11 +1489,31 @@ rmw_operation::returnvalues rmw_operation::parse_returnvalues(const rjson::value
     }
 }
 
+rmw_operation::returnvalues_on_condition_check_failure
+rmw_operation::parse_returnvalues_on_condition_check_failure(const rjson::value& request) {
+    const rjson::value* attribute_value = rjson::find(request, "ReturnValuesOnConditionCheckFailure");
+    if (!attribute_value) {
+        return rmw_operation::returnvalues_on_condition_check_failure::NONE;
+    }
+    if (!attribute_value->IsString()) {
+        throw api_error::validation(format("Expected string value for ReturnValuesOnConditionCheckFailure, got: {}", *attribute_value));
+    }
+    auto s = rjson::to_string_view(*attribute_value);
+    if (s == "NONE") {
+        return rmw_operation::returnvalues_on_condition_check_failure::NONE;
+    } else if (s == "ALL_OLD") {
+        return rmw_operation::returnvalues_on_condition_check_failure::ALL_OLD;
+    } else {
+        throw api_error::validation(format("Unrecognized value for ReturnValuesOnConditionCheckFailure: {}", s));
+    }
+}
+
 rmw_operation::rmw_operation(service::storage_proxy& proxy, rjson::value&& request)
     : _request(std::move(request))
     , _schema(get_table(proxy, _request))
     , _write_isolation(get_write_isolation_for_schema(_schema))
     , _returnvalues(parse_returnvalues(_request))
+    , _returnvalues_on_condition_check_failure(parse_returnvalues_on_condition_check_failure(_request))
 {
     // _pk and _ck will be assigned later, by the subclass's constructor
     // (each operation puts the key in a slightly different location in
@@ -1599,7 +1619,7 @@ future<executor::request_return_type> rmw_operation::execute(service::storage_pr
                     [this, &proxy, trace_state, permit = std::move(permit)] (std::unique_ptr<rjson::value> previous_item) mutable {
                 std::optional<mutation> m = apply(std::move(previous_item), api::new_timestamp());
                 if (!m) {
-                    return make_ready_future<executor::request_return_type>(api_error::conditional_check_failed("Failed condition."));
+                    return make_ready_future<executor::request_return_type>(api_error::conditional_check_failed("The conditional request failed", std::move(_return_attributes)));
                 }
                 return proxy.mutate(std::vector<mutation>{std::move(*m)}, db::consistency_level::LOCAL_QUORUM, executor::default_timeout(), trace_state, std::move(permit), db::allow_per_partition_rate_limit::yes).then([this] () mutable {
                     return rmw_operation_return(std::move(_return_attributes));
@@ -1624,7 +1644,7 @@ future<executor::request_return_type> rmw_operation::execute(service::storage_pr
             {timeout, std::move(permit), client_state, trace_state},
             db::consistency_level::LOCAL_SERIAL, db::consistency_level::LOCAL_QUORUM, timeout, timeout).then([this, read_command] (bool is_applied) mutable {
         if (!is_applied) {
-            return make_ready_future<executor::request_return_type>(api_error::conditional_check_failed("Failed condition."));
+            return make_ready_future<executor::request_return_type>(api_error::conditional_check_failed("The conditional request failed", std::move(_return_attributes)));
         }
         return rmw_operation_return(std::move(_return_attributes));
     });
@@ -1713,6 +1733,10 @@ public:
     virtual std::optional<mutation> apply(std::unique_ptr<rjson::value> previous_item, api::timestamp_type ts) const override {
         if (!verify_expected(_request, previous_item.get()) ||
             !verify_condition_expression(_condition_expression, previous_item.get())) {
+            if (previous_item && _returnvalues_on_condition_check_failure ==
+                returnvalues_on_condition_check_failure::ALL_OLD) {
+                _return_attributes = std::move(*previous_item);
+            }
             // If the update is to be cancelled because of an unfulfilled Expected
             // condition, return an empty optional mutation, which is more
             // efficient than throwing an exception.
@@ -1798,6 +1822,10 @@ public:
     virtual std::optional<mutation> apply(std::unique_ptr<rjson::value> previous_item, api::timestamp_type ts) const override {
         if (!verify_expected(_request, previous_item.get()) ||
             !verify_condition_expression(_condition_expression, previous_item.get())) {
+            if (previous_item && _returnvalues_on_condition_check_failure ==
+                returnvalues_on_condition_check_failure::ALL_OLD) {
+                _return_attributes = std::move(*previous_item);
+            }
             // If the update is to be cancelled because of an unfulfilled Expected
             // condition, return an empty optional mutation, which is more
             // efficient than throwing an exception.
@@ -2794,6 +2822,10 @@ std::optional<mutation>
 update_item_operation::apply(std::unique_ptr<rjson::value> previous_item, api::timestamp_type ts) const {
     if (!verify_expected(_request, previous_item.get()) ||
         !verify_condition_expression(_condition_expression, previous_item.get())) {
+        if (previous_item && _returnvalues_on_condition_check_failure ==
+            returnvalues_on_condition_check_failure::ALL_OLD) {
+            _return_attributes = std::move(*previous_item);
+        }
         // If the update is to be cancelled because of an unfulfilled
         // condition, return an empty optional mutation, which is more
         // efficient than throwing an exception.
