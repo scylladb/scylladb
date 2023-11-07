@@ -9,7 +9,7 @@
 import pytest
 import time
 import rest_api
-from cassandra.protocol import SyntaxException, InvalidRequest, Unauthorized
+from cassandra.protocol import SyntaxException, InvalidRequest, Unauthorized, ConfigurationException
 from util import new_test_table, new_function, new_user, new_session, new_test_keyspace, unique_name, new_type
 
 # Test that granting permissions to various resources works for the default user.
@@ -197,13 +197,19 @@ def test_udf_permissions_quoted_names(cassandra_bug, cql):
 # one function with the given name, and that it fails if there are multiple functions with the same name,
 # regardless of the permissions of the user.
 # If the signature is specified, test that the permission check is performed as usual.
-def test_drop_udf_with_same_name(cql):
+# This test is marked cassandra_bug because it exposes a small error-path
+# bug in Cassandra: When trying to drop an overloaded function without
+# specifying which overload is intended, this error should be reported,
+# regardless of whether some of the overloads have or don't have drop
+# permissions. Cassandra erroneously reports the unrelated missing permissions.
+# Reported to Cassandra as CASSANDRA-19005.
+def test_drop_udf_with_same_name(cql, cassandra_bug):
     schema = "a int primary key"
     with new_test_keyspace(cql, "WITH REPLICATION = { 'class': 'NetworkTopologyStrategy', 'replication_factor': 1 }") as keyspace:
         body1_lua = "(i int) CALLED ON NULL INPUT RETURNS bigint LANGUAGE lua AS 'return 42;'"
-        body1_java = "(i int) CALLED ON NULL INPUT RETURNS bigint LANGUAGE java AS 'return 42;'"
+        body1_java = "(i int) CALLED ON NULL INPUT RETURNS bigint LANGUAGE java AS 'return 42L;'"
         body2_lua = "(i int, j int) CALLED ON NULL INPUT RETURNS bigint LANGUAGE lua AS 'return 42;'"
-        body2_java = "(i int, j int) CALLED ON NULL INPUT RETURNS bigint LANGUAGE java AS 'return 42;'"
+        body2_java = "(i int, j int) CALLED ON NULL INPUT RETURNS bigint LANGUAGE java AS 'return 42L;'"
         body1 = body1_lua
         body2 = body2_lua
         try:
@@ -218,6 +224,14 @@ def test_drop_udf_with_same_name(cql):
         with new_user(cql) as username:
             with new_session(cql, username) as user_session:
                 grant(cql, 'DROP', f'FUNCTION {keyspace}.{fun}(int)', username)
+                # When trying to drop a function without a signature but
+                # there is more than one function with that name, we should
+                # get an InvalidRequest, as is confirmed by the test
+                # test_udf.py::test_drop_udf_with_same_name.
+                # Cassandra fails here because it has a bug: It decided to
+                # complain about the true (but irrelevant) fact that one of
+                # the two functions doesn't have drop permissions and throws
+                # Unauthorized instead of InvalidRequest.
                 with pytest.raises(InvalidRequest):
                     user_session.execute(f"DROP FUNCTION {keyspace}.{fun}")
                 eventually_unauthorized(lambda: user_session.execute(f"DROP FUNCTION {keyspace}.{fun}(int, int)"))
@@ -309,7 +323,9 @@ def test_grant_revoke_alter_udf_permissions(cassandra_bug, cql):
                             function=lambda: user_session.execute(f"CREATE OR REPLACE FUNCTION {keyspace}.{fun} {fun_body}"))
 
 # Test that granting permissions on non-existent UDFs fails
-def test_grant_perms_on_nonexistent_udf(cql):
+# This test is marked cassandra_bug because it exposes a small error-path
+# bug in their parser CASSANDRA-19006 (see comment below).
+def test_grant_perms_on_nonexistent_udf(cql, cassandra_bug):
     keyspace = "ks"
     fun_name = "fun42"
     with new_user(cql) as username:
@@ -317,11 +333,18 @@ def test_grant_perms_on_nonexistent_udf(cql):
         revoke(cql, 'EXECUTE', 'ALL FUNCTIONS', username)
         with pytest.raises(InvalidRequest):
             grant(cql, 'EXECUTE', f'ALL FUNCTIONS IN KEYSPACE {keyspace}', username)
-        with pytest.raises(InvalidRequest):
+        # When the keyspace is non-existant, Scylla returns InvalidRequest
+        # and Cassandra returns ConfigurationException. Let's allow both.
+        with pytest.raises((InvalidRequest, ConfigurationException)):
             grant(cql, 'EXECUTE', f'FUNCTION {keyspace}.{fun_name}(int)', username)
         cql.execute(f"CREATE KEYSPACE IF NOT EXISTS {keyspace} WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }}")
         grant(cql, 'EXECUTE', f'ALL FUNCTIONS IN KEYSPACE {keyspace}', username)
         revoke(cql, 'EXECUTE', f'ALL FUNCTIONS IN KEYSPACE {keyspace}', username)
+        # When the keyspace exists, but the function doesn't, we should
+        # return an InvalidRequest, complaining that "function ks.fun42(int)>
+        # doesn't exist.". Cassandra has a bug here - CASSANDRA-19006 - it
+        # returns a SyntaxException with the message "NoSuchElementException
+        # No value present", suggesting a bug in their parser.
         with pytest.raises(InvalidRequest):
             grant(cql, 'EXECUTE', f'FUNCTION {keyspace}.{fun_name}(int)', username)
 
