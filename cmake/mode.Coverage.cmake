@@ -24,4 +24,4 @@ set(CMAKE_CXX_FLAGS_COVERAGE
 set(CMAKE_STATIC_LINKER_FLAGS_COVERAGE
   "-fprofile-instr-generate -fcoverage-mapping")
 
-set(stack_usage_threshold_in_KB 40)
+maybe_limit_stack_usage_in_KB(40 Coverage)

@@ -18,4 +18,4 @@ foreach(definition ${Seastar_DEFINITIONS_SANITIZE})
     $<$<CONFIG:Sanitize>:${definition}>)
 endforeach()
 
-set(stack_usage_threshold_in_KB 50)
+maybe_limit_stack_usage_in_KB(50 Sanitize)

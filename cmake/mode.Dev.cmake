@@ -17,4 +17,4 @@ foreach(definition ${Seastar_DEFINITIONS_DEV})
     $<$<CONFIG:Dev>:${definition}>)
 endforeach()
 
-set(stack_usage_threshold_in_KB 21)
+maybe_limit_stack_usage_in_KB(21 Dev)
