@@ -373,7 +373,7 @@ mutable_token_metadata2_ptr make_token_metadata2_ptr(Args... args) {
 }
 
 class shared_token_metadata {
-    mutable_token_metadata_ptr _shared;
+    mutable_token_metadata2_ptr _shared;
     token_metadata_lock_func _lock_func;
 
     // We use this barrier during the transition to a new token_metadata version to ensure that the
@@ -392,13 +392,13 @@ class shared_token_metadata {
     //   includes its own invocation as an operation in the new phase.
     utils::phased_barrier _versions_barrier;
     shared_future<> _stale_versions_in_use{make_ready_future<>()};
-    token_metadata::version_t _fence_version = 0;
+    token_metadata2::version_t _fence_version = 0;
 
 public:
     // used to construct the shared object as a sharded<> instance
     // lock_func returns semaphore_units<>
-    explicit shared_token_metadata(token_metadata_lock_func lock_func, token_metadata::config cfg)
-        : _shared(make_token_metadata_ptr(std::move(cfg)))
+    explicit shared_token_metadata(token_metadata_lock_func lock_func, token_metadata2::config cfg)
+        : _shared(make_token_metadata2_ptr(std::move(cfg)))
         , _lock_func(std::move(lock_func))
     {
         _shared->set_version_tracker(_versions_barrier.start());
@@ -407,18 +407,18 @@ public:
     shared_token_metadata(const shared_token_metadata& x) = delete;
     shared_token_metadata(shared_token_metadata&& x) = default;
 
-    token_metadata_ptr get() const noexcept {
+    token_metadata2_ptr get() const noexcept {
         return _shared;
     }
 
-    void set(mutable_token_metadata_ptr tmptr) noexcept;
+    void set(mutable_token_metadata2_ptr tmptr) noexcept;
 
     future<> stale_versions_in_use() const {
         return _stale_versions_in_use.get_future();
     }
 
-    void update_fence_version(token_metadata::version_t version);
-    token_metadata::version_t get_fence_version() const noexcept {
+    void update_fence_version(token_metadata2::version_t version);
+    token_metadata2::version_t get_fence_version() const noexcept {
         return _fence_version;
     }
 
@@ -438,7 +438,7 @@ public:
     // If the functor is successful, the mutated clone
     // is set back to to the shared_token_metadata,
     // otherwise, the clone is destroyed.
-    future<> mutate_token_metadata(seastar::noncopyable_function<future<> (token_metadata&)> func);
+    future<> mutate_token_metadata(seastar::noncopyable_function<future<> (token_metadata2&)> func);
 
     // mutate_token_metadata_on_all_shards acquires the shared_token_metadata lock,
     // clones the token_metadata (using clone_async)
@@ -450,7 +450,7 @@ public:
     // otherwise, the clone is destroyed.
     //
     // Must be called on shard 0.
-    static future<> mutate_on_all_shards(sharded<shared_token_metadata>& stm, seastar::noncopyable_function<future<> (token_metadata&)> func);
+    static future<> mutate_on_all_shards(sharded<shared_token_metadata>& stm, seastar::noncopyable_function<future<> (token_metadata2&)> func);
 };
 
 }

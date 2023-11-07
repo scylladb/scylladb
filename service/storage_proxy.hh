@@ -220,7 +220,7 @@ public:
         return _erm_factory;
     }
 
-    locator::token_metadata_ptr get_token_metadata_ptr() const noexcept;
+    locator::token_metadata2_ptr get_token_metadata_ptr() const noexcept;
 
     query::max_result_size get_max_result_size(const query::partition_slice& slice) const;
     query::tombstone_limit get_tombstone_limit() const;

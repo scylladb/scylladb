@@ -378,7 +378,7 @@ db_clock::time_point new_generation_timestamp(bool add_delay, std::chrono::milli
 }
 
 future<cdc::generation_id> generation_service::legacy_make_new_generation(const std::unordered_set<dht::token>& bootstrap_tokens, bool add_delay) {
-    const locator::token_metadata2_ptr tmptr = _token_metadata.get()->get_new_strong();
+    const locator::token_metadata2_ptr tmptr = _token_metadata.get();
 
     // Fetch sharding parameters for a node that owns vnode ending with this token
     // using gossiped application states.
@@ -846,7 +846,7 @@ future<> generation_service::check_and_repair_cdc_streams() {
         }
     });
 
-    auto tmptr = _token_metadata.get()->get_new_strong();
+    auto tmptr = _token_metadata.get();
     auto sys_dist_ks = get_sys_dist_ks();
 
     bool should_regenerate = false;
@@ -988,7 +988,7 @@ future<> generation_service::legacy_handle_cdc_generation(std::optional<cdc::gen
     if (using_this_gen) {
         cdc_log.info("Starting to use generation {}", *gen_id);
         co_await update_streams_description(*gen_id, get_sys_dist_ks(),
-                [tmptr = _token_metadata.get()->get_new_strong()] { return tmptr->count_normal_token_owners(); },
+                [tmptr = _token_metadata.get()] { return tmptr->count_normal_token_owners(); },
                 _abort_src);
     }
 }
@@ -1005,7 +1005,7 @@ void generation_service::legacy_async_handle_cdc_generation(cdc::generation_id g
                 if (using_this_gen) {
                     cdc_log.info("Starting to use generation {}", gen_id);
                     co_await update_streams_description(gen_id, svc->get_sys_dist_ks(),
-                            [tmptr = svc->_token_metadata.get()->get_new_strong()] { return tmptr->count_normal_token_owners(); },
+                            [tmptr = svc->_token_metadata.get()] { return tmptr->count_normal_token_owners(); },
                             svc->_abort_src);
                 }
                 co_return;

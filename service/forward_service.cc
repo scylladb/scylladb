@@ -303,7 +303,7 @@ public:
     }
 };
 
-locator::token_metadata_ptr forward_service::get_token_metadata_ptr() const noexcept {
+locator::token_metadata2_ptr forward_service::get_token_metadata_ptr() const noexcept {
     return _shared_token_metadata.get();
 }
 

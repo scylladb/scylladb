@@ -267,20 +267,20 @@ SEASTAR_THREAD_TEST_CASE(test_load_sketch) {
         }
     });
 
-    stm.mutate_token_metadata([&] (token_metadata& tm) {
-        tm.get_new()->update_host_id(host1, ip1);
-        tm.get_new()->update_host_id(host2, ip2);
-        tm.get_new()->update_host_id(host3, ip3);
-        tm.get_new()->update_topology(host1, locator::endpoint_dc_rack::default_location, std::nullopt, node1_shard_count);
-        tm.get_new()->update_topology(host2, locator::endpoint_dc_rack::default_location, std::nullopt, node2_shard_count);
-        tm.get_new()->update_topology(host3, locator::endpoint_dc_rack::default_location, std::nullopt, node3_shard_count);
+    stm.mutate_token_metadata([&] (token_metadata2& tm) {
+        tm.update_host_id(host1, ip1);
+        tm.update_host_id(host2, ip2);
+        tm.update_host_id(host3, ip3);
+        tm.update_topology(host1, locator::endpoint_dc_rack::default_location, std::nullopt, node1_shard_count);
+        tm.update_topology(host2, locator::endpoint_dc_rack::default_location, std::nullopt, node2_shard_count);
+        tm.update_topology(host3, locator::endpoint_dc_rack::default_location, std::nullopt, node3_shard_count);
         return make_ready_future<>();
     }).get();
 
     // Check that allocation is even when starting from empty state
     {
         auto tm = stm.get();
-        load_sketch load(tm->get_new_strong());
+        load_sketch load(tm);
         load.populate().get();
 
         std::vector<unsigned> node1_shards(node1_shard_count, 0);
@@ -312,7 +312,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_sketch) {
 
     std::vector<unsigned> node3_shards(node3_shard_count, 0);
 
-    stm.mutate_token_metadata([&] (token_metadata& tm) {
+    stm.mutate_token_metadata([&] (token_metadata2& tm) {
         tablet_metadata tab_meta;
         tablet_map tmap(4);
 
@@ -342,13 +342,13 @@ SEASTAR_THREAD_TEST_CASE(test_load_sketch) {
 
         auto table = table_id(utils::make_random_uuid());
         tab_meta.set_tablet_map(table, tmap);
-        tm.get_new()->set_tablets(std::move(tab_meta));
+        tm.set_tablets(std::move(tab_meta));
         return make_ready_future<>();
     }).get();
 
     {
         auto tm = stm.get();
-        load_sketch load(tm->get_new_strong());
+        load_sketch load(tm);
         load.populate().get();
 
         // host3 has max shard load of 3 and 3 shards, and 4 tablets allocated.

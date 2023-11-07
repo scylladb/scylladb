@@ -6545,7 +6545,7 @@ storage_proxy::stop() {
     return make_ready_future<>();
 }
 
-locator::token_metadata_ptr storage_proxy::get_token_metadata_ptr() const noexcept {
+locator::token_metadata2_ptr storage_proxy::get_token_metadata_ptr() const noexcept {
     return _shared_token_metadata.get();
 }
 

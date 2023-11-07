@@ -1336,7 +1336,7 @@ generic_token_metadata<NodeId>::set_version_tracker(version_tracker_t tracker) {
     _impl->set_version_tracker(std::move(tracker));
 }
 
-void shared_token_metadata::set(mutable_token_metadata_ptr tmptr) noexcept {
+void shared_token_metadata::set(mutable_token_metadata2_ptr tmptr) noexcept {
     if (_shared->get_ring_version() >= tmptr->get_ring_version()) {
         on_internal_error(tlogger, format("shared_token_metadata: must not set non-increasing ring_version: {} -> {}", _shared->get_ring_version(), tmptr->get_ring_version()));
     }
@@ -1375,7 +1375,7 @@ void shared_token_metadata::update_fence_version(token_metadata::version_t versi
     tlogger.debug("new fence_version is set, version {}", _fence_version);
 }
 
-future<> shared_token_metadata::mutate_token_metadata(seastar::noncopyable_function<future<> (token_metadata&)> func) {
+future<> shared_token_metadata::mutate_token_metadata(seastar::noncopyable_function<future<> (token_metadata2&)> func) {
     auto lk = co_await get_lock();
     auto tm = co_await _shared->clone_async();
     // bump the token_metadata ring_version
@@ -1383,17 +1383,17 @@ future<> shared_token_metadata::mutate_token_metadata(seastar::noncopyable_funct
     // when the modified token_metadata is committed.
     tm.invalidate_cached_rings();
     co_await func(tm);
-    set(make_token_metadata_ptr(std::move(tm)));
+    set(make_token_metadata2_ptr(std::move(tm)));
 }
 
-future<> shared_token_metadata::mutate_on_all_shards(sharded<shared_token_metadata>& stm, seastar::noncopyable_function<future<> (token_metadata&)> func) {
+future<> shared_token_metadata::mutate_on_all_shards(sharded<shared_token_metadata>& stm, seastar::noncopyable_function<future<> (token_metadata2&)> func) {
     auto base_shard = this_shard_id();
     assert(base_shard == 0);
     auto lk = co_await stm.local().get_lock();
 
-    std::vector<mutable_token_metadata_ptr> pending_token_metadata_ptr;
+    std::vector<mutable_token_metadata2_ptr> pending_token_metadata_ptr;
     pending_token_metadata_ptr.resize(smp::count);
-    auto tmptr = make_token_metadata_ptr(co_await stm.local().get()->clone_async());
+    auto tmptr = make_token_metadata2_ptr(co_await stm.local().get()->clone_async());
     auto& tm = *tmptr;
     // bump the token_metadata ring_version
     // to invalidate cached token/replication mappings
@@ -1404,7 +1404,7 @@ future<> shared_token_metadata::mutate_on_all_shards(sharded<shared_token_metada
     // Apply the mutated token_metadata only after successfully cloning it on all shards.
     pending_token_metadata_ptr[base_shard] = tmptr;
     co_await smp::invoke_on_others(base_shard, [&] () -> future<> {
-        pending_token_metadata_ptr[this_shard_id()] = make_token_metadata_ptr(co_await tm.clone_async());
+        pending_token_metadata_ptr[this_shard_id()] = make_token_metadata2_ptr(co_await tm.clone_async());
     });
 
     co_await stm.invoke_on_all([&] (shared_token_metadata& stm) {

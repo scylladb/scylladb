@@ -2635,7 +2635,7 @@ void gossiper::append_endpoint_state(std::stringstream& ss, const endpoint_state
 }
 
 locator::token_metadata2_ptr gossiper::get_token_metadata_ptr() const noexcept {
-    return _shared_token_metadata.get()->get_new_strong();
+    return _shared_token_metadata.get();
 }
 
 } // namespace gms

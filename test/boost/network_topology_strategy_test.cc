@@ -250,13 +250,13 @@ void simple_test() {
     };
 
     // Initialize the token_metadata
-    stm.mutate_token_metadata([&] (token_metadata& tm) -> future<> {
-        auto& topo = tm.get_new()->get_topology();
+    stm.mutate_token_metadata([&] (token_metadata2& tm) -> future<> {
+        auto& topo = tm.get_topology();
         for (const auto& [ring_point, endpoint, id] : ring_points) {
             std::unordered_set<token> tokens;
             tokens.insert({dht::token::kind::key, d2t(ring_point / ring_points.size())});
             topo.add_node(id, endpoint, make_endpoint_dc_rack(endpoint), locator::node::state::normal);
-            co_await tm.get_new()->update_normal_tokens(std::move(tokens), id);
+            co_await tm.update_normal_tokens(std::move(tokens), id);
         }
     }).get();
 
@@ -271,7 +271,7 @@ void simple_test() {
     auto ars_ptr = abstract_replication_strategy::create_replication_strategy(
         "NetworkTopologyStrategy", options323);
 
-    full_ring_check(ring_points, options323, ars_ptr, stm.get()->get_new_strong());
+    full_ring_check(ring_points, options323, ars_ptr, stm.get());
 
     ///////////////
     // Create the replication strategy
@@ -284,7 +284,7 @@ void simple_test() {
     ars_ptr = abstract_replication_strategy::create_replication_strategy(
         "NetworkTopologyStrategy", options320);
 
-    full_ring_check(ring_points, options320, ars_ptr, stm.get()->get_new_strong());
+    full_ring_check(ring_points, options320, ars_ptr, stm.get());
 
     //
     // Check cache invalidation: invalidate the cache and run a full ring
@@ -292,11 +292,11 @@ void simple_test() {
     // points will be taken from the cache when it shouldn't and the
     // corresponding check will fail.
     //
-    stm.mutate_token_metadata([] (token_metadata& tm) {
-        tm.get_new()->invalidate_cached_rings();
+    stm.mutate_token_metadata([] (token_metadata2& tm) {
+        tm.invalidate_cached_rings();
         return make_ready_future<>();
     }).get();
-    full_ring_check(ring_points, options320, ars_ptr, stm.get()->get_new_strong());
+    full_ring_check(ring_points, options320, ars_ptr, stm.get());
 }
 
 // Run in a seastar thread.
@@ -357,18 +357,18 @@ void heavy_origin_test() {
         }
     }
 
-    stm.mutate_token_metadata([&] (token_metadata& tm) -> future<> {
-        auto& topo = tm.get_new()->get_topology();
+    stm.mutate_token_metadata([&] (token_metadata2& tm) -> future<> {
+        auto& topo = tm.get_topology();
         for (const auto& [ring_point, endpoint, id] : ring_points) {
             topo.add_node(id, endpoint, make_endpoint_dc_rack(endpoint), locator::node::state::normal);
-            co_await tm.get_new()->update_normal_tokens(tokens[endpoint], id);
+            co_await tm.update_normal_tokens(tokens[endpoint], id);
         }
     }).get();
 
     auto ars_ptr = abstract_replication_strategy::create_replication_strategy(
         "NetworkTopologyStrategy", config_options);
 
-    full_ring_check(ring_points, config_options, ars_ptr, stm.get()->get_new_strong());
+    full_ring_check(ring_points, config_options, ars_ptr, stm.get());
 }
 
 
@@ -413,14 +413,14 @@ SEASTAR_THREAD_TEST_CASE(NetworkTopologyStrategy_tablets_test) {
     };
 
     // Initialize the token_metadata
-    stm.mutate_token_metadata([&] (token_metadata& tm) -> future<> {
-        auto& topo = tm.get_new()->get_topology();
+    stm.mutate_token_metadata([&] (token_metadata2& tm) -> future<> {
+        auto& topo = tm.get_topology();
         for (const auto& [ring_point, endpoint, id] : ring_points) {
             std::unordered_set<token> tokens;
             tokens.insert({dht::token::kind::key, d2t(ring_point / ring_points.size())});
             topo.add_node(id, endpoint, make_endpoint_dc_rack(endpoint), locator::node::state::normal, 1);
-            tm.get_new()->update_host_id(id, endpoint);
-            co_await tm.get_new()->update_normal_tokens(std::move(tokens), id);
+            tm.update_host_id(id, endpoint);
+            co_await tm.update_normal_tokens(std::move(tokens), id);
         }
     }).get();
 
@@ -444,8 +444,8 @@ SEASTAR_THREAD_TEST_CASE(NetworkTopologyStrategy_tablets_test) {
         .with_column("v", utf8_type)
         .build();
 
-    auto tmap = tab_awr_ptr->allocate_tablets_for_new_table(s, stm.get()->get_new_strong()).get0();
-    full_ring_check(tmap, options323, ars_ptr, stm.get()->get_new_strong());
+    auto tmap = tab_awr_ptr->allocate_tablets_for_new_table(s, stm.get()).get0();
+    full_ring_check(tmap, options323, ars_ptr, stm.get());
 
     ///////////////
     // Create the replication strategy
@@ -461,8 +461,8 @@ SEASTAR_THREAD_TEST_CASE(NetworkTopologyStrategy_tablets_test) {
     tab_awr_ptr = ars_ptr->maybe_as_tablet_aware();
     BOOST_REQUIRE(tab_awr_ptr);
 
-    tmap = tab_awr_ptr->allocate_tablets_for_new_table(s, stm.get()->get_new_strong()).get0();
-    full_ring_check(tmap, options320, ars_ptr, stm.get()->get_new_strong());
+    tmap = tab_awr_ptr->allocate_tablets_for_new_table(s, stm.get()).get0();
+    full_ring_check(tmap, options320, ars_ptr, stm.get());
 
     // Test the case of not enough nodes to meet RF in DC 102
     std::map<sstring, sstring> options324 = {
@@ -477,8 +477,8 @@ SEASTAR_THREAD_TEST_CASE(NetworkTopologyStrategy_tablets_test) {
     tab_awr_ptr = ars_ptr->maybe_as_tablet_aware();
     BOOST_REQUIRE(tab_awr_ptr);
 
-    tmap = tab_awr_ptr->allocate_tablets_for_new_table(s, stm.get()->get_new_strong()).get0();
-    full_ring_check(tmap, options324, ars_ptr, stm.get()->get_new_strong());
+    tmap = tab_awr_ptr->allocate_tablets_for_new_table(s, stm.get()).get0();
+    full_ring_check(tmap, options324, ars_ptr, stm.get());
 }
 
 /**
@@ -650,11 +650,11 @@ static void test_equivalence(const shared_token_metadata& stm, const locator::to
                                                                         return std::make_pair(p.first, to_sstring(p.second));
                                                                     })));
 
-    const token_metadata2& tm = *stm.get()->get_new();
+    const token_metadata2& tm = *stm.get();
     for (size_t i = 0; i < 1000; ++i) {
         auto token = dht::token::get_random_token();
         auto expected = calculate_natural_endpoints(token, tm, topo, datacenters);
-        auto actual = nts.calculate_natural_endpoints(token, *stm.get()->get_new()).get0();
+        auto actual = nts.calculate_natural_endpoints(token, *stm.get()).get0();
 
         // Because the old algorithm does not put the nodes in the correct order in the case where more replicas
         // are required than there are racks in a dc, we accept different order as long as the primary
@@ -737,13 +737,13 @@ SEASTAR_THREAD_TEST_CASE(testCalculateEndpoints) {
             }
         }
 
-        stm.mutate_token_metadata([&] (token_metadata& tm) -> future<> {
-            generate_topology(tm.get_new()->get_topology(), datacenters, nodes);
+        stm.mutate_token_metadata([&] (token_metadata2& tm) -> future<> {
+            generate_topology(tm.get_topology(), datacenters, nodes);
             for (auto&& i : endpoint_tokens) {
-                co_await tm.get_new()->update_normal_tokens(std::move(i.second), i.first);
+                co_await tm.update_normal_tokens(std::move(i.second), i.first);
             }
         }).get();
-        test_equivalence(stm, stm.get()->get_new()->get_topology(), datacenters);
+        test_equivalence(stm, stm.get()->get_topology(), datacenters);
     }
 }
 
@@ -835,13 +835,13 @@ SEASTAR_THREAD_TEST_CASE(test_topology_compare_endpoints) {
 
     semaphore sem(1);
     shared_token_metadata stm([&sem] () noexcept { return get_units(sem, 1); }, tm_cfg);
-    stm.mutate_token_metadata([&] (token_metadata& tm) {
-        auto& topo = tm.get_new()->get_topology();
+    stm.mutate_token_metadata([&] (token_metadata2& tm) {
+        auto& topo = tm.get_topology();
         generate_topology(topo, datacenters, nodes);
 
-        const auto& address = tm.get_new()->get_endpoint_for_host_id(nodes[tests::random::get_int<size_t>(0, NODES-1)]);
-        const auto& a1 = tm.get_new()->get_endpoint_for_host_id(nodes[tests::random::get_int<size_t>(0, NODES-1)]);
-        const auto& a2 = tm.get_new()->get_endpoint_for_host_id(nodes[tests::random::get_int<size_t>(0, NODES-1)]);
+        const auto& address = tm.get_endpoint_for_host_id(nodes[tests::random::get_int<size_t>(0, NODES-1)]);
+        const auto& a1 = tm.get_endpoint_for_host_id(nodes[tests::random::get_int<size_t>(0, NODES-1)]);
+        const auto& a2 = tm.get_endpoint_for_host_id(nodes[tests::random::get_int<size_t>(0, NODES-1)]);
 
         topo.test_compare_endpoints(address, address, address);
         topo.test_compare_endpoints(address, address, a1);
@@ -880,23 +880,23 @@ SEASTAR_THREAD_TEST_CASE(test_topology_tracks_local_node) {
 
     // get_location() should work before any node is added
 
-    BOOST_REQUIRE(stm.get()->get_new()->get_topology().get_location() == ip1_dc_rack);
+    BOOST_REQUIRE(stm.get()->get_topology().get_location() == ip1_dc_rack);
 
-    stm.mutate_token_metadata([&] (token_metadata& tm) {
-        tm.get_new()->update_host_id(host2, ip2);
-        tm.get_new()->update_host_id(host1, ip1); // this_node added last on purpose
+    stm.mutate_token_metadata([&] (token_metadata2& tm) {
+        tm.update_host_id(host2, ip2);
+        tm.update_host_id(host1, ip1); // this_node added last on purpose
         return make_ready_future<>();
     }).get();
 
-    const node* n1 = stm.get()->get_new()->get_topology().find_node(host1);
+    const node* n1 = stm.get()->get_topology().find_node(host1);
     BOOST_REQUIRE(n1);
     BOOST_REQUIRE(bool(n1->is_this_node()));
     BOOST_REQUIRE_EQUAL(n1->host_id(), host1);
     BOOST_REQUIRE_EQUAL(n1->endpoint(), ip1);
     BOOST_REQUIRE(n1->dc_rack() == ip1_dc_rack);
-    BOOST_REQUIRE(stm.get()->get_new()->get_topology().get_location() == ip1_dc_rack);
+    BOOST_REQUIRE(stm.get()->get_topology().get_location() == ip1_dc_rack);
 
-    const node* n2 = stm.get()->get_new()->get_topology().find_node(host2);
+    const node* n2 = stm.get()->get_topology().find_node(host2);
     BOOST_REQUIRE(n2);
     BOOST_REQUIRE(!bool(n2->is_this_node()));
     BOOST_REQUIRE_EQUAL(n2->host_id(), host2);
@@ -905,46 +905,46 @@ SEASTAR_THREAD_TEST_CASE(test_topology_tracks_local_node) {
 
     // Removing local node
 
-    stm.mutate_token_metadata([&] (token_metadata& tm) {
-        tm.get_new()->remove_endpoint(host1);
-        tm.get_new()->update_host_id(host3, ip3);
+    stm.mutate_token_metadata([&] (token_metadata2& tm) {
+        tm.remove_endpoint(host1);
+        tm.update_host_id(host3, ip3);
         return make_ready_future<>();
     }).get();
 
-    n1 = stm.get()->get_new()->get_topology().find_node(host1);
+    n1 = stm.get()->get_topology().find_node(host1);
     BOOST_REQUIRE(!n1);
-    n1 = stm.get()->get_new()->get_topology().find_node(ip1);
+    n1 = stm.get()->get_topology().find_node(ip1);
     BOOST_REQUIRE(!n1);
 
     // Removing node with no local node
 
-    stm.mutate_token_metadata([&] (token_metadata& tm) {
-        tm.get_new()->remove_endpoint(host2);
+    stm.mutate_token_metadata([&] (token_metadata2& tm) {
+        tm.remove_endpoint(host2);
         return make_ready_future<>();
     }).get();
 
-    n2 = stm.get()->get_new()->get_topology().find_node(host2);
+    n2 = stm.get()->get_topology().find_node(host2);
     BOOST_REQUIRE(!n2);
-    n2 = stm.get()->get_new()->get_topology().find_node(ip2);
+    n2 = stm.get()->get_topology().find_node(ip2);
     BOOST_REQUIRE(!n2);
 
     // Repopulate after clear_gently()
 
-    stm.mutate_token_metadata([&] (token_metadata& tm) -> future<> {
-        co_await tm.get_new()->clear_gently();
-        tm.get_new()->update_host_id(host2, ip2);
-        tm.get_new()->update_host_id(host1, ip1); // this_node added last on purpose
+    stm.mutate_token_metadata([&] (token_metadata2& tm) -> future<> {
+        co_await tm.clear_gently();
+        tm.update_host_id(host2, ip2);
+        tm.update_host_id(host1, ip1); // this_node added last on purpose
     }).get();
 
-    n1 = stm.get()->get_new()->get_topology().find_node(host1);
+    n1 = stm.get()->get_topology().find_node(host1);
     BOOST_REQUIRE(n1);
     BOOST_REQUIRE(bool(n1->is_this_node()));
     BOOST_REQUIRE_EQUAL(n1->host_id(), host1);
     BOOST_REQUIRE_EQUAL(n1->endpoint(), ip1);
     BOOST_REQUIRE(n1->dc_rack() == ip1_dc_rack);
-    BOOST_REQUIRE(stm.get()->get_new()->get_topology().get_location() == ip1_dc_rack);
+    BOOST_REQUIRE(stm.get()->get_topology().get_location() == ip1_dc_rack);
 
-    n2 = stm.get()->get_new()->get_topology().find_node(host2);
+    n2 = stm.get()->get_topology().find_node(host2);
     BOOST_REQUIRE(n2);
     BOOST_REQUIRE(!bool(n2->is_this_node()));
     BOOST_REQUIRE_EQUAL(n2->host_id(), host2);
@@ -953,16 +953,16 @@ SEASTAR_THREAD_TEST_CASE(test_topology_tracks_local_node) {
 
     // get_location() should pick up endpoint_dc_rack from node info
 
-    stm.mutate_token_metadata([&] (token_metadata& tm) -> future<> {
-        co_await tm.get_new()->clear_gently();
-        tm.get_new()->get_topology().add_or_update_endpoint(ip1, host1, ip1_dc_rack_v2, node::state::being_decommissioned);
+    stm.mutate_token_metadata([&] (token_metadata2& tm) -> future<> {
+        co_await tm.clear_gently();
+        tm.get_topology().add_or_update_endpoint(ip1, host1, ip1_dc_rack_v2, node::state::being_decommissioned);
     }).get();
 
-    n1 = stm.get()->get_new()->get_topology().find_node(host1);
+    n1 = stm.get()->get_topology().find_node(host1);
     BOOST_REQUIRE(n1);
     BOOST_REQUIRE(bool(n1->is_this_node()));
     BOOST_REQUIRE_EQUAL(n1->host_id(), host1);
     BOOST_REQUIRE_EQUAL(n1->endpoint(), ip1);
     BOOST_REQUIRE(n1->dc_rack() == ip1_dc_rack_v2);
-    BOOST_REQUIRE(stm.get()->get_new()->get_topology().get_location() == ip1_dc_rack_v2);
+    BOOST_REQUIRE(stm.get()->get_topology().get_location() == ip1_dc_rack_v2);
 }
