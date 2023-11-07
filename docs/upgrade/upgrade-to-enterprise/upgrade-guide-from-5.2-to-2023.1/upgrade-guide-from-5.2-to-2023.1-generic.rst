@@ -4,7 +4,7 @@
 .. |NEW_VERSION| replace:: 2023.1
 
 .. |DEBIAN_SRC_REPO| replace:: Debian
-.. _DEBIAN_SRC_REPO: http://www.scylladb.com/download/?platform=debian-10&version=scylla-5.3
+.. _DEBIAN_SRC_REPO: http://www.scylladb.com/download/?platform=debian-10&version=scylla-5.2
 
 .. |UBUNTU_SRC_REPO| replace:: Ubuntu
 .. _UBUNTU_SRC_REPO: https://www.scylladb.com/download/?platform=ubuntu-20.04&version=scylla-5.2
