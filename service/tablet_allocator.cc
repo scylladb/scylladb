@@ -199,7 +199,7 @@ class load_balancer {
 
         std::optional<locator::load_sketch> target_load_sketch;
 
-        future<load_sketch&> get_load_sketch(const token_metadata2_ptr& tm) {
+        future<load_sketch&> get_load_sketch(const token_metadata_ptr& tm) {
             if (!target_load_sketch) {
                 target_load_sketch.emplace(tm);
                 co_await target_load_sketch->populate(id);
@@ -255,7 +255,7 @@ class load_balancer {
     const size_t max_write_streaming_load = 2;
     const size_t max_read_streaming_load = 4;
 
-    token_metadata2_ptr _tm;
+    token_metadata_ptr _tm;
     load_balancer_stats_manager& _stats;
 private:
     tablet_replica_set get_replicas_for_tablet_load(const tablet_info& ti, const tablet_transition_info* trinfo) const {
@@ -290,7 +290,7 @@ private:
     }
 
 public:
-    load_balancer(token_metadata2_ptr tm, load_balancer_stats_manager& stats)
+    load_balancer(token_metadata_ptr tm, load_balancer_stats_manager& stats)
         : _tm(std::move(tm))
         , _stats(stats)
     { }
@@ -819,7 +819,7 @@ public:
         _stopped = true;
     }
 
-    future<migration_plan> balance_tablets(token_metadata2_ptr tm) {
+    future<migration_plan> balance_tablets(token_metadata_ptr tm) {
         load_balancer lb(tm, _load_balancer_stats);
         co_return co_await lb.make_plan();
     }
@@ -869,7 +869,7 @@ future<> tablet_allocator::stop() {
     return impl().stop();
 }
 
-future<migration_plan> tablet_allocator::balance_tablets(locator::token_metadata2_ptr tm) {
+future<migration_plan> tablet_allocator::balance_tablets(locator::token_metadata_ptr tm) {
     return impl().balance_tablets(tm);
 }
 

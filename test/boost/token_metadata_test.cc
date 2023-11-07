@@ -28,8 +28,8 @@ namespace {
         };
     }
 
-    mutable_token_metadata2_ptr create_token_metadata(host_id this_host_id) {
-        return make_lw_shared<token_metadata2>(token_metadata::config {
+    mutable_token_metadata_ptr create_token_metadata(host_id this_host_id) {
+        return make_lw_shared<token_metadata>(token_metadata::config {
             topology::config {
                 .this_host_id = this_host_id,
                 .local_dc_rack = get_dc_rack(this_host_id)
@@ -38,7 +38,7 @@ namespace {
     }
 
     template <typename Strategy>
-    mutable_vnode_erm_ptr create_erm(mutable_token_metadata2_ptr tmptr, replication_strategy_config_options opts = {}) {
+    mutable_vnode_erm_ptr create_erm(mutable_token_metadata_ptr tmptr, replication_strategy_config_options opts = {}) {
         dc_rack_fn<host_id> get_dc_rack_fn = get_dc_rack;
         tmptr->update_topology_change_info(get_dc_rack_fn).get();
         auto strategy = seastar::make_shared<Strategy>(std::move(opts));

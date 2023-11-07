@@ -2286,7 +2286,7 @@ bool paxos_response_handler::learned(gms::inet_address ep) {
 }
 
 static inet_address_vector_replica_set
-replica_ids_to_endpoints(const locator::token_metadata2& tm, const std::vector<locator::host_id>& replica_ids) {
+replica_ids_to_endpoints(const locator::token_metadata& tm, const std::vector<locator::host_id>& replica_ids) {
     inet_address_vector_replica_set endpoints;
     endpoints.reserve(replica_ids.size());
 
@@ -2300,7 +2300,7 @@ replica_ids_to_endpoints(const locator::token_metadata2& tm, const std::vector<l
 }
 
 static std::vector<locator::host_id>
-endpoints_to_replica_ids(const locator::token_metadata2& tm, const inet_address_vector_replica_set& endpoints) {
+endpoints_to_replica_ids(const locator::token_metadata& tm, const inet_address_vector_replica_set& endpoints) {
     std::vector<locator::host_id> replica_ids;
     replica_ids.reserve(endpoints.size());
 
@@ -6545,7 +6545,7 @@ storage_proxy::stop() {
     return make_ready_future<>();
 }
 
-locator::token_metadata2_ptr storage_proxy::get_token_metadata_ptr() const noexcept {
+locator::token_metadata_ptr storage_proxy::get_token_metadata_ptr() const noexcept {
     return _shared_token_metadata.get();
 }
 

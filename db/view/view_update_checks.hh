@@ -24,15 +24,12 @@ class system_distributed_keyspace;
 }
 
 namespace locator {
-template <typename NodeId>
-class generic_token_metadata;
-using token_metadata = generic_token_metadata<gms::inet_address>;
-using token_metadata2 = generic_token_metadata<host_id>;
+class token_metadata;
 }
 
 namespace db::view {
 
-future<bool> check_needs_view_update_path(db::system_distributed_keyspace& sys_dist_ks, const locator::token_metadata2& tm, const replica::table& t,
+future<bool> check_needs_view_update_path(db::system_distributed_keyspace& sys_dist_ks, const locator::token_metadata& tm, const replica::table& t,
         streaming::stream_reason reason);
 
 }

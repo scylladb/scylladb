@@ -18,7 +18,7 @@ local_strategy::local_strategy(const replication_strategy_config_options& config
     _natural_endpoints_depend_on_token = false;
 }
 
-future<host_id_set> local_strategy::calculate_natural_endpoints(const token& t, const token_metadata2& tm) const {
+future<host_id_set> local_strategy::calculate_natural_endpoints(const token& t, const token_metadata& tm) const {
     return make_ready_future<host_id_set>(host_id_set{host_id{}});
 }
 
@@ -30,7 +30,7 @@ std::optional<std::unordered_set<sstring>> local_strategy::recognized_options(co
     return {};
 }
 
-size_t local_strategy::get_replication_factor(const token_metadata2&) const {
+size_t local_strategy::get_replication_factor(const token_metadata&) const {
     return 1;
 }
 

@@ -26,10 +26,7 @@ namespace gms {
 }
 
 namespace locator {
-    template <typename NodeId>
-    class generic_token_metadata;
-    using token_metadata = generic_token_metadata<gms::inet_address>;
-    using token_metadata2 = generic_token_metadata<host_id>;
+    class token_metadata;
     class shared_token_metadata;
     struct snitch_ptr;
     class abstract_replication_strategy;
@@ -54,8 +51,8 @@ public:
     std::map<sstring, sstring> get_replication_options() const;
     std::optional<sstring> get_replication_strategy_class() const;
     data_dictionary::storage_options get_storage_options() const;
-    lw_shared_ptr<data_dictionary::keyspace_metadata> as_ks_metadata(sstring ks_name, const locator::token_metadata2&);
-    lw_shared_ptr<data_dictionary::keyspace_metadata> as_ks_metadata_update(lw_shared_ptr<data_dictionary::keyspace_metadata> old, const locator::token_metadata2&);
+    lw_shared_ptr<data_dictionary::keyspace_metadata> as_ks_metadata(sstring ks_name, const locator::token_metadata&);
+    lw_shared_ptr<data_dictionary::keyspace_metadata> as_ks_metadata_update(lw_shared_ptr<data_dictionary::keyspace_metadata> old, const locator::token_metadata&);
 
 #if 0
     public KSMetaData asKSMetadataUpdate(KSMetaData old) throws RequestValidationException

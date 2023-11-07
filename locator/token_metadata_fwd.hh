@@ -11,13 +11,9 @@
 
 namespace locator {
 
-template <typename NodeId>
-class generic_token_metadata;
-using token_metadata = generic_token_metadata<gms::inet_address>;
+class token_metadata;
+
 using token_metadata_ptr = lw_shared_ptr<const token_metadata>;
 using mutable_token_metadata_ptr = lw_shared_ptr<token_metadata>;
-using token_metadata2 = generic_token_metadata<host_id>;
-using token_metadata2_ptr = lw_shared_ptr<const token_metadata2>;
-using mutable_token_metadata2_ptr = lw_shared_ptr<token_metadata2>;
 
 } // namespace locator

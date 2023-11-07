@@ -348,7 +348,7 @@ private:
 public:
     tablet_effective_replication_map(table_id table,
                                      replication_strategy_ptr rs,
-                                     token_metadata2_ptr tmptr,
+                                     token_metadata_ptr tmptr,
                                      size_t replication_factor)
             : effective_replication_map(std::move(rs), std::move(tmptr), replication_factor)
             , _table(table)
@@ -480,11 +480,11 @@ public:
 
     virtual std::unique_ptr<token_range_splitter> make_splitter() const override {
         class splitter : public token_range_splitter {
-            token_metadata2_ptr _tmptr; // To keep the tablet map alive.
+            token_metadata_ptr _tmptr; // To keep the tablet map alive.
             const tablet_map& _tmap;
             std::optional<tablet_id> _next;
         public:
-            splitter(token_metadata2_ptr tmptr, const tablet_map& tmap)
+            splitter(token_metadata_ptr tmptr, const tablet_map& tmap)
                 : _tmptr(std::move(tmptr))
                 , _tmap(tmap)
             { }
@@ -548,7 +548,7 @@ std::unordered_set<sstring> tablet_aware_replication_strategy::recognized_tablet
 }
 
 effective_replication_map_ptr tablet_aware_replication_strategy::do_make_replication_map(
-        table_id table, replication_strategy_ptr rs, token_metadata2_ptr tm, size_t replication_factor) const {
+        table_id table, replication_strategy_ptr rs, token_metadata_ptr tm, size_t replication_factor) const {
     return seastar::make_shared<tablet_effective_replication_map>(table, std::move(rs), std::move(tm), replication_factor);
 }
 

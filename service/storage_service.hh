@@ -113,12 +113,9 @@ private:
     using endpoint_details = dht::endpoint_details;
     using boot_strapper = dht::boot_strapper;
     using token_metadata = locator::token_metadata;
-    using token_metadata2 = locator::token_metadata2;
     using shared_token_metadata = locator::shared_token_metadata;
     using token_metadata_ptr = locator::token_metadata_ptr;
-    using token_metadata2_ptr = locator::token_metadata2_ptr;
     using mutable_token_metadata_ptr = locator::mutable_token_metadata_ptr;
-    using mutable_token_metadata2_ptr = locator::mutable_token_metadata2_ptr;
     using token_metadata_lock = locator::token_metadata_lock;
     using application_state = gms::application_state;
     using inet_address = gms::inet_address;
@@ -214,24 +211,24 @@ private:
     // db::schema_tables::do_merge_schema.
     //
     // Note: must be called on shard 0.
-    future<> mutate_token_metadata(std::function<future<> (mutable_token_metadata2_ptr)> func, acquire_merge_lock aml = acquire_merge_lock::yes) noexcept;
+    future<> mutate_token_metadata(std::function<future<> (mutable_token_metadata_ptr)> func, acquire_merge_lock aml = acquire_merge_lock::yes) noexcept;
 
     // Update pending ranges locally and then replicate to all cores.
     // Should be serialized under token_metadata_lock.
     // Must be called on shard 0.
-    future<> update_topology_change_info(mutable_token_metadata2_ptr tmptr, sstring reason);
+    future<> update_topology_change_info(mutable_token_metadata_ptr tmptr, sstring reason);
     future<> update_topology_change_info(sstring reason, acquire_merge_lock aml = acquire_merge_lock::yes);
     future<> keyspace_changed(const sstring& ks_name);
     void register_metrics();
     future<> snitch_reconfigured();
 
-    future<mutable_token_metadata2_ptr> get_mutable_token_metadata_ptr() noexcept {
-        return _shared_token_metadata.get()->clone_async().then([] (token_metadata2 tm) {
+    future<mutable_token_metadata_ptr> get_mutable_token_metadata_ptr() noexcept {
+        return _shared_token_metadata.get()->clone_async().then([] (token_metadata tm) {
             // bump the token_metadata ring_version
             // to invalidate cached token/replication mappings
             // when the modified token_metadata is committed.
             tm.invalidate_cached_rings();
-            return make_ready_future<mutable_token_metadata2_ptr>(make_token_metadata2_ptr(std::move(tm)));
+            return make_ready_future<mutable_token_metadata_ptr>(make_token_metadata_ptr(std::move(tm)));
         });
     }
 
@@ -258,11 +255,11 @@ public:
         return _erm_factory;
     }
 
-    token_metadata2_ptr get_token_metadata_ptr() const noexcept {
+    token_metadata_ptr get_token_metadata_ptr() const noexcept {
         return _shared_token_metadata.get();
     }
 
-    const locator::token_metadata2& get_token_metadata() const noexcept {
+    const locator::token_metadata& get_token_metadata() const noexcept {
         return *_shared_token_metadata.get();
     }
 
@@ -328,7 +325,7 @@ private:
 
 public:
 
-    static std::unordered_set<gms::inet_address> parse_node_list(sstring comma_separated_list, const locator::token_metadata2& tm);
+    static std::unordered_set<gms::inet_address> parse_node_list(sstring comma_separated_list, const locator::token_metadata& tm);
 
     future<> check_for_endpoint_collision(std::unordered_set<gms::inet_address> initial_contact_nodes,
             const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features);
@@ -480,7 +477,7 @@ private:
     std::optional<locator::endpoint_dc_rack> get_dc_rack_for(inet_address endpoint);
 private:
     // Should be serialized under token_metadata_lock.
-    future<> replicate_to_all_cores(mutable_token_metadata2_ptr tmptr) noexcept;
+    future<> replicate_to_all_cores(mutable_token_metadata_ptr tmptr) noexcept;
     sharded<db::system_keyspace>& _sys_ks;
     sharded<db::system_distributed_keyspace>& _sys_dist_ks;
     locator::snitch_signal_slot_t _snitch_reconfigure;

@@ -433,7 +433,7 @@ SEASTAR_TEST_CASE(test_sharder) {
 
         auto table1 = table_id(utils::UUID_gen::get_time_UUID());
 
-        token_metadata2 tokm(token_metadata::config{ .topo_cfg{ .this_host_id = h1 } });
+        token_metadata tokm(token_metadata::config{ .topo_cfg{ .this_host_id = h1 } });
         tokm.get_topology().add_or_update_endpoint(tokm.get_topology().my_address(), h1);
 
         std::vector<tablet_id> tablet_ids;
@@ -591,7 +591,7 @@ SEASTAR_THREAD_TEST_CASE(test_token_ownership_splitting) {
 
 // Reflects the plan in a given token metadata as if the migrations were fully executed.
 static
-void apply_plan(token_metadata2& tm, const migration_plan& plan) {
+void apply_plan(token_metadata& tm, const migration_plan& plan) {
     for (auto&& mig : plan.migrations()) {
         tablet_map& tmap = tm.tablets().get_tablet_map(mig.tablet.table);
         auto tinfo = tmap.get_tablet_info(mig.tablet.tablet);
@@ -611,7 +611,7 @@ tablet_transition_info migration_to_transition_info(const tablet_migration_info&
 
 // Reflects the plan in a given token metadata as if the migrations were started but not yet executed.
 static
-void apply_plan_as_in_progress(token_metadata2& tm, const migration_plan& plan) {
+void apply_plan_as_in_progress(token_metadata& tm, const migration_plan& plan) {
     for (auto&& mig : plan.migrations()) {
         tablet_map& tmap = tm.tablets().get_tablet_map(mig.tablet.table);
         auto tinfo = tmap.get_tablet_info(mig.tablet.tablet);
@@ -626,7 +626,7 @@ void rebalance_tablets(tablet_allocator& talloc, shared_token_metadata& stm) {
         if (plan.empty()) {
             break;
         }
-        stm.mutate_token_metadata([&] (token_metadata2& tm) {
+        stm.mutate_token_metadata([&] (token_metadata& tm) {
             apply_plan(tm, plan);
             return make_ready_future<>();
         }).get();
@@ -640,7 +640,7 @@ void rebalance_tablets_as_in_progress(tablet_allocator& talloc, shared_token_met
         if (plan.empty()) {
             break;
         }
-        stm.mutate_token_metadata([&] (token_metadata2& tm) {
+        stm.mutate_token_metadata([&] (token_metadata& tm) {
             apply_plan_as_in_progress(tm, plan);
             return make_ready_future<>();
         }).get();
@@ -650,7 +650,7 @@ void rebalance_tablets_as_in_progress(tablet_allocator& talloc, shared_token_met
 // Completes any in progress tablet migrations.
 static
 void execute_transitions(shared_token_metadata& stm) {
-    stm.mutate_token_metadata([&] (token_metadata2& tm) {
+    stm.mutate_token_metadata([&] (token_metadata& tm) {
         for (auto&& [tablet, tmap_] : tm.tablets().all_tables()) {
             auto& tmap = tmap_;
             for (auto&& [tablet, trinfo]: tmap.transitions()) {
@@ -689,7 +689,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_empty_node) {
         }
     });
 
-    stm.mutate_token_metadata([&] (token_metadata2& tm) {
+    stm.mutate_token_metadata([&] (token_metadata& tm) {
         tm.update_host_id(host1, ip1);
         tm.update_host_id(host2, ip2);
         tm.update_host_id(host3, ip3);
@@ -783,7 +783,7 @@ SEASTAR_THREAD_TEST_CASE(test_decommission_rf_met) {
                 }
         });
 
-        stm.mutate_token_metadata([&](token_metadata2& tm) {
+        stm.mutate_token_metadata([&](token_metadata& tm) {
             const unsigned shard_count = 2;
 
             tm.update_host_id(host1, ip1);
@@ -839,7 +839,7 @@ SEASTAR_THREAD_TEST_CASE(test_decommission_rf_met) {
             BOOST_REQUIRE(load.get_avg_shard_load(host3) == 0);
         }
 
-        stm.mutate_token_metadata([&](token_metadata2& tm) {
+        stm.mutate_token_metadata([&](token_metadata& tm) {
             tm.update_topology(host3, locator::endpoint_dc_rack::default_location, node::state::left);
             return make_ready_future<>();
         }).get();
@@ -885,7 +885,7 @@ SEASTAR_THREAD_TEST_CASE(test_decommission_two_racks) {
                 }
         });
 
-        stm.mutate_token_metadata([&](token_metadata2& tm) {
+        stm.mutate_token_metadata([&](token_metadata& tm) {
             const unsigned shard_count = 1;
 
             tm.update_host_id(host1, ip1);
@@ -986,7 +986,7 @@ SEASTAR_THREAD_TEST_CASE(test_decommission_rack_load_failure) {
                 }
         });
 
-        stm.mutate_token_metadata([&](token_metadata2& tm) {
+        stm.mutate_token_metadata([&](token_metadata& tm) {
             const unsigned shard_count = 1;
 
             tm.update_host_id(host1, ip1);
@@ -1060,7 +1060,7 @@ SEASTAR_THREAD_TEST_CASE(test_decommission_rf_not_met) {
                 }
         });
 
-        stm.mutate_token_metadata([&](token_metadata2& tm) {
+        stm.mutate_token_metadata([&](token_metadata& tm) {
             const unsigned shard_count = 2;
 
             tm.update_host_id(host1, ip1);
@@ -1117,7 +1117,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_works_with_in_progress_transitions)
         }
     });
 
-    stm.mutate_token_metadata([&] (token_metadata2& tm) {
+    stm.mutate_token_metadata([&] (token_metadata& tm) {
         tm.update_host_id(host1, ip1);
         tm.update_host_id(host2, ip2);
         tm.update_host_id(host3, ip3);
@@ -1186,7 +1186,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancer_shuffle_mode) {
         }
     });
 
-    stm.mutate_token_metadata([&] (token_metadata2& tm) {
+    stm.mutate_token_metadata([&] (token_metadata& tm) {
         tm.update_host_id(host1, ip1);
         tm.update_host_id(host2, ip2);
         tm.update_host_id(host3, ip3);
@@ -1249,7 +1249,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_two_empty_nodes) {
         }
     });
 
-    stm.mutate_token_metadata([&] (token_metadata2& tm) {
+    stm.mutate_token_metadata([&] (token_metadata& tm) {
         tm.update_host_id(host1, ip1);
         tm.update_host_id(host2, ip2);
         tm.update_host_id(host3, ip3);
@@ -1405,7 +1405,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_random_load) {
         });
 
         size_t total_tablet_count = 0;
-        stm.mutate_token_metadata([&](token_metadata2& tm) {
+        stm.mutate_token_metadata([&](token_metadata& tm) {
             tablet_metadata tmeta;
 
             int i = 0;

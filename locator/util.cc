@@ -54,7 +54,7 @@ get_range_to_address_map(locator::effective_replication_map_ptr erm,
 
 // Caller is responsible to hold token_metadata valid until the returned future is resolved
 static future<std::vector<token>>
-get_tokens_in_local_dc(const locator::token_metadata2& tm) {
+get_tokens_in_local_dc(const locator::token_metadata& tm) {
     std::vector<token> filtered_tokens;
     auto local_dc_filter = tm.get_topology().get_local_dc_filter();
     for (auto token : tm.sorted_tokens()) {

@@ -33,7 +33,7 @@ simple_strategy::simple_strategy(const replication_strategy_config_options& conf
     }
 }
 
-future<host_id_set> simple_strategy::calculate_natural_endpoints(const token& t, const token_metadata2& tm) const {
+future<host_id_set> simple_strategy::calculate_natural_endpoints(const token& t, const token_metadata& tm) const {
     const std::vector<token>& tokens = tm.sorted_tokens();
 
     if (tokens.empty()) {
@@ -63,7 +63,7 @@ future<host_id_set> simple_strategy::calculate_natural_endpoints(const token& t,
     co_return endpoints;
 }
 
-size_t simple_strategy::get_replication_factor(const token_metadata2&) const {
+size_t simple_strategy::get_replication_factor(const token_metadata&) const {
     return _replication_factor;
 }
 

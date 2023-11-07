@@ -25,10 +25,7 @@ class storage_service;
 }
 
 namespace locator {
-template <typename NodeId>
-class generic_token_metadata;
-using token_metadata = generic_token_metadata<gms::inet_address>;
-using token_metadata2 = generic_token_metadata<host_id>;
+class token_metadata;
 }
 
 class node_ops_info {
@@ -139,7 +136,7 @@ public:
     sstring desc;
     locator::host_id host_id;   // Host ID of the node operand (i.e. added, replaced, or leaving node)
     gms::inet_address endpoint;      // IP address of the node operand (i.e. added, replaced, or leaving node)
-    lw_shared_ptr<const locator::token_metadata2> tmptr;
+    lw_shared_ptr<const locator::token_metadata> tmptr;
     std::unordered_set<gms::inet_address> sync_nodes;
     std::unordered_set<gms::inet_address> ignore_nodes;
     node_ops_cmd_request req;

@@ -267,7 +267,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_sketch) {
         }
     });
 
-    stm.mutate_token_metadata([&] (token_metadata2& tm) {
+    stm.mutate_token_metadata([&] (token_metadata& tm) {
         tm.update_host_id(host1, ip1);
         tm.update_host_id(host2, ip2);
         tm.update_host_id(host3, ip3);
@@ -312,7 +312,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_sketch) {
 
     std::vector<unsigned> node3_shards(node3_shard_count, 0);
 
-    stm.mutate_token_metadata([&] (token_metadata2& tm) {
+    stm.mutate_token_metadata([&] (token_metadata& tm) {
         tablet_metadata tab_meta;
         tablet_map tmap(4);
 

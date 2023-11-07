@@ -1492,7 +1492,7 @@ std::optional<double> repair::data_sync_repair_task_impl::expected_children_numb
     return smp::count;
 }
 
-future<> repair_service::bootstrap_with_repair(locator::token_metadata2_ptr tmptr, std::unordered_set<dht::token> bootstrap_tokens) {
+future<> repair_service::bootstrap_with_repair(locator::token_metadata_ptr tmptr, std::unordered_set<dht::token> bootstrap_tokens) {
     assert(this_shard_id() == 0);
     using inet_address = gms::inet_address;
     return seastar::async([this, tmptr = std::move(tmptr), tokens = std::move(bootstrap_tokens)] () mutable {
@@ -1531,14 +1531,14 @@ future<> repair_service::bootstrap_with_repair(locator::token_metadata2_ptr tmpt
             auto replication_factor = erm->get_replication_factor();
 
             //Active ranges
-            auto metadata_clone = locator::make_token_metadata2_ptr(tmptr->clone_only_token_map().get0());
-            auto range_addresses = strat.get_range_addresses(locator::token_metadata(metadata_clone)).get0();
+            auto metadata_clone = tmptr->clone_only_token_map().get0();
+            auto range_addresses = strat.get_range_addresses(metadata_clone).get0();
 
             //Pending ranges
-            metadata_clone->update_topology(myid, myloc, locator::node::state::bootstrapping);
-            metadata_clone->update_normal_tokens(tokens, myid).get();
-            auto pending_range_addresses = strat.get_range_addresses(locator::token_metadata(metadata_clone)).get0();
-            metadata_clone->clear_gently().get();
+            metadata_clone.update_topology(myid, myloc, locator::node::state::bootstrapping);
+            metadata_clone.update_normal_tokens(tokens, myid).get();
+            auto pending_range_addresses = strat.get_range_addresses(metadata_clone).get0();
+            metadata_clone.clear_gently().get();
 
             //Collects the source that will have its range moved to the new node
             std::unordered_map<dht::token_range, repair_neighbors> range_sources;
@@ -1669,7 +1669,7 @@ future<> repair_service::bootstrap_with_repair(locator::token_metadata2_ptr tmpt
     });
 }
 
-future<> repair_service::do_decommission_removenode_with_repair(locator::token_metadata2_ptr tmptr, gms::inet_address leaving_node, shared_ptr<node_ops_info> ops) {
+future<> repair_service::do_decommission_removenode_with_repair(locator::token_metadata_ptr tmptr, gms::inet_address leaving_node, shared_ptr<node_ops_info> ops) {
     assert(this_shard_id() == 0);
     using inet_address = gms::inet_address;
     return seastar::async([this, tmptr = std::move(tmptr), leaving_node = std::move(leaving_node), ops] () mutable {
@@ -1720,15 +1720,15 @@ future<> repair_service::do_decommission_removenode_with_repair(locator::token_m
             // Find (for each range) all nodes that store replicas for these ranges as well
             for (auto& r : ranges) {
                 auto end_token = r.end() ? r.end()->value() : dht::maximum_token();
-                auto eps = strat.calculate_natural_ips(end_token, tmptr).get0();
+                auto eps = strat.calculate_natural_ips(end_token, *tmptr).get0();
                 current_replica_endpoints.emplace(r, std::move(eps));
                 seastar::thread::maybe_yield();
             }
-            auto temp = locator::make_token_metadata2_ptr(tmptr->clone_after_all_left().get0());
+            auto temp = tmptr->clone_after_all_left().get0();
             // leaving_node might or might not be 'leaving'. If it was not leaving (that is, removenode
             // command was used), it is still present in temp and must be removed.
-            if (temp->is_normal_token_owner(leaving_node_id)) {
-                temp->remove_endpoint(leaving_node_id);
+            if (temp.is_normal_token_owner(leaving_node_id)) {
+                temp.remove_endpoint(leaving_node_id);
             }
             std::unordered_map<dht::token_range, repair_neighbors> range_sources;
             dht::token_range_vector ranges_for_removenode;
@@ -1843,7 +1843,7 @@ future<> repair_service::do_decommission_removenode_with_repair(locator::token_m
                     }
                 }
             }
-            temp->clear_gently().get();
+            temp.clear_gently().get();
             if (reason == streaming::stream_reason::decommission) {
                 container().invoke_on_all([nr_ranges_skipped] (repair_service& rs) {
                     rs.get_metrics().decommission_finished_ranges += nr_ranges_skipped;
@@ -1865,13 +1865,13 @@ future<> repair_service::do_decommission_removenode_with_repair(locator::token_m
     });
 }
 
-future<> repair_service::decommission_with_repair(locator::token_metadata2_ptr tmptr) {
+future<> repair_service::decommission_with_repair(locator::token_metadata_ptr tmptr) {
     assert(this_shard_id() == 0);
     auto my_address = tmptr->get_topology().my_address();
     return do_decommission_removenode_with_repair(std::move(tmptr), my_address, {});
 }
 
-future<> repair_service::removenode_with_repair(locator::token_metadata2_ptr tmptr, gms::inet_address leaving_node, shared_ptr<node_ops_info> ops) {
+future<> repair_service::removenode_with_repair(locator::token_metadata_ptr tmptr, gms::inet_address leaving_node, shared_ptr<node_ops_info> ops) {
     assert(this_shard_id() == 0);
     return do_decommission_removenode_with_repair(std::move(tmptr), std::move(leaving_node), std::move(ops)).then([this] {
         rlogger.debug("Triggering off-strategy compaction for all non-system tables on removenode completion");
@@ -1884,7 +1884,7 @@ future<> repair_service::removenode_with_repair(locator::token_metadata2_ptr tmp
     });
 }
 
-future<> repair_service::do_rebuild_replace_with_repair(locator::token_metadata2_ptr tmptr, sstring op, sstring source_dc, streaming::stream_reason reason, std::unordered_set<gms::inet_address> ignore_nodes) {
+future<> repair_service::do_rebuild_replace_with_repair(locator::token_metadata_ptr tmptr, sstring op, sstring source_dc, streaming::stream_reason reason, std::unordered_set<gms::inet_address> ignore_nodes) {
     assert(this_shard_id() == 0);
     return seastar::async([this, tmptr = std::move(tmptr), source_dc = std::move(source_dc), op = std::move(op), reason, ignore_nodes = std::move(ignore_nodes)] () mutable {
         auto& db = get_db().local();
@@ -1898,7 +1898,7 @@ future<> repair_service::do_rebuild_replace_with_repair(locator::token_metadata2
             }
             auto& strat = erm->get_replication_strategy();
             // Okay to yield since tm is immutable
-            dht::token_range_vector ranges = strat.get_ranges(myid, locator::token_metadata(tmptr)).get0();
+            dht::token_range_vector ranges = strat.get_ranges(myid, tmptr).get0();
             auto nr_tables = get_nr_tables(db, keyspace_name);
             nr_ranges_total += ranges.size() * nr_tables;
 
@@ -1922,7 +1922,7 @@ future<> repair_service::do_rebuild_replace_with_repair(locator::token_metadata2
                 continue;
             }
             auto& strat = erm->get_replication_strategy();
-            dht::token_range_vector ranges = strat.get_ranges(myid, locator::token_metadata(tmptr)).get0();
+            dht::token_range_vector ranges = strat.get_ranges(myid, *tmptr).get0();
             auto& topology = erm->get_token_metadata().get_topology();
             std::unordered_map<dht::token_range, repair_neighbors> range_sources;
             auto nr_tables = get_nr_tables(db, keyspace_name);
@@ -1931,7 +1931,7 @@ future<> repair_service::do_rebuild_replace_with_repair(locator::token_metadata2
                 auto& r = *it;
                 seastar::thread::maybe_yield();
                 auto end_token = r.end() ? r.end()->value() : dht::maximum_token();
-                auto neighbors = boost::copy_range<std::vector<gms::inet_address>>(strat.calculate_natural_ips(end_token, tmptr).get0() |
+                auto neighbors = boost::copy_range<std::vector<gms::inet_address>>(strat.calculate_natural_ips(end_token, *tmptr).get0() |
                     boost::adaptors::filtered([myip, &source_dc, &topology, &ignore_nodes] (const gms::inet_address& node) {
                         if (node == myip) {
                             return false;
@@ -1969,7 +1969,7 @@ future<> repair_service::do_rebuild_replace_with_repair(locator::token_metadata2
     });
 }
 
-future<> repair_service::rebuild_with_repair(locator::token_metadata2_ptr tmptr, sstring source_dc) {
+future<> repair_service::rebuild_with_repair(locator::token_metadata_ptr tmptr, sstring source_dc) {
     assert(this_shard_id() == 0);
     auto op = sstring("rebuild_with_repair");
     if (source_dc.empty()) {
@@ -1985,7 +1985,7 @@ future<> repair_service::rebuild_with_repair(locator::token_metadata2_ptr tmptr,
     });
 }
 
-future<> repair_service::replace_with_repair(locator::token_metadata2_ptr tmptr, std::unordered_set<dht::token> replacing_tokens, std::unordered_set<gms::inet_address> ignore_nodes) {
+future<> repair_service::replace_with_repair(locator::token_metadata_ptr tmptr, std::unordered_set<dht::token> replacing_tokens, std::unordered_set<gms::inet_address> ignore_nodes) {
     assert(this_shard_id() == 0);
     auto cloned_tm = co_await tmptr->clone_async();
     auto op = sstring("replace_with_repair");
@@ -1994,7 +1994,7 @@ future<> repair_service::replace_with_repair(locator::token_metadata2_ptr tmptr,
     auto reason = streaming::stream_reason::replace;
     // update a cloned version of tmptr
     // no need to set the original version
-    auto cloned_tmptr = make_token_metadata2_ptr(std::move(cloned_tm));
+    auto cloned_tmptr = make_token_metadata_ptr(std::move(cloned_tm));
     cloned_tmptr->update_topology(tmptr->get_my_id(), myloc, locator::node::state::replacing);
     co_await cloned_tmptr->update_normal_tokens(replacing_tokens, tmptr->get_my_id());
     co_return co_await do_rebuild_replace_with_repair(std::move(cloned_tmptr), std::move(op), myloc.dc, reason, std::move(ignore_nodes));

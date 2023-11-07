@@ -283,7 +283,7 @@ static future<> set_gossip_tokens(gms::gossiper& g,
     });
 }
 
-static std::unordered_map<token, gms::inet_address> get_token_to_endpoint(const locator::token_metadata2& tm) {
+static std::unordered_map<token, gms::inet_address> get_token_to_endpoint(const locator::token_metadata& tm) {
     const auto& map = tm.get_token_to_endpoint();
     std::unordered_map<token, gms::inet_address> result;
     result.reserve(map.size());
@@ -405,7 +405,7 @@ future<> storage_service::topology_state_load() {
         co_await _messaging.local().ban_host(locator::host_id{id.uuid()});
     }
 
-    co_await mutate_token_metadata(seastar::coroutine::lambda([this, &id2ip, &am] (mutable_token_metadata2_ptr tmptr) -> future<> {
+    co_await mutate_token_metadata(seastar::coroutine::lambda([this, &id2ip, &am] (mutable_token_metadata_ptr tmptr) -> future<> {
         co_await tmptr->clear_gently(); // drop previous state
 
         tmptr->set_version(_topology_state_machine._topology.version);
@@ -925,11 +925,11 @@ class topology_coordinator {
     // True if an ongoing topology change should be rolled back
     bool _rollback = false;
 
-    const locator::token_metadata2& get_token_metadata() const noexcept {
+    const locator::token_metadata& get_token_metadata() const noexcept {
         return *_shared_tm.get();
     }
 
-    locator::token_metadata2_ptr get_token_metadata_ptr() const noexcept {
+    locator::token_metadata_ptr get_token_metadata_ptr() const noexcept {
         return _shared_tm.get();
     }
 
@@ -1207,7 +1207,7 @@ class topology_coordinator {
     // If there's a bootstrapping node, its tokens should be included in the new generation.
     // Pass them and a reference to the bootstrapping node's replica_state through `binfo`.
     future<std::pair<utils::UUID, utils::chunked_vector<mutation>>> prepare_new_cdc_generation_data(
-            locator::token_metadata2_ptr tmptr, const group0_guard& guard, std::optional<bootstrapping_info> binfo) {
+            locator::token_metadata_ptr tmptr, const group0_guard& guard, std::optional<bootstrapping_info> binfo) {
         auto get_sharding_info = [&] (dht::token end) -> std::pair<size_t, uint8_t> {
             if (binfo && binfo->bootstrap_tokens.contains(end)) {
                 return {binfo->rs.shard_count, binfo->rs.ignore_msb};
@@ -1269,7 +1269,7 @@ class topology_coordinator {
     // (bootstrapping is quick if there is no data in the cluster, but usually if one has 100 nodes they
     // have tons of data, so indeed streaming/repair will take much longer (hours/days)).
     future<std::tuple<utils::UUID, group0_guard, canonical_mutation>> prepare_and_broadcast_cdc_generation_data(
-            locator::token_metadata2_ptr tmptr, group0_guard guard, std::optional<bootstrapping_info> binfo) {
+            locator::token_metadata_ptr tmptr, group0_guard guard, std::optional<bootstrapping_info> binfo) {
         auto [gen_uuid, gen_mutations] = co_await prepare_new_cdc_generation_data(tmptr, guard, binfo);
 
         if (gen_mutations.empty()) {
@@ -3414,7 +3414,7 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
     }
 
     slogger.debug("Setting tokens to {}", bootstrap_tokens);
-    co_await mutate_token_metadata([this, &bootstrap_tokens] (mutable_token_metadata2_ptr tmptr) -> future<> {
+    co_await mutate_token_metadata([this, &bootstrap_tokens] (mutable_token_metadata_ptr tmptr) -> future<> {
         // This node must know about its chosen tokens before other nodes do
         // since they may start sending writes to this node after it gossips status = NORMAL.
         // Therefore, in case we haven't updated _token_metadata with our tokens yet, do it now.
@@ -3493,7 +3493,7 @@ future<> storage_service::mark_existing_views_as_built() {
     });
 }
 
-std::unordered_set<gms::inet_address> storage_service::parse_node_list(sstring comma_separated_list, const token_metadata2& tm) {
+std::unordered_set<gms::inet_address> storage_service::parse_node_list(sstring comma_separated_list, const token_metadata& tm) {
     std::vector<sstring> ignore_nodes_strs = utils::split_comma_separated_list(std::move(comma_separated_list));
     std::unordered_set<gms::inet_address> ignore_nodes;
     for (const sstring& n : ignore_nodes_strs) {
@@ -3555,7 +3555,7 @@ future<> storage_service::bootstrap(std::unordered_set<token>& bootstrap_tokens,
                 // When is_repair_based_node_ops_enabled is true, the bootstrap node
                 // will use node_ops_cmd to bootstrap, node_ops_cmd will update the pending ranges.
                 slogger.debug("bootstrap: update pending ranges: endpoint={} bootstrap_tokens={}", get_broadcast_address(), bootstrap_tokens);
-                mutate_token_metadata([this, &bootstrap_tokens] (mutable_token_metadata2_ptr tmptr) {
+                mutate_token_metadata([this, &bootstrap_tokens] (mutable_token_metadata_ptr tmptr) {
                     auto endpoint = get_broadcast_address();
                     tmptr->update_topology(tmptr->get_my_id(), _snitch.local()->get_location(), locator::node::state::bootstrapping);
                     tmptr->add_bootstrap_tokens(bootstrap_tokens, tmptr->get_my_id());
@@ -3650,25 +3650,20 @@ future<> storage_service::handle_state_bootstrap(inet_address endpoint, gms::per
     // continue.
     auto tmlock = co_await get_token_metadata_lock();
     auto tmptr = co_await get_mutable_token_metadata_ptr();
-    auto update_tm = [&]<typename NodeId>(locator::generic_token_metadata<NodeId>& tm, NodeId n, std::optional<locator::endpoint_dc_rack> dc_rack) {
-        if (tm.is_normal_token_owner(n)) {
-            // If isLeaving is false, we have missed both LEAVING and LEFT. However, if
-            // isLeaving is true, we have only missed LEFT. Waiting time between completing
-            // leave operation and rebootstrapping is relatively short, so the latter is quite
-            // common (not enough time for gossip to spread). Therefore we report only the
-            // former in the log.
-            if (!tm.is_leaving(n)) {
-                slogger.info("Node {} state jump to bootstrap", n);
-            }
-            tm.remove_endpoint(n);
-        }
-
-        tm.update_topology(n, dc_rack, locator::node::state::bootstrapping);
-        tm.add_bootstrap_tokens(tokens, n);
-    };
-    const auto dc_rack = get_dc_rack_for(endpoint);
     const auto host_id = _gossiper.get_host_id(endpoint);
-    update_tm(*tmptr, host_id, dc_rack);
+    if (tmptr->is_normal_token_owner(host_id)) {
+        // If isLeaving is false, we have missed both LEAVING and LEFT. However, if
+        // isLeaving is true, we have only missed LEFT. Waiting time between completing
+        // leave operation and rebootstrapping is relatively short, so the latter is quite
+        // common (not enough time for gossip to spread). Therefore we report only the
+        // former in the log.
+        if (!tmptr->is_leaving(host_id)) {
+            slogger.info("Node {} state jump to bootstrap", host_id);
+        }
+        tmptr->remove_endpoint(host_id);
+    }
+    tmptr->update_topology(host_id, get_dc_rack_for(endpoint), locator::node::state::bootstrapping);
+    tmptr->add_bootstrap_tokens(tokens, host_id);
     tmptr->update_host_id(host_id, endpoint);
 
     co_await update_topology_change_info(tmptr, ::format("handle_state_bootstrap {}", endpoint));
@@ -4302,13 +4297,13 @@ future<> storage_service::join_cluster(sharded<db::system_distributed_keyspace>&
     co_return co_await join_token_ring(sys_dist_ks, proxy, std::move(initial_contact_nodes), std::move(loaded_endpoints), std::move(loaded_peer_features), get_ring_delay());
 }
 
-future<> storage_service::replicate_to_all_cores(mutable_token_metadata2_ptr tmptr) noexcept {
+future<> storage_service::replicate_to_all_cores(mutable_token_metadata_ptr tmptr) noexcept {
     assert(this_shard_id() == 0);
 
     slogger.debug("Replicating token_metadata to all cores");
     std::exception_ptr ex;
 
-    std::vector<mutable_token_metadata2_ptr> pending_token_metadata_ptr;
+    std::vector<mutable_token_metadata_ptr> pending_token_metadata_ptr;
     pending_token_metadata_ptr.resize(smp::count);
     std::vector<std::unordered_map<sstring, locator::vnode_effective_replication_map_ptr>> pending_effective_replication_maps;
     pending_effective_replication_maps.resize(smp::count);
@@ -4339,7 +4334,7 @@ future<> storage_service::replicate_to_all_cores(mutable_token_metadata2_ptr tmp
         pending_token_metadata_ptr[base_shard] = tmptr;
         // clone a local copy of updated token_metadata on all other shards
         co_await smp::invoke_on_others(base_shard, [&, tmptr] () -> future<> {
-            pending_token_metadata_ptr[this_shard_id()] = make_token_metadata2_ptr(co_await tmptr->clone_async());
+            pending_token_metadata_ptr[this_shard_id()] = make_token_metadata_ptr(co_await tmptr->clone_async());
         });
 
         // Precalculate new effective_replication_map for all keyspaces
@@ -5496,7 +5491,7 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
                 slogger.warn("{}", msg);
                 throw std::runtime_error(msg);
             }
-            mutate_token_metadata([coordinator, &req, this] (mutable_token_metadata2_ptr tmptr) mutable {
+            mutate_token_metadata([coordinator, &req, this] (mutable_token_metadata_ptr tmptr) mutable {
                 for (auto& node : req.leaving_nodes) {
                     slogger.info("removenode[{}]: Added node={} as leaving node, coordinator={}", req.ops_uuid, node, coordinator);
                     tmptr->add_leaving_endpoint(tmptr->get_host_id(node));
@@ -5504,7 +5499,7 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
                 return update_topology_change_info(tmptr, ::format("removenode {}", req.leaving_nodes));
             }).get();
             node_ops_insert(ops_uuid, coordinator, std::move(req.ignore_nodes), [this, coordinator, req = std::move(req)] () mutable {
-                return mutate_token_metadata([this, coordinator, req = std::move(req)] (mutable_token_metadata2_ptr tmptr) mutable {
+                return mutate_token_metadata([this, coordinator, req = std::move(req)] (mutable_token_metadata_ptr tmptr) mutable {
                     for (auto& node : req.leaving_nodes) {
                         slogger.info("removenode[{}]: Removed node={} as leaving node, coordinator={}", req.ops_uuid, node, coordinator);
                         tmptr->del_leaving_endpoint(tmptr->get_host_id(node));
@@ -5544,7 +5539,7 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
                 slogger.warn("{}", msg);
                 throw std::runtime_error(msg);
             }
-            mutate_token_metadata([coordinator, &req, this] (mutable_token_metadata2_ptr tmptr) mutable {
+            mutate_token_metadata([coordinator, &req, this] (mutable_token_metadata_ptr tmptr) mutable {
                 for (auto& node : req.leaving_nodes) {
                     slogger.info("decommission[{}]: Added node={} as leaving node, coordinator={}", req.ops_uuid, node, coordinator);
                     tmptr->add_leaving_endpoint(tmptr->get_host_id(node));
@@ -5552,7 +5547,7 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
                 return update_topology_change_info(tmptr, ::format("decommission {}", req.leaving_nodes));
             }).get();
             node_ops_insert(ops_uuid, coordinator, std::move(req.ignore_nodes), [this, coordinator, req = std::move(req)] () mutable {
-                return mutate_token_metadata([this, coordinator, req = std::move(req)] (mutable_token_metadata2_ptr tmptr) mutable {
+                return mutate_token_metadata([this, coordinator, req = std::move(req)] (mutable_token_metadata_ptr tmptr) mutable {
                     for (auto& node : req.leaving_nodes) {
                         slogger.info("decommission[{}]: Removed node={} as leaving node, coordinator={}", req.ops_uuid, node, coordinator);
                         tmptr->del_leaving_endpoint(tmptr->get_host_id(node));
@@ -5605,7 +5600,7 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
             if (!coordinator_host_id) {
                 throw std::runtime_error("Coordinator host_id not found");
             }
-            mutate_token_metadata([coordinator, coordinator_host_id, &req, this] (mutable_token_metadata2_ptr tmptr) mutable {
+            mutate_token_metadata([coordinator, coordinator_host_id, &req, this] (mutable_token_metadata_ptr tmptr) mutable {
                 for (auto& x: req.replace_nodes) {
                     auto existing_node = x.first;
                     auto replacing_node = x.second;
@@ -5631,7 +5626,7 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
                 return make_ready_future<>();
             }).get();
             node_ops_insert(ops_uuid, coordinator, std::move(req.ignore_nodes), [this, coordinator, coordinator_host_id, req = std::move(req)] () mutable {
-                return mutate_token_metadata([this, coordinator, coordinator_host_id, req = std::move(req)] (mutable_token_metadata2_ptr tmptr) mutable {
+                return mutate_token_metadata([this, coordinator, coordinator_host_id, req = std::move(req)] (mutable_token_metadata_ptr tmptr) mutable {
                     for (auto& x: req.replace_nodes) {
                         auto existing_node = x.first;
                         auto replacing_node = x.second;
@@ -5682,7 +5677,7 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
             if (!coordinator_host_id) {
                 throw std::runtime_error("Coordinator host_id not found");
             }
-            mutate_token_metadata([coordinator, coordinator_host_id, &req, this] (mutable_token_metadata2_ptr tmptr) mutable {
+            mutate_token_metadata([coordinator, coordinator_host_id, &req, this] (mutable_token_metadata_ptr tmptr) mutable {
                 for (auto& x: req.bootstrap_nodes) {
                     auto& endpoint = x.first;
                     auto tokens = std::unordered_set<dht::token>(x.second.begin(), x.second.end());
@@ -5697,7 +5692,7 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
                 return update_topology_change_info(tmptr, ::format("bootstrap {}", req.bootstrap_nodes));
             }).get();
             node_ops_insert(ops_uuid, coordinator, std::move(req.ignore_nodes), [this, coordinator, req = std::move(req)] () mutable {
-                return mutate_token_metadata([this, coordinator, req = std::move(req)] (mutable_token_metadata2_ptr tmptr) mutable {
+                return mutate_token_metadata([this, coordinator, req = std::move(req)] (mutable_token_metadata_ptr tmptr) mutable {
                     for (auto& x: req.bootstrap_nodes) {
                         auto& endpoint = x.first;
                         auto tokens = std::unordered_set<dht::token>(x.second.begin(), x.second.end());
@@ -5914,12 +5909,12 @@ storage_service::get_changed_ranges_for_leaving(locator::vnode_effective_replica
         co_await coroutine::maybe_yield();
     }
 
-    auto temp = locator::make_token_metadata2_ptr(co_await get_token_metadata_ptr()->clone_after_all_left());
+    auto temp = co_await get_token_metadata_ptr()->clone_after_all_left();
 
     // endpoint might or might not be 'leaving'. If it was not leaving (that is, removenode
     // command was used), it is still present in temp and must be removed.
-    if (const auto host_id = temp->get_host_id_if_known(endpoint); host_id && temp->is_normal_token_owner(*host_id)) {
-        temp->remove_endpoint(*host_id);
+    if (const auto host_id = temp.get_host_id_if_known(endpoint); host_id && temp.is_normal_token_owner(*host_id)) {
+        temp.remove_endpoint(*host_id);
     }
 
     std::unordered_multimap<dht::token_range, inet_address> changed_ranges;
@@ -5960,7 +5955,7 @@ storage_service::get_changed_ranges_for_leaving(locator::vnode_effective_replica
         // E.g. everywhere_replication_strategy
         co_await coroutine::maybe_yield();
     }
-    co_await temp->clear_gently();
+    co_await temp.clear_gently();
 
     co_return changed_ranges;
 }
@@ -6080,7 +6075,7 @@ future<> storage_service::excise(std::unordered_set<token> tokens, inet_address 
 future<> storage_service::leave_ring() {
     co_await _cdc_gens.local().leave_ring();
     co_await _sys_ks.local().set_bootstrap_state(db::system_keyspace::bootstrap_state::NEEDS_BOOTSTRAP);
-    co_await mutate_token_metadata([this] (mutable_token_metadata2_ptr tmptr) {
+    co_await mutate_token_metadata([this] (mutable_token_metadata_ptr tmptr) {
         auto endpoint = get_broadcast_address();
         const auto my_id = tmptr->get_my_id();
         tmptr->remove_endpoint(my_id);
@@ -6242,7 +6237,7 @@ future<locator::token_metadata_lock> storage_service::get_token_metadata_lock() 
 // db::schema_tables::do_merge_schema.
 //
 // Note: must be called on shard 0.
-future<> storage_service::mutate_token_metadata(std::function<future<> (mutable_token_metadata2_ptr)> func, acquire_merge_lock acquire_merge_lock) noexcept {
+future<> storage_service::mutate_token_metadata(std::function<future<> (mutable_token_metadata_ptr)> func, acquire_merge_lock acquire_merge_lock) noexcept {
     assert(this_shard_id() == 0);
     std::optional<token_metadata_lock> tmlock;
 
@@ -6254,7 +6249,7 @@ future<> storage_service::mutate_token_metadata(std::function<future<> (mutable_
     co_await replicate_to_all_cores(std::move(tmptr));
 }
 
-future<> storage_service::update_topology_change_info(mutable_token_metadata2_ptr tmptr, sstring reason) {
+future<> storage_service::update_topology_change_info(mutable_token_metadata_ptr tmptr, sstring reason) {
     assert(this_shard_id() == 0);
 
     try {
@@ -6282,7 +6277,7 @@ future<> storage_service::update_topology_change_info(mutable_token_metadata2_pt
 }
 
 future<> storage_service::update_topology_change_info(sstring reason, acquire_merge_lock acquire_merge_lock) {
-    return mutate_token_metadata([this, reason = std::move(reason)] (mutable_token_metadata2_ptr tmptr) mutable {
+    return mutate_token_metadata([this, reason = std::move(reason)] (mutable_token_metadata_ptr tmptr) mutable {
         return update_topology_change_info(std::move(tmptr), std::move(reason));
     }, acquire_merge_lock);
 }
@@ -6324,7 +6319,7 @@ future<> storage_service::load_tablet_metadata() {
 future<> storage_service::snitch_reconfigured() {
     assert(this_shard_id() == 0);
     auto& snitch = _snitch.local();
-    co_await mutate_token_metadata([&snitch] (mutable_token_metadata2_ptr tmptr) -> future<> {
+    co_await mutate_token_metadata([&snitch] (mutable_token_metadata_ptr tmptr) -> future<> {
         // re-read local rack and DC info
         tmptr->update_topology(tmptr->get_my_id(), snitch->get_location());
         return make_ready_future<>();

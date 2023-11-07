@@ -1561,7 +1561,7 @@ public:
     }
 
     const locator::shared_token_metadata& get_shared_token_metadata() const { return _shared_token_metadata; }
-    const locator::token_metadata2& get_token_metadata() const { return *_shared_token_metadata.get(); }
+    const locator::token_metadata& get_token_metadata() const { return *_shared_token_metadata.get(); }
 
     wasm::manager& wasm() noexcept { return _wasm; }
     const wasm::manager& wasm() const noexcept { return _wasm; }

@@ -17,7 +17,7 @@ namespace locator {
 /// Implements sharder object which reflects assignment of tablets of a given table to local shards.
 /// Token ranges which don't have local tablets are reported to belong to shard 0.
 class tablet_sharder : public dht::sharder {
-    const token_metadata2& _tm;
+    const token_metadata& _tm;
     table_id _table;
     mutable const tablet_map* _tmap = nullptr;
 private:
@@ -29,7 +29,7 @@ private:
         }
     }
 public:
-    tablet_sharder(const token_metadata2& tm, table_id table)
+    tablet_sharder(const token_metadata& tm, table_id table)
             : _tm(tm)
             , _table(table)
     { }

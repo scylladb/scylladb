@@ -39,10 +39,7 @@ namespace gms {
 
 namespace locator {
 
-template <typename NodeId>
-class generic_token_metadata;
-using token_metadata = generic_token_metadata<gms::inet_address>;
-using token_metadata2 = generic_token_metadata<host_id>;
+class token_metadata;
 class shared_token_metadata;
 class snitch_ptr;
 

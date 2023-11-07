@@ -159,7 +159,7 @@ private:
     // Used to execute a `forward_request` on a shard.
     future<query::forward_result> execute_on_this_shard(query::forward_request req, std::optional<tracing::trace_info> tr_info);
 
-    locator::token_metadata2_ptr get_token_metadata_ptr() const noexcept;
+    locator::token_metadata_ptr get_token_metadata_ptr() const noexcept;
 
     void register_metrics();
     void init_messaging_service();

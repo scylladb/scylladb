@@ -123,14 +123,14 @@ range_streamer::get_all_ranges_with_strict_sources_for(const sstring& keyspace_n
     auto& strat = erm->get_replication_strategy();
 
     //Active ranges
-    auto metadata_clone = locator::make_token_metadata2_ptr(get_token_metadata().clone_only_token_map().get0());
-    auto range_addresses = strat.get_range_addresses(token_metadata(metadata_clone)).get0();
+    auto metadata_clone = get_token_metadata().clone_only_token_map().get0();
+    auto range_addresses = strat.get_range_addresses(metadata_clone).get0();
 
     //Pending ranges
-    metadata_clone->update_topology(_address, _dr);
-    metadata_clone->update_normal_tokens(_tokens, _address).get();
-    auto pending_range_addresses  = strat.get_range_addresses(token_metadata(metadata_clone)).get0();
-    metadata_clone->clear_gently().get();
+    metadata_clone.update_topology(_address, _dr);
+    metadata_clone.update_normal_tokens(_tokens, _address).get();
+    auto pending_range_addresses  = strat.get_range_addresses(metadata_clone).get0();
+    metadata_clone.clear_gently().get();
 
     //Collects the source that will have its range moved to the new node
     std::unordered_map<dht::token_range, std::vector<inet_address>> range_sources;

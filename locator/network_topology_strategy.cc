@@ -160,7 +160,7 @@ class natural_endpoints_tracker {
         }
     };
 
-    const token_metadata2& _tm;
+    const token_metadata& _tm;
     const topology& _tp;
     std::unordered_map<sstring, size_t> _dc_rep_factor;
 
@@ -189,7 +189,7 @@ class natural_endpoints_tracker {
     size_t _dcs_to_fill;
 
 public:
-    natural_endpoints_tracker(const token_metadata2& tm, const std::unordered_map<sstring, size_t>& dc_rep_factor)
+    natural_endpoints_tracker(const token_metadata& tm, const std::unordered_map<sstring, size_t>& dc_rep_factor)
         : _tm(tm)
         , _tp(_tm.get_topology())
         , _dc_rep_factor(dc_rep_factor)
@@ -239,7 +239,7 @@ public:
 
 future<host_id_set>
 network_topology_strategy::calculate_natural_endpoints(
-    const token& search_token, const token_metadata2& tm) const {
+    const token& search_token, const token_metadata& tm) const {
 
     natural_endpoints_tracker tracker(tm, _dc_rep_factor);
 
@@ -281,14 +281,14 @@ std::optional<std::unordered_set<sstring>> network_topology_strategy::recognized
     return opts;
 }
 
-effective_replication_map_ptr network_topology_strategy::make_replication_map(table_id table, token_metadata2_ptr tm) const {
+effective_replication_map_ptr network_topology_strategy::make_replication_map(table_id table, token_metadata_ptr tm) const {
     if (!uses_tablets()) {
         on_internal_error(rslogger, format("make_replication_map() called for table {} but replication strategy not configured to use tablets", table));
     }
     return do_make_replication_map(table, shared_from_this(), std::move(tm), _rep_factor);
 }
 
-future<tablet_map> network_topology_strategy::allocate_tablets_for_new_table(schema_ptr s, token_metadata2_ptr tm) const {
+future<tablet_map> network_topology_strategy::allocate_tablets_for_new_table(schema_ptr s, token_metadata_ptr tm) const {
     auto tablet_count = get_initial_tablets();
     auto aligned_tablet_count = 1ul << log2ceil(tablet_count);
     if (tablet_count != aligned_tablet_count) {

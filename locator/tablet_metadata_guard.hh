@@ -45,7 +45,7 @@ public:
         return _abort_source;
     }
 
-    locator::token_metadata2_ptr get_token_metadata() {
+    locator::token_metadata_ptr get_token_metadata() {
         return _erm->get_token_metadata_ptr();
     }
 
