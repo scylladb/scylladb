@@ -70,11 +70,10 @@ future<> topology::clear_gently() noexcept {
     co_await utils::clear_gently(_nodes);
 }
 
-topology::topology(config cfg, key_kind k)
+topology::topology(config cfg)
         : _shard(this_shard_id())
         , _cfg(cfg)
         , _sort_by_proximity(!cfg.disable_proximity_sorting)
-        , _key_kind(k)
 {
     tlogger.trace("topology[{}]: constructing using config: endpoint={} dc={} rack={}", fmt::ptr(this),
             cfg.this_endpoint, cfg.local_dc_rack.dc, cfg.local_dc_rack.rack);
@@ -93,7 +92,6 @@ topology::topology(topology&& o) noexcept
     , _dc_racks(std::move(o._dc_racks))
     , _sort_by_proximity(o._sort_by_proximity)
     , _datacenters(std::move(o._datacenters))
-    , _key_kind(o._key_kind)
 {
     assert(_shard == this_shard_id());
     tlogger.trace("topology[{}]: move from [{}]", fmt::ptr(this), fmt::ptr(&o));
@@ -114,7 +112,7 @@ topology& topology::operator=(topology&& o) noexcept {
 }
 
 future<topology> topology::clone_gently() const {
-    topology ret(_cfg, _key_kind);
+    topology ret(_cfg);
     tlogger.debug("topology[{}]: clone_gently to {} from shard {}", fmt::ptr(this), fmt::ptr(&ret), _shard);
     for (const auto& nptr : _nodes) {
         if (nptr) {
@@ -452,30 +450,14 @@ const node* topology::add_or_update_endpoint(std::optional<inet_address> opt_ep,
             current_backtrace());
     }
 
-    const node* n;
-    switch (_key_kind) {
-    case topology::key_kind::host_id:
-        if (!opt_id) {
-            on_internal_error(tlogger, format("topology: host_id is not set, ep={}", opt_ep));
-        }
-        n = find_node(*opt_id);
-        if (n) {
-            return update_node(make_mutable(n), std::nullopt, opt_ep, std::move(opt_dr), std::move(opt_st), std::move(shard_count));
-        } else if (opt_ep && (n = find_node(*opt_ep))) {
-            return update_node(make_mutable(n), opt_id, std::nullopt, std::move(opt_dr), std::move(opt_st), std::move(shard_count));
-        }
-        break;
-    case topology::key_kind::inet_address:
-        if (!opt_ep) {
-            on_internal_error(tlogger, format("topology: endpoint is not set, id={}", opt_id));
-        }
-        n = find_node(*opt_ep);
-        if (n) {
-            return update_node(make_mutable(n), opt_id, std::nullopt, std::move(opt_dr), std::move(opt_st), std::move(shard_count));
-        } else if (opt_id && (n = find_node(*opt_id))) {
-            return update_node(make_mutable(n), std::nullopt, opt_ep, std::move(opt_dr), std::move(opt_st), std::move(shard_count));
-        }
-        break;
+    if (!opt_id) {
+        on_internal_error(tlogger, format("topology: host_id is not set, ep={}", opt_ep));
+    }
+    const auto* n = find_node(*opt_id);
+    if (n) {
+        return update_node(make_mutable(n), std::nullopt, opt_ep, std::move(opt_dr), std::move(opt_st), std::move(shard_count));
+    } else if (opt_ep && (n = find_node(*opt_ep))) {
+        return update_node(make_mutable(n), opt_id, std::nullopt, std::move(opt_dr), std::move(opt_st), std::move(shard_count));
     }
 
     return add_node(opt_id.value_or(host_id::create_null_id()),
