@@ -37,14 +37,6 @@ inline future<> write_memtable_to_sstable_for_test(replica::memtable& mt, sstabl
     return write_memtable_to_sstable(mt, sst, sst->manager().configure_writer("memtable"));
 }
 
-shared_sstable make_sstable(sstables::test_env& env, schema_ptr s, sstring dir, std::vector<mutation> mutations,
-        sstable_writer_config cfg, sstables::sstable::version_types version, gc_clock::time_point query_time = gc_clock::now());
-
-inline shared_sstable make_sstable(sstables::test_env& env, schema_ptr s, std::vector<mutation> mutations,
-        sstable_writer_config cfg, sstables::sstable::version_types version, gc_clock::time_point query_time = gc_clock::now()) {
-    return make_sstable(env, std::move(s), env.tempdir().path().native(), std::move(mutations), std::move(cfg), version, query_time);
-}
-
 namespace sstables {
 
 using sstable_ptr = shared_sstable;
@@ -273,3 +265,5 @@ inline shared_sstable make_sstable_easy(test_env& env, lw_shared_ptr<replica::me
         const sstable::version_types version = sstables::get_highest_sstable_version(), int estimated_partitions = 1, gc_clock::time_point query_time = gc_clock::now()) {
     return make_sstable_easy(env, std::move(mt), std::move(cfg), env.new_generation(), version, estimated_partitions, query_time);
 }
+
+lw_shared_ptr<replica::memtable> make_memtable(schema_ptr s, const std::vector<mutation>& muts);

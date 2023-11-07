@@ -116,8 +116,6 @@ SEASTAR_TEST_CASE(datafile_generation_11) {
     return test_env::do_with_async([] (test_env& env) {
         auto s = complex_schema();
 
-        auto mt = make_lw_shared<replica::memtable>(s);
-
         const column_definition& set_col = *s->get_column_definition("reg_set");
         const column_definition& static_set_col = *s->get_column_definition("static_collection");
 
@@ -144,8 +142,7 @@ SEASTAR_TEST_CASE(datafile_generation_11) {
 
         m2.set_clustered_cell(c_key, set_col, set_mut_single.serialize(*set_col.type));
 
-        mt->apply(std::move(m));
-        mt->apply(std::move(m2));
+        auto mt = make_memtable(s, {std::move(m), std::move(m2)});
 
         auto verifier = [s, set_col, c_key] (auto& mutation) {
             auto& mp = mutation->partition();
@@ -198,8 +195,6 @@ SEASTAR_TEST_CASE(datafile_generation_12) {
     return test_env::do_with_async([] (test_env& env) {
         auto s = complex_schema();
 
-        auto mt = make_lw_shared<replica::memtable>(s);
-
         auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
         auto cp = clustering_key_prefix::from_exploded(*s, {to_bytes("c1")});
 
@@ -207,7 +202,8 @@ SEASTAR_TEST_CASE(datafile_generation_12) {
 
         tombstone tomb(api::new_timestamp(), gc_clock::now());
         m.partition().apply_delete(*s, cp, tomb);
-        mt->apply(std::move(m));
+
+        auto mt = make_memtable(s, {std::move(m)});
 
         verify_mutation(env, env.make_sstable(s), mt, "key1", [&] (mutation_opt& mutation) {
             auto& mp = mutation->partition();
@@ -226,8 +222,6 @@ static future<> sstable_compression_test(compressor_ptr c) {
         builder.set_compressor_params(c);
         auto s = builder.build(schema_builder::compact_storage::no);
 
-        auto mtp = make_lw_shared<replica::memtable>(s);
-
         auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
         auto cp = clustering_key_prefix::from_exploded(*s, {to_bytes("c1")});
 
@@ -235,7 +229,7 @@ static future<> sstable_compression_test(compressor_ptr c) {
 
         tombstone tomb(api::new_timestamp(), gc_clock::now());
         m.partition().apply_delete(*s, cp, tomb);
-        mtp->apply(std::move(m));
+        auto mtp = make_memtable(s, {std::move(m)});
 
         verify_mutation(env, env.make_sstable(s), mtp, "key1", [&] (mutation_opt& mutation) {
             auto& mp = mutation->partition();
@@ -304,8 +298,6 @@ SEASTAR_TEST_CASE(datafile_generation_37) {
     return test_env::do_with_async([] (test_env& env) {
         auto s = compact_simple_dense_schema();
 
-        auto mtp = make_lw_shared<replica::memtable>(s);
-
         auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
         mutation m(s, key);
 
@@ -313,7 +305,7 @@ SEASTAR_TEST_CASE(datafile_generation_37) {
         const column_definition& cl2 = *s->get_column_definition("cl2");
 
         m.set_clustered_cell(c_key, cl2, make_atomic_cell(bytes_type, bytes_type->decompose(data_value(to_bytes("cl2")))));
-        mtp->apply(std::move(m));
+        auto mtp = make_memtable(s, {std::move(m)});
 
         verify_mutation(env, env.make_sstable(s), mtp, "key1", [&] (mutation_opt& mutation) {
             auto& mp = mutation->partition();
@@ -330,8 +322,6 @@ SEASTAR_TEST_CASE(datafile_generation_38) {
     return test_env::do_with_async([] (test_env& env) {
         auto s = compact_dense_schema();
 
-        auto mtp = make_lw_shared<replica::memtable>(s);
-
         auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
         mutation m(s, key);
 
@@ -339,7 +329,7 @@ SEASTAR_TEST_CASE(datafile_generation_38) {
 
         const column_definition& cl3 = *s->get_column_definition("cl3");
         m.set_clustered_cell(c_key, cl3, make_atomic_cell(bytes_type, bytes_type->decompose(data_value(to_bytes("cl3")))));
-        mtp->apply(std::move(m));
+        auto mtp = make_memtable(s, {std::move(m)});
 
         verify_mutation(env, env.make_sstable(s), mtp, "key1", [&] (mutation_opt& mutation) {
             auto& mp = mutation->partition();
@@ -355,8 +345,6 @@ SEASTAR_TEST_CASE(datafile_generation_39) {
     return test_env::do_with_async([] (test_env& env) {
         auto s = compact_sparse_schema();
 
-        auto mtp = make_lw_shared<replica::memtable>(s);
-
         auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
         mutation m(s, key);
 
@@ -366,7 +354,7 @@ SEASTAR_TEST_CASE(datafile_generation_39) {
         m.set_clustered_cell(c_key, cl1, make_atomic_cell(bytes_type, bytes_type->decompose(data_value(to_bytes("cl1")))));
         const column_definition& cl2 = *s->get_column_definition("cl2");
         m.set_clustered_cell(c_key, cl2, make_atomic_cell(bytes_type, bytes_type->decompose(data_value(to_bytes("cl2")))));
-        mtp->apply(std::move(m));
+        auto mtp = make_memtable(s, {std::move(m)});
 
         verify_mutation(env, env.make_sstable(s), mtp, "key1", [&] (mutation_opt& mutation) {
             auto& mp = mutation->partition();
@@ -382,15 +370,13 @@ SEASTAR_TEST_CASE(datafile_generation_41) {
         auto s = make_shared_schema({}, some_keyspace, some_column_family,
             {{"p1", utf8_type}}, {{"c1", utf8_type}}, {{"r1", int32_type}, {"r2", int32_type}}, {}, utf8_type);
 
-        auto mt = make_lw_shared<replica::memtable>(s);
-
         auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
         auto c_key = clustering_key::from_exploded(*s, {to_bytes("c1")});
         mutation m(s, key);
 
         tombstone tomb(api::new_timestamp(), gc_clock::now());
         m.partition().apply_delete(*s, std::move(c_key), tomb);
-        mt->apply(std::move(m));
+        auto mt = make_memtable(s, {std::move(m)});
 
         verify_mutation(env, env.make_sstable(s), mt, "key1", [&] (mutation_opt& mutation) {
             auto& mp = mutation->partition();
@@ -1687,8 +1673,7 @@ SEASTAR_TEST_CASE(test_repeated_tombstone_skipping) {
         for (auto&& mf : fragments) {
             mut.apply(mf);
         }
-        auto sst = make_sstable_easy(env, make_flat_mutation_reader_from_mutations_v2(table.schema(), std::move(permit), std::move(mut)), cfg, version);
-        auto ms = as_mutation_source(sst);
+        auto ms = make_sstable_easy(env, make_flat_mutation_reader_from_mutations_v2(table.schema(), std::move(permit), std::move(mut)), cfg, version)->as_mutation_source();
 
         for (uint32_t i = 3; i < seq; i++) {
             auto ck1 = table.make_ckey(1);
@@ -1736,9 +1721,7 @@ SEASTAR_TEST_CASE(test_skipping_using_index) {
         sstable_writer_config cfg = env.manager().configure_writer();
         cfg.promoted_index_block_size = 1; // So that every fragment is indexed
         cfg.promoted_index_auto_scale_threshold = 0; // disable auto-scaling
-        auto sst = make_sstable_easy(env, make_flat_mutation_reader_from_mutations_v2(table.schema(), env.make_reader_permit(), partitions), cfg, version);
-
-        auto ms = as_mutation_source(sst);
+        auto ms = make_sstable_easy(env, make_flat_mutation_reader_from_mutations_v2(table.schema(), env.make_reader_permit(), partitions), cfg, version)->as_mutation_source();
         auto rd = ms.make_reader_v2(table.schema(),
             env.make_reader_permit(),
             query::full_partition_range,

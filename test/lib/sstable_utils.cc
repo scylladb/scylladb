@@ -57,24 +57,24 @@ sstables::shared_sstable make_sstable_containing(std::function<sstables::shared_
 }
 
 sstables::shared_sstable make_sstable_containing(sstables::shared_sstable sst, std::vector<mutation> muts, validate do_validate) {
-    tests::reader_concurrency_semaphore_wrapper semaphore;
-
     schema_ptr s = muts[0].schema();
     make_sstable_containing(sst, make_memtable(s, muts));
 
-    std::set<mutation, mutation_decorated_key_less_comparator> merged;
-    for (auto&& m : muts) {
-        auto it = merged.find(m);
-        if (it == merged.end()) {
-            merged.insert(std::move(m));
-        } else {
-            auto old = merged.extract(it);
-            old.value().apply(std::move(m));
-            merged.insert(std::move(old));
-        }
-    }
-
     if (do_validate) {
+        tests::reader_concurrency_semaphore_wrapper semaphore;
+
+        std::set<mutation, mutation_decorated_key_less_comparator> merged;
+        for (auto&& m : muts) {
+            auto it = merged.find(m);
+            if (it == merged.end()) {
+                merged.insert(std::move(m));
+            } else {
+                auto old = merged.extract(it);
+                old.value().apply(std::move(m));
+                merged.insert(std::move(old));
+            }
+        }
+
         // validate the sstable
         auto rd = assert_that(sst->as_mutation_source().make_reader_v2(s, semaphore.make_permit()));
         for (auto&& m : merged) {
@@ -82,17 +82,6 @@ sstables::shared_sstable make_sstable_containing(sstables::shared_sstable sst, s
         }
         rd.produces_end_of_stream();
     }
-    return sst;
-}
-
-shared_sstable make_sstable(sstables::test_env& env, schema_ptr s, sstring dir, std::vector<mutation> mutations,
-        sstable_writer_config cfg, sstables::sstable::version_types version, gc_clock::time_point query_time) {
-    fs::path dir_path(dir);
-    auto mt = make_memtable(s, mutations);
-    auto sst = env.make_sstable(s, dir_path.string(), env.new_generation(), version, sstable_format_types::big, default_sstable_buffer_size, query_time);
-    auto mr = mt->make_flat_reader(s, env.make_reader_permit());
-    sst->write_components(std::move(mr), mutations.size(), s, cfg, mt->get_encoding_stats()).get();
-    sst->load(s->get_sharder()).get();
     return sst;
 }
 

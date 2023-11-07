@@ -438,12 +438,6 @@ inline void match_collection_element(const std::pair<bytes, atomic_cell>& elemen
 
 }
 
-inline
-::mutation_source as_mutation_source(sstables::shared_sstable sst) {
-    return sst->as_mutation_source();
-}
-
-
 inline dht::decorated_key make_dkey(schema_ptr s, bytes b)
 {
     auto sst_key = sstables::key::from_bytes(b);

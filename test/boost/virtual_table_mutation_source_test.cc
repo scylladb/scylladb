@@ -12,7 +12,7 @@
 #include "schema/schema.hh"
 
 #include "test/lib/mutation_source_test.hh"
-
+#include "test/lib/sstable_utils.hh"
 #include "test/lib/scylla_test_case.hh"
 
 class memtable_filling_test_vt : public db::memtable_filling_virtual_table {
@@ -38,10 +38,7 @@ public:
 
     virtual future<> execute(reader_permit permit, db::result_collector& rc) override {
         return async([this, permit, &rc] {
-            auto mt = make_lw_shared<replica::memtable>(_s);
-            do_for_each(_mutations, [mt] (const mutation& m) {
-                mt->apply(m);
-            }).get();
+            auto mt = make_memtable(_s, _mutations);
             auto rdr = mt->make_flat_reader(_s, permit);
             auto close_rdr = deferred_close(rdr);
             rdr.consume_pausable([&rc] (mutation_fragment_v2 mf) {

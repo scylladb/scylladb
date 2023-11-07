@@ -20,6 +20,7 @@
 #include "service/storage_proxy.hh"
 #include "test/lib/reader_concurrency_semaphore.hh"
 #include "test/lib/scylla_test_case.hh"
+#include "test/lib/sstable_utils.hh"
 #include "readers/mutation_fragment_v1_stream.hh"
 
 // Helper mutation_fragment_queue that stores the received stream of
@@ -85,9 +86,8 @@ repair_rows_on_wire make_random_repair_rows_on_wire(random_mutation_generator& g
 
     for (mutation& mut : muts) {
         partition_key pk = mut.key();
-        auto m2 = make_lw_shared<replica::memtable>(s);
+        auto m2 = make_memtable(s, {mut});
         m->apply(mut);
-        m2->apply(mut);
         auto reader = mutation_fragment_v1_stream(m2->make_flat_reader(s, permit));
         std::list<frozen_mutation_fragment> mfs;
         reader.consume_pausable([s, &mfs](mutation_fragment mf) {

@@ -28,7 +28,12 @@ using namespace std::chrono_literals;
 static
 mutation_source make_sstable_mutation_source(sstables::test_env& env, schema_ptr s, sstring dir, std::vector<mutation> mutations,
         sstable_writer_config cfg, sstables::sstable::version_types version, gc_clock::time_point query_time = gc_clock::now()) {
-    return as_mutation_source(make_sstable(env, s, dir, std::move(mutations), cfg, version, query_time));
+    auto sst = env.make_sstable(s, dir, env.new_generation(), version, sstable_format_types::big, default_sstable_buffer_size, query_time);
+    auto mt = make_memtable(s, mutations);
+    auto mr = mt->make_flat_reader(s, env.make_reader_permit());
+    sst->write_components(std::move(mr), mutations.size(), s, cfg, mt->get_encoding_stats()).get();
+    sst->load(s->get_sharder()).get();
+    return sst->as_mutation_source();
 }
 
 static void consume_all(flat_mutation_reader_v2& rd) {
