@@ -2261,6 +2261,7 @@ class topology_coordinator {
                     // be able to become a voter - we'll be banned from the cluster.)
                 }
 
+                bool barrier_failed = false;
                 // Wait until other nodes observe the new token ring and stop sending writes to this node.
                 try {
                     node = retake_node(co_await global_token_metadata_barrier(std::move(node.guard), get_excluded_nodes(node)), node.id);
@@ -2272,7 +2273,14 @@ class topology_coordinator {
                     slogger.error("raft topology: node_state::left_token_ring (node: {}), "
                                     "global_token_metadata_barrier failed, error {}",
                                     node.id, std::current_exception());
-                    break;
+                    barrier_failed = true;
+                }
+
+                if (barrier_failed) {
+                    // If barrier above failed it means there may be unfinished writes to a decommissioned node.
+                    // Lets wait for the ring delay for those writes to complete and new topology to propagate
+                    // before continuing.
+                    co_await sleep_abortable(_ring_delay, _as);
                 }
 
                 // Tell the node to shut down.
