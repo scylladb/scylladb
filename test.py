@@ -145,7 +145,15 @@ class TestSuite(ABC):
                 continue
             skip_in_m = set(self.cfg.get("run_in_" + a, []))
             self.disabled_tests.update(skip_in_m - run_in_m)
-
+        # environment variables that should be the base of all processes running in this suit
+        self.base_env = {}
+        if self.need_coverage():
+            # Set the coverage data from each instrumented object to use the same file (and merged into it with locking)
+            # as long as we don't need test specific coverage data, this looks sufficient. The benefit of doing this in
+            # this way is that the storage will not be bloated with coverage files (each can weigh 10s of MBs so for several
+            # thousands of tests it can easily reach 10 of GBs)
+            # ref: https://clang.llvm.org/docs/SourceBasedCodeCoverage.html#running-the-instrumented-program
+            self.base_env["LLVM_PROFILE_FILE"] = os.path.join(options.tmpdir,self.mode, "coverage", self.name, "%m.profraw")
     # Generate a unique ID for `--repeat`ed tests
     # We want these tests to have different XML IDs so test result
     # processors (Jenkins) don't merge results for different iterations of
@@ -274,7 +282,8 @@ class TestSuite(ABC):
                 task.cancel()
             await asyncio.gather(*pending, return_exceptions=True)
             raise
-
+    def need_coverage(self):
+        return self.options.coverage and (self.mode in self.options.coverage_modes) and bool(self.cfg.get("coverage",True))
 
 class UnitTestSuite(TestSuite):
     """TestSuite instantiation for non-boost unit tests"""
@@ -368,10 +377,9 @@ class PythonTestSuite(TestSuite):
     def __init__(self, path, cfg: dict, options: argparse.Namespace, mode: str) -> None:
         super().__init__(path, cfg, options, mode)
         self.scylla_exe = path_to(self.mode, "scylla")
+        self.scylla_env = dict(self.base_env)
         if self.mode == "coverage":
-            self.scylla_env = coverage.env(self.scylla_exe, distinct_id=self.name)
-        else:
-            self.scylla_env = dict()
+            self.scylla_env.update(coverage.env(self.scylla_exe, distinct_id=self.name))
         self.scylla_env['SCYLLA'] = self.scylla_exe
 
         cluster_cfg = self.cfg.get("cluster", {"initial_size": 1})
@@ -419,7 +427,8 @@ class PythonTestSuite(TestSuite):
                 seeds=create_cfg.seeds,
                 cmdline_options=cmdline_options,
                 config_options=config_options,
-                property_file=create_cfg.property_file)
+                property_file=create_cfg.property_file,
+                append_env=self.base_env)
 
             return server
 
@@ -506,10 +515,10 @@ class RunTestSuite(TestSuite):
     def __init__(self, path: str, cfg, options: argparse.Namespace, mode: str) -> None:
         super().__init__(path, cfg, options, mode)
         self.scylla_exe = path_to(self.mode, "scylla")
+        self.scylla_env = dict(self.base_env)
         if self.mode == "coverage":
             self.scylla_env = coverage.env(self.scylla_exe, distinct_id=self.name)
-        else:
-            self.scylla_env = dict()
+
         self.scylla_env['SCYLLA'] = self.scylla_exe
 
     async def add_test(self, shortname) -> None:
@@ -569,6 +578,7 @@ class Test:
         # True if the test was cancelled by a ctrl-c or timeout, so
         # shouldn't be retried, even if it is flaky
         self.is_cancelled = False
+        self.env = dict(self.suite.base_env)
         Test._reset(self)
 
     def reset(self) -> None:
@@ -624,9 +634,8 @@ class UnitTest(Test):
         self.path = path_to(self.mode, "test", self.name)
         self.args = shlex.split(args) + UnitTest.standard_args
         if self.mode == "coverage":
-            self.env = coverage.env(self.path)
-        else:
-            self.env = dict()
+            self.env.update(coverage.env(self.path))
+
         UnitTest._reset(self)
 
     def _reset(self) -> None:
@@ -1256,7 +1265,13 @@ def parse_cmd_line() -> argparse.Namespace:
                              "is only supported by python tests for now, other tests ignore it. "
                              "By default, the marker filter is not applied and all tests will be run without exception."
                              "To exclude e.g. slow tests you can write --markers 'not slow'.")
-
+    parser.add_argument('--coverage', action = 'store_true', default = False,
+                        help="When running code instrumented with coverage support"
+                             "Will route the profiles to `tmpdir`/mode/coverage/`suite` and post process them in order to generate "
+                             "lcov file per suite, lcov file per mode, and an lcov file for the entire run, "
+                             "The lcov files can eventually be used for generating coverage reports")
+    parser.add_argument("--coverage-mode",action = 'append', type = str, dest = "coverage_modes",
+                        help = "Collect and process coverage only for the modes specified. implies: --coverage, defalt: All built modes")
     scylla_additional_options = parser.add_argument_group('Additional options for Scylla tests')
     scylla_additional_options.add_argument('--x-log2-compaction-groups', action="store", default="0", type=int,
                              help="Controls number of compaction groups to be used by Scylla tests. Value of 3 implies 8 groups.")
@@ -1295,6 +1310,19 @@ def parse_cmd_line() -> argparse.Namespace:
             print(palette.fail("Failed to read output of `ninja mode_list`: please run ./configure.py first"))
             raise
 
+    if not args.coverage_modes and args.coverage:
+        args.coverage_modes = list(args.modes)
+        if "coverage" in args.coverage_modes:
+            args.coverage_modes.remove("coverage")
+        if not args.coverage_modes:
+            args.coverage = False
+    elif args.coverage_modes:
+        if "coverage" in args.coverage_modes:
+            raise RuntimeError("'coverage' mode is not allowed in --coverage-mode")
+        missing_coverage_modes = set(args.coverage_modes).difference(set(args.modes))
+        if len(missing_coverage_modes) > 0:
+            raise RuntimeError(f"The following modes weren't built or ran (using the '--mode' option): {missing_coverage_modes}")
+        args.coverage = True
     def prepare_dir(dirname, pattern):
         # Ensure the dir exists
         pathlib.Path(dirname).mkdir(parents=True, exist_ok=True)
