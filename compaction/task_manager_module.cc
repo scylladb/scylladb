@@ -13,7 +13,10 @@
 #include "replica/database.hh"
 #include "sstables/sstables.hh"
 #include "sstables/sstable_directory.hh"
+#include "utils/error_injection.hh"
 #include "utils/pretty_printers.hh"
+
+using namespace std::chrono_literals;
 
 namespace replica {
 
@@ -217,11 +220,15 @@ future<> wait_for_your_turn(seastar::condition_variable& cv, tasks::task_manager
 
 future<> run_table_tasks(replica::database& db, std::vector<table_tasks_info> table_tasks, seastar::condition_variable& cv, tasks::task_manager::task_ptr& current_task, bool sort) {
     std::exception_ptr ex;
+    size_t current = 0;
 
     // While compaction is run on one table, the size of tables may significantly change.
     // Thus, they are sorted before each invidual compaction and the smallest table is chosen.
     while (!table_tasks.empty()) {
         try {
+            if (current == 1) {
+                utils::get_local_injector().inject("compaction_run_table_tasks", [] { throw std::runtime_error("compaction_run_table_tasks"); });
+            }
             if (sort) {
                 // Major compact smaller tables first, to increase chances of success if low on space.
                 // Tables will be kept in descending order.
@@ -238,6 +245,7 @@ future<> run_table_tasks(replica::database& db, std::vector<table_tasks_info> ta
             table_tasks.pop_back();
             cv.broadcast();
             co_await current_task->done();
+            ++current;
         } catch (...) {
             ex = std::current_exception();
             current_task = nullptr;
