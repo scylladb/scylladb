@@ -1120,6 +1120,9 @@ class topology_coordinator {
     std::unordered_set<raft::server_id> get_excluded_nodes(const node_to_work_on& node) {
         auto exclude_nodes = parse_ignore_nodes(node);
         exclude_nodes.insert(parse_replaced_node(node));
+        if (node.request && *node.request == topology_request::remove) {
+            exclude_nodes.insert(node.id);
+        }
         return exclude_nodes;
     }
 
