@@ -39,7 +39,7 @@ namespace {
 
     template <typename Strategy>
     mutable_vnode_erm_ptr create_erm(mutable_token_metadata_ptr tmptr, replication_strategy_config_options opts = {}) {
-        dc_rack_fn<host_id> get_dc_rack_fn = get_dc_rack;
+        dc_rack_fn get_dc_rack_fn = get_dc_rack;
         tmptr->update_topology_change_info(get_dc_rack_fn).get();
         auto strategy = seastar::make_shared<Strategy>(std::move(opts));
         return calculate_effective_replication_map(std::move(strategy), tmptr).get0();

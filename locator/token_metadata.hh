@@ -256,7 +256,7 @@ public:
     static boost::icl::interval<token>::interval_type range_to_interval(range<dht::token> r);
     static range<dht::token> interval_to_range(boost::icl::interval<token>::interval_type i);
 
-    future<> update_topology_change_info(dc_rack_fn<host_id>& get_dc_rack);
+    future<> update_topology_change_info(dc_rack_fn& get_dc_rack);
 
     const std::optional<topology_change_info>& get_topology_change_info() const;
 

@@ -6253,7 +6253,7 @@ future<> storage_service::update_topology_change_info(mutable_token_metadata_ptr
     assert(this_shard_id() == 0);
 
     try {
-        locator::dc_rack_fn<locator::host_id> get_dc_rack_by_host_id([this, &tm = *tmptr] (locator::host_id host_id) -> std::optional<locator::endpoint_dc_rack> {
+        locator::dc_rack_fn get_dc_rack_by_host_id([this, &tm = *tmptr] (locator::host_id host_id) -> std::optional<locator::endpoint_dc_rack> {
             if (_raft_topology_change_enabled) {
                 const auto server_id = raft::server_id(host_id.uuid());
                 const auto* node = _topology_state_machine._topology.find(server_id);
