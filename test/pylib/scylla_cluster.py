@@ -99,6 +99,7 @@ def make_scylla_conf(workdir: pathlib.Path, host_addr: str, seed_addrs: List[str
         'truncate_request_timeout_in_ms': 300000,
         'write_request_timeout_in_ms': 300000,
         'request_timeout_in_ms': 300000,
+        'user_defined_function_time_limit_ms': 1000,
 
         'strict_allow_filtering': True,
         'strict_is_not_null_in_views': True,
