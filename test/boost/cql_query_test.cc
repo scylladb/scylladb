@@ -5707,3 +5707,143 @@ SEASTAR_TEST_CASE(test_setting_synchronous_updates_property) {
         );
     });
 }
+
+static
+cql_test_config tablet_cql_test_config() {
+    cql_test_config c;
+    c.db_config->experimental_features({
+            db::experimental_features_t::feature::TABLETS,
+            db::experimental_features_t::feature::CONSISTENT_TOPOLOGY_CHANGES,
+        }, db::config::config_source::CommandLine);
+    c.db_config->consistent_cluster_management(true);
+    return c;
+}
+
+static
+bool has_tablet_routing(::shared_ptr<cql_transport::messages::result_message> result) {
+    auto custom_payload = result->custom_payload();
+    if (!custom_payload.has_value() || custom_payload->find("tablet_replicas") == custom_payload->end() || custom_payload->find("token_range") == custom_payload->end()) {
+        return false;
+    }
+    return true;
+}
+
+SEASTAR_TEST_CASE(test_sending_tablet_info_unprepared_insert) {
+    BOOST_ASSERT(smp::count == 2);
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        e.execute_cql("create keyspace ks_tablet with replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1, 'initial_tablets': 8};").get();
+        e.execute_cql("create table ks_tablet.test_tablet (pk int, ck int, v int, PRIMARY KEY (pk, ck));").get();
+
+        smp::submit_to(0, [&] {
+            return seastar::async([&] {
+                auto result = e.execute_cql("insert into ks_tablet.test_tablet (pk, ck, v) VALUES (1, 2, 3);").get();
+                BOOST_ASSERT(!has_tablet_routing(result));
+            });
+        }).get();
+
+        smp::submit_to(1, [&] {
+            return seastar::async([&] {
+                auto result = e.execute_cql("insert into ks_tablet.test_tablet (pk, ck, v) VALUES (1, 2, 3);").get();
+                BOOST_ASSERT(!has_tablet_routing(result));
+            });
+        }).get();
+    }, tablet_cql_test_config());
+}
+
+SEASTAR_TEST_CASE(test_sending_tablet_info_unprepared_select) {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        e.execute_cql("create keyspace ks_tablet with replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1, 'initial_tablets': 8};").get();
+        e.execute_cql("create table ks_tablet.test_tablet (pk int, ck int, v int, PRIMARY KEY (pk, ck));").get();
+        e.execute_cql("insert into ks_tablet.test_tablet (pk, ck, v) VALUES (1, 2, 3);").get();
+
+        smp::submit_to(0, [&] {
+            return seastar::async([&] {
+                auto result = e.execute_cql("select pk, ck, v FROM ks_tablet.test_tablet WHERE pk = 1;").get();
+                BOOST_ASSERT(!has_tablet_routing(result));
+            });
+        }).get();
+
+        smp::submit_to(1, [&] {
+            return seastar::async([&] {
+                auto result = e.execute_cql("select pk, ck, v FROM ks_tablet.test_tablet WHERE pk = 1;").get();
+                BOOST_ASSERT(!has_tablet_routing(result));
+            });
+        }).get();
+    }, tablet_cql_test_config());
+}
+
+SEASTAR_TEST_CASE(test_sending_tablet_info_insert) {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        e.execute_cql("create keyspace ks_tablet with replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1, 'initial_tablets': 8};").get();
+        e.execute_cql("create table ks_tablet.test_tablet (pk int, ck int, v int, PRIMARY KEY (pk, ck));").get();
+        auto insert = e.prepare("insert into ks_tablet.test_tablet (pk, ck, v) VALUES (?, ?, ?);").get0();
+        
+        std::vector<cql3::raw_value> raw_values;
+        raw_values.emplace_back(cql3::raw_value::make_value(int32_type->decompose(int32_t{1})));
+        raw_values.emplace_back(cql3::raw_value::make_value(int32_type->decompose(int32_t{2})));
+        raw_values.emplace_back(cql3::raw_value::make_value(int32_type->decompose(int32_t{3})));
+
+        const auto sptr = e.local_db().find_schema("ks_tablet", "test_tablet");
+
+        auto pk = partition_key::from_singular(*sptr, int32_t(1));
+
+        unsigned local_shard = sptr->table().shard_of(dht::get_token(*sptr, pk.view()));
+
+        smp::submit_to(local_shard, [&] {
+            return seastar::async([&] { 
+                auto result = e.execute_prepared(insert, raw_values).get0();
+                BOOST_ASSERT(!has_tablet_routing(result));
+            });
+        }).get();
+
+        std::vector<cql3::raw_value> raw_values2;
+        raw_values2.emplace_back(cql3::raw_value::make_value(int32_type->decompose(int32_t{2})));
+        raw_values2.emplace_back(cql3::raw_value::make_value(int32_type->decompose(int32_t{3})));
+        raw_values2.emplace_back(cql3::raw_value::make_value(int32_type->decompose(int32_t{4})));
+
+        auto pk2 = partition_key::from_singular(*sptr, int32_t(2));
+
+        unsigned local_shard2 = sptr->table().shard_of(dht::get_token(*sptr, pk2.view()));
+        unsigned foreign_shard = (local_shard2 + 1) % smp::count;
+
+        smp::submit_to(foreign_shard, [&] { 
+            return seastar::async([&] {
+                auto result = e.execute_prepared(insert, raw_values2).get0();
+                BOOST_ASSERT(has_tablet_routing(result));
+            });
+        }).get();
+    }, tablet_cql_test_config());
+}
+
+SEASTAR_TEST_CASE(test_sending_tablet_info_select) {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        e.execute_cql("create keyspace ks_tablet with replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1, 'initial_tablets': 8};").get();
+        e.execute_cql("create table ks_tablet.test_tablet (pk int, ck int, v int, PRIMARY KEY (pk, ck));").get();
+        e.execute_cql("insert into ks_tablet.test_tablet (pk, ck, v) VALUES (1, 2, 3);").get();
+        
+        auto select = e.prepare("select pk, ck, v FROM ks_tablet.test_tablet WHERE pk = ?;").get0();
+        std::vector<cql3::raw_value> raw_values;
+        raw_values.emplace_back(cql3::raw_value::make_value(int32_type->decompose(int32_t{1})));
+
+        const auto sptr = e.local_db().find_schema("ks_tablet", "test_tablet");
+
+        auto pk = partition_key::from_singular(*sptr, int32_t(1));
+
+        unsigned local_shard = sptr->table().shard_of(dht::get_token(*sptr, pk.view()));
+        unsigned foreign_shard = (local_shard + 1) % smp::count;
+
+        smp::submit_to(local_shard, [&] { 
+            return seastar::async([&] {
+                auto result = e.execute_prepared(select, raw_values).get0();
+                BOOST_ASSERT(!has_tablet_routing(result));
+            });
+        }).get();
+
+        smp::submit_to(foreign_shard, [&] { 
+            return seastar::async([&] {
+                auto result = e.execute_prepared(select, raw_values).get0();
+                BOOST_ASSERT(has_tablet_routing(result));
+            });
+        }).get();
+    }, tablet_cql_test_config());
+}
