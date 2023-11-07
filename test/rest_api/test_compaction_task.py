@@ -1,3 +1,4 @@
+import pytest
 import requests
 import sys
 import threading
@@ -180,3 +181,44 @@ def test_rewrite_sstables_keyspace_compaction_task_async(cql, rest_api, test_key
     checkout_async_task(cql, rest_api, test_keyspace, lambda keyspace: rest_api.send("GET", f"tasks/compaction/keyspace_upgrade_sstables/{keyspace}"), "upgrade sstables compaction")
     # scrub sstables compaction
     checkout_async_task(cql, rest_api, test_keyspace, lambda keyspace: rest_api.send("GET", f"tasks/compaction/keyspace_scrub/{keyspace}"), "scrub sstables compaction")
+
+@pytest.mark.parametrize("injection", ["major_keyspace_compaction_task_impl_run_fail",
+                                       "shard_major_keyspace_compaction_task_impl_run_fail",
+                                       "table_major_keyspace_compaction_task_impl_run_fail"])
+def test_compaction_progress(cql, this_dc, rest_api, injection):
+    drain_module_tasks(rest_api, module_name)
+    with set_tmp_task_ttl(rest_api, long_time):
+        with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 1 }}") as keyspace:
+            schema = 'p int, v text, primary key (p)'
+            with new_test_table(cql, keyspace, schema) as t0:
+                stmt = cql.prepare(f"INSERT INTO {t0} (p, v) VALUES (?, ?)")
+                cql.execute(stmt, [0, 'hello'])
+                cql.execute(stmt, [1, 'world'])
+                cql.execute(stmt, [2, '!'])
+
+                with new_test_table(cql, keyspace, schema) as t1:
+                    stmt = cql.prepare(f"INSERT INTO {t1} (p, v) VALUES (?, ?)")
+                    cql.execute(stmt, [1, 'hello'])
+                    cql.execute(stmt, [0, 'world'])
+
+                    with scylla_inject_error(rest_api, injection, one_shot=False):
+                        rest_api.send("POST", f"tasks/compaction/keyspace_compaction/{keyspace}")
+
+                        tasks = [task for task in list_tasks(rest_api, module_name) if task["type"] == "major compaction"]
+                        assert tasks, "compaction task was not created"
+                        assert len(tasks) == 1, "More than one compaction task was created"
+                        task = tasks[0]
+
+                        root_id = task["task_id"]
+                        status = wait_for_task(rest_api, root_id)
+
+                        statuses = get_task_status_recursively(rest_api, root_id)
+                        for status in statuses:
+                            assert status["progress_completed"] == status["progress_total"], "Progress of task is not equal to total progress"
+                            if "children_ids" in status:
+                                children = [s["task_id"] for s in status["children_ids"]]
+                                progresses = [(s["progress_completed"], s["progress_total"]) for s in statuses if s["id"] in children]
+                                if len(children) == len(progresses):
+                                    assert status["progress_completed"] == sum(p[0] for p in progresses)
+                                    assert status["progress_total"] == sum(p[1] for p in progresses)
+    drain_module_tasks(rest_api, module_name)
