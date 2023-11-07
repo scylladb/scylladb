@@ -167,7 +167,7 @@ Check the :doc:`Raft in ScyllaDB document </architecture/raft/>` to learn more.
 .. TODO: include enterprise versions
 
 In 5.2, Raft-based consistent cluster management is disabled by default.
-In 5.3 it will be enabled by default, but you'll be able to disable it explicitly during upgrade if needed (assuming you haven't previously enabled it on every node).
+In the following version, it will be enabled by default, but you'll be able to disable it explicitly during upgrade if needed (assuming you haven't previously enabled it on every node).
 In further versions the option will be removed and consistent cluster management will be enabled unconditionally.
 
 The option can also be enabled after the cluster is upgraded to |NEW_VERSION| (see :ref:`Enabling Raft in existing cluster <enabling-raft-existing-cluster>`).

@@ -13,7 +13,7 @@ ScyllaDB follows the ``MAJOR.MINOR.PATCH`` `semantic versioning <https://semver.
 ScyllaDB Open Source:
 
 * ``MAJOR`` versions: 4.y, 5.y
-* ``MINOR`` versions: 5.2.z, 5.3.z
+* ``MINOR`` versions: 5.2.z, 5.4.z
 * ``PATCH`` versions: 5.2.1, 5.2.2
 
 
