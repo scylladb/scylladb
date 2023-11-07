@@ -61,28 +61,35 @@ version supports the ScyllaDB version to which you want to upgrade. See
   
 We recommend upgrading the Monitoring Stack to the latest version.
 
+**Check Feature Updates**
+
+See the ScyllaDB Release Notes for the latest updates. The Release Notes are published 
+at the `ScyllaDB Community Forum <https://forum.scylladb.com/>`_.
+
+.. note::
+
+   DateTieredCompactionStrategy is removed in 5.4. Migrate to TimeWindowCompactionStrategy
+   **before** you upgrade from 5.2 to 5.4
+
 .. note::
    
-   In ScyllaDB 5.4, Raft-based consistent cluster management for existing
+   In ScyllaDB 5.4, Raft-based consistent cluster management for existing 
    deployments is enabled by default.
+   If you want the consistent cluster management feature to be disabled in 
+   ScyllaDB 5.4, you must update the configuration **before** you upgrade 
+   from 5.2 to 5.4:
 
-   If you want to disable the consistent cluster management feature in ScyllaDB 5.4,
-   you must update the configuration **before** you start the upgrade procedure from 
-   5.2 to 5.4:
+   #. Set ``consistent_cluster_management: false`` in the ``scylla.yaml`` 
+      configuration file on each node in the cluster.
+   #. Start the upgrade procedure.
 
-   #. Ensure that the schema is synchronized in the cluster by executing 
-      :doc:`nodetool describecluster </operating-scylla/nodetool-commands/describecluster>` 
-      on each node and ensuring that the schema version is the same on all nodes.
-   #. Perform a :doc:`rolling restart </operating-scylla/procedures/config-change/rolling-restart/>`, 
-      updating the ``scylla.yaml`` file for **each node** in the cluster before 
-      restarting it to  disable the ``consistent_cluster_management`` option:
+   Consistent cluster management **cannot** be disabled in version 5.4 if it was 
+   enabled in version 5.2 in one of the following ways:
 
-       .. code-block:: yaml
-
-          consistent_cluster_management: false
-
-      When all the nodes in the cluster are updated and restarted, you can start
-      the upgrade procedure.
+   * Your cluster was created in version 5.2 with the default ``consistent_cluster_management: true``
+     configuration in ``scylla.yaml``.
+   * You explicitly set ``consistent_cluster_management: true`` in 
+     ``scylla.yaml`` in an existing cluster in version 5.2.
 
 Upgrade Procedure
 =================
