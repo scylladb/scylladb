@@ -80,7 +80,7 @@ Type=none
 Options=bind
 
 [Install]
-WantedBy=local-fs.target
+WantedBy=local-fs.target scylla-server.service
 '''[1:-1]
             with open('/etc/systemd/system/var-lib-systemd-coredump.mount', 'w') as f:
                 f.write(dot_mount)
