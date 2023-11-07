@@ -351,9 +351,12 @@ future<> sstable_directory::filesystem_components_lister::process(sstable_direct
 }
 
 future<> sstable_directory::system_keyspace_components_lister::process(sstable_directory& directory, process_flags flags) {
-    return _sys_ks.sstables_registry_list(_location, [this, flags, &directory] (sstring status, entry_descriptor desc) {
+    return _sys_ks.sstables_registry_list(_location, [this, flags, &directory] (sstring status, sstable_state state, entry_descriptor desc) {
+        if (state != directory._state) {
+            return make_ready_future<>();
+        }
         if (status != "sealed") {
-            // FIXME -- handle
+            dirlog.warn("Skip processing {} {} entry from {} (must have been picked up by garbage collector)", status, desc.generation, _location);
             return make_ready_future<>();
         }
         if (!sstable_generation_generator::maybe_owned_by_this_shard(desc.generation)) {
@@ -383,7 +386,7 @@ future<> sstable_directory::system_keyspace_components_lister::commit() {
 
 future<> sstable_directory::system_keyspace_components_lister::garbage_collect(storage& st) {
     return do_with(std::set<generation_type>(), [this, &st] (auto& gens_to_remove) {
-        return _sys_ks.sstables_registry_list(_location, [&st, &gens_to_remove] (sstring status, entry_descriptor desc) {
+        return _sys_ks.sstables_registry_list(_location, [&st, &gens_to_remove] (sstring status, sstable_state state, entry_descriptor desc) {
             if (status == "sealed") {
                 return make_ready_future<>();
             }

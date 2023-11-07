@@ -5205,7 +5205,7 @@ SEASTAR_TEST_CASE(cleanup_during_offstrategy_incremental_compaction_test) {
     });
 }
 
-SEASTAR_TEST_CASE(test_sstables_excluding_staging_correctness) {
+future<> test_sstables_excluding_staging_correctness(test_env_config cfg) {
     return test_env::do_with_async([] (test_env& env) {
         simple_schema ss;
         auto s = ss.schema();
@@ -5250,7 +5250,15 @@ SEASTAR_TEST_CASE(test_sstables_excluding_staging_correctness) {
                     .produces(*sorted_muts.rbegin())
                     .produces_end_of_stream();
         }
-    });
+    }, std::move(cfg));
+}
+
+SEASTAR_TEST_CASE(test_sstables_excluding_staging_correctness_local) {
+    return test_sstables_excluding_staging_correctness({});
+}
+
+SEASTAR_TEST_CASE(test_sstables_excluding_staging_correctness_s3) {
+    return test_sstables_excluding_staging_correctness({ .storage = make_test_object_storage_options() });
 }
 
 // Reproducer for https://github.com/scylladb/scylladb/issues/15726.

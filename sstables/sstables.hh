@@ -154,6 +154,23 @@ inline sstring state_to_dir(sstable_state state) {
     }
 }
 
+inline sstable_state state_from_dir(std::string_view dir) {
+    if (dir == "") {
+        return sstable_state::normal;
+    }
+    if (dir == staging_dir) {
+        return sstable_state::staging;
+    }
+    if (dir == quarantine_dir) {
+        return sstable_state::quarantine;
+    }
+    if (dir == upload_dir) {
+        return sstable_state::upload;
+    }
+
+    throw std::runtime_error(format("Unknown sstable state dir {}", dir));
+}
+
 inline std::ostream& operator<<(std::ostream& o, sstable_state s) {
     return o << state_to_dir(s);
 }
