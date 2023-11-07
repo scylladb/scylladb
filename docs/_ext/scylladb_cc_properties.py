@@ -1,14 +1,23 @@
 import os
 import re
 import yaml
+from typing import Any, Dict, List
+
+import jinja2
+
+from sphinx import addnodes
 from sphinx.application import Sphinx
-from sphinxcontrib.datatemplates.directive import DataTemplateYAML
+from sphinx.directives import ObjectDescription
+from sphinx.util import logging, status_iterator, ws_re
+from sphinx.util.docfields import Field
+from sphinx.util.docutils import switch_source_input, SphinxDirective
+from sphinx.util.nodes import make_id, nested_parse_with_titles
+from sphinx.jinja2glue import BuiltinTemplateLoader
+from docutils import nodes
 from docutils.parsers.rst import directives
+from docutils.statemachine import StringList
 
-CONFIG_FILE_PATH = "../db/config.cc"
-CONFIG_HEADER_FILE_PATH = "../db/config.hh"
-DESTINATION_PATH = "_data/db_config.yaml"
-
+logger = logging.getLogger(__name__)
 
 class DBConfigParser:
 
@@ -47,42 +56,18 @@ class DBConfigParser:
     """
     COMMENT_PATTERN = r"/\*.*?\*/|//.*?$"
 
-    def __init__(self, config_file_path, config_header_file_path, destination_path):
+    all_properties = {}
+
+    def __init__(self, config_file_path, config_header_file_path):
         self.config_file_path = config_file_path
         self.config_header_file_path = config_header_file_path
-        self.destination_path = destination_path
 
-    def _create_yaml_file(self, destination, data):
-        current_data = None
-
-        try:
-            with open(destination, "r") as file:
-                current_data = yaml.safe_load(file)
-        except FileNotFoundError:
-            pass
-
-        if current_data != data:
-            os.makedirs(os.path.dirname(destination), exist_ok=True)
-            with open(destination, "w") as file:
-                yaml.dump(data, file)
-
-    @staticmethod
-    def _clean_description(description):
-        return (
-            description.replace("\\n", "")
-            .replace('<', '&lt;')
-            .replace('>', '&gt;')
-            .replace("\n", "<br>")
-            .replace("\\t", "- ")
-            .replace('"', "")
-        )
-    
     def _clean_comments(self, content):
         return re.sub(self.COMMENT_PATTERN, "", content, flags=re.DOTALL | re.MULTILINE)
 
     def _parse_group(self, group_match, config_group_content):
         group_name = group_match.group(1).strip()
-        group_description = self._clean_description(group_match.group(2).strip()) if group_match.group(2) else ""
+        group_description = group_match.group(2).strip() if group_match.group(2) else ""
 
         current_group = {
             "name": group_name,
@@ -111,14 +96,16 @@ class DBConfigParser:
         config_matches = re.findall(self.CONFIG_CC_REGEX_PATTERN, content, re.DOTALL)
 
         for match in config_matches:
+            name = match[1].strip()
             property_data = {
-                "name": match[1].strip(),
+                "name": name,
                 "value_status": match[4].strip(),
                 "default": match[5].strip(),
                 "liveness": "True" if match[3] else "False",
-                "description": self._clean_description(match[6].strip()),
+                "description": match[6].strip(),
             }
             properties.append(property_data)
+            DBConfigParser.all_properties[name] = property_data
 
         return properties
 
@@ -135,7 +122,7 @@ class DBConfigParser:
                     if property_data["name"] == property_key:
                         property_data["type"] = match[0].strip()
 
-    def _parse_db_properties(self):
+    def parse(self):
         groups = []
 
         with open(self.config_file_path, "r", encoding='utf-8') as file:
@@ -158,29 +145,167 @@ class DBConfigParser:
 
         return groups
 
-    def run(self, app: Sphinx):
-        dest_path = os.path.join(app.builder.srcdir, self.destination_path)
-        parsed_properties = self._parse_db_properties()
-        self._create_yaml_file(dest_path, parsed_properties)
+    @classmethod
+    def get(cls, name: str):
+        return DBConfigParser.all_properties[name]
 
 
-class DBConfigTemplateDirective(DataTemplateYAML):
-
-    option_spec = DataTemplateYAML.option_spec.copy()
-    option_spec["value_status"] = directives.unchanged_required
-
-    def _make_context(self, data, config, env):
-        context = super()._make_context(data, config, env)
-        context["value_status"] = self.options.get("value_status")
-        return context
-
-
-def setup(app: Sphinx):
-    db_parser = DBConfigParser(
-        CONFIG_FILE_PATH, CONFIG_HEADER_FILE_PATH, DESTINATION_PATH
+def readable_desc(description: str) -> str:
+    return (
+        description.replace("\\n", "")
+        .replace('<', '&lt;')
+        .replace('>', '&gt;')
+        .replace("\n", "<br>")
+        .replace("\\t", "- ")
+        .replace('"', "")
     )
-    app.connect("builder-inited", db_parser.run)
-    app.add_directive("scylladb_config_template", DBConfigTemplateDirective)
+
+
+def maybe_add_filters(builder):
+    env = builder.templates.environment
+    if 'readable_desc' not in env.filters:
+        env.filters['readable_desc'] = readable_desc
+
+
+class ConfigOption(ObjectDescription):
+    has_content = True
+    required_arguments = 1
+    optional_arguments = 0
+    final_argument_whitespace = False
+
+    # TODO: instead of overriding transform_content(), render option properties
+    #       as a field list.
+    doc_field_types = [
+        Field('type',
+              label='Type',
+              has_arg=False,
+              names=('type',)),
+        Field('default',
+              label='Default value',
+              has_arg=False,
+              names=('default',)),
+        Field('liveness',
+              label='Liveness',
+              has_arg=False,
+              names=('liveness',)),
+    ]
+
+    def handle_signature(self,
+                         sig: str,
+                         signode: addnodes.desc_signature) -> str:
+        signode.clear()
+        signode += addnodes.desc_name(sig, sig)
+        # normalize whitespace like XRefRole does
+        return ws_re.sub(' ', sig)
+
+    @property
+    def env(self):
+        document = self.state.document
+        return document.settings.env
+
+    def before_content(self) -> None:
+        maybe_add_filters(self.env.app.builder)
+
+    def _render(self, name) -> str:
+        item = DBConfigParser.get(name)
+        if item is None:
+            raise self.error(f'Option "{name}" not found!')
+        builder = self.env.app.builder
+        template = self.config.scylladb_cc_properties_option_tmpl
+        return builder.templates.render(template, item)
+
+    def transform_content(self,
+                          contentnode: addnodes.desc_content) -> None:
+        name = self.arguments[0]
+        # the source is always None here
+        _, lineno = self.get_source_info()
+        source = f'scylla_config:{lineno}:<{name}>'
+        fields = StringList(self._render(name).splitlines(),
+                            source=source, parent_offset=lineno)
+        with switch_source_input(self.state, fields):
+            self.state.nested_parse(fields, 0, contentnode)
+
+    def add_target_and_index(self,
+                             name: str,
+                             sig: str,
+                             signode: addnodes.desc_signature) -> None:
+        node_id = make_id(self.env, self.state.document, self.objtype, name)
+        signode['ids'].append(node_id)
+        self.state.document.note_explicit_target(signode)
+        entry = f'{name}; configuration option'
+        self.indexnode['entries'].append(('pair', entry, node_id, '', None))
+        std = self.env.get_domain('std')
+        std.note_object(self.objtype, name, node_id, location=signode)
+
+
+class ConfigOptionList(SphinxDirective):
+    has_content = False
+    required_arguments = 2
+    optional_arguments = 0
+    final_argument_whitespace = True
+    option_spec = {
+        'template': directives.path,
+        'value_status': directives.unchanged_required,
+    }
+
+    @property
+    def env(self):
+        document = self.state.document
+        return document.settings.env
+
+    def _resolve_src_path(self, path: str) -> str:
+        rel_filename, filename = self.env.relfn2path(path)
+        self.env.note_dependency(filename)
+        return filename
+
+    def _render(self, context: Dict[str, Any]) -> str:
+        builder = self.env.app.builder
+        template = self.options.get('template')
+        if template is None:
+            self.error(f'Option "template" not specified!')
+        return builder.templates.render(template, context)
+
+    def _make_context(self) -> Dict[str, Any]:
+        header = self._resolve_src_path(self.arguments[0])
+        source = self._resolve_src_path(self.arguments[1])
+        db_parser = DBConfigParser(source, header)
+        value_status = self.options.get("value_status")
+        return dict(data=db_parser.parse(),
+                    value_status=value_status)
+
+    def run(self) -> List[nodes.Node]:
+        maybe_add_filters(self.env.app.builder)
+        rendered = self._render(self._make_context())
+        contents = StringList(rendered.splitlines())
+        node = nodes.section()
+        node.document = self.state.document
+        nested_parse_with_titles(self.state, contents, node)
+        return node.children
+
+
+def setup(app: Sphinx) -> Dict[str, Any]:
+    app.add_config_value(
+        'scylladb_cc_properties_option_tmpl',
+        default='db_option.tmpl',
+        rebuild='html',
+        types=[str])
+
+    app.add_object_type(
+        'confgroup',
+        'confgroup',
+        objname='configuration group',
+        indextemplate='pair: %s; configuration group',
+        doc_field_types=[
+            Field('example',
+                  label='Example',
+                  has_arg=False)
+        ])
+    app.add_object_type(
+        'confval',
+        'confval',
+        objname='configuration option')
+    app.add_directive_to_domain('std', 'confval', ConfigOption, override=True)
+    app.add_directive('scylladb_config_list', ConfigOptionList)
 
     return {
         "version": "0.1",

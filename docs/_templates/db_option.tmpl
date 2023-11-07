@@ -1,0 +1,7 @@
+   .. raw:: html
+
+      <p>{{ description | readable_desc }}</p>
+
+   {% if type %}* **Type:** ``{{ type }}``{% endif %}
+   {% if default %}* **Default value:** ``{{ default }}``{% endif %}
+   {% if liveness %}* **Liveness** :term:`* <Liveness>` **:** ``{{ liveness }}``{% endif %}

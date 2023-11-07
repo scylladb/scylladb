@@ -8,25 +8,12 @@
 {% if group.description %}
 .. raw:: html
 
-   <p>{{ group.description }}</p>
+   <p>{{ group.description | readable_desc }}</p>
 {% endif %}
 
 {% for item in group.properties %}
 {% if item.value_status == value_status %}
-{{ item.name }}
-{{ '=' * (item.name|length) }}
-
-   .. raw:: html
-
-      <p>{{ item.description }}</p>
-
-   {% if item.type %}* **Type:** ``{{ item.type }}``{% endif %}
-   {% if item.default %}* **Default value:** ``{{ item.default }}``{% endif %}
-   {% if item.liveness %}* **Liveness** :term:`* <Liveness>` **:** ``{{ item.liveness }}``{% endif %}
-
-.. raw:: html
-
-   <hr/>
+.. confval:: {{ item.name }}
 {% endif %}
 {% endfor %}
 {% endif %}
