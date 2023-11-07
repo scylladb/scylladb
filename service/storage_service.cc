@@ -3660,10 +3660,6 @@ future<> storage_service::handle_state_left(inet_address endpoint, std::vector<s
     co_await excise(tokens, endpoint, extract_expire_time(pieces), pid);
 }
 
-void storage_service::handle_state_moving(inet_address endpoint, std::vector<sstring> pieces, gms::permit_id) {
-    throw std::runtime_error(::format("Move operation is not supported anymore, endpoint={}", endpoint));
-}
-
 future<> storage_service::handle_state_removed(inet_address endpoint, std::vector<sstring> pieces, gms::permit_id pid) {
     slogger.debug("endpoint={} handle_state_removed: permit_id={}", endpoint, pid);
 
@@ -3732,10 +3728,6 @@ future<> storage_service::on_change(inet_address endpoint, application_state sta
             co_await handle_state_removed(endpoint, std::move(pieces), pid);
         } else if (move_name == sstring(versioned_value::STATUS_LEFT)) {
             co_await handle_state_left(endpoint, std::move(pieces), pid);
-        } else if (move_name == sstring(versioned_value::STATUS_MOVING)) {
-            handle_state_moving(endpoint, std::move(pieces), pid);
-        } else if (move_name == sstring(versioned_value::HIBERNATE)) {
-            slogger.warn("endpoint={} went into HIBERNATE state, this is no longer supported.  Use a new version to perform the replace operation.", endpoint);
         } else {
             co_return; // did nothing.
         }
@@ -4166,8 +4158,7 @@ future<> storage_service::check_for_endpoint_collision(std::unordered_set<gms::i
                         throw std::runtime_error(::format("Node {} has gossip status=UNKNOWN. Try fixing it before adding new node to the cluster.", addr));
                     }
                     slogger.debug("Checking bootstrapping/leaving/moving nodes: node={}, status={} (check_for_endpoint_collision)", addr, state);
-                    if (state == sstring(versioned_value::STATUS_BOOTSTRAPPING) ||
-                        state == sstring(versioned_value::STATUS_MOVING)) {
+                    if (state == sstring(versioned_value::STATUS_BOOTSTRAPPING)) {
                         if (gms::gossiper::clk::now() > t + std::chrono::seconds(60)) {
                             throw std::runtime_error("Other bootstrapping/leaving/moving nodes detected, cannot bootstrap while consistent_rangemovement is true (check_for_endpoint_collision)");
                         } else {

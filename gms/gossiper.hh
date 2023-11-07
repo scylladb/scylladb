@@ -196,7 +196,6 @@ public:
     const std::vector<sstring> SILENT_SHUTDOWN_STATES = {
         versioned_value::REMOVED_TOKEN,
         versioned_value::STATUS_LEFT,
-        versioned_value::HIBERNATE,
         versioned_value::STATUS_BOOTSTRAPPING,
         versioned_value::STATUS_UNKNOWN,
     };

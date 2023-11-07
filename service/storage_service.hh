@@ -450,8 +450,6 @@ public:
      *   set after decommission is completed.
      *
      * Other STATUS values that may be seen (possibly anywhere in the normal progression):
-     * STATUS_MOVING,newtoken
-     *   set if node is currently moving to a new token in the ring
      * REMOVING_TOKEN,deadtoken
      *   set if the node is dead and is being removed by its REMOVAL_COORDINATOR
      * REMOVED_TOKEN,deadtoken
