@@ -446,6 +446,10 @@ future<> major_keyspace_compaction_task_impl::run() {
         auto task = co_await module.make_and_start_task<shard_major_keyspace_compaction_task_impl>(parent_info, _status.keyspace, _status.id, db, _table_infos, fm, _consider_only_existing_data);
         co_await task->done();
     });
+
+    utils::get_local_injector().inject("major_keyspace_compaction_task_impl_run_fail", [] () {
+        throw std::runtime_error("Injected failure in major_keyspace_compaction_task_impl::run");
+    });
 }
 
 future<std::optional<double>> major_keyspace_compaction_task_impl::expected_total_workload() const {
@@ -462,6 +466,10 @@ future<> shard_major_keyspace_compaction_task_impl::run() {
     }
 
     co_await run_table_tasks(_db, std::move(table_tasks), cv, current_task, true);
+
+    utils::get_local_injector().inject("shard_major_keyspace_compaction_task_impl_run_fail", [] () {
+        throw std::runtime_error("Injected failure in shard_major_keyspace_compaction_task_impl::run");
+    });
 }
 
 future<std::optional<double>> shard_major_keyspace_compaction_task_impl::expected_total_workload() const {
@@ -474,6 +482,10 @@ future<> table_major_keyspace_compaction_task_impl::run() {
     replica::table::do_flush do_flush(_flush_mode != flush_mode::skip);
     co_await run_on_table("force_keyspace_compaction", _db, _status.keyspace, _ti, [info, do_flush, consider_only_existing_data = _consider_only_existing_data] (replica::table& t) {
         return t.compact_all_sstables(info, do_flush, consider_only_existing_data);
+    });
+
+    utils::get_local_injector().inject("table_major_keyspace_compaction_task_impl_run_fail", [] () {
+        throw std::runtime_error("Injected failure in table_major_keyspace_compaction_task_impl::run");
     });
 }
 
