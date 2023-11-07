@@ -304,6 +304,7 @@ def run_scylla_cmd(pid, dir):
         '--truncate-request-timeout-in-ms', '300000',
         '--write-request-timeout-in-ms', '300000',
         '--request-timeout-in-ms', '300000',
+        '--user-defined-function-time-limit-ms', '1000',
         # Allow testing experimental features. Following issue #9467, we need
         # to add here specific experimental features as they are introduced.
         # Note that Alternator-specific experimental features are listed in
