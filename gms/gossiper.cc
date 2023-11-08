@@ -1683,7 +1683,7 @@ future<> gossiper::handle_major_state_change(inet_address ep, endpoint_state eps
 
     if (!is_dead_state(eps) && !is_in_shadow_round()) {
         if (_endpoint_state_map.contains(ep))  {
-            logger.debug("Node {} has restarted, now UP, status = {}", ep, get_gossip_status(eps));
+            logger.info("Node {} has restarted, now UP, status = {}", ep, get_gossip_status(eps));
         } else {
             logger.debug("Node {} is now part of the cluster, status = {}", ep, get_gossip_status(eps));
         }
