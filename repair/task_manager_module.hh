@@ -46,9 +46,10 @@ private:
     std::vector<sstring> _hosts;
     std::vector<sstring> _data_centers;
     std::unordered_set<gms::inet_address> _ignore_nodes;
+    bool _small_table_optimization;
     std::optional<int> _ranges_parallelism;
 public:
-    user_requested_repair_task_impl(tasks::task_manager::module_ptr module, repair_uniq_id id, std::string keyspace, std::string entity, lw_shared_ptr<locator::global_vnode_effective_replication_map> germs, std::vector<sstring> cfs, dht::token_range_vector ranges, std::vector<sstring> hosts, std::vector<sstring> data_centers, std::unordered_set<gms::inet_address> ignore_nodes, std::optional<int> ranges_parallelism) noexcept
+    user_requested_repair_task_impl(tasks::task_manager::module_ptr module, repair_uniq_id id, std::string keyspace, std::string entity, lw_shared_ptr<locator::global_vnode_effective_replication_map> germs, std::vector<sstring> cfs, dht::token_range_vector ranges, std::vector<sstring> hosts, std::vector<sstring> data_centers, std::unordered_set<gms::inet_address> ignore_nodes, bool small_table_optimization, std::optional<int> ranges_parallelism) noexcept
         : repair_task_impl(module, id.uuid(), id.id, "keyspace", std::move(keyspace), "", std::move(entity), tasks::task_id::create_null_id(), streaming::stream_reason::repair)
         , _germs(germs)
         , _cfs(std::move(cfs))
@@ -56,6 +57,7 @@ public:
         , _hosts(std::move(hosts))
         , _data_centers(std::move(data_centers))
         , _ignore_nodes(std::move(ignore_nodes))
+        , _small_table_optimization(small_table_optimization)
         , _ranges_parallelism(ranges_parallelism)
     {}
 
@@ -123,6 +125,7 @@ public:
     std::unordered_set<sstring> dropped_tables;
     bool _hints_batchlog_flushed = false;
     std::unordered_set<gms::inet_address> nodes_down;
+    bool _small_table_optimization = false;
 private:
     bool _aborted = false;
     std::optional<sstring> _failed_because;
@@ -142,6 +145,7 @@ public:
             const std::unordered_set<gms::inet_address>& ignore_nodes_,
             streaming::stream_reason reason_,
             bool hints_batchlog_flushed,
+            bool small_table_optimization,
             std::optional<int> ranges_parallelism);
     void check_failed_ranges();
     void check_in_abort_or_shutdown();

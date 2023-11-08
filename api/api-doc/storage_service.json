@@ -1122,6 +1122,14 @@
                      "allowMultiple":false,
                      "type":"string",
                      "paramType":"query"
+                  },
+                  {
+                     "name":"small_table_optimization",
+                     "description":"If the value is the string 'true' with any capitalization, perform small table optimization. When this option is enabled, user can send the repair request to any of the nodes in the cluster. There is no need to send repair requests to multiple nodes. All token ranges for the table will be repaired automatically.",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
                   }
                ]
             },
