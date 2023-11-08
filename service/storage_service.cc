@@ -3491,19 +3491,6 @@ storage_service::get_range_to_address_map(locator::vnode_effective_replication_m
     co_return co_await construct_range_to_endpoint_map(erm, co_await get_all_ranges(sorted_tokens));
 }
 
-future<> storage_service::handle_state_replacing_update_pending_ranges(mutable_token_metadata_ptr tmptr, inet_address replacing_node, gms::permit_id) {
-    try {
-        slogger.info("handle_state_replacing: Waiting for replacing node {} to be alive on all shards", replacing_node);
-        co_await _gossiper.wait_alive({replacing_node}, std::chrono::milliseconds(5 * 1000));
-        slogger.info("handle_state_replacing: Replacing node {} is now alive on all shards", replacing_node);
-    } catch (...) {
-        slogger.warn("handle_state_replacing: Failed to wait for replacing node {} to be alive on all shards: {}",
-                replacing_node, std::current_exception());
-    }
-    slogger.info("handle_state_replacing: Update pending ranges for replacing node {}", replacing_node);
-    co_await update_topology_change_info(tmptr, ::format("handle_state_replacing {}", replacing_node));
-}
-
 future<> storage_service::handle_state_bootstrap(inet_address endpoint, gms::permit_id pid) {
     slogger.debug("endpoint={} handle_state_bootstrap: permit_id={}", endpoint, pid);
     // explicitly check for TOKENS, because a bootstrapping node might be bootstrapping in legacy mode; that is, not using vnodes and no token specified

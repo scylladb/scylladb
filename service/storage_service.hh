@@ -514,9 +514,6 @@ private:
      */
     future<> handle_state_removed(inet_address endpoint, std::vector<sstring> pieces, gms::permit_id);
 
-    future<>
-    handle_state_replacing_update_pending_ranges(mutable_token_metadata_ptr tmptr, inet_address replacing_node, gms::permit_id);
-
 private:
     future<> excise(std::unordered_set<token> tokens, inet_address endpoint, gms::permit_id);
     future<> excise(std::unordered_set<token> tokens, inet_address endpoint, long expire_time, gms::permit_id);
