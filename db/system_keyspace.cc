@@ -227,6 +227,7 @@ schema_ptr system_keyspace::topology() {
             .with_column("supported_features", set_type_impl::get_instance(utf8_type, true))
             .with_column("new_cdc_generation_data_uuid", timeuuid_type, column_kind::static_column)
             .with_column("version", long_type, column_kind::static_column)
+            .with_column("fence_version", long_type, column_kind::static_column)
             .with_column("transition_state", utf8_type, column_kind::static_column)
             .with_column("current_cdc_generation_uuid", timeuuid_type, column_kind::static_column)
             .with_column("current_cdc_generation_timestamp", timestamp_type, column_kind::static_column)
@@ -2592,6 +2593,10 @@ future<service::topology> system_keyspace::load_topology_state() {
             ret.version = some_row.get_as<service::topology::version_t>("version");
         }
 
+        if (some_row.has("fence_version")) {
+            ret.fence_version = some_row.get_as<service::topology::version_t>("fence_version");
+        }
+
         if (some_row.has("transition_state")) {
             ret.tstate = service::transition_state_from_string(some_row.get_as<sstring>("transition_state"));
         } else {
@@ -2690,15 +2695,6 @@ service::topology_features system_keyspace::decode_topology_features_state(::sha
     }
 
     return ret;
-}
-
-future<int64_t> system_keyspace::get_topology_fence_version() {
-    auto opt = co_await get_scylla_local_param_as<int64_t>("topology_fence_version");
-    co_return opt.value_or<int64_t>(0);
-}
-
-future<> system_keyspace::update_topology_fence_version(int64_t value) {
-    return set_scylla_local_param_as<int64_t>("topology_fence_version", value, false);
 }
 
 future<cdc::topology_description>

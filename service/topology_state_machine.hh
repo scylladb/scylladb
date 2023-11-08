@@ -109,6 +109,7 @@ struct topology {
     using version_t = int64_t;
     static constexpr version_t initial_version = 1;
     version_t version = initial_version;
+    version_t fence_version = initial_version;
 
     // Nodes that are normal members of the ring
     std::unordered_map<raft::server_id, replica_state> normal_nodes;
@@ -182,7 +183,6 @@ struct raft_topology_cmd {
           barrier_and_drain,    // same + drain requests which use previous versions
           stream_ranges,        // reqeust to stream data, return when streaming is
                                 // done
-          fence,                // erect the fence against requests with stale versions
           shutdown,             // a decommissioning node should shut down
       };
       command cmd;

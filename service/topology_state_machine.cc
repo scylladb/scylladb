@@ -203,9 +203,6 @@ std::ostream& operator<<(std::ostream& os, const raft_topology_cmd::command& cmd
         case raft_topology_cmd::command::stream_ranges:
             os << "stream_ranges";
             break;
-        case raft_topology_cmd::command::fence:
-            os << "fence";
-            break;
         case raft_topology_cmd::command::shutdown:
             os << "shutdown";
             break;
