@@ -13,6 +13,7 @@ from pytest import fixture
 from contextlib import contextmanager
 from util import new_type, unique_name, new_test_table, new_test_keyspace, new_function, new_aggregate, new_cql
 from cassandra.protocol import InvalidRequest
+import re
 
 # (`element` refers to keyspace or keyspace's element(table, type, function, aggregate))
 # There are 2 main types of tests:
@@ -499,6 +500,19 @@ def test_desc_udf_uda(cql, test_keyspace):
                 cql.execute(f"DESC FUNCTION {test_keyspace}.{aggr}")
             with pytest.raises(InvalidRequest):
                 cql.execute(f"DESC AGGREGATE {test_keyspace}.{fn}")
+
+# Test that JSON objects in DESC TABLE contains whitespaces.
+# In the old client-side describe there was a whitespace after 
+# each colon(:) and comma(,).
+# The new server-side describe was missing it.
+# Example: caching = {'keys': 'ALL', 'rows_per_partition': 'ALL'}
+# Reproduces #14895
+def test_whitespaces_in_table_options(cql, test_keyspace):
+    regex = "\\{[^}]*[:,][^\\s][^}]*\\}" # looks for any colon or comma without space after it inside a { }
+    
+    with new_test_table(cql, test_keyspace, "a int primary key", "WITH cdc = {'enabled': true}") as tbl:
+        desc = "\n".join([d.create_statement for d in cql.execute(f"DESC TABLE {tbl}")])
+        assert re.search(regex, desc) == None
 
 # -----------------------------------------------------------------------------
 # Following tests `test_*_quoting` check if names inside elements' descriptions are quoted if needed.

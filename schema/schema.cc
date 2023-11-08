@@ -759,7 +759,7 @@ static std::ostream& map_as_cql_param(std::ostream& os, const std::map<sstring, 
         if (first) {
             first = false;
         } else {
-            os << ",";
+            os << ", ";
         }
         os << "'" << i.first << "': '" << i.second << "'";
     }
@@ -930,13 +930,14 @@ std::ostream& schema::describe(replica::database& db, std::ostream& os, bool wit
     os << "\n    AND read_repair_chance = " << read_repair_chance();
     os << "\n    AND speculative_retry = '" << speculative_retry().to_sstring() << "'";
     os << "\n    AND paxos_grace_seconds = " << paxos_grace_seconds().count();
-
-    auto tombstone_gc_str = tombstone_gc_options().to_sstring();
-    std::replace(tombstone_gc_str.begin(), tombstone_gc_str.end(), '"', '\'');
-    os << "\n    AND tombstone_gc = " << tombstone_gc_str;
+    os << "\n    AND tombstone_gc = {";
+    map_as_cql_param(os, tombstone_gc_options().to_map());
+    os << "}";
     
     if (cdc_options().enabled()) {
-        os << "\n    AND cdc = " << cdc_options().to_sstring();
+        os << "\n    AND cdc = {";
+        map_as_cql_param(os, cdc_options().to_map());
+        os << "}";
     }
     if (is_view() && !is_index(db, view_info()->base_id(), *this)) {
         auto is_sync_update = db::find_tag(*this, db::SYNCHRONOUS_VIEW_UPDATES_TAG_KEY);
