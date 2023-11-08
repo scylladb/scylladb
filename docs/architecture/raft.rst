@@ -37,6 +37,7 @@ Enabling Raft
 
 .. note::
   In ScyllaDB 5.2 and ScyllaDB Enterprise 2023.1 Raft is Generally Available and can be safely used for consistent schema management.
+  It will get enabled by default when you upgrade your cluster to ScyllaDB 5.4. You can explicitly prevent it from getting enabled; see :doc:`5.2 -> 5.4 upgrade procedure </upgrade/upgrade-opensource/upgrade-guide-from-5.2-to-5.4/upgrade-guide-from-5.2-to-5.4-generic>` for details.
   In further versions, it will be mandatory.
 
 ScyllaDB Open Source 5.2 and later, and ScyllaDB Enterprise 2023.1 and later come equipped with a procedure that can setup Raft-based consistent cluster management in an existing cluster. We refer to this as the **Raft upgrade procedure** (do not confuse with the :doc:`ScyllaDB version upgrade procedure </upgrade/index/>`).
