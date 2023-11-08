@@ -19,6 +19,23 @@ from typing import Any, Dict, Tuple
 logger = logging.getLogger(__name__)
 
 
+class approximate_value:
+    """
+    Allow matching query params with a non-exact match, allowing for a given
+    difference tolerance (delta).
+    """
+    def __init__(self, value=None, delta=None):
+        self._value = value
+        self._delta = delta
+
+    def __eq__(self, v):
+        coerced_v = type(self._value)(v)
+        return abs(self._value - coerced_v) <= self._delta
+
+    def to_json(self):
+        return {"__type__": "approximate_value", "value": self._value, "delta": self._delta}
+
+
 class expected_request:
     ANY = -1  # allow for any number of requests (including no requests at all), similar to the `*` quantity in regexp
     ONE = 0  # exactly one request is allowed
@@ -36,11 +53,17 @@ class expected_request:
         self.hit = 0
 
     def as_json(self):
+        def param_to_json(v):
+            try:
+                return v.to_json()
+            except AttributeError:
+                return v
+
         return {
                 "method": self.method,
                 "path": self.path,
                 "multiple": self.multiple,
-                "params": self.params,
+                "params": {k: param_to_json(v) for k, v in self.params.items()},
                 "response": self.response,
                 "response_status": self.response_status}
 
@@ -51,11 +74,20 @@ class expected_request:
         return json.dumps(self.as_json())
 
 
+def _make_param_value(value):
+    if type(value) is dict and "__type__" in value:
+        cls = globals()[value["__type__"]]
+        del value["__type__"]
+        return cls(**value)
+
+    return value
+
+
 def _make_expected_request(req_json):
     return expected_request(
             req_json["method"],
             req_json["path"],
-            params=req_json.get("params", dict()),
+            params={k: _make_param_value(v) for k, v in req_json.get("params", dict()).items()},
             multiple=req_json.get("multiple", expected_request.ONE),
             response=req_json.get("response"),
             response_status=req_json.get("response_status", 200))
@@ -145,7 +177,7 @@ class rest_server(aiohttp.abc.AbstractRouter):
                     expected_req = self.expected_requests[0]
                     continue
 
-            logger.error(f"unexpected request, expected {expected_req}, got {this_req}")
+            logger.error(f"unexpected request\nexpected {expected_req}\ngot      {this_req}")
             return aiohttp.web.Response(status=500, text="Expected {expected_req}, got {this_req}")
 
         if expected_req.multiple == expected_request.ONE:

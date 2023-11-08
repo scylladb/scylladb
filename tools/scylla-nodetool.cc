@@ -6,7 +6,9 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include <boost/algorithm/string/classification.hpp>
 #include <boost/algorithm/string/join.hpp>
+#include <boost/algorithm/string/split.hpp>
 #include <boost/make_shared.hpp>
 #include <boost/range/adaptor/map.hpp>
 #include <fmt/chrono.h>
@@ -106,23 +108,57 @@ std::vector<sstring> get_keyspaces(scylla_rest_client& client, std::optional<sst
     return keyspaces;
 }
 
+struct keyspace_and_tables {
+    sstring keyspace;
+    std::vector<sstring> tables;
+};
+
+keyspace_and_tables parse_keyspace_and_tables(scylla_rest_client& client, const bpo::variables_map& vm, const char* common_keyspace_table_arg_name) {
+    keyspace_and_tables ret;
+
+    const auto args = vm[common_keyspace_table_arg_name].as<std::vector<sstring>>();
+
+    ret.keyspace = args.at(0);
+
+    const auto all_keyspaces = get_keyspaces(client);
+    if (std::ranges::find(all_keyspaces, ret.keyspace) == all_keyspaces.end()) {
+        throw std::invalid_argument(fmt::format("keyspace {} does not exist", ret.keyspace));
+    }
+
+    if (args.size() > 1) {
+        ret.tables.insert(ret.tables.end(), args.begin() + 1, args.end());
+    }
+
+    return ret;
+}
+
+keyspace_and_tables parse_keyspace_and_tables(scylla_rest_client& client, const bpo::variables_map& vm) {
+    keyspace_and_tables ret;
+
+    ret.keyspace = vm["keyspace"].as<sstring>();
+
+    const auto all_keyspaces = get_keyspaces(client);
+    if (std::ranges::find(all_keyspaces, ret.keyspace) == all_keyspaces.end()) {
+        throw std::invalid_argument(fmt::format("keyspace {} does not exist", ret.keyspace));
+    }
+
+    if (vm.count("table")) {
+        ret.tables = vm["table"].as<std::vector<sstring>>();
+    }
+
+    return ret;
+}
+
 using operation_func = void(*)(scylla_rest_client&, const bpo::variables_map&);
 
 std::map<operation, operation_func> get_operations_with_func();
 
 void cleanup_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     if (vm.count("cleanup_arg")) {
-        const auto all_keyspaces = get_keyspaces(client);
-
-        auto args = vm["cleanup_arg"].as<std::vector<sstring>>();
+        const auto [keyspace, tables] = parse_keyspace_and_tables(client, vm, "cleanup_arg");
         std::unordered_map<sstring, sstring> params;
-        const auto keyspace = args[0];
-        if (std::ranges::find(all_keyspaces, keyspace) == all_keyspaces.end()) {
-            throw std::invalid_argument(fmt::format("keyspace {} does not exist", keyspace));
-        }
-
-        if (args.size() > 1) {
-            params["cf"] = fmt::to_string(fmt::join(args.begin() + 1, args.end(), ","));
+        if (!tables.empty()) {
+            params["cf"] = fmt::to_string(fmt::join(tables.begin(), tables.end(), ","));
         }
         client.post(format("/storage_service/keyspace_cleanup/{}", keyspace), std::move(params));
     } else {
@@ -162,22 +198,15 @@ void compact_operation(scylla_rest_client& client, const bpo::variables_map& vm)
         throw std::invalid_argument("--user-defined flag is unsupported");
     }
 
-    const auto all_keyspaces = get_keyspaces(client);
-
     if (vm.count("compaction_arg")) {
-        auto args = vm["compaction_arg"].as<std::vector<sstring>>();
+        const auto [keyspace, tables] = parse_keyspace_and_tables(client, vm, "compaction_arg");
         std::unordered_map<sstring, sstring> params;
-        const auto keyspace = args[0];
-        if (std::ranges::find(all_keyspaces, keyspace) == all_keyspaces.end()) {
-            throw std::invalid_argument(fmt::format("keyspace {} does not exist", keyspace));
-        }
-
-        if (args.size() > 1) {
-            params["cf"] = fmt::to_string(fmt::join(args.begin() + 1, args.end(), ","));
+        if (!tables.empty()) {
+            params["cf"] = fmt::to_string(fmt::join(tables.begin(), tables.end(), ","));
         }
         client.post(format("/storage_service/keyspace_compaction/{}", keyspace), std::move(params));
     } else {
-        for (const auto& keyspace : all_keyspaces) {
+        for (const auto& keyspace : get_keyspaces(client)) {
             client.post(format("/storage_service/keyspace_compaction/{}", keyspace));
         }
     }
@@ -310,6 +339,21 @@ void compactionhistory_operation(scylla_rest_client& client, const bpo::variable
     }
 }
 
+void disableautocompaction_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    if (!vm.count("keyspace")) {
+        for (const auto& keyspace :  get_keyspaces(client)) {
+            client.del(format("/storage_service/auto_compaction/{}", keyspace));
+        }
+    } else {
+        const auto [keyspace, tables] = parse_keyspace_and_tables(client, vm);
+        std::unordered_map<sstring, sstring> params;
+        if (!tables.empty()) {
+            params["cf"] = fmt::to_string(fmt::join(tables.begin(), tables.end(), ","));
+        }
+        client.del(format("/storage_service/auto_compaction/{}", keyspace), std::move(params));
+    }
+}
+
 void disablebackup_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     client.post("/storage_service/incremental_backups", {{"value", "false"}});
 }
@@ -322,6 +366,25 @@ void disablegossip_operation(scylla_rest_client& client, const bpo::variables_ma
     client.del("/storage_service/gossiping");
 }
 
+void drain_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    client.post("/storage_service/drain");
+}
+
+void enableautocompaction_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    if (!vm.count("keyspace")) {
+        for (const auto& keyspace :  get_keyspaces(client)) {
+            client.post(format("/storage_service/auto_compaction/{}", keyspace));
+        }
+    } else {
+        const auto [keyspace, tables] = parse_keyspace_and_tables(client, vm);
+        std::unordered_map<sstring, sstring> params;
+        if (!tables.empty()) {
+            params["cf"] = fmt::to_string(fmt::join(tables.begin(), tables.end(), ","));
+        }
+        client.post(format("/storage_service/auto_compaction/{}", keyspace), std::move(params));
+    }
+}
+
 void enablebackup_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     client.post("/storage_service/incremental_backups", {{"value", "true"}});
 }
@@ -332,6 +395,15 @@ void enablebinary_operation(scylla_rest_client& client, const bpo::variables_map
 
 void enablegossip_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     client.post("/storage_service/gossiping");
+}
+
+void flush_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    const auto [keyspace, tables] = parse_keyspace_and_tables(client, vm);
+    std::unordered_map<sstring, sstring> params;
+    if (!tables.empty()) {
+        params["cf"] = fmt::to_string(fmt::join(tables.begin(), tables.end(), ","));
+    }
+    client.post(format("/storage_service/keyspace_flush/{}", keyspace), std::move(params));
 }
 
 void gettraceprobability_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
@@ -462,6 +534,82 @@ void settraceprobability_operation(scylla_rest_client& client, const bpo::variab
     client.post("/storage_service/trace_probability", {{"probability", fmt::to_string(value)}});
 }
 
+void snapshot_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    std::unordered_map<sstring, sstring> params;
+
+    sstring kn_msg;
+
+    if (vm.count("keyspace-table-list")) {
+        if (vm.count("table")) {
+            throw std::invalid_argument("when specifying the keyspace-table list for a snapshot, you should not specify table(s)");
+        }
+        if (vm.count("keyspaces")) {
+            throw std::invalid_argument("when specifying the keyspace-table list for a snapshot, you should not specify keyspace(s)");
+        }
+
+        const auto kt_list_str = vm["keyspace-table-list"].as<sstring>();
+        std::vector<sstring> kt_list;
+        boost::split(kt_list, kt_list_str, boost::algorithm::is_any_of(","));
+
+        std::vector<sstring> components;
+        for (const auto& kt : kt_list) {
+            components.clear();
+            boost::split(components, kt, boost::algorithm::is_any_of("."));
+            if (components.size() != 2) {
+                throw std::invalid_argument(fmt::format("invalid keyspace.table: {}, keyspace and table must be separated by exactly one dot", kt));
+            }
+        }
+
+        if (kt_list.size() == 1) {
+            params["kn"] = components[0];
+            params["cf"] = components[1];
+            kn_msg = format("{}.{}", params["kn"], params["cf"]);
+        } else {
+            params["kn"] = kt_list_str;
+        }
+    } else {
+        if (vm.count("keyspaces")) {
+            const auto keyspaces = vm["keyspaces"].as<std::vector<sstring>>();
+
+            if (keyspaces.size() > 1 && vm.count("table")) {
+                throw std::invalid_argument("when specifying the table for the snapshot, you must specify one and only one keyspace");
+            }
+
+            params["kn"] = fmt::to_string(fmt::join(keyspaces.begin(), keyspaces.end(), ","));
+        } else {
+            kn_msg = "all keyspaces";
+        }
+
+        if (vm.count("table")) {
+            params["cf"] = vm["table"].as<sstring>();
+        }
+    }
+
+    if (vm.count("tag")) {
+        params["tag"] = vm["tag"].as<sstring>();
+    } else {
+        params["tag"] = fmt::to_string(db_clock::now().time_since_epoch().count());
+    }
+
+    if (vm.count("skip-flush")) {
+        params["sf"] = "true";
+    } else {
+        params["sf"] = "false";
+    }
+
+    client.post("/storage_service/snapshots", params);
+
+    if (kn_msg.empty()) {
+        kn_msg = params["kn"];
+    }
+
+    fmt::print(std::cout, "Requested creating snapshot(s) for [{}] with snapshot name [{}] and options {{skipFlush={}}}\n",
+            kn_msg,
+            params["tag"],
+            params["sf"]);
+    fmt::print(std::cout, "Snapshot directory: {}\n", params["tag"]);
+}
+
 void statusbackup_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     auto status = client.get("/storage_service/incremental_backups");
     fmt::print(std::cout, "{}\n", status.GetBool() ? "running" : "not running");
@@ -518,6 +666,12 @@ const std::map<std::string_view, std::string_view> option_substitutions{
     {"-st", "--start-token"},
     {"-et", "--end-token"},
     {"-id", "--id"},
+    {"-cf", "--table"},
+    {"--column-family", "--table"},
+    {"-kt", "--keyspace-table-list"},
+    {"--kt-list", "--keyspace-table-list"},
+    {"-kc", "--keyspace-table-list"},
+    {"--kc.list", "--keyspace-table-list"},
 };
 
 std::map<operation, operation_func> get_operations_with_func() {
@@ -607,6 +761,21 @@ Fore more information, see: https://opensource.docs.scylladb.com/stable/operatin
         },
         {
             {
+                "disableautocompaction",
+                "Disables automatic compaction for the given keyspace and table(s)",
+R"(
+Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/disableautocompaction.html
+)",
+                { },
+                {
+                    typed_option<sstring>("keyspace", "The keyspace to disable automatic compaction for", 1),
+                    typed_option<std::vector<sstring>>("table", "The table(s) to disable automatic compaction for", -1),
+                }
+            },
+            disableautocompaction_operation
+        },
+        {
+            {
                 "disablebackup",
                 "Disables incremental backup",
 R"(
@@ -634,6 +803,38 @@ Fore more information, see: https://opensource.docs.scylladb.com/stable/operatin
 )",
             },
             disablegossip_operation
+        },
+        {
+            {
+                "drain",
+                "Drain the node (stop accepting writes and flush all tables)",
+R"(
+Flushes all memtables from a node to the SSTables that are on the disk. Scylla
+stops listening for connections from the client and other nodes. You need to
+restart Scylla after running this command. This command is usually executed
+before upgrading a node to a new version or before any maintenance action is
+performed. When you want to simply flush memtables to disk, use the nodetool
+flush command.
+
+Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/drain.html
+)",
+            },
+            drain_operation
+        },
+        {
+            {
+                "enableautocompaction",
+                "Enables automatic compaction for the given keyspace and table(s)",
+R"(
+Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/enableautocompaction.html
+)",
+                { },
+                {
+                    typed_option<sstring>("keyspace", "The keyspace to enable automatic compaction for", 1),
+                    typed_option<std::vector<sstring>>("table", "The table(s) to enable automatic compaction for", -1),
+                }
+            },
+            enableautocompaction_operation
         },
         {
             {
@@ -668,6 +869,24 @@ Fore more information, see: https://opensource.docs.scylladb.com/stable/operatin
 )",
             },
             enablegossip_operation
+        },
+        {
+            {
+                "flush",
+                "Flush one or more tables",
+R"(
+Specify a keyspace and one or more tables that you want to flush from the
+memtable to on disk SSTables.
+
+Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/flush.html
+)",
+                { },
+                {
+                    typed_option<sstring>("keyspace", "The keyspace to flush", 1),
+                    typed_option<std::vector<sstring>>("table", "The table(s) to flush", -1),
+                }
+            },
+            flush_operation
         },
         {
             {
@@ -724,6 +943,25 @@ Fore more information, see: https://opensource.docs.scylladb.com/stable/operatin
                 },
             },
             settraceprobability_operation
+        },
+        {
+            {
+                "snapshot",
+                "Take a snapshot of specified keyspaces or a snapshot of the specified table",
+R"(
+Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/snapshot.html
+)",
+                {
+                    typed_option<sstring>("table", "The table(s) to snapshot, multiple ones can be joined with ','"),
+                    typed_option<sstring>("keyspace-table-list", "The keyspace.table pair(s) to snapshot, multiple ones can be joined with ','"),
+                    typed_option<sstring>("tag,t", "The name of the snapshot"),
+                    typed_option<>("skip-flush", "Do not flush memtables before snapshotting (snapshot will not contain unflushed data)"),
+                },
+                {
+                    typed_option<std::vector<sstring>>("keyspaces", "The keyspaces to snapshot", -1),
+                },
+            },
+            snapshot_operation
         },
         {
             {
