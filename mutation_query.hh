@@ -121,6 +121,7 @@ class reconcilable_result_builder {
     const schema& _schema;
     const query::partition_slice& _slice;
     bool _reversed;
+    schema_ptr _query_schema;
 
     bool _return_static_content_on_partition_with_no_rows{};
     bool _static_row_is_alive{};
@@ -143,6 +144,7 @@ public:
     reconcilable_result_builder(const schema& s, const query::partition_slice& slice,
                                 query::result_memory_accounter&& accounter) noexcept
         : _schema(s), _slice(slice), _reversed(_slice.options.contains(query::partition_slice::option::reversed))
+        , _query_schema(_reversed ? _schema.make_reversed() : _schema.shared_from_this())
         , _memory_accounter(std::move(accounter))
     { }
 
