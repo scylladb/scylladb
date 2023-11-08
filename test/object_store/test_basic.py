@@ -130,6 +130,11 @@ async def test_basic(test_tempdir, s3_server, ssl):
         conn.execute((f"CREATE KEYSPACE {ks} WITH"
                       f" REPLICATION = {replication_opts} AND STORAGE = {storage_opts};"))
         conn.execute(f"CREATE TABLE {ks}.{cf} ( name text primary key, value text );")
+
+        assert not os.path.exists(os.path.join(test_tempdir, f'data/{ks}')), "S3-backed keyspace has local directory created"
+        # Sanity check that the path is constructed correctly
+        assert os.path.exists(os.path.join(test_tempdir, 'data/system')), "Datadir is elsewhere"
+
         for row in rows:
             cql_fmt = "INSERT INTO {}.{} ( name, value ) VALUES ('{}', '{}');"
             conn.execute(cql_fmt.format(ks, cf, *row))
@@ -146,6 +151,9 @@ async def test_basic(test_tempdir, s3_server, ssl):
 
     print('Restart scylla')
     with managed_cluster(test_tempdir, ssl, s3_server) as cluster:
+        # Shouldn't be recreated by populator code
+        assert not os.path.exists(os.path.join(test_tempdir, f'data/{ks}')), "S3-backed keyspace has local directory resurrected"
+
         conn = cluster.cql.connect()
         res = conn.execute(f"SELECT * FROM {ks}.{cf};")
         have_res = {x.name: x.value for x in res}
