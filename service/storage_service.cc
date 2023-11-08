@@ -2467,8 +2467,8 @@ future<> topology_coordinator::rollback_current_topology_op(group0_guard&& guard
 
     auto str = fmt::format("rollback {} after {} failure to state {}", node.id, node.rs->state, state);
 
-    co_await update_topology_state(std::move(node.guard), {builder.build()}, str);
     slogger.info("{}", str);
+    co_await update_topology_state(std::move(node.guard), {builder.build()}, str);
     // Try to run metadata barrier to wait for all double writes to complete
     // but ignore failures
     try {
