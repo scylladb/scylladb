@@ -12,18 +12,18 @@ set_source_files_properties(${cql_grammar_srcs}
 set(cql_parser_srcs ${cql_grammar_srcs})
 list(FILTER cql_parser_srcs INCLUDE REGEX "Parser.cpp$")
 
-set(unoptimized_modes "Coverage" "Debug" "Sanitize")
-set(sanitized_modes "Debug" "Sanitize")
+set(unoptimized_modes "Coverage,Debug,Sanitize")
+set(sanitized_modes "Debug,Sanitize")
 set_property(
     SOURCE ${cql_parser_srcs}
     APPEND
     PROPERTY COMPILE_OPTIONS
       # Unoptimized parsers end up using huge amounts of stack space and
       # overflowing their stack
-      $<$<IN_LIST:$<CONFIG>,${unoptimized_modes}>:-O1>
+      $<$<CONFIG:${unoptimized_modes}>:-O1>
       # use-after-scope sanitizer also uses large amount of stack space
       # and overflows the stack of CqlParser
-      $<$<IN_LIST:$<CONFIG>,${sanitized_modes}>:-fsanitize-address-use-after-scope>)
+      $<$<CONFIG:${sanitized_modes}>:-fsanitize-address-use-after-scope>)
 
 add_library(cql3 STATIC)
 target_sources(cql3
