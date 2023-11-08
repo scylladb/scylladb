@@ -161,6 +161,9 @@ public:
     }
 
     future<> delete_atomically(std::vector<shared_sstable> ssts);
+    future<> init_table_storage(const data_dictionary::storage_options& so, sstring dir);
+    future<> destroy_table_storage(const data_dictionary::storage_options& so, sstring dir);
+    future<> init_keyspace_storage(const data_dictionary::storage_options& so, sstring dir);
 
 private:
     void add(sstable* sst);

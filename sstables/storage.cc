@@ -589,4 +589,18 @@ std::unique_ptr<sstables::storage> make_storage(sstables_manager& manager, const
     }, s_opts.value);
 }
 
+future<> init_table_storage(const data_dictionary::storage_options& so, sstring dir) {
+            co_await io_check([&dir] { return recursive_touch_directory(dir); });
+            co_await io_check([&dir] { return touch_directory(dir + "/upload"); });
+            co_await io_check([&dir] { return touch_directory(dir + "/staging"); });
+}
+
+future<> init_keyspace_storage(const data_dictionary::storage_options& so, sstring dir) {
+            co_await io_check([&dir] { return touch_directory(dir); });
+}
+
+future<> destroy_table_storage(const data_dictionary::storage_options& so, sstring dir) {
+            co_await sstables::remove_table_directory_if_has_no_snapshots(fs::path(dir));
+}
+
 } // namespace sstables

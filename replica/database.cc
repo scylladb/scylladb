@@ -1393,21 +1393,13 @@ keyspace::make_column_family_config(const schema& s, const database& db) const {
 }
 
 future<> table::init_storage() {
-    co_await coroutine::parallel_for_each(_config.all_datadirs, [] (sstring cfdir) -> future<> {
-        co_await io_check([cfdir] { return recursive_touch_directory(cfdir); });
-        co_await io_check([cfdir] { return touch_directory(cfdir + "/upload"); });
-        co_await io_check([cfdir] { return touch_directory(cfdir + "/staging"); });
+    co_await coroutine::parallel_for_each(_config.all_datadirs, [this] (sstring cfdir) -> future<> {
+        co_await _sstables_manager.init_table_storage(*_storage_opts, cfdir);
     });
 }
 
 future<> table::destroy_storage() {
-    return sstables::remove_table_directory_if_has_no_snapshots(fs::path(_config.datadir));
-}
-
-future<> keyspace::init_storage() {
-    if (_config.datadir != "") {
-        co_await io_check([this] { return touch_directory(_config.datadir); });
-    }
+    return _sstables_manager.destroy_table_storage(*_storage_opts, _config.datadir);
 }
 
 column_family& database::find_column_family(const schema_ptr& schema) {
@@ -1480,7 +1472,9 @@ database::create_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm, locator::
 
     co_await create_in_memory_keyspace(ksm, erm_factory, system);
     auto& ks = _keyspaces.at(ksm->name());
-    co_await ks.init_storage();
+    if (ks.datadir() != "") {
+        co_await get_sstables_manager(system).init_keyspace_storage(ks.metadata()->get_storage_options(), ks.datadir());
+    }
 }
 
 future<> database::create_keyspace_on_all_shards(sharded<database>& sharded_db, sharded<service::storage_proxy>& proxy, const keyspace_metadata& ks_metadata) {
