@@ -1021,7 +1021,7 @@ future<> database::add_column_family(keyspace& ks, schema_ptr schema, column_fam
         erm = ks.get_effective_replication_map();
     }
     // avoid self-reporting
-    auto& sst_manager = is_system_table(*schema) ? get_system_sstables_manager() : get_user_sstables_manager();
+    auto& sst_manager = get_sstables_manager(system_keyspace(is_system_table(*schema)));
     auto cf = make_lw_shared<column_family>(schema, std::move(cfg), ks.metadata()->get_storage_options_ptr(), _compaction_manager, sst_manager, *_cl_stats, _row_cache_tracker, erm);
     cf->set_durable_writes(ks.metadata()->durable_writes());
 
