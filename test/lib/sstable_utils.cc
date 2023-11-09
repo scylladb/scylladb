@@ -162,7 +162,7 @@ protected:
 
 future<> compaction_manager_test::run(test_env& env, sstables::run_id output_run_id, table_state& table_s, noncopyable_function<future<> (sstables::compaction_data&)> job) {
     auto& tcm = env.test_compaction_manager();
-    auto task = make_shared<compaction_manager_test_task>(_cm, table_s, output_run_id, std::move(job));
+    auto task = make_shared<compaction_manager_test_task>(tcm.get_compaction_manager(), table_s, output_run_id, std::move(job));
     co_await tcm.perform_compaction(std::move(task));
 }
 
