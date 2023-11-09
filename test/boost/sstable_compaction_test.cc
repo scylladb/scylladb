@@ -110,13 +110,6 @@ static flat_mutation_reader_v2 sstable_reader(shared_sstable sst, schema_ptr s, 
     return sst->as_mutation_source().make_reader_v2(s, std::move(permit), query::full_partition_range, s->full_slice());
 }
 
-static future<compaction_result>
-compact_sstables(sstables::compaction_descriptor descriptor, table_for_tests t,
-                 std::function<shared_sstable()> creator, sstables::compaction_sstable_replacer_fn replacer = sstables::replacer_fn_no_op(),
-                 can_purge_tombstones can_purge = can_purge_tombstones::yes) {
-    return compact_sstables(t->get_compaction_manager(), std::move(descriptor), t.as_table_state(), std::move(creator), std::move(replacer), can_purge);
-}
-
 class strategy_control_for_test : public strategy_control {
     bool _has_ongoing_compaction;
     std::optional<std::vector<shared_sstable>> _candidates_opt;
