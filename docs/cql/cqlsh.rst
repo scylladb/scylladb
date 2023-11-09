@@ -6,18 +6,26 @@
 CQLSh: the CQL shell
 --------------------
 
-cqlsh is a command line shell for interacting with Cassandra through CQL (the Cassandra Query Language).  It is shipped
-with every Cassandra package and can be found in the bin/ directory alongside the Cassandra executable.  cqlsh utilizes
-the Python native protocol driver and connects to the single node specified on the command line.
+cqlsh is a command line shell for interacting with ScyllaDB through CQL 
+(the Cassandra Query Language). It is shipped with every ScyllaDB package 
+and can be found in the ``bin/`` directory. In addition, it is available on 
+`Docker Hub <https://hub.docker.com/r/scylladb/scylla-cqlsh>`_ and in 
+the `Python Package Index (PyPI) <https://pypi.org/project/scylla-cqlsh/>`_.
+
+cqlsh utilizes the Python native protocol driver and connects to the single 
+node specified on the command line.
+
+See the `scylla-cqlsh <https://github.com/scylladb/scylla-cqlsh>`_ repository 
+on GitHub for usage examples.
 
 
 Compatibility
 ^^^^^^^^^^^^^
 
-cqlsh is compatible with Python 2.7.
+cqlsh is compatible with Python 3.8 - Python 3.11.
 
-In general, a given version of cqlsh is only guaranteed to work with the version of Cassandra that it was released with.
-In some cases, cqlsh may work with older or newer versions of Cassandra, but this is not officially supported.
+A given version of cqlsh is only guaranteed to work with the version of ScyllaDB that it was released with.
+cqlsh may work with older or newer versions of ScyllaDB without any guarantees.
 
 
 Optional Dependencies
@@ -72,13 +80,13 @@ Options:
   ``/usr/bin/google-chrome-stable %s``).
 
 ``--ssl``
-  Use SSL when connecting to Cassandra
+  Use SSL when connecting to ScyllaDB.
 
 ``-u`` ``--user``
-  Username to authenticate against Cassandra with
+  Username to authenticate against ScyllaDB.
 
 ``-p`` ``--password``
-  The password to authenticate against Cassandra with should
+  The password to authenticate against ScyllaDB, which should
   be used in conjunction with ``--user``
 
 ``-k`` ``--keyspace``
@@ -162,17 +170,17 @@ consistency ``ALL`` is not guaranteed to be enough).
 
 SHOW VERSION
 ~~~~~~~~~~~~
-This command is useful if you want to check which Cassandra version is compatible with your Scylla version.
+This command is useful if you want to check which Cassandra version is compatible with your ScyllaDB version.
 Note that the two standards are not 100% identical and this command is simply a comparison tool.
 
-If you want to display your current Scylla Version, refer to :ref:`Check your current version of Scylla <check-your-current-version-of-scylla>`.
+If you want to display your current ScyllaDB version, refer to :ref:`Check your current version of Scylla <check-your-current-version-of-scylla>`.
 
 The display shows:
 
 * The cqlsh tool version that you're using
-* The Apache Cassandra version that your version of Scylla is most compatible with
-* The CQL protocol standard that your version of Scylla is most compatible with
-* The native protocol standard that your version of Scylla is most compatible with
+* The Apache Cassandra version that your version of ScyllaDB is most compatible with
+* The CQL protocol standard that your version of ScyllaDB is most compatible with
+* The native protocol standard that your version of ScyllaDB is most compatible with
 
 Example:
 
@@ -191,7 +199,7 @@ Returns:
 SHOW HOST
 ~~~~~~~~~
 
-Prints the IP address and port of the Cassandra node that cqlsh is connected to in addition to the cluster name.
+Prints the IP address and port of the ScyllaDB node that cqlsh is connected to in addition to the cluster name.
 
 Example:
 
@@ -324,7 +332,7 @@ contents of a single column are large.
 LOGIN
 ~~~~~
 
-Authenticate as a specified Cassandra user for the current session.
+Authenticate as a specified ScyllaDB user for the current session.
 
 `Usage`::
 
