@@ -137,12 +137,14 @@ future<shared_sstable> test_env::reusable_sst(schema_ptr schema, sstring dir, ss
 class compaction_manager_test_task : public compaction::compaction_task_executor {
     sstables::run_id _run_id;
     noncopyable_function<future<> (sstables::compaction_data&)> _job;
+    gate::holder _hold;
 
 public:
     compaction_manager_test_task(compaction_manager& cm, table_state& table_s, sstables::run_id run_id, noncopyable_function<future<> (sstables::compaction_data&)> job)
         : compaction::compaction_task_executor(cm, throw_if_stopping::no, &table_s, sstables::compaction_type::Compaction, "Test compaction")
         , _run_id(run_id)
         , _job(std::move(job))
+        , _hold(_compaction_state.gate.hold())
     { }
 
 protected:
@@ -158,7 +160,6 @@ protected:
 
 future<> compaction_manager_test::run(sstables::run_id output_run_id, table_state& table_s, noncopyable_function<future<> (sstables::compaction_data&)> job) {
     auto task = make_shared<compaction_manager_test_task>(_cm, table_s, output_run_id, std::move(job));
-    gate::holder gate_holder = task->_compaction_state.gate.hold();
     auto& cdata = register_compaction(task);
     co_await task->run_compaction().discard_result().finally([this, &cdata, task] {
         task->switch_state(compaction_task_executor::state::none);
