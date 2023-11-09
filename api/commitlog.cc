@@ -62,6 +62,9 @@ void set_commitlog(http_context& ctx, routes& r) {
     httpd::commitlog_json::get_total_commit_log_size.set(r, [&ctx](std::unique_ptr<request> req) {
         return acquire_cl_metric<uint64_t>(ctx, std::bind(&db::commitlog::get_total_size, std::placeholders::_1));
     });
+    httpd::commitlog_json::get_max_disk_size.set(r, [&ctx](std::unique_ptr<request> req) {
+        return acquire_cl_metric<uint64_t>(ctx, std::bind(&db::commitlog::disk_limit, std::placeholders::_1));
+    });
 }
 
 }

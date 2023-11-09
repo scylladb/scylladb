@@ -144,6 +144,21 @@
           "parameters": []
         }
       ]
+    },
+    {
+      "path": "/commitlog/metrics/max_disk_size",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get max disk size",
+          "type": "long",
+          "nickname": "get_max_disk_size",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
     }
    ]
 }
