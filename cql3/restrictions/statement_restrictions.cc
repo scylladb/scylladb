@@ -1012,8 +1012,18 @@ dht::partition_range_vector partition_ranges_from_token(const expr::expression& 
     return {{std::move(start), std::move(end)}};
 }
 
+void validate_key_length(const std::vector<managed_bytes>& key) {
+    auto max_length = std::numeric_limits<compound_type<allow_prefixes::yes>::size_type>::max();
+    for (auto k : key) {
+        if (k.size() > max_length) {
+            throw exceptions::invalid_request_exception(format("Key length of {} is longer than maximum of {}", k.size(), max_length));
+        }
+    }
+}
+
 /// Turns a partition-key value into a partition_range. \p pk must have elements for all partition columns.
 dht::partition_range range_from_bytes(const schema& schema, const std::vector<managed_bytes>& pk) {
+    validate_key_length(pk);
     const auto k = partition_key::from_exploded(pk);
     const auto tok = dht::get_token(schema, k);
     const query::ring_position pos(std::move(tok), std::move(k));
@@ -1442,6 +1452,7 @@ std::vector<query::clustering_range> get_single_column_clustering_bounds(
                 ck_ranges.reserve(product_size);
                 const auto extra_lb = last_range->start(), extra_ub = last_range->end();
                 for (auto& b : cartesian_product(prior_column_values)) {
+                    validate_key_length(b);
                     auto new_lb = b, new_ub = b;
                     if (extra_lb) {
                         new_lb.push_back(extra_lb->value());
@@ -1462,6 +1473,9 @@ std::vector<query::clustering_range> get_single_column_clustering_bounds(
     // prior_column_values.
     std::vector<query::clustering_range> ck_ranges(product_size);
     cartesian_product cp(prior_column_values);
+    for (auto c : cp) {
+        validate_key_length(c);
+    }
     std::transform(cp.begin(), cp.end(), ck_ranges.begin(), std::bind_front(query::clustering_range::make_singular));
     sort(ck_ranges.begin(), ck_ranges.end(), range_less{schema});
     return ck_ranges;

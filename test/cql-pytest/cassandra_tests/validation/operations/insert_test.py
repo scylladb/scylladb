@@ -192,14 +192,12 @@ def testInsertWithDefaultTtl(cql, test_keyspace):
 TOO_BIG = 1024 * 65
 
 # Reproduces #12247:
-@pytest.mark.xfail(reason="Issue #12247")
 def testPKInsertWithValueOver64K(cql, test_keyspace):
     with create_table(cql, test_keyspace, f"(a text, b text, PRIMARY KEY (a, b))") as table:
         assertInvalidThrow(cql, table, InvalidRequest,
                            "INSERT INTO %s (a, b) VALUES (?, 'foo')", 'x'*TOO_BIG)
 
 # Reproduces #12247:
-@pytest.mark.xfail(reason="Issue #12247")
 def testCKInsertWithValueOver64K(cql, test_keyspace):
     with create_table(cql, test_keyspace, f"(a text, b text, PRIMARY KEY (a, b))") as table:
         assertInvalidThrow(cql, table, InvalidRequest,
