@@ -96,27 +96,26 @@ future<> migration_manager::drain()
 
 void migration_manager::init_messaging_service()
 {
-    auto update_schema = [this] {
-        //FIXME: future discarded.
-        (void)with_gate(_background_tasks, [this] {
-            mlogger.debug("features changed, recalculating schema version");
-            return db::schema_tables::recalculate_schema_version(_sys_ks, _storage_proxy.container(), _feat);
+    auto reload_schema_in_bg = [this] {
+        (void) with_gate(_background_tasks, [this] {
+            return reload_schema().handle_exception([] (std::exception_ptr ep) {
+                // Due to features being unordered, reload might fail because
+                // some tables still have the wrong version and looking up e.g.
+                // the base-table of a view will fail.
+                mlogger.debug("Failed to reload schema: {}", ep);
+            });
         });
     };
 
     if (this_shard_id() == 0) {
-        _feature_listeners.push_back(_feat.view_virtual_columns.when_enabled(update_schema));
-        _feature_listeners.push_back(_feat.digest_insensitive_to_expiry.when_enabled(update_schema));
-        _feature_listeners.push_back(_feat.cdc.when_enabled(update_schema));
-        _feature_listeners.push_back(_feat.per_table_partitioners.when_enabled(update_schema));
-        _feature_listeners.push_back(_feat.computed_columns.when_enabled(update_schema));
+        _feature_listeners.push_back(_feat.view_virtual_columns.when_enabled(reload_schema_in_bg));
+        _feature_listeners.push_back(_feat.digest_insensitive_to_expiry.when_enabled(reload_schema_in_bg));
+        _feature_listeners.push_back(_feat.cdc.when_enabled(reload_schema_in_bg));
+        _feature_listeners.push_back(_feat.per_table_partitioners.when_enabled(reload_schema_in_bg));
+        _feature_listeners.push_back(_feat.computed_columns.when_enabled(reload_schema_in_bg));
 
         if (!_feat.table_digest_insensitive_to_expiry) {
-            _feature_listeners.push_back(_feat.table_digest_insensitive_to_expiry.when_enabled([this] {
-                (void) with_gate(_background_tasks, [this] {
-                    return reload_schema();
-                });
-            }));
+            _feature_listeners.push_back(_feat.table_digest_insensitive_to_expiry.when_enabled(reload_schema_in_bg));
         }
     }
 
