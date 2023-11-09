@@ -99,7 +99,7 @@ shared_sstable make_sstable_easy(test_env& env, lw_shared_ptr<replica::memtable>
     return make_sstable_easy(env, mt->make_flat_reader(mt->schema(), env.make_reader_permit()), std::move(cfg), gen, v, estimated_partitions, query_time);
 }
 
-future<compaction_result> compact_sstables(sstables::compaction_descriptor descriptor, table_for_tests t,
+future<compaction_result> compact_sstables(test_env& env, sstables::compaction_descriptor descriptor, table_for_tests t,
                  std::function<shared_sstable()> creator, sstables::compaction_sstable_replacer_fn replacer, can_purge_tombstones can_purge) {
     auto& cm = t->get_compaction_manager();
     auto& table_s = t.as_table_state();
