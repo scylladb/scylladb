@@ -2831,7 +2831,7 @@ SEASTAR_TEST_CASE(sstable_run_based_compaction_test) {
                 sstables.insert(new_sst);
             }
             column_family_test(cf).rebuild_sstable_list(cf.as_table_state(), new_sstables, old_sstables).get();
-            compaction_manager_test(cf->get_compaction_manager()).propagate_replacement(cf.as_table_state(), old_sstables, new_sstables);
+            env.test_compaction_manager().propagate_replacement(cf.as_table_state(), old_sstables, new_sstables);
         };
 
         auto do_incremental_replace = [&] (auto old_sstables, auto new_sstables, auto& expected_sst, auto& closed_sstables_tracker) {

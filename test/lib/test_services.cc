@@ -255,6 +255,10 @@ data_dictionary::storage_options make_test_object_storage_options() {
     return ret;
 }
 
+void test_env_compaction_manager::propagate_replacement(compaction::table_state& table_s, const std::vector<shared_sstable>& removed, const std::vector<shared_sstable>& added) {
+    _cm.propagate_replacement(table_s, removed, added);
+}
+
 }
 
 static std::pair<int, char**> rebuild_arg_list_without(int argc, char** argv, const char* filter_out, bool exclude_positional_arg = false) {

@@ -237,9 +237,6 @@ public:
 
     future<> run(sstables::run_id output_run_id, table_state& table_s, noncopyable_function<future<> (sstables::compaction_data&)> job);
 
-    void propagate_replacement(table_state& table_s, const std::vector<sstables::shared_sstable>& removed, const std::vector<sstables::shared_sstable>& added) {
-        _cm.propagate_replacement(table_s, removed, added);
-    }
 private:
     sstables::compaction_data& register_compaction(shared_ptr<compaction::compaction_task_executor> task);
 
