@@ -2808,7 +2808,7 @@ SEASTAR_TEST_CASE(sstable_run_based_compaction_test) {
         cf->start();
         cf->set_compaction_strategy(sstables::compaction_strategy_type::size_tiered);
         auto compact = [&, s] (std::vector<shared_sstable> all, auto replacer) -> std::vector<shared_sstable> {
-            return compact_sstables(cf->get_compaction_manager(), sstables::compaction_descriptor(std::move(all), 1, 0), cf.as_table_state(), sst_gen, replacer).get0().new_sstables;
+            return compact_sstables(sstables::compaction_descriptor(std::move(all), 1, 0), cf, sst_gen, replacer).get0().new_sstables;
         };
         auto make_insert = [&] (const dht::decorated_key& key) {
             mutation m(s, key);
