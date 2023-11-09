@@ -236,11 +236,6 @@ public:
     explicit compaction_manager_test(compaction_manager& cm) noexcept : _cm(cm) {}
 
     future<> run(sstables::run_id output_run_id, table_state& table_s, noncopyable_function<future<> (sstables::compaction_data&)> job);
-
-private:
-    sstables::compaction_data& register_compaction(shared_ptr<compaction::compaction_task_executor> task);
-
-    void deregister_compaction(const sstables::compaction_data& c);
 };
 
 using can_purge_tombstones = compaction_manager::can_purge_tombstones;
