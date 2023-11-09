@@ -161,15 +161,9 @@ protected:
 };
 
 future<> compaction_manager_test::run(test_env& env, sstables::run_id output_run_id, table_state& table_s, noncopyable_function<future<> (sstables::compaction_data&)> job) {
+    auto& tcm = env.test_compaction_manager();
     auto task = make_shared<compaction_manager_test_task>(_cm, table_s, output_run_id, std::move(job));
-    _cm._tasks.push_back(task);
-    auto unregister_task = defer([this, task] {
-        if (_cm._tasks.remove(task) == 0) {
-            testlog.error("compaction_manager_test: deregister_compaction uuid={}: task not found", task->compaction_data().compaction_uuid);
-        }
-        task->switch_state(compaction_task_executor::state::none);
-    });
-    co_await task->run_compaction();
+    co_await tcm.perform_compaction(std::move(task));
 }
 
 shared_sstable verify_mutation(test_env& env, shared_sstable sst, lw_shared_ptr<replica::memtable> mt, bytes key, std::function<void(mutation_opt&)> verify) {
