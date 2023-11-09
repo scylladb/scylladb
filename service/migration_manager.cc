@@ -228,6 +228,7 @@ bool migration_manager::have_schema_agreement() {
     }
     auto our_version = _storage_proxy.get_db().local().get_version();
     bool match = false;
+    static thread_local logger::rate_limit rate_limit{std::chrono::seconds{5}};
     _gossiper.for_each_endpoint_state_until([&] (const gms::inet_address& endpoint, const gms::endpoint_state& eps) {
         if (endpoint == utils::fb_utilities::get_broadcast_address() || !_gossiper.is_alive(endpoint)) {
             return stop_iteration::no;
@@ -235,13 +236,14 @@ bool migration_manager::have_schema_agreement() {
         mlogger.debug("Checking schema state for {}.", endpoint);
         auto schema = eps.get_application_state_ptr(gms::application_state::SCHEMA);
         if (!schema) {
-            mlogger.debug("Schema state not yet available for {}.", endpoint);
+            mlogger.log(log_level::info, rate_limit, "Schema state not yet available for {}.", endpoint);
             match = false;
             return stop_iteration::yes;
         }
         auto remote_version = table_schema_version(utils::UUID{schema->value()});
         if (our_version != remote_version) {
-            mlogger.debug("Schema mismatch for {} ({} != {}).", endpoint, our_version, remote_version);
+            mlogger.log(log_level::info, rate_limit, "Schema mismatch for {} ({} != {}).",
+                        endpoint, our_version, remote_version);
             match = false;
             return stop_iteration::yes;
         } else {
@@ -249,6 +251,9 @@ bool migration_manager::have_schema_agreement() {
         }
         return stop_iteration::no;
     });
+    if (match) {
+        mlogger.info("Schema agreement check passed.");
+    }
     return match;
 }
 
@@ -1009,7 +1014,7 @@ void migration_manager::passive_announce(table_schema_version version) {
 
 future<> migration_manager::passive_announce() {
     assert(this_shard_id() == 0);
-    mlogger.debug("Gossiping my schema version {}", _schema_version_to_publish);
+    mlogger.info("Gossiping my schema version {}", _schema_version_to_publish);
     return _gossiper.add_local_application_state(gms::application_state::SCHEMA, gms::versioned_value::schema(_schema_version_to_publish));
 }
 
