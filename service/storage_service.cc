@@ -2883,10 +2883,10 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
             .ip_addr = *replace_address,
             .raft_id = raft::server_id{ri->host_id.uuid()},
         };
+        replacing_a_node_with_same_ip = *replace_address == get_broadcast_address();
+        replacing_a_node_with_diff_ip = *replace_address != get_broadcast_address();
         if (!_raft_topology_change_enabled) {
             bootstrap_tokens = std::move(ri->tokens);
-            replacing_a_node_with_same_ip = *replace_address == get_broadcast_address();
-            replacing_a_node_with_diff_ip = *replace_address != get_broadcast_address();
 
             slogger.info("Replacing a node with {} IP address, my address={}, node being replaced={}",
                 get_broadcast_address() == *replace_address ? "the same" : "a different",
@@ -2989,7 +2989,7 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
         app_states.emplace(gms::application_state::CDC_GENERATION_ID, versioned_value::cdc_generation_id(cdc_gen_id));
         app_states.emplace(gms::application_state::STATUS, versioned_value::normal(my_tokens));
     }
-    if (replacing_a_node_with_same_ip || replacing_a_node_with_diff_ip) {
+    if (!_raft_topology_change_enabled && (replacing_a_node_with_same_ip || replacing_a_node_with_diff_ip)) {
         app_states.emplace(gms::application_state::TOKENS, versioned_value::tokens(bootstrap_tokens));
     }
     app_states.emplace(gms::application_state::SNITCH_NAME, versioned_value::snitch_name(_snitch.local()->get_name()));
@@ -6656,6 +6656,15 @@ future<join_node_response_result> storage_service::join_node_response_handler(jo
 
     co_return co_await std::visit(overloaded_functor {
         [&] (const join_node_response_params::accepted& acc) -> future<join_node_response_result> {
+            // Allow other nodes to mark the replacing node as alive. It has
+            // effect only if the replacing node is reusing the IP of the
+            // replaced node. In such a case, we do not allow the replacing
+            // node to advertise itself earlier. Thanks to this, if the
+            // topology sees the node being replaced as alive, it can safely
+            // reject the join request because it can be sure that it is not
+            // the replacing node that is alive.
+            co_await _gossiper.advertise_to_nodes({});
+
             // Do a read barrier to read/initialize the topology state
             auto& raft_server = _group0->group0_server();
             co_await raft_server.read_barrier(&_abort_source);
