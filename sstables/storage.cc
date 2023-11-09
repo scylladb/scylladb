@@ -589,4 +589,39 @@ std::unique_ptr<sstables::storage> make_storage(sstables_manager& manager, const
     }, s_opts.value);
 }
 
+future<> init_table_storage(const data_dictionary::storage_options& so, sstring dir) {
+    co_await std::visit(overloaded_functor {
+        [&dir] (const data_dictionary::storage_options::local&) -> future<> {
+            co_await io_check([&dir] { return recursive_touch_directory(dir); });
+            co_await io_check([&dir] { return touch_directory(dir + "/upload"); });
+            co_await io_check([&dir] { return touch_directory(dir + "/staging"); });
+        },
+        [] (const data_dictionary::storage_options::s3&) -> future<> {
+            co_return;
+        }
+    }, so.value);
+}
+
+future<> init_keyspace_storage(const data_dictionary::storage_options& so, sstring dir) {
+    co_await std::visit(overloaded_functor {
+        [&dir] (const data_dictionary::storage_options::local&) -> future<> {
+            co_await io_check([&dir] { return touch_directory(dir); });
+        },
+        [] (const data_dictionary::storage_options::s3&) -> future<> {
+            co_return;
+        }
+    }, so.value);
+}
+
+future<> destroy_table_storage(const data_dictionary::storage_options& so, sstring dir) {
+    co_await std::visit(overloaded_functor {
+        [&dir] (const data_dictionary::storage_options::local&) -> future<> {
+            co_await sstables::remove_table_directory_if_has_no_snapshots(fs::path(dir));
+        },
+        [] (const data_dictionary::storage_options::s3&) -> future<> {
+            co_return;
+        }
+    }, so.value);
+}
+
 } // namespace sstables
