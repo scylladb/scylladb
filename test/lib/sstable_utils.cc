@@ -112,7 +112,7 @@ future<compaction_result> compact_sstables(test_env& env, sstables::compaction_d
     }
     auto cmt = compaction_manager_test(cm);
     sstables::compaction_result ret;
-    co_await cmt.run(descriptor.run_identifier, table_s, [&] (sstables::compaction_data& cdata) {
+    co_await cmt.run(env, descriptor.run_identifier, table_s, [&] (sstables::compaction_data& cdata) {
         return do_with(compaction_progress_monitor{}, [&] (compaction_progress_monitor& progress_monitor) {
             return sstables::compact_sstables(std::move(descriptor), cdata, table_s, progress_monitor).then([&] (sstables::compaction_result res) {
                 ret = std::move(res);
@@ -160,7 +160,7 @@ protected:
     friend class compaction_manager_test;
 };
 
-future<> compaction_manager_test::run(sstables::run_id output_run_id, table_state& table_s, noncopyable_function<future<> (sstables::compaction_data&)> job) {
+future<> compaction_manager_test::run(test_env& env, sstables::run_id output_run_id, table_state& table_s, noncopyable_function<future<> (sstables::compaction_data&)> job) {
     auto task = make_shared<compaction_manager_test_task>(_cm, table_s, output_run_id, std::move(job));
     _cm._tasks.push_back(task);
     auto unregister_task = defer([this, task] {
