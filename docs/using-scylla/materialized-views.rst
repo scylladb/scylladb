@@ -8,13 +8,13 @@ Occasionally, the same information record needs to be queried based on more than
 
 * you need to determine scores, and select the aggregated top scores from within different time ranges.
 
-In Scylla, data is divided into partitions which can be looked up via a partition key. Sometimes the application needs to find a partition or partitions by the value of another column. Doing this efficiently requires indexing. You may also need to index an alternative clustering key.
+In ScyllaDB, data is divided into partitions which can be looked up via a partition key. Sometimes the application needs to find a partition or partitions by the value of another column. Doing this efficiently requires indexing. You may also need to index an alternative clustering key.
 
 Prior to the introduction of materialized views, the only way to implement this was using denormalization - creating two entirely separate tables and synchronizing them from within an application. However, ensuring any level of consistency between the data in two or more views this way can require duplicated code along with complex and slow application logic.
 
-Scylla’s materialized views feature, moves this complexity out of the application and into the servers.  With fewer round trips to the applications, this implementation is faster and more reliable.
+ScyllaDB’s materialized views feature, moves this complexity out of the application and into the servers.  With fewer round trips to the applications, this implementation is faster and more reliable.
 
-With materialized views, Scylla automates the process of maintaining separate tables to support different queries of the same data, and allows for fast lookups of data in each view using the standard read path.
+With materialized views, ScyllaDB automates the process of maintaining separate tables to support different queries of the same data, and allows for fast lookups of data in each view using the standard read path.
 
 A **materialized view** is a global index. It is effectively a new table, populated by a query running against the base table.  You cannot update a materialized view directly;  to update it, you must update the base table.
 
@@ -36,7 +36,7 @@ Given the following ‘base’ table:
 	    PRIMARY KEY (name)
 	);
 
-Scylla can automatically maintain a materialized view table. In the following example, we want to search by city, but show all fields in the original table.
+ScyllaDB can automatically maintain a materialized view table. In the following example, we want to search by city, but show all fields in the original table.
 
 ``city`` is the partition key, but since there can be more than one building in each city, we must add ``name`` as the clustering key, so that ``(city, name)`` becomes the primary key:
 
@@ -78,6 +78,8 @@ Note that, although each materialized view is a separate table, a user cannot mo
 
 To modify views, remember that you must instead modify the base table associated with the view.
 
+See the :doc:`CQL Reference for Materialized Views </cql/mv>` for more examples.
+
 Compaction Strategies with Materialized Views
 ---------------------------------------------
 
@@ -108,7 +110,8 @@ For example:
 More information 
 ................
 
-* Learn more about Materialized Views with Scylla University (Free, registration required)
+* :doc:`CQL Reference for Materialized Views </cql/mv>`
+* Learn more about Materialized Views with ScyllaDB University (Free, registration required)
 
   - `Materialized Views, Secondary Indexes, and Filtering Lesson <https://university.scylladb.com/courses/data-modeling/lessons/materialized-views-secondary-indexes-and-filtering/>`_
   - `Hands-on Lab Part 1 <https://university.scylladb.com/courses/data-modeling/lessons/materialized-views-secondary-indexes-and-filtering/topic/materialized-views-and-indexes-hands-on-lab-1/>`_

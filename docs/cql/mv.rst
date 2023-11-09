@@ -22,7 +22,6 @@
 
 Materialized Views
 ------------------
-Production ready in Scylla Open Source 3.0 and Scylla Enterprise 2019.1.x
 
 Materialized views names are defined by:
 
@@ -146,7 +145,7 @@ MV Options
 A materialized view is internally implemented by a table, and as such, creating a MV allows the :ref:`same options than
 creating a table <create-table-options>`.
 
-Additionally, the following Scylla-specific options are supported:
+Additionally, the following ScyllaDB-specific options are supported:
 
 .. list-table::
    :widths: 20 10 10 60
