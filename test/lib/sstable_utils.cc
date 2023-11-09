@@ -101,7 +101,6 @@ shared_sstable make_sstable_easy(test_env& env, lw_shared_ptr<replica::memtable>
 
 future<compaction_result> compact_sstables(test_env& env, sstables::compaction_descriptor descriptor, table_for_tests t,
                  std::function<shared_sstable()> creator, sstables::compaction_sstable_replacer_fn replacer, can_purge_tombstones can_purge) {
-    auto& cm = t->get_compaction_manager();
     auto& table_s = t.as_table_state();
     descriptor.creator = [creator = std::move(creator)] (shard_id dummy) mutable {
         return creator();
@@ -110,9 +109,8 @@ future<compaction_result> compact_sstables(test_env& env, sstables::compaction_d
     if (can_purge) {
         descriptor.enable_garbage_collection(table_s.main_sstable_set());
     }
-    auto cmt = compaction_manager_test(cm);
     sstables::compaction_result ret;
-    co_await cmt.run(env, descriptor.run_identifier, table_s, [&] (sstables::compaction_data& cdata) {
+    co_await run_compaction_task(env, descriptor.run_identifier, table_s, [&] (sstables::compaction_data& cdata) {
         return do_with(compaction_progress_monitor{}, [&] (compaction_progress_monitor& progress_monitor) {
             return sstables::compact_sstables(std::move(descriptor), cdata, table_s, progress_monitor).then([&] (sstables::compaction_result res) {
                 ret = std::move(res);
@@ -156,11 +154,9 @@ protected:
             return make_ready_future<compaction_manager::compaction_stats_opt>(std::nullopt);
         });
     }
-
-    friend class compaction_manager_test;
 };
 
-future<> compaction_manager_test::run(test_env& env, sstables::run_id output_run_id, table_state& table_s, noncopyable_function<future<> (sstables::compaction_data&)> job) {
+future<> run_compaction_task(test_env& env, sstables::run_id output_run_id, table_state& table_s, noncopyable_function<future<> (sstables::compaction_data&)> job) {
     auto& tcm = env.test_compaction_manager();
     auto task = make_shared<compaction_manager_test_task>(tcm.get_compaction_manager(), table_s, output_run_id, std::move(job));
     co_await tcm.perform_compaction(std::move(task));
