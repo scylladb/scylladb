@@ -164,6 +164,28 @@ class ManagerClient():
         await self.server_sees_others(server_id, wait_others, interval = wait_interval)
         self._driver_update()
 
+    async def rolling_restart(self, servers):
+        for idx, s in enumerate(servers):
+            await self.server_stop_gracefully(s.server_id)
+
+            # Wait for other servers to see the server to be stopped
+            # so that the later server_sees_other_server() call will not
+            # exit immediately, making it moot.
+            for idx2 in range(len(servers)):
+                if idx2 != idx:
+                    await self.server_not_sees_other_server(servers[idx2].ip_addr, s.ip_addr)
+
+            await self.server_start(s.server_id)
+
+            # Wait for other servers to see the restarted server.
+            # Otherwise, the next server we are going to restart may not yet see "s" as restarted
+            # and will not send graceful shutdown message to it. Server "s" may learn about the
+            # restart from gossip later and close connections while we already sent CQL requests
+            # to it, which will cause them to time out. Refs #14746.
+            for idx2 in range(len(servers)):
+                if idx2 != idx:
+                    await self.server_sees_other_server(servers[idx2].ip_addr, s.ip_addr)
+
     async def server_pause(self, server_id: ServerNum) -> None:
         """Pause the specified server."""
         logger.debug("ManagerClient pausing %s", server_id)
