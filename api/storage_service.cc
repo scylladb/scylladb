@@ -184,17 +184,21 @@ future<json::json_return_type> set_tables_autocompaction(http_context& ctx, cons
 }
 
 void set_transport_controller(http_context& ctx, routes& r, cql_transport::controller& ctl) {
-    ss::start_native_transport.set(r, [&ctl](std::unique_ptr<request> req) {
+    ss::start_native_transport.set(r, [&ctx, &ctl](std::unique_ptr<request> req) {
         return smp::submit_to(0, [&] {
-            return ctl.start_server();
+            return with_scheduling_group(ctx.db.local().get_statement_scheduling_group(), [&ctl] {
+                return ctl.start_server();
+            });
         }).then([] {
             return make_ready_future<json::json_return_type>(json_void());
         });
     });
 
-    ss::stop_native_transport.set(r, [&ctl](std::unique_ptr<request> req) {
+    ss::stop_native_transport.set(r, [&ctx, &ctl](std::unique_ptr<request> req) {
         return smp::submit_to(0, [&] {
-            return ctl.request_stop_server();
+            return with_scheduling_group(ctx.db.local().get_statement_scheduling_group(), [&ctl] {
+                return ctl.request_stop_server();
+            });
         }).then([] {
             return make_ready_future<json::json_return_type>(json_void());
         });
@@ -216,17 +220,21 @@ void unset_transport_controller(http_context& ctx, routes& r) {
 }
 
 void set_rpc_controller(http_context& ctx, routes& r, thrift_controller& ctl) {
-    ss::stop_rpc_server.set(r, [&ctl](std::unique_ptr<request> req) {
-        return smp::submit_to(0, [&] {
-            return ctl.request_stop_server();
+    ss::stop_rpc_server.set(r, [&ctx, &ctl] (std::unique_ptr<request> req) {
+        return smp::submit_to(0, [&ctx, &ctl] {
+            return with_scheduling_group(ctx.db.local().get_statement_scheduling_group(), [&ctl] () mutable {
+                return ctl.request_stop_server();
+            });
         }).then([] {
             return make_ready_future<json::json_return_type>(json_void());
         });
     });
 
-    ss::start_rpc_server.set(r, [&ctl](std::unique_ptr<request> req) {
-        return smp::submit_to(0, [&] {
-            return ctl.start_server();
+    ss::start_rpc_server.set(r, [&ctx, &ctl](std::unique_ptr<request> req) {
+        return smp::submit_to(0, [&ctx, &ctl] {
+            return with_scheduling_group(ctx.db.local().get_statement_scheduling_group(), [&ctl] () mutable {
+                return ctl.start_server();
+            });
         }).then([] {
             return make_ready_future<json::json_return_type>(json_void());
         });
