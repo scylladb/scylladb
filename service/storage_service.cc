@@ -2647,7 +2647,7 @@ public:
         co_return;
     }
 
-    future<bool> post_server_start(const group0_info& g0_info) override {
+    future<bool> post_server_start(const group0_info& g0_info, abort_source& as) override {
         // Group 0 has been started. Allow the join_node_response to be handled.
         _ss._join_node_group0_started.set_value();
 
