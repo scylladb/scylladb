@@ -199,6 +199,12 @@ SEASTAR_TEST_CASE(test_invalid_user_type_statements) {
                 "Cannot drop user type ks.ut6 as it is still used by user type ut7");
         e.execute_cql("drop type ut7").discard_result().get();
         e.execute_cql("drop type ut6").discard_result().get();
+
+        // cannot add duration field to UDT used in clustering keys (issue #12913)
+        e.execute_cql("create type ut8 (a int, b int)").discard_result().get();
+        e.execute_cql("create table cf4 (pk int, ck frozen<ut8>, primary key(pk, ck))").discard_result().get();
+        REQUIRE_INVALID(e, "alter type ut8 add d duration",
+                "Cannot add new field to type ks.ut8 because it is used in the clustering key column ck of table ks.cf4 where durations are not allowed");
     });
 }
 

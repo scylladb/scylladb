@@ -141,6 +141,18 @@ user_type alter_type_statement::add_or_alter::do_add(data_dictionary::database d
         throw exceptions::invalid_request_exception(format("Cannot add new field to type {}: maximum number of fields reached", _name));
     }
 
+    if (_field_type->is_duration()) {
+        auto&& ks = db.find_keyspace(keyspace());
+        for (auto&& schema : ks.metadata()->cf_meta_data() | boost::adaptors::map_values) {
+            for (auto&& column : schema->clustering_key_columns()) {
+                if (column.type->references_user_type(_name.get_keyspace(), _name.get_user_type_name())) {
+                    throw exceptions::invalid_request_exception(format("Cannot add new field to type {} because it is used in the clustering key column {} of table {}.{} where durations are not allowed",
+                        _name.to_string(), column.name_as_text(), schema->ks_name(), schema->cf_name()));
+                }
+            }
+        }
+    }
+
     std::vector<bytes> new_names(to_update->field_names());
     new_names.push_back(_field_name->name());
     std::vector<data_type> new_types(to_update->field_types());
