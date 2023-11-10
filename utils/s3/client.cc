@@ -21,6 +21,7 @@
 #include <seastar/core/gate.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/util/short_streams.hh>
+#include <seastar/util/lazy.hh>
 #include <seastar/http/request.hh>
 #include "utils/s3/client.hh"
 #include "utils/http.hh"
@@ -420,6 +421,7 @@ protected:
     sstring _upload_id;
     utils::chunked_vector<sstring> _part_etags;
     gate _bg_flushes;
+    std::optional<tag> _tag;
 
     future<> start_upload();
     future<> finalize_upload();
@@ -432,9 +434,10 @@ protected:
     }
 
 public:
-    upload_sink_base(shared_ptr<client> cln, sstring object_name)
+    upload_sink_base(shared_ptr<client> cln, sstring object_name, std::optional<tag> tag)
         : _client(std::move(cln))
         , _object_name(std::move(object_name))
+        , _tag(std::move(tag))
     {
     }
 
@@ -532,9 +535,12 @@ future<> dump_multipart_upload_parts(output_stream<char> out, const utils::chunk
 }
 
 future<> client::upload_sink_base::start_upload() {
-    s3l.trace("POST uploads {}", _object_name);
+    s3l.trace("POST uploads {} (tag {})", _object_name, seastar::value_of([this] { return _tag ? _tag->key + "=" + _tag->value : "none"; }));
     auto rep = http::request::make("POST", _client->_host, _object_name);
     rep.query_parameters["uploads"] = "";
+    if (_tag) {
+        rep._headers["x-amz-tagging"] = format("{}={}", _tag->key, _tag->value);
+    }
     co_await _client->make_request(std::move(rep), [this] (const http::reply& rep, input_stream<char>&& in_) -> future<> {
         auto in = std::move(in_);
         auto body = co_await util::read_entire_stream_contiguous(in);
@@ -664,8 +670,8 @@ class client::upload_sink final : public client::upload_sink_base {
     }
 
 public:
-    upload_sink(shared_ptr<client> cln, sstring object_name)
-        : upload_sink_base(std::move(cln), std::move(object_name))
+    upload_sink(shared_ptr<client> cln, sstring object_name, std::optional<tag> tag = {})
+        : upload_sink_base(std::move(cln), std::move(object_name), std::move(tag))
     {}
 
     virtual future<> put(temporary_buffer<char> buf) override {
@@ -751,13 +757,14 @@ class client::upload_jumbo_sink final : public upload_sink_base {
     // "Part numbers can be any number from 1 to 10,000, inclusive."
     // https://docs.aws.amazon.com/AmazonS3/latest/API/API_UploadPart.html
     static constexpr unsigned aws_maximum_parts_in_piece = 10000;
+    static constexpr tag piece_tag = { .key = "kind", .value = "piece" };
 
     const unsigned _maximum_parts_in_piece;
     std::unique_ptr<upload_sink> _current;
 
     future<> maybe_flush() {
         if (_current->parts_count() >= _maximum_parts_in_piece) {
-            auto next = std::make_unique<upload_sink>(_client, format("{}_{}", _object_name, parts_count() + 1));
+            auto next = std::make_unique<upload_sink>(_client, format("{}_{}", _object_name, parts_count() + 1), piece_tag);
             co_await upload_part(std::exchange(_current, std::move(next)));
             s3l.trace("Initiated {} piece (upload_id {})", parts_count(), _upload_id);
         }
@@ -765,9 +772,9 @@ class client::upload_jumbo_sink final : public upload_sink_base {
 
 public:
     upload_jumbo_sink(shared_ptr<client> cln, sstring object_name, std::optional<unsigned> max_parts_per_piece)
-        : upload_sink_base(std::move(cln), std::move(object_name))
+        : upload_sink_base(std::move(cln), std::move(object_name), std::nullopt)
         , _maximum_parts_in_piece(max_parts_per_piece.value_or(aws_maximum_parts_in_piece))
-        , _current(std::make_unique<upload_sink>(_client, format("{}_{}", _object_name, parts_count())))
+        , _current(std::make_unique<upload_sink>(_client, format("{}_{}", _object_name, parts_count()), piece_tag))
     {}
 
     virtual future<> put(temporary_buffer<char> buf) override {
