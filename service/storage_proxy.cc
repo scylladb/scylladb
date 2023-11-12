@@ -427,6 +427,12 @@ private:
             tracing::trace(trace_state_ptr, "Message received from /{}", src_addr.addr);
         }
 
+        // FIXME: this is also held while mutations are send to replicas which is not needed. They are send inside mutate_counters_on_leader
+        // called below. The way to fix it is to move the entry to the phased barrier into the function, but the barrier needs to be entered
+        // before fencing so the fencing should be moves as well, but and we do fencing here because was want to avoid fetching schema for
+        // fenced writes.
+        auto op = _sp.start_write();
+
         const auto fence = fence_opt.value_or(fencing_token{});
         if (auto stale = _sp.apply_fence(fence, src_addr.addr)) {
             co_return co_await encode_replica_exception_for_rpc<replica::exception_variant>(_sp.features(),
@@ -499,6 +505,7 @@ private:
             co_await coroutine::all(
                 [&] () -> future<> {
                     try {
+                        auto op = _sp.start_write();
                         // FIXME: get_schema_for_write() doesn't timeout
                         schema_ptr s = co_await get_schema_for_write(schema_version, netw::messaging_service::msg_addr{reply_to, shard}, timeout);
                         // Note: blocks due to execution_stage in replica::database::apply()
@@ -1550,6 +1557,7 @@ public:
         return _mutation_holder->store_hint(hm, ep, tr_state);
     }
     future<> apply_locally(storage_proxy::clock_type::time_point timeout, tracing::trace_state_ptr tr_state) {
+        auto op = _proxy->start_write();
         return _mutation_holder->apply_locally(*_proxy, timeout, std::move(tr_state),
             adjust_rate_limit_for_local_operation(_rate_limit_info),
             storage_proxy::get_fence(*_effective_replication_map_ptr));
@@ -3356,6 +3364,11 @@ future<> storage_proxy::mutate_counters(Range&& mutations, db::consistency_level
         auto endpoint = endpoint_and_mutations.first;
 
         if (endpoint == my_address) {
+            // FIXME: this is also held while mutations are send to replicas which is not needed
+            // because mutate_counters_on_leader do so internally. The way to fix it is to move the
+            // entry to the phased barrier into the function, but the function is called from the RPC
+            // handler as well and there it is more complicated. See FIXME there.
+            auto op = start_write();
             co_await apply_fence(this->mutate_counters_on_leader(std::move(endpoint_and_mutations.second), cl, timeout, tr_state, permit), fence, my_address);
         } else {
             auto& mutations = endpoint_and_mutations.second;
