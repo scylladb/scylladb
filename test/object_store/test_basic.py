@@ -109,36 +109,46 @@ def managed_cluster(run_dir, ssl, s3_server):
         kill_with_dir(pid, run_dir)
 
 
-@pytest.mark.asyncio
-async def test_basic(test_tempdir, s3_server, ssl):
-    '''verify ownership table is updated, and tables written to S3 can be read after scylla restarts'''
+def create_ks_and_cf(cql, s3_server):
     ks = 'test_ks'
     cf = 'test_cf'
+
+    replication_opts = format_tuples({'class': 'NetworkTopologyStrategy',
+                                      'replication_factor': '1'})
+    storage_opts = format_tuples(type='S3',
+                                 endpoint=s3_server.address,
+                                 bucket=s3_server.bucket_name)
+
+    cql.execute((f"CREATE KEYSPACE {ks} WITH"
+                  f" REPLICATION = {replication_opts} AND STORAGE = {storage_opts};"))
+    cql.execute(f"CREATE TABLE {ks}.{cf} ( name text primary key, value text );")
+
     rows = [('0', 'zero'),
             ('1', 'one'),
             ('2', 'two')]
+    for row in rows:
+        cql_fmt = "INSERT INTO {}.{} ( name, value ) VALUES ('{}', '{}');"
+        cql.execute(cql_fmt.format(ks, cf, *row))
+
+    return ks, cf
+
+
+@pytest.mark.asyncio
+async def test_basic(test_tempdir, s3_server, ssl):
+    '''verify ownership table is updated, and tables written to S3 can be read after scylla restarts'''
 
     with managed_cluster(test_tempdir, ssl, s3_server) as cluster:
         print(f'Create keyspace (minio listening at {s3_server.address})')
-        replication_opts = format_tuples({'class': 'NetworkTopologyStrategy',
-                                          'replication_factor': '1'})
-        storage_opts = format_tuples(type='S3',
-                                     endpoint=s3_server.address,
-                                     bucket=s3_server.bucket_name)
-
         conn = cluster.cql.connect()
-        conn.execute((f"CREATE KEYSPACE {ks} WITH"
-                      f" REPLICATION = {replication_opts} AND STORAGE = {storage_opts};"))
-        conn.execute(f"CREATE TABLE {ks}.{cf} ( name text primary key, value text );")
+        ks, cf = create_ks_and_cf(conn, s3_server)
 
         assert not os.path.exists(os.path.join(test_tempdir, f'data/{ks}')), "S3-backed keyspace has local directory created"
         # Sanity check that the path is constructed correctly
         assert os.path.exists(os.path.join(test_tempdir, 'data/system')), "Datadir is elsewhere"
 
-        for row in rows:
-            cql_fmt = "INSERT INTO {}.{} ( name, value ) VALUES ('{}', '{}');"
-            conn.execute(cql_fmt.format(ks, cf, *row))
         res = conn.execute(f"SELECT * FROM {ks}.{cf};")
+        rows = {x.name: x.value for x in res}
+        assert len(rows) > 0, 'Test table is empty'
 
         await cluster.api.flush_keyspace(cluster.ip, ks)
 
@@ -157,7 +167,7 @@ async def test_basic(test_tempdir, s3_server, ssl):
         conn = cluster.cql.connect()
         res = conn.execute(f"SELECT * FROM {ks}.{cf};")
         have_res = {x.name: x.value for x in res}
-        assert have_res == dict(rows), f'Unexpected table content: {have_res}'
+        assert have_res == rows, f'Unexpected table content: {have_res}'
 
         print('Drop table')
         conn.execute(f"DROP TABLE {ks}.{cf};")
@@ -170,11 +180,6 @@ async def test_basic(test_tempdir, s3_server, ssl):
 @pytest.mark.asyncio
 async def test_garbage_collect(test_tempdir, s3_server, ssl):
     '''verify ownership table is garbage-collected on boot'''
-    ks = 'test_ks'
-    cf = 'test_cf'
-    rows = [('0', 'zero'),
-            ('1', 'one'),
-            ('2', 'two')]
 
     def list_bucket(s3_server):
         r = requests.get(f'http://{s3_server.address}:{s3_server.port}/{s3_server.bucket_name}')
@@ -191,19 +196,8 @@ async def test_garbage_collect(test_tempdir, s3_server, ssl):
 
     with managed_cluster(test_tempdir, ssl, s3_server) as cluster:
         print(f'Create keyspace (minio listening at {s3_server.address})')
-        replication_opts = format_tuples({'class': 'NetworkTopologyStrategy',
-                                          'replication_factor': '1'})
-        storage_opts = format_tuples(type='S3',
-                                     endpoint=s3_server.address,
-                                     bucket=s3_server.bucket_name)
-
         conn = cluster.cql.connect()
-        conn.execute((f"CREATE KEYSPACE {ks} WITH"
-                      f" REPLICATION = {replication_opts} AND STORAGE = {storage_opts};"))
-        conn.execute(f"CREATE TABLE {ks}.{cf} ( name text primary key, value text );")
-        for row in rows:
-            cql_fmt = "INSERT INTO {}.{} ( name, value ) VALUES ('{}', '{}');"
-            conn.execute(cql_fmt.format(ks, cf, *row))
+        ks, cf = create_ks_and_cf(conn, s3_server)
 
         await cluster.api.flush_keyspace(cluster.ip, ks)
         # Mark the sstables as "removing" to simulate the problem
