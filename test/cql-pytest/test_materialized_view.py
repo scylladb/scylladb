@@ -290,7 +290,9 @@ def test_is_not_null_forbidden_in_filter(cql, test_keyspace, cassandra_bug):
 
 # Test that a view can be altered with synchronous_updates property and that
 # the synchronous updates code path is then reached for such view.
-def test_mv_synchronous_updates(cql, test_keyspace):
+# The synchronous_updates feature is a ScyllaDB extension, so this is a
+# scylla_only test.
+def test_mv_synchronous_updates(cql, test_keyspace, scylla_only):
     schema = 'p int, v text, primary key (p)'
     with new_test_table(cql, test_keyspace, schema) as table:
         with new_materialized_view(cql, table, '*', 'v, p', 'v is not null and p is not null') as sync_mv, \
