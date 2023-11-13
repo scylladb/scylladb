@@ -2844,12 +2844,7 @@ SEASTAR_TEST_CASE(sstable_run_based_compaction_test) {
             BOOST_REQUIRE_EQUAL(*expected_sst, old_sstable->generation());
             expected_sst++;
             // check that previously released sstables were already closed
-            if (auto v = old_sstables.front()->generation().as_int(); v % 4 == 0) {
-                // Due to performance reasons, sstables are not released immediately, but in batches.
-                // At the time of writing, mutation_reader_merger releases it's sstable references
-                // in batches of 4. That's why we only perform this check every 4th sstable. 
-                BOOST_REQUIRE_EQUAL(*closed_sstables_tracker, old_sstable->generation());
-            }
+            BOOST_REQUIRE_EQUAL(*closed_sstables_tracker, old_sstable->generation());
 
             do_replace(old_sstables, new_sstables);
 
@@ -2917,7 +2912,7 @@ SEASTAR_TEST_CASE(sstable_run_based_compaction_test) {
                 .produces(make_insert(keys[i]))
                 .produces_end_of_stream();
         }
-    }, test_env_config{ .use_uuid = false });
+    });
 }
 
 SEASTAR_TEST_CASE(compaction_strategy_aware_major_compaction_test) {
