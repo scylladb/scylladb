@@ -146,6 +146,11 @@ async def test_basic(test_tempdir, s3_server, ssl):
         # Sanity check that the path is constructed correctly
         assert os.path.exists(os.path.join(test_tempdir, 'data/system')), "Datadir is elsewhere"
 
+        desc = conn.execute(f"DESCRIBE KEYSPACE {ks}").one().create_statement
+        # The storage_opts wraps options with '{ <options> }' while the DESCRIBE
+        # does it like '{<options>}' so strip the corner brances and spaces for check
+        assert f"{{'type': 'S3', 'bucket': '{s3_server.bucket_name}', 'endpoint': '{s3_server.address}'}}" in desc, "DESCRIBE generates unexpected storage options"
+
         res = conn.execute(f"SELECT * FROM {ks}.{cf};")
         rows = {x.name: x.value for x in res}
         assert len(rows) > 0, 'Test table is empty'
