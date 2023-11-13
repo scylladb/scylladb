@@ -71,6 +71,7 @@ public:
 
     storage_manager(const db::config&, config cfg);
     shared_ptr<s3::client> get_endpoint_client(sstring endpoint);
+    bool is_known_endpoint(sstring endpoint) const;
     future<> stop();
 };
 
@@ -126,6 +127,11 @@ public:
     shared_ptr<s3::client> get_endpoint_client(sstring endpoint) const {
         assert(_storage != nullptr);
         return _storage->get_endpoint_client(std::move(endpoint));
+    }
+
+    bool is_known_endpoint(sstring endpoint) const {
+        assert(_storage != nullptr);
+        return _storage->is_known_endpoint(std::move(endpoint));
     }
 
     virtual sstable_writer_config configure_writer(sstring origin) const;
