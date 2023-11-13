@@ -3,6 +3,12 @@ from contextlib import ExitStack
 from util import unique_name, config_value_context, new_test_keyspace
 from cassandra.protocol import ConfigurationException
 
+# Tests for the replication_strategy_{warn,fail}_list guardrail. Because
+# this feature does not exist in Cassandra , *all* tests in this file are
+# Scylla-only. Let's mark them all scylla_only with an autouse fixture:
+@pytest.fixture(scope="function", autouse=True)
+def all_tests_are_scylla_only(scylla_only):
+    pass
 
 def create_ks_and_assert_warnings_and_errors(cql, ks_opts, warnings_count=0, fails_count=0):
     if fails_count:
