@@ -228,6 +228,7 @@ fi
 %{_sysctldir}/*.conf
 %{_unitdir}/scylla-tune-sched.service
 /opt/scylladb/kernel_conf/*
+%ghost /etc/sysctl.d/99-scylla-perfevent.conf
 
 
 %package node-exporter
