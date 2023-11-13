@@ -113,6 +113,9 @@ db::commitlog::config db::commitlog::config::from_db_config(const db::config& cf
     if (cfg.commitlog_flush_threshold_in_mb() >= 0) {
         c.commitlog_flush_threshold_in_mb = cfg.commitlog_flush_threshold_in_mb();
     }
+    if (cfg.commitlog_max_data_lifetime_in_seconds() > 0) {
+        c.commitlog_data_max_lifetime_in_seconds = cfg.commitlog_max_data_lifetime_in_seconds();
+    }
 
     return c;
 }

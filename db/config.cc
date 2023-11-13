@@ -544,6 +544,8 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     /* Note: does not exist on the listing page other than in above comment, wtf? */
     , commitlog_sync_batch_window_in_ms(this, "commitlog_sync_batch_window_in_ms", value_status::Used, 10000,
         "Controls how long the system waits for other writes before performing a sync in ``batch`` mode.")
+    , commitlog_max_data_lifetime_in_seconds(this, "commitlog_max_data_lifetime_in_seconds", value_status::Used, 24*60*60,
+        "Controls how long data remains in commit log before the system tries to evict it to sstable, regardless of usage pressure. (0 disables)")
     , commitlog_total_space_in_mb(this, "commitlog_total_space_in_mb", value_status::Used, -1,
         "Total space used for commitlogs. If the used space goes above this value, Scylla rounds up to the next nearest segment multiple and flushes memtables to disk for the oldest commitlog segments, removing those log segments. This reduces the amount of data to replay on startup, and prevents infrequently-updated tables from indefinitely keeping commitlog segments. A small total commitlog space tends to cause more flush activity on less-active tables.\n"
         "\n"
