@@ -11,6 +11,10 @@ if [ ! -d /run/systemd/system ]; then
     exit 0
 fi
 
+version_ge() {
+    [  "$2" = "`echo -e "$1\n$2" | sort -V | head -n1`" ]
+}
+
 # Install capabilities.conf when AmbientCapabilities supported
 . /etc/os-release
 
@@ -26,13 +30,20 @@ fi
 
 AMB_SUPPORT=`grep -c ^CapAmb: /proc/self/status`
 
+KERNEL_VER=$(uname -r)
+
 # AmbientCapabilities supported from v229 but it backported to v219-33 on RHEL7
 if [ $SYSTEMD_VER -ge 229 ] || [[ $SYSTEMD_VER -eq 219 && $SYSTEMD_REL -ge 33 ]]; then
     if [ $AMB_SUPPORT -eq 1 ]; then
+        AMB_CAPABILITIES="CAP_SYS_NICE CAP_IPC_LOCK"
+        # CAP_PERFMON is only available on linux-5.8+
+        if version_ge $KERNEL_VER 5.8; then
+            AMB_CAPABILITIES="$AMB_CAPABILITIES CAP_PERFMON"
+        fi
         mkdir -p /etc/systemd/system/scylla-server.service.d/
         cat << EOS > /etc/systemd/system/scylla-server.service.d/capabilities.conf
 [Service]
-AmbientCapabilities=CAP_SYS_NICE CAP_IPC_LOCK
+AmbientCapabilities=$AMB_CAPABILITIES
 EOS
     fi
 fi
