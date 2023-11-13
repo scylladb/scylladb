@@ -484,8 +484,7 @@ future<> raft_group0::join_group0(std::vector<gms::inet_address> seeds, shared_p
             break;
         }
 
-        // TODO: aborts?
-        if (co_await handshaker->post_server_start(g0_info)) {
+        if (co_await handshaker->post_server_start(g0_info, _abort_source)) {
             break;
         }
 
@@ -522,7 +521,7 @@ shared_ptr<service::group0_handshaker> raft_group0::make_legacy_handshaker(bool 
             co_return;
         }
 
-        future<bool> post_server_start(const group0_info& g0_info) override {
+        future<bool> post_server_start(const group0_info& g0_info, abort_source& as) override {
             netw::msg_addr peer(g0_info.ip_addr);
             auto timeout = db::timeout_clock::now() + std::chrono::milliseconds{1000};
             auto my_id = _group0.load_my_id();

@@ -84,7 +84,10 @@ public:
     //   retried.
     // - An exception is interpreted as an irrecoverable error and causes
     //   setup_group0 to fail.
-    virtual future<bool> post_server_start(const group0_info& info) = 0;
+    //
+    // The implementation can use the abort_source parameter to abort the
+    // function if needed.
+    virtual future<bool> post_server_start(const group0_info& info, abort_source& as) = 0;
 };
 
 class raft_group0 {
