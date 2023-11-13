@@ -1412,9 +1412,17 @@ def test_static_column_index_build(cql, test_keyspace):
         start_time = time.time()
         rows = None
         while time.time() < start_time + 30:
-            rows = sorted(cql.execute(f'SELECT pk FROM {table} WHERE s = 0'))
-            if len(rows) == 3:
-                break
+            try:
+                rows = sorted(cql.execute(f'SELECT pk FROM {table} WHERE s = 0'))
+                if len(rows) == 3:
+                    break
+            except:
+                # In Cassandra, the SELECT can also fail for a short while
+                # instead of returning nothing - as the index is not yet
+                # set up properly. Let's ignore this failure and try again
+                # until the index is ready.
+                pass
+            time.sleep(0.1)
 
         assert [(0,),(1,),(2,)] == rows
 
@@ -1670,7 +1678,9 @@ def test_7659_global(cql, test_keyspace):
         # With issue #7659, this generated an exception and failed request:
         assert [(1,),(2,),(3,)] == sorted(list(cql.execute(f"SELECT a FROM {table} WHERE d=0 AND f>0 ALLOW FILTERING")))
 
-def test_7659_local(cql, test_keyspace):
+# the version of this test for local index is scylla_only, because LSI is
+# a Scylla extension that doesn't exist in Cassandra.
+def test_7659_local(cql, test_keyspace, scylla_only):
     with new_test_table(cql, test_keyspace, 'a int, b int, c int, d int, e int, f int, PRIMARY KEY ((a, b), c, d)') as table:
         cql.execute(f'CREATE INDEX ON {table}((a, b), f)')
         cql.execute(f'CREATE INDEX ON {table}(d)')
