@@ -40,7 +40,7 @@ connection::~connection()
     _server.maybe_stop();
 }
 
-future<> server::for_each_gently(noncopyable_function<void(const connection&)> fn) {
+future<> server::for_each_gently(noncopyable_function<void(connection&)> fn) {
     _gentle_iterators.emplace_front(*this);
     std::list<gentle_iterator>::iterator gi = _gentle_iterators.begin();
     return seastar::do_until([ gi ] { return gi->iter == gi->end; },

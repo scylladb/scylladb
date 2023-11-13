@@ -85,8 +85,8 @@ protected:
     using connections_list_t = boost::intrusive::list<connection>;
     connections_list_t _connections_list;
     struct gentle_iterator {
-        connections_list_t::const_iterator iter, end;
-        gentle_iterator(const server& s) : iter(s._connections_list.begin()), end(s._connections_list.end()) {}
+        connections_list_t::iterator iter, end;
+        gentle_iterator(server& s) : iter(s._connections_list.begin()), end(s._connections_list.end()) {}
         gentle_iterator(const gentle_iterator&) = delete;
         gentle_iterator(gentle_iterator&&) = delete;
     };
@@ -118,7 +118,7 @@ protected:
 
     virtual future<> unadvertise_connection(shared_ptr<connection> conn);
 
-    future<> for_each_gently(noncopyable_function<void(const connection&)>);
+    future<> for_each_gently(noncopyable_function<void(connection&)>);
 
     void maybe_stop();
 };
