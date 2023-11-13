@@ -18,7 +18,7 @@ fi
 # versions of systemd. We will set the version to 0 if systemctl is not found and then be able
 # to use that in tests.
 SYSTEMD_VER=$(( systemctl --version 2>/dev/null || echo 0 0) | head -n1 | awk '{print $2}')
-RHEL=$(echo $ID_LIKE | grep -oi rhel)
+RHEL=$(echo $ID $ID_LIKE | grep -oi rhel)
 SYSTEMD_REL=0
 if [ "$RHEL" ]; then
     SYSTEMD_REL=`rpm -q systemd --qf %{release}|sed -n "s/\([0-9]*\).*/\1/p"`
