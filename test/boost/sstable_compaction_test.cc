@@ -14,6 +14,7 @@
 #include <seastar/util/closeable.hh>
 #include <seastar/core/coroutine.hh>
 
+#include "sstables/generation_type.hh"
 #include "sstables/sstables.hh"
 #include "sstables/compress.hh"
 #include "compaction/compaction.hh"
@@ -83,6 +84,12 @@ atomic_cell make_atomic_cell(data_type dt, bytes_view value, uint32_t ttl = 0, u
     }
 }
 
+namespace sstables {
+std::ostream& boost_test_print_type(std::ostream& os, const generation_type& gen) {
+    fmt::print(os, "{}", gen);
+    return os;
+}
+}
 ////////////////////////////////  Test basic compaction support
 
 // open_sstables() opens several generations of the same sstable, returning,
@@ -2836,17 +2843,17 @@ SEASTAR_TEST_CASE(sstable_run_based_compaction_test) {
 
         auto do_incremental_replace = [&] (auto old_sstables, auto new_sstables, auto& expected_sst, auto& closed_sstables_tracker) {
             // that's because each sstable will contain only 1 mutation.
-            BOOST_REQUIRE(old_sstables.size() == 1);
-            BOOST_REQUIRE(new_sstables.size() == 1);
+            BOOST_REQUIRE_EQUAL(old_sstables.size(), 1);
+            BOOST_REQUIRE_EQUAL(new_sstables.size(), 1);
             // check that sstable replacement follows token order
-            BOOST_REQUIRE(*expected_sst == old_sstables.front()->generation());
+            BOOST_REQUIRE_EQUAL(*expected_sst, old_sstables.front()->generation());
             expected_sst++;
             // check that previously released sstables were already closed
             if (auto v = old_sstables.front()->generation().as_int(); v % 4 == 0) {
                 // Due to performance reasons, sstables are not released immediately, but in batches.
                 // At the time of writing, mutation_reader_merger releases it's sstable references
                 // in batches of 4. That's why we only perform this check every 4th sstable. 
-                BOOST_REQUIRE(*closed_sstables_tracker == old_sstables.front()->generation());
+                BOOST_REQUIRE_EQUAL(*closed_sstables_tracker, old_sstables.front()->generation());
             }
 
             do_replace(old_sstables, new_sstables);
@@ -2872,7 +2879,7 @@ SEASTAR_TEST_CASE(sstable_run_based_compaction_test) {
                 return !run_ids.insert(sst->run_identifier()).second;
             });
 
-            BOOST_REQUIRE(desc.sstables.size() == expected_input);
+            BOOST_REQUIRE_EQUAL(desc.sstables.size(), expected_input);
             auto sstable_run = boost::copy_range<std::set<sstables::generation_type>>(desc.sstables
                 | boost::adaptors::transformed([] (auto& sst) { return sst->generation(); }));
             auto expected_sst = sstable_run.begin();
@@ -2900,16 +2907,16 @@ SEASTAR_TEST_CASE(sstable_run_based_compaction_test) {
         for (auto i = 0U; i < keys.size(); i++) {
             auto sst = make_sstable_containing(sst_gen, { make_insert(keys[i]) });
             sst->set_sstable_level(1);
-            BOOST_REQUIRE(sst->get_sstable_level() == 1);
+            BOOST_REQUIRE_EQUAL(sst->get_sstable_level(), 1);
             column_family_test(cf).add_sstable(sst).get();
             sstables.insert(std::move(sst));
             do_compaction(4, 4);
         }
-        BOOST_REQUIRE(sstables.size() == 16);
+        BOOST_REQUIRE_EQUAL(sstables.size(), 16);
 
         // Generate 1 sstable run from 4 sstables runs of similar size
         auto result = do_compaction(16, 16);
-        BOOST_REQUIRE(result.size() == 16);
+        BOOST_REQUIRE_EQUAL(result.size(), 16);
         for (auto i = 0U; i < keys.size(); i++) {
             assert_that(sstable_reader(result[i], s, env.make_reader_permit()))
                 .produces(make_insert(keys[i]))
