@@ -2877,7 +2877,7 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
     } else {
         auto local_features = _feature_service.supported_feature_set();
         slogger.info("Performing gossip shadow round, initial_contact_nodes={}", initial_contact_nodes);
-        co_await _gossiper.do_shadow_round(initial_contact_nodes);
+        co_await _gossiper.do_shadow_round(initial_contact_nodes, gms::gossiper::mandatory::no);
         if (!_raft_topology_change_enabled) {
             _gossiper.check_knows_remote_features(local_features, loaded_peer_features);
         }
@@ -4169,7 +4169,7 @@ future<> storage_service::check_for_endpoint_collision(std::unordered_set<gms::i
         auto local_features = _feature_service.supported_feature_set();
         do {
             slogger.info("Performing gossip shadow round");
-            _gossiper.do_shadow_round(initial_contact_nodes).get();
+            _gossiper.do_shadow_round(initial_contact_nodes, gms::gossiper::mandatory::yes).get();
             if (!_raft_topology_change_enabled) {
                 _gossiper.check_knows_remote_features(local_features, loaded_peer_features);
             }
@@ -4247,7 +4247,7 @@ storage_service::prepare_replacement_info(std::unordered_set<gms::inet_address> 
 
     // make magic happen
     slogger.info("Performing gossip shadow round");
-    co_await _gossiper.do_shadow_round(initial_contact_nodes);
+    co_await _gossiper.do_shadow_round(initial_contact_nodes, gms::gossiper::mandatory::yes);
     if (!_raft_topology_change_enabled) {
         auto local_features = _feature_service.supported_feature_set();
         _gossiper.check_knows_remote_features(local_features, loaded_peer_features);
