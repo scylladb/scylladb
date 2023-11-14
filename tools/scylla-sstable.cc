@@ -9,6 +9,7 @@
 #include <boost/algorithm/string.hpp>
 #include <boost/algorithm/string/join.hpp>
 #include <filesystem>
+#include <set>
 #include <source_location>
 #include <fmt/chrono.h>
 #include <seastar/core/coroutine.hh>
@@ -2937,8 +2938,13 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
 
         std::vector<sstables::shared_sstable> sstables;
         if (app_config.count("sstables")) {
+            const auto sstable_names = app_config["sstables"].as<std::vector<sstring>>();
+            if (std::set(sstable_names.begin(), sstable_names.end()).size() != sstable_names.size()) {
+                fmt::print(std::cerr, "error processing arguments: duplicate sstable arguments found\n");
+                return 1;
+            }
             try {
-                sstables = load_sstables(schema, sst_man, app_config["sstables"].as<std::vector<sstring>>());
+                sstables = load_sstables(schema, sst_man, sstable_names);
             } catch (...) {
                 fmt::print(std::cerr, "error loading sstables: {}\n", std::current_exception());
                 return 1;
