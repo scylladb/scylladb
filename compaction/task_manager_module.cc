@@ -258,6 +258,65 @@ future<> run_table_tasks(replica::database& db, std::vector<table_tasks_info> ta
     }
 }
 
+struct keyspace_tasks_info {
+    tasks::task_manager::task_ptr task;
+    sstring keyspace;
+    std::vector<table_info> table_infos;
+
+    keyspace_tasks_info(tasks::task_manager::task_ptr t, sstring ks_name, std::vector<table_info> t_infos)
+        : task(t)
+        , keyspace(std::move(ks_name))
+        , table_infos(std::move(t_infos))
+    {}
+};
+
+future<> run_keyspace_tasks(replica::database& db, std::vector<keyspace_tasks_info> keyspace_tasks, seastar::condition_variable& cv, tasks::task_manager::task_ptr& current_task, bool sort) {
+    std::exception_ptr ex;
+
+    // While compaction is run on one table, the size of tables may significantly change.
+    // Thus, they are sorted before each invidual compaction and the smallest keyspace is chosen.
+    while (!keyspace_tasks.empty()) {
+        try {
+            if (sort) {
+                // Major compact smaller tables first, to increase chances of success if low on space.
+                // Tables will be kept in descending order.
+                std::ranges::sort(keyspace_tasks, std::greater<>(), [&] (const keyspace_tasks_info& kti) {
+                    try {
+                        return std::accumulate(kti.table_infos.begin(), kti.table_infos.end(), int64_t(0), [&] (int64_t sum, const table_info& t) {
+                            try {
+                                sum += db.find_column_family(t.id).get_stats().live_disk_space_used;
+                            } catch (const replica::no_such_column_family&) {
+                                // ignore
+                            }
+                            return sum;
+                        });
+                    } catch (const replica::no_such_keyspace&) {
+                        return int64_t(-1);
+                    }
+                });
+            }
+            // Task responsible for the smallest keyspace.
+            current_task = keyspace_tasks.back().task;
+            keyspace_tasks.pop_back();
+            cv.broadcast();
+            co_await current_task->done();
+        } catch (...) {
+            ex = std::current_exception();
+            current_task = nullptr;
+            cv.broken(ex);
+            break;
+        }
+    }
+
+    if (ex) {
+        // Wait for all tasks even on failure.
+        for (auto& kti: keyspace_tasks) {
+            co_await kti.task->done();
+        }
+        co_await coroutine::return_exception_ptr(std::move(ex));
+    }
+}
+
 future<tasks::task_manager::task::progress> compaction_task_impl::get_progress(const sstables::compaction_data& cdata, const sstables::compaction_progress_monitor& progress_monitor) const {
     if (cdata.compaction_size == 0) {
         co_return get_binary_progress();
@@ -296,14 +355,40 @@ static future<bool> maybe_flush_all_tables(sharded<replica::database>& db) {
     co_return false;
 }
 
+future<> global_major_compaction_task_impl::run() {
+    bool flushed_all_tables = false;
+    if (_flush_mode == flush_mode::all_tables) {
+        flushed_all_tables = co_await maybe_flush_all_tables(_db);
+    }
+
+    std::unordered_map<sstring, std::vector<table_info>> tables_by_keyspace;
+    auto tables_meta = _db.local().get_tables_metadata().get_column_families_copy();
+    for (const auto& [table_id, t] : tables_meta) {
+        const auto& ks_name = t->schema()->ks_name();
+        const auto& table_name = t->schema()->cf_name();
+        tables_by_keyspace[ks_name].emplace_back(table_name, table_id);
+    }
+    seastar::condition_variable cv;
+    tasks::task_manager::task_ptr current_task;
+    tasks::task_info parent_info{_status.id, _status.shard};
+    std::vector<keyspace_tasks_info> keyspace_tasks;
+    flush_mode fm = flushed_all_tables ? flush_mode::skip : _flush_mode;
+    for (auto& [ks, table_infos] : tables_by_keyspace) {
+        auto task = co_await _module->make_and_start_task<major_keyspace_compaction_task_impl>(parent_info, ks, parent_info.id, _db, table_infos, fm,
+                &cv, &current_task);
+        keyspace_tasks.emplace_back(std::move(task), ks, std::move(table_infos));
+    }
+    co_await run_keyspace_tasks(_db.local(), keyspace_tasks, cv, current_task, false);
+}
+
 future<> major_keyspace_compaction_task_impl::run() {
     co_await utils::get_local_injector().inject_with_handler("compaction_major_keyspace_compaction_task_impl_run",
             [] (auto& handler) { return handler.wait_for_message(db::timeout_clock::now() + 10s); });
 
-    // TODO: implement a `compact_all_keyspaces` api
-    // that will flush all tables once for all keyspaces
-    // rather than for each keyspace, using a mechanism similar to `run_table_tasks`.
-    // It can be called from `scylla-nodetool compact` with keyspace arg.
+    if (_cv) {
+        co_await wait_for_your_turn(*_cv, *_current_task, _status.id);
+    }
+
     bool flushed_all_tables = false;
     if (_flush_mode == flush_mode::all_tables) {
         flushed_all_tables = co_await maybe_flush_all_tables(_db);

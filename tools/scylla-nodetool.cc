@@ -216,9 +216,7 @@ void compact_operation(scylla_rest_client& client, const bpo::variables_map& vm)
         }
         client.post(format("/storage_service/keyspace_compaction/{}", keyspace), std::move(params));
     } else {
-        for (const auto& keyspace : get_keyspaces(client)) {
-            client.post(format("/storage_service/keyspace_compaction/{}", keyspace), params);
-        }
+        client.post("/storage_service/compact", std::move(params));
     }
 }
 

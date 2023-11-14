@@ -636,6 +636,31 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         });
     });
 
+    ss::force_compaction.set(r, [&ctx](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
+        auto& db = ctx.db;
+        auto params = req_params({
+            std::pair("flush_memtables", mandatory::no),
+        });
+        params.process(*req);
+        auto flush = params.get_as<bool>("flush_memtables").value_or(true);
+        apilog.info("force_compaction: flush={}", flush);
+
+        auto& compaction_module = db.local().get_compaction_manager().get_task_manager_module();
+        std::optional<major_compaction_task_impl::flush_mode> fmopt;
+        if (!flush) {
+            fmopt = major_compaction_task_impl::flush_mode::skip;
+        }
+        auto task = co_await compaction_module.make_and_start_task<global_major_compaction_task_impl>({}, db, fmopt);
+        try {
+            co_await task->done();
+        } catch (...) {
+            apilog.error("force_compaction failed: {}", std::current_exception());
+            throw;
+        }
+
+        co_return json_void();
+    });
+
     ss::force_keyspace_compaction.set(r, [&ctx](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         auto& db = ctx.db;
         auto params = req_params({
@@ -654,7 +679,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         if (!flush) {
             fmopt = major_compaction_task_impl::flush_mode::skip;
         }
-        auto task = co_await compaction_module.make_and_start_task<major_keyspace_compaction_task_impl>({}, std::move(keyspace), db, table_infos, fmopt);
+        auto task = co_await compaction_module.make_and_start_task<major_keyspace_compaction_task_impl>({}, std::move(keyspace), tasks::task_id::create_null_id(), db, table_infos, fmopt);
         try {
             co_await task->done();
         } catch (...) {
@@ -1366,6 +1391,7 @@ void unset_storage_service(http_context& ctx, routes& r) {
     ss::get_current_generation_number.unset(r);
     ss::get_natural_endpoints.unset(r);
     ss::cdc_streams_check_and_repair.unset(r);
+    ss::force_compaction.unset(r);
     ss::force_keyspace_compaction.unset(r);
     ss::force_keyspace_cleanup.unset(r);
     ss::perform_keyspace_offstrategy_compaction.unset(r);

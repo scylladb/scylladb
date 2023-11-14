@@ -9,7 +9,14 @@ import utils
 import pytest
 
 
-def test_all_keyspaces(nodetool):
+# `scylla nodetool compact` invokes the newly added global compact api
+def test_all_keyspaces(nodetool, scylla_only):
+    nodetool("compact", expected_requests=[
+        expected_request("POST", "/storage_service/compact")])
+
+
+# The java-based `nodetool compact` lists all keyspaces and invoke the keyspace_compaction api on each of them
+def test_all_keyspaces_jmx(nodetool, cassandra_only):
     nodetool("compact", expected_requests=[
         expected_request("GET", "/storage_service/keyspaces", multiple=expected_request.MULTIPLE,
                          response=["system", "system_schema"]),
@@ -94,7 +101,4 @@ def test_keyspace_flush_memtables_option(nodetool, scylla_only, flush):
 def test_all_keyspaces_flush_memtables_option(nodetool, scylla_only, flush):
     params = {"flush_memtables": flush}
     nodetool("compact", "--flush-memtables", flush, expected_requests=[
-            expected_request("GET", "/storage_service/keyspaces", multiple=expected_request.MULTIPLE,
-                            response=["system", "system_schema"]),
-            expected_request("POST", "/storage_service/keyspace_compaction/system", params=params),
-            expected_request("POST", "/storage_service/keyspace_compaction/system_schema", params=params)])
+            expected_request("POST", "/storage_service/compact", params=params)])
