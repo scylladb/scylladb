@@ -34,11 +34,12 @@ class ManagerClient():
     """
     # pylint: disable=too-many-public-methods
 
-    def __init__(self, sock_path: str, port: int, use_ssl: bool,
-                 con_gen: Callable[[List[IPAddress], int, bool], CassandraSession]) \
+    def __init__(self, sock_path: str, port: int, use_ssl: bool, auth_provider: Any|None,
+                 con_gen: Callable[[List[IPAddress], int, bool, Any], CassandraSession]) \
                          -> None:
         self.port = port
         self.use_ssl = use_ssl
+        self.auth_provider = auth_provider
         self.con_gen = con_gen
         self.ccluster: Optional[CassandraCluster] = None
         self.cql: Optional[CassandraSession] = None
@@ -57,7 +58,7 @@ class ManagerClient():
         targets = [server] if server else await self.running_servers()
         servers = [s_info.ip_addr for s_info in targets]
         logger.debug("driver connecting to %s", servers)
-        self.ccluster = self.con_gen(servers, self.port, self.use_ssl)
+        self.ccluster = self.con_gen(servers, self.port, self.use_ssl, self.auth_provider)
         self.cql = self.ccluster.connect()
 
     def driver_close(self) -> None:
