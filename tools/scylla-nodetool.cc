@@ -875,8 +875,9 @@ Fore more information, see: https://opensource.docs.scylladb.com/stable/operatin
                 "flush",
                 "Flush one or more tables",
 R"(
-Specify a keyspace and one or more tables that you want to flush from the
-memtable to on disk SSTables.
+Flush memtables to on-disk SSTables in the specified keyspace and table(s).
+If no keyspace is specified, all keyspaces are flushed.
+If no table(s) are specified, all tables in the specified keyspace are flushed.
 
 Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/flush.html
 )",
