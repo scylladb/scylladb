@@ -85,15 +85,23 @@ def test_column_family_tombstone_gc_correctness(cql, this_dc, rest_api):
             # 3 Create partition tombstone
             cql.execute(f"DELETE from {test_keyspace}.{test_table} WHERE a = 1")
 
-            # 4 Flush it into sstable
-            resp = rest_api.send("POST", f"storage_service/keyspace_flush/{test_keyspace}")
+            # 4 Trigger major compaction on that sstable (flushes memtable by default)
+            resp = rest_api.send("POST", f"column_family/major_compaction/{test_keyspace}:{test_table}")
             resp.raise_for_status()
 
-            # 5 Trigger major compaction on that sstable
-            resp = rest_api.send("POST", f"storage_service/keyspace_compaction/{test_keyspace}")
-            resp.raise_for_status()
-
-            # 6 Expect that tombstone was not purged
+            # 5 Expect that tombstone was not purged
             resp = rest_api.send("GET", f"column_family/sstables/by_key/{test_keyspace}:{test_table}?key=1")
             resp.raise_for_status()
             assert "-Data.db" in resp.json()[0]
+
+def test_column_family_major_compaction(cql, this_dc, rest_api):
+    ksdef = f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : '1' }}"
+    with new_test_keyspace(cql, ksdef) as test_keyspace:
+        with new_test_table(cql, test_keyspace, "a int, PRIMARY KEY (a)") as t:
+            test_table = t.split('.')[1]
+            resp = rest_api.send("POST", f"column_family/major_compaction/{test_keyspace}:{test_table}")
+            resp.raise_for_status()
+            resp = rest_api.send("POST", f"column_family/major_compaction/{test_keyspace}:{test_table}", params={"flush_memtables": "true"})
+            resp.raise_for_status()
+            resp = rest_api.send("POST", f"column_family/major_compaction/{test_keyspace}:{test_table}", params={"flush_memtables": "false"})
+            resp.raise_for_status()

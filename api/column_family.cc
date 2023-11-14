@@ -1047,12 +1047,19 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
     });
 
     cf::force_major_compaction.set(r, [&ctx](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
-        if (req->get_query_param("split_output") != "") {
+        auto params = req_params({
+            std::pair("name", mandatory::yes),
+            std::pair("flush_memtables", mandatory::no),
+            std::pair("split_output", mandatory::no),
+        });
+        params.process(*req);
+        if (params.get("split_output")) {
             fail(unimplemented::cause::API);
         }
+        auto [ks, cf] = parse_fully_qualified_cf_name(*params.get("name"));
+        auto flush = params.get_as<bool>("flush_memtables").value_or(true);
+        apilog.info("column_family/force_major_compaction: name={} flush={}", req->param["name"], flush);
 
-        apilog.info("column_family/force_major_compaction: name={}", req->param["name"]);
-        auto [ks, cf] = parse_fully_qualified_cf_name(req->param["name"]);
         auto keyspace = validate_keyspace(ctx, ks);
         std::vector<table_info> table_infos = {table_info{
             .name = cf,
@@ -1060,7 +1067,11 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
         }};
 
         auto& compaction_module = ctx.db.local().get_compaction_manager().get_task_manager_module();
-        auto task = co_await compaction_module.make_and_start_task<major_keyspace_compaction_task_impl>({}, std::move(keyspace), ctx.db, std::move(table_infos));
+        std::optional<major_compaction_task_impl::flush_mode> fmopt;
+        if (!flush) {
+            fmopt = major_compaction_task_impl::flush_mode::skip;
+        }
+        auto task = co_await compaction_module.make_and_start_task<major_keyspace_compaction_task_impl>({}, std::move(keyspace), ctx.db, std::move(table_infos), fmopt);
         co_await task->done();
         co_return json_void();
     });
