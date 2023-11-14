@@ -14,6 +14,7 @@ import xml.etree.ElementTree as ET
 
 from contextlib import contextmanager
 from test.pylib.rest_client import ScyllaRESTAPIClient
+from cassandra.protocol import ConfigurationException
 
 
 def get_scylla_with_s3_cmd(ssl, s3_server):
@@ -227,3 +228,20 @@ async def test_garbage_collect(test_tempdir, s3_server, ssl):
         for o in objects:
             for ent in sstable_entries:
                 assert not o.startswith(str(ent[1])), f'Sstable object not cleaned, found {o}'
+
+@pytest.mark.asyncio
+async def test_misconfigured_storage(test_tempdir, s3_server, ssl):
+    '''creating keyspace with unknown endpoint is not allowed'''
+    # scylladb/scylladb#15074
+    with managed_cluster(test_tempdir, ssl, s3_server) as cluster:
+        print(f'Create keyspace (minio listening at {s3_server.address})')
+        replication_opts = format_tuples({'class': 'NetworkTopologyStrategy',
+                                          'replication_factor': '1'})
+        storage_opts = format_tuples(type='S3',
+                                     endpoint='unknown_endpoint',
+                                     bucket=s3_server.bucket_name)
+
+        conn = cluster.cql.connect()
+        with pytest.raises(ConfigurationException):
+            conn.execute((f"CREATE KEYSPACE test_ks WITH"
+                          f" REPLICATION = {replication_opts} AND STORAGE = {storage_opts};"))
