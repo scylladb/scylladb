@@ -728,6 +728,14 @@
                      "allowMultiple":false,
                      "type":"string",
                      "paramType":"query"
+                  },
+                  {
+                     "name":"flush_memtables",
+                     "description":"Controls flushing of memtables before compaction (true by default). Set to \"false\" to skip automatic flushing of memtables before compaction, e.g. when tables were flushed explicitly before invoking the compaction api.",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"boolean",
+                     "paramType":"query"
                   }
                ]
             }

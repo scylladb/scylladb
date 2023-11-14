@@ -254,11 +254,20 @@ future<> run_table_tasks(replica::database& db, std::vector<table_tasks_info> ta
     }
 }
 
+sstring major_compaction_task_impl::to_string(flush_mode fm) {
+    switch (fm) {
+    case flush_mode::skip: return "skip";
+    case flush_mode::compacted_tables: return "compacted_tables";
+    case flush_mode::all_tables: return "all_tables";
+    }
+    __builtin_unreachable();
+}
+
 future<> major_keyspace_compaction_task_impl::run() {
     co_await _db.invoke_on_all([&] (replica::database& db) -> future<> {
         tasks::task_info parent_info{_status.id, _status.shard};
         auto& module = db.get_compaction_manager().get_task_manager_module();
-        auto task = co_await module.make_and_start_task<shard_major_keyspace_compaction_task_impl>(parent_info, _status.keyspace, _status.id, db, _table_infos);
+        auto task = co_await module.make_and_start_task<shard_major_keyspace_compaction_task_impl>(parent_info, _status.keyspace, _status.id, db, _table_infos, _flush_mode);
         co_await task->done();
     });
 }
@@ -269,7 +278,7 @@ future<> shard_major_keyspace_compaction_task_impl::run() {
     tasks::task_info parent_info{_status.id, _status.shard};
     std::vector<table_tasks_info> table_tasks;
     for (auto& ti : _local_tables) {
-        table_tasks.emplace_back(co_await _module->make_and_start_task<table_major_keyspace_compaction_task_impl>(parent_info, _status.keyspace, ti.name, _status.id, _db, ti, cv, current_task), ti);
+        table_tasks.emplace_back(co_await _module->make_and_start_task<table_major_keyspace_compaction_task_impl>(parent_info, _status.keyspace, ti.name, _status.id, _db, ti, cv, current_task, _flush_mode), ti);
     }
 
     co_await run_table_tasks(_db, std::move(table_tasks), cv, current_task, true);
@@ -278,8 +287,9 @@ future<> shard_major_keyspace_compaction_task_impl::run() {
 future<> table_major_keyspace_compaction_task_impl::run() {
     co_await wait_for_your_turn(_cv, _current_task, _status.id);
     tasks::task_info info{_status.id, _status.shard};
-    co_await run_on_table("force_keyspace_compaction", _db, _status.keyspace, _ti, [info] (replica::table& t) {
-        return t.compact_all_sstables(info);
+    replica::table::do_flush do_flush(_flush_mode != flush_mode::skip);
+    co_await run_on_table("force_keyspace_compaction", _db, _status.keyspace, _ti, [info, do_flush] (replica::table& t) {
+        return t.compact_all_sstables(info, do_flush);
     });
 }
 

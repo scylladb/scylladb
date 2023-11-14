@@ -859,10 +859,12 @@ public:
 
     bool can_flush() const;
 
+    using do_flush = bool_class<struct do_flush_tag>;
+
     // Start a compaction of all sstables in a process known as major compaction
     // Active memtable is flushed first to guarantee that data like tombstone,
     // sitting in the memtable, will be compacted with shadowed data.
-    future<> compact_all_sstables(std::optional<tasks::task_info> info = std::nullopt);
+    future<> compact_all_sstables(std::optional<tasks::task_info> info = std::nullopt, do_flush = do_flush::yes);
 
     future<bool> snapshot_exists(sstring name);
 

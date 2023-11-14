@@ -8,6 +8,8 @@
 
 #pragma once
 
+#include <fmt/format.h>
+
 #include "compaction/compaction.hh"
 #include "replica/database_fwd.hh"
 #include "schema/schema_fwd.hh"
@@ -45,6 +47,13 @@ protected:
 
 class major_compaction_task_impl : public compaction_task_impl {
 public:
+    enum class flush_mode {
+        skip,               // Skip flushing.  Useful when application explicitly flushes all tables prior to compaction
+        compacted_tables,   // Flush only the compacted keyspace/tables
+        // FIXME: flushing all_tables is not implemented yet
+        all_tables          // Flush all tables in the database prior to compaction
+    };
+
     major_compaction_task_impl(tasks::task_manager::module_ptr module,
             tasks::task_id id,
             unsigned sequence_number,
@@ -52,8 +61,10 @@ public:
             std::string keyspace,
             std::string table,
             std::string entity,
-            tasks::task_id parent_id) noexcept
+            tasks::task_id parent_id,
+            flush_mode fm = flush_mode::compacted_tables) noexcept
         : compaction_task_impl(module, id, sequence_number, std::move(scope), std::move(keyspace), std::move(table), std::move(entity), parent_id)
+        , _flush_mode(fm)
     {
         // FIXME: add progress units
     }
@@ -61,7 +72,11 @@ public:
     virtual std::string type() const override {
         return "major compaction";
     }
+
+    static sstring to_string(flush_mode);
 protected:
+    flush_mode _flush_mode;
+
     virtual future<> run() override = 0;
 };
 
@@ -73,8 +88,10 @@ public:
     major_keyspace_compaction_task_impl(tasks::task_manager::module_ptr module,
             std::string keyspace,
             sharded<replica::database>& db,
-            std::vector<table_info> table_infos) noexcept
-        : major_compaction_task_impl(module, tasks::task_id::create_random_id(), module->new_sequence_number(), "keyspace", std::move(keyspace), "", "", tasks::task_id::create_null_id())
+            std::vector<table_info> table_infos,
+            std::optional<flush_mode> fm = std::nullopt) noexcept
+        : major_compaction_task_impl(module, tasks::task_id::create_random_id(), module->new_sequence_number(), "keyspace", std::move(keyspace), "", "", tasks::task_id::create_null_id(),
+                fm.value_or(flush_mode::all_tables))
         , _db(db)
         , _table_infos(std::move(table_infos))
     {}
@@ -91,8 +108,9 @@ public:
             std::string keyspace,
             tasks::task_id parent_id,
             replica::database& db,
-            std::vector<table_info> local_tables) noexcept
-        : major_compaction_task_impl(module, tasks::task_id::create_random_id(), 0, "shard", std::move(keyspace), "", "", parent_id)
+            std::vector<table_info> local_tables,
+            flush_mode fm) noexcept
+        : major_compaction_task_impl(module, tasks::task_id::create_random_id(), 0, "shard", std::move(keyspace), "", "", parent_id, fm)
         , _db(db)
         , _local_tables(std::move(local_tables))
     {}
@@ -114,8 +132,9 @@ public:
             replica::database& db,
             table_info ti,
             seastar::condition_variable& cv,
-            tasks::task_manager::task_ptr& current_task) noexcept
-        : major_compaction_task_impl(module, tasks::task_id::create_random_id(), 0, "table", std::move(keyspace), std::move(table), "", parent_id)
+            tasks::task_manager::task_ptr& current_task,
+            flush_mode fm) noexcept
+        : major_compaction_task_impl(module, tasks::task_id::create_random_id(), 0, "table", std::move(keyspace), std::move(table), "", parent_id, fm)
         , _db(db)
         , _ti(std::move(ti))
         , _cv(cv)
@@ -664,4 +683,13 @@ protected:
     virtual future<> run() override = 0;
 };
 
-}
+} // namespace compaction
+
+template <>
+struct fmt::formatter<major_compaction_task_impl::flush_mode> {
+    constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
+    template <typename FormatContext>
+    auto format(const major_compaction_task_impl::flush_mode& fm, FormatContext& ctx) const {
+        return fmt::format_to(ctx.out(), "{}", major_compaction_task_impl::to_string(fm));
+    }
+};
