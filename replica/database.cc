@@ -1422,6 +1422,7 @@ void database::validate_new_keyspace(keyspace_metadata& ksm) {
     if (has_keyspace(ksm.name())) {
         throw exceptions::already_exists_exception{ksm.name()};
     }
+    _user_sstables_manager->validate_new_keyspace_storage_options(ksm.get_storage_options());
 }
 
 schema_ptr database::find_schema(const sstring& ks_name, const sstring& cf_name) const {

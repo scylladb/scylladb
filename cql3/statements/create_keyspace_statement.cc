@@ -77,10 +77,6 @@ void create_keyspace_statement::validate(query_processor& qp, const service::cli
     } catch (const std::runtime_error& e) {
         throw exceptions::invalid_request_exception(e.what());
     }
-    if (!qp.proxy().features().keyspace_storage_options
-            && _attrs->get_storage_options().type_string() != "LOCAL") {
-        throw exceptions::invalid_request_exception("Keyspace storage options not supported in the cluster");
-    }
 #if 0
     // The strategy is validated through KSMetaData.validate() in announceNewKeyspace below.
     // However, for backward compatibility with thrift, this doesn't validate unexpected options yet,

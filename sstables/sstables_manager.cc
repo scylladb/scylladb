@@ -212,4 +212,16 @@ future<> sstables_manager::destroy_table_storage(const data_dictionary::storage_
     return sstables::destroy_table_storage(so, dir);
 }
 
+void sstables_manager::validate_new_keyspace_storage_options(const data_dictionary::storage_options& so) {
+    std::visit(overloaded_functor {
+        [] (const data_dictionary::storage_options::local&) {
+        },
+        [this] (const data_dictionary::storage_options::s3& so) {
+            if (!_features.keyspace_storage_options) {
+                throw exceptions::invalid_request_exception("Keyspace storage options not supported in the cluster");
+            }
+        }
+    }, so.value);
+}
+
 }   // namespace sstables

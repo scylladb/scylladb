@@ -171,6 +171,8 @@ public:
     future<> destroy_table_storage(const data_dictionary::storage_options& so, sstring dir);
     future<> init_keyspace_storage(const data_dictionary::storage_options& so, sstring dir);
 
+    void validate_new_keyspace_storage_options(const data_dictionary::storage_options&);
+
 private:
     void add(sstable* sst);
     // Transition the sstable to the "inactive" state. It has no
