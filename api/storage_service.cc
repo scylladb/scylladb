@@ -721,6 +721,14 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         co_return json::json_return_type(0);
     }));
 
+    ss::force_flush.set(r, [&ctx](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
+        apilog.info("flush all tables");
+        co_await ctx.db.invoke_on_all([] (replica::database& db) {
+            return db.flush_all_tables();
+        });
+        co_return json_void();
+    });
+
     ss::force_keyspace_flush.set(r, [&ctx](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         auto keyspace = validate_keyspace(ctx, req->param);
         auto column_families = parse_tables(keyspace, ctx, req->query_parameters, "cf");
@@ -1362,6 +1370,7 @@ void unset_storage_service(http_context& ctx, routes& r) {
     ss::force_keyspace_cleanup.unset(r);
     ss::perform_keyspace_offstrategy_compaction.unset(r);
     ss::upgrade_sstables.unset(r);
+    ss::force_flush.unset(r);
     ss::force_keyspace_flush.unset(r);
     ss::decommission.unset(r);
     ss::move.unset(r);

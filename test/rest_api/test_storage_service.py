@@ -276,6 +276,10 @@ def test_storage_service_flush(cql, this_dc, rest_api):
                 stmt = cql.prepare(f"INSERT INTO {table1} (p) VALUES (?)")
                 cql.execute(stmt, ["pk1"])
 
+                # test global flush
+                resp = rest_api.send("POST", f"storage_service/flush")
+                resp.raise_for_status()
+
                 # test the keyspace_flush doesn't produce any errors when called on existing keyspace and table(s)
                 resp = rest_api.send("POST", f"storage_service/keyspace_flush/{ks}")
                 resp.raise_for_status()

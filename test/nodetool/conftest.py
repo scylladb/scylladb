@@ -141,6 +141,12 @@ def scylla_only(request):
         pytest.skip('Scylla-only test skipped')
 
 
+@pytest.fixture(scope="function")
+def cassandra_only(request):
+    if request.config.getoption("nodetool") != "cassandra":
+        pytest.skip('Cassandra-only test skipped')
+
+
 @pytest.fixture(scope="module")
 def nodetool(request, jmx, nodetool_path, rest_api_mock_server):
     def invoker(method, *args, expected_requests=None):

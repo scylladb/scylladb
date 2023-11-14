@@ -921,6 +921,21 @@
          ]
       },
       {
+         "path":"/storage_service/flush",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"Flush all memtables in all keyspaces.",
+               "type":"void",
+               "nickname":"force_flush",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[]
+            }
+         ]
+      },
+      {
          "path":"/storage_service/keyspace_flush/{keyspace}",
          "operations":[
             {
