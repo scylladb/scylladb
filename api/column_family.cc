@@ -1071,7 +1071,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
         if (!flush) {
             fmopt = major_compaction_task_impl::flush_mode::skip;
         }
-        auto task = co_await compaction_module.make_and_start_task<major_keyspace_compaction_task_impl>({}, std::move(keyspace), ctx.db, std::move(table_infos), fmopt);
+        auto task = co_await compaction_module.make_and_start_task<major_keyspace_compaction_task_impl>({}, std::move(keyspace), tasks::task_id::create_null_id(), ctx.db, std::move(table_infos), fmopt);
         co_await task->done();
         co_return json_void();
     });
