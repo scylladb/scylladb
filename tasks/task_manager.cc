@@ -124,7 +124,12 @@ void task_manager::task::impl::run_to_completion() {
         if (f.failed()) {
             finish_failed(f.get_exception());
         } else {
-            finish();
+            try {
+                _as.check();
+                finish();
+            } catch (...) {
+                finish_failed(std::current_exception());
+            }
         }
     });
 }

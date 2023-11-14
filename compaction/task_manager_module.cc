@@ -13,7 +13,10 @@
 #include "replica/database.hh"
 #include "sstables/sstables.hh"
 #include "sstables/sstable_directory.hh"
+#include "utils/error_injection.hh"
 #include "utils/pretty_printers.hh"
+
+using namespace std::chrono_literals;
 
 namespace replica {
 
@@ -265,7 +268,14 @@ future<tasks::task_manager::task::progress> compaction_task_impl::get_progress(c
     };
 }
 
+tasks::is_abortable compaction_task_impl::is_abortable() const noexcept {
+    return tasks::is_abortable{!_parent_id};
+}
+
 future<> major_keyspace_compaction_task_impl::run() {
+    co_await utils::get_local_injector().inject_with_handler("compaction_major_keyspace_compaction_task_impl_run",
+            [] (auto& handler) { return handler.wait_for_message(db::timeout_clock::now() + 10s); });
+
     co_await _db.invoke_on_all([&] (replica::database& db) -> future<> {
         tasks::task_info parent_info{_status.id, _status.shard};
         auto& module = db.get_compaction_manager().get_task_manager_module();
