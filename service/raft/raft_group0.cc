@@ -101,8 +101,8 @@ class group0_rpc: public service::raft_rpc {
 public:
     explicit group0_rpc(direct_failure_detector::failure_detector& direct_fd,
             raft_state_machine& sm, netw::messaging_service& ms,
-            raft_address_map& address_map, raft::group_id gid, raft::server_id srv_id)
-        : raft_rpc(sm, ms, address_map, gid, srv_id)
+            raft_address_map& address_map, shared_ptr<raft::failure_detector> raft_fd, raft::group_id gid, raft::server_id srv_id)
+        : raft_rpc(sm, ms, address_map, std::move(raft_fd), gid, srv_id)
         , _direct_fd(direct_fd)
     {}
 
@@ -199,7 +199,7 @@ const raft::server_id& raft_group0::load_my_id() {
 raft_server_for_group raft_group0::create_server_for_group0(raft::group_id gid, raft::server_id my_id, service::storage_service& ss, cql3::query_processor& qp,
                                                             service::migration_manager& mm, bool topology_change_enabled) {
     auto state_machine = std::make_unique<group0_state_machine>(_client, mm, qp.proxy(), ss, _raft_gr.address_map(), topology_change_enabled);
-    auto rpc = std::make_unique<group0_rpc>(_raft_gr.direct_fd(), *state_machine, _ms.local(), _raft_gr.address_map(), gid, my_id);
+    auto rpc = std::make_unique<group0_rpc>(_raft_gr.direct_fd(), *state_machine, _ms.local(), _raft_gr.address_map(), _raft_gr.failure_detector(), gid, my_id);
     // Keep a reference to a specific RPC class.
     auto& rpc_ref = *rpc;
     auto storage = std::make_unique<raft_sys_table_storage>(qp, gid, my_id);

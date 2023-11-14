@@ -27,9 +27,9 @@ raft_ticker_type::time_point timeout() {
 }
 
 raft_rpc::raft_rpc(raft_state_machine& sm, netw::messaging_service& ms,
-        raft_address_map& address_map, raft::group_id gid, raft::server_id my_id)
+        raft_address_map& address_map, shared_ptr<raft::failure_detector> failure_detector, raft::group_id gid, raft::server_id my_id)
     : _sm(sm), _group_id(std::move(gid)), _my_id(my_id), _messaging(ms)
-    , _address_map(address_map)
+    , _address_map(address_map), _failure_detector(std::move(failure_detector))
 {}
 
 
