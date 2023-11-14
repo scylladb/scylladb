@@ -152,6 +152,7 @@ def task(gdb, scylla_gdb):
         name = scylla_gdb.resolve(vtable_addr, startswith='vtable for seastar::continuation')
         if name and 'do_accept_one' in name:
             return obj_addr.cast(gdb.lookup_type('uintptr_t'))
+    raise gdb.error("no tasks found with expected name")
 
 def test_fiber(gdb, task):
     scylla(gdb, f'fiber {task}')
