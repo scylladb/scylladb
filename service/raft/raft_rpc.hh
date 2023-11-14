@@ -35,7 +35,9 @@ protected:
             raft_address_map& address_map, shared_ptr<raft::failure_detector> failure_detector, raft::group_id gid, raft::server_id my_id);
 
 private:
-    template <typename Verb, typename Msg> void
+    enum class one_way_kind { request, reply };
+
+    template <one_way_kind rpc_kind, typename Verb, typename Msg> void
     one_way_rpc(std::source_location loc, raft::server_id id, Verb&& verb, Msg&& msg);
 
     template <typename Verb, typename... Args> auto
