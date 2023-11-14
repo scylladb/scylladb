@@ -84,6 +84,7 @@ public:
     raft::configuration get_configuration() const override;
     future<> start() override;
     future<> abort(sstring reason) override;
+    bool is_alive() const override;
     term_t get_current_term() const override;
     future<> read_barrier(seastar::abort_source* as = nullptr) override;
     void wait_until_candidate() override;
@@ -122,6 +123,9 @@ private:
 
     // Set to abort reason when abort() is called
     std::optional<sstring> _aborted;
+
+    // Becomes true during start(), becomes false on abort() or a background error
+    bool _is_alive = false;
 
     // Signaled when apply index is changed
     condition_variable _applied_index_changed;
@@ -366,6 +370,8 @@ future<> server_impl::start() {
         }
         _rpc->on_configuration_change(get_rpc_config(), {});
     }
+
+    _is_alive = true;
 
     // start fiber to persist entries added to in-memory log
     _io_status = io_fiber(stable_idx);
@@ -1412,6 +1418,7 @@ void server_impl::check_not_aborted() {
 }
 
 void server_impl::handle_background_error(const char* fiber_name) {
+    _is_alive = false;
     const auto e = std::current_exception();
     logger.error("[{}] {} fiber stopped because of the error: {}", _id, fiber_name, e);
     if (_config.on_background_error) {
@@ -1420,6 +1427,7 @@ void server_impl::handle_background_error(const char* fiber_name) {
 }
 
 future<> server_impl::abort(sstring reason) {
+    _is_alive = false;
     _aborted = std::move(reason);
     logger.trace("[{}]: abort() called", _id);
     _fsm->stop();
@@ -1495,6 +1503,10 @@ future<> server_impl::abort(sstring reason) {
     auto all_with_gate = boost::range::join(all_futures, gate);
 
     co_await seastar::when_all_succeed(all_with_gate.begin(), all_with_gate.end()).discard_result();
+}
+
+bool server_impl::is_alive() const {
+    return _is_alive;
 }
 
 future<> server_impl::set_configuration(config_member_set c_new, seastar::abort_source* as) {
