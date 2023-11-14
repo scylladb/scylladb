@@ -1,11 +1,12 @@
 set(Seastar_OptimizationLevel_COVERAGE "g")
 set(CMAKE_CXX_FLAGS_COVERAGE
-  ""
+  "-fprofile-instr-generate -fcoverage-mapping"
   CACHE
   INTERNAL
   "")
-string(APPEND CMAKE_CXX_FLAGS_COVERAGE
-  " -O${Seastar_OptimizationLevel_SANITIZE}")
+update_cxx_flags(CMAKE_CXX_FLAGS_COVERAGE
+  WITH_DEBUG_INFO
+  OPTIMIZATION_LEVEL ${Seastar_OptimizationLevel_COVERAGE})
 
 set(Seastar_DEFINITIONS_COVERAGE
   SCYLLA_BUILD_MODE=coverage
@@ -17,9 +18,6 @@ foreach(definition ${Seastar_DEFINITIONS_COVERAGE})
   add_compile_definitions(
     $<$<CONFIG:Coverage>:${definition}>)
 endforeach()
-
-set(CMAKE_CXX_FLAGS_COVERAGE
-  " -O${Seastar_OptimizationLevel_COVERAGE} -fprofile-instr-generate -fcoverage-mapping -g -gz")
 
 set(CMAKE_STATIC_LINKER_FLAGS_COVERAGE
   "-fprofile-instr-generate -fcoverage-mapping")

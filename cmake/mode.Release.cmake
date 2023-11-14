@@ -4,8 +4,9 @@ set(CMAKE_CXX_FLAGS_RELEASE
   CACHE
   INTERNAL
   "")
-string(APPEND CMAKE_CXX_FLAGS_RELEASE
-  " -O${Seastar_OptimizationLevel_RELEASE}")
+update_cxx_flags(CMAKE_CXX_FLAGS_RELEASE
+  WITH_DEBUG_INFO
+  OPTIMIZATION_LEVEL ${Seastar_OptimizationLevel_RELEASE})
 
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "arm64|aarch64")
   set(clang_inline_threshold 300)
