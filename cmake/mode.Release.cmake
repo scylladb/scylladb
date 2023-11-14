@@ -4,8 +4,9 @@ set(CMAKE_CXX_FLAGS_RELEASE
   CACHE
   INTERNAL
   "")
-string(APPEND CMAKE_CXX_FLAGS_RELEASE
-  " -O${Seastar_OptimizationLevel_RELEASE}")
+update_cxx_flags(CMAKE_CXX_FLAGS_RELEASE
+  WITH_DEBUG_INFO
+  OPTIMIZATION_LEVEL ${Seastar_OptimizationLevel_RELEASE})
 
 add_compile_definitions(
     $<$<CONFIG:Release>:SCYLLA_BUILD_MODE=release>)

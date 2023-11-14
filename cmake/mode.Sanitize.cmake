@@ -4,8 +4,9 @@ set(CMAKE_CXX_FLAGS_SANITIZE
   CACHE
   INTERNAL
   "")
-string(APPEND CMAKE_CXX_FLAGS_SANITIZE
-  " -O${Seastar_OptimizationLevel_SANITIZE}")
+update_cxx_flags(CMAKE_CXX_FLAGS_COVERAGE
+  WITH_DEBUG_INFO
+  OPTIMIZATION_LEVEL ${Seastar_OptimizationLevel_SANITIZE})
 
 set(Seastar_DEFINITIONS_SANITIZE
   SCYLLA_BUILD_MODE=sanitize

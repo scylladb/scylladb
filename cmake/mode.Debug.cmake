@@ -21,7 +21,8 @@ foreach(definition ${Seastar_DEFINITIONS_DEBUG})
     $<$<CONFIG:Debug>:${definition}>)
 endforeach()
 
-set(CMAKE_CXX_FLAGS_DEBUG
-  " -O${Seastar_OptimizationLevel_DEBUG} -g -gz")
+update_cxx_flags(CMAKE_CXX_FLAGS_DEBUG
+  WITH_DEBUG_INFO
+  OPTIMIZATION_LEVEL ${Seastar_OptimizationLevel_DEBUG})
 
 maybe_limit_stack_usage_in_KB(40 Debug)

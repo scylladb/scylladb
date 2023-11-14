@@ -94,6 +94,23 @@ function(maybe_limit_stack_usage_in_KB stack_usage_threshold_in_KB config)
   endif()
 endfunction()
 
+macro(update_cxx_flags flags)
+  cmake_parse_arguments (
+    parsed_args
+    "WITH_DEBUG_INFO"
+    "OPTIMIZATION_LEVEL"
+    ""
+    ${ARGN})
+  if(NOT DEFINED parsed_args_OPTIMIZATION_LEVEL)
+    message(FATAL_ERROR "OPTIMIZATION_LEVEL is missing")
+  endif()
+  string(APPEND ${flags}
+    " -O${parsed_args_OPTIMIZATION_LEVEL}")
+  if(parsed_args_WITH_DEBUG_INFO)
+    string(APPEND ${flags} " -g -gz")
+  endif()
+endmacro()
+
 # Force SHA1 build-id generation
 add_link_options("LINKER:--build-id=sha1")
 include(CheckLinkerFlag)
