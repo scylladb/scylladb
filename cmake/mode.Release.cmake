@@ -7,6 +7,9 @@ set(CMAKE_CXX_FLAGS_RELEASE
 string(APPEND CMAKE_CXX_FLAGS_RELEASE
   " -O${Seastar_OptimizationLevel_RELEASE}")
 
+add_compile_definitions(
+    $<$<CONFIG:Release>:SCYLLA_BUILD_MODE=release>)
+
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "arm64|aarch64")
   set(clang_inline_threshold 300)
 else()
