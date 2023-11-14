@@ -99,8 +99,9 @@ shared_sstable make_sstable_easy(test_env& env, lw_shared_ptr<replica::memtable>
     return make_sstable_easy(env, mt->make_flat_reader(mt->schema(), env.make_reader_permit()), std::move(cfg), gen, v, estimated_partitions, query_time);
 }
 
-future<compaction_result> compact_sstables(compaction_manager& cm, sstables::compaction_descriptor descriptor, table_state& table_s, std::function<shared_sstable()> creator, compaction_sstable_replacer_fn replacer,
-                                           can_purge_tombstones can_purge) {
+future<compaction_result> compact_sstables(test_env& env, sstables::compaction_descriptor descriptor, table_for_tests t,
+                 std::function<shared_sstable()> creator, sstables::compaction_sstable_replacer_fn replacer, can_purge_tombstones can_purge) {
+    auto& table_s = t.as_table_state();
     descriptor.creator = [creator = std::move(creator)] (shard_id dummy) mutable {
         return creator();
     };
@@ -108,9 +109,8 @@ future<compaction_result> compact_sstables(compaction_manager& cm, sstables::com
     if (can_purge) {
         descriptor.enable_garbage_collection(table_s.main_sstable_set());
     }
-    auto cmt = compaction_manager_test(cm);
     sstables::compaction_result ret;
-    co_await cmt.run(descriptor.run_identifier, table_s, [&] (sstables::compaction_data& cdata) {
+    co_await run_compaction_task(env, descriptor.run_identifier, table_s, [&] (sstables::compaction_data& cdata) {
         return do_with(compaction_progress_monitor{}, [&] (compaction_progress_monitor& progress_monitor) {
             return sstables::compact_sstables(std::move(descriptor), cdata, table_s, progress_monitor).then([&] (sstables::compaction_result res) {
                 ret = std::move(res);
@@ -137,12 +137,14 @@ future<shared_sstable> test_env::reusable_sst(schema_ptr schema, sstring dir, ss
 class compaction_manager_test_task : public compaction::compaction_task_executor {
     sstables::run_id _run_id;
     noncopyable_function<future<> (sstables::compaction_data&)> _job;
+    gate::holder _hold;
 
 public:
     compaction_manager_test_task(compaction_manager& cm, table_state& table_s, sstables::run_id run_id, noncopyable_function<future<> (sstables::compaction_data&)> job)
         : compaction::compaction_task_executor(cm, throw_if_stopping::no, &table_s, sstables::compaction_type::Compaction, "Test compaction")
         , _run_id(run_id)
         , _job(std::move(job))
+        , _hold(_compaction_state.gate.hold())
     { }
 
 protected:
@@ -152,35 +154,12 @@ protected:
             return make_ready_future<compaction_manager::compaction_stats_opt>(std::nullopt);
         });
     }
-
-    friend class compaction_manager_test;
 };
 
-future<> compaction_manager_test::run(sstables::run_id output_run_id, table_state& table_s, noncopyable_function<future<> (sstables::compaction_data&)> job) {
-    auto task = make_shared<compaction_manager_test_task>(_cm, table_s, output_run_id, std::move(job));
-    gate::holder gate_holder = task->_compaction_state.gate.hold();
-    auto& cdata = register_compaction(task);
-    co_await task->run_compaction().discard_result().finally([this, &cdata, task] {
-        task->switch_state(compaction_task_executor::state::none);
-        deregister_compaction(cdata);
-    });
-}
-
-sstables::compaction_data& compaction_manager_test::register_compaction(shared_ptr<compaction::compaction_task_executor> task) {
-    testlog.debug("compaction_manager_test: register_compaction uuid={}: {}", task->compaction_data().compaction_uuid, *task);
-    _cm._tasks.push_back(task);
-    return task->compaction_data();
-}
-
-void compaction_manager_test::deregister_compaction(const sstables::compaction_data& c) {
-    auto it = boost::find_if(_cm._tasks, [&c] (auto& task) { return task->compaction_data().compaction_uuid == c.compaction_uuid; });
-    if (it != _cm._tasks.end()) {
-        auto task = *it;
-        testlog.debug("compaction_manager_test: deregister_compaction uuid={}: {}", c.compaction_uuid, *task);
-        _cm._tasks.erase(it);
-    } else {
-        testlog.error("compaction_manager_test: deregister_compaction uuid={}: task not found", c.compaction_uuid);
-    }
+future<> run_compaction_task(test_env& env, sstables::run_id output_run_id, table_state& table_s, noncopyable_function<future<> (sstables::compaction_data&)> job) {
+    auto& tcm = env.test_compaction_manager();
+    auto task = make_shared<compaction_manager_test_task>(tcm.get_compaction_manager(), table_s, output_run_id, std::move(job));
+    co_await tcm.perform_compaction(std::move(task));
 }
 
 shared_sstable verify_mutation(test_env& env, shared_sstable sst, lw_shared_ptr<replica::memtable> mt, bytes key, std::function<void(mutation_opt&)> verify) {

@@ -26,6 +26,11 @@
 #include "test/lib/test_services.hh"
 #include "test/lib/log.hh"
 
+namespace compaction {
+class table_state;
+class compaction_task_executor;
+}
+
 namespace sstables {
 
 class test_env_sstables_manager : public sstables_manager {
@@ -55,6 +60,10 @@ public:
     {}
 
     compaction_manager& get_compaction_manager() { return _cm; }
+
+    void propagate_replacement(compaction::table_state& table_s, const std::vector<shared_sstable>& removed, const std::vector<shared_sstable>& added);
+
+    future<> perform_compaction(shared_ptr<compaction::compaction_task_executor> task);
 };
 
 struct test_env_config {

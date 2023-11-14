@@ -255,6 +255,22 @@ data_dictionary::storage_options make_test_object_storage_options() {
     return ret;
 }
 
+void test_env_compaction_manager::propagate_replacement(compaction::table_state& table_s, const std::vector<shared_sstable>& removed, const std::vector<shared_sstable>& added) {
+    _cm.propagate_replacement(table_s, removed, added);
+}
+
+// Test version of compaction_manager::perform_compaction<>()
+future<> test_env_compaction_manager::perform_compaction(shared_ptr<compaction::compaction_task_executor> task) {
+    _cm._tasks.push_back(task);
+    auto unregister_task = defer([this, task] {
+        if (_cm._tasks.remove(task) == 0) {
+            testlog.error("compaction_manager_test: deregister_compaction uuid={}: task not found", task->compaction_data().compaction_uuid);
+        }
+        task->switch_state(compaction_task_executor::state::none);
+    });
+    co_await task->run_compaction();
+}
+
 }
 
 static std::pair<int, char**> rebuild_arg_list_without(int argc, char** argv, const char* filter_out, bool exclude_positional_arg = false) {

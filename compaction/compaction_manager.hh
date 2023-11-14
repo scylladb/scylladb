@@ -46,6 +46,8 @@ class system_keyspace;
 class compaction_history_entry;
 }
 
+namespace sstables { class test_env_compaction_manager; }
+
 class repair_history_map {
 public:
     boost::icl::interval_map<dht::token, gc_clock::time_point, boost::icl::partial_absorber, std::less, boost::icl::inplace_max> map;
@@ -442,7 +444,7 @@ public:
 
     friend class compacting_sstable_registration;
     friend class compaction_weight_registration;
-    friend class compaction_manager_test;
+    friend class sstables::test_env_compaction_manager;
 
     friend class compaction::compaction_task_executor;
     friend class compaction::sstables_task_executor;
@@ -600,6 +602,7 @@ public:
     friend future<compaction_manager::compaction_stats_opt> compaction_manager::perform_task(shared_ptr<compaction_task_executor> task, throw_if_stopping do_throw_if_stopping);
     friend fmt::formatter<compaction_task_executor>;
     friend future<> compaction_manager::stop_tasks(std::vector<shared_ptr<compaction_task_executor>> tasks, sstring reason);
+    friend sstables::test_env_compaction_manager;
 };
 
 }
