@@ -123,10 +123,16 @@ keyspace_and_tables parse_keyspace_and_tables(scylla_rest_client& client, const 
     return ret;
 }
 
-keyspace_and_tables parse_keyspace_and_tables(scylla_rest_client& client, const bpo::variables_map& vm) {
+keyspace_and_tables parse_keyspace_and_tables(scylla_rest_client& client, const bpo::variables_map& vm, bool keyspace_required = true) {
     keyspace_and_tables ret;
 
-    ret.keyspace = vm["keyspace"].as<sstring>();
+    if (vm.contains("keyspace")) {
+        ret.keyspace = vm["keyspace"].as<sstring>();
+    } else if (keyspace_required) {
+        throw std::invalid_argument(fmt::format("keyspace must be specified"));
+    } else {
+        return ret;
+    }
 
     const auto all_keyspaces = get_keyspaces(client);
     if (std::ranges::find(all_keyspaces, ret.keyspace) == all_keyspaces.end()) {
@@ -207,7 +213,11 @@ void enablegossip_operation(scylla_rest_client& client, const bpo::variables_map
 }
 
 void flush_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
-    const auto [keyspace, tables] = parse_keyspace_and_tables(client, vm);
+    const auto [keyspace, tables] = parse_keyspace_and_tables(client, vm, false);
+    if (keyspace.empty()) {
+        client.post("/storage_service/flush");
+        return;
+    }
     std::unordered_map<sstring, sstring> params;
     if (!tables.empty()) {
         params["cf"] = fmt::to_string(fmt::join(tables.begin(), tables.end(), ","));
