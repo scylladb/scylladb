@@ -995,7 +995,7 @@ table::try_flush_memtable_to_sstable(compaction_group& cg, lw_shared_ptr<memtabl
         auto metadata = mutation_source_metadata{};
         metadata.min_timestamp = old->get_min_timestamp();
         metadata.max_timestamp = old->get_max_timestamp();
-        auto estimated_partitions = _compaction_strategy.adjust_partition_estimate(metadata, old->partition_count());
+        auto estimated_partitions = _compaction_strategy.adjust_partition_estimate(metadata, old->partition_count(), _schema);
 
         if (!cg.async_gate().is_closed()) {
             co_await _compaction_manager.maybe_wait_for_sstable_count_reduction(cg.as_table_state());
