@@ -184,16 +184,27 @@ public:
     };
 };
 
-uint64_t time_window_compaction_strategy::adjust_partition_estimate(const mutation_source_metadata& ms_meta, uint64_t partition_estimate) const {
-    if (!ms_meta.min_timestamp || !ms_meta.max_timestamp) {
-        // Not enough information, we assume the worst
-        return partition_estimate / max_data_segregation_window_count;
-    }
-    const auto min_window = get_window_for(_options, *ms_meta.min_timestamp);
-    const auto max_window = get_window_for(_options, *ms_meta.max_timestamp);
-    const auto window_size = get_window_size(_options);
+uint64_t time_window_compaction_strategy::adjust_partition_estimate(const mutation_source_metadata& ms_meta, uint64_t partition_estimate, schema_ptr s) const {
+    // If not enough information, we assume the worst
+    auto estimated_window_count = max_data_segregation_window_count;
+    auto default_ttl = std::chrono::duration_cast<std::chrono::microseconds>(s->default_time_to_live());
+    bool min_and_max_ts_available = ms_meta.min_timestamp && ms_meta.max_timestamp;
+    auto estimate_window_count = [this] (timestamp_type min_window, timestamp_type max_window) {
+        const auto window_size = get_window_size(_options);
+        return (max_window + (window_size - 1) - min_window) / window_size;
+    };
 
-    auto estimated_window_count = (max_window + (window_size - 1) - min_window) / window_size;
+    if (!min_and_max_ts_available && default_ttl.count()) {
+        auto min_window = get_window_for(_options, timestamp_type(0));
+        auto max_window = get_window_for(_options, timestamp_type(default_ttl.count()));
+
+        estimated_window_count = estimate_window_count(min_window, max_window);
+    } else if (min_and_max_ts_available) {
+        auto min_window = get_window_for(_options, *ms_meta.min_timestamp);
+        auto max_window = get_window_for(_options, *ms_meta.max_timestamp);
+
+        estimated_window_count = estimate_window_count(min_window, max_window);
+    }
 
     return partition_estimate / std::max(1UL, uint64_t(estimated_window_count));
 }

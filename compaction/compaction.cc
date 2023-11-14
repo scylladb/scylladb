@@ -505,7 +505,7 @@ protected:
         auto max_sstable_size = std::max<uint64_t>(_max_sstable_size, 1);
         uint64_t estimated_sstables = std::max(1UL, uint64_t(ceil(double(_compacting_data_file_size) / max_sstable_size)));
         return std::min(uint64_t(ceil(double(_estimated_partitions) / estimated_sstables)),
-                        _table_s.get_compaction_strategy().adjust_partition_estimate(_ms_metadata, _estimated_partitions));
+                        _table_s.get_compaction_strategy().adjust_partition_estimate(_ms_metadata, _estimated_partitions, _schema));
     }
 
     void setup_new_sstable(shared_sstable& sst) {
@@ -1595,7 +1595,7 @@ private:
     uint64_t partitions_per_sstable(shard_id s) const {
         uint64_t estimated_sstables = std::max(uint64_t(1), uint64_t(ceil(double(_estimation_per_shard[s].estimated_size) / _max_sstable_size)));
         return std::min(uint64_t(ceil(double(_estimation_per_shard[s].estimated_partitions) / estimated_sstables)),
-                _table_s.get_compaction_strategy().adjust_partition_estimate(_ms_metadata, _estimation_per_shard[s].estimated_partitions));
+                _table_s.get_compaction_strategy().adjust_partition_estimate(_ms_metadata, _estimation_per_shard[s].estimated_partitions, _schema));
     }
 public:
     resharding_compaction(table_state& table_s, sstables::compaction_descriptor descriptor, compaction_data& cdata)
