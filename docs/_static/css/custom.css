@@ -17,10 +17,22 @@
 }
 
 .content blockquote li p {
-    margin-bottom: 10px;
+    margin-bottom: 5px;
 }
 
 h3 .pre {
     font-size: 16px;
     font-weight: bold;
+}
+
+hr {
+    max-width: 100%;
+}
+
+dl dt:hover > a.headerlink {
+    visibility: visible;
+}
+
+dl.confval {
+    border-bottom: 1px solid #cacaca;
 }
