@@ -55,6 +55,7 @@
 #include "mutation_writer/partition_based_splitting_writer.hh"
 #include "compaction/table_state.hh"
 #include "mutation_rebuilder.hh"
+#include "mutation_source_metadata.hh"
 
 #include <stdio.h>
 #include <ftw.h>
@@ -3735,6 +3736,28 @@ SEASTAR_TEST_CASE(test_twcs_partition_estimate) {
         table_for_tests cf(env.manager(), s, tmpdir_path);
         auto close_cf = deferred_stop(cf);
         cf->start();
+
+        auto ceil_div = [] (int dividend, int divisor) { return (dividend + divisor - 1) / divisor; };
+
+        auto estimation_test = [ceil_div] (schema_ptr s, uint64_t window_count) {
+            auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::time_window, s->compaction_strategy_options());
+            mutation_source_metadata ms_metadata{};
+            const int partitions = 100;
+            BOOST_REQUIRE_EQUAL(cs.adjust_partition_estimate(ms_metadata, partitions, s),
+                                ceil_div(partitions, window_count));
+        };
+        {
+            static constexpr int window_count = 20;
+            builder.set_default_time_to_live(std::chrono::duration_cast<std::chrono::seconds>(std::chrono::hours(window_count)));
+            auto s = builder.build();
+            estimation_test(s, window_count);
+        }
+
+        {
+            builder.set_default_time_to_live(0s);
+            auto s = builder.build();
+            estimation_test(s, time_window_compaction_strategy::max_data_segregation_window_count);
+        }
 
         std::vector<shared_sstable> sstables_spanning_many_windows = {
             make_sstable(0),

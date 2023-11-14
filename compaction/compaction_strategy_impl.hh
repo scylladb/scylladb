@@ -70,7 +70,7 @@ public:
 
     virtual std::unique_ptr<compaction_backlog_tracker::impl> make_backlog_tracker() = 0;
 
-    virtual uint64_t adjust_partition_estimate(const mutation_source_metadata& ms_meta, uint64_t partition_estimate);
+    virtual uint64_t adjust_partition_estimate(const mutation_source_metadata& ms_meta, uint64_t partition_estimate, schema_ptr schema);
 
     virtual reader_consumer_v2 make_interposer_consumer(const mutation_source_metadata& ms_meta, reader_consumer_v2 end_consumer);
 
