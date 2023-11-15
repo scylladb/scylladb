@@ -399,17 +399,29 @@ def test_filter_and_fetch_size(cql, test_keyspace, use_index, driver_bug_1):
 # Reproduces #13468
 def test_filter_token(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, 'pk int, ck int, x int, PRIMARY KEY (pk, ck)') as table:
-        with pytest.raises(InvalidRequest, match='Invalid number of arguments'):
+        # In this case token() expects just a single argument, if we pass
+        # it the same one twice we get different errors in ScyllaDB and
+        # Cassandra - in ScyllaDB we get "Invalid number of arguments",
+        # Cassandra complains that the two arguments are the same - "The
+        # token() function contains duplicate partition key components":
+        with pytest.raises(InvalidRequest, match='Invalid number of arguments|duplicate partition key'):
             cql.execute(f'SELECT pk FROM {table} WHERE token(pk, pk) = 0')
-    with new_test_table(cql, test_keyspace, 'pk int, ck int, x int, PRIMARY KEY ((pk, ck))') as table:
-        with pytest.raises(InvalidRequest, match='duplicate partition key'):
-            cql.execute(f'SELECT pk FROM {table} WHERE token(pk, pk) = 0')
-        with pytest.raises(InvalidRequest, match='Invalid number of arguments'):
-            cql.execute(f'SELECT pk FROM {table} WHERE token(x) = 0')
-        with pytest.raises(InvalidRequest, match='Invalid number of arguments'):
-            cql.execute(f'SELECT pk FROM {table} WHERE token(pk) = 0')
+    with new_test_table(cql, test_keyspace, 'pk1 int, pk2 int, x int, PRIMARY KEY ((pk1, pk2))') as table:
+        # In the following cases, token() expects two arguments but they
+        # should be the two partition key columns, not something else like
+        # fewer columns or the same column twice. ScyllaDB and Cassandra
+        # print different error messages: ScyllaDB complains about the
+        # specific problem in the request (e.g., duplicate pk1) while
+        # Cassandra makes a general complaint about the that token() "must
+        # be applied to all partition key components or none of them".
+        with pytest.raises(InvalidRequest, match='duplicate partition key|must be applied to all partition key components or none of them'):
+            cql.execute(f'SELECT pk1 FROM {table} WHERE token(pk1, pk1) = 0')
+        with pytest.raises(InvalidRequest, match='Invalid number of arguments|must be applied to all partition key components or none of them'):
+            cql.execute(f'SELECT pk1 FROM {table} WHERE token(x) = 0')
+        with pytest.raises(InvalidRequest, match='Invalid number of arguments|must be applied to all partition key components or none of them'):
+            cql.execute(f'SELECT pk1 FROM {table} WHERE token(pk1) = 0')
         with pytest.raises(InvalidRequest, match='partition key order'):
-            cql.execute(f'SELECT pk FROM {table} WHERE token(ck, pk) = 0')
+            cql.execute(f'SELECT pk1 FROM {table} WHERE token(pk2, pk1) = 0')
 
 
 # In a query with a token restriction the name assigned to the bind marker should be "partition key token".

@@ -106,10 +106,21 @@ def test_alter_keyspace_invalid(cql, this_dc):
     with new_test_keyspace(cql, "WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 1 }") as keyspace:
         with pytest.raises(ConfigurationException):
             cql.execute(f"ALTER KEYSPACE {keyspace} WITH REPLICATION = {{ 'class' : 'NoSuchStrategy' }}")
+
+# Continuing test_alter_keyspace_invalid, this is another invalid alter
+# keyspace: SimpleStrategy, if not outright forbidden, requires a
+# replication_factor option. However, this is only true in Scylla - in
+# Cassandra 4.1 and above, a missing replication_factor *is* allowed,
+# because there is a default_keyspace_rf configuration. See issue #16028.
+def test_alter_keyspace_missing_rf(cql, this_dc, scylla_only):
+    with new_test_keyspace(cql, "WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 1 }") as keyspace:
         # SimpleStrategy, if not outright forbidden, requires a
         # replication_factor option.
         with pytest.raises(ConfigurationException):
             cql.execute(f"ALTER KEYSPACE {keyspace} WITH REPLICATION = {{ 'class' : 'SimpleStrategy' }}")
+        # Strangely, Cassandra doesn't raise here - it allows garbage
+        # replication_factor (and probably uses the default instead).
+        # this should probably be considered a Cassandra bug.
         with pytest.raises(ConfigurationException):
             cql.execute(f"ALTER KEYSPACE {keyspace} WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 'foo' }}")
 

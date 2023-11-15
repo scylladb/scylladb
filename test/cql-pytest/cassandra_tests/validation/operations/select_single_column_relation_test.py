@@ -89,7 +89,10 @@ def testClusteringColumnRelations(cql, test_keyspace):
                    ["first", 2, 6, 2],
                    ["first", 3, 7, 3])
 
-        assert_empty(execute(cql, table, "select * from %s where a = ? and b in ? and c in ?", "first", None, [7, 6]))
+        # Scylla does allow IN NULL (see commit 52bbc1065c8) so this test
+        # is commented out
+        #assert_invalid_message(cql, table, "Invalid null value for column b",
+        #                     "select * from %s where a = ? and b in ? and c in ?", "first", None, [7, 6])
 
         assert_rows(execute(cql, table, "select * from %s where a = ? and c >= ? and b in (?, ?)", "first", 6, 3, 2),
                    ["first", 2, 6, 2],

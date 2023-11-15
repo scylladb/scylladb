@@ -402,43 +402,68 @@ def test_desc_cluster(scylla_only, cql, test_keyspace):
     
     assert sorted(desc_endpoints) == sorted(ring_endpoints)
 
+def is_scylla(cql):
+    return any('scylla' in name for name in [row.table_name for row in cql.execute("SELECT * FROM system_schema.tables WHERE keyspace_name = 'system'")])
+
 # Test that 'DESC INDEX' contains create statement od index
 def test_desc_index(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, "a int primary key, b int, c int") as tbl:
         tbl_name = get_name(tbl)
         create_idx_b = f"CREATE INDEX ON {tbl}(b)"
         create_idx_c = f"CREATE INDEX named_index ON {tbl}(c)"
-        create_idx_ab = f"CREATE INDEX ON {tbl}((a), b)"
+        # Only Scylla supports local indexes
+        has_local = is_scylla(cql)
+        if has_local:
+            create_idx_ab = f"CREATE INDEX ON {tbl}((a), b)"
 
         cql.execute(create_idx_b)
         cql.execute(create_idx_c)
-        cql.execute(create_idx_ab)
+        if has_local:
+            cql.execute(create_idx_ab)
 
         b_desc = cql.execute(f"DESC INDEX {test_keyspace}.{tbl_name}_b_idx").one().create_statement
-        ab_desc = cql.execute(f"DESC INDEX {test_keyspace}.{tbl_name}_b_idx_1").one().create_statement
+        if has_local:
+            ab_desc = cql.execute(f"DESC INDEX {test_keyspace}.{tbl_name}_b_idx_1").one().create_statement
         c_desc = cql.execute(f"DESC INDEX {test_keyspace}.named_index").one().create_statement
 
-        assert f"CREATE INDEX {tbl_name}_b_idx ON {tbl}(b)" in b_desc
-        assert f"CREATE INDEX {tbl_name}_b_idx_1 ON {tbl}((a), b)" in ab_desc
-        assert create_idx_c in c_desc
+        # Cassandra inserts a space between the table name and parantheses,
+        # Scylla doesn't. This difference doesn't matter because both are
+        # valid CQL commands
+        if is_scylla(cql):
+            maybe_space = ''
+        else:
+            maybe_space = ' '
+        assert f"CREATE INDEX {tbl_name}_b_idx ON {tbl}{maybe_space}(b)" in b_desc
+        if has_local:
+            assert f"CREATE INDEX {tbl_name}_b_idx_1 ON {tbl}((a), b)" in ab_desc
+        
+        assert f"CREATE INDEX named_index ON {tbl}{maybe_space}(c)" in c_desc
 
 # Test that 'DESC TABLE' contains description of indexes
 def test_index_desc_in_table_desc(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, "a int primary key, b int, c int") as tbl:
         create_idx_b = f"CREATE INDEX ON {tbl}(b)"
         create_idx_c = f"CREATE INDEX named_index ON {tbl}(c)"
-        create_idx_ab = f"CREATE INDEX ON {tbl}((a), b)"
+        has_local = is_scylla(cql)
+        if is_scylla(cql):
+            maybe_space = ''
+        else:
+            maybe_space = ' '
+        if has_local:
+            create_idx_ab = f"CREATE INDEX ON {tbl}((a), b)"
 
         cql.execute(create_idx_b)
         cql.execute(create_idx_c)
-        cql.execute(create_idx_ab)
+        if has_local:
+            cql.execute(create_idx_ab)
 
         tbl_name = get_name(tbl)
         desc = "\n".join([d.create_statement for d in cql.execute(f"DESC TABLE {tbl}")])
         
-        assert f"CREATE INDEX {tbl_name}_b_idx ON {tbl}(b)" in desc
-        assert create_idx_c in desc
-        assert f"CREATE INDEX {tbl_name}_b_idx_1 ON {tbl}((a), b)" in desc
+        assert f"CREATE INDEX {tbl_name}_b_idx ON {tbl}{maybe_space}(b)" in desc
+        assert f"CREATE INDEX named_index ON {tbl}{maybe_space}(c)" in desc
+        if has_local:
+            assert f"CREATE INDEX {tbl_name}_b_idx_1 ON {tbl}((a), b)" in desc
 
 # -----------------------------------------------------------------------------
 # "Generic describe" is a describe statement without specifying what kind of object 
@@ -492,7 +517,8 @@ def test_generic_desc_user_defined(scylla_only, cql, test_keyspace):
 
 
 # Test that 'DESC FUNCTION'/'DESC AGGREGATE' doesn't show UDA/UDF and doesn't crash Scylla
-def test_desc_udf_uda(cql, test_keyspace):
+# The test is marked scylla_only because it uses Lua as UDF language.
+def test_desc_udf_uda(cql, test_keyspace, scylla_only):
     with new_function(cql, test_keyspace, "(a int, b int) RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE LUA AS 'return a+b'") as fn:
         with new_aggregate(cql, test_keyspace, f"(int) SFUNC {fn} STYPE int") as aggr:
 
@@ -507,7 +533,8 @@ def test_desc_udf_uda(cql, test_keyspace):
 # The new server-side describe was missing it.
 # Example: caching = {'keys': 'ALL', 'rows_per_partition': 'ALL'}
 # Reproduces #14895
-def test_whitespaces_in_table_options(cql, test_keyspace):
+# The test is marked scylla_only because it uses a Scylla-only property "cdc".
+def test_whitespaces_in_table_options(cql, test_keyspace, scylla_only):
     regex = "\\{[^}]*[:,][^\\s][^}]*\\}" # looks for any colon or comma without space after it inside a { }
     
     with new_test_table(cql, test_keyspace, "a int primary key", "WITH cdc = {'enabled': true}") as tbl:
@@ -591,6 +618,8 @@ def test_type_quoting(cql):
         assert f"CREATE TYPE \"{ks_name}\".\"{name}\"" in desc
         assert f"CREATE TYPE \"{ks_name}\".{name}" not in desc
         assert f"CREATE TYPE {ks_name}.\"{name}\"" not in desc
+        # The following used to be buggy in Cassandra, but fixed in
+        # CASSANDRA-17918 (in Cassandra 4.1.2):
         assert f"\"{field_name}\" text" in desc
         assert f"{field_name} text" not in desc
 
@@ -873,9 +902,11 @@ def new_random_table(cql, keyspace, udts=[]):
     extras["min_index_interval"] = min_idx_interval
     extras["max_index_interval"] = random.randrange(min_idx_interval, 10000)
     extras["memtable_flush_period_in_ms"] = random.randrange(0, 10000)
-    extras["paxos_grace_seconds"] = random.randrange(1000, 100000)
 
-    extras["tombstone_gc"] = f"{{'mode': 'timeout', 'propagation_delay_in_seconds': '{random.randrange(100, 100000)}'}}"
+    if is_scylla(cql):
+        # Extra properties which ScyllaDB supports but Cassandra doesn't
+        extras["paxos_grace_seconds"] = random.randrange(1000, 100000)
+        extras["tombstone_gc"] = f"{{'mode': 'timeout', 'propagation_delay_in_seconds': '{random.randrange(100, 100000)}'}}"
 
     extra_options = [f"{k} = {v}" for (k, v) in extras.items()]
     extra_str = " AND ".join(extra_options)

@@ -1046,7 +1046,7 @@ def testDeleteWithOneClusteringColumns(cql, test_keyspace, forceFlush):
         assertInvalidMessage(cql, table, "Only EQ and IN relation are supported on the partition key",
                              "DELETE FROM %s WHERE partitionKey > ? AND clustering = ?", 0, 1)
 
-        assertInvalidMessage(cql, table, "Cannot use CONTAINS on non-collection column",
+        assertInvalidMessageRE(cql, table, "Cannot use CONTAINS on non-collection column|Cannot use DELETE with CONTAINS",
                              "DELETE FROM %s WHERE partitionKey CONTAINS ? AND clustering = ?", 0, 1)
 
         # Non primary key in the where clause
@@ -3965,7 +3965,7 @@ def testUpdate(cql, test_keyspace, forceFlush):
         assertInvalidMessage(cql, table, "Only EQ and IN relation are supported on the partition key",
                              "UPDATE %s SET value = ? WHERE partitionKey > ? AND clustering_1 = ?", 7, 0, 1)
 
-        assertInvalidMessage(cql, table, "Cannot use CONTAINS on non-collection column",
+        assertInvalidMessageRE(cql, table, "Cannot use CONTAINS on non-collection column|Cannot use UPDATE with CONTAINS",
                              "UPDATE %s SET value = ? WHERE partitionKey CONTAINS ? AND clustering_1 = ?", 7, 0, 1)
 
         assertInvalidMessage(cql, table, "value",
@@ -4095,7 +4095,7 @@ def testUpdateWithTwoClusteringColumns(cql, test_keyspace, forceFlush):
         assertInvalidMessage(cql, table, "Only EQ and IN relation are supported on the partition key",
                              "UPDATE %s SET value = ? WHERE partitionKey > ? AND clustering_1 = ? AND clustering_2 = ?", 7, 0, 1, 1)
 
-        assertInvalidMessage(cql, table, "Cannot use CONTAINS on non-collection column",
+        assertInvalidMessageRE(cql, table, "Cannot use CONTAINS on non-collection column|Cannot use UPDATE with CONTAINS",
                              "UPDATE %s SET value = ? WHERE partitionKey CONTAINS ? AND clustering_1 = ? AND clustering_2 = ?", 7, 0, 1, 1)
 
         assertInvalid(cql, table,
