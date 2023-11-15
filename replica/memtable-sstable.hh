@@ -36,13 +36,6 @@ write_memtable_to_sstable(flat_mutation_reader_v2 reader,
         sstables::sstable_writer_config& cfg);
 
 seastar::future<>
-write_memtable_to_sstable(reader_permit permit,
-        memtable& mt,
-        sstables::shared_sstable sst,
-        sstables::write_monitor& mon,
-        sstables::sstable_writer_config& cfg);
-
-seastar::future<>
 write_memtable_to_sstable(memtable& mt,
         sstables::shared_sstable sst,
         sstables::sstable_writer_config cfg);

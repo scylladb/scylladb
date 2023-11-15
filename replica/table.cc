@@ -2472,20 +2472,15 @@ write_memtable_to_sstable(flat_mutation_reader_v2 reader,
 }
 
 future<>
-write_memtable_to_sstable(reader_permit permit, memtable& mt, sstables::shared_sstable sst,
-                          sstables::write_monitor& monitor,
-                          sstables::sstable_writer_config& cfg) {
-    return write_memtable_to_sstable(mt.make_flush_reader(mt.schema(), std::move(permit)), mt, std::move(sst), mt.partition_count(), monitor, cfg);
-}
-
-future<>
 write_memtable_to_sstable(memtable& mt, sstables::shared_sstable sst, sstables::sstable_writer_config cfg) {
     auto monitor = replica::permit_monitor(make_lw_shared(sstable_write_permit::unconditional()));
     auto semaphore = reader_concurrency_semaphore(reader_concurrency_semaphore::no_limits{}, "write_memtable_to_sstable");
     std::exception_ptr ex;
 
     try {
-        co_await write_memtable_to_sstable(semaphore.make_tracking_only_permit(mt.schema().get(), "mt_to_sst", db::no_timeout, {}), mt, std::move(sst), monitor, cfg);
+        auto permit = semaphore.make_tracking_only_permit(mt.schema().get(), "mt_to_sst", db::no_timeout, {});
+        auto reader = mt.make_flush_reader(mt.schema(), std::move(permit));
+        co_await write_memtable_to_sstable(std::move(reader), mt, std::move(sst), mt.partition_count(), monitor, cfg);
     } catch (...) {
         ex = std::current_exception();
     }
