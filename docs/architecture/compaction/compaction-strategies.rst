@@ -8,8 +8,7 @@ Scylla implements the following compaction strategies in order to reduce :term:`
 * `Size-tiered compaction strategy (STCS)`_ - triggered when the system has enough (four by default) similarly sized SSTables.
 * `Leveled compaction strategy (LCS)`_ - the system uses small, fixed-size (by default 160 MB) SSTables distributed across different levels.
 * `Incremental Compaction Strategy (ICS)`_ - shares the same read and write amplification factors as STCS, but it fixes its 2x temporary space amplification issue by breaking huge sstables into SSTable runs, which are comprised of a sorted set of smaller (1 GB by default), non-overlapping SSTables. 
-* `Time-window compaction strategy (TWCS)`_ - designed for time series data; replaced Date-tiered compaction. 
-* `Date-tiered compaction strategy (DTCS)`_ - designed for time series data.
+* `Time-window compaction strategy (TWCS)`_ - designed for time series data.
 
 This document covers how to choose a compaction strategy and presents the benefits and disadvantages of each one. If you want more information on compaction in general or on any of these strategies, refer to the :doc:`Compaction Overview </kb/compaction>`. If you want an explanation of the CQL commands used to create a compaction strategy, refer to :doc:`Compaction CQL Reference </cql/compaction>` .
 
@@ -78,7 +77,6 @@ ICS is only available in ScyllaDB Enterprise. See the `ScyllaDB Enetrpise docume
 Time-window Compaction Strategy (TWCS)
 ======================================
 
-Time-window compaction strategy was introduced in Cassandra 3.0.8 for time-series data as a replacement for `Date-tiered Compaction Strategy (DTCS)`_.
 Time-Window Compaction Strategy compacts SSTables within each time window using `Size-tiered Compaction Strategy (STCS)`_.
 SSTables from different time windows are never compacted together. You set the :ref:`TimeWindowCompactionStrategy <time-window-compactionstrategy-twcs>` parameters when you create a table using a CQL command.
 
@@ -87,9 +85,8 @@ SSTables from different time windows are never compacted together. You set the :
 Time-window Compaction benefits
 -------------------------------
 
-* Keeps entries according to a time range, making searches for data within a given range easy to do, resulting in better read performance
-* Improves over DTCS in that it reduces the number to huge compactions
-* Allows you to expire an entire SSTable at once (using a TTL) as the data is already organized within a time frame
+* Keeps entries according to a time range, making searches for data within a given range easy to do, resulting in better read performance.
+* Allows you to expire an entire SSTable at once (using a TTL) as the data is already organized within a time frame.
 
 Time-window Compaction deficits
 -------------------------------
@@ -101,14 +98,6 @@ Time-window Compaction deficits
 Set the parameters for :ref:`Time-window Compaction <time-window-compactionstrategy-twcs>`.
 
 Use the table in `Which strategy is best`_ to determine if this is the right strategy for your needs. 
-
-.. _DTCS1:
-
-Date-tiered Compaction Strategy (DTCS)
-======================================
-
-Date-Tiered Compaction is designed for time series data. This strategy was introduced with Cassandra 2.1.
-It is only suitable for time-series data. This strategy is not recommended and has been replaced by :ref:`Time-window Compaction Strategy <TWCS1>`.
 
 .. _which-strategy-is-best:
 
