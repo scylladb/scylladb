@@ -33,10 +33,6 @@ sstables::shared_sstable make_sstable_containing(sstables::shared_sstable sst, l
 sstables::shared_sstable make_sstable_containing(std::function<sstables::shared_sstable()> sst_factory, std::vector<mutation> muts, validate do_validate = validate::yes);
 sstables::shared_sstable make_sstable_containing(sstables::shared_sstable sst, std::vector<mutation> muts, validate do_validate = validate::yes);
 
-inline future<> write_memtable_to_sstable_for_test(replica::memtable& mt, sstables::shared_sstable sst) {
-    return write_memtable_to_sstable(mt, sst, sst->manager().configure_writer("memtable"));
-}
-
 namespace sstables {
 
 using sstable_ptr = shared_sstable;

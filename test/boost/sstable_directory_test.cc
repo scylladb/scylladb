@@ -93,7 +93,7 @@ make_sstable_for_all_shards(replica::database& db, replica::table& table, sstabl
     }
     data_dictionary::storage_options local;
     auto sst = table.get_sstables_manager().make_sstable(s, table.dir(), local, generation, state);
-    write_memtable_to_sstable(*mt, sst, table.get_sstables_manager().configure_writer("test")).get();
+    write_memtable_to_sstable(*mt, sst).get();
     mt->clear_gently().get();
     // We can't write an SSTable with bad sharding, so pretend
     // it came from Cassandra

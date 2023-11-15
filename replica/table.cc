@@ -2472,7 +2472,8 @@ write_memtable_to_sstable(flat_mutation_reader_v2 reader,
 }
 
 future<>
-write_memtable_to_sstable(memtable& mt, sstables::shared_sstable sst, sstables::sstable_writer_config cfg) {
+write_memtable_to_sstable(memtable& mt, sstables::shared_sstable sst) {
+    auto cfg = sst->manager().configure_writer("memtable");
     auto monitor = replica::permit_monitor(make_lw_shared(sstable_write_permit::unconditional()));
     auto semaphore = reader_concurrency_semaphore(reader_concurrency_semaphore::no_limits{}, "write_memtable_to_sstable");
     std::exception_ptr ex;
