@@ -56,7 +56,7 @@ target_link_libraries(utils
     xxHash::xxhash
   PRIVATE
     Boost::regex
-    cryptopp
+    cryptopp::cryptopp
     rapidxml::rapidxml)
 
 check_headers(check-headers utils
