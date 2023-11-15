@@ -1,11 +1,10 @@
-set(Seastar_OptimizationLevel_DEV "2")
 set(CMAKE_CXX_FLAGS_DEV
   ""
   CACHE
   INTERNAL
   "")
-update_cxx_flags(CMAKE_CXX_FLAGS_RELEASE
-  OPTIMIZATION_LEVEL ${Seastar_OptimizationLevel_Dev})
+update_cxx_flags(CMAKE_CXX_FLAGS_DEV
+  OPTIMIZATION_LEVEL "2")
 
 set(Seastar_DEFINITIONS_DEV
   SCYLLA_BUILD_MODE=dev

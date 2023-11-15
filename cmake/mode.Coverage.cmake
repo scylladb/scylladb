@@ -1,4 +1,3 @@
-set(Seastar_OptimizationLevel_COVERAGE "g")
 set(CMAKE_CXX_FLAGS_COVERAGE
   "-fprofile-instr-generate -fcoverage-mapping"
   CACHE
@@ -6,7 +5,7 @@ set(CMAKE_CXX_FLAGS_COVERAGE
   "")
 update_cxx_flags(CMAKE_CXX_FLAGS_COVERAGE
   WITH_DEBUG_INFO
-  OPTIMIZATION_LEVEL ${Seastar_OptimizationLevel_COVERAGE})
+  OPTIMIZATION_LEVEL "g")
 
 set(Seastar_DEFINITIONS_COVERAGE
   SCYLLA_BUILD_MODE=coverage
