@@ -1,4 +1,3 @@
-set(Seastar_OptimizationLevel_RELEASE "3")
 set(CMAKE_CXX_FLAGS_RELEASE
   "-ffunction-sections -fdata-sections"
   CACHE
@@ -6,7 +5,7 @@ set(CMAKE_CXX_FLAGS_RELEASE
   "")
 update_cxx_flags(CMAKE_CXX_FLAGS_RELEASE
   WITH_DEBUG_INFO
-  OPTIMIZATION_LEVEL ${Seastar_OptimizationLevel_RELEASE})
+  OPTIMIZATION_LEVEL "3")
 
 add_compile_definitions(
     $<$<CONFIG:Release>:SCYLLA_BUILD_MODE=release>)
