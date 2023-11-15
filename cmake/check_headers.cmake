@@ -66,6 +66,12 @@ function (check_headers check_headers_target target)
   # compile time options
   get_target_property(libraries ${target} LINK_LIBRARIES)
   if (libraries)
+    # as a side effect, the libraries linked by the ${target} are also built as
+    # the dependencies of ${check_lib}. some of the libraries are scylla
+    # libraries. we could tell them from the 3rd party libraries, but we would
+    # have to recursively pull in their compiling options. so, since that
+    # we always build "check-headers" target along with "scylla", this does
+    # not incur overhead.
     target_link_libraries(${check_lib}
       PRIVATE ${libraries})
   endif()
