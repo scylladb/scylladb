@@ -2480,16 +2480,19 @@ write_memtable_to_sstable(reader_permit permit, memtable& mt, sstables::shared_s
 
 future<>
 write_memtable_to_sstable(memtable& mt, sstables::shared_sstable sst, sstables::sstable_writer_config cfg) {
-    return do_with(
-            replica::permit_monitor(make_lw_shared(sstable_write_permit::unconditional())),
-            std::make_unique<reader_concurrency_semaphore>(reader_concurrency_semaphore::no_limits{}, "write_memtable_to_sstable"),
-            cfg,
-            [&mt, sst] (auto& monitor, auto& semaphore, auto& cfg) {
-        return write_memtable_to_sstable(semaphore->make_tracking_only_permit(mt.schema().get(), "mt_to_sst", db::no_timeout, {}), mt, std::move(sst), monitor, cfg)
-        .finally([&semaphore] {
-                return semaphore->stop();
-        });
-    });
+    auto monitor = replica::permit_monitor(make_lw_shared(sstable_write_permit::unconditional()));
+    auto semaphore = reader_concurrency_semaphore(reader_concurrency_semaphore::no_limits{}, "write_memtable_to_sstable");
+    std::exception_ptr ex;
+
+    try {
+        co_await write_memtable_to_sstable(semaphore.make_tracking_only_permit(mt.schema().get(), "mt_to_sst", db::no_timeout, {}), mt, std::move(sst), monitor, cfg);
+    } catch (...) {
+        ex = std::current_exception();
+    }
+    co_await semaphore.stop();
+    if (ex) {
+        std::rethrow_exception(std::move(ex));
+    }
 }
 
 future<lw_shared_ptr<query::result>>
