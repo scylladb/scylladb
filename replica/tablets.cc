@@ -218,42 +218,42 @@ void update_tablet_metadata_change_hint(locator::tablet_metadata_change_hint& hi
 namespace {
 
 tablet_id process_one_row(table_id table, tablet_map& map, tablet_id tid, const cql3::untyped_result_set_row& row) {
-        tablet_replica_set tablet_replicas;
-        if (row.has("replicas")) {
-            tablet_replicas = deserialize_replica_set(row.get_view("replicas"));
+    tablet_replica_set tablet_replicas;
+    if (row.has("replicas")) {
+        tablet_replicas = deserialize_replica_set(row.get_view("replicas"));
+    }
+
+    tablet_replica_set new_tablet_replicas;
+    if (row.has("new_replicas")) {
+        new_tablet_replicas = deserialize_replica_set(row.get_view("new_replicas"));
+    }
+
+    if (row.has("stage")) {
+        auto stage = tablet_transition_stage_from_string(row.get_as<sstring>("stage"));
+
+        std::unordered_set<tablet_replica> pending(new_tablet_replicas.begin(), new_tablet_replicas.end());
+        for (auto&& r : tablet_replicas) {
+            pending.erase(r);
         }
-
-        tablet_replica_set new_tablet_replicas;
-        if (row.has("new_replicas")) {
-            new_tablet_replicas = deserialize_replica_set(row.get_view("new_replicas"));
+        if (pending.size() > 1) {
+            throw std::runtime_error(format("Too many pending replicas for table {} tablet {}: {}",
+                                            table, tid, pending));
         }
+        map.set_tablet_transition_info(tid, tablet_transition_info{stage,
+                std::move(new_tablet_replicas), *pending.begin()});
+    }
 
-        if (row.has("stage")) {
-            auto stage = tablet_transition_stage_from_string(row.get_as<sstring>("stage"));
+    map.set_tablet(tid, tablet_info{std::move(tablet_replicas)});
 
-            std::unordered_set<tablet_replica> pending(new_tablet_replicas.begin(), new_tablet_replicas.end());
-            for (auto&& r : tablet_replicas) {
-                pending.erase(r);
-            }
-            if (pending.size() > 1) {
-                throw std::runtime_error(format("Too many pending replicas for table {} tablet {}: {}",
-                                                table, tid, pending));
-            }
-            map.set_tablet_transition_info(tid, tablet_transition_info{stage,
-                    std::move(new_tablet_replicas), *pending.begin()});
-        }
+    auto persisted_last_token = dht::token::from_int64(row.get_as<int64_t>("last_token"));
+    auto current_last_token = map.get_last_token(tid);
+    if (current_last_token != persisted_last_token) {
+        tablet_logger.debug("current tablet_map: {}", map);
+        throw std::runtime_error(format("last_token mismatch between on-disk ({}) and in-memory ({}) tablet map for table {} tablet {}",
+                                        persisted_last_token, current_last_token, table, tid));
+    }
 
-        map.set_tablet(tid, tablet_info{std::move(tablet_replicas)});
-
-        auto persisted_last_token = dht::token::from_int64(row.get_as<int64_t>("last_token"));
-        auto current_last_token = map.get_last_token(tid);
-        if (current_last_token != persisted_last_token) {
-            tablet_logger.debug("current tablet_map: {}", map);
-            throw std::runtime_error(format("last_token mismatch between on-disk ({}) and in-memory ({}) tablet map for table {} tablet {}",
-                                            persisted_last_token, current_last_token, table, tid));
-        }
-
-        return *map.next_tablet(tid);
+    return *map.next_tablet(tid);
 }
 
 
