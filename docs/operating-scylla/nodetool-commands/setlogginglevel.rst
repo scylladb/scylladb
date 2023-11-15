@@ -70,7 +70,6 @@ To display the log classes (output changes with each version so your display may
    cql_server
    storage_proxy
    cache
-   DateTieredCompactionStrategy
    schema_tables
    rpc
    compaction_manager

@@ -358,12 +358,12 @@ Create Table Compaction
 +----------------------------------------------------+-------------------------------------+
 |:ref:`LeveledCompactionStrategy <LCS>` (LCS)        | |v|                                 |
 +----------------------------------------------------+-------------------------------------+
-|DateTieredCompactionStrategy (DTCS)                 | |v|  :sup:`*`                       |
+|DateTieredCompactionStrategy (DTCS)                 | |x|     :sup:`*`                    |
 +----------------------------------------------------+-------------------------------------+
 |:ref:`TimeWindowCompactionStrategy <TWCS>` (TWCS)   | |v|                                 |
 +----------------------------------------------------+-------------------------------------+
 
-:sup:`*`  Deprecated; use TWCS instead.
+:sup:`*` No longer supported. Use TimeWindowCompactionStrategy (TWCS) instead.
 
 Create Table Compression
 ........................

@@ -19,8 +19,6 @@ The following compaction strategies are supported by Scylla:
 
 * Time-window Compaction Strategy (`TWCS`_)
 
-* Date-tiered Compaction Strategy (DTCS) - use `TWCS`_ instead
-
 This page concentrates on the parameters to use when creating a table with a compaction strategy. If you are unsure which strategy to use or want general information on the compaction strategies which are available to Scylla, refer to :doc:`Compaction Strategies </architecture/compaction/compaction-strategies>`.
 
 Common options
