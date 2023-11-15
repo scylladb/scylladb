@@ -37,9 +37,6 @@ Glossary
     Quorum
       Quorum is a *global* consistency level setting across the entire cluster including all data centers. See :doc:`Consistency Levels </cql/consistency>`.
 
-    Date-tiered compaction strategy (DTCS)
-      :abbr:`DTCS (Date-tiered compaction strategy)` is designed for time series data, but should not be used. Use :term:`Time-Window Compaction Strategy`. See :doc:`Compaction Strategies</architecture/compaction/compaction-strategies/>`.
-
     Entropy
       A state where data is not consistent. This is the result when replicas are not synced and data is random. Scylla has measures in place to be antientropic. See :doc:`Scylla Anti-Entropy </architecture/anti-entropy/index>`.
 
@@ -151,7 +148,7 @@ Glossary
       A collection of columns fetched by row. Columns are ordered by Clustering Key. See :doc:`Ring Architecture </architecture/ringarchitecture/index>`.
 
     Time-window compaction strategy
-      TWCS is designed for time series data and replaced Date-tiered compaction. See :doc:`Compaction Strategies</architecture/compaction/compaction-strategies/>`.
+      TWCS is designed for time series data. See :doc:`Compaction Strategies</architecture/compaction/compaction-strategies/>`.
 
     Token
       A value in a range, used to identify both nodes and partitions. Each node in a Scylla cluster is given an (initial) token, which defines the end of the range a node handles. See :doc:`Ring Architecture </architecture/ringarchitecture/index>`.

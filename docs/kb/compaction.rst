@@ -44,8 +44,7 @@ A compaction strategy is what determines which of the SSTables will be compacted
 * `Size-tiered compaction strategy (STCS)`_ - (default setting) triggered when the system has enough similarly sized SSTables.
 * `Leveled compaction strategy (LCS)`_ - the system uses small, fixed-size (by default 160 MB) SSTables divided into different levels and  lowers both Read and Space Amplification. 
 * :ref:`Incremental compaction strategy (ICS) <incremental-compaction-strategy-ics>` - :label-tip:`ScyllaDB Enterprise` Uses runs of sorted, fixed size (by default 1 GB) SSTables in a similar way that LCS does, organized into size-tiers, similar to STCS size-tiers. If you are an Enterprise customer ICS is an updated strategy meant to replace STCS. It has the same read and write amplification, but has lower space amplification due to the reduction of temporary space overhead is reduced to a constant manageable level. 
-* `Time-window compaction strategy (TWCS)`_ - designed for time series data and puts data in time order. This strategy replaced Date-tiered compaction.  TWCS uses STCS to prevent accumulating  SSTables in a window not yet closed. When the window closes, TWCS works towards reducing the SSTables in a time window to one.
-* `Date-tiered compaction strategy (DTCS)`_ - designed for time series data, but TWCS should be used instead.
+* `Time-window compaction strategy (TWCS)`_ - designed for time series data and puts data in time order. TWCS uses STCS to prevent accumulating  SSTables in a window not yet closed. When the window closes, TWCS works towards reducing the SSTables in a time window to one.
 
 How to Set a Compaction Strategy
 ................................
@@ -125,7 +124,7 @@ ICS is only available in ScyllaDB Enterprise. See the `ScyllaDB Enetrpise docume
 Time-window Compaction Strategy (TWCS)
 --------------------------------------
 
-Time-window compaction strategy was introduced as a replacement for `Date-tiered Compaction Strategy (DTCS)`_ for handling time series workloads. Time-Window Compaction Strategy compacts SSTables within each time window using `Size-tiered Compaction Strategy (STCS)`_. SSTables from different time windows are never compacted together.
+Time-Window Compaction Strategy is designed for handling time series workloads. It compacts SSTables within each time window using `Size-tiered Compaction Strategy (STCS)`_. SSTables from different time windows are never compacted together.
 
 .. include:: /rst_include/warning-ttl-twcs.rst
 
@@ -147,22 +146,6 @@ The primary motivation for TWCS is to separate data on disk by timestamp and to 
 * If the user’s read requests for old data causes read repairs that pull the old data into the current MemTable. The data is commingled in the MemTables and flushed into the same SSTable, where it will remain commingled.
 
 While TWCS tries to minimize the impact of commingled data, users should attempt to avoid this behavior. Specifically, users should avoid queries that explicitly set the timestamp. It is recommended to run frequent repairs (which streams data in such a way that it does not become commingled), and disable background read repair by setting the table’s :ref:`read_repair_chance <create-table-general-options>` and :ref:`dclocal_read_repair_chance <create-table-general-options>` to ``0``.
-
-
-Date-tiered compaction strategy (DTCS)
---------------------------------------
-
-Date-Tiered Compaction is designed for time series data. It is only suitable for time-series data. This strategy has been replaced by `Time-window compaction strategy (TWCS)`_.
-
-Date-tiered compaction strategy works as follows:
-
-* First it sorts the SSTables by time and then compacts adjacent (time-wise) SSTables. 
-* This results in SSTables whose sizes increase exponentially as they grow older. 
-
-For example, at some point we can have the last minute of data in one SSTable (by default, base_time_seconds = 60), another minute before that in another SSTable, then the 4 minutes before that in one SSTable, then the 4 minutes before that, then an SSTable of the 16 minutes before that, and so on. This structure can easily be maintained by compaction, very similar to size-tiered compaction. When there are 4 (the default value for min_threshold) small (one-minute) consecutive SSTables, they are compacted into one 4-minute SSTable. When there are 4 of the bigger SSTables one after another (time-wise), they are merged into a 16-minute SSTable, and so on.
-
-Antique SSTables older than ``max_SSTable_age_days`` (by default 365 days) are not compacted as doing these compactions would not be useful for most queries, the process would be very slow, and the compaction would require huge amounts of temporary disk space.
-
 
 Changing Compaction Strategies or Properties
 --------------------------------------------

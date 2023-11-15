@@ -682,19 +682,12 @@ Compaction options
 
 The ``compaction`` options must at least define the ``'class'`` sub-option, which defines the compaction strategy class
 to use. The default supported class are ``'SizeTieredCompactionStrategy'``,
-``'LeveledCompactionStrategy'``, ``'IncrementalCompactionStrategy'``, and ``'DateTieredCompactionStrategy'``  
+``'LeveledCompactionStrategy'``, and ``'IncrementalCompactionStrategy'``.
 Custom strategy can be provided by specifying the full class name as a :ref:`string constant
 <constants>`.
 
 All default strategies support a number of common options, as well as options specific to
-the strategy chosen (see the section corresponding to your strategy for details: :ref:`STCS <stcs-options>`, :ref:`LCS <lcs-options>`, and :ref:`TWCS <twcs-options>`). DTCS is not recommended, and TWCS should be used instead.
-
-
-.. ``'Date Tiered Compaction Strategy is not recommended and has been replaced by Time Window Compaction Stragegy.'`` (:ref:`TWCS <TWCS>`) (the
-.. is also supported but is deprecated and ``'TimeWindowCompactionStrategy'`` should be
-.. preferred instead). 
-
-
+the strategy chosen (see the section corresponding to your strategy for details: :ref:`STCS <stcs-options>`, :ref:`LCS <lcs-options>`, and :ref:`TWCS <twcs-options>`).
 
 .. _cql-compression-options:
 
