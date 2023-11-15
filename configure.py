@@ -2426,6 +2426,7 @@ def configure_using_cmake(args):
         'CMAKE_CXX_FLAGS': args.user_cflags,
         'CMAKE_EXE_LINKER_FLAGS': semicolon_separated(args.user_ldflags),
         'CMAKE_EXPORT_COMPILE_COMMANDS': 'ON',
+        'Scylla_CHECK_HEADERS': 'ON',
     }
     if args.date_stamp:
         settings['Scylla_DATE_STAMP'] = args.date_stamp
