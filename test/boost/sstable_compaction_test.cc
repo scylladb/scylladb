@@ -2839,25 +2839,26 @@ SEASTAR_TEST_CASE(sstable_run_based_compaction_test) {
             // that's because each sstable will contain only 1 mutation.
             BOOST_REQUIRE_EQUAL(old_sstables.size(), 1);
             BOOST_REQUIRE_EQUAL(new_sstables.size(), 1);
+            auto old_sstable = old_sstables.front();
             // check that sstable replacement follows token order
-            BOOST_REQUIRE_EQUAL(*expected_sst, old_sstables.front()->generation());
+            BOOST_REQUIRE_EQUAL(*expected_sst, old_sstable->generation());
             expected_sst++;
             // check that previously released sstables were already closed
             if (auto v = old_sstables.front()->generation().as_int(); v % 4 == 0) {
                 // Due to performance reasons, sstables are not released immediately, but in batches.
                 // At the time of writing, mutation_reader_merger releases it's sstable references
                 // in batches of 4. That's why we only perform this check every 4th sstable. 
-                BOOST_REQUIRE_EQUAL(*closed_sstables_tracker, old_sstables.front()->generation());
+                BOOST_REQUIRE_EQUAL(*closed_sstables_tracker, old_sstable->generation());
             }
 
             do_replace(old_sstables, new_sstables);
 
-            observers.push_back(old_sstables.front()->add_on_closed_handler([&] (sstable& sst) {
+            observers.push_back(old_sstable->add_on_closed_handler([&] (sstable& sst) {
                 testlog.info("Closing sstable of generation {}", sst.generation());
                 closed_sstables_tracker++;
             }));
 
-            testlog.info("Removing sstable of generation {}, refcnt: {}", old_sstables.front()->generation(), old_sstables.front().use_count());
+            testlog.info("Removing sstable of generation {}, refcnt: {}", old_sstable->generation(), old_sstable.use_count());
         };
 
         auto do_compaction = [&] (size_t expected_input, size_t expected_output) mutable -> std::vector<shared_sstable> {
