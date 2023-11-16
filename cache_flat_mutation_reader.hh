@@ -98,7 +98,16 @@ class cache_flat_mutation_reader final : public flat_mutation_reader_v2::impl {
     bool _next_row_in_range = false;
     bool _has_rt = false;
 
-    // True iff current population interval, since the previous clustering row, starts before all clustered rows.
+    // True iff current population interval starts at before_all_clustered_rows
+    // and _last_row is unset. (And the read isn't reverse).
+    //
+    // Rationale: in the "most general" step of cache population,
+    // we mark the `(_last_row, ...] `range as continuous, which can involve doing something to `_last_row`.
+    // But when populating the range `(before_all_clustered_rows, ...)`,
+    // a rows_entry at `before_all_clustered_rows` needn't exist.
+    // Thus this case needs a special treatment which doesn't involve `_last_row`.
+    // And for that, this case it has to be recognized (via this flag).
+    //
     // We cannot just look at _lower_bound, because emission of range tombstones changes _lower_bound and
     // because we mark clustering intervals as continuous when consuming a clustering_row, it would prevent
     // us from marking the interval as continuous.
@@ -147,6 +156,8 @@ class cache_flat_mutation_reader final : public flat_mutation_reader_v2::impl {
     bool maybe_add_to_cache(const range_tombstone_change& rtc);
     void maybe_add_to_cache(const static_row& sr);
     void maybe_set_static_row_continuous();
+    void set_rows_entry_continuous(rows_entry& e);
+    void restore_continuity_after_insertion(const mutation_partition::rows_type::iterator&);
     void finish_reader() {
         push_mutation_fragment(*_schema, _permit, partition_end());
         _end_of_stream = true;
@@ -341,7 +352,7 @@ future<> cache_flat_mutation_reader::do_fill_buffer() {
             });
         }
         _state = state::reading_from_underlying;
-        _population_range_starts_before_all_rows = _lower_bound.is_before_all_clustered_rows(*_schema) && !_read_context.is_reversed();
+        _population_range_starts_before_all_rows = _lower_bound.is_before_all_clustered_rows(*_schema) && !_read_context.is_reversed() && !_last_row;
         _underlying_upper_bound = _next_row_in_range ? position_in_partition::before_key(_next_row.position())
                                                      : position_in_partition(_upper_bound);
         if (!_read_context.partition_exists()) {
@@ -463,14 +474,15 @@ future<> cache_flat_mutation_reader::read_from_underlying() {
                                 if (insert_result.second) {
                                     clogger.trace("csm {}: L{}: inserted dummy at {}", fmt::ptr(this), __LINE__, _upper_bound);
                                     _snp->tracker()->insert(*insert_result.first);
+                                    restore_continuity_after_insertion(insert_result.first);
                                 }
                                 if (_read_context.is_reversed()) [[unlikely]] {
                                     clogger.trace("csm {}: set_continuous({}), prev={}, rt={}", fmt::ptr(this), _last_row.position(), insert_result.first->position(), _current_tombstone);
-                                    _last_row->set_continuous(true);
+                                    set_rows_entry_continuous(*_last_row);
                                     _last_row->set_range_tombstone(_current_tombstone);
                                 } else {
                                     clogger.trace("csm {}: set_continuous({}), prev={}, rt={}", fmt::ptr(this), insert_result.first->position(), _last_row.position(), _current_tombstone);
-                                    insert_result.first->set_continuous(true);
+                                    set_rows_entry_continuous(*insert_result.first);
                                     insert_result.first->set_range_tombstone(_current_tombstone);
                                 }
                                 maybe_drop_last_entry(_current_tombstone);
@@ -505,11 +517,11 @@ bool cache_flat_mutation_reader::ensure_population_lower_bound() {
         rows_entry::tri_compare cmp(*_schema);
         partition_snapshot_row_cursor cur(*_schema, *_snp, false, _read_context.is_reversed());
 
-        if (!cur.advance_to(_last_row.position())) {
+        if (!cur.advance_to(to_query_domain(_last_row.position()))) {
             return false;
         }
 
-        if (cmp(cur.position(), _last_row.position()) != 0) {
+        if (cmp(cur.table_position(), _last_row.position()) != 0) {
             return false;
         }
 
@@ -531,7 +543,7 @@ void cache_flat_mutation_reader::maybe_update_continuity() {
     position_in_partition::equal_compare eq(*_schema);
     if (can_populate()
             && ensure_population_lower_bound()
-            && !eq(_last_row.position(), _next_row.position())) {
+            && !eq(_last_row.position(), _next_row.table_position())) {
         with_allocator(_snp->region().allocator(), [&] {
             rows_entry& e = _next_row.ensure_entry_in_latest().row;
             auto& rows = _snp->version()->partition().mutable_clustered_rows();
@@ -553,14 +565,14 @@ void cache_flat_mutation_reader::maybe_update_continuity() {
                         }
                         clogger.trace("csm {}: set_continuous({}), prev={}, rt={}", fmt::ptr(this), insert_result.first->position(),
                                       _last_row.position(), _current_tombstone);
-                        insert_result.first->set_continuous(true);
+                        set_rows_entry_continuous(*insert_result.first);
                         insert_result.first->set_range_tombstone(_current_tombstone);
                         clogger.trace("csm {}: set_continuous({})", fmt::ptr(this), _last_row.position());
-                        _last_row->set_continuous(true);
+                        set_rows_entry_continuous(*_last_row);
                     });
                 } else {
                     clogger.trace("csm {}: set_continuous({}), rt={}", fmt::ptr(this), _last_row.position(), _current_tombstone);
-                    _last_row->set_continuous(true);
+                    set_rows_entry_continuous(*_last_row);
                     _last_row->set_range_tombstone(_current_tombstone);
                 }
             } else {
@@ -578,18 +590,18 @@ void cache_flat_mutation_reader::maybe_update_continuity() {
                         if (insert_result.second) {
                             clogger.trace("csm {}: L{}: inserted dummy at {}", fmt::ptr(this), __LINE__, insert_result.first->position());
                             _snp->tracker()->insert(*insert_result.first);
+                            clogger.trace("csm {}: set_continuous({}), prev={}, rt={}", fmt::ptr(this), insert_result.first->position(),
+                                          _last_row.position(), _current_tombstone);
+                            set_rows_entry_continuous(*insert_result.first);
+                            insert_result.first->set_range_tombstone(_current_tombstone);
                         }
-                        clogger.trace("csm {}: set_continuous({}), prev={}, rt={}", fmt::ptr(this), insert_result.first->position(),
-                                      _last_row.position(), _current_tombstone);
-                        insert_result.first->set_continuous(true);
-                        insert_result.first->set_range_tombstone(_current_tombstone);
                         clogger.trace("csm {}: set_continuous({})", fmt::ptr(this), e.position());
-                        e.set_continuous(true);
+                        set_rows_entry_continuous(e);
                     });
                 } else {
                     clogger.trace("csm {}: set_continuous({}), rt={}", fmt::ptr(this), e.position(), _current_tombstone);
                     e.set_range_tombstone(_current_tombstone);
-                    e.set_continuous(true);
+                    set_rows_entry_continuous(e);
                 }
             }
             maybe_drop_last_entry(_current_tombstone);
@@ -625,20 +637,21 @@ void cache_flat_mutation_reader::maybe_add_to_cache(const clustering_row& cr) {
         it = insert_result.first;
         if (insert_result.second) {
             _snp->tracker()->insert(*it);
+            restore_continuity_after_insertion(it);
         }
 
         rows_entry& e = *it;
         if (ensure_population_lower_bound()) {
             if (_read_context.is_reversed()) [[unlikely]] {
                 clogger.trace("csm {}: set_continuous({})", fmt::ptr(this), _last_row.position());
-                _last_row->set_continuous(true);
+                set_rows_entry_continuous(*_last_row);
                 // _current_tombstone must also apply to _last_row itself (if it's non-dummy)
                 // because otherwise there would be a rtc after it, either creating a different entry,
                 // or clearing _last_row if population did not happen.
                 _last_row->set_range_tombstone(_current_tombstone);
             } else {
                 clogger.trace("csm {}: set_continuous({})", fmt::ptr(this), e.position());
-                e.set_continuous(true);
+                set_rows_entry_continuous(e);
                 e.set_range_tombstone(_current_tombstone);
             }
         } else {
@@ -689,20 +702,25 @@ bool cache_flat_mutation_reader::maybe_add_to_cache(const range_tombstone_change
         it = insert_result.first;
         if (insert_result.second) {
             _snp->tracker()->insert(*it);
+            restore_continuity_after_insertion(it);
         }
 
         rows_entry& e = *it;
         if (ensure_population_lower_bound()) {
             // underlying may emit range_tombstone_change fragments with the same position.
             // In such case, the range to which the tombstone from the first fragment applies is empty and should be ignored.
-            if (q_cmp(_last_row.position(), it->position()) < 0) {
+            //
+            // Note: we are using a query schema comparator to compare table schema positions here,
+            // but this is okay because we are only checking for equality,
+            // which is preserved by schema reversals.
+            if (q_cmp(_last_row.position(), it->position()) != 0) {
                 if (_read_context.is_reversed()) [[unlikely]] {
                     clogger.trace("csm {}: set_continuous({}), rt={}", fmt::ptr(this), _last_row.position(), prev);
-                    _last_row->set_continuous(true);
+                    set_rows_entry_continuous(*_last_row);
                     _last_row->set_range_tombstone(prev);
                 } else {
                     clogger.trace("csm {}: set_continuous({}), rt={}", fmt::ptr(this), e.position(), prev);
-                    e.set_continuous(true);
+                    set_rows_entry_continuous(e);
                     e.set_range_tombstone(prev);
                 }
             }
@@ -1038,6 +1056,28 @@ void cache_flat_mutation_reader::maybe_set_static_row_continuous() {
         _snp->version()->partition().set_static_row_continuous(true);
     } else {
         _read_context.cache().on_mispopulate();
+    }
+}
+
+// Last dummies can exist in a quasi-evicted state, where they are unlinked from LRU,
+// but still alive.
+// But while in this state, they mustn't carry any information (i.e. continuity),
+// due to the "older versions are evicted first" rule of MVCC.
+// Thus, when we make an entry continuous, we must ensure that it isn't an
+// unlinked last dummy.
+inline
+void cache_flat_mutation_reader::set_rows_entry_continuous(rows_entry& e) {
+    e.set_continuous(true);
+    if (!e.is_linked()) [[unlikely]] {
+        _snp->tracker()->touch(e);
+    }
+}
+
+inline
+void cache_flat_mutation_reader::restore_continuity_after_insertion(const mutation_partition::rows_type::iterator& it) {
+    if (auto x = std::next(it); x->continuous()) {
+        it->set_continuous(true);
+        it->set_range_tombstone(x->range_tombstone());
     }
 }
 
