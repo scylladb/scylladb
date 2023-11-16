@@ -1515,6 +1515,7 @@ def get_warning_options(cxx):
         # https://gcc.gnu.org/bugzilla/show_bug.cgi?id=77728
         '-Wno-psabi',
         '-Wno-narrowing',
+        '-Wno-enum-constexpr-conversion',
     ]
 
     warnings = [w

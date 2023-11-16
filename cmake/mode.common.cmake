@@ -2,7 +2,8 @@ set(disabled_warnings
   c++11-narrowing
   mismatched-tags
   overloaded-virtual
-  unsupported-friend)
+  unsupported-friend
+  enum-constexpr-conversion)
 include(CheckCXXCompilerFlag)
 foreach(warning ${disabled_warnings})
   check_cxx_compiler_flag("-Wno-${warning}" _warning_supported_${warning})
