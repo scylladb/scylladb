@@ -637,11 +637,14 @@ public:
             }();
             rows_entry& re = *e;
             if (_reversed) { // latest_i is not reliably a successor
-                // FIXME: set continuity when possible. Not that important since cache sets it anyway when populating.
                 re.set_continuous(false);
                 e->set_range_tombstone(range_tombstone_for_row());
                 rows_entry::tri_compare cmp(*_snp.schema());
                 auto res = rows.insert(std::move(e), cmp);
+                if (auto l = std::next(res.first); l != rows.end() && l->continuous()) {
+                    re.set_continuous(true);
+                    re.set_range_tombstone(l->range_tombstone());
+                }
                 if (res.second) {
                     _snp.tracker()->insert(re);
                 }
