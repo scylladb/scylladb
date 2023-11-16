@@ -2307,6 +2307,33 @@ class topology_coordinator {
             }
                 break;
             case node_state::rollback_to_normal: {
+                // The barrier waits for all double writes started during the operation to complete. It allowed to fail
+                // since we will fence the requests later.
+                bool barrier_failed = false;
+                try {
+                    node.guard = co_await exec_global_command(std::move(node.guard),raft_topology_cmd::command::barrier_and_drain, get_excluded_nodes(node), drop_guard_and_retake::yes);
+                } catch (term_changed_error&) {
+                    throw;
+                } catch(...) {
+                    slogger.warn("raft topology: failed to run barrier_and_drain during rollback {}", std::current_exception());
+                    barrier_failed = true;
+                }
+
+                if (barrier_failed) {
+                    node.guard =co_await start_operation();
+                }
+
+                node = retake_node(std::move(node.guard), node.id);
+
+                topology_mutation_builder builder(node.guard.write_timestamp());
+                builder.set_fence_version(_topo_sm._topology.version) // fence requests in case the drain above failed
+                       .with_node(node.id)
+                       .set("node_state", node_state::normal);
+
+                auto str = fmt::format("complete rollback of {} to state normal", node.id);
+
+                slogger.info("{}", str);
+                co_await update_topology_state(std::move(node.guard), {builder.build()}, str);
             }
                 break;
             case node_state::bootstrapping:
@@ -2514,7 +2541,7 @@ future<> topology_coordinator::rollback_current_topology_op(group0_guard&& guard
             [[fallthrough]];
         case node_state::decommissioning:
             // to rollback decommission or remove just move a node that we tried to remove back to normal state
-            state = node_state::normal;
+            state = node_state::rollback_to_normal;
             break;
         default:
             on_internal_error(slogger, fmt::format("raft topology: tried to rollback in unsupported state {}", node.rs->state));
@@ -2530,19 +2557,6 @@ future<> topology_coordinator::rollback_current_topology_op(group0_guard&& guard
 
     slogger.info("{}", str);
     co_await update_topology_state(std::move(node.guard), {builder.build()}, str);
-    // Try to run metadata barrier to wait for all double writes to complete
-    // but ignore failures.
-    while (true) {
-        try {
-            co_await global_token_metadata_barrier(co_await start_operation(), std::move(exclude_nodes));
-        } catch (term_changed_error&) {
-        } catch (group0_concurrent_modification&) {
-            continue;
-        } catch(...) {
-            slogger.warn("raft topology: failed to run metadata barrier during rollback {}", std::current_exception());
-        }
-        break;
-    }
 }
 
 future<> topology_coordinator::run() {

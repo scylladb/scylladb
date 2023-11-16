@@ -21,7 +21,7 @@ async def test_topology_streaming_failure(request, manager: ManagerClient):
     servers = await manager.running_servers()
     assert len(servers) == 3
     logs = [await manager.server_open_log(srv.server_id) for srv in servers]
-    matches = [await log.grep("storage_service - rollback.*after decommissioning failure to state normal") for log in logs]
+    matches = [await log.grep("storage_service - rollback.*after decommissioning failure to state rollback_to_normal") for log in logs]
     assert sum(len(x) for x in matches) == 1
     # remove failure
     await manager.server_add()
@@ -30,7 +30,7 @@ async def test_topology_streaming_failure(request, manager: ManagerClient):
     await manager.api.enable_injection(servers[2].ip_addr, 'stream_ranges_fail', one_shot=True)
     await manager.remove_node(servers[0].server_id, servers[3].server_id, expected_error="Removenode failed. See earlier errors")
     logs = [await manager.server_open_log(srv.server_id) for srv in servers]
-    matches = [await log.grep("storage_service - rollback.*after removing failure to state normal") for log in logs]
+    matches = [await log.grep("storage_service - rollback.*after removing failure to state rollback_to_normal") for log in logs]
     assert sum(len(x) for x in matches) == 1
     await manager.server_start(servers[3].server_id)
     # bootstrap failure
