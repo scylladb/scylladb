@@ -128,7 +128,8 @@ static std::unordered_map<node_state, sstring> node_state_to_name_map = {
     {node_state::left, "left"},
     {node_state::replacing, "replacing"},
     {node_state::rebuilding, "rebuilding"},
-    {node_state::none, "none"}
+    {node_state::none, "none"},
+    {node_state::rollback_to_normal, "rollback_to_normal"},
 };
 
 std::ostream& operator<<(std::ostream& os, node_state s) {

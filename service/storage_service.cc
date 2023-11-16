@@ -315,6 +315,7 @@ static locator::node::state to_topology_node_state(node_state ns) {
         case node_state::decommissioning: return locator::node::state::being_decommissioned;
         case node_state::removing: return locator::node::state::being_removed;
         case node_state::normal: return locator::node::state::normal;
+        case node_state::rollback_to_normal: return locator::node::state::normal;
         case node_state::left_token_ring: return locator::node::state::left;
         case node_state::left: return locator::node::state::left;
         case node_state::replacing: return locator::node::state::replacing;
@@ -506,6 +507,10 @@ future<> storage_service::topology_state_load() {
                 co_await add_normal_node(id, rs);
                 break;
             case node_state::left_token_ring:
+                break;
+            case node_state::rollback_to_normal:
+                // no need for double writes anymore since op failed
+                co_await add_normal_node(id, rs);
                 break;
             default:
                 on_fatal_internal_error(slogger, ::format("Unexpected state {} for node {}", rs.state, id));
@@ -2299,6 +2304,9 @@ class topology_coordinator {
                        .set("node_state", node_state::left);
                 auto str = ::format("finished decommissioning node {}", node.id);
                 co_await update_topology_state(take_guard(std::move(node)), {builder.build()}, std::move(str));
+            }
+                break;
+            case node_state::rollback_to_normal: {
             }
                 break;
             case node_state::bootstrapping:
@@ -6302,6 +6310,7 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(shar
                 case node_state::left:
                 case node_state::none:
                 case node_state::removing:
+                case node_state::rollback_to_normal:
                     on_fatal_internal_error(slogger, ::format("Node {} got streaming request in state {}. It should be either dead or not part of the cluster",
                                      raft_server.id(), rs.state));
                 break;

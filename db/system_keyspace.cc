@@ -2549,6 +2549,11 @@ future<service::topology> system_keyspace::load_topology_state() {
                     ret.req_param.emplace(host_id, service::replace_param{*replaced_id, std::move(ignored_ids)});
                 }
                 break;
+            case service::node_state::rollback_to_normal:
+                if (replaced_id) {
+                    ret.req_param.emplace(host_id, service::removenode_param{std::move(ignored_ids)});
+                }
+                break;
             default:
                 // no parameters for other operations
                 break;
@@ -2601,9 +2606,11 @@ future<service::topology> system_keyspace::load_topology_state() {
             ret.tstate = service::transition_state_from_string(some_row.get_as<sstring>("transition_state"));
         } else {
             // Any remaining transition_nodes must be in left_token_ring state
-            // or rebuilding
+            // or rebuilding or rollback_to_normal
             auto it = std::find_if(ret.transition_nodes.begin(), ret.transition_nodes.end(),
-                    [] (auto& p) { return p.second.state != service::node_state::left_token_ring && p.second.state != service::node_state::rebuilding; });
+                    [] (auto& p) { return p.second.state != service::node_state::left_token_ring &&
+                                               p.second.state != service::node_state::rebuilding &&
+                                               p.second.state != service::node_state::rollback_to_normal; });
             if (it != ret.transition_nodes.end()) {
                 on_internal_error(slogger, format(
                     "load_topology_state: topology not in transition state"

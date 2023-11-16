@@ -34,7 +34,8 @@ enum class node_state: uint16_t {
     rebuilding,          // the node is being rebuild and is streaming data from other replicas
     normal,              // the node does not do any streaming and serves the slice of the ring that belongs to it
     left_token_ring,     // the node left the token ring, but not group0 yet; we wait until other nodes stop writing to it
-    left                 // the node left the cluster and group0
+    left,                // the node left the cluster and group0
+    rollback_to_normal,  // the node rolls back failed decommission/remove node operation
 };
 
 enum class topology_request: uint16_t {
