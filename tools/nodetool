@@ -1,0 +1,42 @@
+#!/bin/bash
+# -*- coding: utf-8 -*-
+#
+# Copyright (C) 2022-present ScyllaDB
+#
+
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+
+SCRIPT_PATH="$(dirname $(realpath $0))"
+
+# We want this script to work OOTB both in-repo and when installed, while
+# allowing the user to override this behaviour.
+# So try to come up with meanigful default according to the detected location,
+# but allow for override via env variables.
+if [[ "$SCRIPT_PATH" == "/opt/scylladb/bin" ]]
+then
+    DEFAULT_SCYLLA_PATH="/opt/scylladb/bin/scylla"
+    DEFAULT_NODETOOL_PATH="/opt/scylladb/bin/nodetool"
+else
+    DEFAULT_SCYLLA_PATH="$(realpath ${SCRIPT_PATH}/../build/dev/scylla)"
+    DEFAULT_NODETOOL_PATH="${SCRIPT_PATH}/java/bin/nodetool"
+fi
+
+SCYLLA_PATH="${SCYLLA_PATH:-$DEFAULT_SCYLLA_PATH}"
+NODETOOL_PATH="${NODETOOL_PATH:-$DEFAULT_NODETOOL_PATH}"
+
+# Capture the output of scylla-nodetool, as it might just print an error about
+# the command not existing.
+# Only print $OUT after checking the return-code for the specific unimplemented
+# command error code.
+OUT=$($SCYLLA_PATH nodetool "$@" 2>&1)
+if [[ $? -ne 100 ]]
+then
+    if [[ "$OUT" != "" ]]
+    then
+        echo "$OUT"
+    fi
+else
+    exec $NODETOOL_PATH "$@"
+fi
