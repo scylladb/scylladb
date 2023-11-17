@@ -162,6 +162,9 @@ storage_service::storage_service(abort_source& abort_source,
     if (_snitch.local_is_initialized()) {
         _listeners.emplace_back(make_lw_shared(_snitch.local()->when_reconfigured(_snitch_reconfigure)));
     }
+
+    auto& cfg = _db.local().get_config();
+    init_messaging_service(cfg.consistent_cluster_management() && cfg.check_experimental(db::experimental_features_t::feature::CONSISTENT_TOPOLOGY_CHANGES));
 }
 
 enum class node_external_status {
@@ -3981,13 +3984,11 @@ future<> storage_service::drain_on_shutdown() {
 }
 
 future<> storage_service::init_messaging_service_part(sharded<db::system_distributed_keyspace>& sys_dist_ks, bool raft_topology_change_enabled) {
-    return container().invoke_on_all([raft_topology_change_enabled] (storage_service& local) {
-        return local.init_messaging_service(raft_topology_change_enabled);
-    });
+    return make_ready_future<>();
 }
 
 future<> storage_service::uninit_messaging_service_part() {
-    return container().invoke_on_all(&service::storage_service::uninit_messaging_service);
+    return make_ready_future<>();
 }
 
 void storage_service::set_group0(raft_group0& group0, bool raft_topology_change_enabled) {
@@ -4178,6 +4179,7 @@ future<> storage_service::replicate_to_all_cores(mutable_token_metadata_ptr tmpt
 }
 
 future<> storage_service::stop() {
+    co_await uninit_messaging_service();
     // make sure nobody uses the semaphore
     node_ops_signal_abort(std::nullopt);
     _listeners.clear();
