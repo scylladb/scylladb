@@ -134,7 +134,7 @@ private:
     gms::gossiper& _gossiper;
     sharded<netw::messaging_service>& _messaging;
     sharded<service::migration_manager>& _migration_manager;
-    cql3::query_processor* _qp = nullptr;
+    cql3::query_processor& _qp;
     sharded<repair_service>& _repair;
     sharded<streaming::stream_manager>& _stream_manager;
     sharded<locator::snitch_ptr>& _snitch;

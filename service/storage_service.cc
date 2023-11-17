@@ -131,7 +131,7 @@ storage_service::storage_service(abort_source& abort_source,
         , _gossiper(gossiper)
         , _messaging(ms)
         , _migration_manager(mm)
-        , _qp(&qp)
+        , _qp(qp)
         , _repair(repair)
         , _stream_manager(stream_manager)
         , _snitch(snitch)
@@ -515,7 +515,7 @@ future<> storage_service::topology_state_load() {
         }
 
         if (_db.local().get_config().check_experimental(db::experimental_features_t::feature::TABLETS)) {
-            tmptr->set_tablets(co_await replica::read_tablet_metadata(*_qp));
+            tmptr->set_tablets(co_await replica::read_tablet_metadata(_qp));
         }
     }));
 
@@ -3086,7 +3086,7 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
             ? ::make_shared<join_node_rpc_handshaker>(*this, join_params)
             : _group0->make_legacy_handshaker(false);
     co_await _group0->setup_group0(_sys_ks.local(), initial_contact_nodes, std::move(handshaker),
-            raft_replace_info, *this, *_qp, _migration_manager.local(), _raft_topology_change_enabled);
+            raft_replace_info, *this, _qp, _migration_manager.local(), _raft_topology_change_enabled);
 
     raft::server* raft_server = co_await [this] () -> future<raft::server*> {
         if (!_raft_topology_change_enabled) {
@@ -3160,7 +3160,7 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
             throw std::runtime_error(err);
         }
 
-        co_await _group0->finish_setup_after_join(*this, *_qp, _migration_manager.local(), _raft_topology_change_enabled);
+        co_await _group0->finish_setup_after_join(*this, _qp, _migration_manager.local(), _raft_topology_change_enabled);
         co_return;
     }
 
@@ -3318,7 +3318,7 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
     }
 
     assert(_group0);
-    co_await _group0->finish_setup_after_join(*this, *_qp, _migration_manager.local(), _raft_topology_change_enabled);
+    co_await _group0->finish_setup_after_join(*this, _qp, _migration_manager.local(), _raft_topology_change_enabled);
     co_await _cdc_gens.local().after_join(std::move(cdc_gen_id));
 }
 
@@ -3995,7 +3995,6 @@ void storage_service::set_group0(raft_group0& group0, bool raft_topology_change_
 
 future<> storage_service::join_cluster(sharded<db::system_distributed_keyspace>& sys_dist_ks, sharded<service::storage_proxy>& proxy) {
     assert(this_shard_id() == 0);
-    assert(_qp != nullptr);
 
     set_mode(mode::STARTING);
 
@@ -5984,7 +5983,7 @@ future<> storage_service::load_tablet_metadata() {
         return make_ready_future<>();
     }
     return mutate_token_metadata([this] (mutable_token_metadata_ptr tmptr) -> future<> {
-        tmptr->set_tablets(co_await replica::read_tablet_metadata(*_qp));
+        tmptr->set_tablets(co_await replica::read_tablet_metadata(_qp));
     }, acquire_merge_lock::no);
 }
 
