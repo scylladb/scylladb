@@ -174,6 +174,25 @@ class ManagerClient():
         logger.debug("ManagerClient unpausing %s", server_id)
         await self.client.put_json(f"/cluster/server/{server_id}/unpause")
 
+    def _create_server_add_data(self, replace_cfg: Optional[ReplaceConfig] = None,
+                                cmdline: Optional[List[str]] = None,
+                                config: Optional[dict[str, Any]] = None,
+                                property_file: Optional[dict[str, Any]] = None,
+                                start: bool = True,
+                                expected_error: Optional[str] = None) -> dict[str, Any]:
+        data: dict[str, Any] = {'start': start}
+        if replace_cfg:
+            data['replace_cfg'] = replace_cfg._asdict()
+        if cmdline:
+            data['cmdline'] = cmdline
+        if config:
+            data['config'] = config
+        if property_file:
+            data['property_file'] = property_file
+        if expected_error:
+            data['expected_error'] = expected_error
+        return data
+
     async def server_add(self, replace_cfg: Optional[ReplaceConfig] = None,
                          cmdline: Optional[List[str]] = None,
                          config: Optional[dict[str, Any]] = None,
@@ -182,17 +201,7 @@ class ManagerClient():
                          expected_error: Optional[str] = None) -> ServerInfo:
         """Add a new server"""
         try:
-            data: dict[str, Any] = {'start': start}
-            if replace_cfg:
-                data['replace_cfg'] = replace_cfg._asdict()
-            if cmdline:
-                data['cmdline'] = cmdline
-            if config:
-                data['config'] = config
-            if property_file:
-                data['property_file'] = property_file
-            if expected_error:
-                data['expected_error'] = expected_error
+            data = self._create_server_add_data(replace_cfg, cmdline, config, property_file, start, expected_error)
 
             # If we replace, we should wait until other nodes see the node being
             # replaced as dead because the replace operation can be rejected if
