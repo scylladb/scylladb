@@ -3983,14 +3983,6 @@ future<> storage_service::drain_on_shutdown() {
         _drain_finished.get_future() : do_drain();
 }
 
-future<> storage_service::init_messaging_service_part(sharded<db::system_distributed_keyspace>& sys_dist_ks, bool raft_topology_change_enabled) {
-    return make_ready_future<>();
-}
-
-future<> storage_service::uninit_messaging_service_part() {
-    return make_ready_future<>();
-}
-
 void storage_service::set_group0(raft_group0& group0, bool raft_topology_change_enabled) {
     _group0 = &group0;
     _raft_topology_change_enabled = raft_topology_change_enabled;

@@ -323,34 +323,6 @@ public:
     future<> check_for_endpoint_collision(std::unordered_set<gms::inet_address> initial_contact_nodes,
             const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features);
 
-    /*!
-     * \brief Init the messaging service part of the service.
-     *
-     * This is the first part of the initialization, call this method
-     * first.
-     *
-     * After this method is completed, it is ok to start the storage_service
-     * API.
-     * \see init_server_without_the_messaging_service_part
-     */
-    future<> init_messaging_service_part(sharded<db::system_distributed_keyspace>& sys_dist_ks, bool raft_topology_change_enabled);
-    /*!
-     * \brief Uninit the messaging service part of the service.
-     */
-    future<> uninit_messaging_service_part();
-
-    /*!
-     * \brief complete the server initialization
-     *
-     * The storage_service initialization is done in two parts.
-     *
-     * It is safe to start the API after init_messaging_service_part
-     * completed
-     *
-     * Must be called on shard 0.
-     *
-     * \see init_messaging_service_part
-     */
     future<> join_cluster(sharded<db::system_distributed_keyspace>& sys_dist_ks, sharded<service::storage_proxy>& proxy);
 
     void set_group0(service::raft_group0&, bool raft_topology_change_enabled);
