@@ -234,12 +234,12 @@ void view_update_generator::do_abort() noexcept {
     }
 
     vug_logger.info("Terminating background fiber");
-    _db.unplug_view_update_generator();
     _as.request_abort();
     _pending_sstables.signal();
 }
 
 future<> view_update_generator::stop() {
+    _db.unplug_view_update_generator();
     do_abort();
     return std::move(_started).then([this] {
         _registration_sem.broken();
