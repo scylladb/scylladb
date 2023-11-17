@@ -16,6 +16,7 @@ add_compile_options(
   "-Werror"
   "-Wno-error=deprecated-declarations"
   "-Wimplicit-fallthrough"
+  "-Wignore-qualifiers"
   ${_supported_warnings})
 
 function(default_target_arch arch)
