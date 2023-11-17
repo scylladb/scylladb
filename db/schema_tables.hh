@@ -77,7 +77,7 @@ public:
         return _extensions;
     }
 
-    const unsigned murmur3_partitioner_ignore_msb_bits() const {
+    unsigned murmur3_partitioner_ignore_msb_bits() const {
         return _murmur3_partitioner_ignore_msb_bits;
     }
 

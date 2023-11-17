@@ -242,7 +242,7 @@ public:
     bool equals_noname(const index_metadata& other) const;
     const table_id& id() const;
     const sstring& name() const;
-    const index_metadata_kind kind() const;
+    index_metadata_kind kind() const;
     const index_options_map& options() const;
     bool local() const;
     static sstring get_default_index_name(const sstring& cf_name, std::optional<sstring> root);
@@ -734,7 +734,7 @@ public:
         return _raw._is_counter;
     }
 
-    const cf_type type() const {
+    cf_type type() const {
         return _raw._type;
     }
 

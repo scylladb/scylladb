@@ -586,7 +586,7 @@ const sstring& index_metadata::name() const {
     return _name;
 }
 
-const index_metadata_kind index_metadata::kind() const {
+index_metadata_kind index_metadata::kind() const {
     return _kind;
 }
 

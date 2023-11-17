@@ -600,7 +600,7 @@ private:
     std::optional<scylla_metadata::large_data_stats> _large_data_stats;
     sstring _origin;
 public:
-    const bool has_component(component_type f) const;
+    bool has_component(component_type f) const;
     sstables_manager& manager() { return _manager; }
     const sstables_manager& manager() const { return _manager; }
 private:

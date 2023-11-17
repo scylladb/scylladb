@@ -901,7 +901,7 @@ public:
      */
     future<> write_schema_as_cql(database& db, sstring dir) const;
 
-    const bool incremental_backups_enabled() const {
+    bool incremental_backups_enabled() const {
         return _config.enable_incremental_backups;
     }
 
@@ -1251,7 +1251,7 @@ public:
     void add_user_type(const user_type ut);
     void remove_user_type(const user_type ut);
 
-    const bool incremental_backups_enabled() const {
+    bool incremental_backups_enabled() const {
         return _config.enable_incremental_backups;
     }
 
@@ -1336,7 +1336,7 @@ public:
         future<> parallel_for_each_table(std::function<future<>(table_id, lw_shared_ptr<table>)> f);
         const std::unordered_map<table_id, lw_shared_ptr<table>> get_column_families_copy() const;
 
-        const auto filter(std::function<bool(std::pair<table_id, lw_shared_ptr<table>>)> f) const {
+        auto filter(std::function<bool(std::pair<table_id, lw_shared_ptr<table>>)> f) const {
             return _column_families | boost::adaptors::filtered(std::move(f));
         }
     };

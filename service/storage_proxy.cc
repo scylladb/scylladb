@@ -1557,7 +1557,7 @@ public:
     const schema_ptr& get_schema() const {
         return _mutation_holder->schema();
     }
-    const size_t get_mutation_size() const {
+    size_t get_mutation_size() const {
         return _mutation_holder->size();
     }
     storage_proxy::response_id_type id() const {
