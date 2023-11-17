@@ -48,6 +48,7 @@ class ReplaceConfig(NamedTuple):
     reuse_ip_addr: bool
     use_host_id: bool
     ignore_dead_nodes: list[IPAddress | HostID] = []
+    wait_replaced_dead: bool = True
 
 
 def make_scylla_conf(workdir: pathlib.Path, host_addr: str, seed_addrs: List[str], cluster_name: str) -> dict[str, object]:
