@@ -188,7 +188,7 @@ public:
 
     // Needed by distributed<>
     future<> stop();
-    void init_messaging_service(sharded<db::system_distributed_keyspace>& sys_dist_ks, bool raft_topology_change_enabled);
+    void init_messaging_service(bool raft_topology_change_enabled);
     future<> uninit_messaging_service();
 
     future<> load_tablet_metadata();
@@ -377,7 +377,7 @@ public:
 private:
     void set_mode(mode m);
     // Can only be called on shard-0
-    future<> mark_existing_views_as_built(sharded<db::system_distributed_keyspace>&);
+    future<> mark_existing_views_as_built();
 
     // Stream data for which we become a new replica.
     // Before that, if we're not replacing another node, inform other nodes about our chosen tokens
@@ -786,7 +786,7 @@ private:
 
     std::unordered_set<raft::server_id> find_raft_nodes_from_hoeps(const std::list<locator::host_id_or_endpoint>& hoeps);
 
-    future<raft_topology_cmd_result> raft_topology_cmd_handler(sharded<db::system_distributed_keyspace>& sys_dist_ks, raft::term_t term, uint64_t cmd_index, const raft_topology_cmd& cmd);
+    future<raft_topology_cmd_result> raft_topology_cmd_handler(raft::term_t term, uint64_t cmd_index, const raft_topology_cmd& cmd);
 
     future<> raft_initialize_discovery_leader(raft::server&, const join_node_request_params& params);
     future<> raft_decommission();

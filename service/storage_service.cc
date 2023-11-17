@@ -843,7 +843,7 @@ topology_node_mutation_builder& topology_mutation_builder::with_node(raft::serve
 }
 
 using raft_topology_cmd_handler_type = noncopyable_function<future<raft_topology_cmd_result>(
-        sharded<db::system_distributed_keyspace>&, raft::term_t, uint64_t, const raft_topology_cmd&)>;
+        raft::term_t, uint64_t, const raft_topology_cmd&)>;
 
 class topology_coordinator {
     sharded<db::system_distributed_keyspace>& _sys_dist_ks;
@@ -1058,7 +1058,7 @@ class topology_coordinator {
         slogger.trace("raft topology: send {} command with term {} and index {} to {}/{}",
             cmd.cmd, _term, cmd_index, id, *ip);
         auto result = utils::fb_utilities::is_me(*ip) ?
-                    co_await _raft_topology_cmd_handler(_sys_dist_ks, _term, cmd_index, cmd) :
+                    co_await _raft_topology_cmd_handler(_term, cmd_index, cmd) :
                     co_await ser::storage_service_rpc_verbs::send_raft_topology_cmd(
                             &_messaging, netw::msg_addr{*ip}, id, _term, cmd_index, cmd);
         if (result.status == raft_topology_cmd_result::command_status::fail) {
@@ -3233,7 +3233,7 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
             // bootstrap_tokens was previously set using tokens gossiped by the replaced node
         }
         co_await sys_dist_ks.invoke_on_all(&db::system_distributed_keyspace::start);
-        co_await mark_existing_views_as_built(sys_dist_ks);
+        co_await mark_existing_views_as_built();
         co_await _sys_ks.local().update_tokens(bootstrap_tokens);
         co_await bootstrap(bootstrap_tokens, cdc_gen_id, ri);
     } else {
@@ -3324,12 +3324,12 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
     co_await _cdc_gens.local().after_join(std::move(cdc_gen_id));
 }
 
-future<> storage_service::mark_existing_views_as_built(sharded<db::system_distributed_keyspace>& sys_dist_ks) {
+future<> storage_service::mark_existing_views_as_built() {
     assert(this_shard_id() == 0);
     auto views = _db.local().get_views();
-    co_await coroutine::parallel_for_each(views, [this, &sys_dist_ks] (view_ptr& view) -> future<> {
+    co_await coroutine::parallel_for_each(views, [this] (view_ptr& view) -> future<> {
         co_await _sys_ks.local().mark_view_as_built(view->ks_name(), view->cf_name());
-        co_await sys_dist_ks.local().finish_view_build(view->ks_name(), view->cf_name());
+        co_await _sys_dist_ks.local().finish_view_build(view->ks_name(), view->cf_name());
     });
 }
 
@@ -3981,8 +3981,8 @@ future<> storage_service::drain_on_shutdown() {
 }
 
 future<> storage_service::init_messaging_service_part(sharded<db::system_distributed_keyspace>& sys_dist_ks, bool raft_topology_change_enabled) {
-    return container().invoke_on_all([&sys_dist_ks, raft_topology_change_enabled] (storage_service& local) {
-        return local.init_messaging_service(sys_dist_ks, raft_topology_change_enabled);
+    return container().invoke_on_all([raft_topology_change_enabled] (storage_service& local) {
+        return local.init_messaging_service(raft_topology_change_enabled);
     });
 }
 
@@ -6003,7 +6003,7 @@ future<> storage_service::snitch_reconfigured() {
     }
 }
 
-future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(sharded<db::system_distributed_keyspace>& sys_dist_ks, raft::term_t term, uint64_t cmd_index, const raft_topology_cmd& cmd) {
+future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft::term_t term, uint64_t cmd_index, const raft_topology_cmd& cmd) {
     raft_topology_cmd_result result;
     slogger.trace("raft topology: topology cmd rpc {} is called", cmd.cmd);
 
@@ -6132,7 +6132,7 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(shar
                 case node_state::replacing: {
                     set_mode(mode::BOOTSTRAP);
                     // See issue #4001
-                    co_await mark_existing_views_as_built(sys_dist_ks);
+                    co_await mark_existing_views_as_built();
                     co_await _db.invoke_on_all([] (replica::database& db) {
                         for (auto& cf : db.get_non_system_column_families()) {
                             cf->notify_bootstrap_or_replace_start();
@@ -6741,7 +6741,7 @@ future<join_node_response_result> storage_service::join_node_response_handler(jo
     }, params.response);
 }
 
-void storage_service::init_messaging_service(sharded<db::system_distributed_keyspace>& sys_dist_ks, bool raft_topology_change_enabled) {
+void storage_service::init_messaging_service(bool raft_topology_change_enabled) {
     _messaging.local().register_node_ops_cmd([this] (const rpc::client_info& cinfo, node_ops_cmd_request req) {
         auto coordinator = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
         return container().invoke_on(0, [coordinator, req = std::move(req)] (auto& ss) mutable {
@@ -6760,9 +6760,9 @@ void storage_service::init_messaging_service(sharded<db::system_distributed_keys
                 return handler(ss);
             });
         };
-        ser::storage_service_rpc_verbs::register_raft_topology_cmd(&_messaging.local(), [&sys_dist_ks, handle_raft_rpc] (raft::server_id dst_id, raft::term_t term, uint64_t cmd_index, raft_topology_cmd cmd) {
-            return handle_raft_rpc(dst_id, [&sys_dist_ks, cmd = std::move(cmd), term, cmd_index] (auto& ss) {
-                return ss.raft_topology_cmd_handler(sys_dist_ks, term, cmd_index, cmd);
+        ser::storage_service_rpc_verbs::register_raft_topology_cmd(&_messaging.local(), [handle_raft_rpc] (raft::server_id dst_id, raft::term_t term, uint64_t cmd_index, raft_topology_cmd cmd) {
+            return handle_raft_rpc(dst_id, [cmd = std::move(cmd), term, cmd_index] (auto& ss) {
+                return ss.raft_topology_cmd_handler(term, cmd_index, cmd);
             });
         });
         ser::storage_service_rpc_verbs::register_raft_pull_topology_snapshot(&_messaging.local(), [handle_raft_rpc] (raft::server_id dst_id, raft_topology_pull_params params) {
