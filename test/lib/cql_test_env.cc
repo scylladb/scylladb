@@ -739,6 +739,7 @@ private:
             _ss.start(std::ref(abort_sources), std::ref(_db),
                 std::ref(_gossiper),
                 std::ref(_sys_ks),
+                std::ref(_sys_dist_ks),
                 std::ref(_feature_service), std::ref(_mm),
                 std::ref(_token_metadata), std::ref(_erm_factory), std::ref(_ms),
                 std::ref(_repair),

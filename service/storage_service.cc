@@ -112,6 +112,7 @@ static constexpr std::chrono::seconds wait_for_live_nodes_timeout{30};
 storage_service::storage_service(abort_source& abort_source,
     distributed<replica::database>& db, gms::gossiper& gossiper,
     sharded<db::system_keyspace>& sys_ks,
+    sharded<db::system_distributed_keyspace>& sys_dist_ks,
     gms::feature_service& feature_service,
     sharded<service::migration_manager>& mm,
     locator::shared_token_metadata& stm,
@@ -142,6 +143,7 @@ storage_service::storage_service(abort_source& abort_source,
         , _lifecycle_notifier(elc_notif)
         , _batchlog_manager(bm)
         , _sys_ks(sys_ks)
+        , _sys_dist_ks(sys_dist_ks)
         , _snitch_reconfigure([this] {
             return container().invoke_on(0, [] (auto& ss) {
                 return ss.snitch_reconfigured();

@@ -171,6 +171,7 @@ public:
     storage_service(abort_source& as, distributed<replica::database>& db,
         gms::gossiper& gossiper,
         sharded<db::system_keyspace>&,
+        sharded<db::system_distributed_keyspace>&,
         gms::feature_service& feature_service,
         sharded<service::migration_manager>& mm,
         locator::shared_token_metadata& stm,
@@ -497,6 +498,7 @@ private:
     // Should be serialized under token_metadata_lock.
     future<> replicate_to_all_cores(mutable_token_metadata_ptr tmptr) noexcept;
     sharded<db::system_keyspace>& _sys_ks;
+    sharded<db::system_distributed_keyspace>& _sys_dist_ks;
     locator::snitch_signal_slot_t _snitch_reconfigure;
     sharded<service::tablet_allocator>& _tablet_allocator;
     sharded<cdc::generation_service>& _cdc_gens;
