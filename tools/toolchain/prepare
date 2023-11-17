@@ -42,7 +42,7 @@ for arch in "${archs[@]}"; do
     fi
 done
 
-buildah bud "${archs[@]/#/--platform=linux/}" --jobs 0 --squash --no-cache --pull -f tools/toolchain/Dockerfile --manifest "$(<tools/toolchain/image)"
+buildah bud --env CARGO_NET_GIT_FETCH_WITH_CLI=true "${archs[@]/#/--platform=linux/}" --jobs 0 --squash --no-cache --pull -f tools/toolchain/Dockerfile --manifest "$(<tools/toolchain/image)"
 
 echo "Done building $(<tools/toolchain/image). You can now test it, and push with"
 echo ""
