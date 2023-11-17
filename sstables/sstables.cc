@@ -1929,7 +1929,7 @@ uint64_t sstable::filter_size() const {
     return _components->filter->memory_size();
 }
 
-const bool sstable::has_component(component_type f) const {
+bool sstable::has_component(component_type f) const {
     return _recognized_components.contains(f);
 }
 

@@ -412,7 +412,7 @@ public:
         }
     }
 
-    const api::timestamp_type last_modified() const {
+    api::timestamp_type last_modified() const {
         return _last_modified;
     }
 

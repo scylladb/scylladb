@@ -196,7 +196,7 @@ public:
         , _id{id}
     { }
 
-    const int32_t get_id() const {
+    int32_t get_id() const {
         return _id;
     }
 

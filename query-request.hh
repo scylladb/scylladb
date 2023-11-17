@@ -243,13 +243,13 @@ public:
     const cql_serialization_format cql_format() const {
         return cql_serialization_format(4); // For IDL compatibility
     }
-    const uint32_t partition_row_limit_low_bits() const {
+    uint32_t partition_row_limit_low_bits() const {
         return _partition_row_limit_low_bits;
     }
-    const uint32_t partition_row_limit_high_bits() const {
+    uint32_t partition_row_limit_high_bits() const {
         return _partition_row_limit_high_bits;
     }
-    const uint64_t partition_row_limit() const {
+    uint64_t partition_row_limit() const {
         return (static_cast<uint64_t>(_partition_row_limit_high_bits) << 32) | _partition_row_limit_low_bits;
     }
     void set_partition_row_limit(uint64_t limit) {

@@ -219,7 +219,7 @@ public:
     const bool& get_value() const {
         return *value;
     }
-    const bool is_true() const {
+    bool is_true() const {
         return has_value() && get_value();
     }
 };

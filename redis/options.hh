@@ -61,8 +61,8 @@ public:
     {
     }
 
-    const db::consistency_level get_read_consistency_level() const { return _read_consistency; }
-    const db::consistency_level get_write_consistency_level() const { return _write_consistency; }
+    db::consistency_level get_read_consistency_level() const { return _read_consistency; }
+    db::consistency_level get_write_consistency_level() const { return _write_consistency; }
 
     const db::timeout_clock::duration get_read_timeout() const { return std::chrono::milliseconds(_timeout_config.read_timeout_in_ms); }
     const db::timeout_clock::duration get_write_timeout() const { return std::chrono::milliseconds(_timeout_config.write_timeout_in_ms); }
