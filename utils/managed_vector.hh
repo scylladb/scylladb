@@ -34,7 +34,7 @@ private:
             _backref->_data = _data;
         }
         size_t storage_size() const noexcept {
-            return sizeof(*this) + sizeof(T[_backref->_capacity]);
+            return sizeof(*this) + sizeof(T) * _backref->_capacity;
         }
     };
     union maybe_constructed {
