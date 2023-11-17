@@ -1384,7 +1384,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 std::ref(feature_service), std::ref(mm), std::ref(token_metadata), std::ref(erm_factory),
                 std::ref(messaging), std::ref(repair),
                 std::ref(stream_manager), std::ref(lifecycle_notifier), std::ref(bm), std::ref(snitch),
-                std::ref(tablet_allocator), std::ref(cdc_generation_service)).get();
+                std::ref(tablet_allocator), std::ref(cdc_generation_service), std::ref(qp)).get();
 
             auto stop_storage_service = defer_verbose_shutdown("storage_service", [&] {
                 ss.stop().get();
@@ -1399,8 +1399,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             smp::invoke_on_all([&] {
                 return db::initialize_virtual_tables(db, ss, gossiper, raft_gr, sys_ks, *cfg);
             }).get();
-
-            ss.invoke_on_all(&service::storage_service::set_query_processor, std::ref(qp)).get();
 
             // #293 - do not stop anything
             // engine().at_exit([&qp] { return qp.stop(); });

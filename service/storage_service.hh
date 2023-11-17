@@ -182,7 +182,8 @@ public:
         sharded<db::batchlog_manager>& bm,
         sharded<locator::snitch_ptr>& snitch,
         sharded<service::tablet_allocator>& tablet_allocator,
-        sharded<cdc::generation_service>& cdc_gs);
+        sharded<cdc::generation_service>& cdc_gs,
+        cql3::query_processor& qp);
 
     // Needed by distributed<>
     future<> stop();
@@ -291,10 +292,6 @@ public:
 
     void register_protocol_server(protocol_server& server) {
         _protocol_servers.push_back(&server);
-    }
-
-    void set_query_processor(cql3::query_processor& qp) {
-        _qp = &qp;
     }
 
     // All pointers are valid.

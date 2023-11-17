@@ -123,13 +123,15 @@ storage_service::storage_service(abort_source& abort_source,
     sharded<db::batchlog_manager>& bm,
     sharded<locator::snitch_ptr>& snitch,
     sharded<service::tablet_allocator>& tablet_allocator,
-    sharded<cdc::generation_service>& cdc_gens)
+    sharded<cdc::generation_service>& cdc_gens,
+    cql3::query_processor& qp)
         : _abort_source(abort_source)
         , _feature_service(feature_service)
         , _db(db)
         , _gossiper(gossiper)
         , _messaging(ms)
         , _migration_manager(mm)
+        , _qp(&qp)
         , _repair(repair)
         , _stream_manager(stream_manager)
         , _snitch(snitch)

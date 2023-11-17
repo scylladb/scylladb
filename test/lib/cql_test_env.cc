@@ -747,7 +747,8 @@ private:
                 std::ref(_batchlog_manager),
                 std::ref(_snitch),
                 std::ref(_tablet_allocator),
-                std::ref(_cdc_generation_service)).get();
+                std::ref(_cdc_generation_service),
+                std::ref(_qp)).get();
             auto stop_storage_service = defer([this] { _ss.stop().get(); });
 
             _mnotifier.local().register_listener(&_ss.local());
@@ -755,9 +756,6 @@ private:
                 _mnotifier.local().unregister_listener(&_ss.local()).get();
             });
 
-            _ss.invoke_on_all([this] (service::storage_service& ss) {
-                ss.set_query_processor(_qp.local());
-            }).get();
             smp::invoke_on_all([&] {
                 return db::initialize_virtual_tables(_db, _ss, _gossiper, _group0_registry, _sys_ks, *cfg);
             }).get();
