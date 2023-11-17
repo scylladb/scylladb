@@ -61,6 +61,10 @@ static mutation extract_history_mutation(std::vector<canonical_mutation>& muts, 
 }
 
 static bool should_flush_system_topology_after_applying(const mutation& mut, const data_dictionary::database db) {
+    if (!db.has_schema(db::system_keyspace::NAME, db::system_keyspace::TOPOLOGY)) {
+        return false;
+    }
+
     auto s_topology = db.find_schema(db::system_keyspace::NAME, db::system_keyspace::TOPOLOGY);
     if (mut.column_family_id() == s_topology->id()) {
         auto enabled_features_id = s_topology->columns_by_name().at("enabled_features")->id;
