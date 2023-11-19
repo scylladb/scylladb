@@ -68,7 +68,7 @@ def jmx(request, rest_api_mock_server):
 
     jmx_path = request.config.getoption("jmx_path")
     if jmx_path is None:
-        jmx_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "scylla-jmx", "scripts",
+        jmx_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "tools", "jmx", "scripts",
                                                 "scylla-jmx"))
     else:
         jmx_path = os.path.abspath(jmx_path)
