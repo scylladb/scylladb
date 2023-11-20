@@ -198,7 +198,7 @@ public:
             auto sst = _env.make_sstable(s, dir(), sstables::generation_type(idx), sstables::get_highest_sstable_version(), sstable::format_types::big, _cfg.buffer_size);
 
             auto start = perf_sstable_test_env::now();
-            write_memtable_to_sstable_for_test(*_mt, sst).get();
+            write_memtable_to_sstable(*_mt, sst).get();
             auto end = perf_sstable_test_env::now();
 
             _mt->revert_flushed_memory();
@@ -218,7 +218,7 @@ public:
                 std::vector<shared_sstable> ssts;
                 for (auto i = 0u; i < _cfg.sstables; i++) {
                     auto sst = sst_gen();
-                    write_memtable_to_sstable_for_test(*_mt, sst).get();
+                    write_memtable_to_sstable(*_mt, sst).get();
                     sst->open_data().get();
                     _mt->revert_flushed_memory();
                     ssts.push_back(std::move(sst));
