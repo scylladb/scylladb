@@ -6749,8 +6749,8 @@ void storage_service::init_messaging_service(bool raft_topology_change_enabled) 
         });
     });
     if (raft_topology_change_enabled) {
-        auto handle_raft_rpc = [&cont = container()] (raft::server_id dst_id, auto handler) {
-            return cont.invoke_on(0, [dst_id, handler = std::move(handler)] (auto& ss) mutable {
+        auto handle_raft_rpc = [this] (raft::server_id dst_id, auto handler) {
+            return container().invoke_on(0, [dst_id, handler = std::move(handler)] (auto& ss) mutable {
                 if (!ss._group0 || !ss._group0->joined_group0()) {
                     throw std::runtime_error("The node did not join group 0 yet");
                 }
