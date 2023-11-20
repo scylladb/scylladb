@@ -332,7 +332,7 @@ if __name__ == '__main__':
         if is_rhel7_old_kernel():
             colorprint('{red}RHEL/CentOS7 default kernel detected.{nocolor}')
             colorprint('{red}To get optimal performance, please install kernel-ml kernel.{nocolor}')
-            continue_setup = interactive_ask_service('Do you want to continue the setup with current kernel?', 'Yes - continue the setup, No - abort the setup.', False)
+            continue_setup = interactive_ask_service('Do you want to continue the setup with current kernel?', 'Yes - continue the setup, No - abort the setup.', True)
             if not continue_setup:
                 colorprint('{red}Setup aborted.{nocolor}')
                 sys.exit(1)
