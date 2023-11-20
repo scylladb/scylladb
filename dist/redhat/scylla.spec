@@ -69,8 +69,6 @@ This package contains ScyllaDB server.
 
 %build
 
-defines=()
-
 %install
 %if 0%{housekeeping}
 install_arg="--housekeeping"
