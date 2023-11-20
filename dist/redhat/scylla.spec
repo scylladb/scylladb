@@ -60,8 +60,6 @@ This package installs all required packages for ScyllaDB,  including
 %package        server
 Group:          Applications/Databases
 Summary:        The Scylla database server
-License:        AGPLv3
-URL:            http://www.scylladb.com/
 Requires:       %{product}-conf = %{version}-%{release}
 Requires:       %{product}-python3 = %{version}-%{release}
 AutoReqProv:    no
@@ -156,8 +154,6 @@ rm -rf $RPM_BUILD_ROOT
 %package conf
 Group:          Applications/Databases
 Summary:        Scylla configuration package
-License:        AGPLv3
-URL:            http://www.scylladb.com/
 Obsoletes:	scylla-server < 1.1
 
 %description conf
@@ -203,8 +199,6 @@ fi
 %package kernel-conf
 Group:          Applications/Databases
 Summary:        Scylla configuration package for the Linux kernel
-License:        AGPLv3
-URL:            http://www.scylladb.com/
 Requires:       kmod
 # tuned overwrites our sysctl settings
 Obsoletes:      tuned >= 2.11.0
