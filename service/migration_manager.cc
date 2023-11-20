@@ -1083,9 +1083,8 @@ future<> migration_manager::maybe_sync(const schema_ptr& s, netw::messaging_serv
             mlogger.debug("Syncing schema of {}.{} (v={}) with {}", s->ks_name(), s->cf_name(), s->version(), endpoint);
             return merge_schema_from(endpoint);
         } else {
-            return container().invoke_on(0, [gs = global_schema_ptr(s), endpoint] (migration_manager& local_mm) {
-                schema_ptr s = gs.get();
-                mlogger.debug("Syncing schema of {}.{} (v={}) with {}", s->ks_name(), s->cf_name(), s->version(), endpoint);
+            return container().invoke_on(0, [ks_name = s->ks_name(), cf_name = s->cf_name(), version = s->version(), endpoint] (migration_manager& local_mm) {
+                mlogger.debug("Syncing schema of {}.{} (v={}) with {}", ks_name, cf_name, version, endpoint);
                 return local_mm.merge_schema_from(endpoint);
             });
         }
@@ -1146,29 +1145,43 @@ future<schema_ptr> migration_manager::get_schema_for_write(table_schema_version 
     }
 
     auto s = local_schema_registry().get_or_null(v);
-
-    if (s && s->is_synced()) {
-        co_return s;
-    }
-
     // `_enable_schema_pulls` may change concurrently with this function (but only from `true` to `false`).
     bool use_raft = !_enable_schema_pulls;
-
-    if (use_raft) {
+    if ((!s || !s->is_synced()) && use_raft) {
         // Schema is synchronized through Raft, so perform a group 0 read barrier.
         // Batch the barriers so we don't invoke them redundantly.
         mlogger.trace("Performing raft read barrier because schema is not synced, version: {}", v);
         co_await (as ? _group0_barrier.trigger(*as) : _group0_barrier.trigger());
     }
 
-    s = co_await get_schema_definition(v, dst, ms, _storage_proxy);
+    if (!s) {
+        s = co_await get_schema_definition(v, dst, ms, _storage_proxy);
+    }
 
-    if (use_raft) {
-        // If Raft is used the schema is synced already (through barrier above), mark it as such.
-        mlogger.trace("Mark schema {} as synced", v);
-        co_await s->registry_entry()->maybe_sync([] { return make_ready_future<>(); });
-    } else {
-        co_await maybe_sync(s, dst);
+    if (!s->is_synced()) {
+        if (use_raft) {
+            // If Raft is used the schema is synced already (through barrier above), mark it as such.
+            mlogger.trace("Mark schema {} as synced", v);
+            co_await s->registry_entry()->maybe_sync([] { return make_ready_future<>(); });
+        } else {
+            co_await maybe_sync(s, dst);
+        }
+    }
+    // here s is guaranteed to be valid and synced
+    if (s->is_view() && !s->view_info()->base_info()) {
+        // The way to get here is if the view schema was deactivated
+        // and reactivated again, or if we loaded it from the schema
+        // history.
+        auto& db = _storage_proxy.local_db();
+        // This line might throw a no_such_column_family but
+        // that is fine, if the schema is synced, it means that if
+        // we failed to get the base table, we learned about the base
+        // table not existing (which means that the view also doesn't exist
+        // any more), which means that this schema is actually useless for either
+        // read or write so we better throw than return an incomplete useless
+        // schema
+        schema_ptr base_schema = db.find_schema(s->view_info()->base_id());
+        s->view_info()->set_base_info(s->view_info()->make_base_dependent_view_info(*base_schema));
     }
 
     co_return s;
