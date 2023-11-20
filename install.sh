@@ -333,6 +333,21 @@ if ! $nonroot; then
         installconfig 644 "$file" "$rusr"/lib/sysctl.d
     done
 fi
+install -d -m755 -d "$rprefix"/kernel_conf
+install -m755 dist/common/kernel_conf/scylla_tune_sched -Dt "$rprefix"/kernel_conf
+install -m755 dist/common/kernel_conf/post_install.sh "$rprefix"/kernel_conf
+if ! $without_systemd; then
+    install -m644 dist/common/systemd/scylla-tune-sched.service -Dt "$rsystemd"
+    if ! $nonroot && [ "$prefix" != "/opt/scylladb" ]; then
+        install -d -m755 "$retc"/systemd/system/scylla-tune-sched.service.d
+        cat << EOS > "$retc"/systemd/system/scylla-tune-sched.service.d/execpath.conf
+[Service]
+ExecStart=
+ExecStart=$prefix/kernel_conf/scylla_tune_sched
+EOS
+    fi
+fi
+relocate_python3 "$rprefix"/kernel_conf dist/common/kernel_conf/scylla_tune_sched
 # scylla-node-exporter
 if ! $without_systemd; then
     install -d -m755 "$rsystemd"
@@ -618,6 +633,7 @@ elif ! $packaging; then
     done
     if ! $supervisor; then
         $rprefix/scripts/scylla_post_install.sh
+        $rprefix/kernel_conf/post_install.sh
     fi
     echo "Scylla offline install completed."
 fi
