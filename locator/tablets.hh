@@ -198,6 +198,12 @@ struct tablet_migration_streaming_info {
 
 tablet_migration_streaming_info get_migration_streaming_info(const tablet_info&, const tablet_transition_info&);
 
+// Describes if a given token is located at either left or right side of a tablet's range
+enum tablet_range_side {
+    left = 0,
+    right = 1,
+};
+
 /// Stores information about tablets of a single table.
 ///
 /// The map contains a constant number of tablets, tablet_count().
@@ -232,6 +238,9 @@ public:
 
     /// Returns tablet_id of a tablet which owns a given token.
     tablet_id get_tablet_id(token) const;
+
+    // Returns tablet_id and also the side of the tablet's range that a given token belongs to.
+    std::pair<tablet_id, tablet_range_side> get_tablet_id_and_range_side(token) const;
 
     /// Returns tablet_info associated with a given tablet.
     /// The given id must belong to this instance.

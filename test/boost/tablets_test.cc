@@ -1487,3 +1487,36 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_random_load) {
     }
   }).get();
 }
+
+SEASTAR_TEST_CASE(test_tablet_id_and_range_side) {
+    static constexpr size_t tablet_count = 128;
+    locator::tablet_map tmap(tablet_count);
+    locator::tablet_map tmap_after_splitting(tablet_count * 2);
+
+    for (size_t id = 0; id < tablet_count; id++) {
+        auto left_id = tablet_id(id << 1);
+        auto right_id = tablet_id(left_id.value() + 1);
+        auto left_tr = tmap_after_splitting.get_token_range(left_id);
+        auto right_tr = tmap_after_splitting.get_token_range(right_id);
+        testlog.debug("id {}, left tr {}, right tr {}", id, left_tr, right_tr);
+
+        auto test = [&tmap, id] (dht::token token, tablet_range_side expected_side) {
+            auto [tid, side] = tmap.get_tablet_id_and_range_side(token);
+            BOOST_REQUIRE_EQUAL(tid.value(), id);
+            BOOST_REQUIRE_EQUAL(side, expected_side);
+        };
+
+        auto test_range = [&] (dht::token_range& tr, tablet_range_side expected_side) {
+            auto lower_token = tr.start()->value() == dht::minimum_token() ? dht::first_token() : tr.start()->value();
+            auto upper_token = tr.end()->value();
+            test(next_token(lower_token), expected_side);
+            test(upper_token, expected_side);
+        };
+
+        // Test the lower and upper bound of tablet's left and right ranges ("compaction groups").
+        test_range(left_tr, tablet_range_side::left);
+        test_range(right_tr, tablet_range_side::right);
+    }
+
+    return make_ready_future<>();
+}
