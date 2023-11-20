@@ -71,6 +71,7 @@ public:
 
     storage_manager(const db::config&, config cfg);
     shared_ptr<s3::client> get_endpoint_client(sstring endpoint);
+    bool is_known_endpoint(sstring endpoint) const;
     future<> stop();
 };
 
@@ -128,6 +129,11 @@ public:
         return _storage->get_endpoint_client(std::move(endpoint));
     }
 
+    bool is_known_endpoint(sstring endpoint) const {
+        assert(_storage != nullptr);
+        return _storage->is_known_endpoint(std::move(endpoint));
+    }
+
     virtual sstable_writer_config configure_writer(sstring origin) const;
     bool uuid_sstable_identifiers() const;
     const db::config& config() const { return _db_config; }
@@ -164,6 +170,8 @@ public:
     future<> init_table_storage(const data_dictionary::storage_options& so, sstring dir);
     future<> destroy_table_storage(const data_dictionary::storage_options& so, sstring dir);
     future<> init_keyspace_storage(const data_dictionary::storage_options& so, sstring dir);
+
+    void validate_new_keyspace_storage_options(const data_dictionary::storage_options&);
 
 private:
     void add(sstable* sst);

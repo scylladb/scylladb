@@ -91,6 +91,10 @@ shared_ptr<s3::client> storage_manager::get_endpoint_client(sstring endpoint) {
     return ep.client;
 }
 
+bool storage_manager::is_known_endpoint(sstring endpoint) const {
+    return _s3_endpoints.contains(endpoint);
+}
+
 storage_manager::config_updater::config_updater(const db::config& cfg, storage_manager& sstm)
     : action([&sstm, &cfg] () mutable {
         return sstm.container().invoke_on_all([&cfg] (auto& sstm) {
@@ -206,6 +210,22 @@ future<> sstables_manager::init_keyspace_storage(const data_dictionary::storage_
 
 future<> sstables_manager::destroy_table_storage(const data_dictionary::storage_options& so, sstring dir) {
     return sstables::destroy_table_storage(so, dir);
+}
+
+void sstables_manager::validate_new_keyspace_storage_options(const data_dictionary::storage_options& so) {
+    std::visit(overloaded_functor {
+        [] (const data_dictionary::storage_options::local&) {
+        },
+        [this] (const data_dictionary::storage_options::s3& so) {
+            if (!_features.keyspace_storage_options) {
+                throw exceptions::invalid_request_exception("Keyspace storage options not supported in the cluster");
+            }
+            // It's non-system keyspace
+            if (!is_known_endpoint(so.endpoint)) {
+                throw exceptions::configuration_exception(format("Endpoint {} not configured", so.endpoint));
+            }
+        }
+    }, so.value);
 }
 
 }   // namespace sstables
