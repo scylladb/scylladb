@@ -1645,7 +1645,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             });
 
             // Register storage_service to migration_notifier so we can update
-            // pending ranges when keyspace is chagned
+            // pending ranges when keyspace is changed
             mm_notifier.local().register_listener(&ss.local());
             auto stop_mm_listener = defer_verbose_shutdown("storage service notifications", [&mm_notifier, &ss] {
                 mm_notifier.local().unregister_listener(&ss.local()).get();
@@ -1671,7 +1671,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             ss.local().set_group0(group0_service, raft_topology_change_enabled);
 
             // Setup group0 early in case the node is bootstrapped already and the group exists.
-            // Need to do it before allowing incomming messaging service connections since
+            // Need to do it before allowing incoming messaging service connections since
             // storage proxy's and migration manager's verbs may access group0.
             // This will also disable migration manager schema pulls if needed.
             group0_service.setup_group0_if_exist(sys_ks.local(), ss.local(), qp.local(), mm.local(), raft_topology_change_enabled).get();
@@ -2001,7 +2001,7 @@ int main(int ac, char** av) {
         return 1;
     }
 
-    // Even on the environment which causes error during initalize Scylla,
+    // Even on the environment which causes error during initialize Scylla,
     // "scylla --version" should be able to run without error.
     // To do so, we need to parse and execute these options before
     // initializing Scylla/Seastar classes.
