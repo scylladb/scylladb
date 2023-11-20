@@ -57,6 +57,17 @@ This package installs all required packages for ScyllaDB,  including
 %prep
 %setup -q -n scylla
 
+%build
+
+%install
+%if 0%{housekeeping}
+install_arg="--housekeeping"
+%endif
+./install.sh --packaging --root "$RPM_BUILD_ROOT" $install_arg
+
+%clean
+rm -rf $RPM_BUILD_ROOT
+
 %package        server
 Group:          Applications/Databases
 Summary:        The Scylla database server
@@ -66,14 +77,6 @@ AutoReqProv:    no
 
 %description server
 This package contains ScyllaDB server.
-
-%build
-
-%install
-%if 0%{housekeeping}
-install_arg="--housekeeping"
-%endif
-./install.sh --packaging --root "$RPM_BUILD_ROOT" $install_arg
 
 %pre server
 getent group scylla || /usr/sbin/groupadd scylla 2> /dev/null || :
@@ -101,9 +104,6 @@ if  [ -d /tmp/%{name}-%{version}-%{release} ]; then
     rm -rf /tmp/%{name}-%{version}-%{release}/
 fi
 ln -sfT /etc/scylla /var/lib/scylla/conf
-
-%clean
-rm -rf $RPM_BUILD_ROOT
 
 %files server
 %defattr(-,root,root)
