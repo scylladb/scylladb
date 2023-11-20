@@ -1,0 +1,73 @@
+#!/usr/bin/env python3
+#
+# Copyright 2023-present ScyllaDB
+#
+
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+import os
+import sys
+import errno
+import logging
+
+PROCFS = '/proc/sys/kernel'
+DEBUGFS = '/sys/kernel/debug'
+
+TUNE_PARAMS = {
+    # Prevent auto-scaling from doing anything to our tunables
+    'sched.tunable_scaling': 0,
+
+    # Preempt sooner (For CFS, only available on <linux-6.6)
+    'sched.min_granularity_ns': 500000,
+
+    # Preempt sooner  (For EEVDF, only available on >=linux-6.6)
+    'sched.base_slice_ns': 500000,
+
+    # Don't delay unrelated workloads (For CFS, only available on <linux-6.6)
+    'sched.wakeup_granularity_ns': 450000,
+
+    # Schedule all tasks in this period (For CFS, only available on <linux-6.6)
+    'sched.latency_ns': 1000000,
+
+    # autogroup seems to prevent sched_latency_ns from being respected
+    'sched.autogroup_enabled': 0,
+
+    # Disable numa balancing
+    'numa_balancing': 0
+}
+
+def write_to(prefix, key, value):
+    if prefix == PROCFS:
+        path = os.path.join(prefix, key.replace('.', '_'))
+    elif prefix == DEBUGFS:
+        path = os.path.join(prefix, key.replace('.', '/'))
+    if not os.path.isfile(path):
+        return False
+    try:
+        with open(path, 'w') as f:
+            f.write(str(value))
+    except OSError as e:
+        # On Ubuntu 22.04, 5.13.0 kernel has following bug on debugfs:
+        # https://lists.openwall.net/linux-kernel/2021/10/01/455
+        # It causes "Invalid argument" while writing to tunable_scaling.
+        # The bug caused because the kernel code forgetting to add
+        # null-terminate on the tail of the string which received from
+        # userspace.
+        # As a workaround, we can avoid the error by writing '\0' on the tail
+        # of the string.
+        if e.errno == errno.EINVAL and key == 'sched.tunable_scaling':
+            with open(path, 'w') as f:
+                f.write(f'{value}\0')
+        else:
+            logging.error(str(e))
+            return False
+    except Exception as e:
+        logging.error(str(e))
+        return False
+    return True
+
+if __name__ == '__main__':
+    for k, v in TUNE_PARAMS.items():
+        if not write_to(PROCFS, k, v) and not write_to(DEBUGFS, k, v):
+            logging.error(f'Failed to set {k} = {v}')

@@ -33,6 +33,7 @@ endif
 	dh_installinit --no-start --name scylla-housekeeping-daily
 	dh_installinit --no-start --name scylla-housekeeping-restart
 	dh_installinit --no-start --name scylla-fstrim
+	dh_installinit --no-start --name scylla-tune-sched
 
 override_dh_strip:
 	# The binaries (ethtool...patchelf) don't pass dh_strip after going through patchelf. Since they are
