@@ -57,27 +57,26 @@ This package installs all required packages for ScyllaDB,  including
 %prep
 %setup -q -n scylla
 
-%package        server
-Group:          Applications/Databases
-Summary:        The Scylla database server
-License:        AGPLv3
-URL:            http://www.scylladb.com/
-Requires:       %{product}-conf = %{version}-%{release}
-Requires:       %{product}-python3 = %{version}-%{release}
-AutoReqProv:    no
-
-%description server
-This package contains ScyllaDB server.
-
 %build
-
-defines=()
 
 %install
 %if 0%{housekeeping}
 install_arg="--housekeeping"
 %endif
 ./install.sh --packaging --root "$RPM_BUILD_ROOT" $install_arg
+
+%clean
+rm -rf $RPM_BUILD_ROOT
+
+%package        server
+Group:          Applications/Databases
+Summary:        The Scylla database server
+Requires:       %{product}-conf = %{version}-%{release}
+Requires:       %{product}-python3 = %{version}-%{release}
+AutoReqProv:    no
+
+%description server
+This package contains ScyllaDB server.
 
 %pre server
 getent group scylla || /usr/sbin/groupadd scylla 2> /dev/null || :
@@ -105,9 +104,6 @@ if  [ -d /tmp/%{name}-%{version}-%{release} ]; then
     rm -rf /tmp/%{name}-%{version}-%{release}/
 fi
 ln -sfT /etc/scylla /var/lib/scylla/conf
-
-%clean
-rm -rf $RPM_BUILD_ROOT
 
 %files server
 %defattr(-,root,root)
@@ -156,8 +152,6 @@ rm -rf $RPM_BUILD_ROOT
 %package conf
 Group:          Applications/Databases
 Summary:        Scylla configuration package
-License:        AGPLv3
-URL:            http://www.scylladb.com/
 Obsoletes:	scylla-server < 1.1
 
 %description conf
@@ -203,8 +197,6 @@ fi
 %package kernel-conf
 Group:          Applications/Databases
 Summary:        Scylla configuration package for the Linux kernel
-License:        AGPLv3
-URL:            http://www.scylladb.com/
 Requires:       kmod
 # tuned overwrites our sysctl settings
 Obsoletes:      tuned >= 2.11.0
