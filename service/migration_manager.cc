@@ -108,13 +108,15 @@ void migration_manager::init_messaging_service()
     };
 
     if (this_shard_id() == 0) {
-        _feature_listeners.push_back(_feat.view_virtual_columns.when_enabled(reload_schema_in_bg));
-        _feature_listeners.push_back(_feat.digest_insensitive_to_expiry.when_enabled(reload_schema_in_bg));
-        _feature_listeners.push_back(_feat.cdc.when_enabled(reload_schema_in_bg));
-        _feature_listeners.push_back(_feat.per_table_partitioners.when_enabled(reload_schema_in_bg));
-
-        if (!_feat.table_digest_insensitive_to_expiry) {
-            _feature_listeners.push_back(_feat.table_digest_insensitive_to_expiry.when_enabled(reload_schema_in_bg));
+        for (const gms::feature& feature : {
+                std::cref(_feat.view_virtual_columns),
+                std::cref(_feat.digest_insensitive_to_expiry),
+                std::cref(_feat.cdc),
+                std::cref(_feat.per_table_partitioners),
+                std::cref(_feat.table_digest_insensitive_to_expiry)}) {
+            if (!feature) {
+                _feature_listeners.push_back(feature.when_enabled(reload_schema_in_bg));
+            }
         }
     }
 
