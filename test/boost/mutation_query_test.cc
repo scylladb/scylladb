@@ -583,3 +583,22 @@ SEASTAR_THREAD_TEST_CASE(test_frozen_mutation_consumer) {
     const auto& rebuilt = *res.result;
     BOOST_REQUIRE_EQUAL(rebuilt, m);
 }
+
+// Reproducer for #10598
+SEASTAR_THREAD_TEST_CASE(test_reverse_range_tombstones) {
+    auto now = gc_clock::now();
+    tests::reader_concurrency_semaphore_wrapper semaphore;
+    schema_ptr table_schema = make_schema();
+    schema_ptr query_schema = table_schema->make_reversed();
+    mutation m(table_schema, partition_key::from_single_value(*table_schema, "key1"));
+    auto rt = range_tombstone(
+            clustering_key::from_single_value(*table_schema, "ck0"), bound_kind::incl_start,
+            clustering_key::from_single_value(*table_schema, "ck1"), bound_kind::incl_end,
+            tombstone(api::timestamp_type(42), now)
+    );
+    m.partition().apply_delete(*table_schema, rt);
+    auto src = make_source({m});
+    auto slice = partition_slice_builder(*query_schema).reversed().build();
+    reconcilable_result result = mutation_query(query_schema, semaphore.make_permit(), src, query::full_partition_range, slice, query::max_rows, query::max_partitions, now);
+    assert_that(result.partitions().at(0).mut().unfreeze(table_schema)).is_equal_to(m);
+}
