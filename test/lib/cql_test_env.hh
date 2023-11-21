@@ -95,6 +95,7 @@ public:
     std::optional<uint64_t> initial_tablets; // When engaged, the default keyspace will use tablets.
     locator::host_id host_id;
     gms::inet_address broadcast_address = gms::inet_address("localhost");
+    bool ms_listen = false;
 
     cql_test_config();
     cql_test_config(const cql_test_config&);
@@ -155,6 +156,8 @@ public:
     virtual sharded<service::migration_manager>& migration_manager() = 0;
 
     virtual sharded<db::batchlog_manager>& batchlog_manager() = 0;
+
+    virtual sharded<netw::messaging_service>& get_messaging_service() = 0;
 
     virtual sharded<gms::gossiper>& gossiper() = 0;
 
