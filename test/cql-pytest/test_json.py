@@ -33,6 +33,25 @@ def table1(cql, test_keyspace, type1):
     yield table
     cql.execute("DROP TABLE " + table)
 
+# The EquivalentJson class wraps a JSON string, and compare equal to other
+# strings if both are valid JSON strings which decode to the same object.
+# EquivalentJson("....") can be used in equality assertions below, to check
+# whether functionally-equivalent JSON is returned instead of checking for
+# identical strings.
+class EquivalentJson:
+    def __init__(self, s):
+        self.obj = json.loads(s)
+    def __eq__(self, other):
+        if isinstance(other, EquivalentJson):
+            return self.obj == other.obj
+        elif isinstance(other, str):
+            return self.obj == json.loads(other)
+        return NotImplemented
+    # Implementing __repr__ is useful because when a comparison fails, pytest
+    # helpfully prints what it tried to compare, and uses __repr__ for that.
+    def __repr__(self):
+        return f'EquivalentJson("{self.obj}")'
+
 # Test that failed fromJson() parsing an invalid JSON results in the expected
 # error - FunctionFailure - and not some weird internal error.
 # Reproduces issue #7911.
@@ -300,32 +319,21 @@ def test_tojson_double(cql, table1):
 
 # Check that toJson() correctly formats "time" values. The JSON translation
 # is a string containing the time (there is no time type in JSON), and of
-# course, a string needs to be wrapped in quotes. (issue #7988
-@pytest.mark.xfail(reason="issue #7988")
+# course, a string needs to be wrapped in quotes.
+# Reproduces issue #7988.
 def test_tojson_time(cql, table1):
     p = unique_key_int()
     stmt = cql.prepare(f"INSERT INTO {table1} (p, t) VALUES (?, ?)")
     cql.execute(stmt, [p, 123])
     assert list(cql.execute(f"SELECT toJson(t) from {table1} where p = {p}")) == [('"00:00:00.000000123"',)]
 
-# The EquivalentJson class wraps a JSON string, and compare equal to other
-# strings if both are valid JSON strings which decode to the same object.
-# EquivalentJson("....") can be used in assert_rows() checks below, to check
-# whether functionally-equivalent JSON is returned instead of checking for
-# identical strings.
-class EquivalentJson:
-    def __init__(self, s):
-        self.obj = json.loads(s)
-    def __eq__(self, other):
-        if isinstance(other, EquivalentJson):
-            return self.obj == other.obj
-        elif isinstance(other, str):
-            return self.obj == json.loads(other)
-        return NotImplemented
-    # Implementing __repr__ is useful because when a comparison fails, pytest
-    # helpfully prints what it tried to compare, and uses __repr__ for that.
-    def __repr__(self):
-        return f'EquivalentJson("{self.obj}")'
+# Test the same thing in test_tojson_time above, with SELECT JSON instead
+# of SELECT toJson(). Also reproduces issue #7988.
+def test_select_json_time(cql, table1):
+    p = unique_key_int()
+    stmt = cql.prepare(f"INSERT INTO {table1} (p, t) VALUES (?, ?)")
+    cql.execute(stmt, [p, 123])
+    assert list(cql.execute(f"SELECT JSON t from {table1} where p = {p}")) == [(EquivalentJson('{"t": "00:00:00.000000123"}'),)]
 
 # Test that toJson() can prints a decimal type with a very high mantissa.
 # Reproduces issue #8002, where it was written as 1 and a billion zeroes,

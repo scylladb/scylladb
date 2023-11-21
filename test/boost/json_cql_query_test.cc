@@ -104,7 +104,7 @@ SEASTAR_TEST_CASE(test_select_json_types) {
                     "\"p\": 3, "
                     "\"q\": 3, "
                     "\"r\": \"1970-01-02\", "
-                    "\"s\": 00:00:00.000000001, "
+                    "\"s\": \"00:00:00.000000001\", "
                     "\"u\": \"1y2mo25d5h6m7s8ms9us10ns\", "
                     "\"w\": null, "
                     "\"unixtimestampof(k)\": 1261009589805}"
@@ -136,7 +136,7 @@ SEASTAR_TEST_CASE(test_select_json_types) {
                 utf8_type->decompose("3"),
                 utf8_type->decompose("3"),
                 utf8_type->decompose("\"1970-01-02\""),
-                utf8_type->decompose("00:00:00.000000001"),
+                utf8_type->decompose("\"00:00:00.000000001\""),
                 utf8_type->decompose("\"1y2mo25d5h6m7s8ms9us10ns\""),
                 utf8_type->decompose("null"),
                 utf8_type->decompose("1261009589805"),
