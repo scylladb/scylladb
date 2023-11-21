@@ -680,7 +680,7 @@ class EquivalentIp:
         return f'EquivalentIp("{self.obj}")'
 
 # Reproduces issue #7972, #7988, #7997, #8001
-@pytest.mark.xfail(reason="issues #7972, #7988, #7997, #8001")
+@pytest.mark.xfail(reason="issues #7972, #7997, #8001")
 def testToJsonFct(cql, test_keyspace):
     abc_tuple = collections.namedtuple('abc_tuple', ['a', 'b', 'c'])
     with create_type(cql, test_keyspace, "(a int, b uuid, c set<text>)") as type_name:
