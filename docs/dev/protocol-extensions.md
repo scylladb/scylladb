@@ -180,3 +180,22 @@ The string map in the SUPPORTED response will contain the following parameters:
 
   - `ERROR_CODE`: a 32-bit signed decimal integer which Scylla
     will use as the error code for the rate limit exception.
+
+## Sending tablet info to the drivers
+
+This extension adds support for sending tablet info to the drivers if the 
+request was routed to the wrong node/shard.
+
+There is a need for sending tablet info to the drivers so they can be 
+tablet aware.
+For the best performance we want to get this info lazily only when it is 
+needed.
+
+The info is send when driver asks about the information that the specific 
+tablet contains and it is directed to the wrong node/shard so it could 
+use that information for every subsequent query.
+If we send the query to the wrong node/shard, we want to send the RESULT 
+message with additional information about the tablet in `custom_payload`:
+
+  - `tablet_replicas` - information about tablet replicas, for every replica there is information about the host and shard.
+  - `token_range` - information about token range for that tablet in format `(first_token, last_token]`.
