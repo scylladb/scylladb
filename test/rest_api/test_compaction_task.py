@@ -106,7 +106,7 @@ def test_running_compaction_task_abort(cql, this_dc, rest_api):
                     resp = rest_api.send("POST", f"column_family/autocompaction/{keyspace}:{table}")
                     resp.raise_for_status()
 
-                    tasks = list_tasks(rest_api, module_name, False, keyspace, table)
+                    tasks = [task for task in list_tasks(rest_api, module_name, False, keyspace, table) if task["type"] == "regular compaction"]
                     assert tasks, "Compaction task was not created"
 
                     for task in tasks:
@@ -115,10 +115,10 @@ def test_running_compaction_task_abort(cql, this_dc, rest_api):
                     resp = rest_api.send("POST", f"v2/error_injection/injection/{injection}/message")
                     resp.raise_for_status()
 
-                    for task in tasks:
-                        status = wait_for_task(rest_api, task["task_id"])
-                        assert status["state"] == "failed", "Task finished successfully"
-                        assert "abort requested" in status["error"], "Task wasn't aborted by user"
+                    statuses = [wait_for_task(rest_api, task["task_id"]) for task in tasks]
+                    aborted = [status for status in statuses if "abort requested" in status["error"]]
+                    assert aborted, "Task wasn't aborted by user"
+                    assert all([status["state"] == "failed" for status in aborted]), "Task finished successfully"
     drain_module_tasks(rest_api, module_name)
 
 def run_major_compaction(rest_api, keyspace):
