@@ -76,14 +76,13 @@ network_topology_strategy::network_topology_strategy(
 
 using endpoint_dc_rack_set = std::unordered_set<endpoint_dc_rack>;
 
-template <typename NodeId>
 class natural_endpoints_tracker {
     /**
      * Endpoint adder applying the replication rules for a given DC.
      */
     struct data_center_endpoints {
         /** List accepted endpoints get pushed into. */
-        set_type<NodeId>& _endpoints;
+        host_id_set& _endpoints;
 
         /**
          * Racks encountered so far. Replicas are put into separate racks while possible.
@@ -96,7 +95,7 @@ class natural_endpoints_tracker {
         size_t _rf_left;
         ssize_t _acceptable_rack_repeats;
 
-        data_center_endpoints(size_t rf, size_t rack_count, size_t node_count, set_type<NodeId>& endpoints, endpoint_dc_rack_set& racks)
+        data_center_endpoints(size_t rf, size_t rack_count, size_t node_count, host_id_set& endpoints, endpoint_dc_rack_set& racks)
             : _endpoints(endpoints)
             , _racks(racks)
             // If there aren't enough nodes in this DC to fill the RF, the number of nodes is the effective RF.
@@ -110,7 +109,7 @@ class natural_endpoints_tracker {
          * Attempts to add an endpoint to the replicas for this datacenter, adding to the endpoints set if successful.
          * Returns true if the endpoint was added, and this datacenter does not require further replicas.
          */
-        bool add_endpoint_and_check_if_done(const NodeId& ep, const endpoint_dc_rack& location) {
+        bool add_endpoint_and_check_if_done(const host_id& ep, const endpoint_dc_rack& location) {
             if (done()) {
                 return false;
             }
@@ -161,7 +160,7 @@ class natural_endpoints_tracker {
         }
     };
 
-    const generic_token_metadata<NodeId>& _tm;
+    const token_metadata2& _tm;
     const topology& _tp;
     std::unordered_map<sstring, size_t> _dc_rep_factor;
 
@@ -169,7 +168,7 @@ class natural_endpoints_tracker {
     // We want to preserve insertion order so that the first added endpoint
     // becomes primary.
     //
-    set_type<NodeId> _replicas;
+    host_id_set _replicas;
     // tracks the racks we have already placed replicas in
     endpoint_dc_rack_set _seen_racks;
 
@@ -190,7 +189,7 @@ class natural_endpoints_tracker {
     size_t _dcs_to_fill;
 
 public:
-    natural_endpoints_tracker(const generic_token_metadata<NodeId>& tm, const std::unordered_map<sstring, size_t>& dc_rep_factor)
+    natural_endpoints_tracker(const token_metadata2& tm, const std::unordered_map<sstring, size_t>& dc_rep_factor)
         : _tm(tm)
         , _tp(_tm.get_topology())
         , _dc_rep_factor(dc_rep_factor)
@@ -220,7 +219,7 @@ public:
         }
     }
 
-    bool add_endpoint_and_check_if_done(NodeId ep) {
+    bool add_endpoint_and_check_if_done(host_id ep) {
         auto& loc = _tp.get_location(ep);
         auto i = _dcs.find(loc.dc);
         if (i != _dcs.end() && i->second.add_endpoint_and_check_if_done(ep, loc)) {
@@ -233,29 +232,27 @@ public:
         return _dcs_to_fill == 0;
     }
 
-    set_type<NodeId>& replicas() noexcept {
+    host_id_set& replicas() noexcept {
         return _replicas;
     }
 };
 
-future<natural_ep_type>
+future<host_id_set>
 network_topology_strategy::calculate_natural_endpoints(
-    const token& search_token, const token_metadata& tm, bool use_host_id) const {
+    const token& search_token, const token_metadata2& tm) const {
 
-    return select_tm([&]<typename NodeId>(const generic_token_metadata<NodeId>& tm) -> future<natural_ep_type> {
-        natural_endpoints_tracker<NodeId> tracker(tm, _dc_rep_factor);
+        natural_endpoints_tracker tracker(tm, _dc_rep_factor);
 
         for (auto& next : tm.ring_range(search_token)) {
             co_await coroutine::maybe_yield();
 
-            NodeId ep = *tm.get_endpoint(next);
+            host_id ep = *tm.get_endpoint(next);
             if (tracker.add_endpoint_and_check_if_done(ep)) {
                 break;
             }
         }
 
         co_return std::move(tracker.replicas());
-    }, tm, use_host_id);
 }
 
 void network_topology_strategy::validate_options(const gms::feature_service& fs) const {
@@ -309,7 +306,7 @@ future<tablet_map> network_topology_strategy::allocate_tablets_for_new_table(sch
     auto token_range = tm->get_new()->ring_range(dht::token::get_random_token());
 
     for (tablet_id tb : tablets.tablet_ids()) {
-        natural_endpoints_tracker<locator::host_id> tracker(*tm->get_new(), _dc_rep_factor);
+        natural_endpoints_tracker tracker(*tm->get_new(), _dc_rep_factor);
 
         while (true) {
             co_await coroutine::maybe_yield();

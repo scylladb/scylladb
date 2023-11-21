@@ -654,7 +654,7 @@ static void test_equivalence(const shared_token_metadata& stm, const locator::to
     for (size_t i = 0; i < 1000; ++i) {
         auto token = dht::token::get_random_token();
         auto expected = calculate_natural_endpoints(token, tm, topo, datacenters);
-        auto actual = get<host_id_set>(nts.calculate_natural_endpoints(token, token_metadata(stm.get()->get_new_strong()), true).get0());
+        auto actual = nts.calculate_natural_endpoints(token, *stm.get()->get_new()).get0();
 
         // Because the old algorithm does not put the nodes in the correct order in the case where more replicas
         // are required than there are racks in a dc, we accept different order as long as the primary

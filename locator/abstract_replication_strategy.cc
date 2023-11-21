@@ -69,8 +69,8 @@ void abstract_replication_strategy::validate_replication_strategy(const sstring&
 }
 
 future<endpoint_set> abstract_replication_strategy::calculate_natural_ips(const token& search_token, const token_metadata2_ptr& tm) const {
-    const auto host_ids = co_await calculate_natural_endpoints(search_token, token_metadata(tm), true);
-    co_return resolve_endpoints(get<host_id_set>(host_ids), *tm);
+    const auto host_ids = co_await calculate_natural_endpoints(search_token, *tm);
+    co_return resolve_endpoints(host_ids, *tm);
 }
 
 using strategy_class_registry = class_registry<
@@ -279,7 +279,7 @@ abstract_replication_strategy::get_ranges(locator::host_id ep, const token_metad
             // Using the common path would make the function quadratic in the number of endpoints.
             should_add = true;
         } else {
-            auto eps = get<host_id_set>(co_await calculate_natural_endpoints(tok, tm, true));
+            auto eps = co_await calculate_natural_endpoints(tok, *tm.get_new());
             should_add = eps.contains(ep);
         }
         if (should_add) {
@@ -360,7 +360,7 @@ abstract_replication_strategy::get_pending_address_ranges(const token_metadata2_
     temp->update_topology(pending_address, std::move(dr));
     co_await temp->update_normal_tokens(pending_tokens, pending_address);
     for (const auto& t : temp->sorted_tokens()) {
-        auto eps = get<host_id_set>(co_await calculate_natural_endpoints(t, token_metadata(temp), true));
+        auto eps = co_await calculate_natural_endpoints(t, *temp);
         if (eps.contains(pending_address)) {
             dht::token_range_vector r = temp->get_primary_ranges_for(t);
             rslogger.debug("get_pending_address_ranges: token={} primary_range={} endpoint={}", t, r, pending_address);

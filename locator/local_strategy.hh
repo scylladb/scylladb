@@ -27,7 +27,7 @@ public:
     virtual ~local_strategy() {};
     virtual size_t get_replication_factor(const token_metadata&) const override;
 
-    virtual future<natural_ep_type> calculate_natural_endpoints(const token& search_token, const token_metadata& tm, bool host_id) const override;
+    virtual future<host_id_set> calculate_natural_endpoints(const token& search_token, const token_metadata2& tm) const override;
 
     virtual void validate_options(const gms::feature_service&) const override;
 

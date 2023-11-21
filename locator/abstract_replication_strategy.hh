@@ -54,11 +54,6 @@ using replication_map = std::unordered_map<token, inet_address_vector_replica_se
 
 using endpoint_set = utils::basic_sequenced_set<inet_address, inet_address_vector_replica_set>;
 using host_id_set = utils::basic_sequenced_set<locator::host_id, host_id_vector_replica_set>;
-using natural_ep_type = std::variant<endpoint_set, host_id_set>;
-template <typename NodeId>
-using set_type = std::conditional_t<std::is_same_v<NodeId, inet_address>, endpoint_set, host_id_set>;
-template <typename NodeId>
-using vector_type = std::conditional_t<std::is_same_v<NodeId, inet_address>, inet_address_vector_replica_set, host_id_vector_replica_set>;
 
 class vnode_effective_replication_map;
 class effective_replication_map_factory;
@@ -92,20 +87,6 @@ protected:
         rslogger.debug(fmt, std::forward<Args>(args)...);
     }
 
-    template <typename NodeId>
-    static NodeId get_self_id(const generic_token_metadata<NodeId>& tm) {
-        if constexpr(std::is_same_v<NodeId, gms::inet_address>) {
-            return tm.get_topology().my_address();
-        } else {
-            return NodeId{};
-        }
-    }
-
-    template <typename Func>
-    static future<natural_ep_type> select_tm(Func&& func, const token_metadata& tm, bool use_host_id) {
-        return use_host_id ? func(*tm.template get_new()) : func(tm);
-    }
-
 public:
     using ptr_type = seastar::shared_ptr<abstract_replication_strategy>;
 
@@ -122,7 +103,7 @@ public:
     // is small, that implementation may not yield since by itself it won't cause a reactor stall (assuming practical
     // cluster sizes and number of tokens per node). The caller is responsible for yielding if they call this function
     // in a loop.
-    virtual future<natural_ep_type> calculate_natural_endpoints(const token& search_token, const token_metadata& tm, bool use_host_id) const  = 0;
+    virtual future<host_id_set> calculate_natural_endpoints(const token& search_token, const token_metadata2& tm) const  = 0;
     future<endpoint_set> calculate_natural_ips(const token& search_token, const token_metadata2_ptr& tm) const;
 
     virtual ~abstract_replication_strategy() {}

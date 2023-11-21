@@ -33,16 +33,15 @@ simple_strategy::simple_strategy(const replication_strategy_config_options& conf
     }
 }
 
-future<natural_ep_type> simple_strategy::calculate_natural_endpoints(const token& t, const token_metadata& tm, bool use_host_id) const {
-    return select_tm([&]<typename NodeId>(const generic_token_metadata<NodeId>& tm) -> future<natural_ep_type> {
+future<host_id_set> simple_strategy::calculate_natural_endpoints(const token& t, const token_metadata2& tm) const {
         const std::vector<token>& tokens = tm.sorted_tokens();
 
         if (tokens.empty()) {
-            co_return set_type<NodeId>{};
+            co_return host_id_set{};
         }
 
         size_t replicas = _replication_factor;
-        set_type<NodeId> endpoints;
+        host_id_set endpoints;
         endpoints.reserve(replicas);
 
         for (auto& token : tm.ring_range(t)) {
@@ -62,7 +61,6 @@ future<natural_ep_type> simple_strategy::calculate_natural_endpoints(const token
         }
 
         co_return endpoints;
-    }, tm, use_host_id);
 }
 
 size_t simple_strategy::get_replication_factor(const token_metadata&) const {
