@@ -502,7 +502,7 @@ struct to_json_string_visitor {
     sstring operator()(const tuple_type_impl& t) { return to_json_string_aux(t, bv); }
     sstring operator()(const user_type_impl& t) { return to_json_string_aux(t, bv); }
     sstring operator()(const simple_date_type_impl& t) { return quote_json_string(t.to_string(bv)); }
-    sstring operator()(const time_type_impl& t) { return t.to_string(bv); }
+    sstring operator()(const time_type_impl& t) { return quote_json_string(t.to_string(bv)); }
     sstring operator()(const empty_type_impl& t) { return "null"; }
     sstring operator()(const duration_type_impl& t) {
         auto v = t.deserialize(bv);
