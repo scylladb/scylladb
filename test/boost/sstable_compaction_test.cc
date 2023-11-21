@@ -5330,3 +5330,77 @@ SEASTAR_TEST_CASE(produces_optimal_filter_by_estimating_correctly_partitions_per
         BOOST_REQUIRE(comp.components->filter->memory_size() >= filter->memory_size());
     });
 }
+
+SEASTAR_TEST_CASE(splitting_compaction_test) {
+    return test_env::do_with_async([] (test_env& env) {
+        auto builder = schema_builder("tests", "twcs_splitting")
+                .with_column("id", utf8_type, column_kind::partition_key)
+                .with_column("cl", int32_type, column_kind::clustering_key)
+                .with_column("value", int32_type);
+        builder.set_compaction_strategy(sstables::compaction_strategy_type::time_window);
+        auto s = builder.build();
+
+        auto sst_gen = env.make_sst_factory(s);
+
+        auto next_timestamp = [] (auto step) {
+            using namespace std::chrono;
+            return (api::timestamp_clock::now().time_since_epoch() - duration_cast<microseconds>(step)).count();
+        };
+
+        auto make_insert = [&] (const dht::decorated_key& key, api::timestamp_clock::duration step) {
+            static thread_local int32_t value = 1;
+
+            mutation m(s, key);
+            auto c_key = clustering_key::from_exploded(*s, {int32_type->decompose(value++)});
+            m.set_clustered_cell(c_key, bytes("value"), data_value(int32_t(value)), next_timestamp(step));
+            return m;
+        };
+
+        auto keys = tests::generate_partition_keys(100, s);
+        std::vector<mutation> muts;
+
+        muts.reserve(keys.size() * 2);
+        for (auto& k : keys) {
+            muts.push_back(make_insert(k, 0ms));
+            muts.push_back(make_insert(k, 720h));
+        }
+
+        auto t = env.make_table_for_tests(s);
+        auto close_table = deferred_stop(t);
+        t->start();
+
+        auto input = make_sstable_containing(sst_gen, std::move(muts));
+
+        std::unordered_set<int64_t> groups;
+        auto classify_fn = [&groups] (dht::token t) -> mutation_writer::token_group_id {
+            auto r = dht::compaction_group_of(1, t);
+            if (groups.insert(r).second) {
+                testlog.info("Group {} detected!", r);
+            }
+            return r;
+        };
+
+        auto desc = sstables::compaction_descriptor({input});
+        desc.options = compaction_type_options::make_split(classify_fn);
+
+        auto ret = compact_sstables(env, std::move(desc), t, sst_gen, replacer_fn_no_op()).get0();
+
+        auto twcs_options = time_window_compaction_strategy_options(s->compaction_strategy_options());
+        auto window_for = [&twcs_options] (api::timestamp_type timestamp) {
+            return time_window_compaction_strategy::get_window_for(twcs_options, timestamp);
+        };
+
+        // Assert that data was segregated both by token and timestamp.
+        for (auto& sst : ret.new_sstables) {
+            testlog.info("{}: token_groups: [{}, {}], windows: [{}, {}]",
+                         sst->get_filename(),
+                         classify_fn(sst->get_first_decorated_key().token()),
+                         classify_fn(sst->get_last_decorated_key().token()),
+                         window_for(sst->get_stats_metadata().min_timestamp),
+                         window_for(sst->get_stats_metadata().max_timestamp));
+            BOOST_REQUIRE_EQUAL(classify_fn(sst->get_first_decorated_key().token()), classify_fn(sst->get_last_decorated_key().token()));
+            BOOST_REQUIRE_EQUAL(window_for(sst->get_stats_metadata().min_timestamp), window_for(sst->get_stats_metadata().max_timestamp));
+        }
+        BOOST_REQUIRE(ret.new_sstables.size() == 4); // 2 token groups * 2 windows.
+    });
+}

@@ -18,6 +18,7 @@
 #include "sstables/sstable_set.hh"
 #include "utils/UUID.hh"
 #include "compaction_fwd.hh"
+#include "mutation_writer/token_group_based_splitting_writer.hh"
 
 namespace sstables {
 
@@ -30,6 +31,7 @@ enum class compaction_type {
     Reshard = 5,
     Upgrade = 6,
     Reshape = 7,
+    Split = 8,
 };
 
 std::ostream& operator<<(std::ostream& os, compaction_type type);
@@ -82,8 +84,11 @@ public:
     };
     struct reshape {
     };
+    struct split {
+        mutation_writer::classify_by_token_group classifier;
+    };
 private:
-    using options_variant = std::variant<regular, cleanup, upgrade, scrub, reshard, reshape>;
+    using options_variant = std::variant<regular, cleanup, upgrade, scrub, reshard, reshape, split>;
 
 private:
     options_variant _options;
@@ -115,6 +120,10 @@ public:
 
     static compaction_type_options make_scrub(scrub::mode mode, scrub::quarantine_invalid_sstables quarantine_sstables = scrub::quarantine_invalid_sstables::yes) {
         return compaction_type_options(scrub{.operation_mode = mode, .quarantine_sstables = quarantine_sstables});
+    }
+
+    static compaction_type_options make_split(mutation_writer::classify_by_token_group classifier) {
+        return compaction_type_options(split{std::move(classifier)});
     }
 
     template <typename... Visitor>
