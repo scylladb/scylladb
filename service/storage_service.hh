@@ -134,7 +134,7 @@ private:
     gms::gossiper& _gossiper;
     sharded<netw::messaging_service>& _messaging;
     sharded<service::migration_manager>& _migration_manager;
-    cql3::query_processor* _qp = nullptr;
+    cql3::query_processor& _qp;
     sharded<repair_service>& _repair;
     sharded<streaming::stream_manager>& _stream_manager;
     sharded<locator::snitch_ptr>& _snitch;
@@ -171,6 +171,7 @@ public:
     storage_service(abort_source& as, distributed<replica::database>& db,
         gms::gossiper& gossiper,
         sharded<db::system_keyspace>&,
+        sharded<db::system_distributed_keyspace>&,
         gms::feature_service& feature_service,
         sharded<service::migration_manager>& mm,
         locator::shared_token_metadata& stm,
@@ -182,11 +183,12 @@ public:
         sharded<db::batchlog_manager>& bm,
         sharded<locator::snitch_ptr>& snitch,
         sharded<service::tablet_allocator>& tablet_allocator,
-        sharded<cdc::generation_service>& cdc_gs);
+        sharded<cdc::generation_service>& cdc_gs,
+        cql3::query_processor& qp);
 
     // Needed by distributed<>
     future<> stop();
-    void init_messaging_service(sharded<db::system_distributed_keyspace>& sys_dist_ks, bool raft_topology_change_enabled);
+    void init_messaging_service(bool raft_topology_change_enabled);
     future<> uninit_messaging_service();
 
     future<> load_tablet_metadata();
@@ -293,10 +295,6 @@ public:
         _protocol_servers.push_back(&server);
     }
 
-    void set_query_processor(cql3::query_processor& qp) {
-        _qp = &qp;
-    }
-
     // All pointers are valid.
     const std::vector<protocol_server*>& protocol_servers() const {
         return _protocol_servers;
@@ -325,34 +323,6 @@ public:
     future<> check_for_endpoint_collision(std::unordered_set<gms::inet_address> initial_contact_nodes,
             const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features);
 
-    /*!
-     * \brief Init the messaging service part of the service.
-     *
-     * This is the first part of the initialization, call this method
-     * first.
-     *
-     * After this method is completed, it is ok to start the storage_service
-     * API.
-     * \see init_server_without_the_messaging_service_part
-     */
-    future<> init_messaging_service_part(sharded<db::system_distributed_keyspace>& sys_dist_ks, bool raft_topology_change_enabled);
-    /*!
-     * \brief Uninit the messaging service part of the service.
-     */
-    future<> uninit_messaging_service_part();
-
-    /*!
-     * \brief complete the server initialization
-     *
-     * The storage_service initialization is done in two parts.
-     *
-     * It is safe to start the API after init_messaging_service_part
-     * completed
-     *
-     * Must be called on shard 0.
-     *
-     * \see init_messaging_service_part
-     */
     future<> join_cluster(sharded<db::system_distributed_keyspace>& sys_dist_ks, sharded<service::storage_proxy>& proxy);
 
     void set_group0(service::raft_group0&, bool raft_topology_change_enabled);
@@ -379,7 +349,7 @@ public:
 private:
     void set_mode(mode m);
     // Can only be called on shard-0
-    future<> mark_existing_views_as_built(sharded<db::system_distributed_keyspace>&);
+    future<> mark_existing_views_as_built();
 
     // Stream data for which we become a new replica.
     // Before that, if we're not replacing another node, inform other nodes about our chosen tokens
@@ -500,6 +470,7 @@ private:
     // Should be serialized under token_metadata_lock.
     future<> replicate_to_all_cores(mutable_token_metadata_ptr tmptr) noexcept;
     sharded<db::system_keyspace>& _sys_ks;
+    sharded<db::system_distributed_keyspace>& _sys_dist_ks;
     locator::snitch_signal_slot_t _snitch_reconfigure;
     sharded<service::tablet_allocator>& _tablet_allocator;
     sharded<cdc::generation_service>& _cdc_gens;
@@ -787,7 +758,7 @@ private:
 
     std::unordered_set<raft::server_id> find_raft_nodes_from_hoeps(const std::list<locator::host_id_or_endpoint>& hoeps);
 
-    future<raft_topology_cmd_result> raft_topology_cmd_handler(sharded<db::system_distributed_keyspace>& sys_dist_ks, raft::term_t term, uint64_t cmd_index, const raft_topology_cmd& cmd);
+    future<raft_topology_cmd_result> raft_topology_cmd_handler(raft::term_t term, uint64_t cmd_index, const raft_topology_cmd& cmd);
 
     future<> raft_initialize_discovery_leader(raft::server&, const join_node_request_params& params);
     future<> raft_decommission();

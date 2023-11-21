@@ -1343,35 +1343,12 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 tablet_allocator.stop().get();
             });
 
-            supervisor::notify("initializing storage service");
-            debug::the_storage_service = &ss;
-            ss.start(std::ref(stop_signal.as_sharded_abort_source()),
-                std::ref(db), std::ref(gossiper), std::ref(sys_ks),
-                std::ref(feature_service), std::ref(mm), std::ref(token_metadata), std::ref(erm_factory),
-                std::ref(messaging), std::ref(repair),
-                std::ref(stream_manager), std::ref(lifecycle_notifier), std::ref(bm), std::ref(snitch),
-                std::ref(tablet_allocator), std::ref(cdc_generation_service)).get();
-
-            auto stop_storage_service = defer_verbose_shutdown("storage_service", [&] {
-                ss.stop().get();
-            });
-
-            api::set_server_storage_service(ctx, ss, group0_client).get();
-            auto stop_ss_api = defer_verbose_shutdown("storage service API", [&ctx] {
-                api::unset_server_storage_service(ctx).get();
-            });
-
             // FIXME -- this can happen next to token_metadata start, but it needs "storage_service"
             // API register, so it comes that late for now
             api::set_server_token_metadata(ctx, token_metadata).get();
             auto stop_tokens_api = defer_verbose_shutdown("token metadata API", [&ctx] {
                 api::unset_server_token_metadata(ctx).get();
             });
-
-            supervisor::notify("initializing virtual tables");
-            smp::invoke_on_all([&] {
-                return db::initialize_virtual_tables(db, ss, gossiper, raft_gr, sys_ks, *cfg);
-            }).get();
 
             supervisor::notify("starting forward service");
             forward_service.start(std::ref(messaging), std::ref(proxy), std::ref(db), std::ref(token_metadata), std::ref(stop_signal.as_sharded_abort_source())).get();
@@ -1400,7 +1377,28 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 qp.invoke_on_all(&cql3::query_processor::stop_remote).get();
             });
 
-            ss.invoke_on_all(&service::storage_service::set_query_processor, std::ref(qp)).get();
+            supervisor::notify("initializing storage service");
+            debug::the_storage_service = &ss;
+            ss.start(std::ref(stop_signal.as_sharded_abort_source()),
+                std::ref(db), std::ref(gossiper), std::ref(sys_ks), std::ref(sys_dist_ks),
+                std::ref(feature_service), std::ref(mm), std::ref(token_metadata), std::ref(erm_factory),
+                std::ref(messaging), std::ref(repair),
+                std::ref(stream_manager), std::ref(lifecycle_notifier), std::ref(bm), std::ref(snitch),
+                std::ref(tablet_allocator), std::ref(cdc_generation_service), std::ref(qp)).get();
+
+            auto stop_storage_service = defer_verbose_shutdown("storage_service", [&] {
+                ss.stop().get();
+            });
+
+            api::set_server_storage_service(ctx, ss, group0_client).get();
+            auto stop_ss_api = defer_verbose_shutdown("storage service API", [&ctx] {
+                api::unset_server_storage_service(ctx).get();
+            });
+
+            supervisor::notify("initializing virtual tables");
+            smp::invoke_on_all([&] {
+                return db::initialize_virtual_tables(db, ss, gossiper, raft_gr, sys_ks, *cfg);
+            }).get();
 
             // #293 - do not stop anything
             // engine().at_exit([&qp] { return qp.stop(); });
@@ -1591,12 +1589,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             cdc.start(std::ref(proxy), sharded_parameter(get_cdc_metadata, std::ref(cdc_generation_service)), std::ref(mm_notifier)).get();
             auto stop_cdc_service = defer_verbose_shutdown("cdc log service", [] {
                 cdc.stop().get();
-            });
-
-            supervisor::notify("starting storage service", true);
-            ss.local().init_messaging_service_part(sys_dist_ks, raft_topology_change_enabled).get();
-            auto stop_ss_msg = defer_verbose_shutdown("storage service messaging", [&ss] {
-                ss.local().uninit_messaging_service_part().get();
             });
 
             api::set_server_messaging_service(ctx, messaging).get();

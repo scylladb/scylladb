@@ -112,6 +112,7 @@ static constexpr std::chrono::seconds wait_for_live_nodes_timeout{30};
 storage_service::storage_service(abort_source& abort_source,
     distributed<replica::database>& db, gms::gossiper& gossiper,
     sharded<db::system_keyspace>& sys_ks,
+    sharded<db::system_distributed_keyspace>& sys_dist_ks,
     gms::feature_service& feature_service,
     sharded<service::migration_manager>& mm,
     locator::shared_token_metadata& stm,
@@ -123,13 +124,15 @@ storage_service::storage_service(abort_source& abort_source,
     sharded<db::batchlog_manager>& bm,
     sharded<locator::snitch_ptr>& snitch,
     sharded<service::tablet_allocator>& tablet_allocator,
-    sharded<cdc::generation_service>& cdc_gens)
+    sharded<cdc::generation_service>& cdc_gens,
+    cql3::query_processor& qp)
         : _abort_source(abort_source)
         , _feature_service(feature_service)
         , _db(db)
         , _gossiper(gossiper)
         , _messaging(ms)
         , _migration_manager(mm)
+        , _qp(qp)
         , _repair(repair)
         , _stream_manager(stream_manager)
         , _snitch(snitch)
@@ -140,6 +143,7 @@ storage_service::storage_service(abort_source& abort_source,
         , _lifecycle_notifier(elc_notif)
         , _batchlog_manager(bm)
         , _sys_ks(sys_ks)
+        , _sys_dist_ks(sys_dist_ks)
         , _snitch_reconfigure([this] {
             return container().invoke_on(0, [] (auto& ss) {
                 return ss.snitch_reconfigured();
@@ -158,6 +162,9 @@ storage_service::storage_service(abort_source& abort_source,
     if (_snitch.local_is_initialized()) {
         _listeners.emplace_back(make_lw_shared(_snitch.local()->when_reconfigured(_snitch_reconfigure)));
     }
+
+    auto& cfg = _db.local().get_config();
+    init_messaging_service(cfg.consistent_cluster_management() && cfg.check_experimental(db::experimental_features_t::feature::CONSISTENT_TOPOLOGY_CHANGES));
 }
 
 enum class node_external_status {
@@ -513,7 +520,7 @@ future<> storage_service::topology_state_load() {
         }
 
         if (_db.local().get_config().check_experimental(db::experimental_features_t::feature::TABLETS)) {
-            tmptr->set_tablets(co_await replica::read_tablet_metadata(*_qp));
+            tmptr->set_tablets(co_await replica::read_tablet_metadata(_qp));
         }
     }));
 
@@ -839,7 +846,7 @@ topology_node_mutation_builder& topology_mutation_builder::with_node(raft::serve
 }
 
 using raft_topology_cmd_handler_type = noncopyable_function<future<raft_topology_cmd_result>(
-        sharded<db::system_distributed_keyspace>&, raft::term_t, uint64_t, const raft_topology_cmd&)>;
+        raft::term_t, uint64_t, const raft_topology_cmd&)>;
 
 class topology_coordinator {
     sharded<db::system_distributed_keyspace>& _sys_dist_ks;
@@ -1054,7 +1061,7 @@ class topology_coordinator {
         slogger.trace("raft topology: send {} command with term {} and index {} to {}/{}",
             cmd.cmd, _term, cmd_index, id, *ip);
         auto result = utils::fb_utilities::is_me(*ip) ?
-                    co_await _raft_topology_cmd_handler(_sys_dist_ks, _term, cmd_index, cmd) :
+                    co_await _raft_topology_cmd_handler(_term, cmd_index, cmd) :
                     co_await ser::storage_service_rpc_verbs::send_raft_topology_cmd(
                             &_messaging, netw::msg_addr{*ip}, id, _term, cmd_index, cmd);
         if (result.status == raft_topology_cmd_result::command_status::fail) {
@@ -3084,7 +3091,7 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
             ? ::make_shared<join_node_rpc_handshaker>(*this, join_params)
             : _group0->make_legacy_handshaker(false);
     co_await _group0->setup_group0(_sys_ks.local(), initial_contact_nodes, std::move(handshaker),
-            raft_replace_info, *this, *_qp, _migration_manager.local(), _raft_topology_change_enabled);
+            raft_replace_info, *this, _qp, _migration_manager.local(), _raft_topology_change_enabled);
 
     raft::server* raft_server = co_await [this] () -> future<raft::server*> {
         if (!_raft_topology_change_enabled) {
@@ -3158,7 +3165,7 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
             throw std::runtime_error(err);
         }
 
-        co_await _group0->finish_setup_after_join(*this, *_qp, _migration_manager.local(), _raft_topology_change_enabled);
+        co_await _group0->finish_setup_after_join(*this, _qp, _migration_manager.local(), _raft_topology_change_enabled);
         co_return;
     }
 
@@ -3229,7 +3236,7 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
             // bootstrap_tokens was previously set using tokens gossiped by the replaced node
         }
         co_await sys_dist_ks.invoke_on_all(&db::system_distributed_keyspace::start);
-        co_await mark_existing_views_as_built(sys_dist_ks);
+        co_await mark_existing_views_as_built();
         co_await _sys_ks.local().update_tokens(bootstrap_tokens);
         co_await bootstrap(bootstrap_tokens, cdc_gen_id, ri);
     } else {
@@ -3316,16 +3323,16 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
     }
 
     assert(_group0);
-    co_await _group0->finish_setup_after_join(*this, *_qp, _migration_manager.local(), _raft_topology_change_enabled);
+    co_await _group0->finish_setup_after_join(*this, _qp, _migration_manager.local(), _raft_topology_change_enabled);
     co_await _cdc_gens.local().after_join(std::move(cdc_gen_id));
 }
 
-future<> storage_service::mark_existing_views_as_built(sharded<db::system_distributed_keyspace>& sys_dist_ks) {
+future<> storage_service::mark_existing_views_as_built() {
     assert(this_shard_id() == 0);
     auto views = _db.local().get_views();
-    co_await coroutine::parallel_for_each(views, [this, &sys_dist_ks] (view_ptr& view) -> future<> {
+    co_await coroutine::parallel_for_each(views, [this] (view_ptr& view) -> future<> {
         co_await _sys_ks.local().mark_view_as_built(view->ks_name(), view->cf_name());
-        co_await sys_dist_ks.local().finish_view_build(view->ks_name(), view->cf_name());
+        co_await _sys_dist_ks.local().finish_view_build(view->ks_name(), view->cf_name());
     });
 }
 
@@ -3976,16 +3983,6 @@ future<> storage_service::drain_on_shutdown() {
         _drain_finished.get_future() : do_drain();
 }
 
-future<> storage_service::init_messaging_service_part(sharded<db::system_distributed_keyspace>& sys_dist_ks, bool raft_topology_change_enabled) {
-    return container().invoke_on_all([&sys_dist_ks, raft_topology_change_enabled] (storage_service& local) {
-        return local.init_messaging_service(sys_dist_ks, raft_topology_change_enabled);
-    });
-}
-
-future<> storage_service::uninit_messaging_service_part() {
-    return container().invoke_on_all(&service::storage_service::uninit_messaging_service);
-}
-
 void storage_service::set_group0(raft_group0& group0, bool raft_topology_change_enabled) {
     _group0 = &group0;
     _raft_topology_change_enabled = raft_topology_change_enabled;
@@ -3993,7 +3990,6 @@ void storage_service::set_group0(raft_group0& group0, bool raft_topology_change_
 
 future<> storage_service::join_cluster(sharded<db::system_distributed_keyspace>& sys_dist_ks, sharded<service::storage_proxy>& proxy) {
     assert(this_shard_id() == 0);
-    assert(_qp != nullptr);
 
     set_mode(mode::STARTING);
 
@@ -4175,6 +4171,7 @@ future<> storage_service::replicate_to_all_cores(mutable_token_metadata_ptr tmpt
 }
 
 future<> storage_service::stop() {
+    co_await uninit_messaging_service();
     // make sure nobody uses the semaphore
     node_ops_signal_abort(std::nullopt);
     _listeners.clear();
@@ -5982,7 +5979,7 @@ future<> storage_service::load_tablet_metadata() {
         return make_ready_future<>();
     }
     return mutate_token_metadata([this] (mutable_token_metadata_ptr tmptr) -> future<> {
-        tmptr->set_tablets(co_await replica::read_tablet_metadata(*_qp));
+        tmptr->set_tablets(co_await replica::read_tablet_metadata(_qp));
     }, acquire_merge_lock::no);
 }
 
@@ -6000,7 +5997,7 @@ future<> storage_service::snitch_reconfigured() {
     }
 }
 
-future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(sharded<db::system_distributed_keyspace>& sys_dist_ks, raft::term_t term, uint64_t cmd_index, const raft_topology_cmd& cmd) {
+future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft::term_t term, uint64_t cmd_index, const raft_topology_cmd& cmd) {
     raft_topology_cmd_result result;
     slogger.trace("raft topology: topology cmd rpc {} is called", cmd.cmd);
 
@@ -6129,7 +6126,7 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(shar
                 case node_state::replacing: {
                     set_mode(mode::BOOTSTRAP);
                     // See issue #4001
-                    co_await mark_existing_views_as_built(sys_dist_ks);
+                    co_await mark_existing_views_as_built();
                     co_await _db.invoke_on_all([] (replica::database& db) {
                         for (auto& cf : db.get_non_system_column_families()) {
                             cf->notify_bootstrap_or_replace_start();
@@ -6738,7 +6735,7 @@ future<join_node_response_result> storage_service::join_node_response_handler(jo
     }, params.response);
 }
 
-void storage_service::init_messaging_service(sharded<db::system_distributed_keyspace>& sys_dist_ks, bool raft_topology_change_enabled) {
+void storage_service::init_messaging_service(bool raft_topology_change_enabled) {
     _messaging.local().register_node_ops_cmd([this] (const rpc::client_info& cinfo, node_ops_cmd_request req) {
         auto coordinator = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
         return container().invoke_on(0, [coordinator, req = std::move(req)] (auto& ss) mutable {
@@ -6746,8 +6743,8 @@ void storage_service::init_messaging_service(sharded<db::system_distributed_keys
         });
     });
     if (raft_topology_change_enabled) {
-        auto handle_raft_rpc = [&cont = container()] (raft::server_id dst_id, auto handler) {
-            return cont.invoke_on(0, [dst_id, handler = std::move(handler)] (auto& ss) mutable {
+        auto handle_raft_rpc = [this] (raft::server_id dst_id, auto handler) {
+            return container().invoke_on(0, [dst_id, handler = std::move(handler)] (auto& ss) mutable {
                 if (!ss._group0 || !ss._group0->joined_group0()) {
                     throw std::runtime_error("The node did not join group 0 yet");
                 }
@@ -6757,9 +6754,9 @@ void storage_service::init_messaging_service(sharded<db::system_distributed_keys
                 return handler(ss);
             });
         };
-        ser::storage_service_rpc_verbs::register_raft_topology_cmd(&_messaging.local(), [&sys_dist_ks, handle_raft_rpc] (raft::server_id dst_id, raft::term_t term, uint64_t cmd_index, raft_topology_cmd cmd) {
-            return handle_raft_rpc(dst_id, [&sys_dist_ks, cmd = std::move(cmd), term, cmd_index] (auto& ss) {
-                return ss.raft_topology_cmd_handler(sys_dist_ks, term, cmd_index, cmd);
+        ser::storage_service_rpc_verbs::register_raft_topology_cmd(&_messaging.local(), [handle_raft_rpc] (raft::server_id dst_id, raft::term_t term, uint64_t cmd_index, raft_topology_cmd cmd) {
+            return handle_raft_rpc(dst_id, [cmd = std::move(cmd), term, cmd_index] (auto& ss) {
+                return ss.raft_topology_cmd_handler(term, cmd_index, cmd);
             });
         });
         ser::storage_service_rpc_verbs::register_raft_pull_topology_snapshot(&_messaging.local(), [handle_raft_rpc] (raft::server_id dst_id, raft_topology_pull_params params) {
