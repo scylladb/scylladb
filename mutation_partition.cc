@@ -2159,7 +2159,7 @@ stop_iteration reconcilable_result_builder::consume(static_row&& sr, tombstone, 
 
 stop_iteration reconcilable_result_builder::consume(clustering_row&& cr, row_tombstone, bool is_alive) {
     if (_rt_assembler.needs_flush()) {
-        if (auto rt_opt = _rt_assembler.flush(_schema, position_in_partition::after_key(_schema, cr.key()))) {
+        if (auto rt_opt = _rt_assembler.flush(*_query_schema, position_in_partition::after_key(_schema, cr.key()))) {
             consume(std::move(*rt_opt));
         }
     }
@@ -2186,7 +2186,7 @@ stop_iteration reconcilable_result_builder::consume(range_tombstone&& rt) {
 }
 
 stop_iteration reconcilable_result_builder::consume(range_tombstone_change&& rtc) {
-    if (auto rt_opt = _rt_assembler.consume(_schema, std::move(rtc))) {
+    if (auto rt_opt = _rt_assembler.consume(*_query_schema, std::move(rtc))) {
         return consume(std::move(*rt_opt));
     }
     return stop_iteration::no;
