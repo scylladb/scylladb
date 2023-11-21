@@ -944,6 +944,10 @@ private:
             with_scheduling_group(dbcfg.statement_scheduling_group, [&func, this] {
                 return func(*this);
             }).get();
+
+            abort_sources.invoke_on_all([] (auto&& as) {
+                as.request_abort();
+            }).get();
     }
 
 public:
