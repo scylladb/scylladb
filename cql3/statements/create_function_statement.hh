@@ -23,7 +23,7 @@ namespace statements {
 
 class create_function_statement final : public create_function_statement_base {
     virtual std::unique_ptr<prepared_statement> prepare(data_dictionary::database db, cql_stats& stats) override;
-    future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>> prepare_schema_mutations(query_processor& qp, api::timestamp_type) const override;
+    future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>> prepare_schema_mutations(query_processor& qp, const service::group0_guard&) const override;
 
     virtual seastar::future<shared_ptr<db::functions::function>> create(query_processor& qp, db::functions::function* old) const override;
     sstring _language;

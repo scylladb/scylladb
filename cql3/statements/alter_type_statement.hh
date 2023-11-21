@@ -35,7 +35,7 @@ public:
     virtual const sstring& keyspace() const override;
 
 
-    future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>> prepare_schema_mutations(query_processor& qp, api::timestamp_type) const override;
+    future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>> prepare_schema_mutations(query_processor& qp, const service::group0_guard&) const override;
 
     class add_or_alter;
     class renames;

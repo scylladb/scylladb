@@ -66,14 +66,14 @@ std::unique_ptr<prepared_statement> create_function_statement::prepare(data_dict
 }
 
 future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>>
-create_function_statement::prepare_schema_mutations(query_processor& qp, api::timestamp_type ts) const {
+create_function_statement::prepare_schema_mutations(query_processor& qp, const service::group0_guard& guard) const {
     ::shared_ptr<cql_transport::event::schema_change> ret;
     std::vector<mutation> m;
 
     auto func = dynamic_pointer_cast<functions::user_function>(co_await validate_while_executing(qp));
 
     if (func) {
-        m = co_await service::prepare_new_function_announcement(qp.proxy(), func, ts);
+        m = co_await service::prepare_new_function_announcement(qp.proxy(), func, guard.write_timestamp());
         ret = create_schema_change(*func, true);
     }
 

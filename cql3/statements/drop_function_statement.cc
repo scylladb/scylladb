@@ -24,7 +24,7 @@ std::unique_ptr<prepared_statement> drop_function_statement::prepare(data_dictio
 }
 
 future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>>
-drop_function_statement::prepare_schema_mutations(query_processor& qp, api::timestamp_type ts) const {
+drop_function_statement::prepare_schema_mutations(query_processor& qp, const service::group0_guard& guard) const {
     ::shared_ptr<cql_transport::event::schema_change> ret;
     std::vector<mutation> m;
 
@@ -38,7 +38,7 @@ drop_function_statement::prepare_schema_mutations(query_processor& qp, api::time
         if (auto aggregate = functions::functions::used_by_user_aggregate(user_func)) {
             throw exceptions::invalid_request_exception(format("Cannot delete function {}, as it is used by user-defined aggregate {}", func, *aggregate));
         }
-        m = co_await service::prepare_function_drop_announcement(qp.proxy(), user_func, ts);
+        m = co_await service::prepare_function_drop_announcement(qp.proxy(), user_func, guard.write_timestamp());
         ret = create_schema_change(*func, false);
     }
 

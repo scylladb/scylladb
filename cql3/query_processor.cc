@@ -988,7 +988,7 @@ query_processor::execute_schema_statement(const statements::schema_altering_stat
 
     cql3::cql_warnings_vec warnings;
 
-    auto [ret, m, cql_warnings] = co_await stmt.prepare_schema_mutations(*this, guard->write_timestamp());
+    auto [ret, m, cql_warnings] = co_await stmt.prepare_schema_mutations(*this, *guard);
     warnings = std::move(cql_warnings);
 
     if (!m.empty()) {

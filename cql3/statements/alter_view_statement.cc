@@ -76,8 +76,8 @@ view_ptr alter_view_statement::prepare_view(data_dictionary::database db) const 
     return view_ptr(builder.build());
 }
 
-future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>> alter_view_statement::prepare_schema_mutations(query_processor& qp, api::timestamp_type ts) const {
-    auto m = co_await service::prepare_view_update_announcement(qp.proxy(), prepare_view(qp.db()), ts);
+future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>> alter_view_statement::prepare_schema_mutations(query_processor& qp, const service::group0_guard& guard) const {
+    auto m = co_await service::prepare_view_update_announcement(qp.proxy(), prepare_view(qp.db()), guard.write_timestamp());
 
     using namespace cql_transport;
     auto ret = ::make_shared<event::schema_change>(

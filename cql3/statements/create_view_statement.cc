@@ -362,12 +362,12 @@ std::pair<view_ptr, cql3::cql_warnings_vec> create_view_statement::prepare_view(
 }
 
 future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>>
-create_view_statement::prepare_schema_mutations(query_processor& qp, api::timestamp_type ts) const {
+create_view_statement::prepare_schema_mutations(query_processor& qp, const service::group0_guard& guard) const {
     ::shared_ptr<cql_transport::event::schema_change> ret;
     std::vector<mutation> m;
     auto [definition, warnings] = prepare_view(qp.db());
     try {
-        m = co_await service::prepare_new_view_announcement(qp.proxy(), std::move(definition), ts);
+        m = co_await service::prepare_new_view_announcement(qp.proxy(), std::move(definition), guard.write_timestamp());
         using namespace cql_transport;
         ret = ::make_shared<event::schema_change>(
                 event::schema_change::change_type::CREATED,

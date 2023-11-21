@@ -33,7 +33,7 @@ future<> drop_table_statement::check_access(query_processor& qp, const service::
 }
 
 future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>>
-drop_table_statement::prepare_schema_mutations(query_processor& qp, api::timestamp_type ts) const {
+drop_table_statement::prepare_schema_mutations(query_processor& qp, const service::group0_guard& guard) const {
     ::shared_ptr<cql_transport::event::schema_change> ret;
     std::vector<mutation> m;
 
@@ -45,7 +45,7 @@ drop_table_statement::prepare_schema_mutations(query_processor& qp, api::timesta
     }
 
     try {
-        m = co_await service::prepare_column_family_drop_announcement(qp.proxy(), keyspace(), column_family(), ts);
+        m = co_await service::prepare_column_family_drop_announcement(qp.proxy(), keyspace(), column_family(), guard.write_timestamp());
 
         using namespace cql_transport;
         ret = ::make_shared<event::schema_change>(

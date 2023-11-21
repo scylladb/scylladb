@@ -376,7 +376,7 @@ schema_ptr create_index_statement::build_index_schema(query_processor& qp) const
 }
 
 future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>>
-create_index_statement::prepare_schema_mutations(query_processor& qp, api::timestamp_type ts) const {
+create_index_statement::prepare_schema_mutations(query_processor& qp, const service::group0_guard& guard) const {
     using namespace cql_transport;
     auto schema = build_index_schema(qp);
 
@@ -384,7 +384,7 @@ create_index_statement::prepare_schema_mutations(query_processor& qp, api::times
     std::vector<mutation> m;
 
     if (schema) {
-        m = co_await service::prepare_column_family_update_announcement(qp.proxy(), std::move(schema), false, {}, ts);
+        m = co_await service::prepare_column_family_update_announcement(qp.proxy(), std::move(schema), false, {}, guard.write_timestamp());
 
         ret = ::make_shared<event::schema_change>(
                 event::schema_change::change_type::UPDATED,

@@ -75,12 +75,12 @@ void cql3::statements::alter_keyspace_statement::validate(query_processor& qp, c
 }
 
 future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>>
-cql3::statements::alter_keyspace_statement::prepare_schema_mutations(query_processor& qp, api::timestamp_type ts) const {
+cql3::statements::alter_keyspace_statement::prepare_schema_mutations(query_processor& qp, const service::group0_guard& guard) const {
     try {
         auto old_ksm = qp.db().find_keyspace(_name).metadata();
         const auto& tm = *qp.proxy().get_token_metadata_ptr();
 
-        auto m = service::prepare_keyspace_update_announcement(qp.db().real_database(), _attrs->as_ks_metadata_update(old_ksm, tm), ts);
+        auto m = service::prepare_keyspace_update_announcement(qp.db().real_database(), _attrs->as_ks_metadata_update(old_ksm, tm), guard.write_timestamp());
 
         using namespace cql_transport;
         auto ret = ::make_shared<event::schema_change>(

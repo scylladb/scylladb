@@ -118,13 +118,13 @@ std::optional<user_type> create_type_statement::make_type(query_processor& qp) c
     return type;
 }
 
-future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>> create_type_statement::prepare_schema_mutations(query_processor& qp, api::timestamp_type ts) const {
+future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>> create_type_statement::prepare_schema_mutations(query_processor& qp, const service::group0_guard& guard) const {
     ::shared_ptr<cql_transport::event::schema_change> ret;
     std::vector<mutation> m;
     try {
         auto t = make_type(qp);
         if (t) {
-            m = co_await service::prepare_new_type_announcement(qp.proxy(), *t, ts);
+            m = co_await service::prepare_new_type_announcement(qp.proxy(), *t, guard.write_timestamp());
             using namespace cql_transport;
 
             ret = ::make_shared<event::schema_change>(

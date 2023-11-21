@@ -24,7 +24,7 @@ std::unique_ptr<prepared_statement> drop_aggregate_statement::prepare(data_dicti
 }
 
 future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>>
-drop_aggregate_statement::prepare_schema_mutations(query_processor& qp, api::timestamp_type ts) const {
+drop_aggregate_statement::prepare_schema_mutations(query_processor& qp, const service::group0_guard& guard) const {
     ::shared_ptr<cql_transport::event::schema_change> ret;
     std::vector<mutation> m;
 
@@ -34,7 +34,7 @@ drop_aggregate_statement::prepare_schema_mutations(query_processor& qp, api::tim
         if (!user_aggr) {
             throw exceptions::invalid_request_exception(format("'{}' is not a user defined aggregate", func));
         }
-        m = co_await service::prepare_aggregate_drop_announcement(qp.proxy(), user_aggr, ts);
+        m = co_await service::prepare_aggregate_drop_announcement(qp.proxy(), user_aggr, guard.write_timestamp());
         ret = create_schema_change(*func, false);
     }
 
