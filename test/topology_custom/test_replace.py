@@ -16,7 +16,7 @@ import pytest
 @pytest.mark.asyncio
 async def test_replace_different_ip(manager: ManagerClient) -> None:
     """Replace an existing node with new node using a different IP address"""
-    servers = [await manager.server_add() for _ in range(3)]
+    servers = [await manager.server_add(config={'failure_detector_timeout_in_ms': 2000}) for _ in range(3)]
     await manager.server_stop(servers[0].server_id)
     replace_cfg = ReplaceConfig(replaced_id = servers[0].server_id, reuse_ip_addr = False, use_host_id = False)
     await manager.server_add(replace_cfg)
@@ -25,7 +25,7 @@ async def test_replace_different_ip(manager: ManagerClient) -> None:
 @pytest.mark.asyncio
 async def test_replace_different_ip_using_host_id(manager: ManagerClient) -> None:
     """Replace an existing node with new node reusing the replaced node host id"""
-    servers = [await manager.server_add() for _ in range(3)]
+    servers = [await manager.server_add(config={'failure_detector_timeout_in_ms': 2000}) for _ in range(3)]
     await manager.server_stop(servers[0].server_id)
     replace_cfg = ReplaceConfig(replaced_id = servers[0].server_id, reuse_ip_addr = False, use_host_id = True)
     await manager.server_add(replace_cfg)
@@ -34,7 +34,7 @@ async def test_replace_different_ip_using_host_id(manager: ManagerClient) -> Non
 @pytest.mark.asyncio
 async def test_replace_reuse_ip(manager: ManagerClient) -> None:
     """Replace an existing node with new node using the same IP address"""
-    servers = [await manager.server_add() for _ in range(3)]
+    servers = [await manager.server_add(config={'failure_detector_timeout_in_ms': 2000}) for _ in range(3)]
     await manager.server_stop(servers[0].server_id)
     replace_cfg = ReplaceConfig(replaced_id = servers[0].server_id, reuse_ip_addr = True, use_host_id = False)
     await manager.server_add(replace_cfg)
@@ -43,7 +43,7 @@ async def test_replace_reuse_ip(manager: ManagerClient) -> None:
 @pytest.mark.asyncio
 async def test_replace_reuse_ip_using_host_id(manager: ManagerClient) -> None:
     """Replace an existing node with new node using the same IP address and same host id"""
-    servers = [await manager.server_add() for _ in range(3)]
+    servers = [await manager.server_add(config={'failure_detector_timeout_in_ms': 2000}) for _ in range(3)]
     await manager.server_stop(servers[0].server_id)
     replace_cfg = ReplaceConfig(replaced_id = servers[0].server_id, reuse_ip_addr = True, use_host_id = True)
     await manager.server_add(replace_cfg)
