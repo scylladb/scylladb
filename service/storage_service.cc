@@ -1979,7 +1979,16 @@ class topology_coordinator {
             }
                 break;
             case topology::transition_state::tablet_draining:
-                co_await handle_tablet_migration(std::move(guard), true);
+                try {
+                    co_await handle_tablet_migration(std::move(guard), true);
+                } catch (term_changed_error&) {
+                    throw;
+                } catch (group0_concurrent_modification&) {
+                    throw;
+                } catch (...) {
+                    slogger.error("raft topology: tablets draining failed with {}. Aborting the topology operation", std::current_exception());
+                    _rollback = true;
+                }
                 break;
             case topology::transition_state::write_both_read_old: {
                 auto node = get_node_to_work_on(std::move(guard));
@@ -2346,6 +2355,7 @@ class topology_coordinator {
 
                 topology_mutation_builder builder(node.guard.write_timestamp());
                 builder.set_fence_version(_topo_sm._topology.version) // fence requests in case the drain above failed
+                       .set_transition_state(topology::transition_state::tablet_migration) // in case tablet drain failed we need to complete tablet transitions
                        .with_node(node.id)
                        .set("node_state", node_state::normal);
 
