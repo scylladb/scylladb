@@ -1506,7 +1506,7 @@ def get_warning_options(cxx):
         '-Wall',
         '-Werror',
         '-Wimplicit-fallthrough',
-        '-Wignore-qualifiers',
+        '-Wignored-qualifiers',
         '-Wno-mismatched-tags',  # clang-only
         '-Wno-c++11-narrowing',
         '-Wno-overloaded-virtual',
