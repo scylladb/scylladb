@@ -915,10 +915,19 @@ void validate_operation(schema_ptr schema, reader_permit permit, const std::vect
     }
 
     abort_source abort;
+    json_writer writer;
+    writer.StartStream();
     for (const auto& sst : sstables) {
         const auto errors = sst->validate(permit, abort, [] (sstring what) { sst_log.info("{}", what); }).get();
-        fmt::print("{}: {}\n", sst->get_filename(), errors == 0 ? "valid" : "invalid");
+        writer.Key(sst->get_filename());
+        writer.StartObject();
+        writer.Key("errors");
+        writer.Uint64(errors);
+        writer.Key("valid");
+        writer.Bool(errors == 0);
+        writer.EndObject();
     }
+    writer.EndStream();
 }
 
 void scrub_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
