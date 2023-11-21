@@ -1517,10 +1517,14 @@ void validate_checksums_operation(schema_ptr schema, reader_permit permit, const
         throw std::invalid_argument("no sstables specified on the command line");
     }
 
+    json_writer writer;
+    writer.StartStream();
     for (auto& sst : sstables) {
         const auto valid = sstables::validate_checksums(sst, permit).get();
-        sst_log.info("validated the checksums of {}: {}", sst->get_filename(), valid ? "valid" : "invalid");
+        writer.Key(sst->get_filename());
+        writer.Bool(valid);
     }
+    writer.EndStream();
 }
 
 void decompress_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
