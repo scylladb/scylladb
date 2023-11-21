@@ -536,6 +536,18 @@ The following things are validated:
 
 Any errors found will be logged with error level to ``stderr``.
 
+The validation result is dumped in JSON, using the following schema:
+
+.. code-block:: none
+    :class: hide-copy-button
+
+    $ROOT := { "$sstable_path": $RESULT }
+
+    $RESULT := {
+        "errors": Uint64,
+        "valid": Bool,
+    }
+
 scrub
 ^^^^^
 

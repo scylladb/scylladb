@@ -112,7 +112,8 @@ def validate_mixed_sstable_pair(ssta, sstb, scylla_path, sst_cache, sst_work_dir
                          stderr=subprocess.PIPE)
     out = res.stdout.decode('utf-8')
     err = res.stderr.decode('utf-8')
-    valid = out.split(":")[1].strip() == "valid"
+    sstables = json.loads(out)['sstables']
+    valid = next(iter(sstables.values()))['valid']
     if error_message:
         assert not valid
         assert error_message in err
