@@ -241,7 +241,7 @@ using uexpression = uninitialized<expression>;
                 add_recognition_error(msg);
                 break;
             }
-            if (!res.emplace(left->raw_text, right->raw_text).second) {
+            if (!res.emplace(to_lower(left->raw_text), right->raw_text).second) {
                 sstring msg = fmt::format("Multiple definition for property {}", left->raw_text);
                 add_recognition_error(msg);
                 break;
