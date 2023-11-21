@@ -3796,6 +3796,33 @@ SEASTAR_TEST_CASE(test_rf_expand) {
             {"class", network_topology},
             {"datacenter1", "2"}
         });
+
+        // datacenter name can be used as option for implicitly selected NetworkTopologyStrategy
+        e.execute_cql(format("CREATE KEYSPACE rf_expand_4 WITH replication = {{'class': '{}', 'datacenter1': 3}}", network_topology)).get();
+        assert_replication_contains("rf_expand_4", {
+            {"class", network_topology},
+            {"datacenter1", "3"}
+        });
+
+        // Don't expand replication_factor option for explicitly-configured datacenters
+        e.execute_cql("ALTER KEYSPACE rf_expand_4 WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2}").get();
+        assert_replication_contains("rf_expand_4", {
+            {"class", network_topology},
+            {"datacenter1", "3"}
+        });
+
+        e.execute_cql("CREATE KEYSPACE rf_expand_5 WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 3}").get();
+        assert_replication_contains("rf_expand_5", {
+            {"class", simple},
+            {"replication_factor", "3"}
+        });
+
+        // Respect factors specified manually with "inherited" replication_factor.
+        e.execute_cql("ALTER KEYSPACE rf_expand_5 WITH replication = {'class': 'NetworkTopologyStrategy', 'datacenter1': 2}").get();
+        assert_replication_contains("rf_expand_5", {
+            {"class", network_topology},
+            {"datacenter1", "2"}
+        });
     });
 }
 
