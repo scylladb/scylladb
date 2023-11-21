@@ -47,8 +47,9 @@ const sstring& alter_type_statement::keyspace() const
     return _name.get_keyspace();
 }
 
-future<std::vector<mutation>> alter_type_statement::prepare_announcement_mutations(service::storage_proxy& sp, api::timestamp_type ts) const {
+future<std::vector<mutation>> alter_type_statement::prepare_announcement_mutations(service::storage_proxy& sp, const service::group0_guard& guard) const {
     std::vector<mutation> m;
+    auto ts = guard.write_timestamp();
     auto&& ks = sp.data_dictionary().find_keyspace(keyspace());
     auto&& all_types = ks.metadata()->user_types().get_all_types();
     auto to_update = all_types.find(_name.get_user_type_name());
@@ -85,7 +86,8 @@ future<std::vector<mutation>> alter_type_statement::prepare_announcement_mutatio
         }
         if (modified) {
             if (schema->is_view()) {
-                auto res = co_await service::prepare_view_update_announcement(sp, view_ptr(cfm.build()), ts);
+                auto res = co_await service::prepare_view_update_announcement(
+                        sp, view_ptr(cfm.build()), ts, guard.with_raft());
                 std::move(res.begin(), res.end(), std::back_inserter(m));
             } else {
                 auto res = co_await service::prepare_column_family_update_announcement(sp, cfm.build(), false, {}, ts);
@@ -100,7 +102,7 @@ future<std::vector<mutation>> alter_type_statement::prepare_announcement_mutatio
 future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>>
 alter_type_statement::prepare_schema_mutations(query_processor& qp, const service::group0_guard& guard) const {
     try {
-        auto m = co_await prepare_announcement_mutations(qp.proxy(), guard.write_timestamp());
+        auto m = co_await prepare_announcement_mutations(qp.proxy(), guard);
 
         using namespace cql_transport;
         auto ret = ::make_shared<event::schema_change>(

@@ -895,7 +895,8 @@ future<std::vector<mutation>> prepare_new_view_announcement(storage_proxy& sp, v
     }
 }
 
-future<std::vector<mutation>> prepare_view_update_announcement(storage_proxy& sp, view_ptr view, api::timestamp_type ts) {
+future<std::vector<mutation>> prepare_view_update_announcement(
+        storage_proxy& sp, view_ptr view, api::timestamp_type ts, bool with_raft) {
 #if 0
     view.metadata.validate();
 #endif
@@ -910,7 +911,13 @@ future<std::vector<mutation>> prepare_view_update_announcement(storage_proxy& sp
         oldCfm.validateCompatility(cfm);
 #endif
         mlogger.info("Update view '{}.{}' From {} To {}", view->ks_name(), view->cf_name(), *old_view, *view);
-        auto mutations = db::schema_tables::make_update_view_mutations(keyspace, view_ptr(old_view), std::move(view), ts, true);
+        // When doing schema changes with Raft, base mutations don't need to be included, they are guaranteed
+        // to have been applied on any node which is applying the view mutations by Raft's ordering of commands.
+        //
+        // Not including them is desirable to prevent issue #15530. In short, these mutations may be sent
+        // together with, and conflict with, mutations that modify the base table in the same schema change command.
+        bool include_base = !with_raft;
+        auto mutations = db::schema_tables::make_update_view_mutations(keyspace, view_ptr(old_view), std::move(view), ts, include_base);
         co_return co_await include_keyspace(sp, *keyspace, std::move(mutations));
     } catch (const std::out_of_range& e) {
         auto&& ex = std::make_exception_ptr(exceptions::configuration_exception(format("Cannot update non existing materialized view '{}' in keyspace '{}'.",
