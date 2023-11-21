@@ -63,6 +63,7 @@ class custom_compaction_task_executor;
 class regular_compaction_task_executor;
 class offstrategy_compaction_task_executor;
 class rewrite_sstables_compaction_task_executor;
+class split_compaction_task_executor;
 class cleanup_sstables_compaction_task_executor;
 class validate_sstables_compaction_task_executor;
 
@@ -345,6 +346,11 @@ public:
     // Submit a table for major compaction.
     future<> perform_major_compaction(compaction::table_state& t, std::optional<tasks::task_info> info = std::nullopt);
 
+    // Splits a compaction group by segregating all its sstable according to the classifier[1].
+    // [1]: See sstables::compaction_type_options::splitting::classifier.
+    // Returns when all sstables in the main sstable set are split. The only exception is shutdown
+    // or user aborted splitting using stop API.
+    future<compaction_stats_opt> perform_split_compaction(compaction::table_state& t, sstables::compaction_type_options::split opt, std::optional<tasks::task_info> info = std::nullopt);
 
     // Run a custom job for a given table, defined by a function
     // it completes when future returned by job is ready or returns immediately
@@ -450,6 +456,7 @@ public:
     friend class compaction::compaction_task_executor;
     friend class compaction::sstables_task_executor;
     friend class compaction::major_compaction_task_executor;
+    friend class compaction::split_compaction_task_executor;
     friend class compaction::custom_compaction_task_executor;
     friend class compaction::regular_compaction_task_executor;
     friend class compaction::offstrategy_compaction_task_executor;
