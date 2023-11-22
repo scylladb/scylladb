@@ -120,6 +120,10 @@ inet_address_vector_replica_set vnode_effective_replication_map::get_endpoints_f
     return inet_address_vector_replica_set(endpoints->begin(), endpoints->end());
 }
 
+std::optional<tablet_routing_info> vnode_effective_replication_map::check_locality(const token& token) const {
+    return {};
+}
+
 bool vnode_effective_replication_map::has_pending_ranges(inet_address endpoint) const {
     for (const auto& item : _pending_endpoints) {
         const auto& nodes = item.second;

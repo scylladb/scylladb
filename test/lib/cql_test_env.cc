@@ -290,8 +290,10 @@ public:
         }
         auto& qo = cql3::query_options::DEFAULT;
         auto timeout = db::timeout_clock::now() + qs->get_client_state().get_timeout_config().write_timeout;
+        cql3::statements::modification_statement::json_cache_opt json_cache = modif_stmt->maybe_prepare_json_cache(qo);
+        std::vector<dht::partition_range> keys = modif_stmt->build_partition_keys(qo, json_cache);
 
-        return modif_stmt->get_mutations(local_qp(), qo, timeout, false, qo.get_timestamp(*qs), *qs)
+        return modif_stmt->get_mutations(local_qp(), qo, timeout, false, qo.get_timestamp(*qs), *qs, json_cache, keys)
             .finally([qs, modif_stmt = std::move(modif_stmt)] {});
     }
 

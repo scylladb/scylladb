@@ -9,16 +9,20 @@
 
 #pragma once
 
+#include <map>
 #include <vector>
 #include <seastar/core/sstring.hh>
 
 #include "seastarx.hh"
+#include "locator/tablets.hh"
+#include "replica/tablets.hh"
 
 namespace cql_transport {
 namespace messages {
 
 class result_message {
     std::vector<sstring> _warnings;
+    std::optional<std::unordered_map<sstring, bytes>> _custom_payload;
 public:
     class visitor;
     class visitor_base;
@@ -33,6 +37,31 @@ public:
 
     const std::vector<sstring>& warnings() const {
         return _warnings;
+    }
+
+    void add_custom_payload(sstring key, bytes value) {
+        if (!_custom_payload) {
+            _custom_payload = std::optional<std::unordered_map<sstring, bytes>>{std::unordered_map<sstring, bytes>()};
+        }
+        _custom_payload.value()[key] = value;
+    }
+
+    void add_tablet_info(locator::tablet_replica_set tablet_replicas, std::pair<dht::token, dht::token> token_range) {
+        if (!tablet_replicas.empty()) {
+            auto replicas_values = make_list_value(replica::get_replica_set_type(), replica::replicas_to_data_value(tablet_replicas));
+            this->add_custom_payload("tablet_replicas", replicas_values.serialize_nonnull());
+            auto v1 = data_value(dht::token::to_int64(token_range.first));
+            auto v2 = data_value(dht::token::to_int64(token_range.second));
+            bytes token_bytes(bytes::initialized_later(), v1.serialized_size() + v2.serialized_size());
+            auto i = token_bytes.begin();
+            v1.serialize(i);
+            v2.serialize(i);
+            this->add_custom_payload("token_range", token_bytes);
+        }
+    }
+
+    const std::optional<std::unordered_map<sstring, bytes>>& custom_payload() const {
+        return _custom_payload;
     }
 
     virtual std::optional<unsigned> move_to_shard() const {

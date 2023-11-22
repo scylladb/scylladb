@@ -1539,6 +1539,10 @@ make_result(int16_t stream, messages::result_message& msg, const tracing::trace_
         response->set_frame_flag(cql_frame_flags::warning);
         response->write_string_list(msg.warnings());
     }
+    if (msg.custom_payload()) {
+        response->set_frame_flag(cql_frame_flags::custom_payload);
+        response->write_string_bytes_map(msg.custom_payload().value());
+    }
     cql_server::fmt_visitor fmt{version, *response, skip_metadata};
     msg.accept(fmt);
     return response;
@@ -1785,6 +1789,15 @@ void cql_server::response::write_string_multimap(std::multimap<sstring, sstring>
         }
         write_string(key);
         write_string_list(values);
+    }
+}
+
+void cql_server::response::write_string_bytes_map(const std::unordered_map<sstring, bytes>& map)
+{
+    write_short(cast_if_fits<uint16_t>(map.size()));
+    for (auto&& s : map) {
+        write_string(s.first);
+        write_bytes(s.second);
     }
 }
 

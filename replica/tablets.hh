@@ -8,6 +8,9 @@
 
 #pragma once
 
+#include "types/types.hh"
+#include "types/tuple.hh"
+#include "types/list.hh"
 #include "timestamp.hh"
 #include "locator/tablets.hh"
 #include "schema/schema_fwd.hh"
@@ -28,7 +31,11 @@ class query_processor;
 
 namespace replica {
 
+data_type get_replica_set_type();
+
 schema_ptr make_tablets_schema();
+
+std::vector<data_value> replicas_to_data_value(const locator::tablet_replica_set& replicas);
 
 /// Converts information in tablet_map to mutations of system.tablets.
 ///

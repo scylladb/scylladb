@@ -42,7 +42,7 @@ namespace raw { class modification_statement; }
 class modification_statement : public cql_statement_opt_metadata {
 public:
     const statement_type type;
-
+    bool _may_use_token_aware_routing;
 private:
     const uint32_t _bound_terms;
     // If we have operation on list entries, such as adding or
@@ -236,7 +236,7 @@ public:
 
 private:
     future<exceptions::coordinator_result<>>
-    execute_without_condition(query_processor& qp, service::query_state& qs, const query_options& options) const;
+    execute_without_condition(query_processor& qp, service::query_state& qs, const query_options& options, json_cache_opt& json_cache, std::vector<dht::partition_range> keys) const;
 
     future<::shared_ptr<cql_transport::messages::result_message>>
     execute_with_condition(query_processor& qp, service::query_state& qs, const query_options& options) const;
@@ -252,7 +252,7 @@ public:
      * @return vector of the mutations
      * @throws invalid_request_exception on invalid requests
      */
-    future<std::vector<mutation>> get_mutations(query_processor& qp, const query_options& options, db::timeout_clock::time_point timeout, bool local, int64_t now, service::query_state& qs) const;
+    future<std::vector<mutation>> get_mutations(query_processor& qp, const query_options& options, db::timeout_clock::time_point timeout, bool local, int64_t now, service::query_state& qs, json_cache_opt& json_cache, std::vector<dht::partition_range> keys) const;
 
     virtual json_cache_opt maybe_prepare_json_cache(const query_options& options) const;
 

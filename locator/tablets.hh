@@ -114,6 +114,16 @@ tablet_replica_set replace_replica(const tablet_replica_set& rs, tablet_replica 
     return result;
 }
 
+inline
+bool contains(const tablet_replica_set& rs, host_id host) {
+    for (auto replica : rs) {
+        if (replica.host == host) {
+            return true;
+        }
+    }
+    return false;
+}
+
 /// Stores information about a single tablet.
 struct tablet_info {
     tablet_replica_set replicas;
@@ -337,6 +347,11 @@ public:
 public:
     bool operator==(const tablet_metadata&) const = default;
     friend std::ostream& operator<<(std::ostream&, const tablet_metadata&);
+};
+
+struct tablet_routing_info {
+    tablet_replica_set tablet_replicas;
+    std::pair<dht::token, dht::token> token_range;
 };
 
 }
