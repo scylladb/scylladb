@@ -67,3 +67,11 @@ operator<<(std::ostream& os, const assignment_testable& at) {
 }
 
 }
+
+template <>
+struct fmt::formatter<cql3::assignment_testable> {
+    constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
+    auto format(const cql3::assignment_testable& at, fmt::format_context& ctx) const {
+        return fmt::format_to(ctx.out(), "{}", at.assignment_testable_source_context());
+    }
+};
