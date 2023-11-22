@@ -248,6 +248,11 @@ void tablet_map::set_tablet_transition_info(tablet_id id, tablet_transition_info
     _transitions.insert_or_assign(id, std::move(info));
 }
 
+void tablet_map::clear_tablet_transition_info(tablet_id id) {
+    check_tablet_id(id);
+    _transitions.erase(id);
+}
+
 future<> tablet_map::for_each_tablet(seastar::noncopyable_function<void(tablet_id, const tablet_info&)> func) const {
     std::optional<tablet_id> tid = first_tablet();
     for (const tablet_info& ti : tablets()) {
