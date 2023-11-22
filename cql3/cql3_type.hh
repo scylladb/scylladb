@@ -66,6 +66,9 @@ public:
         static shared_ptr<raw> tuple(std::vector<shared_ptr<raw>> ts);
         static shared_ptr<raw> frozen(shared_ptr<raw> t);
         friend std::ostream& operator<<(std::ostream& os, const raw& r);
+        friend sstring format_as(const raw& r) {
+            return r.to_string();
+        }
         friend class auth::resource;
     };
 
