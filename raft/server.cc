@@ -28,6 +28,8 @@
 #include "log.hh"
 #include "raft.hh"
 
+#include "utils/exceptions.hh"
+
 using namespace std::chrono_literals;
 
 namespace raft {
@@ -1149,7 +1151,11 @@ void server_impl::send_snapshot(server_id dst, install_snapshot&& snp) {
             _snapshot_transfers.erase(dst);
             auto reply = raft::snapshot_reply{.current_term = _fsm->get_current_term(), .success = false};
             if (f.failed()) {
-                logger.error("[{}] Transferring snapshot to {} failed with: {}", _id, dst, f.get_exception());
+                auto eptr = f.get_exception();
+                const log_level lvl = try_catch<raft::destination_not_alive_error>(eptr) != nullptr
+                        ? log_level::debug
+                        : log_level::error;
+                logger.log(lvl, "[{}] Transferring snapshot to {} failed with: {}", _id, dst, eptr);
             } else {
                 logger.trace("[{}] Transferred snapshot to {}", _id, dst);
                 reply = f.get();

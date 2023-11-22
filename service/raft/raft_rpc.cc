@@ -68,8 +68,7 @@ raft_rpc::two_way_rpc(sloc loc, raft::server_id id,
     using Fut = decltype(verb(&_messaging, netw::msg_addr(gms::inet_address()), db::no_timeout, _group_id, _my_id, id, std::forward<Args>(args)...));
     using Ret = typename Fut::value_type;
     if (!_failure_detector->is_alive(id)) {
-        const auto msg = format("Failed to send {} to {}: node is not seen as alive by the failure detector", loc.function_name(), id);
-        return make_exception_future<Ret>(raft::transport_error(msg));
+        return make_exception_future<Ret>(raft::destination_not_alive_error(id, loc));
     }
     auto ip_addr = _address_map.find(id);
     if (!ip_addr) {

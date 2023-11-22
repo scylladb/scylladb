@@ -300,6 +300,15 @@ struct transport_error: public error {
     using error::error;
 };
 
+// Can be thrown by two-way RPCs when the destination is not seen as alive by the failure detector.
+// If thrown, the request was not sent at all.
+struct destination_not_alive_error: public transport_error {
+    server_id destination;
+
+    destination_not_alive_error(server_id destination, seastar::compat::source_location l = seastar::compat::source_location::current())
+            : transport_error(fmt::format("Failed to send {} to {}: node is not seen as alive by the failure detector", l.function_name(), destination)) {}
+};
+
 struct command_is_too_big_error: public error {
     size_t command_size;
     size_t limit;
