@@ -3444,9 +3444,15 @@ schema_mutations make_schema_mutations(schema_ptr s, api::timestamp_type timesta
 std::vector<mutation> make_create_view_mutations(lw_shared_ptr<keyspace_metadata> keyspace, view_ptr view, api::timestamp_type timestamp)
 {
     std::vector<mutation> mutations;
-    // And also the serialized base table.
+    // Include the serialized base table mutations in case the target node is missing them.
     auto base = keyspace->cf_meta_data().at(view->view_info()->base_name());
-    add_table_or_view_to_schema_mutation(base, timestamp, true, mutations);
+    // Use a smaller timestamp for the included base mutations.
+    // If the constructed schema change command also contains an update for the base table,
+    // these mutations would conflict with the base mutations we're returning here; using a smaller
+    // timestamp makes sure that the update mutations take precedence. Although there is no known
+    // scenario involving creation of new view where this might happen, there is one with updating
+    // a view (see `make_update_view_mutations`); we use similarly modified timestamp here for consistency.
+    add_table_or_view_to_schema_mutation(base, timestamp - 1, true, mutations);
     add_table_or_view_to_schema_mutation(view, timestamp, true, mutations);
     make_table_deleting_mutations(view->ks_name(), view->cf_name(), view->is_view(), timestamp)
         .copy_to(mutations);
@@ -3468,7 +3474,13 @@ std::vector<mutation> make_update_view_mutations(lw_shared_ptr<keyspace_metadata
     if (include_base) {
         // Include the serialized base table mutations in case the target node is missing them.
         auto base = keyspace->cf_meta_data().at(new_view->view_info()->base_name());
-        add_table_or_view_to_schema_mutation(base, timestamp, true, mutations);
+        // Use a smaller timestamp for the included base mutations.
+        // If the constructed schema change command also contains an update for the base table,
+        // these mutations would conflict with the base mutations we're returning here; using a smaller
+        // timestamp makes sure that the update mutations take precedence. Such conflicting mutations
+        // may appear, for example, when we modify a user defined type that is referenced by both base table
+        // and its attached view. See #15530.
+        add_table_or_view_to_schema_mutation(base, timestamp - 1, true, mutations);
     }
     add_table_or_view_to_schema_mutation(new_view, timestamp, false, mutations);
     make_update_columns_mutations(old_view, new_view, timestamp, false, mutations);
