@@ -213,6 +213,10 @@ future<tablet_metadata> read_tablet_metadata(cql3::query_processor& qp) {
             for (auto&& r : tablet_replicas) {
                 pending.erase(r);
             }
+            if (pending.size() == 0) {
+                throw std::runtime_error(format("Stage set but no pending replica for table {} tablet {}",
+                                                table, current->tid));
+            }
             if (pending.size() > 1) {
                 throw std::runtime_error(format("Too many pending replicas for table {} tablet {}: {}",
                                                 table, current->tid, pending));
