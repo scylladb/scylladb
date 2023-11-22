@@ -220,6 +220,12 @@ class ScyllaRESTAPIClient():
             "token": str(token)
         })
 
+    async def enable_tablet_balancing(self, node_ip: str) -> None:
+        await self.client.post(f"/storage_service/tablets/balancing", host=node_ip, params={"enabled": "true"})
+
+    async def disable_tablet_balancing(self, node_ip: str) -> None:
+        await self.client.post(f"/storage_service/tablets/balancing", host=node_ip, params={"enabled": "false"})
+
     async def disable_injection(self, node_ip: str, injection: str) -> None:
         await self.client.delete(f"/v2/error_injection/injection/{injection}", host=node_ip)
 

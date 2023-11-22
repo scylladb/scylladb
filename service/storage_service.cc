@@ -534,6 +534,7 @@ future<> storage_service::topology_state_load() {
 
         if (_db.local().get_config().check_experimental(db::experimental_features_t::feature::TABLETS)) {
             tmptr->set_tablets(co_await replica::read_tablet_metadata(_qp));
+            tmptr->tablets().set_balancing_enabled(_topology_state_machine._topology.tablet_balancing_enabled);
         }
     }));
 
@@ -660,6 +661,7 @@ public:
     topology_mutation_builder& set_version(topology::version_t);
     topology_mutation_builder& set_fence_version(topology::version_t);
     topology_mutation_builder& set_session(session_id);
+    topology_mutation_builder& set_tablet_balancing_enabled(bool);
     topology_mutation_builder& set_current_cdc_generation_id(const cdc::generation_id_v2&);
     topology_mutation_builder& set_new_cdc_generation_data_uuid(const utils::UUID& value);
     topology_mutation_builder& set_unpublished_cdc_generations(const std::vector<cdc::generation_id_v2>& values);
@@ -823,6 +825,11 @@ topology_mutation_builder& topology_mutation_builder::set_fence_version(topology
 
 topology_mutation_builder& topology_mutation_builder::set_session(session_id value) {
     _m.set_static_cell("session", value.uuid(), _ts);
+    return *this;
+}
+
+topology_mutation_builder& topology_mutation_builder::set_tablet_balancing_enabled(bool value) {
+    _m.set_static_cell("tablet_balancing_enabled", value, _ts);
     return *this;
 }
 
@@ -6148,6 +6155,7 @@ future<> storage_service::load_tablet_metadata() {
     }
     return mutate_token_metadata([this] (mutable_token_metadata_ptr tmptr) -> future<> {
         tmptr->set_tablets(co_await replica::read_tablet_metadata(_qp));
+        tmptr->tablets().set_balancing_enabled(_topology_state_machine._topology.tablet_balancing_enabled);
     }, acquire_merge_lock::no);
 }
 
@@ -6719,6 +6727,44 @@ future<> storage_service::move_tablet(table_id table, dht::token token, locator:
         auto& tmap = get_token_metadata().tablets().get_tablet_map(table);
         return !tmap.get_tablet_transition_info(tmap.get_tablet_id(token));
     });
+}
+
+future<> storage_service::set_tablet_balancing_enabled(bool enabled) {
+    auto holder = _async_gate.hold();
+
+    if (this_shard_id() != 0) {
+        // group0 is only set on shard 0.
+        co_return co_await container().invoke_on(0, [&] (auto& ss) {
+            return ss.set_tablet_balancing_enabled(enabled);
+        });
+    }
+
+    while (true) {
+        group0_guard guard = co_await _group0->client().start_operation(&_abort_source);
+
+        while (_topology_state_machine._topology.is_busy()) {
+            slogger.debug("set_tablet_balancing_enabled(): topology is busy");
+            release_guard(std::move(guard));
+            co_await _topology_state_machine.event.wait();
+            guard = co_await _group0->client().start_operation(&_abort_source);
+        }
+
+        std::vector<canonical_mutation> updates;
+        updates.push_back(canonical_mutation(topology_mutation_builder(guard.write_timestamp())
+            .set_tablet_balancing_enabled(enabled)
+            .build()));
+
+        sstring reason = format("Setting tablet balancing to {}", enabled);
+        slogger.info("raft topology: {}", reason);
+        topology_change change{std::move(updates)};
+        group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard, reason);
+        try {
+            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard));
+            break;
+        } catch (group0_concurrent_modification&) {
+            slogger.debug("set_tablet_balancing_enabled(): concurrent modification");
+        }
+    }
 }
 
 future<join_node_request_result> storage_service::join_node_request_handler(join_node_request_params params) {

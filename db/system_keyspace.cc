@@ -235,6 +235,7 @@ schema_ptr system_keyspace::topology() {
             .with_column("global_topology_request", utf8_type, column_kind::static_column)
             .with_column("enabled_features", set_type_impl::get_instance(utf8_type, true), column_kind::static_column)
             .with_column("session", uuid_type, column_kind::static_column)
+            .with_column("tablet_balancing_enabled", boolean_type, column_kind::static_column)
             .set_comment("Current state of topology change machine")
             .with_version(generate_schema_version(id))
             .build();
@@ -2654,6 +2655,12 @@ future<service::topology> system_keyspace::load_topology_state() {
 
         if (some_row.has("session")) {
             ret.session = service::session_id(some_row.get_as<utils::UUID>("session"));
+        }
+
+        if (some_row.has("tablet_balancing_enabled")) {
+            ret.tablet_balancing_enabled = some_row.get_as<bool>("tablet_balancing_enabled");
+        } else {
+            ret.tablet_balancing_enabled = true;
         }
     }
 

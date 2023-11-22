@@ -775,6 +775,7 @@ public:
 
 public:
     future<> move_tablet(table_id, dht::token, locator::tablet_replica src, locator::tablet_replica dst);
+    future<> set_tablet_balancing_enabled(bool);
 
 private:
     // load topology state machine snapshot into memory

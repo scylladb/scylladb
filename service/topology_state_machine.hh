@@ -150,6 +150,9 @@ struct topology {
     // Session used to create topology_guard for operations like streaming.
     session_id session;
 
+    // When false, tablet load balancer will not try to rebalance tablets.
+    bool tablet_balancing_enabled = true;
+
     // Find only nodes in non 'left' state
     const std::pair<const raft::server_id, replica_state>* find(raft::server_id id) const;
     // Return true if node exists in any state including 'left' one

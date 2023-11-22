@@ -2538,6 +2538,30 @@
          ]
       },
       {
+         "path":"/storage_service/tablets/balancing",
+         "operations":[
+            {
+               "nickname":"tablet_balancing_enable",
+               "method":"POST",
+               "summary":"Moves a tablet replica",
+               "type":"void",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"enabled",
+                     "description":"When set to false, tablet load balancing is disabled",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"boolean",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
          "path":"/storage_service/metrics/total_hints",
          "operations":[
             {

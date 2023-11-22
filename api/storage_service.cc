@@ -74,6 +74,16 @@ locator::host_id validate_host_id(const sstring& param) {
     return hoep.id;
 }
 
+bool validate_bool(const sstring& param) {
+    if (param == "true") {
+        return true;
+    } else if (param == "false") {
+        return false;
+    } else {
+        throw std::runtime_error("Parameter must be either 'true' or 'false'");
+    }
+}
+
 static
 int64_t validate_int(const sstring& param) {
     return std::atoll(param.c_str());
@@ -1381,6 +1391,12 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         co_return json_void();
     });
 
+    ss::tablet_balancing_enable.set(r, [&ss] (std::unique_ptr<http::request> req) -> future<json_return_type> {
+        auto enabled = validate_bool(req->get_query_param("enabled"));
+        co_await ss.local().set_tablet_balancing_enabled(enabled);
+        co_return json_void();
+    });
+
     sp::get_schema_versions.set(r, [&ss](std::unique_ptr<http::request> req)  {
         return ss.local().describe_schema_versions().then([] (auto result) {
             std::vector<sp::mapper_list> res;
@@ -1479,6 +1495,7 @@ void unset_storage_service(http_context& ctx, routes& r) {
     ss::sstable_info.unset(r);
     ss::reload_raft_topology_state.unset(r);
     ss::move_tablet.unset(r);
+    ss::tablet_balancing_enable.unset(r);
     sp::get_schema_versions.unset(r);
 }
 
