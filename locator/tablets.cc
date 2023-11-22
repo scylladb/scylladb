@@ -349,6 +349,11 @@ void tablet_map::set_resize_decision(locator::resize_decision decision) {
     _resize_decision = std::move(decision);
 }
 
+void tablet_map::clear_tablet_transition_info(tablet_id id) {
+    check_tablet_id(id);
+    _transitions.erase(id);
+}
+
 future<> tablet_map::for_each_tablet(seastar::noncopyable_function<future<>(tablet_id, const tablet_info&)> func) const {
     std::optional<tablet_id> tid = first_tablet();
     for (const tablet_info& ti : tablets()) {

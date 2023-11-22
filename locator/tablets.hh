@@ -432,6 +432,7 @@ public:
     void set_tablet(tablet_id, tablet_info);
     void set_tablet_transition_info(tablet_id, tablet_transition_info);
     void set_resize_decision(locator::resize_decision);
+    void clear_tablet_transition_info(tablet_id);
     void clear_transitions();
 
     // Destroys gently.
