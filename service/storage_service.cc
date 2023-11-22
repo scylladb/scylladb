@@ -1144,7 +1144,7 @@ future<> storage_service::sstable_cleanup_fiber(raft::server& server, sharded<se
 using raft_topology_cmd_handler_type = noncopyable_function<future<raft_topology_cmd_result>(
         raft::term_t, uint64_t, const raft_topology_cmd&)>;
 
-class topology_coordinator {
+class topology_coordinator : public endpoint_lifecycle_subscriber {
     sharded<db::system_distributed_keyspace>& _sys_dist_ks;
     gms::gossiper& _gossiper;
     netw::messaging_service& _messaging;
@@ -2883,6 +2883,11 @@ public:
     {}
 
     future<> run();
+
+    virtual void on_join_cluster(const gms::inet_address& endpoint) {}
+    virtual void on_leave_cluster(const gms::inet_address& endpoint) {};
+    virtual void on_up(const gms::inet_address& endpoint) {};
+    virtual void on_down(const gms::inet_address& endpoint) { _topo_sm.event.broadcast(); };
 };
 
 future<bool> topology_coordinator::maybe_start_tablet_migration(group0_guard guard) {
@@ -3088,8 +3093,9 @@ future<> storage_service::raft_state_monitor_fiber(raft::server& raft, sharded<d
                     _tablet_allocator.local(),
                     get_ring_delay()),
                     std::ref(raft),
-                [] (std::unique_ptr<topology_coordinator>& coordinator, raft::server& raft) -> future<> {
+                [this] (std::unique_ptr<topology_coordinator>& coordinator, raft::server& raft) -> future<> {
                     std::exception_ptr ex;
+                    _lifecycle_notifier.register_subscriber(&*coordinator);
                     try {
                         co_await coordinator->run();
                     } catch (...) {
@@ -3107,6 +3113,7 @@ future<> storage_service::raft_state_monitor_fiber(raft::server& raft, sharded<d
                         }
                         on_fatal_internal_error(slogger, format("raft topology: unhandled exception in topology_coordinator::run: {}", ex));
                     }
+                    co_await _lifecycle_notifier.unregister_subscriber(&*coordinator);
                 });
         }
     } catch (...) {
