@@ -60,7 +60,7 @@ fi
 
 # Default scylla product/version tags
 PRODUCT=scylla
-VERSION=5.1.18
+VERSION=5.1.19
 
 if test -f version
 then
