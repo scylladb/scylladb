@@ -17,6 +17,7 @@
 #include <boost/range/adaptor/transformed.hpp>
 #include "utils/serialization.hh"
 #include <seastar/util/backtrace.hh>
+#include "exceptions/exceptions.hh"
 
 enum class allow_prefixes { no, yes };
 
@@ -117,7 +118,7 @@ public:
     managed_bytes serialize_optionals(std::span<const bytes_opt> values) const {
         return serialize_value(boost::make_iterator_range(values.begin(), values.end()) | boost::adaptors::transformed([] (const bytes_opt& bo) -> bytes_view {
             if (!bo) {
-                throw std::logic_error("attempted to create key component from empty optional");
+                throw exceptions::invalid_request_exception("Invalid null value in condition for column {}");
             }
             return *bo;
         }));
@@ -125,7 +126,7 @@ public:
     managed_bytes serialize_optionals(std::span<const managed_bytes_opt> values) const {
         return serialize_value(boost::make_iterator_range(values.begin(), values.end()) | boost::adaptors::transformed([] (const managed_bytes_opt& bo) -> managed_bytes_view {
             if (!bo) {
-                throw std::logic_error("attempted to create key component from empty optional");
+                throw exceptions::invalid_request_exception("Invalid null value in condition for column {}");
             }
             return managed_bytes_view(*bo);
         }));
