@@ -772,6 +772,10 @@ public:
     // Precondition: the topology mutations were already written to disk; the function only transitions the in-memory state machine.
     // Public for `reload_raft_topology_state` REST API.
     future<> topology_transition();
+
+public:
+    future<> move_tablet(table_id, dht::token, locator::tablet_replica src, locator::tablet_replica dst);
+
 private:
     // load topology state machine snapshot into memory
     // raft_group0_client::_read_apply_mutex must be held

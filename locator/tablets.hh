@@ -125,6 +125,11 @@ bool contains(const tablet_replica_set& rs, host_id host) {
     return false;
 }
 
+inline
+bool contains(const tablet_replica_set& rs, const tablet_replica& r) {
+    return std::ranges::any_of(rs, [&] (auto&& r_) { return r_ == r; });
+}
+
 /// Stores information about a single tablet.
 struct tablet_info {
     tablet_replica_set replicas;

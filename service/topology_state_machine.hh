@@ -159,6 +159,9 @@ struct topology {
     // Are there any non-left nodes?
     bool is_empty() const;
 
+    // Returns false iff we can safely start a new topology change.
+    bool is_busy() const;
+
     // Calculates a set of features that are supported by all normal nodes but not yet enabled.
     std::set<sstring> calculate_not_yet_enabled_features() const;
 };

@@ -6644,6 +6644,83 @@ future<> storage_service::cleanup_tablet(locator::global_tablet_id tablet) {
     });
 }
 
+future<> storage_service::move_tablet(table_id table, dht::token token, locator::tablet_replica src, locator::tablet_replica dst) {
+    auto holder = _async_gate.hold();
+
+    if (this_shard_id() != 0) {
+        // group0 is only set on shard 0.
+        co_return co_await container().invoke_on(0, [&] (auto& ss) {
+            return ss.move_tablet(table, token, src, dst);
+        });
+    }
+
+    while (true) {
+        auto guard = co_await _group0->client().start_operation(&_abort_source);
+
+        while (_topology_state_machine._topology.is_busy()) {
+            slogger.debug("move_tablet(): topology state machine is busy");
+            release_guard(std::move(guard));
+            co_await _topology_state_machine.event.wait();
+            guard = co_await _group0->client().start_operation(&_abort_source);
+        }
+
+        std::vector<canonical_mutation> updates;
+        auto ks_name = _db.local().find_schema(table)->ks_name();
+        auto& tmap = get_token_metadata().tablets().get_tablet_map(table);
+        auto tid = tmap.get_tablet_id(token);
+        auto& tinfo = tmap.get_tablet_info(tid);
+        auto last_token = tmap.get_last_token(tid);
+        auto gid = locator::global_tablet_id{table, tid};
+
+        // FIXME: Validate replication strategy constraints.
+
+        if (!locator::contains(tinfo.replicas, src)) {
+            throw std::runtime_error(format("Tablet {} has no replica on {}", gid, src));
+        }
+        auto* node = get_token_metadata().get_topology().find_node(dst.host);
+        if (!node) {
+            throw std::runtime_error(format("Unknown host: {}", dst.host));
+        }
+        if (dst.shard >= node->get_shard_count()) {
+            throw std::runtime_error(format("Host {} does not have shard {}", dst.shard));
+        }
+        if (src.host == dst.host) {
+            throw std::runtime_error("Migrating within the same node is not supported");
+        }
+
+        if (src == dst) {
+            co_return;
+        }
+
+        updates.push_back(canonical_mutation(replica::tablet_mutation_builder(guard.write_timestamp(), ks_name, table)
+            .set_new_replicas(last_token, locator::replace_replica(tinfo.replicas, src, dst))
+            .set_stage(last_token, locator::tablet_transition_stage::allow_write_both_read_old)
+            .build()));
+        updates.push_back(canonical_mutation(topology_mutation_builder(guard.write_timestamp())
+            .set_transition_state(topology::transition_state::tablet_migration)
+            .set_version(_topology_state_machine._topology.version + 1)
+            .build()));
+
+        sstring reason = format("Moving tablet {} from {} to {}", gid, src, dst);
+        slogger.info("raft topology: {}", reason);
+        slogger.trace("raft topology: do update {} reason {}", updates, reason);
+        topology_change change{std::move(updates)};
+        group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard, reason);
+        try {
+            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard));
+            break;
+        } catch (group0_concurrent_modification&) {
+            slogger.debug("move_tablet(): concurrent modification, retrying");
+        }
+    }
+
+    // Wait for migration to finish.
+    co_await _topology_state_machine.event.wait([&] {
+        auto& tmap = get_token_metadata().tablets().get_tablet_map(table);
+        return !tmap.get_tablet_transition_info(tmap.get_tablet_id(token));
+    });
+}
+
 future<join_node_request_result> storage_service::join_node_request_handler(join_node_request_params params) {
     join_node_request_result result;
     slogger.info("raft topology: received request to join from host_id: {}", params.host_id);

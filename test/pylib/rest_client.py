@@ -209,6 +209,17 @@ class ScyllaRESTAPIClient():
         await self.client.post(f"/v2/error_injection/injection/{injection}",
                                host=node_ip, params={"one_shot": str(one_shot)}, json={ key: str(value) for key, value in parameters.items() })
 
+    async def move_tablet(self, node_ip: str, ks: str, table: str, src_host: HostID, src_shard: int, dst_host: HostID, dst_shard: int, token: int) -> None:
+        await self.client.post(f"/storage_service/tablets/move", host=node_ip, params={
+            "ks": ks,
+            "table": table,
+            "src_host": str(src_host),
+            "src_shard": str(src_shard),
+            "dst_host": str(dst_host),
+            "dst_shard": str(dst_shard),
+            "token": str(token)
+        })
+
     async def disable_injection(self, node_ip: str, injection: str) -> None:
         await self.client.delete(f"/v2/error_injection/injection/{injection}", host=node_ip)
 
