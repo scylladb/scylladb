@@ -1794,7 +1794,7 @@ future<> gossiper::apply_new_states(inet_address addr, endpoint_state local_stat
             auto remote_gen = remote_state.get_heart_beat_state().get_generation();
             auto local_gen = local_state.get_heart_beat_state().get_generation();
             if(remote_gen != local_gen) {
-                auto err = format("Remote generation {:d} != local generation {:d}", remote_gen, local_gen);
+                auto err = format("Remote generation {} != local generation {}", remote_gen, local_gen);
                 logger.warn("{}", err);
                 throw std::runtime_error(err);
             }
