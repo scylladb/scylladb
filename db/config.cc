@@ -1166,6 +1166,14 @@ void db::config::maybe_in_workdir(named_value<string_list>& tos, const char* sub
 
 const sstring db::config::default_tls_priority("SECURE128:-VERS-TLS1.0");
 
+template <>
+struct fmt::formatter<db::seed_provider_type> {
+    constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
+    auto format(const db::seed_provider_type& s, fmt::format_context& ctx) const {
+        return fmt::format_to(ctx.out(), "seed_provider_type{{class={}, params={}}}",
+                              s.class_name, s.parameters);
+    }
+};
 
 namespace db {
 
