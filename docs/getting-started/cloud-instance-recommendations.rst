@@ -20,7 +20,7 @@ You can run your ScyllaDB workloads on AWS, GCE, and Azure using a ScyllaDB imag
 Amazon Web Services (AWS)
 -----------------------------
 
-* The recommended instance types are :ref:`i3 <system-requirements-i3-instances>`, :ref:`i3en <system-requirements-i3en-instances>`, and :ref:`i4i <system-requirements-i4i-instances>`.
+* The recommended instance types are :ref:`i3en <system-requirements-i3en-instances>`, and :ref:`i4i <system-requirements-i4i-instances>`.
 * We recommend using enhanced networking that exposes the physical network cards to the VM.
 
 .. note::
@@ -28,38 +28,6 @@ Amazon Web Services (AWS)
   Some of the ScyllaDB configuration features rely on querying instance metadata. 
   Disabling access to instance metadata will impact using Ec2 Snitches and tuning performance.
   See `AWS - Configure the instance metadata options <https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/configuring-instance-metadata-options.html>`_ for more information.
-
-.. _system-requirements-i3-instances:
-
-i3 instances
-^^^^^^^^^^^^
-This family includes the High Storage Instances that provide very fast SSD-backed instance storage optimized for very high random I/O performance and provide high IOPS at a low cost. We recommend using enhanced networking that exposes the physical network cards to the VM.
-
-i3 instances are designed for I/O intensive workloads and equipped with super-efficient NVMe SSD storage. It can deliver up to 3.3 Million IOPS.
-An i3 instance is great for low latency and high throughput, compared to the i2 instances, the i3 instance provides storage that it's less expensive and denser, along with the ability to deliver substantially more IOPS and more network bandwidth per CPU core.
-
-
-===========================  ===========  ============  =====================
-Model	                     vCPU         Mem (GB)      Storage (NVMe SSD)
-===========================  ===========  ============  =====================
-i3.xlarge	             4	          30.5	        0.950 TB
----------------------------  -----------  ------------  ---------------------
-i3.2xlarge	             8	          61	        1.9 TB
----------------------------  -----------  ------------  ---------------------
-i3.4xlarge	             16	          122           3.8 TB
----------------------------  -----------  ------------  ---------------------
-i3.8xlarge	             32	          244           7.6 TB
----------------------------  -----------  ------------  ---------------------
-i3.16xlarge	             64	          488	        15.2 TB
----------------------------  -----------  ------------  ---------------------
-i3.metal New in version 2.3  72 :sup:`*`  512           8 x 1.9 NVMe SSD
-===========================  ===========  ============  =====================
-
-:sup:`*` i3.metal provides 72 logical processors on 36 physical cores
-
-Source: `Amazon EC2 I3 Instances <https://aws.amazon.com/ec2/instance-types/i3/>`_
-
-More on using ScyllaDB with `i3.metal vs i3.16xlarge <https://www.scylladb.com/2018/06/21/impact-virtualization-database/>`_ 
 
 .. _system-requirements-i3en-instances:
 
