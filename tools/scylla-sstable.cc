@@ -135,14 +135,55 @@ partition_set get_partitions(schema_ptr schema, const bpo::variables_map& app_co
     return partitions;
 }
 
+struct sstable_path_info {
+    std::filesystem::path sstable_path;
+    std::filesystem::path data_dir_path;
+    sstring keyspace;
+    sstring table;
+};
+
+sstable_path_info extract_from_sstable_path(const bpo::variables_map& app_config) {
+    if (!app_config.count("sstables")) {
+        throw std::invalid_argument("cannot extract information from sstable path, no sstable arguments");
+    }
+
+    auto sst_path = std::filesystem::path(app_config["sstables"].as<std::vector<sstring>>().front());
+    sstring keyspace, table;
+    try {
+        auto [_, ks, tbl] = sstables::parse_path(sst_path);
+        keyspace = std::move(ks);
+        table = std::move(tbl);
+    } catch (const sstables::malformed_sstable_exception&) {
+        throw std::invalid_argument(fmt::format("cannot extract information from sstable path, sstable has invalid path: {}", sst_path));
+    }
+    const auto sst_dir_path = std::filesystem::path(sst_path).remove_filename();
+    std::filesystem::path data_dir_path;
+    // Detect whether sstable is in root table directory, or in a sub-directory
+    // The last component is "" due to the trailing "/" left by "remove_filename()" above.
+    // So we need to go back 2 more, to find the supposed keyspace component.
+    if (keyspace == std::prev(sst_dir_path.end(), 3)->native()) {
+        data_dir_path = sst_dir_path / ".." / "..";
+    } else {
+        data_dir_path = sst_dir_path / ".." / ".." / "..";
+    }
+
+    return sstable_path_info{std::move(sst_path), std::move(data_dir_path), std::move(keyspace), std::move(table)};
+}
+
 std::pair<sstring, sstring> get_keyspace_and_table_options(const bpo::variables_map& app_config) {
     sstring keyspace_name, table_name;
     auto k_it = app_config.find("keyspace");
     auto t_it = app_config.find("table");
-    if (k_it == app_config.end() || t_it == app_config.end()) {
-        throw std::invalid_argument("don't know which schema to load: --keyspace and/or --table are not provided");
+    if (k_it != app_config.end() || t_it != app_config.end()) {
+        return std::pair(k_it->second.as<sstring>(), t_it->second.as<sstring>());
     }
-    return std::pair(k_it->second.as<sstring>(), t_it->second.as<sstring>());
+
+    try {
+        auto info = extract_from_sstable_path(app_config);
+        return std::pair(info.keyspace, info.table);
+    } catch (...) {
+        throw std::invalid_argument("don't know which schema to load: no --keyspace and --table provided, failed to extract keyspace/table from sstable paths");
+    }
 }
 
 struct schema_with_source {
@@ -181,9 +222,6 @@ std::optional<schema_with_source> try_load_schema_from_user_provided_source(cons
         }
         if (app_config.contains("scylla-yaml-file")) {
             schema_source_opt = "schema-tables";
-            const auto scylla_yaml_path = app_config["scylla-yaml-file"].as<sstring>();
-            cfg.read_from_file(scylla_yaml_path).get();
-            cfg.setup_directories();
             const auto data_dir_path = std::filesystem::path(cfg.data_file_directories()[0]);
             return schema_with_source{.schema = tools::load_schema_from_schema_tables(data_dir_path, keyspace_name, table_name).get(),
                 .source = schema_source_opt,
@@ -212,22 +250,11 @@ std::optional<schema_with_source> try_load_schema_autodetect(const bpo::variable
 
     if (app_config.count("sstables")) {
         try {
-            auto sst_path = std::filesystem::path(app_config["sstables"].as<std::vector<sstring>>().front());
-            auto [ed, ks, cf] = sstables::parse_path(sst_path);
-            const auto sst_dir_path = std::filesystem::path(sst_path).remove_filename();
-            std::filesystem::path data_dir_path;
-            // Detect whether sstable is in root table directory, or in a sub-directory
-            // The last component is "" due to the trailing "/" left by "remove_filename()" above.
-            // So we need to go back 2 more, to find the supposed keyspace component.
-            if (ks == std::prev(sst_dir_path.end(), 3)->native()) {
-                data_dir_path = sst_dir_path / ".." / "..";
-            } else {
-                data_dir_path = sst_dir_path / ".." / ".." / "..";
-            }
-            return schema_with_source{.schema = tools::load_schema_from_schema_tables(data_dir_path, ks, cf).get(),
+            auto info = extract_from_sstable_path(app_config);
+            return schema_with_source{.schema = tools::load_schema_from_schema_tables(info.data_dir_path, info.keyspace, info.table).get(),
                 .source = "schema-tables",
-                .path = data_dir_path,
-                .obtained_from = format("sstable path ({})", sst_path)};
+                .path = info.data_dir_path,
+                .obtained_from = format("sstable path ({})", info.sstable_path)};
         } catch (...) {
             sst_log.debug("Trying to find scylla data dir based on the sstable path failed: {}", std::current_exception());
         }
@@ -236,32 +263,14 @@ std::optional<schema_with_source> try_load_schema_autodetect(const bpo::variable
     }
 
     try {
-        auto scylla_yaml_file = db::config::get_conf_sub("scylla.yaml").string();
-        cfg.read_from_file(scylla_yaml_file).get();
-        cfg.setup_directories();
-        auto [keyspace_name, table_name] = get_keyspace_and_table_options(app_config);
+        const auto [keyspace_name, table_name] = get_keyspace_and_table_options(app_config);
         const auto data_dir_path = std::filesystem::path(cfg.data_file_directories()[0]);
         return schema_with_source{.schema = tools::load_schema_from_schema_tables(data_dir_path, keyspace_name, table_name).get(),
             .source = "schema-tables",
             .path = data_dir_path,
-            .obtained_from = format("scylla.yaml file - default location ({})", scylla_yaml_file)};
+            .obtained_from = "data dir"};
     } catch (...) {
-        sst_log.debug("Trying to find and read scylla.yaml failed: {}", std::current_exception());
-    }
-
-    try {
-        // Place on heap to avoid wasting stack space
-        auto pcfg = std::make_unique<db::config>();
-        auto& cfg = *pcfg;
-        cfg.setup_directories();
-        auto [keyspace_name, table_name] = get_keyspace_and_table_options(app_config);
-        const auto data_dir_path = std::filesystem::path(cfg.data_file_directories()[0]);
-        return schema_with_source{.schema = tools::load_schema_from_schema_tables(data_dir_path, keyspace_name, table_name).get(),
-            .source = "schema-tables",
-            .path = data_dir_path,
-            .obtained_from = "default location for data dir"};
-    } catch (...) {
-        sst_log.debug("Trying to find scylla data dir at default location failed: {}", std::current_exception());
+        sst_log.debug("Trying to locate data dir failed: {}", std::current_exception());
     }
 
     fmt::print(std::cerr, "Failed to autodetect and load schema, try again with --logger-log-level scylla-sstable=debug to learn more or provide the schema source manually\n");
@@ -2843,10 +2852,12 @@ are multiple ways to obtain the schema:
 ## System schema
 
 If the examined sstables belong to a system table, whose schema is
-hardcoded in scylla (and thus known), it is enough to provide just
-the name of said table in the `keyspace.table` notation, via the
-`--system-schema` command line option. The table has to be from one of
-the following system keyspaces:
+hardcoded in ScyllaDB (and thus known), it is enough to provide just
+the name of said table via the --keyspace and --table command line
+parameters. Alternatively, the keyspace and tablename can be deduced from
+the path of the sstable, if the sstable is in its natural directory, in
+ScyllaDB's data dir.
+The table has to be from one of the following system keyspaces:
 * system
 * system_schema
 * system_distributed
@@ -2913,6 +2924,25 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
         std::optional<schema_with_source> schema_with_source;
 
         auto& dbcfg = *app.cfg().db_cfg_ext->db_cfg;
+
+        sstring scylla_yaml_path;
+        sstring scylla_yaml_path_source;
+
+        if (app_config.count("scylla-yaml-file")) {
+            scylla_yaml_path = app_config["scylla-yaml-file"].as<sstring>();
+            scylla_yaml_path_source = "user provided";
+        } else {
+            scylla_yaml_path = db::config::get_conf_sub("scylla.yaml").string();
+            scylla_yaml_path_source = "default";
+        }
+
+        if (file_exists(scylla_yaml_path).get()) {
+            dbcfg.read_from_file(scylla_yaml_path).get();
+            dbcfg.setup_directories();
+            sst_log.debug("Successfully read scylla.yaml from {} location of {}", scylla_yaml_path_source, scylla_yaml_path);
+        } else {
+            sst_log.debug("Failed to read scylla.yaml from {} location of {}, some functionality may be unavailable", scylla_yaml_path_source, scylla_yaml_path);
+        }
 
         {
             unsigned schema_sources = 0;

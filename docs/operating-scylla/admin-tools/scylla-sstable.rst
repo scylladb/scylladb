@@ -52,8 +52,10 @@ By default (no schema-related options are provided), the tool will try the follo
 
 * Try to load schema from ``schema.cql``.
 * Try to deduce the ScyllaDB data directory path and table names from the SStable path.
-* Try to load the schema from the ScyllaDB directory located at the standard location (``/var/lib/scylla``). For this to succeed, the table name has to be provided via ``--keyspace`` and ``--table``.
-* Try to load the schema from the ScyllaDB directory path obtained from config at the standard location (``./conf/scylla.yaml``). ``SCYLLA_CONF`` and ``SCYLLA_HOME`` environment variables are also checked. For this to succeed, the table name has to be provided via ``--keyspace`` and ``--table``.
+* Try to load the schema from the ScyllaDB data directory path, obtained from the configuration file, at the standard location (``./conf/scylla.yaml``).
+  ``SCYLLA_CONF`` and ``SCYLLA_HOME`` environment variables are also checked.
+  If the configuration file cannot be located, the default ScyllaDB data directory path (``/var/lib/scylla``) is used.
+  For this to succeed, the table name has to be provided via ``--keyspace`` and ``--table``.
 
 The tool stops after the first successful attempt. If none of the above succeed, an error message will be printed.
 A user provided schema in ``schema.cql`` (if present) always takes precedence over other methods. This is deliberate, to allow to manually override the schema to be used.
