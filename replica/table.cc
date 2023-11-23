@@ -1707,6 +1707,10 @@ future<> compaction_group::stop() noexcept {
     co_await _t._compaction_manager.remove(as_table_state());
 }
 
+bool compaction_group::empty() const noexcept {
+    return _memtables->empty() && live_sstable_count() == 0;
+}
+
 void compaction_group::clear_sstables() {
     _main_sstables = make_lw_shared<sstables::sstable_set>(_t._compaction_strategy.make_sstable_set(_t._schema));
     _maintenance_sstables = _t.make_maintenance_sstable_set();

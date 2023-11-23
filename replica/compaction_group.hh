@@ -88,6 +88,8 @@ public:
     // flushing memtable(s), so all data can be found in the SSTable set.
     future<> stop() noexcept;
 
+    bool empty() const noexcept;
+
     // This removes all the storage belonging to the group. In order to avoid data
     // resurrection, makes sure that all data is flushed into SSTables before
     // proceeding with atomic deletion on them.
