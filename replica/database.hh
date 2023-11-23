@@ -446,7 +446,7 @@ private:
 
     compaction_manager& _compaction_manager;
     sstables::compaction_strategy _compaction_strategy;
-    std::unique_ptr<compaction_group_manager> _cg_manager;
+    std::unique_ptr<storage_group_manager> _sg_manager;
     // The compaction group list is only a helper for accessing the groups managed by the storage groups.
     // The list entries are unlinked automatically when the storage group, they belong to, is removed.
     mutable compaction_group_list _compaction_groups;
@@ -572,12 +572,11 @@ public:
     };
 
 private:
-    storage_group_vector make_storage_groups();
     // Select a compaction group from a given token.
     size_t storage_group_id_for_token(dht::token token) const noexcept;
     storage_group* storage_group_for_token(dht::token token) const noexcept;
 
-    std::unique_ptr<compaction_group_manager> make_compaction_group_manager();
+    std::unique_ptr<storage_group_manager> make_storage_group_manager();
     // Return compaction group if table owns a single one. Otherwise, null is returned.
     compaction_group* single_compaction_group_if_available() const noexcept;
     compaction_group* get_compaction_group(size_t id) const noexcept;

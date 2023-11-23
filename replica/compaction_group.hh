@@ -180,13 +180,12 @@ public:
 
 using storage_group_vector = utils::chunked_vector<std::unique_ptr<storage_group>>;
 
-// TODO: will be changed into storage_group_manager. Not doing it now to reduce the change size.
-class compaction_group_manager {
+class storage_group_manager {
 public:
-    virtual ~compaction_group_manager() {}
-    virtual compaction_group_vector make_compaction_groups() const = 0;
-    virtual size_t compaction_group_of(dht::token) const = 0;
-    virtual size_t log2_compaction_groups() const = 0;
+    virtual ~storage_group_manager() {}
+    virtual storage_group_vector make_storage_groups(compaction_group_list& list) const = 0;
+    virtual size_t storage_group_of(dht::token) const = 0;
+    virtual size_t log2_storage_groups() const = 0;
 };
 
 }
