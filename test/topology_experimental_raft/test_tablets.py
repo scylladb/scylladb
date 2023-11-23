@@ -3,11 +3,15 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
+from uuid import UUID
+
+from cassandra.query import SimpleStatement, ConsistencyLevel
 
 from test.pylib.manager_client import ManagerClient
-from test.pylib.rest_client import inject_error_one_shot
+from test.pylib.rest_client import inject_error_one_shot, HTTPError
 from test.pylib.rest_client import inject_error
 from test.pylib.util import wait_for_cql_and_get_hosts
+from test.topology.conftest import skip_mode
 from test.topology.util import reconnect_driver
 
 import pytest
@@ -27,6 +31,21 @@ async def inject_error_one_shot_on(manager, error_name, servers):
 async def inject_error_on(manager, error_name, servers):
     errs = [manager.api.enable_injection(s.ip_addr, error_name, False) for s in servers]
     await asyncio.gather(*errs)
+
+
+async def get_tablet_replicas(manager, keyspace_name, table_name, token):
+    table_id = await manager.get_table_id(keyspace_name, table_name)
+    rows = await manager.cql.run_async(f"SELECT last_token, replicas FROM system.tablets where "
+                                       f"keyspace_name = '{keyspace_name}' and "
+                                       f"table_id = {table_id}")
+    for row in rows:
+        if row.last_token >= token:
+            return row.replicas
+
+
+async def get_tablet_replica(manager, keyspace_name, table_name, token):
+    replicas = await get_tablet_replicas(manager, keyspace_name, table_name, token)
+    return replicas[0]
 
 
 @pytest.mark.asyncio
@@ -199,3 +218,77 @@ async def test_topology_changes(manager: ManagerClient):
     await check()
 
     await cql.run_async("DROP KEYSPACE test;")
+
+
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_streaming_is_guarded_by_topology_guard(manager: ManagerClient):
+    logger.info("Bootstrapping cluster")
+    cmdline = [
+        '--logger-log-level', 'storage_service=trace',
+    ]
+    servers = [await manager.server_add(cmdline=cmdline)]
+
+    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+
+    cql = manager.get_cql()
+    await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', "
+                        "'replication_factor': 1, 'initial_tablets': 1};")
+    await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, c int);")
+
+    servers.append(await manager.server_add(cmdline=cmdline))
+
+    key = 7 # Whatever
+    tablet_token = 0 # Doesn't matter since there is one tablet
+    await cql.run_async(f"INSERT INTO test.test (pk, c) VALUES ({key}, 0)")
+    rows = await cql.run_async("SELECT pk from test.test")
+    assert len(list(rows)) == 1
+
+    replica = await get_tablet_replica(manager, 'test', 'test', tablet_token)
+
+    s0_host_id = await manager.get_host_id(servers[0].server_id)
+    s1_host_id = await manager.get_host_id(servers[1].server_id)
+    dst_shard = 0
+
+    await manager.api.enable_injection(servers[1].ip_addr, "stream_mutation_fragments", one_shot=True)
+    s1_log = await manager.server_open_log(servers[1].server_id)
+    s1_mark = await s1_log.mark()
+
+    migration_task = asyncio.create_task(
+        manager.api.move_tablet(servers[0].ip_addr, "test", "test", replica[0], replica[1], s1_host_id, dst_shard, tablet_token))
+
+    # Wait for the replica-side writer of streaming to reach a place where it already
+    # received writes from the leaving replica but haven't applied them yet.
+    # Once the writer reaches this place, it will wait for the message_injection() call below before proceeding.
+    # The place we block the writer in should not hold to erm or topology_guard because that will block the migration
+    # below and prevent test from proceeding.
+    await s1_log.wait_for('stream_mutation_fragments: waiting', from_mark=s1_mark)
+    s1_mark = await s1_log.mark()
+
+    # Should cause streaming to fail and be retried while leaving behind the replica-side writer.
+    await manager.api.inject_disconnect(servers[0].ip_addr, servers[1].ip_addr)
+
+    logger.info("Waiting for migration to finish")
+    await migration_task
+    logger.info("Migration done")
+
+    # Sanity test
+    rows = await cql.run_async("SELECT pk from test.test")
+    assert len(list(rows)) == 1
+
+    await cql.run_async("TRUNCATE test.test")
+    rows = await cql.run_async("SELECT pk from test.test")
+    assert len(list(rows)) == 0
+
+    # Release abandoned streaming
+    await manager.api.message_injection(servers[1].ip_addr, "stream_mutation_fragments")
+    await s1_log.wait_for('stream_mutation_fragments: done', from_mark=s1_mark)
+
+    # Verify that there is no data resurrection
+    rows = await cql.run_async("SELECT pk from test.test")
+    assert len(list(rows)) == 0
+
+    # Verify that moving the tablet back works
+    await manager.api.move_tablet(servers[0].ip_addr, "test", "test", s1_host_id, dst_shard, replica[0], replica[1], tablet_token)
+    rows = await cql.run_async("SELECT pk from test.test")
+    assert len(list(rows)) == 0

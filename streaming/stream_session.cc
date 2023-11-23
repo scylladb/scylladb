@@ -38,6 +38,7 @@
 #include "consumer.hh"
 #include "readers/generating_v2.hh"
 #include "service/topology_guard.hh"
+#include "utils/error_injection.hh"
 
 namespace streaming {
 
@@ -127,8 +128,8 @@ void stream_manager::init_messaging_service_handler(abort_source& as) {
             return make_exception_future<rpc::sink<int>>(std::runtime_error(format("Node {} is not fully initialized for streaming, try again later",
                     utils::fb_utilities::get_broadcast_address())));
         }
-        return _mm.local().get_schema_for_write(schema_id, from, _ms.local(), as).then([this, from, estimated_partitions, plan_id, cf_id, source, reason, topo_guard] (schema_ptr s) mutable {
-          return _db.local().obtain_reader_permit(s, "stream-session", db::no_timeout, {}).then([this, from, estimated_partitions, plan_id, cf_id, source, reason, topo_guard, s] (reader_permit permit) mutable {
+        return _mm.local().get_schema_for_write(schema_id, from, _ms.local(), as).then([this, from, estimated_partitions, plan_id, cf_id, source, reason, topo_guard, &as] (schema_ptr s) mutable {
+          return _db.local().obtain_reader_permit(s, "stream-session", db::no_timeout, {}).then([this, from, estimated_partitions, plan_id, cf_id, source, reason, topo_guard, s, &as] (reader_permit permit) mutable {
             struct stream_mutation_fragments_cmd_status {
                 bool got_cmd = false;
                 bool got_end_of_stream = false;
@@ -136,9 +137,18 @@ void stream_manager::init_messaging_service_handler(abort_source& as) {
             auto cmd_status = make_lw_shared<stream_mutation_fragments_cmd_status>();
             auto offstrategy_update = make_lw_shared<offstrategy_trigger>(_db, cf_id, plan_id);
             auto guard = service::topology_guard(s->table(), topo_guard);
-            auto get_next_mutation_fragment = [guard = std::move(guard), &sm = container(), source, plan_id, from, s, cmd_status, offstrategy_update, permit] () mutable {
+
+            // Will log a message when streaming is done. Used to synchronize tests.
+            lw_shared_ptr<std::any> log_done;
+            if (utils::get_local_injector().is_enabled("stream_mutation_fragments")) {
+                log_done = make_lw_shared<std::any>(seastar::make_shared(seastar::defer([] {
+                    sslog.info("stream_mutation_fragments: done");
+                })));
+            }
+
+            auto get_next_mutation_fragment = [guard = std::move(guard), &as, &sm = container(), source, plan_id, from, s, cmd_status, offstrategy_update, permit] () mutable {
                 guard.check();
-                return source().then([&sm, plan_id, from, s, cmd_status, offstrategy_update, permit] (std::optional<std::tuple<frozen_mutation_fragment, rpc::optional<stream_mutation_fragments_cmd>>> opt) mutable {
+                return source().then([&sm, &guard, &as, plan_id, from, s, cmd_status, offstrategy_update, permit] (std::optional<std::tuple<frozen_mutation_fragment, rpc::optional<stream_mutation_fragments_cmd>>> opt) mutable {
                     if (opt) {
                         auto cmd = std::get<1>(*opt);
                         if (cmd) {
@@ -160,7 +170,19 @@ void stream_manager::init_messaging_service_handler(abort_source& as) {
                         auto mf = fmf.unfreeze(*s, permit);
                         sm.local().update_progress(plan_id, from.addr, progress_info::direction::IN, sz);
                         offstrategy_update->update();
-                        return make_ready_future<mutation_fragment_opt>(std::move(mf));
+
+                        return utils::get_local_injector().inject_with_handler("stream_mutation_fragments", [&guard, &as] (auto& handler) -> future<> {
+                            auto& guard_ = guard;
+                            auto& as_ = as;
+                            sslog.info("stream_mutation_fragments: waiting");
+                            while (!handler.poll_for_message()) {
+                                guard_.check();
+                                co_await sleep_abortable(std::chrono::milliseconds(5), as_);
+                            }
+                            sslog.info("stream_mutation_fragments: released");
+                        }).then([mf = std::move(mf)] () mutable {
+                            return mutation_fragment_opt(std::move(mf));
+                        });
                     } else {
                         // If the sender has sent stream_mutation_fragments_cmd it means it is
                         // a node that understands the new protocol. It must send end_of_stream
@@ -185,7 +207,7 @@ void stream_manager::init_messaging_service_handler(abort_source& as) {
                 make_generating_reader_v1(s, permit, std::move(get_next_mutation_fragment)),
                 make_streaming_consumer("streaming", _db, _sys_dist_ks, _view_update_generator, estimated_partitions, reason, is_offstrategy_supported(reason), topo_guard),
                 std::move(op)
-            ).then_wrapped([s, plan_id, from, sink, estimated_partitions, sh_ptr = std::move(sharder_ptr)] (future<uint64_t> f) mutable {
+            ).then_wrapped([s, plan_id, from, sink, estimated_partitions, log_done, sh_ptr = std::move(sharder_ptr)] (future<uint64_t> f) mutable {
                 int32_t status = 0;
                 uint64_t received_partitions = 0;
                 if (f.failed()) {

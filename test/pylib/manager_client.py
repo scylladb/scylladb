@@ -337,6 +337,10 @@ class ManagerClient():
             raise Exception(f"Failed to get local host id address for server {server_id}") from exc
         return HostID(host_id)
 
+    async def get_table_id(self, keyspace: str, table: str):
+        rows = await self.cql.run_async(f"select id from system_schema.tables where keyspace_name = '{keyspace}' and table_name = '{table}'")
+        return rows[0].id
+
     async def server_sees_others(self, server_id: ServerNum, count: int, interval: float = 45.):
         """Wait till a server sees a minimum given count of other servers"""
         if count < 1:
