@@ -38,8 +38,6 @@ struct sync_point {
     bool operator==(const sync_point& other) const = default;
 };
 
-std::ostream& operator<<(std::ostream& out, const sync_point& sp);
-
 // IDL type
 // Contains per-endpoint and per-shard information about replay positions
 // for a particular type of hint queues (regular mutation hints or MV update hints)
