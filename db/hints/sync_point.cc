@@ -180,12 +180,6 @@ sstring sync_point::encode() const {
     return base64_encode(serialized);
 }
 
-std::ostream& operator<<(std::ostream& out, const sync_point& sp) {
-    out << "{regular_per_shard_rps: " << sp.regular_per_shard_rps
-        << ", mv_per_shard_rps: " << sp.mv_per_shard_rps
-        << "}";
-    return out;
+}
 }
 
-}
-}

@@ -12,6 +12,15 @@
 
 #include "db/hints/sync_point.hh"
 
+namespace db::hints {
+std::ostream& operator<<(std::ostream& out, const sync_point& sp) {
+    out << "{regular_per_shard_rps: " << sp.regular_per_shard_rps
+        << ", mv_per_shard_rps: " << sp.mv_per_shard_rps
+        << "}";
+    return out;
+}
+}
+
 SEASTAR_TEST_CASE(test_hint_sync_point_faithful_reserialization) {
     const unsigned encoded_shard_count = 2;
 
