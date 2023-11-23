@@ -2568,8 +2568,11 @@ future<> database::truncate_table_on_all_shards(sharded<database>& sharded_db, s
         throw std::runtime_error(format("Truncating of {}.{} is not allowed.", s->ks_name(), s->cf_name()));
     }
 
-    auto auto_snapshot = sharded_db.local().get_config().auto_snapshot();
-    dblog.info("Truncating {}.{} {}snapshot", s->ks_name(), s->cf_name(), with_snapshot && auto_snapshot ? "with auto-" : "without ");
+    if (!sharded_db.local().get_config().auto_snapshot()) {
+        with_snapshot = false;
+    }
+
+    dblog.info("Truncating {}.{} {}snapshot", s->ks_name(), s->cf_name(), with_snapshot ? "with auto-" : "without ");
 
     std::vector<foreign_ptr<std::unique_ptr<table_truncate_state>>> table_states;
     table_states.resize(smp::count);
@@ -2606,8 +2609,7 @@ future<> database::truncate_table_on_all_shards(sharded<database>& sharded_db, s
         });
     });
 
-    const auto should_snapshot = with_snapshot && auto_snapshot;
-    const auto should_flush = should_snapshot && cf.can_flush();
+    const auto should_flush = with_snapshot && cf.can_flush();
     dblog.trace("{} {}.{} and views on all shards", should_flush ? "Flushing" : "Clearing", s->ks_name(), s->cf_name());
     std::function<future<>(replica::table&)> flush_or_clear = should_flush ?
             [] (replica::table& cf) {
@@ -2634,7 +2636,7 @@ future<> database::truncate_table_on_all_shards(sharded<database>& sharded_db, s
 
     auto truncated_at = truncated_at_opt.value_or(db_clock::now());
 
-    if (should_snapshot) {
+    if (with_snapshot) {
         auto name = snapshot_name_opt.value_or(
             format("{:d}-{}", truncated_at.time_since_epoch().count(), cf.schema()->cf_name()));
         co_await table::snapshot_on_all_shards(sharded_db, table_shards, name);
