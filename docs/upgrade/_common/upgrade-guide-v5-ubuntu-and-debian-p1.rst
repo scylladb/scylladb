@@ -60,9 +60,13 @@ When the upgrade is completed on all nodes, remove the snapshot with the ``nodet
 Backup the configuration file
 ------------------------------
 
+Back up the ``scylla.yaml`` configuration file and the ScyllaDB packages
+in case you need to rollback the upgrade.
+
 .. code:: sh
 
-   sudo cp -a /etc/scylla/scylla.yaml /etc/scylla/scylla.yaml.backup-src
+   sudo cp -a /etc/scylla/scylla.yaml /etc/scylla/scylla.yaml.backup
+   sudo cp /etc/apt/sources.list.d/scylla.list ~/scylla.list-backup
 
 Gracefully stop the node
 ------------------------
