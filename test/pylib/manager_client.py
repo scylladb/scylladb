@@ -21,6 +21,7 @@ from test.pylib.scylla_cluster import ReplaceConfig, ScyllaServer
 from cassandra.cluster import Session as CassandraSession  # type: ignore # pylint: disable=no-name-in-module
 from cassandra.cluster import Cluster as CassandraCluster  # type: ignore # pylint: disable=no-name-in-module
 import aiohttp
+import asyncio
 
 
 logger = logging.getLogger(__name__)
@@ -177,7 +178,8 @@ class ManagerClient():
                          cmdline: Optional[List[str]] = None,
                          config: Optional[dict[str, Any]] = None,
                          property_file: Optional[dict[str, Any]] = None,
-                         start: bool = True) -> ServerInfo:
+                         start: bool = True,
+                         expected_error: Optional[str] = None) -> ServerInfo:
         """Add a new server"""
         try:
             data: dict[str, Any] = {'start': start}
@@ -189,6 +191,18 @@ class ManagerClient():
                 data['config'] = config
             if property_file:
                 data['property_file'] = property_file
+            if expected_error:
+                data['expected_error'] = expected_error
+
+            # If we replace, we should wait until other nodes see the node being
+            # replaced as dead because the replace operation can be rejected if
+            # the node being replaced is considered alive. However, we sometimes
+            # do not want to wait, for example, when we test that replace fails
+            # as expected. Therefore, we make waiting optional and default.
+            if replace_cfg and replace_cfg.wait_replaced_dead:
+                replaced_ip = await self.get_host_ip(replace_cfg.replaced_id)
+                await self.others_not_see_server(replaced_ip)
+
             server_info = await self.client.put_json("/cluster/addserver", data, response_type="json",
                                                      timeout=ScyllaServer.TOPOLOGY_TIMEOUT)
         except Exception as exc:
@@ -307,6 +321,12 @@ class ManagerClient():
             if not other_ip in alive_nodes:
                 return True
         await wait_for(_not_sees_another_server, time() + interval, period=.5)
+
+    async def others_not_see_server(self, server_ip: IPAddress, interval: float = 45.):
+        """Wait till a server is seen as dead by all other running servers in the cluster"""
+        others_ips = [srv.ip_addr for srv in await self.running_servers() if srv.ip_addr != server_ip]
+        await asyncio.gather(*(self.server_not_sees_other_server(ip, server_ip, interval)
+                               for ip in others_ips))
 
     async def server_open_log(self, server_id: ServerNum) -> ScyllaLogFile:
         logger.debug("ManagerClient getting log filename for %s", server_id)

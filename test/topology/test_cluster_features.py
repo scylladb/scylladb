@@ -145,7 +145,7 @@ async def test_joining_old_node_fails(manager: ManagerClient) -> None:
     await manager.server_start(new_server_info.server_id, expected_error="Feature check failed")
 
     # Try to replace with a node that doesn't support the feature - should fail
-    await manager.server_stop(servers[0].server_id)
+    await manager.server_stop_gracefully(servers[0].server_id)
     replace_cfg = ReplaceConfig(replaced_id=servers[0].server_id, reuse_ip_addr=False, use_host_id=False)
     new_server_info = await manager.server_add(start=False, replace_cfg=replace_cfg)
     await manager.server_start(new_server_info.server_id, expected_error="Feature check failed")

@@ -850,6 +850,7 @@ using raft_topology_cmd_handler_type = noncopyable_function<future<raft_topology
 
 class topology_coordinator {
     sharded<db::system_distributed_keyspace>& _sys_dist_ks;
+    gms::gossiper& _gossiper;
     netw::messaging_service& _messaging;
     locator::shared_token_metadata& _shared_tm;
     db::system_keyspace& _sys_ks;
@@ -2294,11 +2295,18 @@ class topology_coordinator {
 
     std::variant<join_node_response_params::accepted, join_node_response_params::rejected>
     validate_joining_node(const node_to_work_on& node) {
-        if (node.rs->state == node_state::replacing) {
+        if (*node.request == topology_request::replace) {
             auto replaced_id = std::get<replace_param>(node.req_param.value()).replaced_id;
             if (!_topo_sm._topology.normal_nodes.contains(replaced_id)) {
                 return join_node_response_params::rejected {
                     .reason = ::format("Cannot replace node {} because it is not in the 'normal' state", replaced_id),
+                };
+            }
+
+            auto replaced_ip = id2ip(locator::host_id(replaced_id.uuid()));
+            if (_gossiper.is_alive(replaced_ip)) {
+                return join_node_response_params::rejected {
+                    .reason = ::format("Cannot replace node {} because it is considered alive", replaced_id),
                 };
             }
         }
@@ -2373,14 +2381,15 @@ class topology_coordinator {
 
 public:
     topology_coordinator(
-            sharded<db::system_distributed_keyspace>& sys_dist_ks,
+            sharded<db::system_distributed_keyspace>& sys_dist_ks, gms::gossiper& gossiper,
             netw::messaging_service& messaging, locator::shared_token_metadata& shared_tm,
             db::system_keyspace& sys_ks, replica::database& db, service::raft_group0& group0,
             service::topology_state_machine& topo_sm, abort_source& as, raft::server& raft_server,
             raft_topology_cmd_handler_type raft_topology_cmd_handler,
             tablet_allocator& tablet_allocator,
             std::chrono::milliseconds ring_delay)
-        : _sys_dist_ks(sys_dist_ks), _messaging(messaging), _shared_tm(shared_tm), _sys_ks(sys_ks), _db(db)
+        : _sys_dist_ks(sys_dist_ks), _gossiper(gossiper), _messaging(messaging)
+        , _shared_tm(shared_tm), _sys_ks(sys_ks), _db(db)
         , _group0(group0), _address_map(_group0.address_map()), _topo_sm(topo_sm), _as(as)
         , _raft(raft_server), _term(raft_server.get_current_term())
         , _raft_topology_cmd_handler(std::move(raft_topology_cmd_handler))
@@ -2586,7 +2595,7 @@ future<> storage_service::raft_state_monitor_fiber(raft::server& raft, sharded<d
             // start topology change coordinator in the background
             _topology_change_coordinator = do_with(
                 std::make_unique<topology_coordinator>(
-                    sys_dist_ks, _messaging.local(), _shared_token_metadata,
+                    sys_dist_ks, _gossiper, _messaging.local(), _shared_token_metadata,
                     _sys_ks.local(), _db.local(), *_group0, _topology_state_machine, *as, raft,
                     std::bind_front(&storage_service::raft_topology_cmd_handler, this),
                     _tablet_allocator.local(),
@@ -2890,10 +2899,10 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
             .ip_addr = *replace_address,
             .raft_id = raft::server_id{ri->host_id.uuid()},
         };
+        replacing_a_node_with_same_ip = *replace_address == get_broadcast_address();
+        replacing_a_node_with_diff_ip = *replace_address != get_broadcast_address();
         if (!_raft_topology_change_enabled) {
             bootstrap_tokens = std::move(ri->tokens);
-            replacing_a_node_with_same_ip = *replace_address == get_broadcast_address();
-            replacing_a_node_with_diff_ip = *replace_address != get_broadcast_address();
 
             slogger.info("Replacing a node with {} IP address, my address={}, node being replaced={}",
                 get_broadcast_address() == *replace_address ? "the same" : "a different",
@@ -2996,7 +3005,7 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
         app_states.emplace(gms::application_state::CDC_GENERATION_ID, versioned_value::cdc_generation_id(cdc_gen_id));
         app_states.emplace(gms::application_state::STATUS, versioned_value::normal(my_tokens));
     }
-    if (replacing_a_node_with_same_ip || replacing_a_node_with_diff_ip) {
+    if (!_raft_topology_change_enabled && (replacing_a_node_with_same_ip || replacing_a_node_with_diff_ip)) {
         app_states.emplace(gms::application_state::TOKENS, versioned_value::tokens(bootstrap_tokens));
     }
     app_states.emplace(gms::application_state::SNITCH_NAME, versioned_value::snitch_name(_snitch.local()->get_name()));
@@ -6653,6 +6662,15 @@ future<join_node_response_result> storage_service::join_node_response_handler(jo
 
     co_return co_await std::visit(overloaded_functor {
         [&] (const join_node_response_params::accepted& acc) -> future<join_node_response_result> {
+            // Allow other nodes to mark the replacing node as alive. It has
+            // effect only if the replacing node is reusing the IP of the
+            // replaced node. In such a case, we do not allow the replacing
+            // node to advertise itself earlier. Thanks to this, if the
+            // topology sees the node being replaced as alive, it can safely
+            // reject the join request because it can be sure that it is not
+            // the replacing node that is alive.
+            co_await _gossiper.advertise_to_nodes({});
+
             // Do a read barrier to read/initialize the topology state
             auto& raft_server = _group0->group0_server();
             co_await raft_server.read_barrier(&_abort_source);
