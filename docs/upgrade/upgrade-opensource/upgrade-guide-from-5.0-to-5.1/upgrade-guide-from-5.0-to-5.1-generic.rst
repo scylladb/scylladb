@@ -90,9 +90,25 @@ When the upgrade is completed on all nodes, remove the snapshot with the ``nodet
 
 Backup the configuration file
 ------------------------------
-.. code:: sh
 
-   sudo cp -a /etc/scylla/scylla.yaml /etc/scylla/scylla.yaml.backup-src
+Back up the ``scylla.yaml`` configuration file and the ScyllaDB packages
+in case you need to rollback the upgrade.
+
+.. tabs::
+
+   .. group-tab:: Debian/Ubuntu
+
+      .. code:: sh
+         
+         sudo cp -a /etc/scylla/scylla.yaml /etc/scylla/scylla.yaml.backup
+         sudo cp /etc/apt/sources.list.d/scylla.list ~/scylla.list-backup
+
+   .. group-tab:: RHEL/CentOS
+
+      .. code:: sh
+         
+         sudo cp -a /etc/scylla/scylla.yaml /etc/scylla/scylla.yaml.backup
+         sudo cp /etc/yum.repos.d/scylla.repo ~/scylla.repo-backup
 
 Gracefully stop the node
 ------------------------
@@ -190,7 +206,6 @@ For each of the nodes you rollback to |SRC_VERSION|, serially (i.e. one node at 
 * Drain the node and stop Scylla
 * Retrieve the old ScyllaDB packages
 * Restore the configuration file
-* Restore system tables
 * Reload systemd configuration
 * Restart ScyllaDB
 * Validate the rollback success
@@ -205,25 +220,24 @@ Drain and gracefully stop the node
 .. code:: sh
 
    nodetool drain
+   nodetool snapshot
    sudo service scylla-server stop
 
-Download and install the old release
+Restore and install the old release
 ------------------------------------
-
-..
-    TODO: downgrade for 3rd party packages in EC2/GCP/Azure - like in the upgrade section?
 
 .. tabs::
 
    .. group-tab:: Debian/Ubuntu
 
-        #. Remove the old repo file.
+        #. Restore the |SRC_VERSION| packages backed up during the upgrade.
 
             .. code:: sh
 
-               sudo rm -rf /etc/apt/sources.list.d/scylla.list
+               sudo cp ~/scylla.list-backup /etc/apt/sources.list.d/scylla.list
+               sudo chown root.root /etc/apt/sources.list.d/scylla.list
+               sudo chmod 644 /etc/apt/sources.list.d/scylla.list
 
-        #. Update the |SCYLLA_DEB_SRC_REPO| to |SRC_VERSION|.
         #. Install:
 
             .. code-block::
@@ -236,59 +250,31 @@ Download and install the old release
 
    .. group-tab:: RHEL/CentOS
 
-        #. Remove the old repo file.
+        #. Restore the |SRC_VERSION| packages backed up during the upgrade.
 
             .. code:: sh
 
-               sudo rm -rf /etc/yum.repos.d/scylla.repo
+               sudo cp ~/scylla.repo-backup /etc/yum.repos.d/scylla.repo
+               sudo chown root.root /etc/yum.repos.d/scylla.repo
+               sudo chmod 644 /etc/yum.repos.d/scylla.repo
 
-        #. Update the |SCYLLA_RPM_SRC_REPO|_  to |SRC_VERSION|.
         #. Install:
 
             .. code:: console
 
                sudo yum clean all
                sudo rm -rf /var/cache/yum
-               sudo yum remove scylla\\*tools-core
-               sudo yum downgrade scylla\\* -y
-               sudo yum install scylla
-
-   .. group-tab:: EC2/GCP/Azure Ubuntu Image
-
-        #. Remove the old repo file.
-
-            .. code:: sh
-
-               sudo rm -rf /etc/apt/sources.list.d/scylla.list
-
-        #. Update the |SCYLLA_DEB_SRC_REPO| to |SRC_VERSION|.
-        #. Install:
-
-            .. code-block::
-
-               sudo apt-get update
-               sudo apt-get remove scylla\* -y
-               sudo apt-get install scylla
-
-        Answer ‘y’ to the first two questions.
+               sudo yum downgrade scylla-\*cqlsh -y
+               sudo yum remove scylla-\*cqlsh -y
+               sudo yum downgrade scylla\* -y
+               sudo yum install scylla -y
 
 Restore the configuration file
 ------------------------------
 .. code:: sh
 
    sudo rm -rf /etc/scylla/scylla.yaml
-   sudo cp -a /etc/scylla/scylla.yaml.backup-src | /etc/scylla/scylla.yaml
-
-Restore system tables
----------------------
-
-Restore all tables of **system** and **system_schema** from the previous snapshot because |NEW_VERSION| uses a different set of system tables. See :doc:`Restore from a Backup and Incremental Backup </operating-scylla/procedures/backup-restore/restore/>` for reference.
-
-.. code:: sh
-
-    cd /var/lib/scylla/data/keyspace_name/table_name-UUID/snapshots/<snapshot_name>/
-    sudo cp -r * /var/lib/scylla/data/keyspace_name/table_name-UUID/
-    sudo chown -R scylla:scylla /var/lib/scylla/data/keyspace_name/table_name-UUID/
+   sudo cp /etc/scylla/scylla.yaml-backup /etc/scylla/scylla.yaml
 
 Reload systemd configuration
 ----------------------------
