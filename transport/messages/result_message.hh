@@ -245,8 +245,6 @@ public:
     }
 };
 
-std::ostream& operator<<(std::ostream& os, const result_message::rows& msg);
-
 
 template<typename ResultMessagePtr>
 requires requires (ResultMessagePtr ptr) {
@@ -264,3 +262,9 @@ inline future<ResultMessagePtr> propagate_exception_as_future(ResultMessagePtr&&
 }
 
 }
+
+template <>
+struct fmt::formatter<cql_transport::messages::result_message::rows> {
+    constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
+    auto format(const cql_transport::messages::result_message::rows&, fmt::format_context& ctx) const -> decltype(ctx.out());
+};

@@ -49,28 +49,6 @@ std::ostream& operator<<(std::ostream& os, const result_message::schema_change& 
     return os;
 }
 
-std::ostream& operator<<(std::ostream& os, const result_message::rows& msg) {
-    os << "{result_message::rows ";
-    struct visitor {
-        std::ostream& _os;
-        void start_row() { _os << "{row: "; }
-        void accept_value(managed_bytes_view_opt value) {
-            if (!value) {
-                _os << " null";
-                return;
-            }
-            _os << " ";
-            for (auto fragment : fragment_range(*value)) {
-                _os << fragment;
-            }
-        }
-        void end_row() { _os << "}"; }
-    };
-    msg.rs().visit(visitor { os });
-    os << "}";
-    return os;
-}
-
 std::ostream& operator<<(std::ostream& os, const result_message& msg) {
     class visitor : public result_message::visitor {
         std::ostream& _os;
@@ -81,7 +59,7 @@ std::ostream& operator<<(std::ostream& os, const result_message& msg) {
         void visit(const result_message::prepared::cql& m) override { _os << m; };
         void visit(const result_message::prepared::thrift& m) override { _os << m; };
         void visit(const result_message::schema_change& m) override { _os << m; };
-        void visit(const result_message::rows& m) override { _os << m; };
+        void visit(const result_message::rows& m) override { fmt::print(_os, "{}", m); };
         void visit(const result_message::bounce_to_shard& m) override { _os << m; };
         void visit(const result_message::exception& m) override { _os << m; };
     };
@@ -108,4 +86,34 @@ result_message::prepared::prepared(cql3::statements::prepared_statement::checked
     return statement->get_result_metadata();
 }
 
+}
+
+auto
+fmt::formatter<cql_transport::messages::result_message::rows>::format(
+    const cql_transport::messages::result_message::rows& msg,
+    fmt::format_context& ctx) const -> decltype(ctx.out()) {
+    using out_t = decltype(ctx.out());
+    out_t out = ctx.out();
+    out = fmt::format_to(out, "{{result_message::rows ");
+    struct visitor {
+        out_t& _os;
+        void start_row() {
+            _os = fmt::format_to(_os, "{{row: ");
+        }
+        void accept_value(managed_bytes_view_opt value) {
+            if (!value) {
+                _os = fmt::format_to(_os, " null");
+                return;
+            }
+            _os = fmt::format_to(_os, " ");
+            for (auto fragment : fragment_range(*value)) {
+                _os = fmt::format_to(_os, "{}", fmt_hex(fragment));
+            }
+        }
+        void end_row() {
+            _os = fmt::format_to(_os, "}}");
+        }
+    };
+    msg.rs().visit(visitor { out });
+    return fmt::format_to(out, "}}");
 }
