@@ -290,13 +290,13 @@ private:
 };
 
 struct topology_change_info {
-    token_metadata target_token_metadata;
-    std::optional<token_metadata> base_token_metadata;
+    token_metadata_ptr target_token_metadata;
+    token_metadata_ptr base_token_metadata;
     std::vector<dht::token> all_tokens;
     token_metadata::read_new_t read_new;
 
-    topology_change_info(token_metadata target_token_metadata_,
-        std::optional<token_metadata> base_token_metadata_,
+    topology_change_info(token_metadata_ptr target_token_metadata_,
+        token_metadata_ptr base_token_metadata_,
         std::vector<dht::token> all_tokens_,
         token_metadata::read_new_t read_new_);
     future<> clear_gently();

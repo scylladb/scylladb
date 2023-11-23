@@ -796,8 +796,8 @@ future<> token_metadata_impl::update_topology_change_info(dc_rack_fn& get_dc_rac
     std::sort(begin(all_tokens), end(all_tokens));
 
     auto prev_value = std::move(_topology_change_info);
-    _topology_change_info.emplace(token_metadata(std::move(target_token_metadata)),
-        base_token_metadata ? std::optional(token_metadata(std::move(base_token_metadata))): std::nullopt,
+    _topology_change_info.emplace(make_token_metadata_ptr(std::move(target_token_metadata)),
+        base_token_metadata ? make_token_metadata_ptr(std::move(base_token_metadata)): nullptr,
         std::move(all_tokens),
         _read_new);
     co_await utils::clear_gently(prev_value);
@@ -844,10 +844,10 @@ std::map<token, inet_address> token_metadata_impl::get_normal_and_bootstrapping_
     return ret;
 }
 
-topology_change_info::topology_change_info(token_metadata target_token_metadata_,
-        std::optional<token_metadata> base_token_metadata_,
-        std::vector<dht::token> all_tokens_,
-        token_metadata::read_new_t read_new_)
+topology_change_info::topology_change_info(token_metadata_ptr target_token_metadata_,
+    token_metadata_ptr base_token_metadata_,
+    std::vector<dht::token> all_tokens_,
+    token_metadata::read_new_t read_new_)
     : target_token_metadata(std::move(target_token_metadata_))
     , base_token_metadata(std::move(base_token_metadata_))
     , all_tokens(std::move(all_tokens_))

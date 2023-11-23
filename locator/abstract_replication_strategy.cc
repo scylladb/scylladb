@@ -373,7 +373,7 @@ future<mutable_vnode_effective_replication_map_ptr> calculate_effective_replicat
             const auto token = all_tokens[i];
 
             auto current_endpoints = co_await rs->calculate_natural_endpoints(token, base_token_metadata);
-            auto target_endpoints = co_await rs->calculate_natural_endpoints(token, topology_changes->target_token_metadata);
+            auto target_endpoints = co_await rs->calculate_natural_endpoints(token, *topology_changes->target_token_metadata);
 
             auto add_mapping = [&](ring_mapping& target, std::unordered_set<inet_address>&& endpoints) {
                 using interval = ring_mapping::interval_type;
