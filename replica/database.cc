@@ -2571,6 +2571,10 @@ future<> database::truncate_table_on_all_shards(sharded<database>& sharded_db, s
     if (!sharded_db.local().get_config().auto_snapshot()) {
         with_snapshot = false;
     }
+    if (with_snapshot && !table_shards->get_storage_options().is_local_type()) {
+        dblog.warn("Not snapshotting dropped/truncated table {}.{} despite auto_snapshot=true - table is not using local disk", s->ks_name(), s->cf_name());
+        with_snapshot = false;
+    }
 
     dblog.info("Truncating {}.{} {}snapshot", s->ks_name(), s->cf_name(), with_snapshot ? "with auto-" : "without ");
 
