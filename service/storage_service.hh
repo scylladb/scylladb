@@ -270,6 +270,9 @@ private:
     bool is_me(inet_address addr) const noexcept {
         return get_token_metadata_ptr()->get_topology().is_me(addr);
     }
+    bool is_me(locator::host_id id) const noexcept {
+        return get_token_metadata_ptr()->get_topology().is_me(id);
+    }
 
     /* This abstraction maintains the token/endpoint metadata information */
     shared_token_metadata& _shared_token_metadata;
