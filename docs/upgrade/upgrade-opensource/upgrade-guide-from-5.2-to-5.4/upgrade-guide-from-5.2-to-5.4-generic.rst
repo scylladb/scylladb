@@ -335,9 +335,10 @@ Restore and install the old release
 
                sudo yum clean all
                sudo rm -rf /var/cache/yum
-               sudo yum remove scylla\\*tools-core
-               sudo yum downgrade scylla\\* -y
-               sudo yum install scylla
+               sudo yum downgrade scylla-\*cqlsh -y
+               sudo yum remove scylla-\*cqlsh -y
+               sudo yum downgrade scylla\* -y
+               sudo yum install scylla -y
 
 Restore the configuration file
 ------------------------------
