@@ -600,6 +600,13 @@ class TestScyllaSsstableSchemaLoading:
                 system_scylla_local_sstable_prepared,
                 system_scylla_local_reference_dump)
 
+    def test_table_dir_system_schema_deduced_keyspace_table(self, scylla_path, system_scylla_local_sstable_prepared, system_scylla_local_reference_dump):
+        self.check(
+                scylla_path,
+                ["--system-schema"],
+                system_scylla_local_sstable_prepared,
+                system_scylla_local_reference_dump)
+
     def test_table_dir_schema_file(self, scylla_path, system_scylla_local_sstable_prepared, system_scylla_local_reference_dump, system_scylla_local_schema_file):
         self.check(
                 scylla_path,
@@ -614,11 +621,26 @@ class TestScyllaSsstableSchemaLoading:
                 system_scylla_local_sstable_prepared,
                 system_scylla_local_reference_dump)
 
+    def test_table_dir_data_dir_deduced_keyspace_table(self, scylla_path, system_scylla_local_sstable_prepared, system_scylla_local_reference_dump, scylla_data_dir):
+        self.check(
+                scylla_path,
+                ["--scylla-data-dir", scylla_data_dir],
+                system_scylla_local_sstable_prepared,
+                system_scylla_local_reference_dump)
+
     def test_table_dir_scylla_yaml(self, scylla_path, system_scylla_local_sstable_prepared, system_scylla_local_reference_dump, scylla_home_dir):
         scylla_yaml_file = os.path.join(scylla_home_dir, "conf", "scylla.yaml")
         self.check(
                 scylla_path,
                 ["--scylla-yaml-file", scylla_yaml_file, "--keyspace", self.keyspace, "--table", self.table],
+                system_scylla_local_sstable_prepared,
+                system_scylla_local_reference_dump)
+
+    def test_table_dir_scylla_yaml_deduced_keyspace_table(self, scylla_path, system_scylla_local_sstable_prepared, system_scylla_local_reference_dump, scylla_home_dir):
+        scylla_yaml_file = os.path.join(scylla_home_dir, "conf", "scylla.yaml")
+        self.check(
+                scylla_path,
+                ["--scylla-yaml-file", scylla_yaml_file],
                 system_scylla_local_sstable_prepared,
                 system_scylla_local_reference_dump)
 
