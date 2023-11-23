@@ -3166,7 +3166,7 @@ repair_service::insert_repair_meta(
         streaming::stream_reason reason,
         gc_clock::time_point compaction_time,
         abort_source& as) {
-    return get_migration_manager().get_schema_for_write(schema_version, {from, src_cpu_id}, get_messaging(), &as).then([this,
+    return get_migration_manager().get_schema_for_write(schema_version, {from, src_cpu_id}, get_messaging(), as).then([this,
             from,
             repair_meta_id,
             range,

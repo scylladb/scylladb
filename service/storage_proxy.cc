@@ -398,12 +398,12 @@ public:
 private:
     future<schema_ptr> get_schema_for_read(table_schema_version v, netw::msg_addr from, clock_type::time_point timeout) {
         abort_on_expiry aoe(timeout);
-        co_return co_await _mm.get_schema_for_read(std::move(v), std::move(from), _ms, &aoe.abort_source());
+        co_return co_await _mm.get_schema_for_read(std::move(v), std::move(from), _ms, aoe.abort_source());
     }
 
     future<schema_ptr> get_schema_for_write(table_schema_version v, netw::msg_addr from, clock_type::time_point timeout) {
         abort_on_expiry aoe(timeout);
-        co_return co_await _mm.get_schema_for_write(std::move(v), std::move(from), _ms, &aoe.abort_source());
+        co_return co_await _mm.get_schema_for_write(std::move(v), std::move(from), _ms, aoe.abort_source());
     }
 
     future<replica::exception_variant> handle_counter_mutation(
