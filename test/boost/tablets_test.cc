@@ -778,14 +778,20 @@ SEASTAR_TEST_CASE(test_sharder) {
 
 SEASTAR_TEST_CASE(test_large_tablet_metadata) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
+        auto& db = e.local_db();
+        auto& qp = e.local_qp();
+
         tablet_metadata tm;
 
         auto h1 = host_id(utils::UUID_gen::get_time_UUID());
         auto h2 = host_id(utils::UUID_gen::get_time_UUID());
         auto h3 = host_id(utils::UUID_gen::get_time_UUID());
+        auto h4 = host_id(utils::UUID_gen::get_time_UUID());
 
         const int nr_tables = 1'00;
         const int tablets_per_table = 1024;
+
+        table_id last_table_id;
 
         for (int i = 0; i < nr_tables; ++i) {
             tablet_map tmap(tablets_per_table);
@@ -796,11 +802,52 @@ SEASTAR_TEST_CASE(test_large_tablet_metadata) {
                 });
             }
 
-            auto id = add_table(e).get0();
-            tm.set_tablet_map(id, std::move(tmap));
+            last_table_id = add_table(e).get0();
+            tm.set_tablet_map(last_table_id, std::move(tmap));
         }
 
+        auto last_table_schema = db.find_schema(last_table_id);
+
         verify_tablet_metadata_persistence(e, tm);
+
+        locator::tablet_metadata_change_hint hint;
+
+        // Migrate one tablet to h4
+        {
+            const auto& tmap = tm.get_tablet_map(last_table_id);
+
+            const auto tb = tmap.first_tablet();
+            replica::tablet_mutation_builder builder(next_timestamp++, last_table_schema->ks_name(), last_table_id);
+            const auto token = tmap.get_last_token(tb);
+
+            builder.set_new_replicas(token,
+                tablet_replica_set {
+                    tablet_replica {h4, 0},
+                }
+            );
+            builder.set_stage(token, tablet_transition_stage::streaming);
+
+            std::vector<mutation> muts;
+            muts.push_back(builder.build());
+            db.apply(freeze(muts), db::no_timeout).get();
+            update_tablet_metadata_change_hint(hint, muts.front());
+        }
+
+        using clk = std::chrono::high_resolution_clock;
+
+        const auto start_full_reload = clk::now();
+        const auto tm_full_reload = read_tablet_metadata(qp).get0();
+        const auto end_full_reload = clk::now();
+        const auto full_reload_duration = std::chrono::duration<double, std::milli>(end_full_reload - start_full_reload);
+
+        const auto start_partial_reload = clk::now();
+        update_tablet_metadata(qp, tm, hint).get();
+        const auto end_partial_reload = clk::now();
+        const auto partial_reload_duration = std::chrono::duration<double, std::milli>(end_partial_reload - start_partial_reload);
+
+        BOOST_REQUIRE_EQUAL(tm, tm_full_reload);
+
+        testlog.info("Tablet metadata reload:\nfull    {:>8.2f}ms\npartial {:>8.2f}ms", full_reload_duration.count(), partial_reload_duration.count());
     }, tablet_cql_test_config());
 }
 
