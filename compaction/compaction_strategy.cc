@@ -35,7 +35,11 @@
 
 logging::logger leveled_manifest::logger("LeveledManifest");
 
+using namespace sstables;
+
 namespace sstables {
+
+using timestamp_type = api::timestamp_type;
 
 compaction_descriptor compaction_strategy_impl::make_major_compaction_job(std::vector<sstables::shared_sstable> candidates, int level, uint64_t max_sstable_bytes) {
     // run major compaction in maintenance priority

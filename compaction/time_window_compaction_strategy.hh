@@ -59,15 +59,13 @@ public:
     friend class time_window_backlog_tracker;
 };
 
-using timestamp_type = api::timestamp_type;
-
 struct time_window_compaction_strategy_state {
     int64_t estimated_remaining_tasks = 0;
     db_clock::time_point last_expired_check;
-    // As timestamp_type is an int64_t, a primitive type, it must be initialized here.
-    timestamp_type highest_window_seen = 0;
+    // As api::timestamp_type is an int64_t, a primitive type, it must be initialized here.
+    api::timestamp_type highest_window_seen = 0;
     // Keep track of all recent active windows that still need to be compacted into a single SSTable
-    std::unordered_set<timestamp_type> recent_active_windows;
+    std::unordered_set<api::timestamp_type> recent_active_windows;
 };
 
 class time_window_compaction_strategy : public compaction_strategy_impl {
@@ -91,11 +89,11 @@ public:
 private:
     time_window_compaction_strategy_state& get_state(table_state& table_s) const;
 
-    static timestamp_type
+    static api::timestamp_type
     to_timestamp_type(time_window_compaction_strategy_options::timestamp_resolutions resolution, int64_t timestamp_from_sstable) {
         switch (resolution) {
         case time_window_compaction_strategy_options::timestamp_resolutions::microsecond:
-            return timestamp_type(timestamp_from_sstable);
+            return api::timestamp_type(timestamp_from_sstable);
         case time_window_compaction_strategy_options::timestamp_resolutions::millisecond:
             return std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::milliseconds(timestamp_from_sstable)).count();
         default:
@@ -104,13 +102,13 @@ private:
     }
 
     // Returns true if bucket is the last, most active one.
-    bool is_last_active_bucket(timestamp_type bucket_key, timestamp_type now) const {
+    bool is_last_active_bucket(api::timestamp_type bucket_key, api::timestamp_type now) const {
         return bucket_key >= now;
     }
 
     // Returns which compaction type should be performed on a given window bucket.
     bucket_compaction_mode
-    compaction_mode(const time_window_compaction_strategy_state&, const bucket_t& bucket, timestamp_type bucket_key, timestamp_type now, size_t min_threshold) const;
+    compaction_mode(const time_window_compaction_strategy_state&, const bucket_t& bucket, api::timestamp_type bucket_key, api::timestamp_type now, size_t min_threshold) const;
 
     std::vector<shared_sstable>
     get_next_non_expired_sstables(table_state& table_s, strategy_control& control, std::vector<shared_sstable> non_expiring_sstables, gc_clock::time_point compaction_time);
@@ -118,18 +116,18 @@ private:
     std::vector<shared_sstable> get_compaction_candidates(table_state& table_s, strategy_control& control, std::vector<shared_sstable> candidate_sstables);
 public:
     // Find the lowest timestamp for window of given size
-    static timestamp_type
-    get_window_lower_bound(std::chrono::seconds sstable_window_size, timestamp_type timestamp);
+    static api::timestamp_type
+    get_window_lower_bound(std::chrono::seconds sstable_window_size, api::timestamp_type timestamp);
 
     // Group files with similar max timestamp into buckets.
     // @return A pair, where the left element is the bucket representation (map of timestamp to sstablereader),
     // and the right is the highest timestamp seen
-    static std::pair<std::map<timestamp_type, std::vector<shared_sstable>>, timestamp_type>
+    static std::pair<std::map<api::timestamp_type, std::vector<shared_sstable>>, api::timestamp_type>
     get_buckets(std::vector<shared_sstable> files, const time_window_compaction_strategy_options& options);
 
     std::vector<shared_sstable>
-    newest_bucket(table_state& table_s, strategy_control& control, std::map<timestamp_type, std::vector<shared_sstable>> buckets,
-        int min_threshold, int max_threshold, timestamp_type now);
+    newest_bucket(table_state& table_s, strategy_control& control, std::map<api::timestamp_type, std::vector<shared_sstable>> buckets,
+        int min_threshold, int max_threshold, api::timestamp_type now);
 
     static std::vector<shared_sstable>
     trim_to_threshold(std::vector<shared_sstable> bucket, int max_threshold);
@@ -141,11 +139,11 @@ public:
 
     static api::timestamp_type
     get_window_size(const time_window_compaction_strategy_options& options) {
-        return timestamp_type(std::chrono::duration_cast<std::chrono::microseconds>(options.get_sstable_window_size()).count());
+        return api::timestamp_type(std::chrono::duration_cast<std::chrono::microseconds>(options.get_sstable_window_size()).count());
     }
 private:
     void update_estimated_compaction_by_tasks(time_window_compaction_strategy_state& state,
-        std::map<timestamp_type, std::vector<shared_sstable>>& tasks,
+        std::map<api::timestamp_type, std::vector<shared_sstable>>& tasks,
         int min_threshold, int max_threshold);
 
     friend class time_window_backlog_tracker;

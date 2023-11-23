@@ -81,7 +81,7 @@ void table::update_sstables_known_generation(sstables::generation_type generatio
 sstables::generation_type table::calculate_generation_for_new_table() {
     assert(_sstable_generation_generator);
     auto ret = std::invoke(*_sstable_generation_generator,
-                           uuid_identifiers{_sstables_manager.uuid_sstable_identifiers()});
+                           sstables::uuid_identifiers{_sstables_manager.uuid_sstable_identifiers()});
     tlogger.debug("{}.{} new sstable generation {}", schema()->ks_name(), schema()->cf_name(), ret);
     return ret;
 }
@@ -110,7 +110,7 @@ table::make_sstable_reader(schema_ptr s,
                 _stats.estimated_sstable_per_read, pr, slice, std::move(trace_state), fwd, fwd_mr, predicate);
     } else {
         return sstables->make_local_shard_sstable_reader(std::move(s), std::move(permit), pr, slice,
-                std::move(trace_state), fwd, fwd_mr, default_read_monitor_generator(), predicate);
+                std::move(trace_state), fwd, fwd_mr, sstables::default_read_monitor_generator(), predicate);
     }
 }
 
@@ -2706,7 +2706,7 @@ table::make_reader_v2_excluding_staging(schema_ptr s,
         readers.reserve(memtable_count + 1);
     });
 
-    static const sstables::sstable_predicate excl_staging_predicate = [] (const sstable& sst) {
+    static const sstables::sstable_predicate excl_staging_predicate = [] (const sstables::sstable& sst) {
         return !sst.requires_view_building();
     };
 

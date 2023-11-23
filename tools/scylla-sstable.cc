@@ -40,6 +40,7 @@
 #include "locator/host_id.hh"
 
 using namespace seastar;
+using namespace sstables;
 
 using json_writer = mutation_json::json_writer;
 
@@ -866,7 +867,7 @@ public:
         , _output_dir(std::move(output_dir))
         , _main_set(sstables::make_partitioned_sstable_set(_schema, false))
         , _maintenance_set(sstables::make_partitioned_sstable_set(_schema, false))
-        , _compaction_strategy(compaction::make_compaction_strategy(_schema->compaction_strategy(), _schema->compaction_strategy_options()))
+        , _compaction_strategy(sstables::make_compaction_strategy(_schema->compaction_strategy(), _schema->compaction_strategy_options()))
         , _compaction_strategy_state(compaction::compaction_strategy_state::make(_compaction_strategy))
         , _tombstone_gc_state(nullptr)
         , _backlog_tracker(std::make_unique<dummy_compaction_backlog_tracker>())

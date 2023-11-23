@@ -22,6 +22,8 @@ namespace sstables {
 
 extern logging::logger clogger;
 
+using timestamp_type = api::timestamp_type;
+
 time_window_compaction_strategy_state& time_window_compaction_strategy::get_state(table_state& table_s) const {
     return table_s.get_compaction_strategy_state().get<time_window_compaction_strategy_state>();
 }
