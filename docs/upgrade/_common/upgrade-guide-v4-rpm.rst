@@ -58,9 +58,14 @@ When the upgrade is completed on all nodes, remove the snapshot with the ``nodet
 
 Backup the configuration file
 ------------------------------
+
+Back up the ``scylla.yaml`` configuration file and the ScyllaDB packages
+in case you need to rollback the upgrade.
+
 .. code:: sh
 
-   sudo cp -a /etc/scylla/scylla.yaml /etc/scylla/scylla.yaml.backup-src
+   sudo cp -a /etc/scylla/scylla.yaml /etc/scylla/scylla.yaml.backup
+   sudo cp /etc/yum.repos.d/scylla.repo ~/scylla.repo-backup
 
 Stop ScyllaDB
 ---------------
@@ -124,29 +129,33 @@ Rollback Steps
 ==============
 Gracefully shutdown ScyllaDB
 -----------------------------
+
 .. code:: sh
 
    nodetool drain
- .. include:: /rst_include/scylla-commands-stop-index.rst
+   nodetool snapshot
+   sudo service scylla-server stop
 
-Download and install the old release
+Restore and install the old release
 ------------------------------------
-#. Remove the old repo file.
+#. Restore the |SRC_VERSION| packages backed up during the upgrade.
 
     .. code:: sh
 
-       sudo rm -rf /etc/yum.repos.d/scylla.repo
+       sudo cp ~/scylla.repo-backup /etc/yum.repos.d/scylla.repo
+       sudo chown root.root /etc/yum.repos.d/scylla.repo
+       sudo chmod 644 /etc/yum.repos.d/scylla.repo
 
-#. Update the |SCYLLA_REPO|_  to |SRC_VERSION|.
 #. Install:
 
     .. code:: console
 
        sudo yum clean all
        sudo rm -rf /var/cache/yum
-       sudo yum remove scylla\\*tools-core
-       sudo yum downgrade scylla\\* -y
-       sudo yum install scylla
+       sudo yum downgrade scylla-\*cqlsh -y
+       sudo yum remove scylla-\*cqlsh -y
+       sudo yum downgrade scylla\* -y
+       sudo yum install scylla -y
      
 
 Restore the configuration file
@@ -155,18 +164,7 @@ Restore the configuration file
 .. code:: sh
 
    sudo rm -rf /etc/scylla/scylla.yaml
-   sudo cp -a /etc/scylla/scylla.yaml.backup-src | /etc/scylla/scylla.yaml
-
-Restore system tables
----------------------
-
-Restore all tables of **system** and **system_schema** from previous snapshot because |NEW_VERSION| uses a different set of system tables. See :doc:`Restore from a Backup and Incremental Backup </operating-scylla/procedures/backup-restore/restore/>` for details.
-
-.. code:: sh
-
-    cd /var/lib/scylla/data/keyspace_name/table_name-UUID/snapshots/<snapshot_name>/
-    sudo cp -r * /var/lib/scylla/data/keyspace_name/table_name-UUID/
-    sudo chown -R scylla:scylla /var/lib/scylla/data/keyspace_name/table_name-UUID/
+   sudo cp /etc/scylla/scylla.yaml-backup /etc/scylla/scylla.yaml
 
 Reload systemd configuration
 ---------------------------------
