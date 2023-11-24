@@ -174,6 +174,25 @@ class ManagerClient():
         logger.debug("ManagerClient unpausing %s", server_id)
         await self.client.put_json(f"/cluster/server/{server_id}/unpause")
 
+    def _create_server_add_data(self, replace_cfg: Optional[ReplaceConfig] = None,
+                                cmdline: Optional[List[str]] = None,
+                                config: Optional[dict[str, Any]] = None,
+                                property_file: Optional[dict[str, Any]] = None,
+                                start: bool = True,
+                                expected_error: Optional[str] = None) -> dict[str, Any]:
+        data: dict[str, Any] = {'start': start}
+        if replace_cfg:
+            data['replace_cfg'] = replace_cfg._asdict()
+        if cmdline:
+            data['cmdline'] = cmdline
+        if config:
+            data['config'] = config
+        if property_file:
+            data['property_file'] = property_file
+        if expected_error:
+            data['expected_error'] = expected_error
+        return data
+
     async def server_add(self, replace_cfg: Optional[ReplaceConfig] = None,
                          cmdline: Optional[List[str]] = None,
                          config: Optional[dict[str, Any]] = None,
@@ -182,17 +201,7 @@ class ManagerClient():
                          expected_error: Optional[str] = None) -> ServerInfo:
         """Add a new server"""
         try:
-            data: dict[str, Any] = {'start': start}
-            if replace_cfg:
-                data['replace_cfg'] = replace_cfg._asdict()
-            if cmdline:
-                data['cmdline'] = cmdline
-            if config:
-                data['config'] = config
-            if property_file:
-                data['property_file'] = property_file
-            if expected_error:
-                data['expected_error'] = expected_error
+            data = self._create_server_add_data(replace_cfg, cmdline, config, property_file, start, expected_error)
 
             # If we replace, we should wait until other nodes see the node being
             # replaced as dead because the replace operation can be rejected if
@@ -218,6 +227,41 @@ class ManagerClient():
         else:
             await self.driver_connect()
         return s_info
+
+    async def servers_add(self, servers_num: int = 1,
+                          cmdline: Optional[List[str]] = None,
+                          config: Optional[dict[str, Any]] = None,
+                          property_file: Optional[dict[str, Any]] = None,
+                          start: bool = True,
+                          expected_error: Optional[str] = None) -> [ServerInfo]:
+        """Add new servers concurrently"""
+        assert servers_num > 0, f"servers_add: cannot add {servers_num} servers, servers_num must be positive"
+
+        try:
+            data = self._create_server_add_data(None, cmdline, config, property_file, start, expected_error)
+            data['servers_num'] = servers_num
+            server_infos = await self.client.put_json("/cluster/addservers", data, response_type="json",
+                                                      timeout=ScyllaServer.TOPOLOGY_TIMEOUT * servers_num)
+        except Exception as exc:
+            raise Exception("Failed to add servers") from exc
+
+        assert len(server_infos) == servers_num, f"servers_add requested adding {servers_num} servers but " \
+                                    f"got server data about {len(server_infos)} servers: {server_infos}"
+        s_infos = list[ServerInfo]()
+        for server_info in server_infos:
+            try:
+                s_info = ServerInfo(ServerNum(int(server_info["server_id"])),
+                                    IPAddress(server_info["ip_addr"]))
+                s_infos.append(s_info)
+            except Exception as exc:
+                raise RuntimeError(f"servers_add got invalid server data {server_info}") from exc
+
+        logger.debug("ManagerClient added %s", s_infos)
+        if self.cql:
+            self._driver_update()
+        else:
+            await self.driver_connect()
+        return s_infos
 
     async def remove_node(self, initiator_id: ServerNum, server_id: ServerNum,
                           ignore_dead: List[IPAddress] | List[HostID] = list[IPAddress](),

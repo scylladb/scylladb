@@ -611,6 +611,8 @@ class ScyllaCluster:
         self.stopped: Dict[ServerNum, ScyllaServer] = {}        # servers no longer running but present
         self.servers = ChainMap(self.running, self.stopped)
         self.removed: Set[ServerNum] = set()                    # removed servers (might be running)
+        # The first IP assigned to a server added to the cluster.
+        self.initial_seed: Optional[IPAddress] = None
         # cluster is started (but it might not have running servers)
         self.is_running: bool = False
         # cluster was modified in a way it should not be used in subsequent tests
@@ -682,6 +684,9 @@ class ScyllaCluster:
             self.running.clear()
 
     def _seeds(self) -> List[str]:
+        # If the cluster is empty, all servers must use self.initial_seed to not start separate clusters.
+        if not self.servers:
+            return [self.initial_seed] if self.initial_seed else []
         return [server.ip_addr for server in self.running.values()]
 
     async def add_server(self, replace_cfg: Optional[ReplaceConfig] = None,
@@ -729,6 +734,9 @@ class ScyllaCluster:
             self.logger.info("Cluster %s obtained new IP: %s", self.name, ip_addr)
             self.leased_ips.add(ip_addr)
 
+        if not self.initial_seed:
+            self.initial_seed = ip_addr
+
         seeds = self._seeds()
         if not seeds:
             seeds = [ip_addr]
@@ -763,6 +771,18 @@ class ScyllaCluster:
             self.stopped[server.server_id] = server
         self.logger.info("Cluster %s added %s", self, server)
         return ServerInfo(server.server_id, server.ip_addr)
+
+    async def add_servers(self, servers_num: int = 1,
+                          cmdline: Optional[List[str]] = None,
+                          config: Optional[dict[str, Any]] = None,
+                          property_file: Optional[dict[str, Any]] = None,
+                          start: bool = True,
+                          expected_error: Optional[str] = None) -> [ServerInfo]:
+        """Add multiple servers to the cluster concurrently"""
+        assert servers_num > 0, f"add_servers: cannot add {servers_num} servers"
+
+        return await asyncio.gather(*(self.add_server(None, cmdline, config, property_file, start, expected_error)
+                                      for _ in range(servers_num)))
 
     def endpoint(self) -> str:
         """Get a server id (IP) from running servers"""
@@ -1063,6 +1083,7 @@ class ScyllaClusterManager:
         add_put('/cluster/server/{server_id}/pause', self._cluster_server_pause)
         add_put('/cluster/server/{server_id}/unpause', self._cluster_server_unpause)
         add_put('/cluster/addserver', self._cluster_server_add)
+        add_put('/cluster/addservers', self._cluster_servers_add)
         add_put('/cluster/remove-node/{initiator}', self._cluster_remove_node)
         add_put('/cluster/decommission-node/{server_id}', self._cluster_decommission_node)
         add_put('/cluster/rebuild-node/{server_id}', self._cluster_rebuild_node)
@@ -1178,6 +1199,15 @@ class ScyllaClusterManager:
                                                data.get('property_file'), data.get('start', True),
                                                data.get('expected_error', None))
         return {"server_id" : s_info.server_id, "ip_addr": s_info.ip_addr}
+
+    async def _cluster_servers_add(self, request) -> list[dict[str, object]]:
+        """Add new servers concurrently"""
+        assert self.cluster
+        data = await request.json()
+        s_infos = await self.cluster.add_servers(data.get('servers_num'), data.get('cmdline'), data.get('config'),
+                                                 data.get('property_file'), data.get('start', True),
+                                                 data.get('expected_error', None))
+        return [{"server_id" : s_info.server_id, "ip_addr": s_info.ip_addr} for s_info in s_infos]
 
     async def _cluster_remove_node(self, request: aiohttp.web.Request) -> None:
         """Run remove node on Scylla REST API for a specified server"""
