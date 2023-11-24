@@ -114,7 +114,6 @@ private:
     utils::estimated_histogram _estimated_cells_count{114};
     db::replay_position _replay_position;
     min_max_tracker<api::timestamp_type> _timestamp_tracker;
-    uint64_t _repaired_at = 0;
     min_max_tracker<int32_t> _local_deletion_time_tracker{std::numeric_limits<int32_t>::max(), std::numeric_limits<int32_t>::max()};
     min_max_tracker<int32_t> _ttl_tracker{0, 0};
     double _compression_ratio = NO_COMPRESSION_RATIO;
@@ -180,10 +179,6 @@ public:
         _replay_position = rp;
     }
 
-    void set_repaired_at(uint64_t repaired_at) {
-        _repaired_at = repaired_at;
-    }
-
     void set_sstable_level(int sstable_level) {
         _sstable_level = sstable_level;
     }
@@ -225,7 +220,6 @@ public:
         m.compression_ratio = _compression_ratio;
         m.estimated_tombstone_drop_time = std::move(_estimated_tombstone_drop_time);
         m.sstable_level = _sstable_level;
-        m.repaired_at = _repaired_at;
         convert(m.min_column_names, _min_clustering_pos);
         convert(m.max_column_names, _max_clustering_pos);
         m.has_legacy_counter_shards = _has_legacy_counter_shards;

@@ -311,7 +311,9 @@ struct stats_metadata : public metadata_base<stats_metadata> {
     double compression_ratio;
     utils::streaming_histogram estimated_tombstone_drop_time;
     uint32_t sstable_level;
-    uint64_t repaired_at;
+    // There is not meaningful value to put in this field, since we have no
+    // incremental repair. Before we have it, let's set it to 0.
+    uint64_t repaired_at = 0;
     disk_array<uint32_t, disk_string<uint16_t>> min_column_names;
     disk_array<uint32_t, disk_string<uint16_t>> max_column_names;
     bool has_legacy_counter_shards;
