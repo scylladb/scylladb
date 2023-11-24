@@ -12,6 +12,8 @@
 #include <seastar/core/gate.hh>
 #include <seastar/util/defer.hh>
 
+#include <boost/range/adaptors.hpp>
+
 #include "db/timeout_clock.hh"
 #include "task_manager.hh"
 #include "utils/error_injection.hh"
@@ -92,8 +94,8 @@ task_manager::task::impl::impl(module_ptr module, task_id id, uint64_t sequence_
     , _parent_id(parent_id)
     , _module(module)
 {
-    // Child tasks do not need to subscribe to abort source because they will be aborted recursively by their parents.
-    if (!parent_id) {
+    // Child tasks of regular tasks do not need to subscribe to abort source because they will be aborted recursively by their parents.
+    if (!parent_id || _parent_kind == task_kind::cluster) {
         _shutdown_subscription = module->abort_source().subscribe([this] () noexcept {
             abort();
         });
@@ -190,6 +192,10 @@ future<std::vector<task_manager::task::task_essentials>> task_manager::task::imp
     );
 }
 
+void task_manager::task::impl::set_virtual_parent() noexcept {
+    _parent_kind = task_kind::cluster;
+}
+
 void task_manager::task::impl::run_to_completion() {
     (void)run().then([this] {
         _as.check();
@@ -201,7 +207,7 @@ void task_manager::task::impl::run_to_completion() {
 
 future<> task_manager::task::impl::maybe_fold_into_parent() const noexcept {
     try {
-        if (is_internal() && _parent_id && _children.all_finished()) {
+        if (is_internal() && _parent_id && _parent_kind == task_kind::node && _children.all_finished()) {
             auto parent = co_await _module->get_task_manager().lookup_task_on_all_shards(_module->get_task_manager().container(), _parent_id);
             task_essentials child{
                 .task_status = _status,
@@ -294,7 +300,7 @@ void task_manager::task::start() {
         // Background fiber does not capture task ptr, so the task can be unregistered and destroyed independently in the foreground.
         // After the ttl expires, the task id will be used to unregister the task if that didn't happen in any other way.
         auto module = _impl->_module;
-        bool drop_after_complete = get_parent_id() || is_internal();
+        bool drop_after_complete = (get_parent_id() && _impl->_parent_kind == task_kind::node) || is_internal();
         (void)done().finally([module, drop_after_complete] {
             if (drop_after_complete) {
                 return make_ready_future<>();
@@ -362,6 +368,68 @@ bool task_manager::task::is_complete() const noexcept {
 
 future<std::vector<task_manager::task::task_essentials>> task_manager::task::get_failed_children() const {
     return _impl->get_failed_children();
+}
+
+void task_manager::task::set_virtual_parent() noexcept {
+    _impl->set_virtual_parent();
+}
+
+task_manager::virtual_task::impl::impl(module_ptr module) noexcept
+    : _module(std::move(module))
+{}
+
+future<std::vector<task_identity>> task_manager::virtual_task::impl::get_children(module_ptr module, task_id parent_id) {
+    return make_ready_future<std::vector<task_identity>>();
+}
+
+task_manager::module_ptr task_manager::virtual_task::impl::get_module() const noexcept {
+    return _module;
+}
+
+task_manager& task_manager::virtual_task::impl::get_task_manager() const noexcept {
+    return _module->get_task_manager();
+}
+
+future<tasks::is_abortable> task_manager::virtual_task::impl::is_abortable() const {
+    return make_ready_future<tasks::is_abortable>(is_abortable::no);
+}
+
+task_manager::virtual_task::virtual_task(virtual_task_impl_ptr&& impl) noexcept
+    : _impl(std::move(impl))
+{
+    assert(this_shard_id() == 0);
+}
+
+future<std::set<task_id>> task_manager::virtual_task::get_ids() const {
+    return _impl->get_ids();
+}
+
+task_manager::module_ptr task_manager::virtual_task::get_module() const noexcept {
+    return _impl->get_module();
+}
+
+task_manager::task_group task_manager::virtual_task::get_group() const noexcept {
+    return _impl->get_group();
+}
+
+future<tasks::is_abortable> task_manager::virtual_task::is_abortable() const {
+    return _impl->is_abortable();
+}
+
+future<std::optional<task_status>> task_manager::virtual_task::get_status(task_id id) {
+    return _impl->get_status(id);
+}
+
+future<std::optional<task_status>> task_manager::virtual_task::wait(task_id id) {
+    return _impl->wait(id);
+}
+
+future<> task_manager::virtual_task::abort(task_id id) noexcept {
+    return _impl->abort(id);
+}
+
+future<std::vector<task_stats>> task_manager::virtual_task::get_stats() {
+    return _impl->get_stats();
 }
 
 task_manager::module::module(task_manager& tm, std::string name) noexcept : _tm(tm), _name(std::move(name)) {
