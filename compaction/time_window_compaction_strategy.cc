@@ -433,14 +433,21 @@ time_window_compaction_strategy::get_buckets(std::vector<shared_sstable> files, 
     return std::make_pair(std::move(buckets), max_timestamp);
 }
 
-static std::ostream& operator<<(std::ostream& os, const std::map<timestamp_type, std::vector<shared_sstable>>& buckets) {
-    os << "  buckets = {\n";
-    for (auto& bucket : buckets | boost::adaptors::reversed) {
-        os << format("    key={}, size={}\n", bucket.first, bucket.second.size());
-    }
-    os << "  }\n";
-    return os;
 }
+
+template <>
+struct fmt::formatter<std::map<sstables::timestamp_type, std::vector<sstables::shared_sstable>>> {
+    constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
+    auto format(const std::map<sstables::timestamp_type, std::vector<sstables::shared_sstable>>& buckets, fmt::format_context& ctx) const {
+        auto out = fmt::format_to(ctx.out(), "  buckets = {{\n");
+        for (auto& [timestamp, sstables] : buckets | boost::adaptors::reversed) {
+            out = fmt::format_to(out, "    key={}, size={}\n", timestamp, sstables.size());
+        }
+        return fmt::format_to(out, "  }}\n");
+    }
+};
+
+namespace sstables {
 
 std::vector<shared_sstable>
 time_window_compaction_strategy::newest_bucket(table_state& table_s, strategy_control& control, std::map<timestamp_type, std::vector<shared_sstable>> buckets,
