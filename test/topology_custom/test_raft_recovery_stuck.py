@@ -10,15 +10,14 @@ import logging
 import time
 from test.pylib.manager_client import ManagerClient
 from test.pylib.random_tables import RandomTables
-from test.pylib.util import wait_for_cql_and_get_hosts
+from test.pylib.util import unique_name, wait_for_cql_and_get_hosts
 from test.topology.util import reconnect_driver, restart, enter_recovery_state, wait_for_upgrade_state, \
         wait_until_upgrade_finishes, delete_raft_data_and_upgrade_state, log_run_time
 
 
 @pytest.mark.asyncio
 @log_run_time
-@pytest.mark.replication_factor(1)
-async def test_recover_stuck_raft_recovery(manager: ManagerClient, random_tables: RandomTables):
+async def test_recover_stuck_raft_recovery(request, manager: ManagerClient):
     """
     After creating a cluster, we enter RECOVERY state on every server. Then, we delete the Raft data
     and the upgrade state on all servers. We restart them and the upgrade procedure starts. One of the
@@ -28,7 +27,9 @@ async def test_recover_stuck_raft_recovery(manager: ManagerClient, random_tables
     the other servers, remove the failed one, and clear existing Raft data. After leaving RECOVERY the
     remaining nodes will restart the procedure, establish a new group 0 and finish upgrade.
     """
-    servers = await manager.running_servers()
+    cfg = {'enable_user_defined_functions': False,
+           'experimental_features': list[str]()}
+    servers = [await manager.server_add(config=cfg) for _ in range(3)]
     srv1, *others = servers
 
     logging.info("Waiting until driver connects to every server")
@@ -87,6 +88,7 @@ async def test_recover_stuck_raft_recovery(manager: ManagerClient, random_tables
         assert rs[0].value == 'recovery'
 
     logging.info("Creating a table while in recovery state")
+    random_tables = RandomTables(request.node.name, manager, unique_name(), 1)
     table = await random_tables.add_table(ncolumns=5)
 
     logging.info(f"Stopping {srv1}")

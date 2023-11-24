@@ -10,15 +10,14 @@ import logging
 import time
 from test.pylib.manager_client import ManagerClient
 from test.pylib.random_tables import RandomTables
-from test.pylib.util import wait_for_cql_and_get_hosts
+from test.pylib.util import unique_name, wait_for_cql_and_get_hosts
 from test.topology.util import reconnect_driver, restart, enter_recovery_state, \
         wait_until_upgrade_finishes, delete_raft_data_and_upgrade_state, log_run_time
 
 
 @pytest.mark.asyncio
 @log_run_time
-@pytest.mark.replication_factor(1)
-async def test_recovery_after_majority_loss(manager: ManagerClient, random_tables: RandomTables):
+async def test_recovery_after_majority_loss(request, manager: ManagerClient):
     """
     All initial servers but one fail - group 0 is left without a majority. We create a new group
     0 by entering RECOVERY, using `removenode` to get rid of the other servers, clearing Raft
@@ -29,13 +28,16 @@ async def test_recovery_after_majority_loss(manager: ManagerClient, random_table
     for schema agreement to complete before proceeding, so we know that every server learned
     about the schema changes.
     """
-    servers = await manager.running_servers()
+    cfg = {'enable_user_defined_functions': False,
+           'experimental_features': list[str]()}
+    servers = [await manager.server_add(config=cfg) for _ in range(3)]
 
     logging.info("Waiting until driver connects to every server")
     cql = manager.get_cql()
     hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
 
     logging.info("Creating a bunch of tables")
+    random_tables = RandomTables(request.node.name, manager, unique_name(), 1)
     tables = await asyncio.gather(*(random_tables.add_table(ncolumns=5) for _ in range(5)))
 
     srv1, *others = servers
@@ -76,4 +78,4 @@ async def test_recovery_after_majority_loss(manager: ManagerClient, random_table
     await random_tables.add_table(ncolumns=5)
 
     logging.info("Booting new node")
-    await manager.server_add()
+    await manager.server_add(config=cfg)
