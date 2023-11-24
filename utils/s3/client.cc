@@ -925,12 +925,22 @@ public:
     }
 
     virtual future<size_t> read_dma(uint64_t pos, void* buffer, size_t len, io_intent*) override {
+        co_await maybe_update_stats();
+        if (pos >= _stats->size) {
+            co_return 0;
+        }
+
         auto buf = co_await _client->get_object_contiguous(_object_name, range{ pos, len });
         std::copy_n(buf.get(), buf.size(), reinterpret_cast<uint8_t*>(buffer));
         co_return buf.size();
     }
 
     virtual future<size_t> read_dma(uint64_t pos, std::vector<iovec> iov, io_intent*) override {
+        co_await maybe_update_stats();
+        if (pos >= _stats->size) {
+            co_return 0;
+        }
+
         auto buf = co_await _client->get_object_contiguous(_object_name, range{ pos, utils::iovec_len(iov) });
         uint64_t off = 0;
         for (auto& v : iov) {
@@ -945,6 +955,11 @@ public:
     }
 
     virtual future<temporary_buffer<uint8_t>> dma_read_bulk(uint64_t offset, size_t range_size, io_intent*) override {
+        co_await maybe_update_stats();
+        if (offset >= _stats->size) {
+            co_return temporary_buffer<uint8_t>();
+        }
+
         auto buf = co_await _client->get_object_contiguous(_object_name, range{ offset, range_size });
         co_return temporary_buffer<uint8_t>(reinterpret_cast<uint8_t*>(buf.get_write()), buf.size(), buf.release());
     }
