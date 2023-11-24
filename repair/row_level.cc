@@ -662,18 +662,30 @@ future<std::list<repair_row>> to_repair_rows_list(repair_rows_on_wire rows, sche
     co_return std::move(row_list);
 }
 
-void flush_rows(schema_ptr s, std::list<repair_row>& rows, lw_shared_ptr<repair_writer>& writer) {
+void flush_rows(schema_ptr s, std::list<repair_row>& rows, lw_shared_ptr<repair_writer>& writer, locator::effective_replication_map_ptr erm, bool small_table_optimization) {
     auto cmp = position_in_partition::tri_compare(*s);
     lw_shared_ptr<mutation_fragment> last_mf;
     lw_shared_ptr<const decorated_key_with_hash> last_dk;
+    bool do_small_table_optimization = erm && small_table_optimization;
+    auto* strat = do_small_table_optimization ? &erm->get_replication_strategy() : nullptr;
+    auto* tm = do_small_table_optimization ? &erm->get_token_metadata() : nullptr;
+    auto myip = do_small_table_optimization ? utils::fb_utilities::get_broadcast_address() : gms::inet_address();
     for (auto& r : rows) {
         thread::maybe_yield();
         if (!r.dirty_on_master()) {
             continue;
         }
+        const auto& dk = r.get_dk_with_hash()->dk;
+        if (do_small_table_optimization) {
+            // Check if the token is owned by the node
+            auto eps = strat->calculate_natural_endpoints(dk.token(), *tm).get0();
+            if (!eps.contains(myip)) {
+                rlogger.trace("master: ignore row, token={}", dk.token());
+                continue;
+            }
+        }
         writer->create_writer();
         auto mf = r.get_mutation_fragment_ptr();
-        const auto& dk = r.get_dk_with_hash()->dk;
         if (last_mf && last_dk &&
                 cmp(last_mf->position(), mf->position()) == 0 &&
                 dk.tri_compare(*s, last_dk->dk) == 0 &&
@@ -1368,13 +1380,13 @@ private:
     }
 public:
     // Must run inside a seastar thread
-    void flush_rows_in_working_row_buf() {
+    void flush_rows_in_working_row_buf(locator::effective_replication_map_ptr erm, bool small_table_optimization) {
         if (_dirty_on_master) {
             _dirty_on_master = is_dirty_on_master::no;
         } else {
             return;
         }
-        flush_rows(_schema, _working_row_buf, _repair_writer);
+        flush_rows(_schema, _working_row_buf, _repair_writer, erm, small_table_optimization);
     }
 
 private:
@@ -1870,37 +1882,55 @@ public:
     future<> put_row_diff_with_rpc_stream(
             repair_hash_set set_diff,
             needs_all_rows_t needs_all_rows,
-            gms::inet_address remote_node, unsigned node_idx) {
-        if (!set_diff.empty()) {
-            if (remote_node == _myip) {
-                return make_ready_future<>();
-            }
-            size_t sz = set_diff.size();
-            return get_row_diff(std::move(set_diff), needs_all_rows).then([this, remote_node, node_idx, sz] (std::list<repair_row> row_diff) {
-                if (row_diff.size() != sz) {
-                    rlogger.warn("Hash conflict detected, keyspace={}, table={}, range={}, row_diff.size={}, set_diff.size={}. It is recommended to compact the table and rerun repair for the range.",
-                            _schema->ks_name(), _schema->cf_name(), _range, row_diff.size(), sz);
-                }
-                return do_with(std::move(row_diff), [this, remote_node, node_idx] (std::list<repair_row>& row_diff) {
-                    return get_repair_rows_size(row_diff).then([this, remote_node, node_idx, &row_diff] (size_t row_bytes) mutable {
-                        stats().tx_row_nr += row_diff.size();
-                        stats().tx_row_nr_peer[remote_node] += row_diff.size();
-                        stats().tx_row_bytes += row_bytes;
-                        stats().rpc_call_nr++;
-                        return to_repair_rows_on_wire(std::move(row_diff)).then([this, remote_node, node_idx] (repair_rows_on_wire rows)  {
-                            return  _sink_source_for_put_row_diff.get_sink_source(remote_node, node_idx).then_unpack(
-                                    [this, rows = std::move(rows), remote_node, node_idx]
-                                    (rpc::sink<repair_row_on_wire_with_cmd>& sink, rpc::source<repair_stream_cmd>& source) mutable {
-                                auto source_op = put_row_diff_source_op(remote_node, node_idx, source);
-                                auto sink_op = put_row_diff_sink_op(std::move(rows), sink, remote_node);
-                                return when_all_succeed(std::move(source_op), std::move(sink_op)).discard_result();
-                            });
-                        });
-                    });
-                });
-            });
+            gms::inet_address remote_node, unsigned node_idx,
+            const locator::effective_replication_map& erm, bool small_table_optimization) {
+        if (set_diff.empty()) {
+            co_return;
         }
-        return make_ready_future<>();
+        if (remote_node == _myip) {
+            co_return;
+        }
+        size_t sz = set_diff.size();
+
+        std::list<repair_row> row_diff = co_await get_row_diff(std::move(set_diff), needs_all_rows);
+        if (row_diff.size() != sz) {
+            rlogger.warn("Hash conflict detected, keyspace={}, table={}, range={}, row_diff.size={}, set_diff.size={}. It is recommended to compact the table and rerun repair for the range.",
+                    _schema->ks_name(), _schema->cf_name(), _range, row_diff.size(), sz);
+        }
+        if (small_table_optimization) {
+            auto& strat = erm.get_replication_strategy();
+            auto& tm = erm.get_token_metadata();
+            std::list<repair_row> tmp;
+            for (auto& row : row_diff) {
+                repair_row r = std::move(row);
+                const auto& dk = r.get_dk_with_hash()->dk;
+                auto eps = co_await strat.calculate_natural_endpoints(dk.token(), tm);
+                if (eps.contains(remote_node)) {
+                    tmp.push_back(std::move(r));
+                } else {
+                    rlogger.trace("master: put : ignore row, token={}", dk.token());
+                }
+            }
+            row_diff = std::move(tmp);
+        }
+
+        size_t row_bytes = co_await get_repair_rows_size(row_diff);
+
+        stats().tx_row_nr += row_diff.size();
+        stats().tx_row_nr_peer[remote_node] += row_diff.size();
+        stats().tx_row_bytes += row_bytes;
+        stats().rpc_call_nr++;
+
+        repair_rows_on_wire rows = co_await to_repair_rows_on_wire(std::move(row_diff));
+
+        auto [sink, source] = co_await _sink_source_for_put_row_diff.get_sink_source(remote_node, node_idx);
+        auto source_op = [&] () mutable -> future<> {
+            co_await put_row_diff_source_op(remote_node, node_idx, source);
+        };
+        auto sink_op = [&] () mutable -> future<> {
+            co_await put_row_diff_sink_op(std::move(rows), sink, remote_node);
+        };
+        co_await coroutine::all(source_op, sink_op);
     }
 
     // RPC handler
@@ -2461,6 +2491,7 @@ class row_level_repair {
     table_id _table_id;
     dht::token_range _range;
     inet_address_vector_replica_set _all_live_peer_nodes;
+    bool _small_table_optimization;
     replica::column_family& _cf;
 
     // Repair master and followers will propose a sync boundary. Each of them
@@ -2509,12 +2540,14 @@ public:
             sstring cf_name,
             table_id table_id,
             dht::token_range range,
-            std::vector<gms::inet_address> all_live_peer_nodes)
+            std::vector<gms::inet_address> all_live_peer_nodes,
+            bool small_table_optimization)
         : _shard_task(shard_task)
         , _cf_name(std::move(cf_name))
         , _table_id(std::move(table_id))
         , _range(std::move(range))
         , _all_live_peer_nodes(sort_peer_nodes(all_live_peer_nodes))
+        , _small_table_optimization(small_table_optimization)
         , _cf(_shard_task.db.local().find_column_family(_table_id))
         , _seed(get_random_seed())
         , _start_time(gc_clock::now()) {
@@ -2741,7 +2774,7 @@ private:
             throw;
           }
         }
-        master.flush_rows_in_working_row_buf();
+        master.flush_rows_in_working_row_buf(get_erm(), _small_table_optimization);
         return op_status::next_step;
     }
 
@@ -2764,7 +2797,7 @@ private:
             auto& node = master.all_nodes()[idx].node;
             if (master.use_rpc_stream()) {
                 ns.state = repair_state::put_row_diff_with_rpc_stream_started;
-                return master.put_row_diff_with_rpc_stream(std::move(set_diff), needs_all_rows, _all_live_peer_nodes[idx], idx).then([&ns] {
+                return master.put_row_diff_with_rpc_stream(std::move(set_diff), needs_all_rows, _all_live_peer_nodes[idx], idx, *get_erm(), _small_table_optimization).then([&ns] {
                     ns.state = repair_state::put_row_diff_with_rpc_stream_finished;
                 }).handle_exception([this, &node] (std::exception_ptr ep) {
                     auto s = _cf.schema();
@@ -2786,6 +2819,11 @@ private:
             }
         }).get();
         master.stats().round_nr_slow_path++;
+    }
+
+private:
+    locator::effective_replication_map_ptr get_erm() {
+        return _shard_task.erm;
     }
 
 private:
@@ -2963,8 +3001,8 @@ public:
 
 future<> repair_cf_range_row_level(repair::shard_repair_task_impl& shard_task,
         sstring cf_name, table_id table_id, dht::token_range range,
-        const std::vector<gms::inet_address>& all_peer_nodes) {
-    auto repair = row_level_repair(shard_task, std::move(cf_name), std::move(table_id), std::move(range), all_peer_nodes);
+        const std::vector<gms::inet_address>& all_peer_nodes, bool small_table_optimization) {
+    auto repair = row_level_repair(shard_task, std::move(cf_name), std::move(table_id), std::move(range), all_peer_nodes, small_table_optimization);
     co_return co_await repair.run();
 }
 

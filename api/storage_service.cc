@@ -325,7 +325,7 @@ void set_repair(http_context& ctx, routes& r, sharded<repair_service>& repair) {
     ss::repair_async.set(r, [&ctx, &repair](std::unique_ptr<http::request> req) {
         static std::vector<sstring> options = {"primaryRange", "parallelism", "incremental",
                 "jobThreads", "ranges", "columnFamilies", "dataCenters", "hosts", "ignore_nodes", "trace",
-                "startToken", "endToken", "ranges_parallelism"};
+                "startToken", "endToken", "ranges_parallelism", "small_table_optimization"};
         std::unordered_map<sstring, sstring> options_map;
         for (auto o : options) {
             auto s = req->get_query_param(o);

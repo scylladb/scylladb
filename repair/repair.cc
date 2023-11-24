@@ -213,9 +213,13 @@ static std::vector<gms::inet_address> get_neighbors(
         const sstring& ksname, query::range<dht::token> range,
         const std::vector<sstring>& data_centers,
         const std::vector<sstring>& hosts,
-        const std::unordered_set<gms::inet_address>& ignore_nodes) {
+        const std::unordered_set<gms::inet_address>& ignore_nodes, bool small_table_optimization = false) {
     dht::token tok = range.end() ? range.end()->value() : dht::maximum_token();
     auto ret = erm.get_natural_endpoints(tok);
+    if (small_table_optimization) {
+        auto normal_nodes = erm.get_token_metadata().get_all_endpoints();
+        ret = inet_address_vector_replica_set(normal_nodes.begin(), normal_nodes.end());
+    }
     remove_item(ret, utils::fb_utilities::get_broadcast_address());
 
     if (!data_centers.empty()) {
@@ -568,6 +572,7 @@ repair::shard_repair_task_impl::shard_repair_task_impl(tasks::task_manager::modu
         const std::unordered_set<gms::inet_address>& ignore_nodes_,
         streaming::stream_reason reason_,
         bool hints_batchlog_flushed,
+        bool small_table_optimization,
         std::optional<int> ranges_parallelism)
     : repair_task_impl(module, id, 0, "shard", keyspace, "", "", parent_id_.uuid(), reason_)
     , rs(repair)
@@ -586,6 +591,7 @@ repair::shard_repair_task_impl::shard_repair_task_impl(tasks::task_manager::modu
     , ignore_nodes(ignore_nodes_)
     , total_rf(erm->get_replication_factor())
     , _hints_batchlog_flushed(std::move(hints_batchlog_flushed))
+    , _small_table_optimization(small_table_optimization)
     , _user_ranges_parallelism(ranges_parallelism ? std::optional<semaphore>(semaphore(*ranges_parallelism)) : std::nullopt)
 {
     rlogger.debug("repair[{}]: Setting user_ranges_parallelism to {}", global_repair_id.uuid(),
@@ -628,7 +634,7 @@ void repair::shard_repair_task_impl::check_in_abort_or_shutdown() {
 
 repair_neighbors repair::shard_repair_task_impl::get_repair_neighbors(const dht::token_range& range) {
     return neighbors.empty() ?
-        repair_neighbors(get_neighbors(*erm, _status.keyspace, range, data_centers, hosts, ignore_nodes)) :
+        repair_neighbors(get_neighbors(*erm, _status.keyspace, range, data_centers, hosts, ignore_nodes, _small_table_optimization)) :
         neighbors[range];
 }
 
@@ -696,7 +702,7 @@ future<> repair::shard_repair_task_impl::repair_range(const dht::token_range& ra
         co_return;
     }
     try {
-        co_await repair_cf_range_row_level(*this, cf, table.id, range, neighbors);
+        co_await repair_cf_range_row_level(*this, cf, table.id, range, neighbors, _small_table_optimization);
     } catch (replica::no_such_column_family&) {
         dropped_tables.insert(cf);
     } catch (...) {
@@ -802,6 +808,8 @@ struct repair_options {
 
     int ranges_parallelism = -1;
 
+    bool small_table_optimization = false;
+
     repair_options(std::unordered_map<sstring, sstring> options) {
         bool_opt(primary_range, options, PRIMARY_RANGE_KEY);
         ranges_opt(ranges, options, RANGES_KEY);
@@ -839,6 +847,8 @@ struct repair_options {
 
         int_opt(ranges_parallelism, options, RANGES_PARALLELISM_KEY);
 
+        bool_opt(small_table_optimization, options, SMALL_TABLE_OPTIMIZATION_KEY);
+
         // The parsing code above removed from the map options we have parsed.
         // If anything is left there in the end, it's an unsupported option.
         if (!options.empty()) {
@@ -860,6 +870,7 @@ struct repair_options {
     static constexpr const char* START_TOKEN = "startToken";
     static constexpr const char* END_TOKEN = "endToken";
     static constexpr const char* RANGES_PARALLELISM_KEY = "ranges_parallelism";
+    static constexpr const char* SMALL_TABLE_OPTIMIZATION_KEY = "small_table_optimization";
 
     // Settings of "parallelism" option. Numbers must match Cassandra's
     // RepairParallelism enum, which is used by the caller.
@@ -1174,8 +1185,15 @@ future<int> repair_service::do_repair_start(sstring keyspace, std::unordered_map
         co_return id.id;
     }
 
+    auto small_table_optimization = options.small_table_optimization;
+    if (small_table_optimization) {
+        auto range = dht::token_range(dht::token_range::bound(dht::minimum_token(), false), dht::token_range::bound(dht::maximum_token(), false));
+        ranges = {range};
+        rlogger.info("repair[{}]: Using small table optimization for keyspace={} tables={} range={}", id.uuid(), keyspace, cfs, range);
+    }
+
     auto ranges_parallelism = options.ranges_parallelism == -1 ? std::nullopt : std::optional<int>(options.ranges_parallelism);
-    auto task = co_await _repair_module->make_and_start_task<repair::user_requested_repair_task_impl>({}, id, std::move(keyspace), "", germs, std::move(cfs), std::move(ranges), std::move(options.hosts), std::move(options.data_centers), std::move(ignore_nodes), ranges_parallelism);
+    auto task = co_await _repair_module->make_and_start_task<repair::user_requested_repair_task_impl>({}, id, std::move(keyspace), "", germs, std::move(cfs), std::move(ranges), std::move(options.hosts), std::move(options.data_centers), std::move(ignore_nodes), small_table_optimization, ranges_parallelism);
     co_return id.id;
 }
 
@@ -1204,7 +1222,13 @@ future<> repair::user_requested_repair_task_impl::run() {
         }
 
         bool hints_batchlog_flushed = false;
-        auto participants = get_hosts_participating_in_repair(germs->get(), keyspace, ranges, data_centers, hosts, ignore_nodes).get();
+        std::list<gms::inet_address> participants;
+        if (_small_table_optimization) {
+            auto normal_nodes = germs->get().get_token_metadata().get_all_endpoints();
+            participants = std::list<gms::inet_address>(normal_nodes.begin(), normal_nodes.end());
+        } else {
+            participants = get_hosts_participating_in_repair(germs->get(), keyspace, ranges, data_centers, hosts, ignore_nodes).get();
+        }
         if (needs_flush_before_repair) {
             auto waiting_nodes = db.get_token_metadata().get_all_endpoints();
             std::erase_if(waiting_nodes, [&] (const auto& addr) {
@@ -1283,13 +1307,14 @@ future<> repair::user_requested_repair_task_impl::run() {
         }
 
         auto ranges_parallelism = _ranges_parallelism;
+        bool small_table_optimization = _small_table_optimization;
         for (auto shard : boost::irange(unsigned(0), smp::count)) {
-            auto f = rs.container().invoke_on(shard, [keyspace, table_ids, id, ranges, hints_batchlog_flushed, ranges_parallelism,
+            auto f = rs.container().invoke_on(shard, [keyspace, table_ids, id, ranges, hints_batchlog_flushed, ranges_parallelism, small_table_optimization,
                     data_centers, hosts, ignore_nodes, parent_data = get_repair_uniq_id().task_info, germs] (repair_service& local_repair) mutable -> future<> {
                 local_repair.get_metrics().repair_total_ranges_sum += ranges.size();
                 auto task = co_await local_repair._repair_module->make_and_start_task<repair::shard_repair_task_impl>(parent_data, tasks::task_id::create_random_id(), keyspace,
                         local_repair, germs->get().shared_from_this(), std::move(ranges), std::move(table_ids),
-                        id, std::move(data_centers), std::move(hosts), std::move(ignore_nodes), streaming::stream_reason::repair, hints_batchlog_flushed, ranges_parallelism);
+                        id, std::move(data_centers), std::move(hosts), std::move(ignore_nodes), streaming::stream_reason::repair, hints_batchlog_flushed, small_table_optimization, ranges_parallelism);
                 auto release_task_resources = defer([&] () noexcept {
                     task->release_resources();
                 });
@@ -1408,10 +1433,11 @@ future<> repair::data_sync_repair_task_impl::run() {
                 auto hosts = std::vector<sstring>();
                 auto ignore_nodes = std::unordered_set<gms::inet_address>();
                 bool hints_batchlog_flushed = false;
+                bool small_table_optimization = false;
                 auto ranges_parallelism = std::nullopt;
                 auto task_impl_ptr = seastar::make_shared<repair::shard_repair_task_impl>(local_repair._repair_module, tasks::task_id::create_random_id(), keyspace,
                         local_repair, germs->get().shared_from_this(), std::move(ranges), std::move(table_ids),
-                        id, std::move(data_centers), std::move(hosts), std::move(ignore_nodes), reason, hints_batchlog_flushed, ranges_parallelism);
+                        id, std::move(data_centers), std::move(hosts), std::move(ignore_nodes), reason, hints_batchlog_flushed, small_table_optimization, ranges_parallelism);
                 task_impl_ptr->neighbors = std::move(neighbors);
                 auto task = co_await local_repair._repair_module->make_task(std::move(task_impl_ptr), parent_data);
                 auto release_task_resources = defer([&] () noexcept {
