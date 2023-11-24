@@ -11,8 +11,7 @@ import time
 from test.pylib.manager_client import ManagerClient
 from test.pylib.random_tables import RandomTables
 from test.pylib.util import wait_for_cql_and_get_hosts
-from test.topology.util import reconnect_driver
-from test.topology_raft_disabled.util import restart, enter_recovery_state, wait_for_upgrade_state, \
+from test.topology.util import reconnect_driver, restart, enter_recovery_state, wait_for_upgrade_state, \
         wait_until_upgrade_finishes, delete_raft_data_and_upgrade_state, log_run_time
 
 

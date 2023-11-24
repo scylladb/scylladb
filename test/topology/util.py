@@ -7,9 +7,11 @@
 Test consistency of schema changes with topology changes.
 """
 import logging
+import functools
 import pytest
 import time
 from cassandra.cluster import Session  # type: ignore # pylint: disable=no-name-in-module
+from cassandra.pool import Host        # type: ignore # pylint: disable=no-name-in-module
 from test.pylib.internal_types import ServerInfo
 from test.pylib.manager_client import ManagerClient
 from test.pylib.util import wait_for, wait_for_cql_and_get_hosts, read_barrier
@@ -92,3 +94,66 @@ async def wait_for_token_ring_and_group0_consistency(manager: ManagerClient, dea
                 return None
             return True
         await wait_for(token_ring_matches, deadline, period=.5)
+
+
+async def restart(manager: ManagerClient, server: ServerInfo) -> None:
+    logging.info(f"Stopping {server} gracefully")
+    await manager.server_stop_gracefully(server.server_id)
+    logging.info(f"Restarting {server}")
+    await manager.server_start(server.server_id)
+    logging.info(f"{server} restarted")
+
+
+async def wait_for_upgrade_state(state: str, cql: Session, host: Host, deadline: float) -> None:
+    """Wait until group 0 upgrade state reaches `state` on `host`, using `cql` to query it.  Warning: if the
+       upgrade procedure may progress beyond `state` this function may not notice when it entered `state` and
+       then time out.  Use it only if either `state` is the last state or the conditions of the test don't allow
+       the upgrade procedure to progress beyond `state` (e.g. a dead node causing the procedure to be stuck).
+    """
+    async def reached_state():
+        rs = await cql.run_async("select value from system.scylla_local where key = 'group0_upgrade_state'", host=host)
+        if rs:
+            value = rs[0].value
+            if value == state:
+                return True
+            else:
+                logging.info(f"Upgrade not yet in state {state} on server {host}, state: {value}")
+        else:
+            logging.info(f"Upgrade not yet in state {state} on server {host}, no state was written")
+        return None
+    await wait_for(reached_state, deadline)
+
+
+async def wait_until_upgrade_finishes(cql: Session, host: Host, deadline: float) -> None:
+    await wait_for_upgrade_state('use_post_raft_procedures', cql, host, deadline)
+
+
+async def enter_recovery_state(cql: Session, host: Host) -> None:
+    await cql.run_async(
+            "update system.scylla_local set value = 'recovery' where key = 'group0_upgrade_state'",
+            host=host)
+
+
+async def delete_raft_data(cql: Session, host: Host) -> None:
+    await cql.run_async("truncate table system.discovery", host=host)
+    await cql.run_async("truncate table system.group0_history", host=host)
+    await cql.run_async("delete value from system.scylla_local where key = 'raft_group0_id'", host=host)
+
+
+async def delete_upgrade_state(cql: Session, host: Host) -> None:
+    await cql.run_async("delete from system.scylla_local where key = 'group0_upgrade_state'", host=host)
+
+
+async def delete_raft_data_and_upgrade_state(cql: Session, host: Host) -> None:
+    await delete_raft_data(cql, host)
+    await delete_upgrade_state(cql, host)
+
+
+def log_run_time(f):
+    @functools.wraps(f)
+    async def wrapped(*args, **kwargs):
+        start = time.time()
+        res = await f(*args, **kwargs)
+        logging.info(f"{f.__name__} took {int(time.time() - start)} seconds.")
+        return res
+    return wrapped
