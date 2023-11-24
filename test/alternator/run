@@ -31,6 +31,12 @@ if '--raft' in sys.argv:
     sys.argv.remove('--raft')
     extra_scylla_options += ['--consistent-cluster-management', 'true']
 
+if "-h" in sys.argv or "--help" in sys.argv:
+    run.run_pytest(sys.path[0], sys.argv)
+    exit(0)
+
+run.omit_scylla_output = "--omit-scylla-output" in sys.argv
+
 # run_alternator_cmd runs the same as run_scylla_cmd with *additional*
 # parameters, so in particular both CQL and Alternator will be enabled.
 # This is useful for us because we need CQL to setup authentication.

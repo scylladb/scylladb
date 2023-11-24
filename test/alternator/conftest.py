@@ -40,6 +40,11 @@ def pytest_addoption(parser):
         help="communicate with given URL instead of defaults")
     parser.addoption("--runveryslow", action="store_true",
         help="run tests marked veryslow instead of skipping them")
+    # Used by the wrapper script only, not by pytest, added here so it appears
+    # in --help output and so that pytest's argparser won't protest against its
+    # presence.
+    parser.addoption('--omit-scylla-output', action='store_true',
+        help='Omit scylla\'s output from the test output')
 
 def pytest_configure(config):
     config.addinivalue_line("markers", "veryslow: mark test as very slow to run")
