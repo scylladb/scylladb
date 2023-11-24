@@ -238,6 +238,9 @@ class ScyllaRESTAPIClient():
     async def message_injection(self, node_ip: str, injection: str) -> None:
         await self.client.post(f"/v2/error_injection/injection/{injection}/message", host=node_ip)
 
+    async def inject_disconnect(self, node_ip: str, ip_to_disconnect_from: str) -> None:
+        await self.client.post(f"/v2/error_injection/disconnect/{ip_to_disconnect_from}", host=node_ip)
+
     async def get_logger_level(self, node_ip: str, logger: str) -> str:
         """Get logger level"""
         return await self.client.get_text(f"/system/logger/{logger}", host=node_ip)

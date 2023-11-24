@@ -10,6 +10,7 @@
 #include "message/messaging_service.hh"
 #include <seastar/rpc/rpc_types.hh>
 #include "api/api-doc/messaging_service.json.hh"
+#include "api/api-doc/error_injection.json.hh"
 #include <iostream>
 #include <sstream>
 
@@ -18,6 +19,8 @@ using namespace httpd::messaging_service_json;
 using namespace netw;
 
 namespace api {
+
+namespace hf = httpd::error_injection_json;
 
 using shard_info = messaging_service::shard_info;
 using msg_addr = messaging_service::msg_addr;
@@ -142,6 +145,14 @@ void set_messaging_service(http_context& ctx, routes& r, sharded<netw::messaging
             return make_ready_future<json::json_return_type>(res);
         });
     });
+
+    hf::inject_disconnect.set(r, [&ms] (std::unique_ptr<request> req) -> future<json::json_return_type> {
+        auto ip = msg_addr(req->param["ip"]);
+        co_await ms.invoke_on_all([ip] (netw::messaging_service& ms) {
+            ms.remove_rpc_client(ip);
+        });
+        co_return json::json_void();
+    });
 }
 
 void unset_messaging_service(http_context& ctx, routes& r) {
@@ -155,6 +166,7 @@ void unset_messaging_service(http_context& ctx, routes& r) {
     get_respond_completed_messages.unset(r);
     get_version.unset(r);
     get_dropped_messages_by_ver.unset(r);
+    hf::inject_disconnect.unset(r);
 }
 
 }
