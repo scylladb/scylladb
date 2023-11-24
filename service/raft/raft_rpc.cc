@@ -27,16 +27,21 @@ raft_ticker_type::time_point timeout() {
 }
 
 raft_rpc::raft_rpc(raft_state_machine& sm, netw::messaging_service& ms,
-        raft_address_map& address_map, raft::group_id gid, raft::server_id my_id)
+        raft_address_map& address_map, shared_ptr<raft::failure_detector> failure_detector, raft::group_id gid, raft::server_id my_id)
     : _sm(sm), _group_id(std::move(gid)), _my_id(my_id), _messaging(ms)
-    , _address_map(address_map)
+    , _address_map(address_map), _failure_detector(std::move(failure_detector))
 {}
 
 
-template <typename Verb, typename Msg> void
+template <raft_rpc::one_way_kind rpc_kind, typename Verb, typename Msg> void
 raft_rpc::one_way_rpc(sloc loc, raft::server_id id,
         Verb&& verb, Msg&& msg) {
     (void)with_gate(_shutdown_gate, [this, loc = std::move(loc), id, &verb, &msg] () mutable {
+        if (rpc_kind == one_way_kind::request && !_failure_detector->is_alive(id)) {
+            rlogger.debug("{}:{}: {} dropping outgoing message to {} - node is not seen as alive by the failure detector",
+                loc.file_name(), loc.line(), loc.function_name(), id);
+            return make_ready_future<>();
+        }
         auto ip_addr = _address_map.find(id);
         if (!ip_addr) {
             rlogger.debug("{}:{}: {} dropping outgoing message to {} - IP address not found",
@@ -60,9 +65,12 @@ template <typename Verb, typename... Args>
 auto
 raft_rpc::two_way_rpc(sloc loc, raft::server_id id,
         Verb&& verb, Args&&... args) {
-    auto ip_addr = _address_map.find(id);
-    using Fut = decltype(verb(&_messaging, netw::msg_addr(*ip_addr), db::no_timeout, _group_id, _my_id, id, std::forward<Args>(args)...));
+    using Fut = decltype(verb(&_messaging, netw::msg_addr(gms::inet_address()), db::no_timeout, _group_id, _my_id, id, std::forward<Args>(args)...));
     using Ret = typename Fut::value_type;
+    if (!_failure_detector->is_alive(id)) {
+        return make_exception_future<Ret>(raft::destination_not_alive_error(id, loc));
+    }
+    auto ip_addr = _address_map.find(id);
     if (!ip_addr) {
         const auto msg = format("Failed to send {} {}: ip address not found", loc.function_name(), id);
         return make_exception_future<Ret>(raft::transport_error(msg));
@@ -80,6 +88,10 @@ future<raft::snapshot_reply> raft_rpc::send_snapshot(raft::server_id id, const r
 }
 
 future<> raft_rpc::send_append_entries(raft::server_id id, const raft::append_request& append_request) {
+    if (!_failure_detector->is_alive(id)) {
+        rlogger.debug("Failed to send append_entires to {}: node is not seen as alive by the failure detector", id);
+        co_return;
+    }
     auto ip_addr = _address_map.find(id);
     if (!ip_addr) {
         const auto msg = format("Failed to send append_entires to {}: ip address not found", id);
@@ -90,27 +102,27 @@ future<> raft_rpc::send_append_entries(raft::server_id id, const raft::append_re
 }
 
 void raft_rpc::send_append_entries_reply(raft::server_id id, const raft::append_reply& reply) {
-    one_way_rpc(sloc::current(), id, ser::raft_rpc_verbs::send_raft_append_entries_reply, reply);
+    one_way_rpc<one_way_kind::reply>(sloc::current(), id, ser::raft_rpc_verbs::send_raft_append_entries_reply, reply);
 }
 
 void raft_rpc::send_vote_request(raft::server_id id, const raft::vote_request& vote_request) {
-    one_way_rpc(sloc::current(), id, ser::raft_rpc_verbs::send_raft_vote_request, vote_request);
+    one_way_rpc<one_way_kind::request>(sloc::current(), id, ser::raft_rpc_verbs::send_raft_vote_request, vote_request);
 }
 
 void raft_rpc::send_vote_reply(raft::server_id id, const raft::vote_reply& vote_reply) {
-    one_way_rpc(sloc::current(), id, ser::raft_rpc_verbs::send_raft_vote_reply, vote_reply);
+    one_way_rpc<one_way_kind::reply>(sloc::current(), id, ser::raft_rpc_verbs::send_raft_vote_reply, vote_reply);
 }
 
 void raft_rpc::send_timeout_now(raft::server_id id, const raft::timeout_now& timeout_now) {
-    one_way_rpc(sloc::current(), id, ser::raft_rpc_verbs::send_raft_timeout_now, timeout_now);
+    one_way_rpc<one_way_kind::request>(sloc::current(), id, ser::raft_rpc_verbs::send_raft_timeout_now, timeout_now);
 }
 
 void raft_rpc::send_read_quorum(raft::server_id id, const raft::read_quorum& read_quorum) {
-    one_way_rpc(sloc::current(), id, ser::raft_rpc_verbs::send_raft_read_quorum, read_quorum);
+    one_way_rpc<one_way_kind::request>(sloc::current(), id, ser::raft_rpc_verbs::send_raft_read_quorum, read_quorum);
 }
 
 void raft_rpc::send_read_quorum_reply(raft::server_id id, const raft::read_quorum_reply& read_quorum_reply) {
-    one_way_rpc(sloc::current(), id, ser::raft_rpc_verbs::send_raft_read_quorum_reply, read_quorum_reply);
+    one_way_rpc<one_way_kind::reply>(sloc::current(), id, ser::raft_rpc_verbs::send_raft_read_quorum_reply, read_quorum_reply);
 }
 
 future<raft::add_entry_reply> raft_rpc::send_add_entry(raft::server_id id, const raft::command& cmd) {

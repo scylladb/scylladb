@@ -190,6 +190,11 @@ public:
     // replication.
     virtual future<> abort(sstring reason = "") = 0;
 
+    // Returns whether the server is running.
+    // A server becomes alive after start() and becomes dead after abort()
+    // is called or an error happens in one of the internal fibers.
+    virtual bool is_alive() const = 0;
+
     // Return Raft protocol current term.
     virtual term_t get_current_term() const = 0;
 

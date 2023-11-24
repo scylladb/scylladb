@@ -75,8 +75,12 @@ struct wrong_destination {
     raft::server_id reached_id;
 };
 
+struct group_liveness_info {
+    bool group0_alive;
+};
+
 struct direct_fd_ping_reply {
-    std::variant<std::monostate, wrong_destination> result;
+    std::variant<std::monostate, wrong_destination, group_liveness_info> result;
 };
 
 } // namespace service

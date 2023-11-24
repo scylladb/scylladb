@@ -28,13 +28,16 @@ protected:
     raft::server_id _my_id;                     // Raft server id of this node.
     netw::messaging_service& _messaging;
     raft_address_map& _address_map;
+    shared_ptr<raft::failure_detector> _failure_detector;
     seastar::gate _shutdown_gate;
 
     explicit raft_rpc(raft_state_machine& sm, netw::messaging_service& ms,
-            raft_address_map& address_map, raft::group_id gid, raft::server_id my_id);
+            raft_address_map& address_map, shared_ptr<raft::failure_detector> failure_detector, raft::group_id gid, raft::server_id my_id);
 
 private:
-    template <typename Verb, typename Msg> void
+    enum class one_way_kind { request, reply };
+
+    template <one_way_kind rpc_kind, typename Verb, typename Msg> void
     one_way_rpc(std::source_location loc, raft::server_id id, Verb&& verb, Msg&& msg);
 
     template <typename Verb, typename... Args> auto
