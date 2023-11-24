@@ -11,6 +11,8 @@
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/gate.hh>
 
+#include <boost/range/adaptors.hpp>
+
 #include "task_manager.hh"
 #include "test_module.hh"
 
@@ -259,6 +261,99 @@ bool task_manager::task::is_complete() const noexcept {
 
 void task_manager::task::release_resources() noexcept {
     return _impl->release_resources();
+}
+
+task_manager::virtual_task::impl::impl(module_ptr module) noexcept
+    : _module(std::move(module))
+{
+    _shutdown_subscription = _module->abort_source().subscribe([this] () noexcept {
+        (void)abort_all_children();
+    });
+}
+
+future<std::vector<task_identity>> task_manager::virtual_task::impl::get_children(task_id parent_id) {
+    // FIXME: implement
+    return make_ready_future<std::vector<task_identity>>();
+}
+
+future<> task_manager::virtual_task::impl::abort_all_children() noexcept {
+    const auto ids = co_await get_ids();
+    co_await get_task_manager().container().invoke_on_all([&ids] (auto& tm) {
+        auto tasks = tm.get_all_tasks() | boost::adaptors::map_values |
+            boost::adaptors::filtered([&ids] (const auto& task) { return ids.contains(task->get_parent_id()); });
+        return parallel_for_each(std::move(tasks), [] (auto task) {
+            return task->abort();
+        });
+    });
+}
+
+uint64_t task_manager::virtual_task::impl::get_sequence_number(task_id id) const {
+    if (auto it = _sequence_number.find(id); it != _sequence_number.end()) {
+        return it->second;
+    }
+
+    auto sn = get_module()->new_sequence_number();
+    _sequence_number[id] = sn;
+    return sn;
+}
+
+task_manager::module_ptr task_manager::virtual_task::impl::get_module() const noexcept {
+    return _module;
+}
+
+task_manager& task_manager::virtual_task::impl::get_task_manager() const noexcept {
+    return _module->get_task_manager();
+}
+
+future<tasks::is_abortable> task_manager::virtual_task::impl::is_abortable() const {
+    return make_ready_future<tasks::is_abortable>(is_abortable::no);
+}
+
+tasks::is_internal task_manager::virtual_task::impl::is_internal() const noexcept {
+    return is_internal::yes;
+}
+
+task_manager::virtual_task::virtual_task(virtual_task_impl_ptr&& impl, task_group group) noexcept
+    : _impl(std::move(impl))
+    , _group(group)
+{
+    assert(this_shard_id() == 0);
+}
+
+future<std::set<task_id>> task_manager::virtual_task::get_ids() const {
+    return _impl->get_ids();
+}
+
+uint64_t task_manager::virtual_task::get_sequence_number(task_id id) const {
+    return _impl->get_sequence_number(id);
+}
+
+task_manager::module_ptr task_manager::virtual_task::get_module() const noexcept {
+    return _impl->get_module();
+}
+
+future<tasks::is_abortable> task_manager::virtual_task::is_abortable() const {
+    return _impl->is_abortable();
+}
+
+tasks::is_internal task_manager::virtual_task::is_internal() const noexcept {
+    return _impl->is_internal();
+}
+
+future<std::optional<task_status>> task_manager::virtual_task::get_status(task_id id) {
+    return _impl->get_status(id);
+}
+
+future<std::optional<task_status>> task_manager::virtual_task::wait(task_id id) {
+    return _impl->wait(id);
+}
+
+future<> task_manager::virtual_task::abort(task_id id) noexcept {
+    return _impl->abort(id);
+}
+
+future<std::vector<task_stats>> task_manager::virtual_task::get_stats() {
+    return _impl->get_stats();
 }
 
 task_manager::module::module(task_manager& tm, std::string name) noexcept : _tm(tm), _name(std::move(name)) {

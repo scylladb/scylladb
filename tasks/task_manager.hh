@@ -16,6 +16,7 @@
 #include <seastar/coroutine/parallel_for_each.hh>
 #include "db_clock.hh"
 #include "log.hh"
+#include "gms/inet_address.hh"
 #include "tasks/types.hh"
 #include "utils/UUID.hh"
 #include "utils/serialized_action.hh"
@@ -32,14 +33,29 @@ using is_internal = bool_class<struct internal_tag>;
 
 extern logging::logger tmlogger;
 
+struct task_identity {
+    gms::inet_address node;
+    task_id task_id;
+};
+
+struct task_status {
+    // FIXME: implement
+};
+struct task_stats {
+    // FIXME: implement
+};
+
 class task_manager : public peering_sharded_service<task_manager> {
 public:
     class task;
+    class virtual_task;
     class module;
+    enum class task_group;
     struct config {
         utils::updateable_value<uint32_t> task_ttl;
     };
     using task_ptr = lw_shared_ptr<task_manager::task>;
+    using virtual_task_ptr = lw_shared_ptr<task_manager::virtual_task>;
     using task_map = std::unordered_map<task_id, task_ptr>;
     using foreign_task_ptr = foreign_ptr<task_ptr>;
     using foreign_task_list = std::list<foreign_task_ptr>;
@@ -70,6 +86,10 @@ public:
         running,
         done,
         failed
+    };
+
+    enum class task_group {
+        // Each virtual task needs to have its group.
     };
 
     class task : public enable_lw_shared_from_this<task> {
@@ -173,6 +193,57 @@ public:
 
         friend class test_task;
         friend class ::repair::task_manager_module;
+    };
+
+    class virtual_task : public enable_lw_shared_from_this<virtual_task> {
+    public:
+        using virtual_sequence_number = std::unordered_map<task_id, uint64_t>;
+
+        class impl {
+        protected:
+            module_ptr _module;
+            mutable virtual_sequence_number _sequence_number;
+            optimized_optional<seastar::abort_source::subscription> _shutdown_subscription;
+        public:
+            impl(module_ptr module) noexcept;
+            impl(const impl&) = delete;
+            impl& operator=(const impl&) = delete;
+            impl(impl&&) = delete;
+            impl& operator=(impl&&) = delete;
+            virtual ~impl() = default;
+        protected:
+            future<std::vector<task_identity>> get_children(task_id parent_id);
+            future<> abort_all_children() noexcept;
+        public:
+            virtual future<std::set<task_id>> get_ids() const = 0;
+            uint64_t get_sequence_number(task_id id) const;
+            module_ptr get_module() const noexcept;
+            task_manager& get_task_manager() const noexcept;
+            virtual future<tasks::is_abortable> is_abortable() const;
+            virtual tasks::is_internal is_internal() const noexcept;
+
+            virtual future<std::optional<task_status>> get_status(task_id id) = 0;
+            virtual future<std::optional<task_status>> wait(task_id id) = 0;
+            virtual future<> abort(task_id id) noexcept = 0;
+            virtual future<std::vector<task_stats>> get_stats() = 0;
+        };
+        using virtual_task_impl_ptr = std::unique_ptr<impl>;
+    private:
+        virtual_task_impl_ptr _impl;
+        [[maybe_unused]]task_group _group;
+    public:
+        virtual_task(virtual_task_impl_ptr&& impl, task_group group) noexcept;
+
+        future<std::set<task_id>> get_ids() const;
+        uint64_t get_sequence_number(task_id id) const;
+        module_ptr get_module() const noexcept;
+        future<tasks::is_abortable> is_abortable() const;
+        tasks::is_internal is_internal() const noexcept;
+
+        future<std::optional<task_status>> get_status(task_id id);
+        future<std::optional<task_status>> wait(task_id id);
+        future<> abort(task_id id) noexcept;
+        future<std::vector<task_stats>> get_stats();
     };
 
     class module : public enable_shared_from_this<module> {
