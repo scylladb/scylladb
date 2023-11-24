@@ -591,6 +591,14 @@ consistent_cluster_management: true
 # to make sure that trying to create an invalid view causes an error.
 strict_is_not_null_in_views: true
 
+# The Unix Domain Socket the node uses for maintenance socket.
+# The possible options are:
+# * ignore: the node will not open the maintenance socket,
+# * workdir: the node will open the maintenance socket on the path <scylla's workdir>/cql.m,
+#            where <scylla's workdir> is a path defined by the workdir configuration option,
+# * <socket path>: the node will open the maintenance socket on the path <socket path>.
+maintenance_socket: ignore
+
 # If set to true, configuration parameters defined with LiveUpdate option can be updated in runtime with CQL
 # by updating system.config virtual table. If we don't want any configuration parameter to be changed in runtime
 # via CQL, this option should be set to false. This parameter doesn't impose any limits on other mechanisms updating
