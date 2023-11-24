@@ -12,8 +12,8 @@ from test.pylib.manager_client import ManagerClient
 from test.pylib.random_tables import RandomTables
 from test.pylib.util import wait_for_cql_and_get_hosts
 from test.topology.util import reconnect_driver
-from test.topology_raft_disabled.util import restart, enable_raft_and_restart, \
-        wait_until_upgrade_finishes, delete_raft_data, log_run_time
+from test.topology_raft_disabled.util import restart, enable_raft_and_restart, enter_recovery_state, \
+        wait_until_upgrade_finishes, delete_raft_data_and_upgrade_state, log_run_time
 
 
 @pytest.mark.asyncio
@@ -53,7 +53,7 @@ async def test_recovery_after_majority_loss(manager: ManagerClient, random_table
 
     logging.info(f"Entering recovery state on {srv1}")
     host1 = next(h for h in hosts if h.address == srv1.ip_addr)
-    await cql.run_async("update system.scylla_local set value = 'recovery' where key = 'group0_upgrade_state'", host=host1)
+    await enter_recovery_state(cql, host1)
     await restart(manager, srv1)
     cql = await reconnect_driver(manager)
 
@@ -67,8 +67,7 @@ async def test_recovery_after_majority_loss(manager: ManagerClient, random_table
         await manager.remove_node(srv1.server_id, to_remove.server_id, ignore_dead_ips)
 
     logging.info(f"Deleting old Raft data and upgrade state on {host1} and restarting")
-    await delete_raft_data(cql, host1)
-    await cql.run_async("delete from system.scylla_local where key = 'group0_upgrade_state'", host=host1)
+    await delete_raft_data_and_upgrade_state(cql, host1)
     await restart(manager, srv1)
     cql = await reconnect_driver(manager)
 

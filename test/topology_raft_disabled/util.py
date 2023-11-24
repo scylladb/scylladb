@@ -77,10 +77,25 @@ async def wait_for_gossip_gen_increase(api: ScyllaRESTAPIClient, gen: int, node_
     logging.info(f"Gossip generation number of {target_ip} is reached {gen} according to {node_ip}")
 
 
+async def enter_recovery_state(cql: Session, host: Host) -> None:
+    await cql.run_async(
+            "update system.scylla_local set value = 'recovery' where key = 'group0_upgrade_state'",
+            host=host)
+
+
 async def delete_raft_data(cql: Session, host: Host) -> None:
     await cql.run_async("truncate table system.discovery", host=host)
     await cql.run_async("truncate table system.group0_history", host=host)
     await cql.run_async("delete value from system.scylla_local where key = 'raft_group0_id'", host=host)
+
+
+async def delete_upgrade_state(cql: Session, host: Host) -> None:
+    await cql.run_async("delete from system.scylla_local where key = 'group0_upgrade_state'", host=host)
+
+
+async def delete_raft_data_and_upgrade_state(cql: Session, host: Host) -> None:
+    await delete_raft_data(cql, host)
+    await delete_upgrade_state(cql, host)
 
 
 def log_run_time(f):

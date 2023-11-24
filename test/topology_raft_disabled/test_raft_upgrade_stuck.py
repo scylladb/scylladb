@@ -13,8 +13,8 @@ from test.pylib.random_tables import RandomTables
 from test.pylib.rest_client import inject_error_one_shot
 from test.pylib.util import wait_for_cql_and_get_hosts
 from test.topology.util import reconnect_driver
-from test.topology_raft_disabled.util import restart, enable_raft_and_restart, \
-        wait_for_upgrade_state, wait_until_upgrade_finishes, delete_raft_data, log_run_time
+from test.topology_raft_disabled.util import restart, enable_raft_and_restart, enter_recovery_state, \
+        wait_for_upgrade_state, wait_until_upgrade_finishes, delete_raft_data_and_upgrade_state, log_run_time
 
 
 @pytest.mark.asyncio
@@ -56,10 +56,7 @@ async def test_recover_stuck_raft_upgrade(manager: ManagerClient, random_tables:
     # '[shard 0] raft_group0_upgrade - Raft upgrade failed: std::runtime_error (error injection before group 0 upgrade enters synchronize).'
 
     logging.info(f"Setting recovery state on {hosts}")
-    for host in hosts:
-        await cql.run_async(
-                "update system.scylla_local set value = 'recovery' where key = 'group0_upgrade_state'",
-                host=host)
+    await asyncio.gather(*(enter_recovery_state(cql, h) for h in hosts))
 
     logging.info(f"Restarting {others}")
     await asyncio.gather(*(restart(manager, srv) for srv in others))
@@ -85,9 +82,7 @@ async def test_recover_stuck_raft_upgrade(manager: ManagerClient, random_tables:
     await manager.remove_node(others[0].server_id, srv1.server_id)
 
     logging.info(f"Deleting Raft data and upgrade state on {hosts} and restarting")
-    for host in hosts:
-        await delete_raft_data(cql, host)
-        await cql.run_async("delete from system.scylla_local where key = 'group0_upgrade_state'", host=host)
+    await asyncio.gather(*(delete_raft_data_and_upgrade_state(cql, h) for h in hosts))
 
     await asyncio.gather(*(restart(manager, srv) for srv in others))
     cql = await reconnect_driver(manager)
