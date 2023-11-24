@@ -42,7 +42,7 @@ Enabling Raft
 
   .. only:: opensource
 
-    See :doc:`the upgrade guide from 5.2 to 5.4 </upgrade/upgrade-opensource/upgrade-guide-from-5.2-to-5.4/upgrade-guide-from-5.2-to-5.4-generic>` for details.
+    See :doc:`the upgrade guide from 5.2 to 5.4 </upgrade/index>` for details.
 
 ScyllaDB Open Source 5.2 and later, and ScyllaDB Enterprise 2023.1 and later come equipped with a procedure that can setup Raft-based consistent cluster management in an existing cluster. We refer to this as the **Raft upgrade procedure** (do not confuse with the :doc:`ScyllaDB version upgrade procedure </upgrade/index/>`).
 
