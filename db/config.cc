@@ -616,7 +616,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     * @Group Advanced initialization properties
     * @GroupDescription Properties for advanced users or properties that are less commonly used.
     */
-    , auto_bootstrap(this, "auto_bootstrap", value_status::Used, true,
+    , auto_bootstrap(this, "auto_bootstrap", value_status::Unused, true,
         "This setting has been removed from default configuration. It makes new (non-seed) nodes automatically migrate the right data to themselves. Do not set this to false unless you really know what you are doing.\n"
         "Related information: Initializing a multiple node cluster (single data center) and Initializing a multiple node cluster (multiple data centers).")
     , batch_size_warn_threshold_in_kb(this, "batch_size_warn_threshold_in_kb", value_status::Used, 128,
