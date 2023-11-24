@@ -120,20 +120,18 @@ void migration_manager::init_messaging_service()
         }
     }
 
-    _messaging.register_definitions_update([this] (const rpc::client_info& cinfo, std::vector<frozen_mutation> fm, rpc::optional<std::vector<canonical_mutation>> cm) {
+    _messaging.register_definitions_update([this] (const rpc::client_info& cinfo, std::vector<frozen_mutation>, rpc::optional<std::vector<canonical_mutation>> cm) {
         auto src = netw::messaging_service::get_source(cinfo);
-        auto f = make_ready_future<>();
-        if (cm) {
-            f = do_with(std::move(*cm), [this, src] (const std::vector<canonical_mutation>& mutations) {
-                return merge_schema_in_background(src, mutations);
-            });
-        } else {
-            f = do_with(std::move(fm), [this, src] (const std::vector<frozen_mutation>& mutations) {
-                return merge_schema_in_background(src, mutations);
-            });
+        if (!cm) {
+            on_internal_error(mlogger, ::format(
+                "definitions_update handler: canonical mutations not supported by {}", src));
         }
         // Start a new fiber.
-        (void)f.then_wrapped([src] (auto&& f) {
+        (void)do_with(std::move(*cm), [this, src] (const std::vector<canonical_mutation>& mutations) {
+            return with_gate(_background_tasks, [this, src, &mutations] {
+                return merge_schema_from(src, mutations);
+            });
+        }).then_wrapped([src] (auto&& f) {
             if (f.failed()) {
                 mlogger.error("Failed to update definitions from {}: {}", src, f.get_exception());
             } else {
@@ -146,18 +144,19 @@ void migration_manager::init_messaging_service()
             [] (migration_manager& self, const rpc::client_info& cinfo, rpc::optional<netw::schema_pull_options> options)
                 -> future<rpc::tuple<std::vector<frozen_mutation>, std::vector<canonical_mutation>>> {
         const auto cm_retval_supported = options && options->remote_supports_canonical_mutation_retval;
+        if (!cm_retval_supported) {
+            // Canonical mutations support was added way back in scylla-3.2 and we don't support
+            // skipping versions during upgrades (certainly not a 3.2 -> 5.4 upgrade).
+            auto src = netw::messaging_service::get_source(cinfo);
+            on_internal_error(mlogger, ::format(
+                "canonical mutations not supported by {}", src));
+        }
 
         auto features = self._feat.cluster_schema_features();
         auto& proxy = self._storage_proxy.container();
         auto& db = proxy.local().get_db();
         auto cm = co_await db::schema_tables::convert_schema_to_mutations(proxy, features);
         if (options->group0_snapshot_transfer) {
-            // if `group0_snapshot_transfer` is `true`, the sender must also understand canonical mutations
-            // (`group0_snapshot_transfer` was added more recently).
-            if (!cm_retval_supported) {
-                on_internal_error(mlogger,
-                    "migration request handler: group0 snapshot transfer requested, but canonical mutations not supported");
-            }
             cm.emplace_back(co_await db::system_keyspace::get_group0_history(db));
             if (proxy.local().local_db().get_config().check_experimental(db::experimental_features_t::feature::TABLETS)) {
                 for (auto&& m: co_await replica::read_tablet_mutations(db)) {
@@ -165,13 +164,7 @@ void migration_manager::init_messaging_service()
                 }
             }
         }
-        if (cm_retval_supported) {
-            co_return rpc::tuple(std::vector<frozen_mutation>{}, std::move(cm));
-        }
-        auto fm = boost::copy_range<std::vector<frozen_mutation>>(cm | boost::adaptors::transformed([&db = db.local()] (const canonical_mutation& cm) {
-            return cm.to_mutation(db.find_column_family(cm.column_family_id()).schema());
-        }));
-        co_return rpc::tuple(std::move(fm), std::move(cm));
+        co_return rpc::tuple(std::vector<frozen_mutation>{}, std::move(cm));
     }, std::ref(*this)));
     _messaging.register_schema_check([this] {
         return make_ready_future<table_schema_version>(_storage_proxy.get_db().local().get_version());
@@ -344,12 +337,13 @@ future<> migration_manager::do_merge_schema_from(netw::messaging_service::msg_ad
 {
     mlogger.info("Pulling schema from {}", id);
     auto frozen_and_canonical_mutations = co_await _messaging.send_migration_request(id, netw::schema_pull_options{});
-    auto&& [mutations, canonical_mutations] = frozen_and_canonical_mutations;
-    if (canonical_mutations) {
-        co_await merge_schema_from(id, *canonical_mutations);
-    } else {
-        co_await merge_schema_from(id, mutations);
+    auto&& [_, canonical_mutations] = frozen_and_canonical_mutations;
+    if (!canonical_mutations) {
+        on_internal_error(mlogger, format(
+            "do_merge_schema_from: {} returned frozen_mutations instead of canonical_mutations", id));
     }
+
+    co_await merge_schema_from(id, *canonical_mutations);
     mlogger.info("Schema merge with {} completed", id);
 }
 
@@ -397,27 +391,6 @@ future<> migration_manager::reload_schema() {
     mlogger.info("Reloading schema");
     std::vector<mutation> mutations;
     return db::schema_tables::merge_schema(_sys_ks, _storage_proxy.container(), _feat, std::move(mutations), true);
-}
-
-future<> migration_manager::merge_schema_from(netw::messaging_service::msg_addr src, const std::vector<frozen_mutation>& mutations)
-{
-    if (_as.abort_requested()) {
-        return make_exception_future<>(abort_requested_exception());
-    }
-
-    mlogger.debug("Applying schema mutations from {}", src);
-    return map_reduce(mutations, [this, src](const frozen_mutation& fm) {
-        // schema table's schema is not syncable so just use get_schema_definition()
-        return get_schema_definition(fm.schema_version(), src, _messaging, _storage_proxy).then([&fm](schema_ptr s) {
-            s->registry_entry()->mark_synced();
-            return fm.unfreeze(std::move(s));
-        });
-    }, std::vector<mutation>(), [](std::vector<mutation>&& all, mutation&& m) {
-        all.emplace_back(std::move(m));
-        return std::move(all);
-    }).then([this](std::vector<mutation> schema) {
-        return db::schema_tables::merge_schema(_sys_ks, _storage_proxy.container(), _feat, std::move(schema));
-    });
 }
 
 bool migration_manager::has_compatible_schema_tables_version(const gms::inet_address& endpoint) {
@@ -946,15 +919,14 @@ future<> migration_manager::push_schema_mutation(const gms::inet_address& endpoi
     netw::messaging_service::msg_addr id{endpoint, 0};
     auto schema_features = _feat.cluster_schema_features();
     auto adjusted_schema = db::schema_tables::adjust_schema_for_schema_features(schema, schema_features);
-    auto fm = std::vector<frozen_mutation>(adjusted_schema.begin(), adjusted_schema.end());
     auto cm = std::vector<canonical_mutation>(adjusted_schema.begin(), adjusted_schema.end());
-    return _messaging.send_definitions_update(id, std::move(fm), std::move(cm));
+    return _messaging.send_definitions_update(id, std::vector<frozen_mutation>{}, std::move(cm));
 }
 
 future<> migration_manager::announce_with_raft(std::vector<mutation> schema, group0_guard guard, std::string_view description) {
     assert(this_shard_id() == 0);
     auto schema_features = _feat.cluster_schema_features();
-    auto adjusted_schema = db::schema_tables::adjust_schema_for_schema_features(schema, schema_features);
+    auto adjusted_schema = db::schema_tables::adjust_schema_for_schema_features(std::move(schema), schema_features);
 
     auto group0_cmd = _group0_client.prepare_command(
         schema_change{
@@ -1151,11 +1123,11 @@ static future<schema_ptr> get_schema_definition(table_schema_version v, netw::me
     });
 }
 
-future<schema_ptr> migration_manager::get_schema_for_read(table_schema_version v, netw::messaging_service::msg_addr dst, netw::messaging_service& ms, abort_source* as) {
+future<schema_ptr> migration_manager::get_schema_for_read(table_schema_version v, netw::messaging_service::msg_addr dst, netw::messaging_service& ms, abort_source& as) {
     return get_schema_for_write(v, dst, ms, as);
 }
 
-future<schema_ptr> migration_manager::get_schema_for_write(table_schema_version v, netw::messaging_service::msg_addr dst, netw::messaging_service& ms, abort_source* as) {
+future<schema_ptr> migration_manager::get_schema_for_write(table_schema_version v, netw::messaging_service::msg_addr dst, netw::messaging_service& ms, abort_source& as) {
     if (_as.abort_requested()) {
         co_return coroutine::exception(std::make_exception_ptr(abort_requested_exception()));
     }
@@ -1167,7 +1139,7 @@ future<schema_ptr> migration_manager::get_schema_for_write(table_schema_version 
         // Schema is synchronized through Raft, so perform a group 0 read barrier.
         // Batch the barriers so we don't invoke them redundantly.
         mlogger.trace("Performing raft read barrier because schema is not synced, version: {}", v);
-        co_await (as ? _group0_barrier.trigger(*as) : _group0_barrier.trigger());
+        co_await _group0_barrier.trigger(as);
     }
 
     if (!s) {

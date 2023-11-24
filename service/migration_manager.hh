@@ -50,9 +50,6 @@ namespace service {
 
 class storage_proxy;
 
-template<typename M>
-concept MergeableMutation = std::is_same<M, canonical_mutation>::value || std::is_same<M, frozen_mutation>::value;
-
 class migration_manager : public seastar::async_sharded_service<migration_manager>,
                             public gms::i_endpoint_state_change_subscriber,
                             public seastar::peering_sharded_service<migration_manager> {
@@ -119,16 +116,6 @@ public:
     future<> merge_schema_from(netw::msg_addr src, const std::vector<canonical_mutation>& mutations);
     // Incremented each time the function above is called. Needed by tests.
     size_t canonical_mutation_merge_count = 0;
-    // Deprecated. The canonical mutation should be used instead.
-    future<> merge_schema_from(netw::msg_addr src, const std::vector<frozen_mutation>& mutations);
-
-    template<typename M>
-    requires MergeableMutation<M>
-    future<> merge_schema_in_background(netw::msg_addr src, const std::vector<M>& mutations) {
-        return with_gate(_background_tasks, [this, src, &mutations] {
-            return merge_schema_from(src, mutations);
-        });
-    }
 
     bool should_pull_schema_from(const gms::inet_address& endpoint);
     bool has_compatible_schema_tables_version(const gms::inet_address& endpoint);
@@ -182,12 +169,12 @@ public:
     // Returns schema of given version, either from cache or from remote node identified by 'from'.
     // The returned schema may not be synchronized. See schema::is_synced().
     // Intended to be used in the read path.
-    future<schema_ptr> get_schema_for_read(table_schema_version, netw::msg_addr from, netw::messaging_service& ms, abort_source* as = nullptr);
+    future<schema_ptr> get_schema_for_read(table_schema_version, netw::msg_addr from, netw::messaging_service& ms, abort_source& as);
 
     // Returns schema of given version, either from cache or from remote node identified by 'from'.
     // Ensures that this node is synchronized with the returned schema. See schema::is_synced().
     // Intended to be used in the write path, which relies on synchronized schema.
-    future<schema_ptr> get_schema_for_write(table_schema_version, netw::msg_addr from, netw::messaging_service& ms, abort_source* as = nullptr);
+    future<schema_ptr> get_schema_for_write(table_schema_version, netw::msg_addr from, netw::messaging_service& ms, abort_source& as);
 
 private:
     virtual future<> on_join(gms::inet_address endpoint, gms::endpoint_state_ptr ep_state, gms::permit_id) override;

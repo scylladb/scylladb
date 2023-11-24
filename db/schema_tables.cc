@@ -330,31 +330,35 @@ schema_ptr tables() {
 
 // Holds Scylla-specific table metadata.
 schema_ptr scylla_tables(schema_features features) {
-    static auto make = [] (bool has_cdc_options, bool has_per_table_partitioners) -> schema_ptr {
+    static thread_local schema_ptr schemas[2][2]{};
+
+    bool has_cdc_options = features.contains(schema_feature::CDC_OPTIONS);
+    bool has_per_table_partitioners = features.contains(schema_feature::PER_TABLE_PARTITIONERS);
+
+    schema_ptr& s = schemas[has_cdc_options][has_per_table_partitioners];
+    if (!s) {
         auto id = generate_legacy_id(NAME, SCYLLA_TABLES);
         auto sb = schema_builder(NAME, SCYLLA_TABLES, std::make_optional(id))
             .with_column("keyspace_name", utf8_type, column_kind::partition_key)
             .with_column("table_name", utf8_type, column_kind::clustering_key)
             .with_column("version", uuid_type)
             .set_gc_grace_seconds(schema_gc_grace);
-        // 0 - false, false
-        // 1 - true, false
-        // 2 - false, true
-        // 3 - true, true
-        int offset = 0;
+        // Each bit in `offset` denotes a different schema feature,
+        // so different values of `offset` are used for different combinations of features.
+        uint16_t offset = 0;
         if (has_cdc_options) {
             sb.with_column("cdc", map_type_impl::get_instance(utf8_type, utf8_type, false));
-            ++offset;
+            offset |= 0b1;
         }
         if (has_per_table_partitioners) {
             sb.with_column("partitioner", utf8_type);
-            offset += 2;
+            offset |= 0b10;
         }
         sb.with_version(system_keyspace::generate_schema_version(id, offset));
-        return sb.build();
-    };
-    static thread_local schema_ptr schemas[2][2] = { {make(false, false), make(false, true)}, {make(true, false), make(true, true)} };
-    return schemas[features.contains(schema_feature::CDC_OPTIONS)][features.contains(schema_feature::PER_TABLE_PARTITIONERS)];
+        s = sb.build();
+    }
+
+    return s;
 }
 
 // The "columns" table lists the definitions of all columns in all tables
@@ -966,7 +970,7 @@ future<> merge_schema(sharded<db::system_keyspace>& sys_ks, distributed<service:
     if (this_shard_id() != 0) {
         // mutations must be applied on the owning shard (0).
         co_await smp::submit_to(0, [&, fmuts = freeze(mutations)] () mutable -> future<> {
-            return merge_schema(sys_ks, proxy, feat, unfreeze(fmuts));
+            return merge_schema(sys_ks, proxy, feat, unfreeze(fmuts), reload);
         });
         co_return;
     }
