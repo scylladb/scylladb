@@ -20,6 +20,7 @@
 #include <seastar/coroutine/parallel_for_each.hh>
 #include "db_clock.hh"
 #include "log.hh"
+#include "gms/inet_address.hh"
 #include "tasks/types.hh"
 #include "utils/serialized_action.hh"
 #include "utils/updateable_value.hh"
@@ -35,14 +36,32 @@ using is_internal = bool_class<struct internal_tag>;
 
 extern logging::logger tmlogger;
 
+struct task_identity {
+    gms::inet_address node;
+    task_id task_id;
+};
+
+enum class task_kind {
+    cluster,
+    node,
+};
+
+struct task_status {
+};
+struct task_stats {
+};
+
 class task_manager : public peering_sharded_service<task_manager> {
 public:
     class task;
+    class virtual_task;
     class module;
+    enum class task_group;
     struct config {
         utils::updateable_value<uint32_t> task_ttl;
     };
     using task_ptr = lw_shared_ptr<task_manager::task>;
+    using virtual_task_ptr = lw_shared_ptr<task_manager::virtual_task>;
     using task_map = std::unordered_map<task_id, task_ptr>;
     using foreign_task_ptr = foreign_ptr<task_ptr>;
     using foreign_task_map = std::unordered_map<task_id, foreign_task_ptr>;
@@ -73,6 +92,10 @@ public:
         running,
         done,
         failed
+    };
+
+    enum class task_group {
+        // Each virtual task needs to have its group.
     };
 
     class task : public enable_lw_shared_from_this<task> {
@@ -151,6 +174,7 @@ public:
         protected:
             status _status;
             task_id _parent_id;
+            task_kind _parent_kind = task_kind::node;
             children _children;
             shared_promise<> _done;
             module_ptr _module;
@@ -172,6 +196,7 @@ public:
             bool is_done() const noexcept;
             virtual void release_resources() noexcept {}
             future<std::vector<task_essentials>> get_failed_children() const;
+            void set_virtual_parent() noexcept;
         protected:
             virtual future<> run() = 0;
             void run_to_completion();
@@ -214,9 +239,53 @@ public:
         const children& get_children() const noexcept;
         bool is_complete() const noexcept;
         future<std::vector<task_essentials>> get_failed_children() const;
+        void set_virtual_parent() noexcept;
 
         friend class test_task;
         friend class ::repair::task_manager_module;
+    };
+
+    class virtual_task : public enable_lw_shared_from_this<virtual_task> {
+    public:
+        class impl {
+        protected:
+            module_ptr _module;
+        public:
+            impl(module_ptr module) noexcept;
+            impl(const impl&) = delete;
+            impl& operator=(const impl&) = delete;
+            impl(impl&&) = delete;
+            impl& operator=(impl&&) = delete;
+            virtual ~impl() = default;
+        protected:
+            static future<std::vector<task_identity>> get_children(module_ptr module, task_id parent_id);
+        public:
+            virtual task_group get_group() const noexcept = 0;
+            virtual future<std::set<task_id>> get_ids() const = 0;
+            module_ptr get_module() const noexcept;
+            task_manager& get_task_manager() const noexcept;
+            virtual future<tasks::is_abortable> is_abortable() const;
+
+            virtual future<std::optional<task_status>> get_status(task_id id) = 0;
+            virtual future<std::optional<task_status>> wait(task_id id) = 0;
+            virtual future<> abort(task_id id) noexcept = 0;
+            virtual future<std::vector<task_stats>> get_stats() = 0;
+        };
+        using virtual_task_impl_ptr = std::unique_ptr<impl>;
+    private:
+        virtual_task_impl_ptr _impl;
+    public:
+        virtual_task(virtual_task_impl_ptr&& impl) noexcept;
+
+        future<std::set<task_id>> get_ids() const;
+        module_ptr get_module() const noexcept;
+        task_group get_group() const noexcept;
+        future<tasks::is_abortable> is_abortable() const;
+
+        future<std::optional<task_status>> get_status(task_id id);
+        future<std::optional<task_status>> wait(task_id id);
+        future<> abort(task_id id) noexcept;
+        future<std::vector<task_stats>> get_stats();
     };
 
     class module : public enable_shared_from_this<module> {
