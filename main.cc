@@ -1724,7 +1724,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             auth_config.authenticator_java_name = qualified_authenticator_name;
             auth_config.role_manager_java_name = qualified_role_manager_name;
 
-            auth_service.start(std::move(perm_cache_config), std::ref(qp), std::ref(mm_notifier), std::ref(mm), auth_config).get();
+            auth_service.start(std::move(perm_cache_config), std::ref(qp), std::ref(mm_notifier), std::ref(mm), auth_config, db::maintenance_socket_enabled::no).get();
 
             auth_service.invoke_on_all(&auth::service::start, std::ref(mm)).get();
             auto stop_auth_service = defer_verbose_shutdown("auth service", [] {

@@ -25,6 +25,7 @@
 #include "seastarx.hh"
 #include "utils/observable.hh"
 #include "utils/serialized_action.hh"
+#include "db/config.hh"
 
 namespace cql3 {
 class query_processor;
@@ -93,6 +94,8 @@ class service final : public seastar::peering_sharded_service<service> {
     utils::observer<uint32_t> _permissions_cache_update_interval_in_ms_observer;
     utils::observer<uint32_t> _permissions_cache_validity_in_ms_observer;
 
+    db::maintenance_socket_enabled _used_by_maintenance_socket;
+
 public:
     service(
             utils::loading_cache_config,
@@ -100,7 +103,8 @@ public:
             ::service::migration_notifier&,
             std::unique_ptr<authorizer>,
             std::unique_ptr<authenticator>,
-            std::unique_ptr<role_manager>);
+            std::unique_ptr<role_manager>,
+            db::maintenance_socket_enabled);
 
     ///
     /// This constructor is intended to be used when the class is sharded via \ref seastar::sharded. In that case, the
@@ -112,7 +116,8 @@ public:
             cql3::query_processor&,
             ::service::migration_notifier&,
             ::service::migration_manager&,
-            const service_config&);
+            const service_config&,
+            db::maintenance_socket_enabled);
 
     future<> start(::service::migration_manager&);
 
