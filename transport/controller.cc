@@ -8,6 +8,8 @@
 
 #include "transport/controller.hh"
 #include <seastar/core/sharded.hh>
+#include <seastar/net/socket_defs.hh>
+#include <seastar/net/unix_address.hh>
 #include "transport/server.hh"
 #include "service/memory_limiter.hh"
 #include "db/config.hh"
@@ -24,7 +26,7 @@ static logging::logger logger("cql_server_controller");
 controller::controller(sharded<auth::service>& auth, sharded<service::migration_notifier>& mn,
         sharded<gms::gossiper>& gossiper, sharded<cql3::query_processor>& qp, sharded<service::memory_limiter>& ml,
         sharded<qos::service_level_controller>& sl_controller, sharded<service::endpoint_lifecycle_notifier>& elc_notif,
-        const db::config& cfg, scheduling_group_key cql_opcode_stats_key)
+        const db::config& cfg, scheduling_group_key cql_opcode_stats_key, db::maintenance_socket_enabled used_by_maintenance_socket)
     : _ops_sem(1)
     , _auth_service(auth)
     , _mnotifier(mn)
@@ -35,6 +37,7 @@ controller::controller(sharded<auth::service>& auth, sharded<service::migration_
     , _sl_controller(sl_controller)
     , _config(cfg)
     , _cql_opcode_stats_key(cql_opcode_stats_key)
+    , _used_by_maintenance_socket(used_by_maintenance_socket)
 {
 }
 
@@ -100,7 +103,6 @@ future<> controller::do_start_server() {
               .bounce_request_smp_service_group = bounce_request_smp_service_group,
             };
         });
-        const seastar::net::inet_address ip = utils::resolve(cfg.rpc_address, family, preferred).get0();
 
         struct listen_cfg {
             socket_address addr;
@@ -110,6 +112,9 @@ future<> controller::do_start_server() {
 
         _listen_addresses.clear();
         std::vector<listen_cfg> configs;
+
+        if (!_used_by_maintenance_socket) {
+        const seastar::net::inet_address ip = utils::resolve(cfg.rpc_address, family, preferred).get0();
         int native_port_idx = -1, native_shard_aware_port_idx = -1;
 
         if (cfg.native_transport_port.is_set() ||
@@ -151,8 +156,47 @@ future<> controller::do_start_server() {
                 configs[native_shard_aware_port_idx].cred = std::move(cred);
             }
         }
+        } else {
+            auto socket = cfg.maintenance_socket();
 
-        cserver->start(std::ref(_qp), std::ref(_auth_service), std::ref(_mem_limiter), std::move(get_cql_server_config), std::ref(cfg), std::ref(_sl_controller), std::ref(_gossiper), _cql_opcode_stats_key).get();
+            if (socket == "workdir") {
+                socket = cfg.work_directory() + "/cql.m";
+            }
+
+            if (socket.length() > 107) {
+                throw std::runtime_error(format("Maintenance socket path is too long: {}. Change it to string shorter than 108 chars.", socket));
+            }
+
+            struct stat statbuf;
+            auto stat_result = ::stat(socket.c_str(), &statbuf);
+            if (stat_result == 0) {
+                // Check if it is a unix domain socket, not a regular file or directory
+                if (!S_ISSOCK(statbuf.st_mode)) {
+                    throw std::runtime_error(format("Under maintenance socket path ({}) there is something else.", socket));
+                }
+            } else if (errno != ENOENT) {
+                // Other error than "file does not exist"
+                throw std::runtime_error(format("Failed to stat {}: {}", socket, strerror(errno)));
+            }
+
+            // Remove the socket if it already exists, otherwise when the server
+            // tries to listen on it, it will hang on bind().
+            auto unlink_result = ::unlink(socket.c_str());
+            if (unlink_result < 0 && errno != ENOENT) {
+                // Other error than "file does not exist"
+                throw std::runtime_error(format("Failed to unlink {}: {}", socket, strerror(errno)));
+            }
+
+            configs.emplace_back(listen_cfg {
+                .addr = socket_address { unix_domain_addr { socket } },
+                .is_shard_aware = false
+            });
+            _listen_addresses.push_back(configs.back().addr);
+
+            logger.info("Setting up maintenance socket on {}", socket);
+        }
+
+        cserver->start(std::ref(_qp), std::ref(_auth_service), std::ref(_mem_limiter), std::move(get_cql_server_config), std::ref(cfg), std::ref(_sl_controller), std::ref(_gossiper), _cql_opcode_stats_key, _used_by_maintenance_socket).get();
         auto on_error = defer([&cserver] { cserver->stop().get(); });
 
         subscribe_server(*cserver).get();

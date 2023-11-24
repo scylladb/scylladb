@@ -32,6 +32,7 @@
 #include "utils/chunked_vector.hh"
 #include "exceptions/coordinator_result.hh"
 #include "db/operation_type.hh"
+#include "db/config.hh"
 
 namespace cql3 {
 
@@ -122,7 +123,7 @@ struct cql_sg_stats {
         uint64_t response_size = 0;
     };
 
-    cql_sg_stats();
+    cql_sg_stats(db::maintenance_socket_enabled);
     request_kind_stats& get_cql_opcode_stats(cql_binary_opcode op) { return _cql_requests_stats[static_cast<uint8_t>(op)]; }
     void register_metrics();
 private:
@@ -168,7 +169,8 @@ public:
             const db::config& db_cfg,
             qos::service_level_controller& sl_controller,
             gms::gossiper& g,
-            scheduling_group_key stats_key);
+            scheduling_group_key stats_key,
+            db::maintenance_socket_enabled used_by_maintenance_socket);
 public:
     using response = cql_transport::response;
     using result_with_foreign_response_ptr = exceptions::coordinator_result<foreign_ptr<std::unique_ptr<cql_server::response>>>;
