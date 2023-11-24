@@ -381,7 +381,7 @@ cql_server::connection::read_frame() {
                 if (frame.length > 100'000) {
                     // The STARTUP message body is a [string map] containing just a few options,
                     // so it should be smaller that 100kB. See #4366.
-                    throw exceptions::protocol_exception(format("Initial message size too large ({:d}), rejecting as invalid", frame.length));
+                    throw exceptions::protocol_exception(format("Initial message size too large ({:d}), rejecting as invalid", uint32_t(frame.length)));
                 }
                 return make_ready_future<ret_type>(frame);
             });
@@ -668,7 +668,7 @@ future<> cql_server::connection::process_request() {
             ++_server._stats.requests_shed;
             return _read_buf.skip(f.length).then([this, stream = f.stream] {
                 const char* message = "request shed due to coordinator overload";
-                clogger.debug("{}: {}, stream {}", _client_state.get_remote_address(), message, stream);
+                clogger.debug("{}: {}, stream {}", _client_state.get_remote_address(), message, uint16_t(stream));
                 write_response(make_error(stream, exceptions::exception_code::OVERLOADED,
                     message, tracing::trace_state_ptr()));
                 return make_ready_future<>();
@@ -689,7 +689,7 @@ future<> cql_server::connection::process_request() {
         auto mem_estimate = f.length * 2 + 8000; // Allow for extra copies and bookkeeping
         if (mem_estimate > _server._max_request_size) {
             const auto message = format("request size too large (frame size {:d}; estimate {:d}; allowed {:d})",
-                f.length, mem_estimate, _server._max_request_size);
+                uint32_t(f.length), mem_estimate, _server._max_request_size);
             clogger.debug("{}: {}, request dropped", _client_state.get_remote_address(), message);
             write_response(make_error(stream, exceptions::exception_code::INVALID, message, tracing::trace_state_ptr()));
             return std::exchange(_ready_to_respond, make_ready_future<>())
