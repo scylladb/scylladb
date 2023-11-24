@@ -20,6 +20,7 @@ Admin Tools
    perftune
    Virtual Tables </operating-scylla/admin-tools/virtual-tables/>
    SELECT * FROM MUTATION_FRAGMENTS() Statement </operating-scylla/admin-tools/select-from-mutation-fragments/>
+   Maintenance socket </operating-scylla/admin-tools/maintenance-socket/>
 
 .. panel-box::
   :title: Admin Tools
