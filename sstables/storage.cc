@@ -167,11 +167,11 @@ future<> filesystem_storage::seal(const sstable& sst) {
     co_await remove_temp_dir();
     auto dir_f = co_await open_checked_directory(sst._write_error_handler, _dir);
     // Guarantee that every component of this sstable reached the disk.
-    co_await sst.sstable_write_io_check([&] { return dir_f.flush(); });
+    co_await dir_f.flush();
     // Rename TOC because it's no longer temporary.
     co_await sst.sstable_write_io_check(rename_file, sst.filename(component_type::TemporaryTOC), sst.filename(component_type::TOC));
-    co_await sst.sstable_write_io_check([&] { return dir_f.flush(); });
-    co_await sst.sstable_write_io_check([&] { return dir_f.close(); });
+    co_await dir_f.flush();
+    co_await dir_f.close();
     // If this point was reached, sstable should be safe in disk.
     sstlog.debug("SSTable with generation {} of {}.{} was sealed successfully.", sst._generation, sst._schema->ks_name(), sst._schema->cf_name());
 }
