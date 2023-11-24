@@ -603,6 +603,8 @@ public:
     bool has_component(component_type f) const;
     sstables_manager& manager() { return _manager; }
     const sstables_manager& manager() const { return _manager; }
+
+    static future<std::vector<sstring>> read_and_parse_toc(file f);
 private:
     void unused(); // Called when reference count drops to zero
     future<file> open_file(component_type, open_flags, file_open_options = {}) noexcept;

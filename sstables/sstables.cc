@@ -784,6 +784,15 @@ static inline sstring parent_path(const sstring& fname) {
     return fs::canonical(fs::path(fname)).parent_path().string();
 }
 
+future<std::vector<sstring>> sstable::read_and_parse_toc(file f) {
+    return with_closeable(make_file_input_stream(f), [] (input_stream<char>& in) -> future<std::vector<sstring>> {
+        std::vector<sstring> components;
+        auto all = co_await util::read_entire_stream_contiguous(in);
+        boost::split(components, all, boost::is_any_of("\n"));
+        co_return components;
+    });
+}
+
 // This is small enough, and well-defined. Easier to just read it all
 // at once
 future<> sstable::read_toc() noexcept {
@@ -793,21 +802,7 @@ future<> sstable::read_toc() noexcept {
 
     try {
         co_await do_read_simple(component_type::TOC, [&] (version_types v, file f) -> future<> {
-            auto bufptr = allocate_aligned_buffer<char>(4096, 4096);
-
-            size_t size = co_await f.dma_read(0, bufptr.get(), 4096);
-            // This file is supposed to be very small. Theoretically we should check its size,
-            // but if we so much as read a whole page from it, there is definitely something fishy
-            // going on - and this simplifies the code.
-            if (size >= 4096) {
-                throw malformed_sstable_exception("SSTable TOC too big: " + to_sstring(size) + " bytes", filename(component_type::TOC));
-            }
-
-            std::string_view buf(bufptr.get(), size);
-            std::vector<sstring> comps;
-
-            boost::split(comps , buf, boost::is_any_of("\n"));
-
+            auto comps = co_await read_and_parse_toc(f);
             for (auto& c: comps) {
                 // accept trailing newlines
                 if (c == "") {
@@ -2625,12 +2620,7 @@ future<> remove_by_toc_name(sstring sstable_toc_name, storage::sync_dir sync) {
     }
     auto toc_file = co_await open_checked_file_dma(sstable_write_error_handler, new_toc_name, open_flags::ro);
     std::vector<sstring> components = co_await with_closeable(std::move(toc_file), [] (file& toc_file) {
-        return with_closeable(make_file_input_stream(toc_file), [] (input_stream<char>& in) -> future<std::vector<sstring>> {
-            std::vector<sstring> components;
-            auto all = co_await util::read_entire_stream_contiguous(in);
-            boost::split(components, all, boost::is_any_of("\n"));
-            co_return components;
-        });
+        return sstable::read_and_parse_toc(toc_file);
     });
 
     co_await coroutine::parallel_for_each(components, [&prefix] (sstring component) -> future<> {
