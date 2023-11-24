@@ -12,7 +12,7 @@ from test.pylib.manager_client import ManagerClient
 from test.pylib.random_tables import RandomTables
 from test.pylib.util import wait_for_cql_and_get_hosts
 from test.topology.util import reconnect_driver
-from test.topology_raft_disabled.util import restart, enable_raft_and_restart, enter_recovery_state, \
+from test.topology_raft_disabled.util import restart, enter_recovery_state, \
         wait_until_upgrade_finishes, delete_raft_data_and_upgrade_state, log_run_time
 
 
@@ -21,11 +21,10 @@ from test.topology_raft_disabled.util import restart, enable_raft_and_restart, e
 @pytest.mark.replication_factor(1)
 async def test_recovery_after_majority_loss(manager: ManagerClient, random_tables: RandomTables):
     """
-    We successfully upgrade a cluster. Eventually however all servers but one fail - group 0
-    is left without a majority. We create a new group 0 by entering RECOVERY, using `removenode`
-    to get rid of the other servers, clearing Raft data and restarting. The Raft upgrade procedure
-    runs again to establish a single-node group 0. We also verify that schema changes performed
-    using the old group 0 are still there.
+    All initial servers but one fail - group 0 is left without a majority. We create a new group
+    0 by entering RECOVERY, using `removenode` to get rid of the other servers, clearing Raft
+    data and restarting. The Raft upgrade procedure runs to establish a single-node group 0. We
+    also verify that schema changes performed using the old group 0 are still there.
     Note: in general there's no guarantee that all schema changes will be present; the minority
     used to recover group 0 might have missed them. However in this test the driver waits
     for schema agreement to complete before proceeding, so we know that every server learned
@@ -33,17 +32,11 @@ async def test_recovery_after_majority_loss(manager: ManagerClient, random_table
     """
     servers = await manager.running_servers()
 
-    logging.info(f"Enabling Raft on {servers} and restarting")
-    await asyncio.gather(*(enable_raft_and_restart(manager, srv) for srv in servers))
-    cql = await reconnect_driver(manager)
-
-    logging.info("Cluster restarted, waiting until driver reconnects to every server")
+    logging.info("Waiting until driver connects to every server")
+    cql = manager.get_cql()
     hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
 
-    logging.info(f"Driver reconnected, hosts: {hosts}. Waiting until upgrade finishes")
-    await asyncio.gather(*(wait_until_upgrade_finishes(cql, h, time.time() + 60) for h in hosts))
-
-    logging.info("Upgrade finished. Creating a bunch of tables")
+    logging.info("Creating a bunch of tables")
     tables = await asyncio.gather(*(random_tables.add_table(ncolumns=5) for _ in range(5)))
 
     srv1, *others = servers
@@ -84,6 +77,4 @@ async def test_recovery_after_majority_loss(manager: ManagerClient, random_table
     await random_tables.add_table(ncolumns=5)
 
     logging.info("Booting new node")
-    await manager.server_add(config={
-        'consistent_cluster_management': True
-    })
+    await manager.server_add()

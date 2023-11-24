@@ -8,35 +8,43 @@ import asyncio
 import pytest
 import logging
 import time
-from typing import Callable, Awaitable, Optional, TypeVar, Generic
 
 from test.pylib.manager_client import ManagerClient
 from test.pylib.random_tables import RandomTables
-from test.pylib.rest_client import inject_error_one_shot
-from test.pylib.util import wait_for, wait_for_cql_and_get_hosts, wait_for_feature
+from test.pylib.util import wait_for_cql_and_get_hosts
 from test.topology.util import reconnect_driver
-from test.topology_raft_disabled.util import restart, enable_raft, \
-        enable_raft_and_restart, wait_for_upgrade_state, wait_until_upgrade_finishes, \
-        delete_raft_data, log_run_time
+from test.topology_raft_disabled.util import restart, enter_recovery_state, \
+        wait_until_upgrade_finishes, delete_raft_data_and_upgrade_state, log_run_time
 
 
 @pytest.mark.asyncio
 @log_run_time
 @pytest.mark.replication_factor(1)
-async def test_raft_upgrade_basic(manager: ManagerClient, random_tables: RandomTables):
+async def test_raft_recovery_basic(manager: ManagerClient, random_tables: RandomTables):
     servers = await manager.running_servers()
     cql = manager.cql
     assert(cql)
 
-    # system.group0_history should either not exist or there should be no entries in it before upgrade.
-    if await cql.run_async("select * from system_schema.tables where keyspace_name = 'system' and table_name = 'group0_history'"):
-        assert(not (await cql.run_async("select * from system.group0_history")))
+    logging.info("Waiting until driver connects to every server")
+    hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
 
-    logging.info(f"Enabling Raft on {servers} and restarting")
-    await asyncio.gather(*(enable_raft_and_restart(manager, srv) for srv in servers))
+    logging.info(f"Setting recovery state on {hosts}")
+    await asyncio.gather(*(enter_recovery_state(cql, h) for h in hosts))
+    await asyncio.gather(*(restart(manager, srv) for srv in servers))
     cql = await reconnect_driver(manager)
 
     logging.info("Cluster restarted, waiting until driver reconnects to every server")
+    hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+    logging.info(f"Driver reconnected, hosts: {hosts}")
+
+    logging.info(f"Deleting Raft data and upgrade state on {hosts}")
+    await asyncio.gather(*(delete_raft_data_and_upgrade_state(cql, h) for h in hosts))
+
+    logging.info(f"Restarting {servers}")
+    await asyncio.gather(*(restart(manager, srv) for srv in servers))
+    cql = await reconnect_driver(manager)
+
+    logging.info(f"Cluster restarted, waiting until driver reconnects to every server")
     hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
 
     logging.info(f"Driver reconnected, hosts: {hosts}. Waiting until upgrade finishes")
@@ -52,6 +60,4 @@ async def test_raft_upgrade_basic(manager: ManagerClient, random_tables: RandomT
     assert(table.full_name in rs[0].description)
 
     logging.info("Booting new node")
-    await manager.server_add(config={
-        'consistent_cluster_management': True
-    })
+    await manager.server_add()

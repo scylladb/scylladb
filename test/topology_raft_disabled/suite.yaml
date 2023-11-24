@@ -7,7 +7,8 @@ extra_scylla_config_options:
     authorizer: AllowAllAuthorizer
     enable_user_defined_functions: False
     experimental_features: []
-    consistent_cluster_management: False
 run_first:
-  - test_raft_upgrade_stuck
-  - test_raft_upgrade_majority_loss
+  - test_raft_recovery_stuck
+  - test_raft_recovery_majority_loss
+skip_in_release:
+  - test_raft_recovery_stuck

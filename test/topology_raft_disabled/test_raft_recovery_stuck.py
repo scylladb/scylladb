@@ -10,38 +10,53 @@ import logging
 import time
 from test.pylib.manager_client import ManagerClient
 from test.pylib.random_tables import RandomTables
-from test.pylib.rest_client import inject_error_one_shot
 from test.pylib.util import wait_for_cql_and_get_hosts
 from test.topology.util import reconnect_driver
-from test.topology_raft_disabled.util import restart, enable_raft_and_restart, enter_recovery_state, \
-        wait_for_upgrade_state, wait_until_upgrade_finishes, delete_raft_data_and_upgrade_state, log_run_time
+from test.topology_raft_disabled.util import restart, enter_recovery_state, wait_for_upgrade_state, \
+        wait_until_upgrade_finishes, delete_raft_data_and_upgrade_state, log_run_time
 
 
 @pytest.mark.asyncio
 @log_run_time
 @pytest.mark.replication_factor(1)
-async def test_recover_stuck_raft_upgrade(manager: ManagerClient, random_tables: RandomTables):
+async def test_recover_stuck_raft_recovery(manager: ManagerClient, random_tables: RandomTables):
     """
-    We enable Raft on every server and the upgrade procedure starts.  All servers join group 0. Then one
-    of them fails, the rest enter 'synchronize' state.  We assume the failed server cannot be recovered.
+    After creating a cluster, we enter RECOVERY state on every server. Then, we delete the Raft data
+    and the upgrade state on all servers. We restart them and the upgrade procedure starts. One of the
+    servers fails, the rest enter 'synchronize' state. We assume the failed server cannot be recovered.
     We cannot just remove it at this point; it's already part of group 0, `remove_from_group0` will wait
     until upgrade procedure finishes - but the procedure is stuck.  To proceed we enter RECOVERY state on
     the other servers, remove the failed one, and clear existing Raft data. After leaving RECOVERY the
     remaining nodes will restart the procedure, establish a new group 0 and finish upgrade.
-
-    kbr-: the test takes about 26 seconds in dev mode on my laptop.
     """
     servers = await manager.running_servers()
     srv1, *others = servers
 
-    logging.info(f"Enabling Raft on {srv1} and restarting")
-    await enable_raft_and_restart(manager, srv1)
+    logging.info("Waiting until driver connects to every server")
+    cql = manager.get_cql()
+    hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
 
-    # TODO error injection should probably be done through ScyllaClusterManager (we may need to mark the cluster as dirty).
-    # In this test the cluster is dirty anyway due to a restart so it's safe.
-    await inject_error_one_shot(manager.api, srv1.ip_addr, 'group0_upgrade_before_synchronize')
-    logging.info(f"Enabling Raft on {others} and restarting")
-    await asyncio.gather(*(enable_raft_and_restart(manager, srv) for srv in others))
+    logging.info(f"Setting recovery state on {hosts}")
+    await asyncio.gather(*(enter_recovery_state(cql, h) for h in hosts))
+    await asyncio.gather(*(restart(manager, srv) for srv in servers))
+    cql = await reconnect_driver(manager)
+
+    logging.info(f"Cluster restarted, waiting until driver reconnects to {others}")
+    hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+    logging.info(f"Driver reconnected, hosts: {hosts}")
+
+    logging.info(f"Deleting Raft data and upgrade state on {hosts}")
+    await asyncio.gather(*(delete_raft_data_and_upgrade_state(cql, h) for h in hosts))
+
+    logging.info(f"Stopping {servers}")
+    await asyncio.gather(*(manager.server_stop_gracefully(srv.server_id) for srv in servers))
+
+    logging.info(f"Starting {srv1} with injected group 0 upgrade error")
+    await manager.server_update_config(srv1.server_id, 'error_injections_at_startup', ['group0_upgrade_before_synchronize'])
+    await manager.server_start(srv1.server_id)
+
+    logging.info(f"Starting {others}")
+    await asyncio.gather(*(manager.server_start(srv.server_id) for srv in others))
     cql = await reconnect_driver(manager)
 
     logging.info(f"Cluster restarted, waiting until driver reconnects to {others}")
