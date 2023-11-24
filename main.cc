@@ -1591,6 +1591,8 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 cdc.stop().get();
             });
 
+            supervisor::notify("starting storage service", true);
+
             api::set_server_messaging_service(ctx, messaging).get();
             auto stop_messaging_api = defer_verbose_shutdown("messaging service API", [&ctx] {
                 api::unset_server_messaging_service(ctx).get();
