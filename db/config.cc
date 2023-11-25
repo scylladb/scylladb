@@ -351,9 +351,9 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     /**
     * @Group Ungrouped properties
     */
-    , background_writer_scheduling_quota(this, "background_writer_scheduling_quota", value_status::Unused, 1.0,
+    , background_writer_scheduling_quota(this, "background_writer_scheduling_quota", value_status::Deprecated, 1.0,
         "max cpu usage ratio (between 0 and 1) for compaction process. Not intended for setting in normal operations. Setting it to 1 or higher will disable it, recommended operational setting is 0.5.")
-    , auto_adjust_flush_quota(this, "auto_adjust_flush_quota", value_status::Unused, false,
+    , auto_adjust_flush_quota(this, "auto_adjust_flush_quota", value_status::Deprecated, false,
         "true: auto-adjust memtable shares for flush processes")
     , memtable_flush_static_shares(this, "memtable_flush_static_shares", liveness::LiveUpdate, value_status::Used, 0,
         "If set to higher than 0, ignore the controller's output and set the memtable shares statically. Do not set this unless you know what you are doing and suspect a problem in the controller. This option will be retired when the controller reaches more maturity")
@@ -1077,7 +1077,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
             "In debug mode, report log-structured allocator sanitizer violations with a backtrace. Slow.")
     , flush_schema_tables_after_modification(this, "flush_schema_tables_after_modification", liveness::LiveUpdate, value_status::Used, true,
         "Flush tables in the system_schema keyspace after schema modification. This is required for crash recovery, but slows down tests and can be disabled for them")
-    , restrict_replication_simplestrategy(this, "restrict_replication_simplestrategy", liveness::LiveUpdate, value_status::Unused, db::tri_mode_restriction_t::mode::FALSE, "Controls whether to disable SimpleStrategy replication. Can be true, false, or warn.")
+    , restrict_replication_simplestrategy(this, "restrict_replication_simplestrategy", liveness::LiveUpdate, value_status::Deprecated, db::tri_mode_restriction_t::mode::FALSE, "Controls whether to disable SimpleStrategy replication. Can be true, false, or warn.")
     , restrict_dtcs(this, "restrict_dtcs", liveness::LiveUpdate, value_status::Unused, db::tri_mode_restriction_t::mode::TRUE, "Controls whether to prevent setting DateTieredCompactionStrategy. Can be true, false, or warn.")
     , restrict_twcs_without_default_ttl(this, "restrict_twcs_without_default_ttl", liveness::LiveUpdate, value_status::Used, db::tri_mode_restriction_t::mode::WARN, "Controls whether to prevent creating TimeWindowCompactionStrategy tables without a default TTL. Can be true, false, or warn.")
     , restrict_future_timestamp(this, "restrict_future_timestamp",liveness::LiveUpdate, value_status::Used, true, "Controls whether to detect and forbid unreasonable USING TIMESTAMP, more than 3 days into the future.")
