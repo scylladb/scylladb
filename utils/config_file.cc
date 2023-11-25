@@ -268,6 +268,17 @@ utils::config_file::add_options(bpo::options_description_easy_init& init) {
     return init;
 }
 
+
+bpo::options_description_easy_init&
+utils::config_file::add_deprecated_options(bpo::options_description_easy_init&& init) {
+    for (config_src& src : _cfgs) {
+        if (src.status() == value_status::Deprecated) {
+            src.add_command_line_option(init);
+        }
+    }
+    return init;
+}
+
 void utils::config_file::read_from_yaml(const sstring& yaml, error_handler h) {
     read_from_yaml(yaml.c_str(), std::move(h));
 }
@@ -304,6 +315,9 @@ void utils::config_file::read_from_yaml(const char* yaml, error_handler h) {
             continue;
         }
         switch (cfg.status()) {
+        case value_status::Deprecated:
+            h(label, "Option is deprecated", cfg.status());
+            continue;
         case value_status::Invalid:
             h(label, "Option is not applicable", cfg.status());
             continue;

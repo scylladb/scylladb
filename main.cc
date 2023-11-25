@@ -232,7 +232,8 @@ read_config(bpo::variables_map& opts, db::config& cfg) {
     return check_direct_io_support(file).then([file, &cfg] {
         return cfg.read_from_file(file, [](auto & opt, auto & msg, auto status) {
             auto level = log_level::warn;
-            if (status.value_or(db::config::value_status::Invalid) != db::config::value_status::Invalid) {
+            if (auto value = status.value_or(db::config::value_status::Invalid);
+                value != db::config::value_status::Invalid && value != db::config::value_status::Deprecated) {
                 level = log_level::error;
             }
             startlog.log(level, "{} : {}", msg, opt);
@@ -604,11 +605,9 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
     init("build-mode", bpo::bool_switch(), "print build mode and exit");
     init("list-tools", bpo::bool_switch(), "list included tools and exit");
 
-    bpo::options_description deprecated("Deprecated options - ignored");
-    deprecated.add_options()
-        ("background-writer-scheduling-quota", bpo::value<float>())
-        ("auto-adjust-flush-quota", bpo::value<bool>());
-    app.get_options_description().add(deprecated);
+    bpo::options_description deprecated_options("Deprecated options - ignored");
+    cfg->add_deprecated_options(deprecated_options.add_options());
+    app.get_options_description().add(deprecated_options);
 
     // TODO : default, always read?
     init("options-file", bpo::value<sstring>(), "configuration file (i.e. <SCYLLA_HOME>/conf/scylla.yaml)");
@@ -661,10 +660,9 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             sm::make_gauge("current_version", sm::description("Current ScyllaDB version."), { sm::label_instance("version", scylla_version()), sm::shard_label("") }, [] { return 0; })
         });
 
-        const std::unordered_set<sstring> ignored_options = { "auto-adjust-flush-quota", "background-writer-scheduling-quota" };
-        for (auto& opt: ignored_options) {
-            if (opts.contains(opt)) {
-                fmt::print("{} option ignored (deprecated)\n", opt);
+        for (auto& opt: deprecated_options.options()) {
+            if (opts.contains(opt->long_name())) {
+                startlog.warn("{} option ignored (deprecated)", opt->long_name());
             }
         }
 

@@ -69,17 +69,29 @@ public:
         Used, ///< a valid option which changes scylla's behavior. only the
               ///< "Used" options are added to the command line options,
               ///< and can be specified with command line.
-        Unused, ///< an option inherited or deprecated, or not yet implemented.
-                ///< we just silently ignore these options at seeing them.
+        Unused, ///< an option inherited or not yet implemented.
+                ///< We want to minimize their "visibility" from user. So
+                ///< despite that they are still accepted in the config file,
+                ///< they are not considered as valid options if specified
+                ///< using the command line anymore.
                 ///< initially, we had loads of these options from Cassandra.
                 ///< they are also used for options supported by the older
                 ///< versions of Scylla.
-        Invalid, ///< an option inherited or deprecated. but we don't intend to
+                ///< (In the past used to deprecate an option,
+                ///< now there's a separate Deprecated enumerator for that purpose)
+        Invalid, ///< an option inherited, but we don't intend to
                  ///< implement it. on the contrary, we print a warning message
                  ///< at seeing each of these options if specified when booting
                  ///< up. these options are kept around only to ease the
                  ///< migration process so user can keep using their existing
                  ///< settings.
+                 ///< (In the past used to deprecate an option,
+                 ///< now there's a separate Deprecated enumerator for that purpose)
+        Deprecated, ///< an option that was used once, but became deprecated.
+                    ///< If specified in configuration file or as a cmd line param,
+                    ///< we'll parse it and print a warning saying it's deprecated.
+                    ///< You may expect such option will become Unused/Invalid
+                    ///< or will be removed altogether some day.
     };
 
     enum class liveness {
@@ -268,6 +280,8 @@ public:
 
     boost::program_options::options_description_easy_init&
     add_options(boost::program_options::options_description_easy_init&);
+    boost::program_options::options_description_easy_init&
+    add_deprecated_options(boost::program_options::options_description_easy_init&&);
 
     /**
      * Default behaviour for yaml parser is to throw on
