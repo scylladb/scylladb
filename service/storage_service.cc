@@ -1729,6 +1729,7 @@ class topology_coordinator {
             // to check atomically with event.wait()
             if (!_tablets_ready) {
                 slogger.trace("raft topology: Going to sleep with active tablet transitions");
+                release_guard(std::move(guard));
                 co_await await_event();
             }
             co_return;
