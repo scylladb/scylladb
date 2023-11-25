@@ -1956,12 +1956,12 @@ def write_build_file(f,
                      && sed -i -e '/^.*On :.*$$/d' $builddir/{mode}/gen/${{stem}}Lexer.hpp $
                      && sed -i -e '/^.*On :.*$$/d' $builddir/{mode}/gen/${{stem}}Lexer.cpp $
                      && sed -i -e '/^.*On :.*$$/d' $builddir/{mode}/gen/${{stem}}Parser.hpp $
-                     && sed -i -e 's/^\\( *\)\\(ImplTraits::CommonTokenType\\* [a-zA-Z0-9_]* = NULL;\\)$$/\\1const \\2/' $
+                     && sed -i -e 's/^\\( *\\)\\(ImplTraits::CommonTokenType\\* [a-zA-Z0-9_]* = NULL;\\)$$/\\1const \\2/' $
                         -e '/^.*On :.*$$/d' $
                         -e '1i using ExceptionBaseType = int;' $
-                        -e 's/^{{/{{ ExceptionBaseType\* ex = nullptr;/; $
-                            s/ExceptionBaseType\* ex = new/ex = new/; $
-                            s/exceptions::syntax_exception e/exceptions::syntax_exception\& e/' $
+                        -e 's/^{{/{{ ExceptionBaseType\\* ex = nullptr;/; $
+                            s/ExceptionBaseType\\* ex = new/ex = new/; $
+                            s/exceptions::syntax_exception e/exceptions::syntax_exception\\& e/' $
                         $builddir/{mode}/gen/${{stem}}Parser.cpp
                 description = ANTLR3 $in
             rule checkhh.{mode}
