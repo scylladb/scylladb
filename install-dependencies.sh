@@ -129,11 +129,12 @@ fedora_python3_packages=(
     python3-pyudev
 )
 
-pip_packages=(
-    scylla-driver
-    geomet
-    traceback-with-variables
-    scylla-api-client
+# an associative array from packages to constrains
+declare -A pip_packages=(
+    [scylla-driver]=
+    [geomet]="<0.3,>=0.1"
+    [traceback-with-variables]=
+    [scylla-api-client]=
 )
 
 pip_symlinks=(
@@ -280,7 +281,7 @@ if $PRINT_PYTHON3; then
 fi
 
 if $PRINT_PIP; then
-    echo "${pip_packages[@]}"
+    echo "${!pip_packages[@]}"
     exit 0
 fi
 
@@ -319,10 +320,12 @@ elif [ "$ID" = "fedora" ]; then
     fi
     dnf install -y "${fedora_packages[@]}" "${fedora_python3_packages[@]}"
     PIP_DEFAULT_ARGS="--only-binary=:all: -v"
-    pip3 install "$PIP_DEFAULT_ARGS" "geomet<0.3,>=0.1"
-    pip3 install "$PIP_DEFAULT_ARGS" scylla-driver
-    pip3 install "$PIP_DEFAULT_ARGS" traceback-with-variables
-    pip3 install "$PIP_DEFAULT_ARGS" scylla-api-client
+    pip_constrained_packages=""
+    for package in ${!pip_packages[@]}
+    do
+        pip_constrained_packages="${pip_constrained_packages} ${package}${pip_packages[$package]}"
+    done
+    pip3 install "$PIP_DEFAULT_ARGS" $pip_constrained_packages
 
     cargo --config net.git-fetch-with-cli=true install cxxbridge-cmd --root /usr/local
     if [ -f "$(node_exporter_fullpath)" ] && node_exporter_checksum; then
