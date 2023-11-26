@@ -143,13 +143,10 @@ def is_suse_variant():
     return ('suse' in d)
 
 def is_developer_mode():
-    # non-advancing comment matcher
-    _nocomment = r"^\s*(?!#)"
-    # non-capturing grouping
-    _scyllaeq = r"(?:\s*|=)"
-    f = open(etcdir() + "/scylla.d/dev-mode.conf", "r")
-    pattern = re.compile(_nocomment + r".*developer-mode" + _scyllaeq + "(1|true)")
-    return len([x for x in f if pattern.match(x)]) >= 1
+    y = yaml.safe_load(open(etcdir_p() / 'scylla/scylla.yaml'))
+    if 'developer_mode' not in y:
+        return False
+    return y['developer_mode']
 
 def get_text_from_path(fpath):
     board_vendor_path = Path(fpath)
@@ -256,38 +253,10 @@ def get_scylla_dirs():
 
     return [d for d in dirs if d is not None]
 
-
-def perftune_base_command():
-    disk_tune_param = "--tune disks " + " ".join("--dir {}".format(d) for d in get_scylla_dirs())
-    return '/opt/scylladb/scripts/perftune.py {}'.format(disk_tune_param)
-
-
 def is_valid_nic(nic):
     if len(nic) == 0:
         return False
     return os.path.exists('/sys/class/net/{}'.format(nic))
-
-
-# Remove this when we do not support SET_NIC configuration value anymore
-def get_set_nic_and_disks_config_value(cfg):
-    """
-    Get the SET_NIC_AND_DISKS configuration value.
-    Return the SET_NIC configuration value if SET_NIC_AND_DISKS is not found (old releases case).
-    :param cfg: sysconfig_parser object
-    :return configuration value
-    :except If the configuration value is not found
-    """
-
-    # Sanity check
-    if cfg.has_option('SET_NIC_AND_DISKS') and cfg.has_option('SET_NIC'):
-        raise Exception("Only one of 'SET_NIC_AND_DISKS' and 'SET_NIC' is allowed to be present")
-
-    try:
-        return cfg.get('SET_NIC_AND_DISKS')
-    except Exception:
-        # For backwards compatibility
-        return cfg.get('SET_NIC')
-
 
 def swap_exists():
     swaps = out('swapon --noheadings --raw')
@@ -479,3 +448,67 @@ class sysconfig_parser:
     def commit(self):
         with open(self._filename, 'w') as f:
             f.write(self._data)
+
+
+class seastar_conf:
+    def __load(self):
+        f = io.StringIO('[global]\n{}'.format(self._data))
+        self._cfg = configparser.ConfigParser()
+        self._cfg.optionxform = str
+        self._cfg.readfp(f)
+
+    def __format_line(self, key, val):
+        return f'{key}={val}'
+
+    def __add(self, key, val):
+        self._data += self.__format_line(key, val) + '\n'
+        self.__load()
+
+    def __init__(self):
+        self._conf_path = etcdir_p() / 'scylla.d/seastar.conf'
+        with self._conf_path.open() as f:
+            self._data = f.read()
+        self.__load()
+
+    def get(self, key):
+        return self._cfg.get('global', key)
+
+    def has_option(self, key):
+        return self._cfg.has_option('global', key)
+
+    def set(self, key, val):
+        if not self.has_option(key):
+            return self.__add(key, val)
+        new_line = self.__format_line(key, val)
+        self._data = re.sub(f'^{key}=[^\n]*$', new_line, self._data, flags=re.MULTILINE)
+        self.__load()
+
+    def remove_option(self, key):
+        return self._cfg.remove_option('global', key)
+
+    def update_with_args(self, args):
+        for k, v in args.__dict__.items():
+            k = k.replace('_', '-')
+            if v is None:
+                if self.has_option(k):
+                    self.remove_option(k)
+                continue
+            if type(v) == bool:
+                v = int(v)
+            self.set(k, v)
+
+    def commit(self):
+        with self._conf_path.open('w') as f:
+            f.write(self._data)
+
+def scylla_yaml_modify(key, val):
+    scylla_yaml = etcdir_p() / 'scylla/scylla.yaml'
+    with scylla_yaml.open() as f:
+        conf = f.read()
+    conf, cnt = re.subn(rf'^({key}:)(\s*)\S+$', f'\\1 {val}', conf, flags=re.MULTILINE)
+    if not cnt:
+        conf, cnt = re.subn(rf'^(#\s*)({key}:)(\s*)\S+$', f'\\2 {val}', conf, flags=re.MULTILINE)
+    if not cnt:
+        conf += f'\n{key}: {val}'
+    with scylla_yaml.open('w') as f:
+        f.write(conf)

@@ -28,15 +28,6 @@ if __name__ == '__main__':
         parser.print_help()
         sys.exit(1)
 
-    conf_args=[]
-    if args.lock_memory:
-        conf_args.append('--lock-memory=1')
-    if args.memory:
-        conf_args.append('--memory={}'.format(args.memory))
-    if args.reserve_memory:
-        conf_args.append('--reserve-memory={}'.format(args.reserve_memory))
-    conf = 'MEM_CONF="{}"\n'.format(' '.join(conf_args))
-
-    with open(str(etcdir_p() / 'scylla.d' / 'memory.conf'), 'w') as f:
-        f.write(conf)
-
+    conf = seastar_conf()
+    conf.update_with_args(args)
+    conf.commit()

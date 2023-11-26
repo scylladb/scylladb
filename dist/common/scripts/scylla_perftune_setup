@@ -1,0 +1,201 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+#
+# Copyright 2018-present ScyllaDB
+#
+
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+import os
+import sys
+import argparse
+import subprocess
+import re
+from scylla_util import *
+from subprocess import run
+from pathlib import Path
+
+perftune_yaml = Path('/etc/scylla.d/perftune.yaml')
+
+def cpu_mask_is_zero(cpu_mask):
+    """
+    The cpu_mask is a comma-separated list of 32-bit hex values with possibly omitted zero components,
+            e.g. 0xffff,,0xffff
+    We want to estimate if the whole mask is all-zeros.
+    :param cpu_mask: hwloc-calc generated CPU mask
+    :return: True if mask is zero, False otherwise
+    """
+    for cur_cpu_mask in cpu_mask.split(','):
+        if cur_cpu_mask and int(cur_cpu_mask, 16) != 0:
+            return False
+
+    return True
+
+def get_irq_cpu_mask():
+    """
+    Return an irq_cpu_mask corresponding to a value written in cpuset.conf
+
+    Let's use the "CPU masks invariant": irq_cpu_mask | compute_cpu_mask == cpu_mask.
+
+    This function is called when  we are generating a perftune.yaml meaning that there are no restrictions on
+    cpu_mask defined.
+
+    And this means that in the context of this function call cpu_mask is "all CPUs", or in hwloc-cal lingo - 'all'.
+
+    (For any "special" value of a cpu_mask a user needs to write his/her own perftune.yaml)
+
+    Mentioned above means that in order to calculate an irq_cpu_mask that corresponds to a compute_cpu_mask defined
+    using --cpuset in cpuset.conf and cpu_mask == 'all' we need to invert bits from the compute_cpu_mask in the 'all'
+    mask.
+
+    This can be achieved by running the following hwloc-calc command:
+
+    hwloc-calc --pi all ~PU:X ~PU:Y ~PU:Z ...
+
+    where X,Y,Z,... are either a single CPU index or a CPU range.
+
+    For example, if we have the following cpuset:
+
+    0,2-7,17-24,35
+
+    to get irq_cpu_mask we want to run the following command:
+
+    hwloc-calc --pi all ~PU:0 ~PU:2-7 ~PU:17-24 ~PU:35
+    """
+
+    conf = seastar_conf()
+    if not conf.has_option('cpuset'):
+        raise Exception('cpuset not found in seastar.conf')
+    cur_cpuset = conf.get('cpuset')
+
+    hwloc_cmd = "/opt/scylladb/bin/hwloc-calc --pi all {}".\
+        format(" ".join(['~PU:{}'.format(c) for c in cur_cpuset.split(",")]))
+
+    irq_cpu_mask = out(hwloc_cmd).strip()
+
+    # If the generated mask turns out to be all-zeros then it means that all present CPUs are used in cpuset.conf.
+    # In such a case irq_cpu_mask has to be all-CPUs too, a.k.a. MQ mode.
+    if cpu_mask_is_zero(irq_cpu_mask):
+        irq_cpu_mask = out("/opt/scylladb/bin/hwloc-calc all").strip()
+
+    return irq_cpu_mask
+
+def create_perftune_conf(args):
+    """
+    This function checks if a perftune configuration file should be created and
+    creates it if so is the case, returning a boolean accordingly. It returns False
+    if none of the perftune options are enabled in scylla_server file. If the perftune
+    configuration file already exists, none is created.
+    :return boolean indicating if perftune.py should be executed
+    """
+    params = ''
+    if args.setup_nic_and_disks:
+        irq_cpu_mask = get_irq_cpu_mask()
+        # Note that 'irq_cpu_mask' is a coma separated list of 32-bits wide masks.
+        # Therefore, we need to put it in quotes.
+        params += f'--tune net --nic "{args.nic}" --irq-cpu-mask "{irq_cpu_mask}" --tune disks '
+        params += ' '.join('--dir {}'.format(d) for d in get_scylla_dirs())
+
+    if args.set_clocksource:
+        params += ' --tune system --tune-clock'
+
+    if args.disable_writeback_cache:
+        params += ' --tune disks --write-back-cache false'
+
+    if len(params) > 0:
+        if perftune_yaml.exists():
+            return True
+
+        params += ' --dump-options-file'
+        yaml = out('/opt/scylladb/scripts/perftune.py ' + params)
+        with perftune_yaml.open('w') as f:
+            f.write(yaml)
+        perftune_yaml.chmod(0o644)
+        return True
+    else:
+        return False
+
+def generate_cpuset(args):
+    conf = seastar_conf()
+    # skip generating cpuset when it's already configured
+    if conf.has_option('cpuset'):
+        return
+
+    params = ''
+    if args.setup_nic_and_disks:
+        params += f'--tune net --nic "{args.nic}" --tune disks '
+        params += ' '.join('--dir {}'.format(d) for d in get_scylla_dirs())
+
+    if args.set_clocksource:
+        params += ' --tune system --tune-clock'
+
+    if args.disable_writeback_cache:
+        params += ' --tune disks --write-back-cache false'
+
+    if len(params) > 0:
+        params += ' --get-cpu-mask'
+        res = out('/opt/scylladb/scripts/perftune.py ' + params)
+    else:
+        raise Exception('No perftune parameters specified.')
+
+    # we need to extract CPU mask from output, since perftune.py may also print warning messages (#10082)
+    match = re.match('(.*\n)?(0x[0-9a-f]+(?:,0x[0-9a-f]+)*)', res, re.DOTALL)
+    try:
+        warning = match.group(1)
+        cpuset_hex = match.group(2)
+    except:
+        raise Exception(f'Failed to retrive CPU mask: {res}')
+    # print warning message if available
+    if warning:
+        print(warning.strip())
+    if len(cpuset_hex) > 0:
+        cpuset = hex2list(cpuset_hex)
+        run('/opt/scylladb/scripts/scylla_cpuset_setup --cpuset {}'.format(cpuset), shell=True, check=True)
+
+if __name__ == '__main__':
+    if os.getuid() > 0:
+        print('Requires root permission.')
+        sys.exit(1)
+
+    parser = argparse.ArgumentParser(description='Configure perftune to optimize HW performance.')
+    parser.add_argument('--nic',
+                        help='specify NIC')
+    parser.add_argument('--setup-nic-and-disks', action='store_true',
+                        help='setup NIC\'s and disks\' interrupts, RPS, XPS, nomerges and I/O scheduler')
+    parser.add_argument('--set-clocksource', action='store_true',
+                        help='Set enforcing fastest available Linux clocksource')
+    parser.add_argument('--disable-writeback-cache', action='store_true',
+                        help='Disable disk writeback cache')
+    parser.add_argument('--regenerate', action='store_true',
+                        help='Regenerate perftune.yaml using current cpuset')
+    parser.add_argument('--disable', action='store_true',
+                        help='Disable perftune')
+    args = parser.parse_args()
+
+    if args.setup_nic_and_disks and not args.nic:
+        print('NIC is not specified.')
+        parser.print_help()
+        sys.exit(1)
+    if args.nic and not is_valid_nic(args.nic):
+            print(f'NIC {args.nic} not found.')
+            sys.exit(1)
+    if args.regenerate:
+        if not perftune_yaml.exists():
+            print(f'{perftune_yaml} not found.')
+            sys.exit(1)
+        cfg = yaml.safe_load(perftune_yaml.open())
+        args.setup_and_disks = 'tune' in cfg and 'net' in cfg['tune']
+        args.nic = cfg.get('nic')
+        args.set_clocksource = 'tune_clock' in cfg
+        args.is_disable_writeback_cache = 'wirte_back_cache' in cfg and not cfg['write_back_cache']
+    if not args.setup_nic_and_disks and not args.set_clocksource and not args.disable_writeback_cache and not args.disable:
+        print('Non of perftune setup options are enabled.')
+        parser.print_help()
+        sys.exit(1)
+    if args.disable:
+        perftune_yaml.unlink(missing_ok=True)
+    else:
+        if args.setup_nic_and_disks:
+            generate_cpuset(args)
+        res = create_perftune_conf(args)

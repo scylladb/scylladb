@@ -253,8 +253,9 @@ if __name__ == '__main__':
     parser.add_argument('--no-coredump-setup', action='store_true',
                         default=default_no_coredump_setup,
                         help='skip coredump setup')
+    # XXX: keep this just for compatibility, will be ignored
     parser.add_argument('--no-sysconfig-setup', action='store_true', default=False,
-                        help='skip sysconfig setup')
+                        help='the option is remained just for compatibility, will be ignored')
     parser.add_argument('--io-setup', default=1, choices=[0, 1], dest='io_setup', type=int,
                         help='Run I/O configuration setup (i.e. iotune). Defaults to 1.')
     parser.add_argument('--no-io-setup', dest='io_setup', action='store_const', const=0,
@@ -284,7 +285,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     if not interactive:
-        if not args.no_sysconfig_setup:
+        if args.setup_nic_and_disks:
             if args.nic:
                 if not is_valid_nic(args.nic):
                     print('NIC {} doesn\'t exist.'.format(args.nic))
@@ -312,7 +313,6 @@ if __name__ == '__main__':
     raid_level_5 = args.raid_level_5
     online_discard = args.online_discard
     coredump_setup = not args.no_coredump_setup
-    sysconfig_setup = not args.no_sysconfig_setup
     io_setup = args.io_setup
     version_check = not args.no_version_check
     node_exporter = not args.no_node_exporter
@@ -479,18 +479,20 @@ if __name__ == '__main__':
             else:
                 run_setup_script('coredump', 'scylla_coredump_setup')
 
-        sysconfig_setup = interactive_ask_service('Do you want to setup a system-wide customized configuration for Scylla?', 'Yes - setup the sysconfig file. No - skips this step.', sysconfig_setup)
-        args.no_sysconfig_setup = not sysconfig_setup
-        if sysconfig_setup:
-            set_nic_and_disks = interactive_ask_service('Do you want to enable Network Interface Card (NIC) and disk(s) optimization?', 'Yes - optimize the NIC queue and disks settings. Selecting Yes greatly improves performance. No - skip this step.', set_nic_and_disks)
-            setup_args = '--setup-nic-and-disks' if set_nic_and_disks else ''
+        set_nic_and_disks = interactive_ask_service('Do you want to enable Network Interface Card (NIC) and disk(s) optimization?', 'Yes - optimize the NIC queue and disks settings. Selecting Yes greatly improves performance. No - skip this step.', set_nic_and_disks)
+        setup_args = '--setup-nic-and-disks' if set_nic_and_disks else ''
+        if set_nic_and_disks:
             if interactive:
                 args.nic = interactive_choose_nic()
+            setup_args += f' --nic {args.nic}'
 
-            set_clocksource = interactive_ask_service('The clocksource is the physical device that Linux uses to take time measurements. In most cases Linux chooses the fastest available clocksource device as long as it is accurate. In some situations, however, Linux errs in the side of caution and does not choose the fastest available clocksource despite it being accurate enough. If you know your hardware''s fast clocksource is stable enough, choose "yes" here. The safest is the choose "no" (the default)', 'Yes - enforce clocksource setting. No - keep current configuration.', set_clocksource)
-            setup_args += ' --set-clocksource' if set_clocksource else ''
+        set_clocksource = interactive_ask_service('The clocksource is the physical device that Linux uses to take time measurements. In most cases Linux chooses the fastest available clocksource device as long as it is accurate. In some situations, however, Linux errs in the side of caution and does not choose the fastest available clocksource despite it being accurate enough. If you know your hardware''s fast clocksource is stable enough, choose "yes" here. The safest is the choose "no" (the default)', 'Yes - enforce clocksource setting. No - keep current configuration.', set_clocksource)
+        setup_args += ' --set-clocksource' if set_clocksource else ''
 
-            run_setup_script('Performance Tuning', 'scylla_sysconfig_setup --nic {nic} {setup_args}'.format(nic=args.nic, setup_args=setup_args))
+        if not set_nic_and_disks and not set_clocksource:
+            setup_args = '--disable'
+
+        run_setup_script('Performance Tuning', f'scylla_perftune_setup {setup_args}')
 
     if is_nonroot():
         params = out('systemctl --no-pager show user@1000.service')

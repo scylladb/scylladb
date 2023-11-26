@@ -323,6 +323,10 @@ WantedBy=local-fs.target
         dpath = '{}/{}'.format(root, d)
         os.makedirs(dpath, exist_ok=True)
         os.chown(dpath, uid, gid)
+    # XXX: we will drop this once we support to customize seastar.conf path
+    seastar_conf_link = Path(f'{root}/.config/seastar/seastar.conf')
+    seastar_conf_link.parent.mkdir(parents=True, exist_ok=True)
+    seastar_conf_link.symlink_to(etcdir_p() / 'scylla.d/seastar.conf')
 
     if is_debian_variant():
         run('update-initramfs -u', shell=True, check=True)

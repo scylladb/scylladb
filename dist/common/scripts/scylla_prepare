@@ -9,116 +9,10 @@
 
 import os
 import sys
-import glob
 import platform
-import distro
 
 from scylla_util import *
 from subprocess import run
-
-def get_cur_cpuset():
-    cfg = sysconfig_parser('/etc/scylla.d/cpuset.conf')
-    cpuset = cfg.get('CPUSET')
-    return re.sub(r'^--cpuset (.+)$', r'\1', cpuset).strip()
-
-def cpu_mask_is_zero(cpu_mask):
-    """
-    The cpu_mask is a comma-separated list of 32-bit hex values with possibly omitted zero components,
-            e.g. 0xffff,,0xffff
-    We want to estimate if the whole mask is all-zeros.
-    :param cpu_mask: hwloc-calc generated CPU mask
-    :return: True if mask is zero, False otherwise
-    """
-    for cur_cpu_mask in cpu_mask.split(','):
-        if cur_cpu_mask and int(cur_cpu_mask, 16) != 0:
-            return False
-
-    return True
-
-def get_irq_cpu_mask():
-    """
-    Return an irq_cpu_mask corresponding to a value written in cpuset.conf
-
-    Let's use the "CPU masks invariant": irq_cpu_mask | compute_cpu_mask == cpu_mask.
-
-    This function is called when  we are generating a perftune.yaml meaning that there are no restrictions on
-    cpu_mask defined.
-
-    And this means that in the context of this function call cpu_mask is "all CPUs", or in hwloc-cal lingo - 'all'.
-
-    (For any "special" value of a cpu_mask a user needs to write his/her own perftune.yaml)
-
-    Mentioned above means that in order to calculate an irq_cpu_mask that corresponds to a compute_cpu_mask defined
-    using --cpuset in cpuset.conf and cpu_mask == 'all' we need to invert bits from the compute_cpu_mask in the 'all'
-    mask.
-
-    This can be achieved by running the following hwloc-calc command:
-
-    hwloc-calc --pi all ~PU:X ~PU:Y ~PU:Z ...
-
-    where X,Y,Z,... are either a single CPU index or a CPU range.
-
-    For example, if we have the following cpuset:
-
-    0,2-7,17-24,35
-
-    to get irq_cpu_mask we want to run the following command:
-
-    hwloc-calc --pi all ~PU:0 ~PU:2-7 ~PU:17-24 ~PU:35
-    """
-
-    if not os.path.exists('/etc/scylla.d/cpuset.conf'):
-        raise Exception('/etc/scylla.d/cpuset.conf not found')
-    cur_cpuset = get_cur_cpuset()
-
-    hwloc_cmd = "/opt/scylladb/bin/hwloc-calc --pi all {}".\
-        format(" ".join(['~PU:{}'.format(c) for c in cur_cpuset.split(",")]))
-
-    irq_cpu_mask = out(hwloc_cmd).strip()
-
-    # If the generated mask turns out to be all-zeros then it means that all present CPUs are used in cpuset.conf.
-    # In such a case irq_cpu_mask has to be all-CPUs too, a.k.a. MQ mode.
-    if cpu_mask_is_zero(irq_cpu_mask):
-        irq_cpu_mask = out("/opt/scylladb/bin/hwloc-calc all").strip()
-
-    return irq_cpu_mask
-
-def create_perftune_conf(cfg):
-    """
-    This function checks if a perftune configuration file should be created and
-    creates it if so is the case, returning a boolean accordingly. It returns False
-    if none of the perftune options are enabled in scylla_server file. If the perftune
-    configuration file already exists, none is created.
-    :return boolean indicating if perftune.py should be executed
-    """
-    params = ''
-    if get_set_nic_and_disks_config_value(cfg) == 'yes':
-        nic = cfg.get('IFNAME')
-        if not nic:
-            nic = 'eth0'
-        irq_cpu_mask = get_irq_cpu_mask()
-        # Note that 'irq_cpu_mask' is a coma separated list of 32-bits wide masks.
-        # Therefore, we need to put it in quotes.
-        params += '--tune net --nic "{nic}" --irq-cpu-mask "{irq_cpu_mask}"'.format(nic=nic, irq_cpu_mask=irq_cpu_mask)
-
-    if cfg.has_option('SET_CLOCKSOURCE') and cfg.get('SET_CLOCKSOURCE') == 'yes':
-        params += ' --tune system --tune-clock'
-
-    if cfg.has_option('DISABLE_WRITEBACK_CACHE') and cfg.get('DISABLE_WRITEBACK_CACHE') == 'yes':
-        params += ' --write-back-cache=false'
-
-    if len(params) > 0:
-        if os.path.exists('/etc/scylla.d/perftune.yaml'):
-            return True
-
-        params += ' --dump-options-file'
-        yaml = out('/opt/scylladb/scripts/perftune.py ' + params)
-        with open('/etc/scylla.d/perftune.yaml', 'w') as f:
-            f.write(yaml)
-        os.chmod('/etc/scylla.d/perftune.yaml', 0o644)
-        return True
-    else:
-        return False
 
 def verify_cpu():
     if platform.machine() == 'x86_64':
@@ -135,46 +29,11 @@ def verify_cpu():
 if __name__ == '__main__':
     verify_cpu()
 
-    if os.getuid() > 0:
-        print('Requires root permission.')
+    try:
+        if os.path.exists('/etc/scylla.d/perftune.yaml'):
+            run("/opt/scylladb/scripts/perftune.py --options-file /etc/scylla.d/perftune.yaml", shell=True, check=True)
+    except Exception as e:
+        print(f'Exception occurred while tuning system using perftune.yaml:\n')
+        traceback.print_exc()
+        print('\nTo fix the error, please re-run scylla_setup.')
         sys.exit(1)
-    cfg = sysconfig_parser(sysconfdir_p() / 'scylla-server')
-    mode = cfg.get('NETWORK_MODE')
-
-    if mode == 'virtio':
-        tap = cfg.get('TAP')
-        user = cfg.get('USER')
-        group = cfg.get('GROUP')
-        bridge = cfg.get('BRIDGE')
-        run('ip tuntap del mode tap dev {TAP}'.format(TAP=tap), shell=True, check=True)
-        run('ip tuntap add mode tap dev {TAP} user {USER} one_queue vnet_hdr'.format(TAP=tap, USER=user), shell=True, check=True)
-        run('ip link set dev {TAP} up'.format(TAP=tap), shell=True, check=True)
-        run('ip link set dev {TAP} master {BRIDGE}'.format(TAP=tap, BRIDGE=bridge), shell=True, check=True)
-        run('chown {USER}.{GROUP} /dev/vhost-net'.format(USER=user, GROUP=group), shell=True, check=True)
-    elif mode == 'dpdk':
-        ethpciid = cfg.get('ETHPCIID')
-        nr_hugepages = cfg.get('NR_HUGEPAGES')
-        run('modprobe uio', shell=True, check=True)
-        run('modprobe uio_pci_generic', shell=True, check=True)
-        run('/opt/scylladb/scripts/dpdk-devbind.py --force --bind=uio_pci_generic {ETHPCIID}'.format(ETHPCIID=ethpciid), shell=True, check=True)
-        for n in glob.glob('/sys/devices/system/node/node?'):
-            with open('{n}/hugepages/hugepages-2048kB/nr_hugepages'.format(n=n), 'w') as f:
-                f.write(nr_hugepages)
-        if distro.name() == 'Ubuntu':
-            run('hugeadm --create-mounts', shell=True, check=True)
-    else:
-        try:
-            res = create_perftune_conf(cfg)
-        except Exception as e:
-            print(f'Exception occurred while creating perftune.yaml:\n')
-            scylla_excepthook(*sys.exc_info())
-            print('\nTo fix the error, please re-run scylla_setup.')
-            sys.exit(1)
-        try:
-            if res:
-                run("{} --options-file /etc/scylla.d/perftune.yaml".format(perftune_base_command()), shell=True, check=True)
-        except Exception as e:
-            print(f'Exception occurred while tuning system using perftune.yaml:\n')
-            traceback.print_exc()
-            print('\nTo fix the error, please re-run scylla_setup.')
-            sys.exit(1)
