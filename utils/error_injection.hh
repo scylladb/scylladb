@@ -157,6 +157,20 @@ public:
             ++_read_messages_counter;
         }
 
+        // \brief Checks if there is an unreceived message.
+        // If yes, returns true and marks the message as received.
+        bool poll_for_message() {
+            if (!_shared_data) {
+                on_internal_error(errinj_logger, "injection_shared_data is not initialized");
+            }
+
+            if (_read_messages_counter < _shared_data->received_message_count) {
+                ++_read_messages_counter;
+                return true;
+            }
+            return false;
+        }
+
         std::optional<std::string_view> get(std::string_view key) {
             if (!_shared_data) {
                 on_internal_error(errinj_logger, "injection_shared_data is not initialized");
