@@ -312,3 +312,80 @@ async def test_streaming_is_guarded_by_topology_guard(manager: ManagerClient):
     await manager.api.move_tablet(servers[0].ip_addr, "test", "test", s1_host_id, dst_shard, replica[0], replica[1], tablet_token)
     rows = await cql.run_async("SELECT pk from test.test")
     assert len(list(rows)) == 0
+
+
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_table_dropped_during_streaming(manager: ManagerClient):
+    """
+    Verifies that load balancing recovers when table is dropped during streaming phase of tablet migration.
+    Recovering means that state machine is not stuck and later migrations can proceed.
+    """
+
+    logger.info("Bootstrapping cluster")
+    servers = [await manager.server_add()]
+
+    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+
+    cql = manager.get_cql()
+    await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', "
+                        "'replication_factor': 1, 'initial_tablets': 1};")
+    await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, c int);")
+    await cql.run_async("CREATE TABLE test.test2 (pk int PRIMARY KEY, c int);")
+
+    servers.append(await manager.server_add())
+
+    logger.info("Populating tables")
+    key = 7 # Whatever
+    value = 3 # Whatever
+    tablet_token = 0 # Doesn't matter since there is one tablet
+    await cql.run_async(f"INSERT INTO test.test (pk, c) VALUES ({key}, {value})")
+    await cql.run_async(f"INSERT INTO test.test2 (pk, c) VALUES ({key}, {value})")
+    rows = await cql.run_async("SELECT pk from test.test")
+    assert len(list(rows)) == 1
+    rows = await cql.run_async("SELECT pk from test.test2")
+    assert len(list(rows)) == 1
+
+    replica = await get_tablet_replica(manager, servers[0], 'test', 'test', tablet_token)
+
+    await manager.api.enable_injection(servers[1].ip_addr, "stream_mutation_fragments", one_shot=True)
+    s1_log = await manager.server_open_log(servers[1].server_id)
+    s1_mark = await s1_log.mark()
+
+    logger.info("Starting tablet migration")
+    s1_host_id = await manager.get_host_id(servers[1].server_id)
+    migration_task = asyncio.create_task(
+        manager.api.move_tablet(servers[0].ip_addr, "test", "test", replica[0], replica[1], s1_host_id, 0, tablet_token))
+
+    # Wait for the replica-side writer of streaming to reach a place where it already
+    # received writes from the leaving replica but haven't applied them yet.
+    # Once the writer reaches this place, it will wait for the message_injection() call below before proceeding.
+    # We want to drop the table while streaming is deep in the process, where it will attempt to apply writes
+    # to the dropped table.
+    await s1_log.wait_for('stream_mutation_fragments: waiting', from_mark=s1_mark)
+
+    # Streaming blocks table drop, so we can't wait here.
+    drop_task = cql.run_async("DROP TABLE test.test")
+
+    # Release streaming as late as possible to increase probability of drop causing problems.
+    await s1_log.wait_for('Dropping', from_mark=s1_mark)
+
+    # Unblock streaming
+    await manager.api.message_injection(servers[1].ip_addr, "stream_mutation_fragments")
+    await drop_task
+
+    logger.info("Waiting for migration to finish")
+    try:
+        await migration_task
+    except HTTPError as e:
+        assert 'Tablet map not found' in e.message
+
+    logger.info("Verifying that moving the other tablet works")
+    replica = await get_tablet_replica(manager, servers[0], 'test', 'test2', tablet_token)
+    s0_host_id = await manager.get_host_id(servers[0].server_id)
+    assert replica[0] == UUID(s0_host_id)
+    await manager.api.move_tablet(servers[0].ip_addr, "test", "test2", replica[0], replica[1], s1_host_id, 0, tablet_token)
+
+    logger.info("Verifying tablet replica")
+    replica = await get_tablet_replica(manager, servers[0], 'test', 'test2', tablet_token)
+    assert replica == (UUID(s1_host_id), 0)
