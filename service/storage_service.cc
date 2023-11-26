@@ -1658,6 +1658,10 @@ class topology_coordinator {
                 // get admitted before global_tablet_token_metadata_barrier() is finished for earlier
                 // stage in case of coordinator failover.
                 case locator::tablet_transition_stage::streaming:
+                    if (drain) {
+                        utils::get_local_injector().inject("stream_tablet_fail_on_drain",
+                                        [] { throw std::runtime_error("stream_tablet failed due to error injection"); });
+                    }
                     if (advance_in_background(gid, tablet_state.streaming, "streaming", [&] {
                         slogger.info("raft topology: Initiating tablet streaming of {} to {}", gid, trinfo.pending_replica);
                         auto dst = trinfo.pending_replica.host;
