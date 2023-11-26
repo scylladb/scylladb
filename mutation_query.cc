@@ -45,21 +45,26 @@ reconcilable_result::operator==(const reconcilable_result& other) const {
     return boost::equal(_partitions, other._partitions);
 }
 
-std::ostream& operator<<(std::ostream& out, const reconcilable_result::printer& pr) {
-    out << "{rows=" << pr.self.row_count() << ", short_read="
-        << pr.self.is_short_read() << ", [";
+auto fmt::formatter<reconcilable_result::printer>::format(
+    const reconcilable_result::printer& pr,
+    fmt::format_context& ctx) const -> decltype(ctx.out()) {
+    auto out = ctx.out();
+    out = fmt::format_to(out,
+                         "{{rows={}, short_read={}, ",
+                         pr.self.row_count(),
+                         pr.self.is_short_read());
     bool first = true;
     for (const partition& p : pr.self.partitions()) {
         if (!first) {
-            out << ", ";
+            out = fmt::format_to(out, ", ");
         }
         first = false;
-        out << "{rows=" << p.row_count() << ", ";
-        out << p._m.pretty_printer(pr.schema);
-        out << "}";
+        out = fmt::format_to(out,
+                             "{{rows={}, {}}}",
+                             p.row_count(),
+                             p._m.pretty_printer(pr.schema));
     }
-    out << "]}";
-    return out;
+    return fmt::format_to(out, "]}}");
 }
 
 reconcilable_result::printer reconcilable_result::pretty_printer(schema_ptr s) const {

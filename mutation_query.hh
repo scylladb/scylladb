@@ -117,6 +117,14 @@ public:
     printer pretty_printer(schema_ptr) const;
 };
 
+template <>
+struct fmt::formatter<reconcilable_result::printer> {
+    constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
+    auto format(const reconcilable_result::printer&, fmt::format_context& ctx) const
+        -> decltype(ctx.out());
+};
+
+
 class reconcilable_result_builder {
     const schema& _schema;
     const query::partition_slice& _slice;
