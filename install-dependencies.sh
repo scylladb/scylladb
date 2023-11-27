@@ -81,6 +81,9 @@ fedora_packages=(
     python3-pytest
     python3-pytest-asyncio
     python3-redis
+    python3-unidiff
+    python3-humanfriendly
+    python3-jinja2
     dnf-utils
     pigz
     net-tools
@@ -107,6 +110,7 @@ fedora_packages=(
     rust-std-static-wasm32-wasi
     wabt
     binaryen
+    lcov
 )
 
 # lld is not available on s390x, see
@@ -135,6 +139,7 @@ declare -A pip_packages=(
     [geomet]="<0.3,>=0.1"
     [traceback-with-variables]=
     [scylla-api-client]=
+    [treelib]=
 )
 
 pip_symlinks=(
