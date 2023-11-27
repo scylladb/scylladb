@@ -4042,8 +4042,17 @@ future<> storage_service::on_change(inet_address endpoint, application_state sta
             slogger.debug("Ignoring state change for dead or unknown endpoint: {}", endpoint);
             co_return;
         }
-        if (get_token_metadata().is_normal_token_owner(endpoint)) {
-            slogger.debug("endpoint={} on_change:     updating system.peers table", endpoint);
+        const auto host_id = _gossiper.get_host_id(endpoint);
+        const auto& tm = *get_token_metadata().get_new();
+        const auto ep = tm.get_endpoint_for_host_id_if_known(host_id);
+        // The check *ep == endpoint is needed when a node changes
+        // its IP - on_change can be called by the gossiper for old IP as part
+        // of its removal, after handle_state_normal has already been called for
+        // the new one. Without the check, the do_update_system_peers_table call
+        // overwrites the IP back to its old value.
+        // In essence, the code under the 'if' should fire if the given IP is a normal_token_owner.
+        if (ep && *ep == endpoint && tm.is_normal_token_owner(host_id)) {
+            slogger.debug("endpoint={}/{} on_change:     updating system.peers table", endpoint, host_id);
             co_await do_update_system_peers_table(endpoint, state, value);
             if (state == application_state::RPC_READY) {
                 slogger.debug("Got application_state::RPC_READY for node {}, is_cql_ready={}", endpoint, ep_state->is_cql_ready());
