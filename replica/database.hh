@@ -547,6 +547,7 @@ public:
                        const std::vector<sstables::shared_sstable>& old_sstables);
     };
 
+    size_t compaction_groups_size() const noexcept;
 private:
     using compaction_group_ptr = std::unique_ptr<compaction_group>;
     std::unique_ptr<compaction_group_manager> make_compaction_group_manager();

@@ -3,8 +3,8 @@ import sys
 # Use the util.py library from ../cql-pytest:
 sys.path.insert(1, sys.path[0] + '/../cql-pytest')
 from util import new_test_table, new_test_keyspace
-from rest_util import set_tmp_task_ttl
-from task_manager_utils import wait_for_task, list_tasks, check_child_parent_relationship, drain_module_tasks
+from rest_util import set_tmp_task_ttl, scylla_inject_error
+from task_manager_utils import wait_for_task, list_tasks, check_child_parent_relationship, drain_module_tasks, get_task_status
 
 module_name = "compaction"
 long_time = 1000000000
@@ -87,4 +87,36 @@ def test_regular_compaction_task(cql, this_dc, rest_api):
 
                 failed = [status["task_id"] for status in statuses if status["state"] != "done"]
                 assert not failed, f"Regular compaction tasks with ids = {failed} failed"
+    drain_module_tasks(rest_api, module_name)
+
+def test_compaction_progress(cql, this_dc, rest_api):
+    drain_module_tasks(rest_api, module_name)
+    with set_tmp_task_ttl(rest_api, long_time):
+        with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 1 }}") as keyspace:
+            schema = 'p int, v text, primary key (p)'
+            with new_test_table(cql, keyspace, schema) as t0:
+                stmt = cql.prepare(f"INSERT INTO {t0} (p, v) VALUES (?, ?)")
+                cql.execute(stmt, [0, 'hello'])
+                cql.execute(stmt, [1, 'world'])
+                cql.execute(stmt, [2, '!'])
+
+                with new_test_table(cql, keyspace, schema) as t1:
+                    stmt = cql.prepare(f"INSERT INTO {t1} (p, v) VALUES (?, ?)")
+                    cql.execute(stmt, [1, 'hello'])
+                    cql.execute(stmt, [0, 'world'])
+
+                    injection = "compaction_run_table_tasks"
+                    with scylla_inject_error(rest_api, injection, True):
+                        rest_api.send("POST", f"storage_service/keyspace_compaction/{keyspace}")
+
+                        tasks = [task for task in list_tasks(rest_api, module_name) if task["type"] == "major compaction"]
+                        assert tasks, "compaction task was not created"
+                        assert len(tasks) == 1, "More than one compaction task was created"
+                        task = tasks[0]
+
+                        status = wait_for_task(rest_api, task["task_id"])
+                        assert status["state"] == "failed", "An exception wasn't thrown"
+                        children = [get_task_status(rest_api, child_id) for child_id in status["children_ids"]]
+                        assert status["progress_total"] == 100, "Invalid total progress value"
+                        assert sum([child["progress_completed"] for child in children]) / len(children) == status["progress_completed"]
     drain_module_tasks(rest_api, module_name)
