@@ -107,6 +107,7 @@ fedora_packages=(
     rust-std-static-wasm32-wasi
     wabt
     binaryen
+    lcov
 )
 
 # lld is not available on s390x, see
@@ -127,6 +128,9 @@ fedora_python3_packages=(
     python3-click
     python3-six
     python3-pyudev
+    python3-unidiff
+    python3-humanfriendly
+    python3-jinja2
 )
 
 # an associative array from packages to constrains
@@ -135,6 +139,7 @@ declare -A pip_packages=(
     [geomet]="<0.3,>=0.1"
     [traceback-with-variables]=
     [scylla-api-client]=
+    [treelib]=
 )
 
 pip_symlinks=(
