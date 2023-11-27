@@ -142,6 +142,7 @@ query latency. For a production ready strategy, see *NetworkTopologyStrategy* . 
 sub-option                 type   since   description
 ========================= ====== ======= =============================================
 ``'replication_factor'``   int    all     The number of replicas to store per range
+``'initial_tablets'``      int    5.4     Experimental - enables tablets for this keyspace (see :ref:`initial_tablets<initial-tablets>`)
 ========================= ====== ======= =============================================
 
 .. note:: Using NetworkTopologyStrategy is recommended. Using SimpleStrategy will make it harder to add Data Center in the future.
@@ -165,6 +166,7 @@ sub-option                             type  description
                                              definitions or explicit datacenter settings.
                                              For example, to have three replicas per
                                              datacenter, supply this with a value of 3.
+``'initial_tablets'``                  int   (since 5.4) Experimental - enables tablets for this keyspace (see :ref:`initial_tablets<initial-tablets>`)
 ===================================== ====== =============================================
 
 Note that when ``ALTER`` ing keyspaces and supplying ``replication_factor``,
@@ -209,6 +211,39 @@ An example that excludes a datacenter while using ``replication_factor``::
   As an alternative, you can configure your keyspace to be stored
   on Amazon S3 or another S3-compatible object store.
   See :ref:`Keyspace storage options <keyspace-storage-options>` for details.
+
+.. _initial-tablets:
+
+The ``initial_tablets`` option :label-caution:`Experimental`
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The ``initial_tablets`` option is used to specify how many tablets the table is split into.
+It is only valid when ``experimental_features: tablets`` is specified in ``scylla.yaml`` (which
+in turn requires ``consistent_cluster_management: true``); it must be a power of two.
+
+A good rule of thumb to calculate initial_tablets is to divide the expected total storage used
+by tables in this keyspace by (``replication_factor`` * 5GB). For example, if you expect a 30TB
+table and have a replication factor of 3, divide 30TB by (3*5GB) for a result of 2000. Since the
+value must be a power of two, round up to 2048.
+
+.. note::
+   The calculation applies to every table in the keyspace independently; so it can only realistically be
+   used for a keyspace containing a single table. It is expected that per-table controls will be available
+   in the future.
+
+.. caution::
+   The ``initial_tablets`` option may change its definition or be completely removed as it is part
+   of an experimental feature.
+
+
+An example that creates a keyspace with 2048 tablets per table::
+
+    CREATE KEYSPACE excalibur
+    WITH replication = {
+        'class': 'NetworkTopologyStrategy',
+        'replication_factor': 3,
+        'initial_tablets': 2048
+    };
 
 .. _use-statement:        
         
