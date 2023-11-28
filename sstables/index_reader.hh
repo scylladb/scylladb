@@ -97,6 +97,52 @@ public:
 class trust_promoted_index_tag;
 using trust_promoted_index = bool_class<trust_promoted_index_tag>;
 
+enum class index_consume_entry_context_state {
+    START,
+    KEY_SIZE,
+    KEY_BYTES,
+    POSITION,
+    PROMOTED_SIZE,
+    PARTITION_HEADER_LENGTH_1,
+    PARTITION_HEADER_LENGTH_2,
+    LOCAL_DELETION_TIME,
+    MARKED_FOR_DELETE_AT,
+    NUM_PROMOTED_INDEX_BLOCKS,
+    CONSUME_ENTRY,
+};
+
+inline std::string_view format_as(index_consume_entry_context_state s) {
+    using enum index_consume_entry_context_state;
+    switch (s) {
+    case START: return "START";
+    case KEY_SIZE: return "KEY_SIZE";
+    case KEY_BYTES: return "KEY_BYTES";
+    case POSITION: return "POSITION";
+    case PROMOTED_SIZE: return "PROMOTED_SIZE";
+    case PARTITION_HEADER_LENGTH_1: return "PARTITION_HEADER_LENGTH_1";
+    case PARTITION_HEADER_LENGTH_2: return "PARTITION_HEADER_LENGTH_2";
+    case LOCAL_DELETION_TIME: return "LOCAL_DELETION_TIME";
+    case MARKED_FOR_DELETE_AT: return "MARKED_FOR_DELETE_AT";
+    case NUM_PROMOTED_INDEX_BLOCKS: return "NUM_PROMOTED_INDEX_BLOCKS";
+    case CONSUME_ENTRY: return "CONSUME_ENTRY";
+    }
+    abort();
+}
+
+} // namespace sstables
+
+#if FMT_VERSION < 10'00'00
+template <>
+struct fmt::formatter<sstables::index_consume_entry_context_state> {
+    constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
+    auto format(sstables::index_consume_entry_context_state s, fmt::format_context& ctx) const {
+        return fmt::format_to(ctx.out(), "{}", format_as(s));
+    }
+};
+#endif
+
+namespace sstables {
+
 // TODO: make it templated on SSTables version since the exact format can be passed in at compile time
 template <class IndexConsumer>
 requires PartitionIndexConsumer<IndexConsumer>
@@ -105,41 +151,13 @@ class index_consume_entry_context : public data_consumer::continuous_data_consum
     using processing_result = data_consumer::processing_result;
     using continuous_data_consumer = data_consumer::continuous_data_consumer<index_consume_entry_context<IndexConsumer>>;
     using read_status = typename continuous_data_consumer::read_status;
+    using state = index_consume_entry_context_state;
 private:
     const sstable& _sst;
     IndexConsumer& _consumer;
     uint64_t _entry_offset;
 
-    enum class state {
-        START,
-        KEY_SIZE,
-        KEY_BYTES,
-        POSITION,
-        PROMOTED_SIZE,
-        PARTITION_HEADER_LENGTH_1,
-        PARTITION_HEADER_LENGTH_2,
-        LOCAL_DELETION_TIME,
-        MARKED_FOR_DELETE_AT,
-        NUM_PROMOTED_INDEX_BLOCKS,
-        CONSUME_ENTRY,
-    } _state = state::START;
-
-    friend std::ostream& operator<<(std::ostream& out, const state& s) {
-        switch (s) {
-        case state::START: return out <<  "START";
-        case state::KEY_SIZE: return out <<  "KEY_SIZE";
-        case state::KEY_BYTES: return out <<  "KEY_BYTES";
-        case state::POSITION: return out <<  "POSITION";
-        case state::PROMOTED_SIZE: return out <<  "PROMOTED_SIZE";
-        case state::PARTITION_HEADER_LENGTH_1: return out <<  "PARTITION_HEADER_LENGTH_1";
-        case state::PARTITION_HEADER_LENGTH_2: return out <<  "PARTITION_HEADER_LENGTH_2";
-        case state::LOCAL_DELETION_TIME: return out <<  "LOCAL_DELETION_TIME";
-        case state::MARKED_FOR_DELETE_AT: return out <<  "MARKED_FOR_DELETE_AT";
-        case state::NUM_PROMOTED_INDEX_BLOCKS: return out <<  "NUM_PROMOTED_INDEX_BLOCKS";
-        case state::CONSUME_ENTRY: return out <<  "CONSUME_ENTRY";
-        }
-        abort();
-    }
+    state _state = state::START;
 
     temporary_buffer<char> _key;
     uint64_t _promoted_index_end;
