@@ -309,6 +309,10 @@ public:
 
     const std::unordered_set<NodeId>& get_all_endpoints() const;
 
+    template <typename T = NodeId>
+    requires std::is_same_v<T, locator::host_id>
+    std::unordered_set<gms::inet_address> get_all_ips() const;
+
     /* Returns the number of different endpoints that own tokens in the ring.
      * Bootstrapping tokens are not taken into account. */
     size_t count_normal_token_owners() const;

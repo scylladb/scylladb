@@ -1279,6 +1279,19 @@ generic_token_metadata<NodeId>::get_all_endpoints() const {
 }
 
 template <typename NodeId>
+template <typename T>
+requires std::is_same_v<T, locator::host_id>
+std::unordered_set<gms::inet_address> generic_token_metadata<NodeId>::get_all_ips() const {
+    const auto& host_ids = _impl->get_all_endpoints();
+    std::unordered_set<gms::inet_address> result;
+    result.reserve(host_ids.size());
+    for (const auto& id: host_ids) {
+        result.insert(_impl->get_endpoint_for_host_id(id));
+    }
+    return result;
+}
+
+template <typename NodeId>
 size_t
 generic_token_metadata<NodeId>::count_normal_token_owners() const {
     return _impl->count_normal_token_owners();
@@ -1455,5 +1468,6 @@ template const token_metadata2* generic_token_metadata<gms::inet_address>::get_n
 template lw_shared_ptr<const token_metadata2> generic_token_metadata<gms::inet_address>::get_new_strong<>() const;
 template generic_token_metadata<gms::inet_address>::generic_token_metadata(std::unique_ptr<token_metadata_impl<gms::inet_address>>, token_metadata2);
 template generic_token_metadata<gms::inet_address>::generic_token_metadata(token_metadata2_ptr);
+template std::unordered_set<gms::inet_address> generic_token_metadata<locator::host_id>::get_all_ips<>() const;
 
 } // namespace locator
