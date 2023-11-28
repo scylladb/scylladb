@@ -365,6 +365,8 @@ public:
         return _dirty_endpoints;
     }
 
+    std::unordered_set<locator::host_id> get_all_pending_nodes() const;
+
 private:
     dht::token_range_vector do_get_ranges(noncopyable_function<stop_iteration(bool& add_range, const inet_address& natural_endpoint)> consider_range_for_endpoint) const;
     inet_address_vector_replica_set do_get_natural_endpoints(const token& tok, bool is_vnode) const;
