@@ -2049,13 +2049,17 @@ future<db::replay_position> table::discard_sstables(db_clock::time_point truncat
         tlogger.debug("cleaning out row cache");
     }));
     rebuild_statistics();
-    co_await coroutine::parallel_for_each(remove, [this] (removed_sstable& r) -> future<> {
+
+    std::vector<sstables::shared_sstable> del;
+    del.reserve(remove.size());
+    for (auto& r : remove) {
         if (r.enable_backlog_tracker) {
             remove_sstable_from_backlog_tracker(r.cg.get_backlog_tracker(), r.sst);
         }
-        co_await get_sstables_manager().delete_atomically({r.sst});
         erase_sstable_cleanup_state(r.sst);
-    });
+        del.emplace_back(r.sst);
+    };
+    co_await get_sstables_manager().delete_atomically(std::move(del));
     co_return rp;
 }
 
