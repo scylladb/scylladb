@@ -1546,7 +1546,7 @@ bool needs_static_row(const mutation_partition& mp, const std::vector<view_and_b
 // If the assumption that the given base token belongs to this replica
 // does not hold, we return an empty optional.
 static std::optional<gms::inet_address>
-get_view_natural_endpoint(const locator::vnode_effective_replication_map_ptr& erm, bool network_topology,
+get_view_natural_endpoint(const locator::effective_replication_map_ptr& erm, bool network_topology,
         const dht::token& base_token, const dht::token& view_token) {
     auto& topology = erm->get_token_metadata_ptr()->get_topology();
     auto my_address = utils::fb_utilities::get_broadcast_address();
@@ -1630,9 +1630,8 @@ future<> view_update_generator::mutate_MV(
     co_await max_concurrent_for_each(view_updates, max_concurrent_updates,
             [this, base_token, &stats, &cf_stats, tr_state, &pending_view_updates, allow_hints, wait_for_all] (frozen_mutation_and_schema mut) mutable -> future<> {
         auto view_token = dht::get_token(*mut.s, mut.fm.key());
-        auto& keyspace_name = mut.s->ks_name();
-        auto& ks = _proxy.local().local_db().find_keyspace(keyspace_name);
-        auto ermp = ks.get_effective_replication_map();
+        auto ermp = mut.s->table().get_effective_replication_map();
+        auto& ks = _proxy.local().local_db().find_keyspace(mut.s->ks_name());
         bool network_topology = dynamic_cast<const locator::network_topology_strategy*>(&ks.get_replication_strategy());
         auto target_endpoint = get_view_natural_endpoint(ermp, network_topology, base_token, view_token);
         auto remote_endpoints = ermp->get_pending_endpoints(view_token);
