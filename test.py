@@ -1142,7 +1142,7 @@ async def run_test(test: Test, options: argparse.Namespace, gentle_kill=False, e
             except Exception as e:
                 print("")
                 print(test.name + ": " + palette.crit("failed to parse XML output: {}".format(e)))
-                # return False
+                return False
             return True
         except (asyncio.TimeoutError, asyncio.CancelledError) as e:
             test.is_cancelled = True
