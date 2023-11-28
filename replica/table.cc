@@ -2011,23 +2011,21 @@ future<db::replay_position> table::discard_sstables(db_clock::time_point truncat
         return _compaction_manager.compaction_disabled(cg->as_table_state());
     }));
 
-        db::replay_position rp;
-        struct removed_sstable {
-            compaction_group& cg;
-            sstables::shared_sstable sst;
-            replica::enable_backlog_tracker enable_backlog_tracker;
-        };
-        std::vector<removed_sstable> remove;
+    db::replay_position rp;
+    struct removed_sstable {
+        compaction_group& cg;
+        sstables::shared_sstable sst;
+        replica::enable_backlog_tracker enable_backlog_tracker;
+    };
+    std::vector<removed_sstable> remove;
 
     co_await _cache.invalidate(row_cache::external_updater([this, &rp, &remove, truncated_at] {
         // FIXME: the following isn't exception safe.
-        for (const compaction_group_ptr& cgp : compaction_groups()) {
-            auto& cg = *cgp;
-            auto& cf = *this;
+        for (const compaction_group_ptr& cg : compaction_groups()) {
             auto gc_trunc = to_gc_clock(truncated_at);
 
-            auto pruned = make_lw_shared<sstables::sstable_set>(cf._compaction_strategy.make_sstable_set(cf._schema));
-            auto maintenance_pruned = cf.make_maintenance_sstable_set();
+            auto pruned = make_lw_shared<sstables::sstable_set>(_compaction_strategy.make_sstable_set(_schema));
+            auto maintenance_pruned = make_maintenance_sstable_set();
 
             auto prune = [&] (lw_shared_ptr<sstables::sstable_set>& pruned,
                                             const lw_shared_ptr<sstables::sstable_set>& pruning,
@@ -2035,17 +2033,17 @@ future<db::replay_position> table::discard_sstables(db_clock::time_point truncat
                 pruning->for_each_sstable([&] (const sstables::shared_sstable& p) mutable {
                     if (p->max_data_age() <= gc_trunc) {
                         rp = std::max(p->get_stats_metadata().position, rp);
-                        remove.emplace_back(removed_sstable{cg, p, enable_backlog_tracker});
+                        remove.emplace_back(removed_sstable{*cg, p, enable_backlog_tracker});
                         return;
                     }
                     pruned->insert(p);
                 });
             };
-            prune(pruned, cg.main_sstables(), enable_backlog_tracker::yes);
-            prune(maintenance_pruned, cg.maintenance_sstables(), enable_backlog_tracker::no);
+            prune(pruned, cg->main_sstables(), enable_backlog_tracker::yes);
+            prune(maintenance_pruned, cg->maintenance_sstables(), enable_backlog_tracker::no);
 
-            cg.set_main_sstables(std::move(pruned));
-            cg.set_maintenance_sstables(std::move(maintenance_pruned));
+            cg->set_main_sstables(std::move(pruned));
+            cg->set_maintenance_sstables(std::move(maintenance_pruned));
         }
         refresh_compound_sstable_set();
         tlogger.debug("cleaning out row cache");
