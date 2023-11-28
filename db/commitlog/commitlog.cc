@@ -2103,8 +2103,13 @@ future<> db::commitlog::segment_manager::delete_segments(std::vector<sstring> fi
         // #11237 - cannot do this already in "init()" - we need to be able to create
         // segments before replay+delete, and more to the point: shards that _don't_ replay
         // must not add this to their footprint (a.) shared, b.) not there after this call)
-        totals.total_size_on_disk += co_await file_size(s);
-        _files_to_dispose.emplace_back(s, dispose_mode::Delete);
+        named_file f(s);
+        // #16207 - must make sure the named_file we put up for deletion/recycling
+        // has its size updated.
+        auto size = co_await file_size(s);
+        f.maybe_update_size(size);
+        totals.total_size_on_disk += size;
+        _files_to_dispose.emplace_back(std::move(f), dispose_mode::Delete);
     }
     co_return co_await do_pending_deletes();
 }

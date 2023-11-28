@@ -1089,3 +1089,79 @@ BOOST_AUTO_TEST_CASE(test_commitlog_segment_descriptor) {
     }
 }
 
+// Test for #16207 - files deleted after recycle does not have size updated
+// and when deleting does not actual decrease footprint.
+SEASTAR_TEST_CASE(test_delete_recycled_segment_removes_size) {
+    commitlog::config cfg;
+
+    constexpr auto max_size_mb = 1;
+
+    cfg.commitlog_segment_size_in_mb = max_size_mb;
+    cfg.commitlog_total_space_in_mb = 2 * max_size_mb * smp::count;
+    cfg.allow_going_over_size_limit = false; // #9348 - now can enforce size limit always
+    cfg.use_o_dsync = true; // make sure we pre-allocate.
+
+    // not using cl_test, because we need to be able to abandon
+    // the log.
+
+    tmpdir tmp;
+    cfg.commit_log_location = tmp.path().string();
+
+    std::vector<sstring> fakes;
+
+    struct myext: public db::commitlog_file_extension {
+    public:
+        std::vector<std::string> deleted;
+
+        seastar::future<seastar::file> wrap_file(const seastar::sstring& filename, seastar::file f, seastar::open_flags flags) override {
+            co_return f;
+        }
+        seastar::future<> before_delete(const seastar::sstring& filename) override {
+            deleted.emplace_back(filename);
+            co_return;
+        }
+    };
+
+    auto ep = std::make_unique<myext>();
+    auto& ex = *ep;
+
+    db::extensions myexts;
+    myexts.add_commitlog_file_extension("hufflepuff", std::move(ep));
+
+    cfg.extensions = &myexts;
+
+    auto log = co_await commitlog::create_commitlog(cfg);
+
+    auto max_file_size_bytes = (max_size_mb * 1024 * 1024);
+    // we might be one segment over disk threshold. 
+    auto max_shard_size_bytes = max_file_size_bytes + (cfg.commitlog_total_space_in_mb * 1024 * 1024) / smp::count;
+
+    // Add a bunch of fake segments (pretending replayed). The total footprint will be much 
+    // more than above limit.
+    for (int i = 0; i < 20; ++i) {
+        fakes.emplace_back(cfg.commit_log_location + "/fake" + std::to_string(i) + ".log");
+
+        auto f = co_await open_file_dma(fakes.back(), open_flags::wo|open_flags::create);
+        co_await f.truncate(max_file_size_bytes);
+        auto size = co_await f.size();
+        co_await f.close();
+        BOOST_CHECK_EQUAL(size, max_file_size_bytes);
+    }
+
+    // this will add the size of all the files, and if the buf is fixed
+    // also ensure actual delete _drops_ footprint.
+    co_await log.delete_segments(fakes);
+
+    // Must have deleted.
+    BOOST_REQUIRE_GT(ex.deleted.size(), 0);
+    // Must have footprint less than effective limit (limit + crossover segment size)
+    BOOST_REQUIRE_LE(log.disk_footprint(), max_shard_size_bytes);
+    // All our fake files should have been either deleted or recycled, in any case 
+    // they should pass through the above extension.
+    BOOST_REQUIRE(std::all_of(fakes.begin(), fakes.end(), [&](const std::string& name) {
+        return std::find(ex.deleted.begin(), ex.deleted.end(), name) != ex.deleted.end();
+    }));
+
+    co_await log.shutdown();
+    co_await log.clear();
+}
