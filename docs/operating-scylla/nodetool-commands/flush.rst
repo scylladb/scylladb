@@ -6,7 +6,9 @@ For example:
 
 .. code-block:: shell
 
-   nodetool flush keyspaces1 standard1
+   nodetool flush
+   nodetool flush keyspace1
+   nodetool flush keyspace1 standard1
 
 Syntax
 ------
