@@ -2011,7 +2011,6 @@ future<db::replay_position> table::discard_sstables(db_clock::time_point truncat
         return _compaction_manager.compaction_disabled(cg->as_table_state());
     }));
 
-        column_family& cf = *this;
         db::replay_position rp;
         struct removed_sstable {
             compaction_group& cg;
@@ -2020,7 +2019,11 @@ future<db::replay_position> table::discard_sstables(db_clock::time_point truncat
         };
         std::vector<removed_sstable> remove;
 
-        auto prune = [&] (compaction_group& cg, db_clock::time_point truncated_at) {
+    co_await _cache.invalidate(row_cache::external_updater([this, &rp, &remove, truncated_at] {
+        // FIXME: the following isn't exception safe.
+        for (const compaction_group_ptr& cgp : compaction_groups()) {
+            auto& cg = *cgp;
+            auto& cf = *this;
             auto gc_trunc = to_gc_clock(truncated_at);
 
             auto pruned = make_lw_shared<sstables::sstable_set>(cf._compaction_strategy.make_sstable_set(cf._schema));
@@ -2043,12 +2046,6 @@ future<db::replay_position> table::discard_sstables(db_clock::time_point truncat
 
             cg.set_main_sstables(std::move(pruned));
             cg.set_maintenance_sstables(std::move(maintenance_pruned));
-        };
-
-    co_await _cache.invalidate(row_cache::external_updater([this, &prune, truncated_at] {
-        // FIXME: the following isn't exception safe.
-        for (const compaction_group_ptr& cg : compaction_groups()) {
-            prune(*cg, truncated_at);
         }
         refresh_compound_sstable_set();
         tlogger.debug("cleaning out row cache");
