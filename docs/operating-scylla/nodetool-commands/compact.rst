@@ -50,7 +50,7 @@ Examples
 
    nodetool compact
    nodetool compact keyspace1
-   nodetool compact standard1
+   nodetool compact keyspace1 standard1
 
 See Also
 --------
