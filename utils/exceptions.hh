@@ -43,9 +43,17 @@ private:
     std::error_code _code;
     std::string _what;
 public:
+    storage_io_error(std::error_code c, std::string s) noexcept
+        : _code(std::move(c))
+        , _what(std::move(s))
+    { }
+
+    storage_io_error(int err, std::string s) noexcept
+        : storage_io_error(std::error_code(err, std::system_category()), std::move(s))
+    { }
+
     storage_io_error(std::system_error& e) noexcept
-        : _code{e.code()}
-        , _what{std::string("Storage I/O error: ") + std::to_string(e.code().value()) + ": " + e.what()}
+        : storage_io_error(e.code(), std::string("Storage I/O error: ") + std::to_string(e.code().value()) + ": " + e.what())
     { }
 
     virtual const char* what() const noexcept override {

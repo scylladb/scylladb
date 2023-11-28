@@ -743,7 +743,7 @@ future<> test_schema_digest_does_not_change_with_disabled_features(sstring data_
     db_cfg.experimental_features({experimental_features_t::feature::UDF, experimental_features_t::feature::KEYSPACE_STORAGE_OPTIONS}, db::config::config_source::CommandLine);
     std::unordered_map<sstring, s3::endpoint_config> so_config;
     so_config["localhost"] = s3::endpoint_config{};
-    db_cfg.object_storage_config = std::move(so_config);
+    db_cfg.object_storage_config.set(std::move(so_config));
     if (regenerate) {
         db_cfg.data_file_directories({data_dir}, db::config::config_source::CommandLine);
     } else {

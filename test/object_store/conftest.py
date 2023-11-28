@@ -6,6 +6,7 @@ import logging
 import pytest
 import shutil
 import tempfile
+import pathlib
 
 # use minio_server
 sys.path.insert(1, sys.path[0] + '/../..')
@@ -47,7 +48,7 @@ class S3_Server:
         if conffile is None:
             conffile = os.path.join(self.tempdir, 'object-storage.yaml')
             MinioServer.create_conf_file(self.address, self.port, self.acc_key, self.secret_key, self.region, conffile)
-        return conffile
+        return pathlib.Path(conffile)
 
     def __repr__(self):
         return f"[unknown] {self.address}:{self.port}/{self.bucket_name}@{self.config_file}"

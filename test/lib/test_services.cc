@@ -177,7 +177,7 @@ std::unordered_map<sstring, s3::endpoint_config> make_storage_options_config(con
 std::unique_ptr<db::config> make_db_config(sstring temp_dir, const data_dictionary::storage_options so) {
     auto cfg = std::make_unique<db::config>();
     cfg->data_file_directories.set({ temp_dir });
-    cfg->object_storage_config = make_storage_options_config(so);
+    cfg->object_storage_config.set(make_storage_options_config(so));
     return cfg;
 }
 
@@ -229,7 +229,7 @@ future<> test_env::do_with_async(noncopyable_function<void (test_env&)> func, te
         auto wrap = std::make_shared<test_env_with_cql>(std::move(func), std::move(cfg));
         auto db_cfg = make_shared<db::config>();
         db_cfg->experimental_features({db::experimental_features_t::feature::KEYSPACE_STORAGE_OPTIONS});
-        db_cfg->object_storage_config = make_storage_options_config(wrap->cfg.storage);
+        db_cfg->object_storage_config.set(make_storage_options_config(wrap->cfg.storage));
         return do_with_cql_env_thread([wrap = std::move(wrap)] (auto& cql_env) mutable {
             test_env env(std::move(wrap->cfg), &cql_env.get_sstorage_manager().local());
             auto close_env = defer([&] { env.stop().get(); });

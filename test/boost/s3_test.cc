@@ -22,6 +22,7 @@
 #include "test/lib/test_utils.hh"
 #include "utils/s3/client.hh"
 #include "utils/s3/creds.hh"
+#include "utils/exceptions.hh"
 #include "gc_clock.hh"
 
 // The test can be run on real AWS-S3 bucket. For that, create a bucket with
@@ -90,8 +91,8 @@ SEASTAR_THREAD_TEST_CASE(test_client_put_get_object) {
     cln->delete_object(name).get();
 
     testlog.info("Verify it's gone\n");
-    BOOST_REQUIRE_EXCEPTION(cln->get_object_size(name).get(), seastar::httpd::unexpected_status_error, [] (const seastar::httpd::unexpected_status_error& ex) {
-        return ex.status() == http::reply::status_type::not_found;
+    BOOST_REQUIRE_EXCEPTION(cln->get_object_size(name).get(), storage_io_error, [] (const storage_io_error& ex) {
+        return ex.code().value() == ENOENT;
     });
 }
 

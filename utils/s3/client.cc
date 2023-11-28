@@ -23,11 +23,13 @@
 #include <seastar/util/short_streams.hh>
 #include <seastar/util/lazy.hh>
 #include <seastar/http/request.hh>
+#include <seastar/http/exception.hh>
 #include "utils/s3/client.hh"
 #include "utils/http.hh"
 #include "utils/memory_data_sink.hh"
 #include "utils/chunked_vector.hh"
 #include "utils/aws_sigv4.hh"
+#include "utils/exceptions.hh"
 #include "db_clock.hh"
 #include "log.hh"
 
@@ -181,10 +183,40 @@ client::group_client& client::find_or_create_client() {
     return it->second;
 }
 
+inline bool is_redirect_status(http::reply::status_type st) {
+    auto st_i = static_cast<int>(st);
+    return st_i >= 300 && st_i < 400;
+}
+
+future<> map_s3_client_exception(std::exception_ptr ex) {
+    seastar::memory::scoped_critical_alloc_section alloc;
+
+    try {
+        std::rethrow_exception(std::move(ex));
+    } catch (const httpd::unexpected_status_error& e) {
+        auto status = e.status();
+
+        if (is_redirect_status(status) || status == http::reply::status_type::not_found) {
+            return make_exception_future<>(storage_io_error(ENOENT, format("S3 object doesn't exist ({})", status)));
+        }
+        if (status == http::reply::status_type::forbidden || status == http::reply::status_type::unauthorized) {
+            return make_exception_future<>(storage_io_error(EACCES, format("S3 access denied ({})", status)));
+        }
+
+        return make_exception_future<>(storage_io_error(EIO, format("S3 request failed with ({})", status)));
+    } catch (...) {
+        auto e = std::current_exception();
+        return make_exception_future<>(storage_io_error(EIO, format("S3 error ({})", e)));
+    }
+
+}
+
 future<> client::make_request(http::request req, http::experimental::client::reply_handler handle, http::reply::status_type expected) {
     authorize(req);
     auto& gc = find_or_create_client();
-    return gc.http.make_request(std::move(req), std::move(handle), expected);
+    return gc.http.make_request(std::move(req), std::move(handle), expected).handle_exception([] (auto ex) {
+        return map_s3_client_exception(std::move(ex));
+    });
 }
 
 future<> client::make_request(http::request req, reply_handler_ext handle_ex, http::reply::status_type expected) {
@@ -193,7 +225,9 @@ future<> client::make_request(http::request req, reply_handler_ext handle_ex, ht
     auto handle = [&gc, handle = std::move(handle_ex)] (const http::reply& rep, input_stream<char>&& in) {
         return handle(gc, rep, std::move(in));
     };
-    return gc.http.make_request(std::move(req), std::move(handle), expected);
+    return gc.http.make_request(std::move(req), std::move(handle), expected).handle_exception([] (auto ex) {
+        return map_s3_client_exception(std::move(ex));
+    });
 }
 
 future<> client::get_object_header(sstring object_name, http::experimental::client::reply_handler handler) {

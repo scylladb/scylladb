@@ -15,7 +15,6 @@
 #include <stdexcept>
 #include <seastar/coroutine/exception.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
-#include <seastar/http/exception.hh>
 #include <seastar/util/file.hh>
 
 #include "sstables/exceptions.hh"
@@ -29,6 +28,7 @@
 #include "utils/overloaded_functor.hh"
 #include "utils/memory_data_sink.hh"
 #include "utils/s3/client.hh"
+#include "utils/exceptions.hh"
 
 #include "checked-file-impl.hh"
 
@@ -544,8 +544,8 @@ future<> s3_storage::remove_by_registry_entry(entry_descriptor desc) {
 
     try {
         toc = co_await _client->get_object_contiguous(prefix + "/" + sstable_version_constants::get_component_map(desc.version).at(component_type::TOC));
-    } catch (seastar::httpd::unexpected_status_error& e) {
-        if (e.status() != seastar::http::reply::status_type::no_content) {
+    } catch (const storage_io_error& e) {
+        if (e.code().value() != ENOENT) {
             throw;
         }
     }
