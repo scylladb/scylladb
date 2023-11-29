@@ -204,7 +204,6 @@ def testCreateAlterKeyspaces(cql, test_keyspace, this_dc):
 # Test {@link ConfigurationException} thrown on alter keyspace to no DC
 # option in replication configuration.
 # Reproduces CASSANDRA-12681 and Scylla #10036
-@pytest.mark.xfail(reason="Issue #10036")
 def testAlterKeyspaceWithNoOptionThrowsConfigurationException(cql, test_keyspace, this_dc):
     # Create keyspaces
     with create_keyspace(cql, "replication={ 'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 3 }") as abc:
