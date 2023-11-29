@@ -9,7 +9,7 @@
 #pragma once
 
 #include <chrono>
-#include <fmt/core.h>
+#include <fmt/format.h>
 
 namespace utils {
 
@@ -70,7 +70,7 @@ struct fmt::formatter<utils::pretty_printed_data_size> {
             }
         }
         if (it != end && *it != '}') {
-            ctx.on_error("invalid format");
+            throw fmt::format_error("invalid format specifier");
         }
         return it;
     }
