@@ -23,6 +23,7 @@ public:
         return "org.apache.cassandra.locator.Ec2MultiRegionSnitch";
     }
 private:
+    inet_address _local_public_address;
     sstring _local_private_address;
     bool _broadcast_rpc_address_specified_by_user;
 };

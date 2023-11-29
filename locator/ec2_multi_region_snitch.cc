@@ -27,8 +27,6 @@ future<> ec2_multi_region_snitch::start() {
 
     co_await ec2_snitch::load_config(true);
     if (this_shard_id() == io_cpu_id()) {
-        inet_address local_public_address;
-
         auto token = co_await aws_api_call(AWS_QUERY_SERVER_ADDR, AWS_QUERY_SERVER_PORT, TOKEN_REQ_ENDPOINT, std::nullopt);
 
         try {
@@ -44,16 +42,16 @@ future<> ec2_multi_region_snitch::start() {
                     logger().warn("Ec2MultiRegionSnitch (ipv6): more than one MAC address listed ({}). Will use first.", macs);
                 }
                 auto ipv6 = co_await aws_api_call(AWS_QUERY_SERVER_ADDR, AWS_QUERY_SERVER_PORT, format(PUBLIC_IPV6_QUERY_REQ, mac), token);
-                local_public_address = inet_address(ipv6);
+                _local_public_address = inet_address(ipv6);
                 _local_private_address = ipv6;
             } else {
                 auto pub_addr = co_await aws_api_call(AWS_QUERY_SERVER_ADDR, AWS_QUERY_SERVER_PORT, PUBLIC_IP_QUERY_REQ, token);
-                local_public_address = inet_address(pub_addr);
+                _local_public_address = inet_address(pub_addr);
             }
         } catch (...) {
             std::throw_with_nested(exceptions::configuration_exception("Failed to get a Public IP. Public IP is a requirement for Ec2MultiRegionSnitch. Consider using a different snitch if your instance doesn't have it"));
         }
-        logger().info("Ec2MultiRegionSnitch using publicIP as identifier: {}", local_public_address);
+        logger().info("Ec2MultiRegionSnitch using publicIP as identifier: {}", _local_public_address);
 
         //
         // Use the Public IP to broadcast Address to other nodes.
@@ -61,12 +59,12 @@ future<> ec2_multi_region_snitch::start() {
         // Cassandra 2.1 manual explicitly instructs to set broadcast_address
         // value to a public address in cassandra.yaml.
         //
-        utils::fb_utilities::set_broadcast_address(local_public_address);
+        utils::fb_utilities::set_broadcast_address(_local_public_address);
         if (!_broadcast_rpc_address_specified_by_user) {
-            utils::fb_utilities::set_broadcast_rpc_address(local_public_address);
+            utils::fb_utilities::set_broadcast_rpc_address(_local_public_address);
         }
 
-        if (!local_public_address.addr().is_ipv6()) {
+        if (!_local_public_address.addr().is_ipv6()) {
             sstring priv_addr = co_await aws_api_call(AWS_QUERY_SERVER_ADDR, AWS_QUERY_SERVER_PORT, PRIVATE_IP_QUERY_REQ, token);
             _local_private_address = priv_addr;
         }
