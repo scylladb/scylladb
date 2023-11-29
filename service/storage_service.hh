@@ -750,7 +750,6 @@ private:
     struct {
         raft::term_t term{0};
         uint64_t last_index{0};
-        semaphore _operation_mutex{1};
     } _raft_topology_cmd_handler_state;
 
     std::unordered_set<raft::server_id> find_raft_nodes_from_hoeps(const std::list<locator::host_id_or_endpoint>& hoeps);

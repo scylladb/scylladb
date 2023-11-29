@@ -322,6 +322,7 @@ static locator::node::state to_topology_node_state(node_state ns) {
         case node_state::decommissioning: return locator::node::state::being_decommissioned;
         case node_state::removing: return locator::node::state::being_removed;
         case node_state::normal: return locator::node::state::normal;
+        case node_state::rollback_to_normal: return locator::node::state::normal;
         case node_state::left_token_ring: return locator::node::state::left;
         case node_state::left: return locator::node::state::left;
         case node_state::replacing: return locator::node::state::replacing;
@@ -514,6 +515,10 @@ future<> storage_service::topology_state_load() {
                 break;
             case node_state::left_token_ring:
                 break;
+            case node_state::rollback_to_normal:
+                // no need for double writes anymore since op failed
+                co_await add_normal_node(id, rs);
+                break;
             default:
                 on_fatal_internal_error(slogger, ::format("Unexpected state {} for node {}", rs.state, id));
             }
@@ -523,6 +528,8 @@ future<> storage_service::topology_state_load() {
             tmptr->set_tablets(co_await replica::read_tablet_metadata(_qp));
         }
     }));
+
+    co_await update_fence_version(_topology_state_machine._topology.fence_version);
 
     // We don't load gossiper endpoint states in storage_service::join_cluster
     // if _raft_topology_change_enabled. On the other hand gossiper is still needed
@@ -643,6 +650,7 @@ public:
     topology_mutation_builder(api::timestamp_type ts);
     topology_mutation_builder& set_transition_state(topology::transition_state);
     topology_mutation_builder& set_version(topology::version_t);
+    topology_mutation_builder& set_fence_version(topology::version_t);
     topology_mutation_builder& set_current_cdc_generation_id(const cdc::generation_id_v2&);
     topology_mutation_builder& set_new_cdc_generation_data_uuid(const utils::UUID& value);
     topology_mutation_builder& set_unpublished_cdc_generations(const std::vector<cdc::generation_id_v2>& values);
@@ -795,6 +803,11 @@ topology_mutation_builder& topology_mutation_builder::set_transition_state(topol
 
 topology_mutation_builder& topology_mutation_builder::set_version(topology::version_t value) {
     _m.set_static_cell("version", value, _ts);
+    return *this;
+}
+
+topology_mutation_builder& topology_mutation_builder::set_fence_version(topology::version_t value) {
+    _m.set_static_cell("fence_version", value, _ts);
     return *this;
 }
 
@@ -1115,6 +1128,9 @@ class topology_coordinator {
     std::unordered_set<raft::server_id> get_excluded_nodes(const node_to_work_on& node) {
         auto exclude_nodes = parse_ignore_nodes(node);
         exclude_nodes.insert(parse_replaced_node(node));
+        if (node.request && *node.request == topology_request::remove) {
+            exclude_nodes.insert(node.id);
+        }
         return exclude_nodes;
     }
 
@@ -1469,9 +1485,27 @@ class topology_coordinator {
     }
 
     future<group0_guard> global_token_metadata_barrier(group0_guard&& guard, std::unordered_set<raft::server_id> exclude_nodes = {}) {
-        guard = co_await exec_global_command(std::move(guard), raft_topology_cmd::command::barrier_and_drain, exclude_nodes, drop_guard_and_retake::yes);
-        guard = co_await exec_global_command(std::move(guard), raft_topology_cmd::command::fence, exclude_nodes, drop_guard_and_retake::yes);
-        co_return std::move(guard);
+        bool drain_failed = false;
+        try {
+            guard = co_await exec_global_command(std::move(guard), raft_topology_cmd::command::barrier_and_drain, exclude_nodes, drop_guard_and_retake::yes);
+        } catch (...) {
+            slogger.error("raft topology: drain rpc failed, proceed to fence old writes: {}", std::current_exception());
+            drain_failed = true;
+        }
+        if (drain_failed) {
+            guard = co_await start_operation();
+        }
+        topology_mutation_builder builder(guard.write_timestamp());
+        builder.set_fence_version(_topo_sm._topology.version);
+        auto reason = ::format("advance fence version to {}", _topo_sm._topology.version);
+        co_await update_topology_state(std::move(guard), {builder.build()}, reason);
+        guard = co_await start_operation();
+        if (drain_failed) {
+            // if drain failed need to wait for fence to be active on all nodes
+            co_return co_await exec_global_command(std::move(guard), raft_topology_cmd::command::barrier, exclude_nodes, drop_guard_and_retake::yes);
+        } else {
+            co_return std::move(guard);
+        }
     }
 
     future<group0_guard> global_tablet_token_metadata_barrier(group0_guard guard) {
@@ -1632,6 +1666,10 @@ class topology_coordinator {
                 // get admitted before global_tablet_token_metadata_barrier() is finished for earlier
                 // stage in case of coordinator failover.
                 case locator::tablet_transition_stage::streaming:
+                    if (drain) {
+                        utils::get_local_injector().inject("stream_tablet_fail_on_drain",
+                                        [] { throw std::runtime_error("stream_tablet failed due to error injection"); });
+                    }
                     if (advance_in_background(gid, tablet_state.streaming, "streaming", [&] {
                         slogger.info("raft topology: Initiating tablet streaming of {} to {}", gid, trinfo.pending_replica);
                         auto dst = trinfo.pending_replica.host;
@@ -1954,7 +1992,16 @@ class topology_coordinator {
             }
                 break;
             case topology::transition_state::tablet_draining:
-                co_await handle_tablet_migration(std::move(guard), true);
+                try {
+                    co_await handle_tablet_migration(std::move(guard), true);
+                } catch (term_changed_error&) {
+                    throw;
+                } catch (group0_concurrent_modification&) {
+                    throw;
+                } catch (...) {
+                    slogger.error("raft topology: tablets draining failed with {}. Aborting the topology operation", std::current_exception());
+                    _rollback = true;
+                }
                 break;
             case topology::transition_state::write_both_read_old: {
                 auto node = get_node_to_work_on(std::move(guard));
@@ -1963,6 +2010,8 @@ class topology_coordinator {
                 try {
                     node = retake_node(co_await global_token_metadata_barrier(std::move(node.guard), get_excluded_nodes(node)), node.id);
                 } catch (term_changed_error&) {
+                    throw;
+                } catch (group0_concurrent_modification&) {
                     throw;
                 } catch (...) {
                     slogger.error("raft topology: transition_state::write_both_read_old, "
@@ -2036,18 +2085,28 @@ class topology_coordinator {
                 break;
             case topology::transition_state::write_both_read_new: {
                 auto node = get_node_to_work_on(std::move(guard));
-
+                bool barrier_failed = false;
                 // In this state writes goes to old and new replicas but reads start to be done from new replicas
                 // Before we stop writing to old replicas we need to wait for all previous reads to complete
                 try {
                     node = retake_node(co_await global_token_metadata_barrier(std::move(node.guard), get_excluded_nodes(node)), node.id);
                 } catch (term_changed_error&) {
                     throw;
+                } catch (group0_concurrent_modification&) {
+                    throw;
                 } catch (...) {
                     slogger.error("raft topology: transition_state::write_both_read_new, "
                                     "global_token_metadata_barrier failed, error {}",
                                     std::current_exception());
-                    break;
+                    barrier_failed = true;
+                }
+                if (barrier_failed) {
+                    // If barrier above failed it means there may be unfenced reads from old replicas.
+                    // Lets wait for the ring delay for those writes to complete or fence to propagate
+                    // before continuing.
+                    // FIXME: nodes that cannot be reached need to be isolated either automatically or
+                    // by an administrator
+                    co_await sleep_abortable(_ring_delay, _as);
                 }
                 switch(node.rs->state) {
                 case node_state::bootstrapping: {
@@ -2232,16 +2291,26 @@ class topology_coordinator {
                     // be able to become a voter - we'll be banned from the cluster.)
                 }
 
+                bool barrier_failed = false;
                 // Wait until other nodes observe the new token ring and stop sending writes to this node.
                 try {
                     node = retake_node(co_await global_token_metadata_barrier(std::move(node.guard), get_excluded_nodes(node)), node.id);
                 } catch (term_changed_error&) {
                     throw;
+                } catch (group0_concurrent_modification&) {
+                    throw;
                 } catch (...) {
                     slogger.error("raft topology: node_state::left_token_ring (node: {}), "
                                     "global_token_metadata_barrier failed, error {}",
                                     node.id, std::current_exception());
-                    break;
+                    barrier_failed = true;
+                }
+
+                if (barrier_failed) {
+                    // If barrier above failed it means there may be unfinished writes to a decommissioned node.
+                    // Lets wait for the ring delay for those writes to complete and new topology to propagate
+                    // before continuing.
+                    co_await sleep_abortable(_ring_delay, _as);
                 }
 
                 // Tell the node to shut down.
@@ -2276,6 +2345,37 @@ class topology_coordinator {
                        .set("node_state", node_state::left);
                 auto str = ::format("finished decommissioning node {}", node.id);
                 co_await update_topology_state(take_guard(std::move(node)), {builder.build()}, std::move(str));
+            }
+                break;
+            case node_state::rollback_to_normal: {
+                // The barrier waits for all double writes started during the operation to complete. It allowed to fail
+                // since we will fence the requests later.
+                bool barrier_failed = false;
+                try {
+                    node.guard = co_await exec_global_command(std::move(node.guard),raft_topology_cmd::command::barrier_and_drain, get_excluded_nodes(node), drop_guard_and_retake::yes);
+                } catch (term_changed_error&) {
+                    throw;
+                } catch(...) {
+                    slogger.warn("raft topology: failed to run barrier_and_drain during rollback {}", std::current_exception());
+                    barrier_failed = true;
+                }
+
+                if (barrier_failed) {
+                    node.guard =co_await start_operation();
+                }
+
+                node = retake_node(std::move(node.guard), node.id);
+
+                topology_mutation_builder builder(node.guard.write_timestamp());
+                builder.set_fence_version(_topo_sm._topology.version) // fence requests in case the drain above failed
+                       .set_transition_state(topology::transition_state::tablet_migration) // in case tablet drain failed we need to complete tablet transitions
+                       .with_node(node.id)
+                       .set("node_state", node_state::normal);
+
+                auto str = fmt::format("complete rollback of {} to state normal", node.id);
+
+                slogger.info("{}", str);
+                co_await update_topology_state(std::move(node.guard), {builder.build()}, str);
             }
                 break;
             case node_state::bootstrapping:
@@ -2491,7 +2591,7 @@ future<> topology_coordinator::rollback_current_topology_op(group0_guard&& guard
             [[fallthrough]];
         case node_state::decommissioning:
             // to rollback decommission or remove just move a node that we tried to remove back to normal state
-            state = node_state::normal;
+            state = node_state::rollback_to_normal;
             break;
         default:
             on_internal_error(slogger, fmt::format("raft topology: tried to rollback in unsupported state {}", node.rs->state));
@@ -2507,14 +2607,6 @@ future<> topology_coordinator::rollback_current_topology_op(group0_guard&& guard
 
     slogger.info("{}", str);
     co_await update_topology_state(std::move(node.guard), {builder.build()}, str);
-    // Try to run metadata barrier to wait for all double writes to complete
-    // but ignore failures
-    try {
-        co_await global_token_metadata_barrier(co_await start_operation(), std::move(exclude_nodes));
-    } catch (term_changed_error&) {
-    } catch(...) {
-        slogger.warn("raft topology: failed to run metadata barrier during rollback {}", std::current_exception());
-    }
 }
 
 future<> topology_coordinator::run() {
@@ -6259,23 +6351,13 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                 case node_state::left:
                 case node_state::none:
                 case node_state::removing:
+                case node_state::rollback_to_normal:
                     on_fatal_internal_error(slogger, ::format("Node {} got streaming request in state {}. It should be either dead or not part of the cluster",
                                      raft_server.id(), rs.state));
                 break;
                 }
             }
             break;
-            case raft_topology_cmd::command::fence: {
-                // We can have several concurrent fence commands in case topology change
-                // coordinator migrated to another node. The update_fence_version function
-                // checks that the version doesn't decrease, we do the check and persist
-                // the new version under the same lock to avoid raises.
-                auto holder = co_await get_units(_raft_topology_cmd_handler_state._operation_mutex, 1);
-                co_await update_fence_version(version);
-                co_await _sys_ks.local().update_topology_fence_version(version);
-                result.status = raft_topology_cmd_result::command_status::success;
-                break;
-            }
             case raft_topology_cmd::command::shutdown:
                 if (_shutdown_request_promise) {
                     std::exchange(_shutdown_request_promise, std::nullopt)->set_value();

@@ -34,8 +34,8 @@ async def set_version(manager: ManagerClient, host: Host, new_version: int):
 
 
 async def set_fence_version(manager: ManagerClient, host: Host, new_version: int):
-    await manager.cql.run_async("update system.scylla_local set value=%s where key = 'topology_fence_version'",
-                                parameters=[str(new_version)],
+    await manager.cql.run_async("update system.topology set fence_version=%s where key = 'topology'",
+                                parameters=[new_version],
                                 host=host)
 
 
@@ -89,6 +89,8 @@ async def test_fence_writes(request, manager: ManagerClient):
 
     await set_version(manager, host2, version - 1)
     logger.info(f"decremented version on host2")
+    await set_fence_version(manager, host2, version - 1)
+    logger.info(f"decremented fence version on host2")
 
     await manager.server_restart(servers[2].server_id, wait_others=2)
     logger.info(f"host2 restarted")

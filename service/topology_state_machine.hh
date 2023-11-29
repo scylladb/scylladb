@@ -34,7 +34,8 @@ enum class node_state: uint16_t {
     rebuilding,          // the node is being rebuild and is streaming data from other replicas
     normal,              // the node does not do any streaming and serves the slice of the ring that belongs to it
     left_token_ring,     // the node left the token ring, but not group0 yet; we wait until other nodes stop writing to it
-    left                 // the node left the cluster and group0
+    left,                // the node left the cluster and group0
+    rollback_to_normal,  // the node rolls back failed decommission/remove node operation
 };
 
 enum class topology_request: uint16_t {
@@ -109,6 +110,7 @@ struct topology {
     using version_t = int64_t;
     static constexpr version_t initial_version = 1;
     version_t version = initial_version;
+    version_t fence_version = initial_version;
 
     // Nodes that are normal members of the ring
     std::unordered_map<raft::server_id, replica_state> normal_nodes;
@@ -182,7 +184,6 @@ struct raft_topology_cmd {
           barrier_and_drain,    // same + drain requests which use previous versions
           stream_ranges,        // reqeust to stream data, return when streaming is
                                 // done
-          fence,                // erect the fence against requests with stale versions
           shutdown,             // a decommissioning node should shut down
       };
       command cmd;

@@ -1670,15 +1670,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // This will also disable migration manager schema pulls if needed.
             group0_service.setup_group0_if_exist(sys_ks.local(), ss.local(), qp.local(), mm.local(), raft_topology_change_enabled).get();
 
-            // It's essential to load fencing_version prior to starting the messaging service,
-            // since incoming messages may require fencing.
-            // It is also necessary that token_metadata be initialized by this point and
-            // token_metadata::version to be up to date, since when assigning fence_version we
-            // validate it cannot be greater than token_metadata::version.
-            // The setup_group0_if_exist call above waits for the raft log for group0 to be applied,
-            // which ensures this.
-            ss.local().update_fence_version(sys_ks.local().get_topology_fence_version().get()).get();
-
             with_scheduling_group(maintenance_scheduling_group, [&] {
                 return messaging.invoke_on_all(&netw::messaging_service::start_listen, std::ref(token_metadata));
             }).get();
