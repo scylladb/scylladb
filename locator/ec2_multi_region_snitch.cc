@@ -20,7 +20,7 @@ static constexpr const char* PRIVATE_MAC_QUERY = "/latest/meta-data/network/inte
 namespace locator {
 ec2_multi_region_snitch::ec2_multi_region_snitch(const snitch_config& cfg)
     : ec2_snitch(cfg)
-    , _broadcast_rpc_address_specified_by_user(cfg.broadcast_rpc_address_specified_by_user) {}
+{}
 
 future<> ec2_multi_region_snitch::start() {
     _state = snitch_state::initializing;
@@ -52,17 +52,6 @@ future<> ec2_multi_region_snitch::start() {
             std::throw_with_nested(exceptions::configuration_exception("Failed to get a Public IP. Public IP is a requirement for Ec2MultiRegionSnitch. Consider using a different snitch if your instance doesn't have it"));
         }
         logger().info("Ec2MultiRegionSnitch using publicIP as identifier: {}", _local_public_address);
-
-        //
-        // Use the Public IP to broadcast Address to other nodes.
-        //
-        // Cassandra 2.1 manual explicitly instructs to set broadcast_address
-        // value to a public address in cassandra.yaml.
-        //
-        utils::fb_utilities::set_broadcast_address(_local_public_address);
-        if (!_broadcast_rpc_address_specified_by_user) {
-            utils::fb_utilities::set_broadcast_rpc_address(_local_public_address);
-        }
 
         if (!_local_public_address.addr().is_ipv6()) {
             sstring priv_addr = co_await aws_api_call(AWS_QUERY_SERVER_ADDR, AWS_QUERY_SERVER_PORT, PRIVATE_IP_QUERY_REQ, token);

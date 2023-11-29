@@ -22,6 +22,9 @@ public:
     virtual sstring get_name() const override {
         return "org.apache.cassandra.locator.Ec2MultiRegionSnitch";
     }
+    virtual std::optional<inet_address> get_public_address() const noexcept override {
+        return _local_public_address;
+    }
 private:
     inet_address _local_public_address;
     sstring _local_private_address;

@@ -46,7 +46,6 @@ struct snitch_config {
     sstring name = "SimpleSnitch";
     sstring properties_file_name = "";
     unsigned io_cpu_id = 0;
-    bool broadcast_rpc_address_specified_by_user = false;
 
     // Gossiping-property-file specific
     gms::inet_address listen_address;
@@ -77,6 +76,8 @@ public:
             .rack = get_rack(),
         };
     }
+
+    virtual std::optional<inet_address> get_public_address() const noexcept { return std::nullopt; }
 
     /**
      * returns whatever info snitch wants to gossip

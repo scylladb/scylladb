@@ -873,7 +873,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             debug::the_snitch = &snitch;
             snitch_config snitch_cfg;
             snitch_cfg.name = cfg->endpoint_snitch();
-            snitch_cfg.broadcast_rpc_address_specified_by_user = !cfg->broadcast_rpc_address().empty();
             snitch_cfg.listen_address = utils::resolve(cfg->listen_address, family).get0();
             snitch.start(snitch_cfg).get();
             auto stop_snitch = defer_verbose_shutdown("snitch", [&snitch] {
@@ -882,6 +881,21 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             snitch.invoke_on_all(&locator::snitch_ptr::start).get();
             // #293 - do not stop anything (unless snitch.on_all(start) fails)
             stop_snitch->cancel();
+
+            if (auto opt_public_address = snitch.local()->get_public_address()) {
+                // Use the Public IP as broadcast_address to other nodes
+                // and the broadcast_rpc_address (for client CQL connections).
+                //
+                // Cassandra 2.1 manual explicitly instructs to set broadcast_address
+                // value to a public address in cassandra.yaml.
+                //
+                broadcast_addr = *opt_public_address;
+                utils::fb_utilities::set_broadcast_address(*opt_public_address);
+                if (cfg->broadcast_rpc_address().empty()) {
+                    broadcast_rpc_addr = *opt_public_address;
+                    utils::fb_utilities::set_broadcast_rpc_address(*opt_public_address);
+                }
+            }
 
             supervisor::notify("starting tokens manager");
             locator::token_metadata::config tm_cfg;
