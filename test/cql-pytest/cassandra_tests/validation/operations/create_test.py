@@ -320,6 +320,7 @@ def testCreateKeyspaceWithNTSOnlyAcceptsConfiguredDataCenterNames(cql, this_dc):
     execute(cql, n, "DROP KEYSPACE IF EXISTS %s")
 
 # Test {@link ConfigurationException} is not thrown on create NetworkTopologyStrategy keyspace without any options.
+@pytest.mark.xfail(reason="Issue #16028")
 def testCreateKeyspaceWithNetworkTopologyStrategyNoOptions(cql):
     n = unique_name()
     execute(cql, n, "CREATE KEYSPACE %s with replication = { 'class': 'NetworkTopologyStrategy' }")

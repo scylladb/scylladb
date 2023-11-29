@@ -256,6 +256,9 @@ network_topology_strategy::calculate_natural_endpoints(
 }
 
 void network_topology_strategy::validate_options(const gms::feature_service& fs) const {
+    if(_config_options.empty()) {
+        throw exceptions::configuration_exception("Configuration for at least one datacenter must be present");
+    }
     validate_tablet_options(fs, _config_options);
     auto tablet_opts = recognized_tablet_options();
     for (auto& c : _config_options) {
