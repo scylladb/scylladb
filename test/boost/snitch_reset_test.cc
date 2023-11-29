@@ -9,7 +9,6 @@
 
 #include <boost/test/unit_test.hpp>
 #include "locator/gossiping_property_file_snitch.hh"
-#include "utils/fb_utilities.hh"
 #include "test/lib/scylla_test_case.hh"
 #include <seastar/util/std-compat.hh>
 #include <vector>
@@ -26,9 +25,6 @@ future<> one_test(const std::string& property_fname1,
     using namespace locator;
     using namespace std::filesystem;
 
-    utils::fb_utilities::set_broadcast_address(gms::inet_address("localhost"));
-    utils::fb_utilities::set_broadcast_rpc_address(gms::inet_address("localhost"));
-
     printf("Testing %s and %s property files. Expected result is %s\n",
            property_fname1.c_str(), property_fname2.c_str(),
            (exp_result ? "success" : "failure"));
@@ -39,6 +35,7 @@ future<> one_test(const std::string& property_fname1,
         auto cpu0_dc_new = make_lw_shared<sstring>();
         auto cpu0_rack_new = make_lw_shared<sstring>();
         sharded<snitch_ptr> snitch;
+        auto my_address = gms::inet_address("localhost");
 
         try {
             path fname1(test_files_subdir);
@@ -51,6 +48,8 @@ future<> one_test(const std::string& property_fname1,
                 snitch_config cfg;
                 cfg.name = "org.apache.cassandra.locator.GossipingPropertyFileSnitch";
                 cfg.properties_file_name = fname1.string();
+                cfg.listen_address = my_address;
+                cfg.broadcast_address = my_address;
                 snitch.start(cfg).get();
                 snitch.invoke_on_all(&snitch_ptr::start).get();
             } catch (std::exception& e) {

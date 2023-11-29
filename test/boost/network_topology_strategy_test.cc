@@ -225,19 +225,20 @@ locator::endpoint_dc_rack make_endpoint_dc_rack(gms::inet_address endpoint) {
 
 // Run in a seastar thread.
 void simple_test() {
-    utils::fb_utilities::set_broadcast_address(gms::inet_address("localhost"));
-    utils::fb_utilities::set_broadcast_rpc_address(gms::inet_address("localhost"));
+    auto my_address = gms::inet_address("localhost");
 
     // Create the RackInferringSnitch
     snitch_config cfg;
     cfg.name = "RackInferringSnitch";
+    cfg.listen_address = my_address;
+    cfg.broadcast_address = my_address;
     sharded<snitch_ptr> snitch;
     snitch.start(cfg).get();
     auto stop_snitch = defer([&snitch] { snitch.stop().get(); });
     snitch.invoke_on_all(&snitch_ptr::start).get();
 
     locator::token_metadata::config tm_cfg;
-    tm_cfg.topo_cfg.this_endpoint = utils::fb_utilities::get_broadcast_address();
+    tm_cfg.topo_cfg.this_endpoint = my_address;
     tm_cfg.topo_cfg.local_dc_rack = { snitch.local()->get_datacenter(), snitch.local()->get_rack() };
     locator::shared_token_metadata stm([] () noexcept { return db::schema_tables::hold_merge_lock(); }, tm_cfg);
 
@@ -307,12 +308,13 @@ void simple_test() {
 
 // Run in a seastar thread.
 void heavy_origin_test() {
-    utils::fb_utilities::set_broadcast_address(gms::inet_address("localhost"));
-    utils::fb_utilities::set_broadcast_rpc_address(gms::inet_address("localhost"));
+    auto my_address = gms::inet_address("localhost");
 
     // Create the RackInferringSnitch
     snitch_config cfg;
     cfg.name = "RackInferringSnitch";
+    cfg.listen_address = my_address;
+    cfg.broadcast_address = my_address;
     sharded<snitch_ptr> snitch;
     snitch.start(cfg).get();
     auto stop_snitch = defer([&snitch] { snitch.stop().get(); });
@@ -386,11 +388,12 @@ SEASTAR_THREAD_TEST_CASE(NetworkTopologyStrategy_heavy) {
 }
 
 SEASTAR_THREAD_TEST_CASE(NetworkTopologyStrategy_tablets_test) {
-    utils::fb_utilities::set_broadcast_address(gms::inet_address("localhost"));
-    utils::fb_utilities::set_broadcast_rpc_address(gms::inet_address("localhost"));
+    auto my_address = gms::inet_address("localhost");
 
     // Create the RackInferringSnitch
     snitch_config cfg;
+    cfg.listen_address = my_address;
+    cfg.broadcast_address = my_address;
     cfg.name = "RackInferringSnitch";
     sharded<snitch_ptr> snitch;
     snitch.start(cfg).get();
@@ -398,7 +401,7 @@ SEASTAR_THREAD_TEST_CASE(NetworkTopologyStrategy_tablets_test) {
     snitch.invoke_on_all(&snitch_ptr::start).get();
 
     locator::token_metadata::config tm_cfg;
-    tm_cfg.topo_cfg.this_endpoint = utils::fb_utilities::get_broadcast_address();
+    tm_cfg.topo_cfg.this_endpoint = my_address;
     tm_cfg.topo_cfg.local_dc_rack = { snitch.local()->get_datacenter(), snitch.local()->get_rack() };
     locator::shared_token_metadata stm([] () noexcept { return db::schema_tables::hold_merge_lock(); }, tm_cfg);
 

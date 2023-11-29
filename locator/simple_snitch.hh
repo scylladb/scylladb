@@ -10,7 +10,6 @@
 
 #pragma once
 #include "snitch_base.hh"
-#include "utils/fb_utilities.hh"
 #include <memory>
 
 namespace locator {
@@ -21,7 +20,9 @@ namespace locator {
  * which improves cache locality.
  */
 struct simple_snitch : public snitch_base {
-    simple_snitch(const snitch_config& cfg) {
+    simple_snitch(const snitch_config& cfg)
+        : snitch_base(cfg)
+    {
         _my_dc = get_datacenter();
         _my_rack = get_rack();
 

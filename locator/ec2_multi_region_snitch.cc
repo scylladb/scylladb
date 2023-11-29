@@ -30,7 +30,7 @@ future<> ec2_multi_region_snitch::start() {
         auto token = co_await aws_api_call(AWS_QUERY_SERVER_ADDR, AWS_QUERY_SERVER_PORT, TOKEN_REQ_ENDPOINT, std::nullopt);
 
         try {
-            auto broadcast = utils::fb_utilities::get_broadcast_address();
+            auto broadcast = _cfg.broadcast_address;
             if (broadcast.addr().is_ipv6()) {
                 auto macs = co_await aws_api_call(AWS_QUERY_SERVER_ADDR, AWS_QUERY_SERVER_PORT, PRIVATE_MAC_QUERY, token);
                 // we should just get a single line, ending in '/'. If there are more than one mac, we should

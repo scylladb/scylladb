@@ -9,7 +9,6 @@
 
 #include <boost/test/unit_test.hpp>
 #include "locator/ec2_snitch.hh"
-#include "utils/fb_utilities.hh"
 #include <seastar/testing/test_case.hh>
 #include <seastar/util/std-compat.hh>
 #include <vector>
@@ -31,12 +30,13 @@ future<> one_test(const std::string& property_fname, bool exp_result) {
     path fname(test_files_subdir);
     fname /= path(property_fname);
 
-    utils::fb_utilities::set_broadcast_address(gms::inet_address("localhost"));
-    utils::fb_utilities::set_broadcast_rpc_address(gms::inet_address("localhost"));
+    auto my_address = gms::inet_address("localhost");
 
     snitch_config cfg;
     cfg.name = "Ec2Snitch";
     cfg.properties_file_name = fname.string();
+    cfg.listen_address = my_address;
+    cfg.broadcast_address = my_address;
     auto snitch_i = std::make_unique<sharded<locator::snitch_ptr>>();
     auto& snitch = *snitch_i;
     return snitch.start(cfg).then([&snitch] () {
