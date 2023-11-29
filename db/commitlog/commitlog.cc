@@ -1380,11 +1380,13 @@ db::commitlog::segment_manager::segment_manager(config c)
     , max_mutation_size(max_size >> 1)
     , max_disk_size(size_t(std::ceil(cfg.commitlog_total_space_in_mb / double(smp::count))) * 1024 * 1024)
     // our threshold for trying to force a flush. needs heristics, for now max - segment_size/2.
-    , disk_usage_threshold(cfg.commitlog_flush_threshold_in_mb.has_value() 
-        ? size_t(std::ceil(*cfg.commitlog_flush_threshold_in_mb / double(smp::count))) * 1024 * 1024 
-        : (max_disk_size -
-            (max_disk_size >= (max_size*2) ? max_size
-                : (max_disk_size > (max_size/2) ? (max_size/2) : max_disk_size/3))))
+    , disk_usage_threshold([&] {
+        if (cfg.commitlog_flush_threshold_in_mb.has_value()) {
+            return size_t(std::ceil(*cfg.commitlog_flush_threshold_in_mb / double(smp::count))) * 1024 * 1024;
+        } else {
+            return max_disk_size / 2;
+        }
+    }())
     , _flush_semaphore(cfg.max_active_flushes)
     // That is enough concurrency to allow for our largest mutation (max_mutation_size), plus
     // an existing in-flight buffer. Since we'll force the cycling() of any buffer that is bigger

@@ -544,8 +544,8 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "Threshold for commitlog disk usage. When used disk space goes above this value, Scylla initiates flushes of memtables to disk for the oldest commitlog segments, removing those log segments. Adjusting this affects disk usage vs. write latency. Default is (approximately) commitlog_total_space_in_mb - <num shards>*commitlog_segment_size_in_mb.")
     , commitlog_use_o_dsync(this, "commitlog_use_o_dsync", value_status::Used, true,
         "Whether or not to use O_DSYNC mode for commitlog segments IO. Can improve commitlog latency on some file systems.\n")
-    , commitlog_use_hard_size_limit(this, "commitlog_use_hard_size_limit", value_status::Used, false,
-        "Whether or not to use a hard size limit for commitlog disk usage. Default is false. Enabling this can cause latency spikes, whereas the default can lead to occasional disk usage peaks.\n")
+    , commitlog_use_hard_size_limit(this, "commitlog_use_hard_size_limit", value_status::Used, true,
+        "Whether or not to use a hard size limit for commitlog disk usage. Default is true. Enabling this can cause latency spikes, whereas the default can lead to occasional disk usage peaks.\n")
     /**
     * @Group Compaction settings
     * @GroupDescription Related information: Configuring compaction
