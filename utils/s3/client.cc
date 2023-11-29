@@ -850,9 +850,21 @@ data_sink client::make_upload_jumbo_sink(sstring object_name, std::optional<unsi
 class client::readable_file : public file_impl {
     shared_ptr<client> _client;
     sstring _object_name;
+    std::optional<stats> _stats;
 
     [[noreturn]] void unsupported() {
         throw_with_backtrace<std::logic_error>("unsupported operation on s3 readable file");
+    }
+
+    future<> maybe_update_stats() {
+        if (_stats) {
+            return make_ready_future<>();
+        }
+
+        return _client->get_object_stats(_object_name).then([this] (auto st) {
+            _stats = std::move(st);
+            return make_ready_future<>();
+        });
     }
 
 public:
@@ -899,26 +911,36 @@ public:
     }
 
     virtual future<struct stat> stat(void) override {
-        auto object_stats = co_await _client->get_object_stats(_object_name);
+        co_await maybe_update_stats();
         struct stat ret {};
         ret.st_nlink = 1;
         ret.st_mode = S_IFREG | S_IRUSR | S_IRGRP | S_IROTH;
-        ret.st_size = object_stats.size;
+        ret.st_size = _stats->size;
         ret.st_blksize = 1 << 10; // huh?
-        ret.st_blocks = object_stats.size >> 9;
+        ret.st_blocks = _stats->size >> 9;
         // objects are immutable on S3, therefore we can use Last-Modified to set both st_mtime and st_ctime
-        ret.st_mtime = object_stats.last_modified;
-        ret.st_ctime = object_stats.last_modified;
+        ret.st_mtime = _stats->last_modified;
+        ret.st_ctime = _stats->last_modified;
         co_return ret;
     }
 
     virtual future<size_t> read_dma(uint64_t pos, void* buffer, size_t len, io_intent*) override {
+        co_await maybe_update_stats();
+        if (pos >= _stats->size) {
+            co_return 0;
+        }
+
         auto buf = co_await _client->get_object_contiguous(_object_name, range{ pos, len });
         std::copy_n(buf.get(), buf.size(), reinterpret_cast<uint8_t*>(buffer));
         co_return buf.size();
     }
 
     virtual future<size_t> read_dma(uint64_t pos, std::vector<iovec> iov, io_intent*) override {
+        co_await maybe_update_stats();
+        if (pos >= _stats->size) {
+            co_return 0;
+        }
+
         auto buf = co_await _client->get_object_contiguous(_object_name, range{ pos, utils::iovec_len(iov) });
         uint64_t off = 0;
         for (auto& v : iov) {
@@ -933,6 +955,11 @@ public:
     }
 
     virtual future<temporary_buffer<uint8_t>> dma_read_bulk(uint64_t offset, size_t range_size, io_intent*) override {
+        co_await maybe_update_stats();
+        if (offset >= _stats->size) {
+            co_return temporary_buffer<uint8_t>();
+        }
+
         auto buf = co_await _client->get_object_contiguous(_object_name, range{ offset, range_size });
         co_return temporary_buffer<uint8_t>(reinterpret_cast<uint8_t*>(buf.get_write()), buf.size(), buf.release());
     }

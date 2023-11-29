@@ -16,6 +16,7 @@
 #include <seastar/core/fstream.hh>
 #include <seastar/http/exception.hh>
 #include <seastar/util/closeable.hh>
+#include <seastar/util/short_streams.hh>
 #include "test/lib/scylla_test_case.hh"
 #include "test/lib/log.hh"
 #include "test/lib/random_utils.hh"
@@ -231,6 +232,30 @@ SEASTAR_THREAD_TEST_CASE(test_client_readable_file) {
     testlog.info("Check bulk read\n");
     auto buf = f.dma_read_bulk<char>(5, 8).get0();
     BOOST_REQUIRE_EQUAL(to_sstring(std::move(buf)), sstring("67890ABC"));
+}
+
+SEASTAR_THREAD_TEST_CASE(test_client_readable_file_stream) {
+    const sstring name(fmt::format("/{}/teststreamobject-{}", tests::getenv_safe("S3_BUCKET_FOR_TEST"), ::getpid()));
+
+    testlog.info("Make client\n");
+    semaphore mem(16<<20);
+    auto cln = s3::client::make(tests::getenv_safe("S3_SERVER_ADDRESS_FOR_TEST"), make_minio_config(), mem);
+    auto close_client = deferred_close(*cln);
+
+    testlog.info("Put object {}\n", name);
+    sstring sample("1F2E3D4C5B6A70899807A6B5C4D3E2F1");
+    temporary_buffer<char> data(sample.c_str(), sample.size());
+    cln->put_object(name, std::move(data)).get();
+    auto delete_object = deferred_delete_object(cln, name);
+
+    auto f = cln->make_readable_file(name);
+    auto close_readable_file = deferred_close(f);
+    auto in = make_file_input_stream(f);
+    auto close_stream = deferred_close(in);
+
+    testlog.info("Check input stream read\n");
+    auto res = seastar::util::read_entire_stream_contiguous(in).get0();
+    BOOST_REQUIRE_EQUAL(res, sample);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_client_put_get_tagging) {

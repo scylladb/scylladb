@@ -16,6 +16,7 @@
 #include <seastar/coroutine/exception.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/util/file.hh>
+#include <seastar/util/closeable.hh>
 
 #include "sstables/exceptions.hh"
 #include "sstables/sstable_directory.hh"
@@ -539,21 +540,19 @@ future<> s3_storage::wipe(const sstable& sst, sync_dir) noexcept {
 
 future<> s3_storage::remove_by_registry_entry(entry_descriptor desc) {
     auto prefix = format("/{}/{}", _bucket, desc.generation);
-    std::optional<temporary_buffer<char>> toc;
     std::vector<sstring> components;
 
     try {
-        toc = co_await _client->get_object_contiguous(prefix + "/" + sstable_version_constants::get_component_map(desc.version).at(component_type::TOC));
+        auto f = _client->make_readable_file(prefix + "/" + sstable_version_constants::get_component_map(desc.version).at(component_type::TOC));
+        components = co_await with_closeable(std::move(f), [] (file& f) {
+            return sstable::read_and_parse_toc(f);
+        });
     } catch (const storage_io_error& e) {
         if (e.code().value() != ENOENT) {
             throw;
         }
     }
-    if (!toc) {
-        co_return; // missing TOC object is OK
-    }
 
-    boost::split(components, std::string_view(toc->get(), toc->size()), boost::is_any_of("\n"));
     co_await coroutine::parallel_for_each(components, [this, &prefix] (sstring comp) -> future<> {
         if (comp != sstable_version_constants::TOC_SUFFIX) {
             co_await _client->delete_object(prefix + "/" + comp);
