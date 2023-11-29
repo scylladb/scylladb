@@ -1020,10 +1020,17 @@ dht::partition_range range_from_bytes(const schema& schema, const std::vector<ma
     return dht::partition_range::make_singular(std::move(pos));
 }
 
-void error_if_exceeds(size_t size, size_t limit) {
-    if (size > limit) {
+void error_if_exceeds_partition_key_limit(size_t size, size_t partition_limit) {
+    if (size > partition_limit) {
         throw std::runtime_error(
-                fmt::format("clustering-key cartesian product size {} is greater than maximum {}", size, limit));
+                fmt::format("size of partition-key IN list or partition-key cartesian product of IN list {} is greater than maximum {}. Use --max-partition-key-restrictions-per-query configuration option to change default setting.", size, partition_limit)); 
+    }
+}
+
+void error_if_exceeds_clustering_key_limit(size_t size, size_t clustering_limit) {
+    if (size > clustering_limit) {
+        throw std::runtime_error(
+                fmt::format("size of clustering-key IN list or clustering-key cartesian product of IN list {} is greater than maximum {}. Use --max-clustering-key-restrictions-per-query configuration option to change default setting.", size, clustering_limit)); 
     }
 }
 
@@ -1044,7 +1051,7 @@ dht::partition_range_vector partition_ranges_from_singles(
                         return {};
                     }
                     product_size *= lst->size();
-                    error_if_exceeds(product_size, size_limit);
+                    error_if_exceeds_partition_key_limit(product_size, size_limit);
                     column_values[schema.position(*cv->col)] = std::move(*lst);
                 } else {
                     throw exceptions::invalid_request_exception(
@@ -1413,7 +1420,7 @@ std::vector<query::clustering_range> get_single_column_clustering_bounds(
             }
             product_size *= list->size();
             prior_column_values.push_back(std::move(*list));
-            error_if_exceeds(product_size, size_limit);
+            error_if_exceeds_clustering_key_limit(product_size, size_limit);
         } else if (auto last_range = std::get_if<nonwrapping_interval<managed_bytes>>(&values)) {
             // Must be the last column in the prefix, since it's neither EQ nor IN.
             std::vector<query::clustering_range> ck_ranges;
