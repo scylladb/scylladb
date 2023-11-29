@@ -100,4 +100,3 @@ async def test_tablet_drain_failure_during_decommission(manager: ManagerClient):
     assert sum(len(x) for x in matches) == 1
 
     await cql.run_async("DROP KEYSPACE test;")
-
