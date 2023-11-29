@@ -916,7 +916,10 @@ void validate_operation(schema_ptr schema, reader_permit permit, const std::vect
     }
 
     abort_source abort;
-    json_writer writer;
+    // Collect JSON output and print after validation is done, to prevent
+    // interleaving with error messages from validation.
+    std::stringstream json_output_stream;
+    json_writer writer(json_output_stream);
     writer.StartStream();
     for (const auto& sst : sstables) {
         const auto errors = sst->validate(permit, abort, [] (sstring what) { sst_log.info("{}", what); }).get();
@@ -929,6 +932,7 @@ void validate_operation(schema_ptr schema, reader_permit permit, const std::vect
         writer.EndObject();
     }
     writer.EndStream();
+    fmt::print(std::cout, "{}", json_output_stream.view());
 }
 
 void scrub_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
@@ -1527,7 +1531,10 @@ void validate_checksums_operation(schema_ptr schema, reader_permit permit, const
         throw std::invalid_argument("no sstables specified on the command line");
     }
 
-    json_writer writer;
+    // Collect JSON output and print after validation is done, to prevent
+    // interleaving with error messages from validation.
+    std::stringstream json_output_stream;
+    json_writer writer(json_output_stream);
     writer.StartStream();
     for (auto& sst : sstables) {
         const auto valid = sstables::validate_checksums(sst, permit).get();
@@ -1535,6 +1542,7 @@ void validate_checksums_operation(schema_ptr schema, reader_permit permit, const
         writer.Bool(valid);
     }
     writer.EndStream();
+    fmt::print(std::cout, "{}", json_output_stream.view());
 }
 
 void decompress_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
