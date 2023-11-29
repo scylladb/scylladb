@@ -38,7 +38,6 @@
 #include "types/map.hh"
 #include "utils/rjson.hh"
 #include "utils/big_decimal.hh"
-#include "utils/fb_utilities.hh"
 #include "cql3/selection/selection.hh"
 #include "cql3/values.hh"
 #include "cql3/query_options.hh"
@@ -417,6 +416,7 @@ class token_ranges_owned_by_this_shard {
     };
 
     schema_ptr _s;
+    locator::effective_replication_map_ptr _erm;
     // _token_ranges will contain a list of token ranges owned by this node.
     // We'll further need to split each such range to the pieces owned by
     // the current shard, using _intersecter.
@@ -430,15 +430,14 @@ class token_ranges_owned_by_this_shard {
     size_t _range_idx;
     size_t _end_idx;
     std::optional<dht::selective_token_range_sharder> _intersecter;
-    locator::effective_replication_map_ptr _erm;
 public:
     token_ranges_owned_by_this_shard(replica::database& db, gms::gossiper& g, schema_ptr s)
         :  _s(s)
+        , _erm(s->table().get_effective_replication_map())
         , _token_ranges(db.find_keyspace(s->ks_name()).get_effective_replication_map(),
-                g, utils::fb_utilities::get_broadcast_address())
+                g, _erm->get_topology().my_address())
         , _range_idx(random_offset(0, _token_ranges.size() - 1))
         , _end_idx(_range_idx + _token_ranges.size())
-        , _erm(s->table().get_effective_replication_map())
     {
         tlogger.debug("Generating token ranges starting from base range {} of {}", _range_idx, _token_ranges.size());
     }
