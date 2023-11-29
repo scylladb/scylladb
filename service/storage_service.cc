@@ -3197,6 +3197,8 @@ future<> topology_coordinator::run() {
     while (!_as.abort_requested()) {
         bool sleep = false;
         try {
+            co_await utils::get_local_injector().inject_with_handler("topology_coordinator_pause_before_processing_backlog",
+                [] (auto& handler) { return handler.wait_for_message(db::timeout_clock::now() + std::chrono::minutes(1)); });
             auto guard = co_await start_operation();
             co_await cleanup_group0_config_if_needed();
 
