@@ -38,7 +38,6 @@
 #include "gms/feature_service.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "tools/schema_loader.hh"
-#include "utils/fb_utilities.hh"
 
 namespace {
 
@@ -219,8 +218,11 @@ std::vector<schema_ptr> do_load_schemas(std::string_view schema_str) {
     feature_service.enable(feature_service.supported_feature_set()).get();
     sharded<locator::shared_token_metadata> token_metadata;
 
-    utils::fb_utilities::set_broadcast_address(gms::inet_address("localhost"));
-    token_metadata.start([] () noexcept { return db::schema_tables::hold_merge_lock(); }, locator::token_metadata::config{}).get();
+    auto my_address = gms::inet_address("localhost");
+    locator::token_metadata::config tm_cfg;
+    tm_cfg.topo_cfg.this_endpoint = my_address;
+    tm_cfg.topo_cfg.this_cql_address = my_address;
+    token_metadata.start([] () noexcept { return db::schema_tables::hold_merge_lock(); }, tm_cfg).get();
     auto stop_token_metadata = deferred_stop(token_metadata);
 
     data_dictionary_impl dd_impl;

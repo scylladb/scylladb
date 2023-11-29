@@ -500,6 +500,7 @@ private:
 
             locator::token_metadata::config tm_cfg;
             tm_cfg.topo_cfg.this_endpoint = utils::fb_utilities::get_broadcast_address();
+            tm_cfg.topo_cfg.this_cql_address = tm_cfg.topo_cfg.this_endpoint;
             tm_cfg.topo_cfg.local_dc_rack = { _snitch.local()->get_datacenter(), _snitch.local()->get_rack() };
             _token_metadata.start([] () noexcept { return db::schema_tables::hold_merge_lock(); }, tm_cfg).get();
             auto stop_token_metadata = defer([this] { _token_metadata.stop().get(); });

@@ -15,7 +15,6 @@
 #include "locator/topology.hh"
 #include "locator/production_snitch_base.hh"
 #include "utils/stall_free.hh"
-#include "utils/fb_utilities.hh"
 
 namespace locator {
 
