@@ -1546,19 +1546,23 @@ bool needs_static_row(const mutation_partition& mp, const std::vector<view_and_b
 // If the assumption that the given base token belongs to this replica
 // does not hold, we return an empty optional.
 static std::optional<gms::inet_address>
-get_view_natural_endpoint(const locator::effective_replication_map_ptr& erm, bool network_topology,
-        const dht::token& base_token, const dht::token& view_token) {
-    auto& topology = erm->get_token_metadata_ptr()->get_topology();
+get_view_natural_endpoint(
+        const locator::effective_replication_map_ptr& base_erm,
+        const locator::effective_replication_map_ptr& view_erm,
+        bool network_topology,
+        const dht::token& base_token,
+        const dht::token& view_token) {
+    auto& topology = base_erm->get_token_metadata_ptr()->get_topology();
     auto my_address = utils::fb_utilities::get_broadcast_address();
     auto my_datacenter = topology.get_datacenter();
     std::vector<gms::inet_address> base_endpoints, view_endpoints;
-    for (auto&& base_endpoint : erm->get_natural_endpoints(base_token)) {
+    for (auto&& base_endpoint : base_erm->get_natural_endpoints(base_token)) {
         if (!network_topology || topology.get_datacenter(base_endpoint) == my_datacenter) {
             base_endpoints.push_back(base_endpoint);
         }
     }
 
-    for (auto&& view_endpoint : erm->get_natural_endpoints(view_token)) {
+    for (auto&& view_endpoint : view_erm->get_natural_endpoints(view_token)) {
         // If this base replica is also one of the view replicas, we use
         // ourselves as the view replica.
         if (view_endpoint == my_address) {
@@ -1617,6 +1621,7 @@ static bool should_update_synchronously(const schema& s) {
 // appropriate paired replicas. This is done asynchronously - we do not wait
 // for the writes to complete.
 future<> view_update_generator::mutate_MV(
+        schema_ptr base,
         dht::token base_token,
         utils::chunked_vector<frozen_mutation_and_schema> view_updates,
         db::view::stats& stats,
@@ -1626,15 +1631,16 @@ future<> view_update_generator::mutate_MV(
         service::allow_hints allow_hints,
         wait_for_all_updates wait_for_all)
 {
+    auto base_ermp = base->table().get_effective_replication_map();
     static constexpr size_t max_concurrent_updates = 128;
     co_await max_concurrent_for_each(view_updates, max_concurrent_updates,
-            [this, base_token, &stats, &cf_stats, tr_state, &pending_view_updates, allow_hints, wait_for_all] (frozen_mutation_and_schema mut) mutable -> future<> {
+            [this, base_token, &stats, &cf_stats, tr_state, &pending_view_updates, allow_hints, wait_for_all, base_ermp] (frozen_mutation_and_schema mut) mutable -> future<> {
         auto view_token = dht::get_token(*mut.s, mut.fm.key());
-        auto ermp = mut.s->table().get_effective_replication_map();
+        auto view_ermp = mut.s->table().get_effective_replication_map();
         auto& ks = _proxy.local().local_db().find_keyspace(mut.s->ks_name());
         bool network_topology = dynamic_cast<const locator::network_topology_strategy*>(&ks.get_replication_strategy());
-        auto target_endpoint = get_view_natural_endpoint(ermp, network_topology, base_token, view_token);
-        auto remote_endpoints = ermp->get_pending_endpoints(view_token);
+        auto target_endpoint = get_view_natural_endpoint(base_ermp, view_ermp, network_topology, base_token, view_token);
+        auto remote_endpoints = view_ermp->get_pending_endpoints(view_token);
         auto sem_units = pending_view_updates.split(mut.fm.representation().size());
 
         const bool update_synchronously = should_update_synchronously(*mut.s);
@@ -1718,7 +1724,7 @@ future<> view_update_generator::mutate_MV(
             stats.view_updates_pushed_remote += updates_pushed_remote;
             cf_stats.total_view_updates_pushed_remote += updates_pushed_remote;
             schema_ptr s = mut.s;
-            future<> view_update = apply_to_remote_endpoints(_proxy.local(), std::move(ermp), *target_endpoint, std::move(remote_endpoints), std::move(mut), base_token, view_token, allow_hints, tr_state).then_wrapped(
+            future<> view_update = apply_to_remote_endpoints(_proxy.local(), std::move(view_ermp), *target_endpoint, std::move(remote_endpoints), std::move(mut), base_token, view_token, allow_hints, tr_state).then_wrapped(
                     [s = std::move(s), &stats, &cf_stats, tr_state, base_token, view_token, target_endpoint, updates_pushed_remote,
                             units = sem_units.split(sem_units.count()), apply_update_synchronously] (future<>&& f) mutable {
                 if (f.failed()) {
