@@ -11,6 +11,7 @@
 #include "sstables/shared_sstable.hh"
 #include "db/timeout_clock.hh"
 #include "utils/chunked_vector.hh"
+#include "schema/schema_fwd.hh"
 
 #include <seastar/core/sharded.hh>
 #include <seastar/core/metrics_registration.hh>
@@ -77,6 +78,7 @@ public:
     replica::database& get_db() noexcept { return _db; }
 
     future<> mutate_MV(
+            schema_ptr base,
             dht::token base_token,
             utils::chunked_vector<frozen_mutation_and_schema> view_updates,
             db::view::stats& stats,
