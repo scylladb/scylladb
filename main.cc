@@ -1287,7 +1287,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             supervisor::notify("starting gossiper");
             gms::gossip_config gcfg;
             gcfg.gossip_scheduling_group = dbcfg.gossip_scheduling_group;
-            gcfg.seeds = get_seeds_from_db_config(*cfg);
+            gcfg.seeds = get_seeds_from_db_config(*cfg, broadcast_addr);
             gcfg.cluster_name = cfg->cluster_name();
             gcfg.partitioner = cfg->partitioner();
             gcfg.ring_delay_ms = cfg->ring_delay_ms();

@@ -9,7 +9,6 @@
 #include "init.hh"
 #include "utils/to_string.hh"
 #include "gms/inet_address.hh"
-#include "utils/fb_utilities.hh"
 #include "seastarx.hh"
 #include "db/config.hh"
 
@@ -18,7 +17,7 @@
 
 logging::logger startlog("init");
 
-std::set<gms::inet_address> get_seeds_from_db_config(const db::config& cfg) {
+std::set<gms::inet_address> get_seeds_from_db_config(const db::config& cfg, gms::inet_address broadcast_address) {
     auto preferred = cfg.listen_interface_prefer_ipv6() ? std::make_optional(net::inet_address::family::INET6) : std::nullopt;
     auto family = cfg.enable_ipv6_dns_lookup() || preferred ? std::nullopt : std::make_optional(net::inet_address::family::INET);
     const auto listen = gms::inet_address::lookup(cfg.listen_address(), family).get0();
@@ -43,7 +42,6 @@ std::set<gms::inet_address> get_seeds_from_db_config(const db::config& cfg) {
     if (seeds.empty()) {
         seeds.emplace(gms::inet_address("127.0.0.1"));
     }
-    auto broadcast_address = utils::fb_utilities::get_broadcast_address();
     startlog.info("seeds={{{}}}, listen_address={}, broadcast_address={}",
             fmt::join(seeds, ", "), listen, broadcast_address);
     if (broadcast_address != listen && seeds.contains(listen)) {

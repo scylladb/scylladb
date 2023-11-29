@@ -35,7 +35,7 @@ extern logging::logger startlog;
 
 class bad_configuration_error : public std::exception {};
 
-std::set<gms::inet_address> get_seeds_from_db_config(const db::config& cfg);
+std::set<gms::inet_address> get_seeds_from_db_config(const db::config& cfg, gms::inet_address broadcast_address);
 
 class service_set {
 public:
