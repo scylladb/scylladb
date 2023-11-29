@@ -132,10 +132,16 @@ keyspace_and_tables parse_keyspace_and_tables(scylla_rest_client& client, const 
     return ret;
 }
 
-keyspace_and_tables parse_keyspace_and_tables(scylla_rest_client& client, const bpo::variables_map& vm) {
+keyspace_and_tables parse_keyspace_and_tables(scylla_rest_client& client, const bpo::variables_map& vm, bool keyspace_required = true) {
     keyspace_and_tables ret;
 
-    ret.keyspace = vm["keyspace"].as<sstring>();
+    if (vm.contains("keyspace")) {
+        ret.keyspace = vm["keyspace"].as<sstring>();
+    } else if (keyspace_required) {
+        throw std::invalid_argument(fmt::format("keyspace must be specified"));
+    } else {
+        return ret;
+    }
 
     const auto all_keyspaces = get_keyspaces(client);
     if (std::ranges::find(all_keyspaces, ret.keyspace) == all_keyspaces.end()) {
@@ -198,17 +204,19 @@ void compact_operation(scylla_rest_client& client, const bpo::variables_map& vm)
         throw std::invalid_argument("--user-defined flag is unsupported");
     }
 
+    std::unordered_map<sstring, sstring> params;
+    if (vm.count("flush-memtables")) {
+        params["flush_memtables"] = vm["flush-memtables"].as<bool>() ? "true" : "false";
+    }
+
     if (vm.count("compaction_arg")) {
         const auto [keyspace, tables] = parse_keyspace_and_tables(client, vm, "compaction_arg");
-        std::unordered_map<sstring, sstring> params;
         if (!tables.empty()) {
             params["cf"] = fmt::to_string(fmt::join(tables.begin(), tables.end(), ","));
         }
         client.post(format("/storage_service/keyspace_compaction/{}", keyspace), std::move(params));
     } else {
-        for (const auto& keyspace : get_keyspaces(client)) {
-            client.post(format("/storage_service/keyspace_compaction/{}", keyspace));
-        }
+        client.post("/storage_service/compact", std::move(params));
     }
 }
 
@@ -398,7 +406,11 @@ void enablegossip_operation(scylla_rest_client& client, const bpo::variables_map
 }
 
 void flush_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
-    const auto [keyspace, tables] = parse_keyspace_and_tables(client, vm);
+    const auto [keyspace, tables] = parse_keyspace_and_tables(client, vm, false);
+    if (keyspace.empty()) {
+        client.post("/storage_service/flush");
+        return;
+    }
     std::unordered_map<sstring, sstring> params;
     if (!tables.empty()) {
         params["cf"] = fmt::to_string(fmt::join(tables.begin(), tables.end(), ","));
@@ -735,6 +747,8 @@ command-line arguments, the compaction will run on these tables.
 Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/compact.html
 )",
                 {
+                    typed_option<bool>("flush-memtables", "Control flushing of tables before major compaction (true by default)"),
+
                     typed_option<>("split-output,s", "Don't create a single big file (unused)"),
                     typed_option<>("user-defined", "Submit listed SStable files for user-defined compaction (unused)"),
                     typed_option<int64_t>("start-token", "Specify a token at which the compaction range starts (unused)"),
@@ -875,8 +889,9 @@ Fore more information, see: https://opensource.docs.scylladb.com/stable/operatin
                 "flush",
                 "Flush one or more tables",
 R"(
-Specify a keyspace and one or more tables that you want to flush from the
-memtable to on disk SSTables.
+Flush memtables to on-disk SSTables in the specified keyspace and table(s).
+If no keyspace is specified, all keyspaces are flushed.
+If no table(s) are specified, all tables in the specified keyspace are flushed.
 
 Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/flush.html
 )",

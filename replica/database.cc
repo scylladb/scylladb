@@ -2508,6 +2508,25 @@ future<> database::flush_keyspace_on_all_shards(sharded<database>& sharded_db, s
     });
 }
 
+future<> database::flush_all_tables() {
+    // see above
+    co_await _commitlog->force_new_active_segment();
+    co_await get_tables_metadata().parallel_for_each_table([] (table_id, lw_shared_ptr<table> t) {
+        return t->flush();
+    });
+    _all_tables_flushed_at = db_clock::now();
+}
+
+future<db_clock::time_point> database::get_all_tables_flushed_at(sharded<database>& sharded_db) {
+    db_clock::time_point min_all_tables_flushed_at;
+    co_await sharded_db.map_reduce0([&] (const database& db) {
+        return db._all_tables_flushed_at;
+    }, db_clock::now(), [] (db_clock::time_point l, db_clock::time_point r) {
+        return std::min(l, r);
+    });
+    co_return min_all_tables_flushed_at;
+}
+
 future<> database::drop_cache_for_keyspace_on_all_shards(sharded<database>& sharded_db, std::string_view ks_name) {
     auto& ks = sharded_db.local().find_keyspace(ks_name);
     return parallel_for_each(ks.metadata()->cf_meta_data(), [&] (auto& pair) {

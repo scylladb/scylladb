@@ -6,9 +6,17 @@
 
 from rest_api_mock import expected_request
 import utils
+import pytest
 
 
-def test_all_keyspaces(nodetool):
+# `scylla nodetool compact` invokes the newly added global compact api
+def test_all_keyspaces(nodetool, scylla_only):
+    nodetool("compact", expected_requests=[
+        expected_request("POST", "/storage_service/compact")])
+
+
+# The java-based `nodetool compact` lists all keyspaces and invoke the keyspace_compaction api on each of them
+def test_all_keyspaces_jmx(nodetool, cassandra_only):
     nodetool("compact", expected_requests=[
         expected_request("GET", "/storage_service/keyspaces", multiple=expected_request.MULTIPLE,
                          response=["system", "system_schema"]),
@@ -76,3 +84,21 @@ def test_user_defined(nodetool, scylla_only):
              "me-3g8w_11cg_4317k2ppfb6d5vgp0w-big-Data.db"),
             {},
             ["error processing arguments: --user-defined flag is unsupported"])
+
+
+@pytest.mark.parametrize("flush", ("true", "false"))
+# The `--flush-memtables` option to `nodetool compact` is available only with `scylla_nodetool`
+def test_keyspace_flush_memtables_option(nodetool, scylla_only, flush):
+    params = {"flush_memtables": flush}
+    nodetool("compact", "system_schema", "--flush-memtables", flush, expected_requests=[
+            expected_request("GET", "/storage_service/keyspaces", multiple=expected_request.MULTIPLE,
+                             response=["system", "system_schema"]),
+            expected_request("POST", "/storage_service/keyspace_compaction/system_schema", params=params)])
+
+
+@pytest.mark.parametrize("flush", ("true", "false"))
+# The `--flush-memtables` option to `nodetool compact` is available only with `scylla_nodetool`
+def test_all_keyspaces_flush_memtables_option(nodetool, scylla_only, flush):
+    params = {"flush_memtables": flush}
+    nodetool("compact", "--flush-memtables", flush, expected_requests=[
+            expected_request("POST", "/storage_service/compact", params=params)])
