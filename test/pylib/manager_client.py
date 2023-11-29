@@ -16,7 +16,7 @@ import logging
 from test.pylib.log_browsing import ScyllaLogFile
 from test.pylib.rest_client import UnixRESTClient, ScyllaRESTAPIClient, ScyllaMetricsClient
 from test.pylib.util import wait_for, wait_for_cql_and_get_hosts, Host
-from test.pylib.internal_types import ServerNum, IPAddress, HostID, ServerInfo
+from test.pylib.internal_types import ServerNum, IPAddress, HostID, ServerInfo, ServerState
 from test.pylib.scylla_cluster import ReplaceConfig, ScyllaServer
 from cassandra.cluster import Session as CassandraSession  # type: ignore # pylint: disable=no-name-in-module
 from cassandra.cluster import Cluster as CassandraCluster  # type: ignore # pylint: disable=no-name-in-module
@@ -223,12 +223,14 @@ class ManagerClient():
         logger.debug("ManagerClient wiping sstables on %s, keyspace=%s, table=%s", server_id, keyspace, table)
         await self.client.put_json(f"/cluster/server/{server_id}/wipe_sstables", {"keyspace": keyspace, "table": table})
 
-    def _create_server_add_data(self, replace_cfg: Optional[ReplaceConfig] = None,
+    def _create_server_add_data(self,
+                                replace_cfg: Optional[ReplaceConfig] = None,
                                 cmdline: Optional[List[str]] = None,
                                 config: Optional[dict[str, Any]] = None,
                                 property_file: Optional[dict[str, Any]] = None,
                                 start: bool = True,
-                                expected_error: Optional[str] = None) -> dict[str, Any]:
+                                expected_error: Optional[str] = None,
+                                expected_server_state: Optional[ServerState] = None) -> dict[str, Any]:
         data: dict[str, Any] = {'start': start}
         if replace_cfg:
             data['replace_cfg'] = replace_cfg._asdict()
@@ -240,17 +242,29 @@ class ManagerClient():
             data['property_file'] = property_file
         if expected_error:
             data['expected_error'] = expected_error
+        if expected_server_state:
+            data['expected_server_state'] = expected_server_state.name
         return data
 
-    async def server_add(self, replace_cfg: Optional[ReplaceConfig] = None,
+    async def server_add(self,
+                         replace_cfg: Optional[ReplaceConfig] = None,
                          cmdline: Optional[List[str]] = None,
                          config: Optional[dict[str, Any]] = None,
                          property_file: Optional[dict[str, Any]] = None,
                          start: bool = True,
-                         expected_error: Optional[str] = None) -> ServerInfo:
+                         expected_error: Optional[str] = None,
+                         expected_server_state: Optional[ServerState] = None) -> ServerInfo:
         """Add a new server"""
         try:
-            data = self._create_server_add_data(replace_cfg, cmdline, config, property_file, start, expected_error)
+            data = self._create_server_add_data(
+                replace_cfg,
+                cmdline,
+                config,
+                property_file,
+                start,
+                expected_error,
+                expected_server_state,
+            )
 
             # If we replace, we should wait until other nodes see the node being
             # replaced as dead because the replace operation can be rejected if
@@ -278,7 +292,8 @@ class ManagerClient():
             await self.driver_connect()
         return s_info
 
-    async def servers_add(self, servers_num: int = 1,
+    async def servers_add(self,
+                          servers_num: int = 1,
                           cmdline: Optional[List[str]] = None,
                           config: Optional[dict[str, Any]] = None,
                           property_file: Optional[dict[str, Any]] = None,
@@ -398,6 +413,18 @@ class ManagerClient():
             return True if any(entry for entry in host_id_map if entry['value'] == expect_host_id) else None
 
         return await wait_for(host_is_known, deadline or (time() + 30))
+
+    async def wait_for_scylla_process_status(self,
+                                             server_id: ServerNum,
+                                             expected_status: str,
+                                             deadline: Optional[float] = None) -> None:
+        """Wait for Scylla's process status for server_id will be as expected, with timeout."""
+        async def process_status_is_as_expected() -> bool:
+            current_status = await self.client.get_json(f"/cluster/server/{server_id}/process_status")
+            if current_status == expected_status:
+                return True
+
+        await wait_for(process_status_is_as_expected, deadline or (time() + 30))
 
     async def get_host_ip(self, server_id: ServerNum) -> IPAddress:
         """Get host IP Address"""

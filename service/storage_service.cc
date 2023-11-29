@@ -90,6 +90,7 @@
 #include "service/topology_mutation.hh"
 #include "service/topology_coordinator.hh"
 #include "cql3/query_processor.hh"
+#include <csignal>
 
 #include <boost/algorithm/string/split.hpp>
 #include <boost/algorithm/string/classification.hpp>
@@ -1483,6 +1484,9 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
 
     auto advertise = gms::advertise_myself(!replacing_a_node_with_same_ip);
     co_await _gossiper.start_gossiping(new_generation, app_states, advertise);
+
+    utils::get_local_injector().inject("stop_after_starting_gossiping",
+        [] { std::raise(SIGSTOP); });
 
     if (!raft_topology_change_enabled() && should_bootstrap()) {
         // Wait for NORMAL state handlers to finish for existing nodes now, so that connection dropping
