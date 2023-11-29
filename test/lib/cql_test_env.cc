@@ -494,13 +494,18 @@ private:
             _feature_service.start(fcfg).get();
             auto stop_feature_service = defer([this] { _feature_service.stop().get(); });
 
-            _snitch.start(locator::snitch_config{}).get();
+            auto my_address = cfg_in.broadcast_address;
+
+            locator::snitch_config snitch_config;
+            snitch_config.listen_address = my_address;
+            snitch_config.broadcast_address = my_address;
+            _snitch.start(snitch_config).get();
             auto stop_snitch = defer([this] { _snitch.stop().get(); });
             _snitch.invoke_on_all(&locator::snitch_ptr::start).get();
 
             locator::token_metadata::config tm_cfg;
-            tm_cfg.topo_cfg.this_endpoint = utils::fb_utilities::get_broadcast_address();
-            tm_cfg.topo_cfg.this_cql_address = tm_cfg.topo_cfg.this_endpoint;
+            tm_cfg.topo_cfg.this_endpoint = my_address;
+            tm_cfg.topo_cfg.this_cql_address = my_address;
             tm_cfg.topo_cfg.local_dc_rack = { _snitch.local()->get_datacenter(), _snitch.local()->get_rack() };
             _token_metadata.start([] () noexcept { return db::schema_tables::hold_merge_lock(); }, tm_cfg).get();
             auto stop_token_metadata = defer([this] { _token_metadata.stop().get(); });
@@ -634,10 +639,10 @@ private:
                 host_id = linfo.host_id;
                 _sys_ks.local().save_local_info(std::move(linfo), _snitch.local()->get_location()).get();
             }
-            locator::shared_token_metadata::mutate_on_all_shards(_token_metadata, [hostid = host_id] (locator::token_metadata& tm) {
+            locator::shared_token_metadata::mutate_on_all_shards(_token_metadata, [hostid = host_id, &cfg_in] (locator::token_metadata& tm) {
                 auto& topo = tm.get_topology();
                 topo.set_host_id_cfg(hostid);
-                topo.add_or_update_endpoint(utils::fb_utilities::get_broadcast_address(),
+                topo.add_or_update_endpoint(cfg_in.broadcast_address,
                                             hostid,
                                             std::nullopt,
                                             locator::node::state::normal,

@@ -94,6 +94,7 @@ public:
     bool need_remote_proxy = false;
     std::optional<uint64_t> initial_tablets; // When engaged, the default keyspace will use tablets.
     locator::host_id host_id;
+    gms::inet_address broadcast_address = gms::inet_address("localhost");
 
     cql_test_config();
     cql_test_config(const cql_test_config&);
