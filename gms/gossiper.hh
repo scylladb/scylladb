@@ -144,7 +144,7 @@ public:
     }
 
     inet_address get_broadcast_address() const noexcept {
-        return utils::fb_utilities::get_broadcast_address();
+        return get_token_metadata_ptr()->get_topology().my_address();
     }
     const std::set<inet_address>& get_seeds() const noexcept;
 
