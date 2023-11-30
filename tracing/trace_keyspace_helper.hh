@@ -73,6 +73,9 @@ public:
     virtual std::unique_ptr<backend_session_state_base> allocate_session_state() const override;
 
 private:
+    // Valid only after start() sets _qp_anchor
+    gms::inet_address my_address() const noexcept;
+
     /**
      * Write records of a single tracing session
      *
@@ -115,7 +118,7 @@ private:
      *
      * @return the relevant cql3::query_options object with the mutation data
      */
-    static cql3::query_options make_session_mutation_data(const one_session_records& all_records_handle);
+    static cql3::query_options make_session_mutation_data(gms::inet_address my_address, const one_session_records& all_records_handle);
 
     /**
      * Create a mutation data for a new session_idx record
@@ -124,7 +127,7 @@ private:
      *
      * @return the relevant cql3::query_options object with the mutation data
      */
-    static cql3::query_options make_session_time_idx_mutation_data(const one_session_records& all_records_handle);
+    static cql3::query_options make_session_time_idx_mutation_data(gms::inet_address my_address, const one_session_records& all_records_handle);
 
     /**
      * Create mutation for a new slow_query_log record
@@ -134,7 +137,7 @@ private:
      *
      * @return the relevant mutation
      */
-    static cql3::query_options make_slow_query_mutation_data(const one_session_records& all_records_handle, const utils::UUID& start_time_id);
+    static cql3::query_options make_slow_query_mutation_data(gms::inet_address my_address, const one_session_records& all_records_handle, const utils::UUID& start_time_id);
 
     /**
      * Create mutation for a new slow_query_log_time_idx record
@@ -144,7 +147,7 @@ private:
      *
      * @return the relevant mutation
      */
-    static cql3::query_options make_slow_query_time_idx_mutation_data(const one_session_records& all_records_handle, const utils::UUID& start_time_id);
+    static cql3::query_options make_slow_query_time_idx_mutation_data(gms::inet_address my_address, const one_session_records& all_records_handle, const utils::UUID& start_time_id);
 
     /**
      * Create a mutation data for a new trace point record
@@ -156,7 +159,7 @@ private:
      *
      * @return a vector with the mutation data
      */
-    std::vector<cql3::raw_value> make_event_mutation_data(one_session_records& session_records, const event_record& record);
+    std::vector<cql3::raw_value> make_event_mutation_data(gms::inet_address my_address, one_session_records& session_records, const event_record& record);
 
     /**
      * Converts a @param elapsed to an int32_t value of microseconds.
