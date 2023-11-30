@@ -669,7 +669,7 @@ void flush_rows(schema_ptr s, std::list<repair_row>& rows, lw_shared_ptr<repair_
     bool do_small_table_optimization = erm && small_table_optimization;
     auto* strat = do_small_table_optimization ? &erm->get_replication_strategy() : nullptr;
     auto* tm = do_small_table_optimization ? &erm->get_token_metadata() : nullptr;
-    auto myip = do_small_table_optimization ? utils::fb_utilities::get_broadcast_address() : gms::inet_address();
+    auto myip = do_small_table_optimization ? erm->get_topology().my_address() : gms::inet_address();
     for (auto& r : rows) {
         thread::maybe_yield();
         if (!r.dirty_on_master()) {
@@ -843,7 +843,7 @@ public:
             , _max_row_buf_size(max_row_buf_size)
             , _seed(seed)
             , _repair_master(master)
-            , _myip(utils::fb_utilities::get_broadcast_address())
+            , _myip(_db.local().get_token_metadata().get_topology().my_address())
             , _repair_meta_id(repair_meta_id)
             , _reason(reason)
             , _master_node_shard_config(std::move(master_node_shard_config))
@@ -872,7 +872,7 @@ public:
             } else {
                 add_to_repair_meta_for_followers(*this);
             }
-            _all_node_states.push_back(repair_node_state(utils::fb_utilities::get_broadcast_address()));
+            _all_node_states.push_back(repair_node_state(_myip));
             for (auto& node : all_live_peer_nodes) {
                 _all_node_states.push_back(repair_node_state(node));
             }
@@ -1576,7 +1576,7 @@ public:
             uint64_t seed, shard_config master_node_shard_config, table_schema_version schema_version, streaming::stream_reason reason,
             gc_clock::time_point compaction_time, abort_source& as) {
         rlogger.debug(">>> Started Row Level Repair (Follower): local={}, peers={}, repair_meta_id={}, keyspace={}, cf={}, schema_version={}, range={}, seed={}, max_row_buf_siz={}",
-            utils::fb_utilities::get_broadcast_address(), from, repair_meta_id, ks_name, cf_name, schema_version, range, seed, max_row_buf_size);
+            repair.get_db().local().get_token_metadata().get_topology().my_address(), from, repair_meta_id, ks_name, cf_name, schema_version, range, seed, max_row_buf_size);
         return repair.insert_repair_meta(from, src_cpu_id, repair_meta_id, std::move(range), algo, max_row_buf_size, seed, std::move(master_node_shard_config), std::move(schema_version), reason, compaction_time, as).then([] {
             return repair_row_level_start_response{repair_row_level_start_status::ok};
         }).handle_exception_type([] (replica::no_such_column_family&) {
@@ -1598,7 +1598,7 @@ public:
     static future<>
     repair_row_level_stop_handler(repair_service& rs, gms::inet_address from, uint32_t repair_meta_id, sstring ks_name, sstring cf_name, dht::token_range range) {
         rlogger.debug("<<< Finished Row Level Repair (Follower): local={}, peers={}, repair_meta_id={}, keyspace={}, cf={}, range={}",
-            utils::fb_utilities::get_broadcast_address(), from, repair_meta_id, ks_name, cf_name, range);
+            rs.get_db().local().get_token_metadata().get_topology().my_address(), from, repair_meta_id, ks_name, cf_name, range);
         auto rm = rs.get_repair_meta(from, repair_meta_id);
         rm->set_repair_state_for_local_node(repair_state::row_level_stop_started);
         return rs.remove_repair_meta(from, repair_meta_id, std::move(ks_name), std::move(cf_name), std::move(range)).then([rm] {
@@ -2392,7 +2392,7 @@ future<> repair_service::init_ms_handlers() {
                 range, algo, max_row_buf_size, seed, remote_shard, remote_shard_count, remote_ignore_msb, schema_version, reason, compaction_time, this] (repair_service& local_repair) mutable {
             if (!local_repair._sys_dist_ks.local_is_initialized() || !local_repair._view_update_generator.local_is_initialized()) {
                 return make_exception_future<repair_row_level_start_response>(std::runtime_error(format("Node {} is not fully initialized for repair, try again later",
-                        utils::fb_utilities::get_broadcast_address())));
+                        local_repair.get_db().local().get_token_metadata().get_topology().my_address())));
             }
             streaming::stream_reason r = reason ? *reason : streaming::stream_reason::repair;
             const gc_clock::time_point ct = compaction_time ? *compaction_time : gc_clock::now();
@@ -2561,9 +2561,9 @@ private:
     };
 
     inet_address_vector_replica_set sort_peer_nodes(const std::vector<gms::inet_address>& nodes) {
-        auto myip = utils::fb_utilities::get_broadcast_address();
         inet_address_vector_replica_set sorted_nodes(nodes.begin(), nodes.end());
-        _shard_task.db.local().get_token_metadata().get_topology().sort_by_proximity(myip, sorted_nodes);
+        auto& topology = _shard_task.db.local().get_token_metadata().get_topology();
+        topology.sort_by_proximity(topology.my_address(), sorted_nodes);
         return sorted_nodes;
     }
 
@@ -2833,11 +2833,12 @@ private:
         if (_shard_task.reason() != streaming::stream_reason::repair) {
             co_return;
         }
+        auto my_address = get_erm()->get_topology().my_address();
         // Update repair_history table only if all replicas have been repaired
         size_t repaired_replicas = _all_live_peer_nodes.size() + 1;
         if (_shard_task.total_rf != repaired_replicas){
             rlogger.debug("repair[{}]: Skipped to update system.repair_history total_rf={}, repaired_replicas={}, local={}, peers={}",
-                    _shard_task.global_repair_id.uuid(), _shard_task.total_rf, repaired_replicas, utils::fb_utilities::get_broadcast_address(), _all_live_peer_nodes);
+                    _shard_task.global_repair_id.uuid(), _shard_task.total_rf, repaired_replicas, my_address, _all_live_peer_nodes);
             co_return;
         }
         // Update repair_history table only if both hints and batchlog have been flushed.
@@ -2852,7 +2853,7 @@ private:
         auto repair_time = repair_time_opt.value();
         repair_update_system_table_request req{_shard_task.global_repair_id.uuid(), _table_id, _shard_task.get_keyspace(), _cf_name, _range, repair_time};
         auto all_nodes = _all_live_peer_nodes;
-        all_nodes.push_back(utils::fb_utilities::get_broadcast_address());
+        all_nodes.push_back(my_address);
         co_await coroutine::parallel_for_each(all_nodes, [this, req] (gms::inet_address node) -> future<> {
             try {
                 auto& ms = _shard_task.messaging.local();
