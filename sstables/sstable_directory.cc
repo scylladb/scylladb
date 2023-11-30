@@ -545,8 +545,8 @@ bool sstable_directory::compare_sstable_storage_prefix(const sstring& prefix_a, 
     return size_a == size_b && sstring::traits_type::compare(prefix_a.begin(), prefix_b.begin(), size_a) == 0;
 }
 
-future<> sstable_directory::delete_with_pending_deletion_log(std::vector<shared_sstable> ssts) {
-    return seastar::async([ssts = std::move(ssts)] {
+future<std::pair<sstring, sstring>> sstable_directory::create_pending_deletion_log(const std::vector<shared_sstable>& ssts) {
+    return seastar::async([&ssts] {
         shared_sstable first = nullptr;
         min_max_tracker<generation_type> gen_tracker;
 
@@ -601,11 +601,18 @@ future<> sstable_directory::delete_with_pending_deletion_log(std::vector<shared_
             sstlog.warn("Error while writing {}: {}. Ignoring.", pending_delete_log, std::current_exception());
         }
 
+        return std::make_pair<sstring, sstring>(std::move(pending_delete_log), first->_storage->prefix());
+    });
+}
+
+future<> sstable_directory::delete_with_pending_deletion_log(std::vector<shared_sstable> ssts) {
+    return seastar::async([ssts = std::move(ssts)] {
+        auto [ pending_delete_log, sst_directory] = create_pending_deletion_log(ssts).get0();
+
         parallel_for_each(ssts, [] (shared_sstable sst) {
             return sst->unlink(sstables::storage::sync_dir::no);
         }).get();
-
-        sync_directory(first->_storage->prefix()).get();
+        sync_directory(sst_directory).get();
 
         // Once all sstables are deleted, the log file can be removed.
         // Note: the log file will be removed also if unlink failed to remove
