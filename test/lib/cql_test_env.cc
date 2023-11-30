@@ -867,6 +867,10 @@ private:
 
             _ss.local().set_group0(group0_service, raft_topology_change_enabled);
 
+            auto stop_group0_usage_in_storage_service = defer([this] {
+                _ss.local().wait_for_group0_stop().get();
+            });
+
             try {
                 _ss.local().join_cluster(_sys_dist_ks, _proxy).get();
             } catch (std::exception& e) {

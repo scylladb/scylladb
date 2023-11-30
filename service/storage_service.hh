@@ -331,6 +331,8 @@ public:
 
     future<> stop_transport();
 
+    future<> wait_for_group0_stop();
+
 private:
     bool should_bootstrap();
     bool is_replacing();
@@ -785,6 +787,9 @@ private:
     shared_promise<> _join_node_group0_started;
     shared_promise<> _join_node_response_done;
     semaphore _join_node_response_handler_mutex{1};
+
+    // We need to be able to abort all group0 operation during shutdown, so we need special abort source for that
+    abort_source _group0_as;
 
     friend class join_node_rpc_handshaker;
 };
