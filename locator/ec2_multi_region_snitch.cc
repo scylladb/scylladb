@@ -25,17 +25,17 @@ ec2_multi_region_snitch::ec2_multi_region_snitch(const snitch_config& cfg)
 future<> ec2_multi_region_snitch::start() {
     _state = snitch_state::initializing;
 
-    return seastar::async([this] {
-        ec2_snitch::load_config(true).get();
+    co_await ec2_snitch::load_config(true);
+    // FIXME: indentation
         if (this_shard_id() == io_cpu_id()) {
             inet_address local_public_address;
 
-            auto token = aws_api_call(AWS_QUERY_SERVER_ADDR, AWS_QUERY_SERVER_PORT, TOKEN_REQ_ENDPOINT, std::nullopt).get0();
+            auto token = co_await aws_api_call(AWS_QUERY_SERVER_ADDR, AWS_QUERY_SERVER_PORT, TOKEN_REQ_ENDPOINT, std::nullopt);
 
             try {
                 auto broadcast = utils::fb_utilities::get_broadcast_address();
                 if (broadcast.addr().is_ipv6()) {
-                    auto macs = aws_api_call(AWS_QUERY_SERVER_ADDR, AWS_QUERY_SERVER_PORT, PRIVATE_MAC_QUERY, token).get0();
+                    auto macs = co_await aws_api_call(AWS_QUERY_SERVER_ADDR, AWS_QUERY_SERVER_PORT, PRIVATE_MAC_QUERY, token);
                     // we should just get a single line, ending in '/'. If there are more than one mac, we should
                     // maybe try to loop the addresses and exclude local/link-local etc, but these addresses typically 
                     // are already filtered by aws, so probably does not help. For now, just warn and pick first address.
@@ -44,11 +44,11 @@ future<> ec2_multi_region_snitch::start() {
                     if (i != std::string::npos && ++i != macs.size()) {
                         logger().warn("Ec2MultiRegionSnitch (ipv6): more than one MAC address listed ({}). Will use first.", macs);
                     }
-                    auto ipv6 = aws_api_call(AWS_QUERY_SERVER_ADDR, AWS_QUERY_SERVER_PORT, format(PUBLIC_IPV6_QUERY_REQ, mac), token).get0();
+                    auto ipv6 = co_await aws_api_call(AWS_QUERY_SERVER_ADDR, AWS_QUERY_SERVER_PORT, format(PUBLIC_IPV6_QUERY_REQ, mac), token);
                     local_public_address = inet_address(ipv6);
                     _local_private_address = ipv6;
                 } else {
-                    auto pub_addr = aws_api_call(AWS_QUERY_SERVER_ADDR, AWS_QUERY_SERVER_PORT, PUBLIC_IP_QUERY_REQ, token).get0();
+                    auto pub_addr = co_await aws_api_call(AWS_QUERY_SERVER_ADDR, AWS_QUERY_SERVER_PORT, PUBLIC_IP_QUERY_REQ, token);
                     local_public_address = inet_address(pub_addr);
                 }
             } catch (...) {
@@ -68,7 +68,7 @@ future<> ec2_multi_region_snitch::start() {
             }
 
             if (!local_public_address.addr().is_ipv6()) {
-                sstring priv_addr = aws_api_call(AWS_QUERY_SERVER_ADDR, AWS_QUERY_SERVER_PORT, PRIVATE_IP_QUERY_REQ, token).get0();
+                sstring priv_addr = co_await aws_api_call(AWS_QUERY_SERVER_ADDR, AWS_QUERY_SERVER_PORT, PRIVATE_IP_QUERY_REQ, token);
                 _local_private_address = priv_addr;
             }
 
@@ -78,18 +78,14 @@ future<> ec2_multi_region_snitch::start() {
             // set on the shard0 so that it may be used when Gossiper is
             // going to invoke gossiper_starting() method.
             //
-            container().invoke_on(0, [this] (snitch_ptr& local_s) {
+            co_await container().invoke_on(0, [this] (snitch_ptr& local_s) {
                 if (this_shard_id() != io_cpu_id()) {
                     local_s->set_local_private_addr(_local_private_address);
                 }
-            }).get();
-
-            set_snitch_ready();
-            return;
+            });
         }
 
         set_snitch_ready();
-    });
 }
 
 void ec2_multi_region_snitch::set_local_private_addr(const sstring& addr_str) {
