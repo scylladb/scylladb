@@ -5200,7 +5200,8 @@ SEASTAR_TEST_CASE(cleanup_during_offstrategy_incremental_compaction_test) {
                     sstables_closed++;
                 }));
                 observers.push_back(sst->add_on_delete_handler([&] (sstable& sst) mutable {
-                    auto missing = !file_exists(sst.get_filename()).get();
+                    // ATTN -- the _on_delete callback is not necessarily running in thread
+                    auto missing = (::access(sst.get_filename().c_str(), F_OK) != 0);
                     testlog.info("Deleting sstable of generation {}: missing={}", sst.generation(), missing);
                     sstables_missing_on_delete += missing;
                 }));
