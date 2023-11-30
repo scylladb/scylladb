@@ -399,6 +399,10 @@ future<> filesystem_storage::change_state(const sstable& sst, sstable_state stat
     co_await move(sst, path.native(), std::move(new_generation), delay_commit);
 }
 
+static inline fs::path parent_path(const sstring& fname) {
+    return fs::canonical(fs::path(fname)).parent_path();
+}
+
 future<> filesystem_storage::wipe(const sstable& sst, sync_dir sync) noexcept {
     // We must be able to generate toc_filename()
     // in order to delete the sstable.
@@ -409,7 +413,31 @@ future<> filesystem_storage::wipe(const sstable& sst, sync_dir sync) noexcept {
     }();
 
     try {
-        co_await remove_by_toc_name(name, sync);
+        auto new_toc_name = co_await make_toc_temporary(name, sync);
+        if (!new_toc_name.empty()) {
+            auto dir_name = parent_path(new_toc_name);
+
+            co_await coroutine::parallel_for_each(sst.all_components(), [&sst, &dir_name] (auto component) -> future<> {
+                if (component.first == component_type::TOC) {
+                    // already renamed
+                    co_return;
+                }
+
+                auto fname = sstable::filename(dir_name.native(), sst._schema->ks_name(), sst._schema->cf_name(), sst._version, sst._generation, sst._format, component.second);
+                try {
+                    co_await sst.sstable_write_io_check(remove_file, fname);
+                } catch (...) {
+                    if (!is_system_error_errno(ENOENT)) {
+                        throw;
+                    }
+                    sstlog.debug("Forgiving ENOENT when deleting file {}", fname);
+                }
+            });
+            if (sync) {
+                co_await sst.sstable_write_io_check(sync_directory, dir_name.native());
+            }
+            co_await sst.sstable_write_io_check(remove_file, new_toc_name);
+        }
     } catch (...) {
         // Log and ignore the failure since there is nothing much we can do about it at this point.
         // a. Compaction will retry deleting the sstable in the next pass, and
