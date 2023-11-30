@@ -77,6 +77,9 @@ private:
     class raw_collection;
     class raw_ut;
     class raw_tuple;
+    friend std::string_view format_as(const cql3_type& t) {
+        return t.to_string();
+    }
     friend std::ostream& operator<<(std::ostream& os, const cql3_type& t) {
         return os << t.to_string();
     }
