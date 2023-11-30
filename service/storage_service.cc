@@ -1385,6 +1385,8 @@ class topology_coordinator {
                 }
             } catch (raft::request_aborted&) {
                 slogger.debug("raft topology: CDC generation publisher fiber aborted");
+            } catch (seastar::abort_requested_exception) {
+                slogger.debug("raft topology: CDC generation publisher fiber aborted");
             } catch (group0_concurrent_modification&) {
             } catch (term_changed_error&) {
                 slogger.debug("raft topology: CDC generation publisher fiber notices term change {} -> {}", _term, _raft.get_current_term());
@@ -2639,6 +2641,8 @@ future<> topology_coordinator::run() {
                 slogger.trace("raft topology: topology coordinator fiber got an event");
             }
         } catch (raft::request_aborted&) {
+            slogger.debug("raft topology: topology change coordinator fiber aborted");
+        } catch (seastar::abort_requested_exception&) {
             slogger.debug("raft topology: topology change coordinator fiber aborted");
         } catch (raft::commit_status_unknown&) {
             slogger.warn("raft topology: topology change coordinator fiber got commit_status_unknown");
