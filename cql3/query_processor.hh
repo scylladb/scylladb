@@ -160,6 +160,10 @@ public:
         return _cql_config;
     }
 
+    const service::storage_proxy& proxy() const noexcept {
+        return _proxy;
+    }
+
     service::storage_proxy& proxy() {
         return _proxy;
     }
