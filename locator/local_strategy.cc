@@ -9,7 +9,6 @@
 #include <algorithm>
 #include "local_strategy.hh"
 #include "utils/class_registrator.hh"
-#include "utils/fb_utilities.hh"
 
 
 namespace locator {
@@ -20,7 +19,7 @@ local_strategy::local_strategy(const replication_strategy_config_options& config
 }
 
 future<endpoint_set> local_strategy::calculate_natural_endpoints(const token& t, const token_metadata& tm) const {
-    return make_ready_future<endpoint_set>(endpoint_set({utils::fb_utilities::get_broadcast_address()}));
+    return make_ready_future<endpoint_set>(endpoint_set({tm.get_topology().my_address()}));
 }
 
 void local_strategy::validate_options(const gms::feature_service&) const {

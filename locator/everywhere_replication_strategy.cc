@@ -11,7 +11,6 @@
 
 #include "locator/everywhere_replication_strategy.hh"
 #include "utils/class_registrator.hh"
-#include "utils/fb_utilities.hh"
 #include "locator/token_metadata.hh"
 
 namespace locator {
@@ -23,7 +22,7 @@ everywhere_replication_strategy::everywhere_replication_strategy(const replicati
 
 future<endpoint_set> everywhere_replication_strategy::calculate_natural_endpoints(const token& search_token, const token_metadata& tm) const {
     if (tm.sorted_tokens().empty()) {
-        endpoint_set result{inet_address_vector_replica_set({utils::fb_utilities::get_broadcast_address()})};
+        endpoint_set result{inet_address_vector_replica_set({tm.get_topology().my_address()})};
         return make_ready_future<endpoint_set>(std::move(result));
     }
     const auto& all_endpoints = tm.get_all_endpoints();
