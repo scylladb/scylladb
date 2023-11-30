@@ -82,7 +82,7 @@ SEASTAR_TEST_CASE(test_group0_cmd_merge) {
             .history_append{db::system_keyspace::make_group0_history_state_id_mutation(
                             id, gc_clock::duration{0}, "test")},
             .new_state_id = id,
-            .creator_addr{utils::fb_utilities::get_broadcast_address()},
+            .creator_addr{env.db().local().get_token_metadata().get_topology().my_address()},
             .creator_id{group0.id()}
         };
         std::vector<canonical_mutation> cms;

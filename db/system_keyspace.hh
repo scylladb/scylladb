@@ -533,6 +533,10 @@ public:
     friend future<column_mapping> db::schema_tables::get_column_mapping(db::system_keyspace& sys_ks, ::table_id table_id, table_schema_version version);
     friend future<bool> db::schema_tables::column_mapping_exists(db::system_keyspace& sys_ks, table_id table_id, table_schema_version version);
     friend future<> db::schema_tables::drop_column_mapping(db::system_keyspace& sys_ks, table_id table_id, table_schema_version version);
+
+    const replica::database& local_db() const noexcept {
+        return _db;
+    }
 }; // class system_keyspace
 
 } // namespace db
