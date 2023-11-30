@@ -25,7 +25,6 @@
 #include "gms/application_state.hh"
 #include <seastar/core/semaphore.hh>
 #include <seastar/core/gate.hh>
-#include "utils/fb_utilities.hh"
 #include "replica/database_fwd.hh"
 #include "streaming/stream_reason.hh"
 #include <seastar/core/distributed.hh>
@@ -264,9 +263,13 @@ public:
     }
 
 private:
-    inet_address get_broadcast_address() const {
-        return utils::fb_utilities::get_broadcast_address();
+    inet_address get_broadcast_address() const noexcept {
+        return get_token_metadata_ptr()->get_topology().my_address();
     }
+    bool is_me(inet_address addr) const noexcept {
+        return get_token_metadata_ptr()->get_topology().is_me(addr);
+    }
+
     /* This abstraction maintains the token/endpoint metadata information */
     shared_token_metadata& _shared_token_metadata;
     locator::effective_replication_map_factory& _erm_factory;
