@@ -132,9 +132,16 @@ class TimeUuid:
     def lsb(self) -> int:
         return int.from_bytes(self.uuid.bytes[8:], byteorder='big')
 
+    # the duration between 00:00 15 Oct 1582 and UNIX epoch
+    # see also utils/UUID_gen.hh
+    UNIX_EPOCH_SINCE_GREGORIAN_DAY0 = 122192928000000000
+
     @property
     def timestamp(self) -> (datetime.datetime, int):
-        seconds, decimicro_seconds = divmod(self.uuid.time, DECIMICRO_RATIO)
+        # UUID v1 uses a timestamp epoch derived from Gregorian calendar, so we
+        # need to translate the timetamp to the UNIX time
+        unix_time = self.uuid.time - self.UNIX_EPOCH_SINCE_GREGORIAN_DAY0
+        seconds, decimicro_seconds = divmod(unix_time, DECIMICRO_RATIO)
         return datetime.datetime.fromtimestamp(seconds), decimicro_seconds
 
     def print_field(self, field: str, print_in_hex: bool) -> None:
@@ -177,6 +184,10 @@ def test_dencode_base36() -> None:
     assert timeuuid.msb == expected_msb
     assert timeuuid.lsb == expected_lsb
     assert timeuuid.encode_with_base36() == encoded_uuid
+
+    timestamp, decimicro_seconds = timeuuid.timestamp
+    assert timestamp == datetime.datetime(2022, 5, 23, 18, 37, 52)
+    assert decimicro_seconds == 7040000
 
 
 def main():
