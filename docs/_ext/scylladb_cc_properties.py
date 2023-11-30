@@ -76,7 +76,8 @@ class DBConfigParser:
             "value_status_count": {
                 'Used': 0,
                 'Unused': 0,
-                'Invalid': 0
+                'Invalid': 0,
+                'Deprecated': 0,
             },
         }
 
