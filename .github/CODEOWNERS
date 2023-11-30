@@ -19,13 +19,13 @@ db/batch* @elcallio
 service/storage_proxy* @gleb-cloudius
 
 # COMPACTION
-compaction/* @raphaelsc @nyh
+compaction/* @raphaelsc
 
 # CQL TRANSPORT LAYER
 transport/*
 
 # CQL QUERY LANGUAGE
-cql3/* @tgrabiec @cvybhu @nyh
+cql3/* @tgrabiec
 
 # COUNTERS
 counters* @jul-stas
@@ -45,44 +45,44 @@ dist/docker/*
 utils/logalloc* @tgrabiec
 
 # MATERIALIZED VIEWS
-db/view/* @nyh @cvybhu @piodul
-cql3/statements/*view* @nyh @cvybhu @piodul
-test/boost/view_* @nyh @cvybhu @piodul
+db/view/* @nyh @piodul
+cql3/statements/*view* @nyh @piodul
+test/boost/view_* @nyh @piodul
 
 # PACKAGING
 dist/* @syuu1228
 
 # REPAIR
-repair/* @tgrabiec @asias @nyh
+repair/* @tgrabiec @asias
 
 # SCHEMA MANAGEMENT
-db/schema_tables* @tgrabiec @nyh
-db/legacy_schema_migrator* @tgrabiec @nyh
-service/migration* @tgrabiec @nyh
-schema* @tgrabiec @nyh
+db/schema_tables* @tgrabiec
+db/legacy_schema_migrator* @tgrabiec
+service/migration* @tgrabiec
+schema* @tgrabiec
 
 # SECONDARY INDEXES
-index/* @nyh @cvybhu @piodul
-cql3/statements/*index* @nyh @cvybhu @piodul
-test/boost/*index* @nyh @cvybhu @piodul
+index/* @nyh @piodul
+cql3/statements/*index* @nyh @piodul
+test/boost/*index* @nyh @piodul
 
 # SSTABLES
-sstables/* @tgrabiec @raphaelsc @nyh
+sstables/* @tgrabiec @raphaelsc
 
 # STREAMING
 streaming/* @tgrabiec @asias
 service/storage_service.* @tgrabiec @asias
 
 # ALTERNATOR
-alternator/* @nyh @havaker @nuivall
-test/alternator/* @nyh @havaker @nuivall
+alternator/* @havaker @nuivall
+test/alternator/* @havaker @nuivall
 
 # HINTED HANDOFF
 db/hints/* @piodul @vladzcloudius @eliransin
 
 # REDIS
-redis/* @nyh @syuu1228
-test/redis/* @nyh @syuu1228
+redis/* @syuu1228
+test/redis/* @syuu1228
 
 # READERS
 reader_* @denesb
