@@ -639,7 +639,8 @@ future<> sstable_directory::filesystem_components_lister::replay_pending_delete_
         boost::split(basenames, all, boost::is_any_of("\n"), boost::token_compress_on);
         auto tocs = boost::copy_range<std::vector<sstring>>(basenames | boost::adaptors::filtered([] (auto&& basename) { return !basename.empty(); }));
         co_await parallel_for_each(tocs, [&sstdir] (const sstring& name) {
-            return remove_by_toc_name(sstdir + "/" + name);
+            // Only move TOC to TOC.tmp, the rest will be finished by regular process
+            return make_toc_temporary(sstdir + "/" + name).discard_result();
         });
         sstlog.debug("Replayed {}, removing", pending_delete_log);
         co_await remove_file(pending_delete_log.native());
