@@ -1031,6 +1031,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             auto get_tm_cfg = sharded_parameter([&] {
                 return tasks::task_manager::config {
                     .task_ttl = cfg->task_ttl_seconds,
+                    .broadcast_address = broadcast_addr
                 };
             });
             task_manager.start(std::move(get_tm_cfg), std::ref(stop_signal.as_sharded_abort_source())).get();
@@ -1388,6 +1389,17 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             api::set_server_messaging_service(ctx, messaging).get();
             auto stop_messaging_api = defer_verbose_shutdown("messaging service API", [&ctx] {
                 api::unset_server_messaging_service(ctx).get();
+            });
+
+            // Task manager's messaging handlers need to be set like this because of dependency chain:
+            // messaging -(needs)-> sys_ks -> db -> cm -> task_manager.
+            task_manager.invoke_on_all([&] (auto& tm) {
+                tm.init_ms_handlers(messaging.local());
+            }).get();
+            auto uninit_tm_ms_handlers = defer([&task_manager] () {
+                task_manager.invoke_on_all([] (auto& tm) {
+                    return tm.uninit_ms_handlers();
+                }).get();
             });
 
             supervisor::notify("starting gossiper");

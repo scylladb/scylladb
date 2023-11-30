@@ -6,19 +6,30 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include <boost/range/adaptors.hpp>
+
 #include <seastar/core/on_internal_error.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/gate.hh>
+#include <seastar/core/when_all.hh>
+#include <seastar/rpc/rpc_types.hh>
 #include <seastar/util/defer.hh>
 
 #include <boost/range/adaptors.hpp>
 
 #include "db/timeout_clock.hh"
+#include "message/messaging_service.hh"
 #include "task_manager.hh"
 #include "utils/error_injection.hh"
 
 using namespace std::chrono_literals;
+
+template <typename T>
+std::vector<T> concat(std::vector<T> a, std::vector<T>&& b) {
+    std::move(b.begin(), b.end(), std::back_inserter(a));
+    return a;
+}
 
 namespace tasks {
 
@@ -379,7 +390,28 @@ task_manager::virtual_task::impl::impl(module_ptr module) noexcept
 {}
 
 future<std::vector<task_identity>> task_manager::virtual_task::impl::get_children(module_ptr module, task_id parent_id) {
-    return make_ready_future<std::vector<task_identity>>();
+    auto ms = module->get_task_manager()._messaging;
+    if (!ms) {
+        auto ids = co_await module->get_task_manager().get_virtual_task_children(parent_id);
+        co_return boost::copy_range<std::vector<task_identity>>(ids | boost::adaptors::transformed([&tm = module->get_task_manager()] (auto id) {
+            return task_identity{
+                .node = tm.get_broadcast_address(),
+                .task_id = id
+            };
+        }));
+    }
+
+    auto nodes = module->get_nodes();
+    co_return co_await map_reduce(nodes, [ms, parent_id] (auto addr) -> future<std::vector<task_identity>> {
+        return ms->send_tasks_get_children(netw::msg_addr{addr}, parent_id).then([addr] (auto resp) {
+            return boost::copy_range<std::vector<task_identity>>(resp | boost::adaptors::transformed([addr] (auto id) {
+                return task_identity{
+                    .node = addr,
+                    .task_id = id
+                };
+            }));
+        });
+    }, std::vector<task_identity>{}, concat<task_identity>);
 }
 
 task_manager::module_ptr task_manager::virtual_task::impl::get_module() const noexcept {
@@ -482,6 +514,10 @@ const task_manager::tasks_collection& task_manager::module::get_tasks_collection
     return _tasks;
 }
 
+std::set<gms::inet_address> task_manager::module::get_nodes() const noexcept {
+    return {_tm.get_broadcast_address()};
+}
+
 void task_manager::module::register_task(task_ptr task) {
     get_local_tasks()[task->id()] = task;
     try {
@@ -567,6 +603,10 @@ task_manager::task_manager() noexcept
     , _task_ttl(0)
 {}
 
+gms::inet_address task_manager::get_broadcast_address() const noexcept {
+    return _cfg.broadcast_address;
+}
+
 task_manager::modules& task_manager::get_modules() noexcept {
     return _modules;
 }
@@ -597,6 +637,15 @@ task_manager::tasks_collection& task_manager::get_tasks_collection() noexcept {
 
 const task_manager::tasks_collection& task_manager::get_tasks_collection() const noexcept {
     return _tasks;
+}
+
+future<std::vector<task_id>> task_manager::get_virtual_task_children(task_id parent_id) {
+    return container().map_reduce0([parent_id] (task_manager& tm) {
+        return boost::copy_range<std::vector<task_id>>(tm.get_local_tasks() |
+            boost::adaptors::map_values |
+            boost::adaptors::filtered([parent_id] (const auto& task) { return task->get_parent_id() == parent_id; }) |
+            boost::adaptors::transformed([] (const auto& task) { return task->id(); }));
+    }, std::vector<task_id>{}, concat<task_id>);
 }
 
 task_manager::module_ptr task_manager::make_module(std::string name) {
@@ -665,6 +714,21 @@ void task_manager::unregister_task(task_id id) noexcept {
 
 void task_manager::unregister_virtual_task(task_group group) noexcept {
     _tasks._virtual_tasks.erase(group);
+}
+
+void task_manager::init_ms_handlers(netw::messaging_service& ms) {
+    _messaging = &ms;
+
+    ms.register_tasks_get_children([this] (const rpc::client_info& cinfo, tasks::get_children_request req) -> future<tasks::get_children_response> {
+        return get_virtual_task_children(task_id{req.id});
+    });
+}
+
+future<> task_manager::uninit_ms_handlers() {
+    if (auto* ms = std::exchange(_messaging, nullptr)) {
+        return ms->unregister_tasks_get_children().discard_result();
+    }
+    return make_ready_future();
 }
 
 }

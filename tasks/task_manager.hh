@@ -29,6 +29,10 @@ namespace repair {
 class task_manager_module;
 }
 
+namespace netw {
+class messaging_service;
+}
+
 namespace tasks {
 
 using is_abortable = bool_class <struct abortable_tag>;
@@ -59,6 +63,7 @@ public:
     enum class task_group;
     struct config {
         utils::updateable_value<uint32_t> task_ttl;
+        gms::inet_address broadcast_address;
     };
     using task_ptr = lw_shared_ptr<task_manager::task>;
     using virtual_task_ptr = lw_shared_ptr<task_manager::virtual_task>;
@@ -82,6 +87,7 @@ private:
     serialized_action _update_task_ttl_action;
     utils::observer<uint32_t> _task_ttl_observer;
     uint32_t _task_ttl;
+    netw::messaging_service* _messaging = nullptr;
 public:
     class task_not_found : public std::exception {
         sstring _cause;
@@ -319,6 +325,8 @@ public:
         const task_manager::virtual_task_map& get_virtual_tasks() const noexcept;
         tasks_collection& get_tasks_collection() noexcept;
         const tasks_collection& get_tasks_collection() const noexcept;
+        // Returns a set of nodes on which some of virtual tasks on this module can have their children.
+        virtual std::set<gms::inet_address> get_nodes() const noexcept;
 
         void register_task(task_ptr task);
         void register_virtual_task(virtual_task_ptr task);
@@ -371,6 +379,7 @@ public:
     task_manager(config cfg, seastar::abort_source& as) noexcept;
     task_manager() noexcept;
 
+    gms::inet_address get_broadcast_address() const noexcept;
     modules& get_modules() noexcept;
     const modules& get_modules() const noexcept;
     task_map& get_local_tasks() noexcept;
@@ -425,6 +434,9 @@ protected:
     void register_virtual_task(virtual_task_ptr task);
     void unregister_task(task_id id) noexcept;
     void unregister_virtual_task(task_group group) noexcept;
+public:
+    void init_ms_handlers(netw::messaging_service& ms);
+    future<> uninit_ms_handlers();
 };
 
 }
