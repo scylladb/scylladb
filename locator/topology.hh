@@ -234,18 +234,10 @@ public:
      *
      * Adds or updates a node with given endpoint
      */
-    const node* add_or_update_endpoint(std::optional<inet_address> ep, std::optional<host_id> opt_id,
-                                       std::optional<endpoint_dc_rack> opt_dr,
-                                       std::optional<node::state> opt_st,
+    const node* add_or_update_endpoint(host_id id, std::optional<inet_address> opt_ep,
+                                       std::optional<endpoint_dc_rack> opt_dr = std::nullopt,
+                                       std::optional<node::state> opt_st = std::nullopt,
                                        std::optional<shard_id> shard_count = std::nullopt);
-
-    // Legacy entry point from token_metadata::update_topology
-    const node* add_or_update_endpoint(inet_address ep, endpoint_dc_rack dr, std::optional<node::state> opt_st) {
-        return add_or_update_endpoint(ep, std::nullopt, std::move(dr), std::move(opt_st), std::nullopt);
-    }
-    const node* add_or_update_endpoint(inet_address ep, host_id id) {
-        return add_or_update_endpoint(ep, id, std::nullopt, std::nullopt, std::nullopt);
-    }
 
     /**
      * Removes current DC/rack assignment for ep

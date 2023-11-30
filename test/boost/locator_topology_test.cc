@@ -110,7 +110,7 @@ SEASTAR_THREAD_TEST_CASE(test_update_node) {
         set_abort_on_internal_error(true);
     });
 
-    topo.add_or_update_endpoint(std::nullopt, id1, endpoint_dc_rack::default_location, node::state::normal);
+    topo.add_or_update_endpoint(id1, std::nullopt, endpoint_dc_rack::default_location, node::state::normal);
 
     auto node = topo.this_node();
     auto mutable_node = const_cast<locator::node*>(node);
@@ -188,7 +188,7 @@ SEASTAR_THREAD_TEST_CASE(test_add_or_update_by_host_id) {
     topo.add_node(id1, gms::inet_address{}, endpoint_dc_rack::default_location, node::state::normal);
     topo.add_node(id2, ep1, endpoint_dc_rack::default_location, node::state::being_decommissioned);
 
-    topo.add_or_update_endpoint(ep1, id1, std::nullopt, node::state::bootstrapping);
+    topo.add_or_update_endpoint(id1, ep1, std::nullopt, node::state::bootstrapping);
 
     auto* n = topo.find_node(id1);
     BOOST_REQUIRE_EQUAL(n->get_state(), node::state::bootstrapping);

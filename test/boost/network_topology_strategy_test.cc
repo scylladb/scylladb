@@ -955,7 +955,7 @@ SEASTAR_THREAD_TEST_CASE(test_topology_tracks_local_node) {
 
     stm.mutate_token_metadata([&] (token_metadata& tm) -> future<> {
         co_await tm.clear_gently();
-        tm.get_topology().add_or_update_endpoint(ip1, host1, ip1_dc_rack_v2, node::state::being_decommissioned);
+        tm.get_topology().add_or_update_endpoint(host1, ip1, ip1_dc_rack_v2, node::state::being_decommissioned);
     }).get();
 
     n1 = stm.get()->get_topology().find_node(host1);

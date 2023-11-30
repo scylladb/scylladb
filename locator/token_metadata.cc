@@ -115,12 +115,8 @@ public:
         return _bootstrap_tokens;
     }
 
-    void update_topology(inet_address ep, std::optional<endpoint_dc_rack> opt_dr, std::optional<node::state> opt_st, std::optional<shard_id> shard_count = std::nullopt) {
-        _topology.add_or_update_endpoint(ep, std::nullopt, std::move(opt_dr), std::move(opt_st), std::move(shard_count));
-    }
-
-    void update_topology(host_id ep, std::optional<endpoint_dc_rack> opt_dr, std::optional<node::state> opt_st, std::optional<shard_id> shard_count = std::nullopt) {
-        _topology.add_or_update_endpoint(std::nullopt, ep, std::move(opt_dr), std::move(opt_st), std::move(shard_count));
+    void update_topology(host_id id, std::optional<endpoint_dc_rack> opt_dr, std::optional<node::state> opt_st, std::optional<shard_id> shard_count = std::nullopt) {
+        _topology.add_or_update_endpoint(id, std::nullopt, std::move(opt_dr), std::move(opt_st), std::move(shard_count));
     }
 
     /**
@@ -520,7 +516,7 @@ void token_metadata_impl::debug_show() const {
 }
 
 void token_metadata_impl::update_host_id(const host_id& host_id, inet_address endpoint) {
-    _topology.add_or_update_endpoint(endpoint, host_id);
+    _topology.add_or_update_endpoint(host_id, endpoint);
 }
 
 host_id token_metadata_impl::get_host_id(inet_address endpoint) const {
