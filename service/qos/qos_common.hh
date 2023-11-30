@@ -18,6 +18,8 @@
 
 namespace qos {
 
+enum class include_effective_names { yes, no };
+
 /**
  *  a structure that holds the configuration for
  *  a service level.
@@ -47,6 +49,17 @@ struct service_level_options {
 
     static std::string_view to_string(const workload_type& wt);
     static std::optional<workload_type> parse_workload_type(std::string_view sv);
+
+    struct slo_effective_names {
+        sstring timeout;
+        sstring workload;
+
+        bool operator==(const slo_effective_names& other) const = default;
+        bool operator!=(const slo_effective_names& other) const = default;
+    };
+    std::optional<slo_effective_names> effective_names = std::nullopt;
+
+    void init_effective_names(sstring& service_level_name);
 };
 
 std::ostream& operator<<(std::ostream& os, const service_level_options::workload_type&);

@@ -9,23 +9,53 @@
 #############################################################################
 
 from contextlib import contextmanager
-from util import unique_name, new_test_table
+from util import unique_name, new_test_table, new_user
 
 from cassandra.protocol import InvalidRequest, ReadTimeout
 from cassandra.util import Duration
 
 import pytest
+import time
 
 @contextmanager
-def new_service_level(cql):
+def new_service_level(cql, timeout=None, workload_type=None, role=None):
+    params = ""
+    if timeout and workload_type:
+        params = f"WITH timeout = {timeout} AND workload_type = '{workload_type}'"
+    elif timeout:
+        params = f"WITH timeout = {timeout}"
+    elif workload_type:
+        params = f"WITH workload_type = '{workload_type}'"
+
+    attach_to = role if role else cql.cluster.auth_provider.username
+
     try:
         sl = f"sl_{unique_name()}"
-        cql.execute(f"CREATE SERVICE LEVEL {sl}")
-        cql.execute(f"ATTACH SERVICE LEVEL {sl} TO {cql.cluster.auth_provider.username}")
+        cql.execute(f"CREATE SERVICE LEVEL {sl} {params}")
+        cql.execute(f"ATTACH SERVICE LEVEL {sl} TO {attach_to}")
         yield sl
     finally:
-        cql.execute(f"DETACH SERVICE LEVEL FROM {cql.cluster.auth_provider.username}")
+        cql.execute(f"DETACH SERVICE LEVEL FROM {attach_to}")
         cql.execute(f"DROP SERVICE LEVEL IF EXISTS {sl}")
+
+# Some of the service levels operations depends on controller's update
+# which currently are done in 10s intervals.
+# To not do plain 10s sleeps in tests, you should use this function 
+# to wait as little as possible.
+def try_until_success(f, timeout, step_sleep = 0.5):
+    start_time = time.time()
+    last_exception = None
+
+    while time.time() - start_time < timeout:
+        try:
+            f()
+            return
+        except Exception as e:
+            last_exception = e
+            time.sleep(step_sleep)
+
+    if last_exception is not None:
+        raise last_exception
 
 # Test that setting service level timeouts correctly sets the timeout parameter
 def test_set_service_level_timeouts(scylla_only, cql):
@@ -56,30 +86,35 @@ def test_attached_service_level(scylla_only, cql):
         res_one = cql.execute(f"LIST ALL ATTACHED SERVICE LEVELS").one()
         assert res_one.role == cql.cluster.auth_provider.username and res_one.service_level == sl
 
-# Test that declaring service level workload types is possible
-def test_set_workload_type(scylla_only, cql):
-    with new_service_level(cql) as sl:
-        res = cql.execute(f"LIST SERVICE LEVEL {sl}")
-        assert not res.one().workload_type
-        for wt in ['interactive', 'batch']:
-            cql.execute(f"ALTER SERVICE LEVEL {sl} WITH workload_type = '{wt}'")
-            res = cql.execute(f"LIST SERVICE LEVEL {sl}")
-            assert res.one().workload_type == wt
+def test_list_effective_service_level(scylla_only, cql):
+    sl1 = "sl1"
+    sl2 = "sl2"
+    timeout = "10s"
+    workload_type = "batch"
 
-# Test that workload type input is validated
-def test_set_invalid_workload_types(scylla_only, cql):
-    with new_service_level(cql) as sl:
-        for incorrect in ['', 'i', 'b', 'dog', 'x'*256]:
-            print(f"Checking {incorrect}")
-            with pytest.raises(Exception):
-                cql.execute(f"ALTER SERVICE LEVEL {sl} WITH workload_type = '{incorrect}'")
+    with new_user(cql, "r1") as r1:
+        with new_user(cql, "r2") as r2:
+            with new_service_level(cql, timeout=timeout, role=r1) as sl1:
+                with new_service_level(cql, workload_type=workload_type, role=r2) as sl2:
+                    cql.execute(f"GRANT {r2} TO {r1}")
 
-# Test that resetting an already set workload type by assigning NULL to it works fine
-def test_reset_workload_type(scylla_only, cql):
-    with new_service_level(cql) as sl:
-        cql.execute(f"ALTER SERVICE LEVEL {sl} WITH workload_type = 'interactive'")
-        res = cql.execute(f"LIST SERVICE LEVEL {sl}")
-        assert res.one().workload_type == 'interactive'
-        cql.execute(f"ALTER SERVICE LEVEL {sl} WITH workload_type = null")
-        res = cql.execute(f"LIST SERVICE LEVEL {sl}")
-        assert not res.one().workload_type
+                    def check_list_effective_statament():
+                        list_r1 = cql.execute(f"LIST EFFECTIVE SERVICE LEVEL OF {r1}")
+                        for row in list_r1:
+                            if row.service_level_option == "timeout":
+                                assert row.effective_service_level == sl1
+                                assert row.value == "10s"
+                            if row.service_level_option == "workload_type":
+                                assert row.effective_service_level == sl2
+                                assert row.value == "batch"
+
+                        list_r2 = cql.execute(f"LIST EFFECTIVE SERVICE LEVEL OF {r2}")
+                        for row in list_r2:
+                            if row.service_level_option == "timeout":
+                                assert row.effective_service_level == sl2
+                                assert row.value == None
+                            if row.service_level_option == "workload_type":
+                                assert row.effective_service_level == sl2
+                                assert row.value == "batch"
+
+                    try_until_success(check_list_effective_statament, 11)
