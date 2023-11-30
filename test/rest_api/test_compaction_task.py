@@ -157,10 +157,6 @@ def test_running_compaction_task_abort(cql, this_dc, rest_api):
                     assert all([status["state"] == "failed" for status in aborted]), "Task finished successfully"
     drain_module_tasks(rest_api, module_name)
 
-def run_major_compaction(rest_api, keyspace):
-    resp = rest_api.send("POST", f"storage_service/keyspace_compaction/{keyspace}")
-    resp.raise_for_status()
-
 def test_not_created_compaction_task_abort(cql, this_dc, rest_api):
     drain_module_tasks(rest_api, module_name)
     with set_tmp_task_ttl(rest_api, long_time):
@@ -173,23 +169,16 @@ def test_not_created_compaction_task_abort(cql, this_dc, rest_api):
 
                 injection = "compaction_major_keyspace_compaction_task_impl_run"
                 with scylla_inject_error(rest_api, injection, True):
-                    [_, table] = t0.split(".")
-                    # FIXME: Replace with asynchronous compaction api call as soon as it is available.
-                    x = threading.Thread(target=run_major_compaction, args=(rest_api, keyspace,))
-                    x.start()
+                    resp = rest_api.send("POST", f"tasks/compaction/keyspace_compaction/{keyspace}")
+                    resp.raise_for_status()
+                    task_id = resp.json()
 
-                    tasks = []
-                    while not tasks:
-                        tasks = [task for task in list_tasks(rest_api, module_name) if task["type"] == "major compaction"]
-                    assert len(tasks) == 1, "More than one top level task was created"
-                    task = tasks[0]
-
-                    abort_task(rest_api, task["task_id"])
+                    abort_task(rest_api, task_id)
 
                     resp = rest_api.send("POST", f"v2/error_injection/injection/{injection}/message")
                     resp.raise_for_status()
 
-                    status = wait_for_task(rest_api, task["task_id"])
+                    status = wait_for_task(rest_api, task_id)
                     assert status["state"] == "failed", "Task finished successfully despite abort"
                     assert "abort" in status["error"], "Task wasn't aborted by user"
 
@@ -198,7 +187,6 @@ def test_not_created_compaction_task_abort(cql, this_dc, rest_api):
                         assert all(child["state"] == "failed" for child in children), "Some child tasks finished successfully despite abort"
                         assert all("abort requested" in child["error"] for child in children), "Some child tasks weren't aborted by user"
                         assert all("children" not in child for child in children), "Some child tasks spawned new tasks even though they were aborted"
-                    x.join()
     drain_module_tasks(rest_api, module_name)
 
 def test_major_keyspace_compaction_task_async(cql, this_dc, rest_api):
