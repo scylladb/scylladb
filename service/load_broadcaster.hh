@@ -69,5 +69,9 @@ public:
 
     void start_broadcasting();
     future<> stop_broadcasting();
+
+    const gms::gossiper& gossiper() const noexcept {
+        return _gossiper;
+    };
 };
 }
