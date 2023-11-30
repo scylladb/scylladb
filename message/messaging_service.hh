@@ -268,6 +268,7 @@ public:
     struct config {
         locator::host_id id;
         gms::inet_address ip;                   // a.k.a. listen_address - the address this node is listening on
+        gms::inet_address broadcast_address;    // This node's address, as told to other nodes
         uint16_t port;
         uint16_t ssl_port = 0;
         encrypt_what encrypt = encrypt_what::none;
@@ -345,6 +346,9 @@ public:
     }
     gms::inet_address listen_address() const noexcept {
         return _cfg.ip;
+    }
+    gms::inet_address broadcast_address() const noexcept {
+        return _cfg.broadcast_address;
     }
     future<> shutdown();
     future<> stop();

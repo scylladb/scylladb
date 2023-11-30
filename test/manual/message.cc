@@ -22,7 +22,6 @@
 #include "gms/gossip_digest.hh"
 #include "api/api.hh"
 #include "utils/UUID.hh"
-#include "utils/fb_utilities.hh"
 #include "log.hh"
 #include "locator/token_metadata.hh"
 #include "db/schema_tables.hh"
@@ -191,7 +190,6 @@ int main(int ac, char ** av) {
             bool stay_alive = config["stay-alive"].as<bool>();
             const gms::inet_address listen = gms::inet_address(config["listen-address"].as<std::string>());
             auto my_address = listen != gms::inet_address("0.0.0.0") ? listen : gms::inet_address("localhost");
-            utils::fb_utilities::set_broadcast_address(my_address);
             locator::token_metadata::config tm_cfg;
             tm_cfg.topo_cfg.this_endpoint = my_address;
             sharded<locator::shared_token_metadata> token_metadata;

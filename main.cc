@@ -1223,6 +1223,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             mscfg.id = host_id;
             mscfg.ip = listen_address;
+            mscfg.broadcast_address = broadcast_addr;
             mscfg.port = cfg->storage_port();
             mscfg.ssl_port = cfg->ssl_storage_port();
             mscfg.listen_on_broadcast_address = cfg->listen_on_broadcast_address();
