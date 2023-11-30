@@ -51,7 +51,6 @@
 #include "multishard_mutation_query.hh"
 
 #include "utils/human_readable.hh"
-#include "utils/fb_utilities.hh"
 #include "utils/stall_free.hh"
 #include "utils/fmt-compat.hh"
 #include "utils/error_injection.hh"
@@ -2693,7 +2692,8 @@ const sstring& database::get_snitch_name() const {
 }
 
 dht::token_range_vector database::get_keyspace_local_ranges(sstring ks) {
-    return find_keyspace(ks).get_effective_replication_map()->get_ranges(utils::fb_utilities::get_broadcast_address());
+    auto my_address = get_token_metadata().get_topology().my_address();
+    return find_keyspace(ks).get_effective_replication_map()->get_ranges(my_address);
 }
 
 /*!
