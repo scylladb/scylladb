@@ -590,12 +590,13 @@ future<std::pair<sstring, sstring>> sstable_directory::create_pending_deletion_l
             close_out.close_now();
 
             auto dir_f = open_directory(pending_delete_dir).get0();
+            auto close_dir = deferred_close(dir_f);
             // Once flushed and closed, the temporary log file can be renamed.
             rename_file(tmp_pending_delete_log, pending_delete_log).get();
 
             // Guarantee that the changes above reached the disk.
             dir_f.flush().get();
-            dir_f.close().get();
+            close_dir.close_now();
             sstlog.debug("{} written successfully.", pending_delete_log);
         } catch (...) {
             sstlog.warn("Error while writing {}: {}. Ignoring.", pending_delete_log, std::current_exception());
