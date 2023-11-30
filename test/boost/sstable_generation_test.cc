@@ -89,12 +89,24 @@ BOOST_AUTO_TEST_CASE(compare) {
     BOOST_CHECK_GT(sstables::generation_type(42), sstables::generation_type(41));
     BOOST_CHECK_LT(sstables::generation_type(41), sstables::generation_type(42));
     BOOST_CHECK_EQUAL(sstables::generation_type(42), sstables::generation_type(42));
-    // the ordering of uuid based generation does not matter, but we should be
-    // able to use them as key in an associative container
+    // if two identifiers are compared, we consider them as timeuuid, which means:
+    //
+    // 1. they can be used as key in an associative container
+    // 2. the newer timeuuids are order after the older ones
+
+    // two UUIDs with the same timestamps but different clock seq and node
     BOOST_CHECK_NE(sstables::generation_type::from_string("3fw2_0tj4_46w3k2cpidnirvjy7k"),
                    sstables::generation_type::from_string("3fw2_0tj4_46w3k2cpidnirvjy7z"));
+    // the return value from_string() of the same string representation should
+    // be equal
     BOOST_CHECK_EQUAL(sstables::generation_type::from_string(uuid),
                       sstables::generation_type::from_string(uuid));
+    // two UUIDs with different timestamps but the same clock seq and node,
+    // their timestamps are:
+    // - 2023-11-24 23:41:56
+    // - 2023-11-24 23:41:57
+    BOOST_CHECK_LE(sstables::generation_type::from_string("3gbc_17lw_3tlpc2fe8ko69yav6u"),
+                   sstables::generation_type::from_string("3gbc_17lx_59opc2fe8ko69yav6u"));
     // all invalid identifiers should be equal
     BOOST_CHECK_EQUAL(sstables::generation_type{}, sstables::generation_type{});
     BOOST_CHECK_NE(sstables::generation_type{},

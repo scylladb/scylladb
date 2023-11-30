@@ -112,9 +112,10 @@ public:
         return _value.timestamp() != 0;
     }
     std::strong_ordering operator<=>(const generation_type& other) const noexcept {
-        if (bool(*this) && is_uuid_based() &&
+        // preserve the ordering as a timeuuid
+        if (bool(*this) && this->is_uuid_based() &&
             bool(other) && other.is_uuid_based()) {
-            return this->_value <=> other._value;
+            return timeuuid_tri_compare(this->_value, other._value);
         }
         int_t lhs = 0, rhs = 0;
         if (bool(*this) && !is_uuid_based()) {
