@@ -5715,7 +5715,6 @@ cql_test_config tablet_cql_test_config() {
             db::experimental_features_t::feature::TABLETS,
             db::experimental_features_t::feature::CONSISTENT_TOPOLOGY_CHANGES,
         }, db::config::config_source::CommandLine);
-    c.db_config->consistent_cluster_management(true);
     return c;
 }
 

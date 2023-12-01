@@ -1874,7 +1874,7 @@ std::vector<schema_ptr> system_keyspace::all_tables(const db::config& cfg) {
                     v3::truncated(),
                     v3::cdc_local(),
     });
-    if (cfg.consistent_cluster_management()) {
+
         r.insert(r.end(), {raft(), raft_snapshots(), raft_snapshot_config(), group0_history(), discovery()});
 
         if (cfg.check_experimental(db::experimental_features_t::feature::CONSISTENT_TOPOLOGY_CHANGES)) {
@@ -1888,7 +1888,7 @@ std::vector<schema_ptr> system_keyspace::all_tables(const db::config& cfg) {
         if (cfg.check_experimental(db::experimental_features_t::feature::TABLETS)) {
             r.insert(r.end(), {tablets()});
         }
-    }
+
     if (cfg.check_experimental(db::experimental_features_t::feature::KEYSPACE_STORAGE_OPTIONS)) {
         r.insert(r.end(), {sstables_registry()});
     }

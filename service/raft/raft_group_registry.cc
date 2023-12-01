@@ -159,12 +159,11 @@ public:
 
 // }}} gossiper_state_change_subscriber_proxy
 
-raft_group_registry::raft_group_registry(bool is_enabled,
+raft_group_registry::raft_group_registry(
         raft::server_id my_id,
         raft_address_map& address_map,
         netw::messaging_service& ms, gms::gossiper& gossiper, direct_failure_detector::failure_detector& fd)
-    : _is_enabled(is_enabled)
-    , _ms(ms)
+    : _ms(ms)
     , _gossiper(gossiper)
     , _gossiper_proxy(make_shared<gossiper_state_change_subscriber_proxy>(address_map))
     , _address_map{address_map}
@@ -372,8 +371,6 @@ future<> raft_group_registry::stop_servers() noexcept {
 }
 
 seastar::future<> raft_group_registry::start() {
-    assert(_is_enabled);
-
     _gossiper.register_(_gossiper_proxy);
 
     // Once a Raft server starts, it soon times out
@@ -390,9 +387,6 @@ const raft::server_id& raft_group_registry::get_my_raft_id() {
 }
 
 seastar::future<> raft_group_registry::stop() {
-    if (!_is_enabled) {
-        co_return;
-    }
     co_await drain_on_shutdown();
     co_await uninit_rpc_verbs();
     _direct_fd_subscription.reset();

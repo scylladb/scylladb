@@ -66,9 +66,6 @@ class gossiper_state_change_subscriber_proxy;
 // to the owning shard for a given raft group_id.
 class raft_group_registry : public seastar::peering_sharded_service<raft_group_registry> {
 private:
-    // True if the feature is enabled
-    bool _is_enabled;
-
     netw::messaging_service& _ms;
     gms::gossiper& _gossiper;
     // A proxy class representing subscription to on_change
@@ -100,12 +97,10 @@ private:
     raft::server_id _my_id;
 
 public:
-    // `is_enabled` must be `true` iff the local RAFT feature is enabled.
-    raft_group_registry(bool is_enabled, raft::server_id my_id, raft_address_map&,
-            netw::messaging_service& ms, gms::gossiper& gs, direct_failure_detector::failure_detector& fd);
+    raft_group_registry(raft::server_id my_id, raft_address_map&, netw::messaging_service& ms,
+            gms::gossiper& gs, direct_failure_detector::failure_detector& fd);
     ~raft_group_registry();
 
-    // If is_enabled(),
     // Called manually at start on every shard.
     seastar::future<> start();
     // Called by sharded<>::stop()
@@ -148,10 +143,6 @@ public:
     shared_ptr<raft::failure_detector> failure_detector();
     raft_address_map& address_map() { return _address_map; }
     direct_failure_detector::failure_detector& direct_fd() { return _direct_fd; }
-
-    // Is the RAFT local feature enabled?
-    // Note: do not confuse with the SUPPORTS_RAFT cluster feature.
-    bool is_enabled() const { return _is_enabled; }
 };
 
 // Implementation of `direct_failure_detector::pinger` which uses DIRECT_FD_PING verb for pinging.

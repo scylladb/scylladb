@@ -14,18 +14,6 @@ else:
     cmd = run.run_scylla_cmd
     check_cql = run.check_cql
 
-# If the "--raft" option is given, switch to the experimental Raft-based
-# implementation of schema operations. Some tests are expected to fail
-# when not in raft mode, so they use the fails_without_consistent_cluster_management fixture
-# that will cause them to xfail when raft isn't used.
-if '--raft' in sys.argv:
-    sys.argv.remove('--raft')
-    def run_with_raft(pid, dir):
-        (c, e) = run_with_raft.orig_cmd(pid, dir)
-        return (c + ['--consistent-cluster-management', 'true'], e)
-    run_with_raft.orig_cmd = cmd
-    cmd = run_with_raft
-
 if "-h" in sys.argv or "--help" in sys.argv:
     run.run_pytest(sys.path[0], sys.argv)
     exit(0)

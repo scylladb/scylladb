@@ -171,7 +171,7 @@ storage_service::storage_service(abort_source& abort_source,
     }
 
     auto& cfg = _db.local().get_config();
-    init_messaging_service(cfg.consistent_cluster_management() && cfg.check_experimental(db::experimental_features_t::feature::CONSISTENT_TOPOLOGY_CHANGES));
+    init_messaging_service(cfg.check_experimental(db::experimental_features_t::feature::CONSISTENT_TOPOLOGY_CHANGES));
 }
 
 enum class node_external_status {

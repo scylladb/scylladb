@@ -719,7 +719,7 @@ private:
                 _fd.stop().get();
             });
 
-            _group0_registry.start(cfg->consistent_cluster_management(),
+            _group0_registry.start(
                 raft::server_id{host_id.id},
                 std::ref(_raft_address_map),
                 std::ref(_ms), std::ref(_gossiper), std::ref(_fd)).get();
@@ -809,11 +809,9 @@ private:
                 });
             }).get();
 
-            if (_group0_registry.local().is_enabled()) {
                 _group0_registry.invoke_on_all([] (service::raft_group_registry& raft_gr) {
                     return raft_gr.start();
                 }).get();
-            }
 
             if (cfg_in.run_with_raft_recovery) {
                 _sys_ks.local().save_group0_upgrade_state("RECOVERY").get();
@@ -884,8 +882,8 @@ private:
                 group0_service.abort().get();
             });
 
-            const bool raft_topology_change_enabled = group0_service.is_raft_enabled()
-                    && cfg->check_experimental(db::experimental_features_t::feature::CONSISTENT_TOPOLOGY_CHANGES);
+            const bool raft_topology_change_enabled =
+                    cfg->check_experimental(db::experimental_features_t::feature::CONSISTENT_TOPOLOGY_CHANGES);
 
             _ss.local().set_group0(group0_service, raft_topology_change_enabled);
 
@@ -1016,10 +1014,4 @@ future<> do_with_cql_env_thread(std::function<void(cql_test_env&)> func, cql_tes
 
 reader_permit make_reader_permit(cql_test_env& env) {
     return env.local_db().get_reader_concurrency_semaphore().make_tracking_only_permit(nullptr, "test", db::no_timeout, {});
-}
-
-cql_test_config raft_cql_test_config() {
-    cql_test_config c;
-    c.db_config->consistent_cluster_management(true);
-    return c;
 }

@@ -87,7 +87,7 @@ SEASTAR_TEST_CASE(test_store_load_term_and_vote) {
 
         BOOST_CHECK_EQUAL(vote_term, persisted.first);
         BOOST_CHECK_EQUAL(vote_id, persisted.second);
-    }, raft_cql_test_config());
+    });
 }
 
 SEASTAR_TEST_CASE(test_store_load_snapshot) {
@@ -117,7 +117,7 @@ SEASTAR_TEST_CASE(test_store_load_snapshot) {
         raft::snapshot_descriptor loaded_snp = co_await storage.load_snapshot_descriptor();
 
         BOOST_CHECK(snp == loaded_snp);
-    }, raft_cql_test_config());
+    });
 }
 
 SEASTAR_TEST_CASE(test_store_load_log_entries) {
@@ -133,7 +133,7 @@ SEASTAR_TEST_CASE(test_store_load_log_entries) {
         for (size_t i = 0, end = entries.size(); i != end; ++i) {
             BOOST_CHECK(*entries[i] == *loaded_entries[i]);
         }
-    }, raft_cql_test_config());
+    });
 }
 
 SEASTAR_TEST_CASE(test_truncate_log) {
@@ -151,7 +151,7 @@ SEASTAR_TEST_CASE(test_truncate_log) {
         for (size_t i = 0, end = loaded_entries.size(); i != end; ++i) {
             BOOST_CHECK(*entries[i] == *loaded_entries[i]);
         }
-    }, raft_cql_test_config());
+    });
 }
 
 SEASTAR_TEST_CASE(test_store_snapshot_truncate_log_tail) {
@@ -186,5 +186,5 @@ SEASTAR_TEST_CASE(test_store_snapshot_truncate_log_tail) {
         for (size_t i = 0, end = loaded_entries.size(); i != end; ++i) {
             BOOST_CHECK(*entries[i + 1] == *loaded_entries[i]);
         }
-    }, raft_cql_test_config());
+    });
 }

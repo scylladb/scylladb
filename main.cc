@@ -757,7 +757,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                     throw bad_configuration_error();
                 }
             }
-            const bool raft_topology_change_enabled = cfg->consistent_cluster_management() &&
+            const bool raft_topology_change_enabled =
                 cfg->check_experimental(db::experimental_features_t::feature::CONSISTENT_TOPOLOGY_CHANGES);
 
             gms::feature_config fcfg = gms::feature_config_from_db_config(*cfg);
@@ -1334,8 +1334,8 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 fd.stop().get();
             });
 
-            raft_gr.start(cfg->consistent_cluster_management(), raft::server_id{host_id.id},
-                std::ref(raft_address_map), std::ref(messaging), std::ref(gossiper), std::ref(fd)).get();
+            raft_gr.start(raft::server_id{host_id.id}, std::ref(raft_address_map),
+                    std::ref(messaging), std::ref(gossiper), std::ref(fd)).get();
 
             // group0 client exists only on shard 0.
             // The client has to be created before `stop_raft` since during
@@ -1425,19 +1425,9 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 sst_format_listener.stop().get();
             });
 
-            if (raft_gr.local().is_enabled()) {
                 supervisor::notify("starting Raft Group Registry service");
                 raft_gr.invoke_on_all(&service::raft_group_registry::start).get();
-            } else {
-                if (cfg->check_experimental(db::experimental_features_t::feature::BROADCAST_TABLES)) {
-                    startlog.error("Bad configuration: RAFT feature has to be enabled if BROADCAST_TABLES is enabled");
-                    throw bad_configuration_error();
-                }
-                if (cfg->check_experimental(db::experimental_features_t::feature::TABLETS)) {
-                    startlog.error("Bad configuration: consistent_cluster_management feature has to be enabled if tablets feature is enabled");
-                    throw bad_configuration_error();
-                }
-            }
+
             group0_client.init().get();
 
             // schema migration, if needed, is also done on shard 0

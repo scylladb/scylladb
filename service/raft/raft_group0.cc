@@ -138,7 +138,7 @@ raft_group0::raft_group0(seastar::abort_source& abort_source,
         db::system_keyspace& sys_ks,
         raft_group0_client& client)
     : _abort_source(abort_source), _raft_gr(raft_gr), _ms(ms), _gossiper(gs),  _feat(feat), _sys_ks(sys_ks), _client(client)
-    , _status_for_monitoring(_raft_gr.is_enabled() ? status_for_monitoring::normal : status_for_monitoring::disabled)
+    , _status_for_monitoring(status_for_monitoring::normal)
 {
     register_metrics();
 }
@@ -591,14 +591,6 @@ static future<bool> synchronize_schema(
 future<bool> raft_group0::use_raft() {
     assert(this_shard_id() == 0);
 
-    if (!_raft_gr.is_enabled()) {
-        group0_log.info("setup_group0: local RAFT feature disabled, skipping group 0 setup.");
-        // Note: if the local feature was enabled by every node earlier, that would enable the cluster
-        // SUPPORTS_RAFT feature, and the node should then refuse to start during feature check
-        // (because if the local feature is disabled, then the cluster feature - enabled in the cluster - is 'unknown' to us).
-        co_return false;
-    }
-
     if (((co_await _client.get_group0_upgrade_state()).second) == group0_upgrade_state::recovery) {
         group0_log.warn("setup_group0: Raft RECOVERY mode, skipping group 0 setup.");
         co_return false;
@@ -772,9 +764,6 @@ future<> raft_group0::finish_setup_after_join(service::storage_service& ss, cql3
             // (that's the only way to join as non-voter today).
             co_return;
         }
-    } else if (!_raft_gr.is_enabled()) {
-        group0_log.info("finish_setup_after_join: local RAFT feature disabled, skipping.");
-        co_return;
     } else {
         // We're either upgrading or in recovery mode.
     }
@@ -866,11 +855,6 @@ future<> raft_group0::remove_from_group0(raft::server_id node) {
 
 future<bool> raft_group0::wait_for_raft() {
     assert(this_shard_id() == 0);
-
-    if (!_raft_gr.is_enabled()) {
-        group0_log.info("Local RAFT feature disabled.");
-        co_return false;
-    }
 
     auto upgrade_state = (co_await _client.get_group0_upgrade_state()).second;
     if (upgrade_state == group0_upgrade_state::recovery) {
@@ -1568,10 +1552,6 @@ static auto warn_if_upgrade_takes_too_long() {
 future<> raft_group0::upgrade_to_group0(service::storage_service& ss, cql3::query_processor& qp, service::migration_manager& mm, bool topology_change_enabled) {
     assert(this_shard_id() == 0);
 
-    // The SUPPORTS_RAFT cluster feature is enabled, so the local RAFT feature must also be enabled
-    // (otherwise we wouldn't 'know' the cluster feature).
-    assert(_raft_gr.is_enabled());
-
     auto start_state = (co_await _client.get_group0_upgrade_state()).second;
     switch (start_state) {
         case group0_upgrade_state::recovery:
@@ -1714,7 +1694,7 @@ void raft_group0::register_metrics() {
     namespace sm = seastar::metrics;
     _metrics.add_group("raft_group0", {
         sm::make_gauge("status", [this] { return static_cast<uint8_t>(_status_for_monitoring); },
-            sm::description("status of the raft group, 0 - disabled, 1 - normal, 2 - aborted"))
+            sm::description("status of the raft group, 1 - normal, 2 - aborted"))
     });
 }
 

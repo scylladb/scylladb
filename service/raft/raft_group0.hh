@@ -114,8 +114,7 @@ class raft_group0 {
 
     // Status of the raft group0 for monitoring.
     enum class status_for_monitoring : uint8_t {
-        // Raft is disabled.
-        disabled = 0,
+        unused = 0,
         normal = 1,
         aborted = 2
     } _status_for_monitoring;
@@ -144,11 +143,6 @@ public:
     // Initialises RPC verbs on all shards.
     // Call after construction but before using the object.
     future<> start();
-
-    // Return true if Raft is enabled (but not necessarily having
-    // an active group 0 - e.g. in case we haven't completed an
-    // upgrade of a heterogeneous cluster yet.
-    bool is_raft_enabled() const { return _raft_gr.is_enabled(); }
 
     // Call before destroying the object.
     future<> abort();
