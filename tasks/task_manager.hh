@@ -67,6 +67,7 @@ public:
     };
     using task_ptr = lw_shared_ptr<task_manager::task>;
     using virtual_task_ptr = lw_shared_ptr<task_manager::virtual_task>;
+    using task_variant = std::variant<task_manager::task_ptr, task_manager::virtual_task_ptr>;
     using task_map = std::unordered_map<task_id, task_ptr>;
     using virtual_task_map = std::unordered_map<task_group, virtual_task_ptr>;
     using foreign_task_ptr = foreign_ptr<task_ptr>;
@@ -396,9 +397,11 @@ public:
     future<> stop() noexcept;
 
     static future<task_manager::foreign_task_ptr> lookup_task_on_all_shards(sharded<task_manager>& tm, task_id tid);
-    static future<> invoke_on_task(sharded<task_manager>& tm, task_id id, std::function<future<> (task_manager::task_ptr)> func);
+    // Must be called from shard 0.
+    static future<task_manager::virtual_task_ptr> lookup_virtual_task(task_manager& tm, task_id id);
+    static future<> invoke_on_task(sharded<task_manager>& tm, task_id id, std::function<future<> (task_manager::task_variant)> func);
     template<typename T>
-    static future<T> invoke_on_task(sharded<task_manager>& tm, task_id id, std::function<future<T> (task_manager::task_ptr)> func) {
+    static future<T> invoke_on_task(sharded<task_manager>& tm, task_id id, std::function<future<T> (task_manager::task_variant)> func) {
         std::optional<T> res;
         co_await coroutine::parallel_for_each(boost::irange(0u, smp::count), [&tm, id, &res, &func] (unsigned shard) -> future<> {
             auto local_res = co_await tm.invoke_on(shard, [id, func] (const task_manager& local_tm) -> future<std::optional<T>> {
@@ -415,7 +418,16 @@ public:
             }
         });
         if (!res) {
-            co_await coroutine::return_exception(task_manager::task_not_found(id));
+            res = co_await tm.invoke_on(0, coroutine::lambda([id, &func] (auto& tm_local) -> future<std::optional<T>> {
+                auto task_ptr = co_await lookup_virtual_task(tm_local, id);
+                if (task_ptr) {
+                    co_return co_await func(task_ptr);
+                }
+                co_return std::nullopt;
+            }));
+            if (!res) {
+                co_await coroutine::return_exception(task_manager::task_not_found(id));
+            }
         }
         co_return std::move(res.value());
     }
