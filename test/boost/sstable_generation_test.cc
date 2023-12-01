@@ -105,7 +105,7 @@ BOOST_AUTO_TEST_CASE(compare) {
     // their timestamps are:
     // - 2023-11-24 23:41:56
     // - 2023-11-24 23:41:57
-    BOOST_CHECK_LE(sstables::generation_type::from_string("3gbc_17lw_3tlpc2fe8ko69yav6u"),
+    BOOST_CHECK_LT(sstables::generation_type::from_string("3gbc_17lw_3tlpc2fe8ko69yav6u"),
                    sstables::generation_type::from_string("3gbc_17lx_59opc2fe8ko69yav6u"));
     // all invalid identifiers should be equal
     BOOST_CHECK_EQUAL(sstables::generation_type{}, sstables::generation_type{});
