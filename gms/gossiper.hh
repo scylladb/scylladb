@@ -19,7 +19,6 @@
 #include <seastar/util/source_location-compat.hh>
 #include "utils/atomic_vector.hh"
 #include "utils/UUID.hh"
-#include "utils/fb_utilities.hh"
 #include "gms/generation-number.hh"
 #include "gms/versioned_value.hh"
 #include "gms/application_state.hh"

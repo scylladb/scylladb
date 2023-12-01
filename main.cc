@@ -814,9 +814,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             auto family = cfg->enable_ipv6_dns_lookup() || preferred ? std::nullopt : std::make_optional(net::inet_address::family::INET);
 
             auto broadcast_addr = utils::resolve(cfg->broadcast_address || cfg->listen_address, family, preferred).get0();
-            utils::fb_utilities::set_broadcast_address(broadcast_addr);
             auto broadcast_rpc_addr = utils::resolve(cfg->broadcast_rpc_address || cfg->rpc_address, family, preferred).get0();
-            utils::fb_utilities::set_broadcast_rpc_address(broadcast_rpc_addr);
 
             ctx.api_dir = cfg->api_ui_dir();
             if (!ctx.api_dir.empty() && ctx.api_dir.back() != '/') {
@@ -894,10 +892,8 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 // value to a public address in cassandra.yaml.
                 //
                 broadcast_addr = *opt_public_address;
-                utils::fb_utilities::set_broadcast_address(*opt_public_address);
                 if (cfg->broadcast_rpc_address().empty()) {
                     broadcast_rpc_addr = *opt_public_address;
-                    utils::fb_utilities::set_broadcast_rpc_address(*opt_public_address);
                 }
             }
 

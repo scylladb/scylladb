@@ -9,7 +9,6 @@
  */
 
 #include "i_filter.hh"
-#include "fb_utilities.hh"
 #include "bytes.hh"
 #include "utils/murmur_hash.hh"
 #include <seastar/core/shared_ptr.hh>

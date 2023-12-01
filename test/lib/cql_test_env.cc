@@ -68,7 +68,6 @@
 #include "service/raft/raft_group0.hh"
 #include "sstables/sstables_manager.hh"
 #include "init.hh"
-#include "utils/fb_utilities.hh"
 
 #include <sys/time.h>
 #include <sys/resource.h>
@@ -412,9 +411,6 @@ public:
                     cql3::functions::functions::clear_functions();
                 }).get();
             });
-
-            utils::fb_utilities::set_broadcast_address(gms::inet_address("localhost"));
-            utils::fb_utilities::set_broadcast_rpc_address(gms::inet_address("localhost"));
 
             single_node_cql_env env;
             env.run_in_thread(std::move(func), std::move(cfg_in), std::move(init_configurables));
