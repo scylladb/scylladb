@@ -1277,18 +1277,7 @@ static future<> do_merge_schema(distributed<service::storage_proxy>& proxy, shar
     auto old_aggregates = co_await read_schema_for_keyspaces(proxy, AGGREGATES, keyspaces);
     auto old_scylla_aggregates = co_await read_schema_for_keyspaces(proxy, SCYLLA_AGGREGATES, keyspaces);
 
-    if (proxy.local().get_db().local().uses_schema_commitlog()) {
-        co_await proxy.local().get_db().local().apply(freeze(mutations), db::no_timeout);
-    } else {
-        co_await proxy.local().mutate_locally(std::move(mutations), tracing::trace_state_ptr());
-
-        if (do_flush) {
-            auto& db = proxy.local().get_db();
-            co_await max_concurrent_for_each(column_families, max_concurrent, [&db] (const table_id& id) -> future<> {
-                return replica::database::flush_table_on_all_shards(db, id);
-            });
-        }
-    }
+    co_await proxy.local().get_db().local().apply(freeze(mutations), db::no_timeout);
 
     // with new data applied
     auto&& new_keyspaces = co_await read_schema_for_keyspaces(proxy, KEYSPACES, keyspaces);

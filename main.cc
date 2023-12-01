@@ -1161,7 +1161,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             when_all_succeed(feature_service.local().on_system_tables_loaded(sys_ks.local()),
                 sst_format_selector.on_system_tables_loaded(sys_ks.local())).get();
 
-            db.local().maybe_init_schema_commitlog();
+            db.local().init_schema_commitlog();
 
             // Mark all the system tables writable and assign the proper commitlog to them.
             sys_ks.invoke_on_all(&db::system_keyspace::mark_writable).get();
@@ -1410,10 +1410,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             });
 
             if (raft_gr.local().is_enabled()) {
-                if (!db.local().uses_schema_commitlog()) {
-                    startlog.error("Bad configuration: consistent_cluster_management requires schema commit log to be enabled");
-                    throw bad_configuration_error();
-                }
                 supervisor::notify("starting Raft Group Registry service");
                 raft_gr.invoke_on_all(&service::raft_group_registry::start).get();
             } else {

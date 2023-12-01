@@ -559,18 +559,6 @@ murmur3_partitioner_ignore_msb_bits: 12
 # Set to `false` to fall-back to the old algorithm.
 # enable_parallelized_aggregation: true
 
-# When enabled, the node will start using separate commit log for schema changes
-# right from the boot. Without this, it only happens following a restart after
-# all nodes in the cluster were upgraded.
-#
-# Having this option ensures that new installations don't need a rolling restart
-# to use the feature, but upgrades do.
-#
-# WARNING: It's unsafe to set this to false if the node previously booted
-# with the schema commit log enabled. In such case, some schema changes
-# may be lost if the node was not cleanly stopped.
-force_schema_commit_log: true
-
 # Time for which task manager task is kept in memory after it completes.
 task_ttl_in_seconds: 10
 

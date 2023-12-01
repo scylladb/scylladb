@@ -1571,9 +1571,6 @@ future<> system_keyspace::update_tokens(gms::inet_address ep, const std::unorder
     slogger.debug("INSERT INTO system.{} (peer, tokens) VALUES ({}, {})", PEERS, ep, tokens);
     auto set_type = set_type_impl::get_instance(utf8_type, true);
     co_await execute_cql(req, ep.addr(), make_set_value(set_type, prepare_tokens(tokens))).discard_result();
-    if (!_db.uses_schema_commitlog()) {
-        co_await force_blocking_flush(PEERS);
-    }
 }
 
 
@@ -1679,7 +1676,7 @@ future<> system_keyspace::set_scylla_local_param_as(const sstring& key, const T&
     sstring req = format("UPDATE system.{} SET value = ? WHERE key = ?", system_keyspace::SCYLLA_LOCAL);
     auto type = data_type_for<T>();
     co_await execute_cql(req, type->to_string_impl(data_value(value)), key).discard_result();
-    if (visible_before_cl_replay || !_db.uses_schema_commitlog()) {
+    if (visible_before_cl_replay) {
         co_await force_blocking_flush(SCYLLA_LOCAL);
     }
 }
@@ -1718,9 +1715,6 @@ future<> system_keyspace::remove_endpoint(gms::inet_address ep) {
     sstring req = format("DELETE FROM system.{} WHERE peer = ?", PEERS);
     slogger.debug("DELETE FROM system.{} WHERE peer = {}", PEERS, ep);
     co_await execute_cql(req, ep.addr()).discard_result();
-    if (!_db.uses_schema_commitlog()) {
-        co_await force_blocking_flush(PEERS);
-    }
 }
 
 future<> system_keyspace::update_tokens(const std::unordered_set<dht::token>& tokens) {
@@ -1731,9 +1725,6 @@ future<> system_keyspace::update_tokens(const std::unordered_set<dht::token>& to
     sstring req = format("INSERT INTO system.{} (key, tokens) VALUES (?, ?)", LOCAL);
     auto set_type = set_type_impl::get_instance(utf8_type, true);
     co_await execute_cql(req, sstring(LOCAL), make_set_value(set_type, prepare_tokens(tokens)));
-    if (!_db.uses_schema_commitlog()) {
-        co_await force_blocking_flush(PEERS);
-    }
 }
 
 future<> system_keyspace::force_blocking_flush(sstring cfname) {
@@ -1779,9 +1770,6 @@ future<> system_keyspace::update_cdc_generation_id(cdc::generation_id gen_id) {
                 sstring(v3::CDC_LOCAL), id.ts, id.id);
     }
     ), gen_id);
-    if (!_db.uses_schema_commitlog()) {
-        co_await force_blocking_flush(v3::CDC_LOCAL);
-    }
 }
 
 future<std::optional<cdc::generation_id>> system_keyspace::get_cdc_generation_id() {
@@ -1863,9 +1851,6 @@ future<> system_keyspace::set_bootstrap_state(bootstrap_state state) {
 
     sstring req = format("INSERT INTO system.{} (key, bootstrapped) VALUES (?, ?)", LOCAL);
     co_await execute_cql(req, sstring(LOCAL), state_name).discard_result();
-    if (!_db.uses_schema_commitlog()) {
-        co_await force_blocking_flush(LOCAL);
-    }
     co_await container().invoke_on_all([state] (auto& sys_ks) {
         sys_ks._cache->_state = state;
     });
@@ -2065,9 +2050,6 @@ future<int> system_keyspace::increment_and_get_generation() {
     }
     req = format("INSERT INTO system.{} (key, gossip_generation) VALUES ('{}', ?)", LOCAL, LOCAL);
     co_await _qp.execute_internal(req, {generation.value()}, cql3::query_processor::cache_internal::yes);
-    if (!_db.uses_schema_commitlog()) {
-        co_await force_blocking_flush(LOCAL);
-    }
     co_return generation;
 }
 
