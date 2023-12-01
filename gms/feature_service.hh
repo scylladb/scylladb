@@ -121,7 +121,6 @@ public:
     gms::feature parallelized_aggregation { *this, "PARALLELIZED_AGGREGATION"sv };
     gms::feature keyspace_storage_options { *this, "KEYSPACE_STORAGE_OPTIONS"sv };
     gms::feature typed_errors_in_read_rpc { *this, "TYPED_ERRORS_IN_READ_RPC"sv };
-    gms::feature schema_commitlog { *this, "SCHEMA_COMMITLOG"sv };
     gms::feature uda_native_parallelized_aggregation { *this, "UDA_NATIVE_PARALLELIZED_AGGREGATION"sv };
     gms::feature aggregate_storage_options { *this, "AGGREGATE_STORAGE_OPTIONS"sv };
     gms::feature collection_indexing { *this, "COLLECTION_INDEXING"sv };

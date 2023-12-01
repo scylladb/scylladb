@@ -621,7 +621,7 @@ private:
             auto stop_sys_kd = defer([this] { _sys_ks.stop().get(); });
 
             replica::distributed_loader::init_system_keyspace(_sys_ks, _erm_factory, _db).get();
-            _db.local().maybe_init_schema_commitlog();
+            _db.local().init_schema_commitlog();
             _sys_ks.invoke_on_all(&db::system_keyspace::mark_writable).get();
 
             auto host_id = cfg_in.host_id;

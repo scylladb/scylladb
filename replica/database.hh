@@ -1419,7 +1419,6 @@ private:
     bool _enable_incremental_backups = false;
     bool _shutdown = false;
     bool _enable_autocompaction_toggle = false;
-    std::optional<bool> _uses_schema_commitlog;
     query::querier_cache _querier_cache;
 
     std::unique_ptr<db::large_data_handler> _large_data_handler;
@@ -1578,7 +1577,7 @@ public:
     future<> create_local_system_table(
             schema_ptr table, bool write_in_user_memory, locator::effective_replication_map_factory&);
 
-    void maybe_init_schema_commitlog();
+    void init_schema_commitlog();
     using is_new_cf = bool_class<struct is_new_cf_tag>;
     future<> add_column_family_and_make_directory(schema_ptr schema, is_new_cf is_new);
 
@@ -1818,8 +1817,6 @@ public:
     sharded<sstables::directory_semaphore>& get_sharded_sst_dir_semaphore() {
         return _sst_dir_semaphore;
     }
-
-    bool uses_schema_commitlog() const;
 
     bool is_user_semaphore(const reader_concurrency_semaphore& semaphore) const;
 };
