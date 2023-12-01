@@ -16,7 +16,7 @@ Requires:       %{product}-tools = %{version}-%{release}
 Requires:       %{product}-tools-core = %{version}-%{release}
 Requires:       %{product}-node-exporter = %{version}-%{release}
 Requires:       %{product}-cqlsh = %{version}-%{release}
-Obsoletes:	scylla-server < 1.1
+Obsoletes:      scylla-server < 1.1
 
 %global _debugsource_template %{nil}
 %global _debuginfo_subpackages %{nil}
@@ -152,7 +152,7 @@ ln -sfT /etc/scylla /var/lib/scylla/conf
 %package conf
 Group:          Applications/Databases
 Summary:        Scylla configuration package
-Obsoletes:	scylla-server < 1.1
+Obsoletes:      scylla-server < 1.1
 
 %description conf
 This package contains the main scylla configuration file.
