@@ -8,23 +8,26 @@
  * SPDX-License-Identifier: (AGPL-3.0-or-later and Apache-2.0)
  */
 
+#include <limits>
+
 #include "thrift_validation.hh"
 #include "thrift/utils.hh"
 #include "db/system_keyspace.hh"
 #include <boost/regex.hpp>
-#include "utils/fb_utilities.hh"
 
 using namespace thrift;
 using namespace ::apache::thrift;
 
 namespace thrift_validation {
 
+static constexpr uint32_t MAX_UNSIGNED_SHORT = std::numeric_limits<uint16_t>::max();
+
 void validate_key(const schema& s, const bytes_view& k) {
     if (k.empty()) {
         throw make_exception<InvalidRequestException>("Key may not be empty");
     }
 
-    auto max = static_cast<uint32_t>(utils::fb_utilities::MAX_UNSIGNED_SHORT);
+    auto max = MAX_UNSIGNED_SHORT;
     if (k.size() > max) {
         throw make_exception<InvalidRequestException>("Key length of {} is longer than maximum of {}", k.size(), max);
     }
@@ -64,7 +67,7 @@ void validate_cf_def(const CfDef& cf_def) {
 }
 
 void validate_column_name(const std::string& name) {
-    auto max_name_length = static_cast<uint32_t>(utils::fb_utilities::MAX_UNSIGNED_SHORT);
+    auto max_name_length = MAX_UNSIGNED_SHORT;
     if (name.size() > max_name_length) {
         throw make_exception<InvalidRequestException>("column name length must not be greater than {}", max_name_length);
     }
