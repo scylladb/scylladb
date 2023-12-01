@@ -2527,6 +2527,7 @@ future<> database::truncate_table_on_all_shards(sharded<database>& sharded_db, s
 
         return db.truncate(sys_ks.local(), cf, st, truncated_at);
     });
+    dblog.info("Truncated {}.{}", s->ks_name(), s->cf_name());
 }
 
 future<> database::truncate(db::system_keyspace& sys_ks, column_family& cf, const table_truncate_state& st, db_clock::time_point truncated_at) {
