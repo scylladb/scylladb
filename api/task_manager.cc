@@ -14,6 +14,7 @@
 #include "column_family.hh"
 #include "unimplemented.hh"
 #include "storage_service.hh"
+#include "utils/overloaded_functor.hh"
 
 #include <utility>
 #include <boost/range/adaptors.hpp>
@@ -160,11 +161,18 @@ void set_task_manager(http_context& ctx, routes& r, sharded<tasks::task_manager>
         auto id = tasks::task_id{utils::UUID{req->param["task_id"]}};
         tasks::task_manager::foreign_task_ptr task;
         try {
-            task = co_await tasks::task_manager::invoke_on_task(tm, id, std::function([] (tasks::task_manager::task_ptr task) -> future<tasks::task_manager::foreign_task_ptr> {
-                if (task->is_complete()) {
-                    task->unregister_task();
-                }
-                co_return std::move(task);
+            task = co_await tasks::task_manager::invoke_on_task(tm, id, std::function([id] (tasks::task_manager::task_variant task_v) -> future<tasks::task_manager::foreign_task_ptr> {
+                return std::visit(overloaded_functor{
+                    [] (tasks::task_manager::task_ptr task) -> future<tasks::task_manager::foreign_task_ptr> {
+                        if (task->is_complete()) {
+                            task->unregister_task();
+                        }
+                        co_return std::move(task);
+                    },
+                    [id] (tasks::task_manager::virtual_task_ptr task) -> future<tasks::task_manager::foreign_task_ptr> {
+                        throw tasks::task_manager::task_not_found(id);    // API does not support virtual tasks yet.
+                    }
+                }, task_v);
             }));
         } catch (tasks::task_manager::task_not_found& e) {
             throw bad_param_exception(e.what());
@@ -176,11 +184,18 @@ void set_task_manager(http_context& ctx, routes& r, sharded<tasks::task_manager>
     tm::abort_task.set(r, [&tm] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         auto id = tasks::task_id{utils::UUID{req->param["task_id"]}};
         try {
-            co_await tasks::task_manager::invoke_on_task(tm, id, [] (tasks::task_manager::task_ptr task) -> future<> {
-                if (!task->is_abortable()) {
-                    co_await coroutine::return_exception(std::runtime_error("Requested task cannot be aborted"));
-                }
-                co_await task->abort();
+            co_await tasks::task_manager::invoke_on_task(tm, id, [id] (tasks::task_manager::task_variant task_v) -> future<> {
+                return std::visit(overloaded_functor{
+                    [] (tasks::task_manager::task_ptr task) -> future<> {
+                        if (!task->is_abortable()) {
+                            co_await coroutine::return_exception(std::runtime_error("Requested task cannot be aborted"));
+                        }
+                        co_await task->abort();
+                    },
+                    [id] (tasks::task_manager::virtual_task_ptr task) -> future<> {
+                        throw tasks::task_manager::task_not_found(id);    // API does not support virtual tasks yet.
+                    }
+                }, task_v);
             });
         } catch (tasks::task_manager::task_not_found& e) {
             throw bad_param_exception(e.what());
@@ -192,14 +207,21 @@ void set_task_manager(http_context& ctx, routes& r, sharded<tasks::task_manager>
         auto id = tasks::task_id{utils::UUID{req->param["task_id"]}};
         tasks::task_manager::foreign_task_ptr task;
         try {
-            task = co_await tasks::task_manager::invoke_on_task(tm, id, std::function([] (tasks::task_manager::task_ptr task) {
-                return task->done().then_wrapped([task] (auto f) {
-                    task->unregister_task();
-                    // done() is called only because we want the task to be complete before getting its status.
-                    // The future should be ignored here as the result does not matter.
-                    f.ignore_ready_future();
-                    return make_foreign(task);
-                });
+            task = co_await tasks::task_manager::invoke_on_task(tm, id, std::function([id] (tasks::task_manager::task_variant task_v) -> future<tasks::task_manager::foreign_task_ptr> {
+                return std::visit(overloaded_functor{
+                    [] (tasks::task_manager::task_ptr task) {
+                        return task->done().then_wrapped([task] (auto f) {
+                            task->unregister_task();
+                            // done() is called only because we want the task to be complete before getting its status.
+                            // The future should be ignored here as the result does not matter.
+                            f.ignore_ready_future();
+                            return make_foreign(task);
+                        });
+                    },
+                    [id] (tasks::task_manager::virtual_task_ptr task) -> future<tasks::task_manager::foreign_task_ptr> {
+                        throw tasks::task_manager::task_not_found(id);    // API does not support virtual tasks yet.
+                    }
+                }, task_v);
             }));
         } catch (tasks::task_manager::task_not_found& e) {
             throw bad_param_exception(e.what());
@@ -217,11 +239,18 @@ void set_task_manager(http_context& ctx, routes& r, sharded<tasks::task_manager>
         tasks::task_manager::foreign_task_ptr task;
         try {
             // Get requested task.
-            task = co_await tasks::task_manager::invoke_on_task(tm, id, std::function([] (tasks::task_manager::task_ptr task) -> future<tasks::task_manager::foreign_task_ptr> {
-                if (task->is_complete()) {
-                    task->unregister_task();
-                }
-                co_return task;
+            task = co_await tasks::task_manager::invoke_on_task(tm, id, std::function([id] (tasks::task_manager::task_variant task_v) -> future<tasks::task_manager::foreign_task_ptr> {
+                return std::visit(overloaded_functor{
+                    [] (tasks::task_manager::task_ptr task) -> future<tasks::task_manager::foreign_task_ptr> {
+                        if (task->is_complete()) {
+                            task->unregister_task();
+                        }
+                        co_return task;
+                    },
+                    [id] (tasks::task_manager::virtual_task_ptr task) -> future<tasks::task_manager::foreign_task_ptr> {
+                        throw tasks::task_manager::task_not_found(id);    // API does not support virtual tasks yet.
+                    }
+                }, task_v);
             }));
         } catch (tasks::task_manager::task_not_found& e) {
             throw bad_param_exception(e.what());
