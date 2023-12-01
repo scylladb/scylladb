@@ -120,13 +120,18 @@ static std::ostream& operator<<(std::ostream& os, const std::unordered_map<T1, T
 }
 
 std::ostream& operator<<(std::ostream& out, row_level_diff_detect_algorithm algo) {
+    return out << format_as(algo);
+}
+
+std::string_view format_as(row_level_diff_detect_algorithm algo) {
+    using enum row_level_diff_detect_algorithm;
     switch (algo) {
-    case row_level_diff_detect_algorithm::send_full_set:
-        return out << "send_full_set";
-    case row_level_diff_detect_algorithm::send_full_set_rpc_stream:
-        return out << "send_full_set_rpc_stream";
+    case send_full_set:
+        return "send_full_set";
+    case send_full_set_rpc_stream:
+        return "send_full_set_rpc_stream";
     };
-    return out << "unknown";
+    return "unknown";
 }
 
 static size_t get_nr_tables(const replica::database& db, const sstring& keyspace) {
