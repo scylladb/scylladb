@@ -938,7 +938,7 @@ def test_gsi_projection_error_duplicate(dynamodb):
                                     'NonKeyAttributes': ['a', 'a'] }
                 }
             ]) as table:
-            passs
+            pass
 
 # NonKeyAttributes must be a list of strings. Non-strings in this list
 # result, for some reason, in SerializationException instead of the more
