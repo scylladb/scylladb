@@ -66,7 +66,7 @@ class validator {
         } else {
             if (n->is_leftmost()) {
                 if (t._corners.left != n) {
-                    fmt::print("leftmost tree {}, excpected {}\n", t._corners.left->id(), n->id());
+                    fmt::print("leftmost tree {}, expected {}\n", t._corners.left->id(), n->id());
                     return false;
                 }
                 if (!n->is_root() && n->_leaf_tree != &t) {
@@ -76,7 +76,7 @@ class validator {
             }
             if (n->is_rightmost()) {
                 if (t._corners.right != n) {
-                    fmt::print("rightmost tree {}, excpected {}\n", t._corners.right->id(), n->id());
+                    fmt::print("rightmost tree {}, expected {}\n", t._corners.right->id(), n->id());
                     return false;
                 }
                 if (!n->is_root() && n->_leaf_tree != &t) {

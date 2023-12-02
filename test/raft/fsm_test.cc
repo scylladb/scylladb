@@ -568,7 +568,7 @@ BOOST_AUTO_TEST_CASE(test_election_two_nodes_prevote) {
     auto msg = std::get<raft::vote_reply>(output.messages.back().second);
     BOOST_CHECK(msg.current_term == term_t{2} && !msg.vote_granted);
 
-    // Check that prevote with higer term get a reply with term in the future
+    // Check that prevote with higher term get a reply with term in the future
     // and does not change local term.
     // Move to follower again
     fsm.step(id2, raft::vote_reply{term_t{3}, false, true});
@@ -1069,7 +1069,7 @@ BOOST_AUTO_TEST_CASE(test_leader_stepdown) {
     fsm2.step(id2, raft::append_reply{fsm2.get_current_term(), idx, raft::append_reply::accepted{idx}});
     // Accept new config entry on id3
     fsm2.step(id3, raft::append_reply{fsm2.get_current_term(), idx, raft::append_reply::accepted{idx}});
-    // C_new is now commited
+    // C_new is now committed
     output = fsm2.get_output(); // this sends out the entry submitted after C_new
     append = std::get<raft::append_request>(output.messages.back().second);
     idx = append.entries.back()->idx;
@@ -1943,7 +1943,7 @@ BOOST_AUTO_TEST_CASE(test_leader_transfer_lost_timeout_now) {
     // ... and lose it.
 
     // By now, B and C should both remain in the follower state.
-    // Check that and attept to go forward with a normal election process to see
+    // Check that and attempt to go forward with a normal election process to see
     // that the cluster operates normally after `timeout_now` has been lost.
     BOOST_CHECK(B.is_follower());
     BOOST_CHECK(C.is_follower());

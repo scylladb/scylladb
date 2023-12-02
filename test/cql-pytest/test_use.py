@@ -17,7 +17,7 @@ import pytest
 from cassandra.protocol import InvalidRequest
 from util import unique_name, new_cql
 
-# Check that CREATE TABLE and DROP TABLE work without an explict keyspace
+# Check that CREATE TABLE and DROP TABLE work without an explicit keyspace
 # name if a default keyspace name is specified with "USE".
 def test_create_table_use_keyspace(cql, test_keyspace):
     with new_cql(cql) as ncql:

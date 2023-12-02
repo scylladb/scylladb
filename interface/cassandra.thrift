@@ -703,7 +703,7 @@ service Cassandra {
   /**
    * Atomic compare and set.
    *
-   * If the cas is successfull, the success boolean in CASResult will be true and there will be no current_values.
+   * If the cas is successful, the success boolean in CASResult will be true and there will be no current_values.
    * Otherwise, success will be false and current_values will contain the current values for the columns in
    * expected (that, by definition of compare-and-set, will differ from the values in expected).
    *
@@ -845,7 +845,7 @@ service Cassandra {
     throws (1:InvalidRequestException ire),
 
   /** Enables tracing for the next query in this connection and returns the UUID for that trace session
-      The next query will be traced idependently of trace probability and the returned UUID can be used to query the trace keyspace */
+      The next query will be traced independently of trace probability and the returned UUID can be used to query the trace keyspace */
   binary trace_next_query(),
 
   list<CfSplit> describe_splits_ex(1:required string cfName,

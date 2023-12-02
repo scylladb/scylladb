@@ -94,7 +94,7 @@ SEASTAR_THREAD_TEST_CASE(test_large_data) {
         BOOST_REQUIRE_EQUAL(to_bytes(*row0[0]), "44");
         BOOST_REQUIRE_EQUAL(to_bytes(*row0[2]), "tbl");
 
-        // Unfortunately we cannot check the exact size, since it includes a timestemp written as a vint of the delta
+        // Unfortunately we cannot check the exact size, since it includes a timestamp written as a vint of the delta
         // since start of the write. This means that the size of the row depends on the time it took to write the
         // previous rows.
         auto row_size_bytes = *row0[1];

@@ -113,7 +113,7 @@ def testDropStaticWithTimestamp(cql, test_keyspace):
         execute(cql, table, "ALTER TABLE %s DROP todrop USING TIMESTAMP 20000")
         execute(cql, table, "ALTER TABLE %s ADD todrop int static")
         execute(cql, table, "INSERT INTO %s (id, c1, v1, todrop) VALUES (?, ?, ?, ?) USING TIMESTAMP ?", 1, 100, 100, 100, 30000)
-        # static column value with largest timestmap will be available again
+        # static column value with largest timestamp will be available again
         assert_rows(execute(cql, table, "SELECT id, c1, v1, todrop FROM %s"),
                [1, 0, 0, 4],
                [1, 1, 1, 4],

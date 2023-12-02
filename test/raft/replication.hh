@@ -286,9 +286,9 @@ using snapshots = std::unordered_map<raft::server_id, std::unordered_map<raft::s
 using persisted_snapshots = std::unordered_map<raft::server_id, std::pair<raft::snapshot_descriptor, snapshot_value>>;
 
 extern seastar::semaphore snapshot_sync;
-// application of a snaphot with that id will be delayed until snapshot_sync is signaled
+// application of a snapshot with that id will be delayed until snapshot_sync is signaled
 extern raft::snapshot_id delay_apply_snapshot;
-// sending of a snaphot with that id will be delayed until snapshot_sync is signaled
+// sending of a snapshot with that id will be delayed until snapshot_sync is signaled
 extern raft::snapshot_id delay_send_snapshot;
 
 // Test connectivity configuration

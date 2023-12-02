@@ -480,7 +480,7 @@ enum class row_extended_flags : uint8_t {
     // This flag is never set by Scylla and it fails to read files that have it set.
         has_shadowable_deletion_cassandra = 0x02,
     // Scylla-specific flag, indicates whether the row deletion is shadowable.
-    // If set, the shadowable tombstone is writen right after the row deletion.
+    // If set, the shadowable tombstone is written right after the row deletion.
     // This is only used by Materialized Views that are not supposed to be exported.
         has_shadowable_deletion_scylla = 0x80,
 };

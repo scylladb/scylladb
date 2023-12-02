@@ -105,7 +105,7 @@ def test_describe_table_provisioned_throughput(test_table):
 
 # This is a silly test for the RestoreSummary attribute in DescribeTable -
 # it should not exist in a table not created by a restore. When testing
-# the backup/restore feature, we will have more meaninful tests for the
+# the backup/restore feature, we will have more meaningful tests for the
 # value of this attribute in that case.
 def test_describe_table_restore_summary(test_table):
     got = test_table.meta.client.describe_table(TableName=test_table.name)['Table']

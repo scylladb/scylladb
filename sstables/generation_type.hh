@@ -226,11 +226,11 @@ struct fmt::formatter<sstables::generation_type> : fmt::formatter<std::string_vi
         if (!generation) {
             return fmt::format_to(ctx.out(), "-");
         } else if (generation.is_uuid_based()) {
-            // format the uuid with 4 parts splitted with "_". each these parts is encoded
+            // format the uuid with 4 parts split with "_". each these parts is encoded
             // as base36 chars.
             //
             // This matches the way how Cassandra formats UUIDBasedSSTableId, but we
-            // don't have to. just don't want to use "-" as the delimeter in UUID, as
+            // don't have to. just don't want to use "-" as the delimiter in UUID, as
             // "-" is already used to split different parts in a SStable filename like
             // "nb-1-big-Data.db".
             const auto uuid = generation.as_uuid();

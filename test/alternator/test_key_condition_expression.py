@@ -245,7 +245,7 @@ def test_key_condition_expression_parser(test_table_sn_with_sorted_partition):
         ExpressionAttributeValues={':p': p, ':c': 3})
     expected_items = [item for item in items if item['c'] == 3]
     assert(got_items == expected_items)
-    # Strangely, although one pair of unnecesary parentheses are allowed
+    # Strangely, although one pair of unnecessary parentheses are allowed
     # in each level, DynamoDB forbids more than one - it refuses to accept
     # the expression ((c=:c) AND ((p=:p))) with one too many redundant levels
     # of parentheses. However, we chose not to implement this extra check

@@ -134,7 +134,7 @@ public:
         return snitch_signal_connection_t();
     }
 
-    // tells wheter the INTERNAL_IP address should be preferred over endpoint address
+    // tells whether the INTERNAL_IP address should be preferred over endpoint address
     virtual bool prefer_local() const noexcept {
         return false;
     }

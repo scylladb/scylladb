@@ -55,7 +55,7 @@ using column_count_type = uint32_t;
 using column_id = column_count_type;
 
 // Column ID unique within a schema. Enum class to avoid
-// mixing wtih column id.
+// mixing with column id.
 enum class ordinal_column_id: column_count_type {};
 
 std::ostream& operator<<(std::ostream& os, ordinal_column_id id);
@@ -536,10 +536,10 @@ class partition_slice;
  *
  * Code using a particular extension can locate it by name in the schema map,
  * and barring the "is_placeholder" says true, cast it to whatever might
- * be the expeceted implementation.
+ * be the expected implementation.
  *
  * We allow placeholder object since an extension written to schema tables
- * might be unavailable on next boot/other node. To avoid loosing the config data,
+ * might be unavailable on next boot/other node. To avoid losing the config data,
  * a placeholder object is put into schema map, which at least can
  * re-serialize the data back.
  *

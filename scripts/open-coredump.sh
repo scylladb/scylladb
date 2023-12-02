@@ -34,11 +34,11 @@ Sometimes the metadata retrieved from the build lacks the package URL.
 In this case, the scylla package can be downloaded manually and extracted
 into the artifact directory (see below) using the "scylla.package" name.
 When this directory exists, the script will not attempt to extract the
-package URL from the metadata and dowload the package itself, instead it
+package URL from the metadata and download the package itself, instead it
 will use the provided package.
 
 The script is idempotent: running it after the prepartory steps will
-re-use what is already donwloaded. It is *strongly* recommended to run
+reuse what is already downloaded. It is *strongly* recommended to run
 this from an empty directory, with nothing but the core-file present.
 
 Options:

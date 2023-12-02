@@ -333,7 +333,7 @@ def test_grant_perms_on_nonexistent_udf(cql, cassandra_bug):
         revoke(cql, 'EXECUTE', 'ALL FUNCTIONS', username)
         with pytest.raises(InvalidRequest):
             grant(cql, 'EXECUTE', f'ALL FUNCTIONS IN KEYSPACE {keyspace}', username)
-        # When the keyspace is non-existant, Scylla returns InvalidRequest
+        # When the keyspace is non-existent, Scylla returns InvalidRequest
         # and Cassandra returns ConfigurationException. Let's allow both.
         with pytest.raises((InvalidRequest, ConfigurationException)):
             grant(cql, 'EXECUTE', f'FUNCTION {keyspace}.{fun_name}(int)', username)

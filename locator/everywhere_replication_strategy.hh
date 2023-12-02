@@ -23,7 +23,7 @@ public:
     virtual void validate_options(const gms::feature_service&) const override { /* noop */ }
 
     std::optional<std::unordered_set<sstring>> recognized_options(const topology&) const override {
-        // We explicitely allow all options
+        // We explicitly allow all options
         return std::nullopt;
     }
 

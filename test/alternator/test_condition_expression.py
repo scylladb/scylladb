@@ -185,7 +185,7 @@ def test_update_condition_eq_set(test_table_s):
 
 # The above test (test_update_condition_eq_set()) checked equality of simple
 # set attributes. But an attributes can contain a nested document, where the
-# set sits in a deep level (the set itself is a leaf in this heirarchy because
+# set sits in a deep level (the set itself is a leaf in this hierarchy because
 # it can only contain numbers, strings or bytes). We need to correctly support
 # equality check in that case too.
 # Reproduces issue #8514.
@@ -1293,7 +1293,7 @@ def test_update_condition_size(test_table_s):
             ConditionExpression='size(a)=f',
             ExpressionAttributeValues={':val': 6})
     assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['z'] == 6
-    # After testing the "=" operator throughly, check other operators are also
+    # After testing the "=" operator thoroughly, check other operators are also
     # supported.
     test_table_s.update_item(Key={'p': p},
         UpdateExpression='SET z = :val',
@@ -1402,7 +1402,7 @@ def test_update_condition_attribute_exists_in_comparison(test_table_s):
             ConditionExpression='attribute_exists(a) < :val',
             ExpressionAttributeValues={':val': 1})
 
-# In essense, the size() function tested in the previous test behaves
+# In essence, the size() function tested in the previous test behaves
 # exactly like the functions of UpdateExpressions, i.e., it transforms a
 # value (attribute from the item or the query) into a new value, which
 # can then be operated (in our case, compared). In this test we check
@@ -1468,7 +1468,7 @@ def test_update_condition_nested_attributes(test_table_s):
             ExpressionAttributeValues={':val': 4})
     assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['c'] == 2
 
-# All the previous tests refered to attributes using their name directly.
+# All the previous tests referred to attributes using their name directly.
 # But the DynamoDB API also allows to refer to attributes using a #reference.
 # Among other things this allows using attribute names which are usually
 # reserved keywords in condition expressions.
@@ -1773,7 +1773,7 @@ def test_update_condition_unused_entries_short_circuit(test_table_s):
     test_table_s.update_item(Key={'p': p},
         AttributeUpdates={'a': {'Value': 1, 'Action': 'PUT'}})
     # If short-circuit evaluation is done for ConditionExpression, it will
-    # not use #name2 or :val2. But we should't fail this request claiming
+    # not use #name2 or :val2. But we shouldn't fail this request claiming
     # these references weren't used... They were used in the expression,
     # just not in the evaluation. This request *should* work.
     test_table_s.update_item(Key={'p': p},

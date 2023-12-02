@@ -69,7 +69,7 @@ public:
 //
 // These callbacks will be called when the dirty memory manager
 // see relevant changes in the memory pressure conditions for this region_group. By specializing
-// those methods - which are a nop by default - the callers initiate memtable flusing to
+// those methods - which are a nop by default - the callers initiate memtable flushing to
 // free real and unspooled memory.
 
 // The following restrictions apply to implementations of start_reclaiming() and stop_reclaiming():

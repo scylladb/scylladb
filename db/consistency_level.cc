@@ -218,7 +218,7 @@ void assure_sufficient_live_nodes(
         if (assure_sufficient_live_nodes_each_quorum(cl, erm, live_endpoints, pending_endpoints)) {
             break;
         }
-    // Fallthough on purpose for SimpleStrategy
+    // Fallthrough on purpose for SimpleStrategy
         [[fallthrough]];
     default:
         size_t live = live_endpoints.size();
@@ -300,7 +300,7 @@ filter_for_query(consistency_level cl,
             //    are 0.01 and 0.02, so equalizing the miss numbers will send
             //    the first node twice the requests. But unless the disk is
             //    extremely slow, at such high hit ratios the disk work is
-            //    negligable and we want these two nodes to get equal work.
+            //    negligible and we want these two nodes to get equal work.
             // 2. Even if one node has perfect cache hit ratio (near 1.0),
             //    and the other near 0, we want the near-0 node to get some
             //    of the work to warm up its cache. When max_hit_rate=0.95
@@ -378,7 +378,7 @@ is_sufficient_live_nodes(consistency_level cl,
         }
     }
         [[fallthrough]];
-        // Fallthough on purpose for SimpleStrategy
+        // Fallthrough on purpose for SimpleStrategy
     default:
         return live_endpoints.size() >= block_for(erm, cl);
     }

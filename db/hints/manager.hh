@@ -165,10 +165,10 @@ public:
     /// and which storing is not complete yet. This is meant to stabilize the memory consumption of the hints storing path
     /// which is initialed from the storage_proxy WRITE flow. storage_proxy is going to check this condition and if it
     /// returns TRUE it won't attempt any new WRITEs thus eliminating the possibility of new hints generation. If new hints
-    /// are not generated the amount of in-flight hints amount and thus the memory they are consuming is going to drop eventualy
+    /// are not generated the amount of in-flight hints amount and thus the memory they are consuming is going to drop eventually
     /// because the hints are going to be either stored or dropped. After that the things are going to get back to normal again.
     ///
-    /// Note that we can't consider the disk usage consumption here because the disk usage is not promissed to drop down shortly
+    /// Note that we can't consider the disk usage consumption here because the disk usage is not promised to drop down shortly
     /// because it requires the remote node to be UP.
     ///
     /// \param ep end point to check

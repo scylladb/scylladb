@@ -529,7 +529,7 @@ public:
      * Checks if there is enough budget for the @param nr new records
      * @param nr number of new records
      *
-     * @return TRUE if there is enough budget, FLASE otherwise
+     * @return TRUE if there is enough budget, FALSE otherwise
      */
     bool have_records_budget(uint64_t nr = 1) {
         // We don't want the total amount of pending, active and flushing records to

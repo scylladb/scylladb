@@ -1020,7 +1020,7 @@ SEASTAR_TEST_CASE(test_apply_monotonically_is_monotonic) {
                     bool use_second = which++ % 2;
                     mutation& dst = use_second ? second : target;
                     dst.partition().set_continuity(s, position_range::from_range(ck_range), is_continuous::yes);
-                    // Continutiy merging rules mandate that continuous range in the newer verison
+                    // Continutiy merging rules mandate that continuous range in the newer version
                     // contains all rows which are in the old versions.
                     if (use_second) {
                         second.partition().apply(s, target.partition().sliced(s, {ck_range}), app_stats);

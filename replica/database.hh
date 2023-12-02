@@ -714,7 +714,7 @@ public:
             lw_shared_ptr<sstables::sstable_set> sstables, gc_clock::time_point compaction_time) const;
 
     // Make a reader which reads only from the row-cache.
-    // The reader doens't populate the cache, it reads only what is in the cache
+    // The reader doesn't populate the cache, it reads only what is in the cache
     // Supports reading only a single partition.
     // Does not support reading in reverse.
     flat_mutation_reader_v2 make_nonpopulating_cache_reader(schema_ptr schema, reader_permit permit, const dht::partition_range& range,
@@ -1166,10 +1166,10 @@ public:
     // Returns true iff sst was found and erased.
     bool erase_sstable_cleanup_state(const sstables::shared_sstable& sst);
 
-    // Returns true if the sstable requries cleanup.
+    // Returns true if the sstable requires cleanup.
     bool requires_cleanup(const sstables::shared_sstable& sst) const;
 
-    // Returns true if any of the sstables requries cleanup.
+    // Returns true if any of the sstables requires cleanup.
     bool requires_cleanup(const sstables::sstable_set& set) const;
 
     // Takes snapshot of current storage state (includes memtable and sstables) from

@@ -446,7 +446,7 @@ def test_allow_filtering_multi_column_and_index(cql, test_keyspace):
             lambda r : r.r == 0 and (r.c1 < 2 or (r.c1 == 2 and r.c2 < 0)))
         # But if the base table's partition key is in the query, along with
         # the clustering key, then it's a full prefix of the index's
-        # clustering key - so filtering is not neeeded. PR #9122 fixed the
+        # clustering key - so filtering is not needed. PR #9122 fixed the
         # correctness of this query, but left ALLOW FILTERING mandatory so
         # the following test failed:
         check_af_optional(cql, (table, everything),

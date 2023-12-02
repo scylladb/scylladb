@@ -28,7 +28,7 @@ class topology_description;
  * (i.e., to pick partition keys for these writes).
  */
 class metadata final {
-    // Note: we use db_clock (1ms resolution) for generation timestaps
+    // Note: we use db_clock (1ms resolution) for generation timestamps
     // (because we need to insert them into tables using columns of timestamp types,
     //  and the native type of our columns' timestamp_type is db_clock::time_point).
     // On the other hand, timestamp_clock (1us resolution) is used for mutation timestamps,

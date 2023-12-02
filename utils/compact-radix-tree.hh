@@ -180,7 +180,7 @@ private:
     }
 
     /*
-     * Finds the number of leading elements that coinside for two
+     * Finds the number of leading elements that coincide for two
      * indices. Needed on insertion, when a short-cut node gets
      * expanded back.
      */
@@ -255,7 +255,7 @@ private:
     /*
      * Allocation returns a slot pointer and a boolean denoting
      * if the allocation really took place (false if the slot
-     * is aleady occupied)
+     * is already occupied)
      */
     using allocate_res = std::pair<T*, bool>;
 
@@ -1155,7 +1155,7 @@ private:
      * The indirect layout is used to keep small number of sparse keys on
      * small node. To do that it keeps an array of indices and when is
      * asked to get an element searches in this array. This map additionally
-     * works as a presense bitmask from direct layout.
+     * works as a presence bitmask from direct layout.
      *
      * Since indirect layouts of different sizes have slots starting at
      * different addresses in memory, they cannot grow dynamically, but are
@@ -1441,7 +1441,7 @@ private:
 
         /*
          * The plen is the level at which current node and desired
-         * index still coinside
+         * index still coincide
          */
         unsigned plen = common_prefix_len(key, n_prefix);
         assert(plen >= depth);
@@ -1547,7 +1547,7 @@ private:
 
     static void populate_slot(node_head_ptr& np, key_t key, unsigned depth) {
         /*
-         * Allocate leaf immediatelly with the prefix
+         * Allocate leaf immediately with the prefix
          * len big enough to cover all skipped node
          * up to the current depth
          */

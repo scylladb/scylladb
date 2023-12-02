@@ -27,7 +27,7 @@ utils::time_estimated_histogram timed_rate_moving_average_summary_merge(utils::t
 }
 
 /**
- * This function implement a two dimentional map reduce where
+ * This function implement a two dimensional map reduce where
  * the first level is a distributed storage_proxy class and the
  * second level is the stats per scheduling group class.
  * @param d -  a reference to the storage_proxy distributed class.
@@ -48,7 +48,7 @@ future<V> two_dimensional_map_reduce(distributed<service::storage_proxy>& d,
 }
 
 /**
- * This function implement a two dimentional map reduce where
+ * This function implement a two dimensional map reduce where
  * the first level is a distributed storage_proxy class and the
  * second level is the stats per scheduling group class.
  * @param d -  a reference to the storage_proxy distributed class.

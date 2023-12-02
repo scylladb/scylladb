@@ -59,7 +59,7 @@ def test_update_expression_set_copy(test_table_s):
     # Copying an non-existing attribute generates an error
     with pytest.raises(ClientError, match='ValidationException'):
         test_table_s.update_item(Key={'p': p}, UpdateExpression='SET c = z')
-    # Same thing happens if the item does't exist at all
+    # Same thing happens if the item doesn't exist at all
     p1 = random_string()
     with pytest.raises(ClientError, match='ValidationException'):
         test_table_s.update_item(Key={'p': p1}, UpdateExpression='SET c = z')

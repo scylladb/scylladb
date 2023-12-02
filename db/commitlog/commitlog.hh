@@ -65,7 +65,7 @@ class extensions;
  * Code should ensure to use discard_completed_segments with UUID +
  * highest rp once a memtable has been flushed. This will allow
  * discarding used segments. Failure to do so will keep stuff
- * indefinately.
+ * indefinitely.
  */
 class commitlog {
 public:
@@ -186,7 +186,7 @@ public:
     /**
      * Template version of add.
      * Resolves with timed_out_error when timeout is reached.
-     * @param mu an invokable op that generates the serialized data. (Of size bytes)
+     * @param mu an invocable op that generates the serialized data. (Of size bytes)
      */
     template<typename MutationOp>
     future<rp_handle> add_mutation(const cf_id_type& id, size_t size, db::timeout_clock::time_point timeout, force_sync sync, MutationOp&& mu) {
@@ -197,7 +197,7 @@ public:
 
     /**
      * Template version of add.
-     * @param mu an invokable op that generates the serialized data. (Of size bytes)
+     * @param mu an invocable op that generates the serialized data. (Of size bytes)
      */
     template<typename MutationOp>
     future<rp_handle> add_mutation(const cf_id_type& id, size_t size, force_sync sync, MutationOp&& mu) {

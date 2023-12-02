@@ -254,7 +254,7 @@ private:
     // Propagate replacement of sstables to all ongoing compaction of a given table
     void propagate_replacement(compaction::table_state& t, const std::vector<sstables::shared_sstable>& removed, const std::vector<sstables::shared_sstable>& added);
 
-    // This constructor is suposed to only be used for testing so lets be more explicit
+    // This constructor is supposed to only be used for testing so lets be more explicit
     // about invoking it. Ref #10146
     compaction_manager(tasks::task_manager& tm);
 public:

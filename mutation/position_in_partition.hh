@@ -362,10 +362,10 @@ public:
 
     // Strong exception guarantees.
     position_in_partition& operator=(position_in_partition_view view) {
-        // The copy assigment to _ck can throw (because it allocates),
+        // The copy assignment to _ck can throw (because it allocates),
         // but assignments to _type and _bound_weight can't throw.
         // Thus, to achieve strong exception guarantees,
-        // we only need to perform the _ck assigmnent before others.
+        // we only need to perform the _ck assignment before others.
         if (view._ck) {
             _ck = *view._ck;
         } else {

@@ -613,7 +613,7 @@ def testFromJsonFct(cql, test_keyspace):
 
             # Unlike all the other cases of unsuccessful fromJson() parsing which return FunctionFailure,
             # in this specific case Cassandra returns InvalidQuery. I don't know why, and I don't think
-            # Scylla needs to reproduce this ideosyncracy. So let's allow both.
+            # Scylla needs to reproduce this idiosyncrasy. So let's allow both.
             assert_invalid_throw(cql, table, (FunctionFailure, InvalidRequest),
                 "INSERT INTO %s (k, durationval) VALUES (?, fromJson(?))", 0, "\"xyz\"")
 
@@ -1118,7 +1118,7 @@ def testInsertJsonSyntaxWithCollections(cql, test_keyspace):
         execute(cql, table, "INSERT INTO %s JSON ?", "{\"k\": 0, \"lf\": [1, 2, 3]}")
         assert_rows(execute(cql, table, "SELECT k, lf FROM %s"), [0, [1, 2, 3]])
 
-# Reproduces issus #8087
+# Reproduces issue #8087
 @pytest.mark.xfail(reason="issue #8087")
 def testInsertJsonSyntaxWithNonNativeMapKeys(cql, test_keyspace):
     # JSON doesn't allow non-string keys, so we accept string representations of any type as map keys and

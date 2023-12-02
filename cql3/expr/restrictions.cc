@@ -155,7 +155,7 @@ void preliminary_binop_vaidation_checks(const binary_operator& binop) {
 
     // Right now a token() on the LHS means that there's a partition token there.
     // In the future with relaxed grammar this might no longer be true and this check will have to be revisisted.
-    // Moving the check after preparation would break tests and cassandra compatability.
+    // Moving the check after preparation would break tests and cassandra compatibility.
     if (is_token_function(binop.lhs)) {
         if (binop.op == oper_t::IN) {
             throw exceptions::invalid_request_exception("IN cannot be used with the token function");

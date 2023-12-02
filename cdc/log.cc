@@ -183,7 +183,7 @@ public:
         // if we are turning off cdc we can skip this, since even if columns change etc,
         // any writer should see cdc -> off together with any actual schema changes to
         // base table, so should never try to write to non-existent log column etc.
-        // note that if user has set ttl=0 in cdc options, he is still reponsible
+        // note that if user has set ttl=0 in cdc options, he is still responsible
         // for emptying the log. 
         if (is_cdc) {
             auto& db = _ctxt._proxy.get_db().local();

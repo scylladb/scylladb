@@ -1450,7 +1450,7 @@ reclaim_timer::reclaim_timer(const char* name, is_preemptible preemptible, size_
             // the hardware clock -- no effort is made to round the values to
             // resolution. Therefore, tick durations vary slightly in both
             // directions. We subtract something slightly bigger than these
-            // variations, to accomodate blocked-reactor-notify-ms values which
+            // variations, to accommodate blocked-reactor-notify-ms values which
             // are multiplies of resolution.
             // E.g. with kernel CONFIG_HZ=250, coarse clock resolution is 4ms.
             // If also we also have blocked-reactor-notify-ms=4, then we would

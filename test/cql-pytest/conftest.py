@@ -4,7 +4,7 @@
 
 # This file configures pytest for all tests in this directory, and also
 # defines common test fixtures for all of them to use. A "fixture" is some
-# setup which an invididual test requires to run; The fixture has setup code
+# setup which an individual test requires to run; The fixture has setup code
 # and teardown code, and if multiple tests require the same fixture, it can
 # be set up only once - while still allowing the user to run individual tests
 # and automatically setting up the fixtures they need.
@@ -28,7 +28,7 @@ print(f"Driver name {DRIVER_NAME}, version {DRIVER_VERSION}")
 
 
 # By default, tests run against a CQL server (Scylla or Cassandra) listening
-# on localhost:9042. Add the --host and --port options to allow overiding
+# on localhost:9042. Add the --host and --port options to allow overriding
 # these defaults.
 def pytest_addoption(parser):
     parser.addoption('--host', action='store', default='localhost',

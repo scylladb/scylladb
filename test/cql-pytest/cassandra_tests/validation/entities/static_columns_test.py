@@ -54,13 +54,13 @@ def testStaticColumns(cql, test_keyspace):
             assert_rows(execute(cql, table, "SELECT p, s FROM %s WHERE k=0 AND p=1"), [1, 24])
             assert_rows(execute(cql, table, "SELECT k, p, s FROM %s WHERE k=0 AND p=1"), [0, 1, 24])
 
-            # Check that deleting a row don't implicitely deletes statics
+            # Check that deleting a row don't implicitly deletes statics
             execute(cql, table, "DELETE FROM %s WHERE k=0 AND p=0")
             if force_flush:
                 flush(cql, table)
             assert_rows(execute(cql, table, "SELECT * FROM %s"), [0, 1, 24, 1])
 
-            # But that explicitely deleting the static column does remove it
+            # But that explicitly deleting the static column does remove it
             execute(cql, table, "DELETE s FROM %s WHERE k=0")
             if force_flush:
                 flush(cql, table)

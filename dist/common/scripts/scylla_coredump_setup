@@ -128,7 +128,7 @@ WantedBy=local-fs.target scylla-server.service
         # Not just available/unavailable, it describe more:
         #  - Storage: none
         #  - Storage: journal
-        #  - Storage: /path/to/file (inacessible)
+        #  - Storage: /path/to/file (inaccessible)
         #  - Storage: /path/to/file
         #
         # After systemd-v248, available coredump file output changed like this:

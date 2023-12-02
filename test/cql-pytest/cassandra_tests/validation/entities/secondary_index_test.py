@@ -12,7 +12,7 @@
 # In Scylla, where secondary indexes are implemented using materialized
 # views, this is *not* always the case - an index write may be asynchronous
 # and may not be available for read immediately after the base write.
-# Neverthless, there are situations where Scylla's MV (and SI) writes are
+# Nevertheless, there are situations where Scylla's MV (and SI) writes are
 # guaranteed synchronous. One of them is when N=RF, or in particular, when
 # N=1. In this case, the base and view replica are always the same node,
 # so writes can be done synchronously - and Scylla does guarantee this.
@@ -1016,7 +1016,7 @@ def testIndexOnNonFrozenUDT(cql, test_keyspace):
     with create_type(cql, test_keyspace, "(a int)") as t:
         with create_table(cql, test_keyspace, f"(k int PRIMARY KEY, v {t})") as table:
             assert_invalid_message(cql, table, "index on non-frozen", "CREATE INDEX ON %s (v)")
-            # Cassandra and Scylla focus on different parts of the erro
+            # Cassandra and Scylla focus on different parts of the error
             # below - Cassandra complains that a because this is not a
             # collection keys()/values() cannot be supported, while Scylla
             # complains that this is an unfrozen UDT so it cannot be indexed.

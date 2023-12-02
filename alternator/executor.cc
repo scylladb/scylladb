@@ -994,7 +994,7 @@ static future<executor::request_return_type> create_table_on_shard0(tracing::tra
                 add_column(view_builder, view_range_key, attribute_definitions, column_kind::clustering_key);
             }
             // Base key columns which aren't part of the index's key need to
-            // be added to the view nontheless, as (additional) clustering
+            // be added to the view nonetheless, as (additional) clustering
             // key(s).
             if  (hash_key != view_hash_key && hash_key != view_range_key) {
                 add_column(view_builder, hash_key, attribute_definitions, column_kind::clustering_key);
@@ -1051,7 +1051,7 @@ static future<executor::request_return_type> create_table_on_shard0(tracing::tra
             }
             add_column(view_builder, view_range_key, attribute_definitions, column_kind::clustering_key);
             // Base key columns which aren't part of the index's key need to
-            // be added to the view nontheless, as (additional) clustering
+            // be added to the view nonetheless, as (additional) clustering
             // key(s).
             if  (!range_key.empty() && view_range_key != range_key) {
                 add_column(view_builder, range_key, attribute_definitions, column_kind::clustering_key);
@@ -2268,7 +2268,7 @@ enum class select_type { regular, count, projection };
 static select_type parse_select(const rjson::value& request, table_or_view_type table_type) {
     const rjson::value* select_value = rjson::find(request, "Select");
     if (!select_value) {
-        // If "Select" is not specificed, it defaults to ALL_ATTRIBUTES
+        // If "Select" is not specified, it defaults to ALL_ATTRIBUTES
         // on a base table, or ALL_PROJECTED_ATTRIBUTES on an index
         return table_type == table_or_view_type::base ?
             select_type::regular : select_type::projection;
@@ -3124,7 +3124,7 @@ future<executor::request_return_type> executor::update_item(client_state& client
 // Check according to the request's "ConsistentRead" field, which consistency
 // level we need to use for the read. The field can be True for strongly
 // consistent reads, or False for eventually consistent reads, or if this
-// field is absense, we default to eventually consistent reads.
+// field is absence, we default to eventually consistent reads.
 // In Scylla, eventually-consistent reads are implemented as consistency
 // level LOCAL_ONE, and strongly-consistent reads as LOCAL_QUORUM.
 static db::consistency_level get_read_consistency(const rjson::value& request) {
@@ -3572,7 +3572,7 @@ public:
         // the JSON but take them out before finally returning the JSON.
         if (_attrs_to_get) {
             _filter.for_filters_on([&] (std::string_view attr) {
-                std::string a(attr); // no heterogenous maps searches :-(
+                std::string a(attr); // no heterogeneous maps searches :-(
                 if (!_attrs_to_get->contains(a)) {
                     _extra_filter_attrs.emplace(std::move(a));
                 }

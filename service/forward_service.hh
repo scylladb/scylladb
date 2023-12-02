@@ -59,7 +59,7 @@ class storage_proxy;
 // Query splitting example (3 node cluster with num_tokens set to 3):
 //   Original query: forward_request{
 //       reduction_types=[reduction_type{count}],
-//       cmd=read_command{contents ommited},
+//       cmd=read_command{contents omitted},
 //       pr={(-inf, +inf)},
 //       cl=ONE,
 //       timeout(ms)=4864752279
@@ -83,7 +83,7 @@ class storage_proxy;
 //
 //       forward_request{
 //           reduction_types=[reduction_type{count}],
-//           cmd=read_command{contents ommited},
+//           cmd=read_command{contents omitted},
 //           pr={
 //               (-inf, {-7656156436523256816, end}],
 //               ({-885518633547994880, end}, {-881470678946355457, end}],
@@ -96,7 +96,7 @@ class storage_proxy;
 //
 //       forward_request{
 //           reduction_types=[reduction_type{count}],
-//           cmd=read_command{contents ommited},
+//           cmd=read_command{contents omitted},
 //           pr={
 //               ({-7656156436523256816, end}, {-6273657286650174294, end}],
 //               ({-6273657286650174294, end}, {-885518633547994880, end}],
@@ -108,7 +108,7 @@ class storage_proxy;
 //
 //       forward_request{
 //           reduction_types=[reduction_type{count}],
-//           cmd=read_command{contents ommited},
+//           cmd=read_command{contents omitted},
 //           pr={
 //               ({-589668175639820781, end}, {1403899953968875783, end}],
 //               ({1403899953968875783, end}, {6175622851574774197, end}],

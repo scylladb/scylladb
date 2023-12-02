@@ -1,5 +1,5 @@
 /*
- * Fast ASCII string validataion.
+ * Fast ASCII string validation.
  *
  * Copyright (c) 2018, Arm Limited.
  */

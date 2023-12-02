@@ -19,7 +19,7 @@ temporary directory which is automatically deleted when the test ends.
 "run" automatically picks the most recently compiled version of Scylla in
 `build/*/scylla` - but this choice of Scylla executable can be overridden with
 the `SCYLLA` environment variable. "run-cassandra" defaults to running the
-command `cassandra` from the user's path, but this can be overriden by setting
+command `cassandra` from the user's path, but this can be overridden by setting
 the `CASSANDRA` environment variable to the path of the `cassandra` script,
 e.g., `export CASSANDRA=$HOME/apache-cassandra-3.11.10/bin/cassandra`.
 A few of the tests also require the `nodetool` when running on Cassandra -
@@ -147,7 +147,7 @@ and practices be followed when writing new tests:
    please resist the urge to add more and more of these utility functions.
    Utility functions are bad for several reasons. First, they make it
    harder to read tests - any reader will understand what "cql.execute(...)"
-   does, but not be familiar with dozens of obscure utilty functions.
+   does, but not be familiar with dozens of obscure utility functions.
    Second, when a utility function is written for the benefit of a single
    test, it is often much less general than its author thought, and when
    it comes time to reuse it in a second test, it turns out it needs to be

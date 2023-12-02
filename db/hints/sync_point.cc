@@ -41,7 +41,7 @@ namespace hints {
 //   per_manager_sync_point_v1 mv_sp - replay positions for materialized view hint queues
 //
 // per_manager_sync_point_v1:
-//   std::vector<gms::inet_address> addresses - adresses for which this sync point defines replay positions
+//   std::vector<gms::inet_address> addresses - addresses for which this sync point defines replay positions
 //   std::vector<db::replay_position> flattened_rps:
 //       A flattened collection of replay positions for all addresses and shards.
 //       Replay positions are grouped by address, in the same order as in

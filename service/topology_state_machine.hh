@@ -26,7 +26,7 @@
 namespace service {
 
 enum class node_state: uint16_t {
-    none,                // the new node joined group0 but did not bootstraped yet (has no tokens and data to serve)
+    none,                // the new node joined group0 but did not bootstrapped yet (has no tokens and data to serve)
     bootstrapping,       // the node is currently in the process of streaming its part of the ring
     decommissioning,     // the node is being decommissioned and stream its data to nodes that took over
     removing,            // the node is being removed and its data is streamed to nodes that took over from still alive owners
@@ -126,7 +126,7 @@ struct topology {
     std::unordered_map<raft::server_id, topology_request> requests;
 
     // Holds parameters for a request per node and valid during entire
-    // operation untill the node becomes normal
+    // operation until the node becomes normal
     std::unordered_map<raft::server_id, request_param> req_param;
 
     // Pending global topology request (i.e. not related to any specific node).
@@ -140,7 +140,7 @@ struct topology {
     // It's used as the first column of the clustering key in CDC_GENERATIONS_V3 table.
     std::optional<utils::UUID> new_cdc_generation_data_uuid;
 
-    // The IDs of the commited yet unpublished CDC generations sorted by timestamps.
+    // The IDs of the committed yet unpublished CDC generations sorted by timestamps.
     std::vector<cdc::generation_id_v2> unpublished_cdc_generations;
 
     // Set of features that are considered to be enabled by the cluster.
@@ -182,7 +182,7 @@ struct raft_topology_cmd {
       enum class command: uint16_t {
           barrier,              // request to wait for the latest topology
           barrier_and_drain,    // same + drain requests which use previous versions
-          stream_ranges,        // reqeust to stream data, return when streaming is
+          stream_ranges,        // request to stream data, return when streaming is
                                 // done
           shutdown,             // a decommissioning node should shut down
       };

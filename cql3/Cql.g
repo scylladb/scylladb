@@ -2421,7 +2421,7 @@ FLOAT
     ;
 
 /*
- * This has to be before IDENT so it takes precendence over it.
+ * This has to be before IDENT so it takes precedence over it.
  */
 BOOLEAN
     : T R U E | F A L S E

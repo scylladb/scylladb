@@ -88,7 +88,7 @@ SEASTAR_TEST_CASE(test_group0_cmd_merge) {
         std::vector<canonical_mutation> cms;
         size_t size = 0;
         auto muts = service::prepare_keyspace_drop_announcement(env.local_db(), "ks", api::new_timestamp()).get0();
-        // Maximum mutation size is 1/3 of commitlog segment size wich we set
+        // Maximum mutation size is 1/3 of commitlog segment size which we set
         // to 1M. Make one command a little bit larger than third of the max size.
         while (size < 150*1024) {
             for (auto&& m : muts) {
@@ -105,9 +105,9 @@ SEASTAR_TEST_CASE(test_group0_cmd_merge) {
                    group0.add_entry(cmd, raft::wait_type::applied, nullptr),
                    group0.add_entry(cmd, raft::wait_type::applied, nullptr),
                    group0.add_entry(cmd, raft::wait_type::applied, nullptr));
-        // Sleep is needed for all the entreis added above to hit the log
+        // Sleep is needed for all the entries added above to hit the log
         seastar::sleep(std::chrono::milliseconds(100)).get();
-        // After unpause all entreis added above will be committed and applied together
+        // After unpause all entries added above will be committed and applied together
         utils::get_local_injector().disable("fsm::poll_output/pause");
         f.get(); // Wait for apply to complete
         // Thete should be two calls to migration manager since two out of

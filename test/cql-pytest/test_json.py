@@ -358,7 +358,7 @@ def test_tojson_decimal_high_mantissa(cql, table1):
 
 # This is a smaller version of test_tojson_decimal_high_mantissa, showing
 # that a much smaller exponent, 1e1000 works (this is not surprising) but
-# results in 1000 digits of output. This hints that 1e1000000000 willl not
+# results in 1000 digits of output. This hints that 1e1000000000 will not
 # work at all, without testing it directly as above.
 @pytest.mark.xfail(reason="issue #8002")
 def test_tojson_decimal_high_mantissa2(cql, table1):

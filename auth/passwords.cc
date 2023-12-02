@@ -68,4 +68,4 @@ bool check(const sstring& pass, const sstring& salted_hash) {
     return detail::hash_with_salt(pass, salted_hash) == salted_hash;
 }
 
-} // namespace auth::paswords
+} // namespace auth::passwords

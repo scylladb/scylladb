@@ -99,7 +99,7 @@ private:
     /// Recall that the index-table CK is (token, PK, CK) of the base table for a global index and (indexed column,
     /// CK) for a local index.
     ///
-    /// Elements are conjuctions of single-column binary operators with the same LHS.
+    /// Elements are conjunctions of single-column binary operators with the same LHS.
     /// Element order follows the indexing-table clustering key.
     /// In case of a global index the first element's (token restriction) RHS is a dummy value, it is filled later.
     std::optional<std::vector<expr::expression>> _idx_tbl_ck_prefix;

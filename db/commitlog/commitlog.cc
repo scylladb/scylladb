@@ -204,7 +204,7 @@ struct db::commitlog::entry_writer {
      * Should return the total, exact, size for all entries + overhead (i.e. schema)
      * for this segment.
      *
-     * Can be called more than once, if segment switch is neccesary (because race)
+     * Can be called more than once, if segment switch is necessary (because race)
      */
     virtual size_t size(segment&) = 0;
     /**
@@ -627,7 +627,7 @@ std::enable_if_t<std::is_fundamental<T>::value, T> read(Input& in) {
 /*
  * A single commit log file on disk. Manages creation of the file and writing mutations to disk,
  * as well as tracking the last mutation position of any "dirty" CFs covered by the segment file. Segment
- * files are initially allocated to a fixed size and can grow to accomidate a larger value if necessary.
+ * files are initially allocated to a fixed size and can grow to accommodate a larger value if necessary.
  *
  * The IO flow is somewhat convoluted and goes something like this:
  *
@@ -654,7 +654,7 @@ std::enable_if_t<std::is_fundamental<T>::value, T> read(Input& in) {
  * Note that we do not care which order segment chunks finish writing
  * to disk, other than all below a flush point must finish before flushing.
  *
- * We currently do not wait for flushes to finish before issueing the next
+ * We currently do not wait for flushes to finish before issuing the next
  * cycle call ("after" flush point in the file). This might not be optimal.
  *
  * To close and finish a segment, we first close the gate object that guards
@@ -1108,7 +1108,7 @@ public:
         } catch (...) {
             // If we get an IO exception (which we assume this is)
             // we should close the segment.
-            // TODO: should we also trunctate away any partial write
+            // TODO: should we also truncate away any partial write
             // we did?
             me->_closed = true; // just mark segment as closed, no writes will be done.
             throw;
@@ -2216,7 +2216,7 @@ future<> db::commitlog::segment_manager::do_pending_deletes() {
     }
 
     // #8376 - if we had an error in recycling (disk rename?), and no elements
-    // are available, we could have waiters hoping they will get segements.
+    // are available, we could have waiters hoping they will get segments.
     // abort the queue (wakes up any existing waiters - futures), and let them
     // retry. Since we did deletions instead, disk footprint should allow
     // for new allocs at least. Or more likely, everything is broken, but

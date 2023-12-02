@@ -543,7 +543,7 @@ auto_snapshot: true
 # tombstones seen in memory so we can return them to the coordinator, which
 # will use them to make sure other replicas also know about the deleted rows.
 # With workloads that generate a lot of tombstones, this can cause performance
-# problems and even exaust the server heap.
+# problems and even exhaust the server heap.
 # (http://www.datastax.com/dev/blog/cassandra-anti-patterns-queues-and-queue-like-datasets)
 # Adjust the thresholds here if you understand the dangers and want to
 # scan more tombstones anyway.  These thresholds may also be adjusted at runtime
@@ -555,7 +555,7 @@ tombstone_failure_threshold: 100000
 # Increase if your rows are large, or if you have a very large
 # number of rows per partition.  The competing goals are these:
 #   1) a smaller granularity means more index entries are generated
-#      and looking up rows withing the partition by collation column
+#      and looking up rows within the partition by collation column
 #      is faster
 #   2) but, Cassandra will keep the collation index in memory for hot
 #      rows (as part of the key cache), so a larger granularity means

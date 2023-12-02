@@ -1214,7 +1214,7 @@ table::sstable_list_builder::build_new_list(const sstables::sstable_set& current
 
     // this might seem dangerous, but "move" here just avoids constness,
     // making the two ranges compatible when compiling with boost 1.55.
-    // Noone is actually moving anything...
+    // No one is actually moving anything...
     for (auto all = current_sstables.all(); auto&& tab : boost::range::join(new_sstables, std::move(*all))) {
         if (!s.contains(tab)) {
             new_sstable_list.insert(tab);

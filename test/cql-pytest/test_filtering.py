@@ -204,7 +204,7 @@ def test_filtering_with_subscript(cql, test_keyspace, cassandra_bug):
         #with pytest.raises(InvalidRequest, match='Unsupported unset map key for column m1'):
         #    cql.execute(stmt, [UNSET_VALUE])
 
-        # Finally, check for sucessful filtering with subscripts. For that we
+        # Finally, check for successful filtering with subscripts. For that we
         # need to add some data:
         cql.execute("INSERT INTO "+table+" (p, m1, m2) VALUES (1, {1:2, 3:4}, {'dog':'cat', 'hi':'hello'})")
         cql.execute("INSERT INTO "+table+" (p, m1, m2) VALUES (2, {2:3, 4:5}, {'man':'woman', 'black':'white'})")
@@ -394,8 +394,8 @@ def test_filter_and_fetch_size(cql, test_keyspace, use_index, driver_bug_1):
         results = cql.execute(s)
         assert len(results.current_rows) == 3
 
-# token() function should either take all parition key components or none of them,
-# if the key(s) are specified, they should be listed in the paritition key order
+# token() function should either take all partition key components or none of them,
+# if the key(s) are specified, they should be listed in the partition key order
 # Reproduces #13468
 def test_filter_token(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, 'pk int, ck int, x int, PRIMARY KEY (pk, ck)') as table:

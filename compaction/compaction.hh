@@ -34,7 +34,7 @@ sstring compaction_name(compaction_type type);
 // to the compaction_type enum code.
 compaction_type to_compaction_type(sstring type_name);
 
-// Return a string respresenting the compaction type
+// Return a string representing the compaction type
 // as a verb for logging purposes, e.g. "Compact" or "Cleanup".
 std::string_view to_string(compaction_type type);
 

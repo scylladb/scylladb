@@ -77,7 +77,7 @@ public:
         typename std::aligned_storage<sizeof(T), alignof(T)>::type data;
     };
 
-    // conversion constuctor. See warning above.
+    // conversion constructor. See warning above.
     template<typename T1,
       typename std::enable_if<std::is_convertible<T1, T>::value
           && !is_in<typename std::remove_reference<T1>::type>::value,int>::type = 0>

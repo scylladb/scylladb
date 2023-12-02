@@ -281,7 +281,7 @@ using alloc_strategy_unique_ptr = std::unique_ptr<T, alloc_strategy_deleter<T>>;
 // time. That seems to be the case in current uses, so a simplified scheme of
 // passing allocators will do. Allocation strategy is set in a thread-local
 // context, as shown below. From there, aware objects pick up the allocation
-// strategy. The code controling the objects must ensure that object allocated
+// strategy. The code controlling the objects must ensure that object allocated
 // in one regime is also freed in the same regime.
 //
 // with_allocator() provides a way to set the current allocation strategy used

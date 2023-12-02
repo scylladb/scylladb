@@ -65,7 +65,7 @@ def test_lwt_static_condition(cql, table1):
 
 # Generate an LWT update where there is no value for the partition key,
 # as the WHERE restricts it using `p = {p} AND p = {p+1}`.
-# Such quries are rejected.
+# Such queries are rejected.
 def test_lwt_empty_partition_range(cql, table1):
     with pytest.raises(InvalidRequest):
         cql.execute(f"UPDATE {table1} SET r = 9000 WHERE p = 1 AND p = 1000 AND c = 2 IF r = 3")

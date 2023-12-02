@@ -594,8 +594,8 @@ def test_long_skipped_view_update_delete_with_timestamp2(cql, test_keyspace):
             cql.execute(f'DELETE FROM {table} USING TIMESTAMP {t} WHERE p=1')
             assert list(cql.execute(f"SELECT c FROM {table}")) == sorted(list(cql.execute(f"SELECT c FROM {mv}")))
 
-# Another, more fundemental, reproducer for issue #12297 where a certain
-# modification to a base partition modifing more than 100 rows was not
+# Another, more fundamental, reproducer for issue #12297 where a certain
+# modification to a base partition modifying more than 100 rows was not
 # applied to the view beyond the 100th row.
 # The test above, test_long_skipped_view_update_delete_with_timestamp was one
 # such specific case, which involved a partition tombstone and a specific
@@ -667,7 +667,7 @@ def test_mv_inherit_clustering_order(cql, test_keyspace):
 
 # When a materialized view specification declares the clustering keys of
 # they view, they default to the base table's clustering order (see test
-# above), but the order can be overriden by an explicit "with clustering
+# above), but the order can be overridden by an explicit "with clustering
 # order by" in the materialized view definition:
 def test_mv_override_clustering_order_1(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, 'p int, c int, x int, y int, primary key (p,c)', 'with clustering order by (c DESC)') as table:

@@ -244,7 +244,7 @@ bool storage_service::is_first_node() {
     }
     // Node with the smallest IP address is chosen as the very first node
     // in the cluster. The first node is the only node that does not
-    // bootstrap in the cluser. All other nodes will bootstrap.
+    // bootstrap in the cluster. All other nodes will bootstrap.
     std::vector<gms::inet_address> sorted_seeds(seeds.begin(), seeds.end());
     std::sort(sorted_seeds.begin(), sorted_seeds.end());
     if (sorted_seeds.front() == get_broadcast_address()) {
@@ -3188,7 +3188,7 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
         join_params.ignore_nodes = utils::split_comma_separated_list(_db.local().get_config().ignore_dead_nodes_for_replace());
     }
 
-    // if the node is bootstrapped the functin will do nothing since we already created group0 in main.cc
+    // if the node is bootstrapped the function will do nothing since we already created group0 in main.cc
     ::shared_ptr<group0_handshaker> handshaker = _raft_topology_change_enabled
             ? ::make_shared<join_node_rpc_handshaker>(*this, join_params)
             : _group0->make_legacy_handshaker(false);
@@ -3224,7 +3224,7 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
         // start topology coordinator fiber
         _raft_state_monitor = raft_state_monitor_fiber(*raft_server, sys_dist_ks);
 
-        // Need to start system_distributed_keyspace before bootstrap because bootstraping
+        // Need to start system_distributed_keyspace before bootstrap because bootstrapping
         // process may access those tables.
         supervisor::notify("starting system distributed keyspace");
         co_await sys_dist_ks.invoke_on_all(&db::system_distributed_keyspace::start);
@@ -4471,10 +4471,10 @@ future<std::map<gms::inet_address, float>> storage_service::effective_ownership(
                     auto ranges = ss.get_ranges_for_endpoint(erm, endpoint);
                     for (auto& r : ranges) {
                         // get_ranges_for_endpoint will unwrap the first range.
-                        // With t0 t1 t2 t3, the first range (t3,t0] will be splitted
+                        // With t0 t1 t2 t3, the first range (t3,t0] will be split
                         // as (min,t0] and (t3,max]. Skippping the range (t3,max]
                         // we will get the correct ownership number as if the first
-                        // range were not splitted.
+                        // range were not split.
                         if (!r.end()) {
                             continue;
                         }
@@ -4976,7 +4976,7 @@ future<> storage_service::raft_removenode(locator::host_id host_id, std::list<lo
             throw std::runtime_error(::format("removenode: host id {} is not found in the cluster", host_id));
         }
 
-        auto& rs = it->second; // not usable after yeild
+        auto& rs = it->second; // not usable after yield
 
         if (rs.state != node_state::normal) {
             throw std::runtime_error(::format("removenode: node {} is in '{}' state. Wait for it to be in 'normal' state", id, rs.state));
@@ -5111,7 +5111,7 @@ future<> storage_service::removenode(locator::host_id host_id, std::list<locator
                 // the removenode operation and sync data if needed. We fail the
                 // removenode operation if any of them is down or fails.
                 //
-                // If the user want the removenode opeartion to succeed even if some of the nodes
+                // If the user want the removenode operation to succeed even if some of the nodes
                 // are not available, the user has to explicitly pass a list of
                 // node that can be skipped for the operation.
                 ctl.start("removenode", [&] (gms::inet_address node) {
@@ -6093,8 +6093,8 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
     // The retrier does:
     // If no operation was previously started - start it now
     // If previous operation still running - wait for it an return its result
-    // If previous operation completed sucessfully - return immediately
-    // If previous opertaion failed - restart it
+    // If previous operation completed successfully - return immediately
+    // If previous operation failed - restart it
     auto retrier = [] (std::optional<shared_future<>>& f, auto&& func) -> future<> {
         if (!f || f->failed()) {
             if (f) {

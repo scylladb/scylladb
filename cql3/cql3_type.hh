@@ -255,7 +255,7 @@ inline bool operator==(const cql3_type& a, const cql3_type& b) {
 
     public static class UserDefined implements CQL3Type
     {
-        // Keeping this separatly from type just to simplify toString()
+        // Keeping this separately from type just to simplify toString()
         private final String name;
         private final UserType type;
 

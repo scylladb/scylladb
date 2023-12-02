@@ -77,7 +77,7 @@ public:
         if (_extra) {
             // Choose one of the remaining n-k nodes as the extra (k+1)th
             // returned node. Currently, we choose the nodes with equal
-            // probablities. We could have also used _pp or the original p
+            // probabilities. We could have also used _pp or the original p
             // for this - I don't know which is better, if it even matters.
             std::vector<bool> used(n);
             for (int i : r) {
@@ -115,7 +115,7 @@ miss_equalizing_combination(
     }
     auto p = miss_equalizing_probablities(hit_rates);
     // When we'll ask for combinations of "bf" different nodes, probabilities
-    // higher than 1/bf cannot be achieved (1/bf itsef can be achieved by
+    // higher than 1/bf cannot be achieved (1/bf itself can be achieved by
     // returning this node in every returned combination). So no matter what
     // we do, we can't actually achieve the desired probabilities. Let's
     // try for the best we can
@@ -125,7 +125,7 @@ miss_equalizing_combination(
     hr_logger.trace("desired probabilities: {}, {}", node_hit_rate | boost::adaptors::map_keys, p);
 
     // If me >= rf, this node is NOT one of the replicas, and we just need
-    // to use the probabilties for these replicas, without doing the
+    // to use the probabilities for these replicas, without doing the
     // redistribution to prefer the local replica.
     if (me < rf) {
         p = redistribute(p, me, bf);

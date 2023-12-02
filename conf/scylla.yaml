@@ -24,7 +24,7 @@ num_tokens: 256
 
 # Directory where Scylla should store all its files, which are commitlog,
 # data, hints, view_hints and saved_caches subdirectories. All of these
-# subs can be overriden by the respective options below.
+# subs can be overridden by the respective options below.
 # If unset, the value defaults to /var/lib/scylla
 # workdir: /var/lib/scylla
 
@@ -385,7 +385,7 @@ commitlog_total_space_in_mb: -1
 # tombstones seen in memory so we can return them to the coordinator, which
 # will use them to make sure other replicas also know about the deleted rows.
 # With workloads that generate a lot of tombstones, this can cause performance
-# problems and even exaust the server heap.
+# problems and even exhaust the server heap.
 # (http://www.datastax.com/dev/blog/cassandra-anti-patterns-queues-and-queue-like-datasets)
 # Adjust the thresholds here if you understand the dangers and want to
 # scan more tombstones anyway.  These thresholds may also be adjusted at runtime
@@ -397,7 +397,7 @@ commitlog_total_space_in_mb: -1
 # Increase if your rows are large, or if you have a very large
 # number of rows per partition.  The competing goals are these:
 #   1) a smaller granularity means more index entries are generated
-#      and looking up rows withing the partition by collation column
+#      and looking up rows within the partition by collation column
 #      is faster
 #   2) but, Scylla will keep the collation index in memory for hot
 #      rows (as part of the key cache), so a larger granularity means
@@ -498,7 +498,7 @@ commitlog_total_space_in_mb: -1
 # not met, performance and reliability can be degraded.
 #
 # These requirements include:
-#    - A filesystem with good support for aysnchronous I/O (AIO). Currently,
+#    - A filesystem with good support for asynchronous I/O (AIO). Currently,
 #      this means XFS.
 #
 # false: strict environment checks are in place; do not start if they are not met.
@@ -535,7 +535,7 @@ commitlog_total_space_in_mb: -1
 #  [shard0] [shard1] ... [shardN-1] [shard0] [shard1] ... [shardN-1] ...
 #
 # Scylla versions 1.6 and below used just one repetition of the pattern;
-# this intefered with data placement among nodes (vnodes).
+# this interfered with data placement among nodes (vnodes).
 #
 # Scylla versions 1.7 and above use 4096 repetitions of the pattern; this
 # provides for better data distribution.

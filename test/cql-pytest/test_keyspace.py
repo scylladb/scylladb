@@ -33,7 +33,7 @@ def test_create_keyspace_if_not_exists(cql, this_dc):
     cql.execute("CREATE KEYSPACE IF NOT EXISTS test_create_keyspace_if_not_exists WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 2 }")
     cql.execute("DROP KEYSPACE test_create_keyspace_if_not_exists")
 
-# The "WITH REPLICATION" part of CREATE KEYSPACE may not be ommitted - trying
+# The "WITH REPLICATION" part of CREATE KEYSPACE may not be omitted - trying
 # to do so should result in a syntax error:
 def test_create_keyspace_missing_with(cql):
     with pytest.raises(SyntaxException):

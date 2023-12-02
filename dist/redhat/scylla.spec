@@ -253,4 +253,4 @@ fi
 
 %changelog
 * Tue Jul 21 2015 Takuya ASADA <syuu@cloudius-systems.com>
-- inital version of scylla.spec
+- initial version of scylla.spec

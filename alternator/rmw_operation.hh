@@ -19,7 +19,7 @@ namespace alternator {
 // operations which may involve a read of the item before the write
 // (so-called Read-Modify-Write operations). These operations include PutItem,
 // UpdateItem and DeleteItem: All of these may be conditional operations (the
-// "Expected" parameter) which requir a read before the write, and UpdateItem
+// "Expected" parameter) which require a read before the write, and UpdateItem
 // may also have an update expression which refers to the item's old value.
 //
 // The code below supports running the read and the write together as one
@@ -81,7 +81,7 @@ protected:
     // it (see explanation below), but note that because apply() may be
     // called more than once, if apply() will sometimes set this field it
     // must set it (even if just to the default empty value) every time.
-    // Additionaly when _returnvalues_on_condition_check_failure is ALL_OLD
+    // Additionally when _returnvalues_on_condition_check_failure is ALL_OLD
     // then condition check failure will also result in storing values here.
     mutable rjson::value _return_attributes;
 public:

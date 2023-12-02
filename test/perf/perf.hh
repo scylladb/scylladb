@@ -178,7 +178,7 @@ std::ostream& operator<<(std::ostream& os, const perf_result_with_aio_writes& re
  * Measures throughput of an asynchronous action. Executes the action on all cores
  * in parallel, with given number of concurrent executions per core.
  *
- * Runs many iterations. Prints partial total throughput after each iteraton.
+ * Runs many iterations. Prints partial total throughput after each iteration.
  *
  * Returns a vector of throughputs achieved in each iteration.
  */

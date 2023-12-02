@@ -22,7 +22,7 @@ from util import create_test_table, random_string, full_scan, full_query, multis
 # secondary indexes within a fraction of a second, under normal conditions"
 # and indeed, in practice, the tests here almost always succeed without a
 # retry.
-# However, it is worthwhile to differenciate between the case where the
+# However, it is worthwhile to differentiate between the case where the
 # result set is not *yet* complete (which is ok, and requires retry), and
 # the case that the result set has wrong data. In the latter case, the
 # test will surely fail and no amount of retry will help, so we should

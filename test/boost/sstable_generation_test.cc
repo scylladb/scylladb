@@ -81,7 +81,7 @@ BOOST_AUTO_TEST_CASE(compare) {
 
     const auto uuid = "3fw2_0tj4_46w3k2cpidnirvjy7k"s;
     const auto id_uuid = sstables::generation_type::from_string(uuid);
-    // an integer-based identifer should be always greater than a uuid-based one,
+    // an integer-based identifier should be always greater than a uuid-based one,
     // so we can find the uuid-based identifier as before
     BOOST_CHECK_GT(sstables::generation_type(42), id_uuid);
     BOOST_CHECK_GT(sstables::generation_type(1), id_uuid);

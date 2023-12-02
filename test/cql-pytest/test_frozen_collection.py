@@ -88,7 +88,7 @@ def test_wrong_set_order_in_nested_2(cql, table1):
         assert isinstance(row.k, OrderedMapSerializedKey)
         # The Python driver implements k.items() inefficiently - it has
         # a list of keys as SortedSet objects, and converts them back to
-        # seralized strings to look them up in k._index. But this
+        # serialized strings to look them up in k._index. But this
         # conversion re-sorts the set and then it can't be found because
         # of issue #7856, so k.items() will throw KeyError when iterated.
         list(row.k.items())

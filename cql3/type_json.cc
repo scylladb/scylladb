@@ -94,7 +94,7 @@ template <typename T> static T to_int(const rjson::value& value) {
         }
         return u64_result;
     } else if (value.IsDouble()) {
-        // We allow specifing integer constants
+        // We allow specifying integer constants
         // using scientific notation (for example 1.3e8)
         // and floating-point numbers ending with .0 (for example 12.0),
         // but not floating-point numbers with fractional part (12.34).

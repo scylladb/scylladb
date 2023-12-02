@@ -2257,7 +2257,7 @@ database::make_keyspace_config(const keyspace_metadata& ksm) {
             cfg.all_datadirs.push_back(format("{}/{}", extra, ksm.name()));
         }
         cfg.enable_disk_writes = !_cfg.enable_in_memory_data_store();
-        cfg.enable_disk_reads = true; // we allways read from disk
+        cfg.enable_disk_reads = true; // we always read from disk
         cfg.enable_commitlog = _cfg.enable_commitlog() && !_cfg.enable_in_memory_data_store();
         cfg.enable_cache = _cfg.enable_cache();
 

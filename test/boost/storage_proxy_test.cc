@@ -125,7 +125,7 @@ SEASTAR_THREAD_TEST_CASE(test_split_stats) {
     // simulating the calling of storage_proxy::on_down, from gossip
     // on node dropping out. If inside a write operation, we'll pick up
     // write handlers and to "timeout_cb" on them, which in turn might
-    // call get_ep_stat, which evenually calls register_metrics for 
+    // call get_ep_stat, which eventually calls register_metrics for 
     // the DC written to.
     // Point being is that either the above should not happen, or 
     // split_stats should be resilient to being called from different

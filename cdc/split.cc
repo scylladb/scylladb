@@ -462,7 +462,7 @@ api::timestamp_type find_timestamp(const mutation& m) {
  * The visitor uses the order in which the mutation is being visited (see the documentation of ChangeVisitor),
  * remembers a bunch of state based on whatever was visited until now (e.g. was there a static row update?
  * Was there a clustered row update? Was there a clustered row delete? Was there a TTL?)
- * and tells the caller to stop on the first occurence of a second timestamp/ttl/type of change.
+ * and tells the caller to stop on the first occurrence of a second timestamp/ttl/type of change.
  */
 struct should_split_visitor {
     bool _had_static_row = false;

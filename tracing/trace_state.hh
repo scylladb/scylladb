@@ -252,7 +252,7 @@ private:
     /**
      * Initiates a tracing session.
      *
-     * Starts the tracing session time measurments.
+     * Starts the tracing session time measurements.
      * This overload is meant for secondary sessions.
      */
     void begin() {
@@ -272,7 +272,7 @@ private:
     /**
      * Initiates a tracing session.
      *
-     * Starts the tracing session time measurments.
+     * Starts the tracing session time measurements.
      * This overload is meant for primary sessions.
      *
      * @param request description of a request being traces
@@ -668,7 +668,7 @@ inline bool should_return_id_in_response(const trace_state_ptr& p) {
 /**
  * A helper for conditional invoking trace_state::begin() functions.
  *
- * If trace state is initialized the operation takes place immediatelly,
+ * If trace state is initialized the operation takes place immediately,
  * otherwise nothing happens.
  *
  * @tparam A

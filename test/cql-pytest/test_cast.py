@@ -161,7 +161,7 @@ def test_function_arg_type_hint(cql, table2):
     timestamp_value = 2*86400000 # 2 days after 1970-01-01
     timeuuid_value = uuid.UUID('{53e99c40-b81b-11ed-be60-134dd121e491}')
 
-    # Explictly specifying the type using a type hint fixes the issue - the type for ? is now known.
+    # Explicitly specifying the type using a type hint fixes the issue - the type for ? is now known.
     prepared_timestamp = cql.prepare(f"INSERT INTO {table2} (pk, d) VALUES ({pk}, toDate((timestamp)?))")
     prepared_timeuuid = cql.prepare(f"INSERT INTO {table2} (pk, d) VALUES ({pk}, toDate((timeuuid)?))")
 

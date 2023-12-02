@@ -534,7 +534,7 @@ private:
             // The exceptions are related to the load operation itself.
             // We should ignore them for the background reads - if
             // they persist the value will age and will be reloaded in
-            // the forground. If the foreground READ fails the error
+            // the foreground. If the foreground READ fails the error
             // will be propagated up to the user and will fail the
             // corresponding query.
             try {

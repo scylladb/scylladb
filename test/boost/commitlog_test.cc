@@ -879,7 +879,7 @@ SEASTAR_TEST_CASE(test_commitlog_shutdown_during_wait) {
 
     // shut down is assumed to 
     // a.) stop allocating
-    // b.) ensure all segments get's free:d
+    // b.) ensure all segments get freed
     while (!queue.empty()) {
         auto flush = std::move(queue.front());
         queue.pop_front();

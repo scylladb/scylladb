@@ -284,7 +284,7 @@ def test_scan_projection_expression_path(test_table):
     assert multiset(expected_items) == multiset(got_items)
 
 # BatchGetItem also supports ProjectionExpression, let's test that it
-# applies to all items, and that it correctly suports document paths as well.
+# applies to all items, and that it correctly supports document paths as well.
 def test_batch_get_item_projection_expression_path(test_table_s):
     items = [{'p': random_string(), 'a': {'b': random_string(), 'x': 'hi'}, 'c': random_string()} for i in range(3)]
     with test_table_s.batch_writer() as batch:

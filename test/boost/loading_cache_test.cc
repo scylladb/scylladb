@@ -211,7 +211,7 @@ SEASTAR_TEST_CASE(test_loading_cache_disable_and_enable) {
         sleep(150ms).get();
         BOOST_REQUIRE_EQUAL(load_count, 0);
 
-        // Reenable
+        // Re-enable
         load_count = 0;
         loading_cache.update_config({num_loaders, 1h, 50ms});
         sleep(50ms).get();

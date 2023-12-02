@@ -39,7 +39,7 @@ public:
     const stateless_aggregate_function& get_aggregate() const;
 
     /**
-     * Checks wheather the function can be distributed and is able to reduce states.
+     * Checks whether the function can be distributed and is able to reduce states.
      *
      * @return <code>true</code> if the function is reducible, <code>false</code> otherwise.
      */

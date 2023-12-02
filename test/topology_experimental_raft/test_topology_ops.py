@@ -33,7 +33,7 @@ async def test_topology_ops(request, manager: ManagerClient):
     await wait_for_cql_and_get_hosts(manager.cql, await manager.running_servers(), time.time() + 60)
     cql = await reconnect_driver(manager)
     # FIXME: disabled as a workaround for #15935, #15924
-    # We need to reenable once these issues are fixed.
+    # We need to re-enable once these issues are fixed.
     #finish_writes = await start_writes(cql)
 
     logger.info("Bootstrapping other nodes")

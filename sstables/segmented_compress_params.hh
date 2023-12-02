@@ -63,7 +63,7 @@ struct segment_info {
     uint8_t grouped_offsets;
 };
 
-// Precomputed optimal segment informations for different data and chunk sizes.
+// Precomputed optimal segment information for different data and chunk sizes.
 const std::array<segment_info, 675> segment_infos{{
     {16, 4, 4},
     {16, 5, 6},

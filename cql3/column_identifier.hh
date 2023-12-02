@@ -21,7 +21,7 @@ namespace cql3 {
 class column_identifier_raw;
 
 /**
- * Represents an identifer for a CQL column definition.
+ * Represents an identifier for a CQL column definition.
  * TODO : should support light-weight mode without text representation for when not interned
  */
 class column_identifier final {

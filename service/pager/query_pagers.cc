@@ -379,7 +379,7 @@ void query_pager::handle_result(
         uint32_t page_size, gc_clock::time_point now) {
 
     auto update_slice = [&] (const partition_key& last_pkey) {
-        // refs #752, when doing aggregate queries we will re-use same
+        // refs #752, when doing aggregate queries we will reuse same
         // slice repeatedly. Since "specific ck ranges" only deal with
         // a single extra range, we must clear out the old one
         // Even if it was not so of course, leaving junk in the slice

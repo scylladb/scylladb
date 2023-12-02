@@ -230,7 +230,7 @@ void compare_with_set(collection& c, oracle& s) {
         BOOST_REQUIRE(j != c.end() && *j == *i);
     }
 
-    /* Both iterators must coinside */
+    /* Both iterators must coincide */
     auto i = c.begin();
     auto j = s.begin();
 

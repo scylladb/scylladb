@@ -1834,7 +1834,7 @@ SEASTAR_THREAD_TEST_CASE(test_stopping_reader_with_pending_read_ahead) {
 
         bool buffer_filled = false;
         auto destroyed_after_close = reader.close().then([&] {
-            // close shuold wait on readahead and complete
+            // close should wait on readahead and complete
             // only after `remote_control->buffer_filled.set_value()`
             // is executed below.
             BOOST_REQUIRE(buffer_filled);
@@ -2049,7 +2049,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_only_reads_from_needed
 // with the normal reading. If the multishard reader is destroyed before the
 // synchronization happens the fiber is orphaned. Test that the fiber is
 // prepared for this possibility and doesn't attempt to read any members of any
-// destoyed objects causing memory errors.
+// destroyed objects causing memory errors.
 //
 // Theory of operation:
 // 1) First read a full buffer from shard 0;

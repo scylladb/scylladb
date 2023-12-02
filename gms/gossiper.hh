@@ -204,7 +204,7 @@ public:
 
     static constexpr std::chrono::milliseconds GOSSIP_SETTLE_MIN_WAIT_MS{5000};
 
-    // Maximimum difference between remote generation value and generation
+    // Maximum difference between remote generation value and generation
     // value this node would get if this node were restarted that we are
     // willing to accept about a peer.
     static constexpr generation_type::value_type MAX_GENERATION_DIFFERENCE = 86400 * 365;

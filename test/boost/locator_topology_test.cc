@@ -163,7 +163,7 @@ SEASTAR_THREAD_TEST_CASE(test_update_node) {
     BOOST_REQUIRE(topo.get_location(ep3) == dc_rack3);
     BOOST_REQUIRE_EQUAL(node->get_state(), locator::node::state::being_decommissioned);
 
-    // In state::left the ndoe will remain indexed only by its host_id
+    // In state::left the node will remain indexed only by its host_id
     node = topo.update_node(mutable_node, std::nullopt, std::nullopt, std::nullopt, locator::node::state::left);
     BOOST_REQUIRE_EQUAL(topo.find_node(id1), node);
     BOOST_REQUIRE_EQUAL(topo.find_node(ep1), nullptr);

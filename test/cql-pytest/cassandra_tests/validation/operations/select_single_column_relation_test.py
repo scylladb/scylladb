@@ -40,7 +40,7 @@ def testInvalidCollectionNonEQRelation(cql, test_keyspace):
         assert_invalid_message(cql, table, "Unsupported \"!=\" relation: b != 5",
                 "SELECT * FROM %s WHERE c = 0 AND b != 5")
         # different error message in Scylla and Cassandra. Note that in the
-        # future, Scylla may want to support this restriction so the erorr
+        # future, Scylla may want to support this restriction so the error
         # message will change again.
         assert_invalid_message(cql, table, "IS NOT",
                 "SELECT * FROM %s WHERE c = 0 AND b IS NOT NULL")
@@ -344,7 +344,7 @@ def testCompositeIndexWithPrimaryKey(cql, test_keyspace):
         assert_empty(execute(cql, table, "SELECT content FROM %s WHERE time1 = 1 AND time2 = 1 AND author='foo' ALLOW FILTERING"))
         assert_empty(execute(cql, table, "SELECT content FROM %s WHERE time1 = 1 AND time2 > 0 AND author='foo' ALLOW FILTERING"))
 
-        # Scylla and Cassandra chose to print different erros in this case -
+        # Scylla and Cassandra chose to print different errors in this case -
         # Cassandra says that ALLOW FILTERING would have made this query
         # work, while Scylla says that time1 should have also been
         # restricted.
@@ -565,7 +565,7 @@ def testInvalidColumnNames(cql, test_keyspace):
         assert_invalid_message(cql, table, "name d", "SELECT * FROM %s WHERE d CONTAINS 0")
         assert_invalid_message(cql, table, "name d", "SELECT * FROM %s WHERE d CONTAINS KEY 0")
         # Here, Cassandra says "Undefined column name d" but Scylla gives
-        # a clearer error message about the real cuase: "Aliases aren't
+        # a clearer error message about the real cause: "Aliases aren't
         # allowed in the where clause ('d = 0')".
         assert_invalid(cql, table, "SELECT a AS d FROM %s WHERE d = 0")
         assert_invalid(cql, table, "SELECT b AS d FROM %s WHERE d IN (0, 1)")

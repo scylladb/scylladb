@@ -409,7 +409,7 @@ future<mutation_reader_merger::needs_merge> mutation_reader_merger::prepare_one(
             // end-of-stream to know what readers to ff. We can't
             // just ff all readers as we might drop fragments from
             // partitions we haven't even read yet.
-            // Readers whoose last emitted fragment was a partition
+            // Readers whose last emitted fragment was a partition
             // end are out of data for good for the current range.
             _halted_readers.push_back(rk);
         } else if (_fwd_mr == mutation_reader::forwarding::no) {

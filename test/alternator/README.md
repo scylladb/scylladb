@@ -19,7 +19,7 @@ More conveniently, instead of starting ScyllaDB on your own, we have a
 script `test/alternator/run` which does all the work necessary to start
 ScyllaDB with Alternator, and then runs `pytest` against it. The ScyllaDB
 process is run in a temporary directory which is automatically deleted when
-the test ends. This is recomended way because it configures scylla to start
+the test ends. This is recommended way because it configures scylla to start
 much faster.
 
 `run` automatically picks the most-recently compiled version of Scylla in
@@ -219,7 +219,7 @@ and practices be followed when writing new tests:
    Utility functions are bad for several reasons. First, they make it
    harder to read tests - any reader will understand boto3 requests (and
    can find many online references for that library), but not be familiar
-   with dozens of obscure utilty functions.  Second, when a utility function
+   with dozens of obscure utility functions.  Second, when a utility function
    is written for the benefit of a single test, it is often much less general
    than its author thought, and when it comes time to reuse it in a second
    test, it turns out it needs to be duplicated or changed, and the result

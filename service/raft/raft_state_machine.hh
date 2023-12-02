@@ -12,7 +12,7 @@
 
 namespace service {
 
-// Scylla specific extention for raft state machine
+// Scylla specific extension for raft state machine
 // Snapshot transfer is delegated to a state machine implementation
 class raft_state_machine : public raft::state_machine {
 public:

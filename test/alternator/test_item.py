@@ -515,7 +515,7 @@ def test_update_item_delete(test_table_s):
     with pytest.raises(ClientError, match='ValidationException.*empty'):
         test_table_s.update_item(Key={'p': p},
             AttributeUpdates={'a': {'Action': 'DELETE', 'Value': set([])}})
-    # Deleting all the elments from a set doesn't leave an empty set
+    # Deleting all the elements from a set doesn't leave an empty set
     # (which DynamoDB doesn't allow) but rather deletes the attribute:
     test_table_s.update_item(Key={'p': p},
         AttributeUpdates={'a': {'Action': 'DELETE', 'Value': set([1, 2, 3])}})
@@ -743,7 +743,7 @@ def test_unused_entries_no_expression(test_table_s):
 def test_null_in_string(test_table_s):
     p = random_string() + '\x00' + random_string()
     val = random_string() + '\x00' + random_string()
-    # sanity check: varify that Python actually put the null in the strings...
+    # sanity check: verify that Python actually put the null in the strings...
     assert 0 in p.encode('utf-8')
     assert 0 in val.encode('utf-8')
     test_table_s.put_item(Item={'p': p, 'val': val})
@@ -752,7 +752,7 @@ def test_null_in_string(test_table_s):
 def test_null_in_bytes(test_table_b):
     p = random_bytes() + bytes([0]) + random_bytes()
     val = random_bytes() + bytes([0]) + random_bytes()
-    # sanity check: varify that Python actually put the null in the bytes...
+    # sanity check: verify that Python actually put the null in the bytes...
     assert 0 in p
     assert 0 in val
     test_table_b.put_item(Item={'p': p, 'val': val})

@@ -56,7 +56,7 @@ public:
 
     typedef db_clock::time_point time_point;
 
-    // TODO: we dont't support triggers.
+    // TODO: we don't support triggers.
     // this is a placeholder.
     struct trigger {
         time_point timestamp;
@@ -448,7 +448,7 @@ public:
         // TODO: Unfortunately there is not a single REGULAR column in system.schema_usertypes, so annoyingly we cannot
         // use the writeTime() CQL function, and must resort to a lower level.
         // Origin digs up the actual cells of target partition and gets timestamp from there.
-        // We should do the same, but g-dam thats messy. Lets give back dung value for now.
+        // We should do the same, but g-dam that's messy. Lets give back dung value for now.
         return make_ready_future<time_point>(dst.timestamp);
     }
 

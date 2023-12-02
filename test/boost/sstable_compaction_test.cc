@@ -1106,7 +1106,7 @@ SEASTAR_TEST_CASE(tombstone_purge_test) {
         }
 
         {
-            // check that expired cell will not be purged if it will ressurect overwritten data.
+            // check that expired cell will not be purged if it will resurrect overwritten data.
             auto mut1 = make_insert(alpha);
             auto mut2 = make_expiring(alpha, ttl);
 
@@ -3046,7 +3046,7 @@ SEASTAR_TEST_CASE(partial_sstable_run_filtered_out_test) {
     }, test_env_config{ .use_uuid = false });
 }
 
-// Make sure that a custom tombstone-gced-only writer will be feeded with gc'able tombstone
+// Make sure that a custom tombstone-gced-only writer will be fed with gc'able tombstone
 // from the regular compaction's input sstable.
 SEASTAR_TEST_CASE(purged_tombstone_consumer_sstable_test) {
     BOOST_REQUIRE(smp::count == 1);
@@ -3182,7 +3182,7 @@ SEASTAR_TEST_CASE(purged_tombstone_consumer_sstable_test) {
     });
 }
 
-/*  Make sure data is not ressurrected.
+/*  Make sure data is not resurrected.
     sstable 1 with key A and key B and key C
     sstable 2 with expired (GC'able) tombstone for key A
 
@@ -3195,7 +3195,7 @@ SEASTAR_TEST_CASE(purged_tombstone_consumer_sstable_test) {
 
     Result: sstable 1 is alive in the table, whereas sstable 2 is gone.
 
-    if key A can be read from table, data was ressurrected.
+    if key A can be read from table, data was resurrected.
  */
 SEASTAR_TEST_CASE(incremental_compaction_data_resurrection_test) {
     return test_env::do_with_async([] (test_env& env) {

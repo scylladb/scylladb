@@ -142,7 +142,7 @@ if(DEFINED ENV{NIX_CC})
   get_padded_dynamic_linker_option(dynamic_linker_option 0)
 else()
   # gdb has a SO_NAME_MAX_PATH_SIZE of 512, so limit the path size to
-  # that. The 512 includes the null at the end, hence the 511 bellow.
+  # that. The 512 includes the null at the end, hence the 511 below.
   get_padded_dynamic_linker_option(dynamic_linker_option 511)
 endif()
 add_link_options("${dynamic_linker_option}")

@@ -79,7 +79,7 @@ protected:
 
     virtual ~selection() {}
 public:
-    // Overriden by SimpleSelection when appropriate.
+    // Overridden by SimpleSelection when appropriate.
     virtual bool is_wildcard() const {
         return false;
     }

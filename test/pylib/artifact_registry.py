@@ -23,7 +23,7 @@ class ArtifactRegistry:
     resources and artifacts, such as open ports, directories with temporary
     files or running auxiliary processes. Contains a map of all glboal
     resources, and as soon as the resource is taken by the test it is
-    reprsented in the artifact registry. """
+    represented in the artifact registry. """
 
     def __init__(self) -> None:
         self.suite_artifacts: Dict[Suite, List[Artifact]] = {}

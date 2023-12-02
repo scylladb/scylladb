@@ -1202,7 +1202,7 @@ future<> server_impl::applier_fiber() {
                 // Completion notification code assumes that previous snapshot is applied
                 // before new entries are committed, otherwise it asserts that some
                 // notifications were missing. To prevent a committed entry to
-                // be notified before an erlier snapshot is applied do both
+                // be notified before an earlier snapshot is applied do both
                 // notification and snapshot application in the same fiber
                 notify_waiters(_awaited_commits, batch);
 

@@ -38,7 +38,7 @@ public:
         PROBE,
         // In this state multiple append entries are sent optimistically
         PIPELINE,
-        // In this state snapshot is been transfered
+        // In this state snapshot is been transferred
         SNAPSHOT
     };
     state state = state::PROBE;

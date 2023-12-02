@@ -58,7 +58,7 @@ FAILED_KEY = pytest.StashKey[bool]()
 
 @pytest.hookimpl(tryfirst=True, hookwrapper=True)
 def pytest_runtest_makereport(item, call):
-    """This is a post-test hook execucted by the pytest library.
+    """This is a post-test hook executed by the pytest library.
     Use it to access the test result and store a flag indicating failure
     so we can later retrieve it in our fixtures like `manager`.
 

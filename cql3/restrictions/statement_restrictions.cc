@@ -622,7 +622,7 @@ std::vector<const column_definition*> statement_restrictions::get_column_defs_fo
 
 void statement_restrictions::add_restriction(const expr::binary_operator& restr, schema_ptr schema, bool allow_filtering, bool for_view) {
     if (restr.op == expr::oper_t::IS_NOT) {
-        // Handle IS NOT NULL restrictions seperately
+        // Handle IS NOT NULL restrictions separately
         add_is_not_restriction(restr, schema, for_view);
     } else if (expr::is_multi_column(restr)) {
         // Multi column restrictions are only allowed on clustering columns
@@ -791,10 +791,10 @@ void statement_restrictions::add_single_column_nonprimary_key_restriction(const 
 }
 
 void statement_restrictions::process_partition_key_restrictions(bool for_view, bool allow_filtering) {
-    // If there is a queriable index, no special condition are required on the other restrictions.
+    // If there is a queryable index, no special condition are required on the other restrictions.
     // But we still need to know 2 things:
-    // - If we don't have a queriable index, is the query ok
-    // - Is it queriable without 2ndary index, which is always more efficient
+    // - If we don't have a queryable index, is the query ok
+    // - Is it queryable without 2ndary index, which is always more efficient
     // If a component of the partition key is restricted by a relation, all preceding
     // components must have a EQ. Only the last partition key component can be in IN relation.
     if (has_token_restrictions()) {
@@ -904,7 +904,7 @@ bool statement_restrictions::multi_column_clustering_restrictions_are_supported_
         return supported_column != nullptr;
     }
 
-    // Otherwise it has to be a singe binary operator with EQ or IN.
+    // Otherwise it has to be a single binary operator with EQ or IN.
     // This is checked earlier during add_restriction.
     const expr::binary_operator* single_binop =
         expr::as_if<expr::binary_operator>(&_clustering_columns_restrictions);

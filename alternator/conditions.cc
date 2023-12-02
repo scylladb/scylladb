@@ -342,7 +342,7 @@ static bool check_NOT_NULL(const rjson::value* val) {
 }
 
 // Only types S, N or B (string, number or bytes) may be compared by the
-// various comparion operators - lt, le, gt, ge, and between.
+// various comparison operators - lt, le, gt, ge, and between.
 // Note that in particular, if the value is missing (v->IsNull()), this
 // check returns false.
 static bool check_comparable_type(const rjson::value& v) {

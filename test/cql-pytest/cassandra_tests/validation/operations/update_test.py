@@ -10,14 +10,14 @@ import re
 
 def testTypeCasts(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(k int PRIMARY KEY, t text, a ascii, d double, i int)") as table:
-        # The followings is fine
+        # The following is fine
         execute(cql, table, "UPDATE %s SET t = 'foo' WHERE k = ?", 0)
         execute(cql, table, "UPDATE %s SET t = (ascii)'foo' WHERE k = ?", 0)
         execute(cql, table, "UPDATE %s SET t = (text)(ascii)'foo' WHERE k = ?", 0)
         execute(cql, table, "UPDATE %s SET a = 'foo' WHERE k = ?", 0)
         execute(cql, table, "UPDATE %s SET a = (ascii)'foo' WHERE k = ?", 0)
 
-        # But trying to put some explicitely type-casted text into an ascii
+        # But trying to put some explicitly type-casted text into an ascii
         # column should be rejected (even though the text is actually ascci)
         assertInvalid(cql, table, "UPDATE %s SET a = (text)'foo' WHERE k = ?", 0)
 

@@ -539,7 +539,7 @@ public:
                 case mutation_fragment_filter::result::ignore:
                     break;
                 case mutation_fragment_filter::result::store_and_finish:
-                    // static row is always either emited or ignored.
+                    // static row is always either emitted or ignored.
                     throw runtime_exception("We should never need to store static row");
                 }
             }

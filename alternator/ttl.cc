@@ -155,7 +155,7 @@ future<executor::request_return_type> executor::describe_time_to_live(client_sta
 // node owning this range as a "primary range" (the first node in the ring
 // with this range), but when this node is down, the secondary owner (the
 // second in the ring) may take over.
-// An expiration thread is reponsible for all tables which need expiration
+// An expiration thread is responsible for all tables which need expiration
 // scans. Currently, the different tables are scanned sequentially (not in
 // parallel).
 // The expiration thread scans item using CL=QUORUM to ensures that it reads

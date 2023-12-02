@@ -533,7 +533,7 @@ static constexpr logical_clock::duration ELECTION_TIMEOUT = logical_clock::durat
 
 // rpc, persistence and state_machine classes will have to be implemented by the
 // raft user to provide network, persistency and busyness logic support
-// repectively.
+// respectively.
 class rpc;
 class persistence;
 
@@ -553,7 +553,7 @@ public:
     // more than one entry all of them will be committed simultaneously.
     // Will be eventually called on all replicas, for all committed commands.
     // Raft owns the data since it may be still replicating.
-    // Raft will not call another apply until the retuned future
+    // Raft will not call another apply until the returned future
     // will not become ready.
     virtual future<> apply(std::vector<command_cref> command) = 0;
 

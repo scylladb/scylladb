@@ -290,7 +290,7 @@ private:
      * Therefore, at the moment of initializing storage_proxy, we don't have access to cdc_service yet.
      *
      * Furthermore, storage_proxy must keep the service object alive while augmenting mutations
-     * (storage_proxy is never deintialized, and even if it would be, it would be after deinitializing cdc_service).
+     * (storage_proxy is never deinitialized, and even if it would be, it would be after deinitializing cdc_service).
      * Thus cdc_service inherits from enable_shared_from_this and storage_proxy code must remember to call
      * shared_from_this().
      *

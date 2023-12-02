@@ -1462,7 +1462,7 @@ void unset_storage_service(http_context& ctx, routes& r) {
 enum class scrub_status {
     successful = 0,
     aborted,
-    unable_to_cancel,   // Not used in Scylla, included to ensure compability with nodetool api.
+    unable_to_cancel,   // Not used in Scylla, included to ensure compatibility with nodetool api.
     validation_errors,
 };
 

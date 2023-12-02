@@ -71,7 +71,7 @@ schema::extensions_map cf_prop_defs::make_schema_extensions(const db::extensions
 }
 
 void cf_prop_defs::validate(const data_dictionary::database db, sstring ks_name, const schema::extensions_map& schema_extensions) const {
-    // Skip validation if the comapction strategy class is already set as it means we've alreayd
+    // Skip validation if the comapction strategy class is already set as it means we've already
     // prepared (and redoing it would set strategyClass back to null, which we don't want)
     if (_compaction_strategy_class) {
         return;

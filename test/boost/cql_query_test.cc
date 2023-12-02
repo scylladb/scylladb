@@ -157,35 +157,35 @@ SEASTAR_TEST_CASE(test_twcs_restrictions_mixed) {
         // Hardcode restriction to max 10 windows
         e.execute_cql("UPDATE system.config SET value='10' WHERE name='twcs_max_window_count';").get();
 
-        // Cenario 1: STCS->TWCS with no TTL defined
+        // Scenario 1: STCS->TWCS with no TTL defined
         e.execute_cql("CREATE TABLE tbl (a int PRIMARY KEY, b int);").get();
         e.execute_cql("ALTER TABLE tbl WITH compaction = {'class': 'TimeWindowCompactionStrategy'};").get();
         BOOST_REQUIRE(e.local_db().has_schema("ks", "tbl"));
 
-        // Cenario 2: STCS->TWCS with small TTL. Note: TWCS default window size is 1 day (86400s)
+        // Scenario 2: STCS->TWCS with small TTL. Note: TWCS default window size is 1 day (86400s)
         e.execute_cql("CREATE TABLE tbl2 (a int PRIMARY KEY, b int) WITH default_time_to_live = 60;").get();
         e.execute_cql("ALTER TABLE tbl2 WITH compaction = {'class': 'TimeWindowCompactionStrategy'};").get();
         BOOST_REQUIRE(e.local_db().has_schema("ks", "tbl2"));
 
-        // Cenario 3: STCS->TWCS with large TTL value
+        // Scenario 3: STCS->TWCS with large TTL value
         e.execute_cql("CREATE TABLE tbl3 (a int PRIMARY KEY, b int) WITH default_time_to_live = 8640000;").get();
         BOOST_REQUIRE(e.local_db().has_schema("ks", "tbl3"));
         BOOST_REQUIRE_THROW(e.execute_cql("ALTER TABLE tbl3 WITH compaction = {'class': 'TimeWindowCompactionStrategy'};").get(), exceptions::configuration_exception);
 
-        // Cenario 4: TWCS table with small to large TTL
+        // Scenario 4: TWCS table with small to large TTL
         e.execute_cql("CREATE TABLE tbl4 (a int PRIMARY KEY, b int) WITH compaction = "
                       "{'class': 'TimeWindowCompactionStrategy'} AND default_time_to_live = 60;").get();
         BOOST_REQUIRE(e.local_db().has_schema("ks", "tbl4"));
         BOOST_REQUIRE_THROW(e.execute_cql("ALTER TABLE tbl4 WITH default_time_to_live = 86400000;").get(), exceptions::configuration_exception);
 
-        // Cenario 5: No TTL TWCS to large TTL and then small TTL
+        // Scenario 5: No TTL TWCS to large TTL and then small TTL
         e.execute_cql("CREATE TABLE tbl5 (a int PRIMARY KEY, b int) WITH compaction = "
                       "{'class': 'TimeWindowCompactionStrategy'}").get();
         BOOST_REQUIRE(e.local_db().has_schema("ks", "tbl5"));
         BOOST_REQUIRE_THROW(e.execute_cql("ALTER TABLE tbl5 WITH default_time_to_live = 86400000;").get(), exceptions::configuration_exception);
         e.execute_cql("ALTER TABLE tbl5 WITH default_time_to_live = 60;").get();
 
-        // Cenario 6: twcs_max_window_count LiveUpdate - Decrease TTL
+        // Scenario 6: twcs_max_window_count LiveUpdate - Decrease TTL
         e.execute_cql("UPDATE system.config SET value='0' WHERE name='twcs_max_window_count';").get();
         e.execute_cql("CREATE TABLE tbl6 (a int PRIMARY KEY, b int) WITH compaction = "
                       "{'class': 'TimeWindowCompactionStrategy'} AND default_time_to_live = 86400000;").get();
@@ -193,7 +193,7 @@ SEASTAR_TEST_CASE(test_twcs_restrictions_mixed) {
         e.execute_cql("UPDATE system.config SET value='50' WHERE name='twcs_max_window_count';").get();
         e.execute_cql("ALTER TABLE tbl6 WITH default_time_to_live = 60;").get();
 
-        // Cenario 7: twcs_max_window_count LiveUpdate - Switch CompactionStrategy
+        // Scenario 7: twcs_max_window_count LiveUpdate - Switch CompactionStrategy
         e.execute_cql("UPDATE system.config SET value='0' WHERE name='twcs_max_window_count';").get();
         e.execute_cql("CREATE TABLE tbl7 (a int PRIMARY KEY, b int) WITH compaction = "
                       "{'class': 'TimeWindowCompactionStrategy'} AND default_time_to_live = 86400000;").get();
@@ -201,13 +201,13 @@ SEASTAR_TEST_CASE(test_twcs_restrictions_mixed) {
         e.execute_cql("UPDATE system.config SET value='50' WHERE name='twcs_max_window_count';").get();
         e.execute_cql("ALTER TABLE tbl7 WITH compaction = {'class': 'SizeTieredCompactionStrategy'}").get();
 
-        // Cenario 8: No TTL TWCS table to STCS
+        // Scenario 8: No TTL TWCS table to STCS
         e.execute_cql("CREATE TABLE tbl8 (a int PRIMARY KEY, b int) WITH compaction = "
                       "{'class': 'TimeWindowCompactionStrategy'};").get();
         BOOST_REQUIRE(e.local_db().has_schema("ks" ,"tbl8"));
         e.execute_cql("ALTER TABLE tbl8 WITH compaction = {'class': 'SizeTieredCompactionStrategy'};").get();
 
-        // Cenario 9: Large TTL TWCS table, modify attribute other than compaction and default_time_to_live
+        // Scenario 9: Large TTL TWCS table, modify attribute other than compaction and default_time_to_live
         e.execute_cql("UPDATE system.config SET value='0' WHERE name='twcs_max_window_count';").get();
         e.execute_cql("CREATE TABLE tbl9 (a int PRIMARY KEY, b int) WITH compaction = "
                       "{'class': 'TimeWindowCompactionStrategy'} AND default_time_to_live = 86400000;").get();
@@ -215,13 +215,13 @@ SEASTAR_TEST_CASE(test_twcs_restrictions_mixed) {
         e.execute_cql("UPDATE system.config SET value='50' WHERE name='twcs_max_window_count';").get();
         e.execute_cql("ALTER TABLE tbl9 WITH gc_grace_seconds = 0;").get();
 
-        // Cenario 10: Large TTL STCS table, fail to switch to TWCS with no TTL
+        // Scenario 10: Large TTL STCS table, fail to switch to TWCS with no TTL
         e.execute_cql("CREATE TABLE tbl10 (a int PRIMARY KEY, b int) WITH default_time_to_live = 8640000;").get();
         BOOST_REQUIRE(e.local_db().has_schema("ks", "tbl10"));
         BOOST_REQUIRE_THROW(e.execute_cql("ALTER TABLE tbl10 WITH compaction = {'class': 'TimeWindowCompactionStrategy'};").get(), exceptions::configuration_exception);
         e.execute_cql("ALTER TABLE tbl10 WITH compaction = {'class': 'TimeWindowCompactionStrategy'} AND default_time_to_live = 0;").get();
 
-        // Cenario 11: Ensure default_time_to_live updates reference existing table properties
+        // Scenario 11: Ensure default_time_to_live updates reference existing table properties
         e.execute_cql("CREATE TABLE tbl11 (a int PRIMARY KEY, b int) WITH compaction = "
                       "{'class': 'TimeWindowCompactionStrategy', 'compaction_window_size': '1', "
                       "'compaction_window_unit': 'MINUTES'} AND default_time_to_live=3000;").get();
@@ -231,7 +231,7 @@ SEASTAR_TEST_CASE(test_twcs_restrictions_mixed) {
                      "'compaction_window_size': '2', 'compaction_window_unit': 'MINUTES'};").get();
        e.execute_cql("ALTER TABLE tbl11 WITH default_time_to_live=3600;").get();
 
-       // Cenario 12: Ensure that window sizes <= 0 are forbidden
+       // Scenario 12: Ensure that window sizes <= 0 are forbidden
        BOOST_REQUIRE_THROW(e.execute_cql("CREATE TABLE tbl12 (a int PRIMARY KEY, b int) WITH compaction = "
                           "{'class': 'TimeWindowCompactionStrategy', 'compaction_window_size': '0'};").get(), exceptions::configuration_exception);
        BOOST_REQUIRE_THROW(e.execute_cql("CREATE TABLE tbl12 (a int PRIMARY KEY, b int) WITH compaction = "
@@ -276,7 +276,7 @@ SEASTAR_TEST_CASE(test_list_elements_validation) {
             }
         };
         e.execute_cql("CREATE TABLE tbl (a int, b list<date>, PRIMARY KEY (a))").get();
-        test_inline("definietly not a date value", true);
+        test_inline("definitely not a date value", true);
         test_inline("2015-05-03", false);
         e.execute_cql("CREATE TABLE tbl2 (a int, b list<text>, PRIMARY KEY (a))").get();
         auto id = e.prepare("INSERT INTO tbl2 (a, b) VALUES(?, ?)").get0();
@@ -310,7 +310,7 @@ SEASTAR_TEST_CASE(test_set_elements_validation) {
             }
         };
         e.execute_cql("CREATE TABLE tbl (a int, b set<date>, PRIMARY KEY (a))").get();
-        test_inline("definietly not a date value", true);
+        test_inline("definitely not a date value", true);
         test_inline("2015-05-03", false);
         e.execute_cql("CREATE TABLE tbl2 (a int, b set<text>, PRIMARY KEY (a))").get();
         auto id = e.prepare("INSERT INTO tbl2 (a, b) VALUES(?, ?)").get0();
@@ -347,7 +347,7 @@ SEASTAR_TEST_CASE(test_map_elements_validation) {
             }
         };
         e.execute_cql("CREATE TABLE tbl (a int, b map<date, date>, PRIMARY KEY (a))").get();
-        test_inline("definietly not a date value", true);
+        test_inline("definitely not a date value", true);
         test_inline("2015-05-03", false);
         e.execute_cql("CREATE TABLE tbl2 (a int, b map<text, text>, PRIMARY KEY (a))").get();
         auto id = e.prepare("INSERT INTO tbl2 (a, b) VALUES(?, ?)").get0();
@@ -396,7 +396,7 @@ SEASTAR_TEST_CASE(test_in_clause_validation) {
             }
         };
         e.execute_cql("CREATE TABLE tbl (p1 int, c1 int, r1 date, PRIMARY KEY (p1, c1,r1))").get();
-        test_inline("definietly not a date value", true);
+        test_inline("definitely not a date value", true);
         test_inline("2015-05-03", false);
         e.execute_cql("CREATE TABLE tbl2 (p1 int, c1 int, r1 text, PRIMARY KEY (p1, c1,r1))").get();
         auto id = e.prepare("SELECT r1 FROM tbl2 WHERE (c1,r1) IN ? ALLOW FILTERING").get0();
@@ -481,7 +481,7 @@ SEASTAR_TEST_CASE(test_tuple_elements_validation) {
             }
         };
         e.execute_cql("CREATE TABLE tbl (a int, b tuple<int, date>, PRIMARY KEY (a))").get();
-        test_inline("definietly not a date value", true);
+        test_inline("definitely not a date value", true);
         test_inline("2015-05-03", false);
         e.execute_cql("CREATE TABLE tbl2 (a int, b tuple<int, text>, PRIMARY KEY (a))").get();
         auto id = e.prepare("INSERT INTO tbl2 (a, b) VALUES(?, ?)").get0();
@@ -556,7 +556,7 @@ SEASTAR_TEST_CASE(test_bound_var_in_collection_literal) {
     });
 }
 
-/// The nubmer of distinct values in a list is limited. Test the
+/// The number of distinct values in a list is limited. Test the
 // limit.
 SEASTAR_TEST_CASE(test_list_append_limit) {
     return do_with_cql_env_thread([](cql_test_env& e) {
@@ -3401,7 +3401,7 @@ public:
     static const int total_num_of_values = constexpr_int_pow(Base, Digits);
 
     /**
-     * Consructor for the testcase
+     * Constructor for the testcase
      * @param gt_range - the tuple for the greater than part of the expression
      *        as a vector of integers.An empty vector indicates no grater than
      *        part.
@@ -3497,11 +3497,11 @@ public:
 
     /**
      * Maps back from integer space to tuple space.
-     * There can be more than one tuple maped to the same int.
+     * There can be more than one tuple mapped to the same int.
      * There will never be more than one tuple of a certain size
-     * that is maped to the same int.
-     * For example: (1) and (1,0) will be maped to the same integer,
-     * but no other tuple of size 1 or 2 will be maped to this int.
+     * that is mapped to the same int.
+     * For example: (1) and (1,0) will be mapped to the same integer,
+     * but no other tuple of size 1 or 2 will be mapped to this int.
      * @param val - the value to map
      * @param num_componnents - the size of the produced tuple.
      * @return the tuple of the requested size.
@@ -3603,15 +3603,15 @@ SEASTAR_TEST_CASE(test_select_with_mixed_order_table) {
             slice_test_type::column_ordering_for_results::DESC,
             slice_test_type::column_ordering_for_results::ASC,
         };
-        // no overlap in componnents equal num of componnents - (b,c,d,e) >/>= (0,1,2,3) and (b,c,d,e) </<= (1,2,3,4)
+        // no overlap in components equal num of components - (b,c,d,e) >/>= (0,1,2,3) and (b,c,d,e) </<= (1,2,3,4)
         generate_with_inclusiveness_permutations({0,1,2,3},{1,2,3,4});
-        // overlap in  componnents equal num of componnents - (b,c,d,e) >/>= (0,1,2,3) and (b,c,d,e) </<= (0,2,2,2)
+        // overlap in  components equal num of components - (b,c,d,e) >/>= (0,1,2,3) and (b,c,d,e) </<= (0,2,2,2)
         generate_with_inclusiveness_permutations({0,1,2,3},{0,2,2,2});
-        // overlap in  componnents equal num of componnents - (b,c,d,e) >/>= (0,1,2,3) and (b,c,d,e) </<= (0,1,2,2)
+        // overlap in  components equal num of components - (b,c,d,e) >/>= (0,1,2,3) and (b,c,d,e) </<= (0,1,2,2)
         generate_with_inclusiveness_permutations({0,1,2,3},{0,1,2,2});
         // no overlap less compnnents in </<= expression - (b,c,d,e) >/>= (0,1,2,3) and (b,c) </<= (1,2)
         generate_with_inclusiveness_permutations({0,1,2,3},{1,2});
-        // overlap in compnnents for less componnents in </<= expression - (b,c,d,e) >/>= (0,1,2,3) and (b,c) </<= (0,2)
+        // overlap in compnnents for less components in </<= expression - (b,c,d,e) >/>= (0,1,2,3) and (b,c) </<= (0,2)
         generate_with_inclusiveness_permutations({0,1,2,3},{0,2});
         // lt side is a prefix of gt side </<= expression - (b,c,d,e) >/>= (0,1,2,3) and (b,c) </<= (0,1)
         generate_with_inclusiveness_permutations({0,1,2,3},{0,1});
@@ -3619,7 +3619,7 @@ SEASTAR_TEST_CASE(test_select_with_mixed_order_table) {
         generate_with_inclusiveness_permutations({0,1},{0,1,2,3});
         // no overlap less compnnents in >/>= expression - (b,c) >/>= (0,1) and (b,c,d,e) </<= (1,2,3,4)
         generate_with_inclusiveness_permutations({0,1},{1,2,3,4});
-        // overlap in compnnents for less componnents in >/>= expression - (b,c) >/>= (0,1) and (b,c,d,e) </<= (0,2,3,4)
+        // overlap in compnnents for less components in >/>= expression - (b,c) >/>= (0,1) and (b,c,d,e) </<= (0,2,3,4)
         generate_with_inclusiveness_permutations({0,1},{0,2,3,4});
         // one sided >/>= 1 expression - (b) >/>= (1)
         generate_with_inclusiveness_permutations({1},{});

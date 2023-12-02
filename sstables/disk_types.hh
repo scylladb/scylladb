@@ -24,7 +24,7 @@ namespace sstables {
 // represents how large they are. They can be a byte-length, in the case of a
 // string, number of elements, in the case of an array, etc.
 //
-// For those elements, we encapsulate the underlying type in an outter
+// For those elements, we encapsulate the underlying type in an outer
 // structure that embeds how large is the in-disk size. It is a lot more
 // convenient to embed it in the size than explicitly writing it in the parser.
 // This way, we don't need to encode this information in multiple places at
