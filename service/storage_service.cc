@@ -1314,9 +1314,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         }
     };
 
-    raft::server_id parse_replaced_node(const node_to_work_on& node) {
-        if (node.req_param) {
-            auto *param = std::get_if<replace_param>(&*node.req_param);
+    raft::server_id parse_replaced_node(const std::optional<request_param>& req_param) {
+        if (req_param) {
+            auto *param = std::get_if<replace_param>(&*req_param);
             if (param) {
                 return param->replaced_id;
             }
@@ -1324,13 +1324,13 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         return {};
     }
 
-    std::unordered_set<raft::server_id> parse_ignore_nodes(const node_to_work_on& node) {
-        if (node.req_param) {
-            auto* remove_param = std::get_if<removenode_param>(&*node.req_param);
+    std::unordered_set<raft::server_id> parse_ignore_nodes(const std::optional<request_param>& req_param) {
+        if (req_param) {
+            auto* remove_param = std::get_if<removenode_param>(&*req_param);
             if (remove_param) {
                 return remove_param->ignored_ids;
             }
-            auto* rep_param = std::get_if<replace_param>(&*node.req_param);
+            auto* rep_param = std::get_if<replace_param>(&*req_param);
             if (rep_param) {
                 return rep_param->ignored_ids;
             }
@@ -1408,13 +1408,17 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         co_return guard;
     }
 
-    std::unordered_set<raft::server_id> get_excluded_nodes(const node_to_work_on& node) {
-        auto exclude_nodes = parse_ignore_nodes(node);
-        exclude_nodes.insert(parse_replaced_node(node));
-        if (node.request && *node.request == topology_request::remove) {
-            exclude_nodes.insert(node.id);
+    std::unordered_set<raft::server_id> get_excluded_nodes(raft::server_id id, const std::optional<topology_request>& req, const std::optional<request_param>& req_param) {
+        auto exclude_nodes = parse_ignore_nodes(req_param);
+        exclude_nodes.insert(parse_replaced_node(req_param));
+        if (req && *req == topology_request::remove) {
+            exclude_nodes.insert(id);
         }
         return exclude_nodes;
+    }
+
+    std::unordered_set<raft::server_id> get_excluded_nodes(const node_to_work_on& node) {
+        return get_excluded_nodes(node.id, node.request, node.req_param);
     }
 
     future<node_to_work_on> exec_global_command(node_to_work_on&& node, const raft_topology_cmd& cmd) {
@@ -2346,7 +2350,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 }
                 if (node.rs->state == node_state::replacing) {
                     // We make a replaced node a non-voter early, just like a removed node.
-                    auto replaced_node_id = parse_replaced_node(node);
+                    auto replaced_node_id = parse_replaced_node(node.req_param);
                     if (_group0.is_member(replaced_node_id, true)) {
                         co_await _group0.make_nonvoter(replaced_node_id);
                     }
@@ -2436,7 +2440,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 }
                     break;
                 case node_state::replacing: {
-                    auto replaced_node_id = parse_replaced_node(node);
+                    auto replaced_node_id = parse_replaced_node(node.req_param);
                     co_await remove_from_group0(replaced_node_id);
 
                     topology_mutation_builder builder1(node.guard.write_timestamp());
@@ -2961,7 +2965,7 @@ future<> topology_coordinator::rollback_current_topology_op(group0_guard&& guard
     // (there should be one since we are in the rollback)
     node_to_work_on node = get_node_to_work_on(std::move(guard));
     node_state state;
-    std::unordered_set<raft::server_id> exclude_nodes = parse_ignore_nodes(node);
+    std::unordered_set<raft::server_id> exclude_nodes = parse_ignore_nodes(node.req_param);
 
     switch (node.rs->state) {
         case node_state::bootstrapping:
