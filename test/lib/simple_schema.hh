@@ -31,7 +31,7 @@
 //
 //   CREATE TABLE ${ks}.${cf} (pk text, ck text, v text, s1 text static, PRIMARY KEY (pk, ck));
 //
-// where ks and cf are specified by the contructor.
+// where ks and cf are specified by the constructor.
 class simple_schema {
 public:
     using with_static = bool_class<class static_tag>;

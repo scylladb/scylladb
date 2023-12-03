@@ -79,7 +79,7 @@ class stream_manager : public gms::i_endpoint_state_change_subscriber, public en
     /*
      * Currently running streams. Removed after completion/failure.
      * We manage them in two different maps to distinguish plan from initiated ones to
-     * receiving ones withing the same JVM.
+     * receiving ones within the same JVM.
      */
 private:
     sharded<replica::database>& _db;

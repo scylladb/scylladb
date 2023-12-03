@@ -324,7 +324,7 @@ def test_desc_aggregate(scylla_only, cql, test_keyspace, random_seed):
             finally:
                 cql.execute(f"DROP AGGREGATE {test_keyspace}.{new_aggr}")
 
-# Test that `DESC TABLE {tbl} WITH INTERNALS` contains additional informations for added/dropped columns
+# Test that `DESC TABLE {tbl} WITH INTERNALS` contains additional information for added/dropped columns
 def test_desc_table_internals(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, "a int primary key, b int, c int") as tbl:
         cql.execute(f"ALTER TABLE {tbl} DROP b")
@@ -363,8 +363,8 @@ def test_desc_keyspace_elements(cql, random_seed):
                 assert f"CREATE TYPE {udt}" not in ks_only_desc
                 assert f"CREATE TABLE {tbl}" not in ks_only_desc
 
-# Test that `DESC SCHEMA` contains all informations for user created keyspaces
-# and `DESC FULL SCHEMA` contains also informations for system keyspaces
+# Test that `DESC SCHEMA` contains all information for user created keyspaces
+# and `DESC FULL SCHEMA` contains also information for system keyspaces
 def test_desc_schema(cql, test_keyspace, random_seed):
     with new_random_keyspace(cql) as ks:
         with new_random_table(cql, test_keyspace) as tbl1, new_random_table(cql, ks) as tbl2:
@@ -426,7 +426,7 @@ def test_desc_index(cql, test_keyspace):
             ab_desc = cql.execute(f"DESC INDEX {test_keyspace}.{tbl_name}_b_idx_1").one().create_statement
         c_desc = cql.execute(f"DESC INDEX {test_keyspace}.named_index").one().create_statement
 
-        # Cassandra inserts a space between the table name and parantheses,
+        # Cassandra inserts a space between the table name and parentheses,
         # Scylla doesn't. This difference doesn't matter because both are
         # valid CQL commands
         if is_scylla(cql):
@@ -468,7 +468,7 @@ def test_index_desc_in_table_desc(cql, test_keyspace):
 # -----------------------------------------------------------------------------
 # "Generic describe" is a describe statement without specifying what kind of object 
 # you want to describe, so it only requires keyspace name(optionally) and object name.
-# Genric describe should be exactly the same as normal describe, so for instannce:
+# Generic describe should be exactly the same as normal describe, so for instannce:
 # `DESC TABLE <table_name> == DESC <table_name>`.
 #
 # ScyllaDB looks for describing object in a following order: 
@@ -744,7 +744,7 @@ def maybe_quote(ident):
             num_quotes += (c == '"')
 
     if not need_quotes:
-        # TODO: Here is missing part from C++ implamentation (see cql3/cql3_type.cc:448)
+        # TODO: Here is missing part from C++ implementation (see cql3/cql3_type.cc:448)
         # Here function from Cql.g (cident) is used to ensure the ident doesn't need quoting.
         return ident
     

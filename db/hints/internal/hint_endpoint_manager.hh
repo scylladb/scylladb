@@ -200,4 +200,4 @@ private:
 };
 
 } // namespace internal
-} // namesapce db::hints
+} // namespace db::hints

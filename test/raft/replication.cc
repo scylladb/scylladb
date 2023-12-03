@@ -12,9 +12,9 @@
 seastar::logger tlogger("test");
 
 seastar::semaphore snapshot_sync(0);
-// application of a snaphot with that id will be delayed until snapshot_sync is signaled
+// application of a snapshot with that id will be delayed until snapshot_sync is signaled
 raft::snapshot_id delay_apply_snapshot{utils::UUID(0, 0xdeadbeaf)};
-// sending of a snaphot with that id will be delayed until snapshot_sync is signaled
+// sending of a snapshot with that id will be delayed until snapshot_sync is signaled
 raft::snapshot_id delay_send_snapshot{utils::UUID(0xdeadbeaf, 0)};
 
 std::vector<raft::server_id> to_raft_id_vec(std::vector<node_id> nodes) noexcept {

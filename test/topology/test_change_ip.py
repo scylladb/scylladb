@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 @pytest.mark.asyncio
 async def test_change_two(manager, random_tables):
     """Stop two nodes, change their IPs and start, check the cluster is
-    funcitonal"""
+    functional"""
     servers = await manager.running_servers()
     table = await random_tables.add_table(ncolumns=5)
     s_1 = servers[1].server_id

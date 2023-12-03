@@ -231,7 +231,7 @@ def test_drop_keyspace_with_uda(scylla_only, cql):
     with pytest.raises(ConfigurationException, match="Cannot drop non existing keyspace"):
         cql.execute(f"DROP KEYSPACE {ks}")
 
-# Test that replacing the state function, reduce function or the final function succesfully changes the function used by the aggregate.
+# Test that replacing the state function, reduce function or the final function successfully changes the function used by the aggregate.
 # When the state or final function is replaced, the new function should be used in following calls to the aggregate. Cassandra keeps using
 # the old function, which we consider a cassandra bug.
 def test_replace_sfunc_ffunc(cql, test_keyspace, cassandra_bug):

@@ -117,7 +117,7 @@ def test_number_precision_not_allowed(test_table_s):
                 ExpressionAttributeValues={':val': num})
 
 # The above tests checked the legal magnitudes and precisions of non-key
-# columns, and the following tests do the same for a numberic key column.
+# columns, and the following tests do the same for a numeric key column.
 # Because different code paths are involved for serializing and storing
 # key and non-key columns, it's important to check this case as well.
 def test_number_magnitude_key(test_table_sn):

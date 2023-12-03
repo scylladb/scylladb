@@ -28,7 +28,7 @@ logger.warning("Driver version %s", DRIVER_VERSION)
 
 
 # By default, tests run against a CQL server (Scylla or Cassandra) listening
-# on localhost:9042. Add the --host and --port options to allow overiding
+# on localhost:9042. Add the --host and --port options to allow overriding
 # these defaults.
 def pytest_addoption(parser) -> None:
     """Set up command line parameters"""

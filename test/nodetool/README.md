@@ -1,6 +1,6 @@
 # Front-end tests for nodetool
 
-The tests in this directory excercise the nodetool client itself, mocking the API backend.
+The tests in this directory exercise the nodetool client itself, mocking the API backend.
 This allows for testing all combinations of all supported options, and still keeping the tests quick.
 
 The tests can be run against both the scylla-native nodetool (default), or the inherited, C\*-based nodetool.

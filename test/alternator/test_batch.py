@@ -432,7 +432,7 @@ def test_batch_write_item_too_many(test_table_sn):
             test_table_sn.name: [{'DeleteRequest': {'Key': {'p': p, 'c': i}}} for i in range(30)]
     })
 
-# According to the DynamoDB documention, a single BatchGetItem operation is
+# According to the DynamoDB documentation, a single BatchGetItem operation is
 # limited to retrieving up to 100 items or a total of 16 MB of data,
 # whichever is smaller. If we read less than those limits in a single
 # BatchGetItem operation, it should work - though may still return only

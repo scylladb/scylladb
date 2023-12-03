@@ -8,7 +8,7 @@ add_subdirectory(perf)
 #
 # add_scylla_test(<test_name>
 #   [KIND <kind>]
-#   [SOUCES <src>...])
+#   [SOURCES <src>...])
 #
 # kind can be:
 # * SEASTAR - a unit test that depends on the scylla sources and the

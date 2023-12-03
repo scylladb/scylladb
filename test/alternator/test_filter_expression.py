@@ -75,7 +75,7 @@ def test_table_sn_with_data(test_table_sn):
 # must use KeyCondition or KeyConditionExpression instead. In the first test
 # we don't use a KeyCondition at all and get a generic error message about
 # Query always needing one. In the second test we do have a KeyCondition plus
-# a (redundent) FilterExpression on the key attribute, and that isn't allowed
+# a (redundant) FilterExpression on the key attribute, and that isn't allowed
 # either.
 def test_filter_expression_partition_key_1(test_table_sn_with_data):
     table, p, items = test_table_sn_with_data
@@ -683,7 +683,7 @@ def test_filter_expression_and_projection_expression(test_table):
     # Note that:
     # 1. Exactly one item matches the filter on x
     # 2. The returned record for that item will include *only* the attribute y
-    #    as requestd by ProjectionExpression. It won't include x - it was just
+    #    as requested by ProjectionExpression. It won't include x - it was just
     #    needed for the filter, but didn't appear in ProjectionExpression.
     expected_items = [{'y': 'horse'}]
     assert(got_items == expected_items)

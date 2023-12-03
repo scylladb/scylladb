@@ -835,7 +835,7 @@ sql_cast_prepare_expression(const cast& c, data_dictionary::database db, const s
         throw exceptions::invalid_request_exception(fmt::format("Could not infer type of cast argument {}", c.arg));
     }
 
-    // cast to the same type should be ommited
+    // cast to the same type should be omitted
     if (cast_type == type_of(*prepared_arg)) {
         return prepared_arg;
     }
@@ -1140,7 +1140,7 @@ try_prepare_expression(const expression& expr, data_dictionary::database db, con
             constant result = value;
             if (receiver) {
                 // The receiver might have a different type from the constant, but this is allowed if the types are compatible.
-                // In such case the type is implictly converted to receiver type.
+                // In such case the type is implicitly converted to receiver type.
                 result.type = receiver->type;
             }
             return result;

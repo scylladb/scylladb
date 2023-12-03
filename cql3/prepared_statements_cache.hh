@@ -126,7 +126,7 @@ public:
 
     // "Touch" the corresponding cache entry in order to bump up its reference count.
     void touch(const key_type& key) {
-        // loading_cache::find() returns a value_ptr object which contructor does the "thouching".
+        // loading_cache::find() returns a value_ptr object which constructor does the "thouching".
         _cache.find(key.key());
     }
 

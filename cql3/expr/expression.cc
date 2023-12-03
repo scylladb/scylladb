@@ -161,7 +161,7 @@ get_value(const subscript& s, const evaluation_inputs& inputs) {
         // For m[null] return null.
         // This is different from Cassandra - which treats m[null]
         // as an invalid request error. But m[null] -> null is more
-        // consistent with our usual null treatement (e.g., both
+        // consistent with our usual null treatment (e.g., both
         // null[2] and null < 2 return null). It will also allow us
         // to support non-constant subscripts (e.g., m[a]) where "a"
         // may be null in some rows and non-null in others, and it's
@@ -1679,14 +1679,14 @@ cql3::raw_value do_evaluate(const binary_operator& binop, const evaluation_input
 }
 
 // Evaluate a conjunction of elements separated by AND.
-// NULL is treated as an "unkown value" - maybe true maybe false.
+// NULL is treated as an "unknown value" - maybe true maybe false.
 // `TRUE AND NULL` evaluates to NULL because it might be true but also might be false.
 // `FALSE AND NULL` evaluates to FALSE because no matter what value NULL acts as, the result will still be FALSE.
 // Empty values are not allowed.
 //
 // Usually in CQL the rule is that when NULL occurs in an operation the whole expression
 // becomes NULL, but here we decided to deviate from this behavior.
-// Treating NULL as an "unkown value" is the standard SQL way of handing NULLs in conjunctions.
+// Treating NULL as an "unknown value" is the standard SQL way of handing NULLs in conjunctions.
 // It works this way in MySQL and Postgres so we do it this way as well.
 //
 // The evaluation short-circuits. Once FALSE is encountered the function returns FALSE

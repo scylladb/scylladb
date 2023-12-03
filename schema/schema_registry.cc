@@ -331,7 +331,7 @@ schema_ptr global_schema_ptr::get() const {
 
         schema_ptr registered_bs;
         // the following code contains registry entry dereference of a foreign shard
-        // however, it is guarantied to succeed since we made sure in the constructor
+        // however, it is guaranteed to succeed since we made sure in the constructor
         // that _bs_schema and _ptr will have a registry on the foreign shard where this
         // object originated so as long as this object lives the registry entries lives too
         // and it is safe to reference them on foreign shards.

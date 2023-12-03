@@ -79,7 +79,7 @@ void drop_type_statement::validate_while_executing(query_processor& qp) const {
         // yet apply the drop mutations after -> inconsistent data!
         // This problem is the same in origin, and I see no good way around it
         // as long as the atomicity of schema modifications are based on
-        // actual appy of mutations, because unlike other drops, this one isn't
+        // actual apply of mutations, because unlike other drops, this one isn't
         // benevolent.
         // I guess this is one case where user need beware, and don't mess with types
         // concurrently!

@@ -224,7 +224,7 @@ struct appending_hash<range_tombstone>  {
 // follow the ordering used by the mutation readers.
 //
 // Unless the accumulator is in the reverse mode, after apply(rt) or
-// tombstone_for_row(ck) are called there are followng restrictions for
+// tombstone_for_row(ck) are called there are following restrictions for
 // subsequent calls:
 //  - apply(rt1) can be invoked only if rt.start_bound() < rt1.start_bound()
 //    and ck < rt1.start_bound()

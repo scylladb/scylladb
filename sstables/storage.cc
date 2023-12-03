@@ -285,7 +285,7 @@ future<> filesystem_storage::check_create_links_replay(const sstable& sst, const
 /// will have both a TemporaryTOC file and a regular TOC file.
 /// It should be deleted on restart, thus rolling the operation backwards.
 ///
-/// Eventually, if \c mark_for_removal is unset, the detination
+/// Eventually, if \c mark_for_removal is unset, the destination
 /// TemporaryTOC is removed, to "commit" the destination sstable;
 ///
 /// Otherwise, if \c mark_for_removal is set, the TemporaryTOC at the destination

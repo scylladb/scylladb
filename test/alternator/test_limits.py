@@ -100,7 +100,7 @@ def test_limit_attribute_length_key_good(dynamodb):
 
 # Attribute length test 4: Test that *key* attribute names more than 255
 # characters are not allowed - not for hash key and not for range key.
-# Strangely, this limitation is not explictly mentioned in the DynamoDB
+# Strangely, this limitation is not explicitly mentioned in the DynamoDB
 # documentation - which only mentions that SI keys are limited to 255 bytes,
 # but forgets to mention base-table keys.
 # Reproduces issue #9169.
@@ -203,7 +203,7 @@ def test_limit_attribute_length_gsi_lsi_bad(dynamodb):
             pass
 
 # Attribute length tests 7,8: In an LSI, projected attribute names are also
-# limited to 255 bytes. This is explicilty mentioned in the DynamoDB
+# limited to 255 bytes. This is explicitly mentioned in the DynamoDB
 # documentation. For GSI this is also true (but not explicitly mentioned).
 # This limitation is only true to attributes *explicitly* projected by name -
 # attributes projected as part as ALL can be bigger (up to the usual 64KB
@@ -498,7 +498,7 @@ def test_deeply_nested_expression_2(test_table_s):
 # redundant parentheses", and Scylla stops parsing after recursing too
 # deeply (MAX_DEPTH) and reports "Failed parsing ConditionExpression".
 # The really important thing is Scylla doesn't crash on this expression (as
-# it used to before implementating MAX_DEPTH).
+# it used to before implementing MAX_DEPTH).
 def test_deeply_nested_expression_3(test_table_s):
     # (((((((((((((((a<b)))))))))))))))
     p = random_string()

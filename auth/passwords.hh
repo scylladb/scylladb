@@ -88,7 +88,7 @@ sstring hash_with_salt(const sstring& pass, const sstring& salt);
 /// Prior to applying the hashing function, random salt is amended to the cleartext. The random salt bytes are generated
 /// according to the random number engine `g`.
 ///
-/// The result is the encrypted cyphertext, and also the salt used but in a implementation-specific format.
+/// The result is the encrypted ciphertext, and also the salt used but in a implementation-specific format.
 ///
 /// \throws \ref std::system_error when the implementation-specific implementation fails to hash the cleartext.
 ///

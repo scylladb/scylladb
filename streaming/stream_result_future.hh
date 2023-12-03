@@ -47,7 +47,7 @@ public:
     stream_result_future(stream_manager& mgr, streaming::plan_id plan_id_, sstring description_, bool is_receiving)
         : stream_result_future(mgr, plan_id_, description_, make_shared<stream_coordinator>(is_receiving)) {
         // Note: Origin sets connections_per_host = 0 on receiving side, We set 1 to
-        // refelct the fact that we actaully create one conncetion to the initiator.
+        // refelct the fact that we actually create one connection to the initiator.
     }
 
     /**

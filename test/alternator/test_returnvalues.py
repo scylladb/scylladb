@@ -103,7 +103,7 @@ def test_put_item_returnvalues_on_condition_check_failure(test_table_s):
             ExpressionAttributeValues={':v1' : 'dog'})
     assert not 'Item' in err.value.response # Field used for error responses not present.
     test_table_s.put_item(Item={'p': p, 's': 'dog'})
-    # Succesful conditional put doesn't return values.
+    # Successful conditional put doesn't return values.
     ret=test_table_s.put_item(Item={'p': p, 's': 'cat'},
         ReturnValuesOnConditionCheckFailure='ALL_OLD',
         ConditionExpression='s = :v1',
@@ -179,7 +179,7 @@ def test_delete_item_returnvalues_on_condition_check_failure(test_table_s):
             ExpressionAttributeValues={':v1' : 'dog'})
     assert not 'Item' in err.value.response # Field used by ReturnValuesOnConditionCheckFailure parameter not present.
     test_table_s.put_item(Item={'p': p, 's': 'dog'})
-    # Succesful delete doesn't return values.
+    # Successful delete doesn't return values.
     ret=test_table_s.delete_item(Key={'p': p},
         ReturnValuesOnConditionCheckFailure='ALL_OLD',
         ConditionExpression='s = :v1',
@@ -534,7 +534,7 @@ def test_update_item_returnvalues_on_condition_check_failure(test_table_s):
             ExpressionAttributeValues={':v1' : 'dog', ':v2': 'cat'})
     assert not 'Item' in err.value.response # Field used by ReturnValuesOnConditionCheckFailure parameter not present.
     test_table_s.put_item(Item={'p': p, 's': 'dog'})
-    # Succesful modification doesn't return values.
+    # Successful modification doesn't return values.
     ret=test_table_s.update_item(Key={'p': p},
         ReturnValuesOnConditionCheckFailure='ALL_OLD',
         ConditionExpression='s = :v1',
@@ -550,7 +550,7 @@ def test_update_item_returnvalues_on_condition_check_failure(test_table_s):
             UpdateExpression='SET s = :v2',
             ExpressionAttributeValues={':v1' : 'rat', ':v2': 'cow'})
     assert err.value.response['Item'] == {'p': {'S': p}, 's': {'S': 'cat'}}
-    # Failed condtion without returning old values.
+    # Failed condition without returning old values.
     with pytest.raises(test_table_s.meta.client.exceptions.ConditionalCheckFailedException) as err:
         test_table_s.update_item(Key={'p': p},
             ReturnValuesOnConditionCheckFailure='NONE',

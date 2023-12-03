@@ -605,8 +605,8 @@ future<> evictable_reader_v2::fill_buffer() {
         auto* next_mf = co_await _reader->peek();
 
         // First make sure we've made progress w.r.t. _next_position_in_partition.
-        // This loop becomes inifinite when next pos is a partition start.
-        // In that case progress is guranteed anyway, so skip this loop entirely.
+        // This loop becomes infinite when next pos is a partition start.
+        // In that case progress is guaranteed anyway, so skip this loop entirely.
         while (!_next_position_in_partition.is_partition_start() && next_mf && _tri_cmp(buffer().back().position(), _next_position_in_partition) <= 0) {
             push_mutation_fragment(_reader->pop_mutation_fragment());
             next_mf = co_await _reader->peek();

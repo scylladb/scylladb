@@ -146,7 +146,7 @@ def test_ttl_disable_errors(dynamodb):
             client.update_time_to_live(TableName=table.name,
                 TimeToLiveSpecification={'AttributeName': 'expiration', 'Enabled': False})
 
-# Test *sucessful* disabling of TTL. This is an extremely slow test on AWS,
+# Test *successful* disabling of TTL. This is an extremely slow test on AWS,
 # as DynamoDB refuses to disable TTL if it was enabled in the last half hour
 # (the documentation suggests a full hour, but in practice it seems 30
 # minutes). But on Scylla it is currently almost instantaneous.
@@ -276,7 +276,7 @@ def test_ttl_expiration(dynamodb):
         p7 = random_string()
         table.put_item(Item={'p': p7, 'expiration': str(int(time.time())+delta)})
         # Like p2, p8 and p9 also have an already-passed expiration time,
-        # and should expire ASAP. However, whereas p2 had a straighforward
+        # and should expire ASAP. However, whereas p2 had a straightforward
         # integer like 12345678 as the expiration time, p8 and p9 have
         # slightly more elaborate numbers: p8 has 1234567e1 and p9 has
         # 12345678.1234. Those formats should be fine, and this test verifies
@@ -726,7 +726,7 @@ def read_entire_stream(dynamodbstreams, table):
         shards.extend([x['ShardId'] for x in response['Shards']])
     records = []
     for shard_id in shards:
-        # Get an interator for everything (TRIM_HORIZON) in the shard
+        # Get an iterator for everything (TRIM_HORIZON) in the shard
         iter = dynamodbstreams.get_shard_iterator(StreamArn=arn,
             ShardId=shard_id, ShardIteratorType='TRIM_HORIZON')['ShardIterator']
         while iter != None:

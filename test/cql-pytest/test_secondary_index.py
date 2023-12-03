@@ -525,7 +525,7 @@ def test_filter_and_limit(cql, test_keyspace, use_index, driver_bug_1):
 # The following test is similar to the previous one (test_filter_and_limit)
 # with one main difference: Whereas in the previous test the table's schema
 # had only a partition key, here we also add a clustering key.
-# This variantion in the test is important because Scylla's index-using code
+# This variation in the test is important because Scylla's index-using code
 # has a different code path for the case that the index lookup results in a
 # list of matching partitions (the previous test) and when it results in a
 # list of matching rows (this test).
@@ -719,7 +719,7 @@ def test_index_set(cql, test_keyspace):
         assert [] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE s CONTAINS 7'))
         assert [] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE s CONTAINS 8'))
         # A set can only have the same value once. The set is now {2,5},
-        # trying to add 2 again makes no diffence - and removing it just once
+        # trying to add 2 again makes no difference - and removing it just once
         # will remove this value:
         cql.execute(f'UPDATE {table} set s = s + {{2}} WHERE pk=1 AND ck=2')
         assert [(1,2)] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE s CONTAINS 2'))
@@ -728,7 +728,7 @@ def test_index_set(cql, test_keyspace):
         # The set is now {5}. Replacing it with an empty set works as expected:
         cql.execute(f'UPDATE {table} SET s = {{}} WHERE pk=1 AND ck=2')
         assert [] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE s CONTAINS 5'))
-        # The DELETE operaiton does the same thing:
+        # The DELETE operation does the same thing:
         cql.execute(f'UPDATE {table} SET s = {{17,18}} WHERE pk=1 AND ck=2')
         assert [(1,2)] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE s CONTAINS 17'))
         assert [(1,2)] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE s CONTAINS 18'))
@@ -829,7 +829,7 @@ def test_index_map_values_multiple_matching_rows(cql, test_keyspace, driver_bug_
         cql.execute(f'CREATE INDEX ON {table}(m)')
         # Insert several rows with several different maps, some of them have
         # the value 3 in them somewhere, others don't. One of the maps has
-        # multiple occurances of the value 3, so we also reproduce here the
+        # multiple occurrences of the value 3, so we also reproduce here the
         # same bug that test_index_map_values_paging() reproduces.
         # Note: Scylla needs to skip a duplicate 3 value in (2,4) which
         # results in an empty page in the result set when page_size=1. We
@@ -856,7 +856,7 @@ def test_index_map_values_partition_key_only(cql, test_keyspace, driver_bug_1):
         cql.execute(f'CREATE INDEX ON {table}(m)')
         # Insert several rows with several different maps, some of them have
         # the value 3 in them somewhere, others don't. One of the maps has
-        # multiple occurances of the value 3, so we also reproduce here the
+        # multiple occurrences of the value 3, so we also reproduce here the
         # same bug that test_index_map_values_paging() reproduces (and here
         # test its intersection with the case of no clustering key).
         cql.execute(f'INSERT INTO {table} (pk, m) VALUES (1, {{1:2, 3:4}})')
@@ -924,7 +924,7 @@ def test_index_map_entries(cql, test_keyspace):
     schema = 'pk int, ck int, m map<int,int>, PRIMARY KEY (pk, ck)'
     with new_test_table(cql, test_keyspace, schema) as table:
         cql.execute(f'CREATE INDEX ON {table}(entries(m))')
-        # indexing entires(m) will allow neither CONTAINS KEY nor CONTAINS
+        # indexing entries(m) will allow neither CONTAINS KEY nor CONTAINS
         with pytest.raises(InvalidRequest, match="ALLOW FILTERING"):
             cql.execute(f'SELECT pk,ck FROM {table} WHERE m CONTAINS 3')
         with pytest.raises(InvalidRequest, match="ALLOW FILTERING"):

@@ -222,7 +222,7 @@ future<> run_table_tasks(replica::database& db, std::vector<table_tasks_info> ta
     std::exception_ptr ex;
 
     // While compaction is run on one table, the size of tables may significantly change.
-    // Thus, they are sorted before each invidual compaction and the smallest table is chosen.
+    // Thus, they are sorted before each individual compaction and the smallest table is chosen.
     while (!table_tasks.empty()) {
         try {
             if (sort) {
@@ -274,7 +274,7 @@ future<> run_keyspace_tasks(replica::database& db, std::vector<keyspace_tasks_in
     std::exception_ptr ex;
 
     // While compaction is run on one table, the size of tables may significantly change.
-    // Thus, they are sorted before each invidual compaction and the smallest keyspace is chosen.
+    // Thus, they are sorted before each individual compaction and the smallest keyspace is chosen.
     while (!keyspace_tasks.empty()) {
         try {
             if (sort) {

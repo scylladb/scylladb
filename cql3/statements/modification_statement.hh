@@ -173,7 +173,7 @@ public:
 
 private:
     // Return true if this statement doesn't update or read any regular rows, only static rows.
-    // Note, it isn't enought to just check !_sets_regular_columns && _regular_conditions.empty(),
+    // Note, it isn't enough to just check !_sets_regular_columns && _regular_conditions.empty(),
     // because a DELETE statement that deletes whole rows (DELETE FROM ...) technically doesn't
     // have any column operations and hence doesn't have _sets_regular_columns set. It doesn't
     // have _sets_static_columns set either so checking the latter flag too here guarantees that

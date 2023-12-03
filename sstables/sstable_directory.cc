@@ -558,7 +558,7 @@ future<> sstable_directory::delete_with_pending_deletion_log(std::vector<shared_
             } else {
                 // All sstables are assumed to be in the same column_family, hence
                 // sharing their base directory. Since lexicographical comparison of
-                // paths is not the same as their actualy equivalence, this should
+                // paths is not the same as their actually equivalence, this should
                 // rather check for fs::equivalent call on _storage.prefix()-s. But
                 // since we know that the worst thing filesystem storage driver can
                 // do is to prepend/drop the trailing slash, it should be enough to

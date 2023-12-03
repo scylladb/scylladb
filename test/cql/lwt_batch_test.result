@@ -384,8 +384,8 @@ OK
 OK
 > --
 > --
-> -- condtitions on different list columns and different rows of the same
-> -- partition, these columns are retreived fine and the appropriate row
+> -- conditions on different list columns and different rows of the same
+> -- partition, these columns are retrieved fine and the appropriate row
 > -- is found when checking the conds
 > --
 > -- correct read command: statement 1 condition is on column a and list update

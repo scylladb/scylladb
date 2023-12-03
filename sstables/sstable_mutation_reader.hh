@@ -107,7 +107,7 @@ position_in_partition_view get_slice_upper_bound(const schema& s, const query::p
 // desired byte range from disk. However, when last_end > end, we may
 // read beyond end in anticipation of a small skip via fast_foward_to.
 // The amount of this excessive read is controlled by read ahead
-// hueristics which learn from the usefulness of previous read aheads.
+// heuristics which learn from the usefulness of previous read aheads.
 template <typename DataConsumeRowsContext>
 inline std::unique_ptr<DataConsumeRowsContext> data_consume_rows(const schema& s, shared_sstable sst, typename DataConsumeRowsContext::consumer& consumer, sstable::disk_read_range toread, uint64_t last_end) {
     // Although we were only asked to read until toread.end, we'll not limit

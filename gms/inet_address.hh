@@ -93,7 +93,7 @@ struct fmt::formatter<gms::inet_address> : fmt::formatter<std::string_view> {
         if (x.addr().is_ipv4()) {
             return fmt::format_to(ctx.out(), "{}", x.addr());
         }
-        // print 2 bytes in a group, and use ':' as the delimeter
+        // print 2 bytes in a group, and use ':' as the delimiter
         fmt::format_to(ctx.out(), "{:2:}", fmt_hex(x.bytes()));
         if (x.addr().scope() != seastar::net::inet_address::invalid_scope) {
             return fmt::format_to(ctx.out(), "%{}", x.addr().scope());

@@ -94,12 +94,12 @@ def testNumericCastsInSelectionClause(cql, test_keyspace, cassandra_bug):
                 "CAST(i AS double) FROM %s"),
                    row(1.0, 2.0, 3.0, 4.0, c_float(5.2).value, 6.3, 6.3, 4.0, None))
 
-        # Cassandra has a bug here (CASSANDRA-18647), so this test was modifed
+        # Cassandra has a bug here (CASSANDRA-18647), so this test was modified
         # from the original and fails on Cassandra and marked cassandra_bug:
         # When the "float" (32-bit) number 5.2 is converted to "decimal",
         # Cassandra wrongly expands it to double and becomes 5.199999809265137,
         # and only then converted to decimal with all those silly extra digits.
-        # Scylla, correctly, only keeps the relevant digits for the orignal
+        # Scylla, correctly, only keeps the relevant digits for the original
         # float - 5.2.
         assertRows(execute(cql, table, "SELECT CAST(a AS decimal), " +
                 "CAST(b AS decimal), " +

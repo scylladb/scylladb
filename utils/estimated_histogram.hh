@@ -185,7 +185,7 @@ public:
     /*!
      * \brief returns the smallest value that could have been added to this histogram
      * This method looks for the first non-empty bucket and returns its lower limit.
-     * Note that for non-empty histogram the lowest potentail value is Min.
+     * Note that for non-empty histogram the lowest potential value is Min.
      *
      * It will return 0 if the histogram is empty.
      */

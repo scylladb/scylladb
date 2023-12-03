@@ -199,7 +199,7 @@ def test_unset_insert_where(cql, table2):
         cql.execute(stmt, [UNSET_VALUE])
 
 # Similar to test_unset_insert_where() above, just use an LWT write ("IF
-# NOT EXISTS"). Test that using an UNSET_VALUE in an LWT condtion causes
+# NOT EXISTS"). Test that using an UNSET_VALUE in an LWT condition causes
 # a clear error, not silent skip and not a crash as in issue #13001.
 def test_unset_insert_where_lwt(cql, table2):
     p = unique_key_int()

@@ -692,7 +692,7 @@ messaging_service::get_rpc_client_idx(messaging_verb verb) const {
     const auto curr_sched_group = current_scheduling_group();
     for (unsigned i = 0; i < _connection_index_for_tenant.size(); ++i) {
         if (_connection_index_for_tenant[i].sched_group == curr_sched_group) {
-            // i == 0: the default tenant maps to the default client indexes beloning to the interval
+            // i == 0: the default tenant maps to the default client indexes belonging to the interval
             // [PER_SHARD_CONNECTION_COUNT, PER_SHARD_CONNECTION_COUNT + PER_TENANT_CONNECTION_COUNT).
             idx += i * PER_TENANT_CONNECTION_COUNT;
             break;

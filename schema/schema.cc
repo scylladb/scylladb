@@ -1115,7 +1115,7 @@ schema_builder& schema_builder::with_column_ordered(const column_definition& c) 
 }
 
 schema_builder& schema_builder::with_column(bytes name, data_type type, column_kind kind, column_view_virtual is_view_virtual) {
-    // component_index will be determined by schema cosntructor
+    // component_index will be determined by schema constructor
     return with_column(name, type, kind, 0, is_view_virtual);
 }
 

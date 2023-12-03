@@ -149,7 +149,7 @@ public:
 //
 class clustered_index_cursor {
 public:
-    // Position of indexed elements in the data file realative to the start of the partition.
+    // Position of indexed elements in the data file relative to the start of the partition.
     using offset_in_partition = uint64_t;
 
     struct skip_info {

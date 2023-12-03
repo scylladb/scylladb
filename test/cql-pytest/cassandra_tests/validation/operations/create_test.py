@@ -540,7 +540,7 @@ def testDoubleWith(cql, test_keyspace):
 #                                           "CREATE TABLE %s (a text, b int, c int, primary key (a, b))"
 #                                           + " WITH memtable = 'test_missing_class';")
 #
-#        assertThrowsConfigurationException("Memtable class org.apache.cassandra.db.memtable.SkipListMemtable does not accept any futher parameters, but {invalid=throw} were given.",
+#        assertThrowsConfigurationException("Memtable class org.apache.cassandra.db.memtable.SkipListMemtable does not accept any further parameters, but {invalid=throw} were given.",
 #                                           "CREATE TABLE %s (a text, b int, c int, primary key (a, b))"
 #                                           + " WITH memtable = 'test_invalid_param';")
 #
@@ -548,7 +548,7 @@ def testDoubleWith(cql, test_keyspace):
 #                                           "CREATE TABLE %s (a text, b int, c int, primary key (a, b))"
 #                                           + " WITH memtable = 'test_unknown_class';")
 #
-#        assertThrowsConfigurationException("Memtable class org.apache.cassandra.db.memtable.TestMemtable does not accept any futher parameters, but {invalid=throw} were given.",
+#        assertThrowsConfigurationException("Memtable class org.apache.cassandra.db.memtable.TestMemtable does not accept any further parameters, but {invalid=throw} were given.",
 #                                           "CREATE TABLE %s (a text, b int, c int, primary key (a, b))"
 #                                           + " WITH memtable = 'test_invalid_extra_param';")
 #

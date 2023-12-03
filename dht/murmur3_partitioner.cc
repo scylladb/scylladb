@@ -21,7 +21,7 @@ namespace dht {
 // allowed anyway. However, they *are* allowed in materialized views, so the
 // empty-key partition should get a real token, not an invalid token, so
 // we dropped this special case. Since we don't support migrating sstables of
-// materialized-views from Cassandra, this Cassandra-Scylla incompatiblity
+// materialized-views from Cassandra, this Cassandra-Scylla incompatibility
 // will not cause problems in practice.
 // Note that get_token(const schema& s, partition_key_view key) below must
 // use exactly the same algorithm as this function.

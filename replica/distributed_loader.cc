@@ -213,7 +213,7 @@ distributed_loader::process_upload_dir(distributed<replica::database>& db, distr
         };
         // Pass owned_ranges_ptr to reshard to piggy-back cleanup on the resharding compaction.
         // Note that needs_cleanup() is inaccurate and may return false positives,
-        // maybe triggerring resharding+cleanup unnecessarily for some sstables.
+        // maybe triggering resharding+cleanup unnecessarily for some sstables.
         // But this is resharding on refresh (sstable loading via upload dir),
         // which will usually require resharding anyway.
         //

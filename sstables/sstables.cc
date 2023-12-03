@@ -165,7 +165,7 @@ const std::unordered_map<sstable_format_types, sstring, enum_hash<sstable_format
 };
 
 // This assumes that the mappings are small enough, and called unfrequent
-// enough.  If that changes, it would be adviseable to create a full static
+// enough.  If that changes, it would be advisable to create a full static
 // reverse mapping, even if it is done at runtime.
 template <typename Map, std::equality_comparable_with<typename Map::mapped_type> Value>
 static typename Map::key_type reverse_map(const Value& v, const Map& map) {
@@ -1669,7 +1669,7 @@ bool sstable::may_contain_rows(const query::clustering_row_ranges& ranges) const
 
     // Include sstables with tombstones that are not scylla's since
     // they may contain partition tombstones that are not taken into
-    // account in min/max coloumn names metadata.
+    // account in min/max column names metadata.
     // We clear min/max metadata for partition tombstones so they
     // will match as containing the rows we're looking for.
     if (!has_scylla_component()) {

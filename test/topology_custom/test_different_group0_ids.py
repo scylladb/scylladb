@@ -68,7 +68,7 @@ async def test_different_group0_ids(manager: ManagerClient):
     # Check if decommissioning the second node fails.
     # Repair service throws a runtime exception "zero replica after the removal"
     # when it tries to remove the only one node from the cluster.
-    # If it is not thrown, it means that the second node succesfully send a gossip
+    # If it is not thrown, it means that the second node successfully send a gossip
     # to the first node and they merged their tokens metadata.
     with pytest.raises(Exception, match='zero replica after the removal'):
         await manager.decommission_node(scylla_b.server_id)

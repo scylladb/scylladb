@@ -72,7 +72,7 @@ struct compression {
     //
     // This is not a general purpose container. There are limitations:
     // * Can't be used before init() is called.
-    // * at() is best called incrementally, altough random lookups are
+    // * at() is best called incrementally, although random lookups are
     // perfectly valid as well.
     // * The iterator and at() can't provide references to the elements.
     // * No point insert is available.

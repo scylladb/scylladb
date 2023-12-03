@@ -676,7 +676,7 @@ public:
 
         /*
          * Special constructor for the case when there's the need for an
-         * iterator to the given value poiter. In this case we need to
+         * iterator to the given value pointer. In this case we need to
          * get three things:
          *  - pointer on class data: we assume that the value pointer
          *    is indeed embedded into the data and do the "container_of"
@@ -1019,11 +1019,11 @@ class node final {
 
     /*
      * Leaf nodes are linked in a list, since leaf nodes do
-     * not use the _kids[0] pointer we re-use it. Respectively,
+     * not use the _kids[0] pointer we reuse it. Respectively,
      * non-leaf nodes don't use the __next one.
      *
      * Also, leftmost and rightmost respectively have prev and
-     * next pointing to the tree object itsef. This is done for
+     * next pointing to the tree object itself. This is done for
      * _left/_right update on node move.
      */
     union {
@@ -1257,7 +1257,7 @@ class node final {
          * killed. This merge is slightly different for leaves
          * and for non-leaves wrt the 0th element.
          *
-         * Non-leaves. For those we need the separation key, whic
+         * Non-leaves. For those we need the separation key, which
          * is passed to us. The caller "knows" that this and t are
          * two siblings and thus the separation key is the one from
          * the parent node. For this reason merging two non-leaf
@@ -1414,7 +1414,7 @@ class node final {
                 node* left = p._kids[i - 1].n;
                 if (left->can_push_to()) {
                     /*
-                     * We've moved the 0th elemet from this, so the index
+                     * We've moved the 0th element from this, so the index
                      * for the new key shifts too
                      */
                     idx--;
@@ -1517,7 +1517,7 @@ class node final {
                 /*
                  * Split of nodes and the new key gets into either of the
                  * halves. This is like leaves split, but we need to carefully
-                 * handle the kids[0] for both. The correspoding key is not
+                 * handle the kids[0] for both. The corresponding key is not
                  * on the node and "has" an index of -1 and thus becomes the
                  * separation one for the upper layer.
                  *

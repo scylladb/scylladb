@@ -212,7 +212,7 @@ db::view::base_info_ptr view_info::make_base_dependent_view_info(const schema& b
             // If we didn't find the column in the base column then it must have been deleted
             // or not yet added (by alter command), this means it is for sure not a pk column
             // in the base table. This can happen if the version of the base schema is not the
-            // one that the view was created with. Seting this schema as the base can't harm since
+            // one that the view was created with. Setting this schema as the base can't harm since
             // if we got to such a situation then it means it is only going to be used for reading
             // (computation of shadowable tombstones) and in that case the existence of such a column
             // is the only thing that is of interest to us.
@@ -289,7 +289,7 @@ bool partition_key_matches(data_dictionary::database db, const schema& base, con
     uint64_t zero = 0;
     auto dummy_row = query::result_row_view(ser::qr_row_view{simple_memory_input_stream(reinterpret_cast<const char*>(&zero), 8)});
     auto dummy_options = cql3::query_options({ });
-    // FIXME: pass nullptrs for some of theses dummies
+    // FIXME: pass nullptrs for some of these dummies
     return cql3::expr::is_satisfied_by(
             pk_restrictions,
             cql3::expr::evaluation_inputs{
@@ -313,7 +313,7 @@ bool clustering_prefix_matches(data_dictionary::database db, const schema& base,
     auto selection = cql3::selection::selection::for_columns(base.shared_from_this(), ck_columns);
     uint64_t zero = 0;
     auto dummy_options = cql3::query_options({ });
-    // FIXME: pass nullptrs for some of theses dummies
+    // FIXME: pass nullptrs for some of  these dummies
     return cql3::expr::is_satisfied_by(
             r,
             cql3::expr::evaluation_inputs{
@@ -1664,7 +1664,7 @@ future<> view_update_generator::mutate_MV(
                 }
             }
         }
-        // It's still possible that a target endpoint is dupliated in the remote endpoints list,
+        // It's still possible that a target endpoint is duplicated in the remote endpoints list,
         // so let's get rid of the duplicate if it exists
         if (target_endpoint) {
             auto remote_it = std::find(remote_endpoints.begin(), remote_endpoints.end(), *target_endpoint);

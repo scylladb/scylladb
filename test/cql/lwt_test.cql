@@ -433,7 +433,7 @@ update lwt set i = 3 where a = 1 if i < 1;
 update lwt set i = 4 where a = 1 if i > 1;
 update lwt set i = 5 where a = 1 if i >= 1;
 update lwt set i = 6 where a = 1 if i <= 1;
--- Compare with another column: cassandra doesnt allow anyting but a
+-- Compare with another column: cassandra doesnt allow anything but a
 -- constant on the right hand side :(
 update lwt set i = 7 where a = 1 if i = t;
 update lwt set i = 7 where a = 1 if i = d;

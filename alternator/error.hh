@@ -29,7 +29,7 @@ public:
     std::string _type;
     std::string _msg;
     // Additional data attached to the error, null value if not set. It's wrapped in copyable_value
-    // class because copy contructor is required for exception classes otherwise it won't compile
+    // class because copy constructor is required for exception classes otherwise it won't compile
     // (despite that its use may be optimized away).
     rjson::copyable_value _extra_fields; 
     api_error(std::string type, std::string msg, status_type http_code = status_type::bad_request,

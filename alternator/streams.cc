@@ -280,7 +280,7 @@ struct sequence_number {
          * Timeuuids viewed as msb<<64|lsb are _not_,
          * but they are still sorted as
          *  timestamp() << 64|lsb
-         * so we can simpy unpack the mangled msb
+         * so we can simply unpack the mangled msb
          * and use as hi 64 in our "bignum".
          */
         uint128_t hi = uint64_t(num.uuid.timestamp());
@@ -419,7 +419,7 @@ using namespace std::string_literals;
  *
  * In scylla, this is sort of akin to an ID having corresponding ID/ID:s
  * that cover the token range it represents. Because ID:s are per
- * vnode shard however, this relation can be somewhat ambigous.
+ * vnode shard however, this relation can be somewhat ambiguous.
  * We still provide some semblance of this by finding the ID in
  * older generation that has token start < current ID token start.
  * This will be a partial overlap, but it is the best we can do.
@@ -526,7 +526,7 @@ future<executor::request_return_type> executor::describe_stream(client_state& cl
         // (see explanation above) since we want to find closest
         // token boundary when determining parent.
         // #7346 - we processed and searched children/parents in
-        // stored order, which is not neccesarily token order,
+        // stored order, which is not necessarily token order,
         // so the finding of "closest" token boundary (using upper bound)
         // could give somewhat weird results.
         static auto token_cmp = [](const cdc::stream_id& id1, const cdc::stream_id& id2) {

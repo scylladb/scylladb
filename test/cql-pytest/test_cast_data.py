@@ -82,7 +82,7 @@ def test_cast_from_large_varint(cql, table1):
     assert [(str(v),)] == list(cql.execute(f"SELECT CAST(cVarint AS ascii) FROM {table1} WHERE p={p}"))
     assert [(str(v),)] == list(cql.execute(f"SELECT CAST(cVarint AS text) FROM {table1} WHERE p={p}"))
     # "varchar" is supposed to be an alias to "text" and worked just as well,
-    # but suprisingly casting to varchar doesn't work on Cassandra, so let's
+    # but surprisingly casting to varchar doesn't work on Cassandra, so let's
     # test it in a separate test below, test_cast_from_large_varint_to_varchar
     # Casting a number to all other types is NOT allowed:
     for t in ['blob', 'boolean', 'counter', 'date', 'duration', 'inet',
@@ -138,7 +138,7 @@ def test_cast_from_counter(cql, table2):
     assert [("1000",)] == list(cql.execute(f"SELECT CAST(c AS ascii) FROM {table2} WHERE p={p}"))
     assert [("1000",)] == list(cql.execute(f"SELECT CAST(c AS text) FROM {table2} WHERE p={p}"))
     # "varchar" is supposed to be an alias to "text" and should work, but
-    # suprisingly casting to varchar doesn't work on Cassandra, so we
+    # surprisingly casting to varchar doesn't work on Cassandra, so we
     # test it in a separate test below, test_cast_from_counter_to_varchar.
     # Casting a counter to all other types is NOT allowed:
     for t in ['blob', 'boolean', 'date', 'duration', 'inet',

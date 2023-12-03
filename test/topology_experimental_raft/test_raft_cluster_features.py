@@ -57,7 +57,7 @@ async def test_cannot_disable_cluster_feature_after_all_declare_support(manager:
     """Upgrade all nodes to support the test cluster feature, but suppress
        the topology coordinator and prevent it from enabling the feature.
        Try to downgrade one of the nodes - it should fail because of the
-       mising feature. Unblock the topology coordinator, restart the node
+       missing feature. Unblock the topology coordinator, restart the node
        and observe that the feature was enabled.
     """
     servers = [await manager.server_add() for _ in range(3)]

@@ -218,7 +218,7 @@ def test_unknown_operation(dynamodb):
 # Because this test uses boto3, we can reproduce the error, but not really
 # understand what it is. We have another variant of this test below -
 # test_exception_escape_raw() - that does the same thing without boto3
-# so we can see the error happens during the reponse JSON parsing.
+# so we can see the error happens during the response JSON parsing.
 def test_exception_escape(test_table_s):
     # ADD expects its parameter :inc to be an integer. We'll send a string,
     # so expect a ValidationException.

@@ -3033,7 +3033,7 @@ raw_value eval_conj(std::vector<raw_value> elements) {
     return evaluate(conjunction{.children = conj_children}, evaluation_inputs{});
 };
 
-// Evaluate all possible two-element conjunctions containting true, false and null.
+// Evaluate all possible two-element conjunctions containing true, false and null.
 BOOST_AUTO_TEST_CASE(evaluate_conjunction_two_elements) {
     raw_value true_val = make_bool_raw(true);
     raw_value false_val = make_bool_raw(false);
@@ -3052,7 +3052,7 @@ BOOST_AUTO_TEST_CASE(evaluate_conjunction_two_elements) {
     BOOST_REQUIRE_EQUAL(eval_conj({null_val, null_val}), null_val);
 }
 
-// Evaluate all possible three-element conjunctions containting true, false and null.
+// Evaluate all possible three-element conjunctions containing true, false and null.
 BOOST_AUTO_TEST_CASE(evaluate_conjunction_three_elements) {
     raw_value true_val = make_bool_raw(true);
     raw_value false_val = make_bool_raw(false);
@@ -3134,7 +3134,7 @@ BOOST_AUTO_TEST_CASE(evaluate_conjunction_one_empty) {
     BOOST_REQUIRE_THROW(evaluate(conj_one_empty, evaluation_inputs{}), exceptions::invalid_request_exception);
 }
 
-// Evaluating 'true AND true AND true AND EMPTY AND ...' should throw an erorr
+// Evaluating 'true AND true AND true AND EMPTY AND ...' should throw an error
 BOOST_AUTO_TEST_CASE(evaluate_conjunction_with_empty) {
     expression conj_with_empty =
         conjunction{.children = {make_bool_const(true), make_bool_const(true), make_bool_const(true),
@@ -3621,7 +3621,7 @@ enum struct expected_rhs_type {
     float_in_list,
     // list<tuple<float, int, text, double>
     multi_column_tuple_in_list,
-    // IS_NOT alows only NULL as the RHS, everything else is invalid
+    // IS_NOT allows only NULL as the RHS, everything else is invalid
     is_not_null_rhs
 };
 
@@ -3640,7 +3640,7 @@ std::vector<expression> get_invalid_rhs_values(expected_rhs_type expected_rhs) {
                                   make_float_untyped("45.67"),
                               }},
         // A tuple with too many elements for multi_column_tuple.
-        // A tuple with too little elements doesn't cause an error - CQL accepts it, the missing fields are assummed to
+        // A tuple with too little elements doesn't cause an error - CQL accepts it, the missing fields are assumed to
         // be null.
         tuple_constructor{.elements =
                               {

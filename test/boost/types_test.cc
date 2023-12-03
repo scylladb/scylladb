@@ -908,7 +908,7 @@ BOOST_AUTO_TEST_CASE(test_collection_type_compatibility) {
     auto lf_b = list_type_impl::get_instance(bytes_type, false);
 
     test_case tests[] = {
-            { nc, m__bi, int32_type },  // collection vs. primitiv
+            { nc, m__bi, int32_type },  // collection vs. primitive
             { cc, m__bi, m__bi },       // identity
             { nc, m__bi, m__ib },       // key not compatible
             { nc, mf_bi, mf_ib },       //  "

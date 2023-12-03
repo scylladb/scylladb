@@ -147,7 +147,7 @@ def test_empty_int(cql, test_keyspace):
 # Above in test_empty_int() we noted a bizarre and archaic (not used by
 # modern CQL users) feature where any type can be set to "empty".
 # But the way to write this bizarre empty values in CQL was via an ugly
-# blobAsInt(0x). It musn't be something as benign as trying to use an
+# blobAsInt(0x). It mustn't be something as benign as trying to use an
 # empty string to set an integer. The following tests verify that trying
 # to use an empty string to set other types results in an error. Each type
 # will be a separate test, using one common test table. Each test will be

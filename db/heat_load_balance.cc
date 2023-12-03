@@ -44,7 +44,7 @@ rand_float() {
 // This implementation has complexity O(N). If we plan to call randone()
 // many times on the same probability vector, and if N can grow large,
 // we should consider a different implementation, known as "The Alias Method",
-// which has O(N) preperation stage but then only O(1) for each call.
+// which has O(N) preparation stage but then only O(1) for each call.
 // The alias method was first suggested by A.J. Walker in 1977 and later
 // refined by Knuth and others. Here is a short overview of this method:
 // The O(N) implementation of randone() divides the interval [0,1) into
@@ -100,21 +100,21 @@ randone(const std::vector<float>& p, float rnd = rand_float()) {
 // than 1/K: even if we return item i in *every* K-combination, item i will
 // still be only 1/K of the produced items. To reach p[i] > 1/K will mean
 // some combinations will need to contain more than one copy of i - which
-// contradicts the defintion of a "combination".
+// contradicts the definition of a "combination".
 //
 // Though ssample() is required to fulfill the first-order inclusion
 // probabilities p (the probability of each item appearing in the returned
 // combination), it is NOT required to make any guarantees on the high-order
-// inclusion probabilities, i.e., the probablities for pairs of items to
+// inclusion probabilities, i.e., the probabilities for pairs of items to
 // be returned together in the same combination. This greatly simplifies
 // the implementation, and means we can use the "Systematic Sampling"
 // technique (explained below) which only makes guarantees on the first-order
-// inclusion probablities. In our use case, fulfilling *only* the 1st order
+// inclusion probabilities. In our use case, fulfilling *only* the 1st order
 // inclusion probabilities is indeed enough: We want that each node gets a
 // given amount of work, but don't care if the different K nodes we choose
 // in one request are correlated.
 //
-// Not making any guarantees on high-order inclusion probablities basically
+// Not making any guarantees on high-order inclusion probabilities basically
 // means that the items are not independent. To understand what this means,
 // consider a simple example: say we have N=4 items with equal probability
 // and want to draw random pairs (K=2). Our implementation will return {0,1}
@@ -138,16 +138,16 @@ randone(const std::vector<float>& p, float rnd = rand_float()) {
 // 2. The probability to choose each item is exactly p_i*K.
 //
 // ssample() only calls for one random number generation (this is important
-// for performance) but calls randone() on the same probablity vector K times,
+// for performance) but calls randone() on the same probability vector K times,
 // which makes it even more interesting to implement the Alias Method
 // described above. However, for very small N like 3, the difference is not
-// likely to be noticable.
+// likely to be noticeable.
 //
 // TODO: For the special case of K == N-1, we can have a slightly more
 // efficient implementation, which calculates the probability for each of
 // the N combinations (the combination lacking item i can be proven to have
-// probablity 1 - K*p[i]) and then uses one randone() call with these
-// modified probablities.
+// probability 1 - K*p[i]) and then uses one randone() call with these
+// modified probabilities.
 // TODO: Consider making this a template of K, N and have specialized
 // implementations for low N (e.g., 3), K=N-1, etc.
 // TODO: write to a pre-allocated return vector to avoid extra allocation.
@@ -187,7 +187,7 @@ miss_equalizing_probablities(const std::vector<float>& hit_rates) {
     return ret;
 }
 
-// Given a set of desired probablities with sum 1, clip the probablities 
+// Given a set of desired probabilities with sum 1, clip the probabilities 
 // to be not higher than the given limit. The rest of the probabilities are
 // increased, in an attempt to preserve the ratios between probabilities,
 // if possible - but keep all the probabilities below the limit.
@@ -286,7 +286,7 @@ redistribute(const std::vector<float>& p, unsigned me, unsigned k) {
         // min(deficit[me], mixed_surplus).
         // TODO: use NlgN sort instead of this ridiculous N^2 implementation.
         // TODO: can we do this without a NlgN (although very small N, not even
-        // the full rf)? Note also the distribution code below is N^2 anway
+        // the full rf)? Note also the distribution code below is N^2 anyway
         // (two nested for loops).
         std::list<std::pair<unsigned, float>> sorted_deficits;
         for (unsigned i = 0; i < rf; i++) {
@@ -393,7 +393,7 @@ redistribute(const std::vector<float>& p, unsigned me, unsigned k) {
             // other nodes. Here we need to handle the opposite side - me is
             // one of the nodes which sent too much to other nodes and needs
             // to send to the mixed node instead.
-            // TODO: find a more efficient way to check if the alorithm will
+            // TODO: find a more efficient way to check if the algorithm will
             // end with just one mixed node and its surplus :-(
             unsigned n_converted_to_deficit = 0;
             unsigned mix_i = 0; // only used if n_converted_to_deficit==1

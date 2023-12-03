@@ -440,7 +440,7 @@ RAFT_TEST_CASE(rpc_configuration_truncate_restore_from_snp, (test_case{
 // the crash + network partition and synchronization with B, since
 // the effective RPC cfg would be {A, B, C} both for
 // joint cfg = {.current = {A, B}, .previous = {A, B, C}}
-// and the previously commited cfg = {A, B, C}.
+// and the previously committed cfg = {A, B, C}.
 //
 // After that, test for the second case: switch leader back to A and
 // try to expand the cluster back to initial state (re-add

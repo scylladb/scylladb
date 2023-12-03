@@ -88,7 +88,7 @@ using snapshots_t = std::unordered_map<raft::snapshot_id, State>;
 // as the ``boilerplate'' that allows the pure machine to be replicated
 // by Raft and communicate with the external world.
 //
-// The interface also requires maintainance of snapshots. We use the
+// The interface also requires maintenance of snapshots. We use the
 // `snapshots_t` introduced above; `impure_state_machine` keeps a reference to `snapshots_t`
 // because it will share it with an implementation of `raft::persistence`.
 template <PureStateMachine M>
@@ -1164,7 +1164,7 @@ private:
 
     deliver_t _deliver;
 
-    // A min-heap of event occurences compared by their time points.
+    // A min-heap of event occurrences compared by their time points.
     std::vector<event> _events;
 
     // Comparator for the `_events` min-heap.

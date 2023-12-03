@@ -1235,7 +1235,7 @@ private:
             // Delete the rows > _current_sync_boundary from _row_buf
             // Swap _working_row_buf and _row_buf so that _working_row_buf
             // contains rows within (_last_sync_boundary,
-            // _current_sync_boundary], _row_buf contains rows wthin
+            // _current_sync_boundary], _row_buf contains rows within
             // (_current_sync_boundary, ...]
             repair_row& r = *it;
             if (_cmp(r.boundary(), *_current_sync_boundary) <= 0) {
@@ -1536,7 +1536,7 @@ public:
     future<get_combined_row_hash_response>
     get_combined_row_hash_handler(std::optional<repair_sync_boundary> common_sync_boundary) {
         // We can not call this function twice. The good thing is we do not use
-        // retransmission at messaging_service level, so no message will be retransmited.
+        // retransmission at messaging_service level, so no message will be retransmitted.
         rlogger.trace("Calling get_combined_row_hash_handler");
         return with_gate(_gate, [this, common_sync_boundary = std::move(common_sync_boundary)] () mutable {
             _cf.update_off_strategy_trigger();

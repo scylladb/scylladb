@@ -210,7 +210,7 @@ void fsm::become_candidate(bool is_prevote, bool is_leadership_transfer) {
     if (!std::holds_alternative<candidate>(_state)) {
         _output.state_changed = true;
     }
-    // When starting a campain we need to reset current leader otherwise
+    // When starting a campaign we need to reset current leader otherwise
     // disruptive server prevention will stall an election if quorum of nodes
     // start election together since each one will ignore vote requests from others
 
@@ -402,7 +402,7 @@ fsm_output fsm::get_output() {
         // We advance stable index before the entries are
         // actually persisted, because if writing to stable storage
         // will fail the FSM will be stopped and get_output() will
-        // never be called again, so any new sate that assumes that
+        // never be called again, so any new state that assumes that
         // the entries are stable will not be observed.
         advance_stable_idx(output.log_entries.back()->idx);
     }
@@ -737,7 +737,7 @@ void fsm::append_entries_reply(server_id from, append_reply&& reply) {
             _my_id, from, progress.match_idx, rejected.non_matching_idx);
 
         // If non_matching_idx and last_idx are zero it means that a follower is looking for a leader
-        // as such message cannot be a result of real missmatch.
+        // as such message cannot be a result of real mismatch.
         // Send an empty append message to notify it that we are the leader
         if (rejected.non_matching_idx == index_t{0} && rejected.last_idx == index_t{0}) {
             logger.trace("append_entries_reply[{}->{}]: send empty append message", _my_id, from);

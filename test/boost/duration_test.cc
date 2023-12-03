@@ -27,7 +27,7 @@ constexpr auto ns_per_s = ns_per_ms * 1000L;
 constexpr auto ns_per_m = ns_per_s * 60L;
 constexpr auto ns_per_h = ns_per_m * 60L;
 
-// Normally we want to be explict, but brevity is nice for tests.
+// Normally we want to be explicit, but brevity is nice for tests.
 constexpr cql_duration make_duration(months_counter::value_type m,
                                  days_counter::value_type d,
                                  nanoseconds_counter::value_type ns) noexcept {

@@ -149,7 +149,7 @@ NarrowT
 narrow(WideT acc) {
     NarrowT ret = static_cast<NarrowT>(acc);
     // The following check only makes sense when NarrowT and WideT are two
-    // different integeral types and we want to check that NarrowT isn't too
+    // different integral types and we want to check that NarrowT isn't too
     // narrow. Let's avoid the check when they are the same type - it is
     // useless, and worse - wrong for the floating-point case (issue #13564).
     if constexpr (!std::is_same<WideT, NarrowT>::value) {

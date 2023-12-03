@@ -506,7 +506,7 @@ public:
     }
 
     // Changes the range of partitions to pr. The range can only be moved
-    // forwards. pr.begin() needs to be larger than pr.end() of the previousl
+    // forwards. pr.begin() needs to be larger than pr.end() of the previously
     // used range (i.e. either the initial one passed to the constructor or a
     // previous fast forward target).
     // pr needs to be valid until the reader is destroyed or fast_forward_to()
@@ -553,8 +553,8 @@ public:
     future<> close() noexcept {
         if (auto i = std::move(_impl)) {
             auto f = i->close();
-            // most close implementations are expexcted to return a ready future
-            // so expedite prcessing it.
+            // most close implementations are expected to return a ready future
+            // so expedite processing it.
             if (f.available() && !f.failed()) {
                 return f;
             }
@@ -602,7 +602,7 @@ public:
     // Cannot be called if is_buffer_empty() returns true.
     const mutation_fragment_v2& peek_buffer() const { return _impl->_buffer.front(); }
     // The actual buffer size of the reader.
-    // Altough we consistently refer to this as buffer size throught the code
+    // Although we consistently refer to this as buffer size throught the code
     // we really use "buffer size" as the size of the collective memory
     // used by all the mutation fragments stored in the buffer of the reader.
     size_t buffer_size() const {
@@ -753,7 +753,7 @@ future<> consume_partitions(flat_mutation_reader_v2& reader, Consumer consumer) 
     });
 }
 
-/// A cosumer function that is passed a flat_mutation_reader to be consumed from
+/// A consumer function that is passed a flat_mutation_reader to be consumed from
 /// and returns a future<> resolved when the reader is fully consumed, and closed.
 /// Note: the function assumes ownership of the reader and must close it in all cases.
 using reader_consumer_v2 = noncopyable_function<future<> (flat_mutation_reader_v2)>;

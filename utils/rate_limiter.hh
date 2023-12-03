@@ -18,7 +18,7 @@ namespace utils {
 /**
  * 100% naive rate limiter. Consider it a placeholder
  * Will let you process X "units" per second, then reset this every s.
- * Obviously, accuracy is virtually non-existant and steady rate will fluctuate.
+ * Obviously, accuracy is virtually non-existent and steady rate will fluctuate.
  */
 class rate_limiter {
 private:

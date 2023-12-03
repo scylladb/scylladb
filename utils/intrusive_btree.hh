@@ -51,7 +51,7 @@ using key_index = size_t;
 using kid_index = size_t;
 
 /*
- * The key's member_hook must point to something that's independet from
+ * The key's member_hook must point to something that's independent from
  * the tree's template parameters, so here's this base. It carries the
  * bare minimum of information needed for member_hook to operate (see
  * the iterator::erase()).
@@ -803,7 +803,7 @@ public:
 
         /*
          * Special constructor for the case when there's the need for an
-         * iterator to the given value poiter. We can get all we need
+         * iterator to the given value pointer. We can get all we need
          * through the hook -> node_base -> node chain.
          */
         iterator_base(pointer key) noexcept : iterator_base(&(key->*Hook), 0) {
@@ -1651,7 +1651,7 @@ private:
                     if (idx > 0) {
                         left->grab_from_right(this, i - 1);
                         /*
-                         * We've moved the 0th elemet from this, so the index
+                         * We've moved the 0th element from this, so the index
                          * for the new key shifts too
                          */
                         idx--;
@@ -1857,7 +1857,7 @@ private:
 
     void grab_from_left(node* left, key_index idx) noexcept {
         /*
-         * Shif keys right -- left sibling's right key goes to parent,
+         * Shift keys right -- left sibling's right key goes to parent,
          * parent's goes to us. Like this
          *
          * left --> ABC  D   EF  <-- this
@@ -1881,7 +1881,7 @@ private:
 
     void grab_from_right(node* right, key_index idx) noexcept {
         /*
-         * Shif keys left -- rights sibling's zeroth key goes to parent,
+         * Shift keys left -- rights sibling's zeroth key goes to parent,
          * parent's goes to us. Like this
          *
          * this -->  AB  C   DEF <-- right

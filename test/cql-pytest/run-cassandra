@@ -95,7 +95,7 @@ def run_cassandra_cmd(pid, dir):
             # Unfortunately, Cassandra's JMX cannot listen only on a specific
             # interface. To allow tests to use JMX (nodetool), we need to
             # have it listen on 0.0.0.0 :-( This is insecure, but arguably
-            # can be forgiven for test enviroments. The following JVM_OPTS
+            # can be forgiven for test environments. The following JVM_OPTS
             # configures that:
             'JVM_OPTS': '-Dcassandra.jmx.remote.port=7199',
           }

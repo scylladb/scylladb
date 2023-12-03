@@ -32,7 +32,7 @@ endfunction()
 
 macro(dist_submodule name dir pkgs)
   # defined as a macro, so that we can append the path to the dist tarball to
-  # specfied "pkgs"
+  # specified "pkgs"
   cmake_parse_arguments(parsed_args "NOARCH" "" "" ${ARGN})
   if(parsed_args_NOARCH)
     set(arch "noarch")

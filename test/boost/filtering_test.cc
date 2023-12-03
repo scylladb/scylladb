@@ -1097,7 +1097,7 @@ SEASTAR_TEST_CASE(test_filtering) {
         // Notice the with_serialized_columns_count() check before the set comparison.
         // Since we are dealing with the result set before serializing to the client,
         // there is an extra column that is used for the filtering, this column will
-        // not be present in the responce to the client and with_serialized_columns_count()
+        // not be present in the response to the client and with_serialized_columns_count()
         // verifies exactly that.
 
         // test filtering on partition keys

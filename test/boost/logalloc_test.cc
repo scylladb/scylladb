@@ -628,7 +628,7 @@ SEASTAR_THREAD_TEST_CASE(test_decay_reserves) {
     reclaims = 0;
 
     // Allocate a big chunk to force the reserve to increase,
-    // and immediately deallocate it (to keep the lru homogenous
+    // and immediately deallocate it (to keep the lru homogeneous
     // and the test simple)
     alloc_section(region, [&] {
         with_allocator(region.allocator(), [&] {

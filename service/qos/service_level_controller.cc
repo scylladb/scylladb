@@ -72,7 +72,7 @@ void service_level_controller::set_distributed_data_accessor(service_level_distr
 
     // Registration of a new accessor can be done only when the _sl_data_accessor is not already set.
     // This behavior is intended to allow to unit testing debug to set this value without having
-    // overriden by storage_proxy
+    // overridden by storage_proxy
     if (!_sl_data_accessor) {
         _sl_data_accessor = sl_data_accessor;
     }

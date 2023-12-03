@@ -49,7 +49,7 @@ public:
         // If set to true will enable prevoting stage during election
         bool enable_prevoting = true;
         // If set to true, forward configuration and entries from
-        // follower to the leader autmatically. This guarantees
+        // follower to the leader automatically. This guarantees
         // add_entry()/modify_config() never throws not_a_leader,
         // but makes timed_out_error more likely.
         bool enable_forwarding = true;
@@ -242,7 +242,7 @@ public:
     virtual void tick() = 0;
 
     // Returned future is resolved when state changes
-    // State changes can be coalesced, so it is not guarantied that the caller will
+    // State changes can be coalesced, so it is not guaranteed that the caller will
     // get notification about each one of them. The state can even be the same after
     // the call as before, but term should be different.
     virtual future<> wait_for_state_change(seastar::abort_source* as = nullptr) = 0;

@@ -91,10 +91,10 @@ bool follower_progress::can_send_to() {
 }
 
 // If this is called when a tracker is just created, the current
-// progress is empty and we should simply crate an instance for
+// progress is empty and we should simply create an instance for
 // each follower.
 // When switching configurations, we should preserve progress
-// for existing followers, crate progress for new, and remove
+// for existing followers, create progress for new, and remove
 // progress for non-members (to make sure we don't send noise
 // messages to them).
 void tracker::set_configuration(const configuration& configuration, index_t next_idx) {

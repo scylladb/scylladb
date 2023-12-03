@@ -191,7 +191,7 @@ protected:
  * The returned views are always a prefix of the underlying capacity.
  *
  * Under a stable workload, the buffer's size will be stable.
- * If a pathological request comes, the buffer will grow to accomodate it.
+ * If a pathological request comes, the buffer will grow to accommodate it.
  * 1-2 periods after the pathology ceases, the buffer will shrink back
  * to its steady-state size.
  *

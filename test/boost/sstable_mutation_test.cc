@@ -1428,7 +1428,7 @@ SEASTAR_TEST_CASE(test_reading_serialization_header) {
     std::optional<sstables::generation_type> gen;
     {
         // SSTable class has way too many responsibilities. In particular, it mixes the reading and
-        // writting parts. Let's use a separate objects for writing and reading to ensure that nothing
+        // writing parts. Let's use a separate objects for writing and reading to ensure that nothing
         // carries over that wouldn't normally be read from disk.
         auto sst = env.make_sstable(s);
         gen.emplace(sst->generation());

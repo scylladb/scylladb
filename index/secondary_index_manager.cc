@@ -261,7 +261,7 @@ view_ptr secondary_index_manager::create_view_for_index(const index_metadata& im
     if (!im.local()) {
         // If two cells within the same collection share the same value but not liveness information, then
         // for the index on the values, the rows generated would share the same primary key and thus the
-        // liveness information as well. Prevent that by distinguising them in the clustering key.
+        // liveness information as well. Prevent that by distinguishing them in the clustering key.
         if (target_type == cql3::statements::index_target::target_type::collection_values) {
             data_type t = type_for_computed_column(cql3::statements::index_target::target_type::keys, *index_target->type);
             bytes column_name = get_available_column_name(*schema, "keys_for_values_idx");

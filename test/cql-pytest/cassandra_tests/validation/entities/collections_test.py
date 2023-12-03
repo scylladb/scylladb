@@ -1474,7 +1474,7 @@ def testNestedAccessWithNestedMap(cql, test_keyspace):
 
 def testInsertingCollectionsWithInvalidElements(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(k int PRIMARY KEY, s frozen<set<tuple<int, text, double>>>)") as table:
-        # Unfortunatly, the Python driver has its own checking of the prepared
+        # Unfortunately, the Python driver has its own checking of the prepared
         # statement bound parameters, so I commented out these tests.
         #assert_invalid_message(cql, table, "Invalid remaining data after end of tuple value",
         #                     "INSERT INTO %s (k, s) VALUES (0, ?)",

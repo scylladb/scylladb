@@ -76,7 +76,7 @@ extern bool is_supported_by(const expression&, const secondary_index::index&);
 extern bool has_supporting_index(
         const expression&, const secondary_index::secondary_index_manager&, allow_local_index allow_local);
 
-// Looks at each column indivudually and checks whether some index can support restrictions on this single column.
+// Looks at each column individually and checks whether some index can support restrictions on this single column.
 // Expression has to consist only of single column restrictions.
 extern bool index_supports_some_column(
     const expression&,
@@ -231,7 +231,7 @@ bool has_eq_restriction_on_column(const column_definition& column, const express
 /// column_value.
 extern expression replace_column_def(const expression&, const column_definition*);
 
-// Replaces all occurences of token(p1, p2) on the left hand side with the given colum.
+// Replaces all occurrences of token(p1, p2) on the left hand side with the given column.
 // For example this changes token(p1, p2) < token(1, 2) to my_column_name < token(1, 2).
 // Schema is needed to find out which calls to token() describe the partition token.
 extern expression replace_partition_token(const expression&, const column_definition*, const schema&);
@@ -355,7 +355,7 @@ data_type column_mutation_attribute_type(const column_mutation_attribute& e);
 // How deep aggregations are nested. e.g. sum(avg(count(col))) == 3
 unsigned aggregation_depth(const cql3::expr::expression& e);
 
-// Make sure evey column_value or column_mutation_attribute is nested in exactly `depth` aggregations, by adding
+// Make sure every column_value or column_mutation_attribute is nested in exactly `depth` aggregations, by adding
 // first() calls at the deepest level. e.g. if depth=3, then
 //
 //    my_agg(sum(x), y)

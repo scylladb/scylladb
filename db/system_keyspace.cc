@@ -1906,7 +1906,7 @@ std::vector<schema_ptr> system_keyspace::all_tables(const db::config& cfg) {
     }
     // legacy schema
     r.insert(r.end(), {
-                    // TODO: once we migrate hints/batchlog and add convertor
+                    // TODO: once we migrate hints/batchlog and add converter
                     // legacy::hints(), legacy::batchlog(),
                     legacy::keyspaces(), legacy::column_families(),
                     legacy::columns(), legacy::triggers(), legacy::usertypes(),
@@ -2228,7 +2228,7 @@ future<service::paxos::paxos_state> system_keyspace::load_paxos_state(partition_
 
         std::optional<service::paxos::proposal> most_recent;
         if (row.has("most_recent_commit_at")) {
-            // the value can be missing if it was pruned, suply empty one since
+            // the value can be missing if it was pruned, supply empty one since
             // it will not going to be used anyway
             auto fm = row.has("most_recent_commit") ?
                      ser::deserialize_from_buffer<>(row.get_blob("most_recent_commit"), boost::type<frozen_mutation>(), 0) :
@@ -2539,7 +2539,7 @@ future<service::topology> system_keyspace::load_topology_state() {
                 ret.req_param.emplace(host_id, service::rebuild_param{*rebuild_option});
                 break;
             case service::node_state::left_token_ring:
-                // If replacenode fails the bootstraping node is moved to left_token_ring state where it executes the metadata
+                // If replacenode fails the bootstrapping node is moved to left_token_ring state where it executes the metadata
                 // barrier. It needs to know which nodes to ignore during the barrier, so put them here into the replace_param.
                 // Note that if the replacenode does not fail and later the node is decommissioned it will move to the left_token_ring
                 // state at some point and replace_param will be created here as well (we do not remove replaced_id, and ignored_ids

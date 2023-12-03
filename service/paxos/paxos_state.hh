@@ -60,12 +60,12 @@ private:
     static thread_local key_lock_map _paxos_table_lock;
     // Taken by the coordinator code to allow only one instance of PAXOS to run for each key.
     // This prevents contantion between multiple clients trying to modify the
-    // same key throug the same coordinator and stealing the ballot from
-    // eachother.
+    // same key through the same coordinator and stealing the ballot from
+    // each other.
     static thread_local key_lock_map _coordinator_lock;
 
 
-    // protects acess to system.paxos
+    // protects access to system.paxos
     template<typename Func>
     static
     futurize_t<std::result_of_t<Func()>> with_locked_key(const dht::token& key, clock_type::time_point timeout, Func func) {

@@ -201,7 +201,7 @@ def list_tables(dynamodb, limit=100):
 # While these transformations are very convenient, they prevent us from
 # checking various *errors* in the format of API parameters, because boto3
 # verifies and/or modifies these parameters for us.
-# So the following contextmanager presents a boto3 client which is modifed
+# So the following contextmanager presents a boto3 client which is modified
 # to *not* do these transformations or validations at all.
 @contextmanager
 def client_no_transform(client):

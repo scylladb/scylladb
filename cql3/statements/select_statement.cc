@@ -667,9 +667,9 @@ indexed_table_select_statement::do_execute_base_query(
                     //
                     // This means that we should not set a open_ended_both_sides
                     // clustering range on base_pk, instead intersect it with
-                    // _row_ranges (which contains the restrictions neccessary for the
+                    // _row_ranges (which contains the restrictions necessary for the
                     // case described above). The result of such intersection is just
-                    // _row_ranges, which we explicity set on base_pk.
+                    // _row_ranges, which we explicitly set on base_pk.
                     command->slice.set_range(*_schema, base_pk, row_ranges);
                 }
             }
@@ -2179,7 +2179,7 @@ select_statement::prepared_orderings_type select_statement::prepare_orderings(co
         prepared_orderings.emplace_back(def, column_ordering);
     }
 
-    // Uncomment this to allow specifing ORDER BY columns in any order.
+    // Uncomment this to allow specifying ORDER BY columns in any order.
     // Right now specifying ORDER BY (c2 asc, c1 asc) is illegal, it can only be ORDER BY (c1 asc, c2 asc).
     //
     // std::sort(prepared_orderings.begin(), prepared_orderings.end(),

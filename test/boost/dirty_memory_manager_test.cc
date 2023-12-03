@@ -406,7 +406,7 @@ SEASTAR_TEST_CASE(test_region_groups_basic_throttling_active_reclaim_worst_offen
         // allocate three regions with three different sizes (segment boundary must be used due to
         // LSA granularity).
         //
-        // The function can only be executed when all three are freed - which exercises continous
+        // The function can only be executed when all three are freed - which exercises continuous
         // reclaim, but they must be freed in descending order of their sizes
         test_reclaimer simple(logalloc::segment_size);
 

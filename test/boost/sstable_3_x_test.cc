@@ -3343,7 +3343,7 @@ static void write_mut_and_validate_version(test_env& env, schema_ptr s, const ss
         sstable_version_types version, std::vector<bytes> min_components, std::vector<bytes> max_components) {
     // FIXME This used to `write_and_compare_sstables()` and to
     // additionally call `do_validate_stats_metadata()` on the result,
-    // but cannot now because flat reader version tranforms rearrange
+    // but cannot now because flat reader version transforms rearrange
     // range tombstones.  Revisit once the reader v2 migration is
     // complete and those version transforms are gone
     auto sst = make_sstable_containing(env.make_sstable(s, version), {mut});

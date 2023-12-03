@@ -26,8 +26,8 @@ cf_statement::cf_statement(std::optional<cf_name> cf_name)
 void cf_statement::prepare_keyspace(const service::client_state& state)
 {
     if (!_cf_name->has_keyspace()) {
-        // XXX: We explicitely only want to call state.getKeyspace() in this case, as we don't want to throw
-        // if not logged in any keyspace but a keyspace is explicitely set on the statement. So don't move
+        // XXX: We explicitly only want to call state.getKeyspace() in this case, as we don't want to throw
+        // if not logged in any keyspace but a keyspace is explicitly set on the statement. So don't move
         // the call outside the 'if' or replace the method by 'prepareKeyspace(state.getKeyspace())'
         _cf_name->set_keyspace(state.get_keyspace(), true);
     }

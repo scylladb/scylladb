@@ -487,7 +487,7 @@ public:
      * or the sstable's schema does not have clustering columns.
      *
      * But if the schema has clustering columns and the sstable is sufficiently ``modern'',
-     * the returned value should be equal to the smallest clustering key occuring in the sstable (across all partitions).
+     * the returned value should be equal to the smallest clustering key occurring in the sstable (across all partitions).
      *
      * The lower bound is inclusive: there might be a clustering row with position equal to min_position.
      */
@@ -500,7 +500,7 @@ public:
      *
      * If certain conditions are satisfied (the same as for `min_position`, see above),
      * the returned value should be equal to after_key(ck), where ck is the greatest clustering key
-     * occuring in the sstable (across all partitions).
+     * occurring in the sstable (across all partitions).
      */
     const position_in_partition& max_position() const {
         return _min_max_position_range.end();

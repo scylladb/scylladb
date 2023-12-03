@@ -70,14 +70,14 @@ struct description {
     sstring _name;
     std::optional<sstring> _create_statement;
 
-    // Descritpion without create_statement
+    // Description without create_statement
     description(replica::database& db, const keyspace_element& element)
         : _keyspace(util::maybe_quote(element.keypace_name()))
         , _type(element.element_type(db))
         , _name(util::maybe_quote(element.element_name()))
         , _create_statement(std::nullopt) {}
 
-    // Descritpion with create_statement
+    // Description with create_statement
     description(replica::database& db, const keyspace_element& element, bool with_internals)
         : _keyspace(util::maybe_quote(element.keypace_name()))
         , _type(element.element_type(db))

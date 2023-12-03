@@ -70,7 +70,7 @@ static std::map<sstring, sstring> prepare_options(
 }
 
 void ks_prop_defs::validate() {
-    // Skip validation if the strategy class is already set as it means we've alreayd
+    // Skip validation if the strategy class is already set as it means we've already
     // prepared (and redoing it would set strategyClass back to null, which we don't want)
     if (_strategy_class) {
         return;

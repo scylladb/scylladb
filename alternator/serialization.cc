@@ -59,7 +59,7 @@ type_representation represent_type(alternator_type atype) {
 // calculate its magnitude and precision from its scale() and unscaled_value().
 // So in the following ugly implementation we calculate them from the string
 // representation instead. We assume the number was already parsed
-// sucessfully to a big_decimal to it follows its syntax rules.
+// successfully to a big_decimal to it follows its syntax rules.
 //
 // FIXME: rewrite this function to take a big_decimal, not a string.
 // Maybe a snippet like this can help:

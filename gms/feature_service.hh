@@ -108,7 +108,7 @@ public:
     // bigger than this hard_limit. To clean things up, we introduced the third
     // field into max_result_size. It's name is page_size. Now page_size always
     // means the size of the page while soft and hard limits are just what their
-    // names suggest. They are no longer interepreted as page size. This is not
+    // names suggest. They are no longer interpreted as page size. This is not
     // a backwards compatible change so this new cluster feature is used to make
     // sure the whole cluster supports the new page_size field and we can safely
     // send it to replicas.

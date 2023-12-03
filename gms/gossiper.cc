@@ -190,7 +190,7 @@ future<> gossiper::handle_syn_msg(msg_addr from, gossip_digest_syn syn_msg) {
 
     syn_msg_pending& p = _syn_handlers[from.addr];
     if (p.pending) {
-        // The latest syn message from peer has the latest infomation, so
+        // The latest syn message from peer has the latest information, so
         // it is safe to drop the previous syn message and keep the latest
         // one only.
         logger.debug("Queue gossip syn msg from node {}, syn_msg={}", from, syn_msg);
@@ -307,7 +307,7 @@ future<> gossiper::handle_ack_msg(msg_addr id, gossip_digest_ack ack_msg) {
     }
     ack_msg_pending& p = _ack_handlers[from.addr];
     if (p.pending) {
-        // The latest ack message digests from peer has the latest infomation, so
+        // The latest ack message digests from peer has the latest information, so
         // it is safe to drop the previous ack message digests and keep the latest
         // one only.
         logger.debug("Queue gossip ack msg digests from node {}, ack_msg_digest={}", from, ack_msg_digest);
@@ -365,7 +365,7 @@ future<> gossiper::do_send_ack2_msg(msg_addr from, utils::chunked_vector<gossip_
             // Local generation for addr may have been increased since the
             // current node sent an initial SYN. Comparing versions across
             // different generations in get_state_for_version_bigger_than
-            // could result in loosing some app states with smaller versions.
+            // could result in losing some app states with smaller versions.
             const auto version = es->get_heart_beat_state().get_generation() > g_digest.get_generation()
                 ? version_type(0)
                 : g_digest.get_max_version();
@@ -1858,7 +1858,7 @@ future<> gossiper::do_on_dead_notifications(inet_address addr, endpoint_state_pt
 
 void gossiper::request_all(gossip_digest& g_digest,
     utils::chunked_vector<gossip_digest>& delta_gossip_digest_list, generation_type remote_generation) const {
-    /* We are here since we have no data for this endpoint locally so request everthing. */
+    /* We are here since we have no data for this endpoint locally so request everything. */
     delta_gossip_digest_list.emplace_back(g_digest.get_endpoint(), remote_generation);
     logger.trace("request_all for {}", g_digest.get_endpoint());
 }
@@ -2128,7 +2128,7 @@ future<> gossiper::add_local_application_state(std::initializer_list<std::pair<a
 // we overwrite the version to ensure the set is monotonic. However, it does not break anything,
 // and changing this tends to spread widely (see versioned_value::factory), so that can be its own
 // change later, if needed.
-// Retaining the slightly broken signature is also cosistent with origin. Hooray.
+// Retaining the slightly broken signature is also consistent with origin. Hooray.
 //
 future<> gossiper::add_local_application_state(std::list<std::pair<application_state, versioned_value>> states) {
     if (states.empty()) {

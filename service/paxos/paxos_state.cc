@@ -200,7 +200,7 @@ future<> paxos_state::learn(storage_proxy& sp, db::system_keyspace& sys_ks, sche
         // Even though there is no guarantee we will see decisions in the right order,
         // because messages can get delayed, so this decision can be older than our current most
         // recent accepted proposal/committed decision, saving it is always safe due to column timestamps.
-        // Since the mutation uses the decision ballot timestamp, if cell timestmap of any current cell
+        // Since the mutation uses the decision ballot timestamp, if cell timestamp of any current cell
         // is strictly greater than the decision one, saving the decision will not erase it.
         //
         // The table may have been truncated since the proposal was initiated. In that case, we

@@ -360,7 +360,7 @@ SEASTAR_TEST_CASE(test_index_with_partition_key) {
             });
         });
 
-        // And it's also sufficient if only full parition key + clustering key prefix is present
+        // And it's also sufficient if only full partition key + clustering key prefix is present
         eventually([&] {
             auto res = e.execute_cql("SELECT * from tab WHERE a = 1 and b = 2 and c = 3 and e = 5").get0();
             assert_that(res).is_rows().with_rows({

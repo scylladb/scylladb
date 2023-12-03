@@ -617,7 +617,7 @@ future<> client::upload_sink_base::upload_part(memory_data_sink_buffers bufs) {
         if (ex) {
             co_await coroutine::return_exception_ptr(std::move(ex));
         }
-        // note: At this point the buffers are sent, but the responce is not yet
+        // note: At this point the buffers are sent, but the response is not yet
         // received. However, claim is released and next part may start uploading
     });
 

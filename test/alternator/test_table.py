@@ -234,7 +234,7 @@ def test_create_table_invalid_attribute_definitions(dynamodb):
             ],
         )
 
-    # I'm not sure why, but even though we tried to disable boto3's paramter
+    # I'm not sure why, but even though we tried to disable boto3's parameter
     # validation in conftest.py, boto3 still doesn't us test the case of
     # extra fields in AttributeDefinitions, and catches such errors itself.
 
@@ -421,7 +421,7 @@ def test_list_tables_wrong_limit(dynamodb):
 # Reproduces issue #7031.
 def test_table_sse_off(dynamodb):
     # If StreamSpecification is given, but has StreamEnabled=false, it's as
-    # if StreamSpecification was missing, and fine. No other attribues are
+    # if StreamSpecification was missing, and fine. No other attributes are
     # necessary.
     table = create_test_table(dynamodb, SSESpecification = {'Enabled': False},
         KeySchema=[{ 'AttributeName': 'p', 'KeyType': 'HASH' }],

@@ -157,7 +157,7 @@ SEASTAR_TEST_CASE(test_memtable_with_many_versions_conforms_to_mutation_source_r
 }
 
 SEASTAR_TEST_CASE(test_memtable_flush_reader) {
-    // Memtable flush reader is severly limited, it always assumes that
+    // Memtable flush reader is severely limited, it always assumes that
     // the full partition range is being read and that
     // streamed_mutation::forwarding is set to no. Therefore, we cannot use
     // run_mutation_source_tests() to test it.

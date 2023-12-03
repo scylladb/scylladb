@@ -25,7 +25,7 @@ namespace gms {
  * instance to decide what he does with this change. Not all modules maybe interested
  * in all state changes.
  *
- * All notificaions that accept a permit_id are guaranteed to be called
+ * All notifications that accept a permit_id are guaranteed to be called
  * under the respective endpoint lock.  The permit_id must be provided
  * by the subscriber if it calls back gossiper functions that modify the same endpoint's
  * state, and therefore may acquire the same endpoint_lock - to prevent deadlock on the nested

@@ -5,7 +5,7 @@
 
 # Tests for the Query operation
 # Some of the Query features are tested in separate files:
-#   * test_key_conditions.py: the KeyConditions paramter.
+#   * test_key_conditions.py: the KeyConditions parameter.
 #   * test_key_condition_expression.py: the KeyConditionExpression parameter.
 #   * test_filter_expression.py: the FilterExpression parameter.
 #   * test_query_filter.py: the QueryFilter parameter.
@@ -455,7 +455,7 @@ def test_query_reverse_long(test_table_sn):
     got_sort_keys = [x['c'] for x in got_items]
     assert got_sort_keys == list(reversed(range(N-50, N)))
 
-    # A similar limited and reveresed query - with an explicit starting
+    # A similar limited and reversed query - with an explicit starting
     # point (2345) instead of the end:
     start = 2345
     got_items = test_table_sn.query(KeyConditions={
@@ -516,7 +516,7 @@ def test_query_reverse_longish(test_table_sn):
     got_sort_keys = [x['c'] for x in got_items]
     assert got_sort_keys == list(reversed(range(N-50, N)))
 
-    # A similar limited and reveresed query - with an explicit starting
+    # A similar limited and reversed query - with an explicit starting
     # point (2345) instead of the end:
     start = 147
     got_items = test_table_sn.query(KeyConditions={

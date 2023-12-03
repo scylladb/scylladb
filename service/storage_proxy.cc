@@ -998,7 +998,7 @@ public:
     // called only when all replicas replied
     virtual void release_mutation() = 0;
     // called when reply is received
-    // alllows mutation holder to have its own accounting
+    // allows mutation holder to have its own accounting
     virtual void reply(gms::inet_address ep) {};
 };
 
@@ -1169,7 +1169,7 @@ private:
     // Unique request id for logging purposes.
     const uint64_t _id = next_id++;
 
-    // max pruning operations to run in parralel
+    // max pruning operations to run in parallel
     static constexpr uint16_t pruning_limit = 1000;
 
 public:
@@ -1214,7 +1214,7 @@ public:
         _cl_for_learn = cl;
     }
     // this is called with an id of a replica that replied to learn request
-    // adn returns true when quorum of such requests are accumulated
+    // and returns true when quorum of such requests are accumulated
     bool learned(gms::inet_address ep);
 
     const locator::effective_replication_map_ptr& get_effective_replication_map() const noexcept {
@@ -1285,8 +1285,8 @@ protected:
     db::write_type _type;
     std::unique_ptr<mutation_holder> _mutation_holder;
     inet_address_vector_replica_set _targets; // who we sent this mutation to
-    // added dead_endpoints as a memeber here as well. This to be able to carry the info across
-    // calls in helper methods in a convinient way. Since we hope this will be empty most of the time
+    // added dead_endpoints as a member here as well. This to be able to carry the info across
+    // calls in helper methods in a convenient way. Since we hope this will be empty most of the time
     // it should not be a huge burden. (flw)
     inet_address_vector_topology_change _dead_endpoints;
     size_t _cl_acks = 0;
@@ -3353,7 +3353,7 @@ future<> storage_proxy::mutate_counters(Range&& mutations, db::consistency_level
         {
             // Would be better to use the effective replication map we started with, but:
             // - this is wrong anyway since we picked a random schema
-            // - we only use this to calculate some infomation for the error message
+            // - we only use this to calculate some information for the error message
             // - the topology coordinator should prevent incompatible changes while requests
             //   (like this one) are in flight
             auto& table = _db.local().find_column_family(s->id());
@@ -3477,7 +3477,7 @@ future<> storage_proxy::replicate_counter_from_leader(mutation m, db::consistenc
 /*
  * Range template parameter can either be range of 'mutation' or a range of 'std::unordered_map<gms::inet_address, mutation>'.
  * create_write_response_handler() has specialization for both types. The one for the former uses keyspace to figure out
- * endpoints to send mutation to, the one for the late uses enpoints that are used as keys for the map.
+ * endpoints to send mutation to, the one for the late uses endpoints that are used as keys for the map.
  */
 template<typename Range>
 future<result<>>
@@ -3779,7 +3779,7 @@ future<> storage_proxy::send_to_endpoint(
     std::optional<clock_type::time_point> timeout;
     db::consistency_level cl = allow_hints ? db::consistency_level::ANY : db::consistency_level::ONE;
     if (type == db::write_type::VIEW) {
-        // View updates have a near-infinite timeout to avoid incurring the extra work of writting hints
+        // View updates have a near-infinite timeout to avoid incurring the extra work of writing hints
         // and to apply backpressure.
         timeout = clock_type::now() + 5min;
     }
@@ -4117,9 +4117,9 @@ public:
             // do not report timeouts, the whole operation will timeout and be reported
             return; // also do not report timeout as replica failure for the same reason
         } else if (try_catch<abort_requested_exception>(eptr)) {
-            // do not report aborts, they are trigerred by shutdown or timeouts
+            // do not report aborts, they are triggered by shutdown or timeouts
         } else if (try_catch<gate_closed_exception>(eptr)) {
-            // do not report gate_closed errors, they are trigerred by shutdown (See #8995)
+            // do not report gate_closed errors, they are triggered by shutdown (See #8995)
         } else if (auto ex = try_catch<rpc::remote_verb_error>(eptr)) {
             // Log remote read error with lower severity.
             // If it is really severe it we be handled on the host that sent
@@ -4791,7 +4791,7 @@ protected:
     db::consistency_level _cl;
     size_t _block_for;
     inet_address_vector_replica_set _targets;
-    // Targets that were succesfully used for a data or digest request
+    // Targets that were successfully used for a data or digest request
     inet_address_vector_replica_set _used_targets;
     promise<result<foreign_ptr<lw_shared_ptr<query::result>>>> _result_promise;
     tracing::trace_state_ptr _trace_state;
@@ -5620,7 +5620,7 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
 
         // query_ranges_to_vnodes_generator can return less results than requested. If the number of results
         // is small enough or there are a lot of results - concurrentcy_factor which is increased by shifting left can
-        // eventualy zero out resulting in an infinite recursion. This line makes sure that concurrency factor is never
+        // eventually zero out resulting in an infinite recursion. This line makes sure that concurrency factor is never
         // get stuck on 0 and never increased too much if the number of results remains small.
         concurrency_factor = std::max(size_t(1), ranges.size());
 
@@ -5666,7 +5666,7 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
                     // Luckily, a full contiguity check here is not needed.
                     // Ranges that we want to merge here are formed by dividing a bigger ranges using
                     // query_ranges_to_vnodes_generator. By knowing query_ranges_to_vnodes_generator internals,
-                    // it can be assumed that usually, mergable ranges are of the form [a, b) [b, c).
+                    // it can be assumed that usually, mergeable ranges are of the form [a, b) [b, c).
                     // Therefore, for the most part, contiguity check is reduced to equality & inclusivity test.
                     // It's fine, that we don't detect contiguity of some other possibly contiguous
                     // ranges (like [a, b] [b+1, c]), because not merging contiguous ranges (as opposed
@@ -6048,7 +6048,7 @@ static mutation_write_failure_exception read_failure_to_write(schema_ptr s, read
  * coordinator to come along and trump our own promise with a newer one but is otherwise safe.
  *
  * NOTE: `cmd` argument can be nullptr, in which case it's guaranteed that this function would not perform
- * any reads of commited values (in case user of the function is not interested in them).
+ * any reads of committed values (in case user of the function is not interested in them).
  *
  * WARNING: the function should be called on a shard that owns the key cas() operates on
  */
@@ -6139,7 +6139,7 @@ future<bool> storage_proxy::cas(schema_ptr schema, shared_ptr<cas_request> reque
                     condition_met = false;
                 }
                 // If a condition is not met we still need to complete paxos round to achieve
-                // linearizability otherwise next write attempt may read differnt value as described
+                // linearizability otherwise next write attempt may read different value as described
                 // in https://github.com/scylladb/scylla/issues/6299
                 // Let's use empty mutation as a value and proceed
                 mutation.emplace(handler->schema(), handler->key());

@@ -51,7 +51,7 @@ namely:
 
 A complete description of expected semantics and guarantees
 is maintained in the comments for these classes and in sample
-implementations. Let's list here key aspects the implementor should
+implementations. Let's list here key aspects the implementer should
 bear in mind:
 - RPC should implement a model of asynchronous, unreliable network,
   in which messages can be lost, reordered, retransmitted more than
@@ -261,7 +261,7 @@ to truncate Raft log length afterwards, or when the snapshot
 transfer from the leader is initiated via `rpc::send_snapshot()`.
 
 In the latter case the leader's state machine is expected
-to contact the follower's state machine and send its snaphsot to
+to contact the follower's state machine and send its snapshot to
 it.
 
 When Raft wants to initialize a state machine with a snapshot

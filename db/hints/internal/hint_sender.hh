@@ -233,7 +233,7 @@ private:
     /// \return
     const column_mapping& get_column_mapping(lw_shared_ptr<send_one_file_ctx> ctx_ptr, const frozen_mutation& fm, const hint_entry_reader& hr);
 
-    /// \brief Perform a single mutation send atempt.
+    /// \brief Perform a single mutation send attempt.
     ///
     /// If the original destination end point is still a replica for the given mutation - send the mutation directly
     /// to it, otherwise execute the mutation "from scratch" with CL=ALL.
