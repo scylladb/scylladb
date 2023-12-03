@@ -26,7 +26,7 @@
 namespace service {
 
 enum class node_state: uint16_t {
-    none,                // the new node joined group0 but did not bootstrapped yet (has no tokens and data to serve)
+    none,                // the new node joined group0 but has not bootstrapped yet (has no tokens and data to serve)
     bootstrapping,       // the node is currently in the process of streaming its part of the ring
     decommissioning,     // the node is being decommissioned and stream its data to nodes that took over
     removing,            // the node is being removed and its data is streamed to nodes that took over from still alive owners
