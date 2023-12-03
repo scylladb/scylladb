@@ -415,6 +415,11 @@ public:
     // the endpoint_state_ptr is held.
     endpoint_state_ptr get_endpoint_state_ptr(inet_address ep) const noexcept;
 
+    // Return this node's endpoint_state_ptr
+    endpoint_state_ptr get_this_endpoint_state_ptr() const noexcept {
+        return get_endpoint_state_ptr(get_broadcast_address());
+    }
+
     const versioned_value* get_application_state_ptr(inet_address endpoint, application_state appstate) const noexcept;
     sstring get_application_state_value(inet_address endpoint, application_state appstate) const;
 

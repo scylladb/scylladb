@@ -2200,7 +2200,7 @@ future<> gossiper::do_stop_gossiping() {
         logger.info("gossip is already stopped");
         co_return;
     }
-    auto my_ep_state = get_endpoint_state_ptr(get_broadcast_address());
+    auto my_ep_state = get_this_endpoint_state_ptr();
     if (my_ep_state) {
         logger.info("My status = {}", get_gossip_status(*my_ep_state));
     }

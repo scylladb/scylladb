@@ -917,8 +917,7 @@ future<> generation_service::check_and_repair_cdc_streams() {
     // Need to artificially update our STATUS so other nodes handle the generation ID change
     // FIXME: after 0e0282cd nodes do not require a STATUS update to react to CDC generation changes.
     // The artificial STATUS update here should eventually be removed (in a few releases).
-    auto status = _gossiper.get_application_state_ptr(
-            utils::fb_utilities::get_broadcast_address(), gms::application_state::STATUS);
+    auto status = _gossiper.get_this_endpoint_state_ptr()->get_application_state_ptr(gms::application_state::STATUS);
     if (!status) {
         cdc_log.error("Our STATUS is missing");
         cdc_log.error("Aborting CDC generation repair due to missing STATUS");
