@@ -778,3 +778,53 @@ SEASTAR_THREAD_TEST_CASE(test_system_datadir_layout) {
         BOOST_REQUIRE(!file_exists(tbl_dirname.native()).get());
     }, cfg).get();
 }
+
+SEASTAR_TEST_CASE(test_pending_log_garbage_collection) {
+    return sstables::test_env::do_with_sharded_async([] (auto& env) {
+        std::vector<shared_sstable> ssts_to_keep;
+        for (int i = 0; i < 2; i++) {
+            ssts_to_keep.emplace_back(make_sstable_for_this_shard(std::bind(new_env_sstable, std::ref(env.local()))));
+        }
+        std::vector<shared_sstable> ssts_to_remove;
+        for (int i = 0; i < 3; i++) {
+            ssts_to_remove.emplace_back(make_sstable_for_this_shard(std::bind(new_env_sstable, std::ref(env.local()))));
+        }
+
+        // Now start atomic deletion -- create the pending deletion log for all
+        // three sstables, move TOC file for one of them into temporary-TOC, and 
+        // partially delete another
+        sstable_directory::create_pending_deletion_log(ssts_to_remove).get0();
+        rename_file(test(ssts_to_remove[1]).filename(sstables::component_type::TOC).native(), test(ssts_to_remove[1]).filename(sstables::component_type::TemporaryTOC).native()).get();
+        rename_file(test(ssts_to_remove[2]).filename(sstables::component_type::TOC).native(), test(ssts_to_remove[2]).filename(sstables::component_type::TemporaryTOC).native()).get();
+        remove_file(test(ssts_to_remove[2]).filename(sstables::component_type::Data).native()).get();
+
+        with_sstable_directory(env, [&] (sharded<sstables::sstable_directory>& sstdir) {
+            auto expect_ok = distributed_loader_for_tests::process_sstable_dir(sstdir, { .throw_on_missing_toc = true, .garbage_collect = true });
+            BOOST_REQUIRE_NO_THROW(expect_ok.get());
+
+            auto collected = sstdir.map_reduce0(
+                [] (auto& sstdir) {
+                    return do_with(std::set<sstables::generation_type>(), [&sstdir] (auto& gens) {
+                        return sstdir.do_for_each_sstable([&] (const shared_sstable& sst) {
+                            gens.emplace(sst->generation());
+                            return make_ready_future<>();
+                        }).then([&gens] () mutable -> future<std::set<sstables::generation_type>> {
+                            return make_ready_future<std::set<sstables::generation_type>>(std::move(gens));;
+                        });
+                    });
+                }, std::set<sstables::generation_type>(),
+                [] (auto&& res, auto&& gens) {
+                    res.merge(gens);
+                    return std::move(res);
+                }
+            ).get();
+
+            std::set<sstables::generation_type> expected;
+            for (auto& sst : ssts_to_keep) {
+                expected.insert(sst->generation());
+            }
+
+            BOOST_REQUIRE_EQUAL(expected, collected);
+        });
+    });
+}

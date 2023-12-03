@@ -2601,7 +2601,7 @@ std::optional<std::pair<uint64_t, uint64_t>> sstable::get_sample_indexes_for_ran
     return std::nullopt;
 }
 
-future<> remove_by_toc_name(sstring sstable_toc_name, storage::sync_dir sync) {
+future<sstring> make_toc_temporary(sstring sstable_toc_name, storage::sync_dir sync) {
     sstring prefix = sstable_toc_name.substr(0, sstable_toc_name.size() - sstable_version_constants::TOC_SUFFIX.size());
     sstring new_toc_name = prefix + sstable_version_constants::TEMPORARY_TOC_SUFFIX;
 
@@ -2615,37 +2615,10 @@ future<> remove_by_toc_name(sstring sstable_toc_name, storage::sync_dir sync) {
     } else {
         if (!co_await sstable_io_check(sstable_write_error_handler, file_exists, new_toc_name)) {
             sstlog.warn("Unable to delete {} because it doesn't exist.", sstable_toc_name);
-            co_return;
+            co_return "";
         }
     }
-    auto toc_file = co_await open_checked_file_dma(sstable_write_error_handler, new_toc_name, open_flags::ro);
-    std::vector<sstring> components = co_await with_closeable(std::move(toc_file), [] (file& toc_file) {
-        return sstable::read_and_parse_toc(toc_file);
-    });
-
-    co_await coroutine::parallel_for_each(components, [&prefix] (sstring component) -> future<> {
-        if (component.empty()) {
-            // eof
-            co_return;
-        }
-        if (component == sstable_version_constants::TOC_SUFFIX) {
-            // already renamed
-            co_return;
-        }
-        auto fname = prefix + component;
-        try {
-            co_await sstable_io_check(sstable_write_error_handler, remove_file, fname);
-        } catch (...) {
-            if (!is_system_error_errno(ENOENT)) {
-                throw;
-            }
-            sstlog.debug("Forgiving ENOENT when deleting file {}", fname);
-        }
-    });
-    if (sync) {
-        co_await sstable_io_check(sstable_write_error_handler, sync_directory, parent_path(new_toc_name));
-    }
-    co_await sstable_io_check(sstable_write_error_handler, remove_file, new_toc_name);
+    co_return new_toc_name;
 }
 
 /**

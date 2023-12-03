@@ -1017,9 +1017,10 @@ public:
 // swallows all errors and just reports them to the log.
 future<> remove_table_directory_if_has_no_snapshots(fs::path table_dir);
 
-// similar to sstable::unlink, but works on a TOC file name
-// Caller may pass sync_dir::no for batching multiple deletes in the same directory,
-// and make sure the directory is sync'ed on or after the last call.
-future<> remove_by_toc_name(sstring sstable_toc_name, storage::sync_dir sync = storage::sync_dir::yes);
+// makes sure the TOC file is temporary by moving existing TOC file or otherwise
+// checking the temporary-TOC already exists
+// resolves into temporary-TOC file name or empty string if neither TOC nor temp.
+// TOC is there
+future<sstring> make_toc_temporary(sstring sstable_toc_name, storage::sync_dir sync = storage::sync_dir::yes);
 
 } // namespace sstables
