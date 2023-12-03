@@ -313,7 +313,7 @@ bool clustering_prefix_matches(data_dictionary::database db, const schema& base,
     auto selection = cql3::selection::selection::for_columns(base.shared_from_this(), ck_columns);
     uint64_t zero = 0;
     auto dummy_options = cql3::query_options({ });
-    // FIXME: pass nullptrs for some of  dummies
+    // FIXME: pass nullptrs for some of  these dummies
     return cql3::expr::is_satisfied_by(
             r,
             cql3::expr::evaluation_inputs{
