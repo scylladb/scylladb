@@ -88,6 +88,9 @@ public:
     static api_error table_not_found(std::string msg) {
         return api_error("TableNotFoundException", std::move(msg));
     }
+    static api_error unavailable(std::string msg) {
+        return api_error("ServiceUnavailable", std::move(msg), http::reply::status_type::service_unavailable);
+    }
     static api_error internal(std::string msg) {
         return api_error("InternalServerError", std::move(msg), http::reply::status_type::internal_server_error);
     }
