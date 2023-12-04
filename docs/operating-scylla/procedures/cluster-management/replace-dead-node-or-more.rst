@@ -29,7 +29,6 @@ Login to one of the nodes in the cluster with (UN) status, collect the following
 * seeds - ``cat /etc/scylla/scylla.yaml | grep seeds:``
 * endpoint_snitch - ``cat /etc/scylla/scylla.yaml | grep endpoint_snitch``
 * Scylla version - ``scylla --version``
-* consistent_cluster_management - ``grep consistent_cluster_management /etc/scylla/scylla.yaml``
 
 Procedure
 ---------

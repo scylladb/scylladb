@@ -70,7 +70,6 @@ the file can be found under ``/etc/scylla/``
 - **listen_address** - IP address that the Scylla use to connect to other Scylla nodes in the cluster
 - **endpoint_snitch** - Set the selected snitch
 - **rpc_address** - Address for client connection (Thrift, CQLSH)
-- **consistent_cluster_management** - ``true`` by default, can be set to ``false`` if you don't want to use Raft for consistent schema management in this cluster (will be mandatory in later versions). Check the :doc:`Raft in ScyllaDB document</architecture/raft/>` to learn more.
 
 3. In the ``cassandra-rackdc.properties`` file, edit the rack and data center information. 
 The file can be found under ``/etc/scylla/``.

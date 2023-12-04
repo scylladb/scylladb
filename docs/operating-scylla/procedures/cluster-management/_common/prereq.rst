@@ -3,7 +3,6 @@
 * endpoint_snitch - ``grep endpoint_snitch /etc/scylla/scylla.yaml``
 * Scylla version - ``scylla --version``
 * Authenticator - ``grep authenticator /etc/scylla/scylla.yaml``
-* consistent_cluster_management - ``grep consistent_cluster_management /etc/scylla/scylla.yaml``
 
 .. Note:: 
 

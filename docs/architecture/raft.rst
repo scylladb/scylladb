@@ -35,50 +35,26 @@ of the DCs is down.
 Enabling Raft
 ---------------
 
-.. note::
-  In ScyllaDB 5.2 and ScyllaDB Enterprise 2023.1 Raft is Generally Available and can be safely used for consistent schema management.
-  It will get enabled by default when you upgrade your cluster to ScyllaDB 5.4 or 2024.1.
-  If needed, you can explicitly prevent it from getting enabled upon upgrade.
-
-  .. only:: opensource
-
-    See :doc:`the upgrade guide from 5.2 to 5.4 </upgrade/index>` for details.
-
 ScyllaDB Open Source 5.2 and later, and ScyllaDB Enterprise 2023.1 and later come equipped with a procedure that can setup Raft-based consistent cluster management in an existing cluster. We refer to this as the **Raft upgrade procedure** (do not confuse with the :doc:`ScyllaDB version upgrade procedure </upgrade/index/>`).
 
 .. warning::
-    Once enabled, Raft cannot be disabled on your cluster. The cluster nodes will fail to restart if you remove the Raft feature.
+    In ScyllaDB Open Source 5.5 and ScyllaDB Enterprise 2024.2 Raft is mandatory.
 
-To enable Raft in an existing cluster, you need to enable the ``consistent_cluster_management`` option in the ``scylla.yaml`` file 
-for **each node** in the cluster: 
+When all the nodes in the cluster are upgraded to ScyllaDB Open Source 5.5 or ScyllaDB Enterprise 2024.2, the cluster will start the **Raft upgrade procedure**.
 
-#. Ensure that the schema is synchronized in the cluster by executing :doc:`nodetool describecluster </operating-scylla/nodetool-commands/describecluster>` on each node and ensuring that the schema version is the same on all nodes.
-#. Perform a :doc:`rolling restart </operating-scylla/procedures/config-change/rolling-restart/>`, updating the ``scylla.yaml`` file for **each node** in the cluster before restarting it to enable the ``consistent_cluster_management`` option:
+.. only:: opensource
 
-    .. code-block:: yaml
+    See :doc:`the upgrade guide from 5.4 to 5.5 </upgrade/index>` for details.
 
-       consistent_cluster_management: true
-
-When all the nodes in the cluster and updated and restarted, the cluster will start the **Raft upgrade procedure**.
-**You must then verify** that the Raft upgrade procedure has finished successfully. Refer to the :ref:`next section <verify-raft-procedure>`.
-
-Alternatively, you can enable the ``consistent_cluster_management`` option when you are:
-
-* Performing a rolling upgrade from version 5.1 to 5.2 or version 2022.x to 2023.1 by updating ``scylla.yaml`` before restarting each node. The Raft upgrade procedure will start as soon as the last node was upgraded and restarted. As above, this requires :ref:`verifying <verify-raft-procedure>` that the procedure successfully finishes.
-* Creating a new cluster. This does not use the Raft upgrade procedure; instead, Raft is functioning in the cluster and managing schema right from the start.
-
-Until all nodes are restarted with ``consistent_cluster_management: true``, it is still possible to turn this option back off. Once enabled on every node, it must remain turned on (or the node will refuse to restart).
+.. warning::
+    Once enabled, Raft cannot be disabled on your cluster.
 
 .. _verify-raft-procedure:
 
 Verifying that the Raft upgrade procedure finished successfully
 ========================================================================
 
-The Raft upgrade procedure starts as soon as every node in the cluster restarts with ``consistent_cluster_management`` flag enabled in ``scylla.yaml``.
-
-.. TODO: update the above sentence once 5.3 and later are released.
-
-The procedure requires **full cluster availability** to correctly setup the Raft algorithm; after the setup finishes, Raft can proceed with only a majority of nodes, but this initial setup is an exception.
+The Raft upgrade procedure requires **full cluster availability** to correctly setup the Raft algorithm; after the setup finishes, Raft can proceed with only a majority of nodes, but this initial setup is an exception.
 An unlucky event, such as a hardware failure, may cause one of your nodes to fail. If this happens before the Raft upgrade procedure finishes, the procedure will get stuck and your intervention will be required.
 
 To verify that the procedure finishes, look at the log of every Scylla node (using ``journalctl _COMM=scylla``). Search for the following patterns:
