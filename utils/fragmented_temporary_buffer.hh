@@ -60,6 +60,15 @@ public:
         return ostream::simple(reinterpret_cast<char*>(current.get_write()), current.size());
     }
 
+    using const_fragment_iterator = typename vector_type::const_iterator;
+
+    const_fragment_iterator begin() const {
+        return _fragments.begin();
+    }
+    const_fragment_iterator end() const {
+        return _fragments.end();
+    }
+
     size_t size_bytes() const { return _size_bytes; }
     bool empty() const { return !_size_bytes; }
 

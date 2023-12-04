@@ -134,10 +134,12 @@ public:
 
         static inline constexpr uint32_t segment_version_1 = 1u;
         static inline constexpr uint32_t segment_version_2 = 2u;
+        static inline constexpr uint32_t segment_version_3 = 4u;
+        static inline constexpr uint32_t current_version = segment_version_3;
 
         descriptor(descriptor&&) noexcept = default;
         descriptor(const descriptor&) = default;
-        descriptor(segment_id_type i, const std::string& fname_prefix, uint32_t v = segment_version_2, sstring = {});
+        descriptor(segment_id_type i, const std::string& fname_prefix, uint32_t v = current_version, sstring = {});
         descriptor(replay_position p, const std::string& fname_prefix = FILENAME_PREFIX);
         descriptor(const std::string& filename, const std::string& fname_prefix = FILENAME_PREFIX);
 
@@ -171,7 +173,7 @@ public:
      * of data to be written. (See add).
      * Don't write less, absolutely don't write more...
      */
-    using output = fragmented_temporary_buffer::ostream;
+    using output = typename seastar::memory_output_stream<detail::sector_split_iterator>;
     using serializer_func = std::function<void(output&)>;
 
     /**
@@ -373,7 +375,7 @@ public:
         uint64_t bytes() const {
             return _bytes;
         }
-        virtual const char* what() const noexcept {
+        const char* what() const noexcept override {
             return _msg.c_str();
         }
     private:
@@ -383,7 +385,7 @@ public:
     class invalid_segment_format : public segment_error {
         static constexpr const char* _msg = "Not a scylla format commitlog file";
     public:
-        virtual const char* what() const noexcept {
+        const char* what() const noexcept override {
             return _msg;
         }
     };
@@ -391,9 +393,19 @@ public:
     class header_checksum_error : public segment_error {
         static constexpr const char* _msg = "Checksum error in file header";
     public:
-        virtual const char* what() const noexcept {
+        const char* what() const noexcept override {
             return _msg;
         }
+    };
+
+    class segment_truncation : public segment_error {
+        std::string _msg;
+        uint64_t _pos;
+    public:
+        segment_truncation(uint64_t);
+
+        uint64_t position() const;
+        const char* what() const noexcept override;
     };
 
     static future<> read_log_file(sstring filename, sstring prefix, commit_load_reader_func, position_type = 0, const db::extensions* = nullptr);

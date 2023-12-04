@@ -492,7 +492,8 @@ SEASTAR_TEST_CASE(test_commitlog_chunk_corruption){
                         auto segments = log.get_active_segment_names();
                         BOOST_REQUIRE(!segments.empty());
                         auto seg = segments[0];
-                        return corrupt_segment(seg, rps->at(0).pos - 4, 0x451234ab).then([seg, rps] {
+                        auto cpos = rps->at(0).pos - 4;
+                        return corrupt_segment(seg, cpos, 0x451234ab).then([seg, rps] {
                             return db::commitlog::read_log_file(seg, db::commitlog::descriptor::FILENAME_PREFIX, [rps](db::commitlog::buffer_and_replay_position buf_rp) {
                                 BOOST_FAIL("Should not reach");
                                 return make_ready_future<>();
@@ -508,6 +509,241 @@ SEASTAR_TEST_CASE(test_commitlog_chunk_corruption){
                         });
                     });
         });
+}
+
+
+SEASTAR_TEST_CASE(test_commitlog_chunk_corruption2){
+    commitlog::config cfg;
+    cfg.commitlog_segment_size_in_mb = 1;
+    return cl_test(cfg, [](commitlog& log) {
+        auto rps = make_lw_shared<std::vector<db::replay_position>>();
+        // write enough entries to fill more than one chunk
+        return do_until([rps]() {return rps->size() > (128*1024/8);},
+                    [&log, rps]() {
+                        auto uuid = make_table_id();
+                        sstring tmp = "hej bubba cow";
+                        return log.add_mutation(uuid, tmp.size(), db::commitlog::force_sync::no, [tmp](db::commitlog::output& dst) {
+                                    dst.write(tmp.data(), tmp.size());
+                                }).then([rps](rp_handle h) {
+                                    BOOST_CHECK_NE(h.rp(), db::replay_position());
+                                    rps->push_back(h.release());
+                                });
+                    }).then([&log]() {
+                        return log.sync_all_segments();
+                    }).then([&log, rps] {
+                        auto segments = log.get_active_segment_names();
+                        BOOST_REQUIRE(!segments.empty());
+                        auto seg = segments[0];
+                        auto desc = commitlog::descriptor(seg);
+                        auto e = std::find_if(rps->begin(), rps->end(), [desc](auto& rp) {
+                            return rp.id != desc.id;
+                        });
+                        auto idx = std::distance(rps->begin(), e);
+                        auto cpos = rps->at(idx/2).pos;
+
+                        return corrupt_segment(seg, cpos, 0x451234ab).then([seg, rps, cpos] {
+                            return db::commitlog::read_log_file(seg, db::commitlog::descriptor::FILENAME_PREFIX, [rps, cpos](db::commitlog::buffer_and_replay_position buf_rp) {
+                                BOOST_CHECK_NE(buf_rp.position.pos, cpos);
+                                return make_ready_future<>();
+                            }).then_wrapped([](auto&& f) {
+                                try {
+                                    f.get();
+                                    BOOST_FAIL("Expected exception");
+                                } catch (commitlog::segment_data_corruption_error& e) {
+                                    // ok.
+                                    BOOST_REQUIRE(e.bytes() > 0);
+                                }
+                            });
+                        });
+                    });
+        });
+}
+
+
+SEASTAR_TEST_CASE(test_commitlog_chunk_corruption3){
+    commitlog::config cfg;
+    cfg.commitlog_segment_size_in_mb = 1;
+    cfg.commitlog_total_space_in_mb = 2 * smp::count;
+    cfg.allow_going_over_size_limit = false;
+
+    return cl_test(cfg, [](commitlog& log) -> future<> {
+        auto uuid = make_table_id();
+        sstring tmp = "hej bubba cow";
+
+        std::optional<db::segment_id_type> last;
+        db::replay_position last_rp;
+
+        int n = 0;
+
+        for (;;) {
+            auto h = co_await log.add_mutation(uuid, tmp.size(), db::commitlog::force_sync::no, [&](db::commitlog::output& dst) {
+                dst.write(tmp.data(), tmp.size());
+            });
+            BOOST_CHECK_NE(h.rp(), db::replay_position());
+
+            // release data immediately
+            auto rp = h.rp();
+            auto id = rp.id;
+
+            if (last && last != id) {
+                // this should mean we are in a recycled segment.
+                if (++n > 3) {
+                    last_rp = h.release(); // prevent removal for now.
+                    break;
+                }
+            }
+            last = id;
+        }
+
+        co_await log.sync_all_segments();
+
+        auto segments = log.get_active_segment_names();
+        BOOST_REQUIRE(!segments.empty());
+
+        for (auto& seg : segments) {
+            auto desc = commitlog::descriptor(seg);
+            if (desc.id == last_rp.id) {
+                try {
+                    co_await db::commitlog::read_log_file(seg, db::commitlog::descriptor::FILENAME_PREFIX, [&](db::commitlog::buffer_and_replay_position buf_rp) {
+                        BOOST_CHECK_LE(buf_rp.position, last_rp);
+                        return make_ready_future<>();
+                    });
+                    BOOST_FAIL("Expected exception");
+                } catch (commitlog::segment_truncation& e) {
+                    // ok.
+                }
+                co_return;
+            }
+        }
+
+        BOOST_FAIL("Did not find segment");
+    });
+}
+
+SEASTAR_TEST_CASE(test_commitlog_replay_single_large_mutation){
+    commitlog::config cfg;
+    cfg.commitlog_segment_size_in_mb = 4;
+    cfg.commitlog_total_space_in_mb = 2 * cfg.commitlog_segment_size_in_mb * smp::count;
+    cfg.allow_going_over_size_limit = false;
+
+    return cl_test(cfg, [](commitlog& log) -> future<> {
+        auto uuid = make_table_id();
+        auto size = log.max_record_size();
+
+        auto buf = fragmented_temporary_buffer::allocate_to_fit(size);
+        std::random_device rd;
+        std::mt19937 gen(rd());
+        std::uniform_int_distribution<char> dist;
+
+        auto out = buf.get_ostream();
+        for (size_t i = 0; i < size; ++i) {
+            auto c = dist(gen);
+            out.write(&c, 1);
+        }
+
+        auto h = co_await log.add_mutation(uuid, size, db::commitlog::force_sync::no, [&](db::commitlog::output& dst) {
+            for (auto& tmp : buf) {
+                dst.write(tmp.get(), tmp.size());
+            }
+        });
+
+        auto rp = h.release();
+
+        co_await log.sync_all_segments();
+
+        auto segments = log.get_active_segment_names();
+        BOOST_REQUIRE(!segments.empty());
+
+        for (auto& seg : segments) {
+            auto desc = commitlog::descriptor(seg);
+            if (desc.id == rp.id) {
+                co_await db::commitlog::read_log_file(seg, db::commitlog::descriptor::FILENAME_PREFIX, [&](db::commitlog::buffer_and_replay_position buf_rp) {
+                    BOOST_CHECK_EQUAL(buf_rp.position, rp);
+                    auto& rp_buf = buf_rp.buffer;
+                    auto in1 = buf.get_istream();
+                    auto in2 = rp_buf.get_istream();
+                    for (size_t i = 0; i < size; ++i) {
+                        auto c1 = in1.read<char>();
+                        auto c2 = in2.read<char>();
+                        BOOST_CHECK_EQUAL(c1, c2);
+                    }
+                    return make_ready_future<>();
+                });
+                co_return;
+            }
+        }
+
+        BOOST_FAIL("Did not find segment");
+    });
+}
+
+/**
+ * Checks same thing as above, but will also ensure the seek mechanism in 
+ * replayer is working, since we will span multiple chunks.
+ */
+SEASTAR_TEST_CASE(test_commitlog_replay_large_mutations){
+    commitlog::config cfg;
+    cfg.commitlog_segment_size_in_mb = 14;
+    cfg.commitlog_total_space_in_mb = 2 * cfg.commitlog_segment_size_in_mb * smp::count;
+    cfg.allow_going_over_size_limit = false;
+
+    return cl_test(cfg, [](commitlog& log) -> future<> {
+        auto uuid = make_table_id();
+        auto size = log.max_record_size() / 2;
+
+        std::unordered_map<replay_position, fragmented_temporary_buffer> buffers;
+
+        for (size_t i = 0; i < 4; ++i) {
+            auto buf = fragmented_temporary_buffer::allocate_to_fit(size);
+            std::random_device rd;
+            std::mt19937 gen(rd());
+            std::uniform_int_distribution<char> dist;
+
+            auto out = buf.get_ostream();
+            for (size_t i = 0; i < size; ++i) {
+                auto c = dist(gen);
+                out.write(&c, 1);
+            }
+
+            auto h = co_await log.add_mutation(uuid, size, db::commitlog::force_sync::no, [&](db::commitlog::output& dst) {
+                for (auto& tmp : buf) {
+                    dst.write(tmp.get(), tmp.size());
+                }
+            });
+
+            auto rp = h.release();
+
+            buffers.emplace(rp, std::move(buf));
+        }
+
+        co_await log.sync_all_segments();
+
+        auto segments = log.get_active_segment_names();
+        BOOST_REQUIRE(!segments.empty());
+
+        size_t n = 0;
+
+        for (auto& seg : segments) {
+            auto desc = commitlog::descriptor(seg);
+            if (std::any_of(buffers.begin(), buffers.end(), [&](auto& p) { return p.first.id == desc.id; })) {
+                co_await db::commitlog::read_log_file(seg, db::commitlog::descriptor::FILENAME_PREFIX, [&](db::commitlog::buffer_and_replay_position buf_rp) {
+                    auto& buf = buffers.at(buf_rp.position);
+                    auto& rp_buf = buf_rp.buffer;
+                    auto in1 = buf.get_istream();
+                    auto in2 = rp_buf.get_istream();
+                    for (size_t i = 0; i < size; ++i) {
+                        auto c1 = in1.read<char>();
+                        auto c2 = in2.read<char>();
+                        BOOST_CHECK_EQUAL(c1, c2);
+                    }
+                    ++n;
+                    return make_ready_future<>();
+                });
+            }
+        }
+
+        BOOST_CHECK_EQUAL(n, buffers.size());
+    });
 }
 
 SEASTAR_TEST_CASE(test_commitlog_reader_produce_exception){

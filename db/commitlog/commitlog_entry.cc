@@ -30,7 +30,7 @@ void commitlog_entry_writer::compute_size() {
     _size = ms.size();
 }
 
-void commitlog_entry_writer::write(typename seastar::memory_output_stream<std::vector<temporary_buffer<char>>::iterator>& out) const {
+void commitlog_entry_writer::write(ostream& out) const {
     serialize(out);
 }
 
