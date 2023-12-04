@@ -112,6 +112,9 @@ public:
                  } catch (rjson::error & re) {
                      generate_error_reply(*rep,
                              api_error::validation(re.what()));
+                 } catch (exceptions::request_timeout_exception& ex) {
+                     generate_error_reply(*rep,
+                             api_error::unavailable(format("Service unavailable: {}", std::current_exception())));
                  } catch (...) {
                      generate_error_reply(*rep,
                              api_error::internal(format("Internal server error: {}", std::current_exception())));
