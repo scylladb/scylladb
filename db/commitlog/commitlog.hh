@@ -134,7 +134,7 @@ public:
 
         static inline constexpr uint32_t segment_version_1 = 1u;
         static inline constexpr uint32_t segment_version_2 = 2u;
-        static inline constexpr uint32_t segment_version_3 = 4u;
+        static inline constexpr uint32_t segment_version_3 = 3u;
         static inline constexpr uint32_t current_version = segment_version_3;
 
         descriptor(descriptor&&) noexcept = default;
