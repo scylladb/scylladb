@@ -318,7 +318,12 @@ void topology::index_node(const node* node) {
     if (node->endpoint() != inet_address{}) {
         auto eit = _nodes_by_endpoint.find(node->endpoint());
         if (eit != _nodes_by_endpoint.end()) {
-            if (eit->second->is_leaving() || eit->second->left()) {
+            if (eit->second->get_state() == node::state::replacing && node->get_state() == node::state::being_replaced) {
+                // replace-with-same-ip, map ip to the old node
+                _nodes_by_endpoint.erase(node->endpoint());
+            } else if (eit->second->get_state() == node::state::being_replaced && node->get_state() == node::state::replacing) {
+                // replace-with-same-ip, map ip to the old node, do nothing if it's already the case
+            } else if (eit->second->is_leaving() || eit->second->left()) {
                 _nodes_by_endpoint.erase(node->endpoint());
             } else if (!node->is_leaving() && !node->left()) {
                 if (node->host_id()) {
