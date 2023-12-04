@@ -474,14 +474,6 @@ msg_addr messaging_service::get_source(const rpc::client_info& cinfo) {
 
 messaging_service::~messaging_service() = default;
 
-uint16_t messaging_service::port() {
-    return _cfg.port;
-}
-
-gms::inet_address messaging_service::listen_address() {
-    return _cfg.ip;
-}
-
 static future<> do_with_servers(std::string_view what, std::array<std::unique_ptr<messaging_service::rpc_protocol_server_wrapper>, 2>& servers, auto method) {
     mlogger.info("{} server", what);
     co_await coroutine::parallel_for_each(
