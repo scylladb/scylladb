@@ -746,6 +746,81 @@ SEASTAR_TEST_CASE(test_commitlog_replay_large_mutations){
     });
 }
 
+// Tests #15269 - skipping past EOF
+SEASTAR_TEST_CASE(test_commitlog_chunk_truncation) {
+    commitlog::config cfg;
+    cfg.commitlog_segment_size_in_mb = 1;
+    return cl_test(cfg, [](commitlog& log) -> future<> {
+        auto uuid = make_table_id();
+        sstring tmp = "hej bubba cow";
+        db::replay_position rp, corrupt;
+
+        // we want to corrupt somewhere in second chunk, before 
+        // middle of it. I.e. between 128k and 192k
+        constexpr auto min_corrupt_pos = 128*1024;
+        constexpr auto max_corrupt_pos = 128*1024 + 64 * 1024;
+
+        // fill one full segment.
+        for (;;) {
+            auto h = co_await log.add_mutation(uuid, tmp.size(), db::commitlog::force_sync::no, [tmp](db::commitlog::output& dst) {
+                dst.write(tmp.data(), tmp.size());
+            });
+            auto nrp = h.release();
+            if (rp != db::replay_position() && nrp.base_id() != rp.base_id()) {
+                break;
+            }
+            rp = nrp;
+            if (rp.pos > min_corrupt_pos && (rp.pos + tmp.size() + 12) < max_corrupt_pos) {
+                corrupt = rp;
+            }
+        }
+
+        co_await log.sync_all_segments();
+
+        auto segments = log.get_active_segment_names();
+
+        BOOST_REQUIRE(!segments.empty());
+        BOOST_CHECK_NE(rp, db::replay_position());
+        BOOST_CHECK_NE(corrupt, db::replay_position());
+
+        BOOST_CHECK_EQUAL(rp.base_id(), corrupt.base_id());
+
+        for (auto& seg : segments) {
+            commitlog::descriptor d(seg);
+            if (d.id == rp.base_id()) {
+                // Corrupt the entry so we skip the rest of the chunk.
+                co_await corrupt_segment(seg, corrupt.pos + 4, 'bose');
+                auto f = co_await open_file_dma(seg, open_flags::rw);
+                // then truncate the file so skipping the chunk will
+                // cause EOF.
+                co_await f.truncate(max_corrupt_pos);
+                co_await f.close();
+
+                // Reading this segment will now get corruption at the above position,
+                // right before where we have truncated the file. It will try to skip
+                // to next chunk, which is past actual EOF. If #15269 is broken, this
+                // will assert and crash in file_data_source_impl. If not, we should 
+                // get a corruption exception and no more entries past the corrupt one.
+                db::position_type pos = 0;
+                try {
+                    co_await db::commitlog::read_log_file(seg, db::commitlog::descriptor::FILENAME_PREFIX, [&](db::commitlog::buffer_and_replay_position buf_rp) {
+                        pos = buf_rp.position.pos; // keep track of how far we reach in the segment.
+                        return make_ready_future<>();
+                    });
+                } catch (commitlog::segment_data_corruption_error& e) {
+                    // ok.
+                    BOOST_CHECK_GT(e.bytes(), 0);
+                }
+                BOOST_CHECK_GT(pos, min_corrupt_pos);
+                BOOST_CHECK_LT(pos, max_corrupt_pos);
+
+                co_return;
+            }
+        }
+        BOOST_FAIL("Should not reach");
+    });
+}
+
 SEASTAR_TEST_CASE(test_commitlog_reader_produce_exception){
     commitlog::config cfg;
     cfg.commitlog_segment_size_in_mb = 1;
