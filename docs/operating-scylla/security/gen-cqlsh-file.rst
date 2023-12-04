@@ -69,7 +69,7 @@ Procedure
         - CQL version that the cluster you are connecting to is using
         - If you are not sure run ``nodetool version``
       * - certfile
-        - Root certificate that was used to sign file specified with the ``usercert`` patameter
+        - Root certificate that was used to sign file specified with the ``usercert`` parameter
         - Applies to CA signed certificates
       * - userkey
         - Key certificate used for ``cqlsh``

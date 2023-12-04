@@ -75,4 +75,4 @@ Additional Resources
 
 * :doc:`Consistency Level Console Demo </architecture/console-CL-full-demo>`
 * :doc:`Consistency Levels </cql/consistency/>`
-* From ScyllaDB Univeristy: take the `Consistency Level lesson <https://university.scylladb.com/courses/scylla-essentials-overview/lessons/architecture/topic/consistency-level-cl/>`_
+* From ScyllaDB University: take the `Consistency Level lesson <https://university.scylladb.com/courses/scylla-essentials-overview/lessons/architecture/topic/consistency-level-cl/>`_

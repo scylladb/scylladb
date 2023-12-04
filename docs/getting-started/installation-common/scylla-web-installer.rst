@@ -42,7 +42,7 @@ You can run the command with the ``-h`` or ``--help`` flag to print information 
 Examples
 ---------
 
-Installing ScyllaDB Open Souce 4.6.1:
+Installing ScyllaDB Open Source 4.6.1:
 
 .. code:: console
 

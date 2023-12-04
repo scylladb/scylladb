@@ -15,7 +15,7 @@ RBNO is more robust, reliable, and safer for data consistency than streaming.
 In particular, a failed node operation can resume from the point it stopped -
 without sending data that has already been synced, which is a significant 
 time-saver when adding or removing large nodes. In addition, with RBNO enabled,
-you don't need to run repair befor or after node operations, such as replace
+you don't need to run repair before or after node operations, such as replace
 or removenode.
 
 RBNO is enabled for the following node operations:

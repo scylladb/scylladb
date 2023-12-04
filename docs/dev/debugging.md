@@ -290,7 +290,7 @@ binaries.
 
 The most convenient way to open a coredump is [scripts/open-coredump.sh](https://github.com/scylladb/scylladb/blob/master/scripts/open-coredump.sh).
 Just point it to a coredump and after some time you should get a shell inside the
-appropriate dbuild container, with a suggested gdb invokation line to open the
+appropriate dbuild container, with a suggested gdb invocation line to open the
 coredump.
 
 If you prefer to open the coredump manually or the script fails for you, continue
@@ -904,7 +904,7 @@ hundreds or more) can cause an otherwise non-problematic amount of reads to use
 excessive amount of memory, potentially leading to OOM.
 
 Reversed- and unpaged-reads (or both, combined) can also consume a huge amount
-of memory, to the point of a fiew of such reads causing OOM. The way to find
+of memory, to the point of a few of such reads causing OOM. The way to find
 these is to inspect readers in memory, trying to locate their partition slice
 and having a look at their respective options:
 * `partition_slice::option::reversed` is set for a reversed query

@@ -30,7 +30,7 @@ For more details on the reader concurrency semaphore's API, check [reader_concur
 
 Permits can be registered as "inactive". This means that the reader object associated with the permit will be kept around only as long as resource consumption is below the semaphore's limit. Otherwise, the reader object will be evicted (destroyed) to free up resources. Evicted permits have to be re-admitted to continue the read.
 
-This is used in multiple places, but in general it is used to cache readers between differnt pages of a query.
+This is used in multiple places, but in general it is used to cache readers between different pages of a query.
 Making reads inactive is also used to prevent deadlocks, where a single process has to obtain permits on multiple shards. To avoid deadlocks, the process marks all shards it is not currently using, as inactive, to allow a concurrent process to be able to obtain permits on those shards. Repair and multi-shard reads mark unused shard readers as inactive for this purpose.
 
 Inactive reads are only evicted when their eviction can potentially allow for permits currently waiting on admission to be admitted. So for example if admission is blocked by lack of memory, inactive reads will be evicted. If admission is blocked by some permit being marked as `need_cpu`, inactive readers will not be evicted.
@@ -43,7 +43,7 @@ The semaphore has anti-OOM protection measures. This is governed by two limits:
 
 Both limits are multipliers and the final limit is calculated by multiplying them with the semaphore's memory limit. So e.g. a `serialize_limit_multiplier` limit of `2` means that the protection menchanism is activated when the memory consumption of the current reads reaches the semaphore limit times two.
 
-After reaching the serialize limit, requests for more memory are queued for all reads except one, which is called the blessed read. The hope is that if only one read is allowed to progress at a time, the memory consumption will not baloon any more. When the memory consumption goes back below the serialize limit, reads are again allowed to progress in parallel.
+After reaching the serialize limit, requests for more memory are queued for all reads except one, which is called the blessed read. The hope is that if only one read is allowed to progress at a time, the memory consumption will not balloon any more. When the memory consumption goes back below the serialize limit, reads are again allowed to progress in parallel.
 Note that participation in this is opt-in for reads, in that there is a separate accounting method for registering memory consumption, which participates in this system. Currently only memory request on behalf of I/O use this API.
 
 When reaching the kill limit, the semaphore will start throwing `std::bad_alloc` from all memory consumption registering API calls. This is a drastic measure which will result in reads being killed. This is meant to provide a hard upper limit on the memory consumption of all reads.
@@ -110,7 +110,7 @@ There might be inactive reads if CPU is a bottleneck; otherwise, there shouldn't
 
 ### Operations
 
-Table of all permit operations possibly contained in disgnostic dumps, from the user or system semaphore:
+Table of all permit operations possibly contained in diagnostic dumps, from the user or system semaphore:
 
 | Operation name                                | Description                                                                                                                  |
 | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
@@ -123,13 +123,13 @@ Table of all permit operations possibly contained in disgnostic dumps, from the 
 | `shard-reader`                                | Part of a range-scan, which runs on replica-shards.                                                                          |
 
 
-Table of all permit operations possibly contained in disgnostic dumps, from the streaming semaphore:
+Table of all permit operations possibly contained in diagnostic dumps, from the streaming semaphore:
 
 | Operation name                                | Description                                                                                                                  |
 | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
 | `repair-meta`                                 | Repair reader.                                                                                                               |
 | `sstables_loader::load_and_stream()`          | Sstable reader, reading sstables on behalf of load-and-stream.                                                               |
-| `stream-session`                              | Permit created for streaming (reciever side).                                                                                |
+| `stream-session`                              | Permit created for streaming (receiver side).                                                                                |
 | `stream-transfer-task`                        | Permit created for streaming (sender side).                                                                                  |
 | `view_builder`                                | Permit created for the view-builder service.                                                                                 |
 | `view_update_generator`                       | Reader which reads the staging sstables, for which view updates have to be generated.                                        |

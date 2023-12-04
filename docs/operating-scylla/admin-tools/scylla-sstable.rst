@@ -769,7 +769,7 @@ In addition to the `ScyllaDB Consume API <scylla-consume-api_>`_, the Lua bindin
 The listing uses the following terminology:
 
 * Attribute - a simple attribute accessible via ``obj.attribute_name``;
-* Method - a method operating on an instance of said type, invokable as ``obj:method()``;
+* Method - a method operating on an instance of said type, invocable as ``obj:method()``;
 * Magic method - magic methods defined in the metatable which define behaviour of these objects w.r.t. `Lua operators and more <http://www.lua.org/manual/5.4/manual.html#2.4>`_;
 
 The format of an attribute description is the following:
@@ -1000,7 +1000,7 @@ Scylla.new_ring_position()
 
 Creates a `Scylla.ring_position <scylla-ring-position-type_>`_ instance.
 
-Has severeal overloads:
+Has several overloads:
 
 * ``Scylla.new_ring_position(weight, key)``.
 * ``Scylla.new_ring_position(weight, token)``.
@@ -1062,7 +1062,7 @@ Currently used only for clustering positions.
 Attributes:
 
 * key (`Scylla.clustering_key <scylla-clustering-key-type_>`_) - the clustering key, ``nil`` if the position in partition represents the min or max clustering positions.
-* weight (integer) - weight of the position, either -1 (before key), 0 (at key) or 1 (after key). If key atribute is ``nil``, the weight is never 0.
+* weight (integer) - weight of the position, either -1 (before key), 0 (at key) or 1 (after key). If key attribute is ``nil``, the weight is never 0.
 
 Methods:
 
@@ -1092,7 +1092,7 @@ Attributes:
 
 * token (integer) - the token, ``nil`` if the ring position represents the min or max ring positions.
 * key (`Scylla.partition_key <scylla-partition-key-type_>`_) - the partition key, ``nil`` if the ring position represents a position before/after a token.
-* weight (integer) - weight of the position, either -1 (before key/token), 0 (at key) or 1 (after key/token). If key atribute is ``nil``, the weight is never 0.
+* weight (integer) - weight of the position, either -1 (before key/token), 0 (at key) or 1 (after key/token). If key attribute is ``nil``, the weight is never 0.
 
 Methods:
 

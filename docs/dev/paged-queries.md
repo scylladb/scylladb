@@ -322,7 +322,7 @@ mainly cold start and result merging.
 
 Implementing a stateful range scan using `multishard_combining_reader`,
 `querier` and `querier_cache` still has a lot of involved details to
-it. To make this as accessible and resuable as possible a function was
+it. To make this as accessible and reusable as possible a function was
 added that takes care of all this, offering a simple interface to
 clients. This is `query_mutations_on_all_shards()`, which takes care of
 all details related to replica local range scans. It supports both

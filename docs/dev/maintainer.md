@@ -249,7 +249,7 @@ Alternatively
  1. Check out the relevant branch (the `branch-3.2` from the example above) 
  2. Apply all the necessary patches (by cherry-picking them or doing any
     other relevant manipulations)
- 3. Push the udpated branch.
+ 3. Push the updated branch.
  * In the `scylla` repository
  1. Check out the relevant next branch (e.g. `next-3.2` one)
  2. Use the refreshing script specifying the `seastar:<branch>` as its
@@ -310,4 +310,4 @@ still has to rely on their judgemenet.
    before backported on older stable releases.
 
 5. Make sure the target branch is not under freeze, waiting
-   for an iminent release.
+   for an imminent release.

@@ -82,7 +82,7 @@ Configure
 ^^^^^^^^^
 
 Configure the detection thresholds of large partitions with the ``compaction_large_partition_warning_threshold_mb`` parameter (default: 1000MB)
-and the ``compaction_rows_count_warning_threshold`` paramater (default 100000)
+and the ``compaction_rows_count_warning_threshold`` parameter (default 100000)
 in the scylla.yaml configuration file.
 Partitions that are bigger than the size threshold and/or hold more than the rows count threshold are reported in the ``system.large_partitions`` table and generate a warning in the Scylla log (refer to :doc:`log </getting-started/logging/>`).
 

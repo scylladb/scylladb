@@ -14,7 +14,7 @@ Errors and Support
    <div class="panel callout radius animated">
             <div class="row">
               <div class="medium-3 columns">
-                <h5 id="getting-started">Scylla Errors and Suppport</h5>
+                <h5 id="getting-started">Scylla Errors and Support</h5>
               </div>
               <div class="medium-9 columns">
 

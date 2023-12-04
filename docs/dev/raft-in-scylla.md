@@ -145,7 +145,7 @@ schema changes out of the box, for two reasons:
       could store entire CQL statements in the log and read
       the state of the schema when the command is already committed
       to the Raft log and is being applied: but that would make
-      reporting erros back to the client difficult. Besides, that
+      reporting errors back to the client difficult. Besides, that
       would require that each participant of the cluster performs
       the same reads and checks, that would be an unwanted
       overhead.

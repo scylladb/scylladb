@@ -5,7 +5,7 @@ Scylla is a database that scales out and up. Scylla adopted much of its distribu
 
 In the world of big data, a single node cannot hold the entire dataset and thus, a cluster of nodes is needed.
 
-A Scylla :term:`cluster<Cluster>` is a collection of :term:`nodes<Node>`, or Scylla instances, visualized as a ring. All of the nodes should be homogenous using a shared-nothing approach. This article describes the design that determines how data is distributed among the cluster members.
+A Scylla :term:`cluster<Cluster>` is a collection of :term:`nodes<Node>`, or Scylla instances, visualized as a ring. All of the nodes should be homogeneous using a shared-nothing approach. This article describes the design that determines how data is distributed among the cluster members.
 
 A Scylla :term:`keyspace<Keyspace>` is a collection of tables with attributes that define how data is replicated on nodes.   A keyspace is analogous to a database in SQL. When a new keyspace is created, the user sets a numerical attribute, the :term:`replication factor<Replication Factor (RF)>`, that defines how data is replicated on nodes. For example, an :abbr:`RF (Replication Factor)` of 2 means a given token or token range will be stored on 2 nodes (or replicated on one additional node).   We will use an RF value of 2 in our examples.
 

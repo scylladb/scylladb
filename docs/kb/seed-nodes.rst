@@ -22,7 +22,7 @@ It allows nodes to discover the cluster ring topology on startup (when joining t
 -  Which token ranges are available
 -  Which nodes will own which tokens when a new node joins the cluster
 
-**Once the nodes have joined the clutser, seed node has no function.**
+**Once the nodes have joined the cluster, seed node has no function.**
      
 The first node in a new cluster needs to be a seed node.
 

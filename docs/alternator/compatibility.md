@@ -102,7 +102,7 @@ one or more of the following:
 Another guarantee that that `always_use_lwt` can make and other write
 isolation modes do not is that writes to the same item are _serialized_:
 Even if the two write are sent at exactly the same time to two different
-nodes, the result will appear as if one write happended first, and then
+nodes, the result will appear as if one write happened first, and then
 the other. But in other modes (with non-LWT writes), two writes can get
 exactly the same microsecond-resolution timestamp, the the result may be
 a mixture of both writes - some attributes from one and some from the

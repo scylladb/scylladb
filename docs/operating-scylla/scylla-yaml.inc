@@ -128,7 +128,7 @@ For example:
    - listen_address: 2a05:d018:223:f00:971d:14af:6418:fe2d
    - broadcast_rpc_address: 2a05:d018:223:f00:971d:14af:6418:fe2d
 
-To enable IPv6 addressing, set the following paramerter in scylla.yaml:
+To enable IPv6 addressing, set the following parameter in scylla.yaml:
 
 .. code-block:: yaml
 

@@ -34,7 +34,7 @@ Scylla breaks indexed queries into two parts:
 
 .. image:: si_building_example.png
    :width: 800
-   :alt: Seconday Index Flow
+   :alt: Secondary Index Flow
 
 In the example above:
 
@@ -127,7 +127,7 @@ Note that you can use the ``DESCRIBE`` command to see the whole schema for the b
    AND caching = {'keys': 'ALL', 'rows_per_partition': 'ALL'}
    ...
 
-Note the Secondary Index is implemeted as MATERIALIZED VIEW.
+Note the Secondary Index is implemented as MATERIALIZED VIEW.
 
 
 More information 

@@ -138,7 +138,7 @@ the conflicts are resolved as follows:
 
 ### Effective service level
 
-Actual values of service level's options may come from different service levels, not only from the one user is assigned with. This can be achived by assigning one role to another.
+Actual values of service level's options may come from different service levels, not only from the one user is assigned with. This can be achieved by assigning one role to another.
 
 For instance:
 There are 2 roles: role1 and role2. Role1 is assigned with sl1 (timeout = 2s, workload_type = interactive) and role2 is assigned with sl2 (timeout = 10s, workload_type = batch).

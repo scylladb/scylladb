@@ -4,7 +4,7 @@ The topology state machine tracks all the nodes in a cluster,
 their state, properties (topology, tokens, etc) and requested actions.
 
 Node state can be one of those:
-- `none`             - the new node joined group0 but did not bootstraped yet (has no tokens and data to serve)
+- `none`             - the new node joined group0 but did not bootstrapped yet (has no tokens and data to serve)
 - `bootstrapping`    - the node is currently in the process of streaming its part of the ring
 - `decommissioning`  - the node is being decommissioned and stream its data to nodes that took over
 - `removing`         - the node is being removed and its data is streamed to nodes that took over from still alive owners

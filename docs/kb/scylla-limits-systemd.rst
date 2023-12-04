@@ -22,7 +22,7 @@ When running under systemd, Scylla enforces the **LimitNOFILE** and **LimitNPROC
 
 **LimitNPROC** - Maximum number of processes allowed to run in parallel (defaults to 8096)
 
-Even though Scylla's provided defaults are suitable for most workloads, there may be situations on which these values may need to be overriden.
+Even though Scylla's provided defaults are suitable for most workloads, there may be situations on which these values may need to be overridden.
 
 Before you start
 ----------------

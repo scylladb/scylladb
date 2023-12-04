@@ -23,7 +23,7 @@ features:
 * Low and consistent latency
 * Data persistence
 * High availability
-* High throughtput
+* High throughput
 * Highly scalable
 * Auto tuning
 
@@ -32,7 +32,7 @@ It's achieved great progress in cluster master management, data persistence,
 failover and replication.
 
 The benefits to the users are easy to use and develop in their production
-environment, and taking avantages of Scylla.
+environment, and taking advantages of Scylla.
 
 ## 3. The Protocol Server
 
@@ -46,7 +46,7 @@ command is received, it's processed and a reply is sent back to the client.
 Two kind of Redis clients are widely used, the smart Redis client and
 simple Redis client. When using smart Redis client to connect the Redis
 cluster, it will send the commands to the right Redis server. Because the
-client will get the hash slots and server nodes mapping data at the bootrap
+client will get the hash slots and server nodes mapping data at the bootstrap
 time. When using simple Redis client,  the server address is needed, and
 all the requests are sent to this address, and the requests only send to
 the single Redis server.
@@ -85,7 +85,7 @@ HASHes, and  ZSETs. (In fact, Now Redis has support other structure types,
 but the basic structure types are used widely).
 
 In this proposal, We use the column family of Scylla to simulate the
-database within Redis. At the bootrap phase, the column families with fixed
+database within Redis. At the bootstrap phase, the column families with fixed
 name should be created (if not exists) or loaded.
 
 We known that, Redis allows us to store keys that map to any one of the
@@ -112,7 +112,7 @@ will have more performance cost with bigger data structure.
 > element (as a string) is 512MB. It's very common that the size of data
 > structure is exceeded the server's memory size.
 
-So single table to store all the data strucutures is not good idea, instead
+So single table to store all the data structures is not good idea, instead
 of five independent tables are created to hold the the different Redis
 structure types within each column family related Redis database. In other
 words, all of the STRINGs of the Redis will be stored in a table within the
@@ -124,10 +124,10 @@ table within the column family, and so on.
 > will be created.
 
 The disadvantages of this proposal is that, we can not the TYPE command of
-Redis. The different type strutures are stored in the different Scylla
+Redis. The different type structures are stored in the different Scylla
 tables, and each Scylla table provide the independent keyspace. In Redis,
 keys are unique in the database. However,  the keys with column family of
-Scylla are not unique. Because the keys are splited into independent
+Scylla are not unique. Because the keys are split into independent
 Scylla tables, it's different to original Redis.
 
 **IMPORTANT NOTE**: The keys with database of Redis are not unique  in this
@@ -314,7 +314,7 @@ original Reids about the RMW commands.
 ### 5.2 Non-RMW Command
 
 The Non-RMW command only performs a single read or write operation. For
-instance, The SET, GET, EXISTS of STRINGs strucutures. The behaviour of
+instance, The SET, GET, EXISTS of STRINGs structures. The behaviour of
 these commands are not different with the original Redis.
 
 ### 5.3 Transaction

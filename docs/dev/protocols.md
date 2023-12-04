@@ -79,7 +79,7 @@ as gossip were sent to a different port. So today we are still stuck with
 this outdated name of this configuration option.
 
 Configuring `storage_port` or `ssl_storage_port` to 0 disables listening
-on the respective unecrypted/encrypted inter-node communication port.
+on the respective unencrypted/encrypted inter-node communication port.
 
 There is also a `listen_address` configuration option to set the IP address
 (and therefore network interface) on which Scylla should listen for the

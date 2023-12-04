@@ -106,7 +106,7 @@ Operations that are not listed below are currently not available.
 * **getlogginglevels** - Get the runtime logging levels.
 * :doc:`gettraceprobability </operating-scylla/nodetool-commands/gettraceprobability>` - Displays the current trace probability value. 0 is disabled 1 is enabled.
 * :doc:`gossipinfo </operating-scylla/nodetool-commands/gossipinfo/>` - Shows the gossip information for the cluster.
-* :doc:`help </operating-scylla/nodetool-commands/help/>` - Display list of avilable nodetool commands.
+* :doc:`help </operating-scylla/nodetool-commands/help/>` - Display list of available nodetool commands.
 * :doc:`info </operating-scylla/nodetool-commands/info/>` - Print node information
 * :doc:`listsnapshots </operating-scylla/nodetool-commands/listsnapshots/>` - Lists all the snapshots along with the size on disk and true size.
 * **move** :code:`<new token>`- Move node on the token ring to a new token

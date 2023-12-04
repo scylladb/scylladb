@@ -395,7 +395,7 @@ CREATE TABLE system.config (
 
 The source of the option is one of 'default', 'config', 'cli', 'cql' or 'internal'
 which means the value wasn't changed from its default, was configured via config
-file, was set by commanline option or via updating this table, or was deliberately
+file, was set by commandline option or via updating this table, or was deliberately
 configured by Scylla internals. Any way the option was updated overrides the
 previous one, so shown here is the latest one used.
 
