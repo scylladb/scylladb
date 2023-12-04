@@ -410,7 +410,7 @@ public:
     };
 
     future<local_info> load_local_info();
-    future<> save_local_info(local_info, locator::endpoint_dc_rack);
+    future<> save_local_info(local_info, locator::endpoint_dc_rack, gms::inet_address broadcast_address, gms::inet_address broadcast_rpc_address);
 public:
     static api::timestamp_type schema_creation_timestamp();
 

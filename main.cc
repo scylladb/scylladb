@@ -12,6 +12,7 @@
 
 #include <seastar/util/closeable.hh>
 #include <seastar/core/abort_source.hh>
+#include "gms/inet_address.hh"
 #include "tasks/task_manager.hh"
 #include "utils/build_id.hh"
 #include "supervisor.hh"
@@ -531,7 +532,9 @@ sharded<service::storage_proxy> *the_storage_proxy;
 static locator::host_id initialize_local_info_thread(sharded<db::system_keyspace>& sys_ks,
         sharded<locator::snitch_ptr>& snitch,
         const gms::inet_address& listen_address,
-        const db::config& cfg)
+        const db::config& cfg,
+        gms::inet_address broadcast_address,
+        gms::inet_address broadcast_rpc_address)
 {
     auto linfo = sys_ks.local().load_local_info().get0();
     if (linfo.cluster_name.empty()) {
@@ -545,7 +548,7 @@ static locator::host_id initialize_local_info_thread(sharded<db::system_keyspace
     }
 
     linfo.listen_address = listen_address;
-    sys_ks.local().save_local_info(std::move(linfo), snitch.local()->get_location()).get();
+    sys_ks.local().save_local_info(std::move(linfo), snitch.local()->get_location(), broadcast_address, broadcast_rpc_address).get();
     return linfo.host_id;
 }
 
@@ -1205,7 +1208,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             sys_ks.local().build_bootstrap_info().get();
 
             const auto listen_address = utils::resolve(cfg->listen_address, family).get0();
-            const auto host_id = initialize_local_info_thread(sys_ks, snitch, listen_address, *cfg);
+            const auto host_id = initialize_local_info_thread(sys_ks, snitch, listen_address, *cfg, broadcast_addr, broadcast_rpc_addr);
 
           shared_token_metadata::mutate_on_all_shards(token_metadata, [host_id, endpoint = broadcast_addr] (locator::token_metadata& tm) {
               // Makes local host id available in topology cfg as soon as possible.

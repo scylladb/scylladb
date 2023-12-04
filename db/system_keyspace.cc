@@ -1374,7 +1374,7 @@ future<system_keyspace::local_info> system_keyspace::load_local_info() {
     co_return ret;
 }
 
-future<> system_keyspace::save_local_info(local_info sysinfo, locator::endpoint_dc_rack location) {
+future<> system_keyspace::save_local_info(local_info sysinfo, locator::endpoint_dc_rack location, gms::inet_address broadcast_address, gms::inet_address broadcast_rpc_address) {
     auto& cfg = _db.get_config();
     sstring req = fmt::format("INSERT INTO system.{} (key, host_id, cluster_name, release_version, cql_version, thrift_version, native_protocol_version, data_center, rack, partitioner, rpc_address, broadcast_address, listen_address) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
                     , db::system_keyspace::LOCAL);
@@ -1389,8 +1389,8 @@ future<> system_keyspace::save_local_info(local_info sysinfo, locator::endpoint_
                             location.dc,
                             location.rack,
                             sstring(cfg.partitioner()),
-                            utils::fb_utilities::get_broadcast_rpc_address().addr(),
-                            utils::fb_utilities::get_broadcast_address().addr(),
+                            broadcast_rpc_address,
+                            broadcast_address,
                             sysinfo.listen_address.addr()
     ).discard_result();
 }
