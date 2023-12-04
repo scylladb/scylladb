@@ -71,7 +71,7 @@ Only reads and writes explicitly issued by the user are counted to the limit.
 Read repair, hints, batch replay, CDC preimage query and internal system queries
 are _not_ counted to the limit.
 
-Paxos and counters are not covered in current implemenation.
+Paxos and counters are not covered in current implementation.
 
 ### Coordinator is not a replica
 

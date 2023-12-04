@@ -60,7 +60,7 @@ When performing a modification to the base table, such as inserting or deleting 
 
 * the CDC options you use (e.g. whether pre-image is enabled or not),
 * the write action you perform: insert, update, row deletion, range deletion, or partition deletion,
-* types of affected collumns (notably collections require complex handling).
+* types of affected columns (notably collections require complex handling).
 
 There are different types of entries appearing in the CDC log:
 

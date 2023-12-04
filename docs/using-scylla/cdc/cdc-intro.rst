@@ -46,7 +46,7 @@ but with CDC, you can also learn the history of all changes:
 Use cases for CDC
 -----------------
 
-Some examples where CDC may be benificial:
+Some examples where CDC may be beneficial:
 
 * Heterogeneous database replication: applying captured changes to another database or table. The other database may use a different schema (or no schema at all), better suited for some specific workloads. An example is replication to ElasticSearch for efficient text searches.
 * Implementing a notification system.

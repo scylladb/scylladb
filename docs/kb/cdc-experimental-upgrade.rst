@@ -16,7 +16,7 @@ First, if you enabled CDC on any table (using ``with cdc = { ... }``), you shoul
 
 This should work even if you already upgraded, but preferably disable CDC on all tables before the upgrade.
 
-After disabling CDC and finishing the upgrade you can safely reenable it.
+After disabling CDC and finishing the upgrade you can safely re-enable it.
 
 The next step is running ``nodetool checkAndRepairCdcStreams``. Up to this point, Scylla may have periodically reported the following errors in its logs:
 

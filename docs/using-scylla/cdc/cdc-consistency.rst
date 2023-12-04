@@ -26,7 +26,7 @@ CDC operations have to follow CL of the base table operations
 As a consequence of the previously described CDC synchronous nature, CDC Log writes are done with the same CL as Base Table writes that cause those CDC Log writes.
 This means that in order to achieve strong consistency, the CDC Log has to be read with an appropriate CL level matching the CL of the Base Table writes.
 For example, if the Base Table writes are done with CL = ONE then the CDC Log needs to be read with CL = ALL.
-If the Base Table is written with CL = QUORUM then the CDC Log reads have to be performed with CL = QUROUM at least.
+If the Base Table is written with CL = QUORUM then the CDC Log reads have to be performed with CL = QUORUM at least.
 
 -------------------------------------------------
 When do CDC updates become visible to the client?

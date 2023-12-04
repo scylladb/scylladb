@@ -304,7 +304,7 @@ A possible strategy may be to distribute the partition keys between your client 
 Postimage rows
 --------------
 
-Postimage rows use the CDC value columns to show the state of each row affected by the write as it appears after the write is applied. To enable postimages pass the ``'postimage': true`` paramer to the ``cdc`` table option.
+Postimage rows use the CDC value columns to show the state of each row affected by the write as it appears after the write is applied. To enable postimages pass the ``'postimage': true`` parameter to the ``cdc`` table option.
 
 Postimages only appear for rows that were modified using ``UPDATE`` or ``INSERT``. No postimages are generated for range deletes, partition deletes and, unlike preimages, for row deletes (there is no additional information that a postimage would give compared to the delta for row deletes).
 

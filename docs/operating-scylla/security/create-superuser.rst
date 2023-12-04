@@ -10,7 +10,7 @@ During login, the credentials for the default superuser ``cassandra`` are read w
 a consistency level of QUORUM, whereas those for all other roles are read at LOCAL_ONE. 
 QUORUM may significantly impact performance, especially in multi-datacenter deployments.
 
-To prevent performance degradation and ensure better secuirty, we highly recommend creating 
+To prevent performance degradation and ensure better security, we highly recommend creating 
 a custom superuser. You should:
 
 #. Use the default ``cassandra`` superuser to log in.

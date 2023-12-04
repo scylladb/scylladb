@@ -120,7 +120,7 @@ Procedure
 
 See the full code example `here <https://github.com/scylladb/scylla-code-samples/tree/master/dual_writes>`_
 
-3. On each Apache Cassandra node, take a snapshot for every keyspace using the :doc:`nodetool snapshot </operating-scylla/nodetool-commands/snapshot>` comand. This will flush all SSTables to disk and generate a ``snapshots`` folder with an epoch timestamp for each underlying table in that keyspace. 
+3. On each Apache Cassandra node, take a snapshot for every keyspace using the :doc:`nodetool snapshot </operating-scylla/nodetool-commands/snapshot>` command. This will flush all SSTables to disk and generate a ``snapshots`` folder with an epoch timestamp for each underlying table in that keyspace. 
 
    Folder path post snapshot: ``/var/lib/cassandra/data/keyspace/table-[uuid]/snapshots/[epoch_timestamp]/``
 

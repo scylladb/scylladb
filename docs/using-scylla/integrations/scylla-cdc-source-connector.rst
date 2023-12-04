@@ -9,7 +9,7 @@ Scylla CDC Source Connector
 
 Scylla CDC Source Connector is a source connector capturing row-level changes in the tables of a Scylla cluster. It is a Debezium connector, compatible with Kafka Connect (with Kafka 2.6.0+) and built on top of scylla-cdc-java library. The source code of the connector is available at `GitHub <https://github.com/scylladb/scylla-cdc-source-connector>`_.
 
-The connector reads the CDC log for specified tables and produces Kafka messages for each row-level ``INSERT``, ``UPDATE`` or ``DELETE`` operation. The connector is able to split reading the CDC log accross multiple processes: the connector can start a separate Kafka Connect task for reading each :doc:`Vnode of Scylla cluster </architecture/ringarchitecture/index>` allowing for high throughput. You can limit the number of started tasks by using ``tasks.max`` property.
+The connector reads the CDC log for specified tables and produces Kafka messages for each row-level ``INSERT``, ``UPDATE`` or ``DELETE`` operation. The connector is able to split reading the CDC log across multiple processes: the connector can start a separate Kafka Connect task for reading each :doc:`Vnode of Scylla cluster </architecture/ringarchitecture/index>` allowing for high throughput. You can limit the number of started tasks by using ``tasks.max`` property.
 
 Scylla CDC Source Connector seamlessly handles schema changes and topology changes (adding, removing nodes from Scylla cluster). The connector is fault-tolerant, retrying reading data from Scylla in case of failure. It periodically saves the current position in Scylla CDC log using Kafka Connect offset tracking (configurable by ``offset.flush.interval.ms`` parameter). If the connector is stopped, it is able to resume reading from previously saved offset. Scylla CDC Source Connector has at-least-once semantics.
 
@@ -17,7 +17,7 @@ The connector has the following capabilities:
 
 * Kafka Connect connector using Debezium framework
 * Replication of row-level changes from Scylla using :doc:`Scylla CDC <../cdc/cdc-intro>`. The connector replicates the following operations: ``INSERT``, ``UPDATE``, ``DELETE`` (single row deletes)
-* High scalability - able to split work accross multiple Kafka Connect workers
+* High scalability - able to split work across multiple Kafka Connect workers
 * Fault tolerant - connector periodically saves its progress and can resume from previously saved offset (with at-least-once semantics)
 * Support for many standard Kafka Connect converters, such as JSON and Avro
 * Compatible with standard Kafka Connect transformations

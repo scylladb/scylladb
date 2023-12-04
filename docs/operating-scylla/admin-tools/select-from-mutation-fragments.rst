@@ -7,7 +7,7 @@ SELECT * FROM MUTATION_FRAGMENTS() Statement
 .. note:: The target audience of this statement and therefore that of this document is people who are familiar with the internals of ScyllaDB.
 
 The ``SELECT * FROM MUTATION_FRAGMENTS()`` statement allows for reading the raw underlying mutations (data) from a table.
-This is indended to be used as a diagnostics tool to debug performance or correctness issues, where inspecting the raw underlying data, as scylla stores it, is desired.
+This is intended to be used as a diagnostics tool to debug performance or correctness issues, where inspecting the raw underlying data, as scylla stores it, is desired.
 So far this was only possible with sstables, using a tool like :doc:`Scylla SStable</operating-scylla/admin-tools/scylla-sstable>`.
 This statement allows inspecting the content of the row-cache, as well as that of individual memtables, in addition to individual sstables.
 
@@ -136,7 +136,7 @@ The kind of the mutation fragment, the row represents. One of:
 * ``partition end``
 
 
-This is the text representation of the ``enum class mutation_fragment_v2_kind``. Since this is a regular column, the human readeable name is used.
+This is the text representation of the ``enum class mutation_fragment_v2_kind``. Since this is a regular column, the human readable name is used.
 
 metadata
 ~~~~~~~~
@@ -146,7 +146,7 @@ This is uses the same JSON schema as :ref:`scylla sstable dump-data<scylla-sstab
 Content of ``metadata`` column for various mutation fragment kinds:
 
 +------------------------+-------------------------------------------------------------+
-| mutation frament kind  | Content                                                     |
+| mutation fragment kind | Content                                                     |
 +========================+=============================================================+
 | partition start        | ``{"tombstone": $TOMBSTONE}``                               |
 +------------------------+-------------------------------------------------------------+
@@ -176,7 +176,7 @@ Limitations and Peculiarities
 
 Data is read locally, from the node which receives the query, so replica is always the same node as the coordinator.
 The query cannot be migrated between nodes. If a query is paged, all its pages have to be served by the same coordinator. This is enforced, and any attempt to migrate the query to another coordinator will result in the query being aborted.
-Note that by default, drivers use round robin load balancing policies, and consequently they will attemp to read each page from a different coordinator.
+Note that by default, drivers use round robin load balancing policies, and consequently they will attempt to read each page from a different coordinator.
 
 
 The statement can output rows with a non-full clustering prefix.

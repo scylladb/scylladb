@@ -28,7 +28,7 @@ Scylla does everything it can to control queues in userspace and not in the OS/d
 Thus, it assumes the bandwidth that was measured by ``scylla_setup``.
 
 It is not that difficult to get the best performance out of Scylla. Mostly, it is automatically tuned as long as you do not work against the system.
-The remainder of this document contains the best practices to follow to make sure that Scylla keeps tuning itself and tht your performance has maximum results.
+The remainder of this document contains the best practices to follow to make sure that Scylla keeps tuning itself and that your performance has maximum results.
 
 Install Scylla Monitoring Stack
 -------------------------------

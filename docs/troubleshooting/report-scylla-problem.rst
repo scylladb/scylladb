@@ -81,7 +81,7 @@ In the event the ``/var/lib/scylla/coredump`` directory is empty, the following 
 Operating System not set to generate core dump files
 ....................................................
 
-If Scylla restarts for some reason and there is no core dump file, the OS system deamon needs to be modified.
+If Scylla restarts for some reason and there is no core dump file, the OS system daemon needs to be modified.
 
 **Procedure**
 

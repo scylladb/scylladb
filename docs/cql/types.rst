@@ -499,7 +499,7 @@ For example::
 
    - Attempting to create an already existing type will result in an error unless the ``IF NOT EXISTS`` option is used. If it is used, the statement will be a no-op if the type already exists.
    - A type is intrinsically bound to the keyspace in which it is created and can only be used in that keyspace. At creation, if the type name is prefixed by a keyspace name, it is created in that keyspace. Otherwise, it is created in the current keyspace.
-   - As of Scylla Open Source 3.2, UDTs not inside collections do not have to be frozen, but in all versions prior to Scylla Open Souce 3.2, and in all Scylla Enterprise versions, UDTs **must** be frozen. 
+   - As of Scylla Open Source 3.2, UDTs not inside collections do not have to be frozen, but in all versions prior to Scylla Open Source 3.2, and in all Scylla Enterprise versions, UDTs **must** be frozen. 
 
 
 A non-frozen UDT example with Scylla Open Source 3.2 and higher::

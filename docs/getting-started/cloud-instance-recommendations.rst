@@ -9,7 +9,7 @@ Cloud Instance Recommendations for AWS, GCP, and Azure
 
 You can run your ScyllaDB workloads on AWS, GCE, and Azure using a ScyllaDB image. This page includes the recommended instance types to be used with ScyllaDB.
 
-.. TO DO: Add a link to the installatation section for cloud deployments - when the page is added.
+.. TO DO: Add a link to the installation section for cloud deployments - when the page is added.
 
 .. note:: 
 

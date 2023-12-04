@@ -15,7 +15,7 @@ d = yaml.load(open(f), Loader=yaml.FullLoader)
 replace_dict = {}
 for key, value in d.items():
      if value in d.keys():
-#        print ("duble redirection:", key, "->", value, "->",  d[value])
+#        print ("double redirection:", key, "->", value, "->",  d[value])
          replace_dict[value] = d[value]
 
 with open(f, "r") as source:
