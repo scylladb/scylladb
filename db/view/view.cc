@@ -1537,6 +1537,14 @@ bool needs_static_row(const mutation_partition& mp, const std::vector<view_and_b
 // of this function is to find, assuming that this node is one of the base
 // replicas for a given partition, the paired view replica.
 //
+// In the past, we used an optimization called "self-pairing" that if a single
+// node was both a base replica and a view replica for a write, the pairing is
+// modified so that this node would send the update to itself. This self-
+// pairing optimization could cause the pairing to change after view ranges
+// are moved between nodes, so currently we only use it if
+// use_legacy_self_pairing is set to true. When using tablets - where range
+// movements are common - it is strongly recommended to set it to false.
+//
 // If the keyspace's replication strategy is a NetworkTopologyStrategy,
 // we pair only nodes in the same datacenter.
 // If one of the base replicas also happens to be a view replica, it is
@@ -1551,7 +1559,8 @@ get_view_natural_endpoint(
         const locator::effective_replication_map_ptr& view_erm,
         bool network_topology,
         const dht::token& base_token,
-        const dht::token& view_token) {
+        const dht::token& view_token,
+        bool use_legacy_self_pairing) {
     auto& topology = base_erm->get_token_metadata_ptr()->get_topology();
     auto my_address = utils::fb_utilities::get_broadcast_address();
     auto my_datacenter = topology.get_datacenter();
@@ -1563,20 +1572,26 @@ get_view_natural_endpoint(
     }
 
     for (auto&& view_endpoint : view_erm->get_natural_endpoints(view_token)) {
-        // If this base replica is also one of the view replicas, we use
-        // ourselves as the view replica.
-        if (view_endpoint == my_address) {
-            return view_endpoint;
-        }
-        // We have to remove any endpoint which is shared between the base
-        // and the view, as it will select itself and throw off the counts
-        // otherwise.
-        auto it = std::find(base_endpoints.begin(), base_endpoints.end(),
-            view_endpoint);
-        if (it != base_endpoints.end()) {
-            base_endpoints.erase(it);
-        } else if (!network_topology || topology.get_datacenter(view_endpoint) == my_datacenter) {
-            view_endpoints.push_back(view_endpoint);
+        if (use_legacy_self_pairing) {
+            // If this base replica is also one of the view replicas, we use
+            // ourselves as the view replica.
+            if (view_endpoint == my_address) {
+                return view_endpoint;
+            }
+            // We have to remove any endpoint which is shared between the base
+            // and the view, as it will select itself and throw off the counts
+            // otherwise.
+            auto it = std::find(base_endpoints.begin(), base_endpoints.end(),
+                view_endpoint);
+            if (it != base_endpoints.end()) {
+                base_endpoints.erase(it);
+            } else if (!network_topology || topology.get_datacenter(view_endpoint) == my_datacenter) {
+                view_endpoints.push_back(view_endpoint);
+            }
+        } else {
+            if (!network_topology || topology.get_datacenter(view_endpoint) == my_datacenter) {
+                view_endpoints.push_back(view_endpoint);
+            }
         }
     }
 
@@ -1584,6 +1599,8 @@ get_view_natural_endpoint(
     auto base_it = std::find(base_endpoints.begin(), base_endpoints.end(), my_address);
     if (base_it == base_endpoints.end()) {
         // This node is not a base replica of this key, so we return empty
+        // FIXME: This case shouldn't happen, and if it happens, a view update
+        // would be lost. We should reported or count this case.
         return {};
     }
     return view_endpoints[base_it - base_endpoints.begin()];
@@ -1639,7 +1656,13 @@ future<> view_update_generator::mutate_MV(
         auto view_ermp = mut.s->table().get_effective_replication_map();
         auto& ks = _proxy.local().local_db().find_keyspace(mut.s->ks_name());
         bool network_topology = dynamic_cast<const locator::network_topology_strategy*>(&ks.get_replication_strategy());
-        auto target_endpoint = get_view_natural_endpoint(base_ermp, view_ermp, network_topology, base_token, view_token);
+        // We set legacy self-pairing for old vnode-based tables (for backward
+        // compatibility), and unset it for tablets - where range movements
+        // are more frequent and backward compatibility is less important.
+        // TODO: Maybe allow users to set use_legacy_self_pairing explicitly
+        // on a view, like we have the synchronous_updates_flag.
+        bool use_legacy_self_pairing = !ks.get_replication_strategy().uses_tablets();
+        auto target_endpoint = get_view_natural_endpoint(base_ermp, view_ermp, network_topology, base_token, view_token, use_legacy_self_pairing);
         auto remote_endpoints = view_ermp->get_pending_endpoints(view_token);
         auto sem_units = pending_view_updates.split(mut.fm.representation().size());
 
