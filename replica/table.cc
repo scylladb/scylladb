@@ -1248,6 +1248,17 @@ compaction_group::delete_sstables_atomically(std::vector<sstables::shared_sstabl
 }
 
 future<>
+compaction_group::delete_unused_sstables(sstables::compaction_completion_desc desc) {
+    std::unordered_set<sstables::shared_sstable> output(desc.new_sstables.begin(), desc.new_sstables.end());
+
+    auto sstables_to_remove = boost::copy_range<std::vector<sstables::shared_sstable>>(desc.old_sstables
+            | boost::adaptors::filtered([&output] (const sstables::shared_sstable& input_sst) {
+        return !output.contains(input_sst);
+    }));
+    return delete_sstables_atomically(std::move(sstables_to_remove));
+}
+
+future<>
 compaction_group::update_sstable_lists_on_off_strategy_completion(sstables::compaction_completion_desc desc) {
     class sstable_lists_updater : public row_cache::external_updater_impl {
         using sstables_t = std::vector<sstables::shared_sstable>;
@@ -1291,15 +1302,7 @@ compaction_group::update_sstable_lists_on_off_strategy_completion(sstables::comp
     _t.get_row_cache().refresh_snapshot();
     _t.rebuild_statistics();
 
-    std::unordered_set<sstables::shared_sstable> output(desc.new_sstables.begin(), desc.new_sstables.end());
-    // Input SSTables that weren't added to the main SSTable set, can be unlinked.
-    // An input SSTable remains linked if it hadn't gone through reshape compaction. Such a SSTable
-    // will only be moved from maintenance (source) to main (destination) set.
-    auto sstables_to_remove = boost::copy_range<std::vector<sstables::shared_sstable>>(desc.old_sstables
-            | boost::adaptors::filtered([&output] (const sstables::shared_sstable& input_sst) {
-                return !output.contains(input_sst);
-            }));
-    co_await delete_sstables_atomically(std::move(sstables_to_remove));
+    co_await delete_unused_sstables(std::move(desc));
 }
 
 future<>
@@ -1379,7 +1382,7 @@ compaction_group::update_main_sstable_list_on_compaction_completion(sstables::co
 
     _t.rebuild_statistics();
 
-    co_await delete_sstables_atomically(std::move(desc.old_sstables));
+    co_await delete_unused_sstables(std::move(desc));
 }
 
 future<>

@@ -66,6 +66,10 @@ private:
     static uint64_t calculate_disk_space_used_for(const sstables::sstable_set& set);
 
     future<> delete_sstables_atomically(std::vector<sstables::shared_sstable> sstables_to_remove);
+    // Input SSTables that weren't added to any SSTable set, are considered unused and can be unlinked.
+    // An input SSTable remains linked if it wasn't actually compacted, yet compaction manager wants
+    // it to be moved from its original sstable set (e.g. maintenance) into a new one (e.g. main).
+    future<> delete_unused_sstables(sstables::compaction_completion_desc desc);
 public:
     compaction_group(table& t, size_t gid, dht::token_range token_range);
 
