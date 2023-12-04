@@ -8,7 +8,7 @@
 #pragma once
 
 #include <chrono>
-#include <ostream>
+#include <fmt/chrono.h>
 
 namespace raft {
 
@@ -45,16 +45,12 @@ private:
     time_point _now = min();
 };
 
-inline std::ostream& operator<<(std::ostream& os, const logical_clock::time_point& p) {
-    return os << (p - logical_clock::min()).count();
-}
-
 } // end of namespace raft
 
-namespace std {
-
-inline std::ostream& operator<<(std::ostream& os, const raft::logical_clock::duration& d) {
-    return os << d.count();
-}
-
-} // end of namespace std
+template <>
+struct fmt::formatter<raft::logical_clock::time_point> {
+    constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
+    auto format(const raft::logical_clock::time_point& p, fmt::format_context& ctx) const {
+        return fmt::format_to(ctx.out(), "{}", (p - raft::logical_clock::min()).count());
+    }
+};
