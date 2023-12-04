@@ -1425,8 +1425,8 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 sst_format_listener.stop().get();
             });
 
-                supervisor::notify("starting Raft Group Registry service");
-                raft_gr.invoke_on_all(&service::raft_group_registry::start).get();
+            supervisor::notify("starting Raft Group Registry service");
+            raft_gr.invoke_on_all(&service::raft_group_registry::start).get();
 
             group0_client.init().get();
 

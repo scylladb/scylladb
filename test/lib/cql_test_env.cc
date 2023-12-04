@@ -809,9 +809,9 @@ private:
                 });
             }).get();
 
-                _group0_registry.invoke_on_all([] (service::raft_group_registry& raft_gr) {
-                    return raft_gr.start();
-                }).get();
+            _group0_registry.invoke_on_all([] (service::raft_group_registry& raft_gr) {
+                return raft_gr.start();
+            }).get();
 
             if (cfg_in.run_with_raft_recovery) {
                 _sys_ks.local().save_group0_upgrade_state("RECOVERY").get();

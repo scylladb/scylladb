@@ -1875,19 +1875,19 @@ std::vector<schema_ptr> system_keyspace::all_tables(const db::config& cfg) {
                     v3::cdc_local(),
     });
 
-        r.insert(r.end(), {raft(), raft_snapshots(), raft_snapshot_config(), group0_history(), discovery()});
+    r.insert(r.end(), {raft(), raft_snapshots(), raft_snapshot_config(), group0_history(), discovery()});
 
-        if (cfg.check_experimental(db::experimental_features_t::feature::CONSISTENT_TOPOLOGY_CHANGES)) {
-            r.insert(r.end(), {topology(), cdc_generations_v3()});
-        }
+    if (cfg.check_experimental(db::experimental_features_t::feature::CONSISTENT_TOPOLOGY_CHANGES)) {
+        r.insert(r.end(), {topology(), cdc_generations_v3()});
+    }
 
-        if (cfg.check_experimental(db::experimental_features_t::feature::BROADCAST_TABLES)) {
-            r.insert(r.end(), {broadcast_kv_store()});
-        }
+    if (cfg.check_experimental(db::experimental_features_t::feature::BROADCAST_TABLES)) {
+        r.insert(r.end(), {broadcast_kv_store()});
+    }
 
-        if (cfg.check_experimental(db::experimental_features_t::feature::TABLETS)) {
-            r.insert(r.end(), {tablets()});
-        }
+    if (cfg.check_experimental(db::experimental_features_t::feature::TABLETS)) {
+        r.insert(r.end(), {tablets()});
+    }
 
     if (cfg.check_experimental(db::experimental_features_t::feature::KEYSPACE_STORAGE_OPTIONS)) {
         r.insert(r.end(), {sstables_registry()});
