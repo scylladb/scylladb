@@ -774,6 +774,7 @@ arg_parser.add_argument('--list-artifacts', dest='list_artifacts', action='store
                         help='List all available build artifacts, that can be passed to --with')
 arg_parser.add_argument('--date-stamp', dest='date_stamp', type=str,
                         help='Set datestamp for SCYLLA-VERSION-GEN')
+arg_parser.add_argument('--use-cmake', action='store_true', help='Use CMake as the build system')
 args = arg_parser.parse_args()
 
 if args.list_artifacts:
@@ -2405,5 +2406,55 @@ def create_build_system(args):
     generate_compdb('compile_commands.json', ninja, args.buildfile, selected_modes)
 
 
+def configure_using_cmake(args):
+    # all supported build modes, and if they are built by default if selected
+    build_by_default = {'debug': True,
+                        'release': True,
+                        'dev': True,
+                        'sanitize': False,
+                        'coverage': False}
+    selected_modes = args.selected_modes or build_by_default.keys()
+    selected_configs = ';'.join(mode.capitalize() for mode in selected_modes)
+    default_configs = ';'.join(mode.capitalize() for mode in selected_modes
+                               if build_by_default[mode])
+
+    settings = {
+        'CMAKE_CONFIGURATION_TYPES': selected_configs,
+        'CMAKE_CROSS_CONFIGS': default_configs,
+        'CMAKE_DEFAULT_CONFIGS': default_configs,
+        'CMAKE_C_COMPILER': args.cc,
+        'CMAKE_CXX_COMPILER': args.cxx,
+        'CMAKE_CXX_FLAGS': args.user_cflags,
+        'CMAKE_EXE_LINKER_FLAGS': semicolon_separated(args.user_ldflags),
+        'CMAKE_EXPORT_COMPILE_COMMANDS': 'ON',
+        'Scylla_CHECK_HEADERS': 'ON',
+    }
+    if args.date_stamp:
+        settings['Scylla_DATE_STAMP'] = args.date_stamp
+
+    source_dir = os.path.realpath(os.path.dirname(__file__))
+    build_dir = os.path.join(source_dir, 'build')
+
+    cmake_command = ['cmake']
+    cmake_command += [f'-D{var}={value}' for var, value in settings.items()]
+    cmake_command += ['-G', 'Ninja Multi-Config',
+                      '-B', build_dir,
+                      '-S', source_dir]
+    subprocess.check_call(cmake_command, shell=False, cwd=source_dir)
+
+    compdb_source = os.path.join(source_dir, 'compile_commands.json')
+    compdb_target = os.path.join(build_dir, 'compile_commands.json')
+    
+    try:
+        os.symlink(compdb_target, compdb_source)
+    except FileExistsError:
+        # if there is already a valid compile_commands.json link in the
+        # source root, we are done.
+        pass
+
+
 if __name__ == '__main__':
-    create_build_system(args)
+    if args.use_cmake:
+        configure_using_cmake(args)
+    else:
+        create_build_system(args)
