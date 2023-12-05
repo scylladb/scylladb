@@ -381,16 +381,13 @@ future<mutable_vnode_effective_replication_map_ptr> calculate_effective_replicat
     replication_map.reserve(depend_on_token ? sorted_tokens.size() : 1);
     if (const auto& topology_changes = tmptr->get_topology_change_info(); topology_changes) {
         const auto& all_tokens = topology_changes->all_tokens;
-        const auto& base_token_metadata = topology_changes->base_token_metadata
-            ? topology_changes->base_token_metadata
-            : tmptr;
         const auto& current_tokens = tmptr->get_token_to_endpoint();
         for (size_t i = 0, size = all_tokens.size(); i < size; ++i) {
             co_await coroutine::maybe_yield();
 
             const auto token = all_tokens[i];
 
-            auto current_endpoints = co_await rs->calculate_natural_endpoints(token, *base_token_metadata);
+            auto current_endpoints = co_await rs->calculate_natural_endpoints(token, *tmptr);
             auto target_endpoints = co_await rs->calculate_natural_endpoints(token, *topology_changes->target_token_metadata);
 
             auto add_mapping = [&](ring_mapping& target, std::unordered_set<inet_address>&& endpoints) {
@@ -421,21 +418,21 @@ future<mutable_vnode_effective_replication_map_ptr> calculate_effective_replicat
                     }
                 }
                 if (!endpoints_diff.empty()) {
-                    add_mapping(pending_endpoints, resolve_endpoints(endpoints_diff, *base_token_metadata).extract_set());
+                    add_mapping(pending_endpoints, resolve_endpoints(endpoints_diff, *tmptr).extract_set());
                 }
             }
 
             // in order not to waste memory, we update read_endpoints only if the
             // new endpoints differs from the old one
             if (topology_changes->read_new && target_endpoints.get_vector() != current_endpoints.get_vector()) {
-                add_mapping(read_endpoints, resolve_endpoints(target_endpoints, *base_token_metadata).extract_set());
+                add_mapping(read_endpoints, resolve_endpoints(target_endpoints, *tmptr).extract_set());
             }
 
             if (!depend_on_token) {
-                replication_map.emplace(default_replication_map_key, resolve_endpoints(current_endpoints, *base_token_metadata).extract_vector());
+                replication_map.emplace(default_replication_map_key, resolve_endpoints(current_endpoints, *tmptr).extract_vector());
                 break;
             } else if (current_tokens.contains(token)) {
-                replication_map.emplace(token, resolve_endpoints(current_endpoints, *base_token_metadata).extract_vector());
+                replication_map.emplace(token, resolve_endpoints(current_endpoints, *tmptr).extract_vector());
             }
         }
     } else if (depend_on_token) {

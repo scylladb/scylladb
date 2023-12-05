@@ -732,8 +732,6 @@ future<> token_metadata_impl::update_topology_change_info(dc_rack_fn& get_dc_rac
         co_return;
     }
 
-    // true if there is a node replaced with the same IP
-    bool replace_with_same_endpoint = false;
     // target_token_metadata incorporates all the changes from leaving, bootstrapping and replacing
     auto target_token_metadata = co_await clone_only_token_map(false);
     {
@@ -748,11 +746,7 @@ future<> token_metadata_impl::update_topology_change_info(dc_rack_fn& get_dc_rac
                 new_normal_tokens[it->second].insert(token);
             }
             for (const auto& [replace_from, replace_to]: _replacing_endpoints) {
-                if (replace_from == replace_to) {
-                    replace_with_same_endpoint = true;
-                } else {
-                    target_token_metadata->remove_endpoint(replace_from);
-                }
+                target_token_metadata->remove_endpoint(replace_from);
             }
         }
         for (const auto& [token, inet_address]: _bootstrap_tokens) {
@@ -770,22 +764,6 @@ future<> token_metadata_impl::update_topology_change_info(dc_rack_fn& get_dc_rac
         target_token_metadata->sort_tokens();
     }
 
-    // We require a distinct token_metadata instance when replace_from equals replace_to,
-    // as it ensures the node is included in pending_ranges.
-    // Otherwise, the node would be excluded from both pending_ranges and
-    // get_natural_endpoints_without_node_being_replaced,
-    // causing the coordinator to overlook it entirely.
-    std::unique_ptr<token_metadata_impl> base_token_metadata;
-    if (replace_with_same_endpoint) {
-        base_token_metadata = co_await clone_only_token_map(false);
-        for (const auto& [replace_from, replace_to]: _replacing_endpoints) {
-            if (replace_from == replace_to) {
-                base_token_metadata->remove_endpoint(replace_from);
-            }
-        }
-        base_token_metadata->sort_tokens();
-    }
-
     // merge tokens from token_to_endpoint and bootstrap_tokens,
     // preserving tokens of leaving endpoints
     auto all_tokens = std::vector<dht::token>();
@@ -799,7 +777,6 @@ future<> token_metadata_impl::update_topology_change_info(dc_rack_fn& get_dc_rac
 
     auto prev_value = std::move(_topology_change_info);
     _topology_change_info.emplace(make_lw_shared<token_metadata>(std::move(target_token_metadata)),
-        base_token_metadata ? make_lw_shared<token_metadata>(std::move(base_token_metadata)): nullptr,
         std::move(all_tokens),
         _read_new);
     co_await utils::clear_gently(prev_value);
@@ -827,6 +804,9 @@ void token_metadata_impl::del_leaving_endpoint(host_id endpoint) {
 }
 
 void token_metadata_impl::add_replacing_endpoint(host_id existing_node, host_id replacing_node) {
+    if (existing_node == replacing_node) {
+        on_internal_error(tlogger, format("Can't replace node {} with itself"));
+    }
     tlogger.info("Added node {} as pending replacing endpoint which replaces existing node {}",
             replacing_node, existing_node);
     _replacing_endpoints[existing_node] = replacing_node;
@@ -841,11 +821,9 @@ void token_metadata_impl::del_replacing_endpoint(host_id existing_node) {
 }
 
 topology_change_info::topology_change_info(lw_shared_ptr<token_metadata> target_token_metadata_,
-        lw_shared_ptr<token_metadata> base_token_metadata_,
     std::vector<dht::token> all_tokens_,
     token_metadata::read_new_t read_new_)
     : target_token_metadata(std::move(target_token_metadata_))
-    , base_token_metadata(std::move(base_token_metadata_))
     , all_tokens(std::move(all_tokens_))
     , read_new(read_new_)
 {
@@ -853,7 +831,6 @@ topology_change_info::topology_change_info(lw_shared_ptr<token_metadata> target_
 
 future<> topology_change_info::clear_gently() {
     co_await utils::clear_gently(target_token_metadata);
-    co_await utils::clear_gently(base_token_metadata);
     co_await utils::clear_gently(all_tokens);
 }
 

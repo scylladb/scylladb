@@ -292,12 +292,10 @@ private:
 
 struct topology_change_info {
     lw_shared_ptr<token_metadata> target_token_metadata;
-    lw_shared_ptr<token_metadata> base_token_metadata;
     std::vector<dht::token> all_tokens;
     token_metadata::read_new_t read_new;
 
     topology_change_info(lw_shared_ptr<token_metadata> target_token_metadata_,
-        lw_shared_ptr<token_metadata> base_token_metadata_,
         std::vector<dht::token> all_tokens_,
         token_metadata::read_new_t read_new_);
     future<> clear_gently();
