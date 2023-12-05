@@ -2053,6 +2053,133 @@ future<> foreach_table_state_with_thread(table_for_tests& table, std::function<v
     });
 }
 
+static std::deque<mutation_fragment_v2> explode(reader_permit permit, std::vector<mutation> muts) {
+    if (muts.empty()) {
+        return {};
+    }
+
+    auto schema = muts.front().schema();
+    std::deque<mutation_fragment_v2> frags;
+
+    auto mr = make_flat_mutation_reader_from_mutations_v2(schema, permit, std::move(muts));
+    mr.consume_pausable([&frags] (mutation_fragment_v2&& mf) {
+        frags.emplace_back(std::move(mf));
+        return stop_iteration::no;
+    }).get();
+
+    return frags;
+}
+
+static std::deque<mutation_fragment_v2> clone(const schema& schema, reader_permit permit, const std::deque<mutation_fragment_v2>& frags) {
+    std::deque<mutation_fragment_v2> cloned_frags;
+    for (const auto& frag : frags) {
+        cloned_frags.emplace_back(schema, permit, frag);
+    }
+    return cloned_frags;
+}
+
+
+static void verify_fragments(std::vector<sstables::shared_sstable> ssts, reader_permit permit, const std::deque<mutation_fragment_v2>& mfs) {
+    auto schema = ssts.front()->get_schema();
+
+    std::vector<flat_mutation_reader_v2> readers;
+    readers.reserve(ssts.size());
+    for (auto& sst : ssts) {
+        readers.push_back(sst->as_mutation_source().make_reader_v2(schema, permit));
+    }
+
+    auto r = assert_that(make_combined_reader(schema, permit, std::move(readers)));
+    for (const auto& mf : mfs) {
+        testlog.trace("Expecting {}", mutation_fragment_v2::printer(*schema, mf));
+        r.produces(*schema, mf);
+    }
+    r.produces_end_of_stream();
+};
+
+
+// A framework for scrub-related tests.
+// Lives in a seastar thread
+class scrub_test_framework {
+public:
+    using test_func = std::function<void(table_for_tests&, compaction::table_state&, std::vector<sstables::shared_sstable>)>;
+
+private:
+    sharded<test_env> _env;
+    uint32_t _seed;
+    std::unique_ptr<tests::random_schema_specification> _random_schema_spec;
+    tests::random_schema _random_schema;
+
+public:
+    scrub_test_framework()
+        : _seed(tests::random::get_int<uint32_t>())
+        , _random_schema_spec(tests::make_random_schema_specification(
+                "scrub_test_framework",
+                std::uniform_int_distribution<size_t>(2, 4),
+                std::uniform_int_distribution<size_t>(2, 4),
+                std::uniform_int_distribution<size_t>(2, 8),
+                std::uniform_int_distribution<size_t>(2, 8)))
+        , _random_schema(_seed, *_random_schema_spec)
+    {
+        _env.start().get();
+        testlog.info("random_schema: {}", _random_schema.cql());
+    }
+
+    ~scrub_test_framework() {
+        _env.stop().get();
+    }
+
+    test_env& env() { return _env.local(); }
+    uint32_t seed() const { return _seed; }
+    tests::random_schema& random_schema() { return _random_schema; }
+    schema_ptr schema() const { return _random_schema.schema(); }
+
+    void run(schema_ptr schema, std::deque<mutation_fragment_v2> frags, test_func func) {
+        auto& env = this->env();
+
+        const auto partition_count = std::count_if(frags.begin(), frags.end(), std::mem_fn(&mutation_fragment_v2::is_partition_start));
+
+        auto permit = env.make_reader_permit();
+        auto mr = make_flat_mutation_reader_from_fragments(schema, permit, clone(*schema, permit, frags));
+
+        auto close_mr = deferred_close(mr);
+
+        auto sst = env.make_sstable(schema);
+        sstable_writer_config cfg = env.manager().configure_writer();
+        cfg.validation_level = mutation_fragment_stream_validation_level::partition_region; // this test violates key order on purpose
+
+        auto wr = sst->get_writer(*schema, partition_count, cfg, encoding_stats{});
+        mr.consume_in_thread(std::move(wr));
+
+        sst->load(schema->get_sharder()).get();
+
+        auto table = env.make_table_for_tests(schema);
+        auto close_cf = deferred_stop(table);
+        table->start();
+
+        table->add_sstable_and_update_cache(sst).get();
+
+        verify_fragments({sst}, env.make_reader_permit(), frags);
+
+        bool found_sstable = false;
+        foreach_table_state_with_thread(table, [&] (compaction::table_state& ts) {
+            auto sstables = in_strategy_sstables(ts);
+            if (sstables.empty()) {
+                return;
+            }
+            BOOST_REQUIRE(sstables.size() == 1);
+            BOOST_REQUIRE(sstables.front() == sst);
+            found_sstable = true;
+
+            func(table, ts, sstables);
+        }).get();
+        BOOST_REQUIRE(found_sstable);
+    }
+
+    void run(schema_ptr schema, std::vector<mutation> muts, test_func func) {
+        run(std::move(schema), explode(env().make_reader_permit(), std::move(muts)), std::move(func));
+    }
+};
+
 SEASTAR_TEST_CASE(sstable_scrub_validate_mode_test) {
     cql_test_config test_cfg;
 
