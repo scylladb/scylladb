@@ -94,6 +94,9 @@ seed_provider:
           # For example: "<IP1>,<IP2>,<IP3>"
           - seeds: "127.0.0.1"
 
+# Amount of time (in seconds) an unavailable node should be kept in gossip information.
+gossip_endpoint_expiration_time: 259200
+
 # Address to bind to and tell other Scylla nodes to connect to.
 # You _must_ change this if you want multiple nodes to be able to communicate!
 #
