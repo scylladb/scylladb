@@ -245,7 +245,8 @@ private:
             std::derived_from<TaskType, compaction_task_impl>
     future<compaction_manager::compaction_stats_opt> perform_task_on_all_files(std::optional<tasks::task_info> info, table_state& t, sstables::compaction_type_options options, owned_ranges_ptr owned_ranges_ptr, get_candidates_func get_func, Args... args);
 
-    future<compaction_stats_opt> rewrite_sstables(compaction::table_state& t, sstables::compaction_type_options options, owned_ranges_ptr, get_candidates_func, std::optional<tasks::task_info> info, can_purge_tombstones can_purge = can_purge_tombstones::yes);
+    future<compaction_stats_opt> rewrite_sstables(compaction::table_state& t, sstables::compaction_type_options options, owned_ranges_ptr, get_candidates_func, std::optional<tasks::task_info> info,
+                                                  can_purge_tombstones can_purge = can_purge_tombstones::yes, sstring options_desc = "");
 
     // Stop all fibers, without waiting. Safe to be called multiple times.
     void do_stop() noexcept;
