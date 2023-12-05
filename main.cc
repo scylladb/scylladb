@@ -1984,7 +1984,7 @@ int main(int ac, char** av) {
         return 1;
     }
 
-    // Even on the environment which causes error during initialize Scylla,
+    // Even on the environment which causes errors during Scylla initialization,
     // "scylla --version" should be able to run without error.
     // To do so, we need to parse and execute these options before
     // initializing Scylla/Seastar classes.
