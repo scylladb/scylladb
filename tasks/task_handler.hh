@@ -39,6 +39,15 @@ struct task_status {
 };
 
 struct task_stats {
+    tasks::task_id task_id;
+    std::string type;
+    task_kind kind;
+    std::string scope;
+    task_manager::task_state state;
+    uint64_t sequence_number;
+    std::string keyspace;
+    std::string table;
+    std::string entity;
 };
 
 class task_handler {
