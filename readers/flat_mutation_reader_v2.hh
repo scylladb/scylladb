@@ -602,7 +602,7 @@ public:
     // Cannot be called if is_buffer_empty() returns true.
     const mutation_fragment_v2& peek_buffer() const { return _impl->_buffer.front(); }
     // The actual buffer size of the reader.
-    // Although we consistently refer to this as buffer size throught the code
+    // Although we consistently refer to this as buffer size throughout the code
     // we really use "buffer size" as the size of the collective memory
     // used by all the mutation fragments stored in the buffer of the reader.
     size_t buffer_size() const {

@@ -954,7 +954,7 @@ public:
      *
      * When `with_internals` is true, the description is extended with table's id and dropped columns.
      * The dropped columns are present in column definitions and also the `ALTER DROP` statement 
-     * (and `ALTER ADD` if the column has been readded) to the description.
+     * (and `ALTER ADD` if the column has been re-added) to the description.
      */
     virtual std::ostream& describe(replica::database& db, std::ostream& os, bool with_internals) const override;
     friend bool operator==(const schema&, const schema&);

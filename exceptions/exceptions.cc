@@ -39,7 +39,7 @@ const std::unordered_map<exception_code, sstring>& exception_map() {
         {exception_code::WRITE_FAILURE, "write_failure"},
         {exception_code::CDC_WRITE_FAILURE, "cdc_write_failure"},
         {exception_code::SYNTAX_ERROR, "syntax_error"},
-        {exception_code::UNAUTHORIZED, "unathorized"},
+        {exception_code::UNAUTHORIZED, "unauthorized"},
         {exception_code::INVALID, "invalid"},
         {exception_code::CONFIG_ERROR, "config_error"},
         {exception_code::ALREADY_EXISTS, "already_exists"},

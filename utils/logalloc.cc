@@ -43,7 +43,7 @@ using namespace std::chrono_literals;
 #ifdef SEASTAR_ASAN_ENABLED
 #include <sanitizer/asan_interface.h>
 // For each aligned 8 byte segment, the algorithm used by address
-// sanitizer can represent any addressable prefix followd by a
+// sanitizer can represent any addressable prefix followed by a
 // poisoned suffix. The details are at:
 // https://github.com/google/sanitizers/wiki/AddressSanitizerAlgorithm
 // For us this means that:

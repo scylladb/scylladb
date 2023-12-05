@@ -80,7 +80,7 @@ for pkg in $PKGS; do
     dirname=$(basename "$pkg"| sed -e "s/-$VERSION_ESC-$RELEASE_ESC\.[^.]*\.tar\.gz//")
     dirname=${dirname/#$PRODUCT/scylla}
     if [ ! -d "$BASEDIR/$dirname" ]; then
-        echo "Directory $dirname not found in $pkg, the pacakge may corrupted."
+        echo "Directory $dirname not found in $pkg, the package may corrupted."
         exit 1
     fi
 done

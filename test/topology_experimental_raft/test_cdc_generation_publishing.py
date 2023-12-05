@@ -49,17 +49,17 @@ async def test_cdc_generations_are_published(request, manager: ManagerClient):
     logger.info("Bootstrapping first node")
     servers = [await manager.server_add()]
     gen_timestamps = await wait_for(new_gen_appeared, time.time() + 60)
-    logger.info(f"Timestamps after boostrapping first node: {gen_timestamps}")
+    logger.info(f"Timestamps after bootstrapping first node: {gen_timestamps}")
 
     logger.info("Bootstrapping second node")
     servers += [await manager.server_add()]
     gen_timestamps = await wait_for(new_gen_appeared, time.time() + 60)
-    logger.info(f"Timestamps after boostrapping second node: {gen_timestamps}")
+    logger.info(f"Timestamps after bootstrapping second node: {gen_timestamps}")
 
     logger.info("Bootstrapping third node")
     servers += [await manager.server_add()]
     gen_timestamps = await wait_for(new_gen_appeared, time.time() + 60)
-    logger.info(f"Timestamps after boostrapping third node: {gen_timestamps}")
+    logger.info(f"Timestamps after bootstrapping third node: {gen_timestamps}")
 
     logger.info(f"Stopping node {servers[0]}")
     await manager.server_stop_gracefully(servers[0].server_id)

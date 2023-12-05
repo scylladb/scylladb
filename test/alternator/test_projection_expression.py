@@ -5,7 +5,7 @@
 # Tests for the various operations (GetItem, Query, Scan) with a
 # ProjectionExpression parameter.
 #
-# ProjectionExpression is an expension of the legacy AttributesToGet
+# ProjectionExpression is an expansion of the legacy AttributesToGet
 # parameter. Both parameters request that only a subset of the attributes
 # be fetched for each item, instead of all of them. But while AttributesToGet
 # was limited to top-level attributes, ProjectionExpression can request also

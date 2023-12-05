@@ -1489,7 +1489,7 @@ OK
 |-------------+-----|
 | False       |   5 |
 +-------------+-----+
-> -- Compare with another column: cassandra doesnt allow anything but a
+> -- Compare with another column: cassandra doesn't allow anything but a
 > -- constant on the right hand side :(
 > update lwt set i = 7 where a = 1 if i = t;
 <Error from server: code=2000 [Syntax error in CQL query] message="line 1:41 no viable alternative at input ';'">

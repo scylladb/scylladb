@@ -5959,7 +5959,7 @@ storage_service::get_new_source_ranges(locator::vnode_effective_replication_map_
 
 future<> storage_service::move(token new_token) {
     return run_with_api_lock(sstring("move"), [] (storage_service& ss) mutable {
-        return make_exception_future<>(std::runtime_error("Move opeartion is not supported only more"));
+        return make_exception_future<>(std::runtime_error("Move operation is not supported only more"));
     });
 }
 

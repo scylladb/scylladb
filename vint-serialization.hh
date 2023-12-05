@@ -26,7 +26,7 @@
 //                       The purpose is to send small negative values as small unsigned values, so that we save bytes on the wire.
 //                       To encode a value n use "(n >> 31) ^ (n << 1)" for 32 bit values, and "(n >> 63) ^ (n << 1)"
 //                       for 64 bit values where "^" is the xor operation, "<<" is the left shift operation and ">>" is
-//                       the arithemtic right shift operation (highest-order bit is replicated).
+//                       the arithmetic right shift operation (highest-order bit is replicated).
 //                       Decode with "(n >> 1) ^ -(n & 1)".
 //
 

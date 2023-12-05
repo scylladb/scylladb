@@ -51,7 +51,7 @@ def get_url(path):
     # If server returns any error, like 403, or 500 urllib.request throws exception, which is not serializable.
     # When multiprocessing routines fail to serialize it, it throws ambiguous serialization exception
     #   from get_json_from_url.
-    # In order to see legit error we catch it from the inside of process, covert to string and
+    # In order to see legit error we catch it from the inside of process, cobvert to string and
     #   pass it as part of return value
     try:
         return 0, urllib.request.urlopen(path).read().decode('utf-8')

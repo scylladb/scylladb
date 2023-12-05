@@ -232,7 +232,7 @@ private:
     // After memory consumption goes above the above limit, only one reader
     // (permit) is allowed to make progress, this method will block for all other
     // one, until:
-    // * The blessed read finishes and a new blessed permit is choosen.
+    // * The blessed read finishes and a new blessed permit is chosen.
     // * Memory consumption falls below the limit.
     future<> request_memory(reader_permit::impl& permit, size_t memory);
 

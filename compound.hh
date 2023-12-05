@@ -255,7 +255,7 @@ public:
                 return type->compare(v1, v2);
             });
     }
-    // Retruns true iff given prefix has no missing components
+    // Returns true iff given prefix has no missing components
     bool is_full(managed_bytes_view v) const {
         assert(AllowPrefixes == allow_prefixes::yes);
         return std::distance(begin(v), end(v)) == (ssize_t)_types.size();

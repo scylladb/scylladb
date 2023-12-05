@@ -209,7 +209,7 @@ public:
      * welcome (e.g. because it throws)
      *
      * Single-elemented array cannot be erased from, just drop it
-     * alltogether if needed
+     * altogether if needed
      */
     void erase(int pos) noexcept {
         assert(!is_single_element());

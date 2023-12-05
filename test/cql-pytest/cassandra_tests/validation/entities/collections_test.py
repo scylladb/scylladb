@@ -850,7 +850,7 @@ def testMultipleOperationOnMapWithinTheSameQuery(cql, test_keyspace):
         execute(cql, table, "UPDATE %s SET m = m + ?, m[?] = ?  WHERE pk = ?", {4: 8}, 4, 6, 1)
         assert_rows(execute(cql, table, "SELECT * FROM %s WHERE pk = ?", 1) , [1, {0: 1, 1: 2, 3: 4, 4: 8}])
 
-        # Checks that, as tombstones win over updates for the same timestamp, the removed element is not readded
+        # Checks that, as tombstones win over updates for the same timestamp, the removed element is not re-added
         execute(cql, table, "UPDATE %s SET m = m - ?, m[?] = ?  WHERE pk = ?", {4}, 4, 9, 1)
         assert_rows(execute(cql, table, "SELECT * FROM %s WHERE pk = ?", 1) , [1, {0: 1, 1: 2, 3: 4}])
 

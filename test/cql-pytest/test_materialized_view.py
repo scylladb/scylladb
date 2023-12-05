@@ -355,7 +355,7 @@ def test_oversized_base_regular_view_key(cql, test_keyspace, cassandra_bug):
 # building*- i.e., pre-existing data in the base table that needs to be
 # copied to the view. The view building cannot return an error to the user,
 # but we do expect it to skip the problematic row and continue to complete
-# the rest of the vew build.
+# the rest of the view build.
 @pytest.mark.xfail(reason="issue #8627")
 # This test currently breaks the build (it repeats a failing build step,
 # and never complete) and we cannot quickly recognize this failure, so

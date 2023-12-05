@@ -73,7 +73,7 @@ private:
     future<bool> property_file_was_modified();
 
     /**
-     * Read the propery file if it has changed since the last time we read it.
+     * Read the property file if it has changed since the last time we read it.
      */
     future<> read_property_file();
 

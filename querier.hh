@@ -271,7 +271,7 @@ public:
 /// * It accepts a factory function which is used to create a new querier if
 ///     the lookup fails (see below). This allows for simple call sites.
 /// * It does range matching. A query sometimes will result in multiple querier
-///     objects executing on the same node and shard paralelly. To identify the
+///     objects executing on the same node and shard parallelly. To identify the
 ///     appropriate querier lookup() will consider - in addition to the lookup
 ///     key - the read range.
 /// * It does schema version and position checking. In some case a subsequent

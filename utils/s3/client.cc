@@ -286,7 +286,7 @@ static tag_set parse_tagging(sstring& body) {
     try {
         doc->parse<0>(body.data());
     } catch (const rapidxml::parse_error& e) {
-        s3l.warn("cannnot parse tagging response: {}", e.what());
+        s3l.warn("cannot parse tagging response: {}", e.what());
         throw std::runtime_error("cannot parse tagging response");
     }
     tag_set tags;

@@ -122,7 +122,7 @@ struct uninitialized {
     uninitialized& operator=(uninitialized&&) = default;
     operator T&&() && { return check(), std::move(*_val); }
     operator std::optional<T>&&() && { return check(), std::move(_val); }
-    void check() const { if (!_val) { throw std::runtime_error("not intitialized"); } }
+    void check() const { if (!_val) { throw std::runtime_error("not initialized"); } }
 };
 
 template <typename T>

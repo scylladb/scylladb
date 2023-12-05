@@ -185,7 +185,7 @@ class iterator_checker {
         _pos--;
 
         if (k != (unsigned long)(*_pos)) {
-            fmt::print("iterator backward mis {} <- {}\n", (unsigned long)k, (unsigned long)(*_pos));
+            fmt::print("iterator backward miss {} <- {}\n", (unsigned long)k, (unsigned long)(*_pos));
             valid = false;
             return true;
         }

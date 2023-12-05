@@ -1227,7 +1227,7 @@ class ScyllaClusterManager:
         expected_error = data["expected_error"]
         self.logger.info("_cluster_remove_node %s with initiator %s", to_remove, initiator)
 
-        # initate remove
+        # initiate remove
         try:
             await self.cluster.api.remove_node(initiator.ip_addr, to_remove.host_id, ignore_dead,
                                                timeout=ScyllaServer.TOPOLOGY_TIMEOUT)

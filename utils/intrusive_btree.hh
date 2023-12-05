@@ -2006,7 +2006,7 @@ private:
          * separation key at its 0 position, so it's moving the
          * whole node anyway.
          *
-         * In case our right sibling is full there's no choise but
+         * In case our right sibling is full there's no choice but
          * to grab a key from it and continue. Next time we get
          * here the right node will be int mergeable state.
          */

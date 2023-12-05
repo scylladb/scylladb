@@ -593,7 +593,7 @@ database::setup_metrics() {
 
         sm::make_counter("querier_cache_resource_based_evictions", _querier_cache.get_stats().resource_based_evictions,
                        sm::description("Counts querier cache entries that were evicted to free up resources "
-                                       "(limited by reader concurency limits) necessary to create new readers.")),
+                                       "(limited by reader concurrency limits) necessary to create new readers.")),
 
         sm::make_gauge("querier_cache_population", _querier_cache.get_stats().population,
                        sm::description("The number of entries currently in the querier cache.")),

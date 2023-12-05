@@ -211,7 +211,7 @@
          "operations":[
             {
                "method":"POST",
-               "summary":"Sets the minumum and maximum number of sstables in queue before compaction kicks off",
+               "summary":"Sets the minimum and maximum number of sstables in queue before compaction kicks off",
                "type":"string",
                "nickname":"set_compaction_threshold",
                "produces":[

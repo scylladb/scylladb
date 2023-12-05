@@ -405,5 +405,5 @@ deserialize_gc_clock_duration_value(Input& in) {
 }
 
 /*
- * Import the auto generated forward decleration code
+ * Import the auto generated forward declaration code
  */

@@ -386,7 +386,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     * @GroupDescription If you have changed any of the default directories during installation, make sure you have root access and set these properties.
     */
     , work_directory(this, "workdir,W", value_status::Used, "/var/lib/scylla",
-        "The directory in which Scylla will put all its subdirectories. The location of individual subdirs can be overriden by the respective *_directory options.")
+        "The directory in which Scylla will put all its subdirectories. The location of individual subdirs can be overridden by the respective *_directory options.")
     , commitlog_directory(this, "commitlog_directory", value_status::Used, "",
         "The directory where the commit log is stored. For optimal write performance, it is recommended the commit log be on a separate disk partition (ideally, a separate physical device) from the data file directories.")
     , schema_commitlog_directory(this, "schema_commitlog_directory", value_status::Used, "",
@@ -796,7 +796,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "\t         Note: When selecting this option, you must change the default value (unlimited) of rpc_max_threads.\n"
         "\tYour own RPC server: You must provide a fully-qualified class name of an o.a.c.t.TServerFactory that can create a server instance.")
     , cache_hit_rate_read_balancing(this, "cache_hit_rate_read_balancing", value_status::Used, true,
-        "This boolean controls whether the replicas for read query will be choosen based on cache hit ratio")
+        "This boolean controls whether the replicas for read query will be chosen based on cache hit ratio")
     /**
     * @Group Advanced fault detection settings
     * @GroupDescription Settings to handle poorly performing or failing nodes.
@@ -960,7 +960,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , prometheus_address(this, "prometheus_address", value_status::Used, {/* listen_address */}, "Prometheus listening address, defaulting to listen_address if not explicitly set")
     , prometheus_prefix(this, "prometheus_prefix", value_status::Used, "scylla", "Set the prefix of the exported Prometheus metrics. Changing this will break Scylla's dashboard compatibility, do not change unless you know what you are doing.")
     , abort_on_lsa_bad_alloc(this, "abort_on_lsa_bad_alloc", value_status::Used, false, "Abort when allocation in LSA region fails")
-    , murmur3_partitioner_ignore_msb_bits(this, "murmur3_partitioner_ignore_msb_bits", value_status::Used, default_murmur3_partitioner_ignore_msb_bits, "Number of most siginificant token bits to ignore in murmur3 partitioner; increase for very large clusters")
+    , murmur3_partitioner_ignore_msb_bits(this, "murmur3_partitioner_ignore_msb_bits", value_status::Used, default_murmur3_partitioner_ignore_msb_bits, "Number of most significant token bits to ignore in murmur3 partitioner; increase for very large clusters")
     , unspooled_dirty_soft_limit(this, "unspooled_dirty_soft_limit", value_status::Used, 0.6, "Soft limit of unspooled dirty memory expressed as a portion of the hard limit")
     , sstable_summary_ratio(this, "sstable_summary_ratio", value_status::Used, 0.0005, "Enforces that 1 byte of summary is written for every N (2000 by default) "
         "bytes written to data file. Value must be between 0 and 1.")
@@ -1423,7 +1423,7 @@ static future<std::vector<seastar::metrics::relabel_config>> get_relable_from_fi
             } else if (key == "regex") {
                 relabels[i].expr = e_it->second.as<std::string>();
             } else {
-                throw std::runtime_error("unkown entry '" + key + "' in file " + name);
+                throw std::runtime_error("unknown entry '" + key + "' in file " + name);
             }
         }
     }
