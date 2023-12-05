@@ -1658,6 +1658,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // Set up group0 service earlier since it is needed by group0 setup just below
             ss.local().set_group0(group0_service, raft_topology_change_enabled);
 
+            // Need to make sure storage service does not use group0 before running group0_service.abort()
+            auto stop_group0_usage_in_storage_service = defer_verbose_shutdown("group 0 usage in local storage", [&ss] {
+                ss.local().wait_for_group0_stop().get();
+            });
+
             // Setup group0 early in case the node is bootstrapped already and the group exists.
             // Need to do it before allowing incomming messaging service connections since
             // storage proxy's and migration manager's verbs may access group0.
