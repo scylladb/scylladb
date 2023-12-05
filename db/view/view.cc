@@ -2579,7 +2579,7 @@ future<bool> check_view_build_ongoing(db::system_distributed_keyspace& sys_dist_
     return sys_dist_ks.view_status(ks_name, cf_name).then([&tm] (view_statuses_type&& view_statuses) {
         return boost::algorithm::any_of(view_statuses, [&tm] (const view_statuses_type::value_type& view_status) {
             // Only consider status of known hosts.
-            return view_status.second == "STARTED" && tm.get_endpoint_for_host_id(view_status.first);
+            return view_status.second == "STARTED" && tm.get_endpoint_for_host_id_if_known(view_status.first);
         });
     });
 }

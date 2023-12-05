@@ -194,17 +194,11 @@ void full_ring_check(const tablet_map& tmap,
     auto& tm = *tmptr;
     const auto& topo = tm.get_topology();
 
-    auto get_endpoint_for_host_id = [&] (host_id host) {
-        auto endpoint_opt = tm.get_endpoint_for_host_id(host);
-        assert(endpoint_opt);
-        return *endpoint_opt;
-    };
-
     auto to_endpoint_set = [&] (const tablet_replica_set& replicas) {
         inet_address_vector_replica_set result;
         result.reserve(replicas.size());
         for (auto&& replica : replicas) {
-            result.emplace_back(get_endpoint_for_host_id(replica.host));
+            result.emplace_back(tm.get_endpoint_for_host_id(replica.host));
         }
         return result;
     };

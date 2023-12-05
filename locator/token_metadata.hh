@@ -219,8 +219,11 @@ public:
     /// Return the unique host ID for an end-point or nullopt if not found.
     std::optional<host_id> get_host_id_if_known(inet_address endpoint) const;
 
+    /** Return the end-point for a unique host ID or nullopt if not found. */
+    std::optional<inet_address> get_endpoint_for_host_id_if_known(locator::host_id host_id) const;
+
     /** Return the end-point for a unique host ID */
-    std::optional<inet_address> get_endpoint_for_host_id(locator::host_id host_id) const;
+    inet_address get_endpoint_for_host_id(locator::host_id host_id) const;
 
     /// Parses the \c host_id_string either as a host uuid or as an ip address and returns the mapping.
     /// Throws std::invalid_argument on parse error or std::runtime_error if the host_id wasn't found.

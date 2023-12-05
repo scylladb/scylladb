@@ -3686,7 +3686,7 @@ future<> storage_service::handle_state_normal(inet_address endpoint, gms::permit
     };
     // Order Matters, TM.updateHostID() should be called before TM.updateNormalToken(), (see CASSANDRA-4300).
     auto host_id = _gossiper.get_host_id(endpoint);
-    auto existing = tmptr->get_endpoint_for_host_id(host_id);
+    auto existing = tmptr->get_endpoint_for_host_id_if_known(host_id);
     if (existing && *existing != endpoint) {
         if (*existing == get_broadcast_address()) {
             slogger.warn("Not updating host ID {} for {} because it's mine", host_id, endpoint);
@@ -5136,7 +5136,7 @@ future<> storage_service::removenode(locator::host_id host_id, std::list<locator
             auto stop_ctl = deferred_stop(ctl);
             auto uuid = ctl.uuid();
             const auto& tmptr = ctl.tmptr;
-            auto endpoint_opt = tmptr->get_endpoint_for_host_id(host_id);
+            auto endpoint_opt = tmptr->get_endpoint_for_host_id_if_known(host_id);
             assert(ss._group0);
             auto raft_id = raft::server_id{host_id.uuid()};
             bool raft_available = ss._group0->wait_for_raft().get();
