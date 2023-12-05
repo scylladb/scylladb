@@ -8,14 +8,12 @@
  * SPDX-License-Identifier: (AGPL-3.0-or-later and Apache-2.0)
  */
 
-#include <iomanip>
 #include <boost/io/ios_state.hpp>
 #include <seastar/net/inet_address.hh>
 #include <seastar/net/dns.hh>
 #include <seastar/core/print.hh>
 #include <seastar/core/future.hh>
 #include "inet_address.hh"
-#include "utils/to_string.hh"
 
 using namespace seastar;
 
