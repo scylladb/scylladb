@@ -3062,6 +3062,12 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
                 get_broadcast_address(), *replace_address);
             tmptr->update_topology(*replace_address, std::move(ri->dc_rack), locator::node::state::being_replaced);
             co_await tmptr->update_normal_tokens(bootstrap_tokens, *replace_address);
+
+            tmptr->get_new()->update_topology(tmptr->get_my_id(), std::nullopt, locator::node::state::replacing);
+            tmptr->get_new()->update_topology(ri->host_id, std::move(ri->dc_rack), locator::node::state::being_replaced);
+            co_await tmptr->get_new()->update_normal_tokens(bootstrap_tokens, ri->host_id);
+            tmptr->get_new()->update_host_id(ri->host_id, *replace_address);
+
             replaced_host_id = ri->host_id;
         }
     } else if (should_bootstrap()) {
@@ -3102,7 +3108,9 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
         // since they may start sending writes to this node after it gossips status = NORMAL.
         // Therefore we update _token_metadata now, before gossip starts.
         tmptr->update_topology(get_broadcast_address(), _snitch.local()->get_location(), locator::node::state::normal);
+        tmptr->get_new()->update_topology(tmptr->get_new()->get_my_id(), _snitch.local()->get_location(), locator::node::state::normal);
         co_await tmptr->update_normal_tokens(my_tokens, get_broadcast_address());
+        co_await tmptr->get_new()->update_normal_tokens(my_tokens, tmptr->get_new()->get_my_id());
 
         cdc_gen_id = co_await _sys_ks.local().get_cdc_generation_id();
         if (!cdc_gen_id) {
@@ -3129,6 +3137,7 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
             slogger.info("Host {}/{} is replacing {}/{} using the same address", local_host_id, endpoint, replace_host_id, endpoint);
         }
         tmptr->update_host_id(local_host_id, get_broadcast_address());
+        tmptr->get_new()->update_host_id(local_host_id, get_broadcast_address());
     }
 
     // Replicate the tokens early because once gossip runs other nodes
@@ -3419,12 +3428,14 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
     }
 
     slogger.debug("Setting tokens to {}", bootstrap_tokens);
-    co_await mutate_token_metadata([this, &bootstrap_tokens] (mutable_token_metadata_ptr tmptr) {
+    co_await mutate_token_metadata([this, &bootstrap_tokens] (mutable_token_metadata_ptr tmptr) -> future<> {
         // This node must know about its chosen tokens before other nodes do
         // since they may start sending writes to this node after it gossips status = NORMAL.
         // Therefore, in case we haven't updated _token_metadata with our tokens yet, do it now.
         tmptr->update_topology(get_broadcast_address(), _snitch.local()->get_location(), locator::node::state::normal);
-        return tmptr->update_normal_tokens(bootstrap_tokens, get_broadcast_address());
+        co_await tmptr->update_normal_tokens(bootstrap_tokens, get_broadcast_address());
+        tmptr->get_new()->update_topology(tmptr->get_new()->get_my_id(), _snitch.local()->get_location(), locator::node::state::normal);
+        co_await tmptr->get_new()->update_normal_tokens(bootstrap_tokens, tmptr->get_new()->get_my_id());
     });
 
     if (!_sys_ks.local().bootstrap_complete()) {
