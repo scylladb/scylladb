@@ -11,7 +11,6 @@
 #include "gms/inet_address.hh"
 #include "locator/types.hh"
 #include "utils/UUID_gen.hh"
-#include "utils/fb_utilities.hh"
 #include "utils/sequenced_set.hh"
 #include "locator/network_topology_strategy.hh"
 #include "test/lib/scylla_test_case.hh"
@@ -225,19 +224,20 @@ locator::endpoint_dc_rack make_endpoint_dc_rack(gms::inet_address endpoint) {
 
 // Run in a seastar thread.
 void simple_test() {
-    utils::fb_utilities::set_broadcast_address(gms::inet_address("localhost"));
-    utils::fb_utilities::set_broadcast_rpc_address(gms::inet_address("localhost"));
+    auto my_address = gms::inet_address("localhost");
 
     // Create the RackInferringSnitch
     snitch_config cfg;
     cfg.name = "RackInferringSnitch";
+    cfg.listen_address = my_address;
+    cfg.broadcast_address = my_address;
     sharded<snitch_ptr> snitch;
     snitch.start(cfg).get();
     auto stop_snitch = defer([&snitch] { snitch.stop().get(); });
     snitch.invoke_on_all(&snitch_ptr::start).get();
 
     locator::token_metadata::config tm_cfg;
-    tm_cfg.topo_cfg.this_endpoint = utils::fb_utilities::get_broadcast_address();
+    tm_cfg.topo_cfg.this_endpoint = my_address;
     tm_cfg.topo_cfg.local_dc_rack = { snitch.local()->get_datacenter(), snitch.local()->get_rack() };
     locator::shared_token_metadata stm([] () noexcept { return db::schema_tables::hold_merge_lock(); }, tm_cfg);
 
@@ -307,12 +307,13 @@ void simple_test() {
 
 // Run in a seastar thread.
 void heavy_origin_test() {
-    utils::fb_utilities::set_broadcast_address(gms::inet_address("localhost"));
-    utils::fb_utilities::set_broadcast_rpc_address(gms::inet_address("localhost"));
+    auto my_address = gms::inet_address("localhost");
 
     // Create the RackInferringSnitch
     snitch_config cfg;
     cfg.name = "RackInferringSnitch";
+    cfg.listen_address = my_address;
+    cfg.broadcast_address = my_address;
     sharded<snitch_ptr> snitch;
     snitch.start(cfg).get();
     auto stop_snitch = defer([&snitch] { snitch.stop().get(); });
@@ -386,11 +387,12 @@ SEASTAR_THREAD_TEST_CASE(NetworkTopologyStrategy_heavy) {
 }
 
 SEASTAR_THREAD_TEST_CASE(NetworkTopologyStrategy_tablets_test) {
-    utils::fb_utilities::set_broadcast_address(gms::inet_address("localhost"));
-    utils::fb_utilities::set_broadcast_rpc_address(gms::inet_address("localhost"));
+    auto my_address = gms::inet_address("localhost");
 
     // Create the RackInferringSnitch
     snitch_config cfg;
+    cfg.listen_address = my_address;
+    cfg.broadcast_address = my_address;
     cfg.name = "RackInferringSnitch";
     sharded<snitch_ptr> snitch;
     snitch.start(cfg).get();
@@ -398,7 +400,7 @@ SEASTAR_THREAD_TEST_CASE(NetworkTopologyStrategy_tablets_test) {
     snitch.invoke_on_all(&snitch_ptr::start).get();
 
     locator::token_metadata::config tm_cfg;
-    tm_cfg.topo_cfg.this_endpoint = utils::fb_utilities::get_broadcast_address();
+    tm_cfg.topo_cfg.this_endpoint = my_address;
     tm_cfg.topo_cfg.local_dc_rack = { snitch.local()->get_datacenter(), snitch.local()->get_rack() };
     locator::shared_token_metadata stm([] () noexcept { return db::schema_tables::hold_merge_lock(); }, tm_cfg);
 
@@ -701,8 +703,10 @@ void generate_topology(topology& topo, const std::unordered_map<sstring, size_t>
 }
 
 SEASTAR_THREAD_TEST_CASE(testCalculateEndpoints) {
-    utils::fb_utilities::set_broadcast_address(gms::inet_address("localhost"));
-    utils::fb_utilities::set_broadcast_rpc_address(gms::inet_address("localhost"));
+    locator::token_metadata::config tm_cfg;
+    auto my_address = gms::inet_address("localhost");
+    tm_cfg.topo_cfg.this_endpoint = my_address;
+    tm_cfg.topo_cfg.this_cql_address = my_address;
 
     constexpr size_t NODES = 100;
     constexpr size_t VNODES = 64;
@@ -723,7 +727,7 @@ SEASTAR_THREAD_TEST_CASE(testCalculateEndpoints) {
 
     for (size_t run = 0; run < RUNS; ++run) {
         semaphore sem(1);
-        shared_token_metadata stm([&sem] () noexcept { return get_units(sem, 1); }, locator::token_metadata::config{});
+        shared_token_metadata stm([&sem] () noexcept { return get_units(sem, 1); }, tm_cfg);
 
         std::unordered_set<dht::token> random_tokens;
         while (random_tokens.size() < nodes.size() * VNODES) {
@@ -810,8 +814,10 @@ void topology::test_compare_endpoints(const inet_address& address, const inet_ad
 } // namespace locator
 
 SEASTAR_THREAD_TEST_CASE(test_topology_compare_endpoints) {
-    utils::fb_utilities::set_broadcast_address(gms::inet_address("localhost"));
-    utils::fb_utilities::set_broadcast_rpc_address(gms::inet_address("localhost"));
+    locator::token_metadata::config tm_cfg;
+    auto my_address = gms::inet_address("localhost");
+    tm_cfg.topo_cfg.this_endpoint = my_address;
+    tm_cfg.topo_cfg.this_cql_address = my_address;
 
     constexpr size_t NODES = 10;
 
@@ -833,7 +839,7 @@ SEASTAR_THREAD_TEST_CASE(test_topology_compare_endpoints) {
     auto bogus_address = make_address(NODES + 1);
 
     semaphore sem(1);
-    shared_token_metadata stm([&sem] () noexcept { return get_units(sem, 1); }, locator::token_metadata::config{});
+    shared_token_metadata stm([&sem] () noexcept { return get_units(sem, 1); }, tm_cfg);
     stm.mutate_token_metadata([&] (token_metadata& tm) {
         auto& topo = tm.get_topology();
         generate_topology(topo, datacenters, nodes);

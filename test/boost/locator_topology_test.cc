@@ -14,7 +14,6 @@
 #include "locator/types.hh"
 #include "test/lib/scylla_test_case.hh"
 
-#include "utils/fb_utilities.hh"
 #include "locator/host_id.hh"
 #include "locator/topology.hh"
 #include "locator/load_sketch.hh"
@@ -32,7 +31,6 @@ SEASTAR_THREAD_TEST_CASE(test_add_node) {
     auto id3 = host_id::create_random_id();
     auto ep3 = gms::inet_address("127.0.0.3");
 
-    utils::fb_utilities::set_broadcast_address(ep1);
     topology::config cfg = {
         .this_endpoint = ep1,
         .local_dc_rack = endpoint_dc_rack::default_location,
@@ -70,7 +68,6 @@ SEASTAR_THREAD_TEST_CASE(test_moving) {
     auto id1 = host_id::create_random_id();
     auto ep1 = gms::inet_address("127.0.0.1");
 
-    utils::fb_utilities::set_broadcast_address(ep1);
     topology::config cfg = {
         .this_endpoint = ep1,
         .local_dc_rack = endpoint_dc_rack::default_location,
@@ -100,7 +97,6 @@ SEASTAR_THREAD_TEST_CASE(test_update_node) {
     auto ep2 = gms::inet_address("127.0.0.2");
     auto ep3 = gms::inet_address("127.0.0.3");
 
-    utils::fb_utilities::set_broadcast_address(ep1);
     topology::config cfg = {
         .this_endpoint = ep1,
         .local_dc_rack = endpoint_dc_rack::default_location,
@@ -193,7 +189,6 @@ SEASTAR_THREAD_TEST_CASE(test_remove_endpoint) {
         .rack = "rack2"
     };
 
-    utils::fb_utilities::set_broadcast_address(ep1);
     topology::config cfg = {
         .this_endpoint = ep1,
         .local_dc_rack = dc_rack1

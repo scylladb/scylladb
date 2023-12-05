@@ -21,7 +21,6 @@
 
 #include <boost/test/unit_test.hpp>
 #include "locator/gce_snitch.hh"
-#include "utils/fb_utilities.hh"
 #include <seastar/testing/test_case.hh>
 #include <seastar/http/httpd.hh>
 #include <seastar/net/inet_address.hh>
@@ -54,8 +53,7 @@ future<> one_test(const std::string& property_fname, bool exp_result) {
         fs::path fname(test_files_subdir);
         fname /= fs::path(property_fname);
 
-        utils::fb_utilities::set_broadcast_address(gms::inet_address("localhost"));
-        utils::fb_utilities::set_broadcast_rpc_address(gms::inet_address("localhost"));
+        auto my_address = gms::inet_address("localhost");
 
         char* meta_url_env = std::getenv(DUMMY_META_SERVER_IP);
         char* use_gce_server = std::getenv(USE_GCE_META_SERVER);
@@ -84,6 +82,8 @@ future<> one_test(const std::string& property_fname, bool exp_result) {
             cfg.name = "GoogleCloudSnitch";
             cfg.properties_file_name = fname.string();
             cfg.gce_meta_server_url = meta_url;
+            cfg.listen_address = my_address;
+            cfg.broadcast_address = my_address;
             sharded<snitch_ptr> snitch;
             snitch.start(cfg).get();
             snitch.invoke_on_all(&snitch_ptr::start).get();

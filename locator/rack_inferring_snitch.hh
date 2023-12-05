@@ -13,7 +13,6 @@
 #include <seastar/core/sstring.hh>
 #include "gms/inet_address.hh"
 #include "snitch_base.hh"
-#include "utils/fb_utilities.hh"
 
 namespace locator {
 
@@ -24,7 +23,9 @@ using inet_address = gms::inet_address;
  * in the 2nd and 3rd octets of the ip address, respectively.
  */
 struct rack_inferring_snitch : public snitch_base {
-    rack_inferring_snitch(const snitch_config& cfg) {
+    rack_inferring_snitch(const snitch_config& cfg)
+        : snitch_base(cfg)
+    {
         _my_dc = get_datacenter();
         _my_rack = get_rack();
 
@@ -33,12 +34,12 @@ struct rack_inferring_snitch : public snitch_base {
     }
 
     virtual sstring get_rack() const override {
-        auto endpoint = utils::fb_utilities::get_broadcast_address();
+        auto& endpoint = _cfg.broadcast_address;
         return std::to_string(uint8_t(endpoint.bytes()[2]));
     }
 
     virtual sstring get_datacenter() const override {
-        auto endpoint = utils::fb_utilities::get_broadcast_address();
+        auto& endpoint = _cfg.broadcast_address;
         return std::to_string(uint8_t(endpoint.bytes()[1]));
     }
 

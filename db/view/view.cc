@@ -59,7 +59,6 @@
 #include "types/map.hh"
 #include "utils/error_injection.hh"
 #include "utils/exponential_backoff_retry.hh"
-#include "utils/fb_utilities.hh"
 #include "query-result-writer.hh"
 #include "readers/from_fragments_v2.hh"
 #include "readers/evictable.hh"
@@ -1553,7 +1552,7 @@ get_view_natural_endpoint(
         const dht::token& base_token,
         const dht::token& view_token) {
     auto& topology = base_erm->get_token_metadata_ptr()->get_topology();
-    auto my_address = utils::fb_utilities::get_broadcast_address();
+    auto my_address = topology.my_address();
     auto my_datacenter = topology.get_datacenter();
     std::vector<gms::inet_address> base_endpoints, view_endpoints;
     for (auto&& base_endpoint : base_erm->get_natural_endpoints(base_token)) {
@@ -1655,7 +1654,7 @@ future<> view_update_generator::mutate_MV(
         // First, find the local endpoint and ensure that if it exists,
         // it will be the target endpoint. That way, all endpoints in the
         // remote_endpoints list are guaranteed to be remote.
-        auto my_address = utils::fb_utilities::get_broadcast_address();
+        auto my_address = view_ermp->get_topology().my_address();
         auto remote_it = std::find(remote_endpoints.begin(), remote_endpoints.end(), my_address);
         if (remote_it != remote_endpoints.end()) {
             if (!target_endpoint) {

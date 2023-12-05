@@ -23,7 +23,6 @@
 #include "service/storage_proxy.hh"
 #include "gms/gossiper.hh"
 #include "utils/overloaded_functor.hh"
-#include "utils/fb_utilities.hh"
 #include "utils/aws_sigv4.hh"
 
 static logging::logger slogger("alternator-server");

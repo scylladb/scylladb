@@ -48,7 +48,7 @@ future<std::map<sstring, double>> load_meter::get_load_map() {
             llogger.debug("load_broadcaster is not set yet!");
         }
         load_map.emplace(format("{}",
-                utils::fb_utilities::get_broadcast_address()), get_load());
+                _lb->gossiper().get_broadcast_address()), get_load());
         return load_map;
     });
 }

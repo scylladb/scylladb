@@ -410,7 +410,7 @@ public:
     };
 
     future<local_info> load_local_info();
-    future<> save_local_info(local_info, locator::endpoint_dc_rack);
+    future<> save_local_info(local_info, locator::endpoint_dc_rack, gms::inet_address broadcast_address, gms::inet_address broadcast_rpc_address);
 public:
     static api::timestamp_type schema_creation_timestamp();
 
@@ -533,6 +533,10 @@ public:
     friend future<column_mapping> db::schema_tables::get_column_mapping(db::system_keyspace& sys_ks, ::table_id table_id, table_schema_version version);
     friend future<bool> db::schema_tables::column_mapping_exists(db::system_keyspace& sys_ks, table_id table_id, table_schema_version version);
     friend future<> db::schema_tables::drop_column_mapping(db::system_keyspace& sys_ks, table_id table_id, table_schema_version version);
+
+    const replica::database& local_db() const noexcept {
+        return _db;
+    }
 }; // class system_keyspace
 
 } // namespace db

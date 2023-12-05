@@ -616,7 +616,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     });
 
     ss::get_current_generation_number.set(r, [&ss](std::unique_ptr<http::request> req) {
-        gms::inet_address ep(utils::fb_utilities::get_broadcast_address());
+        auto ep = ss.local().get_token_metadata().get_topology().my_address();
         return ss.local().gossiper().get_current_generation_number(ep).then([](gms::generation_type res) {
             return make_ready_future<json::json_return_type>(res.value());
         });

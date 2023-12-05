@@ -12,7 +12,8 @@
 #include "service_level_controller.hh"
 #include "message/messaging_service.hh"
 #include "db/system_distributed_keyspace.hh"
-#include "utils/fb_utilities.hh"
+#include "cql3/query_processor.hh"
+#include "service/storage_proxy.hh"
 
 namespace qos {
 static logging::logger sl_logger("service_level_controller");
@@ -432,7 +433,8 @@ future<> service_level_controller::do_remove_service_level(sstring name, bool re
 void service_level_controller::on_join_cluster(const gms::inet_address& endpoint) { }
 
 void service_level_controller::on_leave_cluster(const gms::inet_address& endpoint) {
-    if (this_shard_id() == global_controller && endpoint == utils::fb_utilities::get_broadcast_address()) {
+    auto my_address = _auth_service.local().query_processor().proxy().local_db().get_token_metadata().get_topology().my_address();
+    if (this_shard_id() == global_controller && endpoint == my_address) {
         _global_controller_db->dist_data_update_aborter.request_abort();
     }
 }

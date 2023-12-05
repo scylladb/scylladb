@@ -152,8 +152,16 @@ static future<ResultTuple> add_replica_exception_to_query_result(gms::feature_se
     return encode_replica_exception_for_rpc<ResultTuple>(features, f.get_exception());
 }
 
-static bool only_me(const inet_address_vector_replica_set& replicas) {
-    return replicas.size() == 1 && replicas[0] == utils::fb_utilities::get_broadcast_address();
+gms::inet_address storage_proxy::my_address() const noexcept {
+    return local_db().get_token_metadata().get_topology().my_address();
+}
+
+bool storage_proxy::is_me(gms::inet_address addr) const noexcept {
+    return local_db().get_token_metadata().get_topology().is_me(addr);
+}
+
+bool storage_proxy::only_me(const inet_address_vector_replica_set& replicas) const noexcept {
+    return replicas.size() == 1 && is_me(replicas[0]);
 }
 
 // This class handles all communication with other nodes in `storage_proxy`:
@@ -901,7 +909,6 @@ private:
 };
 
 using namespace exceptions;
-using fbu = utils::fb_utilities;
 
 static inline
 query::digest_algorithm digest_algorithm(service::storage_proxy& proxy) {
@@ -1030,7 +1037,7 @@ public:
     virtual future<> apply_locally(storage_proxy& sp, storage_proxy::clock_type::time_point timeout,
             tracing::trace_state_ptr tr_state, db::per_partition_rate_limit::info rate_limit_info,
             fencing_token fence) override {
-        const auto my_ip = utils::fb_utilities::get_broadcast_address();
+        const auto my_ip = sp.my_address();
         auto m = _mutations[my_ip];
         if (m) {
             tracing::trace(tr_state, "Executing a mutation locally");
@@ -1045,7 +1052,7 @@ public:
         if (m) {
             tracing::trace(tr_state, "Sending a mutation to /{}", ep);
             return sp.remote().send_mutation(netw::messaging_service::msg_addr{ep, 0}, timeout, tracing::make_trace_info(tr_state),
-                    *m, forward, utils::fb_utilities::get_broadcast_address(), this_shard_id(),
+                    *m, forward, sp.my_address(), this_shard_id(),
                     response_id, rate_limit_info, fence);
         }
         sp.got_response(response_id, ep, std::nullopt);
@@ -1085,7 +1092,7 @@ public:
             tracing::trace_state_ptr tr_state, db::per_partition_rate_limit::info rate_limit_info,
             fencing_token fence) override {
         tracing::trace(tr_state, "Executing a mutation locally");
-        return sp.apply_fence(sp.mutate_locally(_schema, *_mutation, std::move(tr_state), db::commitlog::force_sync::no, timeout, rate_limit_info), fence, utils::fb_utilities::get_broadcast_address());
+        return sp.apply_fence(sp.mutate_locally(_schema, *_mutation, std::move(tr_state), db::commitlog::force_sync::no, timeout, rate_limit_info), fence, sp.my_address());
     }
     virtual future<> apply_remotely(storage_proxy& sp, gms::inet_address ep, const inet_address_vector_replica_set& forward,
             storage_proxy::response_id_type response_id, storage_proxy::clock_type::time_point timeout,
@@ -1093,7 +1100,7 @@ public:
             fencing_token fence) override {
         tracing::trace(tr_state, "Sending a mutation to /{}", ep);
         return sp.remote().send_mutation(netw::messaging_service::msg_addr{ep, 0}, timeout, tracing::make_trace_info(tr_state),
-                *_mutation, forward, utils::fb_utilities::get_broadcast_address(), this_shard_id(),
+                *_mutation, forward, sp.my_address(), this_shard_id(),
                 response_id, rate_limit_info, fence);
     }
     virtual bool is_shared() override {
@@ -1116,14 +1123,14 @@ public:
             fencing_token fence) override {
         // A hint will be sent to all relevant endpoints when the endpoint it was originally intended for
         // becomes unavailable - this might include the current node
-        return sp.apply_fence(sp.mutate_hint(_schema, *_mutation, std::move(tr_state), timeout), fence, utils::fb_utilities::get_broadcast_address());
+        return sp.apply_fence(sp.mutate_hint(_schema, *_mutation, std::move(tr_state), timeout), fence, sp.my_address());
     }
     virtual future<> apply_remotely(storage_proxy& sp, gms::inet_address ep, const inet_address_vector_replica_set& forward,
             storage_proxy::response_id_type response_id, storage_proxy::clock_type::time_point timeout,
             tracing::trace_state_ptr tr_state, db::per_partition_rate_limit::info rate_limit_info, fencing_token fence) override {
         return sp.remote().send_hint_mutation(
                 netw::messaging_service::msg_addr{ep, 0}, timeout, tr_state,
-                *_mutation, forward, utils::fb_utilities::get_broadcast_address(), this_shard_id(), response_id, rate_limit_info, fence);
+                *_mutation, forward, sp.my_address(), this_shard_id(), response_id, rate_limit_info, fence);
     }
 };
 
@@ -1250,7 +1257,7 @@ public:
         // TODO: Enforce per partition rate limiting in paxos
         return sp.remote().send_paxos_learn(
                 netw::messaging_service::msg_addr{ep, 0}, timeout, tracing::make_trace_info(tr_state),
-                *_proposal, forward, utils::fb_utilities::get_broadcast_address(), this_shard_id(), response_id);
+                *_proposal, forward, sp.my_address(), this_shard_id(), response_id);
     }
     virtual bool is_shared() override {
         return true;
@@ -1583,7 +1590,7 @@ private:
 class datacenter_write_response_handler : public abstract_write_response_handler {
     bool waited_for(gms::inet_address from) override {
         const auto& topo = _effective_replication_map_ptr->get_topology();
-        return fbu::is_me(from) || (topo.get_datacenter(from) == topo.get_datacenter());
+        return topo.is_me(from) || (topo.get_datacenter(from) == topo.get_datacenter());
     }
 
 public:
@@ -1925,7 +1932,8 @@ future<paxos::prepare_summary> paxos_response_handler::prepare_ballot(utils::UUI
                 // sends query result content while other replicas send digests needed to check consistency.
                 bool only_digest = peer != _live_endpoints[0];
                 auto da = digest_algorithm(*_proxy);
-                if (fbu::is_me(peer)) {
+                const auto& topo = _effective_replication_map_ptr->get_topology();
+                if (topo.is_me(peer)) {
                     tracing::trace(tr_state, "prepare_ballot: prepare {} locally", ballot);
                     response = co_await paxos::paxos_state::prepare(*_proxy, _proxy->remote().system_keyspace(), tr_state, _schema, *_cmd, _key.key(), ballot, only_digest, da, _timeout);
                 } else {
@@ -2082,9 +2090,10 @@ future<bool> paxos_response_handler::accept_proposal(lw_shared_ptr<paxos::propos
         auto handle_one_msg = [this, &request_tracker, timeout_if_partially_accepted, proposal = std::move(proposal)] (gms::inet_address peer) mutable -> future<> {
             bool is_timeout = false;
             std::optional<bool> accepted;
+            const auto& topo = _effective_replication_map_ptr->get_topology();
 
             try {
-                if (fbu::is_me(peer)) {
+                if (topo.is_me(peer)) {
                     tracing::trace(tr_state, "accept_proposal: accept {} locally", *proposal);
                     accepted = co_await paxos::paxos_state::accept(*_proxy, _proxy->remote().system_keyspace(), tr_state, _schema, proposal->update.decorated_key(*_schema).token(), *proposal, _timeout);
                 } else {
@@ -2236,11 +2245,13 @@ void paxos_response_handler::prune(utils::UUID ballot) {
     }
      _proxy->get_stats().cas_now_pruning++;
     _proxy->get_stats().cas_prune++;
+    auto erm = _effective_replication_map_ptr;
+    auto my_address = _proxy->my_address();
     // running in the background, but the amount of the bg job is limited by pruning_limit
     // it is waited by holding shared pointer to storage_proxy which guaranties
     // that storage_proxy::stop() will wait for this to complete
-    (void)parallel_for_each(_live_endpoints, [this, ballot] (gms::inet_address peer) mutable {
-        if (fbu::is_me(peer)) {
+    (void)parallel_for_each(_live_endpoints, [this, ballot, erm, my_address] (gms::inet_address peer) mutable {
+        if (peer == my_address) {
             tracing::trace(tr_state, "prune: prune {} locally", ballot);
             return paxos::paxos_state::prune(_proxy->remote().system_keyspace(), _schema, _key.key(), ballot, _timeout, tr_state);
         } else {
@@ -2734,7 +2745,7 @@ void storage_proxy_stats::stats::register_stats() {
 }
 
 inline uint64_t& storage_proxy_stats::split_stats::get_ep_stat(const locator::topology& topo, gms::inet_address ep) noexcept {
-    if (fbu::is_me(ep)) {
+    if (topo.is_me(ep)) {
         return _local.val;
     }
 
@@ -3019,7 +3030,7 @@ storage_proxy::create_write_response_handler_helper(schema_ptr s, const dht::tok
     tracing::trace(tr_state, "Creating write handler for token: {} natural: {} pending: {}", token, natural_endpoints ,pending_endpoints);
 
     const bool coordinator_in_replica_set = std::find(natural_endpoints.begin(), natural_endpoints.end(),
-            utils::fb_utilities::get_broadcast_address()) != natural_endpoints.end();
+            my_address()) != natural_endpoints.end();
 
     // Check if this node, which is serving as a coordinator for
     // the mutation, is also a replica for the partition being
@@ -3271,7 +3282,7 @@ gms::inet_address storage_proxy::find_leader_for_counter_update(const mutation& 
         throw exceptions::unavailable_exception(cl, block_for(erm, cl), 0);
     }
 
-    const auto my_address = utils::fb_utilities::get_broadcast_address();
+    const auto my_address = this->my_address();
     // Early return if coordinator can become the leader (so one extra internode message can be
     // avoided). With token-aware drivers this is the expected case, so we are doing it ASAP.
     if (boost::algorithm::any_of_equal(live_endpoints, my_address)) {
@@ -3320,7 +3331,7 @@ future<> storage_proxy::mutate_counters(Range&& mutations, db::consistency_level
     }
 
     // Forward mutations to the leaders chosen for them
-    auto my_address = utils::fb_utilities::get_broadcast_address();
+    auto my_address = this->my_address();
     co_await coroutine::parallel_for_each(leaders, [this, cl, timeout, tr_state = std::move(tr_state), permit = std::move(permit), my_address, fence] (auto& endpoint_and_mutations) -> future<> {
       auto first_schema = endpoint_and_mutations.second[0].s;
 
@@ -3537,7 +3548,7 @@ storage_proxy::mutate_atomically(std::vector<mutation> mutations, db::consistenc
 }
 
 static inet_address_vector_replica_set endpoint_filter(
-        const noncopyable_function<bool(const gms::inet_address&)>& is_alive,
+        const noncopyable_function<bool(const gms::inet_address&)>& is_alive, gms::inet_address my_address,
         const sstring& local_rack, const std::unordered_map<sstring, std::unordered_set<gms::inet_address>>& endpoints) {
     // special case for single-node data centers
     if (endpoints.size() == 1 && endpoints.begin()->second.size() == 1) {
@@ -3547,9 +3558,8 @@ static inet_address_vector_replica_set endpoint_filter(
     // strip out dead endpoints and localhost
     std::unordered_multimap<sstring, gms::inet_address> validated;
 
-    auto is_valid = [&is_alive] (gms::inet_address input) {
-        return input != utils::fb_utilities::get_broadcast_address()
-            && is_alive(input);
+    auto is_valid = [&is_alive, my_address] (gms::inet_address input) {
+        return input != my_address && is_alive(input);
     };
 
     for (auto& e : endpoints) {
@@ -3640,12 +3650,12 @@ storage_proxy::mutate_atomically_result(std::vector<mutation> mutations, db::con
                 , _batch_uuid(utils::UUID_gen::get_time_UUID())
                 , _batchlog_endpoints(
                         [this]() -> inet_address_vector_replica_set {
-                            auto local_addr = utils::fb_utilities::get_broadcast_address();
+                            auto local_addr = _p.my_address();
                             auto& topology = _ermp->get_topology();
                             auto local_dc = topology.get_datacenter();
                             auto& local_endpoints = topology.get_datacenter_racks().at(local_dc);
                             auto local_rack = topology.get_rack();
-                            auto chosen_endpoints = endpoint_filter(std::bind_front(&storage_proxy::is_alive, &_p),
+                            auto chosen_endpoints = endpoint_filter(std::bind_front(&storage_proxy::is_alive, &_p), local_addr,
                                                                     local_rack, local_endpoints);
 
                             if (chosen_endpoints.empty()) {
@@ -3925,7 +3935,7 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
     auto& stats = handler_ptr->stats();
     auto& handler = *handler_ptr;
     auto& global_stats = handler._proxy->_global_stats;
-    if (handler.get_targets().size() != 1 || !fbu::is_me(handler.get_targets()[0])) {
+    if (handler.get_targets().size() != 1 || !is_me(handler.get_targets()[0])) {
         auto& topology = handler_ptr->_effective_replication_map_ptr->get_topology();
         auto local_dc = topology.get_datacenter();
 
@@ -3954,7 +3964,7 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
     }
 
     auto all = boost::range::join(local, dc_groups);
-    auto my_address = utils::fb_utilities::get_broadcast_address();
+    auto my_address = this->my_address();
 
     // lambda for applying mutation locally
     auto lmutate = [handler_ptr, response_id, this, my_address, timeout] () mutable {
@@ -4223,7 +4233,7 @@ public:
 private:
     bool waiting_for(gms::inet_address ep) {
         const auto& topo = _effective_replication_map_ptr->get_topology();
-        return db::is_datacenter_local(_cl) ? fbu::is_me(ep) || (topo.get_datacenter(ep) == topo.get_datacenter()) : true;
+        return db::is_datacenter_local(_cl) ? topo.is_me(ep) || (topo.get_datacenter(ep) == topo.get_datacenter()) : true;
     }
     void got_response(gms::inet_address ep) {
         if (!_cl_reported) {
@@ -4843,9 +4853,9 @@ public:
 protected:
     future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>> make_mutation_data_request(lw_shared_ptr<query::read_command> cmd, gms::inet_address ep, clock_type::time_point timeout) {
         ++_proxy->get_stats().mutation_data_read_attempts.get_ep_stat(get_topology(), ep);
-        if (fbu::is_me(ep)) {
+        if (_proxy->is_me(ep)) {
             tracing::trace(_trace_state, "read_mutation_data: querying locally");
-            return _proxy->apply_fence(_proxy->query_mutations_locally(_schema, cmd, _partition_range, timeout, _trace_state), get_fence(), utils::fb_utilities::get_broadcast_address());
+            return _proxy->apply_fence(_proxy->query_mutations_locally(_schema, cmd, _partition_range, timeout, _trace_state), get_fence(), _proxy->my_address());
         } else {
             return _proxy->remote().send_read_mutation_data(netw::messaging_service::msg_addr{ep, 0}, timeout,
                 _trace_state, *cmd, _partition_range,
@@ -4857,9 +4867,9 @@ protected:
         auto opts = want_digest
                   ? query::result_options{query::result_request::result_and_digest, digest_algorithm(*_proxy)}
                   : query::result_options{query::result_request::only_result, query::digest_algorithm::none};
-        if (fbu::is_me(ep)) {
+        if (_proxy->is_me(ep)) {
             tracing::trace(_trace_state, "read_data: querying locally");
-            return _proxy->apply_fence(_proxy->query_result_local(_effective_replication_map_ptr, _schema, _cmd, _partition_range, opts, _trace_state, timeout, adjust_rate_limit_for_local_operation(_rate_limit_info)), get_fence(), utils::fb_utilities::get_broadcast_address());
+            return _proxy->apply_fence(_proxy->query_result_local(_effective_replication_map_ptr, _schema, _cmd, _partition_range, opts, _trace_state, timeout, adjust_rate_limit_for_local_operation(_rate_limit_info)), get_fence(), _proxy->my_address());
         } else {
             return _proxy->remote().send_read_data(netw::messaging_service::msg_addr{ep, 0}, timeout,
                 _trace_state, *_cmd, _partition_range, opts.digest_algo, _rate_limit_info,
@@ -4868,10 +4878,10 @@ protected:
     }
     future<rpc::tuple<query::result_digest, api::timestamp_type, cache_temperature, std::optional<full_position>>> make_digest_request(gms::inet_address ep, clock_type::time_point timeout) {
         ++_proxy->get_stats().digest_read_attempts.get_ep_stat(get_topology(), ep);
-        if (fbu::is_me(ep)) {
+        if (_proxy->is_me(ep)) {
             tracing::trace(_trace_state, "read_digest: querying locally");
             return _proxy->apply_fence(_proxy->query_result_local_digest(_effective_replication_map_ptr, _schema, _cmd, _partition_range, _trace_state,
-                        timeout, digest_algorithm(*_proxy), adjust_rate_limit_for_local_operation(_rate_limit_info)), get_fence(), utils::fb_utilities::get_broadcast_address());
+                        timeout, digest_algorithm(*_proxy), adjust_rate_limit_for_local_operation(_rate_limit_info)), get_fence(), _proxy->my_address());
         } else {
             tracing::trace(_trace_state, "read_digest: sending a message to /{}", ep);
             return _proxy->remote().send_read_digest(netw::messaging_service::msg_addr{ep, 0}, timeout,
@@ -5313,7 +5323,7 @@ result<::shared_ptr<abstract_read_executor>> storage_proxy::get_read_executor(lw
     // reordering of endpoints happens. The local endpoint, if
     // present, is always first in the list, as get_endpoints_for_reading()
     // orders the list by proximity to the local endpoint.
-    is_read_non_local |= !all_replicas.empty() && all_replicas.front() != utils::fb_utilities::get_broadcast_address();
+    is_read_non_local |= !all_replicas.empty() && all_replicas.front() != erm->get_topology().my_address();
 
     auto cf = _db.local().find_column_family(schema).shared_from_this();
     inet_address_vector_replica_set target_replicas = filter_replicas_for_read(cl, *erm, all_replicas, preferred_endpoints, repair_decision,
@@ -6224,9 +6234,9 @@ inet_address_vector_replica_set storage_proxy::get_live_endpoints(const locator:
 }
 
 void storage_proxy::sort_endpoints_by_proximity(const locator::topology& topo, inet_address_vector_replica_set& eps) const {
-    topo.sort_by_proximity(utils::fb_utilities::get_broadcast_address(), eps);
+    topo.sort_by_proximity(my_address(), eps);
     // FIXME: before dynamic snitch is implement put local address (if present) at the beginning
-    auto it = boost::range::find(eps, utils::fb_utilities::get_broadcast_address());
+    auto it = boost::range::find(eps, my_address());
     if (it != eps.end() && it != eps.begin()) {
         std::iter_swap(it, eps.begin());
     }
@@ -6273,7 +6283,7 @@ storage_proxy::filter_replicas_for_read(
 }
 
 bool storage_proxy::is_alive(const gms::inet_address& ep) const {
-    return _remote ? _remote->is_alive(ep) : (ep == utils::fb_utilities::get_broadcast_address());
+    return _remote ? _remote->is_alive(ep) : is_me(ep);
 }
 
 inet_address_vector_replica_set storage_proxy::intersection(const inet_address_vector_replica_set& l1, const inet_address_vector_replica_set& l2) {

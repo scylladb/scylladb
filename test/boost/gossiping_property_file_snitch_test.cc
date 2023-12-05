@@ -9,7 +9,6 @@
 
 #include <boost/test/unit_test.hpp>
 #include "locator/gossiping_property_file_snitch.hh"
-#include "utils/fb_utilities.hh"
 #include "test/lib/scylla_test_case.hh"
 #include <seastar/util/std-compat.hh>
 #include <seastar/core/reactor.hh>
@@ -32,14 +31,15 @@ future<> one_test(const std::string& property_fname, bool exp_result) {
     path fname(test_files_subdir);
     fname /= path(property_fname);
 
-    utils::fb_utilities::set_broadcast_address(gms::inet_address("localhost"));
-    utils::fb_utilities::set_broadcast_rpc_address(gms::inet_address("localhost"));
-
     engine().set_strict_dma(false);
+
+    auto my_address = gms::inet_address("localhost");
 
     snitch_config cfg;
     cfg.name = "org.apache.cassandra.locator.GossipingPropertyFileSnitch";
     cfg.properties_file_name = fname.string();
+    cfg.listen_address = my_address;
+    cfg.broadcast_address = my_address;
     auto snitch_i = std::make_unique<sharded<locator::snitch_ptr>>();
     auto& snitch = *snitch_i;
 

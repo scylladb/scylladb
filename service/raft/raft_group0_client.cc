@@ -20,6 +20,7 @@
 #include "idl/group0_state_machine.dist.hh"
 #include "idl/group0_state_machine.dist.impl.hh"
 #include "service/raft/group0_state_machine.hh"
+#include "replica/database.hh"
 
 
 namespace service {
@@ -301,7 +302,7 @@ group0_command raft_group0_client::prepare_command(Command change, group0_guard&
         .prev_state_id{guard.observed_group0_state_id()},
         .new_state_id{guard.new_group0_state_id()},
 
-        .creator_addr{utils::fb_utilities::get_broadcast_address()},
+        .creator_addr{_sys_ks.local_db().get_token_metadata().get_topology().my_address()},
         .creator_id{_raft_gr.group0().id()}
     };
 
@@ -321,7 +322,7 @@ group0_command raft_group0_client::prepare_command(Command change, std::string_v
         .prev_state_id{std::nullopt},
         .new_state_id{new_group0_state_id},
 
-        .creator_addr{utils::fb_utilities::get_broadcast_address()},
+        .creator_addr{_sys_ks.local_db().get_token_metadata().get_topology().my_address()},
         .creator_id{_raft_gr.group0().id()}
     };
 

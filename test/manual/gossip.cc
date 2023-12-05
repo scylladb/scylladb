@@ -16,7 +16,6 @@
 #include "message/messaging_service.hh"
 #include "gms/gossiper.hh"
 #include "gms/application_state.hh"
-#include "utils/fb_utilities.hh"
 #include "log.hh"
 #include <seastar/core/thread.hh>
 #include <chrono>
@@ -55,8 +54,6 @@ int main(int ac, char ** av) {
             auto config = app.configuration();
             logging::logger_registry().set_logger_level("gossip", logging::log_level::trace);
             const gms::inet_address listen = gms::inet_address(config["listen-address"].as<std::string>());
-            utils::fb_utilities::set_broadcast_address(listen);
-            utils::fb_utilities::set_broadcast_rpc_address(listen);
             auto cfg = std::make_unique<db::config>();
 
             sharded<abort_source> abort_sources;
@@ -65,7 +62,12 @@ int main(int ac, char ** av) {
 
             abort_sources.start().get();
             auto stop_abort_source = defer([&] { abort_sources.stop().get(); });
-            token_metadata.start([] () noexcept { return db::schema_tables::hold_merge_lock(); }, locator::token_metadata::config{}).get();
+
+            locator::token_metadata::config tm_cfg;
+            auto my_address = gms::inet_address("localhost");
+            tm_cfg.topo_cfg.this_endpoint = my_address;
+            tm_cfg.topo_cfg.this_cql_address = my_address;
+            token_metadata.start([] () noexcept { return db::schema_tables::hold_merge_lock(); }, tm_cfg).get();
             auto stop_token_mgr = defer([&] { token_metadata.stop().get(); });
 
             messaging.start(locator::host_id{}, listen, 7000).get();

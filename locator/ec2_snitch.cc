@@ -24,36 +24,32 @@ future<> ec2_snitch::load_config(bool prefer_local) {
     using namespace boost::algorithm;
 
     if (this_shard_id() == io_cpu_id()) {
-        auto token = aws_api_call(AWS_QUERY_SERVER_ADDR, AWS_QUERY_SERVER_PORT, TOKEN_REQ_ENDPOINT, std::nullopt).get0();
-        return aws_api_call(AWS_QUERY_SERVER_ADDR, AWS_QUERY_SERVER_PORT, ZONE_NAME_QUERY_REQ, token).then([this, prefer_local](sstring az) {
-            assert(az.size());
+        auto token = co_await aws_api_call(AWS_QUERY_SERVER_ADDR, AWS_QUERY_SERVER_PORT, TOKEN_REQ_ENDPOINT, std::nullopt);
+        auto az = co_await aws_api_call(AWS_QUERY_SERVER_ADDR, AWS_QUERY_SERVER_PORT, ZONE_NAME_QUERY_REQ, token);
+        assert(az.size());
 
-            std::vector<std::string> splits;
+        std::vector<std::string> splits;
 
-            // Split "us-east-1a" or "asia-1a" into "us-east"/"1a" and "asia"/"1a".
-            split(splits, az, is_any_of("-"));
-            assert(splits.size() > 1);
+        // Split "us-east-1a" or "asia-1a" into "us-east"/"1a" and "asia"/"1a".
+        split(splits, az, is_any_of("-"));
+        assert(splits.size() > 1);
 
-            sstring my_rack = splits[splits.size() - 1];
+        sstring my_rack = splits[splits.size() - 1];
 
-            // hack for CASSANDRA-4026
-            sstring my_dc = az.substr(0, az.size() - 1);
-            if (my_dc[my_dc.size() - 1] == '1') {
-                my_dc = az.substr(0, az.size() - 3);
-            }
+        // hack for CASSANDRA-4026
+        sstring my_dc = az.substr(0, az.size() - 1);
+        if (my_dc[my_dc.size() - 1] == '1') {
+            my_dc = az.substr(0, az.size() - 3);
+        }
 
-            return read_property_file().then([this, prefer_local, my_dc, my_rack] (sstring datacenter_suffix) mutable {
-                my_dc += datacenter_suffix;
-                logger().info("Ec2Snitch using region: {}, zone: {}.", my_dc, my_rack);
-                return container().invoke_on_all([prefer_local, my_dc, my_rack] (snitch_ptr& local_s) {
-                    local_s->set_my_dc_and_rack(my_dc, my_rack);
-                    local_s->set_prefer_local(prefer_local);
-                });
-            });
+        auto datacenter_suffix = co_await read_property_file();
+        my_dc += datacenter_suffix;
+        logger().info("Ec2Snitch using region: {}, zone: {}.", my_dc, my_rack);
+        co_await container().invoke_on_all([prefer_local, my_dc, my_rack] (snitch_ptr& local_s) {
+            local_s->set_my_dc_and_rack(my_dc, my_rack);
+            local_s->set_prefer_local(prefer_local);
         });
     }
-
-    return make_ready_future<>();
 }
 
 future<> ec2_snitch::start() {

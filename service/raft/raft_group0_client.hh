@@ -24,7 +24,6 @@
 #include "gc_clock.hh"
 #include "service/raft/group0_state_machine.hh"
 #include "db/system_keyspace.hh"
-#include "utils/fb_utilities.hh"
 
 namespace service {
 // Obtaining this object means that all previously finished operations on group 0 are visible on this node.

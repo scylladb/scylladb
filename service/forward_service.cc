@@ -35,7 +35,6 @@
 #include "tracing/trace_state.hh"
 #include "tracing/tracing.hh"
 #include "types/types.hh"
-#include "utils/fb_utilities.hh"
 #include "service/storage_proxy.hh"
 
 #include "cql3/functions/aggregate_function.hh"
@@ -268,7 +267,8 @@ public:
     {}
 
     future<query::forward_result> dispatch_to_node(netw::msg_addr id, query::forward_request req) {
-        if (utils::fb_utilities::is_me(id.addr)) {
+        auto my_address = _forwarder._messaging.broadcast_address();
+        if (id.addr == my_address) {
             return _forwarder.dispatch_to_shards(req, _tr_info);
         }
 

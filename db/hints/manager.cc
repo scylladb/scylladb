@@ -38,7 +38,6 @@
 #include "utils/disk-error-handler.hh"
 #include "utils/div_ceil.hh"
 #include "utils/error_injection.hh"
-#include "utils/fb_utilities.hh"
 #include "utils/lister.hh"
 #include "utils/runtime.hh"
 #include "converting_mutation_partition_applier.hh"
@@ -363,13 +362,13 @@ bool manager::too_many_in_flight_hints_for(endpoint_id ep) const noexcept {
     // There is no need to check the DC here because if there is an in-flight hint for this
     // endpoint, then this means that its DC has already been checked and found to be ok.
     return _stats.size_of_hints_in_progress > MAX_SIZE_OF_HINTS_IN_PROGRESS
-            && !utils::fb_utilities::is_me(ep)
+            && _proxy.local_db().get_token_metadata().get_topology().is_me(ep)
             && hints_in_progress_for(ep) > 0
             && local_gossiper().get_endpoint_downtime(ep) <= _max_hint_window_us;
 }
 
 bool manager::can_hint_for(endpoint_id ep) const noexcept {
-    if (utils::fb_utilities::is_me(ep)) {
+    if (_proxy.local_db().get_token_metadata().get_topology().is_me(ep)) {
         return false;
     }
 
@@ -502,7 +501,7 @@ future<> manager::drain_for(endpoint_id endpoint) noexcept {
 
     std::exception_ptr eptr = nullptr;
 
-    if (utils::fb_utilities::is_me(endpoint)) {
+    if (_proxy.local_db().get_token_metadata().get_topology().is_me(endpoint)) {
         set_draining_all();
         
         try {

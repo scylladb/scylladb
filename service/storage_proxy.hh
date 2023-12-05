@@ -495,7 +495,13 @@ public:
     void start_remote(netw::messaging_service&, gms::gossiper&, migration_manager&, sharded<db::system_keyspace>& sys_ks);
     future<> stop_remote();
 
+    gms::inet_address my_address() const noexcept;
+
+    bool is_me(gms::inet_address addr) const noexcept;
+
 private:
+    bool only_me(const inet_address_vector_replica_set& replicas) const noexcept;
+
     // Throws an error if remote is not initialized.
     const struct remote& remote() const;
     struct remote& remote();

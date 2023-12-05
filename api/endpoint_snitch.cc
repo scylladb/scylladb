@@ -11,7 +11,6 @@
 #include "endpoint_snitch.hh"
 #include "api/api-doc/endpoint_snitch_info.json.hh"
 #include "api/api-doc/storage_service.json.hh"
-#include "utils/fb_utilities.hh"
 
 namespace api {
 using namespace seastar::httpd;

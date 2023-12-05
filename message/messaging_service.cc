@@ -240,7 +240,7 @@ future<> messaging_service::unregister_handler(messaging_verb verb) {
 }
 
 messaging_service::messaging_service(locator::host_id id, gms::inet_address ip, uint16_t port)
-    : messaging_service(config{std::move(id), std::move(ip), port},
+    : messaging_service(config{std::move(id), ip, ip, port},
                         scheduling_config{{{{}, "$default"}}, {}, {}}, nullptr)
 {}
 
@@ -336,7 +336,8 @@ bool messaging_service::is_host_banned(locator::host_id id) {
 }
 
 void messaging_service::do_start_listen() {
-    bool listen_to_bc = _cfg.listen_on_broadcast_address && _cfg.ip != utils::fb_utilities::get_broadcast_address();
+    auto broadcast_address = this->broadcast_address();
+    bool listen_to_bc = _cfg.listen_on_broadcast_address && _cfg.ip != broadcast_address;
     rpc::server_options so;
     if (_cfg.compress != compress_what::none) {
         so.compressor_factory = &compressor_factory;
@@ -379,7 +380,7 @@ void messaging_service::do_start_listen() {
         };
         _server[0] = listen(_cfg.ip, rpc::streaming_domain_type(0x55AA));
         if (listen_to_bc) {
-            _server[1] = listen(utils::fb_utilities::get_broadcast_address(), rpc::streaming_domain_type(0x66BB));
+            _server[1] = listen(broadcast_address, rpc::streaming_domain_type(0x66BB));
         }
     }
     
@@ -405,22 +406,22 @@ void messaging_service::do_start_listen() {
         };
         _server_tls[0] = listen(_cfg.ip, rpc::streaming_domain_type(0x77CC));
         if (listen_to_bc) {
-            _server_tls[1] = listen(utils::fb_utilities::get_broadcast_address(), rpc::streaming_domain_type(0x88DD));
+            _server_tls[1] = listen(broadcast_address, rpc::streaming_domain_type(0x88DD));
         }
     }
     // Do this on just cpu 0, to avoid duplicate logs.
     if (this_shard_id() == 0) {
         if (_server_tls[0]) {
-            mlogger.info("Starting Encrypted Messaging Service on SSL port {}", _cfg.ssl_port);
+            mlogger.info("Starting Encrypted Messaging Service on SSL address {} port {}", _cfg.ip, _cfg.ssl_port);
         }
         if (_server_tls[1]) {
-            mlogger.info("Starting Encrypted Messaging Service on SSL broadcast address {} port {}", utils::fb_utilities::get_broadcast_address(), _cfg.ssl_port);
+            mlogger.info("Starting Encrypted Messaging Service on SSL broadcast address {} port {}", broadcast_address, _cfg.ssl_port);
         }
         if (_server[0]) {
-            mlogger.info("Starting Messaging Service on port {}", _cfg.port);
+            mlogger.info("Starting Messaging Service on address {} port {}", _cfg.ip, _cfg.port);
         }
         if (_server[1]) {
-            mlogger.info("Starting Messaging Service on broadcast address {} port {}", utils::fb_utilities::get_broadcast_address(), _cfg.port);
+            mlogger.info("Starting Messaging Service on broadcast address {} port {}", broadcast_address, _cfg.port);
         }
     }
 }
@@ -473,14 +474,6 @@ msg_addr messaging_service::get_source(const rpc::client_info& cinfo) {
 }
 
 messaging_service::~messaging_service() = default;
-
-uint16_t messaging_service::port() {
-    return _cfg.port;
-}
-
-gms::inet_address messaging_service::listen_address() {
-    return _cfg.ip;
-}
 
 static future<> do_with_servers(std::string_view what, std::array<std::unique_ptr<messaging_service::rpc_protocol_server_wrapper>, 2>& servers, auto method) {
     mlogger.info("{} server", what);
@@ -824,7 +817,7 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
     }
 
     auto my_host_id = _cfg.id;
-    auto broadcast_address = utils::fb_utilities::get_broadcast_address();
+    auto broadcast_address = _cfg.broadcast_address;
     bool listen_to_bc = _cfg.listen_on_broadcast_address && _cfg.ip != broadcast_address;
     auto laddr = socket_address(listen_to_bc ? broadcast_address : _cfg.ip, 0);
 
@@ -929,7 +922,7 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
     // No reply is received, nothing to wait for.
     (void)_rpc->make_client<
             rpc::no_wait_type(gms::inet_address, uint32_t, uint64_t, utils::UUID)>(messaging_verb::CLIENT_ID)(
-                *it->second.rpc_client, utils::fb_utilities::get_broadcast_address(), src_cpu_id,
+                *it->second.rpc_client, broadcast_address, src_cpu_id,
                 query::result_memory_limiter::maximum_result_size, my_host_id.uuid())
             .handle_exception([ms = shared_from_this(), remote_addr, verb] (std::exception_ptr ep) {
         mlogger.debug("Failed to send client id to {} for verb {}: {}", remote_addr, std::underlying_type_t<messaging_verb>(verb), ep);

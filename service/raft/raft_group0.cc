@@ -1301,7 +1301,7 @@ static future<bool> wait_for_peers_to_enter_synchronize_state(
     // This is a work-around for boost tests where RPC module is not listening so we cannot contact ourselves.
     // But really, except the (arguably broken) test code, we don't need to be treated as an edge case. All nodes are symmetric.
     // For production code this line is unnecessary.
-    entered_synchronize->insert(utils::fb_utilities::get_broadcast_address());
+    entered_synchronize->insert(ms.broadcast_address());
 
     for (sleep_with_exponential_backoff sleep;; co_await sleep(as)) {
         // We fetch the config again on every attempt to handle the possibility of removing failed nodes.

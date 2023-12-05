@@ -16,7 +16,6 @@
 #include "streaming/stream_result_future.hh"
 #include "streaming/stream_manager.hh"
 #include "dht/i_partitioner.hh"
-#include "utils/fb_utilities.hh"
 #include "streaming/stream_plan.hh"
 #include <seastar/core/sleep.hh>
 #include <seastar/core/thread.hh>
@@ -117,7 +116,7 @@ void stream_manager::init_messaging_service_handler(abort_source& as) {
         sslog.trace("Got stream_mutation_fragments from {} reason {}", from, int(reason));
         if (!_sys_dist_ks.local_is_initialized() || !_view_update_generator.local_is_initialized()) {
             return make_exception_future<rpc::sink<int>>(std::runtime_error(format("Node {} is not fully initialized for streaming, try again later",
-                    utils::fb_utilities::get_broadcast_address())));
+                    _db.local().get_token_metadata().get_topology().my_address())));
         }
         return _mm.local().get_schema_for_write(schema_id, from, _ms.local(), as).then([this, from, estimated_partitions, plan_id, cf_id, source, reason] (schema_ptr s) mutable {
           return _db.local().obtain_reader_permit(s, "stream-session", db::no_timeout, {}).then([this, from, estimated_partitions, plan_id, cf_id, source, reason, s] (reader_permit permit) mutable {

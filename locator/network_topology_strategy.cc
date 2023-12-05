@@ -15,7 +15,6 @@
 
 #include "locator/network_topology_strategy.hh"
 #include "locator/load_sketch.hh"
-#include "utils/fb_utilities.hh"
 #include <boost/algorithm/string.hpp>
 #include "utils/hash.hh"
 

@@ -8,7 +8,6 @@
 
 #include <boost/test/unit_test.hpp>
 #include "test/lib/scylla_test_case.hh"
-#include "utils/fb_utilities.hh"
 #include "locator/token_metadata.hh"
 #include "locator/simple_strategy.hh"
 #include "locator/everywhere_replication_strategy.hh"
@@ -29,6 +28,7 @@ namespace {
         return make_lw_shared<token_metadata>(token_metadata::config {
             topology::config {
                 .this_endpoint = this_endpoint,
+                .this_cql_address = this_endpoint,
                 .local_dc_rack = get_dc_rack(this_endpoint)
             }
         });

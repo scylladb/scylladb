@@ -161,6 +161,7 @@ class topology {
 public:
     struct config {
         inet_address this_endpoint;
+        inet_address this_cql_address;   // corresponds to broadcast_rpc_address
         host_id this_host_id;
         endpoint_dc_rack local_dc_rack;
         bool disable_proximity_sorting = false;
@@ -335,6 +336,26 @@ public:
     void sort_by_proximity(inet_address address, inet_address_vector_replica_set& addresses) const;
 
     void for_each_node(std::function<void(const node*)> func) const;
+
+    host_id my_host_id() const noexcept {
+        return _cfg.this_host_id;
+    }
+
+    inet_address my_address() const noexcept {
+        return _cfg.this_endpoint;
+    }
+
+    inet_address my_cql_address() const noexcept {
+        return _cfg.this_cql_address;
+    }
+
+    bool is_me(const locator::host_id& id) const noexcept {
+        return id == my_host_id();
+    }
+
+    bool is_me(const inet_address& addr) const noexcept {
+        return addr == my_address();
+    }
 
 private:
     bool is_configured_this_node(const node&) const;

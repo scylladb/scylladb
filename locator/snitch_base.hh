@@ -46,10 +46,10 @@ struct snitch_config {
     sstring name = "SimpleSnitch";
     sstring properties_file_name = "";
     unsigned io_cpu_id = 0;
-    bool broadcast_rpc_address_specified_by_user = false;
 
     // Gossiping-property-file specific
     gms::inet_address listen_address;
+    gms::inet_address broadcast_address;
 
     // GCE-specific
     sstring gce_meta_server_url = "";
@@ -77,6 +77,8 @@ public:
             .rack = get_rack(),
         };
     }
+
+    virtual std::optional<inet_address> get_public_address() const noexcept { return std::nullopt; }
 
     /**
      * returns whatever info snitch wants to gossip
@@ -285,6 +287,8 @@ inline future<> i_endpoint_snitch::reset_snitch(sharded<snitch_ptr>& snitch, sni
 
 class snitch_base : public i_endpoint_snitch {
 public:
+    snitch_base(const snitch_config& cfg) : _cfg(cfg) {}
+
     //
     // Sons have to implement:
     // virtual sstring get_rack()        = 0;
@@ -296,6 +300,7 @@ public:
 protected:
     sstring _my_dc;
     sstring _my_rack;
+    snitch_config _cfg;
 };
 
 } // namespace locator

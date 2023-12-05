@@ -12,6 +12,7 @@
 
 #include <seastar/util/closeable.hh>
 #include <seastar/core/abort_source.hh>
+#include "gms/inet_address.hh"
 #include "tasks/task_manager.hh"
 #include "utils/build_id.hh"
 #include "supervisor.hh"
@@ -531,7 +532,9 @@ sharded<service::storage_proxy> *the_storage_proxy;
 static locator::host_id initialize_local_info_thread(sharded<db::system_keyspace>& sys_ks,
         sharded<locator::snitch_ptr>& snitch,
         const gms::inet_address& listen_address,
-        const db::config& cfg)
+        const db::config& cfg,
+        gms::inet_address broadcast_address,
+        gms::inet_address broadcast_rpc_address)
 {
     auto linfo = sys_ks.local().load_local_info().get0();
     if (linfo.cluster_name.empty()) {
@@ -545,7 +548,7 @@ static locator::host_id initialize_local_info_thread(sharded<db::system_keyspace
     }
 
     linfo.listen_address = listen_address;
-    sys_ks.local().save_local_info(std::move(linfo), snitch.local()->get_location()).get();
+    sys_ks.local().save_local_info(std::move(linfo), snitch.local()->get_location(), broadcast_address, broadcast_rpc_address).get();
     return linfo.host_id;
 }
 
@@ -811,9 +814,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             auto family = cfg->enable_ipv6_dns_lookup() || preferred ? std::nullopt : std::make_optional(net::inet_address::family::INET);
 
             auto broadcast_addr = utils::resolve(cfg->broadcast_address || cfg->listen_address, family, preferred).get0();
-            utils::fb_utilities::set_broadcast_address(broadcast_addr);
             auto broadcast_rpc_addr = utils::resolve(cfg->broadcast_rpc_address || cfg->rpc_address, family, preferred).get0();
-            utils::fb_utilities::set_broadcast_rpc_address(broadcast_rpc_addr);
 
             ctx.api_dir = cfg->api_ui_dir();
             if (!ctx.api_dir.empty() && ctx.api_dir.back() != '/') {
@@ -873,8 +874,8 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             debug::the_snitch = &snitch;
             snitch_config snitch_cfg;
             snitch_cfg.name = cfg->endpoint_snitch();
-            snitch_cfg.broadcast_rpc_address_specified_by_user = !cfg->broadcast_rpc_address().empty();
             snitch_cfg.listen_address = utils::resolve(cfg->listen_address, family).get0();
+            snitch_cfg.broadcast_address = broadcast_addr;
             snitch.start(snitch_cfg).get();
             auto stop_snitch = defer_verbose_shutdown("snitch", [&snitch] {
                 snitch.stop().get();
@@ -883,9 +884,23 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // #293 - do not stop anything (unless snitch.on_all(start) fails)
             stop_snitch->cancel();
 
+            if (auto opt_public_address = snitch.local()->get_public_address()) {
+                // Use the Public IP as broadcast_address to other nodes
+                // and the broadcast_rpc_address (for client CQL connections).
+                //
+                // Cassandra 2.1 manual explicitly instructs to set broadcast_address
+                // value to a public address in cassandra.yaml.
+                //
+                broadcast_addr = *opt_public_address;
+                if (cfg->broadcast_rpc_address().empty()) {
+                    broadcast_rpc_addr = *opt_public_address;
+                }
+            }
+
             supervisor::notify("starting tokens manager");
             locator::token_metadata::config tm_cfg;
-            tm_cfg.topo_cfg.this_endpoint = utils::fb_utilities::get_broadcast_address();
+            tm_cfg.topo_cfg.this_endpoint = broadcast_addr;
+            tm_cfg.topo_cfg.this_cql_address = broadcast_rpc_addr;
             tm_cfg.topo_cfg.local_dc_rack = snitch.local()->get_location();
             if (snitch.local()->get_name() == "org.apache.cassandra.locator.SimpleSnitch") {
                 //
@@ -1189,9 +1204,9 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             sys_ks.local().build_bootstrap_info().get();
 
             const auto listen_address = utils::resolve(cfg->listen_address, family).get0();
-            const auto host_id = initialize_local_info_thread(sys_ks, snitch, listen_address, *cfg);
+            const auto host_id = initialize_local_info_thread(sys_ks, snitch, listen_address, *cfg, broadcast_addr, broadcast_rpc_addr);
 
-          shared_token_metadata::mutate_on_all_shards(token_metadata, [host_id, endpoint = utils::fb_utilities::get_broadcast_address()] (locator::token_metadata& tm) {
+          shared_token_metadata::mutate_on_all_shards(token_metadata, [host_id, endpoint = broadcast_addr] (locator::token_metadata& tm) {
               // Makes local host id available in topology cfg as soon as possible.
               // Raft topology discard the endpoint-to-id map, so the local id can
               // still be found in the config.
@@ -1204,6 +1219,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             mscfg.id = host_id;
             mscfg.ip = listen_address;
+            mscfg.broadcast_address = broadcast_addr;
             mscfg.port = cfg->storage_port();
             mscfg.ssl_port = cfg->ssl_storage_port();
             mscfg.listen_on_broadcast_address = cfg->listen_on_broadcast_address();
@@ -1271,7 +1287,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             supervisor::notify("starting gossiper");
             gms::gossip_config gcfg;
             gcfg.gossip_scheduling_group = dbcfg.gossip_scheduling_group;
-            gcfg.seeds = get_seeds_from_db_config(*cfg);
+            gcfg.seeds = get_seeds_from_db_config(*cfg, broadcast_addr);
             gcfg.cluster_name = cfg->cluster_name();
             gcfg.partitioner = cfg->partitioner();
             gcfg.ring_delay_ms = cfg->ring_delay_ms();

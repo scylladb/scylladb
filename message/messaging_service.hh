@@ -267,7 +267,8 @@ public:
 
     struct config {
         locator::host_id id;
-        gms::inet_address ip;
+        gms::inet_address ip;                   // a.k.a. listen_address - the address this node is listening on
+        gms::inet_address broadcast_address;    // This node's address, as told to other nodes
         uint16_t port;
         uint16_t ssl_port = 0;
         encrypt_what encrypt = encrypt_what::none;
@@ -340,8 +341,15 @@ public:
 
     future<> start();
     future<> start_listen(locator::shared_token_metadata& stm);
-    uint16_t port();
-    gms::inet_address listen_address();
+    uint16_t port() const noexcept {
+        return _cfg.port;
+    }
+    gms::inet_address listen_address() const noexcept {
+        return _cfg.ip;
+    }
+    gms::inet_address broadcast_address() const noexcept {
+        return _cfg.broadcast_address;
+    }
     future<> shutdown();
     future<> stop();
     static rpc::no_wait_type no_wait();

@@ -161,6 +161,10 @@ public:
         return *_role_manager;
     }
 
+    const cql3::query_processor& query_processor() const noexcept {
+        return _qp;
+    }
+
 private:
     future<bool> has_existing_legacy_users() const;
 

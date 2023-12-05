@@ -38,7 +38,6 @@
 #include <boost/range/adaptor/map.hpp>
 #include "utils/error_injection.hh"
 #include "utils/histogram_metrics_helper.hh"
-#include "utils/fb_utilities.hh"
 #include "mutation/mutation_source_metadata.hh"
 #include "gms/gossiper.hh"
 #include "gms/feature_service.hh"
@@ -2365,7 +2364,7 @@ table::cache_hit_rate table::get_my_hit_rate() const {
 }
 
 table::cache_hit_rate table::get_hit_rate(const gms::gossiper& gossiper, gms::inet_address addr) {
-    if (utils::fb_utilities::get_broadcast_address() == addr) {
+    if (gossiper.get_broadcast_address() == addr) {
         return get_my_hit_rate();
     }
     auto it = _cluster_cache_hit_rates.find(addr);

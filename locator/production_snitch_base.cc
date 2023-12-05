@@ -10,7 +10,6 @@
 #include "db/system_keyspace.hh"
 #include "gms/gossiper.hh"
 #include "message/messaging_service.hh"
-#include "utils/fb_utilities.hh"
 #include "db/config.hh"
 
 #include <boost/algorithm/string/trim.hpp>
@@ -21,7 +20,8 @@
 namespace locator {
 
 production_snitch_base::production_snitch_base(snitch_config cfg)
-        : allowed_property_keys({ dc_property_key,
+        : snitch_base(cfg)
+        , allowed_property_keys({ dc_property_key,
                           rack_property_key,
                           prefer_local_property_key,
                           dc_suffix_property_key }) {

@@ -10,7 +10,6 @@
 #include "api/api-doc/storage_service.json.hh"
 #include "api/api-doc/endpoint_snitch_info.json.hh"
 #include "locator/token_metadata.hh"
-#include "utils/fb_utilities.hh"
 
 using namespace seastar::httpd;
 
@@ -61,9 +60,9 @@ void set_token_metadata(http_context& ctx, routes& r, sharded<locator::shared_to
         return map_to_key_value(tm.local().get()->get_endpoint_to_host_id_map_for_reading(), res);
     });
 
-    static auto host_or_broadcast = [](const_req req) {
+    static auto host_or_broadcast = [&tm](const_req req) {
         auto host = req.get_query_param("host");
-        return host.empty() ? gms::inet_address(utils::fb_utilities::get_broadcast_address()) : gms::inet_address(host);
+        return host.empty() ? tm.local().get()->get_topology().my_address() : gms::inet_address(host);
     };
 
     httpd::endpoint_snitch_info_json::get_datacenter.set(r, [&tm](const_req req) {
