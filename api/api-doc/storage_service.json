@@ -798,6 +798,21 @@
          ]
       },
       {
+         "path":"/storage_service/cleanup_all",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"Trigger a global cluster cleanup trough the topology coordinator",
+               "type":"long",
+               "nickname":"cleanup_all",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[]
+            }
+         ]
+      },
+      {
          "path":"/storage_service/keyspace_offstrategy_compaction/{keyspace}",
          "operations":[
             {

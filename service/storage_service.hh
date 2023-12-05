@@ -339,6 +339,7 @@ public:
     future<> init_address_map(raft_address_map& address_map);
 
     future<> uninit_address_map();
+    bool is_topology_coordinator_enabled() const;
 
     future<> drain_on_shutdown();
 
@@ -780,6 +781,7 @@ public:
     // Public for `reload_raft_topology_state` REST API.
     future<> topology_transition();
 
+    future<> do_cluster_cleanup();
 public:
     future<> move_tablet(table_id, dht::token, locator::tablet_replica src, locator::tablet_replica dst);
     future<> set_tablet_balancing_enabled(bool);

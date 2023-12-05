@@ -1777,6 +1777,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 "insert CDC generation data (UUID: {})", gen_uuid);
             co_await update_topology_state(std::move(guard), {std::move(mutation), builder.build()}, reason);
         }
+        break;
+        case global_topology_request::cleanup:
+            co_await start_cleanup_on_dirty_nodes(std::move(guard), true);
             break;
         }
     }
@@ -2262,7 +2265,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             }
 
             if (auto* cleanup = std::get_if<start_cleanup>(&work)) {
-                co_await start_cleanup_on_dirty_nodes(std::move(cleanup->guard));
+                co_await start_cleanup_on_dirty_nodes(std::move(cleanup->guard), false);
                 co_return true;
             }
 
@@ -3005,11 +3008,16 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         return muts;
     }
 
-    future<> start_cleanup_on_dirty_nodes(group0_guard guard) {
+    future<> start_cleanup_on_dirty_nodes(group0_guard guard, bool global_request) {
         auto& topo = _topo_sm._topology;
         std::vector<canonical_mutation> muts;
-        muts.reserve(topo.normal_nodes.size());
+        muts.reserve(topo.normal_nodes.size() + size_t(global_request));
 
+        if (global_request) {
+            topology_mutation_builder builder(guard.write_timestamp());
+            builder.del_global_topology_request();
+            muts.emplace_back(builder.build());
+        }
         for (auto& [id, rs] : topo.normal_nodes) {
             if (rs.cleanup == cleanup_status::needed) {
                 topology_mutation_builder builder(guard.write_timestamp());
@@ -4778,6 +4786,10 @@ future<> storage_service::uninit_address_map() {
     return _gossiper.unregister_(_raft_ip_address_updater);
 }
 
+bool storage_service::is_topology_coordinator_enabled() const {
+    return _raft_topology_change_enabled;
+}
+
 future<> storage_service::join_cluster(sharded<db::system_distributed_keyspace>& sys_dist_ks, sharded<service::storage_proxy>& proxy) {
     assert(this_shard_id() == 0);
 
@@ -6321,6 +6333,55 @@ future<> storage_service::do_drain() {
     co_await _db.invoke_on_all(&replica::database::drain);
     co_await _sys_ks.invoke_on_all(&db::system_keyspace::shutdown);
     co_await _repair.invoke_on_all(&repair_service::shutdown);
+}
+
+future<> storage_service::do_cluster_cleanup() {
+    auto& raft_server = _group0->group0_server();
+
+    while (true) {
+        auto guard = co_await _group0->client().start_operation(&_group0_as);
+
+        auto curr_req = _topology_state_machine._topology.global_request;
+        if (curr_req && *curr_req != global_topology_request::cleanup) {
+            // FIXME: replace this with a queue
+            throw std::runtime_error{
+                "topology coordinator: cluster cleanup: a different topology request is already pending, try again later"};
+        }
+
+
+        auto it = _topology_state_machine._topology.find(raft_server.id());
+        if (!it) {
+            throw std::runtime_error(::format("local node {} is not a member of the cluster", raft_server.id()));
+        }
+
+        const auto& rs = it->second;
+
+        if (rs.state != node_state::normal) {
+            throw std::runtime_error(::format("local node is not in the normal state (current state: {})", rs.state));
+        }
+
+        slogger.info("raft topology: cluster cleanup requested");
+        topology_mutation_builder builder(guard.write_timestamp());
+        builder.set_global_topology_request(global_topology_request::cleanup);
+        topology_change change{{builder.build()}};
+        group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard, ::format("cleanup: cluster cleanup requested"));
+
+        try {
+            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), &_group0_as);
+        } catch (group0_concurrent_modification&) {
+            slogger.info("raft topology: cleanup: concurrent operation is detected, retrying.");
+            continue;
+        }
+        break;
+    }
+
+    // Wait cleanup finishes on all nodes
+    co_await _topology_state_machine.event.when([this] {
+        return std::all_of(_topology_state_machine._topology.normal_nodes.begin(), _topology_state_machine._topology.normal_nodes.end(), [] (auto& n) {
+            return n.second.cleanup == cleanup_status::clean;
+        });
+    });
+    slogger.info("raft topology: cluster cleanup done");
 }
 
 future<> storage_service::raft_rebuild(sstring source_dc) {

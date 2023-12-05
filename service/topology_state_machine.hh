@@ -78,6 +78,7 @@ using request_param = std::variant<join_param, rebuild_param, removenode_param, 
 
 enum class global_topology_request: uint16_t {
     new_cdc_generation,
+    cleanup,
 };
 
 struct ring_slice {

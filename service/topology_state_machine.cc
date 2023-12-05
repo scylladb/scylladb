@@ -177,6 +177,7 @@ topology_request topology_request_from_string(const sstring& s) {
 
 static std::unordered_map<global_topology_request, sstring> global_topology_request_to_name_map = {
     {global_topology_request::new_cdc_generation, "new_cdc_generation"},
+    {global_topology_request::cleanup, "cleanup"},
 };
 
 std::ostream& operator<<(std::ostream& os, const global_topology_request& req) {
