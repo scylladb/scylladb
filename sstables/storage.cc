@@ -75,6 +75,8 @@ public:
     virtual noncopyable_function<future<>(std::vector<shared_sstable>)> atomic_deleter() const override {
         return sstable_directory::delete_with_pending_deletion_log;
     }
+    virtual future<atomic_delete_context> atomic_delete_prepare(const std::vector<shared_sstable>&) const override;
+    virtual future<> atomic_delete_complete(atomic_delete_context ctx) const override;
     virtual future<> remove_by_registry_entry(entry_descriptor desc) override;
 
     virtual sstring prefix() const override { return _dir; }
@@ -457,6 +459,14 @@ future<> filesystem_storage::wipe(const sstable& sst, sync_dir sync) noexcept {
     }
 }
 
+future<atomic_delete_context> filesystem_storage::atomic_delete_prepare(const std::vector<shared_sstable>& ssts) const {
+    co_return nullptr;
+}
+
+future<> filesystem_storage::atomic_delete_complete(atomic_delete_context ctx_) const {
+    co_return;
+}
+
 future<> filesystem_storage::remove_by_registry_entry(entry_descriptor desc) {
     on_internal_error(sstlog, "Filesystem storage doesn't keep its entries in registry");
 }
@@ -497,6 +507,8 @@ public:
     virtual noncopyable_function<future<>(std::vector<shared_sstable>)> atomic_deleter() const override {
         return delete_with_system_keyspace;
     }
+    virtual future<atomic_delete_context> atomic_delete_prepare(const std::vector<shared_sstable>&) const override;
+    virtual future<> atomic_delete_complete(atomic_delete_context ctx) const override;
     virtual future<> remove_by_registry_entry(entry_descriptor desc) override;
 
     virtual sstring prefix() const override { return _location; }
@@ -564,6 +576,14 @@ future<> s3_storage::wipe(const sstable& sst, sync_dir) noexcept {
     });
 
     co_await sys_ks.sstables_registry_delete_entry(_location, sst.generation());
+}
+
+future<atomic_delete_context> s3_storage::atomic_delete_prepare(const std::vector<shared_sstable>&) const {
+    co_return nullptr;
+}
+
+future<> s3_storage::atomic_delete_complete(atomic_delete_context ctx) const {
+    co_return;
 }
 
 future<> s3_storage::remove_by_registry_entry(entry_descriptor desc) {

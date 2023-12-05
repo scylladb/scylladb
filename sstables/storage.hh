@@ -31,6 +31,11 @@ class delayed_commit_changes;
 class sstable;
 class sstables_manager;
 class entry_descriptor;
+class atomic_delete_context_impl {
+public:
+    virtual ~atomic_delete_context_impl() {}
+};
+using atomic_delete_context = std::unique_ptr<atomic_delete_context_impl>;
 
 class storage {
     friend class test;
@@ -63,6 +68,8 @@ public:
     virtual future<data_sink> make_component_sink(sstable& sst, component_type type, open_flags oflags, file_output_stream_options options) = 0;
     virtual future<> destroy(const sstable& sst) = 0;
     virtual noncopyable_function<future<>(std::vector<shared_sstable>)> atomic_deleter() const = 0;
+    virtual future<atomic_delete_context> atomic_delete_prepare(const std::vector<shared_sstable>&) const = 0;
+    virtual future<> atomic_delete_complete(atomic_delete_context ctx) const = 0;
     virtual future<> remove_by_registry_entry(entry_descriptor desc) = 0;
 
     virtual sstring prefix() const  = 0;
