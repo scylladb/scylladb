@@ -2024,6 +2024,11 @@ size_t compaction_group::memtable_count() const noexcept {
     return _memtables->size();
 }
 
+size_t storage_group::memtable_count() const noexcept {
+    auto memtable_count = [] (const compaction_group_ptr& cg) { return cg ? cg->memtable_count() : 0; };
+    return memtable_count(_main_cg);
+}
+
 future<> table::flush(std::optional<db::replay_position> pos) {
     if (pos && *pos < _flush_rp) {
         co_return;

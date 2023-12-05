@@ -175,6 +175,8 @@ public:
 
     const dht::token_range& token_range() const noexcept;
 
+    size_t memtable_count() const noexcept;
+
     compaction_group_ptr& main_compaction_group() noexcept;
 
     utils::small_vector<compaction_group*, 3> compaction_groups() noexcept;
