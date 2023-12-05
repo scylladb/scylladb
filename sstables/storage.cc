@@ -72,9 +72,6 @@ public:
     virtual future<data_sink> make_data_or_index_sink(sstable& sst, component_type type) override;
     virtual future<data_sink> make_component_sink(sstable& sst, component_type type, open_flags oflags, file_output_stream_options options) override;
     virtual future<> destroy(const sstable& sst) override { return make_ready_future<>(); }
-    virtual noncopyable_function<future<>(std::vector<shared_sstable>)> atomic_deleter() const override {
-        return sstable_directory::delete_with_pending_deletion_log;
-    }
     virtual future<atomic_delete_context> atomic_delete_prepare(const std::vector<shared_sstable>&) const override;
     virtual future<> atomic_delete_complete(atomic_delete_context ctx) const override;
     virtual future<> remove_by_registry_entry(entry_descriptor desc) override;
@@ -502,8 +499,6 @@ class s3_storage : public sstables::storage {
 
     sstring make_s3_object_name(const sstable& sst, component_type type) const;
 
-    static future<> delete_with_system_keyspace(std::vector<shared_sstable>);
-
 public:
     s3_storage(shared_ptr<s3::client> client, sstring bucket, sstring dir)
         : _client(std::move(client))
@@ -523,9 +518,6 @@ public:
     virtual future<data_sink> make_component_sink(sstable& sst, component_type type, open_flags oflags, file_output_stream_options options) override;
     virtual future<> destroy(const sstable& sst) override {
         return make_ready_future<>();
-    }
-    virtual noncopyable_function<future<>(std::vector<shared_sstable>)> atomic_deleter() const override {
-        return delete_with_system_keyspace;
     }
     virtual future<atomic_delete_context> atomic_delete_prepare(const std::vector<shared_sstable>&) const override;
     virtual future<> atomic_delete_complete(atomic_delete_context ctx) const override;
@@ -628,18 +620,6 @@ future<> s3_storage::remove_by_registry_entry(entry_descriptor desc) {
         }
     });
     co_await _client->delete_object(prefix + "/" + sstable_version_constants::TOC_SUFFIX);
-}
-
-future<> s3_storage::delete_with_system_keyspace(std::vector<shared_sstable> ssts) {
-    co_await coroutine::parallel_for_each(ssts, [] (shared_sstable sst) -> future<> {
-        const s3_storage* storage = dynamic_cast<const s3_storage*>(&sst->get_storage());
-        if (!storage) {
-            on_fatal_internal_error(sstlog, "Atomically deleted sstables must be of same storage type");
-        }
-
-        // FIXME -- need atomicity, see #13567
-        co_await sst->unlink();
-    });
 }
 
 future<> s3_storage::snapshot(const sstable& sst, sstring dir, absolute_path abs) const {

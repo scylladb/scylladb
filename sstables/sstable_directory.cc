@@ -606,27 +606,8 @@ future<std::pair<sstring, sstring>> sstable_directory::create_pending_deletion_l
     });
 }
 
-future<> sstable_directory::delete_with_pending_deletion_log(std::vector<shared_sstable> ssts) {
-    auto [ pending_delete_log, sst_directory] = co_await create_pending_deletion_log(ssts);
-
-    co_await coroutine::parallel_for_each(ssts, [] (shared_sstable sst) {
-        return sst->unlink(sstables::storage::sync_dir::no);
-    });
-    co_await sync_directory(sst_directory);
-
-    // Once all sstables are deleted, the log file can be removed.
-    // Note: the log file will be removed also if unlink failed to remove
-    // any sstable and ignored the error.
-    try {
-        co_await remove_file(pending_delete_log);
-        sstlog.debug("{} removed.", pending_delete_log);
-    } catch (...) {
-        sstlog.warn("Error removing {}: {}. Ignoring.", pending_delete_log, std::current_exception());
-    }
-}
-
 // FIXME: Go through maybe_delete_large_partitions_entry on recovery since
-// this is an indication we crashed in the middle of delete_with_pending_deletion_log
+// this is an indication we crashed in the middle of atomic deletion
 future<> sstable_directory::filesystem_components_lister::replay_pending_delete_log(fs::path pending_delete_log) {
     sstlog.debug("Reading pending_deletes log file {}", pending_delete_log);
     fs::path pending_delete_dir = pending_delete_log.parent_path();
