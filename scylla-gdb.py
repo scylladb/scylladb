@@ -4410,8 +4410,12 @@ class scylla_memtables(gdb.Command):
         for table in for_each_table():
             gdb.write('table %s:\n' % schema_ptr(table['_schema']).table_name())
             try:
-                for cg_ptr in chunked_vector(table["_compaction_groups"]):
-                    scylla_memtables.dump_compaction_group_memtables(std_unique_ptr(cg_ptr).get())
+                try:
+                    for cg in intrusive_list(table["_compaction_groups"], link='_list_hook'):
+                        scylla_memtables.dump_compaction_group_memtables(cg)
+                except gdb.error:
+                    for cg_ptr in chunked_vector(table["_compaction_groups"]):
+                        scylla_memtables.dump_compaction_group_memtables(std_unique_ptr(cg_ptr).get())
             except gdb.error:
                 try:
                     for cg_ptr in std_vector(table["_compaction_groups"]):

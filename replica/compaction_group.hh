@@ -14,7 +14,8 @@
 #include "compaction/compaction_backlog_manager.hh"
 #include "compaction/compaction_strategy_state.hh"
 #include "sstables/sstable_set.hh"
-#include "compaction/compaction_fwd.hh"
+#include "utils/chunked_vector.hh"
+#include <boost/intrusive/list.hpp>
 
 #pragma once
 
@@ -51,6 +52,8 @@ class compaction_group {
     seastar::condition_variable _staging_done_condition;
     // Gates async operations confined to a single group.
     seastar::gate _async_gate;
+    using list_hook_t = boost::intrusive::list_member_hook<boost::intrusive::link_mode<boost::intrusive::auto_unlink>>;
+    list_hook_t _list_hook;
 private:
     // Adds new sstable to the set of sstables
     // Doesn't update the cache. The cache must be synchronized in order for reads to see
@@ -71,6 +74,10 @@ private:
     // it to be moved from its original sstable set (e.g. maintenance) into a new one (e.g. main).
     future<> delete_unused_sstables(sstables::compaction_completion_desc desc);
 public:
+    using list_t = boost::intrusive::list<compaction_group,
+        boost::intrusive::member_hook<compaction_group, compaction_group::list_hook_t, &compaction_group::_list_hook>,
+        boost::intrusive::constant_time_size<false>>;
+
     compaction_group(table& t, size_t gid, dht::token_range token_range);
 
     size_t group_id() const noexcept {
@@ -150,8 +157,30 @@ public:
     }
 };
 
-using compaction_group_vector = utils::chunked_vector<std::unique_ptr<compaction_group>>;
+using compaction_group_ptr = std::unique_ptr<compaction_group>;
+using compaction_group_vector = utils::chunked_vector<compaction_group_ptr>;
+using compaction_group_list = compaction_group::list_t;
 
+// Storage group is responsible for storage that belongs to a single tablet.
+// A storage group can manage 1 or more compaction groups, each of which can be compacted independently.
+// If a tablet needs splitting, the storage group can be put in splitting mode, allowing the storage
+// in main compaction groups to be split into two new compaction groups, all of which will be managed
+// by the same storage group.
+class storage_group {
+    compaction_group_ptr _main_cg;
+public:
+    storage_group(compaction_group_ptr cg, compaction_group_list& list);
+
+    const dht::token_range& token_range() const noexcept;
+
+    compaction_group_ptr& main_compaction_group() noexcept;
+
+    utils::small_vector<compaction_group*, 3> compaction_groups() noexcept;
+};
+
+using storage_group_vector = utils::chunked_vector<std::unique_ptr<storage_group>>;
+
+// TODO: will be changed into storage_group_manager. Not doing it now to reduce the change size.
 class compaction_group_manager {
 public:
     virtual ~compaction_group_manager() {}
