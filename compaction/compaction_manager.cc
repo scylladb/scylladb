@@ -1483,7 +1483,7 @@ class rewrite_sstables_compaction_task_executor : public sstables_task_executor 
 public:
     rewrite_sstables_compaction_task_executor(compaction_manager& mgr, throw_if_stopping do_throw_if_stopping, table_state* t, tasks::task_id parent_id, sstables::compaction_type_options options, owned_ranges_ptr owned_ranges_ptr,
                                      std::vector<sstables::shared_sstable> sstables, compacting_sstable_registration compacting,
-                                     compaction_manager::can_purge_tombstones can_purge, sstring type_options_desc)
+                                     compaction_manager::can_purge_tombstones can_purge, sstring type_options_desc = "")
         : sstables_task_executor(mgr, do_throw_if_stopping, t, options.type(), sstring(sstables::to_string(options.type())), std::move(sstables), parent_id, std::move(type_options_desc))
         , _options(std::move(options))
         , _owned_ranges_ptr(std::move(owned_ranges_ptr))
@@ -1514,17 +1514,21 @@ protected:
         co_return stats;
     }
 
-private:
-    future<sstables::compaction_result> rewrite_sstable(const sstables::shared_sstable sst) {
+    virtual sstables::compaction_descriptor make_descriptor(const sstables::shared_sstable& sst) const {
+        auto sstable_level = sst->get_sstable_level();
+        auto run_identifier = sst->run_identifier();
+        return sstables::compaction_descriptor({ sst },
+            sstable_level, sstables::compaction_descriptor::default_max_sstable_bytes, run_identifier, _options, _owned_ranges_ptr);
+    }
+
+    virtual future<sstables::compaction_result> rewrite_sstable(const sstables::shared_sstable sst) {
+        // FIXME: this compaction should run with maintenance priority.
         co_await coroutine::switch_to(_cm.compaction_sg());
 
         for (;;) {
             switch_state(state::active);
-            auto sstable_level = sst->get_sstable_level();
-            auto run_identifier = sst->run_identifier();
-            // FIXME: this compaction should run with maintenance priority.
-            auto descriptor = sstables::compaction_descriptor({ sst },
-                sstable_level, sstables::compaction_descriptor::default_max_sstable_bytes, run_identifier, _options, _owned_ranges_ptr);
+
+            auto descriptor = make_descriptor(sst);
 
             // Releases reference to cleaned sstable such that respective used disk space can be freed.
             auto on_replace = _compacting.update_on_sstable_replacement();
