@@ -1,0 +1,20 @@
+name: codespell
+on:
+  pull_request:
+    branches:
+      - master
+      - enterprise
+permissions: {}
+jobs:
+  codespell:
+    name: Check for spelling errors
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: codespell-project/actions-codespell@master
+        with:
+          only_warn: 1
+          ignore_words_list: "ser"
+          skip: "./.git,build/*,tools/*,*.js,*.thrift,test/*"
