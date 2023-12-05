@@ -560,7 +560,7 @@ host_id token_metadata_impl<NodeId>::get_host_id(inet_address endpoint) const {
     if (const auto* node = _topology.find_node(endpoint)) [[likely]] {
         return node->host_id();
     } else {
-        throw std::runtime_error(format("host_id for endpoint {} is not found", endpoint));
+        on_internal_error(tlogger, format("host_id for endpoint {} is not found", endpoint));
     }
 }
 
