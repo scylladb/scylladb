@@ -224,6 +224,14 @@
                "type":"string",
                "description":"The description of the task"
             },
+            "kind":{
+               "type":"string",
+               "enum":[
+                  "node",
+                  "cluster"
+               ],
+               "description":"The kind of a task"
+            },
             "scope":{
                "type":"string",
                "description":"The scope of the task"

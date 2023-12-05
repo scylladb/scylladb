@@ -520,6 +520,37 @@ std::set<gms::inet_address> task_manager::module::get_nodes() const noexcept {
     return {_tm.get_broadcast_address()};
 }
 
+future<utils::chunked_vector<task_stats>> task_manager::module::get_stats(is_internal internal, std::function<bool(std::string& keyspace, std::string& table)> filter) const {
+    utils::chunked_vector<task_stats> stats;
+    for (auto [_, task]: get_local_tasks()) {
+        if ((internal || !task->is_internal()) && filter(task->get_status().keyspace, task->get_status().table)) {
+            stats.push_back(task_stats{
+                .task_id = task->id(),
+                .type = task->type(),
+                .kind = task_kind::node,
+                .scope = task->get_status().scope,
+                .state = task->get_status().state,
+                .sequence_number = task->get_sequence_number(),
+                .keyspace = task->get_status().keyspace,
+                .table = task->get_status().table,
+                .entity = task->get_status().entity
+            });
+        }
+    }
+    if (this_shard_id() == 0) {
+        auto virtual_tasks = get_virtual_tasks(); // Copy to make sure iterators are valid.
+        for (auto [_, vt]: virtual_tasks) {
+            auto vstats = co_await vt->get_stats();
+            for (auto&& s: vstats) {
+                if (filter(s.keyspace, s.table)) {
+                    stats.push_back(std::move(s));
+                }
+            }
+        }
+    }
+    co_return stats;
+}
+
 void task_manager::module::register_task(task_ptr task) {
     get_local_tasks()[task->id()] = task;
     try {

@@ -26,33 +26,6 @@ namespace tm = httpd::task_manager_json;
 using namespace json;
 using namespace seastar::httpd;
 
-inline bool filter_tasks(tasks::task_manager::task_ptr task, std::unordered_map<sstring, sstring>& query_params) {
-    return (!query_params.contains("keyspace") || query_params["keyspace"] == task->get_status().keyspace) &&
-        (!query_params.contains("table") || query_params["table"] == task->get_status().table);
-}
-
-struct task_stats {
-    task_stats(tasks::task_manager::task_ptr task)
-        : task_id(task->id().to_sstring())
-        , state(task->get_status().state)
-        , type(task->type())
-        , scope(task->get_status().scope)
-        , keyspace(task->get_status().keyspace)
-        , table(task->get_status().table)
-        , entity(task->get_status().entity)
-        , sequence_number(task->get_status().sequence_number)
-    { }
-
-    sstring task_id;
-    tasks::task_manager::task_state state;
-    std::string type;
-    std::string scope;
-    std::string keyspace;
-    std::string table;
-    std::string entity;
-    uint64_t sequence_number;
-};
-
 tm::task_status make_status(tasks::task_status status) {
     auto start_time = db_clock::to_time_t(status.start_time);
     auto end_time = db_clock::to_time_t(status.end_time);
@@ -87,6 +60,20 @@ tm::task_status make_status(tasks::task_status status) {
     return res;
 }
 
+tm::task_stats make_stats(tasks::task_stats stats) {
+    tm::task_stats res{};
+    res.task_id = stats.task_id.to_sstring();
+    res.type = stats.type;
+    res.kind = stats.kind;
+    res.scope = stats.scope;
+    res.state = stats.state;
+    res.sequence_number = stats.sequence_number;
+    res.keyspace = stats.keyspace;
+    res.table = stats.table;
+    res.entity = stats.entity;
+    return res;
+}
+
 void set_task_manager(http_context& ctx, routes& r, sharded<tasks::task_manager>& tm, db::config& cfg) {
     tm::get_modules.set(r, [&tm] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         std::vector<std::string> v = boost::copy_range<std::vector<std::string>>(tm.local().get_modules() | boost::adaptors::map_keys);
@@ -94,23 +81,28 @@ void set_task_manager(http_context& ctx, routes& r, sharded<tasks::task_manager>
     });
 
     tm::get_tasks.set(r, [&tm] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
-        using chunked_stats = utils::chunked_vector<task_stats>;
+        using chunked_stats = utils::chunked_vector<tasks::task_stats>;
         auto internal = tasks::is_internal{req_param<bool>(*req, "internal", false)};
         std::vector<chunked_stats> res = co_await tm.map([&req, internal] (tasks::task_manager& tm) {
-            chunked_stats local_res;
             tasks::task_manager::module_ptr module;
+            std::optional<std::string> keyspace = std::nullopt;
+            std::optional<std::string> table = std::nullopt;
             try {
                 module = tm.find_module(req->get_path_param("module"));
             } catch (...) {
                 throw bad_param_exception(fmt::format("{}", std::current_exception()));
             }
-            const auto& filtered_tasks = module->get_local_tasks() | boost::adaptors::filtered([&params = req->query_parameters, internal] (const auto& task) {
-                return (internal || !task.second->is_internal()) && filter_tasks(task.second, params);
-            });
-            for (auto& [task_id, task] : filtered_tasks) {
-                local_res.push_back(task_stats{task});
+
+            if (auto it = req->query_parameters.find("keyspace"); it != req->query_parameters.end()) {
+                keyspace = it->second;
             }
-            return local_res;
+            if (auto it = req->query_parameters.find("table"); it != req->query_parameters.end()) {
+                table = it->second;
+            }
+
+            return module->get_stats(internal, [keyspace = std::move(keyspace), table = std::move(table)] (std::string& ks, std::string& t) {
+                return (!keyspace || keyspace == ks) && (!table || table == t);
+            });
         });
 
         std::function<future<>(output_stream<char>&&)> f = [r = std::move(res)] (output_stream<char>&& os) -> future<> {
@@ -123,8 +115,7 @@ void set_task_manager(http_context& ctx, routes& r, sharded<tasks::task_manager>
                 for (auto& v: res) {
                     for (auto& stats: v) {
                         co_await s.write(std::exchange(delim, ", "));
-                        tm::task_stats ts;
-                        ts = stats;
+                        tm::task_stats ts = make_stats(stats);
                         co_await formatter::write(s, ts);
                     }
                 }
