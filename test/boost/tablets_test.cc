@@ -1520,3 +1520,34 @@ SEASTAR_TEST_CASE(test_tablet_id_and_range_side) {
 
     return make_ready_future<>();
 }
+
+SEASTAR_THREAD_TEST_CASE(basic_tablet_storage_splitting_test) {
+    auto cfg = tablet_cql_test_config();
+    cfg.initial_tablets = std::bit_floor(smp::count);
+    do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql(
+                "CREATE TABLE cf (pk int, ck int, v int, PRIMARY KEY (pk, ck))").get();
+
+        for (int i = 0; i < smp::count * 20; i++) {
+            e.execute_cql(format("INSERT INTO cf (pk, ck, v) VALUES ({}, 0, 0)", i)).get();
+        }
+
+        e.db().invoke_on_all([] (replica::database& db) {
+            auto& table = db.find_column_family("ks", "cf");
+            return table.flush();
+        }).get();
+
+        testlog.info("Splitting sstables...");
+        e.db().invoke_on_all([] (replica::database& db) {
+            auto& table = db.find_column_family("ks", "cf");
+            testlog.info("sstable count: {}", table.sstables_count());
+            return table.split_all_storage_groups();
+        }).get();
+
+        testlog.info("Verifying sstables are split...");
+        BOOST_REQUIRE_EQUAL(e.db().map_reduce0([] (replica::database& db) {
+            auto& table = db.find_column_family("ks", "cf");
+            return make_ready_future<bool>(table.all_storage_groups_split());
+        }, bool(false), std::logical_or<bool>()).get0(), true);
+    }, std::move(cfg)).get();
+}

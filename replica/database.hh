@@ -571,8 +571,11 @@ public:
                        const std::vector<sstables::shared_sstable>& old_sstables);
     };
 
+    bool all_storage_groups_split();
+    future<> split_all_storage_groups();
 private:
     // Select a compaction group from a given token.
+    std::pair<size_t, locator::tablet_range_side> storage_group_of(dht::token token) const noexcept;
     size_t storage_group_id_for_token(dht::token token) const noexcept;
     storage_group* storage_group_for_token(dht::token token) const noexcept;
 
@@ -912,7 +915,6 @@ private:
     // Writes the table schema and the manifest of all files in the snapshot directory.
     future<> finalize_snapshot(database& db, sstring jsondir, std::vector<snapshot_file_set> file_sets);
     static future<> seal_snapshot(sstring jsondir, std::vector<snapshot_file_set> file_sets);
-
 public:
     static future<> snapshot_on_all_shards(sharded<database>& sharded_db, const global_table_ptr& table_shards, sstring name);
 

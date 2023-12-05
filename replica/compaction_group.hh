@@ -13,6 +13,7 @@
 #include "compaction/compaction_descriptor.hh"
 #include "compaction/compaction_backlog_manager.hh"
 #include "compaction/compaction_strategy_state.hh"
+#include "locator/tablets.hh"
 #include "sstables/sstable_set.hh"
 #include "utils/chunked_vector.hh"
 #include <boost/intrusive/list.hpp>
@@ -157,6 +158,10 @@ public:
     seastar::gate& async_gate() noexcept {
         return _async_gate;
     }
+
+    compaction_manager& get_compaction_manager() noexcept;
+
+    friend class storage_group;
 };
 
 using compaction_group_ptr = std::unique_ptr<compaction_group>;
@@ -170,6 +175,12 @@ using compaction_group_list = compaction_group::list_t;
 // by the same storage group.
 class storage_group {
     compaction_group_ptr _main_cg;
+    compaction_group_ptr _left_cg;
+    compaction_group_ptr _right_cg;
+private:
+    bool splitting_mode() const {
+        return bool(_left_cg) && bool(_right_cg);
+    }
 public:
     storage_group(compaction_group_ptr cg, compaction_group_list& list);
 
@@ -178,8 +189,23 @@ public:
     size_t memtable_count() const noexcept;
 
     compaction_group_ptr& main_compaction_group() noexcept;
+    compaction_group_ptr& select_compaction_group(locator::tablet_range_side) noexcept;
 
     utils::small_vector<compaction_group*, 3> compaction_groups() noexcept;
+
+    // Puts the storage group in split mode, in which it internally segregates data
+    // into two sstable sets and two memtable sets corresponding to the two adjacent
+    // tablets post-split.
+    // Preexisting sstables and memtables are not split yet.
+    // Returns true if post-conditions for split() are met.
+    bool set_split_mode(compaction_group_list&);
+
+    // Like set_split_mode() but triggers splitting for old sstables and memtables and waits
+    // for it:
+    //  1) Flushes all memtables which were created in non-split mode, and waits for that to complete.
+    //  2) Compacts all sstables which overlap with the split point
+    // Returns a future which resolves when this process is complete.
+    future<> split(compaction_group_list&, sstables::compaction_type_options::split opt);
 };
 
 using storage_group_vector = utils::chunked_vector<std::unique_ptr<storage_group>>;
@@ -188,7 +214,7 @@ class storage_group_manager {
 public:
     virtual ~storage_group_manager() {}
     virtual storage_group_vector make_storage_groups(compaction_group_list& list) const = 0;
-    virtual size_t storage_group_of(dht::token) const = 0;
+    virtual std::pair<size_t, locator::tablet_range_side> storage_group_of(dht::token) const = 0;
     virtual size_t log2_storage_groups() const = 0;
 };
 
