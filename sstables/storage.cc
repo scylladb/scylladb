@@ -459,12 +459,32 @@ future<> filesystem_storage::wipe(const sstable& sst, sync_dir sync) noexcept {
     }
 }
 
+class filesystem_atomic_delete_ctx : public atomic_delete_context_impl {
+public:
+    sstring log;
+    sstring directory;
+    filesystem_atomic_delete_ctx(sstring l, sstring dir) noexcept : log(std::move(l)), directory(std::move(dir)) {}
+};
+
 future<atomic_delete_context> filesystem_storage::atomic_delete_prepare(const std::vector<shared_sstable>& ssts) const {
-    co_return nullptr;
+    auto [ pending_delete_log, sst_directory ] = co_await sstable_directory::create_pending_deletion_log(ssts);
+    co_return std::make_unique<filesystem_atomic_delete_ctx>(std::move(pending_delete_log), std::move(sst_directory));
 }
 
 future<> filesystem_storage::atomic_delete_complete(atomic_delete_context ctx_) const {
-    co_return;
+    auto& ctx = static_cast<filesystem_atomic_delete_ctx&>(*ctx_);
+
+    co_await sync_directory(ctx.directory);
+
+    // Once all sstables are deleted, the log file can be removed.
+    // Note: the log file will be removed also if unlink failed to remove
+    // any sstable and ignored the error.
+    try {
+        co_await remove_file(ctx.log);
+        sstlog.debug("{} removed.", ctx.log);
+    } catch (...) {
+        sstlog.warn("Error removing {}: {}. Ignoring.", ctx.log, std::current_exception());
+    }
 }
 
 future<> filesystem_storage::remove_by_registry_entry(entry_descriptor desc) {
@@ -579,6 +599,7 @@ future<> s3_storage::wipe(const sstable& sst, sync_dir) noexcept {
 }
 
 future<atomic_delete_context> s3_storage::atomic_delete_prepare(const std::vector<shared_sstable>&) const {
+    // FIXME -- need atomicity, see #13567
     co_return nullptr;
 }
 
