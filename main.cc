@@ -1278,6 +1278,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             gcfg.shadow_round_ms = cfg->shadow_round_ms();
             gcfg.shutdown_announce_ms = cfg->shutdown_announce_in_ms();
             gcfg.skip_wait_for_gossip_to_settle = cfg->skip_wait_for_gossip_to_settle();
+            gcfg.endpoint_expiration_time = cfg->gossip_endpoint_expiration_time();
             if (gcfg.cluster_name.empty()) {
                 gcfg.cluster_name = "Test Cluster";
                 startlog.warn("Using default cluster name is not recommended. Using a unique cluster name will reduce the chance of adding nodes to the wrong cluster by mistake");
