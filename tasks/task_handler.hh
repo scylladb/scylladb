@@ -13,6 +13,11 @@
 
 namespace tasks {
 
+enum class task_kind {
+    cluster,
+    node,
+};
+
 struct task_identity {
     gms::inet_address node;
     task_id task_id;
@@ -39,7 +44,15 @@ struct task_status {
 };
 
 struct task_stats {
-    // FIXME: implement
+    std::string task_id;
+    std::string type;
+    task_kind kind;
+    std::string scope;
+    task_manager::task_state state;
+    uint64_t sequence_number;
+    std::string keyspace;
+    std::string table;
+    std::string entity;
 };
 
 class task_handler {

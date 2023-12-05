@@ -19,6 +19,7 @@
 #include "gms/inet_address.hh"
 #include "tasks/types.hh"
 #include "utils/UUID.hh"
+#include "utils/chunked_vector.hh"
 #include "utils/serialized_action.hh"
 #include "utils/updateable_value.hh"
 
@@ -283,6 +284,7 @@ public:
         const tasks_collection& get_tasks_collection() const noexcept;
         // Returns a list of nodes on which some of virtual tasks on this module can have their children.
         virtual std::vector<gms::inet_address> get_nodes() const noexcept;
+        future<utils::chunked_vector<task_stats>> get_stats(is_internal internal, std::function<bool(std::string&, std::string&)> filter) const;
 
         void register_task(task_ptr task);
         void register_virtual_task(task_group group, virtual_task_ptr task);
