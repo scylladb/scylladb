@@ -23,7 +23,7 @@ Quorum Requirement
 -------------------
 
 Raft requires at least a quorum of nodes in a cluster to be available. If multiple nodes fail
-and the quorum is lost, the cluster is unavailable for schema updates. See :ref:`Handling Failures <raft-handling-failures>`
+and the quorum is lost, the cluster is unavailable for schema updates or topology changes. See :ref:`Handling Failures <raft-handling-failures>`
 for information on how to handle failures.
 
 Note that when you have a two-DC cluster with the same number of nodes in each DC, the cluster will lose the quorum if one
