@@ -1253,7 +1253,7 @@ public:
 
         _segment_manager->sanity_check_size(s);
 
-        if (!is_still_allocating() || position() + s > _segment_manager->max_size) { // would we make the file too big?
+        if (!is_still_allocating() || next_position(s) > _segment_manager->max_size) { // would we make the file too big?
             return write_result::no_space;
         } else if (!_buffer.empty() && (s > _buffer_ostream.size())) {  // enough data?
             if (_segment_manager->cfg.mode == sync_mode::BATCH || writer.sync) {
@@ -1340,6 +1340,12 @@ public:
 
     position_type position() const {
         return position_type(_file_pos + buffer_position());
+    }
+
+    position_type next_position(size_t size) const {
+        auto used = _buffer_ostream_size - _buffer_ostream.size();
+        used += size;
+        return _file_pos + used + sector_overhead(used);
     }
 
     size_t file_position() const {

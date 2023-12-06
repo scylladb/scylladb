@@ -1140,6 +1140,50 @@ SEASTAR_TEST_CASE(test_commitlog_entry_offsets) {
     });
 }
 
+SEASTAR_TEST_CASE(test_commitlog_max_segment_size) {
+    commitlog::config cfg;
+    cfg.commitlog_segment_size_in_mb = 1;
+    cfg.commitlog_total_space_in_mb = 2 * smp::count;
+    cfg.allow_going_over_size_limit = false;
+
+    return cl_test(cfg, [max_size = cfg.commitlog_segment_size_in_mb](commitlog& log) -> future<> {
+        auto uuid = make_table_id();
+        sstring tmp = "hej bubba cow";
+        db::replay_position last_rp;
+        std::optional<db::segment_id_type> last;
+        auto max_size_bytes = max_size * 1024 * 1024;
+
+        for (;;) {
+            auto h = co_await log.add_mutation(uuid, tmp.size(), db::commitlog::force_sync::no, [&](db::commitlog::output& dst) {
+                dst.write(tmp.data(), tmp.size());
+            });
+
+            auto rp = h.release();
+
+            if (last && last != rp.id) {
+                break;
+            }
+            last = rp.id;
+        }
+
+        co_await log.sync_all_segments();
+
+        auto segments = log.get_active_segment_names();
+        BOOST_REQUIRE(!segments.empty());
+
+        for (auto& seg : segments) {
+            auto desc = commitlog::descriptor(seg);
+            if (last == desc.id) {
+                auto size = co_await file_size(seg);
+                BOOST_REQUIRE_LE(size, max_size_bytes);
+                co_return;
+            }
+        }
+
+        BOOST_FAIL("Did not find segment");
+    });
+}
+
 SEASTAR_TEST_CASE(test_commitlog_new_segment_odsync){
     commitlog::config cfg;
     cfg.commitlog_segment_size_in_mb = 1;
