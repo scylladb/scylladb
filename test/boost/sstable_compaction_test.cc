@@ -2192,17 +2192,17 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_validate_mode_test) {
     std::swap(*muts.begin(), *(muts.begin() + 1));
 
     test.run(schema, muts, [] (table_for_tests& table, compaction::table_state& ts, std::vector<sstables::shared_sstable> sstables) {
-                BOOST_REQUIRE(sstables.size() == 1);
-                auto sst = sstables.front();
+        BOOST_REQUIRE(sstables.size() == 1);
+        auto sst = sstables.front();
 
-                // No way to really test validation besides observing the log messages.
-                sstables::compaction_type_options::scrub opts = {
-                    .operation_mode = sstables::compaction_type_options::scrub::mode::validate,
-                };
-                table->get_compaction_manager().perform_sstable_scrub(ts, opts).get();
+        // No way to really test validation besides observing the log messages.
+        sstables::compaction_type_options::scrub opts = {
+            .operation_mode = sstables::compaction_type_options::scrub::mode::validate,
+        };
+        table->get_compaction_manager().perform_sstable_scrub(ts, opts).get();
 
-                BOOST_REQUIRE(sst->is_quarantined());
-                BOOST_REQUIRE(in_strategy_sstables(ts).empty());
+        BOOST_REQUIRE(sst->is_quarantined());
+        BOOST_REQUIRE(in_strategy_sstables(ts).empty());
     });
 }
 
@@ -2326,18 +2326,18 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_abort_mode_test) {
     std::swap(*muts.begin(), *(muts.begin() + 1));
 
     test.run(schema, muts, [] (table_for_tests& table, compaction::table_state& ts, std::vector<sstables::shared_sstable> sstables) {
-                BOOST_REQUIRE(sstables.size() == 1);
-                auto sst = sstables.front();
+        BOOST_REQUIRE(sstables.size() == 1);
+        auto sst = sstables.front();
 
-                testlog.info("Scrub in abort mode");
+        testlog.info("Scrub in abort mode");
 
-                // We expect the scrub with mode=srub::mode::abort to stop on the first invalid fragment.
-                sstables::compaction_type_options::scrub opts = {};
-                opts.operation_mode = sstables::compaction_type_options::scrub::mode::abort;
-                BOOST_REQUIRE_THROW(table->get_compaction_manager().perform_sstable_scrub(ts, opts).get(), sstables::compaction_aborted_exception);
+        // We expect the scrub with mode=srub::mode::abort to stop on the first invalid fragment.
+        sstables::compaction_type_options::scrub opts = {};
+        opts.operation_mode = sstables::compaction_type_options::scrub::mode::abort;
+        BOOST_REQUIRE_THROW(table->get_compaction_manager().perform_sstable_scrub(ts, opts).get(), sstables::compaction_aborted_exception);
 
-                BOOST_REQUIRE(in_strategy_sstables(ts).size() == 1);
-                BOOST_REQUIRE(in_strategy_sstables(ts).front() == sst);
+        BOOST_REQUIRE(in_strategy_sstables(ts).size() == 1);
+        BOOST_REQUIRE(in_strategy_sstables(ts).front() == sst);
     });
 }
 
@@ -2372,20 +2372,20 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_skip_mode_test) {
     scrubbed_fragments.erase(scrubbed_fragments.begin() + first_cr_index);
 
     test.run(schema, std::move(corrupt_fragments), [&] (table_for_tests& table, compaction::table_state& ts, std::vector<sstables::shared_sstable> sstables) {
-                BOOST_REQUIRE(sstables.size() == 1);
-                auto sst = sstables.front();
+        BOOST_REQUIRE(sstables.size() == 1);
+        auto sst = sstables.front();
 
-                testlog.info("Scrub in skip mode");
+        testlog.info("Scrub in skip mode");
 
-                // We expect the scrub with mode=srub::mode::skip to get rid of all invalid data.
-                sstables::compaction_type_options::scrub opts = {};
-                opts.operation_mode = sstables::compaction_type_options::scrub::mode::skip;
-                table->get_compaction_manager().perform_sstable_scrub(ts, opts).get();
+        // We expect the scrub with mode=srub::mode::skip to get rid of all invalid data.
+        sstables::compaction_type_options::scrub opts = {};
+        opts.operation_mode = sstables::compaction_type_options::scrub::mode::skip;
+        table->get_compaction_manager().perform_sstable_scrub(ts, opts).get();
 
-                BOOST_REQUIRE(in_strategy_sstables(ts).size() == 1);
-                BOOST_REQUIRE(in_strategy_sstables(ts).front() != sst);
+        BOOST_REQUIRE(in_strategy_sstables(ts).size() == 1);
+        BOOST_REQUIRE(in_strategy_sstables(ts).front() != sst);
 
-                verify_fragments(in_strategy_sstables(ts), test.env().make_reader_permit(), scrubbed_fragments);
+        verify_fragments(in_strategy_sstables(ts), test.env().make_reader_permit(), scrubbed_fragments);
     });
 }
 
@@ -2414,18 +2414,18 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_segregate_mode_test) {
     std::swap(cr1, cr2);
 
     test.run(schema, std::move(corrupt_fragments), [&] (table_for_tests& table, compaction::table_state& ts, std::vector<sstables::shared_sstable> sstables) {
-                BOOST_REQUIRE(sstables.size() == 1);
+        BOOST_REQUIRE(sstables.size() == 1);
 
-                testlog.info("Scrub in segregate mode");
+        testlog.info("Scrub in segregate mode");
 
-                // We expect the scrub with mode=srub::mode::segregate to fix all out-of-order data.
-                sstables::compaction_type_options::scrub opts = {};
-                opts.operation_mode = sstables::compaction_type_options::scrub::mode::segregate;
-                table->get_compaction_manager().perform_sstable_scrub(ts, opts).get();
+        // We expect the scrub with mode=srub::mode::segregate to fix all out-of-order data.
+        sstables::compaction_type_options::scrub opts = {};
+        opts.operation_mode = sstables::compaction_type_options::scrub::mode::segregate;
+        table->get_compaction_manager().perform_sstable_scrub(ts, opts).get();
 
-                testlog.info("Scrub resulted in {} sstables", in_strategy_sstables(ts).size());
-                BOOST_REQUIRE(in_strategy_sstables(ts).size() > 1);
-                verify_fragments(in_strategy_sstables(ts), test.env().make_reader_permit(), explode(test.env().make_reader_permit(), muts));
+        testlog.info("Scrub resulted in {} sstables", in_strategy_sstables(ts).size());
+        BOOST_REQUIRE(in_strategy_sstables(ts).size() > 1);
+        verify_fragments(in_strategy_sstables(ts), test.env().make_reader_permit(), explode(test.env().make_reader_permit(), muts));
     });
 }
 
@@ -2453,44 +2453,44 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_quarantine_mode_test) {
     for (auto qmode : quarantine_modes) {
         testlog.info("Checking qurantine mode {}", qmode);
         test.run(schema, corrupt_muts, [&] (table_for_tests& table, compaction::table_state& ts, std::vector<sstables::shared_sstable> sstables) {
-                    BOOST_REQUIRE(sstables.size() == 1);
-                    auto sst = sstables.front();
+            BOOST_REQUIRE(sstables.size() == 1);
+            auto sst = sstables.front();
 
-                    auto permit = test.env().make_reader_permit();
+            auto permit = test.env().make_reader_permit();
 
-                    testlog.info("Scrub in validate mode");
+            testlog.info("Scrub in validate mode");
 
-                    // We expect the scrub with mode=scrub::mode::validate to quarantine the sstable.
-                    sstables::compaction_type_options::scrub opts = {};
-                    opts.operation_mode = sstables::compaction_type_options::scrub::mode::validate;
-                    table->get_compaction_manager().perform_sstable_scrub(ts, opts).get();
+            // We expect the scrub with mode=scrub::mode::validate to quarantine the sstable.
+            sstables::compaction_type_options::scrub opts = {};
+            opts.operation_mode = sstables::compaction_type_options::scrub::mode::validate;
+            table->get_compaction_manager().perform_sstable_scrub(ts, opts).get();
 
-                    BOOST_REQUIRE(in_strategy_sstables(ts).empty());
-                    BOOST_REQUIRE(sst->is_quarantined());
-                    verify_fragments({sst}, permit, corrupt_fragments);
+            BOOST_REQUIRE(in_strategy_sstables(ts).empty());
+            BOOST_REQUIRE(sst->is_quarantined());
+            verify_fragments({sst}, permit, corrupt_fragments);
 
-                    testlog.info("Scrub in segregate mode with quarantine_mode {}", qmode);
+            testlog.info("Scrub in segregate mode with quarantine_mode {}", qmode);
 
-                    // We expect the scrub with mode=scrub::mode::segregate to fix all out-of-order data.
-                    opts.operation_mode = sstables::compaction_type_options::scrub::mode::segregate;
-                    opts.quarantine_operation_mode = qmode;
-                    table->get_compaction_manager().perform_sstable_scrub(ts, opts).get();
+            // We expect the scrub with mode=scrub::mode::segregate to fix all out-of-order data.
+            opts.operation_mode = sstables::compaction_type_options::scrub::mode::segregate;
+            opts.quarantine_operation_mode = qmode;
+            table->get_compaction_manager().perform_sstable_scrub(ts, opts).get();
 
-                    switch (qmode) {
-                    case sstables::compaction_type_options::scrub::quarantine_mode::include:
-                    case sstables::compaction_type_options::scrub::quarantine_mode::only:
-                        // The sstable should be found and scrubbed when scrub::quarantine_mode is scrub::quarantine_mode::{include,only}
-                        testlog.info("Scrub resulted in {} sstables", in_strategy_sstables(ts).size());
-                        BOOST_REQUIRE(in_strategy_sstables(ts).size() > 1);
-                        verify_fragments(in_strategy_sstables(ts), permit, scrubbed_fragments);
-                        break;
-                    case sstables::compaction_type_options::scrub::quarantine_mode::exclude:
-                        // The sstable should not be found when scrub::quarantine_mode is scrub::quarantine_mode::exclude
-                        BOOST_REQUIRE(in_strategy_sstables(ts).empty());
-                        BOOST_REQUIRE(sst->is_quarantined());
-                        verify_fragments({sst}, permit, corrupt_fragments);
-                        break;
-                    }
+            switch (qmode) {
+            case sstables::compaction_type_options::scrub::quarantine_mode::include:
+            case sstables::compaction_type_options::scrub::quarantine_mode::only:
+                // The sstable should be found and scrubbed when scrub::quarantine_mode is scrub::quarantine_mode::{include,only}
+                testlog.info("Scrub resulted in {} sstables", in_strategy_sstables(ts).size());
+                BOOST_REQUIRE(in_strategy_sstables(ts).size() > 1);
+                verify_fragments(in_strategy_sstables(ts), permit, scrubbed_fragments);
+                break;
+            case sstables::compaction_type_options::scrub::quarantine_mode::exclude:
+                // The sstable should not be found when scrub::quarantine_mode is scrub::quarantine_mode::exclude
+                BOOST_REQUIRE(in_strategy_sstables(ts).empty());
+                BOOST_REQUIRE(sst->is_quarantined());
+                verify_fragments({sst}, permit, corrupt_fragments);
+                break;
+            }
         });
     }
 }
