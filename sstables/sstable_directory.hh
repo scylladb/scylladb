@@ -276,7 +276,7 @@ public:
     // until all shards agree it can be deleted.
     //
     // This function only solves the second problem for now.
-    static future<> delete_with_pending_deletion_log(std::vector<shared_sstable> ssts);
+
     // Creates the deletion log for atomic deletion of sstables (helper for the
     // above function that's also used by tests)
     // Returns a pair of "logilfe name" and "directory with sstables"

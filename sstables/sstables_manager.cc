@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include <seastar/coroutine/parallel_for_each.hh>
 #include "log.hh"
 #include "sstables/sstables_manager.hh"
 #include "sstables/partition_index_cache.hh"
@@ -181,8 +182,14 @@ future<> sstables_manager::delete_atomically(std::vector<shared_sstable> ssts) {
     // in the same storage so it's OK to get the deleter from the
     // front element. The deleter implementation is welcome to check
     // that sstables from the vector really live in it.
-    auto deleter = ssts.front()->get_storage().atomic_deleter();
-    co_await deleter(std::move(ssts));
+    auto& storage = ssts.front()->get_storage();
+    auto ctx = co_await storage.atomic_delete_prepare(ssts);
+
+    co_await coroutine::parallel_for_each(ssts, [] (shared_sstable sst) {
+        return sst->unlink(sstables::storage::sync_dir::no);
+    });
+
+    co_await storage.atomic_delete_complete(std::move(ctx));
 }
 
 future<> sstables_manager::close() {
