@@ -1135,8 +1135,18 @@ static future<executor::request_return_type> create_table_on_shard0(tracing::tra
     }
     co_await service::prepare_new_column_family_announcement(schema_mutations, sp, *ksm, schema, ts);
     for (schema_builder& view_builder : view_builders) {
+        view_ptr view(view_builder.build());
         db::schema_tables::add_table_or_view_to_schema_mutation(
-            view_ptr(view_builder.build()), ts, true, schema_mutations);
+            view, ts, true, schema_mutations);
+        // add_table_or_view_to_schema_mutation() is a low-level function that
+        // doesn't call the callbacks that prepare_new_view_announcement()
+        // calls. So we need to call this callback here :-( If we don't, among
+        // other things *tablets* will not be created for the new view.
+        // These callbacks need to be called in a Seastar thread.
+        co_await seastar::async([&sp, &ksm, &view, &schema_mutations, ts] {
+            return sp.local_db().get_notifier().before_create_column_family(*ksm, *view, schema_mutations, ts);
+        });
+
     }
     co_await mm.announce(std::move(schema_mutations), std::move(group0_guard), format("alternator-executor: create {} table", table_name));
 
