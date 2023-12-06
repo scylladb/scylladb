@@ -275,12 +275,6 @@ public:
     }
 
 public:
-    /**
-     * @return a (stable copy, won't be modified) Token to Endpoint map for all the normal and bootstrapping nodes
-     *         in the cluster.
-     */
-    std::map<token, NodeId> get_normal_and_bootstrapping_token_to_endpoint_map() const;
-
     long get_ring_version() const {
         return _ring_version;
     }
@@ -902,13 +896,6 @@ void token_metadata_impl<NodeId>::del_replacing_endpoint(NodeId existing_node) {
 }
 
 template <typename NodeId>
-std::map<token, NodeId> token_metadata_impl<NodeId>::get_normal_and_bootstrapping_token_to_endpoint_map() const {
-    std::map<token, NodeId> ret(_token_to_endpoint_map.begin(), _token_to_endpoint_map.end());
-    ret.insert(_bootstrap_tokens.begin(), _bootstrap_tokens.end());
-    return ret;
-}
-
-template <typename NodeId>
 topology_change_info<NodeId>::topology_change_info(lw_shared_ptr<generic_token_metadata<NodeId>> target_token_metadata_,
         lw_shared_ptr<generic_token_metadata<NodeId>> base_token_metadata_,
     std::vector<dht::token> all_tokens_,
@@ -1319,12 +1306,6 @@ template <typename NodeId>
 void
 generic_token_metadata<NodeId>::set_read_new(read_new_t read_new) {
     _impl->set_read_new(read_new);
-}
-
-template <typename NodeId>
-std::map<token, NodeId>
-generic_token_metadata<NodeId>::get_normal_and_bootstrapping_token_to_endpoint_map() const {
-    return _impl->get_normal_and_bootstrapping_token_to_endpoint_map();
 }
 
 template <typename NodeId>

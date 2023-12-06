@@ -6242,7 +6242,15 @@ storage_service::construct_range_to_endpoint_map(
 
 
 std::map<token, inet_address> storage_service::get_token_to_endpoint_map() {
-    return get_token_metadata().get_normal_and_bootstrapping_token_to_endpoint_map();
+    const auto& tm = *get_token_metadata().get_new();
+    std::map<token, inet_address> result;
+    for (const auto [t, id]: tm.get_token_to_endpoint()) {
+        result.insert({t, tm.get_endpoint_for_host_id(id)});
+    }
+    for (const auto [t, id]: tm.get_bootstrap_tokens()) {
+        result.insert({t, tm.get_endpoint_for_host_id(id)});
+    }
+    return result;
 }
 
 std::chrono::milliseconds storage_service::get_ring_delay() {

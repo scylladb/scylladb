@@ -328,12 +328,6 @@ public:
     using read_new_t = bool_class<class read_new_tag>;
     void set_read_new(read_new_t value);
 
-    /**
-     * @return a (stable copy, won't be modified) Token to Endpoint map for all the normal and bootstrapping nodes
-     *         in the cluster.
-     */
-    std::map<token, NodeId> get_normal_and_bootstrapping_token_to_endpoint_map() const;
-
     long get_ring_version() const;
     void invalidate_cached_rings();
 
