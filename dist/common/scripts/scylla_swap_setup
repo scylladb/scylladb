@@ -21,6 +21,19 @@ def GB(n):
 def to_GB(n):
     return '{:.2f}'.format(n / 1024 / 1024 / 1024)
 
+def find_mount_point(path):
+    path = path.absolute()
+    while not path.is_mount():
+        path = path.parent
+    return path
+
+def get_fs_type(path):
+    mnt = find_mount_point(path)
+    for part in psutil.disk_partitions():
+        if part.mountpoint == str(mnt):
+            return part.fstype
+    return None
+
 if __name__ == '__main__':
     if os.getuid() > 0:
         print('Requires root permission.')
@@ -40,6 +53,18 @@ if __name__ == '__main__':
 
     if args.swap_size and args.swap_size_bytes:
         print("Cannot specify both --swap-size and --swap-size-bytes")
+        sys.exit(1)
+
+    swap_directory = Path(args.swap_directory)
+    swapfile =  swap_directory / 'swapfile'
+    if swapfile.exists():
+        print('swapfile {} already exists'.format(swapfile))
+        sys.exit(1)
+
+    swapunit_bn = out('systemd-escape -p --suffix=swap {}'.format(swapfile))
+    swapunit = Path('/etc/systemd/system/{}'.format(swapunit_bn))
+    if not args.overwrite_unit_file and swapunit.exists():
+        print('swap unit {} already exists'.format(swapunit))
         sys.exit(1)
 
     diskfree = psutil.disk_usage(args.swap_directory).free
@@ -71,18 +96,13 @@ if __name__ == '__main__':
             swapsize = half_of_diskfree
 
     swapsize_mb = int(swapsize / 1024 / 1024)
-    swapfile = Path(args.swap_directory) / 'swapfile'
-    if swapfile.exists():
-        print('swapfile {} already exists'.format(swapfile))
-        sys.exit(1)
-    run('dd if=/dev/zero of={} bs=1M count={}'.format(swapfile, swapsize_mb), shell=True, check=True)
+    fs_type = get_fs_type(swap_directory)
+    if fs_type == 'ext4':
+        run(f'fallocate -l {swapsize_mb}MiB {swapfile}', shell=True, check=True)
+    else:
+        run('dd if=/dev/zero of={} bs=1M count={}'.format(swapfile, swapsize_mb), shell=True, check=True)
     swapfile.chmod(0o600)
     run('mkswap -f {}'.format(swapfile), shell=True, check=True)
-    swapunit_bn = out('systemd-escape -p --suffix=swap {}'.format(swapfile))
-    swapunit = Path('/etc/systemd/system/{}'.format(swapunit_bn))
-    if swapunit.exists():
-        print('swap unit {} already exists'.format(swapunit))
-        sys.exit(1)
     unit_data = '''
 [Unit]
 Description=swapfile
