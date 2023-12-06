@@ -55,7 +55,7 @@ or include a library for :doc:`CDC </using-scylla/cdc/cdc-intro>`.
      - |x| 
      - |x| 
    * - :doc:`Rust </using-scylla/drivers/cql-drivers/scylla-rust-driver>`
-     - |v|   (preview version)
+     - |v| 
      - |v|
      - |v| 
 
