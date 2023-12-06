@@ -328,7 +328,7 @@ future<> hint_sender::send_one_hint(lw_shared_ptr<send_one_file_ctx> ctx_ptr, fr
             f.ignore_ready_future();
         });
     }).handle_exception([ctx_ptr, rp] (auto eptr) {
-        manager_logger.trace("send_one_file(): Hmmm. Something bad had happend: {}", eptr);
+        manager_logger.trace("send_one_file(): Hmmm. Something bad had happened: {}", eptr);
         ctx_ptr->on_hint_send_failure(rp);
     });
 }
@@ -387,7 +387,7 @@ future<> hint_sender::wait_until_hints_are_replayed_up_to(abort_source& as, db::
     // therefore we cannot capture `this`
     auto ep = end_point_key();
     return (**ptr).get_future().finally([sub = std::move(sub), ep] {
-        manager_logger.debug("[{}] wait_until_hints_are_replayed_up_to(): returning afther the future was satisfied", ep);
+        manager_logger.debug("[{}] wait_until_hints_are_replayed_up_to(): returning after the future was satisfied", ep);
     });
 }
 

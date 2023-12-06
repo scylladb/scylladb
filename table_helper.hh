@@ -109,7 +109,7 @@ public:
      * @param last_event_nanos a reference to the last nanos to align the given time point to.
      * @param tp the amount of time passed since the Epoch that will be used for the calculation.
      *
-     * @return the monotonically increasing vlaue in 100s of ns based on the
+     * @return the monotonically increasing value in 100s of ns based on the
      * given time stamp and on the "nanos" value of the previous event.
      */
     static std::chrono::system_clock::time_point make_monotonic_UUID_tp(int64_t& last_event_nanos, std::chrono::system_clock::time_point tp) {

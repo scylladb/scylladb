@@ -273,7 +273,7 @@ partition_slice native_reverse_slice_to_legacy_reverse_slice(const schema& schem
 // Fully reverse slice (forward to native reverse or native reverse to forward).
 // Also toggles the reversed bit in `partition_slice::options`.
 partition_slice reverse_slice(const schema& schema, partition_slice slice);
-// Half reverse slice (forwad to legacy reverse or legacy reverse to forward).
+// Half reverse slice (forward to legacy reverse or legacy reverse to forward).
 // Also toggles the reversed bit in `partition_slice::options`.
 partition_slice half_reverse_slice(const schema&, partition_slice);
 

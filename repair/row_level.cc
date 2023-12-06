@@ -1844,7 +1844,7 @@ private:
                     if (status == repair_stream_cmd::put_rows_done) {
                         return make_ready_future<stop_iteration>(stop_iteration::yes);
                     } else if (status == repair_stream_cmd::error) {
-                        throw std::runtime_error(format("put_row_diff: Repair follower={} failed in put_row_diff hanlder, status={}", remote_node, int(status)));
+                        throw std::runtime_error(format("put_row_diff: Repair follower={} failed in put_row_diff handler, status={}", remote_node, int(status)));
                     } else {
                         throw std::runtime_error("put_row_diff: Got unexpected repair_stream_cmd");
                     }

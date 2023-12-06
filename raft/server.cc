@@ -345,7 +345,7 @@ future<> server_impl::start() {
     index_t stable_idx = log.stable_idx();
     logger.trace("[{}] start raft instance: snapshot id={} commit index={} last stable index={}", id(), snapshot.id, commit_idx, stable_idx);
     if (commit_idx > stable_idx) {
-        on_internal_error(logger, "Raft init failed: commited index cannot be larger then persisted one");
+        on_internal_error(logger, "Raft init failed: committed index cannot be larger then persisted one");
     }
     _fsm = std::make_unique<fsm>(_id, term, vote, std::move(log), commit_idx, *_failure_detector,
                                  fsm_config {

@@ -287,7 +287,7 @@ echo "=======" >> $REPORT
 echo "This document first serves as a system review and health check report." >> $REPORT
 echo "It is based on the configuration data (hardware, OS, Scylla SW, etc.) collected from the node." >> $REPORT
 echo "Based on the review and analysis of the collected data, ScyllaDB can recommend on possible" >> $REPORT
-echo "ways to better utilize the cluster, based on both experiance and best practices." >> $REPORT
+echo "ways to better utilize the cluster, based on both experience and best practices." >> $REPORT
 echo "" >> $REPORT
 echo "" >> $REPORT
 

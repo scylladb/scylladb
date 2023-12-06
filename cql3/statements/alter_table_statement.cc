@@ -332,7 +332,7 @@ std::pair<schema_builder, std::vector<view_ptr>> alter_table_statement::prepare_
                 const auto& cdc_opts = dynamic_pointer_cast<cdc::cdc_extension>(it->second)->get_options();
                 if (!cdc_opts.is_enabled_set()) {
                     // "enabled" flag not specified
-                    throw exceptions::invalid_request_exception("Altering CDC options requires specyfing \"enabled\" flag");
+                    throw exceptions::invalid_request_exception("Altering CDC options requires specifying \"enabled\" flag");
                 }
             }
 

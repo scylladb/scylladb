@@ -7,11 +7,11 @@
                 "items": {
                     "type": "string"
                 },
-                "description": "The source labels, a match is based on concatination of the labels"
+                "description": "The source labels, a match is based on concatenation of the labels"
             },
             "action": {
                 "type": "string",
-                "description": "The action to perfrom on match",
+                "description": "The action to perform on match",
                 "enum": ["skip_when_empty", "report_when_empty", "replace", "keep", "drop", "drop_label"]
             },
             "target_label": {
@@ -28,7 +28,7 @@
             },
             "separator": {
                 "type": "string",
-                "description": "The separator string to use when concatinating the labels"
+                "description": "The separator string to use when concatenating the labels"
             }
         }
     }

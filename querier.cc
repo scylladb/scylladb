@@ -58,7 +58,7 @@ static bool ring_position_matches(const schema& s, const dht::partition_range& r
     // If there are no clustering columns or the select is distinct we don't
     // have clustering rows at all. In this case we can be sure we won't have
     // anything more in the last page's partition and thus the start bound is
-    // exclusive. Otherwise there migh be clustering rows still and it is
+    // exclusive. Otherwise there might be clustering rows still and it is
     // inclusive.
     const auto expected_inclusiveness = s.clustering_key_size() > 0 &&
         !slice.options.contains<query::partition_slice::option::distinct>() &&

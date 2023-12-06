@@ -88,7 +88,7 @@ def table1(cql, test_keyspace):
 
 # Although the "!=" operator exists in the parser and might be allowed in
 # other places (e.g., LWT), it is *NOT* supported in WHERE clauses - not
-# for filtering, and also not in relations tha don't need filtering
+# for filtering, and also not in relations that don't need filtering
 # (on partition keys or tokens). It is not supported in either Cassandra or
 # Scylla, and there are no plans to add this support, so for now the test
 # verifies that at least we get the expected error.

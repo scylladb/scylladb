@@ -415,7 +415,7 @@ if __name__ == '__main__':
 
         res = interactive_ask_service('Do you want to setup RAID and XFS?', 'It is recommended to use RAID and XFS for Scylla data. If you select yes, you will be prompted to choose the unmounted disks to use for Scylla data. Selected disks are formatted as part of the process.\nYes - choose a disk/disks to format and setup for RAID and XFS. No - skip this step.', raid_setup)
         if res:
-            raid_setup = interactive_ask_service('Are you sure you want to setup RAID and XFS?', 'If you choose Yes, the selected drive will be reformated, erasing all existing data in the process.', raid_setup)
+            raid_setup = interactive_ask_service('Are you sure you want to setup RAID and XFS?', 'If you choose Yes, the selected drive will be reformatted, erasing all existing data in the process.', raid_setup)
         else:
             raid_setup = False
         if res and raid_setup:

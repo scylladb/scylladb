@@ -760,7 +760,7 @@ class db::commitlog::segment : public enable_shared_from_this<segment>, public c
     }
 
     size_t buffer_position() const {
-        // need some arithmetics to figure out what out actual position is, including
+        // need some arithmetic to figure out what out actual position is, including
         // page checksums etc. The ostream does not include this, as it is subdivided and
         // skips sector_overhead parts of the memory buffer. So to get actual position 
         // in the buffer, we need to add it back.

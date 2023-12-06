@@ -2511,7 +2511,7 @@ bool gossiper::is_safe_for_restart(inet_address endpoint, locator::host_id host_
                 break;
             }
         } catch (...) {
-            logger.info("is_safe_for_restart: node={} doest not have status or host_id yet in gossip", node);
+            logger.info("is_safe_for_restart: node={} doesn't not have status or host_id yet in gossip", node);
         }
     }
     return allowed;

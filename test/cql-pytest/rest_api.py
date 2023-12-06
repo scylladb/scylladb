@@ -46,7 +46,7 @@ def delete_request(cql, *path):
 
 
 # Get column family's metric.
-# metric - name of matric
+# metric - name of metric
 # table - (optional) column family name to add to request's path
 #         Expected format: `keyspace.name`
 def get_column_family_metric(cql, metric, table=None):

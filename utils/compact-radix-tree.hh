@@ -563,7 +563,7 @@ private:
     };
 
     /*
-     * This helper wraps several layouts into one and preceeds them with
+     * This helper wraps several layouts into one and precedes them with
      * the header. It does nothing but provides a polymorphic calls to the
      * lower/inner layouts depending on the head.base_layout value.
      */

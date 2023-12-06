@@ -12,7 +12,7 @@
          "operations":[
             {
                "method":"GET",
-               "summary":"Get the addreses of the down endpoints",
+               "summary":"Get the addresses of the down endpoints",
                "type":"array",
                "items":{
                   "type":"string"
@@ -31,7 +31,7 @@
          "operations":[
             {
                "method":"GET",
-               "summary":"Get the addreses of live endpoints",
+               "summary":"Get the addresses of live endpoints",
                "type":"array",
                "items":{
                   "type":"string"

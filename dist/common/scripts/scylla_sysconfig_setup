@@ -74,7 +74,7 @@ if __name__ == '__main__':
             warning = match.group(1)
             rps_cpus = match.group(2)
         except:
-            raise Exception(f'Failed to retrive CPU mask: {res}')
+            raise Exception(f'Failed to retrieve CPU mask: {res}')
         # print warning message if available
         if warning:
             print(warning.strip())

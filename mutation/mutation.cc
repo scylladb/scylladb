@@ -81,7 +81,7 @@ void mutation::set_cell(const clustering_key_prefix& prefix, const column_defini
     } else if (def.is_regular()) {
         set_clustered_cell(prefix, def, std::move(value));
     } else {
-        throw std::runtime_error("attemting to store into a key cell");
+        throw std::runtime_error("attempting to store into a key cell");
     }
 }
 

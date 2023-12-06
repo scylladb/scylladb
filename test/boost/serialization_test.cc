@@ -214,7 +214,7 @@ static void test_vector_deserializer(const std::vector<T>& v) {
 
     auto required = [] (bool x) {
         if (!x) {
-            throw std::runtime_error(format("failed requirment"));
+            throw std::runtime_error(format("failed requirement"));
         }
     };
 
@@ -269,7 +269,7 @@ static void test_reverse_vector_deserializer(const std::vector<T>& v) {
 
     auto required = [] (bool x) {
         if (!x) {
-            throw std::runtime_error(format("failed requirment"));
+            throw std::runtime_error(format("failed requirement"));
         }
     };
 

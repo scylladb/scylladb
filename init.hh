@@ -80,7 +80,7 @@ public:
     virtual void append_options(db::config&, boost::program_options::options_description_easy_init&)
     {};
     // Called after command line is parsed and db/config populated.
-    // Hooked config can for example take this oppurtunity to load any file(s).
+    // Hooked config can for example take this opportunity to load any file(s).
     virtual future<> initialize(const boost::program_options::variables_map&) {
         return make_ready_future();
     }

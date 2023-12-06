@@ -1657,7 +1657,7 @@
             },
             {
                "method":"POST",
-               "summary":"allows a user to reenable thrift",
+               "summary":"allows a user to re-enable thrift",
                "type":"void",
                "nickname":"start_rpc_server",
                "produces":[

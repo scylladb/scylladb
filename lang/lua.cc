@@ -86,7 +86,7 @@ static void* lua_alloc(void* ud, void* ptr, size_t osize, size_t nsize) {
     }
 
     if (next > s->max) {
-        lua_logger.info("allocation failed. alread allocated = {}, next total = {}, max = {}", s->allocated, next, s->max);
+        lua_logger.info("allocation failed. already allocated = {}, next total = {}, max = {}", s->allocated, next, s->max);
         return nullptr;
     }
 

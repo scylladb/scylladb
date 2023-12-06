@@ -50,7 +50,7 @@ public:
 
     virtual ~duration_unit() = default;
 
-    // Units with larger indicies are greater. For example, "months" have a greater index than "days".
+    // Units with larger indices are greater. For example, "months" have a greater index than "days".
     virtual index_type index() const noexcept = 0;
 
     virtual const char* short_name() const noexcept = 0;

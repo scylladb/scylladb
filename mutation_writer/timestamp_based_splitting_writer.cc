@@ -218,7 +218,7 @@ std::optional<timestamp_based_splitting_mutation_writer::bucket_id> timestamp_ba
         }
         return bucket;
     }
-    throw std::runtime_error(fmt::format("Cannot classify timestamp of cell (column {} of uknown type {})", cdef.name_as_text(), cdef.type->name()));
+    throw std::runtime_error(fmt::format("Cannot classify timestamp of cell (column {} of unknown type {})", cdef.name_as_text(), cdef.type->name()));
 }
 
 std::optional<timestamp_based_splitting_mutation_writer::bucket_id> timestamp_based_splitting_mutation_writer::examine_row(const row& r,

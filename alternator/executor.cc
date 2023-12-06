@@ -77,7 +77,7 @@ static sstring_view table_status_to_sstring(table_status tbl_status) {
         case table_status::deleting:
             return "DELETING";
     }
-    return "UKNOWN";
+    return "UNKNOWN";
 }
 
 static lw_shared_ptr<keyspace_metadata> create_keyspace_metadata(std::string_view keyspace_name, service::storage_proxy& sp, gms::gossiper& gossiper, api::timestamp_type);

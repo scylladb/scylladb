@@ -112,7 +112,7 @@ public:
 /// The read starts with a concurrency of one, that is the reader reads from a
 /// single shard at a time. The concurrency is exponentially increased (to a
 /// maximum of the number of shards) when a reader's buffer is empty after
-/// moving the next shard. This condition is important as we only wan't to
+/// moving the next shard. This condition is important as we only want to
 /// increase concurrency for sparse tables that have little data and the reader
 /// has to move between shards often. When concurrency is > 1, the reader
 /// issues background read-aheads to the next shards so that by the time it

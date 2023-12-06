@@ -59,7 +59,7 @@ public:
     std::vector<db::commitlog_file_extension*> commitlog_file_extensions() const;
 
     /**
-     * Registered extensions keywords, i.e. custom properties/propery sets
+     * Registered extensions keywords, i.e. custom properties/property sets
      * for schema extensions
      */
     std::set<sstring> schema_extension_keywords() const;

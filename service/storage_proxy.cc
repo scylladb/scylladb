@@ -2688,7 +2688,7 @@ void storage_proxy_stats::stats::register_stats() {
                        {storage_proxy_stats::current_scheduling_group_label()}),
 
         sm::make_total_operations("cas_dropped_prune", cas_coordinator_dropped_prune,
-                       sm::description("how many times a coordinator did not perfom prune after cas"),
+                       sm::description("how many times a coordinator did not perform prune after cas"),
                        {storage_proxy_stats::current_scheduling_group_label()}).set_skip_when_empty(),
 
         sm::make_total_operations("cas_total_operations", cas_total_operations,
@@ -2700,7 +2700,7 @@ void storage_proxy_stats::stats::register_stats() {
                         {storage_proxy_stats::current_scheduling_group_label()}).set_skip_when_empty(),
 
         sm::make_gauge("cas_background", [this] { return cas_total_running - cas_foreground; },
-                        sm::description("how many paxos operations are still running after a result was alredy returned"),
+                        sm::description("how many paxos operations are still running after a result was already returned"),
                         {storage_proxy_stats::current_scheduling_group_label()}).set_skip_when_empty(),
     });
 
@@ -2738,7 +2738,7 @@ void storage_proxy_stats::stats::register_stats() {
                        {storage_proxy_stats::current_scheduling_group_label()}).set_skip_when_empty(),
 
         sm::make_total_operations("cas_dropped_prune", cas_replica_dropped_prune,
-                       sm::description("how many times a coordinator did not perfom prune after cas"),
+                       sm::description("how many times a coordinator did not perform prune after cas"),
                        {storage_proxy_stats::current_scheduling_group_label()}).set_skip_when_empty(),
     });
     _metrics = std::exchange(new_metrics, {});

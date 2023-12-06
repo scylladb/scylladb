@@ -1813,7 +1813,7 @@ future<> repair_service::do_decommission_removenode_with_repair(locator::token_m
                         neighbors_set = get_neighbors_set(boost::copy_range<std::vector<inet_address>>(new_eps));
                     }
                 } else {
-                    throw std::runtime_error(format("{}: keyspace={}, range={}, current_replica_endpoints={}, new_replica_endpoints={}, wrong nubmer of new owner node={}",
+                    throw std::runtime_error(format("{}: keyspace={}, range={}, current_replica_endpoints={}, new_replica_endpoints={}, wrong number of new owner node={}",
                             op, keyspace_name, r, current_eps, new_eps, new_owner));
                 }
                 neighbors_set.erase(myip);
