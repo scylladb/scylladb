@@ -201,7 +201,7 @@ want modify a non-top-level attribute directly (e.g., a.b[3].c) need RMW:
 Alternator implements such requests by reading the entire top-level
 attribute a, modifying only a.b[3].c, and then writing back a.
 
-```eval_rst
+```{eval-rst}
 .. toctree::
     :maxdepth: 2
 

@@ -79,7 +79,7 @@ and to the TRUNCATE data definition query.
 
 In addition, the timeout parameter can be applied to SELECT queries as well.
 
-```eval_rst 
+```{eval-rst}
 .. _keyspace-storage-options:
  ```
  

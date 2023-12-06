@@ -35,15 +35,15 @@ extensions = [
     "sphinx.ext.extlinks",
     "sphinx_sitemap",
     "sphinx_scylladb_theme",
-    "sphinx_multiversion",  # optional
-    "recommonmark",  # optional
+    "sphinx_multiversion",
+    "sphinx_scylladb_markdown",
     "sphinxcontrib.datatemplates",
     "scylladb_cc_properties",
     "scylladb_aws_images"
 ]
 
 # The suffix(es) of source filenames.
-source_suffix = [".rst", ".md"]
+source_suffix = ['.rst']
 
 # The master toctree document.
 master_doc = "index"
@@ -73,6 +73,11 @@ notfound_template = "404.html"
 
 # Prefix added to all the URLs generated in the 404 page.
 notfound_urls_prefix = ""
+
+# -- Options for markdown extension
+scylladb_markdown_enable = True
+scylladb_markdown_recommonmark_versions = ['branch-5.1', 'branch-5.2', 'branch-5.4']
+suppress_warnings = ["myst.xref_missing"]
 
 # -- Options for sitemap extension
 
@@ -149,15 +154,3 @@ html_baseurl = BASE_URL
 
 # Dictionary of values to pass into the template engine’s context for all pages
 html_context = {"html_baseurl": html_baseurl}
-
-# -- Initialize Sphinx
-def setup(sphinx):
-    warnings.filterwarnings(
-        action="ignore",
-        category=UserWarning,
-        message=r".*Container node skipped.*",
-    )
-    sphinx.add_config_value('recommonmark_config', {
-        'enable_eval_rst': True,
-    }, True)
-    sphinx.add_transform(AutoStructify)
