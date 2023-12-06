@@ -1,11 +1,9 @@
-==================
-Scylla Rust Driver
-==================
+=====================
+ScyllaDB Rust Driver
+=====================
 
-The Scylla Rust Driver has not yet been released as GA. Updates will be made to the `Release Notes <https://www.scylladb.com/product/release-notes/>`_.
-The Scylla Rust driver is a client-side, shard-aware driver written in pure Rust with a fully async API using Tokio.
-
-Although optimized for ScyllaDB, the driver is also compatible with Apache Cassandra®.
+The ScyllaDB Rust driver is a client-side, shard-aware driver written in pure Rust with a fully async API using Tokio.
+Optimized for ScyllaDB, the driver is also compatible with Apache Cassandra®.
 
 
 .. image:: ./images/monster-rust.png
