@@ -2131,6 +2131,29 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_validate_mode_test) {
     });
 }
 
+SEASTAR_THREAD_TEST_CASE(sstable_scrub_validate_mode_test_valid_sstable) {
+    scrub_test_framework test;
+
+    auto schema = test.schema();
+
+    auto muts = tests::generate_random_mutations(test.random_schema()).get();
+
+    test.run(schema, muts, [] (table_for_tests& table, compaction::table_state& ts, std::vector<sstables::shared_sstable> sstables) {
+        BOOST_REQUIRE(sstables.size() == 1);
+        auto sst = sstables.front();
+
+        // No way to really test validation besides observing the log messages.
+        sstables::compaction_type_options::scrub opts = {
+            .operation_mode = sstables::compaction_type_options::scrub::mode::validate,
+        };
+        table->get_compaction_manager().perform_sstable_scrub(ts, opts).get();
+
+        BOOST_REQUIRE(!sst->is_quarantined());
+        BOOST_REQUIRE_EQUAL(in_strategy_sstables(ts).size(), 1);
+        BOOST_REQUIRE_EQUAL(in_strategy_sstables(ts).front(), sst);
+    });
+}
+
 SEASTAR_TEST_CASE(sstable_validate_test) {
   return test_env::do_with_async([] (test_env& env) {
     auto schema = schema_builder("ks", get_name())
