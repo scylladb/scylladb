@@ -159,7 +159,7 @@ def new_secondary_index(cql, table, column, name='', extra=''):
 
 # Helper function for establishing a connection with given username and password
 @contextmanager
-def cql_session(host, port, is_ssl, username, password):
+def cql_session(host, port, is_ssl, username, password, request_timeout=120):
     profile = ExecutionProfile(
         load_balancing_policy=RoundRobinPolicy(),
         consistency_level=ConsistencyLevel.LOCAL_QUORUM,
@@ -169,7 +169,7 @@ def cql_session(host, port, is_ssl, username, password):
         # very slow debug build running on a very busy machine and a very slow
         # request (e.g., a DROP KEYSPACE needing to drop multiple tables)
         # 10 seconds may not be enough, so let's increase it. See issue #7838.
-        request_timeout = 120)
+        request_timeout=request_timeout)
     if is_ssl:
         # Scylla does not support any earlier TLS protocol. If you try,
         # you will get mysterious EOF errors (see issue #6971) :-(
