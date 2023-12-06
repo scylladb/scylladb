@@ -7,6 +7,7 @@
  */
 
 #include <boost/range/algorithm/min_element.hpp>
+#include <seastar/core/future.hh>
 
 #include "compaction/task_manager_module.hh"
 #include "compaction/compaction_manager.hh"
@@ -448,7 +449,14 @@ future<> table_cleanup_keyspace_compaction_task_impl::run() {
     co_await wait_for_your_turn(_cv, _current_task, _status.id);
     auto owned_ranges_ptr = compaction::make_owned_ranges_ptr(_db.get_keyspace_local_ranges(_status.keyspace));
     co_await run_on_table("force_keyspace_cleanup", _db, _status.keyspace, _ti, [&] (replica::table& t) {
-        return t.perform_cleanup_compaction(owned_ranges_ptr, tasks::task_info{_status.id, _status.shard});
+        try {
+            return t.perform_cleanup_compaction(owned_ranges_ptr, tasks::task_info{_status.id, _status.shard});
+        } catch (const gate_closed_exception& e) {
+            if (t.async_gate().is_closed()) {
+                return make_ready_future();
+            }
+            return make_exception_future(e);
+        }
     });
 }
 
