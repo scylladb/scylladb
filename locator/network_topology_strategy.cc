@@ -241,18 +241,18 @@ future<host_id_set>
 network_topology_strategy::calculate_natural_endpoints(
     const token& search_token, const token_metadata2& tm) const {
 
-        natural_endpoints_tracker tracker(tm, _dc_rep_factor);
+    natural_endpoints_tracker tracker(tm, _dc_rep_factor);
 
-        for (auto& next : tm.ring_range(search_token)) {
-            co_await coroutine::maybe_yield();
+    for (auto& next : tm.ring_range(search_token)) {
+        co_await coroutine::maybe_yield();
 
-            host_id ep = *tm.get_endpoint(next);
-            if (tracker.add_endpoint_and_check_if_done(ep)) {
-                break;
-            }
+        host_id ep = *tm.get_endpoint(next);
+        if (tracker.add_endpoint_and_check_if_done(ep)) {
+            break;
         }
+    }
 
-        co_return std::move(tracker.replicas());
+    co_return std::move(tracker.replicas());
 }
 
 void network_topology_strategy::validate_options(const gms::feature_service& fs) const {

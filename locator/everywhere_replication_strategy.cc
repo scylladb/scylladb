@@ -21,12 +21,12 @@ everywhere_replication_strategy::everywhere_replication_strategy(const replicati
 }
 
 future<host_id_set> everywhere_replication_strategy::calculate_natural_endpoints(const token& search_token, const token_metadata2& tm) const {
-        if (tm.sorted_tokens().empty()) {
-            host_id_set result{host_id_vector_replica_set({host_id{}})};
-            return make_ready_future<host_id_set>(std::move(result));
-        }
-        const auto& all_endpoints = tm.get_all_endpoints();
-        return make_ready_future<host_id_set>(host_id_set(all_endpoints.begin(), all_endpoints.end()));
+    if (tm.sorted_tokens().empty()) {
+        host_id_set result{host_id_vector_replica_set({host_id{}})};
+        return make_ready_future<host_id_set>(std::move(result));
+    }
+    const auto& all_endpoints = tm.get_all_endpoints();
+    return make_ready_future<host_id_set>(host_id_set(all_endpoints.begin(), all_endpoints.end()));
 }
 
 size_t everywhere_replication_strategy::get_replication_factor(const token_metadata& tm) const {

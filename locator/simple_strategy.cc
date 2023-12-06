@@ -34,33 +34,33 @@ simple_strategy::simple_strategy(const replication_strategy_config_options& conf
 }
 
 future<host_id_set> simple_strategy::calculate_natural_endpoints(const token& t, const token_metadata2& tm) const {
-        const std::vector<token>& tokens = tm.sorted_tokens();
+    const std::vector<token>& tokens = tm.sorted_tokens();
 
-        if (tokens.empty()) {
-            co_return host_id_set{};
+    if (tokens.empty()) {
+        co_return host_id_set{};
+    }
+
+    size_t replicas = _replication_factor;
+    host_id_set endpoints;
+    endpoints.reserve(replicas);
+
+    for (auto& token : tm.ring_range(t)) {
+        // If the number of nodes in the cluster is smaller than the desired
+        // replication factor we should return the loop when endpoints already
+        // contains all the nodes in the cluster because no more nodes could be
+        // added to endpoints lists.
+        if (endpoints.size() == replicas || endpoints.size() == tm.count_normal_token_owners()) {
+           break;
         }
 
-        size_t replicas = _replication_factor;
-        host_id_set endpoints;
-        endpoints.reserve(replicas);
+        auto ep = tm.get_endpoint(token);
+        assert(ep);
 
-        for (auto& token : tm.ring_range(t)) {
-            // If the number of nodes in the cluster is smaller than the desired
-            // replication factor we should return the loop when endpoints already
-            // contains all the nodes in the cluster because no more nodes could be
-            // added to endpoints lists.
-            if (endpoints.size() == replicas || endpoints.size() == tm.count_normal_token_owners()) {
-               break;
-            }
+        endpoints.push_back(*ep);
+        co_await coroutine::maybe_yield();
+    }
 
-            auto ep = tm.get_endpoint(token);
-            assert(ep);
-
-            endpoints.push_back(*ep);
-            co_await coroutine::maybe_yield();
-        }
-
-        co_return endpoints;
+    co_return endpoints;
 }
 
 size_t simple_strategy::get_replication_factor(const token_metadata&) const {
