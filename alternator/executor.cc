@@ -80,7 +80,7 @@ static sstring_view table_status_to_sstring(table_status tbl_status) {
     return "UNKNOWN";
 }
 
-static lw_shared_ptr<keyspace_metadata> create_keyspace_metadata(std::string_view keyspace_name, service::storage_proxy& sp, gms::gossiper& gossiper, api::timestamp_type);
+static lw_shared_ptr<keyspace_metadata> create_keyspace_metadata(std::string_view keyspace_name, service::storage_proxy& sp, gms::gossiper& gossiper, api::timestamp_type, const std::map<sstring, sstring>& tags_map);
 
 static map_type attrs_type() {
     static thread_local auto t = map_type_impl::get_instance(utf8_type, bytes_type, true);
@@ -1121,7 +1121,7 @@ static future<executor::request_return_type> create_table_on_shard0(tracing::tra
     auto group0_guard = co_await mm.start_group0_operation();
     auto ts = group0_guard.write_timestamp();
     std::vector<mutation> schema_mutations;
-    auto ksm = create_keyspace_metadata(keyspace_name, sp, gossiper, ts);
+    auto ksm = create_keyspace_metadata(keyspace_name, sp, gossiper, ts, tags_map);
     try {
         schema_mutations = service::prepare_new_keyspace_announcement(sp.local_db(), ksm, ts);
     } catch (exceptions::already_exists_exception&) {
@@ -4495,7 +4495,7 @@ future<executor::request_return_type> executor::describe_continuous_backups(clie
 // of nodes in the cluster: A cluster with 3 or more live nodes, gets RF=3.
 // A smaller cluster (presumably, a test only), gets RF=1. The user may
 // manually create the keyspace to override this predefined behavior.
-static lw_shared_ptr<keyspace_metadata> create_keyspace_metadata(std::string_view keyspace_name, service::storage_proxy& sp, gms::gossiper& gossiper, api::timestamp_type ts) {
+static lw_shared_ptr<keyspace_metadata> create_keyspace_metadata(std::string_view keyspace_name, service::storage_proxy& sp, gms::gossiper& gossiper, api::timestamp_type ts, const std::map<sstring, sstring>& tags_map) {
     int endpoint_count = gossiper.num_endpoints();
     int rf = 3;
     if (endpoint_count < rf) {
@@ -4504,6 +4504,18 @@ static lw_shared_ptr<keyspace_metadata> create_keyspace_metadata(std::string_vie
                 keyspace_name, rf, endpoint_count);
     }
     auto opts = get_network_topology_options(sp, gossiper, rf);
+
+    // Tablets are not yet enabled by default on Alternator tables, because of
+    // missing support for CDC (see issue #16313). Until then, allow
+    // requesting tablets at table-creation time by supplying following tag,
+    // with an integer value. This is useful for testing Tablet support in
+    // Alternator even before it is ready for prime time.
+    // If we make this tag a permanent feature, it will get a "system:" prefix -
+    // until then we give it the "experimental:" prefix to not commit to it.
+    static constexpr auto INITIAL_TABLETS_TAG_KEY = "experimental:initial_tablets";
+    if (tags_map.contains(INITIAL_TABLETS_TAG_KEY)) {
+        opts.emplace("initial_tablets", tags_map.at(INITIAL_TABLETS_TAG_KEY));
+    }
 
     return keyspace_metadata::new_keyspace(keyspace_name, "org.apache.cassandra.locator.NetworkTopologyStrategy", std::move(opts), true);
 }
