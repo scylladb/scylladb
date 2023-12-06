@@ -189,7 +189,7 @@ struct table_tasks_info {
     {}
 };
 
-future<> run_on_table(sstring op, replica::database& db, std::string keyspace, table_info ti, std::function<future<> (replica::table&)> func) {
+future<> run_on_table(std::string_view op, replica::database& db, std::string keyspace, table_info ti, std::function<future<> (replica::table&)> func) {
     std::exception_ptr ex;
     tasks::tmlogger.debug("Starting {} on {}.{}", op, keyspace, ti.name);
     try {
