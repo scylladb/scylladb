@@ -182,7 +182,11 @@ def test_many_partition_scan(cql, test_keyspace, scylla_only):
         requests.post(f'{nodetool.rest_api_url(cql)}/system/drop_sstable_caches')
 
         # the real test here is that this scan completes without problems
-        res_all = list(cql.execute(f"SELECT pk, mutation_source, mutation_fragment_kind, metadata FROM MUTATION_FRAGMENTS({test_table});"))
+        # since this scan is very slow, we create an extra patient cql connection,
+        # with an abundant 10 minutes timeout
+        ep = cql.hosts[0].endpoint
+        with util.cql_session(ep.address, ep.port, False, 'cassandra', 'cassandra', 600) as patient_cql:
+            res_all = list(patient_cql.execute(f"SELECT pk, mutation_source, mutation_fragment_kind, metadata FROM MUTATION_FRAGMENTS({test_table});"))
 
         actual_partitions = []
         for r in res_all:
