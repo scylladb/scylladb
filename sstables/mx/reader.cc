@@ -2001,11 +2001,11 @@ public:
     data_consumer::proceed consume_range_tombstone(const std::vector<fragmented_temporary_buffer>& ecp, bound_kind kind, tombstone tomb) {
         auto ck = from_fragmented_buffer(ecp);
         _current_pos = position_in_partition(position_in_partition::range_tag_t(), kind, std::move(ck));
-        std::optional<tombstone> new_current_tomb;
+        tombstone new_current_tomb;
         if (kind == bound_kind::incl_start || kind == bound_kind::excl_start) {
             new_current_tomb = tomb;
         }
-        sstlog.trace("validating_consumer {}: {}({}, {})", fmt::ptr(this), __FUNCTION__, _current_pos, tomb);
+        sstlog.trace("validating_consumer {}: {}({}, {})", fmt::ptr(this), __FUNCTION__, _current_pos, new_current_tomb);
         validate_fragment_order(mutation_fragment_v2::kind::range_tombstone_change, new_current_tomb);
         return data_consumer::proceed(!need_preempt());
     }
