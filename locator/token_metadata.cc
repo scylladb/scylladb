@@ -268,8 +268,6 @@ public:
     }
 
 public:
-    /** @return an endpoint to token multimap representation of tokenToEndpointMap (a copy) */
-    std::multimap<inet_address, token> get_endpoint_to_token_map_for_reading() const;
     /**
      * @return a (stable copy, won't be modified) Token to Endpoint map for all the normal and bootstrapping nodes
      *         in the cluster.
@@ -846,14 +844,6 @@ std::map<token, inet_address> token_metadata_impl::get_normal_and_bootstrapping_
     return ret;
 }
 
-std::multimap<inet_address, token> token_metadata_impl::get_endpoint_to_token_map_for_reading() const {
-    std::multimap<inet_address, token> cloned;
-    for (const auto& x : _token_to_endpoint_map) {
-        cloned.emplace(x.second, x.first);
-    }
-    return cloned;
-}
-
 topology_change_info::topology_change_info(token_metadata target_token_metadata_,
         std::optional<token_metadata> base_token_metadata_,
         std::vector<dht::token> all_tokens_,
@@ -1152,11 +1142,6 @@ token_metadata::count_normal_token_owners() const {
 void
 token_metadata::set_read_new(read_new_t read_new) {
     _impl->set_read_new(read_new);
-}
-
-std::multimap<inet_address, token>
-token_metadata::get_endpoint_to_token_map_for_reading() const {
-    return _impl->get_endpoint_to_token_map_for_reading();
 }
 
 std::map<token, inet_address>

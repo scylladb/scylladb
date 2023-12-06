@@ -271,8 +271,6 @@ public:
     using read_new_t = bool_class<class read_new_tag>;
     void set_read_new(read_new_t value);
 
-    /** @return an endpoint to token multimap representation of tokenToEndpointMap (a copy) */
-    std::multimap<inet_address, token> get_endpoint_to_token_map_for_reading() const;
     /**
      * @return a (stable copy, won't be modified) Token to Endpoint map for all the normal and bootstrapping nodes
      *         in the cluster.
