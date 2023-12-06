@@ -239,12 +239,6 @@ public:
                                        std::optional<node::state> opt_st = std::nullopt,
                                        std::optional<shard_id> shard_count = std::nullopt);
 
-    /**
-     * Removes current DC/rack assignment for ep
-     * Returns true if the node was found and removed.
-     */
-    bool remove_endpoint(inet_address ep);
-
     bool remove_endpoint(locator::host_id ep);
 
     /**

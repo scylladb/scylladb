@@ -464,17 +464,6 @@ const node* topology::add_or_update_endpoint(host_id id, std::optional<inet_addr
                     shard_count.value_or(0));
 }
 
-bool topology::remove_endpoint(inet_address ep)
-{
-    auto node = find_node(ep);
-    tlogger.debug("topology[{}]: remove_endpoint: endpoint={}: {}", fmt::ptr(this), ep, debug_format(node));
-    if (node) {
-        remove_node(node);
-        return true;
-    }
-    return false;
-}
-
 bool topology::remove_endpoint(locator::host_id host_id)
 {
     auto node = find_node(host_id);
