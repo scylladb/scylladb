@@ -357,15 +357,15 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , auto_adjust_flush_quota(this, "auto_adjust_flush_quota", value_status::Deprecated, false,
         "true: auto-adjust memtable shares for flush processes")
     , memtable_flush_static_shares(this, "memtable_flush_static_shares", liveness::LiveUpdate, value_status::Used, 0,
-        "If set to higher than 0, ignore the controller's output and set the memtable shares statically. Do not set this unless you know what you are doing and suspect a problem in the controller. This option will be retired when the controller reaches more maturity")
+        "If set to higher than 0, ignore the controller's output and set the memtable shares statically. Do not set this unless you know what you are doing and suspect a problem in the controller. This option will be retired when the controller reaches more maturity.")
     , compaction_static_shares(this, "compaction_static_shares", liveness::LiveUpdate, value_status::Used, 0,
-        "If set to higher than 0, ignore the controller's output and set the compaction shares statically. Do not set this unless you know what you are doing and suspect a problem in the controller. This option will be retired when the controller reaches more maturity")
+        "If set to higher than 0, ignore the controller's output and set the compaction shares statically. Do not set this unless you know what you are doing and suspect a problem in the controller. This option will be retired when the controller reaches more maturity.")
     , compaction_enforce_min_threshold(this, "compaction_enforce_min_threshold", liveness::LiveUpdate, value_status::Used, false,
-        "If set to true, enforce the min_threshold option for compactions strictly. If false (default), Scylla may decide to compact even if below min_threshold")
+        "If set to true, enforce the min_threshold option for compactions strictly. If false (default), Scylla may decide to compact even if below min_threshold.")
     , compaction_flush_all_tables_before_major_seconds(this, "compaction_flush_all_tables_before_major_seconds", value_status::Used, 86400,
-        "Set the minimum interval in seconds between flushing all tables before each major compaction (default is 86400). "
-        "This option is useful for maximizing tombstone garbage collection by releasing all active commitlog segments. "
-        "Set to 0 to disable automatic flushing all tables before major compaction")
+        "Set the minimum interval in seconds between flushing all tables before each major compaction (default is 86400)."
+        "This option is useful for maximizing tombstone garbage collection by releasing all active commitlog segments."
+        "Set to 0 to disable automatic flushing all tables before major compaction.")
     /**
     * @Group Initialization properties
     * @GroupDescription The minimal properties needed for configuring a cluster.
@@ -377,9 +377,9 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , listen_interface(this, "listen_interface", value_status::Unused, "eth0",
         "The interface that Scylla binds to for connecting to other Scylla nodes. Interfaces must correspond to a single address, IP aliasing is not supported. See listen_address.")
     , listen_interface_prefer_ipv6(this, "listen_interface_prefer_ipv6", value_status::Used, false,
-        "If you choose to specify the interface by name and the interface has an ipv4 and an ipv6 address\n"
-        "you can specify which should be chosen using listen_interface_prefer_ipv6. If false the first ipv4\n"
-        "address will be used. If true the first ipv6 address will be used. Defaults to false preferring\n"
+        "If you choose to specify the interface by name and the interface has an ipv4 and an ipv6 address"
+        "you can specify which should be chosen using listen_interface_prefer_ipv6. If false the first ipv4"
+        "address will be used. If true the first ipv6 address will be used. Defaults to false preferring"
         "ipv4. If there is only one address it will be selected regardless of ipv4/ipv6."
     )
     /**
@@ -387,13 +387,13 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     * @GroupDescription If you have changed any of the default directories during installation, make sure you have root access and set these properties.
     */
     , work_directory(this, "workdir,W", value_status::Used, "/var/lib/scylla",
-        "The directory in which Scylla will put all its subdirectories. The location of individual subdirs can be overridden by the respective *_directory options.")
+        "The directory in which Scylla will put all its subdirectories. The location of individual subdirs can be overridden by the respective ``*_directory`` options.")
     , commitlog_directory(this, "commitlog_directory", value_status::Used, "",
         "The directory where the commit log is stored. For optimal write performance, it is recommended the commit log be on a separate disk partition (ideally, a separate physical device) from the data file directories.")
     , schema_commitlog_directory(this, "schema_commitlog_directory", value_status::Used, "",
         "The directory where the schema commit log is stored. This is a special commitlog instance used for schema and system tables. For optimal write performance, it is recommended the commit log be on a separate disk partition (ideally, a separate physical device) from the data file directories.")
     , data_file_directories(this, "data_file_directories", "datadir", value_status::Used, { },
-        "The directory location where table data (SSTables) is stored")
+        "The directory location where table data (SSTables) is stored.")
     , hints_directory(this, "hints_directory", value_status::Used, "",
         "The directory where hints files are stored if hinted handoff is enabled.")
     , view_hints_directory(this, "view_hints_directory", value_status::Used, "",
@@ -411,56 +411,52 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     */
     , commit_failure_policy(this, "commit_failure_policy", value_status::Unused, "stop",
         "Policy for commit disk failures:\n"
-        "\n"
-        "\tdie          Shut down gossip and Thrift and kill the JVM, so the node can be replaced.\n"
-        "\tstop         Shut down gossip and Thrift, leaving the node effectively dead, but can be inspected using JMX.\n"
-        "\tstop_commit  Shut down the commit log, letting writes collect but continuing to service reads (as in pre-2.0.5 Cassandra).\n"
-        "\tignore       Ignore fatal errors and let the batches fail."
+        "* die          Shut down gossip and Thrift and kill the JVM, so the node can be replaced.\n"
+        "* stop         Shut down gossip and Thrift, leaving the node effectively dead, but can be inspected using JMX.\n"
+        "* stop_commit  Shut down the commit log, letting writes collect but continuing to service reads (as in pre-2.0.5 Cassandra).\n"
+        "* ignore       Ignore fatal errors and let the batches fail."
         , {"die", "stop", "stop_commit", "ignore"})
     , disk_failure_policy(this, "disk_failure_policy", value_status::Unused, "stop",
         "Sets how Scylla responds to disk failure. Recommend settings are stop or best_effort.\n"
-        "\n"
-        "\tdie              Shut down gossip and Thrift and kill the JVM for any file system errors or single SSTable errors, so the node can be replaced.\n"
-        "\tstop_paranoid    Shut down gossip and Thrift even for single SSTable errors.\n"
-        "\tstop             Shut down gossip and Thrift, leaving the node effectively dead, but available for inspection using JMX.\n"
-        "\tbest_effort      Stop using the failed disk and respond to requests based on the remaining available SSTables. This means you will see obsolete data at consistency level of ONE.\n"
-        "\tignore           Ignores fatal errors and lets the requests fail; all file system errors are logged but otherwise ignored. Scylla acts as in versions prior to Cassandra 1.2.\n"
-        "\n"
+        "* die              Shut down gossip and Thrift and kill the JVM for any file system errors or single SSTable errors, so the node can be replaced.\n"
+        "* stop_paranoid    Shut down gossip and Thrift even for single SSTable errors.\n"
+        "* stop             Shut down gossip and Thrift, leaving the node effectively dead, but available for inspection using JMX.\n"
+        "* best_effort      Stop using the failed disk and respond to requests based on the remaining available SSTables. This means you will see obsolete data at consistency level of ONE.\n"
+        "* ignore           Ignores fatal errors and lets the requests fail; all file system errors are logged but otherwise ignored. Scylla acts as in versions prior to Cassandra 1.2.\n"
         "Related information: Handling Disk Failures In Cassandra 1.2 blog and Recovering from a single disk failure using JBOD.\n"
         , {"die", "stop_paranoid", "stop", "best_effort", "ignore"})
     , endpoint_snitch(this, "endpoint_snitch", value_status::Used, "org.apache.cassandra.locator.SimpleSnitch",
-        "Set to a class that implements the IEndpointSnitch. Scylla uses snitches for locating nodes and routing requests.\n\n"
-        "\tSimpleSnitch: Use for single-data center deployments or single-zone in public clouds. Does not recognize data center or rack information. It treats strategy order as proximity, which can improve cache locality when disabling read repair.\n\n"
-        "\tGossipingPropertyFileSnitch: Recommended for production. The rack and data center for the local node are defined in the cassandra-rackdc.properties file and propagated to other nodes via gossip. To allow migration from the PropertyFileSnitch, it uses the cassandra-topology.properties file if it is present.\n\n"
-        /*"\tPropertyFileSnitch: Determines proximity by rack and data center, which are explicitly configured in the cassandra-topology.properties file.\n\n"    */
-        "\tEc2Snitch: For EC2 deployments in a single region. Loads region and availability zone information from the EC2 API. The region is treated as the data center and the availability zone as the rack. Uses only private IPs. Subsequently it does not work across multiple regions.\n\n"
-        "\tEc2MultiRegionSnitch: Uses public IPs as the broadcast_address to allow cross-region connectivity. This means you must also set seed addresses to the public IP and open the storage_port or ssl_storage_port on the public IP firewall. For intra-region traffic, Scylla switches to the private IP after establishing a connection.\n\n"
-        "\tGoogleCloudSnitch: For deployments on Google Cloud Platform across one or more regions. The region is treated as a datacenter and the availability zone is treated as a rack within the datacenter. The communication should occur over private IPs within the same logical network.\n\n"
-        "\tRackInferringSnitch: Proximity is determined by rack and data center, which are assumed to correspond to the 3rd and 2nd octet of each node's IP address, respectively. This snitch is best used as an example for writing a custom snitch class (unless this happens to match your deployment conventions).\n"
+        "Set to a class that implements the IEndpointSnitch. Scylla uses snitches for locating nodes and routing requests.\n"
+        "* SimpleSnitch: Use for single-data center deployments or single-zone in public clouds. Does not recognize data center or rack information. It treats strategy order as proximity, which can improve cache locality when disabling read repair.\n"
+        "* GossipingPropertyFileSnitch: Recommended for production. The rack and data center for the local node are defined in the cassandra-rackdc.properties file and propagated to other nodes via gossip. To allow migration from the PropertyFileSnitch, it uses the cassandra-topology.properties file if it is present.\n"
+        /*"* PropertyFileSnitch: Determines proximity by rack and data center, which are explicitly configured in the cassandra-topology.properties file.\n"    */
+        "* Ec2Snitch: For EC2 deployments in a single region. Loads region and availability zone information from the EC2 API. The region is treated as the data center and the availability zone as the rack. Uses only private IPs. Subsequently it does not work across multiple regions.\n"
+        "* Ec2MultiRegionSnitch: Uses public IPs as the broadcast_address to allow cross-region connectivity. This means you must also set seed addresses to the public IP and open the storage_port or ssl_storage_port on the public IP firewall. For intra-region traffic, Scylla switches to the private IP after establishing a connection.\n"
+        "* GoogleCloudSnitch: For deployments on Google Cloud Platform across one or more regions. The region is treated as a datacenter and the availability zone is treated as a rack within the datacenter. The communication should occur over private IPs within the same logical network.\n"
+        "* RackInferringSnitch: Proximity is determined by rack and data center, which are assumed to correspond to the 3rd and 2nd octet of each node's IP address, respectively. This snitch is best used as an example for writing a custom snitch class (unless this happens to match your deployment conventions).\n"
         "\n"
         "Related information: Snitches\n")
     , rpc_address(this, "rpc_address", value_status::Used, "localhost",
         "The listen address for client connections (Thrift RPC service and native transport).Valid values are:\n"
+        "* unset: Resolves the address using the hostname configuration of the node. If left unset, the hostname must resolve to the IP address of this node using /etc/hostname, /etc/hosts, or DNS.\n"
+        "* 0.0.0.0: Listens on all configured interfaces, but you must set the broadcast_rpc_address to a value other than 0.0.0.0.\n"
+        "* IP address\n"
+        "* hostname\n"
         "\n"
-        "\tunset:   Resolves the address using the hostname configuration of the node. If left unset, the hostname must resolve to the IP address of this node using /etc/hostname, /etc/hosts, or DNS.\n"
-        "\t0.0.0.0 : Listens on all configured interfaces, but you must set the broadcast_rpc_address to a value other than 0.0.0.0.\n"
-        "\tIP address\n"
-        "\thostname\n"
         "Related information: Network\n")
     , rpc_interface(this, "rpc_interface", value_status::Unused, "eth1",
         "The listen address for client connections. Interfaces must correspond to a single address, IP aliasing is not supported. See rpc_address.")
     , rpc_interface_prefer_ipv6(this, "rpc_interface_prefer_ipv6", value_status::Used, false,
-        "If you choose to specify the interface by name and the interface has an ipv4 and an ipv6 address\n"
-        "you can specify which should be chosen using rpc_interface_prefer_ipv6. If false the first ipv4\n"
-        "address will be used. If true the first ipv6 address will be used. Defaults to false preferring\n"
-        "ipv4. If there is only one address it will be selected regardless of ipv4/ipv6"
+        "If you choose to specify the interface by name and the interface has an ipv4 and an ipv6 address"
+        "you can specify which should be chosen using rpc_interface_prefer_ipv6. If false the first ipv4"
+        "address will be used. If true the first ipv6 address will be used. Defaults to false preferring"
+        "ipv4. If there is only one address it will be selected regardless of ipv4/ipv6."
     )
     , seed_provider(this, "seed_provider", value_status::Used, seed_provider_type("org.apache.cassandra.locator.SimpleSeedProvider"),
         "The addresses of hosts deemed contact points. Scylla nodes use the -seeds list to find each other and learn the topology of the ring.\n"
-        "\n"
-        "  class_name (Default: org.apache.cassandra.locator.SimpleSeedProvider)\n"
-        "  \tThe class within Scylla that handles the seed logic. It can be customized, but this is typically not required.\n"
-        "  \t- seeds (Default: 127.0.0.1)    A comma-delimited list of IP addresses used by gossip for bootstrapping new nodes joining a cluster. When running multiple nodes, you must change the list from the default value. In multiple data-center clusters, the seed list should include at least one node from each data center (replication group). More than a single seed node per data center is recommended for fault tolerance. Otherwise, gossip has to communicate with another data center when bootstrapping a node. Making every node a seed node is not recommended because of increased maintenance and reduced gossip performance. Gossip optimization is not critical, but it is recommended to use a small seed list (approximately three nodes per data center).\n"
+        " \n"
+        " * class_name (Default: org.apache.cassandra.locator.SimpleSeedProvider): The class within Scylla that handles the seed logic. It can be customized, but this is typically not required.\n"
+        " * seeds (Default: 127.0.0.1): A comma-delimited list of IP addresses used by gossip for bootstrapping new nodes joining a cluster. When running multiple nodes, you must change the list from the default value. In multiple data-center clusters, the seed list should include at least one node from each data center (replication group). More than a single seed node per data center is recommended for fault tolerance. Otherwise, gossip has to communicate with another data center when bootstrapping a node. Making every node a seed node is not recommended because of increased maintenance and reduced gossip performance. Gossip optimization is not critical, but it is recommended to use a small seed list (approximately three nodes per data center).\n"
         "\n"
         "Related information: Initializing a multiple node cluster (single data center) and Initializing a multiple node cluster (multiple data centers).")
     /**
@@ -469,17 +465,18 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     */
     , compaction_throughput_mb_per_sec(this, "compaction_throughput_mb_per_sec", liveness::LiveUpdate, value_status::Used, 0,
         "Throttles compaction to the specified total throughput across the entire system. The faster you insert data, the faster you need to compact in order to keep the SSTable count down. The recommended Value is 16 to 32 times the rate of write throughput (in MBs/second). Setting the value to 0 disables compaction throttling.\n"
+        "\n"
         "Related information: Configuring compaction")
     , compaction_large_partition_warning_threshold_mb(this, "compaction_large_partition_warning_threshold_mb", liveness::LiveUpdate, value_status::Used, 1000,
-        "Log a warning when writing partitions larger than this value")
+        "Log a warning when writing partitions larger than this value.")
     , compaction_large_row_warning_threshold_mb(this, "compaction_large_row_warning_threshold_mb", liveness::LiveUpdate, value_status::Used, 10,
-        "Log a warning when writing rows larger than this value")
+        "Log a warning when writing rows larger than this value.")
     , compaction_large_cell_warning_threshold_mb(this, "compaction_large_cell_warning_threshold_mb", liveness::LiveUpdate, value_status::Used, 1,
-        "Log a warning when writing cells larger than this value")
+        "Log a warning when writing cells larger than this value.")
     , compaction_rows_count_warning_threshold(this, "compaction_rows_count_warning_threshold", liveness::LiveUpdate, value_status::Used, 100000,
-        "Log a warning when writing a number of rows larger than this value")
+        "Log a warning when writing a number of rows larger than this value.")
     , compaction_collection_elements_count_warning_threshold(this, "compaction_collection_elements_count_warning_threshold", liveness::LiveUpdate, value_status::Used, 10000,
-        "Log a warning when writing a collection containing more elements than this value")
+        "Log a warning when writing a collection containing more elements than this value.")
     /**
     * @Group Common memtable settings
     */
@@ -499,15 +496,18 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     */
     , incremental_backups(this, "incremental_backups", value_status::Used, false,
         "Backs up data updated since the last snapshot was taken. When enabled, Scylla creates a hard link to each SSTable flushed or streamed locally in a backups/ subdirectory of the keyspace data. Removing these links is the operator's responsibility.\n"
+        "\n"
         "Related information: Enabling incremental backups")
     , snapshot_before_compaction(this, "snapshot_before_compaction", value_status::Unused, false,
         "Enable or disable taking a snapshot before each compaction. This option is useful to back up data when there is a data format change. Be careful using this option because Cassandra does not clean up older snapshots automatically.\n"
+        "\n"
         "Related information: Configuring compaction")
     /**
     * @Group Common fault detection setting
     */
     , phi_convict_threshold(this, "phi_convict_threshold", value_status::Used, 8,
         "Adjusts the sensitivity of the failure detector on an exponential scale. Generally this setting never needs adjusting.\n"
+        "\n"
         "Related information: Failure detection and recovery")
     , failure_detector_timeout_in_ms(this, "failure_detector_timeout_in_ms", liveness::LiveUpdate, value_status::Used, 20 * 1000, "Maximum time between two successful echo message before gossip mark a node down in milliseconds.\n")
     /**
@@ -519,24 +519,27 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     */
     , commitlog_sync(this, "commitlog_sync", value_status::Used, "periodic",
         "The method that Scylla uses to acknowledge writes in milliseconds:\n"
+        "* periodic: Used with commitlog_sync_period_in_ms (Default: 10000 - 10 seconds ) to control how often the commit log is synchronized to disk. Periodic syncs are acknowledged immediately.\n"
+        "* batch: Used with commitlog_sync_batch_window_in_ms (Default: disabled ``**``) to control how long Scylla waits for other writes before performing a sync. When using this method, writes are not acknowledged until fsynced to disk.\n"
         "\n"
-        "\tperiodic : Used with commitlog_sync_period_in_ms (Default: 10000 - 10 seconds ) to control how often the commit log is synchronized to disk. Periodic syncs are acknowledged immediately.\n"
-        "\tbatch : Used with commitlog_sync_batch_window_in_ms (Default: disabled **) to control how long Scylla waits for other writes before performing a sync. When using this method, writes are not acknowledged until fsynced to disk.\n"
         "Related information: Durability")
     , commitlog_segment_size_in_mb(this, "commitlog_segment_size_in_mb", value_status::Used, 64,
         "Sets the size of the individual commitlog file segments. A commitlog segment may be archived, deleted, or recycled after all its data has been flushed to SSTables. This amount of data can potentially include commitlog segments from every table in the system. The default size is usually suitable for most commitlog archiving, but if you want a finer granularity, 8 or 16 MB is reasonable. See Commit log archive configuration.\n"
+        "\n"
         "Related information: Commit log archive configuration")
     , schema_commitlog_segment_size_in_mb(this, "schema_commitlog_segment_size_in_mb", value_status::Used, 128,
         "Sets the size of the individual schema commitlog file segments. The default size is larger than the default size of the data commitlog because the segment size puts a limit on the mutation size that can be written at once, and some schema mutation writes are much larger than average.\n"
+        "\n"
         "Related information: Commit log archive configuration")
     /* Note: does not exist on the listing page other than in above comment, wtf? */
     , commitlog_sync_period_in_ms(this, "commitlog_sync_period_in_ms", value_status::Used, 10000,
-        "Controls how long the system waits for other writes before performing a sync in \"periodic\" mode.")
+        "Controls how long the system waits for other writes before performing a sync in ``periodic`` mode.")
     /* Note: does not exist on the listing page other than in above comment, wtf? */
     , commitlog_sync_batch_window_in_ms(this, "commitlog_sync_batch_window_in_ms", value_status::Used, 10000,
-        "Controls how long the system waits for other writes before performing a sync in \"batch\" mode.")
+        "Controls how long the system waits for other writes before performing a sync in ``batch`` mode.")
     , commitlog_total_space_in_mb(this, "commitlog_total_space_in_mb", value_status::Used, -1,
         "Total space used for commitlogs. If the used space goes above this value, Scylla rounds up to the next nearest segment multiple and flushes memtables to disk for the oldest commitlog segments, removing those log segments. This reduces the amount of data to replay on startup, and prevents infrequently-updated tables from indefinitely keeping commitlog segments. A small total commitlog space tends to cause more flush activity on less-active tables.\n"
+        "\n"
         "Related information: Configuring memtable throughput")
     /* Note: Unused. Retained for upgrade compat. Deprecate and remove in a cycle or two. */
     , commitlog_reuse_segments(this, "commitlog_reuse_segments", value_status::Unused, true,
@@ -567,9 +570,9 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     */
     , memtable_allocation_type(this, "memtable_allocation_type", value_status::Invalid, "heap_buffers",
         "Specify the way Cassandra allocates and manages memtable memory. See Off-heap memtables in Cassandra 2.1. Options are:\n"
-        "\theap_buffers     On heap NIO (non-blocking I/O) buffers.\n"
-        "\toffheap_buffers  Off heap (direct) NIO buffers.\n"
-        "\toffheap_objects  Native memory, eliminating NIO buffer heap overhead.")
+        "* heap_buffers     On heap NIO (non-blocking I/O) buffers.\n"
+        "* offheap_buffers  Off heap (direct) NIO buffers.\n"
+        "* offheap_objects  Native memory, eliminating NIO buffer heap overhead.")
     , memtable_cleanup_threshold(this, "memtable_cleanup_threshold", value_status::Invalid, .11,
         "Ratio of occupied non-flushing memtable size to total permitted size for triggering a flush of the largest memtable. Larger values mean larger flushes and less compaction, but also less concurrent flush activity, which can make it difficult to keep your disks saturated under heavy write load.")
     , file_cache_size_in_mb(this, "file_cache_size_in_mb", value_status::Unused, 512,
@@ -606,7 +609,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , inter_dc_stream_throughput_outbound_megabits_per_sec(this, "inter_dc_stream_throughput_outbound_megabits_per_sec", value_status::Unused, 0,
         "Throttles all streaming file transfer between the data centers. This setting allows throttles streaming throughput betweens data centers in addition to throttling all network stream traffic as configured with stream_throughput_outbound_megabits_per_sec.")
     , stream_io_throughput_mb_per_sec(this, "stream_io_throughput_mb_per_sec", liveness::LiveUpdate, value_status::Used, 0,
-        "Throttles streaming I/O to the specified total throughput (in MiBs/s) across the entire system. Streaming I/O includes the one performed by repair and both RBNO and legacy topology operations such as adding or removing a node. Setting the value to 0 disables stream throttling")
+        "Throttles streaming I/O to the specified total throughput (in MiBs/s) across the entire system. Streaming I/O includes the one performed by repair and both RBNO and legacy topology operations such as adding or removing a node. Setting the value to 0 disables stream throttling.")
     , stream_plan_ranges_fraction(this, "stream_plan_ranges_fraction", liveness::LiveUpdate, value_status::Used, 0.1,
         "Specify the fraction of ranges to stream in a single stream plan. Value is between 0 and 1.")
     , trickle_fsync(this, "trickle_fsync", value_status::Unused, false,
@@ -636,16 +639,17 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , initial_token(this, "initial_token", value_status::Used, {/* N/A */},
         "Used in the single-node-per-token architecture, where a node owns exactly one contiguous range in the ring space. Setting this property overrides num_tokens.\n"
         "If you not using vnodes or have num_tokens set it to 1 or unspecified (#num_tokens), you should always specify this parameter when setting up a production cluster for the first time and when adding capacity. For more information, see this parameter in the Cassandra 1.1 Node and Cluster Configuration documentation.\n"
-        "This parameter can be used with num_tokens (vnodes ) in special cases such as Restoring from a snapshot.")
+        "This parameter can be used with num_tokens (vnodes) in special cases such as Restoring from a snapshot.")
     , num_tokens(this, "num_tokens", value_status::Used, 1,
         "Defines the number of tokens randomly assigned to this node on the ring when using virtual nodes (vnodes). The more tokens, relative to other nodes, the larger the proportion of data that the node stores. Generally all nodes should have the same number of tokens assuming equal hardware capability. The recommended value is 256. If unspecified (#num_tokens), Scylla uses 1 (equivalent to #num_tokens : 1) for legacy compatibility and uses the initial_token setting.\n"
         "If not using vnodes, comment #num_tokens : 256 or set num_tokens : 1 and use initial_token. If you already have an existing cluster with one token per node and wish to migrate to vnodes, see Enabling virtual nodes on an existing production cluster.\n"
-        "Note: If using DataStax Enterprise, the default setting of this property depends on the type of node and type of install.")
+        "\n"
+        ".. note:: If using DataStax Enterprise, the default setting of this property depends on the type of node and type of install.")
     , partitioner(this, "partitioner", value_status::Used, "org.apache.cassandra.dht.Murmur3Partitioner",
         "Distributes rows (by partition key) across all nodes in the cluster. At the moment, only Murmur3Partitioner is supported. For new clusters use the default partitioner.\n"
         "\n"
-        "Related information: Partitioners"
-        , {"org.apache.cassandra.dht.Murmur3Partitioner"})
+        "Related information: Partitioners",
+        {"org.apache.cassandra.dht.Murmur3Partitioner"})
     , storage_port(this, "storage_port", value_status::Used, 7000,
         "The port for inter-node communication.")
     /**
@@ -673,8 +677,8 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "Duration in seconds that rows are saved in cache. Caches are saved to saved_caches_directory.")
     , memory_allocator(this, "memory_allocator", value_status::Invalid, "NativeAllocator",
         "The off-heap memory allocator. In addition to caches, this property affects storage engine meta data. Supported values:\n"
-        "\tNativeAllocator\n"
-        "\tJEMallocAllocator\n"
+        "* NativeAllocator\n"
+        "* JEMallocAllocator\n"
         "\n"
         "Experiments show that jemalloc saves some memory compared to the native allocator because it is more fragmentation resistant. To use, install jemalloc as a library and modify cassandra-env.sh (instructions in file).")
     /**
@@ -714,9 +718,11 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "The time that the coordinator waits for truncates (remove all data from a table) to complete. The long default value allows for a snapshot to be taken before removing the data. If auto_snapshot is disabled (not recommended), you can reduce this time.")
     , write_request_timeout_in_ms(this, "write_request_timeout_in_ms", liveness::LiveUpdate, value_status::Used, 2000,
         "The time in milliseconds that the coordinator waits for write operations to complete.\n"
+        "\n"
         "Related information: About hinted handoff writes")
     , request_timeout_in_ms(this, "request_timeout_in_ms", liveness::LiveUpdate, value_status::Used, 10000,
         "The default timeout for other, miscellaneous operations.\n"
+        "\n"
         "Related information: About hinted handoff writes")
     /**
     * @Group Inter-node settings
@@ -728,19 +734,17 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , internode_send_buff_size_in_bytes(this, "internode_send_buff_size_in_bytes", value_status::Unused, 0,
         "Sets the sending socket buffer size in bytes for inter-node calls.\n"
         "When setting this parameter and internode_recv_buff_size_in_bytes, the buffer size is limited by net.core.wmem_max. When unset, buffer size is defined by net.ipv4.tcp_wmem. See man tcp and:\n"
-        "\n"
-        "\t/proc/sys/net/core/wmem_max\n"
-        "\t/proc/sys/net/core/rmem_max\n"
-        "\t/proc/sys/net/ipv4/tcp_wmem\n"
-        "\t/proc/sys/net/ipv4/tcp_wmem\n")
+        "* /proc/sys/net/core/wmem_max\n"
+        "* /proc/sys/net/core/rmem_max\n"
+        "* /proc/sys/net/ipv4/tcp_wmem\n"
+        "* /proc/sys/net/ipv4/tcp_wmem\n")
     , internode_recv_buff_size_in_bytes(this, "internode_recv_buff_size_in_bytes", value_status::Unused, 0,
         "Sets the receiving socket buffer size in bytes for inter-node calls.")
     , internode_compression(this, "internode_compression", value_status::Used, "none",
         "Controls whether traffic between nodes is compressed. The valid values are:\n"
-        "\n"
-        "\tall: All traffic is compressed.\n"
-        "\tdc : Traffic between data centers is compressed.\n"
-        "\tnone : No compression.")
+        "* all: All traffic is compressed.\n"
+        "* dc: Traffic between data centers is compressed.\n"
+        "* none: No compression.")
     , inter_dc_tcp_nodelay(this, "inter_dc_tcp_nodelay", value_status::Used, false,
         "Enable or disable tcp_nodelay for inter-data center communication. When disabled larger, but fewer, network packets are sent. This reduces overhead from the TCP protocol itself. However, if cross data-center responses are blocked, it will increase latency.")
     , streaming_socket_timeout_in_ms(this, "streaming_socket_timeout_in_ms", value_status::Unused, 0,
@@ -764,7 +768,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "Enabling client encryption and keeping native_transport_port_ssl disabled will use encryption"
         "for native_transport_port. Setting native_transport_port_ssl to a different value"
         "from native_transport_port will use encryption for native_transport_port_ssl while"
-        "keeping native_transport_port unencrypted")
+        "keeping native_transport_port unencrypted.")
     , native_shard_aware_transport_port(this, "native_shard_aware_transport_port", value_status::Used, 19042,
         "Like native_transport_port, but clients-side port number (modulo smp) is used to route the connection to the specific shard.")
     , native_shard_aware_transport_port_ssl(this, "native_shard_aware_transport_port_ssl", value_status::Used, 19142,
@@ -798,13 +802,12 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "Sets the sending socket buffer size in bytes for remote procedure calls.")
     , rpc_server_type(this, "rpc_server_type", value_status::Unused, "sync",
         "Cassandra provides three options for the RPC server. On Windows, sync is about 30% slower than hsha. On Linux, sync and hsha performance is about the same, but hsha uses less memory.\n"
-        "\n"
-        "\tsync    (Default One thread per Thrift connection.) For a very large number of clients, memory is the limiting factor. On a 64-bit JVM, 180KB is the minimum stack size per thread and corresponds to your use of virtual memory. Physical memory may be limited depending on use of stack space.\n"
-        "\thsh      Half synchronous, half asynchronous. All Thrift clients are handled asynchronously using a small number of threads that does not vary with the number of clients and thus scales well to many clients. The RPC requests are synchronous (one thread per active request).\n"
-        "\t         Note: When selecting this option, you must change the default value (unlimited) of rpc_max_threads.\n"
-        "\tYour own RPC server: You must provide a fully-qualified class name of an o.a.c.t.TServerFactory that can create a server instance.")
+        "* sync    (Default One thread per Thrift connection.) For a very large number of clients, memory is the limiting factor. On a 64-bit JVM, 180KB is the minimum stack size per thread and corresponds to your use of virtual memory. Physical memory may be limited depending on use of stack space.\n"
+        "* hsh      Half synchronous, half asynchronous. All Thrift clients are handled asynchronously using a small number of threads that does not vary with the number of clients and thus scales well to many clients. The RPC requests are synchronous (one thread per active request).\n"
+        "*         Note: When selecting this option, you must change the default value (unlimited) of rpc_max_threads.\n"
+        "* Your own RPC server: You must provide a fully-qualified class name of an o.a.c.t.TServerFactory that can create a server instance.")
     , cache_hit_rate_read_balancing(this, "cache_hit_rate_read_balancing", value_status::Used, true,
-        "This boolean controls whether the replicas for read query will be chosen based on cache hit ratio")
+        "This boolean controls whether the replicas for read query will be chosen based on cache hit ratio.")
     /**
     * @Group Advanced fault detection settings
     * @GroupDescription Settings to handle poorly performing or failing nodes.
@@ -817,6 +820,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "The time interval for how often the snitch calculates node scores. Because score calculation is CPU intensive, be careful when reducing this interval.")
     , hinted_handoff_enabled(this, "hinted_handoff_enabled", value_status::Used, db::config::hinted_handoff_enabled_type(db::config::hinted_handoff_enabled_type::enabled_for_all_tag()),
         "Enable or disable hinted handoff. To enable per data center, add data center list. For example: hinted_handoff_enabled: DC1,DC2. A hint indicates that the write needs to be replayed to an unavailable node. "
+        "\n"
         "Related information: About hinted handoff writes")
     , max_hinted_handoff_concurrency(this, "max_hinted_handoff_concurrency", liveness::LiveUpdate, value_status::Used, 0,
         "Maximum concurrency allowed for sending hints. The concurrency is divided across shards and rounded up if not divisible by the number of shards. By default (or when set to 0), concurrency of 8*shard_count will be used.")
@@ -824,6 +828,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "Maximum throttle per delivery thread in kilobytes per second. This rate reduces proportionally to the number of nodes in the cluster. For example, if there are two nodes in the cluster, each delivery thread will use the maximum rate. If there are three, each node will throttle to half of the maximum, since the two nodes are expected to deliver hints simultaneously.")
     , max_hint_window_in_ms(this, "max_hint_window_in_ms", value_status::Used, 10800000,
         "Maximum amount of time that hints are generates hints for an unresponsive node. After this interval, new hints are no longer generated until the node is back up and responsive. If the node goes down again, a new interval begins. This setting can prevent a sudden demand for resources when a node is brought back online and the rest of the cluster attempts to replay a large volume of hinted writes.\n"
+        "\n"
         "Related information: Failure detection and recovery")
     , max_hints_delivery_threads(this, "max_hints_delivery_threads", value_status::Invalid, 2,
         "Number of threads with which to deliver hints. In multiple data-center deployments, consider increasing this number because cross data-center handoff is generally slower.")
@@ -835,19 +840,17 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     */
     , request_scheduler(this, "request_scheduler", value_status::Unused, "org.apache.cassandra.scheduler.NoScheduler",
         "Defines a scheduler to handle incoming client requests according to a defined policy. This scheduler is useful for throttling client requests in single clusters containing multiple keyspaces. This parameter is specifically for requests from the client and does not affect inter-node communication. Valid values are:\n"
-        "\n"
-        "\torg.apache.cassandra.scheduler.NoScheduler   No scheduling takes place.\n"
-        "\torg.apache.cassandra.scheduler.RoundRobinScheduler   Round robin of client requests to a node with a separate queue for each request_scheduler_id property.\n"
-        "\tA Java class that implements the RequestScheduler interface."
+        "* org.apache.cassandra.scheduler.NoScheduler   No scheduling takes place.\n"
+        "* org.apache.cassandra.scheduler.RoundRobinScheduler   Round robin of client requests to a node with a separate queue for each request_scheduler_id property.\n"
+        "* A Java class that implements the RequestScheduler interface."
         , {"org.apache.cassandra.scheduler.NoScheduler", "org.apache.cassandra.scheduler.RoundRobinScheduler"})
     , request_scheduler_id(this, "request_scheduler_id", value_status::Unused, {/* keyspace */},
         "An identifier on which to perform request scheduling. Currently the only valid value is keyspace. See weights.")
     , request_scheduler_options(this, "request_scheduler_options", value_status::Unused, {/* disabled */},
         "Contains a list of properties that define configuration options for request_scheduler:\n"
-        "\n"
-        "\tthrottle_limit: The number of in-flight requests per client. Requests beyond this limit are queued up until running requests complete. Recommended value is ((concurrent_reads + concurrent_writes) × 2)\n"
-        "\tdefault_weight: (Default: 1 **)  How many requests are handled during each turn of the RoundRobin.\n"
-        "\tweights: (Default: Keyspace: 1)  Takes a list of keyspaces. It sets how many requests are handled during each turn of the RoundRobin, based on the request_scheduler_id.")
+        "* throttle_limit: The number of in-flight requests per client. Requests beyond this limit are queued up until running requests complete. Recommended value is ((concurrent_reads + concurrent_writes) × 2)\n"
+        "* default_weight: (Default: 1 **)  How many requests are handled during each turn of the RoundRobin.\n"
+        "* weights: (Default: Keyspace: 1)  Takes a list of keyspaces. It sets how many requests are handled during each turn of the RoundRobin, based on the request_scheduler_id.")
     /**
     * @Group Thrift interface properties
     * @GroupDescription Legacy API for older clients. CQL is a simpler and better API for Scylla.
@@ -862,30 +865,31 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     */
     , authenticator(this, "authenticator", value_status::Used, "org.apache.cassandra.auth.AllowAllAuthenticator",
         "The authentication backend, used to identify users. The available authenticators are:\n"
+        "* org.apache.cassandra.auth.AllowAllAuthenticator: Disables authentication; no checks are performed.\n"
+        "* org.apache.cassandra.auth.PasswordAuthenticator: Authenticates users with user names and hashed passwords stored in the system_auth.credentials table. If you use the default, 1, and the node with the lone replica goes down, you will not be able to log into the cluster because the system_auth keyspace was not replicated.\n"
+        "* com.scylladb.auth.CertificateAuthenticator: Authenticates users based on TLS certificate authentication subject. Roles and permissions still need to be defined as normal. Super user can be set using the 'auth_superuser_name' configuration value. Query to extract role name from subject string is set using 'auth_certificate_role_queries'.\n"
+        "* com.scylladb.auth.TransitionalAuthenticator: Wraps around the PasswordAuthenticator, logging them in if username/password pair provided is correct and treating them as anonymous users otherwise.\n"
         "\n"
-        "\torg.apache.cassandra.auth.AllowAllAuthenticator : Disables authentication; no checks are performed.\n"
-        "\torg.apache.cassandra.auth.PasswordAuthenticator : Authenticates users with user names and hashed passwords stored in the system_auth.credentials table. If you use the default, 1, and the node with the lone replica goes down, you will not be able to log into the cluster because the system_auth keyspace was not replicated.\n"
-        "\tcom.scylladb.auth.CertificateAuthenticator : Authenticates users based on TLS certificate authentication subject. Roles and permissions still need to be defined as normal. Super user can be set using the 'auth_superuser_name' configuration value. Query to extract role name from subject string is set using 'auth_certificate_role_queries'.\n"
-        "\tcom.scylladb.auth.TransitionalAuthenticator : Wraps around the PasswordAuthenticator, logging them in if username/password pair provided is correct and treating them as anonymous users otherwise.\n"
-        "Related information: Internal authentication"
-        , {"AllowAllAuthenticator", "PasswordAuthenticator", "CertificateAuthenticator", "org.apache.cassandra.auth.PasswordAuthenticator", "org.apache.cassandra.auth.AllowAllAuthenticator", "com.scylladb.auth.TransitionalAuthenticator", "com.scylladb.auth.CertificateAuthenticator"})
+        "Related information: Internal authentication", 
+        {"AllowAllAuthenticator", "PasswordAuthenticator", "CertificateAuthenticator", "org.apache.cassandra.auth.PasswordAuthenticator", "org.apache.cassandra.auth.AllowAllAuthenticator", "com.scylladb.auth.TransitionalAuthenticator", "com.scylladb.auth.CertificateAuthenticator"})
     , internode_authenticator(this, "internode_authenticator", value_status::Unused, "enabled",
         "Internode authentication backend. It implements org.apache.cassandra.auth.AllowAllInternodeAuthenticator to allows or disallow connections from peer nodes.")
     , authorizer(this, "authorizer", value_status::Used, "org.apache.cassandra.auth.AllowAllAuthorizer",
         "The authorization backend. It implements IAuthenticator, which limits access and provides permissions. The available authorizers are:\n"
+        "* AllowAllAuthorizer: Disables authorization; allows any action to any user.\n"
+        "* CassandraAuthorizer: Stores permissions in system_auth.permissions table. If you use the default, 1, and the node with the lone replica goes down, you will not be able to log into the cluster because the system_auth keyspace was not replicated.\n"
+        "* com.scylladb.auth.TransitionalAuthorizer: Wraps around the CassandraAuthorizer, which is used to authorize permission management. Other actions are allowed for all users.\n"
         "\n"
-        "\tAllowAllAuthorizer : Disables authorization; allows any action to any user.\n"
-        "\tCassandraAuthorizer : Stores permissions in system_auth.permissions table. If you use the default, 1, and the node with the lone replica goes down, you will not be able to log into the cluster because the system_auth keyspace was not replicated.\n"
-        "\tcom.scylladb.auth.TransitionalAuthorizer : Wraps around the CassandraAuthorizer, which is used to authorize permission management. Other actions are allowed for all users.\n"
-        "Related information: Object permissions"
-        , {"AllowAllAuthorizer", "CassandraAuthorizer", "org.apache.cassandra.auth.AllowAllAuthorizer", "org.apache.cassandra.auth.CassandraAuthorizer", "com.scylladb.auth.TransitionalAuthorizer"})
+        "Related information: Object permissions",
+        {"AllowAllAuthorizer", "CassandraAuthorizer", "org.apache.cassandra.auth.AllowAllAuthorizer", "org.apache.cassandra.auth.CassandraAuthorizer", "com.scylladb.auth.TransitionalAuthorizer"})
     , role_manager(this, "role_manager", value_status::Used, "org.apache.cassandra.auth.CassandraRoleManager",
-        "The role-management backend, used to maintain grantts and memberships between roles.\n"
+        "The role-management backend, used to maintain grantts and memberships between roles."
         "The available role-managers are:\n"
-        "\tCassandraRoleManager : Stores role data in the system_auth keyspace.")
+        "* CassandraRoleManager: Stores role data in the system_auth keyspace.")
     , permissions_validity_in_ms(this, "permissions_validity_in_ms", liveness::LiveUpdate, value_status::Used, 10000,
         "How long permissions in cache remain valid. Depending on the authorizer, such as CassandraAuthorizer, fetching permissions can be resource intensive. Permissions caching is disabled when this property is set to 0 or when AllowAllAuthorizer is used. The cached value is considered valid as long as both its value is not older than the permissions_validity_in_ms "
         "and the cached value has been read at least once during the permissions_validity_in_ms time frame. If any of these two conditions doesn't hold the cached value is going to be evicted from the cache.\n"
+        "\n"
         "Related information: Object permissions")
     , permissions_update_interval_in_ms(this, "permissions_update_interval_in_ms", liveness::LiveUpdate, value_status::Used, 2000,
         "Refresh interval for permissions cache (if enabled). After this interval, cache entries become eligible for refresh. An async reload is scheduled every permissions_update_interval_in_ms time period and the old value is returned until it completes. If permissions_validity_in_ms has a non-zero value, then this property must also have a non-zero value. It's recommended to set this value to be at least 3 times smaller than the permissions_validity_in_ms.")
@@ -893,66 +897,65 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "Maximum cached permission entries. Must have a non-zero value if permissions caching is enabled (see a permissions_validity_in_ms description).")
     , server_encryption_options(this, "server_encryption_options", value_status::Used, {/*none*/},
         "Enable or disable inter-node encryption. You must also generate keys and provide the appropriate key and trust store locations and passwords. The available options are:\n"
-        "\n"
-        "internode_encryption : (Default: none) Enable or disable encryption of inter-node communication using the TLS_RSA_WITH_AES_128_CBC_SHA cipher suite for authentication, key exchange, and encryption of data transfers. The available inter-node options are:\n"
-        "\tall : Encrypt all inter-node communications.\n"
-        "\tnone : No encryption.\n"
-        "\tdc : Encrypt the traffic between the data centers (server only).\n"
-        "\track : Encrypt the traffic between the racks(server only).\n"
-        "certificate : (Default: conf/scylla.crt) The location of a PEM-encoded x509 certificate used to identify and encrypt the internode communication.\n"
-        "keyfile : (Default: conf/scylla.key) PEM Key file associated with certificate.\n"
-        "truststore : (Default: <not set, use system truststore> ) Location of the truststore containing the trusted certificate for authenticating remote servers.\n"
-        "certficate_revocation_list : (Default: <not set>) PEM encoded certificate revocation list.\n"
+        "* internode_encryption: (Default: none) Enable or disable encryption of inter-node communication using the TLS_RSA_WITH_AES_128_CBC_SHA cipher suite for authentication, key exchange, and encryption of data transfers. The available inter-node options are:\n"
+        "   * all: Encrypt all inter-node communications.\n"
+        "   * none: No encryption.\n"
+        "   * dc: Encrypt the traffic between the data centers (server only).\n"
+        "   * rack: Encrypt the traffic between the racks(server only).\n"
+        "* certificate: (Default: conf/scylla.crt) The location of a PEM-encoded x509 certificate used to identify and encrypt the internode communication.\n"
+        "* keyfile: (Default: conf/scylla.key) PEM Key file associated with certificate.\n"
+        "* truststore: (Default: <not set, use system truststore> ) Location of the truststore containing the trusted certificate for authenticating remote servers.\n"
+        "* certficate_revocation_list: (Default: <not set>) PEM encoded certificate revocation list.\n"
         "\n"
         "The advanced settings are:\n"
         "\n"
-        "\tpriority_string : (Default: not set, use default) GnuTLS priority string controlling TLS algorithms used/allowed.\n"
-        "\trequire_client_auth : (Default: false ) Enables or disables certificate authentication.\n"
+        "* priority_string: (Default: not set, use default) GnuTLS priority string controlling TLS algorithms used/allowed.\n"
+        "* require_client_auth: (Default: false ) Enables or disables certificate authentication.\n"
+        "\n"
         "Related information: Node-to-node encryption")
     , client_encryption_options(this, "client_encryption_options", value_status::Used, {/*none*/},
         "Enable or disable client-to-node encryption. You must also generate keys and provide the appropriate key and certificate. The available options are:\n"
-        "\n"
-        "\tenabled : (Default: false) To enable, set to true.\n"
-        "\tcertificate: (Default: conf/scylla.crt) The location of a PEM-encoded x509 certificate used to identify and encrypt the client/server communication.\n"
-        "\tkeyfile: (Default: conf/scylla.key) PEM Key file associated with certificate.\n"
-        "truststore : (Default: <not set. use system truststore>) Location of the truststore containing the trusted certificate for authenticating remote servers.\n"
-        "certficate_revocation_list : (Default: <not set> ) PEM encoded certificate revocation list.\n"
+        "* enabled: (Default: false) To enable, set to true.\n"
+        "* certificate: (Default: conf/scylla.crt) The location of a PEM-encoded x509 certificate used to identify and encrypt the client/server communication.\n"
+        "* keyfile: (Default: conf/scylla.key) PEM Key file associated with certificate.\n"
+        "* truststore: (Default: <not set. use system truststore>) Location of the truststore containing the trusted certificate for authenticating remote servers.\n"
+        "* certficate_revocation_list: (Default: <not set> ) PEM encoded certificate revocation list.\n"
         "\n"
         "The advanced settings are:\n"
         "\n"
-        "\tpriority_string : (Default: not set, use default) GnuTLS priority string controlling TLS algorithms used/allowed.\n"
-        "\trequire_client_auth : (Default: false) Enables or disables certificate authentication.\n"
+        "* priority_string: (Default: not set, use default) GnuTLS priority string controlling TLS algorithms used/allowed.\n"
+        "* require_client_auth: (Default: false) Enables or disables certificate authentication.\n"
+        "\n"
         "Related information: Client-to-node encryption")
     , alternator_encryption_options(this, "alternator_encryption_options", value_status::Used, {/*none*/},
         "When Alternator via HTTPS is enabled with alternator_https_port, where to take the key and certificate. The available options are:\n"
-        "\n"
-        "\tcertificate: (Default: conf/scylla.crt) The location of a PEM-encoded x509 certificate used to identify and encrypt the client/server communication.\n"
-        "\tkeyfile: (Default: conf/scylla.key) PEM Key file associated with certificate.\n"
+        "* certificate: (Default: conf/scylla.crt) The location of a PEM-encoded x509 certificate used to identify and encrypt the client/server communication.\n"
+        "* keyfile: (Default: conf/scylla.key) PEM Key file associated with certificate.\n"
         "\n"
         "The advanced settings are:\n"
         "\n"
-        "\tpriority_string : GnuTLS priority string controlling TLS algorithms used/allowed.")
+        "* priority_string: GnuTLS priority string controlling TLS algorithms used/allowed.")
     , ssl_storage_port(this, "ssl_storage_port", value_status::Used, 7001,
         "The SSL port for encrypted communication. Unused unless enabled in encryption_options.")
-    , enable_in_memory_data_store(this, "enable_in_memory_data_store", value_status::Used, false, "Enable in memory mode (system tables are always persisted)")
-    , enable_cache(this, "enable_cache", value_status::Used, true, "Enable cache")
-    , enable_commitlog(this, "enable_commitlog", value_status::Used, true, "Enable commitlog")
+    , enable_in_memory_data_store(this, "enable_in_memory_data_store", value_status::Used, false, "Enable in memory mode (system tables are always persisted).")
+    , enable_cache(this, "enable_cache", value_status::Used, true, "Enable cache.")
+    , enable_commitlog(this, "enable_commitlog", value_status::Used, true, "Enable commitlog.")
     , volatile_system_keyspace_for_testing(this, "volatile_system_keyspace_for_testing", value_status::Used, false, "Don't persist system keyspace - testing only!")
-    , api_port(this, "api_port", value_status::Used, 10000, "Http Rest API port")
-    , api_address(this, "api_address", value_status::Used, "", "Http Rest API address")
-    , api_ui_dir(this, "api_ui_dir", value_status::Used, "swagger-ui/dist/", "The directory location of the API GUI")
-    , api_doc_dir(this, "api_doc_dir", value_status::Used, "api/api-doc/", "The API definition file directory")
-    , load_balance(this, "load_balance", value_status::Unused, "none", "CQL request load balancing: 'none' or round-robin'")
-    , consistent_rangemovement(this, "consistent_rangemovement", value_status::Used, true, "When set to true, range movements will be consistent. It means: 1) it will refuse to bootstrap a new node if other bootstrapping/leaving/moving nodes detected. 2) data will be streamed to a new node only from the node which is no longer responsible for the token range. Same as -Dcassandra.consistent.rangemovement in cassandra")
+    , api_port(this, "api_port", value_status::Used, 10000, "Http Rest API port.")
+    , api_address(this, "api_address", value_status::Used, "", "Http Rest API address.")
+    , api_ui_dir(this, "api_ui_dir", value_status::Used, "swagger-ui/dist/", "The directory location of the API GUI.")
+    , api_doc_dir(this, "api_doc_dir", value_status::Used, "api/api-doc/", "The API definition file directory.")
+    , load_balance(this, "load_balance", value_status::Unused, "none", "CQL request load balancing: 'none' or round-robin.'")
+    , consistent_rangemovement(this, "consistent_rangemovement", value_status::Used, true, "When set to true, range movements will be consistent. It means: 1) it will refuse to bootstrap a new node if other bootstrapping/leaving/moving nodes detected. 2) data will be streamed to a new node only from the node which is no longer responsible for the token range. Same as -Dcassandra.consistent.rangemovement in cassandra.")
     , join_ring(this, "join_ring", value_status::Unused, true, "When set to true, a node will join the token ring. When set to false, a node will not join the token ring. User can use nodetool join to initiate ring joinging later. Same as -Dcassandra.join_ring in cassandra.")
     , load_ring_state(this, "load_ring_state", value_status::Used, true, "When set to true, load tokens and host_ids previously saved. Same as -Dcassandra.load_ring_state in cassandra.")
     , replace_node_first_boot(this, "replace_node_first_boot", value_status::Used, "", "The Host ID of a dead node to replace. If the replacing node has already been bootstrapped successfully, this option will be ignored.")
     , replace_address(this, "replace_address", value_status::Used, "", "[[deprecated]] The listen_address or broadcast_address of the dead node to replace. Same as -Dcassandra.replace_address.")
     , replace_address_first_boot(this, "replace_address_first_boot", value_status::Used, "", "[[deprecated]] Like replace_address option, but if the node has been bootstrapped successfully it will be ignored. Same as -Dcassandra.replace_address_first_boot.")
     , ignore_dead_nodes_for_replace(this, "ignore_dead_nodes_for_replace", value_status::Used, "", "List dead nodes to ignore for replace operation using a comma-separated list of host IDs. E.g., scylla --ignore-dead-nodes-for-replace 8d5ed9f4-7764-4dbd-bad8-43fddce94b7c,125ed9f4-7777-1dbn-mac8-43fddce9123e")
-    , override_decommission(this, "override_decommission", value_status::Deprecated, false, "Set true to force a decommissioned node to join the cluster (cannot be set if consistent-cluster-management is enabled")
-    , enable_repair_based_node_ops(this, "enable_repair_based_node_ops", liveness::LiveUpdate, value_status::Used, true, "Set true to use enable repair based node operations instead of streaming based")
-    , allowed_repair_based_node_ops(this, "allowed_repair_based_node_ops", liveness::LiveUpdate, value_status::Used, "replace,removenode,rebuild,bootstrap,decommission", "A comma separated list of node operations which are allowed to enable repair based node operations. The operations can be bootstrap, replace, removenode, decommission and rebuild")
+    , override_decommission(this, "override_decommission", value_status::Deprecated, false, "Set true to force a decommissioned node to join the cluster (cannot be set if consistent-cluster-management is enabled).")
+    , enable_repair_based_node_ops(this, "enable_repair_based_node_ops", liveness::LiveUpdate, value_status::Used, true, "Set true to use enable repair based node operations instead of streaming based.")
+    , allowed_repair_based_node_ops(this, "allowed_repair_based_node_ops", liveness::LiveUpdate, value_status::Used, "replace,removenode,rebuild,bootstrap,decommission", "A comma separated list of node operations which are allowed to enable repair based node operations. The operations can be bootstrap, replace, removenode, decommission and rebuild.")
     , enable_compacting_data_for_streaming_and_repair(this, "enable_compacting_data_for_streaming_and_repair", liveness::LiveUpdate, value_status::Used, true, "Enable the compacting reader, which compacts the data for streaming and repair (load'n'stream included) before sending it to, or synchronizing it with peers. Can reduce the amount of data to be processed by removing dead data, but adds CPU overhead.")
     , ring_delay_ms(this, "ring_delay_ms", value_status::Used, 30 * 1000, "Time a node waits to hear from other nodes before joining the ring in milliseconds. Same as -Dcassandra.ring_delay_ms in cassandra.")
     , shadow_round_ms(this, "shadow_round_ms", value_status::Used, 300 * 1000, "The maximum gossip shadow round time. Can be used to reduce the gossip feature check time during node boot up.")
@@ -961,27 +964,27 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , shutdown_announce_in_ms(this, "shutdown_announce_in_ms", value_status::Used, 2 * 1000, "Time a node waits after sending gossip shutdown message in milliseconds. Same as -Dcassandra.shutdown_announce_in_ms in cassandra.")
     , developer_mode(this, "developer_mode", value_status::Used, DEVELOPER_MODE_DEFAULT, "Relax environment checks. Setting to true can reduce performance and reliability significantly.")
     , skip_wait_for_gossip_to_settle(this, "skip_wait_for_gossip_to_settle", value_status::Used, -1, "An integer to configure the wait for gossip to settle. -1: wait normally, 0: do not wait at all, n: wait for at most n polls. Same as -Dcassandra.skip_wait_for_gossip_to_settle in cassandra.")
-    , force_gossip_generation(this, "force_gossip_generation", liveness::LiveUpdate, value_status::Used, -1 , "Force gossip to use the generation number provided by user")
+    , force_gossip_generation(this, "force_gossip_generation", liveness::LiveUpdate, value_status::Used, -1 , "Force gossip to use the generation number provided by user.")
     , experimental_features(this, "experimental_features", value_status::Used, {}, experimental_features_help_string())
-    , lsa_reclamation_step(this, "lsa_reclamation_step", value_status::Used, 1, "Minimum number of segments to reclaim in a single step")
-    , prometheus_port(this, "prometheus_port", value_status::Used, 9180, "Prometheus port, set to zero to disable")
-    , prometheus_address(this, "prometheus_address", value_status::Used, {/* listen_address */}, "Prometheus listening address, defaulting to listen_address if not explicitly set")
+    , lsa_reclamation_step(this, "lsa_reclamation_step", value_status::Used, 1, "Minimum number of segments to reclaim in a single step.")
+    , prometheus_port(this, "prometheus_port", value_status::Used, 9180, "Prometheus port, set to zero to disable.")
+    , prometheus_address(this, "prometheus_address", value_status::Used, {/* listen_address */}, "Prometheus listening address, defaulting to listen_address if not explicitly set.")
     , prometheus_prefix(this, "prometheus_prefix", value_status::Used, "scylla", "Set the prefix of the exported Prometheus metrics. Changing this will break Scylla's dashboard compatibility, do not change unless you know what you are doing.")
-    , abort_on_lsa_bad_alloc(this, "abort_on_lsa_bad_alloc", value_status::Used, false, "Abort when allocation in LSA region fails")
-    , murmur3_partitioner_ignore_msb_bits(this, "murmur3_partitioner_ignore_msb_bits", value_status::Used, default_murmur3_partitioner_ignore_msb_bits, "Number of most significant token bits to ignore in murmur3 partitioner; increase for very large clusters")
-    , unspooled_dirty_soft_limit(this, "unspooled_dirty_soft_limit", value_status::Used, 0.6, "Soft limit of unspooled dirty memory expressed as a portion of the hard limit")
-    , sstable_summary_ratio(this, "sstable_summary_ratio", value_status::Used, 0.0005, "Enforces that 1 byte of summary is written for every N (2000 by default) "
+    , abort_on_lsa_bad_alloc(this, "abort_on_lsa_bad_alloc", value_status::Used, false, "Abort when allocation in LSA region fails.")
+    , murmur3_partitioner_ignore_msb_bits(this, "murmur3_partitioner_ignore_msb_bits", value_status::Used, default_murmur3_partitioner_ignore_msb_bits, "Number of most significant token bits to ignore in murmur3 partitioner; increase for very large clusters.")
+    , unspooled_dirty_soft_limit(this, "unspooled_dirty_soft_limit", value_status::Used, 0.6, "Soft limit of unspooled dirty memory expressed as a portion of the hard limit.")
+    , sstable_summary_ratio(this, "sstable_summary_ratio", value_status::Used, 0.0005, "Enforces that 1 byte of summary is written for every N (2000 by default)"
         "bytes written to data file. Value must be between 0 and 1.")
-    , large_memory_allocation_warning_threshold(this, "large_memory_allocation_warning_threshold", value_status::Used, size_t(1) << 20, "Warn about memory allocations above this size; set to zero to disable")
+    , large_memory_allocation_warning_threshold(this, "large_memory_allocation_warning_threshold", value_status::Used, size_t(1) << 20, "Warn about memory allocations above this size; set to zero to disable.")
     , enable_deprecated_partitioners(this, "enable_deprecated_partitioners", value_status::Used, false, "Enable the byteordered and random partitioners. These partitioners are deprecated and will be removed in a future version.")
-    , enable_keyspace_column_family_metrics(this, "enable_keyspace_column_family_metrics", value_status::Used, false, "Enable per keyspace and per column family metrics reporting")
-    , enable_node_aggregated_table_metrics(this, "enable_node_aggregated_table_metrics", value_status::Used, true, "Enable aggregated per node, per keyspace and per table metrics reporting, applicable if enable_keyspace_column_family_metrics is false")
+    , enable_keyspace_column_family_metrics(this, "enable_keyspace_column_family_metrics", value_status::Used, false, "Enable per keyspace and per column family metrics reporting.")
+    , enable_node_aggregated_table_metrics(this, "enable_node_aggregated_table_metrics", value_status::Used, true, "Enable aggregated per node, per keyspace and per table metrics reporting, applicable if enable_keyspace_column_family_metrics is false.")
     , enable_sstable_data_integrity_check(this, "enable_sstable_data_integrity_check", value_status::Used, false, "Enable interposer which checks for integrity of every sstable write."
         " Performance is affected to some extent as a result. Useful to help debugging problems that may arise at another layers.")
     , enable_sstable_key_validation(this, "enable_sstable_key_validation", value_status::Used, ENABLE_SSTABLE_KEY_VALIDATION, "Enable validation of partition and clustering keys monotonicity"
         " Performance is affected to some extent as a result. Useful to help debugging problems that may arise at another layers.")
-    , cpu_scheduler(this, "cpu_scheduler", value_status::Used, true, "Enable cpu scheduling")
-    , view_building(this, "view_building", value_status::Used, true, "Enable view building; should only be set to false when the node is experience issues due to view building")
+    , cpu_scheduler(this, "cpu_scheduler", value_status::Used, true, "Enable cpu scheduling.")
+    , view_building(this, "view_building", value_status::Used, true, "Enable view building; should only be set to false when the node is experience issues due to view building.")
     , enable_sstables_mc_format(this, "enable_sstables_mc_format", value_status::Unused, true, "Enable SSTables 'mc' format to be used as the default file format.  Deprecated, please use \"sstable_format\" instead.")
     , enable_sstables_md_format(this, "enable_sstables_md_format", value_status::Unused, true, "Enable SSTables 'md' format to be used as the default file format.  Deprecated, please use \"sstable_format\" instead.")
     , sstable_format(this, "sstable_format", value_status::Used, "me", "Default sstable file format", {"md", "me"})
@@ -992,9 +995,9 @@ db::config::config(std::shared_ptr<db::extensions> exts)
             "When enabled, per-table schema digest calculation ignores empty partitions.")
     , enable_dangerous_direct_import_of_cassandra_counters(this, "enable_dangerous_direct_import_of_cassandra_counters", value_status::Used, false, "Only turn this option on if you want to import tables from Cassandra containing counters, and you are SURE that no counters in that table were created in a version earlier than Cassandra 2.1."
         " It is not enough to have ever since upgraded to newer versions of Cassandra. If you EVER used a version earlier than 2.1 in the cluster where these SSTables come from, DO NOT TURN ON THIS OPTION! You will corrupt your data. You have been warned.")
-    , enable_shard_aware_drivers(this, "enable_shard_aware_drivers", value_status::Used, true, "Enable native transport drivers to use connection-per-shard for better performance")
+    , enable_shard_aware_drivers(this, "enable_shard_aware_drivers", value_status::Used, true, "Enable native transport drivers to use connection-per-shard for better performance.")
     , enable_ipv6_dns_lookup(this, "enable_ipv6_dns_lookup", value_status::Used, false, "Use IPv6 address resolution")
-    , abort_on_internal_error(this, "abort_on_internal_error", liveness::LiveUpdate, value_status::Used, false, "Abort the server instead of throwing exception when internal invariants are violated")
+    , abort_on_internal_error(this, "abort_on_internal_error", liveness::LiveUpdate, value_status::Used, false, "Abort the server instead of throwing exception when internal invariants are violated.")
     , max_partition_key_restrictions_per_query(this, "max_partition_key_restrictions_per_query", liveness::LiveUpdate, value_status::Used, 100,
             "Maximum number of distinct partition keys restrictions per query. This limit places a bound on the size of IN tuples, "
             "especially when multiple partition key columns have IN restrictions. Increasing this value can result in server instability.")
@@ -1014,15 +1017,15 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , twcs_max_window_count(this, "twcs_max_window_count", liveness::LiveUpdate, value_status::Used, 50,
             "The maximum number of compaction windows allowed when making use of TimeWindowCompactionStrategy. A setting of 0 effectively disables the restriction.")
     , initial_sstable_loading_concurrency(this, "initial_sstable_loading_concurrency", value_status::Used, 4u,
-            "Maximum amount of sstables to load in parallel during initialization. A higher number can lead to more memory consumption. You should not need to touch this")
+            "Maximum amount of sstables to load in parallel during initialization. A higher number can lead to more memory consumption. You should not need to touch this.")
     , enable_3_1_0_compatibility_mode(this, "enable_3_1_0_compatibility_mode", value_status::Used, false,
         "Set to true if the cluster was initially installed from 3.1.0. If it was upgraded from an earlier version,"
         " or installed from a later version, leave this set to false. This adjusts the communication protocol to"
-        " work around a bug in Scylla 3.1.0")
-    , enable_user_defined_functions(this, "enable_user_defined_functions", value_status::Used, false,  "Enable user defined functions. You must also set experimental-features=udf")
-    , user_defined_function_time_limit_ms(this, "user_defined_function_time_limit_ms", value_status::Used, 10, "The time limit for each UDF invocation")
-    , user_defined_function_allocation_limit_bytes(this, "user_defined_function_allocation_limit_bytes", value_status::Used, 1024*1024, "How much memory each UDF invocation can allocate")
-    , user_defined_function_contiguous_allocation_limit_bytes(this, "user_defined_function_contiguous_allocation_limit_bytes", value_status::Used, 1024*1024, "How much memory each UDF invocation can allocate in one chunk")
+        " work around a bug in Scylla 3.1.0.")
+    , enable_user_defined_functions(this, "enable_user_defined_functions", value_status::Used, false,  "Enable user defined functions. You must also set ``experimental-features=udf``.")
+    , user_defined_function_time_limit_ms(this, "user_defined_function_time_limit_ms", value_status::Used, 10, "The time limit for each UDF invocation.")
+    , user_defined_function_allocation_limit_bytes(this, "user_defined_function_allocation_limit_bytes", value_status::Used, 1024*1024, "How much memory each UDF invocation can allocate.")
+    , user_defined_function_contiguous_allocation_limit_bytes(this, "user_defined_function_contiguous_allocation_limit_bytes", value_status::Used, 1024*1024, "How much memory each UDF invocation can allocate in one chunk.")
     , schema_registry_grace_period(this, "schema_registry_grace_period", value_status::Used, 1,
         "Time period in seconds after which unused schema versions will be evicted from the local schema registry cache. Default is 1 second.")
     , max_concurrent_requests_per_shard(this, "max_concurrent_requests_per_shard", liveness::LiveUpdate, value_status::Used, std::numeric_limits<uint32_t>::max(),
@@ -1049,15 +1052,15 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , enable_optimized_reversed_reads(this, "enable_optimized_reversed_reads", liveness::LiveUpdate, value_status::Used, true,
             "Use a new optimized algorithm for performing reversed reads.")
     , enable_cql_config_updates(this, "enable_cql_config_updates", liveness::LiveUpdate, value_status::Used, true,
-            "Make the system.config table UPDATEable")
+            "Make the system.config table UPDATEable.")
     , enable_parallelized_aggregation(this, "enable_parallelized_aggregation", liveness::LiveUpdate, value_status::Used, true,
             "Use on a new, parallel algorithm for performing aggregate queries.")
-    , alternator_port(this, "alternator_port", value_status::Used, 0, "Alternator API port")
-    , alternator_https_port(this, "alternator_https_port", value_status::Used, 0, "Alternator API HTTPS port")
-    , alternator_address(this, "alternator_address", value_status::Used, "0.0.0.0", "Alternator API listening address")
-    , alternator_enforce_authorization(this, "alternator_enforce_authorization", value_status::Used, false, "Enforce checking the authorization header for every request in Alternator")
-    , alternator_write_isolation(this, "alternator_write_isolation", value_status::Used, "", "Default write isolation policy for Alternator")
-    , alternator_streams_time_window_s(this, "alternator_streams_time_window_s", value_status::Used, 10, "CDC query confidence window for alternator streams")
+    , alternator_port(this, "alternator_port", value_status::Used, 0, "Alternator API port.")
+    , alternator_https_port(this, "alternator_https_port", value_status::Used, 0, "Alternator API HTTPS port.")
+    , alternator_address(this, "alternator_address", value_status::Used, "0.0.0.0", "Alternator API listening address.")
+    , alternator_enforce_authorization(this, "alternator_enforce_authorization", value_status::Used, false, "Enforce checking the authorization header for every request in Alternator.")
+    , alternator_write_isolation(this, "alternator_write_isolation", value_status::Used, "", "Default write isolation policy for Alternator.")
+    , alternator_streams_time_window_s(this, "alternator_streams_time_window_s", value_status::Used, 10, "CDC query confidence window for alternator streams.")
     , alternator_timeout_in_ms(this, "alternator_timeout_in_ms", liveness::LiveUpdate, value_status::Used, 10000,
         "The server-side timeout for completing Alternator API requests.")
     , alternator_ttl_period_in_seconds(this, "alternator_ttl_period_in_seconds", value_status::Used,
@@ -1079,10 +1082,11 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , redis_keyspace_replication_strategy_options(this, "redis_keyspace_replication_strategy", value_status::Used, {}, 
         "Set the replication strategy for the redis keyspace. The setting is used by the first node in the boot phase when the keyspace is not exists to create keyspace for redis.\n"
         "The replication strategy determines how many copies of the data are kept in a given data center. This setting impacts consistency, availability and request speed.\n"
-        "Two strategies are available: SimpleStrategy and NetworkTopologyStrategy.\n\n"
-        "\tclass: (Default: SimpleStrategy ). Set the replication strategy for redis keyspace.\n"
-        "\t'replication_factor':N, (Default: 'replication_factor':1) IFF the class is SimpleStrategy, assign the same replication factor to the entire cluster.\n"
-        "\t'datacenter_name':N [,...], (Default: 'dc1:1') IFF the class is NetworkTopologyStrategy, assign replication factors to each data center in a comma separated list.\n"
+        "Two strategies are available: SimpleStrategy and NetworkTopologyStrategy.\n"
+        "\n"
+        "* class: (Default: SimpleStrategy ). Set the replication strategy for redis keyspace.\n"
+        "* 'replication_factor': N, (Default: 'replication_factor':1) IFF the class is SimpleStrategy, assign the same replication factor to the entire cluster.\n"
+        "* 'datacenter_name': N [,...], (Default: 'dc1:1') IFF the class is NetworkTopologyStrategy, assign replication factors to each data center in a comma separated list.\n"
         "\n"
         "Related information: About replication strategy.")
     , sanitizer_report_backtrace(this, "sanitizer_report_backtrace", value_status::Used, false,
@@ -1098,24 +1102,24 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , force_schema_commit_log(this, "force_schema_commit_log", value_status::Deprecated, false,
         "Use separate schema commit log unconditionally rater than after restart following discovery of cluster-wide support for it.")
     , task_ttl_seconds(this, "task_ttl_in_seconds", liveness::LiveUpdate, value_status::Used, 0, "Time for which information about finished task stays in memory.")
-    , nodeops_watchdog_timeout_seconds(this, "nodeops_watchdog_timeout_seconds", liveness::LiveUpdate, value_status::Used, 120, "Time in seconds after which node operations abort when not hearing from the coordinator")
-    , nodeops_heartbeat_interval_seconds(this, "nodeops_heartbeat_interval_seconds", liveness::LiveUpdate, value_status::Used, 10, "Period of heartbeat ticks in node operations")
+    , nodeops_watchdog_timeout_seconds(this, "nodeops_watchdog_timeout_seconds", liveness::LiveUpdate, value_status::Used, 120, "Time in seconds after which node operations abort when not hearing from the coordinator.")
+    , nodeops_heartbeat_interval_seconds(this, "nodeops_heartbeat_interval_seconds", liveness::LiveUpdate, value_status::Used, 10, "Period of heartbeat ticks in node operations.")
     , cache_index_pages(this, "cache_index_pages", liveness::LiveUpdate, value_status::Used, true,
-        "Keep SSTable index pages in the global cache after a SSTable read. Expected to improve performance for workloads with big partitions, but may degrade performance for workloads with small partitions. The amount of memory usable by index cache is limited with `index_cache_fraction`.")
+        "Keep SSTable index pages in the global cache after a SSTable read. Expected to improve performance for workloads with big partitions, but may degrade performance for workloads with small partitions. The amount of memory usable by index cache is limited with ``index_cache_fraction``.")
     , index_cache_fraction(this, "index_cache_fraction", liveness::LiveUpdate, value_status::Used, 0.2,
         "The maximum fraction of cache memory permitted for use by index cache. Clamped to the [0.0; 1.0] range. Must be small enough to not deprive the row cache of memory, but should be big enough to fit a large fraction of the index. The default value 0.2 means that at least 80\% of cache memory is reserved for the row cache, while at most 20\% is usable by the index cache.")
-    , consistent_cluster_management(this, "consistent_cluster_management", value_status::Deprecated, true, "Use RAFT for cluster management and DDL")
-    , wasm_cache_memory_fraction(this, "wasm_cache_memory_fraction", value_status::Used, 0.01, "Maximum total size of all WASM instances stored in the cache as fraction of total shard memory")
-    , wasm_cache_timeout_in_ms(this, "wasm_cache_timeout_in_ms", value_status::Used, 5000, "Time after which an instance is evicted from the cache")
-    , wasm_cache_instance_size_limit(this, "wasm_cache_instance_size_limit", value_status::Used, 1024*1024, "Instances with size above this limit will not be stored in the cache")
-    , wasm_udf_yield_fuel(this, "wasm_udf_yield_fuel", value_status::Used, 100000, "Wasmtime fuel a WASM UDF can consume before yielding")
-    , wasm_udf_total_fuel(this, "wasm_udf_total_fuel", value_status::Used, 100000000, "Wasmtime fuel a WASM UDF can consume before termination")
-    , wasm_udf_memory_limit(this, "wasm_udf_memory_limit", value_status::Used, 2*1024*1024, "How much memory each WASM UDF can allocate at most")
-    , relabel_config_file(this, "relabel_config_file", value_status::Used, "", "Optionally, read relabel config from file")
-    , object_storage_config_file(this, "object_storage_config_file", value_status::Used, "", "Optionally, read object-storage endpoints config from file")
+    , consistent_cluster_management(this, "consistent_cluster_management", value_status::Deprecated, true, "Use RAFT for cluster management and DDL.")
+    , wasm_cache_memory_fraction(this, "wasm_cache_memory_fraction", value_status::Used, 0.01, "Maximum total size of all WASM instances stored in the cache as fraction of total shard memory.")
+    , wasm_cache_timeout_in_ms(this, "wasm_cache_timeout_in_ms", value_status::Used, 5000, "Time after which an instance is evicted from the cache.")
+    , wasm_cache_instance_size_limit(this, "wasm_cache_instance_size_limit", value_status::Used, 1024*1024, "Instances with size above this limit will not be stored in the cache.")
+    , wasm_udf_yield_fuel(this, "wasm_udf_yield_fuel", value_status::Used, 100000, "Wasmtime fuel a WASM UDF can consume before yielding.")
+    , wasm_udf_total_fuel(this, "wasm_udf_total_fuel", value_status::Used, 100000000, "Wasmtime fuel a WASM UDF can consume before termination.")
+    , wasm_udf_memory_limit(this, "wasm_udf_memory_limit", value_status::Used, 2*1024*1024, "How much memory each WASM UDF can allocate at most.")
+    , relabel_config_file(this, "relabel_config_file", value_status::Used, "", "Optionally, read relabel config from file.")
+    , object_storage_config_file(this, "object_storage_config_file", value_status::Used, "", "Optionally, read object-storage endpoints config from file.")
     , live_updatable_config_params_changeable_via_cql(this, "live_updatable_config_params_changeable_via_cql", liveness::MustRestart, value_status::Used, true, "If set to true, configuration parameters defined with LiveUpdate can be updated in runtime via CQL (by updating system.config virtual table), otherwise they can't.")
     , auth_superuser_name(this, "auth_superuser_name", value_status::Used, "",
-        "Initial authentication super username. Ignored if authentication tables already contain a super user")
+        "Initial authentication super username. Ignored if authentication tables already contain a super user.")
     , auth_superuser_salted_password(this, "auth_superuser_salted_password", value_status::Used, "", 
         "Initial authentication super user salted password. Create using mkpassword or similar. The hashing algorithm used must be available on the node host. "
         "Ignored if authentication tables already contain a super user password.")

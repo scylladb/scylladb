@@ -6,9 +6,7 @@
 {{ '-' * (group.name|length) }}
 
 {% if group.description %}
-.. raw:: html
-
-   <p>{{ group.description | readable_desc }}</p>
+{{ group.description | readable_desc_rst }}
 {% endif %}
 
 {% for item in group.properties %}

@@ -1,6 +1,5 @@
-   .. raw:: html
 
-      <p>{{ description | readable_desc }}</p>
+{{ description | readable_desc_rst }}
 
    {% if type %}* **Type:** ``{{ type }}``{% endif %}
    {% if default %}* **Default value:** ``{{ default }}``{% endif %}
