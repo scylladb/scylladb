@@ -137,6 +137,7 @@ public:
     // tombstones and flags to schema tables when performing schema changes, allowing us to
     // revert to the digest method when necessary (if we must perform a schema change during RECOVERY).
     gms::feature group0_schema_versioning { *this, "GROUP0_SCHEMA_VERSIONING"sv };
+    gms::feature supports_consistent_topology_changes { *this, "SUPPORTS_CONSISTENT_TOPOLOGY_CHANGES"sv };
 
     // A feature just for use in tests. It must not be advertised unless
     // the "features_enable_test_feature" injection is enabled.
