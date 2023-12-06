@@ -205,13 +205,6 @@ future<> run_on_table(sstring op, replica::database& db, std::string keyspace, t
     }
 }
 
-// Run on all tables, skipping dropped tables
-future<> run_on_existing_tables(sstring op, replica::database& db, std::string keyspace, const std::vector<table_info> local_tables, std::function<future<> (replica::table&)> func) {
-    for (const auto& ti : local_tables) {
-        co_await run_on_table(op, db, keyspace, ti, func);
-    }
-}
-
 future<> wait_for_your_turn(seastar::condition_variable& cv, tasks::task_manager::task_ptr& current_task, tasks::task_id id) {
     co_await cv.wait([&] {
         return current_task && current_task->id() == id;
