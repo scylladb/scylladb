@@ -743,6 +743,7 @@ class db::commitlog::segment : public enable_shared_from_this<segment>, public c
 
     buffer_type _buffer;
     base_ostream_type _buffer_ostream;
+    size_t _buffer_ostream_size = 0;
     std::unordered_map<cf_id_type, uint64_t> _cf_dirty;
     std::unordered_map<cf_id_type, gc_clock::time_point> _cf_min_time;
     time_point _sync_time;
@@ -764,9 +765,13 @@ class db::commitlog::segment : public enable_shared_from_this<segment>, public c
         // page checksums etc. The ostream does not include this, as it is subdivided and
         // skips sector_overhead parts of the memory buffer. So to get actual position 
         // in the buffer, we need to add it back.
-        auto size = _buffer_ostream.size();
-        size += sector_overhead(size);
-        return _buffer.size_bytes() - size;
+
+        // #16298 - this was based on _buffer_size vs. remaining in ostream.
+        // ostream type has no "position" type, need to keep track of 
+        // what the original size was, i.e. _buffer.size() adjusted down
+        // for sector overhead.
+        auto used = _buffer_ostream_size - _buffer_ostream.size();
+        return used + sector_overhead(used);
     }
 
     future<> begin_flush() {
@@ -1000,9 +1005,7 @@ public:
 
         s += overhead;
         // add bookkeep data reqs. 
-        s += sector_overhead(s);
-
-        auto a = align_up(s, _alignment);
+        auto a = align_up(s + sector_overhead(s), _alignment);
         auto k = std::max(a, default_size);
 
         _buffer = _segment_manager->acquire_buffer(k, _alignment);
@@ -1011,11 +1014,17 @@ public:
         // the amount of data we can actually write into.
         auto useable_size = size - n_blocks * detail::sector_overhead_size;
 
+        assert(useable_size >= s);
+
         _buffer_ostream = frag_ostream_type(detail::sector_split_iterator(_buffer.begin(), _buffer.end(), _alignment), useable_size);
+        // #16298 - keep track of ostream initial size.
+        _buffer_ostream_size = useable_size;
 
         auto out = _buffer_ostream.write_substream(overhead);
         out.fill('\0', overhead);
         _segment_manager->totals.buffer_list_bytes += _buffer.size_bytes();
+
+        assert(buffer_position() == overhead);
     }
 
     bool buffer_is_empty() const {
@@ -1044,6 +1053,7 @@ public:
 
         _file_pos = top;
         _buffer_ostream = { };
+        _buffer_ostream_size = 0;
         _num_allocs = 0;
 
         assert(me.use_count() > 1);
@@ -1342,9 +1352,13 @@ public:
         auto buf_pos = buffer_position();
         auto size = align_up(buf_pos, _alignment);
         auto fill_size = size - buf_pos;
-        _buffer_ostream.fill('\0', fill_size);
-        _segment_manager->totals.bytes_slack += fill_size;
-        _segment_manager->account_memory_usage(fill_size);
+        if (fill_size > 0) {
+            // we want to fill to a sector boundry, must leave room for metadata
+            assert((fill_size - detail::sector_overhead_size) <= _buffer_ostream.size());
+            _buffer_ostream.fill('\0', fill_size - detail::sector_overhead_size);
+            _segment_manager->totals.bytes_slack += fill_size;
+            _segment_manager->account_memory_usage(fill_size);
+        }
         return size;
     }
     void mark_clean(const cf_id_type& id, uint64_t count) noexcept {
@@ -1888,7 +1902,7 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
             // proper descriptor id order. If we renamed in the delete call
             // that recycled the file we could potentially have
             // out-of-order files. (Sort does not help).
-            clogger.debug("Using recycled segment file {} -> {}", f.name(), dst);
+            clogger.debug("Using recycled segment file {} -> {} ({} MB)", f.name(), dst, f.known_size()/(1024*1024));
             co_await f.rename(dst);
             co_return co_await allocate_segment_ex(std::move(d), std::move(f), flags);
         }
@@ -2267,7 +2281,7 @@ future<> db::commitlog::segment_manager::do_pending_deletes() {
                 descriptor d(next_id(), "Recycled-" + cfg.fname_prefix);
                 auto dst = this->filename(d);
 
-                clogger.debug("Recycling segment file {}", f.name());
+                clogger.debug("Recycling segment file {} -> {}", f.name(), dst);
                 // must rename the file since we must ensure the
                 // data is not replayed. Changing the name will
                 // cause header ID to be invalid in the file -> ignored
@@ -2283,6 +2297,7 @@ future<> db::commitlog::segment_manager::do_pending_deletes() {
                 }
             }
 
+            clogger.debug("Deleting segment file {}", f.name());
             // last resort.
             co_await f.remove_file();
         } catch (...) {
@@ -2724,29 +2739,40 @@ db::commitlog::read_log_file(sstring filename, sstring pfx, commit_load_reader_f
             return eof || next == pos;
         }
         future<> skip_to_chunk(size_t seek_to_pos) {
+            clogger.debug("Skip to {} ({}, {})", seek_to_pos, pos, buffer.size_bytes());
+
             if (seek_to_pos >= file_size) {
                 eof = true;
                 pos = file_size;
                 co_return;
             }
 
-            auto bytes = seek_to_pos - pos;
-            auto rem = buffer.size_bytes();
-            if (bytes < rem) {
-                buffer.remove_suffix(bytes);
-                rem -= bytes;
-                pos += bytes;
-                co_return;
+            // Fix the buffer skip to be correct and more resilient.
+            if (buffer.size_bytes()) {
+                auto dseek_to_pos = filepos_to_datapos(seek_to_pos);
+                auto dpos = filepos_to_datapos(pos);
+                auto rem = buffer.size_bytes();
+                auto n = std::min(dseek_to_pos - dpos, rem);
+
+                buffer.remove_prefix(n);
+                advance_pos(n);
             }
 
-            buffer = {};
-            pos += rem;
-            bytes = seek_to_pos - pos;
+            if (pos == seek_to_pos) {
+                co_return;
+            }
+            // must be on page boundary now!
+            assert(align_down(pos, alignment) == pos);
 
+            // this is in full sectors. no need to fiddle with overhead here.
+            auto bytes = seek_to_pos - pos;
             auto skip_bytes = align_down(bytes, alignment);
-            pos += skip_bytes;
 
+            pos += skip_bytes;
             co_await fin.skip(skip_bytes);
+            // Should not be the case - we only ever skip to page boundaries,
+            // but it is nice if the code can handle it. If we get here, we
+            // want to get into the current page. Read and discard.
             if (bytes > skip_bytes) {
                 // must crc check if we read into a sector
                 co_await read_data(bytes - skip_bytes);
@@ -2817,6 +2843,8 @@ db::commitlog::read_log_file(sstring filename, sstring pfx, commit_load_reader_f
             auto buf_vec = std::move(buffer).release();
             auto block_boundry = align_up(pos - initial.size_bytes(), alignment);
 
+            clogger.debug("Read {} bytes of data ({}, {})", size, pos, rem);
+
             while (rem < size) {
                 if (eof) {
                     throw segment_truncation(block_boundry);
@@ -2874,7 +2902,6 @@ db::commitlog::read_log_file(sstring filename, sstring pfx, commit_load_reader_f
                 tmp.remove_suffix(detail::sector_overhead_size);
 
                 rem += tmp.size_bytes();
-                pos += detail::sector_overhead_size;
 
                 auto vec2 = std::move(tmp).release();
                 for (auto&& v : vec2) {
@@ -2908,12 +2935,16 @@ db::commitlog::read_log_file(sstring filename, sstring pfx, commit_load_reader_f
             // this is the returned result.
             auto res = fragmented_temporary_buffer(std::move(buf_vec), size);
 
-            pos += size;
+            // #16298 - adjust position here, based on data returned.
+            advance_pos(size);
+
+            assert(((filepos_to_datapos(pos) + buffer.size_bytes()) % (alignment - detail::sector_overhead_size)) == 0);
 
             co_return res;
         }
 
         future<> read_chunk() {
+            clogger.debug("read_chunk {}", pos);
             auto start = pos;
             auto buf = co_await read_data(segment::segment_overhead_size); 
             auto in = buf.get_istream();
@@ -2952,8 +2983,33 @@ db::commitlog::read_log_file(sstring filename, sstring pfx, commit_load_reader_f
             }
         }
 
+        // adjust an actual file position to "data stream" position, i.e. without overhead.
+        size_t filepos_to_datapos(size_t pos) const {
+            return pos - (pos / alignment) * detail::sector_overhead_size;
+        }
+
+        // adjust "data stream" pos to file pos, i.e. add overhead
+        size_t datapos_to_filepos(size_t pos) const {
+            return pos + (pos / (alignment - detail::sector_overhead_size)) * detail::sector_overhead_size;
+        }
+
+        size_t next_pos(size_t off) const {
+            auto data_pos = filepos_to_datapos(pos);
+            auto next_data_pos = data_pos + off;
+            return datapos_to_filepos(next_data_pos);
+        }
+
+        // #16298 - handle adjusted file position update correctly.
+        void advance_pos(size_t off) {
+            auto old = pos;
+            pos = next_pos(off);
+            clogger.trace("Pos {} -> {} ({})", old, pos, off);
+        }
+
         future<> read_entry() {
             static constexpr size_t entry_header_size = segment::entry_overhead_size;
+
+            clogger.debug("read_entry {}", pos);
 
             /**
              * #598 - Must check that data left in chunk is enough to even read an entry.
@@ -2961,7 +3017,7 @@ db::commitlog::read_log_file(sstring filename, sstring pfx, commit_load_reader_f
              * to the next.
              */
             assert(pos <= next);
-            if ((pos + entry_header_size) >= next) {
+            if (next_pos(entry_header_size) >= next) {
                 co_await skip_to_chunk(next);
                 co_return;
             }

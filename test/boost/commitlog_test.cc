@@ -971,6 +971,69 @@ SEASTAR_TEST_CASE(test_commitlog_replay_invalid_key){
 
 using namespace std::chrono_literals;
 
+SEASTAR_TEST_CASE(test_commitlog_add_entry) {
+    return cl_test([](commitlog& log) {
+        return seastar::async([&] {
+            using force_sync = commitlog_entry_writer::force_sync;
+
+            constexpr auto n = 10;
+            for (auto fs : { force_sync(false), force_sync(true) }) {
+                std::vector<commitlog_entry_writer> writers;
+                std::vector<frozen_mutation> mutations;
+                std::vector<replay_position> rps;
+
+                writers.reserve(n);
+                mutations.reserve(n);
+
+                for (auto i = 0; i < n; ++i) {
+                    random_mutation_generator gen(random_mutation_generator::generate_counters(false));
+                    mutations.emplace_back(gen(1).front());
+                    writers.emplace_back(gen.schema(), mutations.back(), fs);
+                }
+
+                std::set<segment_id_type> ids;
+
+                for (auto& w : writers) {
+                    auto h = log.add_entry(w.schema()->id(), w, db::timeout_clock::now() + 60s).get0();
+                    ids.emplace(h.rp().id);
+                    rps.emplace_back(h.rp());
+                }
+
+                BOOST_CHECK_EQUAL(ids.size(), 1);
+
+                log.sync_all_segments().get();
+                auto segments = log.get_active_segment_names();
+                BOOST_REQUIRE(!segments.empty());
+
+                std::unordered_set<replay_position> result;
+
+                for (auto& seg : segments) {
+                    db::commitlog::read_log_file(seg, db::commitlog::descriptor::FILENAME_PREFIX, [&](db::commitlog::buffer_and_replay_position buf_rp) {
+                        commitlog_entry_reader r(buf_rp.buffer);
+                        auto& rp = buf_rp.position;
+                        auto i = std::find(rps.begin(), rps.end(), rp);
+                        // since we are looping, we can be reading last test cases 
+                        // segment (force_sync permutations)
+                        if (i != rps.end()) {
+                            auto n = std::distance(rps.begin(), i);
+                            auto& fm1 = mutations.at(n);
+                            auto& fm2 = r.mutation();
+                            auto s = writers.at(n).schema();
+                            auto m1 = fm1.unfreeze(s);
+                            auto m2 = fm2.unfreeze(s);
+                            BOOST_CHECK_EQUAL(m1, m2);
+                            result.emplace(rp);
+                        }
+                        return make_ready_future<>();
+                    }).get();
+                }
+
+                BOOST_CHECK_EQUAL(result.size(), rps.size());
+            }
+        });
+    });
+}
+
 SEASTAR_TEST_CASE(test_commitlog_add_entries) {
     return cl_test([](commitlog& log) {
         return seastar::async([&] {
@@ -984,7 +1047,7 @@ SEASTAR_TEST_CASE(test_commitlog_add_entries) {
 
                 writers.reserve(n);
                 mutations.reserve(n);
-                
+
                 for (auto i = 0; i < n; ++i) {
                     random_mutation_generator gen(random_mutation_generator::generate_counters(false));
                     mutations.emplace_back(gen(1).front());
@@ -1030,6 +1093,50 @@ SEASTAR_TEST_CASE(test_commitlog_add_entries) {
                 BOOST_CHECK_EQUAL(result.size(), rps.size());
             }
         });
+    });
+}
+
+// #16298 - check entry offsets so that we report the correct file positions both
+// when reading and writing CL data.
+SEASTAR_TEST_CASE(test_commitlog_entry_offsets) {
+    commitlog::config cfg;
+    cfg.commitlog_segment_size_in_mb = 1;
+    cfg.commitlog_total_space_in_mb = 2 * smp::count;
+    cfg.allow_going_over_size_limit = false;
+
+    return cl_test(cfg, [](commitlog& log) -> future<> {
+        auto uuid = make_table_id();
+        sstring tmp = "hej bubba cow";
+
+        auto h = co_await log.add_mutation(uuid, tmp.size(), db::commitlog::force_sync::no, [&](db::commitlog::output& dst) {
+            dst.write(tmp.data(), tmp.size());
+        });
+
+        auto rp = h.release();
+
+        // verify the first rp is at file offset 32 (file header + chunk header)
+        BOOST_CHECK_EQUAL(rp.pos, 24 + 8); // TODO: export these sizes for tests. 
+
+        co_await log.sync_all_segments();
+
+        auto segments = log.get_active_segment_names();
+        BOOST_REQUIRE(!segments.empty());
+
+        for (auto& seg : segments) {
+            auto desc = commitlog::descriptor(seg);
+            if (desc.id == rp.id) {
+                bool found = false;
+                co_await db::commitlog::read_log_file(seg, db::commitlog::descriptor::FILENAME_PREFIX, [&](db::commitlog::buffer_and_replay_position buf_rp) {
+                    BOOST_CHECK_EQUAL(buf_rp.position, rp);
+                    found = true;
+                    return make_ready_future<>();
+                });
+                BOOST_REQUIRE(found);
+                co_return;
+            }
+        }
+
+        BOOST_FAIL("Did not find segment");
     });
 }
 
