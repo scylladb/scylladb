@@ -1899,6 +1899,7 @@ private:
                 }
             }
             if (cmp_end == 0) {
+                sstlog.trace("validating_consumer {}: {}() current block is done", fmt::ptr(this), __FUNCTION__);
                 _expected_clustering_block->done = true;
             }
         }
