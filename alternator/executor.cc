@@ -1002,6 +1002,8 @@ static future<executor::request_return_type> create_table_on_shard0(tracing::tra
             if  (!range_key.empty() && range_key != view_hash_key && range_key != view_range_key) {
                 add_column(view_builder, range_key, attribute_definitions, column_kind::clustering_key);
             }
+            // GSIs have no tags:
+            view_builder.add_extension(db::tags_extension::NAME, ::make_shared<db::tags_extension>());
             sstring where_clause = format("{} IS NOT NULL", cql3::util::maybe_quote(view_hash_key));
             if (!view_range_key.empty()) {
                 where_clause = format("{} AND {} IS NOT NULL", where_clause,
@@ -1066,6 +1068,11 @@ static future<executor::request_return_type> create_table_on_shard0(tracing::tra
                     cql3::util::maybe_quote(view_range_key));
             }
             where_clauses.push_back(std::move(where_clause));
+            // LSIs have no tags, but Scylla's "synchronous_updates" feature
+            // (which an LSIs need), is actually implemented as a tag so we
+            // need to add it here:
+            std::map<sstring, sstring> tags_map = {{db::SYNCHRONOUS_VIEW_UPDATES_TAG_KEY, "true"}};
+            view_builder.add_extension(db::tags_extension::NAME, ::make_shared<db::tags_extension>(tags_map));
             view_builders.emplace_back(std::move(view_builder));
         }
     }
@@ -1112,7 +1119,6 @@ static future<executor::request_return_type> create_table_on_shard0(tracing::tra
         }
         const bool include_all_columns = true;
         view_builder.with_view_info(*schema, include_all_columns, *where_clause_it);
-        view_builder.add_extension(db::tags_extension::NAME, ::make_shared<db::tags_extension>());
         ++where_clause_it;
     }
 
