@@ -599,6 +599,7 @@ static constexpr unsigned do_get_rpc_client_idx(messaging_verb verb) {
     case messaging_verb::UNUSED__REPLICATION_FINISHED:
     case messaging_verb::UNUSED__REPAIR_CHECKSUM_RANGE:
     case messaging_verb::STREAM_MUTATION_FRAGMENTS:
+    case messaging_verb::STREAM_BLOB:
     case messaging_verb::REPAIR_ROW_LEVEL_START:
     case messaging_verb::REPAIR_ROW_LEVEL_STOP:
     case messaging_verb::REPAIR_GET_FULL_ROW_HASHES:
@@ -616,6 +617,7 @@ static constexpr unsigned do_get_rpc_client_idx(messaging_verb verb) {
     case messaging_verb::REPAIR_FLUSH_HINTS_BATCHLOG:
     case messaging_verb::NODE_OPS_CMD:
     case messaging_verb::HINT_MUTATION:
+    case messaging_verb::TABLET_STREAM_FILES:
     case messaging_verb::TABLET_STREAM_DATA:
     case messaging_verb::TABLET_CLEANUP:
         return 1;

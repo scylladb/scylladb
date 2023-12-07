@@ -8,6 +8,7 @@
 
 #include <boost/range/algorithm/transform.hpp>
 #include <iterator>
+#include <random>
 #include <seastar/core/thread.hh>
 #include <seastar/util/defer.hh>
 #include "replica/database_fwd.hh"
@@ -348,6 +349,10 @@ public:
         return _batchlog_manager;
     }
 
+    virtual sharded<netw::messaging_service>& get_messaging_service() override {
+        return _ms;
+    }
+
     virtual sharded<gms::gossiper>& gossiper() override {
         return _gossiper;
     }
@@ -646,9 +651,20 @@ private:
                 return make_ready_future<>();
             }).get();
 
-            // don't start listening so tests can be run in parallel
-            _ms.start(host_id, listen, std::move(7000)).get();
+            uint16_t port = 7000;
+            if (cfg_in.ms_listen) {
+               std::random_device rd;
+               std::mt19937 gen(rd());
+               std::uniform_int_distribution<> distrib(27000, 37000);
+               port = distrib(gen);
+            }
+            // Don't start listening so tests can be run in parallel if cfg_in.ms_listen is not set to true explicitly.
+            _ms.start(host_id, listen, std::move(port)).get();
             auto stop_ms = defer([this] { _ms.stop().get(); });
+
+            if (cfg_in.ms_listen) {
+                _ms.invoke_on_all(&netw::messaging_service::start_listen, std::ref(_token_metadata)).get();
+            }
 
             // Normally the auth server is already stopped in here,
             // but if there is an initialization failure we have to
