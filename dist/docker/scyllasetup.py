@@ -75,7 +75,8 @@ class ScyllaSetup:
             hostname = self._listenAddress
         else:
             hostname = subprocess.check_output(['hostname', '-i']).decode('ascii').strip()
-        with open("%s/.cqlshrc" % home, "w") as cqlshrc:
+        self._run(["mkdir", "-p",  "%s/.cassandra" % home])
+        with open("%s/.cassandra/cqlshrc" % home, "w") as cqlshrc:
             cqlshrc.write("[connection]\nhostname = %s\n" % hostname)
 
     def set_housekeeping(self):
