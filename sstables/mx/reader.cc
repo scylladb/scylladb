@@ -2110,7 +2110,7 @@ future<uint64_t> validate(
                     const auto end = std::get<position_in_partition_view>(current_pi_block->end);
                     const auto index_pos = current_partition_pos + current_pi_block->offset;
                     const auto data_pos = context->position();
-                    sstlog.trace("validate(): index-data position check for clustering block (first={}) [{}, {}]: {} == {}", first_block, start, end, data_pos, index_pos);
+                    sstlog.trace("validate(): index-data position check for clustering block (first={}) [{}, {}]: {} == {}, partition starts at {}", first_block, start, end, index_pos, data_pos, current_partition_pos);
                     // We cannot reliably position the parser at the start of
                     // the first block, because there is no way to check what
                     // the next element is (static row or clustering row)
