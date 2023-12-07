@@ -548,7 +548,7 @@ public:
     virtual void on_update_function(const sstring&, const sstring&) override { ++update_function_count; }
     virtual void on_update_aggregate(const sstring&, const sstring&) override { ++update_aggregate_count; }
     virtual void on_update_view(const sstring&, const sstring&, bool) override { ++update_view_count; }
-    virtual void on_update_tablet_metadata() override { ++update_tablets; }
+    virtual void on_update_tablet_metadata(const locator::tablet_metadata_change_hint&) override { ++update_tablets; }
     virtual void on_drop_keyspace(const sstring&) override { ++drop_keyspace_count; }
     virtual void on_drop_column_family(const sstring&, const sstring&) override { ++drop_column_family_count; }
     virtual void on_drop_user_type(const sstring&, const sstring&) override { ++drop_user_type_count; }

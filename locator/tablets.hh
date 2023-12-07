@@ -20,6 +20,7 @@
 #include <seastar/core/reactor.hh>
 #include <seastar/util/log.hh>
 #include <seastar/core/coroutine.hh>
+#include <seastar/core/sharded.hh>
 #include <seastar/util/noncopyable_function.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 
@@ -304,6 +305,7 @@ public:
 public:
     void set_tablet(tablet_id, tablet_info);
     void set_tablet_transition_info(tablet_id, tablet_transition_info);
+    void clear_tablet_transition_info(tablet_id);
     void clear_transitions();
 
     // Destroys gently.
@@ -323,35 +325,60 @@ private:
 /// Copy constructor can be invoked across shards.
 class tablet_metadata {
 public:
-    // FIXME: Make cheap to copy.
     // We want both immutability and cheap updates, so we should use
     // hierarchical data structure with shared pointers and copy-on-write.
-    // Currently we have immutability but updates require full copy.
     //
     // Also, currently the copy constructor is invoked across shards, which precludes
     // using shared pointers. We should change that and use a foreign_ptr<> to
     // hold immutable tablet_metadata which lives on shard 0 only.
     // See storage_service::replicate_to_all_cores().
-    using table_to_tablet_map = std::unordered_map<table_id, tablet_map>;
+    using tablet_map_ptr = foreign_ptr<lw_shared_ptr<const tablet_map>>;
+    using table_to_tablet_map = std::unordered_map<table_id, tablet_map_ptr>;
 private:
     table_to_tablet_map _tablets;
 public:
     const tablet_map& get_tablet_map(table_id id) const;
     const table_to_tablet_map& all_tables() const { return _tablets; }
-    table_to_tablet_map& all_tables() { return _tablets; }
     size_t external_memory_usage() const;
 public:
+    tablet_metadata() = default;
+    // No implicit copy, use copy()
+    tablet_metadata(tablet_metadata&) = delete;
+    tablet_metadata& operator=(tablet_metadata&) = delete;
+    future<tablet_metadata> copy() const;
+    // Move is supported.
+    tablet_metadata(tablet_metadata&&) = default;
+    tablet_metadata& operator=(tablet_metadata&&) = default;
+
     void set_tablet_map(table_id, tablet_map);
-    tablet_map& get_tablet_map(table_id id);
+    void drop_tablet_map(table_id);
+
+    // Allow mutating a tablet_map
+    // Uses the copy-modify-swap idiom.
+    // If func throws, no changes are done to the tablet map.
+    void mutate_tablet_map(table_id, noncopyable_function<void(tablet_map&)> func);
+    future<> mutate_tablet_map_async(table_id, noncopyable_function<future<>(tablet_map&)> func);
+
     future<> clear_gently();
 public:
-    bool operator==(const tablet_metadata&) const = default;
+    bool operator==(const tablet_metadata&) const;
     friend std::ostream& operator<<(std::ostream&, const tablet_metadata&);
 };
 
 struct tablet_routing_info {
     tablet_replica_set tablet_replicas;
     std::pair<dht::token, dht::token> token_range;
+};
+
+struct tablet_metadata_change_hint {
+    struct table_hint {
+        sstring keyspace_name;
+        table_id table_id;
+        std::vector<token> tokens;
+    };
+    std::unordered_map<table_id, table_hint> tables;
+
+    operator bool() const noexcept { return !tables.empty(); }
 };
 
 }

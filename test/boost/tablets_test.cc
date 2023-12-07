@@ -47,6 +47,25 @@ void verify_tablet_metadata_persistence(cql_test_env& env, const tablet_metadata
 }
 
 static
+void verify_tablet_metadata_update(cql_test_env& env, tablet_metadata& tm, std::vector<mutation> muts) {
+    testlog.trace("verify_tablet_metadata_update(): {}", muts);
+
+    auto& db = env.local_db();
+
+    db.apply(freeze(muts), db::no_timeout).get();
+
+    locator::tablet_metadata_change_hint hint;
+    for (const auto& mut : muts) {
+        update_tablet_metadata_change_hint(hint, mut);
+    }
+
+    update_tablet_metadata(env.local_qp(), tm, hint).get();
+
+    auto tm_reload = read_tablet_metadata(env.local_qp()).get0();
+    BOOST_REQUIRE_EQUAL(tm, tm_reload);
+}
+
+static
 cql_test_config tablet_cql_test_config() {
     cql_test_config c;
     c.db_config->experimental_features({
@@ -131,8 +150,7 @@ SEASTAR_TEST_CASE(test_tablet_metadata_persistence) {
             verify_tablet_metadata_persistence(e, tm);
 
             // Increase RF of table2
-            {
-                auto&& tmap = tm.get_tablet_map(table2);
+            tm.mutate_tablet_map(table2, [&] (tablet_map& tmap) {
                 auto tb = tmap.first_tablet();
                 tb = *tmap.next_tablet(tb);
 
@@ -154,7 +172,7 @@ SEASTAR_TEST_CASE(test_tablet_metadata_persistence) {
                     },
                     tablet_replica {h1, 4}
                 });
-            }
+            });
 
             verify_tablet_metadata_persistence(e, tm);
 
@@ -225,6 +243,232 @@ SEASTAR_TEST_CASE(test_tablet_metadata_persistence) {
             }
 
             verify_tablet_metadata_persistence(e, tm);
+        }
+    }, tablet_cql_test_config());
+}
+
+// Check that updating tablet-metadata and reloading only modified parts from
+// disk yields the correct metadata.
+SEASTAR_TEST_CASE(test_tablet_metadata_update) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        auto h1 = host_id(utils::UUID_gen::get_time_UUID());
+        auto h2 = host_id(utils::UUID_gen::get_time_UUID());
+        auto h3 = host_id(utils::UUID_gen::get_time_UUID());
+
+        auto& db = e.local_db();
+
+        auto table1 = add_table(e).get0();
+        auto table1_schema = db.find_schema(table1);
+        auto table2 = add_table(e).get0();
+        auto table2_schema = db.find_schema(table2);
+
+        testlog.trace("table1: {}", table1);
+        testlog.trace("table2: {}", table2);
+
+        tablet_metadata tm;
+
+        verify_tablet_metadata_persistence(e, tm);
+
+        // Add table1
+        {
+            testlog.trace("add table1");
+
+            tablet_map tmap(1);
+            tmap.set_tablet(tmap.first_tablet(), tablet_info {
+                tablet_replica_set {
+                    tablet_replica {h1, 0},
+                    tablet_replica {h2, 3},
+                    tablet_replica {h3, 1},
+                }
+            });
+
+            verify_tablet_metadata_update(e, tm, {
+                    tablet_map_to_mutation(tmap, table1, table1_schema->ks_name(), table1_schema->cf_name(), ++next_timestamp).get(),
+            });
+        }
+
+        // Add table2
+        {
+            testlog.trace("add table2");
+
+            tablet_map tmap(4);
+            auto tb = tmap.first_tablet();
+            tmap.set_tablet(tb, tablet_info {
+                tablet_replica_set {
+                    tablet_replica {h1, 0},
+                }
+            });
+            tb = *tmap.next_tablet(tb);
+            tmap.set_tablet(tb, tablet_info {
+                tablet_replica_set {
+                    tablet_replica {h3, 3},
+                }
+            });
+            tb = *tmap.next_tablet(tb);
+            tmap.set_tablet(tb, tablet_info {
+                tablet_replica_set {
+                    tablet_replica {h2, 2},
+                }
+            });
+            tb = *tmap.next_tablet(tb);
+            tmap.set_tablet(tb, tablet_info {
+                tablet_replica_set {
+                    tablet_replica {h1, 1},
+                }
+            });
+
+            verify_tablet_metadata_update(e, tm, {
+                    tablet_map_to_mutation(tmap, table2, table2_schema->ks_name(), table2_schema->cf_name(), ++next_timestamp).get(),
+            });
+        }
+
+        // Increase RF of table2
+        {
+            testlog.trace("increates RF of table2");
+
+            const auto& tmap = tm.get_tablet_map(table2);
+            auto tb = tmap.first_tablet();
+
+            replica::tablet_mutation_builder builder(next_timestamp++, table2_schema->ks_name(), table2);
+
+            tb = *tmap.next_tablet(tb);
+            builder.set_new_replicas(tmap.get_last_token(tb),
+                tablet_replica_set {
+                    tablet_replica {h1, 7},
+                }
+            );
+            builder.set_stage(tmap.get_last_token(tb), tablet_transition_stage::allow_write_both_read_old);
+
+            tb = *tmap.next_tablet(tb);
+            builder.set_new_replicas(tmap.get_last_token(tb),
+                tablet_replica_set {
+                    tablet_replica {h1, 4},
+                }
+            );
+            builder.set_stage(tmap.get_last_token(tb), tablet_transition_stage::use_new);
+
+            verify_tablet_metadata_update(e, tm, {
+                    builder.build(),
+            });
+        }
+
+        // Reduce RF for table1, increasing tablet count
+        {
+            testlog.trace("reduce RF for table1, increasing tablet count");
+
+            tablet_map tmap(2);
+            auto tb = tmap.first_tablet();
+            tmap.set_tablet(tb, tablet_info {
+                tablet_replica_set {
+                    tablet_replica {h3, 7},
+                }
+            });
+            tb = *tmap.next_tablet(tb);
+            tmap.set_tablet(tb, tablet_info {
+                tablet_replica_set {
+                    tablet_replica {h1, 3},
+                }
+            });
+
+            verify_tablet_metadata_update(e, tm, {
+                    tablet_map_to_mutation(tmap, table1, table1_schema->ks_name(), table1_schema->cf_name(), ++next_timestamp).get(),
+            });
+        }
+
+
+        // Reduce tablet count for table1
+        {
+            testlog.trace("reduce tablet count for table1");
+
+            tablet_map tmap(1);
+            auto tb = tmap.first_tablet();
+            tmap.set_tablet(tb, tablet_info {
+                tablet_replica_set {
+                    tablet_replica {h1, 3},
+                }
+            });
+
+            verify_tablet_metadata_update(e, tm, {
+                    tablet_map_to_mutation(tmap, table1, table1_schema->ks_name(), table1_schema->cf_name(), ++next_timestamp).get(),
+            });
+        }
+
+        // Change replica of table1
+        {
+            testlog.trace("change replica of table1");
+
+            replica::tablet_mutation_builder builder(next_timestamp++, table1_schema->ks_name(), table1);
+
+            const auto& tmap = tm.get_tablet_map(table1);
+            auto tb = tmap.first_tablet();
+            builder.set_replicas(tmap.get_last_token(tb),
+                tablet_replica_set {
+                    tablet_replica {h3, 7},
+                }
+            );
+
+            verify_tablet_metadata_update(e, tm, {
+                    builder.build(),
+            });
+        }
+
+        // Migrate all tablets of table2
+        {
+            testlog.trace("stream all tablets of table2");
+
+            const auto& tmap = tm.get_tablet_map(table2);
+
+            std::vector<mutation> muts;
+            for (std::optional<tablet_id> tb = tmap.first_tablet(); tb; tb = tmap.next_tablet(*tb)) {
+                replica::tablet_mutation_builder builder(next_timestamp++, table2_schema->ks_name(), table2);
+
+                const auto token = tmap.get_last_token(*tb);
+
+                builder.set_new_replicas(token,
+                    tablet_replica_set {
+                        tablet_replica {h2, 7},
+                    }
+                );
+                builder.set_stage(token, tablet_transition_stage::streaming);
+
+                muts.emplace_back(builder.build());
+            }
+
+            verify_tablet_metadata_update(e, tm, std::move(muts));
+        }
+
+        // Remove transitions from tablets of table2
+        {
+            testlog.trace("stream all tablets of table2");
+
+            const auto& tmap = tm.get_tablet_map(table2);
+
+            std::vector<mutation> muts;
+            for (std::optional<tablet_id> tb = tmap.first_tablet(); tb; tb = tmap.next_tablet(*tb)) {
+                replica::tablet_mutation_builder builder(next_timestamp++, table2_schema->ks_name(), table2);
+
+                const auto token = tmap.get_last_token(*tb);
+
+                builder.set_replicas(token,
+                    tablet_replica_set {
+                        tablet_replica {h2, 7},
+                    }
+                );
+                builder.del_transition(token);
+
+                muts.emplace_back(builder.build());
+            }
+
+            verify_tablet_metadata_update(e, tm, std::move(muts));
+        }
+
+        // Drop table2
+        {
+            testlog.trace("drop table2");
+
+            verify_tablet_metadata_update(e, tm, {
+                    make_drop_tablet_map_mutation(table2_schema->ks_name(), table2, next_timestamp++)
+            });
         }
     }, tablet_cql_test_config());
 }
@@ -533,14 +777,20 @@ SEASTAR_TEST_CASE(test_sharder) {
 
 SEASTAR_TEST_CASE(test_large_tablet_metadata) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
+        auto& db = e.local_db();
+        auto& qp = e.local_qp();
+
         tablet_metadata tm;
 
         auto h1 = host_id(utils::UUID_gen::get_time_UUID());
         auto h2 = host_id(utils::UUID_gen::get_time_UUID());
         auto h3 = host_id(utils::UUID_gen::get_time_UUID());
+        auto h4 = host_id(utils::UUID_gen::get_time_UUID());
 
         const int nr_tables = 1'00;
         const int tablets_per_table = 1024;
+
+        table_id last_table_id;
 
         for (int i = 0; i < nr_tables; ++i) {
             tablet_map tmap(tablets_per_table);
@@ -551,11 +801,52 @@ SEASTAR_TEST_CASE(test_large_tablet_metadata) {
                 });
             }
 
-            auto id = add_table(e).get0();
-            tm.set_tablet_map(id, std::move(tmap));
+            last_table_id = add_table(e).get0();
+            tm.set_tablet_map(last_table_id, std::move(tmap));
         }
 
+        auto last_table_schema = db.find_schema(last_table_id);
+
         verify_tablet_metadata_persistence(e, tm);
+
+        locator::tablet_metadata_change_hint hint;
+
+        // Migrate one tablet to h4
+        {
+            const auto& tmap = tm.get_tablet_map(last_table_id);
+
+            const auto tb = tmap.first_tablet();
+            replica::tablet_mutation_builder builder(next_timestamp++, last_table_schema->ks_name(), last_table_id);
+            const auto token = tmap.get_last_token(tb);
+
+            builder.set_new_replicas(token,
+                tablet_replica_set {
+                    tablet_replica {h4, 0},
+                }
+            );
+            builder.set_stage(token, tablet_transition_stage::streaming);
+
+            std::vector<mutation> muts;
+            muts.push_back(builder.build());
+            db.apply(freeze(muts), db::no_timeout).get();
+            update_tablet_metadata_change_hint(hint, muts.front());
+        }
+
+        using clk = std::chrono::high_resolution_clock;
+
+        const auto start_full_reload = clk::now();
+        const auto tm_full_reload = read_tablet_metadata(qp).get0();
+        const auto end_full_reload = clk::now();
+        const auto full_reload_duration = std::chrono::duration<double, std::milli>(end_full_reload - start_full_reload);
+
+        const auto start_partial_reload = clk::now();
+        update_tablet_metadata(qp, tm, hint).get();
+        const auto end_partial_reload = clk::now();
+        const auto partial_reload_duration = std::chrono::duration<double, std::milli>(end_partial_reload - start_partial_reload);
+
+        BOOST_REQUIRE_EQUAL(tm, tm_full_reload);
+
+        testlog.info("Tablet metadata reload:\nfull    {:>8.2f}ms\npartial {:>8.2f}ms", full_reload_duration.count(), partial_reload_duration.count());
     }, tablet_cql_test_config());
 }
 
@@ -592,10 +883,11 @@ SEASTAR_THREAD_TEST_CASE(test_token_ownership_splitting) {
 static
 void apply_plan(token_metadata& tm, const migration_plan& plan) {
     for (auto&& mig : plan.migrations()) {
-        tablet_map& tmap = tm.tablets().get_tablet_map(mig.tablet.table);
-        auto tinfo = tmap.get_tablet_info(mig.tablet.tablet);
-        tinfo.replicas = replace_replica(tinfo.replicas, mig.src, mig.dst);
-        tmap.set_tablet(mig.tablet.tablet, tinfo);
+        tm.tablets().mutate_tablet_map(mig.tablet.table, [&] (tablet_map& tmap) {
+            auto tinfo = tmap.get_tablet_info(mig.tablet.tablet);
+            tinfo.replicas = replace_replica(tinfo.replicas, mig.src, mig.dst);
+            tmap.set_tablet(mig.tablet.tablet, tinfo);
+        });
     }
 }
 
@@ -612,9 +904,10 @@ tablet_transition_info migration_to_transition_info(const tablet_migration_info&
 static
 void apply_plan_as_in_progress(token_metadata& tm, const migration_plan& plan) {
     for (auto&& mig : plan.migrations()) {
-        tablet_map& tmap = tm.tablets().get_tablet_map(mig.tablet.table);
-        auto tinfo = tmap.get_tablet_info(mig.tablet.tablet);
-        tmap.set_tablet_transition_info(mig.tablet.tablet, migration_to_transition_info(mig, tinfo));
+        tm.tablets().mutate_tablet_map(mig.tablet.table, [&] (tablet_map& tmap) {
+            auto tinfo = tmap.get_tablet_info(mig.tablet.tablet);
+            tmap.set_tablet_transition_info(mig.tablet.tablet, migration_to_transition_info(mig, tinfo));
+        });
     }
 }
 
@@ -651,13 +944,14 @@ static
 void execute_transitions(shared_token_metadata& stm) {
     stm.mutate_token_metadata([&] (token_metadata& tm) {
         for (auto&& [tablet, tmap_] : tm.tablets().all_tables()) {
-            auto& tmap = tmap_;
+          tm.tablets().mutate_tablet_map(tablet, [&] (tablet_map& tmap) {
             for (auto&& [tablet, trinfo]: tmap.transitions()) {
                 auto ti = tmap.get_tablet_info(tablet);
                 ti.replicas = trinfo.next;
                 tmap.set_tablet(tablet, ti);
             }
             tmap.clear_transitions();
+          });
         }
         return make_ready_future<>();
     }).get();

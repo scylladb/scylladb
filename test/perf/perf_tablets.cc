@@ -98,7 +98,7 @@ static future<> test_basic_operations(app_template& app) {
 
         tablet_metadata tm2;
         auto time_to_copy = duration_in_seconds([&] {
-            tm2 = tm;
+            tm2 = tm.copy().get();
         });
 
         testlog.info("Copied in {:.6f} [ms]", time_to_copy.count() * 1000);

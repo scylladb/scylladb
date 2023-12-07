@@ -1467,7 +1467,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             }).get();
 
             supervisor::notify("loading tablet metadata");
-            ss.local().load_tablet_metadata().get();
+            ss.local().load_tablet_metadata({}).get();
 
             supervisor::notify("loading non-system sstables");
             replica::distributed_loader::init_non_system_keyspaces(db, proxy, sys_ks).get();

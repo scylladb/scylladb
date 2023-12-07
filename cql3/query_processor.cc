@@ -1079,7 +1079,7 @@ void query_processor::migration_subscriber::on_update_view(
         const sstring& view_name, bool columns_changed) {
 }
 
-void query_processor::migration_subscriber::on_update_tablet_metadata() {
+void query_processor::migration_subscriber::on_update_tablet_metadata(const locator::tablet_metadata_change_hint&) {
 }
 
 void query_processor::migration_subscriber::on_drop_keyspace(const sstring& ks_name) {

@@ -59,8 +59,24 @@ mutation make_drop_tablet_map_mutation(const sstring& keyspace_name, table_id, a
 /// The timestamp must be greater than api::min_timestamp.
 future<> save_tablet_metadata(replica::database&, const locator::tablet_metadata&, api::timestamp_type);
 
+/// Extract a tablet metadata change hint from the tablet mutations.
+///
+/// Mutations which don't mutate the tablet table are ignored.
+locator::tablet_metadata_change_hint get_tablet_metadata_change_hint(const std::vector<canonical_mutation>&);
+
+/// Update the tablet metadata change hint, with the changes represented by the tablet mutation.
+///
+/// If the mutation belongs to another table, no updates are done.
+void update_tablet_metadata_change_hint(locator::tablet_metadata_change_hint&, const mutation&);
+
 /// Reads tablet metadata from system.tablets.
 future<locator::tablet_metadata> read_tablet_metadata(cql3::query_processor&);
+
+/// Update tablet metadata from system.tablets, based on the provided hint.
+///
+/// The hint is used to determine what has changed and only reload the changed
+/// parts from disk, updating the passed-in metadata in-place accordingly.
+future<> update_tablet_metadata(cql3::query_processor&, locator::tablet_metadata&, const locator::tablet_metadata_change_hint&);
 
 /// Reads tablet metadata from system.tablets in the form of mutations.
 future<std::vector<canonical_mutation>> read_tablet_mutations(seastar::sharded<database>&);

@@ -42,6 +42,12 @@ table_id canonical_mutation::column_family_id() const {
     return mv.table_id();
 }
 
+partition_key canonical_mutation::key() const {
+    auto in = ser::as_input_stream(_data);
+    auto mv = ser::deserialize(in, boost::type<ser::canonical_mutation_view>());
+    return mv.key();
+}
+
 mutation canonical_mutation::to_mutation(schema_ptr s) const {
     auto in = ser::as_input_stream(_data);
     auto mv = ser::deserialize(in, boost::type<ser::canonical_mutation_view>());
