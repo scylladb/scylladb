@@ -39,6 +39,10 @@ bool topology::contains(raft::server_id id) {
            left_nodes.contains(id);
 }
 
+bool topology::is_busy() const {
+    return tstate.has_value();
+}
+
 std::set<sstring> calculate_not_yet_enabled_features(const std::set<sstring>& enabled_features, const auto& supported_features) {
     std::set<sstring> to_enable;
     bool first = true;

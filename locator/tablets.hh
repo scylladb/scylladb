@@ -11,6 +11,7 @@
 #include "dht/token.hh"
 #include "utils/small_vector.hh"
 #include "locator/host_id.hh"
+#include "service/session.hh"
 #include "dht/i_partitioner_fwd.hh"
 #include "schema/schema_fwd.hh"
 #include "utils/chunked_vector.hh"
@@ -124,6 +125,11 @@ bool contains(const tablet_replica_set& rs, host_id host) {
     return false;
 }
 
+inline
+bool contains(const tablet_replica_set& rs, const tablet_replica& r) {
+    return std::ranges::any_of(rs, [&] (auto&& r_) { return r_ == r; });
+}
+
 /// Stores information about a single tablet.
 struct tablet_info {
     tablet_replica_set replicas;
@@ -171,10 +177,12 @@ struct tablet_transition_info {
     tablet_transition_stage stage;
     tablet_replica_set next;
     tablet_replica pending_replica; // Optimization (next - tablet_info::replicas)
+    service::session_id session_id;
     write_replica_set_selector writes;
     read_replica_set_selector reads;
 
-    tablet_transition_info(tablet_transition_stage stage, tablet_replica_set next, tablet_replica pending_replica);
+    tablet_transition_info(tablet_transition_stage stage, tablet_replica_set next, tablet_replica pending_replica,
+                           service::session_id session_id = {});
 
     bool operator==(const tablet_transition_info&) const = default;
 };
@@ -335,12 +343,17 @@ public:
     using table_to_tablet_map = std::unordered_map<table_id, tablet_map>;
 private:
     table_to_tablet_map _tablets;
+
+    // When false, tablet load balancer will not try to rebalance tablets.
+    bool _balancing_enabled = true;
 public:
+    bool balancing_enabled() const { return _balancing_enabled; }
     const tablet_map& get_tablet_map(table_id id) const;
     const table_to_tablet_map& all_tables() const { return _tablets; }
     table_to_tablet_map& all_tables() { return _tablets; }
     size_t external_memory_usage() const;
 public:
+    void set_balancing_enabled(bool value) { _balancing_enabled = value; }
     void set_tablet_map(table_id, tablet_map);
     tablet_map& get_tablet_map(table_id id);
     future<> clear_gently();

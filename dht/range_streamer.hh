@@ -14,6 +14,7 @@
 #include "streaming/stream_plan.hh"
 #include "streaming/stream_state.hh"
 #include "streaming/stream_reason.hh"
+#include "service/topology_guard.hh"
 #include "gms/inet_address.hh"
 #include "range.hh"
 #include <seastar/core/distributed.hh>
@@ -78,6 +79,7 @@ public:
 
     range_streamer(distributed<replica::database>& db, sharded<streaming::stream_manager>& sm, const token_metadata_ptr tmptr, abort_source& abort_source, std::unordered_set<token> tokens,
             inet_address address, locator::endpoint_dc_rack dr, sstring description, streaming::stream_reason reason,
+            service::frozen_topology_guard topo_guard,
             std::vector<sstring> tables = {})
         : _db(db)
         , _stream_manager(sm)
@@ -89,13 +91,14 @@ public:
         , _description(std::move(description))
         , _reason(reason)
         , _tables(std::move(tables))
+        , _topo_guard(topo_guard)
     {
         _abort_source.check();
     }
 
     range_streamer(distributed<replica::database>& db, sharded<streaming::stream_manager>& sm, const token_metadata_ptr tmptr, abort_source& abort_source,
-            inet_address address, locator::endpoint_dc_rack dr, sstring description, streaming::stream_reason reason, std::vector<sstring> tables = {})
-        : range_streamer(db, sm, std::move(tmptr), abort_source, std::unordered_set<token>(), address, std::move(dr), description, reason, std::move(tables)) {
+            inet_address address, locator::endpoint_dc_rack dr, sstring description, streaming::stream_reason reason, service::frozen_topology_guard topo_guard, std::vector<sstring> tables = {})
+        : range_streamer(db, sm, std::move(tmptr), abort_source, std::unordered_set<token>(), address, std::move(dr), description, reason, std::move(topo_guard), std::move(tables)) {
     }
 
     void add_source_filter(std::unique_ptr<i_source_filter> filter) {
@@ -141,6 +144,7 @@ private:
     }
 #endif
 
+    // Can be called only before stream_async().
     const token_metadata& get_token_metadata() {
         return *_token_metadata_ptr;
     }
@@ -150,7 +154,7 @@ public:
 private:
     distributed<replica::database>& _db;
     sharded<streaming::stream_manager>& _stream_manager;
-    const token_metadata_ptr _token_metadata_ptr;
+    token_metadata_ptr _token_metadata_ptr;
     abort_source& _abort_source;
     std::unordered_set<token> _tokens;
     inet_address _address;
@@ -158,6 +162,7 @@ private:
     sstring _description;
     streaming::stream_reason _reason;
     std::vector<sstring> _tables;
+    service::frozen_topology_guard _topo_guard;
     std::unordered_multimap<sstring, std::unordered_map<inet_address, dht::token_range_vector>> _to_stream;
     std::unordered_set<std::unique_ptr<i_source_filter>> _source_filters;
     // Number of tx and rx ranges added

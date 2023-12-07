@@ -1697,10 +1697,10 @@ table::table(schema_ptr schema, config config, lw_shared_ptr<const storage_optio
 }
 
 void table::update_effective_replication_map(locator::effective_replication_map_ptr erm) {
-    if (_erm) {
-        _erm->invalidate();
+    auto old_erm = std::exchange(_erm, std::move(erm));
+    if (old_erm) {
+        old_erm->invalidate();
     }
-    _erm = std::move(erm);
 }
 
 partition_presence_checker

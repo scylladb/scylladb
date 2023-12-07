@@ -157,6 +157,20 @@ public:
             ++_read_messages_counter;
         }
 
+        // \brief Checks if there is an unreceived message.
+        // If yes, returns true and marks the message as received.
+        bool poll_for_message() {
+            if (!_shared_data) {
+                on_internal_error(errinj_logger, "injection_shared_data is not initialized");
+            }
+
+            if (_read_messages_counter < _shared_data->received_message_count) {
+                ++_read_messages_counter;
+                return true;
+            }
+            return false;
+        }
+
         std::optional<std::string_view> get(std::string_view key) {
             if (!_shared_data) {
                 on_internal_error(errinj_logger, "injection_shared_data is not initialized");
@@ -223,11 +237,6 @@ private:
     // TODO: change to unordered_set once we have heterogeneous lookups
     std::map<sstring, injection_data, str_less> _enabled;
 
-    bool is_enabled(const std::string_view& injection_name) const {
-        auto data = get_data(injection_name);
-        return data && !data->is_ongoing_oneshot();
-    }
-
     bool is_one_shot(const std::string_view& injection_name) const {
         const auto it = _enabled.find(injection_name);
         if (it == _enabled.end()) {
@@ -253,6 +262,13 @@ private:
     }
 
 public:
+    // \brief Returns true iff the injection is enabled.
+    // \param name error injection name to check
+    bool is_enabled(const std::string_view& injection_name) const {
+        auto data = get_data(injection_name);
+        return data && !data->is_ongoing_oneshot();
+    }
+
     // \brief Enter into error injection if it's enabled
     // \param name error injection name to check
     bool enter(const std::string_view& name) {
@@ -461,6 +477,10 @@ class error_injection<false> {
     static thread_local error_injection _local;
     using handler_fun = std::function<void()>;
 public:
+    bool is_enabled(const std::string_view& name) const {
+        return false;
+    }
+
     bool enter(const std::string_view& name) const {
         return false;
     }

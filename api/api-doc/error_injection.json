@@ -91,6 +91,30 @@
          ]
       },
       {
+         "path":"/v2/error_injection/disconnect/{ip}",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"Drop connection to a given IP",
+               "type":"void",
+               "nickname":"inject_disconnect",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"ip",
+                     "description":"IP address to disconnect from",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
          "path":"/v2/error_injection/injection",
          "operations":[
             {

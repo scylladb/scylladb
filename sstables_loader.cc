@@ -184,7 +184,7 @@ future<> sstables_loader::load_and_stream(sstring ks_name, sstring cf_name,
                     for (auto& node : current_targets) {
                         if (!metas.contains(node)) {
                             auto [sink, source] = co_await ms.make_sink_and_source_for_stream_mutation_fragments(reader.schema()->version(),
-                                    ops_uuid, cf_id, estimated_partitions, reason, netw::messaging_service::msg_addr(node));
+                                    ops_uuid, cf_id, estimated_partitions, reason, service::default_session_id, netw::messaging_service::msg_addr(node));
                             llog.debug("load_and_stream: ops_uuid={}, make sink and source for node={}", ops_uuid, node);
                             metas.emplace(node, send_meta_data(node, std::move(sink), std::move(source)));
                             metas.at(node).receive();

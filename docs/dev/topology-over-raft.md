@@ -170,6 +170,70 @@ When tablet is not in transition, the following invariants hold:
 1. The storage layer (database) on any node contains writes for keys which belong to the tablet only if
     that shard is one of the current tablet replicas.
 
+# Topology guards
+
+In addition to synchronizing with data access operations (e.g. CQL requests), we need to synchronize with
+operations started by the topology change coordinator like streaming, repair, etc.
+Those are distributed operations which involve several nodes.
+
+The goal of tracking such operations is to make sure that they don’t have any side-effects beyond the
+topology change process (e.g. tablet migration) they were started in. This invariant is the basis for
+reasoning about correctness. For example, if streaming which started in migration X runs concurrently
+with later repair migration Y of the same tablet, we can run into consistency issues,
+e.g. old streaming can resurrect deleted data.
+
+Example scenario:
+
+    1. Tablet T has replicas {A, B, C}
+    2. Write (w1) of key K1 is replicated everywhere
+    3. Start migration of tablet T replica from A to D
+    4. Migration fails, but leaves behind an async part (s1) which later sends w1 to D
+    5. Migration is retried and completes
+    6. Write (w2) of Key K1 which deletes the key is replicated everywhere {D, B, C}
+    7. Tablet T is repaired
+    8. Tombstone for w2 is garbage-collected on D
+    9. s1 is applied to D, and resurrects K1 (bad!)
+
+For tablets, the time window of those migrations is much smaller than with vnodes, because tablet migrations
+are started automatically and tablets themselves are smaller so operations complete faster.
+
+We don't want to use tracking by effective_replication_map_ptr for streaming, because we want to allow
+unrelated migrations to start concurrently with streaming of some tablet. Using effective_replication_map_ptr
+precludes that because it blocks the global token metadata barrier, so the tablet state machine would not be
+able to make progress.
+
+The solution is to use a tracking mechanism called topology guards, which is built on top of the concept of
+"sessions" managed in group0.
+
+Each topology operation runs under a unique global session, identified by UUID. Session life cycle is controlled by
+the topology change coordinator, and part of the group0 state machine. For example, for streaming, session is created
+when entering the "streaming" stage, and cleared when entering the next stage. Each stage which needs a session gets
+its own unique session id assigned by the topology change coordinator. For tablets, session id is stored with
+a given tablet in tablet_transition_info. Retried operations running within the same stage use the same session.
+
+When topology operation starts, it picks up the current session id from group0 (e.g. tablet_transition_info::session)
+and keeps it in the object called frozen_topology_guard. This object acts as a permit which identifies the scope of the operation.
+It is propagated everywhere where the operation may have side effects. It must be materialized into a topology_guard object around
+sections which do have side effects. Materialization will succeed only if the session is still open. If it succeeds,
+the topology_guard will keep the session guard alive, which is tracked under the local session object.
+
+When topology change coordinator moves to the next stage, it clears the session in group0. The next stage will
+execute a global token metadata barrier, which does two things: (1) executes a raft read barrier and (2) waits
+for all guards created under no longer open sessions to be released. Doing (1) ensures that the local node
+sees that the session should be closed. The local state machine will initiate close on all sessions which are
+no longer present in group0. Doing (2) ensures that any operation started under no longer open sessions is finished.
+So executing a global token metadata barrier ensures that only operations started under still open sessions are running
+or can start later. Stale RPCs which carry the permit of an already closed session will be rejected after the barrier
+when they try to materialize the permit into topology_guard.
+
+Because sessions are managed in group0, there is no room for races between topology change coordinator's decisions
+about sessions and actual state of sessions on each node. Each node follows the group0 history, and will arrive at the same view
+about sessions. Also, stale topology coordinators cannot close or create sessions and mess with the intent of the new coordinator.
+
+Because each tablet uses its own unique session, the global token metadata barrier is not blocked by active streaming.
+
+VNode-based operations also use this mechanism, but they use a single session for the whole topology, as they don't
+need any parallelism.
 
 # Topology state persistence table
 

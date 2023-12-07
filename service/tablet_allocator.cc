@@ -417,7 +417,7 @@ public:
         }
 
         if (nodes_to_drain.empty()) {
-            if (!shuffle && max_load == min_load) {
+            if (!shuffle && (max_load == min_load || !_tm->tablets().balancing_enabled())) {
                 // load is balanced.
                 // TODO: Evaluate and fix intra-node balance.
                 _stats.for_dc(dc).stop_balance++;

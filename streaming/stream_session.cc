@@ -16,6 +16,7 @@
 #include "streaming/stream_result_future.hh"
 #include "streaming/stream_manager.hh"
 #include "dht/i_partitioner.hh"
+#include "dht/auto_refreshing_sharder.hh"
 #include "streaming/stream_plan.hh"
 #include <seastar/core/sleep.hh>
 #include <seastar/core/thread.hh>
@@ -35,6 +36,8 @@
 #include "streaming/stream_mutation_fragments_cmd.hh"
 #include "consumer.hh"
 #include "readers/generating_v2.hh"
+#include "service/topology_guard.hh"
+#include "utils/error_injection.hh"
 
 namespace streaming {
 
@@ -88,17 +91,19 @@ public:
 void stream_manager::init_messaging_service_handler(abort_source& as) {
     auto& ms = _ms.local();
 
-    ms.register_prepare_message([this] (const rpc::client_info& cinfo, prepare_message msg, streaming::plan_id plan_id, sstring description, rpc::optional<stream_reason> reason_opt) {
+    ms.register_prepare_message([this] (const rpc::client_info& cinfo, prepare_message msg, streaming::plan_id plan_id, sstring description, rpc::optional<stream_reason> reason_opt, rpc::optional<service::session_id> session) {
         const auto& src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
         const auto& from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
         auto dst_cpu_id = this_shard_id();
         auto reason = reason_opt ? *reason_opt : stream_reason::unspecified;
-        return container().invoke_on(dst_cpu_id, [msg = std::move(msg), plan_id, description = std::move(description), from, src_cpu_id, reason] (auto& sm) mutable {
+        auto topo_guard = service::frozen_topology_guard(session.value_or(service::default_session_id));
+        return container().invoke_on(dst_cpu_id, [msg = std::move(msg), plan_id, description = std::move(description), from, src_cpu_id, reason, topo_guard] (auto& sm) mutable {
             auto sr = stream_result_future::init_receiving_side(sm, plan_id, description, from);
             auto session = sm.get_session(plan_id, from, "PREPARE_MESSAGE");
             session->init(sr);
             session->dst_cpu_id = src_cpu_id;
             session->set_reason(reason);
+            session->set_topo_guard(topo_guard);
             return session->prepare(std::move(msg.requests), std::move(msg.summaries));
         });
     });
@@ -110,25 +115,39 @@ void stream_manager::init_messaging_service_handler(abort_source& as) {
             return make_ready_future<>();
         });
     });
-    ms.register_stream_mutation_fragments([this, &as] (const rpc::client_info& cinfo, streaming::plan_id plan_id, table_schema_version schema_id, table_id cf_id, uint64_t estimated_partitions, rpc::optional<stream_reason> reason_opt, rpc::source<frozen_mutation_fragment, rpc::optional<stream_mutation_fragments_cmd>> source) {
+    ms.register_stream_mutation_fragments([this, &as] (const rpc::client_info& cinfo, streaming::plan_id plan_id, table_schema_version schema_id, table_id cf_id, uint64_t estimated_partitions,
+            rpc::optional<stream_reason> reason_opt,
+            rpc::optional<service::session_id> session,
+            rpc::source<frozen_mutation_fragment, rpc::optional<stream_mutation_fragments_cmd>> source) {
         auto from = netw::messaging_service::get_source(cinfo);
         auto reason = reason_opt ? *reason_opt: stream_reason::unspecified;
-        sslog.trace("Got stream_mutation_fragments from {} reason {}", from, int(reason));
+        service::frozen_topology_guard topo_guard = session.value_or(service::default_session_id);
+        sslog.trace("Got stream_mutation_fragments from {} reason {}, session {}", from, int(reason), session);
         if (!_sys_dist_ks.local_is_initialized() || !_view_update_generator.local_is_initialized()) {
             return make_exception_future<rpc::sink<int>>(std::runtime_error(format("Node {} is not fully initialized for streaming, try again later",
                     _db.local().get_token_metadata().get_topology().my_address())));
         }
-        return _mm.local().get_schema_for_write(schema_id, from, _ms.local(), as).then([this, from, estimated_partitions, plan_id, cf_id, source, reason] (schema_ptr s) mutable {
-          return _db.local().obtain_reader_permit(s, "stream-session", db::no_timeout, {}).then([this, from, estimated_partitions, plan_id, cf_id, source, reason, s] (reader_permit permit) mutable {
-            auto sink = _ms.local().make_sink_for_stream_mutation_fragments(source);
+        return _mm.local().get_schema_for_write(schema_id, from, _ms.local(), as).then([this, from, estimated_partitions, plan_id, cf_id, source, reason, topo_guard, &as] (schema_ptr s) mutable {
+          return _db.local().obtain_reader_permit(s, "stream-session", db::no_timeout, {}).then([this, from, estimated_partitions, plan_id, cf_id, source, reason, topo_guard, s, &as] (reader_permit permit) mutable {
             struct stream_mutation_fragments_cmd_status {
                 bool got_cmd = false;
                 bool got_end_of_stream = false;
             };
             auto cmd_status = make_lw_shared<stream_mutation_fragments_cmd_status>();
             auto offstrategy_update = make_lw_shared<offstrategy_trigger>(_db, cf_id, plan_id);
-            auto get_next_mutation_fragment = [&sm = container(), source, plan_id, from, s, cmd_status, offstrategy_update, permit] () mutable {
-                return source().then([&sm, plan_id, from, s, cmd_status, offstrategy_update, permit] (std::optional<std::tuple<frozen_mutation_fragment, rpc::optional<stream_mutation_fragments_cmd>>> opt) mutable {
+            auto guard = service::topology_guard(s->table(), topo_guard);
+
+            // Will log a message when streaming is done. Used to synchronize tests.
+            lw_shared_ptr<std::any> log_done;
+            if (utils::get_local_injector().is_enabled("stream_mutation_fragments")) {
+                log_done = make_lw_shared<std::any>(seastar::make_shared(seastar::defer([] {
+                    sslog.info("stream_mutation_fragments: done");
+                })));
+            }
+
+            auto get_next_mutation_fragment = [guard = std::move(guard), &as, &sm = container(), source, plan_id, from, s, cmd_status, offstrategy_update, permit] () mutable {
+                guard.check();
+                return source().then([&sm, &guard, &as, plan_id, from, s, cmd_status, offstrategy_update, permit] (std::optional<std::tuple<frozen_mutation_fragment, rpc::optional<stream_mutation_fragments_cmd>>> opt) mutable {
                     if (opt) {
                         auto cmd = std::get<1>(*opt);
                         if (cmd) {
@@ -150,7 +169,19 @@ void stream_manager::init_messaging_service_handler(abort_source& as) {
                         auto mf = fmf.unfreeze(*s, permit);
                         sm.local().update_progress(plan_id, from.addr, progress_info::direction::IN, sz);
                         offstrategy_update->update();
-                        return make_ready_future<mutation_fragment_opt>(std::move(mf));
+
+                        return utils::get_local_injector().inject_with_handler("stream_mutation_fragments", [&guard, &as] (auto& handler) -> future<> {
+                            auto& guard_ = guard;
+                            auto& as_ = as;
+                            sslog.info("stream_mutation_fragments: waiting");
+                            while (!handler.poll_for_message()) {
+                                guard_.check();
+                                co_await sleep_abortable(std::chrono::milliseconds(5), as_);
+                            }
+                            sslog.info("stream_mutation_fragments: released");
+                        }).then([mf = std::move(mf)] () mutable {
+                            return mutation_fragment_opt(std::move(mf));
+                        });
                     } else {
                         // If the sender has sent stream_mutation_fragments_cmd it means it is
                         // a node that understands the new protocol. It must send end_of_stream
@@ -162,18 +193,20 @@ void stream_manager::init_messaging_service_handler(abort_source& as) {
                     }
                 });
             };
+          auto sink = _ms.local().make_sink_for_stream_mutation_fragments(source);
           try {
             // Make sure the table with cf_id is still present at this point.
             // Close the sink in case the table is dropped.
             auto& table = _db.local().find_column_family(cf_id);
-            auto erm = table.get_effective_replication_map();
             auto op = table.stream_in_progress();
+            auto sharder_ptr = std::make_unique<dht::auto_refreshing_sharder>(table.shared_from_this());
+            auto& sharder = *sharder_ptr;
             //FIXME: discarded future.
-            (void)mutation_writer::distribute_reader_and_consume_on_shards(s, erm->get_sharder(*s),
+            (void)mutation_writer::distribute_reader_and_consume_on_shards(s, sharder,
                 make_generating_reader_v1(s, permit, std::move(get_next_mutation_fragment)),
-                make_streaming_consumer("streaming", _db, _sys_dist_ks, _view_update_generator, estimated_partitions, reason, is_offstrategy_supported(reason)),
+                make_streaming_consumer("streaming", _db, _sys_dist_ks, _view_update_generator, estimated_partitions, reason, is_offstrategy_supported(reason), topo_guard),
                 std::move(op)
-            ).then_wrapped([s, plan_id, from, sink, estimated_partitions, erm] (future<uint64_t> f) mutable {
+            ).then_wrapped([s, plan_id, from, sink, estimated_partitions, log_done, sh_ptr = std::move(sharder_ptr)] (future<uint64_t> f) mutable {
                 int32_t status = 0;
                 uint64_t received_partitions = 0;
                 if (f.failed()) {
@@ -270,7 +303,7 @@ future<> stream_session::on_initialization_complete() {
     }
     auto id = msg_addr{this->peer, 0};
     sslog.debug("[Stream #{}] SEND PREPARE_MESSAGE to {}", plan_id(), id);
-    return manager().ms().send_prepare_message(id, std::move(prepare), plan_id(), description(), get_reason()).then_wrapped([this, id] (auto&& f) {
+    return manager().ms().send_prepare_message(id, std::move(prepare), plan_id(), description(), get_reason(), topo_guard()).then_wrapped([this, id] (auto&& f) {
         try {
             auto msg = f.get0();
             sslog.debug("[Stream #{}] GOT PREPARE_MESSAGE Reply from {}", this->plan_id(), this->peer);

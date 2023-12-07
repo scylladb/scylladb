@@ -245,6 +245,7 @@ future<> range_streamer::add_ranges(const sstring& keyspace_name, locator::vnode
 future<> range_streamer::stream_async() {
     _nr_ranges_remaining = nr_ranges_to_stream();
     _nr_total_ranges = _nr_ranges_remaining;
+    _token_metadata_ptr = nullptr;
     logger.info("{} starts, nr_ranges_remaining={}", _description, _nr_ranges_remaining);
     auto start = lowres_clock::now();
     return do_for_each(_to_stream, [this, description = _description] (auto& stream) {
@@ -265,7 +266,8 @@ future<> range_streamer::stream_async() {
                 unsigned nr_ranges_streamed = 0;
                 size_t nr_ranges_total = range_vec.size();
                 auto do_streaming = [&] (dht::token_range_vector&& ranges_to_stream) {
-                    auto sp = stream_plan(_stream_manager.local(), format("{}-{}-index-{:d}", description, keyspace, sp_index++), _reason);
+                    auto sp = stream_plan(_stream_manager.local(), format("{}-{}-index-{:d}", description, keyspace, sp_index++),
+                                          _reason, _topo_guard);
                     auto abort_listener = _abort_source.subscribe([&] () noexcept { sp.abort(); });
                     _abort_source.check();
                     logger.info("{} with {} for keyspace={}, streaming [{}, {}) out of {} ranges",

@@ -10,6 +10,8 @@
  */
 
 #include "storage_service.hh"
+#include "service/topology_guard.hh"
+#include "service/session.hh"
 #include "dht/boot_strapper.hh"
 #include <seastar/core/distributed.hh>
 #include <seastar/util/defer.hh>
@@ -105,6 +107,12 @@ namespace db {
 namespace service {
 
 static logging::logger slogger("storage_service");
+
+static thread_local session_manager topology_session_manager;
+
+session_manager& get_topology_session_manager() {
+    return topology_session_manager;
+}
 
 static constexpr std::chrono::seconds wait_for_live_nodes_timeout{30};
 
@@ -525,6 +533,7 @@ future<> storage_service::topology_state_load() {
 
         if (_db.local().get_config().check_experimental(db::experimental_features_t::feature::TABLETS)) {
             tmptr->set_tablets(co_await replica::read_tablet_metadata(_qp));
+            tmptr->tablets().set_balancing_enabled(_topology_state_machine._topology.tablet_balancing_enabled);
         }
     }));
 
@@ -650,6 +659,8 @@ public:
     topology_mutation_builder& set_transition_state(topology::transition_state);
     topology_mutation_builder& set_version(topology::version_t);
     topology_mutation_builder& set_fence_version(topology::version_t);
+    topology_mutation_builder& set_session(session_id);
+    topology_mutation_builder& set_tablet_balancing_enabled(bool);
     topology_mutation_builder& set_current_cdc_generation_id(const cdc::generation_id_v2&);
     topology_mutation_builder& set_new_cdc_generation_data_uuid(const utils::UUID& value);
     topology_mutation_builder& set_unpublished_cdc_generations(const std::vector<cdc::generation_id_v2>& values);
@@ -659,6 +670,7 @@ public:
     topology_mutation_builder& add_enabled_features(const std::set<S>& value);
     topology_mutation_builder& add_unpublished_cdc_generation(const cdc::generation_id_v2& value);
     topology_mutation_builder& del_transition_state();
+    topology_mutation_builder& del_session();
     topology_mutation_builder& del_global_topology_request();
     topology_node_mutation_builder& with_node(raft::server_id);
     canonical_mutation build() { return canonical_mutation{std::move(_m)}; }
@@ -810,8 +822,22 @@ topology_mutation_builder& topology_mutation_builder::set_fence_version(topology
     return *this;
 }
 
+topology_mutation_builder& topology_mutation_builder::set_session(session_id value) {
+    _m.set_static_cell("session", value.uuid(), _ts);
+    return *this;
+}
+
+topology_mutation_builder& topology_mutation_builder::set_tablet_balancing_enabled(bool value) {
+    _m.set_static_cell("tablet_balancing_enabled", value, _ts);
+    return *this;
+}
+
 topology_mutation_builder& topology_mutation_builder::del_transition_state() {
     return del("transition_state");
+}
+
+topology_mutation_builder& topology_mutation_builder::del_session() {
+    return del("session");
 }
 
 topology_mutation_builder& topology_mutation_builder::set_current_cdc_generation_id(
@@ -1635,10 +1661,13 @@ class topology_coordinator {
             auto& tablet_state = _tablets[gid];
             table_id table = s->id();
 
+            auto get_mutation_builder = [&] () {
+                return replica::tablet_mutation_builder(guard.write_timestamp(), s->ks_name(), table);
+            };
+
             auto transition_to = [&] (locator::tablet_transition_stage stage) {
                 slogger.trace("raft topology: Will set tablet {} stage to {}", gid, stage);
-                updates.emplace_back(
-                    replica::tablet_mutation_builder(guard.write_timestamp(), s->ks_name(), table)
+                updates.emplace_back(get_mutation_builder()
                         .set_stage(last_token, stage)
                         .build());
             };
@@ -1658,7 +1687,15 @@ class topology_coordinator {
 
             switch (trinfo.stage) {
                 case locator::tablet_transition_stage::allow_write_both_read_old:
-                    transition_to_with_barrier(locator::tablet_transition_stage::write_both_read_old);
+                    if (do_barrier()) {
+                        slogger.trace("raft topology: Will set tablet {} stage to {}", gid, locator::tablet_transition_stage::write_both_read_old);
+                        updates.emplace_back(get_mutation_builder()
+                            .set_stage(last_token, locator::tablet_transition_stage::write_both_read_old)
+                            // Create session a bit earlier to avoid adding barrier
+                            // to the streaming stage to create sessions on replicas.
+                            .set_session(last_token, session_id(utils::UUID_gen::get_time_UUID()))
+                            .build());
+                    }
                     break;
                 case locator::tablet_transition_stage::write_both_read_old:
                     transition_to_with_barrier(locator::tablet_transition_stage::streaming);
@@ -1677,7 +1714,11 @@ class topology_coordinator {
                         return ser::storage_service_rpc_verbs::send_tablet_stream_data(&_messaging,
                                    netw::msg_addr(id2ip(dst)), _as, raft::server_id(dst.uuid()), gid);
                     })) {
-                        transition_to(locator::tablet_transition_stage::write_both_read_new);
+                        slogger.trace("raft topology: Will set tablet {} stage to {}", gid, locator::tablet_transition_stage::write_both_read_new);
+                        updates.emplace_back(get_mutation_builder()
+                            .set_stage(last_token, locator::tablet_transition_stage::write_both_read_new)
+                            .del_session(last_token)
+                            .build());
                     }
                     break;
                 case locator::tablet_transition_stage::write_both_read_new:
@@ -1701,8 +1742,7 @@ class topology_coordinator {
                     // See do_tablet_operation() doc.
                     if (do_barrier()) {
                         _tablets.erase(gid);
-                        updates.emplace_back(
-                            replica::tablet_mutation_builder(guard.write_timestamp(), s->ks_name(), table)
+                        updates.emplace_back(get_mutation_builder()
                                 .del_transition(last_token)
                                 .set_replicas(last_token, trinfo.next)
                                 .build());
@@ -1778,6 +1818,7 @@ class topology_coordinator {
             updates.emplace_back(
                 topology_mutation_builder(guard.write_timestamp())
                     .set_transition_state(topology::transition_state::write_both_read_old)
+                    .set_session(session_id(guard.new_group0_state_id()))
                     .set_version(_topo_sm._topology.version + 1)
                     .build());
         } else {
@@ -1986,6 +2027,7 @@ class topology_coordinator {
                     builder.del_transition_state();
                 } else {
                     builder.set_transition_state(topology::transition_state::write_both_read_old);
+                    builder.set_session(session_id(guard.new_group0_state_id()));
                     builder.set_version(_topo_sm._topology.version + 1);
                 }
                 auto str = ::format("committed new CDC generation, ID: {}", cdc_gen_id);
@@ -2079,6 +2121,7 @@ class topology_coordinator {
                 topology_mutation_builder builder(node.guard.write_timestamp());
                 builder
                     .set_transition_state(topology::transition_state::write_both_read_new)
+                    .del_session()
                     .set_version(_topo_sm._topology.version + 1);
                 auto str = ::format("{}: streaming completed for node {}", node.rs->state, node.id);
                 co_await update_topology_state(take_guard(std::move(node)), {builder.build()}, std::move(str));
@@ -3531,7 +3574,7 @@ future<> storage_service::bootstrap(std::unordered_set<token>& bootstrap_tokens,
                 _gossiper.wait_for_range_setup().get();
                 dht::boot_strapper bs(_db, _stream_manager, _abort_source, get_broadcast_address(), _snitch.local()->get_location(), bootstrap_tokens, get_token_metadata_ptr());
                 slogger.info("Starting to bootstrap...");
-                bs.bootstrap(streaming::stream_reason::bootstrap, _gossiper).get();
+                bs.bootstrap(streaming::stream_reason::bootstrap, _gossiper, null_topology_guard).get();
             } else {
                 // Even with RBNO bootstrap we need to announce the new CDC generation immediately after it's created.
                 _gossiper.add_local_application_state({
@@ -4162,6 +4205,25 @@ future<> storage_service::replicate_to_all_cores(mutable_token_metadata_ptr tmpt
     std::vector<std::unordered_map<table_id, locator::effective_replication_map_ptr>> pending_table_erms;
     pending_table_erms.resize(smp::count);
 
+    std::unordered_set<session_id> open_sessions;
+
+    // Collect open sessions
+    {
+        auto session = _topology_state_machine._topology.session;
+        if (session) {
+            open_sessions.insert(session);
+        }
+
+        for (auto&& [table_id, tmap]: tmptr->tablets().all_tables()) {
+            for (auto&& [tid, trinfo]: tmap.transitions()) {
+                if (trinfo.session_id) {
+                    auto id = session_id(trinfo.session_id);
+                    open_sessions.insert(id);
+                }
+            }
+        }
+    }
+
     try {
         auto base_shard = this_shard_id();
         pending_token_metadata_ptr[base_shard] = tmptr;
@@ -4253,6 +4315,12 @@ future<> storage_service::replicate_to_all_cores(mutable_token_metadata_ptr tmpt
                 auto& cf = db.find_column_family(it->first);
                 cf.update_effective_replication_map(std::move(it->second));
                 it = table_erms.erase(it);
+            }
+
+            auto& session_mgr = get_topology_session_manager();
+            session_mgr.initiate_close_of_sessions_except(open_sessions);
+            for (auto id : open_sessions) {
+                session_mgr.create_session(id);
             }
         });
     } catch (...) {
@@ -4957,7 +5025,7 @@ void storage_service::run_replace_ops(std::unordered_set<token>& bootstrap_token
         } else {
             slogger.info("replace[{}]: Using streaming based node ops to sync data", uuid);
             dht::boot_strapper bs(_db, _stream_manager, _abort_source, get_broadcast_address(), _snitch.local()->get_location(), bootstrap_tokens, get_token_metadata_ptr());
-            bs.bootstrap(streaming::stream_reason::replace, _gossiper, replace_address).get();
+            bs.bootstrap(streaming::stream_reason::replace, _gossiper, null_topology_guard, replace_address).get();
         }
         on_streaming_finished();
 
@@ -5281,6 +5349,7 @@ void storage_service::node_ops_insert(node_ops_id ops_uuid,
 future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_address coordinator, node_ops_cmd_request req) {
     return seastar::async([this, coordinator, req = std::move(req)] () mutable {
         auto ops_uuid = req.ops_uuid;
+        auto topo_guard = null_topology_guard;
         slogger.debug("node_ops_cmd_handler cmd={}, ops_uuid={}", req.cmd, ops_uuid);
 
         if (req.cmd == node_ops_cmd::query_pending_ops) {
@@ -5352,7 +5421,7 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
                     _repair.local().removenode_with_repair(get_token_metadata_ptr(), node, ops).get();
                 } else {
                     slogger.info("removenode[{}]: Started to sync data for removing node={} using stream, coordinator={}", req.ops_uuid, node, coordinator);
-                    removenode_with_stream(node, as).get();
+                    removenode_with_stream(node, topo_guard, as).get();
                 }
             }
         } else if (req.cmd == node_ops_cmd::removenode_abort) {
@@ -5653,7 +5722,7 @@ future<> storage_service::rebuild(sstring source_dc) {
                 co_await ss._repair.local().rebuild_with_repair(tmptr, std::move(source_dc));
             } else {
                 auto streamer = make_lw_shared<dht::range_streamer>(ss._db, ss._stream_manager, tmptr, ss._abort_source,
-                        ss.get_broadcast_address(), ss._snitch.local()->get_location(), "Rebuild", streaming::stream_reason::rebuild);
+                        ss.get_broadcast_address(), ss._snitch.local()->get_location(), "Rebuild", streaming::stream_reason::rebuild, null_topology_guard);
                 streamer->add_source_filter(std::make_unique<dht::range_streamer::failure_detector_source_filter>(ss._gossiper.get_unreachable_members()));
                 if (source_dc != "") {
                     streamer->add_source_filter(std::make_unique<dht::range_streamer::single_datacenter_filter>(source_dc));
@@ -5812,8 +5881,10 @@ future<> storage_service::removenode_add_ranges(lw_shared_ptr<dht::range_streame
     }
 }
 
-future<> storage_service::removenode_with_stream(gms::inet_address leaving_node, shared_ptr<abort_source> as_ptr) {
-    return seastar::async([this, leaving_node, as_ptr] {
+future<> storage_service::removenode_with_stream(gms::inet_address leaving_node,
+                                                 frozen_topology_guard topo_guard,
+                                                 shared_ptr<abort_source> as_ptr) {
+    return seastar::async([this, leaving_node, as_ptr, topo_guard] {
         auto tmptr = get_token_metadata_ptr();
         abort_source as;
         auto sub = _abort_source.subscribe([&as] () noexcept {
@@ -5829,7 +5900,7 @@ future<> storage_service::removenode_with_stream(gms::inet_address leaving_node,
                 as.request_abort();
             }
         });
-        auto streamer = make_lw_shared<dht::range_streamer>(_db, _stream_manager, tmptr, as, get_broadcast_address(), _snitch.local()->get_location(), "Removenode", streaming::stream_reason::removenode);
+        auto streamer = make_lw_shared<dht::range_streamer>(_db, _stream_manager, tmptr, as, get_broadcast_address(), _snitch.local()->get_location(), "Removenode", streaming::stream_reason::removenode, topo_guard);
         removenode_add_ranges(streamer, leaving_node).get();
         try {
             streamer->stream_async().get();
@@ -5880,7 +5951,12 @@ future<> storage_service::leave_ring() {
 
 future<>
 storage_service::stream_ranges(std::unordered_map<sstring, std::unordered_multimap<dht::token_range, inet_address>> ranges_to_stream_by_keyspace) {
-    auto streamer = dht::range_streamer(_db, _stream_manager, get_token_metadata_ptr(), _abort_source, get_broadcast_address(), _snitch.local()->get_location(), "Unbootstrap", streaming::stream_reason::decommission);
+    auto streamer = dht::range_streamer(_db, _stream_manager, get_token_metadata_ptr(), _abort_source,
+                                        get_broadcast_address(),
+                                        _snitch.local()->get_location(),
+                                        "Unbootstrap",
+                                        streaming::stream_reason::decommission,
+                                        null_topology_guard);
     for (auto& entry : ranges_to_stream_by_keyspace) {
         const auto& keyspace = entry.first;
         auto& ranges_with_endpoints = entry.second;
@@ -6078,6 +6154,7 @@ future<> storage_service::load_tablet_metadata() {
     }
     return mutate_token_metadata([this] (mutable_token_metadata_ptr tmptr) -> future<> {
         tmptr->set_tablets(co_await replica::read_tablet_metadata(_qp));
+        tmptr->tablets().set_balancing_enabled(_topology_state_machine._topology.tablet_balancing_enabled);
     }, acquire_merge_lock::no);
 }
 
@@ -6202,6 +6279,8 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                     }
 
                     co_await ss._shared_token_metadata.stale_versions_in_use();
+                    co_await get_topology_session_manager().drain_closing_sessions();
+
                     slogger.debug("raft_topology_cmd::barrier_and_drain done");
                 });
                 result.status = raft_topology_cmd_result::command_status::success;
@@ -6238,7 +6317,7 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                                 } else {
                                     dht::boot_strapper bs(_db, _stream_manager, _abort_source, get_broadcast_address(),
                                         locator::endpoint_dc_rack{rs.datacenter, rs.rack}, rs.ring.value().tokens, get_token_metadata_ptr());
-                                    co_await bs.bootstrap(streaming::stream_reason::bootstrap, _gossiper);
+                                    co_await bs.bootstrap(streaming::stream_reason::bootstrap, _gossiper, _topology_state_machine._topology.session);
                                 }
                             }));
                         }
@@ -6265,7 +6344,7 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                                 auto replaced_id = std::get<replace_param>(_topology_state_machine._topology.req_param[raft_server.id()]).replaced_id;
                                 auto existing_ip = _group0->address_map().find(replaced_id);
                                 assert(existing_ip);
-                                co_await bs.bootstrap(streaming::stream_reason::replace, _gossiper, *existing_ip);
+                                co_await bs.bootstrap(streaming::stream_reason::replace, _gossiper, _topology_state_machine._topology.session, *existing_ip);
                             }
                         }));
                     }
@@ -6317,7 +6396,7 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                             auto ops = seastar::make_shared<node_ops_info>(node_ops_id::create_random_id(), as, std::move(ignored_ips));
                             return _repair.local().removenode_with_repair(get_token_metadata_ptr(), *ip, ops);
                         } else {
-                            return removenode_with_stream(*ip, as);
+                            return removenode_with_stream(*ip, _topology_state_machine._topology.session, as);
                         }
                     }));
                     result.status = raft_topology_cmd_result::command_status::success;
@@ -6332,7 +6411,8 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                             co_await _repair.local().rebuild_with_repair(tmptr, std::move(source_dc));
                         } else {
                             auto streamer = make_lw_shared<dht::range_streamer>(_db, _stream_manager, tmptr, _abort_source,
-                                    get_broadcast_address(), _snitch.local()->get_location(), "Rebuild", streaming::stream_reason::rebuild);
+                                    get_broadcast_address(), _snitch.local()->get_location(), "Rebuild", streaming::stream_reason::rebuild,
+                                    _topology_state_machine._topology.session);
                             streamer->add_source_filter(std::make_unique<dht::range_streamer::failure_detector_source_filter>(_gossiper.get_unreachable_members()));
                             if (source_dc != "") {
                                 streamer->add_source_filter(std::make_unique<dht::range_streamer::single_datacenter_filter>(source_dc));
@@ -6500,6 +6580,10 @@ future<> storage_service::stream_tablet(locator::global_tablet_id tablet) {
         if (trinfo->stage != locator::tablet_transition_stage::streaming) {
             throw std::runtime_error(format("Tablet {} stage is not at streaming", tablet));
         }
+        auto topo_guard = trinfo->session_id;
+        if (!trinfo->session_id) {
+            throw std::runtime_error(format("Tablet {} session is not set", tablet));
+        }
         if (trinfo->pending_replica.host != tm->get_my_id()) {
             throw std::runtime_error(format("Tablet {} has pending replica different than this one", tablet));
         }
@@ -6519,7 +6603,8 @@ future<> storage_service::stream_tablet(locator::global_tablet_id tablet) {
         std::vector<sstring> tables = {table.schema()->cf_name()};
         auto streamer = make_lw_shared<dht::range_streamer>(_db, _stream_manager, std::move(tm), guard.get_abort_source(),
                get_broadcast_address(), _snitch.local()->get_location(),
-               "Tablet migration", streaming::stream_reason::tablet_migration, std::move(tables));
+               "Tablet migration", streaming::stream_reason::tablet_migration, topo_guard, std::move(tables));
+        tm = nullptr;
         streamer->add_source_filter(std::make_unique<dht::range_streamer::failure_detector_source_filter>(
                 _gossiper.get_unreachable_members()));
 
@@ -6565,6 +6650,121 @@ future<> storage_service::cleanup_tablet(locator::global_tablet_id tablet) {
             return table.cleanup_tablet(tablet.tablet);
         });
     });
+}
+
+future<> storage_service::move_tablet(table_id table, dht::token token, locator::tablet_replica src, locator::tablet_replica dst) {
+    auto holder = _async_gate.hold();
+
+    if (this_shard_id() != 0) {
+        // group0 is only set on shard 0.
+        co_return co_await container().invoke_on(0, [&] (auto& ss) {
+            return ss.move_tablet(table, token, src, dst);
+        });
+    }
+
+    while (true) {
+        auto guard = co_await _group0->client().start_operation(&_abort_source);
+
+        while (_topology_state_machine._topology.is_busy()) {
+            slogger.debug("move_tablet(): topology state machine is busy");
+            release_guard(std::move(guard));
+            co_await _topology_state_machine.event.wait();
+            guard = co_await _group0->client().start_operation(&_abort_source);
+        }
+
+        std::vector<canonical_mutation> updates;
+        auto ks_name = _db.local().find_schema(table)->ks_name();
+        auto& tmap = get_token_metadata().tablets().get_tablet_map(table);
+        auto tid = tmap.get_tablet_id(token);
+        auto& tinfo = tmap.get_tablet_info(tid);
+        auto last_token = tmap.get_last_token(tid);
+        auto gid = locator::global_tablet_id{table, tid};
+
+        // FIXME: Validate replication strategy constraints.
+
+        if (!locator::contains(tinfo.replicas, src)) {
+            throw std::runtime_error(format("Tablet {} has no replica on {}", gid, src));
+        }
+        auto* node = get_token_metadata().get_topology().find_node(dst.host);
+        if (!node) {
+            throw std::runtime_error(format("Unknown host: {}", dst.host));
+        }
+        if (dst.shard >= node->get_shard_count()) {
+            throw std::runtime_error(format("Host {} does not have shard {}", dst.shard));
+        }
+        if (src.host == dst.host) {
+            throw std::runtime_error("Migrating within the same node is not supported");
+        }
+
+        if (src == dst) {
+            co_return;
+        }
+
+        updates.push_back(canonical_mutation(replica::tablet_mutation_builder(guard.write_timestamp(), ks_name, table)
+            .set_new_replicas(last_token, locator::replace_replica(tinfo.replicas, src, dst))
+            .set_stage(last_token, locator::tablet_transition_stage::allow_write_both_read_old)
+            .build()));
+        updates.push_back(canonical_mutation(topology_mutation_builder(guard.write_timestamp())
+            .set_transition_state(topology::transition_state::tablet_migration)
+            .set_version(_topology_state_machine._topology.version + 1)
+            .build()));
+
+        sstring reason = format("Moving tablet {} from {} to {}", gid, src, dst);
+        slogger.info("raft topology: {}", reason);
+        slogger.trace("raft topology: do update {} reason {}", updates, reason);
+        topology_change change{std::move(updates)};
+        group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard, reason);
+        try {
+            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard));
+            break;
+        } catch (group0_concurrent_modification&) {
+            slogger.debug("move_tablet(): concurrent modification, retrying");
+        }
+    }
+
+    // Wait for migration to finish.
+    co_await _topology_state_machine.event.wait([&] {
+        auto& tmap = get_token_metadata().tablets().get_tablet_map(table);
+        return !tmap.get_tablet_transition_info(tmap.get_tablet_id(token));
+    });
+}
+
+future<> storage_service::set_tablet_balancing_enabled(bool enabled) {
+    auto holder = _async_gate.hold();
+
+    if (this_shard_id() != 0) {
+        // group0 is only set on shard 0.
+        co_return co_await container().invoke_on(0, [&] (auto& ss) {
+            return ss.set_tablet_balancing_enabled(enabled);
+        });
+    }
+
+    while (true) {
+        group0_guard guard = co_await _group0->client().start_operation(&_abort_source);
+
+        while (_topology_state_machine._topology.is_busy()) {
+            slogger.debug("set_tablet_balancing_enabled(): topology is busy");
+            release_guard(std::move(guard));
+            co_await _topology_state_machine.event.wait();
+            guard = co_await _group0->client().start_operation(&_abort_source);
+        }
+
+        std::vector<canonical_mutation> updates;
+        updates.push_back(canonical_mutation(topology_mutation_builder(guard.write_timestamp())
+            .set_tablet_balancing_enabled(enabled)
+            .build()));
+
+        sstring reason = format("Setting tablet balancing to {}", enabled);
+        slogger.info("raft topology: {}", reason);
+        topology_change change{std::move(updates)};
+        group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard, reason);
+        try {
+            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard));
+            break;
+        } catch (group0_concurrent_modification&) {
+            slogger.debug("set_tablet_balancing_enabled(): concurrent modification");
+        }
+    }
 }
 
 future<join_node_request_result> storage_service::join_node_request_handler(join_node_request_params params) {

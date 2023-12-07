@@ -25,6 +25,7 @@ stream_plan& stream_plan::request_ranges(inet_address from, sstring keyspace, dh
     auto session = _coordinator->get_or_create_session(_mgr, from);
     session->add_stream_request(keyspace, std::move(ranges), std::move(column_families));
     session->set_reason(_reason);
+    session->set_topo_guard(_topo_guard);
     return *this;
 }
 
@@ -37,6 +38,7 @@ stream_plan& stream_plan::transfer_ranges(inet_address to, sstring keyspace, dht
     auto session = _coordinator->get_or_create_session(_mgr, to);
     session->add_transfer_ranges(std::move(keyspace), std::move(ranges), std::move(column_families));
     session->set_reason(_reason);
+    session->set_topo_guard(_topo_guard);
     return *this;
 }
 

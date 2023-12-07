@@ -22,6 +22,7 @@
 #include "streaming/stream_manager.hh"
 #include "streaming/stream_reason.hh"
 #include "streaming/session_info.hh"
+#include "service/topology_guard.hh"
 #include "query-request.hh"
 #include <map>
 #include <vector>
@@ -156,12 +157,21 @@ private:
     session_info _session_info;
 
     stream_reason _reason = stream_reason::unspecified;
+    service::frozen_topology_guard _topo_guard;
 public:
     stream_reason get_reason() const {
         return _reason;
     }
     void set_reason(stream_reason reason) {
         _reason = reason;
+    }
+
+    void set_topo_guard(service::frozen_topology_guard topo_guard) {
+        _topo_guard = topo_guard;
+    }
+
+    service::frozen_topology_guard topo_guard() const {
+        return _topo_guard;
     }
 
     void add_bytes_sent(int64_t bytes) {

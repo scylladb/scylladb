@@ -2466,6 +2466,102 @@
          ]
       },
       {
+         "path":"/storage_service/tablets/move",
+         "operations":[
+            {
+               "nickname":"move_tablet",
+               "method":"POST",
+               "summary":"Moves a tablet replica",
+               "type":"void",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"ks",
+                     "description":"Keyspace name",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"table",
+                     "description":"Table name",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"token",
+                     "description":"Token owned by the tablet to move",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"integer",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"src_host",
+                     "description":"Source host id",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"dst_host",
+                     "description":"Destination host id",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"src_shard",
+                     "description":"Source shard number",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"integer",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"dst_shard",
+                     "description":"Destination shard number",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"integer",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_service/tablets/balancing",
+         "operations":[
+            {
+               "nickname":"tablet_balancing_enable",
+               "method":"POST",
+               "summary":"Moves a tablet replica",
+               "type":"void",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"enabled",
+                     "description":"When set to false, tablet load balancing is disabled",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"boolean",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
          "path":"/storage_service/metrics/total_hints",
          "operations":[
             {
