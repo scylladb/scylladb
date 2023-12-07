@@ -184,14 +184,16 @@ std::vector<sstring> check_against_restricted_replication_strategies(
 
     // The {minimum,maximum}_replication_factor_{warn,fail}_threshold configuration option can be used to forbid
     // a smaller/greater replication factor. We assume that all numeric replication
-    // options are replication factors - this is true for SimpleStrategy and
-    // NetworkTopologyStrategy but in the future if we add more strategies,
-    // we may need to limit this test only to specific options.
+    // options except for initial_tablets are replication factors - this is true for both
+    // SimpleStrategy and NetworkTopologyStrategy
     // A zero replication factor is not forbidden - it is the traditional
     // way to avoid replication on some DC.
     // We ignore errors (non-number, negative number, etc.) here,
     // these are checked and reported elsewhere.
     for (auto opt : attrs.get_replication_options()) {
+        if (opt.first == sstring("initial_tablets")) {
+            continue;
+        }
         try {
             auto rf = std::stol(opt.second);
             if (rf > 0) {
