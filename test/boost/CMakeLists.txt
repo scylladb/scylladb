@@ -179,6 +179,8 @@ add_scylla_test(result_utils_test
   KIND SEASTAR)
 add_scylla_test(reusable_buffer_test
   KIND SEASTAR)
+add_scylla_test(reservoir_sampling_test
+  KIND BOOST)
 add_scylla_test(rust_test
   KIND BOOST
   LIBRARIES inc)
