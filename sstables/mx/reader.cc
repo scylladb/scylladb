@@ -1953,6 +1953,7 @@ public:
             report_error(res.what());
             _validator.reset(dk);
         }
+        _expected_clustering_block.reset();
         if (_stop_after_partition_header) {
             _stop_after_partition_header = false;
             return data_consumer::proceed::no;
