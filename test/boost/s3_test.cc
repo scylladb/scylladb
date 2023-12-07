@@ -142,7 +142,7 @@ void do_test_client_multipart_upload(bool with_copy_upload) {
     testlog.info("Checking correctness\n");
     for (int samples = 0; samples < 7; samples++) {
         uint64_t len = tests::random::get_int(1u, chunk_size);
-        uint64_t off = tests::random::get_int(object_size) - len;
+        uint64_t off = tests::random::get_int(object_size - len);
 
         auto s_buf = cln->get_object_contiguous(name, s3::range{ off, len }).get0();
         unsigned align = off % chunk_size;
