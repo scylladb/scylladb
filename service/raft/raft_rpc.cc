@@ -20,7 +20,7 @@ namespace service {
 
 static seastar::logger rlogger("raft_rpc");
 
-using sloc = std::source_location;
+using sloc = seastar::compat::source_location;
 
 raft_ticker_type::time_point timeout() {
     return raft_ticker_type::clock::now() + raft_tick_interval * (raft::ELECTION_TIMEOUT.count() / 2);

@@ -8,6 +8,7 @@
 #pragma once
 
 #include <seastar/core/gate.hh>
+#include "seastar/util/std-compat.hh"
 #include "raft/raft.hh"
 #include "message/messaging_service_fwd.hh"
 #include "utils/UUID.hh"
@@ -38,10 +39,10 @@ private:
     enum class one_way_kind { request, reply };
 
     template <one_way_kind rpc_kind, typename Verb, typename Msg> void
-    one_way_rpc(std::source_location loc, raft::server_id id, Verb&& verb, Msg&& msg);
+    one_way_rpc(seastar::compat::source_location loc, raft::server_id id, Verb&& verb, Msg&& msg);
 
     template <typename Verb, typename... Args> auto
-    two_way_rpc(std::source_location loc, raft::server_id id, Verb&& verb, Args&&... args);
+    two_way_rpc(seastar::compat::source_location loc, raft::server_id id, Verb&& verb, Args&&... args);
 
 public:
     future<raft::snapshot_reply> send_snapshot(raft::server_id server_id, const raft::install_snapshot& snap, seastar::abort_source& as) override;
