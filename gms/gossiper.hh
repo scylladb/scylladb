@@ -150,6 +150,7 @@ public:
 public:
     static clk::time_point inline now() noexcept { return clk::now(); }
 public:
+    using abortable = bool_class<struct abortable_tag>;
     struct endpoint_lock_entry {
         semaphore sem;
         permit_id pid;
@@ -172,7 +173,7 @@ public:
         const permit_id& id() const noexcept { return _permit_id; }
     };
     // Must be called on shard 0
-    future<endpoint_permit> lock_endpoint(inet_address, permit_id pid, seastar::compat::source_location l = seastar::compat::source_location::current());
+    future<endpoint_permit> lock_endpoint(inet_address, permit_id pid, abortable = abortable::yes, seastar::compat::source_location l = seastar::compat::source_location::current());
 
 private:
     void permit_internal_error(const inet_address& addr, permit_id pid);

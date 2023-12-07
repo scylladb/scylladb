@@ -814,7 +814,7 @@ gossiper::endpoint_lock_entry::endpoint_lock_entry() noexcept
     , pid(permit_id::create_null_id())
 {}
 
-future<gossiper::endpoint_permit> gossiper::lock_endpoint(inet_address ep, permit_id pid, seastar::compat::source_location l) {
+future<gossiper::endpoint_permit> gossiper::lock_endpoint(inet_address ep, permit_id pid, abortable abortable, seastar::compat::source_location l) {
     if (this_shard_id() != 0) {
         on_internal_error(logger, "lock_endpoint must be called on shard 0");
     }
@@ -832,12 +832,11 @@ future<gossiper::endpoint_permit> gossiper::lock_endpoint(inet_address ep, permi
     }
     pid = permit_id::create_random_id();
     logger.debug("{}: lock_endpoint {}: waiting: permit_id={}", caller, ep, pid);
-    eptr->units = co_await get_units(eptr->sem, 1, _abort_source);
+    eptr->units = co_await (abortable ? get_units(eptr->sem, 1, _abort_source) : get_units(eptr->sem, 1));
     eptr->pid = pid;
     if (eptr->holders) {
         on_internal_error_noexcept(logger, fmt::format("{}: lock_endpoint {}: newly held endpoint_lock_entry has {} holders", caller, ep, eptr->holders));
     }
-    _abort_source.check();
     co_return endpoint_permit(std::move(eptr), std::move(ep), std::move(caller));
 }
 
@@ -1842,10 +1841,7 @@ future<> gossiper::do_before_change_notifications(inet_address addr, endpoint_st
 }
 
 future<> gossiper::do_on_change_notifications(inet_address addr, const application_state& state, const versioned_value& value, permit_id pid) const {
-    co_await _subscribers.for_each([this, addr, state, value, pid] (shared_ptr<i_endpoint_state_change_subscriber> subscriber) {
-        // Once _abort_source is aborted, don't attempt to process any further notifications
-        // because that would violate monotonicity due to partially failed notification.
-        _abort_source.check();
+    co_await _subscribers.for_each([addr, state, value, pid] (shared_ptr<i_endpoint_state_change_subscriber> subscriber) {
         return subscriber->on_change(addr, state, value, pid);
     });
 }
@@ -2138,7 +2134,7 @@ future<> gossiper::add_local_application_state(std::list<std::pair<application_s
         co_await container().invoke_on(0, [&] (gossiper& gossiper) mutable -> future<> {
             inet_address ep_addr = gossiper.get_broadcast_address();
             // for symmetry with other apply, use endpoint lock for our own address.
-            auto permit = co_await gossiper.lock_endpoint(ep_addr, null_permit_id);
+            auto permit = co_await gossiper.lock_endpoint(ep_addr, null_permit_id, abortable::no);
             auto ep_state_before = gossiper.get_endpoint_state_ptr(ep_addr);
             if (!ep_state_before) {
                 auto err = format("endpoint_state_map does not contain endpoint = {}, application_states = {}",
