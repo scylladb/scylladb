@@ -13,6 +13,9 @@
 #include <seastar/util/closeable.hh>
 #include <seastar/core/abort_source.hh>
 #include "gms/inet_address.hh"
+#include "auth/allow_all_authenticator.hh"
+#include "auth/allow_all_authorizer.hh"
+#include "auth/maintenance_socket_role_manager.hh"
 #include "tasks/task_manager.hh"
 #include "utils/build_id.hh"
 #include "supervisor.hh"
@@ -1126,6 +1129,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             api::set_server_config(ctx, *cfg).get();
 
             static sharded<auth::service> auth_service;
+            static sharded<auth::service> maintenance_auth_service;
             static sharded<qos::service_level_controller> sl_controller;
             debug::the_sl_controller = &sl_controller;
 
@@ -1668,6 +1672,25 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                     controller.stop_server().get();
                 });
             };
+
+            auth::service_config maintenance_auth_config;
+            maintenance_auth_config.authorizer_java_name = sstring{auth::allow_all_authorizer_name};
+            maintenance_auth_config.authenticator_java_name = sstring{auth::allow_all_authenticator_name};
+            maintenance_auth_config.role_manager_java_name = sstring{auth::maintenance_socket_role_manager_name};
+
+            maintenance_auth_service.start(perm_cache_config, std::ref(qp), std::ref(mm_notifier), std::ref(mm), maintenance_auth_config, db::maintenance_socket_enabled::yes).get();
+
+            scheduling_group_key_config maintenance_cql_sg_stats_cfg =
+            make_scheduling_group_key_config<cql_transport::cql_sg_stats>(db::maintenance_socket_enabled::yes);
+            cql_transport::controller cql_maintenance_server_ctl(maintenance_auth_service, mm_notifier, gossiper, qp, service_memory_limiter, sl_controller, lifecycle_notifier, *cfg, scheduling_group_key_create(maintenance_cql_sg_stats_cfg).get0(), db::maintenance_socket_enabled::yes);
+
+            std::any stop_maintenance_auth_service;
+            std::any stop_maintenance_cql;
+
+            if (cfg->maintenance_socket() != "ignore") {
+                start_auth_service(maintenance_auth_service, stop_maintenance_auth_service, "maintenance auth service");
+                start_cql(cql_maintenance_server_ctl, stop_maintenance_cql, "maintenance native server");
+            }
 
             sys_dist_ks.start(std::ref(qp), std::ref(mm), std::ref(proxy)).get();
             auto stop_sdks = defer_verbose_shutdown("system distributed keyspace", [] {
