@@ -16,6 +16,7 @@
 #include <seastar/coroutine/parallel_for_each.hh>
 #include "system_keyspace.hh"
 #include "cql3/untyped_result_set.hh"
+#include "db/system_auth_keyspace.hh"
 #include "thrift/server.hh"
 #include "cql3/query_processor.hh"
 #include "partition_slice_builder.hh"
@@ -2110,6 +2111,11 @@ std::vector<schema_ptr> system_keyspace::all_tables(const db::config& cfg) {
 
     if (cfg.check_experimental(db::experimental_features_t::feature::CONSISTENT_TOPOLOGY_CHANGES)) {
         r.insert(r.end(), {topology(), cdc_generations_v3(), topology_requests()});
+    }
+
+    if (cfg.check_experimental(db::experimental_features_t::feature::CONSISTENT_TOPOLOGY_CHANGES)) {
+        auto auth_tables = db::system_auth_keyspace::all_tables();
+        std::copy(auth_tables.begin(), auth_tables.end(), std::back_inserter(r));
     }
 
     if (cfg.check_experimental(db::experimental_features_t::feature::BROADCAST_TABLES)) {

@@ -1803,7 +1803,7 @@ class schema_ptr:
         return self.ptr[item]
 
     def is_system(self):
-        return self.ks_name in ["system", "system_schema", "system_distributed", "system_traces", "system_auth", "audit"]
+        return self.ks_name in ["system", "system_schema", "system_distributed", "system_traces", "system_auth", "system_auth_v2", "audit"]
 
 
 class scylla_active_sstables(gdb.Command):

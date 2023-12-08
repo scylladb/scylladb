@@ -2,6 +2,7 @@ add_library(db STATIC)
 target_sources(db
   PRIVATE
     consistency_level.cc
+    system_auth_keyspace.cc
     system_keyspace.cc
     virtual_table.cc
     virtual_tables.cc
