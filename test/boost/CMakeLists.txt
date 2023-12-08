@@ -282,6 +282,8 @@ add_scylla_test(schema_loader_test
   LIBRARIES tools)
 add_scylla_test(schema_registry_test
   KIND SEASTAR)
+add_scylla_test(sessions_test
+  KIND SEASTAR)
 add_scylla_test(sstable_conforms_to_mutation_source_test
   KIND SEASTAR)
 add_scylla_test(sstable_compaction_test
