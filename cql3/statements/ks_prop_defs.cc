@@ -157,7 +157,7 @@ std::optional<sstring> ks_prop_defs::get_replication_strategy_class() const {
     return _strategy_class;
 }
 
-lw_shared_ptr<data_dictionary::keyspace_metadata> ks_prop_defs::as_ks_metadata(sstring ks_name, const locator::token_metadata& tm) {
+lw_shared_ptr<data_dictionary::keyspace_metadata> ks_prop_defs::as_ks_metadata(sstring ks_name, const locator::token_metadata& tm, const gms::feature_service& feat) {
     auto sc = get_replication_strategy_class().value();
     std::optional<unsigned> initial_tablets = get_initial_tablets(sc);
     auto options = prepare_options(sc, tm, get_replication_options(), initial_tablets);

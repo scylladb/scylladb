@@ -92,11 +92,12 @@ void create_keyspace_statement::validate(query_processor& qp, const service::cli
 future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>> create_keyspace_statement::prepare_schema_mutations(query_processor& qp, api::timestamp_type ts) const {
     using namespace cql_transport;
     const auto& tm = *qp.proxy().get_token_metadata_ptr();
+    const auto& feat = qp.proxy().features();
     ::shared_ptr<event::schema_change> ret;
     std::vector<mutation> m;
 
     try {
-        m = service::prepare_new_keyspace_announcement(qp.db().real_database(), _attrs->as_ks_metadata(_name, tm), ts);
+        m = service::prepare_new_keyspace_announcement(qp.db().real_database(), _attrs->as_ks_metadata(_name, tm, feat), ts);
 
         ret = ::make_shared<event::schema_change>(
                 event::schema_change::change_type::CREATED,
@@ -257,7 +258,7 @@ create_keyspace_statement::execute(query_processor& qp, service::query_state& st
 
 lw_shared_ptr<data_dictionary::keyspace_metadata> create_keyspace_statement::get_keyspace_metadata(const locator::token_metadata& tm, const gms::feature_service& feat) {
     _attrs->validate();
-    return _attrs->as_ks_metadata(_name, tm);
+    return _attrs->as_ks_metadata(_name, tm, feat);
 }
 
 }
