@@ -8,6 +8,8 @@
 
 import contextlib
 import glob
+import itertools
+import functools
 import json
 import nodetool
 import os
@@ -18,6 +20,7 @@ import random
 import re
 import shutil
 import util
+from typing import Iterable, Type, Union
 
 
 def simple_no_clustering_table(cql, keyspace):
@@ -865,3 +868,83 @@ def test_scrub_validate_mode(scylla_path, scrub_workdir, scrub_schema_file, scru
 
         # Check that validate did not move the bad sstable into qurantine
         assert os.path.exists(scrub_bad_sstable)
+
+
+def _to_cql3_type(t: Type) -> str:
+    # map from Python type to Cassandra type, only a small subset is supported
+    py_to_cql3_type = {int: "Int32Type",
+                       str: "UTF8Type",
+                       bool: "BooleanType"}
+    return py_to_cql3_type[t]
+
+
+KeyType = Union[int, str, bool]
+
+
+def _serialize_value(scylla_path: str, value: KeyType) -> str:
+    return subprocess.check_output([scylla_path,
+                                    "types", "serialize", "--full-compound",
+                                    "-t", _to_cql3_type(type(value)),
+                                    "--",
+                                    str(value)]).strip().decode()
+
+
+def _shard_of_values(scylla_path: str, shards: int, *values: list[KeyType]) -> int:
+    args = [scylla_path, "types", "shardof",
+            "--full-compound",
+            "--shards", str(shards)]
+    for value in values:
+        args.extend(['-t', _to_cql3_type(type(value))])
+    serialized = ''.join(_serialize_value(scylla_path, v) for v in values)
+    args.extend(['--', serialized])
+    output = subprocess.check_output(args).strip().decode()
+    # the output looks like:
+    # (file_instance, 2021-03-27, c61a3321-0459-41c3-8e56-75255feb0196): token: -5043005771368701888, shard: 1
+    shard = output.rsplit(':', 1)[-1]
+    return int(shard)
+
+
+def _generate_key_for_shard(scylla_path: str, shards: int, shard_id: int) -> Iterable[int]:
+    # this only works with the table with a single integer pk. if we want to
+    # be more general, we could use a randomized generator to enumerate all
+    # possible pk combinations.
+    for pk in itertools.count(start=0, step=1):
+        if _shard_of_values(scylla_path, shards, pk) == shard_id:
+            yield pk
+
+
+def _simple_table_with_keys(cql, keyspace: str, keys: Iterable[int]) -> tuple[str, str]:
+    table = util.unique_name()
+    schema = (f"CREATE TABLE {keyspace}.{table} (pk int PRIMARY KEY, v int) "
+              "WITH compaction = {'class': 'NullCompactionStrategy'}")
+    cql.execute(schema)
+
+    for pk in keys:
+        cql.execute(f"INSERT INTO {keyspace}.{table} (pk, v) VALUES ({pk}, 0)")
+    nodetool.flush(cql, f"{keyspace}.{table}")
+
+    return table, schema
+
+
+def test_scylla_sstable_shard_of(cql, test_keyspace, scylla_path, scylla_data_dir) -> None:
+    # cql-pytest/run.py::run_scylla_cmd() passes "--smp 2" to scylla, so we
+    # need to be consistent with it to get the correct sstable-shard mapping
+    scylla_option_smp = 2
+    shards = scylla_option_smp
+    num_keys = 42
+    for shard_id in range(shards):
+        all_keys_for_shard = _generate_key_for_shard(scylla_path, shards, shard_id)
+        keys = itertools.islice(all_keys_for_shard, num_keys)
+        table_factory = functools.partial(_simple_table_with_keys, keys=keys)
+        with scylla_sstable(table_factory, cql, test_keyspace, scylla_data_dir) as (schema_file, sstables):
+            out = subprocess.check_output([scylla_path,
+                                           "sstable", "shard-of",
+                                           "--schema-file", schema_file,
+                                           "--shards", str(shards)] +
+                                          sstables)
+            # all sstables contains the rows with the keys deliberately
+            # created for specified shard
+            sstables_json = json.loads(out)['sstables']
+            expected_json = [shard_id]
+            for actual_json in sstables_json.values():
+                assert actual_json == expected_json
