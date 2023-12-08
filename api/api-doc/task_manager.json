@@ -202,6 +202,20 @@
       }
    ],
    "models":{
+      "task_identity":{
+         "id": "task_identity",
+         "description":"Id and node of a task",
+         "properties":{
+            "task_id":{
+               "type":"string",
+               "description":"The uuid of a task"
+            },
+            "node":{
+               "type":"string",
+               "description":"Address of a server on which a task is created"
+            }
+         }
+      },
       "task_stats" :{
          "id": "task_stats",
          "description":"A task statistics object",
@@ -265,6 +279,14 @@
             "type":{
                "type":"string",
                "description":"The description of the task"
+            },
+            "kind":{
+               "type":"string",
+               "enum":[
+                  "node",
+                  "cluster"
+               ],
+               "description":"The kind of a task"
             },
             "scope":{
                "type":"string",
@@ -335,9 +357,9 @@
             "children_ids":{
                "type":"array",
                "items":{
-                  "type":"string"
+                  "type":"task_identity"
                },
-               "description":"Task IDs of children of this task"
+               "description":"Task identities of children of this task"
             }
          }
       }

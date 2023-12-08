@@ -42,7 +42,7 @@ def test_repair_task_progress_finished_task(cql, this_dc, rest_api):
                     assert status["progress_completed"] == status["progress_total"], "Incorrect task progress"
 
                     assert "children_ids" in status, "Shard tasks weren't created"
-                    children = [get_task_status(rest_api, child_id) for child_id in status["children_ids"]]
+                    children = [get_task_status(rest_api, child_ident["task_id"]) for child_ident in status["children_ids"]]
                     assert all([child["progress_completed"] == child["progress_total"] for child in children]), "Some shard tasks have incorrect progress"
 
                     assert sum([child["progress_total"] for child in children]) == status["progress_total"], "Total progress of parent is not equal to children total progress sum"
@@ -103,9 +103,9 @@ def test_repair_task_progress(cql, this_dc, rest_api):
                         status = statuses[0]
                         assert "children_ids" in status, "No child tasks created"
 
-                        for child_id in status["children_ids"]:
+                        for child_ident in status["children_ids"]:
                             # Check if task state is correct.
-                            child_status = get_task_status(rest_api, child_id)
+                            child_status = get_task_status(rest_api, child_ident["task_id"])
                             assert child_status["state"] == "running", "Incorrect task progress"
                             assert child_status["progress_completed"] * 2 <= child_status["progress_total"], "Incorrect task progress"
 
@@ -113,7 +113,7 @@ def test_repair_task_progress(cql, this_dc, rest_api):
                         resp.raise_for_status()
 
 
-                        for child_id in status["children_ids"]:
-                            child_status = wait_for_task(rest_api, child_id)
+                        for child_ident in status["children_ids"]:
+                            child_status = wait_for_task(rest_api, child_ident["task_id"])
                             assert child_status["progress_completed"] == child_status["progress_total"], "Incorrect task progress"
     drain_module_tasks(rest_api, module_name)

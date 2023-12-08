@@ -183,7 +183,7 @@ def test_not_created_compaction_task_abort(cql, this_dc, rest_api):
                     assert "abort" in status["error"], "Task wasn't aborted by user"
 
                     if "children_ids" in status:
-                        children = [wait_for_task(rest_api, child_id) for child_id in status["children_ids"]]
+                        children = [wait_for_task(rest_api, child_ident["task_id"]) for child_ident in status["children_ids"]]
                         assert all(child["state"] == "failed" for child in children), "Some child tasks finished successfully despite abort"
                         assert all("abort requested" in child["error"] for child in children), "Some child tasks weren't aborted by user"
                         assert all("children" not in child for child in children), "Some child tasks spawned new tasks even though they were aborted"
