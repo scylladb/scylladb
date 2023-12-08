@@ -540,6 +540,14 @@ void help_operation(const tool_app_template::config& cfg, const bpo::variables_m
     }
 }
 
+void rebuild_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    std::unordered_map<sstring, sstring> params;
+    if (vm.count("source-dc")) {
+        params["source_dc"] = vm["source-dc"].as<sstring>();
+    }
+    client.post("/storage_service/rebuild", std::move(params));
+}
+
 void settraceprobability_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     if (!vm.count("trace_probability")) {
         throw std::invalid_argument("required parameters are missing: trace_probability");
@@ -955,6 +963,26 @@ Fore more information, see: https://opensource.docs.scylladb.com/stable/operatin
                 { },
             },
             listsnapshots_operation
+        },
+        {
+            {
+                "rebuild",
+                "Rebuilds a node’s data by streaming data from other nodes in the cluster (similarly to bootstrap)",
+R"(
+Rebuild operates on multiple nodes in a Scylla cluster. It streams data from a
+single source replica when rebuilding a token range. When executing the command,
+Scylla first figures out which ranges the local node (the one we want to rebuild)
+is responsible for. Then which node in the cluster contains the same ranges.
+Finally, Scylla streams the data to the local node.
+
+Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/rebuild.html
+)",
+                { },
+                {
+                    typed_option<sstring>("source-dc", "DC from which to stream data (default: any DC)", 1),
+                },
+            },
+            rebuild_operation
         },
         {
             {
