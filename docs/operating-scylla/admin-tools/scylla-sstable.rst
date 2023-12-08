@@ -648,6 +648,22 @@ Note that levels are cumulative - each contains all the checks of the previous l
 By default, the strictest level is used.
 This can be relaxed, for example, if you want to produce intentionally corrupt SStables for tests.
 
+shard-of
+^^^^^^^^
+
+Pint out the shards which own the specified SSTables.
+
+The content is dumped in JSON, using the following schema:
+
+.. code-block:: none
+    :class: hide-copy-button
+
+    $ROOT := { "$sstable_path": $SHARD_IDS, ... }
+
+    $SHARD_IDS := [$SHARD_ID, ...]
+
+    $SHARD_ID := Uint
+
 script
 ^^^^^^
 

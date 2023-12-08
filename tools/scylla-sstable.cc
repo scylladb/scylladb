@@ -2553,6 +2553,43 @@ void sstable_consumer_operation(schema_ptr schema, reader_permit permit, const s
     consumer->consume_stream_end().get();
 }
 
+void shard_of_operation(schema_ptr, reader_permit,
+                        const std::vector<sstables::shared_sstable>& sstables,
+                        sstables::sstables_manager& sstable_manager,
+                        const bpo::variables_map& vm) {
+    if (!vm.count("shards")) {
+        throw std::invalid_argument("missing required option '--shards'");
+    }
+    unsigned shard_count = vm["shards"].as<unsigned>();
+    unsigned ignore_msb_bits = vm["ignore-msb-bits"].as<unsigned>();
+
+    json_writer writer;
+    writer.StartStream();
+    for (auto& sst : sstables) {
+        // sst was loaded with the smp::count as its shard_count but that's not
+        // necessarily identical to the "shards" specified in the command line.
+        // reload the sst with the specified shard_count and ignore_msb_bits
+        auto schema = schema_builder(sst->get_schema()).with_sharder(
+            shard_count, ignore_msb_bits).build();
+        auto new_sst = sstable_manager.make_sstable(
+            schema,
+            sst->get_storage().prefix(),
+            data_dictionary::storage_options{},
+            sst->generation(),
+            sstable_state::normal,
+            sst->get_version());
+        new_sst->load(schema->get_sharder(), sstables::sstable_open_config{}).get();
+
+        writer.Key(sst->get_filename());
+        writer.StartArray();
+        for (unsigned shard_id : new_sst->get_shards_for_this_sstable()) {
+            writer.Uint(shard_id);
+        }
+        writer.EndArray();
+    }
+    writer.EndStream();
+}
+
 const std::vector<operation_option> global_options {
     typed_option<sstring>("schema-file", "schema.cql", "file containing the schema description"),
     typed_option<sstring>("keyspace", "keyspace name"),
@@ -2816,6 +2853,15 @@ for more information on this operation, including the API documentation.
                 typed_option<program_options::string_map>("script-arg", {}, "parameter(s) for the script"),
             }},
             script_operation},
+/* shard-of */
+    {{"shard-of",
+            "Print out the shard which 'owns' the sstable",
+            "Print out the intersection(s) of the shard-ranges and the partition ranges",
+            {
+                typed_option<unsigned>("shards", "the number of shards the source scylla instance has"),
+                typed_option<unsigned>("ignore-msb-bits", 12u, "'murmur3_partitioner_ignore_msb_bits' set by scylla.yaml"),
+            }},
+            shard_of_operation},
 };
 
 } // anonymous namespace
