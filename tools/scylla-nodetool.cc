@@ -491,6 +491,10 @@ void listsnapshots_operation(scylla_rest_client& client, const bpo::variables_ma
     fmt::print(std::cout, "\nTotal TrueDiskSpaceUsed: {}\n\n", format_hr_size(utils::to_hr_size(true_size)));
 }
 
+void move_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    throw std::invalid_argument("This operation is not supported");
+}
+
 void help_operation(const tool_app_template::config& cfg, const bpo::variables_map& vm) {
     if (vm.count("command")) {
         const auto command = vm["command"].as<sstring>();
@@ -1017,6 +1021,20 @@ Fore more information, see: https://opensource.docs.scylladb.com/stable/operatin
                 { },
             },
             listsnapshots_operation
+        },
+        {
+            {
+                "move",
+                "Move the token to this node",
+R"(
+This operation is not supported.
+)",
+                { },
+                {
+                    typed_option<sstring>("new-token", "The new token to move to this node", 1),
+                },
+            },
+            move_operation
         },
         {
             {
