@@ -21,6 +21,7 @@
 #include "db/timeout_clock.hh"
 #include "message/messaging_service.hh"
 #include "utils/overloaded_functor.hh"
+#include "tasks/task_handler.hh"
 #include "task_manager.hh"
 #include "utils/error_injection.hh"
 

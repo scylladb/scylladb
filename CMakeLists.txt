@@ -151,6 +151,7 @@ target_sources(scylla-main
     serializer.cc
     sstables_loader.cc
     table_helper.cc
+    tasks/task_handler.cc
     tasks/task_manager.cc
     timeout_config.cc
     unimplemented.cc
