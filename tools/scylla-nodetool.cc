@@ -423,6 +423,21 @@ void flush_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     client.post(format("/storage_service/keyspace_flush/{}", keyspace), std::move(params));
 }
 
+void getlogginglevels_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    auto res = client.get("/storage_service/logging_level");
+    const auto row_format = "{:<50}{:>10}\n";
+    fmt::print(std::cout, "\n");
+    fmt::print(std::cout, fmt::runtime(row_format), "Logger Name", "Log Level");
+    for (const auto& element : res.GetArray()) {
+        const auto& logger_obj = element.GetObject();
+        fmt::print(
+                std::cout,
+                fmt::runtime(row_format),
+                rjson::to_string_view(logger_obj["key"]),
+                rjson::to_string_view(logger_obj["value"]));
+    }
+}
+
 void gettraceprobability_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     auto res = client.get("/storage_service/trace_probability");
     fmt::print(std::cout, "Current trace probability: {}\n", res.GetDouble());
@@ -947,6 +962,16 @@ Fore more information, see: https://opensource.docs.scylladb.com/stable/operatin
                 }
             },
             flush_operation
+        },
+        {
+            {
+                "getlogginglevels",
+                "Get the runtime logging levels",
+R"(
+Prints a table with the name and current logging level for each logger in ScyllaDB.
+)",
+            },
+            getlogginglevels_operation
         },
         {
             {
