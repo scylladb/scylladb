@@ -567,6 +567,23 @@ void rebuild_operation(scylla_rest_client& client, const bpo::variables_map& vm)
     client.post("/storage_service/rebuild", std::move(params));
 }
 
+void refresh_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    if (!vm.count("keyspace") || !vm.count("table")) {
+        throw std::invalid_argument("required parameters are missing: keyspace and/or table");
+    }
+    std::unordered_map<sstring, sstring> params{{"cf", vm["table"].as<sstring>()}};
+    if (vm.count("load-and-stream")) {
+        params["load_and_stream"] = "true";
+    }
+    if (vm.count("primary-replica-only")) {
+        if (!vm.count("load-and-stream")) {
+            throw std::invalid_argument("--primary-replica-only|-pro takes no effect without --load-and-stream|-las");
+        }
+        params["primary_replica_only"] = "true";
+    }
+    client.post(format("/storage_service/sstables/{}", vm["keyspace"].as<sstring>()), std::move(params));
+}
+
 void removenode_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     if (!vm.count("remove-operation")) {
         throw std::invalid_argument("required parameters are missing: remove-operation, pass one of (status, force or a host id)");
@@ -745,6 +762,8 @@ const std::map<std::string_view, std::string_view> option_substitutions{
     {"--kt-list", "--keyspace-table-list"},
     {"-kc", "--keyspace-table-list"},
     {"--kc.list", "--keyspace-table-list"},
+    {"-las", "--load-and-stream"},
+    {"-pro", "--primary-replica-only"},
 };
 
 std::map<operation, operation_func> get_operations_with_func() {
@@ -1055,6 +1074,30 @@ Fore more information, see: https://opensource.docs.scylladb.com/stable/operatin
                 },
             },
             rebuild_operation
+        },
+        {
+            {
+                "refresh",
+                "Load newly placed SSTables to the system without a restart",
+R"(
+Add the files to the upload directory, by default it is located under
+/var/lib/scylla/data/keyspace_name/table_name-UUID/upload.
+Materialized Views (MV) and Secondary Indexes (SI) of the upload table, and if
+they exist, they are automatically updated. Uploading MV or SI SSTables is not
+required and will fail.
+
+Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/refresh.html
+)",
+                {
+                    typed_option<>("load-and-stream", "Allows loading sstables that do not belong to this node, in which case they are automatically streamed to the owning nodes"),
+                    typed_option<>("primary-replica-only", "Load the sstables and stream to primary replica node that owns the data. Repair is needed after the load and stream process"),
+                },
+                {
+                    typed_option<sstring>("keyspace", "The keyspace to load sstable(s) into", 1),
+                    typed_option<sstring>("table", "The table to load sstable(s) into", 1),
+                },
+            },
+            refresh_operation
         },
         {
             {
