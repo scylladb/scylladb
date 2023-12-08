@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "gms/inet_address.hh"
 #include "tasks/task_manager.hh"
 #include "utils/chunked_vector.hh"
 
@@ -21,6 +22,7 @@ struct task_identity {
 struct task_status {
     tasks::task_id task_id;
     std::string type;
+    task_kind kind;
     std::string scope;
     task_manager::task_state state;
     is_abortable is_abortable;
@@ -35,7 +37,7 @@ struct task_status {
     std::string entity;
     std::string progress_units;
     task_manager::task::progress progress;
-    std::vector<tasks::task_id> children;
+    std::vector<task_identity> children;
 };
 
 struct task_stats {

@@ -33,14 +33,18 @@ tm::task_status make_status(tasks::task_status status) {
     ::gmtime_r(&end_time, &et);
     ::gmtime_r(&start_time, &st);
 
-    std::vector<std::string> tis{status.children.size()};
+    std::vector<tm::task_identity> tis{status.children.size()};
     boost::transform(status.children, tis.begin(), [] (const auto& child) {
-        return child.to_sstring();
+        tm::task_identity ident;
+        ident.task_id = child.task_id.to_sstring();
+        ident.node = fmt::format("{}", child.node);
+        return ident;
     });
 
     tm::task_status res{};
     res.id = status.task_id.to_sstring();
     res.type = status.type;
+    res.kind = status.kind;
     res.scope = status.scope;
     res.state = status.state;
     res.is_abortable = bool(status.is_abortable);
