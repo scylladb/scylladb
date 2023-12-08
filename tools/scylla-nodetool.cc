@@ -347,6 +347,11 @@ void compactionhistory_operation(scylla_rest_client& client, const bpo::variable
     }
 }
 
+
+void decommission_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    client.post("/storage_service/decommission");
+}
+
 void disableautocompaction_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     if (!vm.count("keyspace")) {
         for (const auto& keyspace :  get_keyspaces(client)) {
@@ -772,6 +777,16 @@ Fore more information, see: https://opensource.docs.scylladb.com/stable/operatin
                 },
             },
             compactionhistory_operation
+        },
+        {
+            {
+                "decommission",
+                "Deactivate a selected node by streaming its data to the next node in the ring",
+R"(
+Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/decommission.html
+)",
+            },
+            decommission_operation
         },
         {
             {
