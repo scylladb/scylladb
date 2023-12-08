@@ -37,17 +37,9 @@ using is_internal = bool_class<struct internal_tag>;
 
 extern logging::logger tmlogger;
 
-struct task_identity {
-    gms::inet_address node;
-    task_id task_id;
-};
-
-struct task_status {
-    // FIXME: implement
-};
-struct task_stats {
-    // FIXME: implement
-};
+struct task_identity;
+struct task_status;
+struct task_stats;
 
 class task_manager : public peering_sharded_service<task_manager> {
 public:
