@@ -16,10 +16,12 @@ namespace tasks {
 using task_status_variant = std::variant<tasks::task_manager::foreign_task_ptr, tasks::task_manager::task::task_essentials>;
 
 static future<task_status> get_task_status(task_manager::task_ptr task) {
+    auto broadcast_address = task->get_module()->get_task_manager().get_broadcast_address();
     auto local_task_status = task->get_status();
     auto status = task_status{
         .task_id = local_task_status.id,
         .type = task->type(),
+        .kind = task_kind::node,
         .scope = local_task_status.scope,
         .state = local_task_status.state,
         .is_abortable = task->is_abortable(),
@@ -34,9 +36,19 @@ static future<task_status> get_task_status(task_manager::task_ptr task) {
         .entity = local_task_status.entity,
         .progress_units = local_task_status.progress_units,
         .progress = co_await task->get_progress(),
-        .children = co_await task->get_children().map_each_task<task_id>(
-            [] (const task_manager::foreign_task_ptr& task) { return task->id(); },
-            [] (const task_manager::task::task_essentials& task) { return task.task_status.id; })
+        .children = co_await task->get_children().map_each_task<task_identity>(
+            [broadcast_address] (const task_manager::foreign_task_ptr& task) {
+                return task_identity{
+                    .node = broadcast_address,
+                    .task_id = task->id()
+                };
+            },
+            [broadcast_address] (const task_manager::task::task_essentials& task) {
+                return task_identity{
+                    .node = broadcast_address,
+                    .task_id = task.task_status.id
+                };
+            })
     };
     co_return status;
 }
@@ -47,40 +59,51 @@ static future<task_status> get_foreign_task_status(const task_manager::foreign_t
     });
 }
 
+template<typename T>
+static T get_virtual_task_info(task_id id, std::optional<T> info) {
+    // A service associated with the virtual task may have stopped tracking the operation
+    // before its info got retrieved.
+    if (!info) {
+        throw task_manager::task_not_found(id);
+    }
+    return *info;
+}
+
 future<task_status> task_handler::get_status() {
-    auto task = co_await task_manager::invoke_on_task(_tm.container(), _id, std::function([id = _id] (task_manager::task_variant task_v) -> future<task_manager::foreign_task_ptr> {
+    return task_manager::invoke_on_task(_tm.container(), _id, std::function([id = _id] (task_manager::task_variant task_v) -> future<task_status> {
         return std::visit(overloaded_functor{
-            [] (task_manager::task_ptr task) -> future<task_manager::foreign_task_ptr> {
+            [] (task_manager::task_ptr task) -> future<task_status> {
                 if (task->is_complete()) {
                     task->unregister_task();
                 }
-                co_return std::move(task);
+                return get_task_status(std::move(task));
             },
-            [id] (task_manager::virtual_task_ptr task) -> future<task_manager::foreign_task_ptr> {
-                throw task_manager::task_not_found(id);    // API does not support virtual tasks yet.
+            [id] (task_manager::virtual_task_ptr task) -> future<task_status> {
+                auto id_ = id;
+                auto status = co_await task->get_status(id_);
+                co_return get_virtual_task_info(id_, status);
             }
         }, task_v);
     }));
-    co_return co_await get_foreign_task_status(task);
 }
 
 future<task_status> task_handler::wait_for_task() {
-    auto task = co_await task_manager::invoke_on_task(_tm.container(), _id, std::function([id = _id] (task_manager::task_variant task_v) -> future<task_manager::foreign_task_ptr> {
+    return task_manager::invoke_on_task(_tm.container(), _id, std::function([id = _id] (task_manager::task_variant task_v) -> future<task_status> {
         return std::visit(overloaded_functor{
             [] (task_manager::task_ptr task) {
                 return task->done().then_wrapped([task] (auto f) {
                     // done() is called only because we want the task to be complete before getting its status.
                     // The future should be ignored here as the result does not matter.
                     f.ignore_ready_future();
-                    return make_foreign(task);
+                    return get_task_status(std::move(task));
                 });
             },
-            [id] (task_manager::virtual_task_ptr task) -> future<task_manager::foreign_task_ptr> {
-                throw task_manager::task_not_found(id);    // API does not support virtual tasks yet.
+            [id] (task_manager::virtual_task_ptr task) -> future<task_status> {
+                auto status = co_await task->get_status(id);
+                co_return get_virtual_task_info(id, status);
             }
         }, task_v);
     }));
-    co_return co_await get_foreign_task_status(task);
 }
 
 future<utils::chunked_vector<task_status>> task_handler::get_status_recursively(bool local) {
@@ -133,8 +156,11 @@ future<utils::chunked_vector<task_status>> task_handler::get_status_recursively(
                     .entity = task.task_status.entity,
                     .progress_units = task.task_status.progress_units,
                     .progress = task.task_progress,
-                    .children = boost::copy_range<std::vector<task_id>>(task.failed_children | boost::adaptors::transformed([] (auto& child) {
-                        return child.task_status.id;
+                    .children = boost::copy_range<std::vector<task_identity>>(task.failed_children | boost::adaptors::transformed([&tm = _tm] (auto& child) {
+                        return task_identity{
+                            .node = tm.get_broadcast_address(),
+                            .task_id = child.task_status.id
+                        };
                     }))
                 };
                 res.push_back(status);
@@ -160,7 +186,7 @@ future<> task_handler::abort() {
                 task->abort();
             },
             [id] (task_manager::virtual_task_ptr task) -> future<> {
-                throw task_manager::task_not_found(id);    // API does not support virtual tasks yet.
+                return task->abort(id);
             }
         }, task_v);
     });
