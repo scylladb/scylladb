@@ -117,6 +117,9 @@ node before validating that the node you upgraded is up and running the new vers
   or running repairs.
 * Not to apply schema changes.
 
+Finally, if ``consistent_cluster_management`` wasn't enabled in the cluster before the upgrade, and you didn't disable it (as explained in the note above), then as soon as every node has been upgraded to the new version, the cluster will start a procedure which initializes the Raft algorithm for consistent cluster metadata management.
+You must then :ref:`verify <validate-raft-setup-enabled-default>` that this procedure successfully finishes.
+
 Upgrade Steps
 =============
 
@@ -248,6 +251,33 @@ Validate
 Once you are sure the node upgrade was successful, move to the next node in the cluster.
 
 See |Scylla_METRICS|_ for more information.
+
+After upgrading every node
+==========================
+
+The following section applies only if
+
+* ``consistent_cluster_management`` was not enabled in your cluster before the rolling upgrade,
+* you did not explicitly disable ``consistent_cluster_management`` when doing the rolling upgrade.
+
+This will cause Scylla to enable Raft in the cluster once the rolling upgrade procedure is done.
+
+.. _validate-raft-setup-enabled-default:
+
+Validate Raft setup
+-------------------
+
+Enabling Raft (which in |NEW_VERSION| happens by default -- unless you explicitly disable it in scylla.yaml) will cause the Scylla cluster to start an additional internal procedure as soon as every node is upgraded to the new version.
+The goal of this procedure is to initialize data structures used by the Raft algorithm to consistently manage cluster-wide metadata such as table schemas.
+
+Assuming you performed the rolling upgrade procedure correctly, in particular ensuring that schema is synchronized on every step, and if there are no problems with cluster connectivity, then this follow-up internal procedure should take no longer than a few seconds to finish.
+However, the procedure requires **full cluster availability**. If an unlucky accident (e.g. a hardware problem) causes one of your nodes to fail before this procedure finishes, the procedure may get stuck. This may cause the cluster to end up in a state where schema change or topology change operations are unavailable.
+
+Therefore, following the rolling upgrade, **you must verify** that this internal procedure has finished successfully by checking the logs of every Scylla node.
+If the procedure gets stuck, manual intervention is required.
+
+Refer to the following document for instructions on how to verify that the procedure was successful and how to proceed if it gets stuck: :ref:`Verifying that the internal Raft upgrade procedure finished successfully <verify-raft-procedure>`.
+
 
 Rollback Procedure
 ==================
