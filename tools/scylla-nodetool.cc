@@ -548,6 +548,28 @@ void rebuild_operation(scylla_rest_client& client, const bpo::variables_map& vm)
     client.post("/storage_service/rebuild", std::move(params));
 }
 
+void removenode_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    if (!vm.count("remove-operation")) {
+        throw std::invalid_argument("required parameters are missing: remove-operation, pass one of (status, force or a host id)");
+    }
+    const auto op = vm["remove-operation"].as<sstring>();
+    if (op == "status" || op == "force") {
+        if (vm.count("ignore-dead-nodes")) {
+            throw std::invalid_argument("cannot use --ignore-dead-nodes with status or force");
+        }
+        fmt::print(std::cout, "RemovalStatus: {}\n", rjson::to_string_view(client.get("/storage_service/removal_status")));
+        if (op == "force") {
+            client.post("/storage_service/force_remove_completion");
+        }
+    } else {
+        std::unordered_map<sstring, sstring> params{{"host_id", op}};
+        if (vm.count("ignore-dead-nodes")) {
+            params["ignore_nodes"] = vm["ignore-dead-nodes"].as<sstring>();
+        }
+        client.post("/storage_service/remove_node", std::move(params));
+    }
+}
+
 void settraceprobability_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     if (!vm.count("trace_probability")) {
         throw std::invalid_argument("required parameters are missing: trace_probability");
@@ -983,6 +1005,27 @@ Fore more information, see: https://opensource.docs.scylladb.com/stable/operatin
                 },
             },
             rebuild_operation
+        },
+        {
+            {
+                "removenode",
+                "Remove a node from the cluster when the status of the node is Down Normal (DN) and all attempts to restore the node have failed",
+R"(
+Provide the Host ID of the node to specify which node you want to remove.
+
+Important: use this command *only* on nodes that are not reachable by other nodes
+by any means!
+
+Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/removenode.html
+)",
+                {
+                    typed_option<sstring>("ignore-dead-nodes", "Comma-separated list of dead nodes to ignore during removenode"),
+                },
+                {
+                    typed_option<sstring>("remove-operation", "status|force|$HOST_ID - show status of current node removal, force completion of pending removal, or remove provided ID", 1),
+                },
+            },
+            removenode_operation
         },
         {
             {
