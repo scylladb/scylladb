@@ -585,6 +585,13 @@ void removenode_operation(scylla_rest_client& client, const bpo::variables_map& 
     }
 }
 
+void setlogginglevel_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    if (!vm.count("logger") || !vm.count("level")) {
+        throw std::invalid_argument("resetting logger(s) is not supported yet, the logger and level parameters are required");
+    }
+    client.post(format("/system/logger/{}", vm["logger"].as<sstring>()), {{"level", vm["level"].as<sstring>()}});
+}
+
 void settraceprobability_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     if (!vm.count("trace_probability")) {
         throw std::invalid_argument("required parameters are missing: trace_probability");
@@ -1051,6 +1058,23 @@ Fore more information, see: https://opensource.docs.scylladb.com/stable/operatin
                 },
             },
             removenode_operation
+        },
+        {
+            {
+                "setlogginglevel",
+                "Sets the level log threshold for a given logger during runtime",
+R"(
+Resetting the log level of one or all loggers is not supported yet.
+
+Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/setlogginglevel.html
+)",
+                { },
+                {
+                    typed_option<sstring>("logger", "The logger to set the log level for, if unspecified, all loggers are reset to the default level", 1),
+                    typed_option<sstring>("level", "The log level to set, one of (trace, debug, info, warn and error), if unspecified, default level is reset to default log level", 1),
+                },
+            },
+            setlogginglevel_operation
         },
         {
             {
