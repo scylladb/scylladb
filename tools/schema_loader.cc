@@ -251,7 +251,7 @@ std::vector<schema_ptr> do_load_schemas(const db::config& cfg, std::string_view 
         auto* statement = prepared_statement->statement.get();
         auto p = dynamic_cast<cql3::statements::create_keyspace_statement*>(statement);
         assert(p);
-        real_db.keyspaces.emplace_back(p->get_keyspace_metadata(*token_metadata.local().get()));
+        real_db.keyspaces.emplace_back(p->get_keyspace_metadata(*token_metadata.local().get(), feature_service));
         return db.find_keyspace(name);
     };
 
@@ -272,7 +272,7 @@ std::vector<schema_ptr> do_load_schemas(const db::config& cfg, std::string_view 
         auto* statement = prepared_statement->statement.get();
 
         if (auto p = dynamic_cast<cql3::statements::create_keyspace_statement*>(statement)) {
-            real_db.keyspaces.emplace_back(p->get_keyspace_metadata(*token_metadata.local().get()));
+            real_db.keyspaces.emplace_back(p->get_keyspace_metadata(*token_metadata.local().get(), feature_service));
         } else if (auto p = dynamic_cast<cql3::statements::create_type_statement*>(statement)) {
             dd_impl.unwrap(ks).metadata->add_user_type(p->create_type(db));
         } else if (auto p = dynamic_cast<cql3::statements::create_table_statement*>(statement)) {
