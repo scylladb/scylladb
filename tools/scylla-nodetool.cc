@@ -347,6 +347,11 @@ void compactionhistory_operation(scylla_rest_client& client, const bpo::variable
     }
 }
 
+
+void decommission_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    client.post("/storage_service/decommission");
+}
+
 void disableautocompaction_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     if (!vm.count("keyspace")) {
         for (const auto& keyspace :  get_keyspaces(client)) {
@@ -418,6 +423,21 @@ void flush_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     client.post(format("/storage_service/keyspace_flush/{}", keyspace), std::move(params));
 }
 
+void getlogginglevels_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    auto res = client.get("/storage_service/logging_level");
+    const auto row_format = "{:<50}{:>10}\n";
+    fmt::print(std::cout, "\n");
+    fmt::print(std::cout, fmt::runtime(row_format), "Logger Name", "Log Level");
+    for (const auto& element : res.GetArray()) {
+        const auto& logger_obj = element.GetObject();
+        fmt::print(
+                std::cout,
+                fmt::runtime(row_format),
+                rjson::to_string_view(logger_obj["key"]),
+                rjson::to_string_view(logger_obj["value"]));
+    }
+}
+
 void gettraceprobability_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     auto res = client.get("/storage_service/trace_probability");
     fmt::print(std::cout, "Current trace probability: {}\n", res.GetDouble());
@@ -469,6 +489,10 @@ void listsnapshots_operation(scylla_rest_client& client, const bpo::variables_ma
     }
 
     fmt::print(std::cout, "\nTotal TrueDiskSpaceUsed: {}\n\n", format_hr_size(utils::to_hr_size(true_size)));
+}
+
+void move_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    throw std::invalid_argument("This operation is not supported");
 }
 
 void help_operation(const tool_app_template::config& cfg, const bpo::variables_map& vm) {
@@ -533,6 +557,60 @@ void help_operation(const tool_app_template::config& cfg, const bpo::variables_m
         }
         fmt::print(std::cout, "\nSee 'nodetool help <command>' for more information on a specific command.\n\n");
     }
+}
+
+void rebuild_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    std::unordered_map<sstring, sstring> params;
+    if (vm.count("source-dc")) {
+        params["source_dc"] = vm["source-dc"].as<sstring>();
+    }
+    client.post("/storage_service/rebuild", std::move(params));
+}
+
+void refresh_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    if (!vm.count("keyspace") || !vm.count("table")) {
+        throw std::invalid_argument("required parameters are missing: keyspace and/or table");
+    }
+    std::unordered_map<sstring, sstring> params{{"cf", vm["table"].as<sstring>()}};
+    if (vm.count("load-and-stream")) {
+        params["load_and_stream"] = "true";
+    }
+    if (vm.count("primary-replica-only")) {
+        if (!vm.count("load-and-stream")) {
+            throw std::invalid_argument("--primary-replica-only|-pro takes no effect without --load-and-stream|-las");
+        }
+        params["primary_replica_only"] = "true";
+    }
+    client.post(format("/storage_service/sstables/{}", vm["keyspace"].as<sstring>()), std::move(params));
+}
+
+void removenode_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    if (!vm.count("remove-operation")) {
+        throw std::invalid_argument("required parameters are missing: remove-operation, pass one of (status, force or a host id)");
+    }
+    const auto op = vm["remove-operation"].as<sstring>();
+    if (op == "status" || op == "force") {
+        if (vm.count("ignore-dead-nodes")) {
+            throw std::invalid_argument("cannot use --ignore-dead-nodes with status or force");
+        }
+        fmt::print(std::cout, "RemovalStatus: {}\n", rjson::to_string_view(client.get("/storage_service/removal_status")));
+        if (op == "force") {
+            client.post("/storage_service/force_remove_completion");
+        }
+    } else {
+        std::unordered_map<sstring, sstring> params{{"host_id", op}};
+        if (vm.count("ignore-dead-nodes")) {
+            params["ignore_nodes"] = vm["ignore-dead-nodes"].as<sstring>();
+        }
+        client.post("/storage_service/remove_node", std::move(params));
+    }
+}
+
+void setlogginglevel_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    if (!vm.count("logger") || !vm.count("level")) {
+        throw std::invalid_argument("resetting logger(s) is not supported yet, the logger and level parameters are required");
+    }
+    client.post(format("/system/logger/{}", vm["logger"].as<sstring>()), {{"level", vm["level"].as<sstring>()}});
 }
 
 void settraceprobability_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
@@ -684,6 +762,8 @@ const std::map<std::string_view, std::string_view> option_substitutions{
     {"--kt-list", "--keyspace-table-list"},
     {"-kc", "--keyspace-table-list"},
     {"--kc.list", "--keyspace-table-list"},
+    {"-las", "--load-and-stream"},
+    {"-pro", "--primary-replica-only"},
 };
 
 std::map<operation, operation_func> get_operations_with_func() {
@@ -772,6 +852,16 @@ Fore more information, see: https://opensource.docs.scylladb.com/stable/operatin
                 },
             },
             compactionhistory_operation
+        },
+        {
+            {
+                "decommission",
+                "Deactivate a selected node by streaming its data to the next node in the ring",
+R"(
+Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/decommission.html
+)",
+            },
+            decommission_operation
         },
         {
             {
@@ -905,6 +995,16 @@ Fore more information, see: https://opensource.docs.scylladb.com/stable/operatin
         },
         {
             {
+                "getlogginglevels",
+                "Get the runtime logging levels",
+R"(
+Prints a table with the name and current logging level for each logger in ScyllaDB.
+)",
+            },
+            getlogginglevels_operation
+        },
+        {
+            {
                 "gettraceprobability",
                 "Displays the current trace probability value",
 R"(
@@ -940,6 +1040,102 @@ Fore more information, see: https://opensource.docs.scylladb.com/stable/operatin
                 { },
             },
             listsnapshots_operation
+        },
+        {
+            {
+                "move",
+                "Move the token to this node",
+R"(
+This operation is not supported.
+)",
+                { },
+                {
+                    typed_option<sstring>("new-token", "The new token to move to this node", 1),
+                },
+            },
+            move_operation
+        },
+        {
+            {
+                "rebuild",
+                "Rebuilds a node’s data by streaming data from other nodes in the cluster (similarly to bootstrap)",
+R"(
+Rebuild operates on multiple nodes in a Scylla cluster. It streams data from a
+single source replica when rebuilding a token range. When executing the command,
+Scylla first figures out which ranges the local node (the one we want to rebuild)
+is responsible for. Then which node in the cluster contains the same ranges.
+Finally, Scylla streams the data to the local node.
+
+Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/rebuild.html
+)",
+                { },
+                {
+                    typed_option<sstring>("source-dc", "DC from which to stream data (default: any DC)", 1),
+                },
+            },
+            rebuild_operation
+        },
+        {
+            {
+                "refresh",
+                "Load newly placed SSTables to the system without a restart",
+R"(
+Add the files to the upload directory, by default it is located under
+/var/lib/scylla/data/keyspace_name/table_name-UUID/upload.
+Materialized Views (MV) and Secondary Indexes (SI) of the upload table, and if
+they exist, they are automatically updated. Uploading MV or SI SSTables is not
+required and will fail.
+
+Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/refresh.html
+)",
+                {
+                    typed_option<>("load-and-stream", "Allows loading sstables that do not belong to this node, in which case they are automatically streamed to the owning nodes"),
+                    typed_option<>("primary-replica-only", "Load the sstables and stream to primary replica node that owns the data. Repair is needed after the load and stream process"),
+                },
+                {
+                    typed_option<sstring>("keyspace", "The keyspace to load sstable(s) into", 1),
+                    typed_option<sstring>("table", "The table to load sstable(s) into", 1),
+                },
+            },
+            refresh_operation
+        },
+        {
+            {
+                "removenode",
+                "Remove a node from the cluster when the status of the node is Down Normal (DN) and all attempts to restore the node have failed",
+R"(
+Provide the Host ID of the node to specify which node you want to remove.
+
+Important: use this command *only* on nodes that are not reachable by other nodes
+by any means!
+
+Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/removenode.html
+)",
+                {
+                    typed_option<sstring>("ignore-dead-nodes", "Comma-separated list of dead nodes to ignore during removenode"),
+                },
+                {
+                    typed_option<sstring>("remove-operation", "status|force|$HOST_ID - show status of current node removal, force completion of pending removal, or remove provided ID", 1),
+                },
+            },
+            removenode_operation
+        },
+        {
+            {
+                "setlogginglevel",
+                "Sets the level log threshold for a given logger during runtime",
+R"(
+Resetting the log level of one or all loggers is not supported yet.
+
+Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/setlogginglevel.html
+)",
+                { },
+                {
+                    typed_option<sstring>("logger", "The logger to set the log level for, if unspecified, all loggers are reset to the default level", 1),
+                    typed_option<sstring>("level", "The log level to set, one of (trace, debug, info, warn and error), if unspecified, default level is reset to default log level", 1),
+                },
+            },
+            setlogginglevel_operation
         },
         {
             {
