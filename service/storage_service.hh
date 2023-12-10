@@ -472,7 +472,6 @@ private:
 
     template <typename T>
     future<> update_table(gms::inet_address endpoint, sstring col, T value);
-    future<> update_peer_info(inet_address endpoint);
     future<> do_update_system_peers_table(gms::inet_address endpoint, const application_state& state, const versioned_value& value);
 
     std::unordered_set<token> get_tokens_for(inet_address endpoint);

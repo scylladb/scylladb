@@ -429,13 +429,14 @@ future<> storage_service::topology_state_load() {
                 // Populate the table with the state from the gossiper here since storage_service::on_change()
                 // (which is called each time gossiper state changes) may have skipped it because the tokens
                 // for the node were not in the 'normal' state yet
-                co_await update_peer_info(ip);
+                auto info = get_peer_info_for_update(ip);
                 // And then amend with the info from raft
-                co_await _sys_ks.local().update_tokens(ip, rs.ring.value().tokens);
-                co_await _sys_ks.local().update_peer_info(ip, "data_center", rs.datacenter);
-                co_await _sys_ks.local().update_peer_info(ip, "rack", rs.rack);
-                co_await _sys_ks.local().update_peer_info(ip, "host_id", id.uuid());
-                co_await _sys_ks.local().update_peer_info(ip, "release_version", rs.release_version);
+                info.tokens = rs.ring.value().tokens;
+                info.data_center = rs.datacenter;
+                info.rack = rs.rack;
+                info.host_id = id.uuid();
+                info.release_version = rs.release_version;
+                co_await _sys_ks.local().update_peer_info(ip, info);
             } else {
                 co_await _sys_ks.local().update_tokens(rs.ring.value().tokens);
                 co_await _gossiper.add_local_application_state({{ gms::application_state::STATUS, gms::versioned_value::normal(rs.ring.value().tokens) }});
@@ -485,8 +486,9 @@ future<> storage_service::topology_state_load() {
                 if (rs.ring.has_value()) {
                     if (!is_me(ip)) {
                         // Save ip -> id mapping in peers table because we need it on restart, but do not save tokens until owned
-                        co_await _sys_ks.local().update_tokens(ip, {});
-                        co_await _sys_ks.local().update_peer_info(ip, "host_id", id.uuid());
+                        db::system_keyspace::peer_info info;
+                        info.host_id = id.uuid();
+                        co_await _sys_ks.local().update_peer_info(ip, info);
                     }
                     update_topology(host_id, ip, rs);
                     if (_topology_state_machine._topology.normal_nodes.empty()) {
@@ -3883,9 +3885,10 @@ future<> storage_service::handle_state_normal(inet_address endpoint, gms::permit
     }
     slogger.debug("handle_state_normal: endpoint={} is_normal_token_owner={} endpoint_to_remove={} owned_tokens={}", endpoint, is_normal_token_owner, endpoints_to_remove.contains(endpoint), owned_tokens);
     if (!is_me(endpoint) && !owned_tokens.empty() && !endpoints_to_remove.count(endpoint)) {
-        co_await update_peer_info(endpoint);
         try {
-            co_await _sys_ks.local().update_tokens(endpoint, owned_tokens);
+            auto info = get_peer_info_for_update(endpoint);
+            info.tokens = std::move(owned_tokens);
+            co_await _sys_ks.local().update_peer_info(endpoint, info);
         } catch (...) {
             slogger.error("handle_state_normal: fail to update tokens for {}: {}", endpoint, std::current_exception());
         }
@@ -4199,11 +4202,6 @@ db::system_keyspace::peer_info storage_service::get_peer_info_for_update(inet_ad
         }
     }
     return ret;
-}
-
-future<> storage_service::update_peer_info(gms::inet_address endpoint) {
-    slogger.debug("Update peer info: endpoint={}", endpoint);
-    co_await _sys_ks.local().update_peer_info(endpoint, get_peer_info_for_update(endpoint));
 }
 
 std::unordered_set<locator::token> storage_service::get_tokens_for(inet_address endpoint) {
