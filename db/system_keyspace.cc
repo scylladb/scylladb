@@ -1565,12 +1565,26 @@ static std::vector<cdc::generation_id_v2> decode_cdc_generations_ids(const set_t
     return gen_ids_list;
 }
 
+static locator::host_id get_host_id(const gms::inet_address& peer, const cql3::untyped_result_set::row& row) {
+    locator::host_id host_id;
+    if (row.has("host_id")) {
+        host_id = locator::host_id(row.get_as<utils::UUID>("host_id"));
+    }
+    if (!host_id) {
+        slogger.warn("Peer {} has no host_id in system.{}", peer, system_keyspace::PEERS);
+    }
+    return host_id;
+}
+
 future<std::unordered_map<gms::inet_address, std::unordered_set<dht::token>>> system_keyspace::load_tokens() {
-    sstring req = format("SELECT peer, tokens FROM system.{}", PEERS);
+    sstring req = format("SELECT peer, host_id, tokens FROM system.{}", PEERS);
     return execute_cql(req).then([] (::shared_ptr<cql3::untyped_result_set> cql_result) {
         std::unordered_map<gms::inet_address, std::unordered_set<dht::token>> ret;
         for (auto& row : *cql_result) {
             auto peer = gms::inet_address(row.get_as<net::inet_address>("peer"));
+            if (!get_host_id(peer, row)) {
+                continue;
+            }
             if (row.has("tokens")) {
                 ret.emplace(peer, decode_tokens(deserialize_set_column(*peers(), row, "tokens")));
             }
@@ -1585,8 +1599,8 @@ future<std::unordered_map<gms::inet_address, locator::host_id>> system_keyspace:
         std::unordered_map<gms::inet_address, locator::host_id> ret;
         for (auto& row : *cql_result) {
             auto peer = gms::inet_address(row.get_as<net::inet_address>("peer"));
-            if (row.has("host_id")) {
-                ret.emplace(peer, locator::host_id(row.get_as<utils::UUID>("host_id")));
+            if (auto host_id = get_host_id(peer, row)) {
+                ret.emplace(peer, host_id);
             }
         }
         return ret;
@@ -1594,11 +1608,15 @@ future<std::unordered_map<gms::inet_address, locator::host_id>> system_keyspace:
 }
 
 future<std::vector<gms::inet_address>> system_keyspace::load_peers() {
-    auto res = co_await execute_cql(format("SELECT peer, tokens FROM system.{}", PEERS));
+    auto res = co_await execute_cql(format("SELECT peer, host_id, tokens FROM system.{}", PEERS));
     assert(res);
 
     std::vector<gms::inet_address> ret;
     for (auto& row: *res) {
+        auto peer = gms::inet_address(row.get_as<net::inet_address>("peer"));
+        if (!get_host_id(peer, row)) {
+            continue;
+        }
         if (!row.has("tokens")) {
             // Ignore rows that don't have tokens. Such rows may
             // be introduced by code that persists parts of peer
@@ -1606,7 +1624,7 @@ future<std::vector<gms::inet_address>> system_keyspace::load_peers() {
             // race with deleting a peer (during node removal).
             continue;
         }
-        ret.emplace_back(row.get_as<net::inet_address>("peer"));
+        ret.emplace_back(peer);
     }
     co_return ret;
 }
