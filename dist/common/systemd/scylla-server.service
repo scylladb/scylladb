@@ -26,6 +26,7 @@ Restart=on-abnormal
 User=scylla
 OOMScoreAdjust=-950
 SyslogLevelPrefix=false
+AmbientCapabilities=CAP_SYS_NICE CAP_IPC_LOCK
 Slice=scylla-server.slice
 
 [Install]
