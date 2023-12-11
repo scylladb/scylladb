@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <seastar/core/sleep.hh>
 #include <seastar/core/thread.hh>
+#include "seastar/core/timer.hh"
 #include "service_level_controller.hh"
 #include "message/messaging_service.hh"
 #include "db/system_distributed_keyspace.hh"
@@ -271,15 +272,15 @@ future<> service_level_controller::notify_service_level_removed(sstring name) {
     return make_ready_future<>();
 }
 
-void service_level_controller::update_from_distributed_data(std::chrono::duration<float> interval) {
+void service_level_controller::update_from_distributed_data(std::function<steady_clock_type::duration()> interval_f) {
     if (this_shard_id() != global_controller) {
         throw std::runtime_error(format("Service level updates from distributed data can only be activated on shard {}", global_controller));
     }
     if (_global_controller_db->distributed_data_update.available()) {
         sl_logger.info("update_from_distributed_data: starting configuration polling loop");
         _logged_intervals = 0;
-        _global_controller_db->distributed_data_update = repeat([this, interval] {
-            return sleep_abortable<steady_clock_type>(std::chrono::duration_cast<steady_clock_type::duration>(interval),
+        _global_controller_db->distributed_data_update = repeat([this, interval_f = std::move(interval_f)] {
+            return sleep_abortable<steady_clock_type>(interval_f(),
                     _global_controller_db->dist_data_update_aborter).then_wrapped([this] (future<>&& f) {
                 try {
                     f.get();

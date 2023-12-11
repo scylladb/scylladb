@@ -468,6 +468,8 @@ public:
     named_value<std::vector<enum_option<replication_strategy_restriction_t>>> replication_strategy_warn_list;
     named_value<std::vector<enum_option<replication_strategy_restriction_t>>> replication_strategy_fail_list;
 
+    named_value<uint32_t> service_levels_interval;
+
     seastar::logging_settings logging_settings(const log_cli::options&) const;
 
     const db::extensions& extensions() const;
