@@ -431,7 +431,11 @@ def test_many_partitions(cql, test_keyspace, scylla_only):
         for pk in range(num_partitions):
             cql.execute(delete_id, (pk,))
 
-        res = list(cql.execute(f"SELECT * FROM MUTATION_FRAGMENTS({table})"))
+        # since this scan is very slow, we create an extra patient cql connection,
+        # with an abundant 10 minutes timeout
+        ep = cql.hosts[0].endpoint
+        with util.cql_session(ep.address, ep.port, False, 'cassandra', 'cassandra', 600) as patient_cql:
+            res = list(patient_cql.execute(f"SELECT * FROM MUTATION_FRAGMENTS({table})"))
         pks = set()
         partition_starts = 0
         partition_ends = 0
