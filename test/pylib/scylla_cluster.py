@@ -644,9 +644,8 @@ class ScyllaCluster:
         """Setup initial servers and start them.
            Catch and save any startup exception"""
         try:
-            for _ in range(self.replicas):
-                await self.add_server()
             if self.replicas > 0:
+                await self.add_servers(self.replicas)
                 self.keyspace_count = self._get_keyspace_count()
         except Exception as exc:
             # If start fails, swallow the error to throw later,
