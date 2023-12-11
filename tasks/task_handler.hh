@@ -52,6 +52,8 @@ struct task_stats {
     std::string entity;
 };
 
+struct status_helper;
+
 class task_handler {
 private:
     task_manager& _tm;
@@ -66,6 +68,8 @@ public:
     future<task_status> wait_for_task();
     future<utils::chunked_vector<task_status>> get_status_recursively(bool local);
     future<> abort();
+private:
+    future<status_helper> get_status_helper();
 };
 
 }

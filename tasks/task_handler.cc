@@ -69,22 +69,40 @@ static T get_virtual_task_info(task_id id, std::optional<T> info) {
     return *info;
 }
 
-future<task_status> task_handler::get_status() {
-    return task_manager::invoke_on_task(_tm.container(), _id, std::function([id = _id] (task_manager::task_variant task_v) -> future<task_status> {
+// Prolongs task life to make sure all its children will be accessible.
+struct status_helper {
+    task_status status;
+    task_manager::foreign_task_ptr task;
+};
+
+future<status_helper> task_handler::get_status_helper() {
+    return task_manager::invoke_on_task(_tm.container(), _id, std::function(
+            [id = _id] (task_manager::task_variant task_v) -> future<status_helper> {
         return std::visit(overloaded_functor{
-            [] (task_manager::task_ptr task) -> future<task_status> {
+            [] (task_manager::task_ptr task) -> future<status_helper> {
                 if (task->is_complete()) {
                     task->unregister_task();
                 }
-                return get_task_status(std::move(task));
+                co_return status_helper{
+                    .status = co_await get_task_status(task),
+                    .task = task
+                };
             },
-            [id] (task_manager::virtual_task_ptr task) -> future<task_status> {
+            [id] (task_manager::virtual_task_ptr task) -> future<status_helper> {
                 auto id_ = id;
                 auto status = co_await task->get_status(id_);
-                co_return get_virtual_task_info(id_, status);
+                co_return status_helper{
+                    .status = get_virtual_task_info(id_, status),
+                    .task = nullptr
+                };
             }
         }, task_v);
     }));
+}
+
+future<task_status> task_handler::get_status() {
+    auto s = co_await get_status_helper();
+    co_return s.status;
 }
 
 future<task_status> task_handler::wait_for_task() {
@@ -107,25 +125,30 @@ future<task_status> task_handler::wait_for_task() {
 }
 
 future<utils::chunked_vector<task_status>> task_handler::get_status_recursively(bool local) {
+    auto sh = co_await get_status_helper();
+
     std::queue<task_status_variant> q;
     utils::chunked_vector<task_status> res;
-
-    auto task = co_await task_manager::invoke_on_task(_tm.container(), _id, std::function([id = _id] (task_manager::task_variant task_v) -> future<task_manager::foreign_task_ptr> {
-        return std::visit(overloaded_functor{
-            [] (task_manager::task_ptr task) -> future<task_manager::foreign_task_ptr> {
-                if (task->is_complete()) {
-                    task->unregister_task();
-                }
-                co_return task;
-            },
-            [id] (task_manager::virtual_task_ptr task) -> future<task_manager::foreign_task_ptr> {
-                throw task_manager::task_not_found(id);    // API does not support virtual tasks yet.
+    if (sh.task) {  // task
+        q.push(co_await sh.task.copy());   // Task cannot be moved since we need it to be alive during whole loop execution.
+    } else {        // virtual task
+        res.push_back(sh.status);
+        for (auto ident: sh.status.children) {
+            if (ident.node != _tm.get_broadcast_address()) {
+                // FIXME: add non-local version
+                continue;
             }
-        }, task_v);
-    }));
+
+            try {
+                auto child = co_await _tm.lookup_task_on_all_shards(_tm.container(), ident.task_id);
+                q.push(std::move(child));
+            } catch (const task_manager::task_not_found& e) {
+                continue; // Virtual task's children may get unregistered.
+            }
+        }
+    }
 
     // Push children's statuses in BFS order.
-    q.push(co_await task.copy());   // Task cannot be moved since we need it to be alive during whole loop execution.
     while (!q.empty()) {
         auto& current = q.front();
         co_await std::visit(overloaded_functor {
@@ -173,6 +196,7 @@ future<utils::chunked_vector<task_status>> task_handler::get_status_recursively(
         }, current);
         q.pop();
     }
+
     co_return res;
 }
 
