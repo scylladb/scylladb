@@ -342,6 +342,38 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
             .ip_addr = *replace_address,
             .raft_id = raft::server_id{ri->host_id.uuid()},
         };
+<<<<<<< HEAD
+=======
+        replacing_a_node_with_same_ip = *replace_address == get_broadcast_address();
+        replacing_a_node_with_diff_ip = *replace_address != get_broadcast_address();
+        if (!raft_topology_change_enabled()) {
+            bootstrap_tokens = std::move(ri->tokens);
+
+            slogger.info("Replacing a node with {} IP address, my address={}, node being replaced={}",
+                get_broadcast_address() == *replace_address ? "the same" : "a different",
+                get_broadcast_address(), *replace_address);
+            tmptr->update_topology(tmptr->get_my_id(), std::nullopt, locator::node::state::replacing);
+            tmptr->update_topology(ri->host_id, std::move(ri->dc_rack), locator::node::state::being_replaced);
+            co_await tmptr->update_normal_tokens(bootstrap_tokens, ri->host_id);
+            tmptr->update_host_id(ri->host_id, *replace_address);
+
+            replaced_host_id = ri->host_id;
+
+            // With gossip, after a full cluster restart, the ignored nodes
+            // state is loaded from system.peers with no STATUS state,
+            // therefore we need to "inject" their state here after we
+            // learn about them in the shadow round initiated in `prepare_replacement_info`.
+            for (const auto& [host_id, st] : ri->ignore_nodes) {
+                tmptr->update_host_id(host_id, st.endpoint);
+                if (st.opt_dc_rack) {
+                    tmptr->update_topology(host_id, st.opt_dc_rack);
+                }
+                if (!st.tokens.empty()) {
+                    co_await tmptr->update_normal_tokens(st.tokens, host_id);
+                }
+            }
+        }
+>>>>>>> 655d624e01 (storage_service: join_token_ring: load ignored nodes state if replacing)
     } else if (should_bootstrap()) {
         co_await check_for_endpoint_collision(initial_contact_nodes, loaded_peer_features);
     } else {
