@@ -352,15 +352,21 @@ SEASTAR_TEST_CASE(test_commitlog_delete_when_over_disk_limit) {
 SEASTAR_TEST_CASE(test_commitlog_reader){
     static auto count_mutations_in_segment = [] (sstring path) -> future<size_t> {
         size_t count = 0;
-        co_await db::commitlog::read_log_file(path, db::commitlog::descriptor::FILENAME_PREFIX, [&count](db::commitlog::buffer_and_replay_position buf_rp) -> future<> {
-            auto&& [buf, rp] = buf_rp;
-            auto linearization_buffer = bytes_ostream();
-            auto in = buf.get_istream();
-            auto str = to_sstring_view(in.read_bytes_view(buf.size_bytes(), linearization_buffer));
-            BOOST_CHECK_EQUAL(str, "hej bubba cow");
-            count++;
-            co_return;
-        });
+        try {
+            co_await db::commitlog::read_log_file(path, db::commitlog::descriptor::FILENAME_PREFIX, [&count](db::commitlog::buffer_and_replay_position buf_rp) -> future<> {
+                auto&& [buf, rp] = buf_rp;
+                auto linearization_buffer = bytes_ostream();
+                auto in = buf.get_istream();
+                auto str = to_sstring_view(in.read_bytes_view(buf.size_bytes(), linearization_buffer));
+                BOOST_CHECK_EQUAL(str, "hej bubba cow");
+                count++;
+                co_return;
+            });
+        } catch (commitlog::segment_truncation&) {
+            // ok. this does not ensure to have fully synced segments
+            // before reading them in all code paths. We can end up
+            // hitting (premature) eof or even half-written page.
+        }
         co_return count;
     };
 
