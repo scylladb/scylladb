@@ -1464,6 +1464,20 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
             tmptr->update_host_id(ri->host_id, *replace_address);
 
             replaced_host_id = ri->host_id;
+
+            // With gossip, after a full cluster restart, the ignored nodes
+            // state is loaded from system.peers with no STATUS state,
+            // therefore we need to "inject" their state here after we
+            // learn about them in the shadow round initiated in `prepare_replacement_info`.
+            for (const auto& [host_id, st] : ri->ignore_nodes) {
+                tmptr->update_host_id(host_id, st.endpoint);
+                if (st.opt_dc_rack) {
+                    tmptr->update_topology(host_id, st.opt_dc_rack);
+                }
+                if (!st.tokens.empty()) {
+                    co_await tmptr->update_normal_tokens(st.tokens, host_id);
+                }
+            }
         }
     } else if (should_bootstrap()) {
         co_await check_for_endpoint_collision(initial_contact_nodes, loaded_peer_features);
