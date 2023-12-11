@@ -12,8 +12,7 @@ CPUAccounting=true
 # seems less future proof. Using just the new versions does not work at all for RHEL7/
 BlockIOWeight=1000
 IOWeight=1000
-# Should be zero, but work around https://github.com/systemd/systemd/issues/8363 for older systemd
-MemorySwapMax=1
+MemorySwapMax=0
 CPUShares=1000
 CPUWeight=1000
 
