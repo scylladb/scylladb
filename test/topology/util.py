@@ -10,9 +10,10 @@ import asyncio
 import logging
 import functools
 import operator
-import pytest
 import time
-from cassandra.cluster import Session  # type: ignore # pylint: disable=no-name-in-module
+import re
+
+from cassandra.cluster import Session, SimpleStatement  # type: ignore # pylint: disable=no-name-in-module
 from cassandra.pool import Host        # type: ignore # pylint: disable=no-name-in-module
 from test.pylib.internal_types import ServerInfo
 from test.pylib.manager_client import ManagerClient
@@ -20,6 +21,8 @@ from test.pylib.util import wait_for, wait_for_cql_and_get_hosts, read_barrier
 
 
 logger = logging.getLogger(__name__)
+
+UUID_REGEX = re.compile(r"([0-9a-fA-F]{8}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{12})")
 
 
 async def reconnect_driver(manager: ManagerClient) -> Session:
@@ -243,3 +246,64 @@ def log_run_time(f):
         logging.info(f"{f.__name__} took {int(time.time() - start)} seconds.")
         return res
     return wrapped
+
+
+async def get_coordinator_host_ids(manager: ManagerClient) -> list[str]:
+    """ Get coordinator host id from history
+
+    Select all records with elected coordinator
+    from description column in system.group0_history table and 
+    return list of coordinator host ids, where
+    first element in list is active coordinator
+    """
+    stm = SimpleStatement("select description from system.group0_history "
+                          "where key = 'history' and description LIKE 'Starting new topology coordinator%' ALLOW FILTERING;")
+
+    cql = manager.get_cql()
+    result = await cql.run_async(stm)
+    coordinators_ids = []
+    for row in result:
+        coordinator_host_id = get_uuid_from_str(row.description)
+        if coordinator_host_id:
+            coordinators_ids.append(coordinator_host_id)
+        continue
+    assert len(coordinators_ids) > 0, f"No coordinator ids {coordinators_ids} were found"
+    return coordinators_ids
+
+
+async def get_coordinator_host(manager: ManagerClient) -> ServerInfo:
+    """Get coordinator ServerInfo"""
+
+    coordinator_host_id = (await get_coordinator_host_ids(manager))[0]
+    server_id_maps = {await manager.get_host_id(srv.server_id):srv for srv in await manager.running_servers()}
+    coordinator_host = server_id_maps.get(coordinator_host_id, None)
+    assert coordinator_host, \
+        f"Node with host id {coordinator_host_id} was not found in cluster host ids {list(server_id_maps.keys())}"
+    return coordinator_host
+
+
+def get_uuid_from_str(string: str) -> str:
+    """Search uuid in string"""
+    uuid = ""
+    if match := UUID_REGEX.search(string):
+        uuid = match.group(1)
+    return uuid
+
+
+async def wait_new_coordinator_elected(manager: ManagerClient, expected_num_of_elections: int, deadline: float) -> None:
+    """Wait new coordinator to be elected
+
+    Wait while the table 'system.group0_history' will have a number of lines 
+    with the 'new topology coordinator' equal to the expected_num_of_elections number,
+    and the latest host_id coordinator differs from the previous one.
+    """
+    async def new_coordinator_elected():
+        coordinators_ids = await get_coordinator_host_ids(manager)
+        try:
+            assert len(coordinators_ids) == expected_num_of_elections, "No new record about the coordinator's election"
+            assert coordinators_ids[0] != coordinators_ids[1], f"New coordinator wasn't elected {coordinators_ids}"
+            return True
+        except AssertionError:
+            return None
+
+    await wait_for(new_coordinator_elected, deadline=deadline)
