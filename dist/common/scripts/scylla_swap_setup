@@ -63,7 +63,7 @@ if __name__ == '__main__':
 
     swapunit_bn = out('systemd-escape -p --suffix=swap {}'.format(swapfile))
     swapunit = Path('/etc/systemd/system/{}'.format(swapunit_bn))
-    if not args.overwrite_unit_file and swapunit.exists():
+    if swapunit.exists():
         print('swap unit {} already exists'.format(swapunit))
         sys.exit(1)
 
