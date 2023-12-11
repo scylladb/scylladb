@@ -1649,7 +1649,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         co_await _group0.make_nonvoter(replaced_node_id, _as);
                     }
                 }
-
+                utils::get_local_injector().inject("crash_coordinator_before_stream", [] { abort(); });
                 raft_topology_cmd cmd{raft_topology_cmd::command::stream_ranges};
                 auto state = node.rs->state;
                 try {
