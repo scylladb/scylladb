@@ -81,6 +81,7 @@ feature_config feature_config_from_db_config(const db::config& cfg, std::set<sst
     }
     if (!cfg.consistent_cluster_management()) {
         fcfg._disabled_features.insert("SUPPORTS_RAFT_CLUSTER_MANAGEMENT"s);
+        fcfg._disabled_features.insert("GROUP0_SCHEMA_VERSIONING"s);
     }
     if (!cfg.check_experimental(db::experimental_features_t::feature::KEYSPACE_STORAGE_OPTIONS)) {
         fcfg._disabled_features.insert("KEYSPACE_STORAGE_OPTIONS"s);
@@ -203,6 +204,7 @@ db::schema_features feature_service::cluster_schema_features() const {
     f.set_if<db::schema_feature::SCYLLA_KEYSPACES>(keyspace_storage_options);
     f.set_if<db::schema_feature::SCYLLA_AGGREGATES>(aggregate_storage_options);
     f.set_if<db::schema_feature::TABLE_DIGEST_INSENSITIVE_TO_EXPIRY>(table_digest_insensitive_to_expiry);
+    f.set_if<db::schema_feature::GROUP0_SCHEMA_VERSIONING>(group0_schema_versioning);
     return f;
 }
 

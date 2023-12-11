@@ -227,3 +227,56 @@ node, performs the following steps:
    `group0_history`. If the state id is recorded in the history,
    the command is really executed, otherwise it turned into a no-op,
    so the whole procedure needs to be restarted.
+
+# Group 0 schema versioning
+
+Historically Scylla was using hashes (called "digests") of schema mutations
+calculated on each node to ensure that schema is in sync between nodes.
+There was a global schema digest calculated from schema mutations of all
+non-system tables, gossiped by each node as an application state
+(`gms::application_state::SCHEMA`). Furthermore, each distributed table had its
+own table schema version, calculated from schema mutations for this table
+(`schema::version()`).
+
+When a node noticed that another node is gossiping a different global digest
+than its own, it would pull all schema mutations from that other node.
+
+Whenever a replica receives a write or read to a table, the operation comes
+with a version attached for this table by the operation's coordinator. If the
+version is different or unknown, the replica would ensure that its schema
+is at least as up-to-date as the coordinator's schema for this table before
+handling the operation, pulling mutations for this table if necessary
+(`get_schema_for_write`).
+
+This hash-based versioning had its place in an eventually consistent world of
+schema changes where different nodes might apply schema changes out of order.
+But it has downsides, some of them described in issues scylladb/scylladb#7620,
+scylladb/scylladb#13957. In particular, the more schema changes we performed,
+the longer it would take to calculate the hash of entire schema (due to
+tombstones), and at some point schema changes would slow down significantly.
+
+With schema changes on group 0, we decided to replace these hashes with values
+that are calculated in a single place -- by the sender of the schema change.
+Other nodes persist the obtained global schema version and table versions when
+applying the resulting group 0 command.
+
+For the global schema version, each schema change command -- which is a vector
+of mutations -- is extended with a mutation for the `system.scylla_local`
+table, which is a string-string key-value store. This mutation writes the
+version under `group0_schema_version` key. Whenever a node updates its
+in-memory schema version (`update_schema_version_and_announce`), in particular
+after each schema change, it uses the version obtained from this table if it's
+present, instead of calculating a hash.
+
+For each table creation or alteration schema change command, the vector of
+mutations contains a mutation for the `system_schema.scylla_tables` table
+that adds/modifies a row corresponding to the created/altered table. This row
+contains a `version` cell that contains the version and a boolean
+`committed_by_group0` cell that is set to `true`. Whenever a node updates its
+in-memory version for this table, in particular after each schema change
+touching this table, if it sees that `committed_by_group0 == true`, it will use
+the provided version instead of calculating a hash.
+
+When performing schema changes in Raft Recovery mode we're writing a tombstone
+for the `system.scylla_local` entry and we write `committed_by_group0 == false`
+for the `system_schema.scylla_tables` entries, forcing the old behavior.

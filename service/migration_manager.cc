@@ -164,6 +164,15 @@ void migration_manager::init_messaging_service()
                 }
             }
         }
+
+        // If the schema we're returning was last modified in group 0 mode, we also need to return
+        // the persisted schema version so the pulling node uses it instead of calculating a schema digest.
+        //
+        // If it was modified in RECOVERY mode, we still need to return the mutation as it may contain a tombstone
+        // that will force the pulling node to revert to digest calculation instead of using a version that it
+        // could've persisted earlier.
+        cm.emplace_back(co_await self._sys_ks.local().get_group0_schema_version());
+
         co_return rpc::tuple(std::vector<frozen_mutation>{}, std::move(cm));
     }, std::ref(*this)));
     _messaging.register_schema_check([this] {
@@ -965,8 +974,50 @@ future<> migration_manager::announce_without_raft(std::vector<mutation> schema, 
     co_return co_await std::move(f);
 }
 
+static mutation make_group0_schema_version_mutation(const data_dictionary::database db, const group0_guard& guard) {
+    auto s = db.find_schema(db::system_keyspace::NAME, db::system_keyspace::SCYLLA_LOCAL);
+    auto* cdef = s->get_column_definition("value");
+    assert(cdef);
+
+    mutation m(s, partition_key::from_singular(*s, "group0_schema_version"));
+    auto cell = guard.with_raft()
+        ? atomic_cell::make_live(*cdef->type, guard.write_timestamp(),
+                                 cdef->type->decompose(guard.new_group0_state_id().to_sstring()))
+        : atomic_cell::make_dead(guard.write_timestamp(), gc_clock::now());
+    m.set_clustered_cell(clustering_key::make_empty(), *cdef, std::move(cell));
+    return m;
+}
+
+// Precondition: GROUP0_SCHEMA_VERSIONING feature is enabled in the cluster.
+//
+// See the description of this column in db/schema_tables.cc.
+static void add_committed_by_group0_flag(std::vector<mutation>& schema, const group0_guard& guard) {
+    auto committed_by_group0 = guard.with_raft();
+    auto timestamp = guard.write_timestamp();
+
+    for (auto& mut: schema) {
+        if (mut.schema()->cf_name() != db::schema_tables::v3::SCYLLA_TABLES) {
+            continue;
+        }
+
+        auto& scylla_tables_schema = *mut.schema();
+        auto cdef = scylla_tables_schema.get_column_definition("committed_by_group0");
+        assert(cdef);
+
+        for (auto& cr: mut.partition().clustered_rows()) {
+            cr.row().cells().apply(*cdef, atomic_cell::make_live(
+                    *cdef->type, timestamp, cdef->type->decompose(committed_by_group0)));
+        }
+    }
+}
+
 // Returns a future on the local application of the schema
 future<> migration_manager::announce(std::vector<mutation> schema, group0_guard guard, std::string_view description) {
+    if (_feat.group0_schema_versioning) {
+        schema.push_back(make_group0_schema_version_mutation(_storage_proxy.data_dictionary(), guard));
+        add_committed_by_group0_flag(schema, guard);
+    }
+
     if (guard.with_raft()) {
         return announce_with_raft(std::move(schema), std::move(guard), std::move(description));
     } else {
