@@ -185,14 +185,7 @@ views happens _asynchronously_, i.e., in the background. This means that
 the user cannot know when the view updates have all finished - or even be
 sure that they succeeded.
 
-However, there are circumstances where ScyllaDB does view updates
-_synchronously_ - i.e., the user's write returns only after the views
-were updated. This happens when the materialized-view replica is on the
-same node as the base-table replica. For example, if the base table and
-the view have the same partition key. Note that only ScyllaDB guarantees
-synchronous view updates in this case - they are asynchronous in Cassandra.
-
-ScyllaDB also allows explicitly marking a view as synchronous. When a view
+ScyllaDB allows marking a view as synchronous. When a view
 is marked synchronous, base-table updates will wait for that view to be
 updated before returning. A base table may have multiple views marked
 synchronous, and will wait for all of them. The consistency level of a
@@ -230,6 +223,15 @@ above, _usually_ means asynchronous updates), use:
 ```cql
 ALTER MATERIALIZED VIEW main.mv WITH synchronous_updates = false;
 ```
+
+Even in an asynchronous view, _some_ view updates may be done synchronously.
+This happens when the materialized-view replica is on the same node as the
+base-table replica. This happens, for example, in tables using vnodes where
+the base table and the view have the same partition key; But is not the case
+if the table uses tablets: With tablets, the base and view tablets may migrate
+to different nodes. In general, users should not, and cannot, rely on these
+serendipitous synchronous view updates; If synchronous view updates are
+important, mark the view explicitly with `synchronous_updates = true`.
 
 ### Synchronous global secondary indexes
 
