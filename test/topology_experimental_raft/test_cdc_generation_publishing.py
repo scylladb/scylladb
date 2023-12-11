@@ -90,7 +90,7 @@ async def test_multiple_unpublished_cdc_generations(request, manager: ManagerCli
         # After all 3 nodes bootstrap, there should be 3 or 4 unpublished CDC generations (4 if publishing the first
         # CDC generation hasn't started before injecting an error).
         logger.info("Bootstrapping other nodes")
-        servers += [await manager.server_add() for _ in range(3)]
+        servers += await manager.servers_add(3)
 
         cql = manager.get_cql()
         await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)

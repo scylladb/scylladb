@@ -37,7 +37,7 @@ async def test_topology_ops(request, manager: ManagerClient):
     #finish_writes = await start_writes(cql)
 
     logger.info("Bootstrapping other nodes")
-    servers += [await manager.server_add(), await manager.server_add()]
+    servers += await manager.servers_add(2)
 
     logger.info(f"Restarting node {servers[0]} when other nodes have bootstrapped")
     await manager.server_stop_gracefully(servers[0].server_id)

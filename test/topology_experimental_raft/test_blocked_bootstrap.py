@@ -30,7 +30,7 @@ async def test_blocked_bootstrap(manager: ManagerClient):
     raft_group0_upgrade - : failed to resolve IP addresses of some of the cluster members ([node4's host ID])
     ```
     """
-    servers = [await manager.server_add() for _ in range(3)]
+    servers = await manager.servers_add(3)
 
     logger.info(f"Stopping node {servers[0]}")
     await manager.server_stop_gracefully(servers[0].server_id)

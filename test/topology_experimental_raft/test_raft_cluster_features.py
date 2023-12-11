@@ -19,36 +19,31 @@ import pytest
 
 @pytest.mark.asyncio
 async def test_rolling_upgrade_happy_path(manager: ManagerClient) -> None:
-    for _ in range(3):
-        await manager.server_add()
+    await manager.servers_add(3)
     await test_cluster_features.test_rolling_upgrade_happy_path(manager)
 
 
 @pytest.mark.asyncio
 async def test_downgrade_after_partial_upgrade(manager: ManagerClient) -> None:
-    for _ in range(3):
-        await manager.server_add()
+    await manager.servers_add(3)
     await test_cluster_features.test_downgrade_after_partial_upgrade(manager)
 
 
 @pytest.mark.asyncio
 async def test_joining_old_node_fails(manager: ManagerClient) -> None:
-    for _ in range(3):
-        await manager.server_add()
+    await manager.servers_add(3)
     await test_cluster_features.test_joining_old_node_fails(manager)
 
 
 @pytest.mark.asyncio
 async def test_downgrade_after_successful_upgrade_fails(manager: ManagerClient) -> None:
-    for _ in range(3):
-        await manager.server_add()
+    await manager.servers_add(3)
     await test_cluster_features.test_downgrade_after_successful_upgrade_fails(manager)
 
 
 @pytest.mark.asyncio
 async def test_partial_upgrade_can_be_finished_with_removenode(manager: ManagerClient) -> None:
-    for _ in range(3):
-        await manager.server_add()
+    await manager.servers_add(3)
     await test_cluster_features.test_partial_upgrade_can_be_finished_with_removenode(manager)
 
 
@@ -60,7 +55,7 @@ async def test_cannot_disable_cluster_feature_after_all_declare_support(manager:
        missing feature. Unblock the topology coordinator, restart the node
        and observe that the feature was enabled.
     """
-    servers = [await manager.server_add() for _ in range(3)]
+    servers = await manager.servers_add(3)
 
     # Rolling restart so that all nodes support the feature - but do not
     # allow enabling yet

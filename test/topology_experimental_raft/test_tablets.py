@@ -82,9 +82,7 @@ async def test_tablet_metadata_propagates_with_schema_changes_in_snapshot_mode(m
         '--logger-log-level', 'messaging_service=trace',
         '--logger-log-level', 'rpc=trace',
         ]
-    servers = [await manager.server_add(cmdline=cmdline),
-               await manager.server_add(cmdline=cmdline),
-               await manager.server_add(cmdline=cmdline)]
+    servers = await manager.servers_add(3, cmdline=cmdline)
 
     s0 = servers[0].server_id
     not_s0 = servers[1:]
@@ -153,7 +151,7 @@ async def test_tablet_metadata_propagates_with_schema_changes_in_snapshot_mode(m
 @pytest.mark.asyncio
 async def test_scans(manager: ManagerClient):
     logger.info("Bootstrapping cluster")
-    servers = [await manager.server_add(), await manager.server_add(), await manager.server_add()]
+    servers = await manager.servers_add(3)
 
     cql = manager.get_cql()
     await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', "
@@ -178,9 +176,7 @@ async def test_scans(manager: ManagerClient):
 async def test_table_drop_with_auto_snapshot(manager: ManagerClient):
     logger.info("Bootstrapping cluster")
     cfg = { 'auto_snapshot': True }
-    servers = [await manager.server_add(config = cfg),
-               await manager.server_add(config = cfg),
-               await manager.server_add(config = cfg)]
+    servers = await manager.servers_add(3, config = cfg)
 
     cql = manager.get_cql()
 
@@ -199,7 +195,7 @@ async def test_table_drop_with_auto_snapshot(manager: ManagerClient):
 @pytest.mark.asyncio
 async def test_topology_changes(manager: ManagerClient):
     logger.info("Bootstrapping cluster")
-    servers = [await manager.server_add(), await manager.server_add(), await manager.server_add()]
+    servers = await manager.servers_add(3)
 
     cql = manager.get_cql()
     await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', "

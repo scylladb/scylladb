@@ -31,7 +31,7 @@ async def test_login_message_after_half_of_the_cluster_is_down(manager: ManagerC
         'permissions_update_interval_in_ms': 0,
     }
 
-    servers = [await manager.server_add(config=config) for _ in range(2)]
+    servers = await manager.servers_add(2, config=config)
     cql = manager.get_cql()
     # system_auth is ALTERed to make the test stable, because by default
     # system_auth has SimpleStrategy with RF=1, but if RF=1, we cannot make sure
