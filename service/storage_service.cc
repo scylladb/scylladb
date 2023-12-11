@@ -809,9 +809,7 @@ public:
     using builder_base::del;
     topology_node_mutation_builder& set(const char* cell, const std::unordered_set<raft::server_id>& nodes_ids);
     topology_node_mutation_builder& set(const char* cell, const std::unordered_set<dht::token>& value);
-    template<typename S>
-    requires std::constructible_from<sstring, S>
-    topology_node_mutation_builder& set(const char* cell, const std::set<S>& value);
+    topology_node_mutation_builder& set(const char* cell, const std::set<sstring>& value);
 
     canonical_mutation build();
 };
@@ -845,9 +843,7 @@ public:
     topology_mutation_builder& set_new_cdc_generation_data_uuid(const utils::UUID& value);
     topology_mutation_builder& set_unpublished_cdc_generations(const std::vector<cdc::generation_id_v2>& values);
     topology_mutation_builder& set_global_topology_request(global_topology_request);
-    template<typename S>
-    requires std::constructible_from<sstring, S>
-    topology_mutation_builder& add_enabled_features(const std::set<S>& value);
+    topology_mutation_builder& add_enabled_features(const std::set<sstring>& value);
     topology_mutation_builder& add_unpublished_cdc_generation(const cdc::generation_id_v2& value);
     topology_mutation_builder& del_transition_state();
     topology_mutation_builder& del_session();
@@ -988,9 +984,7 @@ topology_node_mutation_builder& topology_node_mutation_builder::set(const char* 
     return apply_set(cell, collection_apply_mode::overwrite, tokens | boost::adaptors::transformed([] (const auto& t) { return t.to_sstring(); }));
 }
 
-template<typename S>
-requires std::constructible_from<sstring, S>
-topology_node_mutation_builder& topology_node_mutation_builder::set(const char* cell, const std::set<S>& features) {
+topology_node_mutation_builder& topology_node_mutation_builder::set(const char* cell, const std::set<sstring>& features) {
     return apply_set(cell, collection_apply_mode::overwrite, features | boost::adaptors::transformed([] (const auto& f) { return sstring(f); }));
 }
 
@@ -1065,9 +1059,7 @@ topology_mutation_builder& topology_mutation_builder::set_global_topology_reques
     return apply_atomic("global_topology_request", ::format("{}", value));
 }
 
-template<typename S>
-requires std::constructible_from<sstring, S>
-topology_mutation_builder& topology_mutation_builder::add_enabled_features(const std::set<S>& features) {
+topology_mutation_builder& topology_mutation_builder::add_enabled_features(const std::set<sstring>& features) {
     return apply_set("enabled_features", collection_apply_mode::update, features | boost::adaptors::transformed([] (const auto& f) { return sstring(f); }));
 }
 
