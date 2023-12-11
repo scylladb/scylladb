@@ -7,7 +7,6 @@ Wants=scylla-housekeeping-daily.timer
 Conflicts=abrt-ccpp.service
 
 [Service]
-PermissionsStartOnly=true
 Type=notify
 LimitCORE=infinity
 LimitMEMLOCK=infinity
@@ -16,9 +15,9 @@ LimitAS=infinity
 LimitNPROC=8096
 EnvironmentFile=/etc/sysconfig/scylla-server
 EnvironmentFile=/etc/scylla.d/*.conf
-ExecStartPre=/opt/scylladb/scripts/scylla_prepare
+ExecStartPre=+/opt/scylladb/scripts/scylla_prepare
 ExecStart=/usr/bin/scylla $SCYLLA_ARGS $SEASTAR_IO $DEV_MODE $CPUSET $MEM_CONF
-ExecStopPost=/opt/scylladb/scripts/scylla_stop
+ExecStopPost=+/opt/scylladb/scripts/scylla_stop
 TimeoutStartSec=1y
 TimeoutStopSec=900
 KillMode=process
