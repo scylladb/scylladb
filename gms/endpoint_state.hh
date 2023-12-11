@@ -14,6 +14,7 @@
 #include "gms/application_state.hh"
 #include "gms/versioned_value.hh"
 #include "locator/host_id.hh"
+#include "locator/types.hh"
 
 namespace gms {
 
@@ -151,6 +152,12 @@ public:
     // Return the value of the HOST_ID application state
     // or a null host_id if the application state is not found.
     locator::host_id get_host_id() const noexcept;
+
+    std::optional<locator::endpoint_dc_rack> get_dc_rack() const;
+
+    // Return the value of the TOKENS application state
+    // or an empty set if the application state is not found.
+    std::unordered_set<dht::token> get_tokens() const;
 
     friend fmt::formatter<endpoint_state>;
 };

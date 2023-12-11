@@ -12,8 +12,11 @@
 #include "gms/i_endpoint_state_change_subscriber.hh"
 #include <ostream>
 #include <boost/lexical_cast.hpp>
+#include "log.hh"
 
 namespace gms {
+
+logging::logger logger("endpoint_state");
 
 static_assert(std::is_default_constructible_v<heart_beat_state>);
 static_assert(std::is_nothrow_copy_constructible_v<heart_beat_state>);
@@ -51,10 +54,40 @@ bool endpoint_state::is_cql_ready() const noexcept {
 }
 
 locator::host_id endpoint_state::get_host_id() const noexcept {
+    locator::host_id host_id;
     if (auto app_state = get_application_state_ptr(application_state::HOST_ID)) {
-        return locator::host_id(utils::UUID(app_state->value()));
+        host_id = locator::host_id(utils::UUID(app_state->value()));
+        if (!host_id) {
+            on_internal_error_noexcept(logger, format("Node has null host_id"));
+        }
     }
-    return locator::host_id::create_null_id();
+    return host_id;
+}
+
+std::optional<locator::endpoint_dc_rack> endpoint_state::get_dc_rack() const {
+    if (auto app_state = get_application_state_ptr(application_state::DC)) {
+        std::optional<locator::endpoint_dc_rack> ret;
+        ret->dc = app_state->value();
+        if ((app_state = get_application_state_ptr(application_state::RACK))) {
+            ret->rack = app_state->value();
+            if (ret->dc.empty() || ret->rack.empty()) {
+                on_internal_error_noexcept(logger, format("Node {} has empty dc={} or rack={}", get_host_id(), ret->dc, ret->rack));
+            }
+            return ret;
+        }
+    }
+    return std::nullopt;
+}
+
+std::unordered_set<dht::token> endpoint_state::get_tokens() const {
+    std::unordered_set<dht::token> ret;
+    if (auto app_state = get_application_state_ptr(application_state::TOKENS)) {
+        ret = versioned_value::tokens_from_string(app_state->value());
+        if (ret.empty()) {
+            on_internal_error_noexcept(logger, format("Node {} has empty tokens state", get_host_id()));
+        }
+    }
+    return ret;
 }
 
 future<> i_endpoint_state_change_subscriber::on_application_state_change(inet_address endpoint,
