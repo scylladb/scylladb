@@ -129,7 +129,7 @@ void set_task_manager(http_context& ctx, routes& r, sharded<tasks::task_manager>
             } catch (...) {
                 throw bad_param_exception(fmt::format("{}", std::current_exception()));
             }
-            const auto& filtered_tasks = module->get_tasks() | boost::adaptors::filtered([&params = req->query_parameters, internal] (const auto& task) {
+            const auto& filtered_tasks = module->get_local_tasks() | boost::adaptors::filtered([&params = req->query_parameters, internal] (const auto& task) {
                 return (internal || !task.second->is_internal()) && filter_tasks(task.second, params);
             });
             for (auto& [task_id, task] : filtered_tasks) {
