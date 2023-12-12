@@ -362,7 +362,7 @@ public:
             auto&& prange = make_partition_range(*schema, range);
             auto cmd = slice_pred_to_read_cmd(proxy, *schema, predicate);
             // KeyRange::count is the number of thrift rows to return, while
-            // SlicePredicte::slice_range::count limits the number of thrift colums.
+            // SlicePredicte::slice_range::count limits the number of thrift columns.
             if (schema->thrift().is_dynamic()) {
                 // For dynamic CFs we must limit the number of partitions returned.
                 cmd->partition_limit = range.count;

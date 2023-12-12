@@ -1528,7 +1528,7 @@ class scylla_tables(gdb.Command):
 
 
 class scylla_table(gdb.Command):
-    """Prints various info about individial table
+    """Prints various info about individual table
         Example:
           scylla table ks.cf
     """
@@ -1990,7 +1990,7 @@ class span(object):
 
         Due to https://github.com/scylladb/seastar/issues/625 there may be some
         pages at the end of the span which are not used by the small pool.
-        We try to detect this. It's not 100% accurrate but should work in most cases.
+        We try to detect this. It's not 100% accurate but should work in most cases.
 
         Returns 0 for free spans.
         """
@@ -4747,7 +4747,7 @@ class scylla_small_objects(gdb.Command):
     spans belonging to the pool linearly, until the desired range of object is
     found. This can take a long time for well populated pools. To speed this
     up, the span iterator is saved and reused when possible. This caching can
-    only be exploited withing the same pool and only with monotonically
+    only be exploited within the same pool and only with monotonically
     increasing pages.
 
     For usage see: scylla small-objects --help

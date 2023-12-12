@@ -1623,7 +1623,7 @@ def dynamic_linker_option():
 
     if employ_ld_trickery:
         # gdb has a SO_NAME_MAX_PATH_SIZE of 512, so limit the path size to
-        # that. The 512 includes the null at the end, hence the 511 bellow.
+        # that. The 512 includes the null at the end, hence the 511 below.
         dynamic_linker = '/' * (511 - len(original_dynamic_linker)) + original_dynamic_linker
     else:
         dynamic_linker = original_dynamic_linker

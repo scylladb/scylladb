@@ -28,7 +28,7 @@ The files created are:
 
 By default, these files are created in the 'build'
 subdirectory under the directory containing the script.
-The destination directory can be overriden by
+The destination directory can be overridden by
 using '-o PATH' option.
 END
 )
