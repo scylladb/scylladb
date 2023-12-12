@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include <fmt/format.h>
 #include <initializer_list>
 #include <memory>
 #include <stdexcept>
@@ -18,8 +19,11 @@
 #include <boost/algorithm/string/classification.hpp>
 #include <boost/range/adaptor/map.hpp>
 #include <seastar/core/coroutine.hh>
+#include <seastar/core/future.hh>
 #include <seastar/core/gate.hh>
+#include <seastar/core/pipe.hh>
 #include <seastar/core/units.hh>
+#include <seastar/core/temporary_buffer.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/util/short_streams.hh>
 #include <seastar/util/lazy.hh>
@@ -852,6 +856,164 @@ data_sink client::make_upload_sink(sstring object_name) {
 
 data_sink client::make_upload_jumbo_sink(sstring object_name, std::optional<unsigned> max_parts_per_piece) {
     return data_sink(std::make_unique<upload_jumbo_sink>(shared_from_this(), std::move(object_name), max_parts_per_piece));
+}
+
+// a sink with known object size
+//
+// unlike upload_sink and upload_jumbo_sink, upload_ranged_sink sends the
+// received buffers right away without accumulating them first. if the
+// buffer fed by the caller crosses the boundary of the current part, a
+// new part is created, and the remainder of the buffer is sent to it instead,
+// until whole buffer is consumed.
+class client::upload_ranged_sink final : public upload_sink_base {
+    // TODO: resume support
+    const size_t _part_size;
+    const size_t _total_size;
+    std::optional<future<>> _uploading;
+
+    // avoid stuffing the memory with yet-uploaded buffers in the expense of
+    // having ping-pong between reader (from disk) and writer (to the wire).
+    // client::_memory already controls the amount of memory sinks can hold in
+    // RAM on a per-client basis.
+    seastar::pipe<temporary_buffer<char>> _part_body{1};
+
+    future<> upload_part(size_t part_size) {
+        // upload a part in a multipart upload, see
+        // https://docs.aws.amazon.com/AmazonS3/latest/API/API_UploadPart.html
+        unsigned part_number = _part_etags.size();
+        _part_etags.emplace_back();
+        auto req = http::request::make("PUT", _client->_host, _object_name);
+        req._headers["Content-Length"] = to_sstring(part_size);
+        req.query_parameters.emplace("partNumber", to_sstring(part_number + 1));
+        req.query_parameters.emplace("uploadId", _upload_id);
+        s3l.trace("PUT part {}, {} bytes (upload id {})", part_number, part_size, _upload_id);
+        req.write_body("bin", part_size, [part_size, this] (output_stream<char>&& out_) mutable -> future<> {
+            auto out = std::move(out_);
+            std::exception_ptr ex;
+            try {
+                for (size_t part_offset = 0, written = 0; part_offset < part_size; part_offset += written) {
+                    auto buffer = co_await _part_body.reader.read();
+                    if (!buffer.has_value()) {
+                        // the writer side is closed, close() will abort this
+                        // multipart upload.
+                        break;
+                    }
+                    if (size_t part_remainder = part_size - part_offset; buffer->size() > part_remainder) {
+                        auto front = buffer->share(0, part_remainder);
+                        buffer->trim_front(part_remainder);
+                        // return the remainder of the buffer back to the pipe, so the next
+                        // part can pick it up
+                        _part_body.reader.unread(std::move(*buffer));
+                        co_await out.write(front.get(), front.size());
+                        written = part_remainder;
+                    } else {
+                        written = buffer->size();
+                        co_await out.write(buffer->get(), buffer->size());
+                    }
+                }
+                co_await out.flush();
+            } catch (...) {
+                ex = std::current_exception();
+            }
+            co_await out.close();
+            if (ex) {
+                std::rethrow_exception(std::move(ex));
+            }
+        });
+        return _client->make_request(std::move(req), [this, part_size, part_number, start = s3_clock::now()] (group_client& gc, const http::reply& reply, input_stream<char>&& in_) mutable -> future<> {
+            auto etag = reply.get_header("ETag");
+            s3l.trace("uploaded {} part data -> etag = {} (upload id {})", part_number, etag, _upload_id);
+            _part_etags[part_number] = std::move(etag);
+            gc.write_stats.update(part_size, s3_clock::now() - start);
+            return make_ready_future();
+        }).handle_exception([this, part_number] (auto ex) {
+            s3l.warn("couldn't upload part {}: {} (upload id {})", part_number, ex, _upload_id);
+        });
+    }
+
+    static size_t calc_part_size(size_t total_size, size_t part_size) {
+        if (part_size > 0) {
+            assert(part_size >= aws_minimum_part_size);
+            assert((total_size + part_size - 1) / part_size <= aws_maximum_parts_in_piece);
+            return part_size;
+        }
+        // if part_size is 0, this means the caller leaves it to us to decide
+        // the part_size. and let's start with aws_minimum_part_size. and we
+        // prefer smaller parts, so we increment it by 1M  until the number of
+        // parts satisfies the constraint of aws_maximum_parts_in_piece
+        part_size = aws_minimum_part_size;
+        while ((total_size + part_size - 1) / part_size > aws_maximum_parts_in_piece) {
+            part_size += 1_MiB;
+        }
+        return part_size;
+    }
+
+    future<> multipart_upload() {
+        // a background job which consumes the buffers pushed to part_body,
+        // and writes them to S3 with multipart upload
+        co_await start_upload();
+        size_t part_size = 0;
+        for (size_t offset = 0; offset < _total_size; offset += part_size) {
+            part_size = std::min(_total_size - offset, _part_size);
+            s3l.trace("upload_part: {}~{}/{}", offset, part_size, _total_size);
+            // consume the buffers in the exact order in which they are pushed
+            co_await upload_part(part_size);
+        }
+        co_await finalize_upload();
+    }
+
+public:
+    upload_ranged_sink(shared_ptr<client> cln,
+                       sstring object_name,
+                       std::optional<tag> tag,
+                       size_t total_size,
+                       size_t part_size)
+        : upload_sink_base{std::move(cln), std::move(object_name), std::move(tag)}
+        , _part_size{calc_part_size(total_size, part_size)}
+        , _total_size{total_size} {
+        assert(_part_size >= aws_minimum_part_size);
+    }
+
+    future<> put(temporary_buffer<char> buf) final {
+        if (!_uploading) {
+            _uploading = multipart_upload();
+        }
+        co_await _part_body.writer.write(std::move(buf));
+    }
+
+    future<> put(net::packet packet) final {
+        for (auto&& buffer : packet.release()) {
+            co_await put(std::move(buffer));
+        }
+    }
+
+    future<> flush() final {
+        if (auto uploading = std::exchange(_uploading, {}); uploading) {
+            return *std::move(uploading);
+        }
+        return make_ready_future();
+    }
+
+    future<> close() final {
+        if (auto uploading = std::exchange(_uploading, {}); uploading) {
+            // close from the writer side
+            std::ignore = std::move(_part_body.writer);
+            return *std::move(uploading);
+        }
+        return make_ready_future();
+    }
+};
+
+data_sink client::make_upload_ranged(sstring object_name,
+                                     size_t total_size,
+                                     std::optional<tag> tag,
+                                     std::optional<size_t> part_size) {
+    assert(total_size > 0);
+    return data_sink{std::make_unique<upload_ranged_sink>(shared_from_this(),
+                                                          std::move(object_name),
+                                                          std::move(tag),
+                                                          total_size,
+                                                          part_size.value_or(0))};
 }
 
 class client::readable_file : public file_impl {

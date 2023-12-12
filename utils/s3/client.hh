@@ -43,6 +43,7 @@ class client : public enable_shared_from_this<client> {
     class upload_sink_base;
     class upload_sink;
     class upload_jumbo_sink;
+    class upload_ranged_sink;
     class readable_file;
     std::string _host;
     endpoint_config_ptr _cfg;
@@ -98,6 +99,22 @@ public:
     file make_readable_file(sstring object_name);
     data_sink make_upload_sink(sstring object_name);
     data_sink make_upload_jumbo_sink(sstring object_name, std::optional<unsigned> max_parts_per_piece = {});
+    /// create a sink whose total length is known before hand
+    ///
+    /// the sink sends the written buffer using multipart upload. unlike
+    /// @c make_upload_sink and @c make_upload_jumbo_sink, make_upload_ranged()
+    /// flushes at every put() call, also, a buffer with @c part_size should be
+    /// passed to each put(), except the last call.
+    ///
+    /// @param object_name object name for the created object in S3
+    /// @param total_size the total size of the stream
+    /// @param tag an optional tag
+    /// @param part_size the size of each part of the multipart upload
+    /// @return the sink with the specified constraints above
+    data_sink make_upload_ranged(sstring object_name,
+                                 size_t total_size,
+                                 std::optional<tag> tag = {},
+                                 std::optional<size_t> max_part_size = {});
 
     void update_config(endpoint_config_ptr);
 
