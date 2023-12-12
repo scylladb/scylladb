@@ -31,9 +31,9 @@
 #include "cdc/cdc_extension.hh"
 #include "utils/UUID_gen.hh"
 
-static cql_test_config disable_raft_schema_config() {
+static cql_test_config run_with_raft_recovery_config() {
     cql_test_config c;
-    c.db_config->consistent_cluster_management(false);
+    c.run_with_raft_recovery = true;
     return c;
 }
 
@@ -158,10 +158,10 @@ SEASTAR_TEST_CASE(test_tombstones_are_ignored_in_version_calculation) {
             // a digest to be calculated when applying the schema change, and the digest
             // will be different than the first version sent.
             //
-            // Hence we use `disable_raft_schema_config()` in this test.
+            // Hence we use `run_with_raft_recovery_config()` in this test.
             BOOST_REQUIRE_EQUAL(new_node_version, old_node_version);
         });
-    }, disable_raft_schema_config());
+    }, run_with_raft_recovery_config());
 }
 
 SEASTAR_TEST_CASE(test_concurrent_column_addition) {
@@ -220,10 +220,10 @@ SEASTAR_TEST_CASE(test_concurrent_column_addition) {
             // This is fine with group 0 where all schema changes are linearized, so this scenario
             // of merging concurrent schema changes doesn't happen.
             //
-            // Hence we use `disable_raft_schema_config()` in this test.
+            // Hence we use `run_with_raft_recovery_config()` in this test.
             BOOST_REQUIRE(new_schema->version() != s2->version());
         });
-    }, disable_raft_schema_config());
+    }, run_with_raft_recovery_config());
 }
 
 SEASTAR_TEST_CASE(test_sort_type_in_update) {

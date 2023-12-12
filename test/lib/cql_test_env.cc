@@ -815,6 +815,10 @@ private:
                 }).get();
             }
 
+            if (cfg_in.run_with_raft_recovery) {
+                _sys_ks.local().save_group0_upgrade_state("RECOVERY").get();
+            }
+
             group0_client.init().get();
             auto stop_system_keyspace = defer([this] {
                 _sys_ks.invoke_on_all(&db::system_keyspace::shutdown).get();

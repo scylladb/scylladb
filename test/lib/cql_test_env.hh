@@ -96,6 +96,7 @@ public:
     locator::host_id host_id;
     gms::inet_address broadcast_address = gms::inet_address("localhost");
     bool ms_listen = false;
+    bool run_with_raft_recovery = false;
 
     cql_test_config();
     cql_test_config(const cql_test_config&);
