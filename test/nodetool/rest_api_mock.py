@@ -178,7 +178,7 @@ class rest_server(aiohttp.abc.AbstractRouter):
                     continue
 
             logger.error(f"unexpected request\nexpected {expected_req}\ngot      {this_req}")
-            return aiohttp.web.Response(status=500, text="Expected {expected_req}, got {this_req}")
+            return aiohttp.web.Response(status=500, text=f"Expected {expected_req}, got {this_req}")
 
         if expected_req.multiple == expected_request.ONE:
             del self.expected_requests[0]
