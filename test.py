@@ -33,7 +33,7 @@ import yaml
 from abc import ABC, abstractmethod
 from io import StringIO
 from scripts import coverage    # type: ignore
-from test.pylib.artifact_registry import ArtifactRegistry
+from test.pylib.artifact_registry import ArtifactRegistry, ArtifactCleanupException
 from test.pylib.host_registry import HostRegistry
 from test.pylib.pool import Pool
 from test.pylib.util import LogPrefixAdapter
@@ -205,7 +205,12 @@ class TestSuite(ABC):
             self.pending_test_count -= 1
             self.n_failed += int(not test.success)
             if self.pending_test_count == 0:
-                await TestSuite.artifacts.cleanup_after_suite(self, self.n_failed > 0)
+                try:
+                    await TestSuite.artifacts.cleanup_after_suite(self, self.n_failed > 0)
+                except ArtifactCleanupException as e:
+                    logging.error(e.pretty_error())
+                except Exception as e:
+                    logging.error(f"Unexpected error while cleaning up after suite {self.name} : {e}")
         return test
 
     def junit_tests(self):
@@ -1367,7 +1372,12 @@ async def run_all_tests(signaled: asyncio.Event, options: argparse.Namespace) ->
     except asyncio.CancelledError:
         return
     finally:
-        await TestSuite.artifacts.cleanup_before_exit()
+        try:
+            await TestSuite.artifacts.cleanup_before_exit()
+        except ArtifactCleanupException as e:
+            logging.error(e.pretty_error())
+        except Exception as e:
+            logging.error(f"Unexpected error while cleaning up before exit: {e}")
 
     console.print_end_blurb()
 
