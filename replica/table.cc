@@ -67,6 +67,11 @@ static seastar::metrics::label keyspace_label("ks");
 
 using namespace std::chrono_literals;
 
+table_holder::table_holder(table& t)
+    : _holder(t.async_gate())
+    , _table_ptr(t.shared_from_this())
+{ }
+
 void table::update_sstables_known_generation(sstables::generation_type generation) {
     auto gen = generation ? generation.as_int() : 0;
     if (_sstable_generation_generator) {
@@ -1073,10 +1078,13 @@ table::stop() {
     if (_async_gate.is_closed()) {
         co_return;
     }
-    co_await _async_gate.close();
+    // Allow `compaction_group::stop` to stop ongoing compactions
+    // while they may still hold the table _async_gate
+    auto gate_closed_fut = _async_gate.close();
     co_await await_pending_ops();
     co_await parallel_foreach_compaction_group(std::mem_fn(&compaction_group::stop));
     co_await _sstable_deletion_gate.close();
+    co_await std::move(gate_closed_fut);
     co_await get_row_cache().invalidate(row_cache::external_updater([this] {
         for (const compaction_group_ptr& cg : compaction_groups()) {
             cg->clear_sstables();

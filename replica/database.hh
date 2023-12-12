@@ -361,6 +361,31 @@ struct table_stats {
 
 using storage_options = data_dictionary::storage_options;
 
+// Smart table pointer that guards the table object
+// while it's being accessed asynchronously
+class table_holder {
+    gate::holder _holder;
+    lw_shared_ptr<table> _table_ptr;
+public:
+    explicit table_holder(table&);
+
+    const table& operator*() const noexcept {
+        return *_table_ptr;
+    }
+
+    table& operator*() noexcept {
+        return *_table_ptr;
+    }
+
+    const table* operator->() const noexcept {
+        return _table_ptr.operator->();
+    }
+
+    table* operator->() noexcept {
+        return _table_ptr.operator->();
+    }
+};
+
 class table : public enable_lw_shared_from_this<table>
             , public weakly_referencable<table> {
 public:
@@ -783,6 +808,11 @@ public:
 
     table(column_family&&) = delete; // 'this' is being captured during construction
     ~table();
+
+    table_holder hold() {
+        return table_holder(*this);
+    }
+
     const schema_ptr& schema() const { return _schema; }
     void set_schema(schema_ptr);
     db::commitlog* commitlog() const;
