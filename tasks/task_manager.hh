@@ -42,7 +42,7 @@ public:
     using task_ptr = lw_shared_ptr<task_manager::task>;
     using task_map = std::unordered_map<task_id, task_ptr>;
     using foreign_task_ptr = foreign_ptr<task_ptr>;
-    using foreign_task_vector = std::vector<foreign_task_ptr>;
+    using foreign_task_list = std::list<foreign_task_ptr>;
     using module_ptr = shared_ptr<module>;
     using modules = std::unordered_map<std::string, module_ptr>;
 private:
@@ -109,7 +109,7 @@ public:
         protected:
             status _status;
             task_id _parent_id;
-            foreign_task_vector _children;
+            foreign_task_list _children;
             shared_promise<> _done;
             module_ptr _module;
             seastar::abort_source _as;
@@ -166,7 +166,7 @@ public:
         future<> done() const noexcept;
         void register_task();
         void unregister_task() noexcept;
-        const foreign_task_vector& get_children() const noexcept;
+        const foreign_task_list& get_children() const noexcept;
         bool is_complete() const noexcept;
         void release_resources() noexcept;
 

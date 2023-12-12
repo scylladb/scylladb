@@ -71,9 +71,7 @@ future<task_manager::task::progress> task_manager::task::impl::get_progress() co
     }
 
     tasks::task_manager::task::progress progress{};
-    // _children vector may be modified in the meantime. Do not use foreach loop as the iterators may get invalidated.
-    for (unsigned i = 0; i < _children.size(); ++i) {
-        auto& child = _children[i];
+    for (auto& child: _children) {
         progress += co_await smp::submit_to(child.get_owner_shard(), [&child] {
             return child->get_progress();
         });
@@ -242,7 +240,7 @@ void task_manager::task::unregister_task() noexcept {
     _impl->_module->unregister_task(id());
 }
 
-const task_manager::foreign_task_vector& task_manager::task::get_children() const noexcept {
+const task_manager::foreign_task_list& task_manager::task::get_children() const noexcept {
     return _impl->_children;
 }
 
