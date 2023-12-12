@@ -446,7 +446,7 @@ future<> table_cleanup_keyspace_compaction_task_impl::run() {
 }
 
 future<> offstrategy_keyspace_compaction_task_impl::run() {
-    _needed = co_await _db.map_reduce0([&] (replica::database& db) -> future<bool> {
+    bool res = co_await _db.map_reduce0([&] (replica::database& db) -> future<bool> {
         bool needed = false;
         tasks::task_info parent_info{_status.id, _status.shard};
         auto& module = db.get_compaction_manager().get_task_manager_module();
@@ -454,6 +454,9 @@ future<> offstrategy_keyspace_compaction_task_impl::run() {
         co_await task->done();
         co_return needed;
     }, false, std::plus<bool>());
+    if (_needed) {
+        *_needed = res;
+    }
 }
 
 future<> shard_offstrategy_keyspace_compaction_task_impl::run() {
@@ -509,7 +512,7 @@ future<> table_upgrade_sstables_compaction_task_impl::run() {
 }
 
 future<> scrub_sstables_compaction_task_impl::run() {
-    _stats = co_await _db.map_reduce0([&] (replica::database& db) -> future<sstables::compaction_stats> {
+    auto res = co_await _db.map_reduce0([&] (replica::database& db) -> future<sstables::compaction_stats> {
         sstables::compaction_stats stats;
         tasks::task_info parent_info{_status.id, _status.shard};
         auto& compaction_module = db.get_compaction_manager().get_task_manager_module();
@@ -517,6 +520,9 @@ future<> scrub_sstables_compaction_task_impl::run() {
         co_await task->done();
         co_return stats;
     }, sstables::compaction_stats{}, std::plus<sstables::compaction_stats>());
+    if (_stats) {
+        *_stats = res;
+    }
 }
 
 future<> shard_scrub_sstables_compaction_task_impl::run() {

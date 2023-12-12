@@ -281,13 +281,13 @@ class offstrategy_keyspace_compaction_task_impl : public offstrategy_compaction_
 private:
     sharded<replica::database>& _db;
     std::vector<table_info> _table_infos;
-    bool& _needed;
+    bool* _needed;
 public:
     offstrategy_keyspace_compaction_task_impl(tasks::task_manager::module_ptr module,
             std::string keyspace,
             sharded<replica::database>& db,
             std::vector<table_info> table_infos,
-            bool& needed) noexcept
+            bool* needed) noexcept
         : offstrategy_compaction_task_impl(module, tasks::task_id::create_random_id(), module->new_sequence_number(), "keyspace", std::move(keyspace), "", "", tasks::task_id::create_null_id())
         , _db(db)
         , _table_infos(std::move(table_infos))
@@ -454,14 +454,14 @@ private:
     sharded<replica::database>& _db;
     std::vector<sstring> _column_families;
     sstables::compaction_type_options::scrub _opts;
-    sstables::compaction_stats& _stats;
+    sstables::compaction_stats* _stats;
 public:
     scrub_sstables_compaction_task_impl(tasks::task_manager::module_ptr module,
             std::string keyspace,
             sharded<replica::database>& db,
             std::vector<sstring> column_families,
             sstables::compaction_type_options::scrub opts,
-            sstables::compaction_stats& stats) noexcept
+            sstables::compaction_stats* stats) noexcept
         : sstables_compaction_task_impl(module, tasks::task_id::create_random_id(), module->new_sequence_number(), "keyspace", std::move(keyspace), "", "", tasks::task_id::create_null_id())
         , _db(db)
         , _column_families(std::move(column_families))

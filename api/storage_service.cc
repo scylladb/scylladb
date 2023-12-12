@@ -245,6 +245,70 @@ future<json::json_return_type> set_tables_tombstone_gc(http_context& ctx, const 
     });
 }
 
+future<scrub_info> parse_scrub_options(http_context& ctx, sharded<db::snapshot_ctl>& snap_ctl, std::unique_ptr<http::request> req) {
+    scrub_info info;
+    auto rp = req_params({
+        {"keyspace", {mandatory::yes}},
+        {"cf", {""}},
+        {"scrub_mode", {}},
+        {"skip_corrupted", {}},
+        {"disable_snapshot", {}},
+        {"quarantine_mode", {}},
+    });
+    rp.process(*req);
+    info.keyspace = validate_keyspace(ctx, *rp.get("keyspace"));
+    info.column_families = parse_tables(info.keyspace, ctx, *rp.get("cf"));
+    auto scrub_mode_opt = rp.get("scrub_mode");
+    auto scrub_mode = sstables::compaction_type_options::scrub::mode::abort;
+
+    if (!scrub_mode_opt) {
+        const auto skip_corrupted = rp.get_as<bool>("skip_corrupted").value_or(false);
+
+        if (skip_corrupted) {
+            scrub_mode = sstables::compaction_type_options::scrub::mode::skip;
+        }
+    } else {
+        auto scrub_mode_str = *scrub_mode_opt;
+        if (scrub_mode_str == "ABORT") {
+            scrub_mode = sstables::compaction_type_options::scrub::mode::abort;
+        } else if (scrub_mode_str == "SKIP") {
+            scrub_mode = sstables::compaction_type_options::scrub::mode::skip;
+        } else if (scrub_mode_str == "SEGREGATE") {
+            scrub_mode = sstables::compaction_type_options::scrub::mode::segregate;
+        } else if (scrub_mode_str == "VALIDATE") {
+            scrub_mode = sstables::compaction_type_options::scrub::mode::validate;
+        } else {
+            throw httpd::bad_param_exception(fmt::format("Unknown argument for 'scrub_mode' parameter: {}", scrub_mode_str));
+        }
+    }
+
+    if (!req_param<bool>(*req, "disable_snapshot", false)) {
+        auto tag = format("pre-scrub-{:d}", db_clock::now().time_since_epoch().count());
+        co_await coroutine::parallel_for_each(info.column_families, [&snap_ctl, keyspace = info.keyspace, tag](sstring cf) {
+            // We always pass here db::snapshot_ctl::snap_views::no since:
+            // 1. When scrubbing particular tables, there's no need to auto-snapshot their views.
+            // 2. When scrubbing the whole keyspace, column_families will contain both base tables and views.
+            return snap_ctl.local().take_column_family_snapshot(keyspace, cf, tag, db::snapshot_ctl::snap_views::no, db::snapshot_ctl::skip_flush::no);
+        });
+    }
+
+    info.opts = {
+        .operation_mode = scrub_mode,
+    };
+    const sstring quarantine_mode_str = req_param<sstring>(*req, "quarantine_mode", "INCLUDE");
+    if (quarantine_mode_str == "INCLUDE") {
+        info.opts.quarantine_operation_mode = sstables::compaction_type_options::scrub::quarantine_mode::include;
+    } else if (quarantine_mode_str == "EXCLUDE") {
+        info.opts.quarantine_operation_mode = sstables::compaction_type_options::scrub::quarantine_mode::exclude;
+    } else if (quarantine_mode_str == "ONLY") {
+        info.opts.quarantine_operation_mode = sstables::compaction_type_options::scrub::quarantine_mode::only;
+    } else {
+        throw httpd::bad_param_exception(fmt::format("Unknown argument for 'quarantine_mode' parameter: {}", quarantine_mode_str));
+    }
+
+    co_return info;
+}
+
 void set_transport_controller(http_context& ctx, routes& r, cql_transport::controller& ctl) {
     ss::start_native_transport.set(r, [&ctx, &ctl](std::unique_ptr<http::request> req) {
         return smp::submit_to(0, [&] {
@@ -726,7 +790,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         apilog.info("perform_keyspace_offstrategy_compaction: keyspace={} tables={}", keyspace, table_infos);
         bool res = false;
         auto& compaction_module = ctx.db.local().get_compaction_manager().get_task_manager_module();
-        auto task = co_await compaction_module.make_and_start_task<offstrategy_keyspace_compaction_task_impl>({}, std::move(keyspace), ctx.db, table_infos, res);
+        auto task = co_await compaction_module.make_and_start_task<offstrategy_keyspace_compaction_task_impl>({}, std::move(keyspace), ctx.db, table_infos, &res);
         try {
             co_await task->done();
         } catch (...) {
@@ -1594,68 +1658,11 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
 
     ss::scrub.set(r, [&ctx, &snap_ctl] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         auto& db = ctx.db;
-        auto rp = req_params({
-            {"keyspace", {mandatory::yes}},
-            {"cf", {""}},
-            {"scrub_mode", {}},
-            {"skip_corrupted", {}},
-            {"disable_snapshot", {}},
-            {"quarantine_mode", {}},
-        });
-        rp.process(*req);
-        auto keyspace = validate_keyspace(ctx, *rp.get("keyspace"));
-        auto column_families = parse_tables(keyspace, ctx, *rp.get("cf"));
-        auto scrub_mode_opt = rp.get("scrub_mode");
-        auto scrub_mode = sstables::compaction_type_options::scrub::mode::abort;
-
-        if (!scrub_mode_opt) {
-            const auto skip_corrupted = rp.get_as<bool>("skip_corrupted").value_or(false);
-
-            if (skip_corrupted) {
-                scrub_mode = sstables::compaction_type_options::scrub::mode::skip;
-            }
-        } else {
-            auto scrub_mode_str = *scrub_mode_opt;
-            if (scrub_mode_str == "ABORT") {
-                scrub_mode = sstables::compaction_type_options::scrub::mode::abort;
-            } else if (scrub_mode_str == "SKIP") {
-                scrub_mode = sstables::compaction_type_options::scrub::mode::skip;
-            } else if (scrub_mode_str == "SEGREGATE") {
-                scrub_mode = sstables::compaction_type_options::scrub::mode::segregate;
-            } else if (scrub_mode_str == "VALIDATE") {
-                scrub_mode = sstables::compaction_type_options::scrub::mode::validate;
-            } else {
-                throw httpd::bad_param_exception(fmt::format("Unknown argument for 'scrub_mode' parameter: {}", scrub_mode_str));
-            }
-        }
-
-        if (!req_param<bool>(*req, "disable_snapshot", false)) {
-            auto tag = format("pre-scrub-{:d}", db_clock::now().time_since_epoch().count());
-            co_await coroutine::parallel_for_each(column_families, [&snap_ctl, keyspace, tag](sstring cf) {
-                // We always pass here db::snapshot_ctl::snap_views::no since:
-                // 1. When scrubbing particular tables, there's no need to auto-snapshot their views.
-                // 2. When scrubbing the whole keyspace, column_families will contain both base tables and views.
-                return snap_ctl.local().take_column_family_snapshot(keyspace, cf, tag, db::snapshot_ctl::snap_views::no, db::snapshot_ctl::skip_flush::no);
-            });
-        }
-
-        sstables::compaction_type_options::scrub opts = {
-            .operation_mode = scrub_mode,
-        };
-        const sstring quarantine_mode_str = req_param<sstring>(*req, "quarantine_mode", "INCLUDE");
-        if (quarantine_mode_str == "INCLUDE") {
-            opts.quarantine_operation_mode = sstables::compaction_type_options::scrub::quarantine_mode::include;
-        } else if (quarantine_mode_str == "EXCLUDE") {
-            opts.quarantine_operation_mode = sstables::compaction_type_options::scrub::quarantine_mode::exclude;
-        } else if (quarantine_mode_str == "ONLY") {
-            opts.quarantine_operation_mode = sstables::compaction_type_options::scrub::quarantine_mode::only;
-        } else {
-            throw httpd::bad_param_exception(fmt::format("Unknown argument for 'quarantine_mode' parameter: {}", quarantine_mode_str));
-        }
+        auto info = co_await parse_scrub_options(ctx, snap_ctl, std::move(req));
 
         sstables::compaction_stats stats;
         auto& compaction_module = db.local().get_compaction_manager().get_task_manager_module();
-        auto task = co_await compaction_module.make_and_start_task<scrub_sstables_compaction_task_impl>({}, std::move(keyspace), db, column_families, opts, stats);
+        auto task = co_await compaction_module.make_and_start_task<scrub_sstables_compaction_task_impl>({}, info.keyspace, db, info.column_families, info.opts, &stats);
         try {
             co_await task->done();
             if (stats.validation_errors) {
@@ -1664,7 +1671,7 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
         } catch (const sstables::compaction_aborted_exception&) {
             co_return json::json_return_type(static_cast<int>(scrub_status::aborted));
         } catch (...) {
-            apilog.error("scrub keyspace={} tables={} failed: {}", keyspace, column_families, std::current_exception());
+            apilog.error("scrub keyspace={} tables={} failed: {}", info.keyspace, info.column_families, std::current_exception());
             throw;
         }
 
