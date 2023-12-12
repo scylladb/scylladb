@@ -18,6 +18,7 @@
 #include <seastar/util/short_streams.hh>
 #include <yaml-cpp/yaml.h>
 
+#include "api/scrub_status.hh"
 #include "db_clock.hh"
 #include "log.hh"
 #include "tools/utils.hh"
@@ -35,6 +36,10 @@ namespace {
 const auto app_name = "scylla-nodetool";
 
 logging::logger nlog(app_name);
+
+struct operation_failed_on_scylladb : public std::runtime_error {
+    using std::runtime_error::runtime_error;
+};
 
 class scylla_rest_client {
     sstring _host;
@@ -606,6 +611,48 @@ void removenode_operation(scylla_rest_client& client, const bpo::variables_map& 
     }
 }
 
+void scrub_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    const auto [keyspace, tables] = parse_keyspace_and_tables(client, vm, false);
+    if (keyspace.empty()) {
+        throw std::invalid_argument("missing mandatory positional argument: keyspace");
+    }
+    if (vm.count("skip-corrupted") && vm.count("mode")) {
+        throw std::invalid_argument("cannot use --skip-corrupted when --mode is used");
+    }
+
+    std::unordered_map<sstring, sstring> params;
+
+    if (!tables.empty()) {
+        params["cf"] = fmt::to_string(fmt::join(tables.begin(), tables.end(), ","));
+    }
+
+    if (vm.count("mode")) {
+        params["scrub_mode"] = vm["mode"].as<sstring>();
+    } else if (vm.count("skip-corrupted")) {
+        params["scrub_mode"] = "SKIP";
+    }
+
+    if (vm.count("quarantine-mode")) {
+        params["quarantine_mode"] = vm["quarantine-mode"].as<sstring>();
+    }
+
+    if (vm.count("no-snapshot")) {
+        params["disable_snapshot"] = "true";
+    }
+
+    auto res = client.get(format("/storage_service/keyspace_scrub/{}", keyspace), std::move(params)).GetInt();
+
+    switch (api::scrub_status(res)) {
+        case api::scrub_status::successful:
+        case api::scrub_status::unable_to_cancel:
+            return;
+        case api::scrub_status::aborted:
+            throw operation_failed_on_scylladb("scrub failed: aborted");
+        case api::scrub_status::validation_errors:
+            throw operation_failed_on_scylladb("scrub failed: there are invalid sstables");
+    }
+}
+
 void setlogginglevel_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     if (!vm.count("logger") || !vm.count("level")) {
         throw std::invalid_argument("resetting logger(s) is not supported yet, the logger and level parameters are required");
@@ -764,6 +811,8 @@ const std::map<std::string_view, std::string_view> option_substitutions{
     {"--kc.list", "--keyspace-table-list"},
     {"-las", "--load-and-stream"},
     {"-pro", "--primary-replica-only"},
+    {"-ns", "--no-snapshot"},
+    {"-m", "--mode"}, // FIXME: this clashes with seastar option for memory
 };
 
 std::map<operation, operation_func> get_operations_with_func() {
@@ -1122,6 +1171,29 @@ Fore more information, see: https://opensource.docs.scylladb.com/stable/operatin
         },
         {
             {
+                "scrub",
+                "Scrub the SSTable files in the specified keyspace or table(s)",
+R"(
+Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/scrub.html
+)",
+                {
+                    typed_option<>("no-snapshot", "Do not take a snapshot of scrubbed tables before starting scrub (default false)"),
+                    typed_option<>("skip-corrupted,s", "Skip corrupted rows or partitions, even when scrubbing counter tables (deprecated, use ‘–-mode’ instead, default false)"),
+                    typed_option<sstring>("mode,m", "How to handle corrupt data (one of: ABORT|SKIP|SEGREGATE|VALIDATE, default ABORT; overrides ‘–-skip-corrupted’)"),
+                    typed_option<sstring>("quarantine-mode,q", "How to handle quarantined sstables (one of: INCLUDE|EXCLUDE|ONLY, default INCLUDE)"),
+                    typed_option<>("no-validate,n", "Do not validate columns using column validator (unused)"),
+                    typed_option<>("reinsert-overflowed-ttl,r", "Rewrites rows with overflowed expiration date (unused)"),
+                    typed_option<int64_t>("jobs,j", "The number of sstables to be scrubbed concurrently (unused)"),
+                },
+                {
+                    typed_option<sstring>("keyspace", "The keyspace to scrub", 1),
+                    typed_option<std::vector<sstring>>("table", "The table(s) to scrub (if unspecified, all tables in the keyspace are scrubbed)", -1),
+                },
+            },
+            scrub_operation
+        },
+        {
+            {
                 "setlogginglevel",
                 "Sets the level log threshold for a given logger during runtime",
 R"(
@@ -1353,6 +1425,9 @@ For more information, see: https://opensource.docs.scylladb.com/stable/operating
         } catch (std::invalid_argument& e) {
             fmt::print(std::cerr, "error processing arguments: {}\n", e.what());
             return 1;
+        } catch (operation_failed_on_scylladb& e) {
+            fmt::print(std::cerr, "{}\n", e.what());
+            return 3;
         } catch (...) {
             fmt::print(std::cerr, "error running operation: {}\n", std::current_exception());
             return 2;
