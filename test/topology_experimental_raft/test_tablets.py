@@ -7,10 +7,11 @@ from uuid import UUID
 
 from cassandra.query import SimpleStatement, ConsistencyLevel
 
+from test.pylib.internal_types import ServerInfo
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import inject_error_one_shot, HTTPError
 from test.pylib.rest_client import inject_error
-from test.pylib.util import wait_for_cql_and_get_hosts
+from test.pylib.util import wait_for_cql_and_get_hosts, read_barrier
 from test.topology.conftest import skip_mode
 from test.topology.util import reconnect_driver
 
@@ -33,18 +34,37 @@ async def inject_error_on(manager, error_name, servers):
     await asyncio.gather(*errs)
 
 
-async def get_tablet_replicas(manager, keyspace_name, table_name, token):
+async def get_tablet_replicas(manager: ManagerClient, server: ServerInfo, keyspace_name: str, table_name: str, token: int):
+    """
+    Gets tablet replicas of the tablet which owns a given token of a given table.
+    This call is guaranteed to see all prior changes applied to group0 tables.
+
+    :param server: server to query. Can be any live node.
+    """
+
+    host = manager.cql.cluster.metadata.get_host(server.ip_addr)
+
+    # read_barrier is needed to ensure that local tablet metadata on the queried node
+    # reflects the finalized tablet movement.
+    await read_barrier(manager.cql, host)
+
     table_id = await manager.get_table_id(keyspace_name, table_name)
     rows = await manager.cql.run_async(f"SELECT last_token, replicas FROM system.tablets where "
                                        f"keyspace_name = '{keyspace_name}' and "
-                                       f"table_id = {table_id}")
+                                       f"table_id = {table_id}", host=host)
     for row in rows:
         if row.last_token >= token:
             return row.replicas
 
 
-async def get_tablet_replica(manager, keyspace_name, table_name, token):
-    replicas = await get_tablet_replicas(manager, keyspace_name, table_name, token)
+async def get_tablet_replica(manager: ManagerClient, server: ServerInfo, keyspace_name: str, table_name: str, token: int):
+    """
+    Get the first replica of the tablet which owns a given token of a given table.
+    This call is guaranteed to see all prior changes applied to group0 tables.
+
+    :param server: server to query. Can be any live node.
+    """
+    replicas = await get_tablet_replicas(manager, server, keyspace_name, table_name, token)
     return replicas[0]
 
 
@@ -244,7 +264,7 @@ async def test_streaming_is_guarded_by_topology_guard(manager: ManagerClient):
     rows = await cql.run_async("SELECT pk from test.test")
     assert len(list(rows)) == 1
 
-    replica = await get_tablet_replica(manager, 'test', 'test', tablet_token)
+    replica = await get_tablet_replica(manager, servers[0], 'test', 'test', tablet_token)
 
     s0_host_id = await manager.get_host_id(servers[0].server_id)
     s1_host_id = await manager.get_host_id(servers[1].server_id)
