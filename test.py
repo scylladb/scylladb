@@ -699,7 +699,7 @@ class BoostTest(UnitTest):
 
 
 class CQLApprovalTest(Test):
-    """Run a sequence of CQL commands against a standlone Scylla"""
+    """Run a sequence of CQL commands against a standalone Scylla"""
 
     def __init__(self, test_no: int, shortname: str, suite) -> None:
         super().__init__(test_no, shortname, suite)
@@ -959,7 +959,7 @@ class TopologyTest(PythonTest):
             self.args.insert(0, "--manager-api={}".format(manager.sock_path))
 
             try:
-                # Note: start manager here so cluster (and its logs) is availale in case of failure
+                # Note: start manager here so cluster (and its logs) is available in case of failure
                 await manager.start()
                 self.success = await run_test(self, options)
             except Exception as e:
@@ -1532,7 +1532,7 @@ def write_consolidated_boost_junit_xml(tmpdir: str, mode: str) -> None:
     for full_path, tests in itertools.groupby(
             test_cases,
             key=BoostTest.test_path_of_element):
-        # dedup the tests with the same name, so only the representive one is
+        # dedup the tests with the same name, so only the representative one is
         # preserved
         test_case = summarize_tests(tests)
         test_case.attrib.pop('path')

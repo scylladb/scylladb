@@ -1665,7 +1665,7 @@ def handle_types(tree):
 def setup_additional_metadata(tree, ns_context = [], parent_template_params=[]):
     '''Cache additional metadata for each type declaration directly in the AST node.
 
-    This currenty includes namespace info and template parameters for the
+    This currently includes namespace info and template parameters for the
     parent scope (applicable only to enums and classes).'''
     for obj in tree:
         if isinstance(obj, NamespaceDef):
@@ -1767,7 +1767,7 @@ if __name__ == "__main__":
     parser.add_argument('-f', help='input file', default='')
     parser.add_argument('--ns', help="""namespace, when set function will be created
     under the given namespace""", default='')
-    parser.add_argument('file', nargs='*', help="combine one or more file names for the genral include files")
+    parser.add_argument('file', nargs='*', help="combine one or more file names for the general include files")
 
     config = parser.parse_args()
     if config.file:
