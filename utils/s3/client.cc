@@ -19,6 +19,7 @@
 #include <boost/range/adaptor/map.hpp>
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/gate.hh>
+#include <seastar/core/units.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/util/short_streams.hh>
 #include <seastar/util/lazy.hh>
@@ -58,6 +59,12 @@ inline size_t iovec_len(const std::vector<iovec>& iov)
 namespace s3 {
 
 static logging::logger s3l("s3");
+// "Each part must be at least 5 MB in size, except the last part."
+// https://docs.aws.amazon.com/AmazonS3/latest/API/API_UploadPart.html
+static constexpr size_t aws_minimum_part_size = 5_MiB;
+// "Part numbers can be any number from 1 to 10,000, inclusive."
+// https://docs.aws.amazon.com/AmazonS3/latest/API/API_UploadPart.html
+static constexpr unsigned aws_maximum_parts_in_piece = 10'000;
 
 future<> ignore_reply(const http::reply& rep, input_stream<char>&& in_) {
     auto in = std::move(in_);
@@ -699,13 +706,9 @@ future<> client::upload_sink_base::close() {
 }
 
 class client::upload_sink final : public client::upload_sink_base {
-    // "Each part must be at least 5 MB in size, except the last part."
-    // https://docs.aws.amazon.com/AmazonS3/latest/API/API_UploadPart.html
-    static constexpr size_t minimum_part_size = 5 << 20;
-
     memory_data_sink_buffers _bufs;
     future<> maybe_flush() {
-        if (_bufs.size() >= minimum_part_size) {
+        if (_bufs.size() >= aws_minimum_part_size) {
             co_await upload_part(std::move(_bufs));
         }
     }
@@ -795,9 +798,6 @@ future<> client::upload_sink_base::upload_part(std::unique_ptr<upload_sink> piec
 }
 
 class client::upload_jumbo_sink final : public upload_sink_base {
-    // "Part numbers can be any number from 1 to 10,000, inclusive."
-    // https://docs.aws.amazon.com/AmazonS3/latest/API/API_UploadPart.html
-    static constexpr unsigned aws_maximum_parts_in_piece = 10000;
     static constexpr tag piece_tag = { .key = "kind", .value = "piece" };
 
     const unsigned _maximum_parts_in_piece;
