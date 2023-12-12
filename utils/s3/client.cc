@@ -854,6 +854,99 @@ data_sink client::make_upload_jumbo_sink(sstring object_name, std::optional<unsi
     return data_sink(std::make_unique<upload_jumbo_sink>(shared_from_this(), std::move(object_name), max_parts_per_piece));
 }
 
+// a sink with known object size
+//
+// unlike upload_sink and upload_jumbo_sink, upload_ranged_sink sends the
+// received buffers right away without accumulating them first. caller is
+// supposed to put() with the payload of part_size until the specified
+// total_size is reached.
+class client::upload_ranged_sink final : public upload_sink_base {
+    // TODO: resume support
+    const size_t _total_size;
+    const size_t _part_size;
+    const unsigned _total_num_parts;
+    memory_data_sink_buffers _bufs;
+
+    size_t next_part_size() const {
+        assert(_part_etags.size() <= _total_num_parts);
+        if (_part_etags.size() == _total_num_parts) {
+            return 0;
+        }
+        size_t remainder = _total_size - _part_etags.size() * _part_size;
+        return std::min(remainder, _part_size);
+    }
+
+public:
+    upload_ranged_sink(shared_ptr<client> cln,
+                       sstring object_name,
+                       size_t total_size,
+                       size_t part_size)
+        : upload_sink_base(std::move(cln), std::move(object_name), std::nullopt)
+        , _total_size{total_size}
+        , _part_size{part_size}
+        , _total_num_parts{(total_size + part_size - 1) / part_size} {
+        assert(_part_size >= aws_minimum_part_size);
+        assert(_total_num_parts <= aws_maximum_parts_in_piece);
+    }
+
+    future<> put(temporary_buffer<char> buf) final {
+        _bufs.put(std::move(buf));
+        assert(_bufs.size() <= _total_size);
+        size_t next_size = next_part_size();
+        assert(next_size > 0);
+        if (_bufs.size() >= next_size) {
+            co_await upload_part(_bufs.split_at(next_size));
+        }
+    }
+
+    future<> put(net::packet packet) final {
+        packet.release_into([this] (temporary_buffer<char>&& frag) {
+            _bufs.put(std::move(frag));
+        });
+        assert(_bufs.size() <= _total_size);
+        for (;;) {
+            size_t next_size = next_part_size();
+            if (next_size == 0 || _bufs.size() < next_size) {
+                break;
+            }
+            co_await upload_part(_bufs.split_at(next_size));
+        }
+    }
+
+    future<> flush() final {
+        // we don't keep a partial of the multipart part in memory, so no
+        // need to flush the bits as new part. but neither do we could
+        // wait until all background flushes complete
+        return make_ready_future();
+    }
+
+    future<> close() final {
+        size_t remaining = next_part_size();
+        if (remaining != 0) {
+            // before resume support is implemented, it is considered an
+            // unexpected usage
+            s3l.warn("premature close(): {}/{} to go", remaining, _total_size);
+            co_await upload_sink_base::close();
+        } else {
+            co_await finalize_upload();
+        }
+    }
+
+    size_t buffer_size() const noexcept final {
+        // we don't buffer at all
+        return 0;
+    }
+};
+
+data_sink client::make_upload_ranged(sstring object_name, size_t total_size, size_t part_size) {
+    assert(total_size > 0);
+    assert(part_size > 0);
+    return data_sink{std::make_unique<upload_ranged_sink>(shared_from_this(),
+                                                          std::move(object_name),
+                                                          total_size,
+                                                          part_size)};
+}
+
 class client::readable_file : public file_impl {
     shared_ptr<client> _client;
     sstring _object_name;
