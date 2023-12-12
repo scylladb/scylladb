@@ -9,6 +9,7 @@
 #include "storage_service.hh"
 #include "api/api-doc/storage_service.json.hh"
 #include "api/api-doc/storage_proxy.json.hh"
+#include "api/scrub_status.hh"
 #include "db/config.hh"
 #include "db/schema_tables.hh"
 #include "utils/hash.hh"
@@ -1479,13 +1480,6 @@ void unset_storage_service(http_context& ctx, routes& r) {
     ss::tablet_balancing_enable.unset(r);
     sp::get_schema_versions.unset(r);
 }
-
-enum class scrub_status {
-    successful = 0,
-    aborted,
-    unable_to_cancel,   // Not used in Scylla, included to ensure compatibility with nodetool api.
-    validation_errors,
-};
 
 void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_ctl) {
     ss::get_snapshot_details.set(r, [&snap_ctl](std::unique_ptr<http::request> req) {
