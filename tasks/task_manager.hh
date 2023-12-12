@@ -57,12 +57,21 @@ public:
     using task_ptr = lw_shared_ptr<task_manager::task>;
     using virtual_task_ptr = lw_shared_ptr<task_manager::virtual_task>;
     using task_map = std::unordered_map<task_id, task_ptr>;
+    using virtual_task_map = std::unordered_map<task_group, virtual_task_ptr>;
     using foreign_task_ptr = foreign_ptr<task_ptr>;
     using foreign_task_list = std::list<foreign_task_ptr>;
     using module_ptr = shared_ptr<module>;
     using modules = std::unordered_map<std::string, module_ptr>;
+
+    class tasks_collection {
+    private:
+        task_map _all_tasks;
+        virtual_task_map _virtual_tasks;
+
+        friend task_manager;
+    };
 private:
-    task_map _all_tasks;
+    tasks_collection _tasks;
     modules _modules;
     config _cfg;
     seastar::abort_source _as;
@@ -230,7 +239,7 @@ public:
         using virtual_task_impl_ptr = std::unique_ptr<impl>;
     private:
         virtual_task_impl_ptr _impl;
-        [[maybe_unused]]task_group _group;
+        task_group _group;
     public:
         virtual_task(virtual_task_impl_ptr&& impl, task_group group) noexcept;
 
@@ -239,6 +248,8 @@ public:
         module_ptr get_module() const noexcept;
         future<tasks::is_abortable> is_abortable() const;
         tasks::is_internal is_internal() const noexcept;
+        void register_task();
+        void unregister_task() noexcept;
 
         future<std::optional<task_status>> get_status(task_id id);
         future<std::optional<task_status>> wait(task_id id);
@@ -250,7 +261,7 @@ public:
     protected:
         task_manager& _tm;
         std::string _name;
-        task_map _tasks;
+        tasks_collection _tasks;
         gate _gate;
         uint64_t _sequence_number = 0;
     private:
@@ -265,11 +276,17 @@ public:
         seastar::abort_source& abort_source() noexcept;
         gate& async_gate() noexcept;
         const std::string& get_name() const noexcept;
-        task_manager::task_map& get_tasks() noexcept;
-        const task_manager::task_map& get_tasks() const noexcept;
+        task_manager::task_map& get_all_tasks() noexcept;
+        const task_manager::task_map& get_all_tasks() const noexcept;
+        task_manager::virtual_task_map& get_virtual_tasks() noexcept;
+        const task_manager::virtual_task_map& get_virtual_tasks() const noexcept;
+        tasks_collection& get_tasks_collection() noexcept;
+        const tasks_collection& get_tasks_collection() const noexcept;
 
         void register_task(task_ptr task);
+        void register_virtual_task(task_group group, virtual_task_ptr task);
         void unregister_task(task_id id) noexcept;
+        void unregister_virtual_task(task_group group) noexcept;
         virtual future<> stop() noexcept;
     public:
         template<typename T>
@@ -310,6 +327,11 @@ public:
     const modules& get_modules() const noexcept;
     task_map& get_all_tasks() noexcept;
     const task_map& get_all_tasks() const noexcept;
+    virtual_task_map& get_virtual_tasks() noexcept;
+    const virtual_task_map& get_virtual_tasks() const noexcept;
+    tasks_collection& get_tasks_collection() noexcept;
+    const tasks_collection& get_tasks_collection() const noexcept;
+    future<std::vector<task_id>> get_virtual_task_children(task_id parent_id);
 
     module_ptr make_module(std::string name);
     void register_module(std::string name, module_ptr module);
@@ -352,7 +374,9 @@ private:
 protected:
     void unregister_module(std::string name) noexcept;
     void register_task(task_ptr task);
+    void register_virtual_task(task_group group, virtual_task_ptr task);
     void unregister_task(task_id id) noexcept;
+    void unregister_virtual_task(task_group group) noexcept;
 };
 
 }

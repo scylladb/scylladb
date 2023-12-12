@@ -87,7 +87,7 @@ is_abortable task_manager::task::impl::is_abortable() const noexcept {
 }
 
 is_internal task_manager::task::impl::is_internal() const noexcept {
-    return tasks::is_internal(bool(_parent_id));
+    return tasks::is_internal(bool(_parent_id));    // TODO: is direct child of virtual task internal?
 }
 
 future<> task_manager::task::impl::abort() noexcept {
@@ -318,6 +318,7 @@ task_manager::virtual_task::virtual_task(virtual_task_impl_ptr&& impl, task_grou
     , _group(group)
 {
     assert(this_shard_id() == 0);
+    register_task();
 }
 
 future<std::set<task_id>> task_manager::virtual_task::get_ids() const {
@@ -338,6 +339,14 @@ future<tasks::is_abortable> task_manager::virtual_task::is_abortable() const {
 
 tasks::is_internal task_manager::virtual_task::is_internal() const noexcept {
     return _impl->is_internal();
+}
+
+void task_manager::virtual_task::register_task() {
+    get_module()->register_virtual_task(_group, shared_from_this());
+}
+
+void task_manager::virtual_task::unregister_task() noexcept {
+    get_module()->unregister_virtual_task(_group);
 }
 
 future<std::optional<task_status>> task_manager::virtual_task::get_status(task_id id) {
@@ -382,33 +391,67 @@ const std::string& task_manager::module::get_name() const noexcept {
     return _name;
 }
 
-task_manager::task_map& task_manager::module::get_tasks() noexcept {
+task_manager::task_map& task_manager::module::get_all_tasks() noexcept {
+    return _tasks._all_tasks;
+}
+
+const task_manager::task_map& task_manager::module::get_all_tasks() const noexcept {
+    return _tasks._all_tasks;
+}
+
+task_manager::virtual_task_map& task_manager::module::get_virtual_tasks() noexcept {
+    return _tasks._virtual_tasks;
+}
+
+const task_manager::virtual_task_map& task_manager::module::get_virtual_tasks() const noexcept {
+    return _tasks._virtual_tasks;
+}
+
+task_manager::tasks_collection& task_manager::module::get_tasks_collection() noexcept {
     return _tasks;
 }
 
-const task_manager::task_map& task_manager::module::get_tasks() const noexcept {
+const task_manager::tasks_collection& task_manager::module::get_tasks_collection() const noexcept {
     return _tasks;
 }
 
 void task_manager::module::register_task(task_ptr task) {
-    _tasks[task->id()] = task;
+    get_all_tasks()[task->id()] = task;
     try {
         _tm.register_task(task);
     } catch (...) {
-        _tasks.erase(task->id());
+        get_all_tasks().erase(task->id());
+        throw;
+    }
+}
+
+void task_manager::module::register_virtual_task(task_group group, virtual_task_ptr task) {
+    get_virtual_tasks()[group] = task;
+    try {
+        _tm.register_virtual_task(group, task);
+    } catch (...) {
+        get_virtual_tasks().erase(group);
         throw;
     }
 }
 
 void task_manager::module::unregister_task(task_id id) noexcept {
-    _tasks.erase(id);
+    get_all_tasks().erase(id);
     _tm.unregister_task(id);
+}
+
+void task_manager::module::unregister_virtual_task(task_group group) noexcept { // TODO do we really need unregistering?
+    get_virtual_tasks().erase(group);
+    _tm.unregister_virtual_task(group);
 }
 
 future<> task_manager::module::stop() noexcept {
     tmlogger.info("Stopping module {}", _name);
     abort_source().request_abort();
     co_await _gate.close();
+    for (auto [_, vt]: get_virtual_tasks()) {
+        vt->unregister_task();
+    }
     _tm.unregister_module(_name);
 }
 
@@ -416,15 +459,20 @@ future<task_manager::task_ptr> task_manager::module::make_task(task::task_impl_p
     auto task = make_lw_shared<task_manager::task>(std::move(task_impl_ptr), async_gate().hold());
     bool abort = false;
     if (parent_d) {
-        task->get_status().sequence_number = co_await _tm.container().invoke_on(parent_d.shard, [id = parent_d.id, task = make_foreign(task), &abort] (task_manager& tm) mutable {
+        task->get_status().sequence_number = co_await _tm.container().invoke_on(parent_d.shard, [id = parent_d.id, task = make_foreign(task), &abort] (task_manager& tm) mutable -> future<uint64_t> {
             const auto& all_tasks = tm.get_all_tasks();
-            if (auto it = all_tasks.find(id); it != all_tasks.end()) {
+            if (auto it = all_tasks.find(id); it != all_tasks.end()) {  // regular task as a parent
                 it->second->add_child(std::move(task));
                 abort = it->second->abort_requested();
-                return it->second->get_sequence_number();
-            } else {
-                throw task_manager::task_not_found(id);
+                co_return it->second->get_sequence_number();
+            } else {    // virtual task as a parent
+                for (auto [_, vt]: tm.get_virtual_tasks()) {
+                    if ((co_await vt->get_ids()).contains(id)) {
+                        co_return vt->get_sequence_number(id);
+                    }
+                }
             }
+            throw task_manager::task_not_found(id);
         });
     }
     if (abort) {
@@ -459,11 +507,27 @@ const task_manager::modules& task_manager::get_modules() const noexcept {
 }
 
 task_manager::task_map& task_manager::get_all_tasks() noexcept {
-    return _all_tasks;
+    return _tasks._all_tasks;
 }
 
 const task_manager::task_map& task_manager::get_all_tasks() const noexcept {
-    return _all_tasks;
+    return _tasks._all_tasks;
+}
+
+task_manager::virtual_task_map& task_manager::get_virtual_tasks() noexcept {
+    return _tasks._virtual_tasks;
+}
+
+const task_manager::virtual_task_map& task_manager::get_virtual_tasks() const noexcept {
+    return _tasks._virtual_tasks;
+}
+
+task_manager::tasks_collection& task_manager::get_tasks_collection() noexcept {
+    return _tasks;
+}
+
+const task_manager::tasks_collection& task_manager::get_tasks_collection() const noexcept {
+    return _tasks;
 }
 
 task_manager::module_ptr task_manager::make_module(std::string name) {
@@ -519,11 +583,19 @@ void task_manager::unregister_module(std::string name) noexcept {
 }
 
 void task_manager::register_task(task_ptr task) {
-    _all_tasks[task->id()] = task;
+    _tasks._all_tasks[task->id()] = task;
+}
+
+void task_manager::register_virtual_task(task_group group, virtual_task_ptr task) {
+    _tasks._virtual_tasks[group] = task;
 }
 
 void task_manager::unregister_task(task_id id) noexcept {
-    _all_tasks.erase(id);
+    _tasks._all_tasks.erase(id);
+}
+
+void task_manager::unregister_virtual_task(task_group group) noexcept {
+    _tasks._virtual_tasks.erase(group);
 }
 
 }
