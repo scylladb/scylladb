@@ -201,7 +201,7 @@ void task_manager::task::unregister_task() noexcept {
     _impl->_module->unregister_task(id());
 }
 
-const task_manager::foreign_task_vector& task_manager::task::get_children() const noexcept {
+const task_manager::foreign_task_list& task_manager::task::get_children() const noexcept {
     return _impl->_children;
 }
 

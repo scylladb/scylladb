@@ -204,8 +204,8 @@ void set_task_manager(http_context& ctx, routes& r) {
         while (!q.empty()) {
             auto& current = q.front();
             res.push_back(co_await retrieve_status(current));
-            for (auto i = 0; i < current->get_children().size(); ++i) {
-                q.push(co_await current->get_children()[i].copy());
+            for (auto& child: current->get_children()) {
+                q.push(co_await child.copy());
             }
             q.pop();
         }
