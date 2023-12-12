@@ -13,6 +13,7 @@
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/metrics.hh>
 #include <seastar/http/client.hh>
+#include <filesystem>
 #include "utils/s3/creds.hh"
 
 using namespace seastar;
@@ -45,6 +46,7 @@ class client : public enable_shared_from_this<client> {
     class upload_sink_base;
     class upload_sink;
     class upload_jumbo_sink;
+    class do_upload_file;
     class readable_file;
     std::string _host;
     endpoint_config_ptr _cfg;
@@ -100,6 +102,16 @@ public:
     file make_readable_file(sstring object_name);
     data_sink make_upload_sink(sstring object_name);
     data_sink make_upload_jumbo_sink(sstring object_name, std::optional<unsigned> max_parts_per_piece = {});
+    /// upload a file with specified path to s3
+    ///
+    /// @param path the path to the file
+    /// @param object_name object name for the created object in S3
+    /// @param tag an optional tag
+    /// @param part_size the size of each part of the multipart upload
+    future<> upload_file(std::filesystem::path path,
+                         sstring object_name,
+                         std::optional<tag> tag = {},
+                         std::optional<size_t> max_part_size = {});
 
     void update_config(endpoint_config_ptr);
 
