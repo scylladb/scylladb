@@ -63,12 +63,18 @@ public:
     using task_ptr = lw_shared_ptr<task_manager::task>;
     using virtual_task_ptr = lw_shared_ptr<task_manager::virtual_task>;
     using task_map = std::unordered_map<task_id, task_ptr>;
+    using virtual_task_map = std::unordered_map<task_group, virtual_task_ptr>;
     using foreign_task_ptr = foreign_ptr<task_ptr>;
     using foreign_task_map = std::unordered_map<task_id, foreign_task_ptr>;
     using module_ptr = shared_ptr<module>;
     using modules = std::unordered_map<std::string, module_ptr>;
+
+    struct tasks_collection {
+        task_map _local_tasks;
+        virtual_task_map _virtual_tasks;
+    };
 private:
-    task_map _all_tasks;
+    tasks_collection _tasks;
     modules _modules;
     config _cfg;
     seastar::abort_source _as;
@@ -292,7 +298,7 @@ public:
     protected:
         task_manager& _tm;
         std::string _name;
-        task_map _tasks;
+        tasks_collection _tasks;
         gate _gate;
         uint64_t _sequence_number = 0;
     private:
@@ -307,10 +313,15 @@ public:
         seastar::abort_source& abort_source() noexcept;
         gate& async_gate() noexcept;
         const std::string& get_name() const noexcept;
-        task_manager::task_map& get_tasks() noexcept;
-        const task_manager::task_map& get_tasks() const noexcept;
+        task_manager::task_map& get_local_tasks() noexcept;
+        const task_manager::task_map& get_local_tasks() const noexcept;
+        task_manager::virtual_task_map& get_virtual_tasks() noexcept;
+        const task_manager::virtual_task_map& get_virtual_tasks() const noexcept;
+        tasks_collection& get_tasks_collection() noexcept;
+        const tasks_collection& get_tasks_collection() const noexcept;
 
         void register_task(task_ptr task);
+        void register_virtual_task(virtual_task_ptr task);
         void unregister_task(task_id id) noexcept;
         virtual future<> stop() noexcept;
     public:
@@ -343,6 +354,18 @@ public:
             task->start();
             co_return task;
         }
+
+        // Must be called on target shard.
+        template<typename VirtualTaskImpl, typename... Args>
+        requires std::is_base_of_v<virtual_task::impl, VirtualTaskImpl> &&
+        requires (module_ptr module, Args&&... args) {
+            {VirtualTaskImpl(module, std::forward<Args>(args)...)} -> std::same_as<VirtualTaskImpl>;
+        }
+        void make_virtual_task(Args&&... args) {
+            auto virtual_task_impl_ptr = std::make_unique<VirtualTaskImpl>(shared_from_this(), std::forward<Args>(args)...);
+            auto vt = make_lw_shared<virtual_task>(std::move(virtual_task_impl_ptr));
+            register_virtual_task(std::move(vt));
+        }
     };
 public:
     task_manager(config cfg, seastar::abort_source& as) noexcept;
@@ -350,8 +373,13 @@ public:
 
     modules& get_modules() noexcept;
     const modules& get_modules() const noexcept;
-    task_map& get_all_tasks() noexcept;
-    const task_map& get_all_tasks() const noexcept;
+    task_map& get_local_tasks() noexcept;
+    const task_map& get_local_tasks() const noexcept;
+    virtual_task_map& get_virtual_tasks() noexcept;
+    const virtual_task_map& get_virtual_tasks() const noexcept;
+    tasks_collection& get_tasks_collection() noexcept;
+    const tasks_collection& get_tasks_collection() const noexcept;
+    future<std::vector<task_id>> get_virtual_task_children(task_id parent_id);
 
     module_ptr make_module(std::string name);
     void register_module(std::string name, module_ptr module);
@@ -365,7 +393,7 @@ public:
         std::optional<T> res;
         co_await coroutine::parallel_for_each(boost::irange(0u, smp::count), [&tm, id, &res, &func] (unsigned shard) -> future<> {
             auto local_res = co_await tm.invoke_on(shard, [id, func] (const task_manager& local_tm) -> future<std::optional<T>> {
-                const auto& all_tasks = local_tm.get_all_tasks();
+                const auto& all_tasks = local_tm.get_local_tasks();
                 if (auto it = all_tasks.find(id); it != all_tasks.end()) {
                     co_return co_await func(it->second);
                 }
@@ -394,7 +422,9 @@ private:
 protected:
     void unregister_module(std::string name) noexcept;
     void register_task(task_ptr task);
+    void register_virtual_task(virtual_task_ptr task);
     void unregister_task(task_id id) noexcept;
+    void unregister_virtual_task(task_group group) noexcept;
 };
 
 }

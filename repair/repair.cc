@@ -503,8 +503,8 @@ void repair::task_manager_module::remove_shard_task_id(int id) {
 tasks::task_manager::task_ptr repair::task_manager_module::get_shard_task_ptr(int id) {
     auto it = _repairs.find(id);
     if (it != _repairs.end()) {
-        auto task_it = _tasks.find(it->second);
-        if (task_it != _tasks.end()) {
+        auto task_it = get_local_tasks().find(it->second);
+        if (task_it != get_local_tasks().end()) {
             return task_it->second;
         }
     }
@@ -540,8 +540,8 @@ bool repair::task_manager_module::is_aborted(const tasks::task_id& uuid) {
 void repair::task_manager_module::abort_all_repairs() {
     _aborted_pending_repairs = _pending_repairs;
     for (auto& x : _repairs) {
-        auto it = _tasks.find(x.second);
-        if (it != _tasks.end()) {
+        auto it = get_local_tasks().find(x.second);
+        if (it != get_local_tasks().end()) {
             auto& impl = dynamic_cast<repair::shard_repair_task_impl&>(*it->second->_impl);
             // If the task is aborted, its state will change to failed. One can wait for this with task_manager::task::done().
             impl.abort();
@@ -554,8 +554,8 @@ float repair::task_manager_module::report_progress() {
     uint64_t nr_ranges_finished = 0;
     uint64_t nr_ranges_total = 0;
     for (auto& x : _repairs) {
-        auto it = _tasks.find(x.second);
-        if (it != _tasks.end()) {
+        auto it = get_local_tasks().find(x.second);
+        if (it != get_local_tasks().end()) {
             auto& impl = dynamic_cast<repair::shard_repair_task_impl&>(*it->second->_impl);
             if (impl.reason() == streaming::stream_reason::repair) {
                 nr_ranges_total += impl.ranges_size();
