@@ -573,6 +573,7 @@ validate-checksums
 ^^^^^^^^^^^^^^^^^^
 
 There are two kinds of checksums for SStable data files:
+
 * The digest (full checksum), stored in the ``Digest.crc32`` file. It is calculated over the entire content of ``Data.db``.
 * The per-chunk checksum. For uncompressed SStables, it is stored in ``CRC.db``; for compressed SStables, it is stored inline after each compressed chunk in ``Data.db``.
 
