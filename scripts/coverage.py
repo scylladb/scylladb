@@ -104,7 +104,7 @@ def generate_coverage_report(path="build/coverage/test", name="tests", input_fil
         Defaults to 0 (False).
     """
     verbose = int(verbose)
-    input_file_re_str = f"(.+)\.profraw(\.{__DISTINCT_ID_RE})?"
+    input_file_re_str = rf"(.+)\.profraw(\.{__DISTINCT_ID_RE})?"
     input_file_re = re.compile(input_file_re_str)
     test_executables = []
 
@@ -113,13 +113,13 @@ def generate_coverage_report(path="build/coverage/test", name="tests", input_fil
             print(msg)
 
     if input_files:
-        maybe_print(f"Using input_files as input for the report")
+        maybe_print("Using input_files as input for the report")
         profraw_files = input_files
         for file in profraw_files:
             dirname, basename = os.path.split(file)
             match = re.fullmatch(input_file_re, basename)
             if match is None:
-                print(f"Error: input file {input_file} doesn't match the expected input file naming pattern {input_file_re_str}, skipping it")
+                print(f"Error: input file {basename} doesn't match the expected input file naming pattern {input_file_re_str}, skipping it")
 
             test_executables.append(os.path.join(dirname, match.group(1)))
     else:
@@ -128,14 +128,13 @@ def generate_coverage_report(path="build/coverage/test", name="tests", input_fil
         for root, dirs, files in os.walk(path):
             for file in files:
                 match = re.fullmatch(input_file_re, file)
-                if not match is None:
+                if match is not None:
                     profraw_files.append(os.path.join(root, file))
                     test_executables.append(os.path.join(root, match.group(1)))
         maybe_print(f"Found {len(profraw_files)} input files")
 
     if not profraw_files:
-        print("Error: couldn't find any raw profiling data files, can't generate coverage report")
-        exit(1)
+        sys.exit("Error: couldn't find any raw profiling data files, can't generate coverage report")
 
     profdata_path = os.path.join(path, f"{name}.profdata")
 
@@ -193,7 +192,7 @@ def main(argv):
     Note that `--path`, `--name` and `--verbose` can always be provided.
     """
 
-    class Value(argparse.Action):
+    class Value:
         def __init__(self, val, is_default=False):
             self.val = val
             self.is_default = is_default
