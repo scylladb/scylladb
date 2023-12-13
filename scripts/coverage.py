@@ -128,7 +128,7 @@ def generate_coverage_report(path="build/coverage/test", name="tests", input_fil
         for root, dirs, files in os.walk(path):
             for file in files:
                 match = re.fullmatch(input_file_re, file)
-                if not match is None:
+                if match is not None:
                     profraw_files.append(os.path.join(root, file))
                     test_executables.append(os.path.join(root, match.group(1)))
         maybe_print(f"Found {len(profraw_files)} input files")
