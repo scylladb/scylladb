@@ -134,8 +134,7 @@ def generate_coverage_report(path="build/coverage/test", name="tests", input_fil
         maybe_print(f"Found {len(profraw_files)} input files")
 
     if not profraw_files:
-        print("Error: couldn't find any raw profiling data files, can't generate coverage report")
-        exit(1)
+        sys.exit("Error: couldn't find any raw profiling data files, can't generate coverage report")
 
     profdata_path = os.path.join(path, f"{name}.profdata")
 
