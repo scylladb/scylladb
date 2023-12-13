@@ -12,10 +12,9 @@
 
 #include "locator/abstract_replication_strategy.hh"
 #include "locator/tablet_replication_strategy.hh"
-#include "exceptions/exceptions.hh"
 
 #include <optional>
-#include <set>
+#include <unordered_set>
 
 namespace locator {
 
