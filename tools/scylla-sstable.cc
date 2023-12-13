@@ -2725,10 +2725,10 @@ Read and re-write the sstable, getting rid of or fixing broken parts, depending
 on the selected mode.
 Output sstables are written to the directory specified via `--output-directory`.
 They will be written with the BIG format and the highest supported sstable
-format, with generations choosen by scylla-sstable. Generations are chosen such
+format, with generations chosen by scylla-sstable. Generations are chosen such
 that they are unique between the sstables written by the current scrub.
 The output directory is expected to be empty, if it isn't scylla-sstable will
-abort the scrub. This can be overriden by the
+abort the scrub. This can be overridden by the
 `--unsafe-accept-nonempty-output-dir` command line flag, but note that scrub will
 be aborted if an sstable cannot be written because its generation clashes with
 pre-existing sstables in the directory.
