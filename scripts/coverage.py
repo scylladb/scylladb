@@ -113,7 +113,7 @@ def generate_coverage_report(path="build/coverage/test", name="tests", input_fil
             print(msg)
 
     if input_files:
-        maybe_print(f"Using input_files as input for the report")
+        maybe_print("Using input_files as input for the report")
         profraw_files = input_files
         for file in profraw_files:
             dirname, basename = os.path.split(file)
