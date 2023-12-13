@@ -193,7 +193,7 @@ def main(argv):
     Note that `--path`, `--name` and `--verbose` can always be provided.
     """
 
-    class Value(argparse.Action):
+    class Value:
         def __init__(self, val, is_default=False):
             self.val = val
             self.is_default = is_default
