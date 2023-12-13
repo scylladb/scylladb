@@ -466,7 +466,7 @@ protected:
     bool _contains_set_or_map = false;
     bool _contains_collection = false;
 
-    // native_value_* methods are virualized versions of native_type's
+    // native_value_* methods are virtualized versions of native_type's
     // sizeof/alignof/copy-ctor/move-ctor etc.
     void* native_value_clone(const void* from) const;
     const std::type_info& native_typeid() const;

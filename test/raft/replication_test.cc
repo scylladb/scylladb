@@ -301,7 +301,7 @@ RAFT_TEST_CASE(rpc_load_conf_from_log, (test_case{
 
 
 // 3 node cluster {A, B, C}.
-// Shrinked later to 2 nodes and then expanded back to 3 nodes.
+// Shrunk later to 2 nodes and then expanded back to 3 nodes.
 // Test that both configuration changes update RPC configuration correspondingly
 // on all nodes.
 RAFT_TEST_CASE(rpc_propose_conf_change, (test_case{

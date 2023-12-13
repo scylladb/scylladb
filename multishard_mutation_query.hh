@@ -53,7 +53,7 @@ namespace tracing {
 /// their respective shard's `querier_cache`, instead of creating new shard
 /// readers.
 /// To enable stateful queries set the `query_uuid` field of the read command
-/// to an id unique to the query. This can be easily achived by generating a
+/// to an id unique to the query. This can be easily achieved by generating a
 /// random uuid with `utils::make_random_uuid()`.
 /// It is advisable that the `is_first_page` flag of the read command is set on
 /// the first page of the query so that a pointless lookup is avoided.

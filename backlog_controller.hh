@@ -22,7 +22,7 @@
 // Goal is to consume the backlog as fast as we can, but not so fast that we steal all the CPU from
 // incoming requests, and at the same time minimize user-visible fluctuations in the quota.
 //
-// What that translates to is we'll try to keep the backlog's firt derivative at 0 (IOW, we keep
+// What that translates to is we'll try to keep the backlog's first derivative at 0 (IOW, we keep
 // backlog constant). As the backlog grows we increase CPU usage, decreasing CPU usage as the
 // backlog diminishes.
 //
