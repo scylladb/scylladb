@@ -104,7 +104,7 @@ def generate_coverage_report(path="build/coverage/test", name="tests", input_fil
         Defaults to 0 (False).
     """
     verbose = int(verbose)
-    input_file_re_str = f"(.+)\.profraw(\.{__DISTINCT_ID_RE})?"
+    input_file_re_str = rf"(.+)\.profraw(\.{__DISTINCT_ID_RE})?"
     input_file_re = re.compile(input_file_re_str)
     test_executables = []
 
