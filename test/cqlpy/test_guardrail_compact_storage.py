@@ -12,8 +12,11 @@ def all_tests_are_scylla_only(scylla_only):
     pass
 
 def test_create_table_with_compact_storage_default_config(cql, test_keyspace):
-    # enable_create_table_with_compact_storage is still enabled in db/config
-    with new_test_table(cql, test_keyspace, schema="p int PRIMARY KEY, v int", extra="WITH COMPACT STORAGE") as test_table:
+    # enable_create_table_with_compact_storage is now disabled in db/config
+    try:
+        with new_test_table(cql, test_keyspace, schema="p int PRIMARY KEY, v int", extra="WITH COMPACT STORAGE") as test_table:
+            pytest.fail
+    except InvalidRequest:
         pass
 
 @pytest.mark.parametrize("enable_compact_storage", [False, True])
