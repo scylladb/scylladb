@@ -1576,7 +1576,7 @@ async def main() -> int:
 
     signaled = asyncio.Event()
 
-    setup_signal_handlers(asyncio.get_event_loop(), signaled)
+    setup_signal_handlers(asyncio.get_running_loop(), signaled)
 
     try:
         await run_all_tests(signaled, options)
@@ -1616,10 +1616,10 @@ async def workaround_python26789() -> int:
     except (Exception, KeyboardInterrupt):
         def noop(x, y):
             return None
-        asyncio.get_event_loop().set_exception_handler(noop)
+        asyncio.get_running_loop().set_exception_handler(noop)
         traceback.print_exc()
         # Clear the custom handler
-        asyncio.get_event_loop().set_exception_handler(None)
+        asyncio.get_running_loop().set_exception_handler(None)
         return -1
     return code
 
