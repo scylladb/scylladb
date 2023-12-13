@@ -187,3 +187,34 @@ async def test_tablet_alternator_lsi_consistency(manager: ManagerClient):
             }
         )
     table.delete()
+
+@pytest.mark.asyncio
+async def test_tablet_si_create(manager: ManagerClient):
+    """A basic test for creating a secondary index on a table stored
+       with tablets on a one-node cluster. We just create the index and
+       delete it - that's it, we don't read or write the table.
+       Reproduces issue #16194.
+    """
+    servers = await manager.servers_add(1)
+    cql = manager.get_cql()
+
+    await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1, 'initial_tablets': 100}")
+    await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, c int)")
+    await cql.run_async("CREATE INDEX my_idx ON test.test(c)")
+    await cql.run_async("DROP INDEX test.my_idx")
+    await cql.run_async("DROP KEYSPACE test")
+
+async def test_tablet_lsi_create(manager: ManagerClient):
+    """A basic test for creating a *local* secondary index on a table stored
+       with tablets on a one-node cluster. We just create the index and
+       delete it - that's it, we don't read or write the table.
+       Reproduces issue #16194.
+    """
+    servers = await manager.servers_add(1)
+    cql = manager.get_cql()
+
+    await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1, 'initial_tablets': 100}")
+    await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, c int)")
+    await cql.run_async("CREATE INDEX my_idx ON test.test((pk),c)")
+    await cql.run_async("DROP INDEX test.my_idx")
+    await cql.run_async("DROP KEYSPACE test")

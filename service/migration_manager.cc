@@ -727,7 +727,10 @@ future<std::vector<mutation>> prepare_column_family_update_announcement(storage_
         mlogger.info("Update table '{}.{}' From {} To {}", cfm->ks_name(), cfm->cf_name(), *old_schema, *cfm);
         auto&& keyspace = db.find_keyspace(cfm->ks_name()).metadata();
 
-        auto mutations = db::schema_tables::make_update_table_mutations(db, keyspace, old_schema, cfm, ts, from_thrift);
+        auto mutations = co_await seastar::async([&] {
+            // Can call notifier when it creates new indexes, so needs to run in Seastar thread
+            return db::schema_tables::make_update_table_mutations(db, keyspace, old_schema, cfm, ts, from_thrift);
+        });
         for (auto&& view : view_updates) {
             auto& old_view = keyspace->cf_meta_data().at(view->cf_name());
             mlogger.info("Update view '{}.{}' From {} To {}", view->ks_name(), view->cf_name(), *old_view, *view);
