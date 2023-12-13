@@ -56,7 +56,7 @@ SEASTAR_TEST_CASE(test_exception_container) {
     BOOST_REQUIRE_THROW(bar.throw_me(), bar_exception);
 
     // Construct the futures outside BOOST_REQUIRE_THROW
-    // otherwise the checks would pass if as_exception_future throwed
+    // otherwise the checks would pass if as_exception_future throws
     // and we don't want that
     auto f_empty = empty.as_exception_future();
     auto f_foo = foo.as_exception_future();
