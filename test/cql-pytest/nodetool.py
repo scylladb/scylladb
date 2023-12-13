@@ -122,7 +122,7 @@ def disablebinary(cql):
         run_nodetool(cql, "disablebinary")
 
 def parse_keyspace_table(name, separator_chars = '.'):
-    pat = f"(?P<keyspace>\w+)(?:[{separator_chars}](?P<table>\w+))?"
+    pat = rf"(?P<keyspace>\w+)(?:[{separator_chars}](?P<table>\w+))?"
     m = re.match(pat, name)
     return m.group('keyspace'), m.group('table')
 
