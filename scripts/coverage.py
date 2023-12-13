@@ -119,7 +119,7 @@ def generate_coverage_report(path="build/coverage/test", name="tests", input_fil
             dirname, basename = os.path.split(file)
             match = re.fullmatch(input_file_re, basename)
             if match is None:
-                print(f"Error: input file {input_file} doesn't match the expected input file naming pattern {input_file_re_str}, skipping it")
+                print(f"Error: input file {basename} doesn't match the expected input file naming pattern {input_file_re_str}, skipping it")
 
             test_executables.append(os.path.join(dirname, match.group(1)))
     else:
