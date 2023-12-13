@@ -332,7 +332,8 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
         "_read_concurrency_sem",
         max_inactive_queue_length(),
         _cfg.reader_concurrency_semaphore_serialize_limit_multiplier,
-        _cfg.reader_concurrency_semaphore_kill_limit_multiplier)
+        _cfg.reader_concurrency_semaphore_kill_limit_multiplier,
+        reader_concurrency_semaphore::register_metrics::yes)
     // No timeouts or queue length limits - a failure here can kill an entire repair.
     // Trust the caller to limit concurrency.
     , _streaming_concurrency_sem(
@@ -341,9 +342,10 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
             "_streaming_concurrency_sem",
             std::numeric_limits<size_t>::max(),
             utils::updateable_value(std::numeric_limits<uint32_t>::max()),
-            utils::updateable_value(std::numeric_limits<uint32_t>::max()))
+            utils::updateable_value(std::numeric_limits<uint32_t>::max()),
+            reader_concurrency_semaphore::register_metrics::yes)
     // No limits, just for accounting.
-    , _compaction_concurrency_sem(reader_concurrency_semaphore::no_limits{}, "compaction")
+    , _compaction_concurrency_sem(reader_concurrency_semaphore::no_limits{}, "compaction", reader_concurrency_semaphore::register_metrics::no)
     , _system_read_concurrency_sem(
             // Using higher initial concurrency, see revert_initial_system_read_concurrency_boost().
             max_count_concurrent_reads,
@@ -351,7 +353,8 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
             "_system_read_concurrency_sem",
             std::numeric_limits<size_t>::max(),
             utils::updateable_value(std::numeric_limits<uint32_t>::max()),
-            utils::updateable_value(std::numeric_limits<uint32_t>::max()))
+            utils::updateable_value(std::numeric_limits<uint32_t>::max()),
+            reader_concurrency_semaphore::register_metrics::yes)
     , _row_cache_tracker(_cfg.index_cache_fraction.operator utils::updateable_value<double>(), cache_tracker::register_metrics::yes)
     , _apply_stage("db_apply", &database::do_apply)
     , _version(empty_version)

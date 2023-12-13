@@ -265,6 +265,7 @@ private:
 
 public:
     struct no_limits { };
+    using register_metrics = bool_class<class register_metrics_clas>;
 
     /// Create a semaphore with the specified limits
     ///
@@ -274,13 +275,14 @@ public:
             sstring name,
             size_t max_queue_length,
             utils::updateable_value<uint32_t> serialize_limit_multiplier,
-            utils::updateable_value<uint32_t> kill_limit_multiplier);
+            utils::updateable_value<uint32_t> kill_limit_multiplier,
+            register_metrics metrics);
 
     /// Create a semaphore with practically unlimited count and memory.
     ///
     /// And conversely, no queue limit either.
     /// The semaphore's name has to be unique!
-    explicit reader_concurrency_semaphore(no_limits, sstring name);
+    explicit reader_concurrency_semaphore(no_limits, sstring name, register_metrics metrics);
 
     /// A helper constructor *only for tests* that supplies default arguments.
     /// The other constructors have default values removed so 'production-code'
@@ -291,8 +293,10 @@ public:
             ssize_t memory = std::numeric_limits<ssize_t>::max(),
             size_t max_queue_length = std::numeric_limits<size_t>::max(),
             utils::updateable_value<uint32_t> serialize_limit_multipler = utils::updateable_value(std::numeric_limits<uint32_t>::max()),
-            utils::updateable_value<uint32_t> kill_limit_multipler = utils::updateable_value(std::numeric_limits<uint32_t>::max()))
-        : reader_concurrency_semaphore(count, memory, std::move(name), max_queue_length, std::move(serialize_limit_multipler), std::move(kill_limit_multipler))
+            utils::updateable_value<uint32_t> kill_limit_multipler = utils::updateable_value(std::numeric_limits<uint32_t>::max()),
+            register_metrics metrics = register_metrics::no)
+        : reader_concurrency_semaphore(count, memory, std::move(name), max_queue_length, std::move(serialize_limit_multipler),
+                std::move(kill_limit_multipler), register_metrics::no)
     {}
 
     virtual ~reader_concurrency_semaphore();

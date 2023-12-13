@@ -43,7 +43,7 @@ struct table {
     row_cache cache;
 
     table(unsigned partitions, unsigned rows)
-        : semaphore(reader_concurrency_semaphore::no_limits{}, __FILE__)
+        : semaphore(reader_concurrency_semaphore::no_limits{}, __FILE__, reader_concurrency_semaphore::register_metrics::no)
         , mt(make_lw_shared<replica::memtable>(s.schema()))
         , underlying(s.schema())
         , cache(s.schema(), snapshot_source([this] { return underlying(); }), tracker)

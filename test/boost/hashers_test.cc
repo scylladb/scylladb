@@ -63,7 +63,7 @@ BOOST_AUTO_TEST_CASE(bytes_view_hasher_sanity_check) {
 }
 
 SEASTAR_THREAD_TEST_CASE(mutation_fragment_sanity_check) {
-    reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::no_limits{}, __FILE__);
+    reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::no_limits{}, __FILE__, reader_concurrency_semaphore::register_metrics::no);
     auto stop_semaphore = deferred_stop(semaphore);
     simple_schema s;
     auto permit = semaphore.make_tracking_only_permit(s.schema().get(), "test", db::no_timeout, {});

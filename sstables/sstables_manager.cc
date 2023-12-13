@@ -31,7 +31,8 @@ sstables_manager::sstables_manager(
         fmt::format("sstables_manager_{}", name),
         std::numeric_limits<size_t>::max(),
         utils::updateable_value(std::numeric_limits<uint32_t>::max()),
-        utils::updateable_value(std::numeric_limits<uint32_t>::max()))
+        utils::updateable_value(std::numeric_limits<uint32_t>::max()),
+        reader_concurrency_semaphore::register_metrics::no)
     , _dir_semaphore(dir_sem)
     , _resolve_host_id(std::move(resolve_host_id))
 {

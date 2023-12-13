@@ -469,7 +469,7 @@ std::unordered_map<schema_ptr, std::string> get_schema_table_directories(std::fi
 }
 
 schema_ptr do_load_schema_from_schema_tables(std::filesystem::path scylla_data_path, std::string_view keyspace, std::string_view table) {
-    reader_concurrency_semaphore rcs_sem(reader_concurrency_semaphore::no_limits{}, __FUNCTION__);
+    reader_concurrency_semaphore rcs_sem(reader_concurrency_semaphore::no_limits{}, __FUNCTION__, reader_concurrency_semaphore::register_metrics::no);
     auto stop_semaphore = deferred_stop(rcs_sem);
 
     sharded<sstable_manager_service> sst_man;
