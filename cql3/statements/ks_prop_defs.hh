@@ -12,6 +12,7 @@
 
 #include "cql3/statements/property_definitions.hh"
 #include "data_dictionary/storage_options.hh"
+#include "locator/host_id.hh"
 
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/sstring.hh>
@@ -19,6 +20,9 @@
 
 namespace data_dictionary {
 class keyspace_metadata;
+}
+namespace gms {
+    class inet_address;
 }
 
 namespace locator {

@@ -18,7 +18,6 @@
 namespace locator {
 
 class token_metadata;
-
 };
 
 namespace data_dictionary {

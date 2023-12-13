@@ -643,8 +643,8 @@ private:
             locator::shared_token_metadata::mutate_on_all_shards(_token_metadata, [hostid = host_id, &cfg_in] (locator::token_metadata& tm) {
                 auto& topo = tm.get_topology();
                 topo.set_host_id_cfg(hostid);
-                topo.add_or_update_endpoint(cfg_in.broadcast_address,
-                                            hostid,
+                topo.add_or_update_endpoint(hostid,
+                                            cfg_in.broadcast_address,
                                             std::nullopt,
                                             locator::node::state::normal,
                                             smp::count);

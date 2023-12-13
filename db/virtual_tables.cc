@@ -80,7 +80,7 @@ public:
                     set_cell(cr, "host_id", hostid->uuid());
                 }
 
-                if (tm.is_normal_token_owner(endpoint)) {
+                if (hostid && tm.is_normal_token_owner(*hostid)) {
                     sstring dc = tm.get_topology().get_location(endpoint).dc;
                     set_cell(cr, "dc", dc);
                 }
@@ -89,7 +89,7 @@ public:
                     set_cell(cr, "owns", ownership[endpoint]);
                 }
 
-                set_cell(cr, "tokens", int32_t(tm.get_tokens(endpoint).size()));
+                set_cell(cr, "tokens", int32_t(hostid ? tm.get_tokens(*hostid).size() : 0));
 
                 mutation_sink(std::move(m));
             });

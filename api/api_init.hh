@@ -10,6 +10,7 @@
 #include <seastar/http/httpd.hh>
 #include <seastar/core/future.hh>
 
+#include "locator/host_id.hh"
 #include "replica/database_fwd.hh"
 #include "tasks/task_manager.hh"
 #include "seastarx.hh"
@@ -30,6 +31,10 @@ class sstables_loader;
 
 namespace streaming {
 class stream_manager;
+}
+
+namespace gms {
+    class inet_address;
 }
 
 namespace locator {

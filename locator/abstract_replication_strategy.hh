@@ -53,11 +53,13 @@ using replication_strategy_config_options = std::map<sstring, sstring>;
 using replication_map = std::unordered_map<token, inet_address_vector_replica_set>;
 
 using endpoint_set = utils::basic_sequenced_set<inet_address, inet_address_vector_replica_set>;
+using host_id_set = utils::basic_sequenced_set<locator::host_id, host_id_vector_replica_set>;
 
 class vnode_effective_replication_map;
 class effective_replication_map_factory;
 class per_table_replication_strategy;
 class tablet_aware_replication_strategy;
+
 
 class abstract_replication_strategy : public seastar::enable_shared_from_this<abstract_replication_strategy> {
     friend class vnode_effective_replication_map;
@@ -101,7 +103,8 @@ public:
     // is small, that implementation may not yield since by itself it won't cause a reactor stall (assuming practical
     // cluster sizes and number of tokens per node). The caller is responsible for yielding if they call this function
     // in a loop.
-    virtual future<endpoint_set> calculate_natural_endpoints(const token& search_token, const token_metadata& tm) const  = 0;
+    virtual future<host_id_set> calculate_natural_endpoints(const token& search_token, const token_metadata& tm) const  = 0;
+    future<endpoint_set> calculate_natural_ips(const token& search_token, const token_metadata& tm) const;
 
     virtual ~abstract_replication_strategy() {}
     static ptr_type create_replication_strategy(const sstring& strategy_name, const replication_strategy_config_options& config_options);
@@ -146,13 +149,13 @@ public:
 
     // Use the token_metadata provided by the caller instead of _token_metadata
     // Note: must be called with initialized, non-empty token_metadata.
-    future<dht::token_range_vector> get_ranges(inet_address ep, token_metadata_ptr tmptr) const;
-    future<dht::token_range_vector> get_ranges(inet_address ep, const token_metadata& tm) const;
+    future<dht::token_range_vector> get_ranges(locator::host_id ep, token_metadata_ptr tmptr) const;
+    future<dht::token_range_vector> get_ranges(locator::host_id ep, const token_metadata& tm) const;
 
     // Caller must ensure that token_metadata will not change throughout the call.
     future<std::unordered_map<dht::token_range, inet_address_vector_replica_set>> get_range_addresses(const token_metadata& tm) const;
 
-    future<dht::token_range_vector> get_pending_address_ranges(const token_metadata_ptr tmptr, std::unordered_set<token> pending_tokens, inet_address pending_address, locator::endpoint_dc_rack dr) const;
+    future<dht::token_range_vector> get_pending_address_ranges(const token_metadata_ptr tmptr, std::unordered_set<token> pending_tokens, locator::host_id pending_address, locator::endpoint_dc_rack dr) const;
 };
 
 using ring_mapping = boost::icl::interval_map<token, std::unordered_set<inet_address>>;

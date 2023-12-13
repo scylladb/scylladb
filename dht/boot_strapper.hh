@@ -35,15 +35,15 @@ class boot_strapper {
     sharded<streaming::stream_manager>& _stream_manager;
     abort_source& _abort_source;
     /* endpoint that needs to be bootstrapped */
-    inet_address _address;
+    locator::host_id _address;
     /* its DC/RACK info */
     locator::endpoint_dc_rack _dr;
     /* token of the node being bootstrapped. */
     std::unordered_set<token> _tokens;
-    const token_metadata_ptr _token_metadata_ptr;
+    const locator::token_metadata_ptr _token_metadata_ptr;
 public:
     boot_strapper(distributed<replica::database>& db, sharded<streaming::stream_manager>& sm, abort_source& abort_source,
-            inet_address addr, locator::endpoint_dc_rack dr, std::unordered_set<token> tokens, const token_metadata_ptr tmptr)
+            locator::host_id addr, locator::endpoint_dc_rack dr, std::unordered_set<token> tokens, const token_metadata_ptr tmptr)
         : _db(db)
         , _stream_manager(sm)
         , _abort_source(abort_source)

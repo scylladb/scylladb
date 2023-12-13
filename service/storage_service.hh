@@ -223,7 +223,7 @@ private:
     future<> snitch_reconfigured();
 
     future<mutable_token_metadata_ptr> get_mutable_token_metadata_ptr() noexcept {
-        return get_token_metadata_ptr()->clone_async().then([] (token_metadata tm) {
+        return _shared_token_metadata.get()->clone_async().then([] (token_metadata tm) {
             // bump the token_metadata ring_version
             // to invalidate cached token/replication mappings
             // when the modified token_metadata is committed.
@@ -269,6 +269,9 @@ private:
     }
     bool is_me(inet_address addr) const noexcept {
         return get_token_metadata_ptr()->get_topology().is_me(addr);
+    }
+    bool is_me(locator::host_id id) const noexcept {
+        return get_token_metadata_ptr()->get_topology().is_me(id);
     }
 
     /* This abstraction maintains the token/endpoint metadata information */
@@ -653,7 +656,7 @@ public:
      * @param hostIdString token for the node
      */
     future<> removenode(locator::host_id host_id, std::list<locator::host_id_or_endpoint> ignore_nodes);
-    future<node_ops_cmd_response> node_ops_cmd_handler(gms::inet_address coordinator, node_ops_cmd_request req);
+    future<node_ops_cmd_response> node_ops_cmd_handler(gms::inet_address coordinator, std::optional<locator::host_id> coordinator_host_id, node_ops_cmd_request req);
     void node_ops_cmd_check(gms::inet_address coordinator, const node_ops_cmd_request& req);
     future<> node_ops_cmd_heartbeat_updater(node_ops_cmd cmd, node_ops_id uuid, std::list<gms::inet_address> nodes, lw_shared_ptr<bool> heartbeat_updater_done);
     void on_node_ops_registered(node_ops_id);

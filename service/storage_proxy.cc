@@ -2291,7 +2291,7 @@ replica_ids_to_endpoints(const locator::token_metadata& tm, const std::vector<lo
     endpoints.reserve(replica_ids.size());
 
     for (const auto& replica_id : replica_ids) {
-        if (auto endpoint_opt = tm.get_endpoint_for_host_id(replica_id)) {
+        if (auto endpoint_opt = tm.get_endpoint_for_host_id_if_known(replica_id)) {
             endpoints.push_back(*endpoint_opt);
         }
     }

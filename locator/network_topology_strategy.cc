@@ -82,7 +82,7 @@ class natural_endpoints_tracker {
      */
     struct data_center_endpoints {
         /** List accepted endpoints get pushed into. */
-        endpoint_set& _endpoints;
+        host_id_set& _endpoints;
 
         /**
          * Racks encountered so far. Replicas are put into separate racks while possible.
@@ -95,7 +95,7 @@ class natural_endpoints_tracker {
         size_t _rf_left;
         ssize_t _acceptable_rack_repeats;
 
-        data_center_endpoints(size_t rf, size_t rack_count, size_t node_count, endpoint_set& endpoints, endpoint_dc_rack_set& racks)
+        data_center_endpoints(size_t rf, size_t rack_count, size_t node_count, host_id_set& endpoints, endpoint_dc_rack_set& racks)
             : _endpoints(endpoints)
             , _racks(racks)
             // If there aren't enough nodes in this DC to fill the RF, the number of nodes is the effective RF.
@@ -109,7 +109,7 @@ class natural_endpoints_tracker {
          * Attempts to add an endpoint to the replicas for this datacenter, adding to the endpoints set if successful.
          * Returns true if the endpoint was added, and this datacenter does not require further replicas.
          */
-        bool add_endpoint_and_check_if_done(const inet_address& ep, const endpoint_dc_rack& location) {
+        bool add_endpoint_and_check_if_done(const host_id& ep, const endpoint_dc_rack& location) {
             if (done()) {
                 return false;
             }
@@ -168,7 +168,7 @@ class natural_endpoints_tracker {
     // We want to preserve insertion order so that the first added endpoint
     // becomes primary.
     //
-    endpoint_set _replicas;
+    host_id_set _replicas;
     // tracks the racks we have already placed replicas in
     endpoint_dc_rack_set _seen_racks;
 
@@ -219,7 +219,7 @@ public:
         }
     }
 
-    bool add_endpoint_and_check_if_done(inet_address ep) {
+    bool add_endpoint_and_check_if_done(host_id ep) {
         auto& loc = _tp.get_location(ep);
         auto i = _dcs.find(loc.dc);
         if (i != _dcs.end() && i->second.add_endpoint_and_check_if_done(ep, loc)) {
@@ -232,12 +232,12 @@ public:
         return _dcs_to_fill == 0;
     }
 
-    endpoint_set& replicas() noexcept {
+    host_id_set& replicas() noexcept {
         return _replicas;
     }
 };
 
-future<endpoint_set>
+future<host_id_set>
 network_topology_strategy::calculate_natural_endpoints(
     const token& search_token, const token_metadata& tm) const {
 
@@ -246,7 +246,7 @@ network_topology_strategy::calculate_natural_endpoints(
     for (auto& next : tm.ring_range(search_token)) {
         co_await coroutine::maybe_yield();
 
-        inet_address ep = *tm.get_endpoint(next);
+        host_id ep = *tm.get_endpoint(next);
         if (tracker.add_endpoint_and_check_if_done(ep)) {
             break;
         }
@@ -313,7 +313,7 @@ future<tablet_map> network_topology_strategy::allocate_tablets_for_new_table(sch
             if (token_range.begin() == token_range.end()) {
                 token_range = tm->ring_range(dht::minimum_token());
             }
-            inet_address ep = *tm->get_endpoint(*token_range.begin());
+            locator::host_id ep = *tm->get_endpoint(*token_range.begin());
             token_range.drop_front();
             if (tracker.add_endpoint_and_check_if_done(ep)) {
                 break;
@@ -322,8 +322,7 @@ future<tablet_map> network_topology_strategy::allocate_tablets_for_new_table(sch
 
         tablet_replica_set replicas;
         for (auto&& ep : tracker.replicas()) {
-            auto host = tm->get_host_id(ep);
-            replicas.emplace_back(tablet_replica{host, load.next_shard(host)});
+            replicas.emplace_back(tablet_replica{ep, load.next_shard(ep)});
         }
 
         tablets.set_tablet(tb, tablet_info{std::move(replicas)});

@@ -32,13 +32,22 @@ void set_token_metadata(http_context& ctx, routes& r, sharded<locator::shared_to
 
     ss::get_node_tokens.set(r, [&tm] (std::unique_ptr<http::request> req) {
         gms::inet_address addr(req->param["endpoint"]);
-        return make_ready_future<json::json_return_type>(stream_range_as_array(tm.local().get()->get_tokens(addr), [](const dht::token& i) {
-           return fmt::to_string(i);
-       }));
+        auto& local_tm = *tm.local().get();
+        const auto host_id = local_tm.get_host_id_if_known(addr);
+        return make_ready_future<json::json_return_type>(stream_range_as_array(host_id ? local_tm.get_tokens(*host_id): std::vector<dht::token>{}, [](const dht::token& i) {
+            return fmt::to_string(i);
+        }));
     });
 
     ss::get_leaving_nodes.set(r, [&tm](const_req req) {
-        return container_to_vec(tm.local().get()->get_leaving_endpoints());
+        const auto& local_tm = *tm.local().get();
+        const auto& leaving_host_ids = local_tm.get_leaving_endpoints();
+        std::unordered_set<gms::inet_address> eps;
+        eps.reserve(leaving_host_ids.size());
+        for (const auto host_id: leaving_host_ids) {
+            eps.insert(local_tm.get_endpoint_for_host_id(host_id));
+        }
+        return container_to_vec(eps);
     });
 
     ss::get_moving_nodes.set(r, [](const_req req) {
@@ -47,12 +56,14 @@ void set_token_metadata(http_context& ctx, routes& r, sharded<locator::shared_to
     });
 
     ss::get_joining_nodes.set(r, [&tm](const_req req) {
-        auto points = tm.local().get()->get_bootstrap_tokens();
-        std::unordered_set<sstring> addr;
-        for (auto i: points) {
-            addr.insert(fmt::to_string(i.second));
+        const auto& local_tm = *tm.local().get();
+        const auto& points = local_tm.get_bootstrap_tokens();
+        std::unordered_set<gms::inet_address> eps;
+        eps.reserve(points.size());
+        for (const auto& [token, host_id]: points) {
+            eps.insert(local_tm.get_endpoint_for_host_id(host_id));
         }
-        return container_to_vec(addr);
+        return container_to_vec(eps);
     });
 
     ss::get_host_id_map.set(r, [&tm](const_req req) {

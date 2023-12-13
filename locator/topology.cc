@@ -316,7 +316,12 @@ void topology::index_node(const node* node) {
     if (node->endpoint() != inet_address{}) {
         auto eit = _nodes_by_endpoint.find(node->endpoint());
         if (eit != _nodes_by_endpoint.end()) {
-            if (eit->second->is_leaving() || eit->second->left()) {
+            if (eit->second->get_state() == node::state::replacing && node->get_state() == node::state::being_replaced) {
+                // replace-with-same-ip, map ip to the old node
+                _nodes_by_endpoint.erase(node->endpoint());
+            } else if (eit->second->get_state() == node::state::being_replaced && node->get_state() == node::state::replacing) {
+                // replace-with-same-ip, map ip to the old node, do nothing if it's already the case
+            } else if (eit->second->is_leaving() || eit->second->left()) {
                 _nodes_by_endpoint.erase(node->endpoint());
             } else if (!node->is_leaving() && !node->left()) {
                 if (node->host_id()) {
@@ -437,30 +442,32 @@ const node* topology::find_node(node::idx_type idx) const noexcept {
     return _nodes.at(idx).get();
 }
 
-const node* topology::add_or_update_endpoint(inet_address ep, std::optional<host_id> opt_id, std::optional<endpoint_dc_rack> opt_dr, std::optional<node::state> opt_st, std::optional<shard_id> shard_count)
+const node* topology::add_or_update_endpoint(host_id id, std::optional<inet_address> opt_ep, std::optional<endpoint_dc_rack> opt_dr, std::optional<node::state> opt_st, std::optional<shard_id> shard_count)
 {
     if (tlogger.is_enabled(log_level::trace)) {
-        tlogger.trace("topology[{}]: add_or_update_endpoint: ep={} host_id={} dc={} rack={} state={} shards={}, at {}", fmt::ptr(this),
-            ep, opt_id.value_or(host_id::create_null_id()), opt_dr.value_or(endpoint_dc_rack{}).dc, opt_dr.value_or(endpoint_dc_rack{}).rack, opt_st.value_or(node::state::none), shard_count,
+        tlogger.trace("topology[{}]: add_or_update_endpoint: host_id={} ep={} dc={} rack={} state={} shards={}, at {}", fmt::ptr(this),
+            id, opt_ep, opt_dr.value_or(endpoint_dc_rack{}).dc, opt_dr.value_or(endpoint_dc_rack{}).rack, opt_st.value_or(node::state::none), shard_count,
             current_backtrace());
     }
-    auto n = find_node(ep);
+
+    const auto* n = find_node(id);
     if (n) {
-        return update_node(make_mutable(n), opt_id, std::nullopt, std::move(opt_dr), std::move(opt_st), std::move(shard_count));
-    } else if (opt_id && (n = find_node(*opt_id))) {
-        return update_node(make_mutable(n), std::nullopt, ep, std::move(opt_dr), std::move(opt_st), std::move(shard_count));
-    } else {
-        return add_node(opt_id.value_or(host_id::create_null_id()), ep,
-                        opt_dr.value_or(endpoint_dc_rack::default_location),
-                        opt_st.value_or(node::state::normal),
-                        shard_count.value_or(0));
+        return update_node(make_mutable(n), std::nullopt, opt_ep, std::move(opt_dr), std::move(opt_st), std::move(shard_count));
+    } else if (opt_ep && (n = find_node(*opt_ep))) {
+        return update_node(make_mutable(n), id, std::nullopt, std::move(opt_dr), std::move(opt_st), std::move(shard_count));
     }
+
+    return add_node(id,
+                    opt_ep.value_or(inet_address{}),
+                    opt_dr.value_or(endpoint_dc_rack::default_location),
+                    opt_st.value_or(node::state::normal),
+                    shard_count.value_or(0));
 }
 
-bool topology::remove_endpoint(inet_address ep)
+bool topology::remove_endpoint(locator::host_id host_id)
 {
-    auto node = find_node(ep);
-    tlogger.debug("topology[{}]: remove_endpoint: endpoint={}: {}", fmt::ptr(this), ep, debug_format(node));
+    auto node = find_node(host_id);
+    tlogger.debug("topology[{}]: remove_endpoint: host_id={}: {}", fmt::ptr(this), host_id, debug_format(node));
     if (node) {
         remove_node(node);
         return true;

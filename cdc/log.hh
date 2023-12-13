@@ -29,6 +29,7 @@
 #include "timestamp.hh"
 #include "tracing/trace_state.hh"
 #include "utils/UUID.hh"
+#include "locator/host_id.hh"
 
 class schema;
 using schema_ptr = seastar::lw_shared_ptr<const schema>;

@@ -115,7 +115,7 @@ const tablet_map& tablet_metadata::get_tablet_map(table_id id) const {
     try {
         return _tablets.at(id);
     } catch (const std::out_of_range&) {
-        throw std::runtime_error(format("Tablet map not found for table {}", id));
+        throw_with_backtrace<std::runtime_error>(format("Tablet map not found for table {}", id));
     }
 }
 
@@ -334,18 +334,11 @@ class tablet_effective_replication_map : public effective_replication_map {
     table_id _table;
     tablet_sharder _sharder;
 private:
-    gms::inet_address get_endpoint_for_host_id(host_id host) const {
-        auto endpoint_opt = _tmptr->get_endpoint_for_host_id(host);
-        if (!endpoint_opt) {
-            on_internal_error(tablet_logger, format("Host ID {} not found in the cluster", host));
-        }
-        return *endpoint_opt;
-    }
     inet_address_vector_replica_set to_replica_set(const tablet_replica_set& replicas) const {
         inet_address_vector_replica_set result;
         result.reserve(replicas.size());
         for (auto&& replica : replicas) {
-            result.emplace_back(get_endpoint_for_host_id(replica.host));
+            result.emplace_back(_tmptr->get_endpoint_for_host_id(replica.host));
         }
         return result;
     }
@@ -406,7 +399,7 @@ public:
             case write_replica_set_selector::both:
                 tablet_logger.trace("get_pending_endpoints({}): table={}, tablet={}, replica={}",
                                     search_token, _table, tablet, info->pending_replica);
-                return {get_endpoint_for_host_id(info->pending_replica.host)};
+                return {_tmptr->get_endpoint_for_host_id(info->pending_replica.host)};
             case write_replica_set_selector::next:
                 return {};
         }

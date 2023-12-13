@@ -88,6 +88,7 @@ range_streamer::get_all_ranges_with_sources_for(const sstring& keyspace_name, lo
     logger.debug("keyspace={}, desired_ranges.size={}, range_addresses.size={}", keyspace_name, desired_ranges.size(), range_addresses.size());
 
     std::unordered_map<dht::token_range, std::vector<inet_address>> range_sources;
+    const auto address_ep = get_token_metadata().get_endpoint_for_host_id(_address);
     for (auto& desired_range : desired_ranges) {
         auto found = false;
         for (auto& x : range_addresses) {
@@ -97,7 +98,7 @@ range_streamer::get_all_ranges_with_sources_for(const sstring& keyspace_name, lo
             const range<token>& src_range = x.first;
             if (src_range.contains(desired_range, dht::operator<=>)) {
                 inet_address_vector_replica_set preferred(x.second.begin(), x.second.end());
-                get_token_metadata().get_topology().sort_by_proximity(_address, preferred);
+                get_token_metadata().get_topology().sort_by_proximity(address_ep, preferred);
                 for (inet_address& p : preferred) {
                     range_sources[desired_range].push_back(p);
                 }

@@ -283,6 +283,16 @@ static future<> set_gossip_tokens(gms::gossiper& g,
     });
 }
 
+static std::unordered_map<token, gms::inet_address> get_token_to_endpoint(const locator::token_metadata& tm) {
+    const auto& map = tm.get_token_to_endpoint();
+    std::unordered_map<token, gms::inet_address> result;
+    result.reserve(map.size());
+    for (const auto [t, id]: map) {
+        result.insert({t, tm.get_endpoint_for_host_id(id)});
+    }
+    return result;
+}
+
 /*
  * The helper waits for two things
  *  1) for schema agreement
@@ -401,7 +411,7 @@ future<> storage_service::topology_state_load() {
         tmptr->set_version(_topology_state_machine._topology.version);
 
         auto update_topology = [&] (locator::host_id id, inet_address ip, const replica_state& rs) {
-            tmptr->update_topology(ip, locator::endpoint_dc_rack{rs.datacenter, rs.rack},
+            tmptr->update_topology(id, locator::endpoint_dc_rack{rs.datacenter, rs.rack},
                                    to_topology_node_state(rs.state), rs.shard_count);
             tmptr->update_host_id(id, ip);
         };
@@ -431,14 +441,14 @@ future<> storage_service::topology_state_load() {
                 co_await _gossiper.add_local_application_state({{ gms::application_state::STATUS, gms::versioned_value::normal(rs.ring.value().tokens) }});
             }
             update_topology(host_id, ip, rs);
-            co_await tmptr->update_normal_tokens(rs.ring.value().tokens, ip);
+            co_await tmptr->update_normal_tokens(rs.ring.value().tokens, host_id);
         };
 
         for (const auto& [id, rs]: _topology_state_machine._topology.normal_nodes) {
             co_await add_normal_node(id, rs);
         }
 
-        tmptr->set_read_new(std::invoke([](std::optional<topology::transition_state> state) {
+        const auto read_new = std::invoke([](std::optional<topology::transition_state> state) {
             using read_new_t = locator::token_metadata::read_new_t;
             if (!state.has_value()) {
                 return read_new_t::no;
@@ -457,7 +467,8 @@ future<> storage_service::topology_state_load() {
                 case topology::transition_state::write_both_read_new:
                     return read_new_t::yes;
             }
-        }, _topology_state_machine._topology.tstate));
+        }, _topology_state_machine._topology.tstate);
+        tmptr->set_read_new(read_new);
 
         for (const auto& [id, rs]: _topology_state_machine._topology.transition_nodes) {
             locator::host_id host_id{id.uuid()};
@@ -483,9 +494,9 @@ future<> storage_service::topology_state_load() {
                         // so we can perform writes to regular 'distributed' tables during the bootstrap procedure
                         // (such as the CDC generation write).
                         // It doesn't break anything to set the tokens to normal early in this single-node case.
-                        co_await tmptr->update_normal_tokens(rs.ring.value().tokens, ip);
+                        co_await tmptr->update_normal_tokens(rs.ring.value().tokens, host_id);
                     } else {
-                        tmptr->add_bootstrap_tokens(rs.ring.value().tokens, ip);
+                        tmptr->add_bootstrap_tokens(rs.ring.value().tokens, host_id);
                         co_await update_topology_change_info(tmptr, ::format("bootstrapping node {}/{}", id, ip));
                     }
                 }
@@ -493,8 +504,8 @@ future<> storage_service::topology_state_load() {
             case node_state::decommissioning:
             case node_state::removing:
                 update_topology(host_id, ip, rs);
-                co_await tmptr->update_normal_tokens(rs.ring.value().tokens, ip);
-                tmptr->add_leaving_endpoint(ip);
+                co_await tmptr->update_normal_tokens(rs.ring.value().tokens, host_id);
+                tmptr->add_leaving_endpoint(host_id);
                 co_await update_topology_change_info(tmptr, ::format("{} {}/{}", rs.state, id, ip));
                 break;
             case node_state::replacing: {
@@ -507,11 +518,10 @@ future<> storage_service::topology_state_load() {
                         on_fatal_internal_error(slogger, ::format("Cannot map id of a node being replaced {} to its ip", replaced_id));
                     }
                     assert(existing_ip);
-                    // FIXME: Topology cannot hold two IPs with different host ids yet so
-                    // when replacing we must advertise the replaced_id for the ip, otherwise
-                    // topology will complain about host id of a local node changing and fail.
-                    update_topology(ip == existing_ip ? locator::host_id(replaced_id.uuid()) : host_id, ip, rs);
-                    tmptr->add_replacing_endpoint(*existing_ip, ip);
+                    const auto replaced_host_id = locator::host_id(replaced_id.uuid());
+                    tmptr->update_topology(replaced_host_id, std::nullopt, locator::node::state::being_replaced);
+                    update_topology(host_id, ip, rs);
+                    tmptr->add_replacing_endpoint(replaced_host_id, host_id);
                     co_await update_topology_change_info(tmptr, ::format("replacing {}/{} by {}/{}", replaced_id, *existing_ip, id, ip));
                 }
             }
@@ -545,9 +555,11 @@ future<> storage_service::topology_state_load() {
     // of the cluster state. To work correctly, the gossiper needs to know the current
     // endpoints. We cannot rely on seeds alone, since it is not guaranteed that seeds
     // will be up to date and reachable at the time of restart.
-    for (const auto& e: get_token_metadata_ptr()->get_all_endpoints()) {
-        if (!is_me(e) && !_gossiper.get_endpoint_state_ptr(e)) {
-            co_await _gossiper.add_saved_endpoint(e);
+    const auto tmptr = get_token_metadata_ptr();
+    for (const auto& e: tmptr->get_all_endpoints()) {
+        const auto ep = tmptr->get_endpoint_for_host_id(e);
+        if (!is_me(e) && !_gossiper.get_endpoint_state_ptr(ep)) {
+            co_await _gossiper.add_saved_endpoint(ep);
         }
     }
 
@@ -1210,18 +1222,11 @@ class topology_coordinator {
                         " can't find endpoint for token {}", end));
                 }
 
-                auto id = tmptr->get_host_id_if_known(*ep);
-                if (!id) {
-                    on_internal_error(slogger, ::format(
-                        "raft topology: make_new_cdc_generation_data: get_sharding_info:"
-                        " can't find host ID for endpoint {}, owner of token {}", *ep, end));
-                }
-
-                auto ptr = _topo_sm._topology.find(raft::server_id{id->uuid()});
+                auto ptr = _topo_sm._topology.find(raft::server_id{ep->uuid()});
                 if (!ptr) {
                     on_internal_error(slogger, ::format(
                         "raft topology: make_new_cdc_generation_data: get_sharding_info:"
-                        " couldn't find node {} in topology, owner of token {}", *id, end));
+                        " couldn't find node {} in topology, owner of token {}", *ep, end));
                 }
 
                 auto& rs = ptr->second;
@@ -3047,8 +3052,11 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
             slogger.info("Replacing a node with {} IP address, my address={}, node being replaced={}",
                 get_broadcast_address() == *replace_address ? "the same" : "a different",
                 get_broadcast_address(), *replace_address);
-            tmptr->update_topology(*replace_address, std::move(ri->dc_rack), locator::node::state::being_replaced);
-            co_await tmptr->update_normal_tokens(bootstrap_tokens, *replace_address);
+            tmptr->update_topology(tmptr->get_my_id(), std::nullopt, locator::node::state::replacing);
+            tmptr->update_topology(ri->host_id, std::move(ri->dc_rack), locator::node::state::being_replaced);
+            co_await tmptr->update_normal_tokens(bootstrap_tokens, ri->host_id);
+            tmptr->update_host_id(ri->host_id, *replace_address);
+
             replaced_host_id = ri->host_id;
         }
     } else if (should_bootstrap()) {
@@ -3088,8 +3096,8 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
         // This node must know about its chosen tokens before other nodes do
         // since they may start sending writes to this node after it gossips status = NORMAL.
         // Therefore we update _token_metadata now, before gossip starts.
-        tmptr->update_topology(get_broadcast_address(), _snitch.local()->get_location(), locator::node::state::normal);
-        co_await tmptr->update_normal_tokens(my_tokens, get_broadcast_address());
+        tmptr->update_topology(tmptr->get_my_id(), _snitch.local()->get_location(), locator::node::state::normal);
+        co_await tmptr->update_normal_tokens(my_tokens, tmptr->get_my_id());
 
         cdc_gen_id = co_await _sys_ks.local().get_cdc_generation_id();
         if (!cdc_gen_id) {
@@ -3343,7 +3351,7 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
         if (!replace_address) {
             auto tmptr = get_token_metadata_ptr();
 
-            if (tmptr->is_normal_token_owner(get_broadcast_address())) {
+            if (tmptr->is_normal_token_owner(tmptr->get_my_id())) {
                 throw std::runtime_error("This node is already a member of the token ring; bootstrap aborted. (If replacing a dead node, remove the old one from the ring first.)");
             }
             slogger.info("getting bootstrap token");
@@ -3369,7 +3377,7 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
                 for (auto token : bootstrap_tokens) {
                     auto existing = tmptr->get_endpoint(token);
                     if (existing) {
-                        auto eps = _gossiper.get_endpoint_state_ptr(*existing);
+                        auto eps = _gossiper.get_endpoint_state_ptr(tmptr->get_endpoint_for_host_id(*existing));
                         if (eps && eps->get_update_timestamp() > gms::gossiper::clk::now() - delay) {
                             throw std::runtime_error("Cannot replace a live node...");
                         }
@@ -3406,12 +3414,12 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
     }
 
     slogger.debug("Setting tokens to {}", bootstrap_tokens);
-    co_await mutate_token_metadata([this, &bootstrap_tokens] (mutable_token_metadata_ptr tmptr) {
+    co_await mutate_token_metadata([this, &bootstrap_tokens] (mutable_token_metadata_ptr tmptr) -> future<> {
         // This node must know about its chosen tokens before other nodes do
         // since they may start sending writes to this node after it gossips status = NORMAL.
         // Therefore, in case we haven't updated _token_metadata with our tokens yet, do it now.
-        tmptr->update_topology(get_broadcast_address(), _snitch.local()->get_location(), locator::node::state::normal);
-        return tmptr->update_normal_tokens(bootstrap_tokens, get_broadcast_address());
+        tmptr->update_topology(tmptr->get_my_id(), _snitch.local()->get_location(), locator::node::state::normal);
+        co_await tmptr->update_normal_tokens(bootstrap_tokens, tmptr->get_my_id());
     });
 
     if (!_sys_ks.local().bootstrap_complete()) {
@@ -3549,8 +3557,8 @@ future<> storage_service::bootstrap(std::unordered_set<token>& bootstrap_tokens,
                 slogger.debug("bootstrap: update pending ranges: endpoint={} bootstrap_tokens={}", get_broadcast_address(), bootstrap_tokens);
                 mutate_token_metadata([this, &bootstrap_tokens] (mutable_token_metadata_ptr tmptr) {
                     auto endpoint = get_broadcast_address();
-                    tmptr->update_topology(endpoint, _snitch.local()->get_location(), locator::node::state::bootstrapping);
-                    tmptr->add_bootstrap_tokens(bootstrap_tokens, endpoint);
+                    tmptr->update_topology(tmptr->get_my_id(), _snitch.local()->get_location(), locator::node::state::bootstrapping);
+                    tmptr->add_bootstrap_tokens(bootstrap_tokens, tmptr->get_my_id());
                     return update_topology_change_info(std::move(tmptr), ::format("bootstrapping node {}", endpoint));
                 }).get();
             }
@@ -3572,7 +3580,7 @@ future<> storage_service::bootstrap(std::unordered_set<token>& bootstrap_tokens,
 
                 slogger.info("sleeping {} ms for pending range setup", get_ring_delay().count());
                 _gossiper.wait_for_range_setup().get();
-                dht::boot_strapper bs(_db, _stream_manager, _abort_source, get_broadcast_address(), _snitch.local()->get_location(), bootstrap_tokens, get_token_metadata_ptr());
+                dht::boot_strapper bs(_db, _stream_manager, _abort_source, get_token_metadata_ptr()->get_my_id(), _snitch.local()->get_location(), bootstrap_tokens, get_token_metadata_ptr());
                 slogger.info("Starting to bootstrap...");
                 bs.bootstrap(streaming::stream_reason::bootstrap, _gossiper, null_topology_guard).get();
             } else {
@@ -3642,21 +3650,22 @@ future<> storage_service::handle_state_bootstrap(inet_address endpoint, gms::per
     // continue.
     auto tmlock = co_await get_token_metadata_lock();
     auto tmptr = co_await get_mutable_token_metadata_ptr();
-    if (tmptr->is_normal_token_owner(endpoint)) {
+    const auto host_id = _gossiper.get_host_id(endpoint);
+    if (tmptr->is_normal_token_owner(host_id)) {
         // If isLeaving is false, we have missed both LEAVING and LEFT. However, if
         // isLeaving is true, we have only missed LEFT. Waiting time between completing
         // leave operation and rebootstrapping is relatively short, so the latter is quite
         // common (not enough time for gossip to spread). Therefore we report only the
         // former in the log.
-        if (!tmptr->is_leaving(endpoint)) {
-            slogger.info("Node {} state jump to bootstrap", endpoint);
+        if (!tmptr->is_leaving(host_id)) {
+            slogger.info("Node {} state jump to bootstrap", host_id);
         }
-        tmptr->remove_endpoint(endpoint);
+        tmptr->remove_endpoint(host_id);
     }
+    tmptr->update_topology(host_id, get_dc_rack_for(endpoint), locator::node::state::bootstrapping);
+    tmptr->add_bootstrap_tokens(tokens, host_id);
+    tmptr->update_host_id(host_id, endpoint);
 
-    tmptr->update_topology(endpoint, get_dc_rack_for(endpoint), locator::node::state::bootstrapping);
-    tmptr->add_bootstrap_tokens(tokens, endpoint);
-    tmptr->update_host_id(_gossiper.get_host_id(endpoint), endpoint);
     co_await update_topology_change_info(tmptr, ::format("handle_state_bootstrap {}", endpoint));
     co_await replicate_to_all_cores(std::move(tmptr));
 }
@@ -3675,35 +3684,85 @@ future<> storage_service::handle_state_normal(inet_address endpoint, gms::permit
 
     auto tmlock = std::make_unique<token_metadata_lock>(co_await get_token_metadata_lock());
     auto tmptr = co_await get_mutable_token_metadata_ptr();
-    if (tmptr->is_normal_token_owner(endpoint)) {
-        slogger.info("Node {} state jump to normal", endpoint);
-    }
     std::unordered_set<inet_address> endpoints_to_remove;
 
     auto do_remove_node = [&] (gms::inet_address node) {
-        tmptr->remove_endpoint(node);
+        // this lambda is called in three cases:
+        // 1. old endpoint for the given host_id is ours, we remove the new endpoint;
+        // 2. new endpoint for the given host_id has bigger generation, we remove the old endpoint;
+        // 3. old endpoint for the given host_id has bigger generation, we remove the new endpoint.
+        // In all of these cases host_id is retained, only the IP addresses are changed.
+        // We don't need to call remove_endpoint on tmptr, since it will be called
+        // indirectly through the chain endpoints_to_remove->storage_service::remove_endpoint ->
+        // _gossiper.remove_endpoint -> storage_service::on_remove.
+
         endpoints_to_remove.insert(node);
     };
     // Order Matters, TM.updateHostID() should be called before TM.updateNormalToken(), (see CASSANDRA-4300).
     auto host_id = _gossiper.get_host_id(endpoint);
-    auto existing = tmptr->get_endpoint_for_host_id(host_id);
+    if (tmptr->is_normal_token_owner(host_id)) {
+        slogger.info("Node {}/{} state jump to normal", endpoint, host_id);
+    }
+    auto existing = tmptr->get_endpoint_for_host_id_if_known(host_id);
+
+    // Old node in replace-with-same-IP scenario.
+    std::optional<locator::host_id> replaced_id;
+
     if (existing && *existing != endpoint) {
+        // This branch in taken when a node changes its IP address.
+
         if (*existing == get_broadcast_address()) {
             slogger.warn("Not updating host ID {} for {} because it's mine", host_id, endpoint);
             do_remove_node(endpoint);
         } else if (_gossiper.compare_endpoint_startup(endpoint, *existing) > 0) {
+            // The new IP has greater generation than the existing one.
+            // Here we remap the host_id to the new IP. The 'owned_tokens' calculation logic below
+            // won't detect any changes - the branch 'endpoint == current_owner' will be taken.
+            // We still need to call 'remove_endpoint' for existing IP to remove it from system.peers.
+
             slogger.warn("Host ID collision for {} between {} and {}; {} is the new owner", host_id, *existing, endpoint, endpoint);
             do_remove_node(*existing);
             slogger.info("Set host_id={} to be owned by node={}, existing={}", host_id, endpoint, *existing);
             tmptr->update_host_id(host_id, endpoint);
         } else {
+            // The new IP has smaller generation than the existing one,
+            // we are going to remove it, so we add it to the endpoints_to_remove.
+            // How does this relate to the tokens this endpoint may have?
+            // There is a condition below which checks that if endpoints_to_remove
+            // contains 'endpoint', then the owned_tokens must be empty, otherwise internal_error
+            // is triggered. This means the following is expected to be true:
+            // 1. each token from the tokens variable (which is read from gossiper) must have an owner node
+            // 2. this owner must be different from 'endpoint'
+            // 3. its generation must be greater than endpoint's
+
             slogger.warn("Host ID collision for {} between {} and {}; ignored {}", host_id, *existing, endpoint, endpoint);
             do_remove_node(endpoint);
         }
     } else if (existing && *existing == endpoint) {
-        tmptr->del_replacing_endpoint(endpoint);
+        // This branch is taken for all gossiper-managed topology operations.
+        // For example, if this node is a member of the cluster and a new node is added,
+        // handle_state_normal is called on this node as the final step
+        // in the endpoint bootstrap process.
+        // This method is also called for both replace scenarios - with either the same or with a different IP.
+        // If the new node has a different IP, the old IP is removed by the block of
+        // logic below - we detach the old IP from token ring,
+        // it gets added to candidates_for_removal, then storage_service::remove_endpoint ->
+        // _gossiper.remove_endpoint -> storage_service::on_remove -> remove from token_metadata.
+        // If the new node has the same IP, we need to explicitly remove old host_id from
+        // token_metadata, since no IPs will be removed in this case.
+        // We do this after update_normal_tokens, allowing for tokens to be properly
+        // migrated to the new host_id.
+
+        if (const auto old_host_id = tmptr->get_host_id_if_known(endpoint); old_host_id && *old_host_id != host_id) {
+            replaced_id = *old_host_id;
+        }
     } else {
-        tmptr->del_replacing_endpoint(endpoint);
+        // This branch is taken if this node wasn't involved in node_ops
+        // workflow (storage_service::node_ops_cmd_handler wasn't called on it) and it just
+        // receives the current state of the cluster from the gossiper.
+        // For example, a new node receives this notification for every
+        // existing node in the cluster.
+
         auto nodes = _gossiper.get_nodes_with_host_id(host_id);
         bool left = std::any_of(nodes.begin(), nodes.end(), [this] (const gms::inet_address& node) { return _gossiper.is_left(node); });
         if (left) {
@@ -3723,8 +3782,18 @@ future<> storage_service::handle_state_normal(inet_address endpoint, gms::permit
     // token_to_endpoint_map is used to track the current token owners for the purpose of removing replaced endpoints.
     // when any token is replaced by a new owner, we track the existing owner in `candidates_for_removal`
     // and eventually, if any candidate for removal ends up owning no tokens, it is removed from token_metadata.
-    std::unordered_map<token, inet_address> token_to_endpoint_map = get_token_metadata().get_token_to_endpoint();
+    std::unordered_map<token, inet_address> token_to_endpoint_map = get_token_to_endpoint(get_token_metadata());
     std::unordered_set<inet_address> candidates_for_removal;
+
+    // Here we convert endpoint tokens from gossiper to owned_tokens, which will be assigned as a new
+    // normal tokens to the token_metadata.
+    // This transformation accounts for situations where some tokens
+    // belong to outdated nodes - the ones with smaller generation.
+    // We use endpoints instead of host_ids here since gossiper operates
+    // with endpoints and generations are tied to endpoints, not host_ids.
+    // In replace-with-same-ip scenario we won't be able to distinguish
+    // between the old and new IP owners, so we assume the old replica
+    // is down and won't be resurrected.
 
     for (auto t : tokens) {
         // we don't want to update if this node is responsible for the token and it has a later startup time than endpoint.
@@ -3777,7 +3846,7 @@ future<> storage_service::handle_state_normal(inet_address endpoint, gms::permit
         endpoints_to_remove.insert(ep);
     }
 
-    bool is_normal_token_owner = tmptr->is_normal_token_owner(endpoint);
+    bool is_normal_token_owner = tmptr->is_normal_token_owner(host_id);
     bool do_notify_joined = false;
 
     if (endpoints_to_remove.contains(endpoint)) [[unlikely]] {
@@ -3793,8 +3862,19 @@ future<> storage_service::handle_state_normal(inet_address endpoint, gms::permit
             do_notify_joined = true;
         }
 
-        tmptr->update_topology(endpoint, get_dc_rack_for(endpoint), locator::node::state::normal);
-        co_await tmptr->update_normal_tokens(owned_tokens, endpoint);
+        const auto dc_rack = get_dc_rack_for(endpoint);
+        tmptr->update_topology(host_id, dc_rack, locator::node::state::normal);
+        co_await tmptr->update_normal_tokens(owned_tokens, host_id);
+        if (replaced_id) {
+            if (tmptr->is_normal_token_owner(*replaced_id)) {
+                on_internal_error(slogger, ::format("replaced endpoint={}/{} still owns tokens {}",
+                    endpoint, *replaced_id, tmptr->get_tokens(*replaced_id)));
+            } else {
+                tmptr->remove_endpoint(*replaced_id);
+                slogger.info("node {}/{} is removed from token_metadata since it's replaced by {}/{} ",
+                    endpoint, *replaced_id, endpoint, host_id);
+            }
+        }
     }
 
     co_await update_topology_change_info(tmptr, ::format("handle_state_normal {}", endpoint));
@@ -3823,7 +3903,7 @@ future<> storage_service::handle_state_normal(inet_address endpoint, gms::permit
         const auto& tm = get_token_metadata();
         auto ver = tm.get_ring_version();
         for (auto& x : tm.get_token_to_endpoint()) {
-            slogger.debug("handle_state_normal: token_metadata.ring_version={}, token={} -> endpoint={}", ver, x.first, x.second);
+            slogger.debug("handle_state_normal: token_metadata.ring_version={}, token={} -> endpoint={}/{}", ver, x.first, tm.get_endpoint_for_host_id(x.second), x.second);
         }
     }
     _normal_state_handled_on_boot.insert(endpoint);
@@ -3841,8 +3921,9 @@ future<> storage_service::handle_state_left(inet_address endpoint, std::vector<s
         slogger.warn("Fail to handle_state_left endpoint={} pieces={}", endpoint, pieces);
         co_return;
     }
+    const auto host_id = _gossiper.get_host_id(endpoint);
     auto tokens = get_tokens_for(endpoint);
-    slogger.debug("Node {} state left, tokens {}", endpoint, tokens);
+    slogger.debug("Node {}/{} state left, tokens {}", endpoint, host_id, tokens);
     if (tokens.empty()) {
         auto eps = _gossiper.get_endpoint_state_ptr(endpoint);
         if (eps) {
@@ -3850,8 +3931,8 @@ future<> storage_service::handle_state_left(inet_address endpoint, std::vector<s
         } else {
             slogger.warn("handle_state_left: Couldn't find endpoint state for node={}", endpoint);
         }
-        auto tokens_from_tm = get_token_metadata().get_tokens(endpoint);
-        slogger.warn("handle_state_left: Get tokens from token_metadata, node={}, tokens={}", endpoint, tokens_from_tm);
+        auto tokens_from_tm = get_token_metadata().get_tokens(host_id);
+        slogger.warn("handle_state_left: Get tokens from token_metadata, node={}/{}, tokens={}", endpoint, host_id, tokens_from_tm);
         tokens = std::unordered_set<dht::token>(tokens_from_tm.begin(), tokens_from_tm.end());
     }
     co_await excise(tokens, endpoint, extract_expire_time(pieces), pid);
@@ -3870,9 +3951,10 @@ future<> storage_service::handle_state_removed(inet_address endpoint, std::vecto
         }
         co_return;
     }
-    if (get_token_metadata().is_normal_token_owner(endpoint)) {
+    const auto host_id = _gossiper.get_host_id(endpoint);
+    if (get_token_metadata().is_normal_token_owner(host_id)) {
         auto state = pieces[0];
-        auto remove_tokens = get_token_metadata().get_tokens(endpoint);
+        auto remove_tokens = get_token_metadata().get_tokens(host_id);
         std::unordered_set<token> tmp(remove_tokens.begin(), remove_tokens.end());
         co_await excise(std::move(tmp), endpoint, extract_expire_time(pieces), pid);
     } else { // now that the gossiper has told us about this nonexistent member, notify the gossiper to remove it
@@ -3889,14 +3971,19 @@ future<> storage_service::on_join(gms::inet_address endpoint, gms::endpoint_stat
 }
 
 future<> storage_service::on_alive(gms::inet_address endpoint, gms::endpoint_state_ptr state, gms::permit_id pid) {
-    slogger.debug("endpoint={} on_alive: permit_id={}", endpoint, pid);
-    bool is_normal_token_owner = get_token_metadata().is_normal_token_owner(endpoint);
+    const auto& tm = get_token_metadata();
+    const auto tm_host_id_opt = tm.get_host_id_if_known(endpoint);
+    slogger.debug("endpoint={}/{} on_alive: permit_id={}", endpoint, tm_host_id_opt, pid);
+    bool is_normal_token_owner = tm_host_id_opt && tm.is_normal_token_owner(*tm_host_id_opt);
     if (is_normal_token_owner) {
         co_await notify_up(endpoint);
     } else {
         auto tmlock = co_await get_token_metadata_lock();
         auto tmptr = co_await get_mutable_token_metadata_ptr();
-        tmptr->update_topology(endpoint, get_dc_rack_for(endpoint));
+        const auto dc_rack = get_dc_rack_for(endpoint);
+        const auto host_id = _gossiper.get_host_id(endpoint);
+        tmptr->update_host_id(host_id, endpoint);
+        tmptr->update_topology(host_id, dc_rack);
         co_await replicate_to_all_cores(std::move(tmptr));
     }
 }
@@ -3934,8 +4021,17 @@ future<> storage_service::on_change(inet_address endpoint, application_state sta
             slogger.debug("Ignoring state change for dead or unknown endpoint: {}", endpoint);
             co_return;
         }
-        if (get_token_metadata().is_normal_token_owner(endpoint)) {
-            slogger.debug("endpoint={} on_change:     updating system.peers table", endpoint);
+        const auto host_id = _gossiper.get_host_id(endpoint);
+        const auto& tm = get_token_metadata();
+        const auto ep = tm.get_endpoint_for_host_id_if_known(host_id);
+        // The check *ep == endpoint is needed when a node changes
+        // its IP - on_change can be called by the gossiper for old IP as part
+        // of its removal, after handle_state_normal has already been called for
+        // the new one. Without the check, the do_update_system_peers_table call
+        // overwrites the IP back to its old value.
+        // In essence, the code under the 'if' should fire if the given IP is a normal_token_owner.
+        if (ep && *ep == endpoint && tm.is_normal_token_owner(host_id)) {
+            slogger.debug("endpoint={}/{} on_change:     updating system.peers table", endpoint, host_id);
             co_await do_update_system_peers_table(endpoint, state, value);
             if (state == application_state::RPC_READY) {
                 slogger.debug("Got application_state::RPC_READY for node {}, is_cql_ready={}", endpoint, ep_state->is_cql_ready());
@@ -3966,7 +4062,13 @@ future<> storage_service::on_remove(gms::inet_address endpoint, gms::permit_id p
     slogger.debug("endpoint={} on_remove: permit_id={}", endpoint, pid);
     auto tmlock = co_await get_token_metadata_lock();
     auto tmptr = co_await get_mutable_token_metadata_ptr();
-    tmptr->remove_endpoint(endpoint);
+    // We should handle the case when we aren't able to find endpoint -> ip mapping in token_metadata.
+    // This could happen e.g. when the new endpoint has bigger generation in handle_state_normal - the code
+    // in handle_state_normal will remap host_id to the new IP and we won't find
+    // old IP here. We should just skip the remove in that case.
+    if (const auto host_id = tmptr->get_host_id_if_known(endpoint); host_id) {
+        tmptr->remove_endpoint(*host_id);
+    }
     co_await update_topology_change_info(tmptr, ::format("on_remove {}", endpoint));
     co_await replicate_to_all_cores(std::move(tmptr));
 }
@@ -4163,11 +4265,14 @@ future<> storage_service::join_cluster(sharded<db::system_distributed_keyspace>&
                 // entry has been mistakenly added, delete it
                 co_await _sys_ks.local().remove_endpoint(ep);
             } else {
-                tmptr->update_topology(ep, get_dc_rack(ep), locator::node::state::normal);
-                co_await tmptr->update_normal_tokens(tokens, ep);
-                if (loaded_host_ids.contains(ep)) {
-                    tmptr->update_host_id(loaded_host_ids.at(ep), ep);
+                const auto dc_rack = get_dc_rack(ep);
+                const auto hostIdIt = loaded_host_ids.find(ep);
+                if (hostIdIt == loaded_host_ids.end()) {
+                    on_internal_error(slogger, format("can't find host_id for ep {}", ep));
                 }
+                tmptr->update_topology(hostIdIt->second, dc_rack, locator::node::state::normal);
+                co_await tmptr->update_normal_tokens(tokens, hostIdIt->second);
+                tmptr->update_host_id(hostIdIt->second, ep);
                 loaded_endpoints.insert(ep);
                 co_await _gossiper.add_saved_endpoint(ep);
             }
@@ -4256,7 +4361,7 @@ future<> storage_service::replicate_to_all_cores(mutable_token_metadata_ptr tmpt
                     continue;
                 }
                 auto tmptr = pending_token_metadata_ptr[this_shard_id()];
-                auto erm = co_await ss.get_erm_factory().create_effective_replication_map(rs, std::move(tmptr));
+                auto erm = co_await ss.get_erm_factory().create_effective_replication_map(rs, tmptr);
                 pending_effective_replication_maps[this_shard_id()].emplace(ks_name, std::move(erm));
             }
         });
@@ -4493,9 +4598,9 @@ future<std::map<gms::inet_address, float>> storage_service::get_ownership() {
         // describeOwnership returns tokens in an unspecified order, let's re-order them
         std::map<gms::inet_address, float> ownership;
         for (auto entry : token_map) {
-            gms::inet_address endpoint = tm.get_endpoint(entry.first).value();
+            locator::host_id id = tm.get_endpoint(entry.first).value();
             auto token_ownership = entry.second;
-            ownership[endpoint] += token_ownership;
+            ownership[tm.get_endpoint_for_host_id(id)] += token_ownership;
         }
         return ownership;
     });
@@ -4785,7 +4890,7 @@ future<> storage_service::decommission() {
                 uuid = ctl.uuid();
                 auto endpoint = ctl.endpoint;
                 const auto& tmptr = ctl.tmptr;
-                if (!tmptr->is_normal_token_owner(endpoint)) {
+                if (!tmptr->is_normal_token_owner(ctl.host_id)) {
                     throw std::runtime_error("local node is not a member of the token ring yet");
                 }
                 // We assume that we're a member of group 0 if we're in decommission()` and Raft is enabled.
@@ -5024,7 +5129,7 @@ void storage_service::run_replace_ops(std::unordered_set<token>& bootstrap_token
             _repair.local().replace_with_repair(get_token_metadata_ptr(), bootstrap_tokens, ctl.ignore_nodes).get();
         } else {
             slogger.info("replace[{}]: Using streaming based node ops to sync data", uuid);
-            dht::boot_strapper bs(_db, _stream_manager, _abort_source, get_broadcast_address(), _snitch.local()->get_location(), bootstrap_tokens, get_token_metadata_ptr());
+            dht::boot_strapper bs(_db, _stream_manager, _abort_source, get_token_metadata_ptr()->get_my_id(), _snitch.local()->get_location(), bootstrap_tokens, get_token_metadata_ptr());
             bs.bootstrap(streaming::stream_reason::replace, _gossiper, null_topology_guard, replace_address).get();
         }
         on_streaming_finished();
@@ -5136,7 +5241,7 @@ future<> storage_service::removenode(locator::host_id host_id, std::list<locator
             auto stop_ctl = deferred_stop(ctl);
             auto uuid = ctl.uuid();
             const auto& tmptr = ctl.tmptr;
-            auto endpoint_opt = tmptr->get_endpoint_for_host_id(host_id);
+            auto endpoint_opt = tmptr->get_endpoint_for_host_id_if_known(host_id);
             assert(ss._group0);
             auto raft_id = raft::server_id{host_id.uuid()};
             bool raft_available = ss._group0->wait_for_raft().get();
@@ -5195,7 +5300,7 @@ future<> storage_service::removenode(locator::host_id host_id, std::list<locator
                     return node != endpoint;
                 });
 
-                auto tokens = tmptr->get_tokens(endpoint);
+                auto tokens = tmptr->get_tokens(host_id);
 
                 try {
                     // Step 3: Start heartbeat updater
@@ -5346,8 +5451,8 @@ void storage_service::node_ops_insert(node_ops_id ops_uuid,
     on_node_ops_registered(ops_uuid);
 }
 
-future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_address coordinator, node_ops_cmd_request req) {
-    return seastar::async([this, coordinator, req = std::move(req)] () mutable {
+future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_address coordinator, std::optional<locator::host_id> coordinator_host_id, node_ops_cmd_request req) {
+    return seastar::async([this, coordinator, coordinator_host_id, req = std::move(req)] () mutable {
         auto ops_uuid = req.ops_uuid;
         auto topo_guard = null_topology_guard;
         slogger.debug("node_ops_cmd_handler cmd={}, ops_uuid={}", req.cmd, ops_uuid);
@@ -5389,7 +5494,7 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
             mutate_token_metadata([coordinator, &req, this] (mutable_token_metadata_ptr tmptr) mutable {
                 for (auto& node : req.leaving_nodes) {
                     slogger.info("removenode[{}]: Added node={} as leaving node, coordinator={}", req.ops_uuid, node, coordinator);
-                    tmptr->add_leaving_endpoint(node);
+                    tmptr->add_leaving_endpoint(tmptr->get_host_id(node));
                 }
                 return update_topology_change_info(tmptr, ::format("removenode {}", req.leaving_nodes));
             }).get();
@@ -5397,7 +5502,7 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
                 return mutate_token_metadata([this, coordinator, req = std::move(req)] (mutable_token_metadata_ptr tmptr) mutable {
                     for (auto& node : req.leaving_nodes) {
                         slogger.info("removenode[{}]: Removed node={} as leaving node, coordinator={}", req.ops_uuid, node, coordinator);
-                        tmptr->del_leaving_endpoint(node);
+                        tmptr->del_leaving_endpoint(tmptr->get_host_id(node));
                     }
                     return update_topology_change_info(tmptr, ::format("removenode {}", req.leaving_nodes));
                 });
@@ -5437,7 +5542,7 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
             mutate_token_metadata([coordinator, &req, this] (mutable_token_metadata_ptr tmptr) mutable {
                 for (auto& node : req.leaving_nodes) {
                     slogger.info("decommission[{}]: Added node={} as leaving node, coordinator={}", req.ops_uuid, node, coordinator);
-                    tmptr->add_leaving_endpoint(node);
+                    tmptr->add_leaving_endpoint(tmptr->get_host_id(node));
                 }
                 return update_topology_change_info(tmptr, ::format("decommission {}", req.leaving_nodes));
             }).get();
@@ -5445,7 +5550,7 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
                 return mutate_token_metadata([this, coordinator, req = std::move(req)] (mutable_token_metadata_ptr tmptr) mutable {
                     for (auto& node : req.leaving_nodes) {
                         slogger.info("decommission[{}]: Removed node={} as leaving node, coordinator={}", req.ops_uuid, node, coordinator);
-                        tmptr->del_leaving_endpoint(node);
+                        tmptr->del_leaving_endpoint(tmptr->get_host_id(node));
                     }
                     return update_topology_change_info(tmptr, ::format("decommission {}", req.leaving_nodes));
                 });
@@ -5461,13 +5566,14 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
                 check_again = false;
                 for (auto& node : req.leaving_nodes) {
                     auto tmptr = get_token_metadata_ptr();
-                    if (tmptr->is_normal_token_owner(node)) {
+                    const auto host_id = tmptr->get_host_id_if_known(node);
+                    if (host_id && tmptr->is_normal_token_owner(*host_id)) {
                         check_again = true;
                         if (std::chrono::steady_clock::now() > start_time + std::chrono::seconds(60)) {
-                            auto msg = ::format("decommission[{}]: Node {} is still in the cluster", req.ops_uuid, node);
+                            auto msg = ::format("decommission[{}]: Node {}/{} is still in the cluster", req.ops_uuid, node, host_id);
                             throw std::runtime_error(msg);
                         }
-                        slogger.warn("decommission[{}]: Node {} is still in the cluster, sleep and check again", req.ops_uuid, node);
+                        slogger.warn("decommission[{}]: Node {}/{} is still in the cluster, sleep and check again", req.ops_uuid, node, host_id);
                         sleep_abortable(std::chrono::milliseconds(500), _abort_source).get();
                         break;
                     }
@@ -5491,23 +5597,48 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
                 slogger.warn("{}", msg);
                 throw std::runtime_error(msg);
             }
-            mutate_token_metadata([coordinator, &req, this] (mutable_token_metadata_ptr tmptr) mutable {
+            if (!coordinator_host_id) {
+                throw std::runtime_error("Coordinator host_id not found");
+            }
+            mutate_token_metadata([coordinator, coordinator_host_id, &req, this] (mutable_token_metadata_ptr tmptr) mutable {
                 for (auto& x: req.replace_nodes) {
                     auto existing_node = x.first;
                     auto replacing_node = x.second;
-                    slogger.info("replace[{}]: Added replacing_node={} to replace existing_node={}, coordinator={}", req.ops_uuid, replacing_node, existing_node, coordinator);
-                    tmptr->update_topology(replacing_node, get_dc_rack_for(replacing_node), locator::node::state::replacing);
-                    tmptr->add_replacing_endpoint(existing_node, replacing_node);
+                    const auto existing_node_id = tmptr->get_host_id(existing_node);
+                    const auto replacing_node_id = *coordinator_host_id;
+                    slogger.info("replace[{}]: Added replacing_node={}/{} to replace existing_node={}/{}, coordinator={}/{}",
+                        req.ops_uuid, replacing_node, replacing_node_id, existing_node, existing_node_id, coordinator, *coordinator_host_id);
+
+                    // In case of replace-with-same-ip we need to map both host_id-s
+                    // to the same IP. The locator::topology allows this specifically in case
+                    // where one node is being_replaced and another is replacing,
+                    // so here we adjust the state of the original node accordingly.
+                    // The host_id -> IP map works as usual, and IP -> host_id will map
+                    // IP to the being_replaced node - this is what is implied by the
+                    // current code. The IP will be placed in pending_endpoints and
+                    // excluded from normal_endpoints (maybe_remove_node_being_replaced function).
+                    // In handle_state_normal we'll remap the IP to the new host_id.
+                    tmptr->update_topology(existing_node_id, std::nullopt, locator::node::state::being_replaced);
+                    tmptr->update_topology(replacing_node_id, get_dc_rack_for(replacing_node), locator::node::state::replacing);
+                    tmptr->update_host_id(replacing_node_id, replacing_node);
+                    tmptr->add_replacing_endpoint(existing_node_id, replacing_node_id);
                 }
                 return make_ready_future<>();
             }).get();
-            node_ops_insert(ops_uuid, coordinator, std::move(req.ignore_nodes), [this, coordinator, req = std::move(req)] () mutable {
-                return mutate_token_metadata([this, coordinator, req = std::move(req)] (mutable_token_metadata_ptr tmptr) mutable {
+            node_ops_insert(ops_uuid, coordinator, std::move(req.ignore_nodes), [this, coordinator, coordinator_host_id, req = std::move(req)] () mutable {
+                return mutate_token_metadata([this, coordinator, coordinator_host_id, req = std::move(req)] (mutable_token_metadata_ptr tmptr) mutable {
                     for (auto& x: req.replace_nodes) {
                         auto existing_node = x.first;
                         auto replacing_node = x.second;
-                        slogger.info("replace[{}]: Removed replacing_node={} to replace existing_node={}, coordinator={}", req.ops_uuid, replacing_node, existing_node, coordinator);
-                        tmptr->del_replacing_endpoint(existing_node);
+                        const auto existing_node_id = tmptr->get_host_id(existing_node);
+                        const auto replacing_node_id = *coordinator_host_id;
+                        slogger.info("replace[{}]: Removed replacing_node={}/{} to replace existing_node={}/{}, coordinator={}/{}",
+                            req.ops_uuid, replacing_node, replacing_node_id, existing_node, existing_node_id, coordinator, *coordinator_host_id);
+
+                        tmptr->del_replacing_endpoint(existing_node_id);
+                        const auto dc_rack = get_dc_rack_for(replacing_node);
+                        tmptr->update_topology(existing_node_id, dc_rack, locator::node::state::normal);
+                        tmptr->remove_endpoint(replacing_node_id);
                     }
                     return update_topology_change_info(tmptr, ::format("replace {}", req.replace_nodes));
                 });
@@ -5543,13 +5674,20 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
                 slogger.warn("{}", msg);
                 throw std::runtime_error(msg);
             }
-            mutate_token_metadata([coordinator, &req, this] (mutable_token_metadata_ptr tmptr) mutable {
+            if (!coordinator_host_id) {
+                throw std::runtime_error("Coordinator host_id not found");
+            }
+            mutate_token_metadata([coordinator, coordinator_host_id, &req, this] (mutable_token_metadata_ptr tmptr) mutable {
                 for (auto& x: req.bootstrap_nodes) {
                     auto& endpoint = x.first;
                     auto tokens = std::unordered_set<dht::token>(x.second.begin(), x.second.end());
-                    slogger.info("bootstrap[{}]: Added node={} as bootstrap, coordinator={}", req.ops_uuid, endpoint, coordinator);
-                    tmptr->update_topology(endpoint, get_dc_rack_for(endpoint), locator::node::state::bootstrapping);
-                    tmptr->add_bootstrap_tokens(tokens, endpoint);
+                    const auto host_id = *coordinator_host_id;
+                    const auto dc_rack = get_dc_rack_for(endpoint);
+                    slogger.info("bootstrap[{}]: Added node={}/{} as bootstrap, coordinator={}/{}",
+                        req.ops_uuid, endpoint, host_id, coordinator, *coordinator_host_id);
+                    tmptr->update_host_id(host_id, endpoint);
+                    tmptr->update_topology(host_id, dc_rack, locator::node::state::bootstrapping);
+                    tmptr->add_bootstrap_tokens(tokens, host_id);
                 }
                 return update_topology_change_info(tmptr, ::format("bootstrap {}", req.bootstrap_nodes));
             }).get();
@@ -5722,7 +5860,7 @@ future<> storage_service::rebuild(sstring source_dc) {
                 co_await ss._repair.local().rebuild_with_repair(tmptr, std::move(source_dc));
             } else {
                 auto streamer = make_lw_shared<dht::range_streamer>(ss._db, ss._stream_manager, tmptr, ss._abort_source,
-                        ss.get_broadcast_address(), ss._snitch.local()->get_location(), "Rebuild", streaming::stream_reason::rebuild, null_topology_guard);
+                        tmptr->get_my_id(), ss._snitch.local()->get_location(), "Rebuild", streaming::stream_reason::rebuild, null_topology_guard);
                 streamer->add_source_filter(std::make_unique<dht::range_streamer::failure_detector_source_filter>(ss._gossiper.get_unreachable_members()));
                 if (source_dc != "") {
                     streamer->add_source_filter(std::make_unique<dht::range_streamer::single_datacenter_filter>(source_dc));
@@ -5775,8 +5913,8 @@ storage_service::get_changed_ranges_for_leaving(locator::vnode_effective_replica
 
     // endpoint might or might not be 'leaving'. If it was not leaving (that is, removenode
     // command was used), it is still present in temp and must be removed.
-    if (temp.is_normal_token_owner(endpoint)) {
-        temp.remove_endpoint(endpoint);
+    if (const auto host_id = temp.get_host_id_if_known(endpoint); host_id && temp.is_normal_token_owner(*host_id)) {
+        temp.remove_endpoint(*host_id);
     }
 
     std::unordered_multimap<dht::token_range, inet_address> changed_ranges;
@@ -5789,7 +5927,7 @@ storage_service::get_changed_ranges_for_leaving(locator::vnode_effective_replica
     const auto& rs = erm->get_replication_strategy();
     for (auto& r : ranges) {
         auto end_token = r.end() ? r.end()->value() : dht::maximum_token();
-        auto new_replica_endpoints = co_await rs.calculate_natural_endpoints(end_token, temp);
+        auto new_replica_endpoints = co_await rs.calculate_natural_ips(end_token, temp);
 
         auto rg = current_replica_endpoints.equal_range(r);
         for (auto it = rg.first; it != rg.second; it++) {
@@ -5900,7 +6038,7 @@ future<> storage_service::removenode_with_stream(gms::inet_address leaving_node,
                 as.request_abort();
             }
         });
-        auto streamer = make_lw_shared<dht::range_streamer>(_db, _stream_manager, tmptr, as, get_broadcast_address(), _snitch.local()->get_location(), "Removenode", streaming::stream_reason::removenode, topo_guard);
+        auto streamer = make_lw_shared<dht::range_streamer>(_db, _stream_manager, tmptr, as, tmptr->get_my_id(), _snitch.local()->get_location(), "Removenode", streaming::stream_reason::removenode, topo_guard);
         removenode_add_ranges(streamer, leaving_node).get();
         try {
             streamer->stream_async().get();
@@ -5917,7 +6055,9 @@ future<> storage_service::excise(std::unordered_set<token> tokens, inet_address 
     co_await remove_endpoint(endpoint, pid);
     auto tmlock = std::make_optional(co_await get_token_metadata_lock());
     auto tmptr = co_await get_mutable_token_metadata_ptr();
-    tmptr->remove_endpoint(endpoint);
+    if (const auto host_id = tmptr->get_host_id_if_known(endpoint); host_id) {
+        tmptr->remove_endpoint(*host_id);
+    }
     tmptr->remove_bootstrap_tokens(tokens);
 
     co_await update_topology_change_info(tmptr, ::format("excise {}", endpoint));
@@ -5937,8 +6077,9 @@ future<> storage_service::leave_ring() {
     co_await _sys_ks.local().set_bootstrap_state(db::system_keyspace::bootstrap_state::NEEDS_BOOTSTRAP);
     co_await mutate_token_metadata([this] (mutable_token_metadata_ptr tmptr) {
         auto endpoint = get_broadcast_address();
-        tmptr->remove_endpoint(endpoint);
-        return update_topology_change_info(std::move(tmptr), ::format("leave_ring {}", endpoint));
+        const auto my_id = tmptr->get_my_id();
+        tmptr->remove_endpoint(my_id);
+        return update_topology_change_info(std::move(tmptr), ::format("leave_ring {}/{}", endpoint, my_id));
     });
 
     auto expire_time = _gossiper.compute_expire_time().time_since_epoch().count();
@@ -5951,12 +6092,7 @@ future<> storage_service::leave_ring() {
 
 future<>
 storage_service::stream_ranges(std::unordered_map<sstring, std::unordered_multimap<dht::token_range, inet_address>> ranges_to_stream_by_keyspace) {
-    auto streamer = dht::range_streamer(_db, _stream_manager, get_token_metadata_ptr(), _abort_source,
-                                        get_broadcast_address(),
-                                        _snitch.local()->get_location(),
-                                        "Unbootstrap",
-                                        streaming::stream_reason::decommission,
-                                        null_topology_guard);
+    auto streamer = dht::range_streamer(_db, _stream_manager, get_token_metadata_ptr(), _abort_source, get_token_metadata_ptr()->get_my_id(), _snitch.local()->get_location(), "Unbootstrap", streaming::stream_reason::decommission, null_topology_guard);
     for (auto& entry : ranges_to_stream_by_keyspace) {
         const auto& keyspace = entry.first;
         auto& ranges_with_endpoints = entry.second;
@@ -6069,7 +6205,15 @@ storage_service::construct_range_to_endpoint_map(
 
 
 std::map<token, inet_address> storage_service::get_token_to_endpoint_map() {
-    return get_token_metadata().get_normal_and_bootstrapping_token_to_endpoint_map();
+    const auto& tm = get_token_metadata();
+    std::map<token, inet_address> result;
+    for (const auto [t, id]: tm.get_token_to_endpoint()) {
+        result.insert({t, tm.get_endpoint_for_host_id(id)});
+    }
+    for (const auto [t, id]: tm.get_bootstrap_tokens()) {
+        result.insert({t, tm.get_endpoint_for_host_id(id)});
+    }
+    return result;
 }
 
 std::chrono::milliseconds storage_service::get_ring_delay() {
@@ -6109,8 +6253,22 @@ future<> storage_service::update_topology_change_info(mutable_token_metadata_ptr
     assert(this_shard_id() == 0);
 
     try {
-        locator::dc_rack_fn get_dc_rack_from_gossiper([this] (inet_address ep) { return get_dc_rack_for(ep); });
-        co_await tmptr->update_topology_change_info(get_dc_rack_from_gossiper);
+        locator::dc_rack_fn get_dc_rack_by_host_id([this, &tm = *tmptr] (locator::host_id host_id) -> std::optional<locator::endpoint_dc_rack> {
+            if (_raft_topology_change_enabled) {
+                const auto server_id = raft::server_id(host_id.uuid());
+                const auto* node = _topology_state_machine._topology.find(server_id);
+                if (node) {
+                    return locator::endpoint_dc_rack {
+                        .dc = node->second.datacenter,
+                        .rack = node->second.rack,
+                    };
+                }
+                return std::nullopt;
+            }
+
+            return get_dc_rack_for(tm.get_endpoint_for_host_id(host_id));
+        });
+        co_await tmptr->update_topology_change_info(get_dc_rack_by_host_id);
     } catch (...) {
         auto ep = std::current_exception();
         slogger.error("Failed to update topology change info for {}: {}", reason, ep);
@@ -6161,9 +6319,9 @@ future<> storage_service::load_tablet_metadata() {
 future<> storage_service::snitch_reconfigured() {
     assert(this_shard_id() == 0);
     auto& snitch = _snitch.local();
-    co_await mutate_token_metadata([&] (mutable_token_metadata_ptr tmptr) -> future<> {
+    co_await mutate_token_metadata([&snitch] (mutable_token_metadata_ptr tmptr) -> future<> {
         // re-read local rack and DC info
-        tmptr->update_topology(get_broadcast_address(), snitch->get_location());
+        tmptr->update_topology(tmptr->get_my_id(), snitch->get_location());
         return make_ready_future<>();
     });
 
@@ -6315,7 +6473,7 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                                 if (is_repair_based_node_ops_enabled(streaming::stream_reason::bootstrap)) {
                                     co_await _repair.local().bootstrap_with_repair(get_token_metadata_ptr(), rs.ring.value().tokens);
                                 } else {
-                                    dht::boot_strapper bs(_db, _stream_manager, _abort_source, get_broadcast_address(),
+                                    dht::boot_strapper bs(_db, _stream_manager, _abort_source, get_token_metadata_ptr()->get_my_id(),
                                         locator::endpoint_dc_rack{rs.datacenter, rs.rack}, rs.ring.value().tokens, get_token_metadata_ptr());
                                     co_await bs.bootstrap(streaming::stream_reason::bootstrap, _gossiper, _topology_state_machine._topology.session);
                                 }
@@ -6339,7 +6497,7 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                                 }
                                 co_await _repair.local().replace_with_repair(get_token_metadata_ptr(), rs.ring.value().tokens, std::move(ignored_ips));
                             } else {
-                                dht::boot_strapper bs(_db, _stream_manager, _abort_source, get_broadcast_address(),
+                                dht::boot_strapper bs(_db, _stream_manager, _abort_source, get_token_metadata_ptr()->get_my_id(),
                                                       locator::endpoint_dc_rack{rs.datacenter, rs.rack}, rs.ring.value().tokens, get_token_metadata_ptr());
                                 auto replaced_id = std::get<replace_param>(_topology_state_machine._topology.req_param[raft_server.id()]).replaced_id;
                                 auto existing_ip = _group0->address_map().find(replaced_id);
@@ -6411,8 +6569,7 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                             co_await _repair.local().rebuild_with_repair(tmptr, std::move(source_dc));
                         } else {
                             auto streamer = make_lw_shared<dht::range_streamer>(_db, _stream_manager, tmptr, _abort_source,
-                                    get_broadcast_address(), _snitch.local()->get_location(), "Rebuild", streaming::stream_reason::rebuild,
-                                    _topology_state_machine._topology.session);
+                                    tmptr->get_my_id(), _snitch.local()->get_location(), "Rebuild", streaming::stream_reason::rebuild, _topology_state_machine._topology.session);
                             streamer->add_source_filter(std::make_unique<dht::range_streamer::failure_detector_source_filter>(_gossiper.get_unreachable_members()));
                             if (source_dc != "") {
                                 streamer->add_source_filter(std::make_unique<dht::range_streamer::single_datacenter_filter>(source_dc));
@@ -6601,10 +6758,9 @@ future<> storage_service::stream_tablet(locator::global_tablet_id tablet) {
 
         auto& table = _db.local().find_column_family(tablet.table);
         std::vector<sstring> tables = {table.schema()->cf_name()};
-        auto streamer = make_lw_shared<dht::range_streamer>(_db, _stream_manager, std::move(tm), guard.get_abort_source(),
-               get_broadcast_address(), _snitch.local()->get_location(),
+        auto streamer = make_lw_shared<dht::range_streamer>(_db, _stream_manager, tm, guard.get_abort_source(),
+               tm->get_my_id(), _snitch.local()->get_location(),
                "Tablet migration", streaming::stream_reason::tablet_migration, topo_guard, std::move(tables));
-        tm = nullptr;
         streamer->add_source_filter(std::make_unique<dht::range_streamer::failure_detector_source_filter>(
                 _gossiper.get_unreachable_members()));
 
@@ -7035,8 +7191,12 @@ future<join_node_response_result> storage_service::join_node_response_handler(jo
 void storage_service::init_messaging_service(bool raft_topology_change_enabled) {
     _messaging.local().register_node_ops_cmd([this] (const rpc::client_info& cinfo, node_ops_cmd_request req) {
         auto coordinator = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
-        return container().invoke_on(0, [coordinator, req = std::move(req)] (auto& ss) mutable {
-            return ss.node_ops_cmd_handler(coordinator, std::move(req));
+        std::optional<locator::host_id> coordinator_host_id;
+        if (const auto* id = cinfo.retrieve_auxiliary_opt<locator::host_id>("host_id")) {
+            coordinator_host_id = *id;
+        }
+        return container().invoke_on(0, [coordinator, coordinator_host_id, req = std::move(req)] (auto& ss) mutable {
+            return ss.node_ops_cmd_handler(coordinator, coordinator_host_id, std::move(req));
         });
     });
     if (raft_topology_change_enabled) {
@@ -7179,22 +7339,20 @@ future<> storage_service::force_remove_completion() {
             if (!tm.get_leaving_endpoints().empty()) {
                 auto leaving = tm.get_leaving_endpoints();
                 slogger.warn("Removal not confirmed, Leaving={}", leaving);
-                for (auto endpoint : leaving) {
-                    locator::host_id host_id;
-                    auto tokens = tm.get_tokens(endpoint);
-                    try {
-                        host_id = tm.get_host_id(endpoint);
-                    } catch (...) {
-                        slogger.warn("No host_id is found for endpoint {}", endpoint);
+                for (auto host_id : leaving) {
+                    const auto endpoint = tm.get_endpoint_for_host_id_if_known(host_id);
+                    if (!endpoint) {
+                        slogger.warn("No endpoint is found for host_id {}", host_id);
                         continue;
                     }
-                    auto permit = co_await ss._gossiper.lock_endpoint(endpoint, gms::null_permit_id);
+                    auto tokens = tm.get_tokens(host_id);
+                    auto permit = co_await ss._gossiper.lock_endpoint(*endpoint, gms::null_permit_id);
                     const auto& pid = permit.id();
-                    co_await ss._gossiper.advertise_token_removed(endpoint, host_id, pid);
+                    co_await ss._gossiper.advertise_token_removed(*endpoint, host_id, pid);
                     std::unordered_set<token> tokens_set(tokens.begin(), tokens.end());
-                    co_await ss.excise(tokens_set, endpoint, pid);
+                    co_await ss.excise(tokens_set, *endpoint, pid);
 
-                    slogger.info("force_remove_completion: removing endpoint {} from group 0", endpoint);
+                    slogger.info("force_remove_completion: removing endpoint {} from group 0", *endpoint);
                     assert(ss._group0);
                     bool raft_available = co_await ss._group0->wait_for_raft();
                     if (raft_available) {

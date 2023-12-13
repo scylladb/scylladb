@@ -99,6 +99,7 @@ SEASTAR_THREAD_TEST_CASE(test_update_node) {
 
     topology::config cfg = {
         .this_endpoint = ep1,
+        .this_host_id = id1,
         .local_dc_rack = endpoint_dc_rack::default_location,
     };
 
@@ -109,12 +110,12 @@ SEASTAR_THREAD_TEST_CASE(test_update_node) {
         set_abort_on_internal_error(true);
     });
 
-    topo.add_or_update_endpoint(ep1, endpoint_dc_rack::default_location, node::state::normal);
+    topo.add_or_update_endpoint(id1, std::nullopt, endpoint_dc_rack::default_location, node::state::normal);
 
     auto node = topo.this_node();
     auto mutable_node = const_cast<locator::node*>(node);
 
-    node = topo.update_node(mutable_node, id1, std::nullopt, std::nullopt, std::nullopt);
+    node = topo.update_node(mutable_node, std::nullopt, ep1, std::nullopt, std::nullopt);
     BOOST_REQUIRE_EQUAL(topo.find_node(id1), node);
     mutable_node = const_cast<locator::node*>(node);
 
@@ -171,6 +172,38 @@ SEASTAR_THREAD_TEST_CASE(test_update_node) {
     BOOST_REQUIRE_EQUAL(node->get_state(), locator::node::state::left);
 }
 
+SEASTAR_THREAD_TEST_CASE(test_add_or_update_by_host_id) {
+    auto id1 = host_id::create_random_id();
+    auto id2 = host_id::create_random_id();
+    auto ep1 = gms::inet_address("127.0.0.1");
+
+    // In this test we check that add_or_update_endpoint searches by host_id first.
+    // We create two nodes, one matches by id, another - by ip,
+    // and assert that add_or_update_endpoint updates the first.
+    // We need to make the second node 'being_decommissioned', so that
+    // it gets removed from ip index and we don't get the non-unique IP error.
+
+    auto topo = topology({});
+    //auto topo = topology({});
+    topo.add_node(id1, gms::inet_address{}, endpoint_dc_rack::default_location, node::state::normal);
+    topo.add_node(id2, ep1, endpoint_dc_rack::default_location, node::state::being_decommissioned);
+
+    topo.add_or_update_endpoint(id1, ep1, std::nullopt, node::state::bootstrapping);
+
+    auto* n = topo.find_node(id1);
+    BOOST_REQUIRE_EQUAL(n->get_state(), node::state::bootstrapping);
+    BOOST_REQUIRE_EQUAL(n->host_id(), id1);
+    BOOST_REQUIRE_EQUAL(n->endpoint(), ep1);
+
+    auto* n2 = topo.find_node(ep1);
+    BOOST_REQUIRE_EQUAL(n, n2);
+
+    auto* n3 = topo.find_node(id2);
+    BOOST_REQUIRE_EQUAL(n3->get_state(), node::state::being_decommissioned);
+    BOOST_REQUIRE_EQUAL(n3->host_id(), id2);
+    BOOST_REQUIRE_EQUAL(n3->endpoint(), ep1);
+}
+
 SEASTAR_THREAD_TEST_CASE(test_remove_endpoint) {
     using dc_endpoints_t = std::unordered_map<sstring, std::unordered_set<inet_address>>;
     using dc_racks_t = std::unordered_map<sstring, std::unordered_map<sstring, std::unordered_set<inet_address>>>;
@@ -203,12 +236,12 @@ SEASTAR_THREAD_TEST_CASE(test_remove_endpoint) {
     BOOST_REQUIRE_EQUAL(topo.get_datacenter_racks(), (dc_racks_t{{"dc1", {{"rack1", {ep1}}, {"rack2", {ep2}}}}}));
     BOOST_REQUIRE_EQUAL(topo.get_datacenters(), (dcs_t{"dc1"}));
 
-    topo.remove_endpoint(ep2);
+    topo.remove_endpoint(id2);
     BOOST_REQUIRE_EQUAL(topo.get_datacenter_endpoints(), (dc_endpoints_t{{"dc1", {ep1}}}));
     BOOST_REQUIRE_EQUAL(topo.get_datacenter_racks(), (dc_racks_t{{"dc1", {{"rack1", {ep1}}}}}));
     BOOST_REQUIRE_EQUAL(topo.get_datacenters(), (dcs_t{"dc1"}));
 
-    topo.remove_endpoint(ep1);
+    topo.remove_endpoint(id1);
     BOOST_REQUIRE_EQUAL(topo.get_datacenter_endpoints(), (dc_endpoints_t{}));
     BOOST_REQUIRE_EQUAL(topo.get_datacenter_racks(), (dc_racks_t{}));
     BOOST_REQUIRE_EQUAL(topo.get_datacenters(), (dcs_t{}));
@@ -231,6 +264,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_sketch) {
     shared_token_metadata stm([&sem] () noexcept { return get_units(sem, 1); }, locator::token_metadata::config{
         topology::config{
             .this_endpoint = ip1,
+            .this_host_id = host1
         }
     });
 
@@ -238,9 +272,9 @@ SEASTAR_THREAD_TEST_CASE(test_load_sketch) {
         tm.update_host_id(host1, ip1);
         tm.update_host_id(host2, ip2);
         tm.update_host_id(host3, ip3);
-        tm.update_topology(ip1, locator::endpoint_dc_rack::default_location, std::nullopt, node1_shard_count);
-        tm.update_topology(ip2, locator::endpoint_dc_rack::default_location, std::nullopt, node2_shard_count);
-        tm.update_topology(ip3, locator::endpoint_dc_rack::default_location, std::nullopt, node3_shard_count);
+        tm.update_topology(host1, locator::endpoint_dc_rack::default_location, std::nullopt, node1_shard_count);
+        tm.update_topology(host2, locator::endpoint_dc_rack::default_location, std::nullopt, node2_shard_count);
+        tm.update_topology(host3, locator::endpoint_dc_rack::default_location, std::nullopt, node3_shard_count);
         return make_ready_future<>();
     }).get();
 

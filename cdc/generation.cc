@@ -391,8 +391,9 @@ future<cdc::generation_id> generation_service::legacy_make_new_generation(const 
                 throw std::runtime_error(
                         format("Can't find endpoint for token {}", end));
             }
-            auto sc = get_shard_count(*endpoint, _gossiper);
-            return {sc > 0 ? sc : 1, get_sharding_ignore_msb(*endpoint, _gossiper)};
+            const auto ep = tmptr->get_endpoint_for_host_id(*endpoint);
+            auto sc = get_shard_count(ep, _gossiper);
+            return {sc > 0 ? sc : 1, get_sharding_ignore_msb(ep, _gossiper)};
         }
     };
 

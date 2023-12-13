@@ -76,13 +76,6 @@ struct topology_change_info;
 
 class token_metadata final {
     std::unique_ptr<token_metadata_impl> _impl;
-public:
-    struct config {
-        topology::config topo_cfg;
-    };
-    using inet_address = gms::inet_address;
-    using version_t = service::topology::version_t;
-    using version_tracker_t = utils::phased_barrier::operation;
 private:
     friend class token_metadata_ring_splitter;
     class tokens_iterator {
@@ -107,6 +100,13 @@ private:
     };
 
 public:
+    struct config {
+        topology::config topo_cfg;
+    };
+    using inet_address = gms::inet_address;
+    using version_t = service::topology::version_t;
+    using version_tracker_t = utils::phased_barrier::operation;
+
     token_metadata(config cfg);
     explicit token_metadata(std::unique_ptr<token_metadata_impl> impl);
     token_metadata(token_metadata&&) noexcept; // Can't use "= default;" - hits some static_assert in unique_ptr
@@ -121,19 +121,21 @@ public:
     //
     // Note: the function is not exception safe!
     // It must be called only on a temporary copy of the token_metadata
-    future<> update_normal_tokens(std::unordered_set<token> tokens, inet_address endpoint);
+    future<> update_normal_tokens(std::unordered_set<token> tokens, host_id endpoint);
     const token& first_token(const token& start) const;
     size_t first_token_index(const token& start) const;
-    std::optional<inet_address> get_endpoint(const token& token) const;
-    std::vector<token> get_tokens(const inet_address& addr) const;
-    const std::unordered_map<token, inet_address>& get_token_to_endpoint() const;
-    const std::unordered_set<inet_address>& get_leaving_endpoints() const;
-    const std::unordered_map<token, inet_address>& get_bootstrap_tokens() const;
+    std::optional<host_id> get_endpoint(const token& token) const;
+    std::vector<token> get_tokens(const host_id& addr) const;
+    const std::unordered_map<token, host_id>& get_token_to_endpoint() const;
+    const std::unordered_set<host_id>& get_leaving_endpoints() const;
+    const std::unordered_map<token, host_id>& get_bootstrap_tokens() const;
 
     /**
-     * Update or add endpoint given its inet_address and endpoint_dc_rack.
+     * Update or add a node for a given host_id.
+     * The other arguments (dc, state, shard_count) are optional, i.e. the corresponding node
+     * fields won't be updated if std::nullopt is passed.
      */
-    void update_topology(inet_address ep, std::optional<endpoint_dc_rack> opt_dr, std::optional<node::state> opt_st = std::nullopt,
+    void update_topology(host_id ep, std::optional<endpoint_dc_rack> opt_dr, std::optional<node::state> opt_st = std::nullopt,
                          std::optional<shard_id> shard_count = std::nullopt);
     /**
      * Creates an iterable range of the sorted tokens starting at the token t
@@ -169,8 +171,11 @@ public:
     /// Return the unique host ID for an end-point or nullopt if not found.
     std::optional<host_id> get_host_id_if_known(inet_address endpoint) const;
 
+    /** Return the end-point for a unique host ID or nullopt if not found. */
+    std::optional<inet_address> get_endpoint_for_host_id_if_known(locator::host_id host_id) const;
+
     /** Return the end-point for a unique host ID */
-    std::optional<inet_address> get_endpoint_for_host_id(locator::host_id host_id) const;
+    inet_address get_endpoint_for_host_id(locator::host_id host_id) const;
 
     /// Parses the \c host_id_string either as a host uuid or as an ip address and returns the mapping.
     /// Throws std::invalid_argument on parse error or std::runtime_error if the host_id wasn't found.
@@ -182,32 +187,32 @@ public:
     /// Returns host_id of the local node.
     host_id get_my_id() const;
 
-    void add_bootstrap_token(token t, inet_address endpoint);
+    void add_bootstrap_token(token t, host_id endpoint);
 
-    void add_bootstrap_tokens(std::unordered_set<token> tokens, inet_address endpoint);
+    void add_bootstrap_tokens(std::unordered_set<token> tokens, host_id endpoint);
 
     void remove_bootstrap_tokens(std::unordered_set<token> tokens);
 
-    void add_leaving_endpoint(inet_address endpoint);
-    void del_leaving_endpoint(inet_address endpoint);
+    void add_leaving_endpoint(host_id endpoint);
+    void del_leaving_endpoint(host_id endpoint);
 
-    void remove_endpoint(inet_address endpoint);
+    void remove_endpoint(host_id endpoint);
 
     // Checks if the node is part of the token ring. If yes, the node is one of
     // the nodes that owns the tokens and inside the set _normal_token_owners.
-    bool is_normal_token_owner(inet_address endpoint) const;
+    bool is_normal_token_owner(host_id endpoint) const;
 
-    bool is_leaving(inet_address endpoint) const;
+    bool is_leaving(host_id endpoint) const;
 
     // Is this node being replaced by another node
-    bool is_being_replaced(inet_address endpoint) const;
+    bool is_being_replaced(host_id endpoint) const;
 
     // Is any node being replaced by another node
     bool is_any_node_being_replaced() const;
 
-    void add_replacing_endpoint(inet_address existing_node, inet_address replacing_node);
+    void add_replacing_endpoint(host_id existing_node, host_id replacing_node);
 
-    void del_replacing_endpoint(inet_address existing_node);
+    void del_replacing_endpoint(host_id existing_node);
 
     /**
      * Create a full copy of token_metadata using asynchronous continuations.
@@ -257,7 +262,9 @@ public:
 
     token get_predecessor(token t) const;
 
-    const std::unordered_set<inet_address>& get_all_endpoints() const;
+    const std::unordered_set<host_id>& get_all_endpoints() const;
+
+    std::unordered_set<gms::inet_address> get_all_ips() const;
 
     /* Returns the number of different endpoints that own tokens in the ring.
      * Bootstrapping tokens are not taken into account. */
@@ -270,14 +277,6 @@ public:
     // The value is preserved in all clone functions, the default is read_new_t::no.
     using read_new_t = bool_class<class read_new_tag>;
     void set_read_new(read_new_t value);
-
-    /** @return an endpoint to token multimap representation of tokenToEndpointMap (a copy) */
-    std::multimap<inet_address, token> get_endpoint_to_token_map_for_reading() const;
-    /**
-     * @return a (stable copy, won't be modified) Token to Endpoint map for all the normal and bootstrapping nodes
-     *         in the cluster.
-     */
-    std::map<token, inet_address> get_normal_and_bootstrapping_token_to_endpoint_map() const;
 
     long get_ring_version() const;
     void invalidate_cached_rings();
@@ -292,13 +291,11 @@ private:
 };
 
 struct topology_change_info {
-    token_metadata target_token_metadata;
-    std::optional<token_metadata> base_token_metadata;
+    lw_shared_ptr<token_metadata> target_token_metadata;
     std::vector<dht::token> all_tokens;
     token_metadata::read_new_t read_new;
 
-    topology_change_info(token_metadata target_token_metadata_,
-        std::optional<token_metadata> base_token_metadata_,
+    topology_change_info(lw_shared_ptr<token_metadata> target_token_metadata_,
         std::vector<dht::token> all_tokens_,
         token_metadata::read_new_t read_new_);
     future<> clear_gently();

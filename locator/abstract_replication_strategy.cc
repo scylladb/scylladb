@@ -19,6 +19,18 @@
 
 namespace locator {
 
+static endpoint_set resolve_endpoints(const host_id_set& host_ids, const token_metadata& tm) {
+    endpoint_set result{};
+    result.reserve(host_ids.size());
+    for (const auto& host_id: host_ids) {
+        // Empty host_id is used as a marker for local address.
+        // The reason for this hack is that we need local_strategy to
+        // work before the local host_id is loaded from the system.local table.
+        result.push_back(host_id ? tm.get_endpoint_for_host_id(host_id) : tm.get_topology().my_address());
+    }
+    return result;
+}
+
 logging::logger rslogger("replication_strategy");
 
 abstract_replication_strategy::abstract_replication_strategy(
@@ -56,6 +68,11 @@ void abstract_replication_strategy::validate_replication_strategy(const sstring&
     }
 }
 
+future<endpoint_set> abstract_replication_strategy::calculate_natural_ips(const token& search_token, const token_metadata& tm) const {
+    const auto host_ids = co_await calculate_natural_endpoints(search_token, tm);
+    co_return resolve_endpoints(host_ids, tm);
+}
+
 using strategy_class_registry = class_registry<
     locator::abstract_replication_strategy,
     const locator::replication_strategy_config_options&>;
@@ -87,7 +104,8 @@ void maybe_remove_node_being_replaced(const token_metadata& tm,
         // as the natural_endpoints and the node will not appear in the
         // pending_endpoints.
         auto it = boost::range::remove_if(natural_endpoints, [&] (gms::inet_address& p) {
-            return tm.is_being_replaced(p);
+            const auto host_id = tm.get_host_id(p);
+            return tm.is_being_replaced(host_id);
         });
         natural_endpoints.erase(it, natural_endpoints.end());
     }
@@ -238,13 +256,13 @@ vnode_effective_replication_map::get_ranges(inet_address ep) const {
 
 // Caller must ensure that token_metadata will not change throughout the call.
 future<dht::token_range_vector>
-abstract_replication_strategy::get_ranges(inet_address ep, token_metadata_ptr tmptr) const {
+abstract_replication_strategy::get_ranges(locator::host_id ep, token_metadata_ptr tmptr) const {
     co_return co_await get_ranges(ep, *tmptr);
 }
 
 // Caller must ensure that token_metadata will not change throughout the call.
 future<dht::token_range_vector>
-abstract_replication_strategy::get_ranges(inet_address ep, const token_metadata& tm) const {
+abstract_replication_strategy::get_ranges(locator::host_id ep, const token_metadata& tm) const {
     dht::token_range_vector ret;
     if (!tm.is_normal_token_owner(ep)) {
         co_return ret;
@@ -326,7 +344,7 @@ abstract_replication_strategy::get_range_addresses(const token_metadata& tm) con
     std::unordered_map<dht::token_range, inet_address_vector_replica_set> ret;
     for (auto& t : tm.sorted_tokens()) {
         dht::token_range_vector ranges = tm.get_primary_ranges_for(t);
-        auto eps = co_await calculate_natural_endpoints(t, tm);
+        auto eps = co_await calculate_natural_ips(t, tm);
         for (auto& r : ranges) {
             ret.emplace(r, eps.get_vector());
         }
@@ -335,9 +353,9 @@ abstract_replication_strategy::get_range_addresses(const token_metadata& tm) con
 }
 
 future<dht::token_range_vector>
-abstract_replication_strategy::get_pending_address_ranges(const token_metadata_ptr tmptr, std::unordered_set<token> pending_tokens, inet_address pending_address, locator::endpoint_dc_rack dr) const {
+abstract_replication_strategy::get_pending_address_ranges(const token_metadata_ptr tmptr, std::unordered_set<token> pending_tokens, locator::host_id pending_address, locator::endpoint_dc_rack dr) const {
     dht::token_range_vector ret;
-    token_metadata temp = co_await tmptr->clone_only_token_map();
+    auto temp = co_await tmptr->clone_only_token_map();
     temp.update_topology(pending_address, std::move(dr));
     co_await temp.update_normal_tokens(pending_tokens, pending_address);
     for (const auto& t : temp.sorted_tokens()) {
@@ -363,17 +381,14 @@ future<mutable_vnode_effective_replication_map_ptr> calculate_effective_replicat
     replication_map.reserve(depend_on_token ? sorted_tokens.size() : 1);
     if (const auto& topology_changes = tmptr->get_topology_change_info(); topology_changes) {
         const auto& all_tokens = topology_changes->all_tokens;
-        const auto& base_token_metadata = topology_changes->base_token_metadata
-            ? *topology_changes->base_token_metadata
-            : *tmptr;
         const auto& current_tokens = tmptr->get_token_to_endpoint();
         for (size_t i = 0, size = all_tokens.size(); i < size; ++i) {
             co_await coroutine::maybe_yield();
 
             const auto token = all_tokens[i];
 
-            auto current_endpoints = co_await rs->calculate_natural_endpoints(token, base_token_metadata);
-            auto target_endpoints = co_await rs->calculate_natural_endpoints(token, topology_changes->target_token_metadata);
+            auto current_endpoints = co_await rs->calculate_natural_endpoints(token, *tmptr);
+            auto target_endpoints = co_await rs->calculate_natural_endpoints(token, *topology_changes->target_token_metadata);
 
             auto add_mapping = [&](ring_mapping& target, std::unordered_set<inet_address>&& endpoints) {
                 using interval = ring_mapping::interval_type;
@@ -396,37 +411,37 @@ future<mutable_vnode_effective_replication_map_ptr> calculate_effective_replicat
             };
 
             {
-                std::unordered_set<inet_address> endpoints_diff;
+                host_id_set endpoints_diff;
                 for (const auto& e: target_endpoints) {
                     if (!current_endpoints.contains(e)) {
                         endpoints_diff.insert(e);
                     }
                 }
                 if (!endpoints_diff.empty()) {
-                    add_mapping(pending_endpoints, std::move(endpoints_diff));
+                    add_mapping(pending_endpoints, resolve_endpoints(endpoints_diff, *tmptr).extract_set());
                 }
             }
 
             // in order not to waste memory, we update read_endpoints only if the
             // new endpoints differs from the old one
             if (topology_changes->read_new && target_endpoints.get_vector() != current_endpoints.get_vector()) {
-                add_mapping(read_endpoints, std::move(target_endpoints).extract_set());
+                add_mapping(read_endpoints, resolve_endpoints(target_endpoints, *tmptr).extract_set());
             }
 
             if (!depend_on_token) {
-                replication_map.emplace(default_replication_map_key, std::move(current_endpoints).extract_vector());
+                replication_map.emplace(default_replication_map_key, resolve_endpoints(current_endpoints, *tmptr).extract_vector());
                 break;
             } else if (current_tokens.contains(token)) {
-                replication_map.emplace(token, std::move(current_endpoints).extract_vector());
+                replication_map.emplace(token, resolve_endpoints(current_endpoints, *tmptr).extract_vector());
             }
         }
     } else if (depend_on_token) {
         for (const auto &t : sorted_tokens) {
-            auto eps = co_await rs->calculate_natural_endpoints(t, *tmptr);
+            auto eps = co_await rs->calculate_natural_ips(t, *tmptr);
             replication_map.emplace(t, std::move(eps).extract_vector());
         }
     } else {
-        auto eps = co_await rs->calculate_natural_endpoints(default_replication_map_key, *tmptr);
+        auto eps = co_await rs->calculate_natural_ips(default_replication_map_key, *tmptr);
         replication_map.emplace(default_replication_map_key, std::move(eps).extract_vector());
     }
 

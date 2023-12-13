@@ -101,7 +101,9 @@ bool hint_sender::can_send() noexcept {
             return true;
         } else {
             if (!_state.contains(state::ep_state_left_the_ring)) {
-                _state.set_if<state::ep_state_left_the_ring>(!_shard_manager.local_db().get_token_metadata().is_normal_token_owner(end_point_key()));
+                const auto& tm = _shard_manager.local_db().get_token_metadata();
+                const auto host_id = tm.get_host_id_if_known(end_point_key());
+                _state.set_if<state::ep_state_left_the_ring>(!host_id || !tm.is_normal_token_owner(*host_id));
             }
             // send the hints out if the destination Node is part of the ring - we will send to all new replicas in this case
             return _state.contains(state::ep_state_left_the_ring);

@@ -1272,7 +1272,8 @@ future<> migration_manager::on_change(gms::inet_address endpoint, gms::applicati
             mlogger.debug("Ignoring state change for dead or unknown endpoint: {}", endpoint);
             return make_ready_future();
         }
-        if (_storage_proxy.get_token_metadata_ptr()->is_normal_token_owner(endpoint)) {
+        const auto host_id = _gossiper.get_host_id(endpoint);
+        if (_storage_proxy.get_token_metadata_ptr()->is_normal_token_owner(host_id)) {
             schedule_schema_pull(endpoint, *ep_state);
         }
     }
