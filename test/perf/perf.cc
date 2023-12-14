@@ -73,7 +73,8 @@ std::ostream& operator<<(std::ostream& os, const perf_result_with_aio_writes& re
 namespace perf {
 
 reader_concurrency_semaphore_wrapper::reader_concurrency_semaphore_wrapper(sstring name)
-    : _semaphore(std::make_unique<reader_concurrency_semaphore>(reader_concurrency_semaphore::no_limits{}, std::move(name)))
+    : _semaphore(std::make_unique<reader_concurrency_semaphore>(reader_concurrency_semaphore::no_limits{}, std::move(name),
+                reader_concurrency_semaphore::register_metrics::no))
 {
 }
 

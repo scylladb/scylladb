@@ -94,7 +94,7 @@ public:
             // Create with no memory, so all inactive reads are immediately evicted.
             _contexts[shard]->semaphore.emplace(reader_concurrency_semaphore::for_tests{}, std::move(name), 1, 0);
         } else {
-            _contexts[shard]->semaphore.emplace(reader_concurrency_semaphore::no_limits{}, std::move(name));
+            _contexts[shard]->semaphore.emplace(reader_concurrency_semaphore::no_limits{}, std::move(name), reader_concurrency_semaphore::register_metrics::no);
         }
         return *_contexts[shard]->semaphore;
     }

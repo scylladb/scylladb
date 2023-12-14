@@ -341,7 +341,7 @@ struct sstable_manager_service {
     explicit sstable_manager_service()
         : feature_service(gms::feature_config_from_db_config(dbcfg))
         , dir_sem(1)
-        , sst_man(large_data_handler, dbcfg, feature_service, tracker, memory::stats().total_memory(), dir_sem, []{ return locator::host_id{}; }) {
+        , sst_man("schema_loader", large_data_handler, dbcfg, feature_service, tracker, memory::stats().total_memory(), dir_sem, []{ return locator::host_id{}; }) {
     }
 
     future<> stop() {
@@ -469,7 +469,7 @@ std::unordered_map<schema_ptr, std::string> get_schema_table_directories(std::fi
 }
 
 schema_ptr do_load_schema_from_schema_tables(std::filesystem::path scylla_data_path, std::string_view keyspace, std::string_view table) {
-    reader_concurrency_semaphore rcs_sem(reader_concurrency_semaphore::no_limits{}, __FUNCTION__);
+    reader_concurrency_semaphore rcs_sem(reader_concurrency_semaphore::no_limits{}, __FUNCTION__, reader_concurrency_semaphore::register_metrics::no);
     auto stop_semaphore = deferred_stop(rcs_sem);
 
     sharded<sstable_manager_service> sst_man;

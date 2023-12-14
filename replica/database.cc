@@ -329,29 +329,32 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
     }))
     , _read_concurrency_sem(max_count_concurrent_reads,
         max_memory_concurrent_reads(),
-        "_read_concurrency_sem",
+        "user",
         max_inactive_queue_length(),
         _cfg.reader_concurrency_semaphore_serialize_limit_multiplier,
-        _cfg.reader_concurrency_semaphore_kill_limit_multiplier)
+        _cfg.reader_concurrency_semaphore_kill_limit_multiplier,
+        reader_concurrency_semaphore::register_metrics::yes)
     // No timeouts or queue length limits - a failure here can kill an entire repair.
     // Trust the caller to limit concurrency.
     , _streaming_concurrency_sem(
             max_count_streaming_concurrent_reads,
             max_memory_streaming_concurrent_reads(),
-            "_streaming_concurrency_sem",
+            "streaming",
             std::numeric_limits<size_t>::max(),
             utils::updateable_value(std::numeric_limits<uint32_t>::max()),
-            utils::updateable_value(std::numeric_limits<uint32_t>::max()))
+            utils::updateable_value(std::numeric_limits<uint32_t>::max()),
+            reader_concurrency_semaphore::register_metrics::yes)
     // No limits, just for accounting.
-    , _compaction_concurrency_sem(reader_concurrency_semaphore::no_limits{}, "compaction")
+    , _compaction_concurrency_sem(reader_concurrency_semaphore::no_limits{}, "compaction", reader_concurrency_semaphore::register_metrics::no)
     , _system_read_concurrency_sem(
             // Using higher initial concurrency, see revert_initial_system_read_concurrency_boost().
             max_count_concurrent_reads,
             max_memory_system_concurrent_reads(),
-            "_system_read_concurrency_sem",
+            "system",
             std::numeric_limits<size_t>::max(),
             utils::updateable_value(std::numeric_limits<uint32_t>::max()),
-            utils::updateable_value(std::numeric_limits<uint32_t>::max()))
+            utils::updateable_value(std::numeric_limits<uint32_t>::max()),
+            reader_concurrency_semaphore::register_metrics::yes)
     , _row_cache_tracker(_cfg.index_cache_fraction.operator utils::updateable_value<double>(), cache_tracker::register_metrics::yes)
     , _apply_stage("db_apply", &database::do_apply)
     , _version(empty_version)
@@ -367,8 +370,8 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
               _cfg.compaction_rows_count_warning_threshold,
               _cfg.compaction_collection_elements_count_warning_threshold))
     , _nop_large_data_handler(std::make_unique<db::nop_large_data_handler>())
-    , _user_sstables_manager(std::make_unique<sstables::sstables_manager>(*_large_data_handler, _cfg, feat, _row_cache_tracker, dbcfg.available_memory, sst_dir_sem.local(), [&stm]{ return stm.get()->get_my_id(); }, &sstm))
-    , _system_sstables_manager(std::make_unique<sstables::sstables_manager>(*_nop_large_data_handler, _cfg, feat, _row_cache_tracker, dbcfg.available_memory, sst_dir_sem.local(), [&stm]{ return stm.get()->get_my_id(); }))
+    , _user_sstables_manager(std::make_unique<sstables::sstables_manager>("user", *_large_data_handler, _cfg, feat, _row_cache_tracker, dbcfg.available_memory, sst_dir_sem.local(), [&stm]{ return stm.get()->get_my_id(); }, &sstm))
+    , _system_sstables_manager(std::make_unique<sstables::sstables_manager>("system", *_nop_large_data_handler, _cfg, feat, _row_cache_tracker, dbcfg.available_memory, sst_dir_sem.local(), [&stm]{ return stm.get()->get_my_id(); }))
     , _result_memory_limiter(dbcfg.available_memory / 10)
     , _data_listeners(std::make_unique<db::data_listeners>())
     , _mnotifier(mn)
@@ -476,10 +479,6 @@ database::setup_metrics() {
 
     namespace sm = seastar::metrics;
 
-    auto user_label_instance = class_label("user");
-    auto streaming_label_instance = class_label("streaming");
-    auto system_label_instance = class_label("system");
-
     _metrics.add_group("memory", {
         sm::make_gauge("dirty_bytes", [this] { return _dirty_memory_manager.real_dirty_memory() + _system_dirty_memory_manager.real_dirty_memory(); },
                        sm::description("Holds the current size of all (\"regular\" and \"system\") non-free memory in bytes: used memory + released memory that hasn't been returned to a free memory pool yet. "
@@ -546,23 +545,6 @@ database::setup_metrics() {
         sm::make_counter("total_writes_rate_limited", _stats->total_writes_rate_limited,
                        sm::description("Counts write operations which were rejected on the replica side because the per-partition limit was reached.")),
 
-        sm::make_counter("total_reads", _read_concurrency_sem.get_stats().total_successful_reads,
-                       sm::description("Counts the total number of successful user reads on this shard."),
-                       {user_label_instance}),
-
-        sm::make_counter("total_reads_failed", _read_concurrency_sem.get_stats().total_failed_reads,
-                       sm::description("Counts the total number of failed user read operations. "
-                                       "Add the total_reads to this value to get the total amount of reads issued on this shard."),
-                       {user_label_instance}),
-
-        sm::make_counter("total_reads", _system_read_concurrency_sem.get_stats().total_successful_reads,
-                       sm::description("Counts the total number of successful system reads on this shard."),
-                       {system_label_instance}),
-
-        sm::make_counter("total_reads_failed", _system_read_concurrency_sem.get_stats().total_failed_reads,
-                       sm::description("Counts the total number of failed system read operations. "
-                                       "Add the total_reads to this value to get the total amount of reads issued on this shard."),
-                       {system_label_instance}),
 
         sm::make_counter("total_reads_rate_limited", _stats->total_reads_rate_limited,
                        sm::description("Counts read operations which were rejected on the replica side because the per-partition limit was reached.")),
@@ -578,7 +560,7 @@ database::setup_metrics() {
 
         sm::make_counter("querier_cache_drops", _querier_cache.get_stats().drops,
                        sm::description("Counts querier cache lookups that found a cached querier but had to drop it")),
-            
+
         sm::make_counter("querier_cache_scheduling_group_mismatches", _querier_cache.get_stats().scheduling_group_mismatches,
                        sm::description("Counts querier cache lookups that found a cached querier but had to drop it due to scheduling group mismatch")),
 
@@ -592,118 +574,10 @@ database::setup_metrics() {
         sm::make_gauge("querier_cache_population", _querier_cache.get_stats().population,
                        sm::description("The number of entries currently in the querier cache.")),
 
-        sm::make_counter("sstable_read_queue_overloads", _read_concurrency_sem.get_stats().total_reads_shed_due_to_overload,
-                       sm::description("Counts the number of times the sstable read queue was overloaded. "
-                                       "A non-zero value indicates that we have to drop read requests because they arrive faster than we can serve them.")),
-
-        sm::make_gauge("active_reads", [this] { return _read_concurrency_sem.active_reads(); },
-                       sm::description("Holds the number of currently active read operations. "),
-                       {user_label_instance}),
     });
 
     // Registering all the metrics with a single call causes the stack size to blow up.
     _metrics.add_group("database", {
-        sm::make_gauge("reads_memory_consumption", [this] { return _read_concurrency_sem.consumed_resources().memory; },
-                       sm::description("Holds the amount of memory consumed by current read operations. "),
-                       {user_label_instance}),
-
-        sm::make_gauge("queued_reads", [this] { return _read_concurrency_sem.get_stats().waiters; },
-                       sm::description("Holds the number of currently queued read operations."),
-                       {user_label_instance}),
-
-        sm::make_gauge("paused_reads", _read_concurrency_sem.get_stats().inactive_reads,
-                       sm::description("The number of currently active reads that are temporarily paused."),
-                       {user_label_instance}),
-
-        sm::make_counter("paused_reads_permit_based_evictions", _read_concurrency_sem.get_stats().permit_based_evictions,
-                       sm::description("The number of paused reads evicted to free up permits."
-                                       " Permits are required for new reads to start, and the database will evict paused reads (if any)"
-                                       " to be able to admit new ones, if there is a shortage of permits."),
-                       {user_label_instance}),
-
-        sm::make_counter("reads_shed_due_to_overload", _read_concurrency_sem.get_stats().total_reads_shed_due_to_overload,
-                       sm::description("The number of reads shed because the admission queue reached its max capacity."
-                                       " When the queue is full, excessive reads are shed to avoid overload."),
-                       {user_label_instance}),
-
-        sm::make_gauge("disk_reads", [this] { return _read_concurrency_sem.get_stats().disk_reads; },
-                       sm::description("Holds the number of currently active disk read operations. "),
-                       {user_label_instance}),
-
-        sm::make_gauge("sstables_read", [this] { return _read_concurrency_sem.get_stats().sstables_read; },
-                       sm::description("Holds the number of currently read sstables. "),
-                       {user_label_instance}),
-
-        sm::make_gauge("active_reads", [this] { return _streaming_concurrency_sem.active_reads(); },
-                       sm::description("Holds the number of currently active read operations issued on behalf of streaming "),
-                       {streaming_label_instance}),
-
-        sm::make_gauge("reads_memory_consumption", [this] { return _streaming_concurrency_sem.consumed_resources().memory; },
-                       sm::description("Holds the amount of memory consumed by current read operations issued on behalf of streaming "),
-                       {streaming_label_instance}),
-
-        sm::make_gauge("queued_reads", [this] { return _streaming_concurrency_sem.get_stats().waiters; },
-                       sm::description("Holds the number of currently queued read operations on behalf of streaming."),
-                       {streaming_label_instance}),
-
-        sm::make_gauge("paused_reads", _streaming_concurrency_sem.get_stats().inactive_reads,
-                       sm::description("The number of currently ongoing streaming reads that are temporarily paused."),
-                       {streaming_label_instance}),
-
-        sm::make_counter("paused_reads_permit_based_evictions", _streaming_concurrency_sem.get_stats().permit_based_evictions,
-                       sm::description("The number of inactive streaming reads evicted to free up permits"
-                                       " Permits are required for new reads to start, and the database will evict paused reads (if any)"
-                                       " to be able to admit new ones, if there is a shortage of permits."),
-                       {streaming_label_instance}),
-
-        sm::make_counter("reads_shed_due_to_overload", _streaming_concurrency_sem.get_stats().total_reads_shed_due_to_overload,
-                       sm::description("The number of reads shed because the admission queue reached its max capacity."
-                                       " When the queue is full, excessive reads are shed to avoid overload."),
-                       {streaming_label_instance}),
-
-        sm::make_gauge("disk_reads", [this] { return _streaming_concurrency_sem.get_stats().disk_reads; },
-                       sm::description("Holds the number of currently active disk read operations. "),
-                       {streaming_label_instance}),
-
-        sm::make_gauge("sstables_read", [this] { return _streaming_concurrency_sem.get_stats().sstables_read; },
-                       sm::description("Holds the number of currently read sstables. "),
-                       {streaming_label_instance}),
-
-        sm::make_gauge("active_reads", [this] { return _system_read_concurrency_sem.active_reads(); },
-                       sm::description("Holds the number of currently active read operations from \"system\" keyspace tables. "),
-                       {system_label_instance}),
-
-        sm::make_gauge("reads_memory_consumption", [this] { return _system_read_concurrency_sem.consumed_resources().memory; },
-                       sm::description("Holds the amount of memory consumed by all read operations from \"system\" keyspace tables. "),
-                       {system_label_instance}),
-
-        sm::make_gauge("queued_reads", [this] { return _system_read_concurrency_sem.get_stats().waiters; },
-                       sm::description("Holds the number of currently queued read operations from \"system\" keyspace tables."),
-                       {system_label_instance}),
-
-        sm::make_gauge("paused_reads", _system_read_concurrency_sem.get_stats().inactive_reads,
-                       sm::description("The number of currently ongoing system reads that are temporarily paused."),
-                       {system_label_instance}),
-
-        sm::make_counter("paused_reads_permit_based_evictions", _system_read_concurrency_sem.get_stats().permit_based_evictions,
-                       sm::description("The number of paused system reads evicted to free up permits"
-                                       " Permits are required for new reads to start, and the database will evict inactive reads (if any)"
-                                       " to be able to admit new ones, if there is a shortage of permits."),
-                       {system_label_instance}),
-
-        sm::make_counter("reads_shed_due_to_overload", _system_read_concurrency_sem.get_stats().total_reads_shed_due_to_overload,
-                       sm::description("The number of reads shed because the admission queue reached its max capacity."
-                                       " When the queue is full, excessive reads are shed to avoid overload."),
-                       {system_label_instance}),
-
-        sm::make_gauge("disk_reads", [this] { return _system_read_concurrency_sem.get_stats().disk_reads; },
-                       sm::description("Holds the number of currently active disk read operations. "),
-                       {system_label_instance}),
-
-        sm::make_gauge("sstables_read", [this] { return _system_read_concurrency_sem.get_stats().sstables_read; },
-                       sm::description("Holds the number of currently read sstables. "),
-                       {system_label_instance}),
-
         sm::make_gauge("total_result_bytes", [this] { return get_result_memory_limiter().total_used_memory(); },
                        sm::description("Holds the current amount of memory used for results.")),
 

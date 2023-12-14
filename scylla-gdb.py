@@ -2168,7 +2168,8 @@ class scylla_memory(gdb.Command):
 
     @staticmethod
     def format_semaphore_stats(semaphore):
-        semaphore_name = "{}:".format(str(semaphore['_name'])[1:-1].split("_")[1])
+        # older versions had names like "_user_concurrency_semaphore"
+        semaphore_name = "{}:".format(str(semaphore['_name']).removeprefix('_').removesuffix('_concurrency_semaphore'))
         initial_count = int(semaphore["_initial_resources"]["count"])
         initial_memory = int(semaphore["_initial_resources"]["memory"])
         used_count = initial_count - int(semaphore["_resources"]["count"])

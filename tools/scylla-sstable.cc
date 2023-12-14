@@ -2983,7 +2983,7 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
         gms::feature_service feature_service(gms::feature_config_from_db_config(dbcfg));
         cache_tracker tracker;
         sstables::directory_semaphore dir_sem(1);
-        sstables::sstables_manager sst_man(large_data_handler, dbcfg, feature_service, tracker,
+        sstables::sstables_manager sst_man("scylla_sstable", large_data_handler, dbcfg, feature_service, tracker,
             memory::stats().total_memory(), dir_sem,
             [host_id = locator::host_id::create_random_id()] { return host_id; });
         auto close_sst_man = deferred_close(sst_man);
@@ -3003,7 +3003,7 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
             }
         }
 
-        reader_concurrency_semaphore rcs_sem(reader_concurrency_semaphore::no_limits{}, app_name);
+        reader_concurrency_semaphore rcs_sem(reader_concurrency_semaphore::no_limits{}, app_name, reader_concurrency_semaphore::register_metrics::no);
         auto stop_semaphore = deferred_stop(rcs_sem);
 
         const auto permit = rcs_sem.make_tracking_only_permit(schema.get(), app_name, db::no_timeout, {});

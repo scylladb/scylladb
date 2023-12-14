@@ -36,7 +36,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_clear_inactive_reads)
     std::vector<reader_concurrency_semaphore::inactive_read_handle> handles;
 
     {
-        reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::no_limits{}, get_name());
+        reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::no_limits{}, get_name(), reader_concurrency_semaphore::register_metrics::no);
         auto stop_sem = deferred_stop(semaphore);
         auto clear_permits = defer([&permits] { permits.clear(); });
 
@@ -112,7 +112,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_destroyed_permit_rele
 
 SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_abandoned_handle_closes_reader) {
     simple_schema s;
-    reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::no_limits{}, get_name());
+    reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::no_limits{}, get_name(), reader_concurrency_semaphore::register_metrics::no);
     auto stop_sem = deferred_stop(semaphore);
 
     auto permit = semaphore.make_tracking_only_permit(s.schema().get(), get_name(), db::no_timeout, {});
@@ -543,7 +543,7 @@ SEASTAR_TEST_CASE(reader_concurrency_semaphore_max_queue_length) {
 }
 
 SEASTAR_THREAD_TEST_CASE(reader_concurrency_semaphore_dump_reader_diganostics) {
-    reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::no_limits{}, get_name());
+    reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::no_limits{}, get_name(), reader_concurrency_semaphore::register_metrics::no);
     auto stop_sem = deferred_stop(semaphore);
 
     const auto nr_tables = tests::random::get_int<unsigned>(2, 4);
@@ -583,20 +583,21 @@ SEASTAR_THREAD_TEST_CASE(reader_concurrency_semaphore_dump_reader_diganostics) {
 SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_stop_waits_on_permits) {
     BOOST_TEST_MESSAGE("unused");
     {
-        reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::no_limits{}, get_name());
+        reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::no_limits{}, get_name(), reader_concurrency_semaphore::register_metrics::no);
         // Checks for stop() should not be triggered.
     }
 
     BOOST_TEST_MESSAGE("0 permits");
     {
-        reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::no_limits{}, get_name());
+        reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::no_limits{}, get_name(), reader_concurrency_semaphore::register_metrics::no);
         // Test will fail by timing out.
         semaphore.stop().get();
     }
 
     BOOST_TEST_MESSAGE("1 permit");
     {
-        auto semaphore = std::make_unique<reader_concurrency_semaphore>(reader_concurrency_semaphore::no_limits{}, get_name());
+        auto semaphore = std::make_unique<reader_concurrency_semaphore>(reader_concurrency_semaphore::no_limits{}, get_name(),
+                reader_concurrency_semaphore::register_metrics::no);
         auto permit = std::make_unique<reader_permit>(semaphore->make_tracking_only_permit(nullptr, "permit1", db::no_timeout, {}));
 
         // Test will fail via use-after-free
@@ -947,7 +948,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_evict_inactive_reads_
         schema_handles.emplace(&s, std::vector<reader_concurrency_semaphore::inactive_read_handle>{});
     }
 
-    reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::no_limits{}, get_name());
+    reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::no_limits{}, get_name(), reader_concurrency_semaphore::register_metrics::no);
     auto stop_sem = deferred_stop(semaphore);
 
     for (auto& s : schemas) {
@@ -1236,7 +1237,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_memory_limit_no_leaks
     const auto serialize_multiplier = 2;
     const auto kill_multiplier = 3;
     reader_concurrency_semaphore semaphore(initial_resources.count, initial_resources.memory, get_name(), 100,
-            utils::updateable_value<uint32_t>(serialize_multiplier), utils::updateable_value<uint32_t>(kill_multiplier));
+            utils::updateable_value<uint32_t>(serialize_multiplier), utils::updateable_value<uint32_t>(kill_multiplier), reader_concurrency_semaphore::register_metrics::no);
     auto stop_sem = deferred_stop(semaphore);
 
     const size_t reader_count_target = 6;
@@ -1491,7 +1492,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_request_memory_preser
     const auto serialize_multiplier = 2;
     const auto kill_multiplier = std::numeric_limits<uint32_t>::max(); // we don't want this to interfere with our test
     reader_concurrency_semaphore semaphore(initial_resources.count, initial_resources.memory, get_name(), 100,
-            utils::updateable_value<uint32_t>(serialize_multiplier), utils::updateable_value<uint32_t>(kill_multiplier));
+            utils::updateable_value<uint32_t>(serialize_multiplier), utils::updateable_value<uint32_t>(kill_multiplier), reader_concurrency_semaphore::register_metrics::no);
     auto stop_sem = deferred_stop(semaphore);
 
     auto sponge_permit = semaphore.obtain_permit(nullptr, get_name(), 1024, db::no_timeout, {}).get0();
@@ -1554,7 +1555,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_blessed_read_goes_ina
     const auto serialize_multiplier = 2;
     const auto kill_multiplier = std::numeric_limits<uint32_t>::max(); // we don't want this to interfere with our test
     reader_concurrency_semaphore semaphore(initial_resources.count, initial_resources.memory, get_name(), 100,
-            utils::updateable_value<uint32_t>(serialize_multiplier), utils::updateable_value<uint32_t>(kill_multiplier));
+            utils::updateable_value<uint32_t>(serialize_multiplier), utils::updateable_value<uint32_t>(kill_multiplier), reader_concurrency_semaphore::register_metrics::no);
     auto stop_sem = deferred_stop(semaphore);
 
     simple_schema ss;
@@ -1584,7 +1585,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_blessed_read_goes_ina
 
 // Check that `stop()` correctly evicts all inactive reads.
 SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_stop_with_inactive_reads) {
-    reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::no_limits{}, get_name());
+    reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::no_limits{}, get_name(), reader_concurrency_semaphore::register_metrics::no);
 
     simple_schema ss;
     auto s = ss.schema();
@@ -1616,7 +1617,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_permit_waiting_for_me
     const auto serialize_multiplier = 2;
     const auto kill_multiplier = std::numeric_limits<uint32_t>::max(); // we don't want this to interfere with our test
     reader_concurrency_semaphore semaphore(initial_resources.count, initial_resources.memory, get_name(), 100,
-            utils::updateable_value<uint32_t>(serialize_multiplier), utils::updateable_value<uint32_t>(kill_multiplier));
+            utils::updateable_value<uint32_t>(serialize_multiplier), utils::updateable_value<uint32_t>(kill_multiplier), reader_concurrency_semaphore::register_metrics::no);
     auto stop_sem = deferred_stop(semaphore);
 
     auto permit1 = semaphore.obtain_permit(nullptr, get_name(), 1024, db::no_timeout, {}).get0();
@@ -1663,7 +1664,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_no_unnecessary_evicti
     const auto serialize_multiplier = std::numeric_limits<uint32_t>::max();
     const auto kill_multiplier = std::numeric_limits<uint32_t>::max();
     reader_concurrency_semaphore semaphore(initial_resources.count, initial_resources.memory, get_name(), 100,
-            utils::updateable_value<uint32_t>(serialize_multiplier), utils::updateable_value<uint32_t>(kill_multiplier));
+            utils::updateable_value<uint32_t>(serialize_multiplier), utils::updateable_value<uint32_t>(kill_multiplier), reader_concurrency_semaphore::register_metrics::no);
     auto stop_sem = deferred_stop(semaphore);
 
     simple_schema ss;
@@ -1756,7 +1757,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_necessary_evicting) {
     const auto serialize_multiplier = std::numeric_limits<uint32_t>::max();
     const auto kill_multiplier = std::numeric_limits<uint32_t>::max();
     reader_concurrency_semaphore semaphore(initial_resources.count, initial_resources.memory, get_name(), 100,
-            utils::updateable_value<uint32_t>(serialize_multiplier), utils::updateable_value<uint32_t>(kill_multiplier));
+            utils::updateable_value<uint32_t>(serialize_multiplier), utils::updateable_value<uint32_t>(kill_multiplier), reader_concurrency_semaphore::register_metrics::no);
     auto stop_sem = deferred_stop(semaphore);
 
     simple_schema ss;
@@ -1914,7 +1915,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_execution_stage_wakeu
     const auto serialize_multiplier = std::numeric_limits<uint32_t>::max();
     const auto kill_multiplier = std::numeric_limits<uint32_t>::max();
     reader_concurrency_semaphore semaphore(initial_resources.count, initial_resources.memory, get_name(), 100,
-            utils::updateable_value<uint32_t>(serialize_multiplier), utils::updateable_value<uint32_t>(kill_multiplier));
+            utils::updateable_value<uint32_t>(serialize_multiplier), utils::updateable_value<uint32_t>(kill_multiplier), reader_concurrency_semaphore::register_metrics::no);
     auto stop_sem = deferred_stop(semaphore);
 
     auto permit1 = semaphore.obtain_permit(nullptr, get_name(), 1024, db::no_timeout, {}).get();

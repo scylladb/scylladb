@@ -759,9 +759,9 @@ SEASTAR_THREAD_TEST_CASE(test_immediate_evict_on_insert) {
 }
 
 SEASTAR_THREAD_TEST_CASE(test_unique_inactive_read_handle) {
-    reader_concurrency_semaphore sem1(reader_concurrency_semaphore::no_limits{}, "sem1");
+    reader_concurrency_semaphore sem1(reader_concurrency_semaphore::no_limits{}, "sem1", reader_concurrency_semaphore::register_metrics::no);
     auto stop_sem1 = deferred_stop(sem1);
-    reader_concurrency_semaphore sem2(reader_concurrency_semaphore::no_limits{}, ""); // to see the message for an unnamed semaphore
+    reader_concurrency_semaphore sem2(reader_concurrency_semaphore::no_limits{}, "", reader_concurrency_semaphore::register_metrics::no); // to see the message for an unnamed semaphore
     auto stop_sem2 = deferred_stop(sem2);
 
     auto schema = schema_builder("ks", "cf")
@@ -784,7 +784,7 @@ SEASTAR_THREAD_TEST_CASE(test_unique_inactive_read_handle) {
 }
 
 SEASTAR_THREAD_TEST_CASE(test_semaphore_mismatch) {
-    reader_concurrency_semaphore other_sem(reader_concurrency_semaphore::no_limits{}, "other_semaphore");
+    reader_concurrency_semaphore other_sem(reader_concurrency_semaphore::no_limits{}, "other_semaphore", reader_concurrency_semaphore::register_metrics::no);
     auto stop_sem1 = deferred_stop(other_sem);
 
     bool is_user_semaphore = true;
