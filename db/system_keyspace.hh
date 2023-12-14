@@ -496,8 +496,8 @@ public:
     static future<mutation> get_group0_history(distributed<replica::database>&);
 
     // If the `group0_schema_version` key in `system.scylla_local` is present (either live or tombstone),
-    // returns the corresponding mutation. Otherwise returns an empty mutation for that key.
-    future<mutation> get_group0_schema_version();
+    // returns the corresponding mutation. Otherwise returns nullopt.
+    future<std::optional<mutation>> get_group0_schema_version();
 
     future<> sstables_registry_create_entry(sstring location, sstring status, sstables::sstable_state state, sstables::entry_descriptor desc);
     future<> sstables_registry_update_entry_status(sstring location, sstables::generation_type gen, sstring status);

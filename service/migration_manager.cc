@@ -171,7 +171,10 @@ void migration_manager::init_messaging_service()
         // If it was modified in RECOVERY mode, we still need to return the mutation as it may contain a tombstone
         // that will force the pulling node to revert to digest calculation instead of using a version that it
         // could've persisted earlier.
-        cm.emplace_back(co_await self._sys_ks.local().get_group0_schema_version());
+        auto group0_schema_version = co_await self._sys_ks.local().get_group0_schema_version();
+        if (group0_schema_version) {
+            cm.emplace_back(std::move(*group0_schema_version));
+        }
 
         co_return rpc::tuple(std::vector<frozen_mutation>{}, std::move(cm));
     }, std::ref(*this)));
