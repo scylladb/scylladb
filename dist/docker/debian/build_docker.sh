@@ -102,6 +102,10 @@ bconfig --entrypoint  '["/docker-entrypoint.py"]'
 bconfig --cmd  ''
 bconfig --port 10000 --port 9042 --port 9160 --port 9180 --port 7000 --port 7001 --port 22
 bconfig --volume "/var/lib/scylla"
+bconfig --label org.opencontainers.image.ref.name="ScyllaDB"
+bconfig --label org.opencontainers.image.version="$version-$release"
+bconfig --label description="ScyllaDB Open Source"
+bconfig --label summary="NoSQL data store using the seastar framework, compatible with Apache Cassandra"
 
 mkdir -p build/$mode/dist/docker/
 image="oci-archive:build/$mode/dist/docker/$product-$version-$release"
