@@ -128,8 +128,6 @@ class system_keyspace : public seastar::peering_sharded_service<system_keyspace>
     static schema_ptr large_cells();
     static schema_ptr scylla_local();
     future<> force_blocking_flush(sstring cfname);
-    template <typename Value>
-    future<> update_cached_values(gms::inet_address ep, sstring column_name, Value value);
 public:
     static schema_ptr size_estimates();
 public:
