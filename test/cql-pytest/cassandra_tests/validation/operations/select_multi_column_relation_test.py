@@ -28,7 +28,7 @@ def testSingleClusteringInvalidQueries(cql, test_keyspace):
 # We need to skip this test because issue #13241 causes it to frequently
 # crash Scylla, and not just fail cleanly.
 @pytest.mark.skip(reason="Issue #13241")
-@pytest.mark.xfail(reason="Issue #4244, #13217")
+@pytest.mark.xfail(reason="Issue #4244")
 def testMultiClusteringInvalidQueries(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int, b int, c int, d int, primary key (a, b, c, d))") as table:
         assertInvalidSyntax(cql, table, "SELECT * FROM %s WHERE a = 0 AND (b, c) > ()")
@@ -66,7 +66,7 @@ def testMultiClusteringInvalidQueries(cql, test_keyspace):
         assertInvalidMessage(cql, table, "Invalid null value",
                              "SELECT * FROM %s WHERE a = 0 AND (b, c, d) IN ((?, ?, ?))", 1, 2, None)
         # Reproduces #13217
-        assertInvalidMessage(cql, table, "Invalid null value in condition for columns: [b, c, d]",
+        assertInvalidMessage(cql, table, "Invalid null value in condition for column",
                              "SELECT * FROM %s WHERE a = 0 AND (b, c, d) IN ((?, ?, ?), (?, ?, ?))", 1, 2, None, 2, 1, 4)
 
         # Wrong type for 'd'

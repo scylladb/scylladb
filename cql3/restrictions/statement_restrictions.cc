@@ -1257,9 +1257,9 @@ struct multi_column_range_accumulator {
     const clustering_key_prefix::prefix_equal_tri_compare prefix3cmp = get_unreversed_tri_compare(*schema);
 
     void operator()(const binary_operator& binop) {
+        auto& lhs = expr::as<tuple_constructor>(binop.lhs);
         if (is_compare(binop.op)) {
             auto opt_values = expr::get_tuple_elements(expr::evaluate(binop.rhs, options), *type_of(binop.rhs));
-            auto& lhs = expr::as<tuple_constructor>(binop.lhs);
             std::vector<managed_bytes> values(lhs.elements.size());
             for (size_t i = 0; i < lhs.elements.size(); ++i) {
                 auto& col = expr::as<column_value>(lhs.elements.at(i));
@@ -1273,7 +1273,19 @@ struct multi_column_range_accumulator {
             utils::chunked_vector<std::vector<managed_bytes_opt>> tuple_elems;
             if (tup.is_value()) {
                 tuple_elems = expr::get_list_of_tuples_elements(tup, *type_of(binop.rhs));
-            }
+            }   
+            for(size_t i = 0; i < tuple_elems.size(); ++i) {
+                if(tuple_elems[i].size() != lhs.elements.size()) {
+                    throw exceptions::invalid_request_exception(format("Expected {} elements in value tuple, but got {}",
+                    lhs.elements.size(), tuple_elems[i].size()));
+                }
+                for(size_t j = 0; j < lhs.elements.size(); ++j) {
+                    auto& col = expr::as<column_value>(lhs.elements.at(j));
+                    statements::request_validations::check_not_null(
+                            tuple_elems[i][j],
+                            "Invalid null value in condition for column {}", col.col->name_as_text());
+                }
+            }   
             process_in_values(std::move(tuple_elems));
         } else {
             on_internal_error(rlogger, format("multi_column_range_accumulator: unexpected atom {}", binop));
