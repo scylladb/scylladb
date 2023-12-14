@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include <list>
 #include <boost/range/algorithm/transform.hpp>
 #include <seastar/core/on_internal_error.hh>
 #include <seastar/core/gate.hh>
