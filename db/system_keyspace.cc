@@ -1698,6 +1698,10 @@ future<std::optional<T>> system_keyspace::get_scylla_local_param_as(const sstrin
     });
 }
 
+template
+future<std::optional<utils::UUID>>
+system_keyspace::get_scylla_local_param_as<utils::UUID>(const sstring& key);
+
 future<> system_keyspace::set_scylla_local_param(const sstring& key, const sstring& value, bool visible_before_cl_replay) {
     return set_scylla_local_param_as<sstring>(key, value, visible_before_cl_replay);
 }
