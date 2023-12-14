@@ -11,6 +11,7 @@
 #include "system_keyspace.hh"
 #include "db/schema_tables.hh"
 #include "schema/schema_builder.hh"
+#include "types/set.hh"
 
 namespace db::system_auth_keyspace {
 
@@ -21,7 +22,6 @@ using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
 static constexpr auto auth_gc_grace = std::chrono::duration_cast<std::chrono::seconds>(days(7)).count();
 
 schema_ptr roles() {
-    //TODO(mmal): define fully
     static thread_local auto schema = [] {
         schema_builder builder(generate_legacy_id(NAME, ROLES), NAME, ROLES,
         // partition key
@@ -29,13 +29,91 @@ schema_ptr roles() {
         // clustering key
         {},
         // regular columns
+        {
+            {"can_login", boolean_type},
+            {"is_superuser", boolean_type},
+            {"member_of", set_type_impl::get_instance(utf8_type, true)},
+            {"salted_hash", utf8_type}
+        },
+        // static columns
+        {},
+        // regular column name type
+        utf8_type,
+        // comment
+        "roles for authentication and RBAC"
+        );
+        builder.set_gc_grace_seconds(auth_gc_grace);
+        builder.with_version(system_keyspace::generate_schema_version(builder.uuid()));
+        return builder.build();
+    }();
+    return schema;
+}
+
+schema_ptr role_members() {
+    static thread_local auto schema = [] {
+        schema_builder builder(generate_legacy_id(NAME, ROLE_MEMBERS), NAME, ROLE_MEMBERS,
+        // partition key
+        {{"role", utf8_type}},
+        // clustering key
+        {{"member", utf8_type}},
+        // regular columns
         {},
         // static columns
         {},
         // regular column name type
         utf8_type,
         // comment
-        "comment"
+        "joins users and their granted roles in RBAC"
+        );
+        builder.set_gc_grace_seconds(auth_gc_grace);
+        builder.with_version(system_keyspace::generate_schema_version(builder.uuid()));
+        return builder.build();
+    }();
+    return schema;
+}
+
+schema_ptr role_attributes() {
+    static thread_local auto schema = [] {
+        schema_builder builder(generate_legacy_id(NAME, ROLE_ATTRIBUTES), NAME, ROLE_ATTRIBUTES,
+        // partition key
+        {{"role", utf8_type}},
+        // clustering key
+        {{"name", utf8_type}},
+        // regular columns
+        {
+            {"value", utf8_type}
+        },
+        // static columns
+        {},
+        // regular column name type
+        utf8_type,
+        // comment
+        "role permissions in RBAC"
+        );
+        builder.set_gc_grace_seconds(auth_gc_grace);
+        builder.with_version(system_keyspace::generate_schema_version(builder.uuid()));
+        return builder.build();
+    }();
+    return schema;
+}
+
+schema_ptr role_permissions() {
+    static thread_local auto schema = [] {
+        schema_builder builder(generate_legacy_id(NAME, ROLE_PERMISSIONS), NAME, ROLE_PERMISSIONS,
+        // partition key
+        {{"role", utf8_type}},
+        // clustering key
+        {{"resource", utf8_type}},
+        // regular columns
+        {
+            {"permissions", set_type_impl::get_instance(utf8_type, true)}
+        },
+        // static columns
+        {},
+        // regular column name type
+        utf8_type,
+        // comment
+        "role permissions for CassandraAuthorizer"
         );
         builder.set_gc_grace_seconds(auth_gc_grace);
         builder.with_version(system_keyspace::generate_schema_version(builder.uuid()));
@@ -45,7 +123,7 @@ schema_ptr roles() {
 }
 
 std::vector<schema_ptr> all_tables() {
-    return {roles()};
+    return {roles(), role_members(), role_attributes(), role_permissions()};
 }
 
 } // namespace system_auth_keyspace
