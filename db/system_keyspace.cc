@@ -2392,7 +2392,7 @@ future<mutation> system_keyspace::get_group0_history(distributed<replica::databa
     co_return mutation(s, partition_key::from_singular(*s, GROUP0_HISTORY_KEY));
 }
 
-future<mutation> system_keyspace::get_group0_schema_version() {
+future<std::optional<mutation>> system_keyspace::get_group0_schema_version() {
     auto s = _db.find_schema(db::system_keyspace::NAME, db::system_keyspace::SCYLLA_LOCAL);
 
     partition_key pk = partition_key::from_singular(*s, "group0_schema_version");
@@ -2406,7 +2406,7 @@ future<mutation> system_keyspace::get_group0_schema_version() {
         co_return std::move(mut);
     }
 
-    co_return mutation(s, pk);
+    co_return std::nullopt;
 }
 
 static constexpr auto GROUP0_UPGRADE_STATE_KEY = "group0_upgrade_state";
