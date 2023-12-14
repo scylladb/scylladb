@@ -13,7 +13,18 @@
 #include "schema/schema_builder.hh"
 #include "types/set.hh"
 
-namespace db::system_auth_keyspace {
+namespace db {
+
+// all system auth tables use schema commitlog
+namespace {
+    const auto set_use_schema_commitlog = schema_builder::register_static_configurator([](const sstring& ks_name, const sstring& cf_name, schema_static_props& props) {
+        if (ks_name == system_auth_keyspace::NAME) {
+            props.enable_schema_commitlog();
+        }
+    });
+} // anonymous namespace
+
+namespace system_auth_keyspace {
 
 // use the same gc setting as system_schema tables
 using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
@@ -127,4 +138,4 @@ std::vector<schema_ptr> all_tables() {
 }
 
 } // namespace system_auth_keyspace
-
+} // namespace db
