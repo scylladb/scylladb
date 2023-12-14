@@ -911,6 +911,34 @@ SEASTAR_TEST_CASE(test_parse_broken) {
     return make_ready_future<>();
 }
 
+// see issue #15201
+SEASTAR_TEST_CASE(test_values_on_options_removal) {
+    auto cfg_ptr = std::make_unique<config>();
+    config& cfg = *cfg_ptr;
+
+    cfg.read_from_yaml(R"foo(
+compaction_static_shares: 15
+tombstone_warn_threshold: 9999)foo", throw_on_error);
+
+    // check both live updatable and non-updatable values are set
+    BOOST_CHECK_EQUAL(cfg.compaction_static_shares.is_set(), true);
+    BOOST_CHECK_EQUAL(cfg.compaction_static_shares(), 15);
+    BOOST_CHECK_EQUAL(cfg.tombstone_warn_threshold.is_set(), true);
+    BOOST_CHECK_EQUAL(cfg.tombstone_warn_threshold(), 9999);
+
+    // read yaml where options are missing (were deleted)
+    cfg.read_from_yaml("", throw_on_error);
+    // live updatable value was reset to it's default value
+    BOOST_CHECK_EQUAL(cfg.compaction_static_shares.is_set(), false);
+    BOOST_CHECK_EQUAL(cfg.compaction_static_shares(), 0);
+
+    // non-updatable value keeps it's value in config
+    BOOST_CHECK_EQUAL(cfg.tombstone_warn_threshold.is_set(), true);
+    BOOST_CHECK_EQUAL(cfg.tombstone_warn_threshold(), 9999);
+
+    return make_ready_future<>();
+}
+
 using ef = experimental_features_t::feature;
 using features = std::vector<enum_option<experimental_features_t>>;
 

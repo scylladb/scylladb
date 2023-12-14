@@ -213,6 +213,16 @@ bool utils::config_file::named_value<T>::set_value(sstring value, config_source 
 }
 
 template<typename T>
+void utils::config_file::named_value<T>::reset_value_to_default() {
+    if (_source == config_source::SettingsFile && _liveness != liveness::LiveUpdate) {
+        return;
+    }
+
+    (*this)(_default_value);
+    _source = config_source::None;
+}
+
+template<typename T>
 future<> utils::config_file::named_value<T>::set_value_on_all_shards(const YAML::Node& node) {
     if (_source == config_source::SettingsFile && _liveness != liveness::LiveUpdate) {
         // FIXME: warn if different?

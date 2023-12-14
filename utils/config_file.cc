@@ -298,6 +298,7 @@ void utils::config_file::read_from_yaml(const char* yaml, error_handler h) {
      * There are no exhaustive attempts at converting, we rely on syntax of
      * file mapping to the data type...
      */
+    std::set<std::string_view> cfgs_read;
     auto doc = YAML::Load(yaml);
     for (auto node : doc) {
         auto label = node.first.as<sstring>();
@@ -328,6 +329,9 @@ void utils::config_file::read_from_yaml(const char* yaml, error_handler h) {
         if (node.second.IsNull()) {
             continue;
         }
+
+        cfgs_read.insert(cfg.name());
+
         // Still, a syntax error is an error warning, not a fail
         try {
             cfg.set_value(node.second);
@@ -335,6 +339,15 @@ void utils::config_file::read_from_yaml(const char* yaml, error_handler h) {
             h(label, e.what(), cfg.status());
         } catch (...) {
             h(label, "Could not convert value", cfg.status());
+        }
+    }
+
+    // find and reset options loaded from yaml previously but missing in new yaml (issue #15201)
+    for (config_src& cfg : _cfgs) {
+        if (cfg.source() == config_source::SettingsFile) {
+            if (cfgs_read.find(cfg.name()) == cfgs_read.end()) {
+                cfg.reset_value_to_default();
+            }
         }
     }
 }
