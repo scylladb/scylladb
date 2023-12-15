@@ -25,31 +25,31 @@ namespace roles_table {
 
 std::string_view creation_query() {
     static const sstring instance = fmt::format(
-            "CREATE TABLE {} ("
+            "CREATE TABLE {}.{} ("
             "  {} text PRIMARY KEY,"
             "  can_login boolean,"
             "  is_superuser boolean,"
             "  member_of set<text>,"
             "  salted_hash text"
             ")",
-            qualified_name,
+            meta::AUTH_KS,
+            name,
             role_col_name);
 
     return instance;
 }
 
-constexpr std::string_view qualified_name("system_auth.roles");
+} // namespace roles_table
 
-}
-
-}
+} // namespace meta
 
 future<bool> default_role_row_satisfies(
         cql3::query_processor& qp,
         std::function<bool(const cql3::untyped_result_set_row&)> p,
         std::optional<std::string> rolename) {
-    static const sstring query = format("SELECT * FROM {} WHERE {} = ?",
-            meta::roles_table::qualified_name,
+    static const sstring query = format("SELECT * FROM {}.{} WHERE {} = ?",
+            meta::AUTH_KS,
+            meta::roles_table::name,
             meta::roles_table::role_col_name);
 
     for (auto cl : { db::consistency_level::ONE, db::consistency_level::QUORUM }) {
@@ -69,7 +69,7 @@ future<bool> any_nondefault_role_row_satisfies(
         cql3::query_processor& qp,
         std::function<bool(const cql3::untyped_result_set_row&)> p,
         std::optional<std::string> rolename) {
-    static const sstring query = format("SELECT * FROM {}", meta::roles_table::qualified_name);
+    static const sstring query = format("SELECT * FROM {}.{}", meta::AUTH_KS, meta::roles_table::name);
 
     auto results = co_await qp.execute_internal(query, db::consistency_level::QUORUM
         , internal_distributed_query_state(), cql3::query_processor::cache_internal::no

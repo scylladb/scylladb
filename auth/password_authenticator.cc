@@ -73,8 +73,9 @@ static bool has_salted_hash(const cql3::untyped_result_set_row& row) {
 }
 
 static const sstring& update_row_query() {
-    static const sstring update_row_query = format("UPDATE {} SET {} = ? WHERE {} = ?",
-            meta::roles_table::qualified_name,
+    static const sstring update_row_query = format("UPDATE {}.{} SET {} = ? WHERE {} = ?",
+            meta::AUTH_KS,
+            meta::roles_table::name,
             SALTED_HASH,
             meta::roles_table::role_col_name);
     return update_row_query;
@@ -216,9 +217,10 @@ future<authenticated_user> password_authenticator::authenticate(
     // Rely on query processing caching statements instead, and lets assume
     // that a map lookup string->statement is not gonna kill us much.
     return futurize_invoke([this, username, password] {
-        static const sstring query = format("SELECT {} FROM {} WHERE {} = ?",
+        static const sstring query = format("SELECT {} FROM {}.{} WHERE {} = ?",
                 SALTED_HASH,
-                meta::roles_table::qualified_name,
+                meta::AUTH_KS,
+                meta::roles_table::name,
                 meta::roles_table::role_col_name);
 
         return _qp.execute_internal(
@@ -270,8 +272,9 @@ future<> password_authenticator::alter(std::string_view role_name, const authent
         return make_ready_future<>();
     }
 
-    static const sstring query = format("UPDATE {} SET {} = ? WHERE {} = ?",
-            meta::roles_table::qualified_name,
+    static const sstring query = format("UPDATE {}.{} SET {} = ? WHERE {} = ?",
+            meta::AUTH_KS,
+            meta::roles_table::name,
             SALTED_HASH,
             meta::roles_table::role_col_name);
 
@@ -284,9 +287,10 @@ future<> password_authenticator::alter(std::string_view role_name, const authent
 }
 
 future<> password_authenticator::drop(std::string_view name) {
-    static const sstring query = format("DELETE {} FROM {} WHERE {} = ?",
+    static const sstring query = format("DELETE {} FROM {}.{} WHERE {} = ?",
             SALTED_HASH,
-            meta::roles_table::qualified_name,
+            meta::AUTH_KS,
+            meta::roles_table::name,
             meta::roles_table::role_col_name);
 
     return _qp.execute_internal(

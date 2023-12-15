@@ -30,8 +30,6 @@ std::string_view creation_query();
 
 constexpr std::string_view name{"roles", 5};
 
-extern const std::string_view qualified_name;
-
 constexpr std::string_view role_col_name{"role", 4};
 
 }
