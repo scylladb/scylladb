@@ -257,11 +257,6 @@ public:
     */
     future<> update_tokens(const std::unordered_set<dht::token>& tokens);
 
-    /**
-     * Record tokens being used by another node in the PEERS table.
-     */
-    future<> update_tokens(gms::inet_address ep, const std::unordered_set<dht::token>& tokens);
-
     future<std::unordered_map<gms::inet_address, gms::inet_address>> get_preferred_ips();
 
 public:
