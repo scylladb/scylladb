@@ -474,7 +474,7 @@ gossiper::handle_get_endpoint_states_msg(gossip_get_endpoint_states_request requ
     for (const auto& [node, state] : _endpoint_state_map) {
         const heart_beat_state& hbs = state->get_heart_beat_state();
         auto state_wanted = endpoint_state(hbs);
-        const std::map<application_state, versioned_value>& apps = state->get_application_state_map();
+        auto& apps = state->get_application_state_map();
         for (const auto& app : apps) {
             if (application_states_wanted.count(app.first) > 0) {
                 state_wanted.get_application_state_map().emplace(app);
@@ -1945,7 +1945,7 @@ void gossiper::examine_gossiper(utils::chunked_vector<gossip_digest>& g_digest_l
     }
 }
 
-future<> gossiper::start_gossiping(gms::generation_type generation_nbr, std::map<application_state, versioned_value> preload_local_states, gms::advertise_myself advertise) {
+future<> gossiper::start_gossiping(gms::generation_type generation_nbr, application_state_map preload_local_states, gms::advertise_myself advertise) {
     auto permit = co_await lock_endpoint(get_broadcast_address(), null_permit_id);
     co_await container().invoke_on_all([advertise] (gossiper& g) {
         if (!advertise) {

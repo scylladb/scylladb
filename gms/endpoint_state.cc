@@ -19,7 +19,7 @@ static_assert(std::is_default_constructible_v<heart_beat_state>);
 static_assert(std::is_nothrow_copy_constructible_v<heart_beat_state>);
 static_assert(std::is_nothrow_move_constructible_v<heart_beat_state>);
 
-static_assert(std::is_nothrow_default_constructible_v<std::map<application_state, versioned_value>>);
+static_assert(std::is_nothrow_default_constructible_v<application_state_map>);
 
 // Note: although std::map::find is not guaranteed to be noexcept
 // it depends on the comperator used and in this case comparing application_state

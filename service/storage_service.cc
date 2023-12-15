@@ -3000,7 +3000,7 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
         std::unordered_map<gms::inet_address, sstring> loaded_peer_features,
         std::chrono::milliseconds delay) {
     std::unordered_set<token> bootstrap_tokens;
-    std::map<gms::application_state, gms::versioned_value> app_states;
+    gms::application_state_map app_states;
     /* The timestamp of the CDC streams generation that this node has proposed when joining.
      * This value is nullopt only when:
      * 1. this node is being upgraded from a non-CDC version,

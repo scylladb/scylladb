@@ -588,7 +588,7 @@ public:
      * existing nodes can talk to the replacing node. So the probability of
      * replacing node being talked to is pretty high.
      */
-    future<> start_gossiping(gms::generation_type generation_nbr, std::map<application_state, versioned_value> preload_local_states = {},
+    future<> start_gossiping(gms::generation_type generation_nbr, application_state_map preload_local_states = {},
             gms::advertise_myself advertise = gms::advertise_myself::yes);
 
 public:
