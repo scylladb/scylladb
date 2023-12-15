@@ -1567,7 +1567,7 @@ static std::vector<cdc::generation_id_v2> decode_cdc_generations_ids(const set_t
 future<> system_keyspace::update_tokens(gms::inet_address ep, const std::unordered_set<dht::token>& tokens)
 {
     if (_db.get_token_metadata().get_topology().is_me(ep)) {
-        co_return co_await remove_endpoint(ep);
+        on_internal_error(slogger, format("update_tokens called for this node: {}", ep));
     }
 
     sstring req = format("INSERT INTO system.{} (peer, tokens) VALUES (?, ?)", PEERS);
@@ -1661,7 +1661,7 @@ future<> system_keyspace::update_cached_values(gms::inet_address ep, sstring col
 template <typename Value>
 future<> system_keyspace::update_peer_info(gms::inet_address ep, sstring column_name, Value value) {
     if (_db.get_token_metadata().get_topology().is_me(ep)) {
-        co_return;
+        on_internal_error(slogger, format("update_peer_info called for this node: {}", ep));
     }
 
     co_await update_cached_values(ep, column_name, value);
