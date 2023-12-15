@@ -470,10 +470,6 @@ private:
     db::system_keyspace::peer_info get_peer_info_for_update(inet_address endpoint);
     static db::system_keyspace::peer_info get_peer_info_for_update(inet_address endpoint, const gms::application_state_map& app_state_map);
 
-    template <typename T>
-    future<> update_table(gms::inet_address endpoint, sstring col, T value);
-    future<> do_update_system_peers_table(gms::inet_address endpoint, const application_state& state, const versioned_value& value);
-
     std::unordered_set<token> get_tokens_for(inet_address endpoint);
     std::optional<locator::endpoint_dc_rack> get_dc_rack_for(const gms::endpoint_state& ep_state);
     std::optional<locator::endpoint_dc_rack> get_dc_rack_for(inet_address endpoint);

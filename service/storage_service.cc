@@ -4084,52 +4084,6 @@ future<> storage_service::on_restart(gms::inet_address endpoint, gms::endpoint_s
     return make_ready_future();
 }
 
-template <typename T>
-future<> storage_service::update_table(gms::inet_address endpoint, sstring col, T value) {
-    try {
-        co_await _sys_ks.local().update_peer_info(endpoint, col, value);
-    } catch (...) {
-        slogger.error("fail to update {} for {}: {}", col, endpoint, std::current_exception());
-    }
-}
-
-future<> storage_service::do_update_system_peers_table(gms::inet_address endpoint, const application_state& state, const versioned_value& value) {
-    slogger.debug("Update system.peers table: endpoint={}, app_state={}, versioned_value={}", endpoint, state, value);
-    if (state == application_state::RELEASE_VERSION) {
-        co_await update_table(endpoint, "release_version", value.value());
-    } else if (state == application_state::DC) {
-        co_await update_table(endpoint, "data_center", value.value());
-    } else if (state == application_state::RACK) {
-        co_await update_table(endpoint, "rack", value.value());
-    } else if (state == application_state::INTERNAL_IP) {
-        auto col = sstring("preferred_ip");
-        inet_address ep;
-        try {
-            ep = gms::inet_address(value.value());
-        } catch (...) {
-            slogger.error("fail to update {} for {}: invalid address {}", col, endpoint, value.value());
-            co_return;
-        }
-        co_await update_table(endpoint, col, ep.addr());
-    } else if (state == application_state::RPC_ADDRESS) {
-        auto col = sstring("rpc_address");
-        inet_address ep;
-        try {
-            ep = gms::inet_address(value.value());
-        } catch (...) {
-            slogger.error("fail to update {} for {}: invalid rcpaddr {}", col, endpoint, value.value());
-            co_return;
-        }
-        co_await update_table(endpoint, col, ep.addr());
-    } else if (state == application_state::SCHEMA) {
-        co_await update_table(endpoint, "schema_version", utils::UUID(value.value()));
-    } else if (state == application_state::HOST_ID) {
-        co_await update_table(endpoint, "host_id", utils::UUID(value.value()));
-    } else if (state == application_state::SUPPORTED_FEATURES) {
-        co_await update_table(endpoint, "supported_features", value.value());
-    }
-}
-
 db::system_keyspace::peer_info storage_service::get_peer_info_for_update(inet_address endpoint) {
     auto ep_state = _gossiper.get_endpoint_state_ptr(endpoint);
     if (!ep_state) {
