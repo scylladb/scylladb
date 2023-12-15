@@ -31,7 +31,7 @@ custom_args:
     sstable_datafile_test:
         - '-c1 -m2G'
     sstable_compaction_test:
-        - '-c1 -m2G'
+        - '-c1 -m2G --logger-log-level compaction=debug --logger-log-level compaction_manager=debug'
     sstable_3_x_test:
         - '-c1 -m2G'
     cql_query_test:
