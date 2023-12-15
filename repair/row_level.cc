@@ -8,6 +8,7 @@
 
 #include <exception>
 #include <seastar/util/defer.hh>
+#include "gms/endpoint_state.hh"
 #include "repair/repair.hh"
 #include "message/messaging_service.hh"
 #include "repair/task_manager_module.hh"
@@ -3033,8 +3034,7 @@ public:
     }
     virtual future<> on_change(
             gms::inet_address endpoint,
-            gms::application_state state,
-            const gms::versioned_value& value,
+            const gms::application_state_map& states,
             gms::permit_id) override {
         return make_ready_future();
     }

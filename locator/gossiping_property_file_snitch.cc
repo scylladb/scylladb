@@ -107,14 +107,14 @@ void gossiping_property_file_snitch::periodic_reader_callback() {
     });
 }
 
-std::list<std::pair<gms::application_state, gms::versioned_value>> gossiping_property_file_snitch::get_app_states() const {
-    std::list<std::pair<gms::application_state, gms::versioned_value>> ret = {
+gms::application_state_map gossiping_property_file_snitch::get_app_states() const {
+    gms::application_state_map ret = {
         {gms::application_state::DC, gms::versioned_value::datacenter(_my_dc)},
         {gms::application_state::RACK, gms::versioned_value::rack(_my_rack)},
     };
     if (_listen_address.has_value()) {
         sstring ip = format("{}", *_listen_address);
-        ret.emplace_back(gms::application_state::INTERNAL_IP, gms::versioned_value::internal_ip(std::move(ip)));
+        ret.emplace(gms::application_state::INTERNAL_IP, gms::versioned_value::internal_ip(std::move(ip)));
     }
     return ret;
 }

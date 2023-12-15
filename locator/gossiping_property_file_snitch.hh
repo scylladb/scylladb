@@ -35,7 +35,7 @@ public:
         return std::chrono::seconds(60);
     }
 
-    virtual std::list<std::pair<gms::application_state, gms::versioned_value>> get_app_states() const override;
+    virtual gms::application_state_map get_app_states() const override;
     virtual future<> stop() override;
     virtual future<> start() override;
     virtual future<> pause_io() override;

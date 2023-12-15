@@ -15,6 +15,7 @@
 #include <boost/signals2.hpp>
 #include <boost/signals2/dummy_mutex.hpp>
 
+#include "gms/endpoint_state.hh"
 #include "locator/types.hh"
 #include "gms/inet_address.hh"
 #include "inet_address_vectors.hh"
@@ -83,7 +84,7 @@ public:
     /**
      * returns whatever info snitch wants to gossip
      */
-    virtual std::list<std::pair<gms::application_state, gms::versioned_value>> get_app_states() const = 0;
+    virtual gms::application_state_map get_app_states() const = 0;
 
     virtual ~i_endpoint_snitch() { assert(_state == snitch_state::stopped); };
 
@@ -295,7 +296,7 @@ public:
     // virtual sstring get_datacenter()  = 0;
     //
 
-    virtual std::list<std::pair<gms::application_state, gms::versioned_value>> get_app_states() const override;
+    virtual gms::application_state_map get_app_states() const override;
 
 protected:
     sstring _my_dc;

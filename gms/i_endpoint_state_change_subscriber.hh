@@ -33,6 +33,10 @@ namespace gms {
  * null_permit_id to indicate that no endpoint lock is held for them.
  */
 class i_endpoint_state_change_subscriber {
+protected:
+    future<> on_application_state_change(inet_address endpoint, const application_state_map& states, application_state app_state, permit_id,
+        std::function<future<>(inet_address, const gms::versioned_value&, gms::permit_id)> func);
+
 public:
     virtual ~i_endpoint_state_change_subscriber() {}
     /**
@@ -44,7 +48,7 @@ public:
      */
     virtual future<> on_join(inet_address endpoint, endpoint_state_ptr ep_state, permit_id) = 0;
 
-    virtual future<> on_change(inet_address endpoint, application_state state, const versioned_value& value, permit_id) = 0;
+    virtual future<> on_change(inet_address endpoint, const application_state_map& states, permit_id) = 0;
 
     virtual future<> on_alive(inet_address endpoint, endpoint_state_ptr state, permit_id) = 0;
 

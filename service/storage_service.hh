@@ -12,6 +12,7 @@
 #pragma once
 
 #include <seastar/core/shared_future.hh>
+#include "gms/endpoint_state.hh"
 #include "gms/i_endpoint_state_change_subscriber.hh"
 #include "service/endpoint_lifecycle_subscriber.hh"
 #include "service/topology_guard.hh"
@@ -436,7 +437,7 @@ public:
      * Note: Any time a node state changes from STATUS_NORMAL, it will not be visible to new nodes. So it follows that
      * you should never bootstrap a new node during a removenode, decommission or move.
      */
-    virtual future<> on_change(inet_address endpoint, application_state state, const versioned_value& value, gms::permit_id) override;
+    virtual future<> on_change(gms::inet_address endpoint, const gms::application_state_map& states, gms::permit_id) override;
     virtual future<> on_alive(gms::inet_address endpoint, gms::endpoint_state_ptr state, gms::permit_id) override;
     virtual future<> on_dead(gms::inet_address endpoint, gms::endpoint_state_ptr state, gms::permit_id) override;
     virtual future<> on_remove(gms::inet_address endpoint, gms::permit_id) override;

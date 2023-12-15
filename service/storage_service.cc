@@ -3965,9 +3965,7 @@ future<> storage_service::handle_state_removed(inet_address endpoint, std::vecto
 
 future<> storage_service::on_join(gms::inet_address endpoint, gms::endpoint_state_ptr ep_state, gms::permit_id pid) {
     slogger.debug("endpoint={} on_join: permit_id={}", endpoint, pid);
-    for (const auto& e : ep_state->get_application_state_map()) {
-        co_await on_change(endpoint, e.first, e.second, pid);
-    }
+    co_await on_change(endpoint, ep_state->get_application_state_map(), pid);
 }
 
 future<> storage_service::on_alive(gms::inet_address endpoint, gms::endpoint_state_ptr state, gms::permit_id pid) {
@@ -3988,13 +3986,15 @@ future<> storage_service::on_alive(gms::inet_address endpoint, gms::endpoint_sta
     }
 }
 
-future<> storage_service::on_change(inet_address endpoint, application_state state, const versioned_value& value, gms::permit_id pid) {
-    slogger.debug("endpoint={} on_change:     app_state={}, versioned_value={}, permit_id={}", endpoint, state, value, pid);
-    if (state == application_state::STATUS) {
+future<> storage_service::on_change(gms::inet_address endpoint, const gms::application_state_map& states_, gms::permit_id pid) {
+    // copy the states map locally since the coroutine may yield
+    auto states = states_;
+    slogger.debug("endpoint={} on_change:     states={}, permit_id={}", endpoint, states, pid);
+    co_await on_application_state_change(endpoint, states, application_state::STATUS, pid, [this] (inet_address endpoint, const gms::versioned_value& value, gms::permit_id pid) -> future<> {
         std::vector<sstring> pieces;
         boost::split(pieces, value.value(), boost::is_any_of(sstring(versioned_value::DELIMITER_STR)));
         if (pieces.empty()) {
-            slogger.warn("Fail to split status in on_change: endpoint={}, app_state={}, value={}", endpoint, state, value);
+            slogger.warn("Fail to split status in on_change: endpoint={}, app_state={}, value={}", endpoint, application_state::STATUS, value);
             co_return;
         }
         const sstring& move_name = pieces[0];
@@ -4010,7 +4010,8 @@ future<> storage_service::on_change(inet_address endpoint, application_state sta
         } else {
             co_return; // did nothing.
         }
-    } else {
+    });
+    // FIXME: indentation
         auto ep_state = _gossiper.get_endpoint_state_ptr(endpoint);
         if (!ep_state || _gossiper.is_dead_state(*ep_state)) {
             slogger.debug("Ignoring state change for dead or unknown endpoint: {}", endpoint);
@@ -4028,16 +4029,16 @@ future<> storage_service::on_change(inet_address endpoint, application_state sta
         if (ep && *ep == endpoint && tm.is_normal_token_owner(host_id)) {
             if (!is_me(endpoint)) {
                 slogger.debug("endpoint={}/{} on_change:     updating system.peers table", endpoint, host_id);
-                co_await do_update_system_peers_table(endpoint, state, value);
+                co_await _sys_ks.local().update_peer_info(endpoint, get_peer_info_for_update(endpoint, states));
             }
-            if (state == application_state::RPC_READY) {
+            if (states.contains(application_state::RPC_READY)) {
                 slogger.debug("Got application_state::RPC_READY for node {}, is_cql_ready={}", endpoint, ep_state->is_cql_ready());
                 co_await notify_cql_change(endpoint, ep_state->is_cql_ready());
-            } else if (state == application_state::INTERNAL_IP) {
-                co_await maybe_reconnect_to_preferred_ip(endpoint, inet_address(value.value()));
+            }
+            if (auto it = states.find(application_state::INTERNAL_IP); it != states.end()) {
+                co_await maybe_reconnect_to_preferred_ip(endpoint, inet_address(it->second.value()));
             }
         }
-    }
 }
 
 future<> storage_service::maybe_reconnect_to_preferred_ip(inet_address ep, inet_address local_ip) {

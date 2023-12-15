@@ -524,7 +524,7 @@ private:
 
     // notify that an application state has changed
     // Must be called under lock_endpoint.
-    future<> do_on_change_notifications(inet_address addr, const application_state& state, const versioned_value& value, permit_id) const;
+    future<> do_on_change_notifications(inet_address addr, const application_state_map& states, permit_id) const;
 
     // notify that a node is DOWN (dead)
     // Must be called under lock_endpoint.
@@ -611,7 +611,7 @@ public:
      * Applies all states in set "atomically", as in guaranteed monotonic versions and
      * inserted into endpoint state together (and assuming same grouping, overwritten together).
      */
-    future<> add_local_application_state(std::list<std::pair<application_state, versioned_value>>);
+    future<> add_local_application_state(application_state_map states);
 
     /**
      * Intentionally overenginered to avoid very rare string copies.
