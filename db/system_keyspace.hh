@@ -25,6 +25,7 @@
 #include "locator/host_id.hh"
 #include "mutation/canonical_mutation.hh"
 #include "virtual_tables.hh"
+#include "types/types.hh"
 
 namespace sstables {
     struct entry_descriptor;
@@ -523,7 +524,7 @@ public:
 
     virtual_tables_registry& get_virtual_tables_registry() { return _virtual_tables_registry; }
 private:
-    future<::shared_ptr<cql3::untyped_result_set>> execute_cql(const sstring& query_string, const std::initializer_list<data_value>& values);
+    future<::shared_ptr<cql3::untyped_result_set>> execute_cql(const sstring& query_string, const data_value_list& values);
     template <typename... Args>
     future<::shared_ptr<cql3::untyped_result_set>> execute_cql_with_timeout(sstring req, db::timeout_clock::time_point timeout, Args&&... args);
 
