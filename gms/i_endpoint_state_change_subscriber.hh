@@ -44,8 +44,6 @@ public:
      */
     virtual future<> on_join(inet_address endpoint, endpoint_state_ptr ep_state, permit_id) = 0;
 
-    virtual future<> before_change(inet_address endpoint, endpoint_state_ptr current_state, application_state new_statekey, const versioned_value& newvalue) = 0;
-
     virtual future<> on_change(inet_address endpoint, application_state state, const versioned_value& value, permit_id) = 0;
 
     virtual future<> on_alive(inet_address endpoint, endpoint_state_ptr state, permit_id) = 0;

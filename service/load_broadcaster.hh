@@ -50,8 +50,6 @@ public:
         return make_ready_future();
     }
     
-    virtual future<> before_change(gms::inet_address endpoint, gms::endpoint_state_ptr current_state, gms::application_state new_state_key, const gms::versioned_value& newValue) override { return make_ready_future(); }
-
     future<> on_alive(gms::inet_address endpoint, gms::endpoint_state_ptr, gms::permit_id) override { return make_ready_future(); }
 
     future<> on_dead(gms::inet_address endpoint, gms::endpoint_state_ptr, gms::permit_id) override { return make_ready_future(); }

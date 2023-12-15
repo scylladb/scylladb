@@ -522,10 +522,6 @@ private:
     // Must be called under lock_endpoint.
     future<> apply_new_states(inet_address addr, endpoint_state local_state, const endpoint_state& remote_state, permit_id);
 
-    // notify that a local application state is going to change (doesn't get triggered for remote changes)
-    // Must be called under lock_endpoint.
-    future<> do_before_change_notifications(inet_address addr, endpoint_state_ptr ep_state, const application_state& ap_state, const versioned_value& new_value) const;
-
     // notify that an application state has changed
     // Must be called under lock_endpoint.
     future<> do_on_change_notifications(inet_address addr, const application_state& state, const versioned_value& value, permit_id) const;

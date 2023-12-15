@@ -102,14 +102,6 @@ public:
     }
 
     virtual future<>
-    before_change(gms::inet_address endpoint,
-        gms::endpoint_state_ptr current_state, gms::application_state new_statekey,
-        const gms::versioned_value& newvalue) override {
-        // Raft server ID never changes - do nothing
-        return make_ready_future<>();
-    }
-
-    virtual future<>
     on_change(gms::inet_address endpoint,
         gms::application_state state, const gms::versioned_value& value, gms::permit_id) override {
         // Raft server ID never changes - do nothing

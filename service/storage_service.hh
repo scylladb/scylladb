@@ -408,7 +408,6 @@ public:
             const dht::token_range_vector& ranges) const;
 public:
     virtual future<> on_join(gms::inet_address endpoint, gms::endpoint_state_ptr ep_state, gms::permit_id) override;
-    virtual future<> before_change(gms::inet_address endpoint, gms::endpoint_state_ptr current_state, gms::application_state new_state_key, const gms::versioned_value& new_value) override;
     /*
      * Handle the reception of a new particular ApplicationState for a particular endpoint. Note that the value of the
      * ApplicationState has not necessarily "changed" since the last known value, if we already received the same update

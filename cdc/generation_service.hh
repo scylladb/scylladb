@@ -104,7 +104,6 @@ public:
         return _cdc_metadata;
     }
 
-    virtual future<> before_change(gms::inet_address, gms::endpoint_state_ptr, gms::application_state, const gms::versioned_value&) override { return make_ready_future(); }
     virtual future<> on_alive(gms::inet_address, gms::endpoint_state_ptr, gms::permit_id) override { return make_ready_future(); }
     virtual future<> on_dead(gms::inet_address, gms::endpoint_state_ptr, gms::permit_id) override { return make_ready_future(); }
     virtual future<> on_remove(gms::inet_address, gms::permit_id) override { return make_ready_future(); }

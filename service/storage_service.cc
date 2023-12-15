@@ -3988,11 +3988,6 @@ future<> storage_service::on_alive(gms::inet_address endpoint, gms::endpoint_sta
     }
 }
 
-future<> storage_service::before_change(gms::inet_address endpoint, gms::endpoint_state_ptr current_state, gms::application_state new_state_key, const gms::versioned_value& new_value) {
-    slogger.debug("endpoint={} before_change: new app_state={}, new versioned_value={}", endpoint, new_state_key, new_value);
-    return make_ready_future();
-}
-
 future<> storage_service::on_change(inet_address endpoint, application_state state, const versioned_value& value, gms::permit_id pid) {
     slogger.debug("endpoint={} on_change:     app_state={}, versioned_value={}, permit_id={}", endpoint, state, value, pid);
     if (state == application_state::STATUS) {

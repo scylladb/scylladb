@@ -171,7 +171,6 @@ public:
 
 public:
     virtual future<> on_join(inet_address endpoint, endpoint_state_ptr ep_state, gms::permit_id) override { return make_ready_future(); }
-    virtual future<> before_change(inet_address endpoint, endpoint_state_ptr current_state, application_state new_state_key, const versioned_value& new_value) override { return make_ready_future(); }
     virtual future<> on_change(inet_address endpoint, application_state state, const versioned_value& value, gms::permit_id) override { return make_ready_future(); }
     virtual future<> on_alive(inet_address endpoint, endpoint_state_ptr state, gms::permit_id) override { return make_ready_future(); }
     virtual future<> on_dead(inet_address endpoint, endpoint_state_ptr state, gms::permit_id) override;

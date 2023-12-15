@@ -183,7 +183,6 @@ private:
     virtual future<> on_dead(gms::inet_address endpoint, gms::endpoint_state_ptr state, gms::permit_id) override { return make_ready_future(); }
     virtual future<> on_remove(gms::inet_address endpoint, gms::permit_id) override { return make_ready_future(); }
     virtual future<> on_restart(gms::inet_address endpoint, gms::endpoint_state_ptr state, gms::permit_id) override { return make_ready_future(); }
-    virtual future<> before_change(gms::inet_address endpoint, gms::endpoint_state_ptr current_state, gms::application_state new_statekey, const gms::versioned_value& newvalue) override { return make_ready_future(); }
 
 public:
     // For tests only.

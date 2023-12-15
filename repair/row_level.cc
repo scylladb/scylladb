@@ -3031,13 +3031,6 @@ public:
             gms::permit_id) override {
         return make_ready_future();
     }
-    virtual future<> before_change(
-            gms::inet_address endpoint,
-            gms::endpoint_state_ptr current_state,
-            gms::application_state new_state_key,
-            const gms::versioned_value& new_value) override {
-        return make_ready_future();
-    }
     virtual future<> on_change(
             gms::inet_address endpoint,
             gms::application_state state,
