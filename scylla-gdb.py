@@ -4223,7 +4223,11 @@ class scylla_gms(gdb.Command):
                 pass
             ip = ip_to_str(int(get_ip(endpoint)), byteorder=sys.byteorder)
             gdb.write('%s: (gms::endpoint_state*) %s (%s)\n' % (ip, state.address, state['_heart_beat_state']))
-            for app_state, vv in std_map(state['_application_state']):
+            try:
+                app_states_map = std_unordered_map(state['_application_state'])
+            except:
+                app_states_map = std_map(state['_application_state'])
+            for app_state, vv in app_states_map:
                 value = get_gms_versioned_value(vv)
                 gdb.write('  %s: {version=%d, value=%s}\n' % (app_state, value['version'], value['value']))
 

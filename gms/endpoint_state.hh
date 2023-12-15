@@ -19,7 +19,7 @@
 
 namespace gms {
 
-using application_state_map = std::map<application_state, versioned_value>;
+using application_state_map = std::unordered_map<application_state, versioned_value>;
 
 /**
  * This abstraction represents both the HeartBeatState and the ApplicationState in an EndpointState
