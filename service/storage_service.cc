@@ -6846,7 +6846,7 @@ future<> storage_service::move_tablet(table_id table, dht::token token, locator:
             throw std::runtime_error(format("Unknown host: {}", dst.host));
         }
         if (dst.shard >= node->get_shard_count()) {
-            throw std::runtime_error(format("Host {} does not have shard {}", dst.shard));
+            throw std::runtime_error(format("Host {} does not have shard {}", *node, dst.shard));
         }
         if (src.host == dst.host) {
             throw std::runtime_error("Migrating within the same node is not supported");
