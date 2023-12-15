@@ -467,6 +467,9 @@ public:
     virtual void on_drop_aggregate(const sstring& ks_name, const sstring& aggregate_name) override {}
     virtual void on_drop_view(const sstring& ks_name, const sstring& view_name) override {}
 private:
+    db::system_keyspace::peer_info get_peer_info_for_update(inet_address endpoint);
+    static db::system_keyspace::peer_info get_peer_info_for_update(inet_address endpoint, const gms::application_state_map& app_state_map);
+
     template <typename T>
     future<> update_table(gms::inet_address endpoint, sstring col, T value);
     future<> update_peer_info(inet_address endpoint);
