@@ -4011,34 +4011,33 @@ future<> storage_service::on_change(gms::inet_address endpoint, const gms::appli
             co_return; // did nothing.
         }
     });
-    // FIXME: indentation
-        auto ep_state = _gossiper.get_endpoint_state_ptr(endpoint);
-        if (!ep_state || _gossiper.is_dead_state(*ep_state)) {
-            slogger.debug("Ignoring state change for dead or unknown endpoint: {}", endpoint);
-            co_return;
+    auto ep_state = _gossiper.get_endpoint_state_ptr(endpoint);
+    if (!ep_state || _gossiper.is_dead_state(*ep_state)) {
+        slogger.debug("Ignoring state change for dead or unknown endpoint: {}", endpoint);
+        co_return;
+    }
+    const auto host_id = _gossiper.get_host_id(endpoint);
+    const auto& tm = get_token_metadata();
+    const auto ep = tm.get_endpoint_for_host_id_if_known(host_id);
+    // The check *ep == endpoint is needed when a node changes
+    // its IP - on_change can be called by the gossiper for old IP as part
+    // of its removal, after handle_state_normal has already been called for
+    // the new one. Without the check, the do_update_system_peers_table call
+    // overwrites the IP back to its old value.
+    // In essence, the code under the 'if' should fire if the given IP is a normal_token_owner.
+    if (ep && *ep == endpoint && tm.is_normal_token_owner(host_id)) {
+        if (!is_me(endpoint)) {
+            slogger.debug("endpoint={}/{} on_change:     updating system.peers table", endpoint, host_id);
+            co_await _sys_ks.local().update_peer_info(endpoint, get_peer_info_for_update(endpoint, states));
         }
-        const auto host_id = _gossiper.get_host_id(endpoint);
-        const auto& tm = get_token_metadata();
-        const auto ep = tm.get_endpoint_for_host_id_if_known(host_id);
-        // The check *ep == endpoint is needed when a node changes
-        // its IP - on_change can be called by the gossiper for old IP as part
-        // of its removal, after handle_state_normal has already been called for
-        // the new one. Without the check, the do_update_system_peers_table call
-        // overwrites the IP back to its old value.
-        // In essence, the code under the 'if' should fire if the given IP is a normal_token_owner.
-        if (ep && *ep == endpoint && tm.is_normal_token_owner(host_id)) {
-            if (!is_me(endpoint)) {
-                slogger.debug("endpoint={}/{} on_change:     updating system.peers table", endpoint, host_id);
-                co_await _sys_ks.local().update_peer_info(endpoint, get_peer_info_for_update(endpoint, states));
-            }
-            if (states.contains(application_state::RPC_READY)) {
-                slogger.debug("Got application_state::RPC_READY for node {}, is_cql_ready={}", endpoint, ep_state->is_cql_ready());
-                co_await notify_cql_change(endpoint, ep_state->is_cql_ready());
-            }
-            if (auto it = states.find(application_state::INTERNAL_IP); it != states.end()) {
-                co_await maybe_reconnect_to_preferred_ip(endpoint, inet_address(it->second.value()));
-            }
+        if (states.contains(application_state::RPC_READY)) {
+            slogger.debug("Got application_state::RPC_READY for node {}, is_cql_ready={}", endpoint, ep_state->is_cql_ready());
+            co_await notify_cql_change(endpoint, ep_state->is_cql_ready());
         }
+        if (auto it = states.find(application_state::INTERNAL_IP); it != states.end()) {
+            co_await maybe_reconnect_to_preferred_ip(endpoint, inet_address(it->second.value()));
+        }
+    }
 }
 
 future<> storage_service::maybe_reconnect_to_preferred_ip(inet_address ep, inet_address local_ip) {
