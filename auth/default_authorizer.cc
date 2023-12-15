@@ -51,7 +51,8 @@ static const class_registrator<
 
 default_authorizer::default_authorizer(cql3::query_processor& qp, ::service::migration_manager& mm)
         : _qp(qp)
-        , _migration_manager(mm) {
+        , _migration_manager(mm)
+        , _auth_ks_name(get_auth_ks_name(qp)) {
 }
 
 default_authorizer::~default_authorizer() {
@@ -154,7 +155,7 @@ default_authorizer::authorize(const role_or_anonymous& maybe_role, const resourc
 
     static const sstring query = format("SELECT {} FROM {}.{} WHERE {} = ? AND {} = ?",
             PERMISSIONS_NAME,
-            meta::AUTH_KS,
+            _auth_ks_name,
             PERMISSIONS_CF,
             ROLE_NAME,
             RESOURCE_NAME);
@@ -180,7 +181,7 @@ default_authorizer::modify(
         std::string_view op) {
     return do_with(
             format("UPDATE {}.{} SET {} = {} {} ? WHERE {} = ? AND {} = ?",
-                    meta::AUTH_KS,
+                    _auth_ks_name,
                     PERMISSIONS_CF,
                     PERMISSIONS_NAME,
                     PERMISSIONS_NAME,
@@ -211,7 +212,7 @@ future<std::vector<permission_details>> default_authorizer::list_all() const {
             ROLE_NAME,
             RESOURCE_NAME,
             PERMISSIONS_NAME,
-            meta::AUTH_KS,
+            _auth_ks_name,
             PERMISSIONS_CF);
 
     return _qp.execute_internal(
@@ -237,7 +238,7 @@ future<std::vector<permission_details>> default_authorizer::list_all() const {
 
 future<> default_authorizer::revoke_all(std::string_view role_name) {
     static const sstring query = format("DELETE FROM {}.{} WHERE {} = ?",
-            meta::AUTH_KS,
+            _auth_ks_name,
             PERMISSIONS_CF,
             ROLE_NAME);
 
@@ -258,7 +259,7 @@ future<> default_authorizer::revoke_all(std::string_view role_name) {
 future<> default_authorizer::revoke_all(const resource& resource) {
     static const sstring query = format("SELECT {} FROM {}.{} WHERE {} = ? ALLOW FILTERING",
             ROLE_NAME,
-            meta::AUTH_KS,
+            _auth_ks_name,
             PERMISSIONS_CF,
             RESOURCE_NAME);
 
@@ -274,7 +275,7 @@ future<> default_authorizer::revoke_all(const resource& resource) {
                     res->end(),
                     [this, res, resource](const cql3::untyped_result_set::row& r) {
                 static const sstring query = format("DELETE FROM {}.{} WHERE {} = ? AND {} = ?",
-                        meta::AUTH_KS,
+                        _auth_ks_name,
                         PERMISSIONS_CF,
                         ROLE_NAME,
                         RESOURCE_NAME);

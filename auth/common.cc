@@ -17,6 +17,8 @@
 #include "schema/schema_builder.hh"
 #include "service/migration_manager.hh"
 #include "timeout_config.hh"
+#include "db/config.hh"
+#include "db/system_auth_keyspace.hh"
 
 namespace auth {
 
@@ -29,6 +31,19 @@ constinit const std::string_view AUTH_PACKAGE_NAME("org.apache.cassandra.auth.")
 }
 
 static logging::logger auth_log("auth");
+
+bool legacy_mode(cql3::query_processor& qp) {
+    return !qp.db().get_config().check_experimental(
+        db::experimental_features_t::feature::CONSISTENT_TOPOLOGY_CHANGES) ||
+        qp.auth_version <= db::system_auth_keyspace::version_t::v1;
+}
+
+std::string_view get_auth_ks_name(cql3::query_processor& qp) {
+    if (legacy_mode(qp)) {
+        return meta::legacy::AUTH_KS;
+    }
+    return db::system_auth_keyspace::NAME;
+}
 
 // Func must support being invoked more than once.
 future<> do_after_system_ready(seastar::abort_source& as, seastar::noncopyable_function<future<>()> func) {

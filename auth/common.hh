@@ -46,6 +46,13 @@ extern constinit const std::string_view AUTH_PACKAGE_NAME;
 
 }
 
+// This is a helper to check whether auth-v2 is on.
+bool legacy_mode(cql3::query_processor& qp);
+
+// We have legacy implementation using different keyspace
+// and need to parametrize depending on runtime feature.
+std::string_view get_auth_ks_name(cql3::query_processor& qp);
+
 template <class Task>
 future<> once_among_shards(Task&& f) {
     if (this_shard_id() == 0u) {
