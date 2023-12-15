@@ -5074,8 +5074,8 @@ static future<> run_incremental_compaction_test(sstables::offstrategy offstrateg
         }
 
         size_t last_input_sstable_count = sstables_nr;
+        auto t = env.make_table_for_tests(s);
         {
-            auto t = env.make_table_for_tests(s);
             auto& cm = t->get_compaction_manager();
             auto stop = deferred_stop(t);
             t->disable_auto_compaction().get();
