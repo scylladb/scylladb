@@ -1483,8 +1483,8 @@ class rewrite_sstables_compaction_task_executor : public sstables_task_executor 
 public:
     rewrite_sstables_compaction_task_executor(compaction_manager& mgr, throw_if_stopping do_throw_if_stopping, table_state* t, tasks::task_id parent_id, sstables::compaction_type_options options, owned_ranges_ptr owned_ranges_ptr,
                                      std::vector<sstables::shared_sstable> sstables, compacting_sstable_registration compacting,
-                                     compaction_manager::can_purge_tombstones can_purge)
-        : sstables_task_executor(mgr, do_throw_if_stopping, t, options.type(), sstring(sstables::to_string(options.type())), std::move(sstables), parent_id, options.type() == sstables::compaction_type::Scrub ? fmt::format("mode: {};\nquarantine_mode: {}\n", std::get<sstables::compaction_type_options::scrub>(options.options()).operation_mode, std::get<sstables::compaction_type_options::scrub>(options.options()).quarantine_operation_mode) : "")
+                                     compaction_manager::can_purge_tombstones can_purge, sstring type_options_desc = "")
+        : sstables_task_executor(mgr, do_throw_if_stopping, t, options.type(), sstring(sstables::to_string(options.type())), std::move(sstables), parent_id, std::move(type_options_desc))
         , _options(std::move(options))
         , _owned_ranges_ptr(std::move(owned_ranges_ptr))
         , _compacting(std::move(compacting))
@@ -1514,17 +1514,21 @@ protected:
         co_return stats;
     }
 
-private:
-    future<sstables::compaction_result> rewrite_sstable(const sstables::shared_sstable sst) {
+    virtual sstables::compaction_descriptor make_descriptor(const sstables::shared_sstable& sst) const {
+        auto sstable_level = sst->get_sstable_level();
+        auto run_identifier = sst->run_identifier();
+        return sstables::compaction_descriptor({ sst },
+            sstable_level, sstables::compaction_descriptor::default_max_sstable_bytes, run_identifier, _options, _owned_ranges_ptr);
+    }
+
+    virtual future<sstables::compaction_result> rewrite_sstable(const sstables::shared_sstable sst) {
+        // FIXME: this compaction should run with maintenance priority.
         co_await coroutine::switch_to(_cm.compaction_sg());
 
         for (;;) {
             switch_state(state::active);
-            auto sstable_level = sst->get_sstable_level();
-            auto run_identifier = sst->run_identifier();
-            // FIXME: this compaction should run with maintenance priority.
-            auto descriptor = sstables::compaction_descriptor({ sst },
-                sstable_level, sstables::compaction_descriptor::default_max_sstable_bytes, run_identifier, _options, _owned_ranges_ptr);
+
+            auto descriptor = make_descriptor(sst);
 
             // Releases reference to cleaned sstable such that respective used disk space can be freed.
             auto on_replace = _compacting.update_on_sstable_replacement();
@@ -1550,6 +1554,48 @@ private:
                 co_return sstables::compaction_result{};
             }
         }
+    }
+};
+
+class split_compaction_task_executor final : public rewrite_sstables_compaction_task_executor {
+    sstables::compaction_type_options::split _opt;
+public:
+    split_compaction_task_executor(compaction_manager& mgr,
+                                       throw_if_stopping do_throw_if_stopping,
+                                       table_state* t,
+                                       tasks::task_id parent_id,
+                                       sstables::compaction_type_options options,
+                                       owned_ranges_ptr owned_ranges,
+                                       std::vector<sstables::shared_sstable> sstables,
+                                       compacting_sstable_registration compacting)
+            : rewrite_sstables_compaction_task_executor(mgr, do_throw_if_stopping, t, parent_id, options, std::move(owned_ranges),
+                std::move(sstables), std::move(compacting), compaction_manager::can_purge_tombstones::yes)
+            , _opt(options.as<sstables::compaction_type_options::split>())
+    {
+    }
+private:
+    bool sstable_needs_split(const sstables::shared_sstable& sst) const {
+        return _opt.classifier(sst->get_first_decorated_key().token()) != _opt.classifier(sst->get_last_decorated_key().token());
+    }
+protected:
+    sstables::compaction_descriptor make_descriptor(const sstables::shared_sstable& sst) const override {
+        auto desc = rewrite_sstables_compaction_task_executor::make_descriptor(sst);
+        desc.options = sstables::compaction_type_options::make_split(_opt.classifier);
+        return desc;
+    }
+
+    future<sstables::compaction_result> rewrite_sstable(const sstables::shared_sstable sst) override {
+        if (sstable_needs_split(sst)) {
+            return rewrite_sstables_compaction_task_executor::rewrite_sstable(std::move(sst));
+        }
+        // SSTable that doesn't require split can bypass compaction and the table will be able to place
+        // it into the correct compaction group. Similar approach is done in off-strategy compaction for
+        // sstables that don't require reshape and are ready to be moved across sets.
+        sstables::compaction_completion_desc desc { .old_sstables = {sst}, .new_sstables = {sst} };
+        return _compacting_table->on_compaction_completion(std::move(desc), sstables::offstrategy::no).then([] {
+            // It's fine to return empty results (zeroed stats) as compaction was bypassed.
+            return sstables::compaction_result{};
+        });
     }
 };
 
@@ -1586,8 +1632,11 @@ future<compaction_manager::compaction_stats_opt> compaction_manager::perform_tas
     co_return co_await perform_compaction<TaskType>(throw_if_stopping::no, info, &t, info.value_or(tasks::task_info{}).id, std::move(options), std::move(owned_ranges_ptr), std::move(sstables), std::move(compacting), std::forward<Args>(args)...);
 }
 
-future<compaction_manager::compaction_stats_opt> compaction_manager::rewrite_sstables(table_state& t, sstables::compaction_type_options options, owned_ranges_ptr owned_ranges_ptr, get_candidates_func get_func, std::optional<tasks::task_info> info, can_purge_tombstones can_purge) {
-    return perform_task_on_all_files<rewrite_sstables_compaction_task_executor>(info, t, std::move(options), std::move(owned_ranges_ptr), std::move(get_func), can_purge);
+future<compaction_manager::compaction_stats_opt>
+compaction_manager::rewrite_sstables(table_state& t, sstables::compaction_type_options options, owned_ranges_ptr owned_ranges_ptr,
+                                     get_candidates_func get_func, std::optional<tasks::task_info> info, can_purge_tombstones can_purge,
+                                     sstring options_desc) {
+    return perform_task_on_all_files<rewrite_sstables_compaction_task_executor>(info, t, std::move(options), std::move(owned_ranges_ptr), std::move(get_func), can_purge, std::move(options_desc));
 }
 
 namespace compaction {
@@ -1948,6 +1997,16 @@ future<> compaction_manager::perform_sstable_upgrade(owned_ranges_ptr sorted_own
     return rewrite_sstables(t, sstables::compaction_type_options::make_upgrade(), std::move(sorted_owned_ranges), std::move(get_sstables), info).discard_result();
 }
 
+future<compaction_manager::compaction_stats_opt> compaction_manager::perform_split_compaction(table_state& t, sstables::compaction_type_options::split opt, std::optional<tasks::task_info> info) {
+    auto get_sstables = [this, &t] {
+        return make_ready_future<std::vector<sstables::shared_sstable>>(get_candidates(t));
+    };
+    owned_ranges_ptr owned_ranges_ptr = {};
+    auto options = sstables::compaction_type_options::make_split(std::move(opt.classifier));
+
+    return perform_task_on_all_files<split_compaction_task_executor>(info, t, std::move(options), std::move(owned_ranges_ptr), std::move(get_sstables));
+}
+
 // Submit a table to be scrubbed and wait for its termination.
 future<compaction_manager::compaction_stats_opt> compaction_manager::perform_sstable_scrub(table_state& t, sstables::compaction_type_options::scrub opts, std::optional<tasks::task_info> info) {
     auto scrub_mode = opts.operation_mode;
@@ -1955,6 +2014,7 @@ future<compaction_manager::compaction_stats_opt> compaction_manager::perform_sst
         return perform_sstable_scrub_validate_mode(t, info);
     }
     owned_ranges_ptr owned_ranges_ptr = {};
+    sstring option_desc = fmt::format("mode: {};\nquarantine_mode: {}\n", opts.operation_mode, opts.quarantine_operation_mode);
     return rewrite_sstables(t, sstables::compaction_type_options::make_scrub(scrub_mode), std::move(owned_ranges_ptr), [&t, opts] {
         auto all_sstables = get_all_sstables(t);
         std::vector<sstables::shared_sstable> sstables = boost::copy_range<std::vector<sstables::shared_sstable>>(all_sstables
@@ -1973,7 +2033,7 @@ future<compaction_manager::compaction_stats_opt> compaction_manager::perform_sst
             on_internal_error(cmlog, "bad scrub quarantine mode");
         }));
         return make_ready_future<std::vector<sstables::shared_sstable>>(std::move(sstables));
-    }, info, can_purge_tombstones::no);
+    }, info, can_purge_tombstones::no, std::move(option_desc));
 }
 
 compaction::compaction_state::compaction_state(table_state& t)

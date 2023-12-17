@@ -1487,3 +1487,67 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_random_load) {
     }
   }).get();
 }
+
+SEASTAR_TEST_CASE(test_tablet_id_and_range_side) {
+    static constexpr size_t tablet_count = 128;
+    locator::tablet_map tmap(tablet_count);
+    locator::tablet_map tmap_after_splitting(tablet_count * 2);
+
+    for (size_t id = 0; id < tablet_count; id++) {
+        auto left_id = tablet_id(id << 1);
+        auto right_id = tablet_id(left_id.value() + 1);
+        auto left_tr = tmap_after_splitting.get_token_range(left_id);
+        auto right_tr = tmap_after_splitting.get_token_range(right_id);
+        testlog.debug("id {}, left tr {}, right tr {}", id, left_tr, right_tr);
+
+        auto test = [&tmap, id] (dht::token token, tablet_range_side expected_side) {
+            auto [tid, side] = tmap.get_tablet_id_and_range_side(token);
+            BOOST_REQUIRE_EQUAL(tid.value(), id);
+            BOOST_REQUIRE_EQUAL(side, expected_side);
+        };
+
+        auto test_range = [&] (dht::token_range& tr, tablet_range_side expected_side) {
+            auto lower_token = tr.start()->value() == dht::minimum_token() ? dht::first_token() : tr.start()->value();
+            auto upper_token = tr.end()->value();
+            test(next_token(lower_token), expected_side);
+            test(upper_token, expected_side);
+        };
+
+        // Test the lower and upper bound of tablet's left and right ranges ("compaction groups").
+        test_range(left_tr, tablet_range_side::left);
+        test_range(right_tr, tablet_range_side::right);
+    }
+
+    return make_ready_future<>();
+}
+
+SEASTAR_THREAD_TEST_CASE(basic_tablet_storage_splitting_test) {
+    auto cfg = tablet_cql_test_config();
+    cfg.initial_tablets = std::bit_floor(smp::count);
+    do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql(
+                "CREATE TABLE cf (pk int, ck int, v int, PRIMARY KEY (pk, ck))").get();
+
+        for (int i = 0; i < smp::count * 20; i++) {
+            e.execute_cql(format("INSERT INTO cf (pk, ck, v) VALUES ({}, 0, 0)", i)).get();
+        }
+
+        e.db().invoke_on_all([] (replica::database& db) {
+            auto& table = db.find_column_family("ks", "cf");
+            return table.flush();
+        }).get();
+
+        testlog.info("Splitting sstables...");
+        e.db().invoke_on_all([] (replica::database& db) {
+            auto& table = db.find_column_family("ks", "cf");
+            testlog.info("sstable count: {}", table.sstables_count());
+            return table.split_all_storage_groups();
+        }).get();
+
+        testlog.info("Verifying sstables are split...");
+        BOOST_REQUIRE_EQUAL(e.db().map_reduce0([] (replica::database& db) {
+            auto& table = db.find_column_family("ks", "cf");
+            return make_ready_future<bool>(table.all_storage_groups_split());
+        }, bool(false), std::logical_or<bool>()).get0(), true);
+    }, std::move(cfg)).get();
+}

@@ -13,8 +13,10 @@
 #include "compaction/compaction_descriptor.hh"
 #include "compaction/compaction_backlog_manager.hh"
 #include "compaction/compaction_strategy_state.hh"
+#include "locator/tablets.hh"
 #include "sstables/sstable_set.hh"
-#include "compaction/compaction_fwd.hh"
+#include "utils/chunked_vector.hh"
+#include <boost/intrusive/list.hpp>
 
 #pragma once
 
@@ -51,6 +53,8 @@ class compaction_group {
     seastar::condition_variable _staging_done_condition;
     // Gates async operations confined to a single group.
     seastar::gate _async_gate;
+    using list_hook_t = boost::intrusive::list_member_hook<boost::intrusive::link_mode<boost::intrusive::auto_unlink>>;
+    list_hook_t _list_hook;
 private:
     // Adds new sstable to the set of sstables
     // Doesn't update the cache. The cache must be synchronized in order for reads to see
@@ -66,7 +70,15 @@ private:
     static uint64_t calculate_disk_space_used_for(const sstables::sstable_set& set);
 
     future<> delete_sstables_atomically(std::vector<sstables::shared_sstable> sstables_to_remove);
+    // Input SSTables that weren't added to any SSTable set, are considered unused and can be unlinked.
+    // An input SSTable remains linked if it wasn't actually compacted, yet compaction manager wants
+    // it to be moved from its original sstable set (e.g. maintenance) into a new one (e.g. main).
+    future<> delete_unused_sstables(sstables::compaction_completion_desc desc);
 public:
+    using list_t = boost::intrusive::list<compaction_group,
+        boost::intrusive::member_hook<compaction_group, compaction_group::list_hook_t, &compaction_group::_list_hook>,
+        boost::intrusive::constant_time_size<false>>;
+
     compaction_group(table& t, size_t gid, dht::token_range token_range);
 
     size_t group_id() const noexcept {
@@ -76,6 +88,8 @@ public:
     // Stops all activity in the group, synchronizes with in-flight writes, before
     // flushing memtable(s), so all data can be found in the SSTable set.
     future<> stop() noexcept;
+
+    bool empty() const noexcept;
 
     // This removes all the storage belonging to the group. In order to avoid data
     // resurrection, makes sure that all data is flushed into SSTables before
@@ -144,16 +158,64 @@ public:
     seastar::gate& async_gate() noexcept {
         return _async_gate;
     }
+
+    compaction_manager& get_compaction_manager() noexcept;
+
+    friend class storage_group;
 };
 
-using compaction_group_vector = utils::chunked_vector<std::unique_ptr<compaction_group>>;
+using compaction_group_ptr = std::unique_ptr<compaction_group>;
+using compaction_group_vector = utils::chunked_vector<compaction_group_ptr>;
+using compaction_group_list = compaction_group::list_t;
 
-class compaction_group_manager {
+// Storage group is responsible for storage that belongs to a single tablet.
+// A storage group can manage 1 or more compaction groups, each of which can be compacted independently.
+// If a tablet needs splitting, the storage group can be put in splitting mode, allowing the storage
+// in main compaction groups to be split into two new compaction groups, all of which will be managed
+// by the same storage group.
+class storage_group {
+    compaction_group_ptr _main_cg;
+    compaction_group_ptr _left_cg;
+    compaction_group_ptr _right_cg;
+private:
+    bool splitting_mode() const {
+        return bool(_left_cg) && bool(_right_cg);
+    }
 public:
-    virtual ~compaction_group_manager() {}
-    virtual compaction_group_vector make_compaction_groups() const = 0;
-    virtual size_t compaction_group_of(dht::token) const = 0;
-    virtual size_t log2_compaction_groups() const = 0;
+    storage_group(compaction_group_ptr cg, compaction_group_list& list);
+
+    const dht::token_range& token_range() const noexcept;
+
+    size_t memtable_count() const noexcept;
+
+    compaction_group_ptr& main_compaction_group() noexcept;
+    compaction_group_ptr& select_compaction_group(locator::tablet_range_side) noexcept;
+
+    utils::small_vector<compaction_group*, 3> compaction_groups() noexcept;
+
+    // Puts the storage group in split mode, in which it internally segregates data
+    // into two sstable sets and two memtable sets corresponding to the two adjacent
+    // tablets post-split.
+    // Preexisting sstables and memtables are not split yet.
+    // Returns true if post-conditions for split() are met.
+    bool set_split_mode(compaction_group_list&);
+
+    // Like set_split_mode() but triggers splitting for old sstables and memtables and waits
+    // for it:
+    //  1) Flushes all memtables which were created in non-split mode, and waits for that to complete.
+    //  2) Compacts all sstables which overlap with the split point
+    // Returns a future which resolves when this process is complete.
+    future<> split(compaction_group_list&, sstables::compaction_type_options::split opt);
+};
+
+using storage_group_vector = utils::chunked_vector<std::unique_ptr<storage_group>>;
+
+class storage_group_manager {
+public:
+    virtual ~storage_group_manager() {}
+    virtual storage_group_vector make_storage_groups(compaction_group_list& list) const = 0;
+    virtual std::pair<size_t, locator::tablet_range_side> storage_group_of(dht::token) const = 0;
+    virtual size_t log2_storage_groups() const = 0;
 };
 
 }

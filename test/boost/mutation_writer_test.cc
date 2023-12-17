@@ -21,6 +21,7 @@
 #include "mutation_writer/multishard_writer.hh"
 #include "mutation_writer/timestamp_based_splitting_writer.hh"
 #include "mutation_writer/partition_based_splitting_writer.hh"
+#include "mutation_writer/token_group_based_splitting_writer.hh"
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/flat_mutation_reader_assertions.hh"
 #include "test/lib/mutation_assertions.hh"
@@ -174,10 +175,12 @@ SEASTAR_TEST_CASE(test_multishard_writer_producer_aborts) {
 
 namespace {
 
+using classify_by_var_t = std::variant<classify_by_timestamp, classify_by_token_group>;
+
 class test_bucket_writer {
     schema_ptr _schema;
     reader_permit _permit;
-    classify_by_timestamp _classify;
+    classify_by_var_t _classify;
     std::unordered_map<int64_t, std::vector<mutation>>& _buckets;
 
     std::optional<int64_t> _bucket_id;
@@ -198,14 +201,27 @@ public:
     };
 
 private:
-    void check_timestamp(api::timestamp_type ts) {
-        const auto bucket_id = _classify(ts);
+    void check_bucket_id(int64_t bucket_id) {
         if (_bucket_id) {
             BOOST_REQUIRE_EQUAL(bucket_id, *_bucket_id);
         } else {
             _bucket_id = bucket_id;
         }
     }
+
+    void check_timestamp(api::timestamp_type ts) {
+        if (!std::holds_alternative<classify_by_timestamp>(_classify)) {
+            return;
+        }
+        check_bucket_id(std::get<classify_by_timestamp>(_classify)(ts));
+    }
+    void check_token(dht::token t) {
+        if (!std::holds_alternative<classify_by_token_group>(_classify)) {
+            return;
+        }
+        check_bucket_id(std::get<classify_by_token_group>(_classify)(t));
+    }
+
     void verify_column_bucket_id(const atomic_cell_or_collection& cell, const column_definition& cdef) {
         if (cdef.is_atomic()) {
             check_timestamp(cell.as_atomic_cell(cdef).timestamp());
@@ -254,7 +270,7 @@ private:
     }
 
 public:
-    test_bucket_writer(schema_ptr schema, reader_permit permit, classify_by_timestamp classify, std::unordered_map<int64_t,
+    test_bucket_writer(schema_ptr schema, reader_permit permit, classify_by_var_t classify, std::unordered_map<int64_t,
             std::vector<mutation>>& buckets, size_t throw_after = std::numeric_limits<size_t>::max())
         : _schema(std::move(schema))
         , _permit(std::move(permit))
@@ -267,6 +283,7 @@ public:
         maybe_throw();
         BOOST_REQUIRE(!_current_mutation);
         _current_mutation = mutation(_schema, dk);
+        check_token(dk.token());
     }
     void consume(tombstone partition_tombstone) {
         maybe_throw();
@@ -322,6 +339,11 @@ public:
 
 } // anonymous namespace
 
+using bucket_map_t = std::unordered_map<int64_t, std::vector<mutation>>;
+
+// requires seastar thread.
+static void assert_that_segregator_produces_correct_data(const bucket_map_t& buckets, std::vector<mutation>& muts, reader_permit permit, tests::random_schema& random_schema);
+
 SEASTAR_THREAD_TEST_CASE(test_timestamp_based_splitting_mutation_writer) {
     tests::reader_concurrency_semaphore_wrapper semaphore;
     auto random_spec = tests::make_random_schema_specification(
@@ -365,7 +387,10 @@ SEASTAR_THREAD_TEST_CASE(test_timestamp_based_splitting_mutation_writer) {
 
     testlog.debug("Data split into {} buckets: {}", buckets.size(), boost::copy_range<std::vector<int64_t>>(buckets | boost::adaptors::map_keys));
 
-    auto permit = semaphore.make_permit();
+    assert_that_segregator_produces_correct_data(buckets, muts, semaphore.make_permit(), random_schema);
+}
+
+static void assert_that_segregator_produces_correct_data(const bucket_map_t& buckets, std::vector<mutation>& muts, reader_permit permit, tests::random_schema& random_schema) {
     auto bucket_readers = boost::copy_range<std::vector<flat_mutation_reader_v2>>(buckets | boost::adaptors::map_values |
             boost::adaptors::transformed([&random_schema, &permit] (std::vector<mutation> muts) { return make_flat_mutation_reader_from_mutations_v2(random_schema.schema(), permit, std::move(muts)); }));
     auto reader = make_combined_reader(random_schema.schema(), permit, std::move(bucket_readers), streamed_mutation::forwarding::no,
@@ -522,4 +547,39 @@ SEASTAR_THREAD_TEST_CASE(test_partition_based_splitting_mutation_writer) {
         check_and_reset();
     }
 
+}
+
+SEASTAR_THREAD_TEST_CASE(test_token_group_based_splitting_mutation_writer) {
+    tests::reader_concurrency_semaphore_wrapper semaphore;
+    auto random_spec = tests::make_random_schema_specification(
+            get_name(),
+            std::uniform_int_distribution<size_t>(1, 4),
+            std::uniform_int_distribution<size_t>(2, 4),
+            std::uniform_int_distribution<size_t>(2, 8),
+            std::uniform_int_distribution<size_t>(2, 8));
+    auto random_schema = tests::random_schema{tests::random::get_int<uint32_t>(), *random_spec};
+
+    testlog.info("Random schema:\n{}", random_schema.cql());
+
+    size_t partition_count = many_partitions();
+
+    auto muts = tests::generate_random_mutations(random_schema, partition_count).get0();
+
+    auto classify_fn = [] (dht::token t) -> mutation_writer::token_group_id {
+        return dht::compaction_group_of(1, t);
+    };
+
+    std::unordered_map<int64_t, std::vector<mutation>> buckets;
+
+    auto consumer = [&] (flat_mutation_reader_v2 bucket_reader) {
+        return with_closeable(std::move(bucket_reader), [&] (flat_mutation_reader_v2& rd) {
+            return rd.consume(test_bucket_writer(random_schema.schema(), rd.permit(), classify_fn, buckets));
+        });
+    };
+
+    segregate_by_token_group(make_flat_mutation_reader_from_mutations_v2(random_schema.schema(), semaphore.make_permit(), muts), classify_fn, std::move(consumer)).get();
+
+    testlog.info("Data split into {} buckets: {}", buckets.size(), boost::copy_range<std::vector<int64_t>>(buckets | boost::adaptors::map_keys));
+
+    assert_that_segregator_produces_correct_data(buckets, muts, semaphore.make_permit(), random_schema);
 }

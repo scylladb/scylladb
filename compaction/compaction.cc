@@ -68,6 +68,7 @@ static const std::unordered_map<compaction_type, sstring> compaction_types = {
     { compaction_type::Reshard, "RESHARD" },
     { compaction_type::Upgrade, "UPGRADE" },
     { compaction_type::Reshape, "RESHAPE" },
+    { compaction_type::Split, "SPLIT" },
 };
 
 sstring compaction_name(compaction_type type) {
@@ -97,6 +98,7 @@ std::string_view to_string(compaction_type type) {
     case compaction_type::Reshard: return "Reshard";
     case compaction_type::Upgrade: return "Upgrade";
     case compaction_type::Reshape: return "Reshape";
+    case compaction_type::Split: return "Split";
     }
     on_internal_error_noexcept(clogger, format("Invalid compaction type {}", int(type)));
     return "(invalid)";
@@ -871,7 +873,7 @@ protected:
     }
 private:
     void on_interrupt(std::exception_ptr ex) {
-        log_info("{} of {} sstables interrupted due to: {}", report_start_desc(), _input_sstable_generations.size(), ex);
+        log_info("{} of {} sstables interrupted due to: {}, at {}", report_start_desc(), _input_sstable_generations.size(), ex, current_backtrace());
         delete_sstables_for_interrupted_compaction();
     }
 
@@ -1326,6 +1328,37 @@ public:
     }
 };
 
+class split_compaction final : public regular_compaction {
+    compaction_type_options::split _options;
+public:
+    split_compaction(table_state& table_s, compaction_descriptor descriptor, compaction_data& cdata, compaction_type_options::split options,
+                         compaction_progress_monitor& progress_monitor)
+            : regular_compaction(table_s, std::move(descriptor), cdata, progress_monitor)
+            , _options(std::move(options))
+    {
+    }
+
+    reader_consumer_v2 make_interposer_consumer(reader_consumer_v2 end_consumer) override {
+        return [this, end_consumer = std::move(end_consumer)] (flat_mutation_reader_v2 reader) mutable -> future<> {
+            return mutation_writer::segregate_by_token_group(std::move(reader),
+                    _options.classifier,
+                    _table_s.get_compaction_strategy().make_interposer_consumer(_ms_metadata, std::move(end_consumer)));
+        };
+    }
+
+    bool use_interposer_consumer() const override {
+        return true;
+    }
+
+    std::string_view report_start_desc() const override {
+        return "Splitting";
+    }
+
+    std::string_view report_finish_desc() const override {
+        return "Split";
+    }
+};
+
 class scrub_compaction final : public regular_compaction {
 public:
     static void report_validation_error(compaction_type type, const ::schema& schema, sstring what, std::string_view action = "") {
@@ -1742,6 +1775,7 @@ compaction_type compaction_type_options::type() const {
         compaction_type::Scrub,
         compaction_type::Reshard,
         compaction_type::Reshape,
+        compaction_type::Split,
     };
     static_assert(std::variant_size_v<compaction_type_options::options_variant> == std::size(index_to_type));
     return index_to_type[_options.index()];
@@ -1771,6 +1805,9 @@ static std::unique_ptr<compaction> make_compaction(table_state& table_s, sstable
         }
         std::unique_ptr<compaction> operator()(compaction_type_options::scrub scrub_options) {
             return std::make_unique<scrub_compaction>(table_s, std::move(descriptor), cdata, scrub_options, progress_monitor);
+        }
+        std::unique_ptr<compaction> operator()(compaction_type_options::split split_options) {
+            return std::make_unique<split_compaction>(table_s, std::move(descriptor), cdata, std::move(split_options), progress_monitor);
         }
     } visitor_factory{table_s, std::move(descriptor), cdata, progress_monitor};
 

@@ -65,6 +65,7 @@
 #include "locator/tablets.hh"
 #include "utils/serialized_action.hh"
 #include "compaction/compaction_fwd.hh"
+#include "compaction_group.hh"
 
 class cell_locker;
 class cell_locker_stats;
@@ -325,11 +326,6 @@ struct table_stats;
 using column_family_stats = table_stats;
 
 class database_sstable_write_monitor;
-class compaction_group;
-class compaction_group_manager;
-using compaction_group_vector = utils::chunked_vector<std::unique_ptr<compaction_group>>;
-
-using enable_backlog_tracker = bool_class<class enable_backlog_tracker_tag>;
 
 extern const ssize_t new_reader_base_cost;
 
@@ -450,8 +446,11 @@ private:
 
     compaction_manager& _compaction_manager;
     sstables::compaction_strategy _compaction_strategy;
-    std::unique_ptr<compaction_group_manager> _cg_manager;
-    compaction_group_vector _compaction_groups;
+    std::unique_ptr<storage_group_manager> _sg_manager;
+    // The compaction group list is only a helper for accessing the groups managed by the storage groups.
+    // The list entries are unlinked automatically when the storage group, they belong to, is removed.
+    mutable compaction_group_list _compaction_groups;
+    storage_group_vector _storage_groups;
     // Compound SSTable set for all the compaction groups, which is useful for operations spanning all of them.
     lw_shared_ptr<sstables::sstable_set> _sstables;
     // Control background fibers waiting for sstables to be deleted
@@ -572,21 +571,28 @@ public:
                        const std::vector<sstables::shared_sstable>& old_sstables);
     };
 
+    bool all_storage_groups_split();
+    future<> split_all_storage_groups();
 private:
-    using compaction_group_ptr = std::unique_ptr<compaction_group>;
-    std::unique_ptr<compaction_group_manager> make_compaction_group_manager();
+    // Select a compaction group from a given token.
+    std::pair<size_t, locator::tablet_range_side> storage_group_of(dht::token token) const noexcept;
+    size_t storage_group_id_for_token(dht::token token) const noexcept;
+    storage_group* storage_group_for_token(dht::token token) const noexcept;
+
+    std::unique_ptr<storage_group_manager> make_storage_group_manager();
     // Return compaction group if table owns a single one. Otherwise, null is returned.
     compaction_group* single_compaction_group_if_available() const noexcept;
+    compaction_group* get_compaction_group(size_t id) const noexcept;
     // Select a compaction group from a given token.
     compaction_group& compaction_group_for_token(dht::token token) const noexcept;
-    // Return ids of compaction groups, present in this shard, that own a particular token range.
-    std::vector<size_t> compaction_group_ids_for_token_range(dht::token_range tr) const;
+    // Return compaction groups, present in this shard, that own a particular token range.
+    utils::chunked_vector<compaction_group*> compaction_groups_for_token_range(dht::token_range tr) const;
     // Select a compaction group from a given key.
     compaction_group& compaction_group_for_key(partition_key_view key, const schema_ptr& s) const noexcept;
     // Select a compaction group from a given sstable based on its token range.
     compaction_group& compaction_group_for_sstable(const sstables::shared_sstable& sst) const noexcept;
     // Returns a list of all compaction groups.
-    const compaction_group_vector& compaction_groups() const noexcept;
+    compaction_group_list& compaction_groups() const noexcept;
     // Safely iterate through compaction groups, while performing async operations on them.
     future<> parallel_foreach_compaction_group(std::function<future<>(compaction_group&)> action);
 
@@ -909,7 +915,6 @@ private:
     // Writes the table schema and the manifest of all files in the snapshot directory.
     future<> finalize_snapshot(database& db, sstring jsondir, std::vector<snapshot_file_set> file_sets);
     static future<> seal_snapshot(sstring jsondir, std::vector<snapshot_file_set> file_sets);
-
 public:
     static future<> snapshot_on_all_shards(sharded<database>& sharded_db, const global_table_ptr& table_shards, sstring name);
 

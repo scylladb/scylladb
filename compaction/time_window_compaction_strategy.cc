@@ -220,7 +220,7 @@ reader_consumer_v2 time_window_compaction_strategy::make_interposer_consumer(con
         return mutation_writer::segregate_by_timestamp(
                 std::move(rd),
                 classify_by_timestamp(std::move(options)),
-                std::move(end_consumer));
+                end_consumer);
     };
 }
 

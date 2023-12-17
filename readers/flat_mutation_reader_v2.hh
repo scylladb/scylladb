@@ -756,4 +756,4 @@ future<> consume_partitions(flat_mutation_reader_v2& reader, Consumer consumer) 
 /// A consumer function that is passed a flat_mutation_reader to be consumed from
 /// and returns a future<> resolved when the reader is fully consumed, and closed.
 /// Note: the function assumes ownership of the reader and must close it in all cases.
-using reader_consumer_v2 = noncopyable_function<future<> (flat_mutation_reader_v2)>;
+using reader_consumer_v2 = std::function<future<> (flat_mutation_reader_v2)>;
