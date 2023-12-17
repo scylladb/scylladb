@@ -274,11 +274,6 @@ public:
 
     future<> update_peer_info(gms::inet_address ep, const peer_info& info);
 
-    // FIXME: implement update_peer_info specializations temporarily,
-    // until all callers are converted to use peer_info
-    template <typename Value>
-    future<> update_peer_info(gms::inet_address ep, sstring column_name, Value value);
-
     future<> remove_endpoint(gms::inet_address ep);
 
     // Saves the key-value pair into system.scylla_local table.
