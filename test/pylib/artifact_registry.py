@@ -7,9 +7,12 @@ from typing import Protocol
 from typing import Callable, Coroutine, List, Dict, Optional
 import asyncio
 import logging
+from test.pylib.util import MultiException
 
 Artifact = Coroutine
 
+class ArtifactCleanupException(MultiException):
+    pass
 
 class Suite(Protocol):
     suite_key: str
@@ -31,14 +34,21 @@ class ArtifactRegistry:
 
     async def cleanup_before_exit(self) -> None:
         logging.info("Cleaning up before exit...")
+        errors = []
         for artifacts in self.suite_artifacts.values():
             for artifact in artifacts:
                 artifact.close()
-            await asyncio.gather(*artifacts, return_exceptions=True)
+            errors += list(filter(lambda e: isinstance(e,Exception),
+                                  await asyncio.gather(*artifacts, return_exceptions=True)))
         self.suite_artifacts = {}
         for artifacts in self.exit_artifacts.values():
-            await asyncio.gather(*artifacts, return_exceptions=True)
+            errors += list(filter(lambda e: isinstance(e,Exception),
+                                 await asyncio.gather(*artifacts, return_exceptions=True)))
         self.exit_artifacts = {}
+        if len(errors) > 0:
+            error_msg = "Cleaning up befor exit finished with errors"
+            logging.error(error_msg)
+            raise ArtifactCleanupException(error_msg,errors)
         logging.info("Done cleaning up before exit...")
 
     async def cleanup_after_suite(self, suite: Suite, failed: bool) -> None:
@@ -49,12 +59,19 @@ class ArtifactRegistry:
         early."""
         logging.info("Cleaning up after suite %s...", suite.suite_key)
         # Only drop suite artifacts if the suite executed successfully.
+        errors = []
         if not failed and suite in self.suite_artifacts:
-            await asyncio.gather(*self.suite_artifacts[suite])
+            errors += list(filter(lambda e: isinstance(e,Exception),
+                                  await asyncio.gather(*self.suite_artifacts[suite],return_exceptions=True)))
             del self.suite_artifacts[suite]
         if suite in self.exit_artifacts:
-            await asyncio.gather(*self.exit_artifacts[suite])
+            errors += list(filter(lambda e: isinstance(e,Exception),
+                                  await asyncio.gather(*self.exit_artifacts[suite], return_exceptions=True)))
             del self.exit_artifacts[suite]
+        if len(errors) > 0:
+            error_msg = f"Cleanup for suite {suite} finised with errors"
+            logging.error(error_msg)
+            raise ArtifactCleanupException(error_msg, errors)
         logging.info("Done cleaning up after suite %s...", suite.suite_key)
 
     def add_suite_artifact(self, suite: Suite, artifact: Callable[[], Artifact]) -> None:

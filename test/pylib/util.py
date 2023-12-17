@@ -10,13 +10,14 @@ import pathlib
 import os
 import pytest
 
-from typing import Callable, Awaitable, Optional, TypeVar, Generic
+from typing import Callable, Awaitable, Optional, TypeVar, Generic, List
 
 from cassandra.cluster import NoHostAvailable, Session, Cluster # type: ignore # pylint: disable=no-name-in-module
 from cassandra.protocol import InvalidRequest # type: ignore # pylint: disable=no-name-in-module
 from cassandra.pool import Host # type: ignore # pylint: disable=no-name-in-module
 
 from test.pylib.internal_types import ServerInfo
+import traceback
 
 class LogPrefixAdapter(logging.LoggerAdapter):
     def process(self, msg, kwargs):
@@ -141,3 +142,16 @@ async def get_enabled_features(cql: Session, host: Host) -> set[str]:
     """Returns a set of cluster features that a node considers to be enabled."""
     rs = await cql.run_async(f"SELECT value FROM system.scylla_local WHERE key = 'enabled_features'", host=host)
     return set(rs[0].value.split(","))
+
+def make_multi_exception_message(*exceptions : Exception):
+    error_msg = ""
+    for i,e in enumerate(exceptions):
+        error_msg += f"Exception {i} - {type(e)}:\n"
+        error_msg += "\t" + "\n\t".join(traceback.format_exception(e)) + "\n"
+    return error_msg
+
+class MultiException(Exception):
+    def __init__(self, err_message : str,errors : List[Exception]):
+        super().__init__(err_message, errors)
+    def pretty_error(self):
+        return self.args[0] + ":\n" + make_multi_exception_message(*self.args[1])
