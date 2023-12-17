@@ -1609,10 +1609,13 @@ static future<> apply_to_remote_endpoints(service::storage_proxy& proxy, locator
         gms::inet_address target, inet_address_vector_topology_change&& pending_endpoints,
         frozen_mutation_and_schema&& mut, const dht::token& base_token, const dht::token& view_token,
         service::allow_hints allow_hints, tracing::trace_state_ptr tr_state) {
-
+    // The "delay_before_remote_view_update" injection point can be
+    // used to add a short delay (currently 0.5 seconds) before a base
+    // replica sends its update to the remove view replica.
+    co_await utils::get_local_injector().inject("delay_before_remote_view_update", 500ms);
     tracing::trace(tr_state, "Sending view update for {}.{} to {}, with pending endpoints = {}; base token = {}; view token = {}",
             mut.s->ks_name(), mut.s->cf_name(), target, pending_endpoints, base_token, view_token);
-    return proxy.send_to_endpoint(
+    co_await proxy.send_to_endpoint(
             std::move(mut),
             std::move(ermp),
             target,
@@ -1745,10 +1748,6 @@ future<> view_update_generator::mutate_MV(
             stats.view_updates_pushed_remote += updates_pushed_remote;
             cf_stats.total_view_updates_pushed_remote += updates_pushed_remote;
             schema_ptr s = mut.s;
-            // The "delay_before_remote_view_update" injection point can be
-            // used to add a short delay (currently 0.5 seconds) before a base
-            // replica sends its update to the remove view replica.
-            co_await utils::get_local_injector().inject("delay_before_remote_view_update", 500ms);
             future<> remote_view_update = apply_to_remote_endpoints(_proxy.local(), std::move(view_ermp), *target_endpoint, std::move(remote_endpoints), std::move(mut), base_token, view_token, allow_hints, tr_state).then_wrapped(
                 [s = std::move(s), &stats, &cf_stats, tr_state, base_token, view_token, target_endpoint, updates_pushed_remote,
                  units = sem_units.split(sem_units.count()), apply_update_synchronously] (future<>&& f) mutable {
