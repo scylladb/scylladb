@@ -2105,10 +2105,18 @@ future<> gossiper::add_saved_endpoint(inet_address ep, permit_id pid) {
     auto ep_state = endpoint_state();
     auto es = get_endpoint_state_ptr(ep);
     if (es) {
+        if (es->get_heart_beat_state().get_generation()) {
+            auto msg = fmt::format("Attempted to add saved endpoint {} after endpoint_state was already established with gossip: {}, at {}", ep, es->get_heart_beat_state(), current_backtrace());
+            on_internal_error(logger, msg);
+        }
         ep_state = *es;
         logger.debug("not replacing a previous ep_state for {}, but reusing it: {}", ep, ep_state);
-        ep_state.set_heart_beat_state_and_update_timestamp(heart_beat_state());
+        ep_state.update_timestamp();
     }
+    // It's okay to use the local version generator for the loaded application state values
+    // As long as the endpoint_state has zero generation.
+    // It will get updated as a whole by handle_major_state_change
+    // via do_apply_state_locally when (remote_generation > local_generation)
     const auto tmptr = get_token_metadata_ptr();
     auto host_id = tmptr->get_host_id_if_known(ep);
     if (host_id) {
