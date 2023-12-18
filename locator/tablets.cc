@@ -465,13 +465,9 @@ public:
         return make_tablet_routing_info();
     }
 
-    virtual bool has_pending_ranges(inet_address endpoint) const override {
-        const auto host_id = _tmptr->get_host_id_if_known(endpoint);
-        if (!host_id.has_value()) {
-            return false;
-        }
+    virtual bool has_pending_ranges(locator::host_id host_id) const override {
         for (const auto& [id, transition_info]: get_tablet_map().transitions()) {
-            if (transition_info.pending_replica.host == *host_id) {
+            if (transition_info.pending_replica.host == host_id) {
                 return true;
             }
         }

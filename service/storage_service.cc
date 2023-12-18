@@ -4958,7 +4958,7 @@ future<> storage_service::decommission() {
 
                 auto non_system_keyspaces = db.get_non_local_vnode_based_strategy_keyspaces();
                 for (const auto& keyspace_name : non_system_keyspaces) {
-                    if (ss._db.local().find_keyspace(keyspace_name).get_effective_replication_map()->has_pending_ranges(ss.get_broadcast_address())) {
+                    if (ss._db.local().find_keyspace(keyspace_name).get_effective_replication_map()->has_pending_ranges(ss.get_token_metadata_ptr()->get_my_id())) {
                         throw std::runtime_error("data is currently moving to this node; unable to leave the ring");
                     }
                 }
@@ -7664,9 +7664,9 @@ future<> storage_service::wait_for_normal_state_handled_on_boot() {
 
 future<bool> storage_service::is_cleanup_allowed(sstring keyspace) {
     return container().invoke_on(0, [keyspace = std::move(keyspace)] (storage_service& ss) {
-        auto my_address = ss.get_broadcast_address();
-        auto pending_ranges = ss._db.local().find_keyspace(keyspace).get_effective_replication_map()->has_pending_ranges(my_address);
-        bool is_bootstrap_mode = ss._operation_mode == mode::BOOTSTRAP;
+        const auto my_id = ss.get_token_metadata().get_my_id();
+        const auto pending_ranges = ss._db.local().find_keyspace(keyspace).get_effective_replication_map()->has_pending_ranges(my_id);
+        const bool is_bootstrap_mode = ss._operation_mode == mode::BOOTSTRAP;
         slogger.debug("is_cleanup_allowed: keyspace={}, is_bootstrap_mode={}, pending_ranges={}",
                 keyspace, is_bootstrap_mode, pending_ranges);
         return !is_bootstrap_mode && !pending_ranges;

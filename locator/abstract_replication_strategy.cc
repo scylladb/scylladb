@@ -140,10 +140,14 @@ std::optional<tablet_routing_info> vnode_effective_replication_map::check_locali
     return {};
 }
 
-bool vnode_effective_replication_map::has_pending_ranges(inet_address endpoint) const {
+bool vnode_effective_replication_map::has_pending_ranges(locator::host_id endpoint) const {
+    const auto ep = _tmptr->get_endpoint_for_host_id_if_known(endpoint);
+    if (!ep) {
+        return false;
+    }
     for (const auto& item : _pending_endpoints) {
         const auto& nodes = item.second;
-        if (nodes.contains(endpoint)) {
+        if (nodes.contains(*ep)) {
             return true;
         }
     }

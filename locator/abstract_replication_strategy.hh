@@ -230,7 +230,7 @@ public:
     /// Returns true if there are any pending ranges for this endpoint.
     /// This operation is expensive, for vnode_erm it iterates
     /// over all pending ranges which is O(number of tokens).
-    virtual bool has_pending_ranges(inet_address endpoint) const = 0;
+    virtual bool has_pending_ranges(locator::host_id endpoint) const = 0;
 
     /// Returns a token_range_splitter which is line with the replica assignment of this replication map.
     /// The splitter can live longer than this instance.
@@ -303,7 +303,7 @@ public: // effective_replication_map
     inet_address_vector_topology_change get_pending_endpoints(const token& search_token) const override;
     inet_address_vector_replica_set get_endpoints_for_reading(const token& search_token) const override;
     std::optional<tablet_routing_info> check_locality(const token& token) const override;
-    bool has_pending_ranges(inet_address endpoint) const override;
+    bool has_pending_ranges(locator::host_id endpoint) const override;
     std::unique_ptr<token_range_splitter> make_splitter() const override;
     const dht::sharder& get_sharder(const schema& s) const override;
 public:
