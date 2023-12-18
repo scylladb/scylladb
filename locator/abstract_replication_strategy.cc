@@ -483,8 +483,8 @@ inet_address_vector_replica_set vnode_effective_replication_map::get_natural_end
     return do_get_natural_endpoints(search_token, false);
 }
 
-stop_iteration vnode_effective_replication_map::for_each_natural_endpoint_until(const token& search_token, const noncopyable_function<stop_iteration(const inet_address&)>& func) const {
-    for (const auto& ep : do_get_natural_endpoints(search_token, false)) {
+stop_iteration vnode_effective_replication_map::for_each_natural_endpoint_until(const token& vnode_tok, const noncopyable_function<stop_iteration(const inet_address&)>& func) const {
+    for (const auto& ep : do_get_natural_endpoints(vnode_tok, true)) {
         if (func(ep) == stop_iteration::yes) {
             return stop_iteration::yes;
         }

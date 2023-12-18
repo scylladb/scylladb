@@ -327,8 +327,6 @@ public:
     // since future_state requires T to be no_throw_move_constructible.
     future<std::unique_ptr<cloned_data>> clone_data_gently() const;
 
-    stop_iteration for_each_natural_endpoint_until(const token& search_token, const noncopyable_function<stop_iteration(const inet_address&)>& func) const;
-
     // get_ranges() returns the list of ranges held by the given endpoint.
     // The list is sorted, and its elements are non overlapping and non wrap-around.
     // It the analogue of Origin's getAddressRanges().get(endpoint).
@@ -360,6 +358,7 @@ public:
 private:
     dht::token_range_vector do_get_ranges(noncopyable_function<stop_iteration(bool& add_range, const inet_address& natural_endpoint)> consider_range_for_endpoint) const;
     inet_address_vector_replica_set do_get_natural_endpoints(const token& tok, bool is_vnode) const;
+    stop_iteration for_each_natural_endpoint_until(const token& vnode_tok, const noncopyable_function<stop_iteration(const inet_address&)>& func) const;
 
 public:
     static factory_key make_factory_key(const replication_strategy_ptr& rs, const token_metadata_ptr& tmptr);
