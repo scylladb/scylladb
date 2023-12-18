@@ -1290,15 +1290,6 @@ uint64_t compaction_group::total_disk_space_used() const noexcept {
     return live_disk_space_used() + boost::accumulate(_sstables_compacted_but_not_deleted | boost::adaptors::transformed(std::mem_fn(&sstables::sstable::bytes_on_disk)), uint64_t(0));
 }
 
-uint64_t compaction_group::calculate_disk_space_used_for(const sstables::sstable_set& set) {
-    uint64_t disk_space_used = 0;
-
-    set.for_each_sstable([&] (const sstables::shared_sstable& sst) {
-        disk_space_used += sst->bytes_on_disk();
-    });
-    return disk_space_used;
-}
-
 void table::rebuild_statistics() {
     _stats.live_disk_space_used = 0;
     _stats.live_sstable_count = 0;
