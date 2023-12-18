@@ -61,7 +61,7 @@ static const std::unordered_set<std::string_view> internal_keyspaces = {
         db::system_keyspace::NAME,
         db::system_auth_keyspace::NAME,
         db::schema_tables::NAME,
-        auth::meta::AUTH_KS,
+        auth::meta::legacy::AUTH_KS,
         tracing::trace_keyspace_helper::KEYSPACE_NAME
 };
 

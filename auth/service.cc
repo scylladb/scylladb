@@ -165,24 +165,24 @@ future<> service::create_keyspace_if_missing(::service::migration_manager& mm) c
     assert(this_shard_id() == 0); // once_among_shards makes sure a function is executed on shard 0 only
     auto db = _qp.db();
 
-    while (!db.has_keyspace(meta::AUTH_KS)) {
+    while (!db.has_keyspace(meta::legacy::AUTH_KS)) {
         auto group0_guard = co_await mm.start_group0_operation();
         auto ts = group0_guard.write_timestamp();
 
-        if (!db.has_keyspace(meta::AUTH_KS)) {
+        if (!db.has_keyspace(meta::legacy::AUTH_KS)) {
             locator::replication_strategy_config_options opts{{"replication_factor", "1"}};
 
             auto ksm = data_dictionary::keyspace_metadata::new_keyspace(
-                    meta::AUTH_KS,
+                    meta::legacy::AUTH_KS,
                     "org.apache.cassandra.locator.SimpleStrategy",
                     opts,
                     std::nullopt);
 
             try {
                 co_return co_await mm.announce(::service::prepare_new_keyspace_announcement(db.real_database(), ksm, ts),
-                        std::move(group0_guard), format("auth_service: create {} keyspace", meta::AUTH_KS));
+                        std::move(group0_guard), format("auth_service: create {} keyspace", meta::legacy::AUTH_KS));
             } catch (::service::group0_concurrent_modification&) {
-                log.info("Concurrent operation is detected while creating {} keyspace, retrying.", meta::AUTH_KS);
+                log.info("Concurrent operation is detected while creating {} keyspace, retrying.", meta::legacy::AUTH_KS);
             }
         }
     }
@@ -241,18 +241,18 @@ void service::reset_authorization_cache() {
 }
 
 future<bool> service::has_existing_legacy_users() const {
-    if (!_qp.db().has_schema(meta::AUTH_KS, meta::USERS_CF)) {
+    if (!_qp.db().has_schema(meta::legacy::AUTH_KS, meta::legacy::USERS_CF)) {
         return make_ready_future<bool>(false);
     }
 
     static const sstring default_user_query = format("SELECT * FROM {}.{} WHERE {} = ?",
-            meta::AUTH_KS,
-            meta::USERS_CF,
+            meta::legacy::AUTH_KS,
+            meta::legacy::USERS_CF,
             meta::user_name_col_name);
 
     static const sstring all_users_query = format("SELECT * FROM {}.{} LIMIT 1",
-            meta::AUTH_KS,
-            meta::USERS_CF);
+            meta::legacy::AUTH_KS,
+            meta::legacy::USERS_CF);
 
     // This logic is borrowed directly from Apache Cassandra. By first checking for the presence of the default user, we
     // can potentially avoid doing a range query with a high consistency level.

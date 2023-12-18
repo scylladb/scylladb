@@ -32,7 +32,7 @@ std::string_view creation_query() {
             "  member_of set<text>,"
             "  salted_hash text"
             ")",
-            meta::AUTH_KS,
+            meta::legacy::AUTH_KS,
             name,
             role_col_name);
 
