@@ -285,12 +285,13 @@ future<> list_roles_statement::check_access(query_processor& qp, const service::
 }
 
 future<result_message_ptr>
-list_roles_statement::execute(query_processor&, service::query_state& state, const query_options&, std::optional<service::group0_guard> guard) const {
+list_roles_statement::execute(query_processor& qp, service::query_state& state, const query_options&, std::optional<service::group0_guard> guard) const {
     static const sstring virtual_table_name("roles");
 
-    static const auto make_column_spec = [](const sstring& name, const ::shared_ptr<const abstract_type>& ty) {
+    auto auth_ks = auth::get_auth_ks_name(qp);
+    static const auto make_column_spec = [auth_ks = std::move(auth_ks)](const sstring& name, const ::shared_ptr<const abstract_type>& ty) {
         return make_lw_shared<column_specification>(
-                auth::meta::AUTH_KS,
+                auth_ks,
                 virtual_table_name,
                 ::make_shared<column_identifier>(name, true),
                 ty);

@@ -29,9 +29,10 @@ future<::shared_ptr<cql_transport::messages::result_message>>
 cql3::statements::list_users_statement::execute(query_processor& qp, service::query_state& state, const query_options& options, std::optional<service::group0_guard> guard) const {
     static const sstring virtual_table_name("users");
 
-    static const auto make_column_spec = [](const sstring& name, const ::shared_ptr<const abstract_type>& ty) {
+    auto auth_ks = auth::get_auth_ks_name(qp);
+    static const auto make_column_spec = [auth_ks = std::move(auth_ks)](const sstring& name, const ::shared_ptr<const abstract_type>& ty) {
         return make_lw_shared<column_specification>(
-            auth::meta::AUTH_KS,
+            auth_ks,
             virtual_table_name,
             ::make_shared<column_identifier>(name, true),
             ty);

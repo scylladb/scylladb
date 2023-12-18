@@ -80,9 +80,10 @@ cql3::statements::list_permissions_statement::execute(
         service::query_state& state,
         const query_options& options,
         std::optional<service::group0_guard> guard) const {
-    static auto make_column = [](sstring name) {
+    auto auth_ks = auth::get_auth_ks_name(qp);
+    static auto make_column = [auth_ks = std::move(auth_ks)](sstring name) {
         return make_lw_shared<column_specification>(
-                auth::meta::AUTH_KS,
+                auth_ks,
                 "permissions",
                 ::make_shared<column_identifier>(std::move(name), true),
                 utf8_type);
