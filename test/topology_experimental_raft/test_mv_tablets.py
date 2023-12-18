@@ -20,6 +20,15 @@ import time
 
 logger = logging.getLogger(__name__)
 
+async def get_table_id(cql, keyspace_name, table_or_view_name):
+    # "table_or_view_name" may be either a table or a view, and those are
+    # listed in different system tables so we may need to search both:
+    matches = list(await cql.run_async(f"select id from system_schema.tables where keyspace_name = '{keyspace_name}' and table_name = '{table_or_view_name}'"))
+    if not matches:
+        matches = list(await cql.run_async(f"select id from system_schema.views where keyspace_name = '{keyspace_name}' and view_name = '{table_or_view_name}'"))
+    assert len(matches) == 1
+    return matches[0].id
+
 # This convenience function takes the name of a table or a view, and a token,
 # and returns the list of host_id,shard pairs holding tablets for this token
 # and view.
@@ -31,13 +40,7 @@ async def get_tablet_replicas(manager: ManagerClient, server: ServerInfo, keyspa
     host = (await wait_for_cql_and_get_hosts(manager.cql, [server], time.time() + 60))[0]
     await read_barrier(manager.cql, host)
 
-    # "table_or_view_name" may be either a table or a view, and those are
-    # listed in different system tables so we may need to search both:
-    matches = list(await manager.cql.run_async(f"select id from system_schema.tables where keyspace_name = '{keyspace_name}' and table_name = '{table_or_view_name}'"))
-    if not matches:
-        matches = list(await manager.cql.run_async(f"select id from system_schema.views where keyspace_name = '{keyspace_name}' and view_name = '{table_or_view_name}'"))
-    assert len(matches) == 1
-    table_id = matches[0].id
+    table_id = await get_table_id(manager.cql, keyspace_name, table_or_view_name)
 
     rows = await manager.cql.run_async(f"SELECT last_token, replicas FROM system.tablets where "
                                        f"keyspace_name = '{keyspace_name}' and "
@@ -74,6 +77,14 @@ async def pin_the_only_tablet(manager, keyspace_name, table_or_view_name, server
     # Finally move the tablet. We can send the command to any of the hosts,
     # it will propagate it to all of them.
     await manager.api.move_tablet(server.ip_addr, keyspace_name, table_or_view_name, source_host_id, source_shard, target_host_id, target_shard, tablet_token)
+
+# Assert that the given table uses tablets, and has only one. It helps
+# verify that a test that attempted to enable tablets - and set up only
+# one tablet for the entire table - actually succeeded in doing that.
+async def assert_one_tablet(cql, keyspace_name, table_or_view_name):
+    table_id = await get_table_id(cql, keyspace_name, table_or_view_name)
+    rows = await cql.run_async(f"SELECT last_token, replicas FROM system.tablets where keyspace_name = '{keyspace_name}' and table_id = {table_id}")
+    assert len(rows) == 1
 
 
 @pytest.mark.asyncio
@@ -176,29 +187,29 @@ async def inject_error_on(manager, error_name, servers):
 # separate thread) ourselves.
 @pytest.mark.asyncio
 @skip_mode('release', 'error injections are not supported in release mode')
-@skip_mode('debug', '10-node test is too slow in debug mode')
 async def test_tablet_alternator_lsi_consistency(manager: ManagerClient):
     """A reproducer for a bug where Alternator LSI was not using synchronous
        view updates when tablets are enabled, which could cause strongly-
        consistent read of the LSI to miss the data just written to the base.
-       We use a fairly large cluster to increase the chance that the tablet
-       randomization results in non-local pairing of base and view tablets.
-       We could make this test fail more reliably and only need 4 nodes if
-       we had an API to control the tablet placement.
-       We also use the "delay_before_remote_view_update" injection point
-       to add a delay to the view update - without it it's almost impossible
-       to reproduce this issue on a fast machine.
+
+       We use a cluster of just two nodes and RF=1, and control the tablets
+       so all base tablets will be in node 0 and all view tablets will be
+       in node 1, to ensure that the view update is remote and therefore
+       not synchronous by default. To make the test failure even more
+       likely on a fast machine, we use the "delay_before_remote_view_update"
+       injection point to add a delay to the view update more than usual.
        Reproduces #16313.
     """
-    servers = await manager.servers_add(10, config=alternator_config)
+    servers = await manager.servers_add(2, config=alternator_config)
     cql = manager.get_cql()
     alternator = get_alternator(servers[0].ip_addr)
-    # Currently, to create an Alternator table with tablets, a special
-    # tag must be given. See issue #16203. In the future this should be
-    # automatic - any Alternator table will use tablets.
-    tablets_tags = [{'Key': 'experimental:initial_tablets', 'Value': '100'}]
+    # Tell Alternator to create a table with just *one* tablet, via a
+    # special tag.
+    tablets_tags = [{'Key': 'experimental:initial_tablets', 'Value': '1'}]
     # Create a table with an LSI
-    table = alternator.create_table(TableName='alternator_table',
+    table_name = 'tbl'
+    index_name = 'ind'
+    table = alternator.create_table(TableName=table_name,
         BillingMode='PAY_PER_REQUEST',
         KeySchema=[
             {'AttributeName': 'p', 'KeyType': 'HASH' },
@@ -210,7 +221,7 @@ async def test_tablet_alternator_lsi_consistency(manager: ManagerClient):
             {'AttributeName': 'd', 'AttributeType': 'S' }
         ],
         LocalSecondaryIndexes=[
-            {   'IndexName': 'ind',
+            {   'IndexName': index_name,
                 'KeySchema': [
                     { 'AttributeName': 'p', 'KeyType': 'HASH' },
                     { 'AttributeName': 'd', 'KeyType': 'RANGE' },
@@ -219,31 +230,37 @@ async def test_tablet_alternator_lsi_consistency(manager: ManagerClient):
             }
         ],
         Tags=tablets_tags)
-    # Above we connected to a one node to perform Alternator requests.
-    # Now we want to be able to connect to the above-created table through
-    # each one of the nodes. Let's define tables[i] as the same table accessed
-    # through node i (all of them refer to the same table):
-    alternators = [get_alternator(server.ip_addr) for server in servers]
-    tables = [alternator.Table(table.name) for alternator in alternators]
+
+    # This is how Alternator calls the CQL tables that back up the Alternator
+    # tables:
+    cql_keyspace_name = 'alternator_' + table_name
+    cql_table_name = table_name
+    cql_view_name = table_name + '!:' + index_name
+
+    # Verify that the above setup managed to correctly enable tablets, and
+    # ensure there is just one tablet for each table.
+    await assert_one_tablet(cql, cql_keyspace_name, cql_table_name)
+    await assert_one_tablet(cql, cql_keyspace_name, cql_view_name)
+
+    # Move the base tablet (there's just one) to node 0, and the view tablet
+    # to node 1. In particular, all view updates will then be remote: node 0
+    # will send view updates to node 1.
+    await pin_the_only_tablet(manager, cql_keyspace_name, cql_table_name, servers[0])
+    await pin_the_only_tablet(manager, cql_keyspace_name, cql_view_name, servers[1])
 
     await inject_error_on(manager, "delay_before_remote_view_update", servers);
 
-    # write to the table through one node (table1) and read from the view
-    # through another node (table2). In an LSI, it is allowed to use strong
+    # Write to the base table (which is on node 0) and read from the LSI
+    # (which is on node 1). In a DynamoDB LSI, it is allowed to use strong
     # consistency for the read, and it must return the just-written value.
-    # Try 10 times, in different combinations of nodes, to increase the
-    # chance of reproducing the bug.
-    for i in range(10):
-        table1 = tables[random.randrange(0, len(tables))]
-        table2 = tables[random.randrange(0, len(tables))]
-        item = {'p': 'dog', 'c': 'c'+str(i), 'd': 'd'+str(i)}
-        table1.put_item(Item=item)
-        assert [item] == full_query(table2, IndexName='ind',
-            KeyConditions={
-                'p': {'AttributeValueList': ['dog'], 'ComparisonOperator': 'EQ'},
-                'd': {'AttributeValueList': ['d'+str(i)], 'ComparisonOperator': 'EQ'}
-            }
-        )
+    item = {'p': 'dog', 'c': 'c0', 'd': 'd0'}
+    table.put_item(Item=item)
+    assert [item] == full_query(table, IndexName=index_name,
+        KeyConditions={
+            'p': {'AttributeValueList': ['dog'], 'ComparisonOperator': 'EQ'},
+            'd': {'AttributeValueList': ['d0'], 'ComparisonOperator': 'EQ'}
+        }
+    )
     table.delete()
 
 @pytest.mark.asyncio
