@@ -748,11 +748,10 @@ utils::chunked_vector<compaction_group*> table::compaction_groups_for_token_rang
         if (!sg) {
             continue;
         }
-        // FIXME: indentation.
         for (auto& cg : sg->compaction_groups()) {
-        if (cg && tr.overlaps(cg->token_range(), cmp)) {
-            ret.push_back(cg);
-        }
+            if (cg && tr.overlaps(cg->token_range(), cmp)) {
+                ret.push_back(cg);
+            }
         }
     }
 
@@ -3196,19 +3195,17 @@ future<> table::cleanup_tablet(locator::tablet_id tid) {
 
     auto& sg = _storage_groups[tid.value()];
 
-    // FIXME: indentation.
     for (auto& cg_ptr : sg->compaction_groups()) {
+        if (!cg_ptr) {
+            throw std::runtime_error(format("Cannot cleanup tablet {} of table {}.{} because it is not allocated in this shard",
+                                            tid, _schema->ks_name(), _schema->cf_name()));
+        }
 
-    if (!cg_ptr) {
-        throw std::runtime_error(format("Cannot cleanup tablet {} of table {}.{} because it is not allocated in this shard",
-                                        tid, _schema->ks_name(), _schema->cf_name()));
-    }
-
-    // Synchronizes with in-flight writes if any, and also takes care of flushing if needed.
-    // FIXME: to be able to stop group and provide guarantee above, we must first be able to reallocate a new group if tablet is migrated back.
-    //co_await _cg.stop();
-    co_await cg_ptr->flush();
-    co_await cg_ptr->cleanup();
+        // Synchronizes with in-flight writes if any, and also takes care of flushing if needed.
+        // FIXME: to be able to stop group and provide guarantee above, we must first be able to reallocate a new group if tablet is migrated back.
+        //co_await _cg.stop();
+        co_await cg_ptr->flush();
+        co_await cg_ptr->cleanup();
     }
 
     tlogger.info("Cleaned up tablet {} of table {}.{} successfully.", tid, _schema->ks_name(), _schema->cf_name());
