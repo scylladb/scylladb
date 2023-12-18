@@ -65,13 +65,7 @@ network_topology_strategy::network_topology_strategy(
         _rep_factor += one_dc_rep_factor.second;
     }
 
-    if (rslogger.is_enabled(log_level::debug)) {
-        sstring cfg;
-        for (auto& p : _dc_rep_factor) {
-            cfg += format(" {}:{}", p.first, p.second);
-        }
-        rslogger.debug("Configured datacenter replicas are: {}", cfg);
-    }
+    rslogger.debug("Configured datacenter replicas are: {}", _dc_rep_factor);
 }
 
 using endpoint_dc_rack_set = std::unordered_set<endpoint_dc_rack>;
