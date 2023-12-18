@@ -35,20 +35,9 @@ public:
                  std::string_view strategy_name,
                  locator::replication_strategy_config_options strategy_options,
                  bool durable_writes,
-                 std::vector<schema_ptr> cf_defs = std::vector<schema_ptr>{});
-    keyspace_metadata(std::string_view name,
-                 std::string_view strategy_name,
-                 locator::replication_strategy_config_options strategy_options,
-                 bool durable_writes,
-                 std::vector<schema_ptr> cf_defs,
-                 user_types_metadata user_types);
-    keyspace_metadata(std::string_view name,
-                 std::string_view strategy_name,
-                 locator::replication_strategy_config_options strategy_options,
-                 bool durable_writes,
-                 std::vector<schema_ptr> cf_defs,
-                 user_types_metadata user_types,
-                 storage_options storage_opts);
+                 std::vector<schema_ptr> cf_defs = std::vector<schema_ptr>{},
+                 user_types_metadata user_types = {},
+                 storage_options storage_opts = {});
     static lw_shared_ptr<keyspace_metadata>
     new_keyspace(std::string_view name,
                  std::string_view strategy_name,
