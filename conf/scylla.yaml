@@ -562,18 +562,6 @@ murmur3_partitioner_ignore_msb_bits: 12
 # Time for which task manager task is kept in memory after it completes.
 task_ttl_in_seconds: 10
 
-# Use Raft to consistently manage schema information in the cluster.
-# Refer to https://docs.scylladb.com/master/architecture/raft.html for more details.
-# The 'Handling Failures' section is especially important.
-#
-# Once enabled in a cluster, this cannot be turned off.
-# If you want to bootstrap a new cluster without Raft, make sure to set this to `false`
-# before starting your nodes for the first time.
-#
-# A cluster not using Raft can be 'upgraded' to use Raft. Refer to the aforementioned
-# documentation, section 'Enabling Raft in ScyllaDB 5.2 and further', for the procedure.
-consistent_cluster_management: true
-
 # In materialized views, restrictions are allowed only on the view's primary key columns.
 # In old versions Scylla mistakenly allowed IS NOT NULL restrictions on columns which were not part
 # of the view's primary key. These invalid restrictions were ignored.

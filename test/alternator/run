@@ -23,13 +23,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 print('Scylla is: ' + run.find_scylla() + '.')
 
-# If the "--raft" option is given, switch to the experimental Raft-based
-# implementation of schema operations. When the experimental feature becomes
-# the default, we can drop this option.
 extra_scylla_options = []
-if '--raft' in sys.argv:
-    sys.argv.remove('--raft')
-    extra_scylla_options += ['--consistent-cluster-management', 'true']
 
 if "-h" in sys.argv or "--help" in sys.argv:
     run.run_pytest(sys.path[0], sys.argv)

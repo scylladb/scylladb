@@ -96,6 +96,7 @@ public:
     locator::host_id host_id;
     gms::inet_address broadcast_address = gms::inet_address("localhost");
     bool ms_listen = false;
+    bool run_with_raft_recovery = false;
 
     cql_test_config();
     cql_test_config(const cql_test_config&);
@@ -184,6 +185,3 @@ future<> do_with_cql_env(std::function<future<>(cql_test_env&)> func, cql_test_c
 future<> do_with_cql_env_thread(std::function<void(cql_test_env&)> func, cql_test_config = {}, thread_attributes thread_attr = {}, std::optional<cql_test_init_configurables> = {});
 
 reader_permit make_reader_permit(cql_test_env&);
-
-// CQL test config with raft experimental feature enabled
-cql_test_config raft_cql_test_config();

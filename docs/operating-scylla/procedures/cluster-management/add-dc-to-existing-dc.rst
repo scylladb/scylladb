@@ -119,7 +119,6 @@ Add New DC
    * **listen_address** - IP address that Scylla used to connect to the other Scylla nodes in the cluster.
    * **endpoint_snitch** - Set the selected snitch.
    * **rpc_address** - Address for client connections (Thrift, CQL).
-   * **consistent_cluster_management** - set to the same value as used by your existing nodes.
 
    The parameters ``seeds``, ``cluster_name`` and ``endpoint_snitch`` need to match the existing cluster.
 

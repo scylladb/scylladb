@@ -171,7 +171,7 @@ storage_service::storage_service(abort_source& abort_source,
     }
 
     auto& cfg = _db.local().get_config();
-    init_messaging_service(cfg.consistent_cluster_management() && cfg.check_experimental(db::experimental_features_t::feature::CONSISTENT_TOPOLOGY_CHANGES));
+    init_messaging_service(cfg.check_experimental(db::experimental_features_t::feature::CONSISTENT_TOPOLOGY_CHANGES));
 }
 
 enum class node_external_status {
@@ -3015,15 +3015,10 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
     std::optional<cdc::generation_id> cdc_gen_id;
 
     if (_sys_ks.local().was_decommissioned()) {
-        if (_db.local().get_config().override_decommission() && !_db.local().get_config().consistent_cluster_management()) {
-            slogger.warn("This node was decommissioned, but overriding by operator request.");
-            co_await _sys_ks.local().set_bootstrap_state(db::system_keyspace::bootstrap_state::COMPLETED);
-        } else {
-            auto msg = sstring("This node was decommissioned and will not rejoin the ring unless override_decommission=true has been set and consistent cluster management is not in use,"
-                               "or all existing data is removed and the node is bootstrapped again");
-            slogger.error("{}", msg);
-            throw std::runtime_error(msg);
-        }
+        auto msg = sstring("This node was decommissioned and will not rejoin the ring unless "
+                           "all existing data is removed and the node is bootstrapped again");
+        slogger.error("{}", msg);
+        throw std::runtime_error(msg);
     }
 
     bool replacing_a_node_with_same_ip = false;

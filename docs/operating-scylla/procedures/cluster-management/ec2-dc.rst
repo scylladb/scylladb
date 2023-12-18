@@ -63,7 +63,6 @@ Perform the following steps for each node in the new cluster:
      * **rpc_address** - Address for client connection (Thrift, CQL).
      * **broadcast_address** - The IP address a node tells other nodes in the cluster to contact it by.
      * **broadcast_rpc_address** - Default: unset. The RPC address to broadcast to drivers and other Scylla nodes. It cannot be set to 0.0.0.0. If left blank, it will be set to the value of ``rpc_address``. If ``rpc_address`` is set to 0.0.0.0, ``broadcast_rpc_address`` must be explicitly configured.
-     * **consistent_cluster_management** - ``true`` by default, can be set to ``false`` if you don't want to use Raft for consistent schema management in this cluster (will be mandatory in later versions). Check the :doc:`Raft in ScyllaDB document</architecture/raft/>` to learn more.
 
 #. After you have installed and configured Scylla and edited ``scylla.yaml`` file on all the nodes, start the node specified with the ``seeds`` parameter. Then start the rest of the nodes in your cluster, one at a time, using
    ``sudo systemctl start scylla-server``.

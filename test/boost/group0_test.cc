@@ -67,7 +67,7 @@ SEASTAR_TEST_CASE(test_abort_server_on_background_error) {
         BOOST_REQUIRE_EQUAL(get_status(), 2);
         BOOST_CHECK_EXCEPTION(co_await perform_schema_change(), raft::stopped_error, check_error);
         BOOST_REQUIRE_EQUAL(get_status(), 2);
-    }, raft_cql_test_config());
+    });
 #endif
 }
 
@@ -152,7 +152,7 @@ SEASTAR_TEST_CASE(test_group0_history_clearing_old_entries) {
         // Therefore `timestamps2` should contain all in `timestamps1` minus those changes plus one (`last_ts`).
         BOOST_REQUIRE_EQUAL(timestamps2.size(), timestamps1.size() - older_by_sleep_dur + 1);
 
-    }, raft_cql_test_config());
+    });
 }
 
 SEASTAR_TEST_CASE(test_concurrent_group0_modifications) {
@@ -234,5 +234,5 @@ SEASTAR_TEST_CASE(test_concurrent_group0_modifications) {
         // Each execution should have succeeded on first attempt because the mutex serialized them all.
         BOOST_REQUIRE_EQUAL(successes, N*M);
 
-    }, raft_cql_test_config());
+    });
 }

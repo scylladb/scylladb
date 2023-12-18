@@ -1,16 +1,6 @@
 Handling Node Failures
 ------------------------
 
-.. note::
-
-    This page applies to ScyllaDB clusters that use Raft to ensure consistency. 
-    You can verify that Raft-based consistent management is enabled for your 
-    cluster in the ``scylla.yaml`` file (enabled by default): 
-    ``consistent_cluster_management: true``
-
- .. REMOVE IN FUTURE VERSIONS - Remove the above note when Raft is mandatory
-    and default for both new and existing clusters.
-
 ScyllaDB relies on the Raft consensus algorithm, which requires at least a quorum 
 of nodes in a cluster to be available. If one or more nodes are down, but the quorum 
 is live, reads, writes, and schema updates proceed unaffected. When the node that 
@@ -81,9 +71,7 @@ You can follow the manual recovery procedure when:
 
 * The majority of nodes (for example, 2 out of 3) failed and are irrecoverable.
 * :ref:`The Raft upgrade procedure <verify-raft-procedure>` got stuck because one 
-  of the nodes failed in the middle of the procedure and is irrecoverable. This 
-  may occur in existing clusters where Raft was manually enabled. 
-  See :ref:`Enabling Raft <enabling-raft-existing-cluster>` for details.
+  of the nodes failed in the middle of the procedure and is irrecoverable.
 
 .. warning::
 

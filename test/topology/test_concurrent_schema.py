@@ -20,7 +20,7 @@ logger = logging.getLogger('schema-test')
 # - Creates 20+20 tables to alter and 20 tables to index
 # - In parallel run 20 * create table, and drop/add column and index of previous 2 tables
 @pytest.mark.asyncio
-async def test_cassandra_issue_10250(random_tables, fails_without_consistent_cluster_management):
+async def test_cassandra_issue_10250(random_tables):
     tables = random_tables
     # How many combinations of tables; original Cassandra issue repro had 20
     RANGE = 1

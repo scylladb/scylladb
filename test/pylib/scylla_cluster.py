@@ -79,8 +79,6 @@ def make_scylla_conf(workdir: pathlib.Path, host_addr: str, seed_addrs: List[str
                                   'keyspace-storage-options',
                                   'tablets'],
 
-        'consistent_cluster_management': True,
-
         'skip_wait_for_gossip_to_settle': 0,
         'ring_delay_ms': 0,
         'num_tokens': 16,
