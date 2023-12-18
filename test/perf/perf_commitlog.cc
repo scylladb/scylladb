@@ -116,9 +116,12 @@ struct commitlog_service {
         , size_dist(cfg.min_data_size, cfg.max_data_size)
     {}
 
-    future<> init(const db::commitlog::config& cfg) {
+    future<> init(const db::config& db_cfg) {
         assert(!log);
-        log.emplace(co_await db::commitlog::create_commitlog(cfg));
+
+        db::commitlog::config cl_cfg = db::commitlog::config::from_db_config(db_cfg, current_scheduling_group(), memory::stats().total_memory());
+
+        log.emplace(co_await db::commitlog::create_commitlog(cl_cfg));
         fa.emplace(log->add_flush_handler(std::bind(&commitlog_service::flush_handler, this, std::placeholders::_1, std::placeholders::_2)));
     }
     future<> stop() {
@@ -137,12 +140,16 @@ struct commitlog_service {
 
 static std::vector<clperf_result> do_commitlog_test(distributed<commitlog_service>& cls, test_config& cfg) {
     auto uuid = table_id(utils::UUID_gen::get_time_UUID());
+    auto max = cls.local().size_dist.max();
+    std::vector<char> data(max);
 
-    return time_parallel_ex<clperf_result>([&] {
+    std::generate_n(data.begin(), max, [&] { return char(cls.local().size_dist(tests::random::gen())); });
+
+    return time_parallel_ex<clperf_result>([&, src = data.data()] {
         auto& log = cls.local();
         size_t size = log.size_dist(tests::random::gen());
-        return log.log->add_mutation(uuid, size, db::commitlog::force_sync::no, [size](db::commitlog::output& dst) {
-            dst.fill('1', size);
+        return log.log->add_mutation(uuid, size, db::commitlog::force_sync::no, [src, size](db::commitlog::output& dst) {
+            dst.write(src, size);
         }).then([](db::rp_handle h) {
             h.release();
         });
@@ -164,6 +171,7 @@ int main(int argc, char** argv) {
         ("commitlog-sync-period-in-ms", bpo::value<unsigned>(), "how long the system waits for other writes before performing a sync in \"periodic\" mode")
         ("commitlog-use-o-dsync", bpo::value<bool>()->default_value(true), "whether or not to use O_DSYNC mode for commitlog segments io")
         ("commitlog-use-hard-size-limit", bpo::value<bool>()->default_value(true), "whether or not to use a hard size limit for commitlog disk usage")
+        ("commitlog-compressor-class", bpo::value<sstring>(), "optional compressor type to use on commitlog entries")
 
         ("min-data-size", bpo::value<size_t>()->default_value(200), "minimum size of data element added")
         ("max-data-size", bpo::value<size_t>()->default_value(32/2 * 1024 * 1024 - 1), "maximum size of data element added")
@@ -207,6 +215,9 @@ int main(int argc, char** argv) {
         if (app.configuration().contains("commitlog-use-hard-size-limit")) {
             db_cfg->commitlog_use_hard_size_limit(app.configuration()["commitlog-use-hard-size-limit"].as<bool>());
         }
+        if (app.configuration().contains("commitlog-compressor-class")) {
+            db_cfg->commitlog_compression(db::class_and_options_type{ app.configuration()["commitlog-compressor-class"].as<sstring>()});
+        }
 
         auto cfg = test_config();
         cfg.duration_in_seconds = app.configuration()["duration"].as<unsigned>();
@@ -226,16 +237,15 @@ int main(int argc, char** argv) {
             cfg.max_flush_delay_in_ms = cfg.min_flush_delay_in_ms;
         }
 
-        db::commitlog::config cl_cfg = db::commitlog::config::from_db_config(*db_cfg, current_scheduling_group(), memory::stats().total_memory());
         tmpdir tmp;
-        cl_cfg.commit_log_location = tmp.path().string();
+        db_cfg->commitlog_directory(tmp.path().string());
 
         distributed<commitlog_service> test_commitlog;
 
         //logging::logger_registry().set_logger_level("commitlog", logging::log_level::debug);
 
         co_await test_commitlog.start(cfg);
-        co_await test_commitlog.invoke_on_all(std::mem_fn(&commitlog_service::init), cl_cfg);
+        co_await test_commitlog.invoke_on_all(std::mem_fn(&commitlog_service::init), std::cref(*db_cfg));
         std::exception_ptr ex;
 
         try {
