@@ -358,7 +358,14 @@ future<temporary_buffer<char>> client::get_object_contiguous(sstring object_name
     auto req = http::request::make("GET", _host, object_name);
     http::reply::status_type expected = http::reply::status_type::ok;
     if (range) {
-        auto range_header = format("bytes={}-{}", range->off, range->off + range->len - 1);
+        if (range->len == 0) {
+            co_return temporary_buffer<char>();
+        }
+        auto end_bytes = range->off + range->len - 1;
+        if (end_bytes < range->off) {
+            throw std::overflow_error("End of the range exceeds 64-bits");
+        }
+        auto range_header = format("bytes={}-{}", range->off, end_bytes);
         s3l.trace("GET {} contiguous range='{}'", object_name, range_header);
         req._headers["Range"] = std::move(range_header);
         expected = http::reply::status_type::partial_content;
