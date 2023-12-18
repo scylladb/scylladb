@@ -20,15 +20,6 @@ import time
 
 logger = logging.getLogger(__name__)
 
-async def get_table_id(cql, keyspace_name, table_or_view_name):
-    # "table_or_view_name" may be either a table or a view, and those are
-    # listed in different system tables so we may need to search both:
-    matches = list(await cql.run_async(f"select id from system_schema.tables where keyspace_name = '{keyspace_name}' and table_name = '{table_or_view_name}'"))
-    if not matches:
-        matches = list(await cql.run_async(f"select id from system_schema.views where keyspace_name = '{keyspace_name}' and view_name = '{table_or_view_name}'"))
-    assert len(matches) == 1
-    return matches[0].id
-
 # This convenience function takes the name of a table or a view, and a token,
 # and returns the list of host_id,shard pairs holding tablets for this token
 # and view.
@@ -40,11 +31,10 @@ async def get_tablet_replicas(manager: ManagerClient, server: ServerInfo, keyspa
     host = (await wait_for_cql_and_get_hosts(manager.cql, [server], time.time() + 60))[0]
     await read_barrier(manager.cql, host)
 
-    table_id = await get_table_id(manager.cql, keyspace_name, table_or_view_name)
-
     rows = await manager.cql.run_async(f"SELECT last_token, replicas FROM system.tablets where "
                                        f"keyspace_name = '{keyspace_name}' and "
-                                       f"table_id = {table_id}", host=host)
+                                       f"table_name = '{table_or_view_name}'"
+                                       " ALLOW FILTERING", host=host)
     for row in rows:
         if row.last_token >= token:
             return row.replicas
@@ -82,8 +72,7 @@ async def pin_the_only_tablet(manager, keyspace_name, table_or_view_name, server
 # verify that a test that attempted to enable tablets - and set up only
 # one tablet for the entire table - actually succeeded in doing that.
 async def assert_one_tablet(cql, keyspace_name, table_or_view_name):
-    table_id = await get_table_id(cql, keyspace_name, table_or_view_name)
-    rows = await cql.run_async(f"SELECT last_token, replicas FROM system.tablets where keyspace_name = '{keyspace_name}' and table_id = {table_id}")
+    rows = await cql.run_async(f"SELECT last_token, replicas FROM system.tablets where keyspace_name = '{keyspace_name}' and table_name = '{table_or_view_name}' ALLOW FILTERING")
     assert len(rows) == 1
 
 
