@@ -43,6 +43,7 @@
 #include "test/lib/mutation_source_test.hh"
 #include "test/lib/key_utils.hh"
 #include "test/lib/cql_assertions.hh"
+#include "utils/crc.hh"
 
 using namespace db;
 
@@ -1839,4 +1840,109 @@ SEASTAR_TEST_CASE(test_commitlog_add_entries_compressed_deflate) {
 
 SEASTAR_TEST_CASE(test_commitlog_add_entries_compressed_zstd) {
     co_await do_test_commitlog_add_entries_compressed("ZstdCompressor");
+}
+
+static future<> do_test_commitlog_add_large_entry_compressed(std::string_view compressor_name) {
+    commitlog::config cfg;
+
+    cfg.compressor = compressor::create(sstring(compressor_name), [](auto&&) { return std::nullopt; });
+
+    return cl_test(cfg, [](commitlog& log) {
+        return seastar::async([&log] {
+            using force_sync = commitlog_entry_writer::force_sync;
+
+            auto uuid = make_table_id();
+            auto size = log.max_record_size();
+            std::random_device rd;
+            std::mt19937 gen(rd());
+            std::uniform_int_distribution<char> dist;
+            // Don't make it fully up to max size - we need to allow for some overhead caused
+            // by "max compressed size", which is larger than input size for all/most compressors
+            std::uniform_int_distribution<size_t> dist2(size/3, (2*size)/3);
+
+            constexpr auto n = 10;
+
+            for (auto fs : { force_sync(false), force_sync(true) }) {
+                std::vector<db::replay_position> rps;
+
+                for (auto i = 0; i < n; ++i) {
+                    auto s = dist2(gen);
+                    assert(s > sizeof(uint32_t));
+
+                    auto h = log.add_mutation(uuid, s, fs, [&](db::commitlog::output& dst) {
+                        auto target = s - sizeof(uint32_t);
+                        utils::crc32 crc;
+                        uint8_t buf[1024];
+
+                        while (target > 0) {
+                            auto ls = std::min(target, sizeof(buf));
+                            std::generate(buf, buf + ls, [&] { return dist(gen); });
+                            crc.process(buf, ls);
+                            dst.write(reinterpret_cast<const char*>(buf), ls);
+                            target -= ls;
+                        }
+                        auto cs = crc.get();
+                        dst.write(reinterpret_cast<const char*>(&cs), sizeof(cs));
+                    }).get0();
+
+                    rps.emplace_back(h.release());
+                }
+
+                log.sync_all_segments().get();
+                auto segments = log.get_active_segment_names();
+                BOOST_REQUIRE(!segments.empty());
+
+                std::unordered_set<replay_position> result;
+
+                for (auto& seg : segments) {
+                    db::commitlog::read_log_file(seg, db::commitlog::descriptor::FILENAME_PREFIX, [&](db::commitlog::buffer_and_replay_position buf_rp) {
+                        auto& rp = buf_rp.position;
+                        auto i = std::find(rps.begin(), rps.end(), rp);
+                        // since we are looping, we can be reading last test cases 
+                        // segment (force_sync permutations)
+                        if (i != rps.end()) {
+
+                            auto& buf = buf_rp.buffer;
+                            auto size = buf.size_bytes();
+                            auto target = size - sizeof(uint32_t);
+                            utils::crc32 crc;
+
+                            for (auto& frag : buf) {
+                                auto ls = std::min(target, frag.size());
+                                crc.process(reinterpret_cast<const uint8_t*>(frag.get()), ls);
+                                target -= ls;
+                            }
+
+                            buf.remove_prefix(size - sizeof(uint32_t));
+
+                            auto cs = crc.get();
+                            auto check =  buf.get_istream().read<uint32_t>();
+
+                            BOOST_CHECK_EQUAL(cs, check);
+                            result.emplace(rp);
+                        }
+                        return make_ready_future<>();
+                    }).get();
+                }
+
+                BOOST_CHECK_EQUAL(result.size(), rps.size());
+            }
+        });
+    });
+}
+
+SEASTAR_TEST_CASE(test_commitlog_add_large_entry_compressed_lz4) {
+    co_await do_test_commitlog_add_large_entry_compressed("LZ4Compressor");
+}
+
+SEASTAR_TEST_CASE(test_commitlog_add_large_entry_compressed_snappy) {
+    co_await do_test_commitlog_add_large_entry_compressed("SnappyCompressor");
+}
+
+SEASTAR_TEST_CASE(test_commitlog_add_large_entry_compressed_deflate) {
+    co_await do_test_commitlog_add_large_entry_compressed("DeflateCompressor");
+}
+
+SEASTAR_TEST_CASE(test_commitlog_add_large_entry_compressed_zstd) {
+    co_await do_test_commitlog_add_large_entry_compressed("ZstdCompressor");
 }
