@@ -175,8 +175,7 @@ future<> service::create_keyspace_if_missing(::service::migration_manager& mm) c
             auto ksm = data_dictionary::keyspace_metadata::new_keyspace(
                     meta::AUTH_KS,
                     "org.apache.cassandra.locator.SimpleStrategy",
-                    opts,
-                    true);
+                    opts);
 
             try {
                 co_return co_await mm.announce(::service::prepare_new_keyspace_announcement(db.real_database(), ksm, ts),

@@ -145,7 +145,7 @@ future<> table_helper::setup_keyspace(cql3::query_processor& qp, service::migrat
 
     std::map<sstring, sstring> opts;
     opts["replication_factor"] = replication_factor;
-    auto ksm = keyspace_metadata::new_keyspace(keyspace_name, "org.apache.cassandra.locator.SimpleStrategy", std::move(opts), true);
+    auto ksm = keyspace_metadata::new_keyspace(keyspace_name, "org.apache.cassandra.locator.SimpleStrategy", std::move(opts));
 
     while (!db.has_keyspace(keyspace_name)) {
         auto group0_guard = co_await mm.start_group0_operation();

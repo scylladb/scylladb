@@ -53,7 +53,7 @@ public:
     new_keyspace(std::string_view name,
                  std::string_view strategy_name,
                  locator::replication_strategy_config_options options,
-                 bool durables_writes,
+                 bool durables_writes = true,
                  std::vector<schema_ptr> cf_defs = std::vector<schema_ptr>{},
                  storage_options storage_opts = {});
     static lw_shared_ptr<keyspace_metadata>

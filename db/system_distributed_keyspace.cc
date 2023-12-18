@@ -264,8 +264,7 @@ future<> system_distributed_keyspace::start() {
         auto sd_ksm = keyspace_metadata::new_keyspace(
                 NAME,
                 "org.apache.cassandra.locator.SimpleStrategy",
-                {{"replication_factor", "3"}},
-                true /* durable_writes */);
+                {{"replication_factor", "3"}});
         if (!db.has_keyspace(NAME)) {
             mutations = service::prepare_new_keyspace_announcement(db.real_database(), sd_ksm, ts);
             description += format(" create {} keyspace;", NAME);
@@ -276,8 +275,7 @@ future<> system_distributed_keyspace::start() {
         auto sde_ksm = keyspace_metadata::new_keyspace(
                 NAME_EVERYWHERE,
                 "org.apache.cassandra.locator.EverywhereStrategy",
-                {},
-                true /* durable_writes */);
+                {});
         if (!db.has_keyspace(NAME_EVERYWHERE)) {
             auto sde_mutations = service::prepare_new_keyspace_announcement(db.real_database(), sde_ksm, ts);
             std::move(sde_mutations.begin(), sde_mutations.end(), std::back_inserter(mutations));
