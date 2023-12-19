@@ -166,6 +166,7 @@ public:
             auto logname = log_name(schema.cf_name());
             check_that_cdc_log_table_does_not_exist(db, schema, logname);
             ensure_that_table_has_no_counter_columns(schema);
+            ensure_that_table_uses_vnodes(ksm, schema);
 
             // in seastar thread
             auto log_schema = create_log_schema(schema);
@@ -204,6 +205,7 @@ public:
 
             check_for_attempt_to_create_nested_cdc_log(db, new_schema);
             ensure_that_table_has_no_counter_columns(new_schema);
+            ensure_that_table_uses_vnodes(*keyspace.metadata(), new_schema);
 
             auto new_log_schema = create_log_schema(new_schema, log_schema ? std::make_optional(log_schema->id()) : std::nullopt, log_schema);
 
@@ -263,6 +265,17 @@ private:
         if (schema.is_counter()) {
             throw exceptions::invalid_request_exception(format("Cannot create CDC log for table {}.{}. Counter support not implemented",
                     schema.ks_name(), schema.cf_name()));
+        }
+    }
+
+    // Until we support CDC with tablets (issue #16317), we can't allow this
+    // to be attempted - in particular the log table we try to create will not
+    // have tablets, and will cause a failure.
+    static void ensure_that_table_uses_vnodes(const keyspace_metadata& ksm, const schema& schema) {
+        auto rs = locator::abstract_replication_strategy::create_replication_strategy(ksm.strategy_name(), ksm.strategy_options());
+        if (rs->uses_tablets()) {
+            throw exceptions::invalid_request_exception(format("Cannot create CDC log for a table {}.{}, because keyspace uses tablets. See issue #16317.",
+                schema.ks_name(), schema.cf_name()));
         }
     }
 };
