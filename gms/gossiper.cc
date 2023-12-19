@@ -2093,13 +2093,13 @@ void gossiper::build_seeds_list() {
     }
 }
 
-future<> gossiper::add_saved_endpoint(inet_address ep) {
+future<> gossiper::add_saved_endpoint(inet_address ep, permit_id pid) {
     if (ep == get_broadcast_address()) {
         logger.debug("Attempt to add self as saved endpoint");
         co_return;
     }
 
-    auto permit = co_await lock_endpoint(ep, null_permit_id);
+    auto permit = co_await lock_endpoint(ep, pid);
 
     //preserve any previously known, in-memory data about the endpoint (such as DC, RACK, and so on)
     auto ep_state = endpoint_state();
