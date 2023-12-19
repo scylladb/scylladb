@@ -400,116 +400,116 @@ future<> storage_service::sync_raft_topology_nodes(mutable_token_metadata_ptr tm
         co_await _messaging.local().ban_host(locator::host_id{id.uuid()});
     }
 
-        auto update_topology = [&] (locator::host_id id, inet_address ip, const replica_state& rs) {
-            tmptr->update_topology(id, locator::endpoint_dc_rack{rs.datacenter, rs.rack},
-                                   to_topology_node_state(rs.state), rs.shard_count);
-            tmptr->update_host_id(id, ip);
-        };
+    auto update_topology = [&] (locator::host_id id, inet_address ip, const replica_state& rs) {
+        tmptr->update_topology(id, locator::endpoint_dc_rack{rs.datacenter, rs.rack},
+                               to_topology_node_state(rs.state), rs.shard_count);
+        tmptr->update_host_id(id, ip);
+    };
 
-        auto add_normal_node = [&] (raft::server_id id, const replica_state& rs) -> future<> {
-            locator::host_id host_id{id.uuid()};
-            auto ip = co_await id2ip(id);
+    auto add_normal_node = [&] (raft::server_id id, const replica_state& rs) -> future<> {
+        locator::host_id host_id{id.uuid()};
+        auto ip = co_await id2ip(id);
 
-            slogger.trace("raft topology: loading topology: raft id={} ip={} node state={} dc={} rack={} tokens state={} tokens={} shards={}",
-                          id, ip, rs.state, rs.datacenter, rs.rack, _topology_state_machine._topology.tstate, rs.ring.value().tokens, rs.shard_count);
-            // Save tokens, not needed for raft topology management, but needed by legacy
-            // Also ip -> id mapping is needed for address map recreation on reboot
-            if (!is_me(ip)) {
-                // Some state that is used to fill in 'peeers' table is still propagated over gossiper.
-                // Populate the table with the state from the gossiper here since storage_service::on_change()
-                // (which is called each time gossiper state changes) may have skipped it because the tokens
-                // for the node were not in the 'normal' state yet
-                auto info = get_peer_info_for_update(ip);
-                // And then amend with the info from raft
-                info.tokens = rs.ring.value().tokens;
-                info.data_center = rs.datacenter;
-                info.rack = rs.rack;
-                info.host_id = id.uuid();
-                info.release_version = rs.release_version;
-                co_await _sys_ks.local().update_peer_info(ip, info);
-            } else {
-                co_await _sys_ks.local().update_tokens(rs.ring.value().tokens);
-                co_await _gossiper.add_local_application_state({{ gms::application_state::STATUS, gms::versioned_value::normal(rs.ring.value().tokens) }});
-            }
-            update_topology(host_id, ip, rs);
-            co_await tmptr->update_normal_tokens(rs.ring.value().tokens, host_id);
-        };
-
-        for (const auto& [id, rs]: _topology_state_machine._topology.normal_nodes) {
-            co_await add_normal_node(id, rs);
+        slogger.trace("raft topology: loading topology: raft id={} ip={} node state={} dc={} rack={} tokens state={} tokens={} shards={}",
+                      id, ip, rs.state, rs.datacenter, rs.rack, _topology_state_machine._topology.tstate, rs.ring.value().tokens, rs.shard_count);
+        // Save tokens, not needed for raft topology management, but needed by legacy
+        // Also ip -> id mapping is needed for address map recreation on reboot
+        if (!is_me(ip)) {
+            // Some state that is used to fill in 'peeers' table is still propagated over gossiper.
+            // Populate the table with the state from the gossiper here since storage_service::on_change()
+            // (which is called each time gossiper state changes) may have skipped it because the tokens
+            // for the node were not in the 'normal' state yet
+            auto info = get_peer_info_for_update(ip);
+            // And then amend with the info from raft
+            info.tokens = rs.ring.value().tokens;
+            info.data_center = rs.datacenter;
+            info.rack = rs.rack;
+            info.host_id = id.uuid();
+            info.release_version = rs.release_version;
+            co_await _sys_ks.local().update_peer_info(ip, info);
+        } else {
+            co_await _sys_ks.local().update_tokens(rs.ring.value().tokens);
+            co_await _gossiper.add_local_application_state({{ gms::application_state::STATUS, gms::versioned_value::normal(rs.ring.value().tokens) }});
         }
+        update_topology(host_id, ip, rs);
+        co_await tmptr->update_normal_tokens(rs.ring.value().tokens, host_id);
+    };
 
-        for (const auto& [id, rs]: _topology_state_machine._topology.transition_nodes) {
-            locator::host_id host_id{id.uuid()};
-            auto ip = co_await id2ip(id);
+    for (const auto& [id, rs]: _topology_state_machine._topology.normal_nodes) {
+        co_await add_normal_node(id, rs);
+    }
 
-            slogger.trace("raft topology: loading topology: raft id={} ip={} node state={} dc={} rack={} tokens state={} tokens={}",
-                          id, ip, rs.state, rs.datacenter, rs.rack, _topology_state_machine._topology.tstate,
-                          seastar::value_of([&] () -> sstring {
-                              return rs.ring ? ::format("{}", rs.ring->tokens) : sstring("null");
-                          }));
+    for (const auto& [id, rs]: _topology_state_machine._topology.transition_nodes) {
+        locator::host_id host_id{id.uuid()};
+        auto ip = co_await id2ip(id);
 
-            switch (rs.state) {
-            case node_state::bootstrapping:
-                if (rs.ring.has_value()) {
-                    if (!is_me(ip)) {
-                        // Save ip -> id mapping in peers table because we need it on restart, but do not save tokens until owned
+        slogger.trace("raft topology: loading topology: raft id={} ip={} node state={} dc={} rack={} tokens state={} tokens={}",
+                      id, ip, rs.state, rs.datacenter, rs.rack, _topology_state_machine._topology.tstate,
+                      seastar::value_of([&] () -> sstring {
+                          return rs.ring ? ::format("{}", rs.ring->tokens) : sstring("null");
+                      }));
+
+        switch (rs.state) {
+        case node_state::bootstrapping:
+            if (rs.ring.has_value()) {
+                if (!is_me(ip)) {
+                    // Save ip -> id mapping in peers table because we need it on restart, but do not save tokens until owned
                         db::system_keyspace::peer_info info;
                         info.host_id = id.uuid();
                         co_await _sys_ks.local().update_peer_info(ip, info);
-                    }
-                    update_topology(host_id, ip, rs);
-                    if (_topology_state_machine._topology.normal_nodes.empty()) {
-                        // This is the first node in the cluster. Insert the tokens as normal to the token ring early
-                        // so we can perform writes to regular 'distributed' tables during the bootstrap procedure
-                        // (such as the CDC generation write).
-                        // It doesn't break anything to set the tokens to normal early in this single-node case.
-                        co_await tmptr->update_normal_tokens(rs.ring.value().tokens, host_id);
-                    } else {
-                        tmptr->add_bootstrap_tokens(rs.ring.value().tokens, host_id);
-                        co_await update_topology_change_info(tmptr, ::format("bootstrapping node {}/{}", id, ip));
-                    }
                 }
-                break;
-            case node_state::decommissioning:
-            case node_state::removing:
                 update_topology(host_id, ip, rs);
-                co_await tmptr->update_normal_tokens(rs.ring.value().tokens, host_id);
-                tmptr->add_leaving_endpoint(host_id);
-                co_await update_topology_change_info(tmptr, ::format("{} {}/{}", rs.state, id, ip));
-                break;
-            case node_state::replacing: {
-                if (rs.ring.has_value()) {
-                    assert(_topology_state_machine._topology.req_param.contains(id));
-                    auto replaced_id = std::get<replace_param>(_topology_state_machine._topology.req_param[id]).replaced_id;
-                    auto existing_ip = am.find(replaced_id);
-                    if (!existing_ip) {
-                        // FIXME: What if not known?
-                        on_fatal_internal_error(slogger, ::format("Cannot map id of a node being replaced {} to its ip", replaced_id));
-                    }
-                    assert(existing_ip);
-                    const auto replaced_host_id = locator::host_id(replaced_id.uuid());
-                    tmptr->update_topology(replaced_host_id, std::nullopt, locator::node::state::being_replaced);
-                    update_topology(host_id, ip, rs);
-                    tmptr->add_replacing_endpoint(replaced_host_id, host_id);
-                    co_await update_topology_change_info(tmptr, ::format("replacing {}/{} by {}/{}", replaced_id, *existing_ip, id, ip));
+                if (_topology_state_machine._topology.normal_nodes.empty()) {
+                    // This is the first node in the cluster. Insert the tokens as normal to the token ring early
+                    // so we can perform writes to regular 'distributed' tables during the bootstrap procedure
+                    // (such as the CDC generation write).
+                    // It doesn't break anything to set the tokens to normal early in this single-node case.
+                    co_await tmptr->update_normal_tokens(rs.ring.value().tokens, host_id);
+                } else {
+                    tmptr->add_bootstrap_tokens(rs.ring.value().tokens, host_id);
+                    co_await update_topology_change_info(tmptr, ::format("bootstrapping node {}/{}", id, ip));
                 }
             }
-                break;
-            case node_state::rebuilding:
-                // Rebuilding node is normal
-                co_await add_normal_node(id, rs);
-                break;
-            case node_state::left_token_ring:
-                break;
-            case node_state::rollback_to_normal:
-                // no need for double writes anymore since op failed
-                co_await add_normal_node(id, rs);
-                break;
-            default:
-                on_fatal_internal_error(slogger, ::format("Unexpected state {} for node {}", rs.state, id));
+            break;
+        case node_state::decommissioning:
+        case node_state::removing:
+            update_topology(host_id, ip, rs);
+            co_await tmptr->update_normal_tokens(rs.ring.value().tokens, host_id);
+            tmptr->add_leaving_endpoint(host_id);
+            co_await update_topology_change_info(tmptr, ::format("{} {}/{}", rs.state, id, ip));
+            break;
+        case node_state::replacing: {
+            if (rs.ring.has_value()) {
+                assert(_topology_state_machine._topology.req_param.contains(id));
+                auto replaced_id = std::get<replace_param>(_topology_state_machine._topology.req_param[id]).replaced_id;
+                auto existing_ip = am.find(replaced_id);
+                if (!existing_ip) {
+                    // FIXME: What if not known?
+                    on_fatal_internal_error(slogger, ::format("Cannot map id of a node being replaced {} to its ip", replaced_id));
+                }
+                assert(existing_ip);
+                const auto replaced_host_id = locator::host_id(replaced_id.uuid());
+                tmptr->update_topology(replaced_host_id, std::nullopt, locator::node::state::being_replaced);
+                update_topology(host_id, ip, rs);
+                tmptr->add_replacing_endpoint(replaced_host_id, host_id);
+                co_await update_topology_change_info(tmptr, ::format("replacing {}/{} by {}/{}", replaced_id, *existing_ip, id, ip));
             }
         }
+            break;
+        case node_state::rebuilding:
+            // Rebuilding node is normal
+            co_await add_normal_node(id, rs);
+            break;
+        case node_state::left_token_ring:
+            break;
+        case node_state::rollback_to_normal:
+            // no need for double writes anymore since op failed
+            co_await add_normal_node(id, rs);
+            break;
+        default:
+            on_fatal_internal_error(slogger, ::format("Unexpected state {} for node {}", rs.state, id));
+        }
+    }
 }
 
 future<> storage_service::topology_state_load() {
