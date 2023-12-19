@@ -607,7 +607,7 @@ public:
     static future<std::vector<sstring>> read_and_parse_toc(file f);
 private:
     void unused(); // Called when reference count drops to zero
-    future<file> open_file(component_type, open_flags, file_open_options = {}) noexcept;
+    future<file> open_file(component_type, open_flags, file_open_options = {}) const noexcept;
 
     template <component_type Type, typename T>
     future<> read_simple(T& comp);
@@ -628,7 +628,7 @@ private:
     void write_crc(const checksum& c);
     void write_digest(uint32_t full_checksum);
 
-    future<file> new_sstable_component_file(const io_error_handler& error_handler, component_type f, open_flags flags, file_open_options options = {}) noexcept;
+    future<file> new_sstable_component_file(const io_error_handler& error_handler, component_type f, open_flags flags, file_open_options options = {}) const noexcept;
 
     future<file_writer> make_component_file_writer(component_type c, file_output_stream_options options,
             open_flags oflags = open_flags::wo | open_flags::create | open_flags::exclusive) noexcept;
@@ -937,6 +937,9 @@ public:
     // Drops all evictable in-memory caches of on-disk content.
     future<> drop_caches();
 
+    // Returns a read-only file for all existing components of the sstable
+    future<std::unordered_map<component_type, file>> readable_file_for_all_components() const;
+
     // Allow the test cases from sstable_test.cc to test private methods. We use
     // a placeholder to avoid cluttering this class too much. The sstable_test class
     // will then re-export as public every method it needs.
@@ -1023,5 +1026,11 @@ future<> remove_table_directory_if_has_no_snapshots(fs::path table_dir);
 // resolves into temporary-TOC file name or empty string if neither TOC nor temp.
 // TOC is there
 future<sstring> make_toc_temporary(sstring sstable_toc_name, storage::sync_dir sync = storage::sync_dir::yes);
+
+// This snapshot allows the sstable files to be read even if they were removed from the directory
+struct sstable_files_snapshot {
+    shared_sstable sst;
+    std::unordered_map<component_type, file> files;
+};
 
 } // namespace sstables

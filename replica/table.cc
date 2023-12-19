@@ -782,8 +782,8 @@ future<> table::parallel_foreach_compaction_group(std::function<future<>(compact
     });
 }
 
-future<sstables::sstable_list> table::take_storage_snapshot(dht::token_range tr) {
-    sstables::sstable_list ret;
+future<utils::chunked_vector<sstables::sstable_files_snapshot>> table::take_storage_snapshot(dht::token_range tr) {
+    utils::chunked_vector<sstables::sstable_files_snapshot> ret;
 
     for (auto& cg : compaction_groups_for_token_range(tr)) {
         // We don't care about sstables in snapshot being unlinked, as the file
@@ -794,14 +794,17 @@ future<sstables::sstable_list> table::take_storage_snapshot(dht::token_range tr)
 
         co_await cg->flush();
 
-        auto all_sstables = cg->make_compound_sstable_set();
+        auto set = cg->make_compound_sstable_set();
 
-        all_sstables->for_each_sstable([&ret] (const sstables::shared_sstable& sst) mutable {
-           ret.insert(sst);
-        });
+        for (auto all_sstables = set->all(); auto& sst : *all_sstables) {
+           ret.push_back({
+               .sst = sst,
+               .files = co_await sst->readable_file_for_all_components(),
+           });
+        }
     }
 
-    co_return ret;
+    co_return std::move(ret);
 }
 
 void table::update_stats_for_new_sstable(const sstables::shared_sstable& sst) noexcept {

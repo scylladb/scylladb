@@ -103,6 +103,7 @@ class sstables_manager;
 class compaction_data;
 class sstable_set;
 class directory_semaphore;
+struct sstable_files_snapshot;
 
 }
 
@@ -1210,7 +1211,7 @@ public:
     // Takes snapshot of current storage state (includes memtable and sstables) from
     // all compaction groups that overlap with a given token range. The output is
     // a list of SSTables that represent the snapshot.
-    future<sstables::sstable_list> take_storage_snapshot(dht::token_range tr);
+    future<utils::chunked_vector<sstables::sstable_files_snapshot>> take_storage_snapshot(dht::token_range tr);
 
     friend class compaction_group;
 };
