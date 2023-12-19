@@ -351,68 +351,68 @@ SEASTAR_TEST_CASE(test_commitlog_delete_when_over_disk_limit) {
 
 SEASTAR_TEST_CASE(test_commitlog_reader){
     static auto count_mutations_in_segment = [] (sstring path) -> future<size_t> {
-        auto count = make_lw_shared<size_t>(0);
-        return db::commitlog::read_log_file(path, db::commitlog::descriptor::FILENAME_PREFIX, [count](db::commitlog::buffer_and_replay_position buf_rp) {
-            auto&& [buf, rp] = buf_rp;
-            auto linearization_buffer = bytes_ostream();
-            auto in = buf.get_istream();
-            auto str = to_sstring_view(in.read_bytes_view(buf.size_bytes(), linearization_buffer));
-            BOOST_CHECK_EQUAL(str, "hej bubba cow");
-            (*count)++;
-            return make_ready_future<>();
-        }).then([count] {
-            return *count;
-        });
+        size_t count = 0;
+        try {
+            co_await db::commitlog::read_log_file(path, db::commitlog::descriptor::FILENAME_PREFIX, [&count](db::commitlog::buffer_and_replay_position buf_rp) -> future<> {
+                auto&& [buf, rp] = buf_rp;
+                auto linearization_buffer = bytes_ostream();
+                auto in = buf.get_istream();
+                auto str = to_sstring_view(in.read_bytes_view(buf.size_bytes(), linearization_buffer));
+                BOOST_CHECK_EQUAL(str, "hej bubba cow");
+                count++;
+                co_return;
+            });
+        } catch (commitlog::segment_truncation&) {
+            // ok. this does not ensure to have fully synced segments
+            // before reading them in all code paths. We can end up
+            // hitting (premature) eof or even half-written page.
+        }
+        co_return count;
     };
+
     commitlog::config cfg;
     cfg.commitlog_segment_size_in_mb = 1;
-    return cl_test(cfg, [](commitlog& log) {
-            auto set = make_lw_shared<rp_set>();
-            auto count = make_lw_shared<size_t>(0);
-            auto count2 = make_lw_shared<size_t>(0);
-            auto uuid = make_table_id();
-            return do_until([count, set]() {return set->size() > 1;},
-                    [&log, uuid, count, set]() {
-                        sstring tmp = "hej bubba cow";
-                        return log.add_mutation(uuid, tmp.size(), db::commitlog::force_sync::no, [tmp](db::commitlog::output& dst) {
-                                    dst.write(tmp.data(), tmp.size());
-                                }).then([set, count](auto h) {
-                                    BOOST_CHECK_NE(db::replay_position(), h.rp());
-                                    set->put(std::move(h));
-                                    if (set->size() == 1) {
-                                        ++(*count);
-                                    }
-                                });
+    return cl_test(cfg, [](commitlog& log) -> future<> {
+        rp_set set;
+        size_t count = 0;
+        auto uuid = make_table_id();
+        sstring tmp = "hej bubba cow";
 
-                    }).then([&log, set, count2]() {
-                        auto segments = log.get_active_segment_names();
-                        BOOST_REQUIRE(segments.size() > 1);
+        while (set.size() < 2) {
+            auto h = co_await log.add_mutation(uuid, tmp.size(), db::commitlog::force_sync::no, [&tmp](db::commitlog::output& dst) {
+                dst.write(tmp.data(), tmp.size());
+            });
+            BOOST_CHECK_NE(db::replay_position(), h.rp());
+            set.put(std::move(h));
+            if (set.size() == 1) {
+                ++count;
+            }
+        }
 
-                        auto ids = boost::copy_range<std::vector<segment_id_type>>(set->usage() | boost::adaptors::map_keys);
-                        std::sort(ids.begin(), ids.end());
-                        auto id = ids.front();
-                        auto i = std::find_if(segments.begin(), segments.end(), [id](sstring filename) {
-                            commitlog::descriptor desc(filename, db::commitlog::descriptor::FILENAME_PREFIX);
-                            return desc.id == id;
-                        });
-                        if (i == segments.end()) {
-                            throw std::runtime_error("Did not find expected log file");
-                        }
-                        return *i;
-                    }).then([&log, count] (sstring segment_path) {
-                        // Check reading from an unsynced segment
-                        return count_mutations_in_segment(segment_path).then([count] (size_t replay_count) {
-                            BOOST_CHECK_GE(*count, replay_count);
-                        }).then([&log, count, segment_path] {
-                            return log.sync_all_segments().then([count, segment_path] {
-                                // Check reading from a synced segment
-                                return count_mutations_in_segment(segment_path).then([count] (size_t replay_count) {
-                                    BOOST_CHECK_EQUAL(*count, replay_count);
-                                });
-                            });
-                        });
-                    });
+        auto segments = log.get_active_segment_names();
+        BOOST_REQUIRE(segments.size() > 1);
+
+        auto ids = boost::copy_range<std::vector<segment_id_type>>(set.usage() | boost::adaptors::map_keys);
+        std::sort(ids.begin(), ids.end());
+        auto id = ids.front();
+        auto i = std::find_if(segments.begin(), segments.end(), [id](sstring filename) {
+            commitlog::descriptor desc(filename, db::commitlog::descriptor::FILENAME_PREFIX);
+            return desc.id == id;
         });
+        if (i == segments.end()) {
+            throw std::runtime_error("Did not find expected log file");
+        }
+        sstring segment_path = *i;
+
+        // Check reading from an unsynced segment
+        auto replay_count = co_await count_mutations_in_segment(segment_path);
+        BOOST_CHECK_GE(count, replay_count);
+
+        co_await log.sync_all_segments();
+        // Check reading from a synced segment
+        auto replay_count2 = co_await count_mutations_in_segment(segment_path);
+        BOOST_CHECK_EQUAL(count, replay_count2);
+    });
 }
 
 static future<> corrupt_segment(sstring seg, uint64_t off, uint32_t value) {
