@@ -791,6 +791,9 @@ public:
     future<> set_tablet_balancing_enabled(bool);
 
 private:
+    // Synchronizes the local node state (token_metadata, system.peers/system.local tables,
+    // gossiper) to align it with the other raft topology nodes.
+    future<> sync_raft_topology_nodes(mutable_token_metadata_ptr tmptr);
     // load topology state machine snapshot into memory
     // raft_group0_client::_read_apply_mutex must be held
     future<> topology_state_load();

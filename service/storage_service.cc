@@ -368,33 +368,9 @@ static locator::node::state to_topology_node_state(node_state ns) {
     on_internal_error(slogger, format("unhandled node state: {}", ns));
 }
 
-future<> storage_service::topology_state_load() {
-#ifdef SEASTAR_DEBUG
-    static bool running = false;
-    assert(!running); // The function is not re-entrant
-    auto d = defer([] {
-        running = false;
-    });
-    running = true;
-#endif
-
-    if (!_raft_topology_change_enabled) {
-        co_return;
-    }
-
-    slogger.debug("raft topology: reload raft topology state");
-    // read topology state from disk and recreate token_metadata from it
-    _topology_state_machine._topology = co_await _sys_ks.local().load_topology_state();
-
-    co_await _feature_service.container().invoke_on_all([&] (gms::feature_service& fs) {
-        return fs.enable(boost::copy_range<std::set<std::string_view>>(_topology_state_machine._topology.enabled_features));
-    });
-
-    // Update the legacy `enabled_features` key in `system.scylla_local`.
-    // It's OK to update it after enabling features because `system.topology` now
-    // is the source of truth about enabled features.
-    co_await _sys_ks.local().save_local_enabled_features(_topology_state_machine._topology.enabled_features, false);
-
+// Synchronizes the local node state (token_metadata, system.peers/system.local tables,
+// gossiper) to align it with the other raft topology nodes.
+future<> storage_service::sync_raft_topology_nodes(mutable_token_metadata_ptr tmptr) {
     const auto& am = _group0->address_map();
     auto id2ip = [this, &am] (raft::server_id id) -> future<gms::inet_address> {
         auto ip = am.find(id);
@@ -409,11 +385,6 @@ future<> storage_service::topology_state_load() {
         }
         co_return *ip;
     };
-
-    co_await mutate_token_metadata(seastar::coroutine::lambda([this, &id2ip, &am] (mutable_token_metadata_ptr tmptr) -> future<> {
-        co_await tmptr->clear_gently(); // drop previous state
-
-        tmptr->set_version(_topology_state_machine._topology.version);
 
     for (const auto& id: _topology_state_machine._topology.left_nodes) {
         auto ip = co_await id2ip(id);
@@ -467,28 +438,6 @@ future<> storage_service::topology_state_load() {
         for (const auto& [id, rs]: _topology_state_machine._topology.normal_nodes) {
             co_await add_normal_node(id, rs);
         }
-
-        const auto read_new = std::invoke([](std::optional<topology::transition_state> state) {
-            using read_new_t = locator::token_metadata::read_new_t;
-            if (!state.has_value()) {
-                return read_new_t::no;
-            }
-            switch (*state) {
-                case topology::transition_state::join_group0:
-                    [[fallthrough]];
-                case topology::transition_state::tablet_migration:
-                    [[fallthrough]];
-                case topology::transition_state::commit_cdc_generation:
-                    [[fallthrough]];
-                case topology::transition_state::tablet_draining:
-                    [[fallthrough]];
-                case topology::transition_state::write_both_read_old:
-                    return read_new_t::no;
-                case topology::transition_state::write_both_read_new:
-                    return read_new_t::yes;
-            }
-        }, _topology_state_machine._topology.tstate);
-        tmptr->set_read_new(read_new);
 
         for (const auto& [id, rs]: _topology_state_machine._topology.transition_nodes) {
             locator::host_id host_id{id.uuid()};
@@ -561,6 +510,63 @@ future<> storage_service::topology_state_load() {
                 on_fatal_internal_error(slogger, ::format("Unexpected state {} for node {}", rs.state, id));
             }
         }
+}
+
+future<> storage_service::topology_state_load() {
+#ifdef SEASTAR_DEBUG
+    static bool running = false;
+    assert(!running); // The function is not re-entrant
+    auto d = defer([] {
+        running = false;
+    });
+    running = true;
+#endif
+
+    if (!_raft_topology_change_enabled) {
+        co_return;
+    }
+
+    slogger.debug("raft topology: reload raft topology state");
+    // read topology state from disk and recreate token_metadata from it
+    _topology_state_machine._topology = co_await _sys_ks.local().load_topology_state();
+
+    co_await _feature_service.container().invoke_on_all([&] (gms::feature_service& fs) {
+        return fs.enable(boost::copy_range<std::set<std::string_view>>(_topology_state_machine._topology.enabled_features));
+    });
+
+    // Update the legacy `enabled_features` key in `system.scylla_local`.
+    // It's OK to update it after enabling features because `system.topology` now
+    // is the source of truth about enabled features.
+    co_await _sys_ks.local().save_local_enabled_features(_topology_state_machine._topology.enabled_features, false);
+
+    co_await mutate_token_metadata(seastar::coroutine::lambda([this] (mutable_token_metadata_ptr tmptr) -> future<> {
+        co_await tmptr->clear_gently(); // drop previous state
+
+        tmptr->set_version(_topology_state_machine._topology.version);
+
+        const auto read_new = std::invoke([](std::optional<topology::transition_state> state) {
+            using read_new_t = locator::token_metadata::read_new_t;
+            if (!state.has_value()) {
+                return read_new_t::no;
+            }
+            switch (*state) {
+                case topology::transition_state::join_group0:
+                    [[fallthrough]];
+                case topology::transition_state::tablet_migration:
+                    [[fallthrough]];
+                case topology::transition_state::commit_cdc_generation:
+                    [[fallthrough]];
+                case topology::transition_state::tablet_draining:
+                    [[fallthrough]];
+                case topology::transition_state::write_both_read_old:
+                    return read_new_t::no;
+                case topology::transition_state::write_both_read_new:
+                    return read_new_t::yes;
+            }
+        }, _topology_state_machine._topology.tstate);
+        tmptr->set_read_new(read_new);
+
+        co_await sync_raft_topology_nodes(tmptr);
 
         if (_db.local().get_config().check_experimental(db::experimental_features_t::feature::TABLETS)) {
             tmptr->set_tablets(co_await replica::read_tablet_metadata(_qp));
