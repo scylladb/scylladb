@@ -2685,7 +2685,7 @@ private:
         size_t repaired_replicas = _all_live_peer_nodes.size() + 1;
         if (_shard_task.total_rf != repaired_replicas){
             rlogger.debug("repair[{}]: Skipped to update system.repair_history total_rf={}, repaired_replicas={}, local={}, peers={}",
-                    _shard_task.id.uuid(), _shard_task.total_rf, repaired_replicas, utils::fb_utilities::get_broadcast_address(), _all_live_peer_nodes);
+                    _shard_task.global_repair_id.uuid(), _shard_task.total_rf, repaired_replicas, utils::fb_utilities::get_broadcast_address(), _all_live_peer_nodes);
             co_return;
         }
         // Update repair_history table only if both hints and batchlog have been flushed.
@@ -2693,12 +2693,12 @@ private:
             co_return;
         }
         repair_service& rs = _shard_task.rs;
-        std::optional<gc_clock::time_point> repair_time_opt = co_await rs.update_history(_shard_task.id.uuid(), _table_id, _range, _start_time);
+        std::optional<gc_clock::time_point> repair_time_opt = co_await rs.update_history(_shard_task.global_repair_id.uuid(), _table_id, _range, _start_time);
         if (!repair_time_opt) {
             co_return;
         }
         auto repair_time = repair_time_opt.value();
-        repair_update_system_table_request req{_shard_task.id.uuid(), _table_id, _shard_task.get_keyspace(), _cf_name, _range, repair_time};
+        repair_update_system_table_request req{_shard_task.global_repair_id.uuid(), _table_id, _shard_task.get_keyspace(), _cf_name, _range, repair_time};
         auto all_nodes = _all_live_peer_nodes;
         all_nodes.push_back(utils::fb_utilities::get_broadcast_address());
         co_await coroutine::parallel_for_each(all_nodes, [this, req] (gms::inet_address node) -> future<> {
@@ -2706,9 +2706,9 @@ private:
                 auto& ms = _shard_task.messaging.local();
                 repair_update_system_table_response resp = co_await ser::partition_checksum_rpc_verbs::send_repair_update_system_table(&ms, netw::messaging_service::msg_addr(node), req);
                 (void)resp;  // nothing to do with the response yet
-                rlogger.debug("repair[{}]: Finished to update system.repair_history table of node {}", _shard_task.id.uuid(), node);
+                rlogger.debug("repair[{}]: Finished to update system.repair_history table of node {}", _shard_task.global_repair_id.uuid(), node);
             } catch (...) {
-                rlogger.warn("repair[{}]: Failed to update system.repair_history table of node {}: {}", _shard_task.id.uuid(), node, std::current_exception());
+                rlogger.warn("repair[{}]: Failed to update system.repair_history table of node {}: {}", _shard_task.global_repair_id.uuid(), node, std::current_exception());
             }
         });
         co_return;
@@ -2735,10 +2735,10 @@ public:
             auto wanted = (_all_live_peer_nodes.size() + 1) * repair_module::max_repair_memory_per_range;
             wanted = std::min(max, wanted);
             rlogger.trace("repair[{}]: Started to get memory budget, wanted={}, available={}, max_repair_memory={}",
-                    _shard_task.id.uuid(), wanted, mem_sem.current(), max);
+                    _shard_task.global_repair_id.uuid(), wanted, mem_sem.current(), max);
             auto mem_permit = seastar::get_units(mem_sem, wanted).get0();
             rlogger.trace("repair[{}]: Finished to get memory budget, wanted={}, available={}, max_repair_memory={}",
-                    _shard_task.id.uuid(), wanted, mem_sem.current(), max);
+                    _shard_task.global_repair_id.uuid(), wanted, mem_sem.current(), max);
 
             auto permit = _shard_task.db.local().obtain_reader_permit(_cf, "repair-meta", db::no_timeout).get0();
 
@@ -2810,11 +2810,11 @@ public:
             } catch (replica::no_such_column_family& e) {
                 table_dropped = true;
                 rlogger.warn("repair[{}]: shard={}, keyspace={}, cf={}, range={}, got error in row level repair: {}",
-                        _shard_task.id.uuid(), this_shard_id(), _shard_task.get_keyspace(), _cf_name, _range, e);
+                        _shard_task.global_repair_id.uuid(), this_shard_id(), _shard_task.get_keyspace(), _cf_name, _range, e);
                 _failed = true;
             } catch (std::exception& e) {
                 rlogger.warn("repair[{}]: shard={}, keyspace={}, cf={}, range={}, got error in row level repair: {}",
-                        _shard_task.id.uuid(), this_shard_id(), _shard_task.get_keyspace(), _cf_name, _range, e);
+                        _shard_task.global_repair_id.uuid(), this_shard_id(), _shard_task.get_keyspace(), _cf_name, _range, e);
                 // In case the repair process fail, we need to call repair_row_level_stop to clean up repair followers
                 _failed = true;
             }
