@@ -519,9 +519,17 @@ future<> storage_service::topology_state_load() {
     // of the cluster state. To work correctly, the gossiper needs to know the current
     // endpoints. We cannot rely on seeds alone, since it is not guaranteed that seeds
     // will be up to date and reachable at the time of restart.
-    for (const auto& e: get_token_metadata_ptr()->get_all_endpoints()) {
-        if (!utils::fb_utilities::is_me(e) && !_gossiper.get_endpoint_state_ptr(e)) {
-            co_await _gossiper.add_saved_endpoint(e);
+    const auto tmptr = get_token_metadata_ptr();
+    for (const auto& e: tmptr->get_all_endpoints()) {
+        if (utils::fb_utilities::is_me(e)) {
+            continue;
+        }
+        auto permit = co_await _gossiper.lock_endpoint(e, gms::null_permit_id);
+        // Add the endpoint if it doesn't exist yet in gossip
+        // since it is not loaded in join_cluster in the
+        // _raft_topology_change_enabled case.
+        if (!_gossiper.get_endpoint_state_ptr(e)) {
+            co_await _gossiper.add_saved_endpoint(e, permit.id());
         }
     }
 
@@ -2832,7 +2840,9 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
         }
         co_await _gossiper.reset_endpoint_state_map();
         for (auto ep : loaded_endpoints) {
-            co_await _gossiper.add_saved_endpoint(ep);
+            // gossiping hasn't started yet
+            // so no need to lock the endpoint
+            co_await _gossiper.add_saved_endpoint(ep, gms::null_permit_id);
         }
     }
     auto features = _feature_service.supported_feature_set();
@@ -3998,7 +4008,9 @@ future<> storage_service::join_cluster(sharded<db::system_distributed_keyspace>&
                     tmptr->update_host_id(loaded_host_ids.at(ep), ep);
                 }
                 loaded_endpoints.insert(ep);
-                co_await _gossiper.add_saved_endpoint(ep);
+                // gossiping hasn't started yet
+                // so no need to lock the endpoint
+                co_await _gossiper.add_saved_endpoint(ep, gms::null_permit_id);
             }
         }
         co_await replicate_to_all_cores(std::move(tmptr));
