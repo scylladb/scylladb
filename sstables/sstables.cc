@@ -125,14 +125,14 @@ read_monitor_generator& default_read_monitor_generator() {
     return noop_read_monitor_generator;
 }
 
-future<file> sstable::new_sstable_component_file(const io_error_handler& error_handler, component_type type, open_flags flags, file_open_options options) noexcept {
+future<file> sstable::new_sstable_component_file(const io_error_handler& error_handler, component_type type, open_flags flags, file_open_options options) const noexcept {
   try {
     auto f = _storage->open_component(*this, type, flags, options, _manager.config().enable_sstable_data_integrity_check());
 
     if (type != component_type::TOC && type != component_type::TemporaryTOC) {
         for (auto * ext : _manager.config().extensions().sstable_file_io_extensions()) {
             f = with_file_close_on_failure(std::move(f), [ext, this, type, flags] (file f) {
-               return ext->wrap_file(*this, type, f, flags).then([f](file nf) mutable {
+               return ext->wrap_file(const_cast<sstable&>(*this), type, f, flags).then([f](file nf) mutable {
                    return nf ? nf : std::move(f);
                });
             });
@@ -846,6 +846,14 @@ void sstable::generate_toc() {
     _recognized_components.insert(component_type::Scylla);
 }
 
+future<std::unordered_map<component_type, file>> sstable::readable_file_for_all_components() const {
+    std::unordered_map<component_type, file> files;
+    for (auto c : _recognized_components) {
+        files.emplace(c, co_await open_file(c, open_flags::ro));
+    }
+    co_return std::move(files);
+}
+
 file_writer::~file_writer() {
     if (_closed) {
         return;
@@ -1284,7 +1292,7 @@ future<> sstable::read_summary() noexcept {
     });
 }
 
-future<file> sstable::open_file(component_type type, open_flags flags, file_open_options opts) noexcept {
+future<file> sstable::open_file(component_type type, open_flags flags, file_open_options opts) const noexcept {
     return new_sstable_component_file(_read_error_handler, type, flags, opts);
 }
 
