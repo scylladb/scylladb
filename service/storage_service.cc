@@ -539,8 +539,12 @@ future<> storage_service::topology_state_load() {
     // is the source of truth about enabled features.
     co_await _sys_ks.local().save_local_enabled_features(_topology_state_machine._topology.enabled_features, false);
 
-    co_await mutate_token_metadata(seastar::coroutine::lambda([this] (mutable_token_metadata_ptr tmptr) -> future<> {
-        co_await tmptr->clear_gently(); // drop previous state
+    {
+        auto tmlock = co_await get_token_metadata_lock();
+        auto tmptr = make_token_metadata_ptr(token_metadata::config {
+            get_token_metadata().get_topology().get_config()
+        });
+        tmptr->invalidate_cached_rings();
 
         tmptr->set_version(_topology_state_machine._topology.version);
 
@@ -572,7 +576,9 @@ future<> storage_service::topology_state_load() {
             tmptr->set_tablets(co_await replica::read_tablet_metadata(_qp));
             tmptr->tablets().set_balancing_enabled(_topology_state_machine._topology.tablet_balancing_enabled);
         }
-    }));
+
+        co_await replicate_to_all_cores(std::move(tmptr));
+    }
 
     co_await update_fence_version(_topology_state_machine._topology.fence_version);
 
