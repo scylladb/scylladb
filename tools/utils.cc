@@ -102,7 +102,7 @@ int tool_app_template::run_async(int argc, char** argv, noncopyable_function<int
     }
 
     app_template::seastar_options app_cfg;
-    app_cfg.name = _cfg.name;
+    app_cfg.name = format("scylla-{}", _cfg.name);
 
     if (found_op) {
         app_cfg.description = format("{}\n\n{}\n", found_op->summary(), found_op->description());
