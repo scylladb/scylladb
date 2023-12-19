@@ -948,3 +948,13 @@ def test_scylla_sstable_shard_of(cql, test_keyspace, scylla_path, scylla_data_di
             expected_json = [shard_id]
             for actual_json in sstables_json.values():
                 assert actual_json == expected_json
+
+
+def test_scylla_sstable_no_args(scylla_path):
+    res = subprocess.run([scylla_path, "sstable"], capture_output=True, text=True)
+
+    assert res.stdout == ""
+    assert res.stderr == """\
+Usage: scylla sstable OPERATION [OPTIONS] ...
+Try `scylla sstable --help` for more information.
+"""
