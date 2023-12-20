@@ -71,8 +71,9 @@ struct table {
     const keyspace& ks;
     schema_ptr schema;
     secondary_index::secondary_index_manager secondary_idx_man;
+    bool user;
 
-    table(data_dictionary_impl& impl, const keyspace& ks, schema_ptr schema);
+    table(data_dictionary_impl& impl, const keyspace& ks, schema_ptr schema, bool user);
     table(table&&) = delete;
 };
 
@@ -202,8 +203,8 @@ public:
     }
 };
 
-table::table(data_dictionary_impl& impl, const keyspace& ks, schema_ptr schema) :
-    ks(ks), schema(std::move(schema)), secondary_idx_man(impl.wrap(*this))
+table::table(data_dictionary_impl& impl, const keyspace& ks, schema_ptr schema, bool user) :
+    ks(ks), schema(std::move(schema)), secondary_idx_man(impl.wrap(*this)), user(user)
 { }
 
 sstring read_file(std::filesystem::path path) {
@@ -238,9 +239,7 @@ std::vector<schema_ptr> do_load_schemas(const db::config& cfg, std::string_view 
                 std::map<sstring, sstring>{},
                 std::nullopt,
                 false));
-    real_db.tables.emplace_back(dd_impl, real_db.keyspaces.back(), db::schema_tables::dropped_columns());
-
-    std::vector<schema_ptr> schemas;
+    real_db.tables.emplace_back(dd_impl, real_db.keyspaces.back(), db::schema_tables::dropped_columns(), false);
 
     auto find_or_create_keyspace = [&] (const sstring& name) -> data_dictionary::keyspace {
         try {
@@ -279,14 +278,15 @@ std::vector<schema_ptr> do_load_schemas(const db::config& cfg, std::string_view 
         } else if (auto p = dynamic_cast<cql3::statements::create_type_statement*>(statement)) {
             dd_impl.unwrap(ks).metadata->add_user_type(p->create_type(db));
         } else if (auto p = dynamic_cast<cql3::statements::create_table_statement*>(statement)) {
-            schemas.push_back(p->get_cf_meta_data(db));
+            auto schema = p->get_cf_meta_data(db);
             // CDC tables use a custom partitioner, which is not reflected when
             // dumping the schema to schema.cql, so we have to manually set it here.
-            if (cdc::is_log_name(schemas.back()->cf_name())) {
-                schema_builder b(std::move(schemas.back()));
+            if (cdc::is_log_name(schema->cf_name())) {
+                schema_builder b(std::move(schema));
                 b.with_partitioner(cdc::cdc_partitioner::classname);
-                schemas.back() = b.build();
+                schema = b.build();
             }
+            real_db.tables.emplace_back(dd_impl, dd_impl.unwrap(ks), std::move(schema), true);
         } else if (auto p = dynamic_cast<cql3::statements::update_statement*>(statement)) {
             if (p->keyspace() != db::schema_tables::NAME && p->column_family() != db::schema_tables::DROPPED_COLUMNS) {
                 throw std::runtime_error(fmt::format("tools::do_load_schemas(): expected modification statement to be against {}.{}, but it is against {}.{}",
@@ -311,17 +311,18 @@ std::vector<schema_ptr> do_load_schemas(const db::config& cfg, std::string_view 
             for (auto& row : rs.rows()) {
                 const auto keyspace_name = row.get_nonnull<sstring>("keyspace_name");
                 const auto table_name = row.get_nonnull<sstring>("table_name");
-                auto it = std::find_if(schemas.begin(), schemas.end(), [&] (schema_ptr s) {
+                auto it = std::find_if(real_db.tables.begin(), real_db.tables.end(), [&] (const table& t) {
+                    auto& s = t.schema;
                     return s->ks_name() == keyspace_name && s->cf_name() == table_name;
                 });
-                if (it == schemas.end()) {
+                if (it == real_db.tables.end()) {
                     throw std::runtime_error(fmt::format("tools::do_load_schemas(): failed applying update to {}.{}, the table it applies to is not found: {}.{}",
                             db::schema_tables::NAME, db::schema_tables::DROPPED_COLUMNS, keyspace_name, table_name));
                 }
                 auto name = row.get_nonnull<sstring>("column_name");
                 auto type = db::cql_type_parser::parse(keyspace_name, row.get_nonnull<sstring>("type"), user_types_storage(real_db));
                 auto time = row.get_nonnull<db_clock::time_point>("dropped_time");
-                *it = schema_builder(*it).without_column(std::move(name), std::move(type), time.time_since_epoch().count()).build();
+                it->schema = schema_builder(std::move(it->schema)).without_column(std::move(name), std::move(type), time.time_since_epoch().count()).build();
             }
         } else {
             throw std::runtime_error(fmt::format("tools::do_load_schemas(): expected statement to be one of (create keyspace, create type, create table), got: {}",
@@ -329,7 +330,10 @@ std::vector<schema_ptr> do_load_schemas(const db::config& cfg, std::string_view 
         }
     }
 
-    return schemas;
+    return boost::copy_range<std::vector<schema_ptr>>(
+            real_db.tables |
+            boost::adaptors::filtered([] (const table& t) { return t.user; }) |
+            boost::adaptors::transformed([] (const table& t) { return t.schema; }));
 }
 
 struct sstable_manager_service {
