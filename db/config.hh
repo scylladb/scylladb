@@ -126,6 +126,8 @@ struct replication_strategy_restriction_t {
 
 constexpr unsigned default_murmur3_partitioner_ignore_msb_bits = 12;
 
+using maintenance_socket_enabled = bool_class<class maintenance_socket_enabled_tag>;
+
 class config final : public utils::config_file {
 public:
     config();
@@ -274,6 +276,7 @@ public:
     named_value<uint32_t> streaming_socket_timeout_in_ms;
     named_value<bool> start_native_transport;
     named_value<uint16_t> native_transport_port;
+    named_value<sstring> maintenance_socket;
     named_value<uint16_t> native_transport_port_ssl;
     named_value<uint16_t> native_shard_aware_transport_port;
     named_value<uint16_t> native_shard_aware_transport_port_ssl;

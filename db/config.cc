@@ -751,6 +751,13 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "Enable or disable the native transport server. Uses the same address as the rpc_address, but the port is different from the rpc_port. See native_transport_port.")
     , native_transport_port(this, "native_transport_port", "cql_port", value_status::Used, 9042,
         "Port on which the CQL native transport listens for clients.")
+    , maintenance_socket(this, "maintenance_socket", value_status::Used, "ignore",
+        "The Unix Domain Socket the node uses for maintenance socket.\n"
+        "The possible options are:\n"
+        "\tignore         the node will not open the maintenance socket.\n"
+        "\tworkdir        the node will open the maintenance socket on the path <scylla's workdir>/cql.m,\n"
+        "\t               where <scylla's workdir> is a path defined by the workdir configuration option\n"
+        "\t<socket path>  the node will open the maintenance socket on the path <socket path>")
     , native_transport_port_ssl(this, "native_transport_port_ssl", value_status::Used, 9142,
         "Port on which the CQL TLS native transport listens for clients."
         "Enabling client encryption and keeping native_transport_port_ssl disabled will use encryption"

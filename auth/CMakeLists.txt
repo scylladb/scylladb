@@ -20,7 +20,8 @@ target_sources(scylla_auth
     sasl_challenge.cc
     service.cc
     standard_role_manager.cc
-    transitional.cc)
+    transitional.cc
+    maintenance_socket_role_manager.cc)
 target_include_directories(scylla_auth
   PUBLIC
     ${CMAKE_SOURCE_DIR})

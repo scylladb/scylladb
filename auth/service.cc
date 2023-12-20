@@ -131,7 +131,8 @@ service::service(
         ::service::migration_notifier& mn,
         std::unique_ptr<authorizer> z,
         std::unique_ptr<authenticator> a,
-        std::unique_ptr<role_manager> r)
+        std::unique_ptr<role_manager> r,
+        db::maintenance_socket_enabled used_by_maintenance_socket)
             : _loading_cache_config(std::move(c))
             , _permissions_cache(nullptr)
             , _qp(qp)
@@ -144,21 +145,24 @@ service::service(
             , _permissions_cache_config_action([this] { update_cache_config(); return make_ready_future<>(); })
             , _permissions_cache_max_entries_observer(_qp.db().get_config().permissions_cache_max_entries.observe(_permissions_cache_cfg_cb))
             , _permissions_cache_update_interval_in_ms_observer(_qp.db().get_config().permissions_update_interval_in_ms.observe(_permissions_cache_cfg_cb))
-            , _permissions_cache_validity_in_ms_observer(_qp.db().get_config().permissions_validity_in_ms.observe(_permissions_cache_cfg_cb)) {}
+            , _permissions_cache_validity_in_ms_observer(_qp.db().get_config().permissions_validity_in_ms.observe(_permissions_cache_cfg_cb))
+            , _used_by_maintenance_socket(used_by_maintenance_socket) {}
 
 service::service(
         utils::loading_cache_config c,
         cql3::query_processor& qp,
         ::service::migration_notifier& mn,
         ::service::migration_manager& mm,
-        const service_config& sc)
+        const service_config& sc,
+        db::maintenance_socket_enabled used_by_maintenance_socket)
             : service(
                       std::move(c),
                       qp,
                       mn,
                       create_object<authorizer>(sc.authorizer_java_name, qp, mm),
                       create_object<authenticator>(sc.authenticator_java_name, qp, mm),
-                      create_object<role_manager>(sc.role_manager_java_name, qp, mm)) {
+                      create_object<role_manager>(sc.role_manager_java_name, qp, mm),
+                      used_by_maintenance_socket) {
 }
 
 future<> service::create_keyspace_if_missing(::service::migration_manager& mm) const {
@@ -189,9 +193,13 @@ future<> service::create_keyspace_if_missing(::service::migration_manager& mm) c
 }
 
 future<> service::start(::service::migration_manager& mm) {
-    return once_among_shards([this, &mm] {
-        return create_keyspace_if_missing(mm);
-    }).then([this] {
+    auto create_keyspace_if_missing_or_noop = _used_by_maintenance_socket
+        ? make_ready_future<>()
+        : once_among_shards([this, &mm] {
+            return create_keyspace_if_missing(mm);
+        });
+
+    return create_keyspace_if_missing_or_noop.then([this] {
         return _role_manager->start().then([this] {
             return when_all_succeed(_authorizer->start(), _authenticator->start()).discard_result();
         });

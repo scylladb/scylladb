@@ -15,6 +15,7 @@
 * :doc:`scylla_dev_mode_setup</getting-started/installation-common/dev-mod>` - run Scylla in Developer Mode.
 * :doc:`perftune</operating-scylla/admin-tools/perftune>` - performance configuration.
 * :doc:`SELECT * FROM MUTATION_FRAGMENTS() Statement </operating-scylla/admin-tools/select-from-mutation-fragments/>` - dump the underlying mutation data from tables.
+* :doc:`Maintenance socket </operating-scylla/admin-tools/maintenance-socket/>` - a Unix domain socket for full-permission CQL connection.
 
 
 Run each tool with ``-h``, ``--help`` for full options description.
