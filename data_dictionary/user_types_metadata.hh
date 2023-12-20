@@ -28,7 +28,7 @@ public:
     void add_type(user_type type) {
         auto i = _user_types.find(type->_name);
         assert(i == _user_types.end() || type->is_compatible_with(*i->second));
-        _user_types[type->_name] = std::move(type);
+        _user_types.insert_or_assign(i, type->_name, type);
     }
     void remove_type(user_type type) {
         _user_types.erase(type->_name);
