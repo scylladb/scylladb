@@ -545,8 +545,8 @@ schema_ptr do_load_schema_from_schema_tables(std::filesystem::path scylla_data_p
     mutation_opt dropped_columns = do_load(db::schema_tables::dropped_columns);
     mutation_opt scylla_tables = do_load([] () { return db::schema_tables::scylla_tables(); });
 
-    if (!tables || !columns) {
-        throw std::runtime_error(fmt::format("Failed to find {}.{} in 'tables' and/or 'columns' schema tables", keyspace, table));
+    if ((!tables || !tables->partition().row_count()) || (!columns || !columns->partition().row_count())) {
+        throw std::runtime_error(fmt::format("Failed to find {}.{} in schema tables", keyspace, table));
     }
 
     data_dictionary::user_types_metadata utm;
