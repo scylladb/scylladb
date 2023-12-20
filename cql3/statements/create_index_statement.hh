@@ -51,6 +51,8 @@ public:
 
 
     virtual std::unique_ptr<prepared_statement> prepare(data_dictionary::database db, cql_stats& stats) override;
+
+    schema_ptr build_index_schema(data_dictionary::database db) const;
 private:
     void validate_for_local_index(const schema& schema) const;
     void validate_for_frozen_collection(const index_target& target) const;
@@ -66,7 +68,6 @@ private:
                                               index_metadata_kind kind,
                                               const index_options_map& options);
     std::vector<::shared_ptr<index_target>> validate_while_executing(data_dictionary::database db) const;
-    schema_ptr build_index_schema(data_dictionary::database db) const;
 };
 
 }
