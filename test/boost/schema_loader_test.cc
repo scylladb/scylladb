@@ -6,10 +6,13 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include "test/lib/log.hh"
 #include "test/lib/scylla_test_case.hh"
 
 #include "db/config.hh"
+#include "index/secondary_index_manager.hh"
 #include "tools/schema_loader.hh"
+#include "view_info.hh"
 
 SEASTAR_THREAD_TEST_CASE(test_empty) {
     db::config dbcfg;
@@ -125,4 +128,152 @@ SEASTAR_THREAD_TEST_CASE(test_dropped_columns) {
                 "CREATE TABLE ks.cf (pk int PRIMARY KEY, v1 int); "
                 "INSERT INTO system_schema.dropped_columns (keyspace_name, table_name, column_name, dropped_time, type) VALUES ('ks', 'unknown_cf', 'v2', 1631011979170675, 'int'); "
     ).get(), std::exception);
+}
+
+/// Check that:
+/// * schemas[0] is a base schema (it is not a view)
+/// * schemas[1]..schemas.back() are views
+/// * schemas[0] is the base of each view
+/// * the type of schemas[i] matches views_type[i - 1]
+enum class view_type {
+    index,
+    view
+};
+void check_views(std::vector<schema_ptr> schemas, std::vector<view_type> views_type, std::source_location sl = std::source_location::current()) {
+    testlog.info("Checking views built at {}:{}", sl.file_name(), sl.line());
+    BOOST_REQUIRE_EQUAL(schemas.size(), views_type.size() + 1);
+
+    const auto base_schema = schemas.front();
+    testlog.info("Base table is {}.{}", base_schema->ks_name(), base_schema->cf_name());
+    BOOST_REQUIRE(!base_schema->is_view());
+
+    auto schema_it = schemas.begin() + 1;
+    auto view_type_it = views_type.begin();
+    while (schema_it != schemas.end() && view_type_it != views_type.end()) {
+        auto schema = *schema_it;
+        auto type = *view_type_it;
+        testlog.info("Checking view {}.{} is_index={}", schema->ks_name(), schema->cf_name(), type == view_type::index);
+        BOOST_REQUIRE(schema->is_view());
+        BOOST_REQUIRE_EQUAL(base_schema->id(), schema->view_info()->base_id());
+        if (type == view_type::index) {
+            BOOST_REQUIRE(base_schema->has_index(secondary_index::index_name_from_table_name(schema->cf_name())));
+        }
+
+        ++schema_it;
+        ++view_type_it;
+    }
+    BOOST_REQUIRE(schema_it == schemas.end());
+    BOOST_REQUIRE(view_type_it == views_type.end());
+}
+
+SEASTAR_THREAD_TEST_CASE(test_materialized_view) {
+    db::config dbcfg;
+
+    check_views(
+            tools::load_schemas(
+                    dbcfg,
+                    "CREATE TABLE ks.cf (pk int PRIMARY KEY, v int); "
+                    "CREATE MATERIALIZED VIEW ks.cf_by_v AS"
+                    "    SELECT * FROM ks.cf"
+                    "    WHERE v IS NOT NULL"
+                    "    PRIMARY KEY (v, pk);").get(),
+            {view_type::view});
+
+    check_views(
+            tools::load_schemas(
+                    dbcfg,
+                    "CREATE TABLE ks.cf (pk int PRIMARY KEY, v1 int, v2 int); "
+                    "CREATE MATERIALIZED VIEW ks.cf_by_v1 AS"
+                    "    SELECT * FROM ks.cf"
+                    "    WHERE v1 IS NOT NULL"
+                    "    PRIMARY KEY (v1, pk);"
+                    "CREATE MATERIALIZED VIEW ks.cf_by_v2 AS"
+                    "    SELECT * FROM ks.cf"
+                    "    WHERE v2 IS NOT NULL"
+                    "    PRIMARY KEY (v2, pk);").get(),
+            {view_type::view, view_type::view});
+
+    check_views(
+            tools::load_schemas(
+                    dbcfg,
+                    "CREATE TABLE ks.cf (pk int PRIMARY KEY, v int); "
+                    "CREATE MATERIALIZED VIEW IF NOT EXISTS ks.cf_by_v AS"
+                    "    SELECT * FROM ks.cf"
+                    "    WHERE v IS NOT NULL"
+                    "    PRIMARY KEY (v, pk);"
+                    "CREATE MATERIALIZED VIEW IF NOT EXISTS ks.cf_by_v AS"
+                    "    SELECT * FROM ks.cf"
+                    "    WHERE v IS NOT NULL"
+                    "    PRIMARY KEY (v, pk);").get(),
+            {view_type::view});
+};
+
+SEASTAR_THREAD_TEST_CASE(test_index) {
+    db::config dbcfg;
+
+    check_views(
+            tools::load_schemas(
+                dbcfg,
+                "CREATE TABLE ks.cf (pk int PRIMARY KEY, v int); "
+                "CREATE INDEX cf_by_v ON ks.cf (v);").get(),
+            {view_type::index});
+
+    check_views(
+            tools::load_schemas(
+                dbcfg,
+                "CREATE TABLE ks.cf (pk int PRIMARY KEY, v int); "
+                "CREATE INDEX ON ks.cf (v);").get(),
+            {view_type::index});
+
+    check_views(
+            tools::load_schemas(
+                dbcfg,
+                "CREATE TABLE ks.cf (pk int PRIMARY KEY, v1 int, v2 int); "
+                "CREATE INDEX cf_by_v1 ON ks.cf (v1);"
+                "CREATE INDEX cf_by_v2 ON ks.cf (v2);").get(),
+            {view_type::index, view_type::index});
+
+    check_views(
+            tools::load_schemas(
+                dbcfg,
+                "CREATE TABLE ks.cf (pk int PRIMARY KEY, v1 int, v2 int); "
+                "CREATE INDEX ON ks.cf (v1);"
+                "CREATE INDEX ON ks.cf (v2);").get(),
+            {view_type::index, view_type::index});
+
+    check_views(
+            tools::load_schemas(
+                dbcfg,
+                "CREATE TABLE ks.cf (pk int PRIMARY KEY, v int); "
+                "CREATE INDEX IF NOT EXISTS cf_by_v ON ks.cf (v);"
+                "CREATE INDEX IF NOT EXISTS cf_by_v ON ks.cf (v);").get(),
+            {view_type::index});
+
+    check_views(
+            tools::load_schemas(
+                dbcfg,
+                "CREATE TABLE ks.cf (pk int PRIMARY KEY, v int); "
+                "CREATE INDEX IF NOT EXISTS ON ks.cf (v);"
+                "CREATE INDEX IF NOT EXISTS ON ks.cf (v);").get(),
+            {view_type::index});
+}
+
+SEASTAR_THREAD_TEST_CASE(test_mv_index) {
+    db::config dbcfg;
+
+    check_views(
+            tools::load_schemas(
+                    dbcfg,
+                    "CREATE TABLE ks.cf (pk int PRIMARY KEY, v1 int, v2 int); "
+                    "CREATE MATERIALIZED VIEW ks.cf_by_v1 AS"
+                    "    SELECT * FROM ks.cf"
+                    "    WHERE v1 IS NOT NULL"
+                    "    PRIMARY KEY (v1, pk);"
+                    "CREATE INDEX ON ks.cf (v2);"
+                    "CREATE MATERIALIZED VIEW ks.cf_by_v2 AS"
+                    "    SELECT * FROM ks.cf"
+                    "    WHERE v2 IS NOT NULL"
+                    "    PRIMARY KEY (v2, pk);"
+                    "CREATE INDEX ON ks.cf (v1);").get(),
+            {view_type::view, view_type::index, view_type::view, view_type::index});
 }
