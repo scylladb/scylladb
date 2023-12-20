@@ -18,6 +18,7 @@ import sys
 import tempfile
 import textwrap
 from distutils.spawn import find_executable
+from typing import NamedTuple
 
 outdir = 'build'
 
@@ -2412,17 +2413,21 @@ def create_build_system(args):
     generate_compdb('compile_commands.json', ninja, args.buildfile, selected_modes)
 
 
+class BuildType(NamedTuple):
+    build_by_default: bool
+
+
 def configure_using_cmake(args):
     # all supported build modes, and if they are built by default if selected
-    build_by_default = {'debug': True,
-                        'release': True,
-                        'dev': True,
-                        'sanitize': False,
-                        'coverage': False}
-    selected_modes = args.selected_modes or build_by_default.keys()
+    build_modes = {'debug': BuildType(True),
+                   'release': BuildType(True),
+                   'dev': BuildType(True),
+                   'sanitize': BuildType(False),
+                   'coverage': BuildType(False)}
+    selected_modes = args.selected_modes or build_modes.keys()
     selected_configs = ';'.join(mode.capitalize() for mode in selected_modes)
     default_configs = ';'.join(mode.capitalize() for mode in selected_modes
-                               if build_by_default[mode])
+                               if build_modes[mode].build_by_default)
 
     settings = {
         'CMAKE_CONFIGURATION_TYPES': selected_configs,
