@@ -68,11 +68,11 @@ struct keyspace {
 };
 
 struct table {
-    keyspace& ks;
+    const keyspace& ks;
     schema_ptr schema;
     secondary_index::secondary_index_manager secondary_idx_man;
 
-    table(data_dictionary_impl& impl, keyspace& ks, schema_ptr schema);
+    table(data_dictionary_impl& impl, const keyspace& ks, schema_ptr schema);
     table(table&&) = delete;
 };
 
@@ -202,7 +202,7 @@ public:
     }
 };
 
-table::table(data_dictionary_impl& impl, keyspace& ks, schema_ptr schema) :
+table::table(data_dictionary_impl& impl, const keyspace& ks, schema_ptr schema) :
     ks(ks), schema(std::move(schema)), secondary_idx_man(impl.wrap(*this))
 { }
 
