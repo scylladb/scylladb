@@ -80,7 +80,7 @@ static sstring_view table_status_to_sstring(table_status tbl_status) {
     return "UNKNOWN";
 }
 
-static lw_shared_ptr<keyspace_metadata> create_keyspace_metadata(std::string_view keyspace_name, service::storage_proxy& sp, gms::gossiper& gossiper, api::timestamp_type);
+static lw_shared_ptr<keyspace_metadata> create_keyspace_metadata(std::string_view keyspace_name, service::storage_proxy& sp, gms::gossiper& gossiper, api::timestamp_type, const std::map<sstring, sstring>& tags_map);
 
 static map_type attrs_type() {
     static thread_local auto t = map_type_impl::get_instance(utf8_type, bytes_type, true);
@@ -1002,6 +1002,8 @@ static future<executor::request_return_type> create_table_on_shard0(tracing::tra
             if  (!range_key.empty() && range_key != view_hash_key && range_key != view_range_key) {
                 add_column(view_builder, range_key, attribute_definitions, column_kind::clustering_key);
             }
+            // GSIs have no tags:
+            view_builder.add_extension(db::tags_extension::NAME, ::make_shared<db::tags_extension>());
             sstring where_clause = format("{} IS NOT NULL", cql3::util::maybe_quote(view_hash_key));
             if (!view_range_key.empty()) {
                 where_clause = format("{} AND {} IS NOT NULL", where_clause,
@@ -1066,6 +1068,11 @@ static future<executor::request_return_type> create_table_on_shard0(tracing::tra
                     cql3::util::maybe_quote(view_range_key));
             }
             where_clauses.push_back(std::move(where_clause));
+            // LSIs have no tags, but Scylla's "synchronous_updates" feature
+            // (which an LSIs need), is actually implemented as a tag so we
+            // need to add it here:
+            std::map<sstring, sstring> tags_map = {{db::SYNCHRONOUS_VIEW_UPDATES_TAG_KEY, "true"}};
+            view_builder.add_extension(db::tags_extension::NAME, ::make_shared<db::tags_extension>(tags_map));
             view_builders.emplace_back(std::move(view_builder));
         }
     }
@@ -1112,7 +1119,6 @@ static future<executor::request_return_type> create_table_on_shard0(tracing::tra
         }
         const bool include_all_columns = true;
         view_builder.with_view_info(*schema, include_all_columns, *where_clause_it);
-        view_builder.add_extension(db::tags_extension::NAME, ::make_shared<db::tags_extension>());
         ++where_clause_it;
     }
 
@@ -1121,7 +1127,7 @@ static future<executor::request_return_type> create_table_on_shard0(tracing::tra
     auto group0_guard = co_await mm.start_group0_operation();
     auto ts = group0_guard.write_timestamp();
     std::vector<mutation> schema_mutations;
-    auto ksm = create_keyspace_metadata(keyspace_name, sp, gossiper, ts);
+    auto ksm = create_keyspace_metadata(keyspace_name, sp, gossiper, ts, tags_map);
     try {
         schema_mutations = service::prepare_new_keyspace_announcement(sp.local_db(), ksm, ts);
     } catch (exceptions::already_exists_exception&) {
@@ -1135,8 +1141,18 @@ static future<executor::request_return_type> create_table_on_shard0(tracing::tra
     }
     co_await service::prepare_new_column_family_announcement(schema_mutations, sp, *ksm, schema, ts);
     for (schema_builder& view_builder : view_builders) {
+        view_ptr view(view_builder.build());
         db::schema_tables::add_table_or_view_to_schema_mutation(
-            view_ptr(view_builder.build()), ts, true, schema_mutations);
+            view, ts, true, schema_mutations);
+        // add_table_or_view_to_schema_mutation() is a low-level function that
+        // doesn't call the callbacks that prepare_new_view_announcement()
+        // calls. So we need to call this callback here :-( If we don't, among
+        // other things *tablets* will not be created for the new view.
+        // These callbacks need to be called in a Seastar thread.
+        co_await seastar::async([&sp, &ksm, &view, &schema_mutations, ts] {
+            return sp.local_db().get_notifier().before_create_column_family(*ksm, *view, schema_mutations, ts);
+        });
+
     }
     co_await mm.announce(std::move(schema_mutations), std::move(group0_guard), format("alternator-executor: create {} table", table_name));
 
@@ -4495,7 +4511,7 @@ future<executor::request_return_type> executor::describe_continuous_backups(clie
 // of nodes in the cluster: A cluster with 3 or more live nodes, gets RF=3.
 // A smaller cluster (presumably, a test only), gets RF=1. The user may
 // manually create the keyspace to override this predefined behavior.
-static lw_shared_ptr<keyspace_metadata> create_keyspace_metadata(std::string_view keyspace_name, service::storage_proxy& sp, gms::gossiper& gossiper, api::timestamp_type ts) {
+static lw_shared_ptr<keyspace_metadata> create_keyspace_metadata(std::string_view keyspace_name, service::storage_proxy& sp, gms::gossiper& gossiper, api::timestamp_type ts, const std::map<sstring, sstring>& tags_map) {
     int endpoint_count = gossiper.num_endpoints();
     int rf = 3;
     if (endpoint_count < rf) {
@@ -4504,6 +4520,18 @@ static lw_shared_ptr<keyspace_metadata> create_keyspace_metadata(std::string_vie
                 keyspace_name, rf, endpoint_count);
     }
     auto opts = get_network_topology_options(sp, gossiper, rf);
+
+    // Tablets are not yet enabled by default on Alternator tables, because of
+    // missing support for CDC (see issue #16313). Until then, allow
+    // requesting tablets at table-creation time by supplying following tag,
+    // with an integer value. This is useful for testing Tablet support in
+    // Alternator even before it is ready for prime time.
+    // If we make this tag a permanent feature, it will get a "system:" prefix -
+    // until then we give it the "experimental:" prefix to not commit to it.
+    static constexpr auto INITIAL_TABLETS_TAG_KEY = "experimental:initial_tablets";
+    if (tags_map.contains(INITIAL_TABLETS_TAG_KEY)) {
+        opts.emplace("initial_tablets", tags_map.at(INITIAL_TABLETS_TAG_KEY));
+    }
 
     return keyspace_metadata::new_keyspace(keyspace_name, "org.apache.cassandra.locator.NetworkTopologyStrategy", std::move(opts), true);
 }
