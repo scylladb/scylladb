@@ -56,6 +56,7 @@ struct database {
 
     database(const db::config& cfg, gms::feature_service& features) : cfg(cfg), features(features)
     { }
+    database(database&&) = delete;
 };
 
 struct keyspace {
@@ -63,6 +64,7 @@ struct keyspace {
 
     explicit keyspace(lw_shared_ptr<keyspace_metadata> metadata) : metadata(std::move(metadata))
     { }
+    keyspace(keyspace&&) = delete;
 };
 
 struct table {
@@ -71,6 +73,7 @@ struct table {
     secondary_index::secondary_index_manager secondary_idx_man;
 
     table(data_dictionary_impl& impl, keyspace& ks, schema_ptr schema);
+    table(table&&) = delete;
 };
 
 class data_dictionary_impl : public data_dictionary::impl {
