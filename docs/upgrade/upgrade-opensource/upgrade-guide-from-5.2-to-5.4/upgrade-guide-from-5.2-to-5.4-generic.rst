@@ -117,6 +117,21 @@ node before validating that the node you upgraded is up and running the new vers
   or running repairs.
 * Not to apply schema changes.
 
+**After** the upgrade, you need to verify that Raft was successfully initiated in 
+your cluster. You can skip this step only in either of the following cases:
+
+* The ``consistent_cluster_management`` option was enabled in a previous 
+  ScyllaDB version.
+* You disabled the ``consistent_cluster_management`` option before upgrading 
+  to |NEW_VERSION|, as described in the note in the *Before You Upgrade 
+  ScyllaDB* section. 
+  
+Otherwise, as soon as every node has been upgraded to the new version, 
+the cluster will start a procedure that initializes the Raft algorithm for 
+consistent cluster metadata management. You must then 
+:ref:`verify <validate-raft-setup-enabled-default-5.4>` that the Raft 
+initialization procedure has successfully finished.
+
 Upgrade Steps
 =============
 
@@ -248,6 +263,48 @@ Validate
 Once you are sure the node upgrade was successful, move to the next node in the cluster.
 
 See |Scylla_METRICS|_ for more information.
+
+After Upgrading Every Node
+==============================
+
+This section applies to upgrades where Raft is initialized for the first time 
+in the cluster, which in |NEW_VERSION| happens by default.
+
+You can skip this step only in either of the following cases:
+
+* The ``consistent_cluster_management`` option was enabled in a previous 
+  ScyllaDB version (i.e., Raft was enabled in a version prior to 5.4).
+* You disabled the ``consistent_cluster_management`` option before upgrading 
+  to 5.4, as described in the note in the Before You Upgrade ScyllaDB section 
+  (i.e., you prevented Raft from being enabled in 5.4).
+
+.. _validate-raft-setup-enabled-default-5.4:
+
+Validate Raft Setup
+------------------------
+
+Enabling Raft causes the ScyllaDB cluster to start an internal Raft 
+initialization procedure as soon as every node is upgraded to the new version. 
+The goal of that procedure is to initialize data structures used by the Raft 
+algorithm to consistently manage cluster-wide metadata, such as table schemas.
+
+Assuming you performed the rolling upgrade procedure correctly (in particular, 
+ensuring that the schema is synchronized on every step), and if there are no 
+problems with cluster connectivity, that internal procedure should take a few 
+seconds to finish. However, the procedure requires full cluster availability.
+If one of the nodes fails before the procedure finishes (for example, due to 
+a hardware problem), the process may get stuck, which may prevent schema or 
+topology changes in your cluster.
+
+Therefore, following the rolling upgrade, you must verify that the internal 
+Raft initialization procedure has finished successfully by checking the logs 
+of every ScyllaDB node. If the process gets stuck, manual intervention is 
+required.
+
+Refer to the 
+:ref:`Verifying that the internal Raft upgrade procedure finished successfully <verify-raft-procedure>` 
+section for instructions on verifying that the procedure was successful and 
+proceeding if it gets stuck.
 
 Rollback Procedure
 ==================
