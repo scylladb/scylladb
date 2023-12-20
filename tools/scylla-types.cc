@@ -24,6 +24,8 @@ namespace bpo = boost::program_options;
 
 namespace {
 
+const auto app_name = "types";
+
 using type_variant = std::variant<
         data_type,
         compound_type<allow_prefixes::yes>,
@@ -348,9 +350,9 @@ namespace tools {
 
 int scylla_types_main(int argc, char** argv) {
     auto description_template =
-R"(scylla-types - a command-line tool to examine values belonging to scylla types.
+R"(scylla-{} - a command-line tool to examine values belonging to scylla types.
 
-Usage: scylla types {{action}} [--option1] [--option2] ... {{hex_value1}} [{{hex_value2}}] ...
+Usage: scylla {} {{action}} [--option1] [--option2] ... {{hex_value1}} [{{hex_value2}}] ...
 
 Allows examining raw values obtained from e.g. sstables, logs or coredumps and
 executing various actions on them. Values should be provided in hex form,
@@ -373,8 +375,8 @@ $ scylla types {{action}} --help
 
     const auto operations = boost::copy_range<std::vector<operation>>(operations_with_func | boost::adaptors::map_keys);
     tool_app_template::config app_cfg{
-        .name = "scylla-types",
-        .description = format(description_template, boost::algorithm::join(operations | boost::adaptors::transformed(
+        .name = app_name,
+        .description = format(description_template, app_name, app_name, boost::algorithm::join(operations | boost::adaptors::transformed(
                 [] (const operation& op) { return format("* {} - {}", op.name(), op.summary()); } ), "\n")),
         .operations = std::move(operations),
         .global_options = &global_options,

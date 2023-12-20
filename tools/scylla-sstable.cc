@@ -52,9 +52,9 @@ using operation_func = void(*)(schema_ptr, reader_permit, const std::vector<ssta
 
 namespace {
 
-const auto app_name = "scylla-sstable";
+const auto app_name = "sstable";
 
-logging::logger sst_log(app_name);
+logging::logger sst_log(format("scylla-{}", app_name));
 
 db::nop_large_data_handler large_data_handler;
 
@@ -2870,7 +2870,7 @@ namespace tools {
 
 int scylla_sstable_main(int argc, char** argv) {
     constexpr auto description_template =
-R"(scylla-sstable - a multifunctional command-line tool to examine the content of sstables.
+R"(scylla-{} - a multifunctional command-line tool to examine the content of sstables.
 
 Usage: scylla sstable {{operation}} [--option1] [--option2] ... [{{sstable_path1}}] [{{sstable_path2}}] ...
 
@@ -2962,10 +2962,10 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
     const auto operations = boost::copy_range<std::vector<operation>>(operations_with_func | boost::adaptors::map_keys);
     tool_app_template::config app_cfg{
             .name = app_name,
-            .description = format(description_template, app_name, boost::algorithm::join(operations | boost::adaptors::transformed([] (const auto& op) {
+            .description = format(description_template, app_name, sst_log.name(), boost::algorithm::join(operations | boost::adaptors::transformed([] (const auto& op) {
                 return format("* {}: {}", op.name(), op.summary());
             }), "\n")),
-            .logger_name = app_name,
+            .logger_name = sst_log.name(),
             .lsa_segment_pool_backend_size_mb = 100,
             .operations = std::move(operations),
             .global_options = &global_options,

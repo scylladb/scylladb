@@ -5,6 +5,7 @@
 #
 
 from rest_api_mock import expected_request
+import subprocess
 
 
 def test_jmx_compatibility_args(nodetool, scylla_only):
@@ -29,3 +30,13 @@ def test_jmx_compatibility_args(nodetool, scylla_only):
              expected_requests=dummy_request)
     nodetool("compact", "system_schema", "--print-port",
              expected_requests=dummy_request)
+
+
+def test_nodetool_no_args(nodetool_path, scylla_only):
+    res = subprocess.run([nodetool_path, "nodetool"], capture_output=True, text=True)
+
+    assert res.stdout == ""
+    assert res.stderr == """\
+Usage: scylla nodetool OPERATION [OPTIONS] ...
+Try `scylla nodetool --help` for more information.
+"""
