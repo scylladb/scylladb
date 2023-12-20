@@ -19,6 +19,8 @@
 #include "cql3/statements/create_keyspace_statement.hh"
 #include "cql3/statements/create_table_statement.hh"
 #include "cql3/statements/create_type_statement.hh"
+#include "cql3/statements/create_view_statement.hh"
+#include "cql3/statements/create_index_statement.hh"
 #include "cql3/statements/update_statement.hh"
 #include "db/cql_type_parser.hh"
 #include "db/config.hh"
@@ -161,12 +163,21 @@ private:
         static const std::vector<view_ptr> empty;
         return empty;
     }
-    virtual sstring get_available_index_name(data_dictionary::database db, std::string_view ks_name, std::string_view table_name,
+    virtual sstring get_available_index_name(data_dictionary::database db, std::string_view ks_name, std::string_view cf_name,
             std::optional<sstring> index_name_root) const override {
-        throw std::bad_function_call();
+        auto has_schema = [&] (std::string_view ks_name, std::string_view table_name) {
+            const auto& tables = unwrap(db).tables;
+            return std::find_if(tables.begin(), tables.end(), [&] (const table& t) {
+                return t.schema->ks_name() == ks_name && t.schema->cf_name() == table_name;
+            }) != tables.end();
+        };
+        return secondary_index::get_available_index_name(ks_name, cf_name, index_name_root, existing_index_names(db, ks_name), has_schema);
     }
     virtual std::set<sstring> existing_index_names(data_dictionary::database db, std::string_view ks_name, std::string_view cf_to_exclude = {}) const override {
-        return {};
+        auto tables = boost::copy_range<std::vector<schema_ptr>>(unwrap(db).tables
+                | boost::adaptors::filtered([ks_name] (const table& t) { return t.schema->ks_name() == ks_name; })
+                | boost::adaptors::transformed([] (const table& t) { return t.schema; }));
+        return secondary_index::existing_index_names(tables, cf_to_exclude);
     }
     virtual schema_ptr find_indexed_table(data_dictionary::database db, std::string_view ks_name, std::string_view index_name) const override {
         return {};
@@ -287,6 +298,28 @@ std::vector<schema_ptr> do_load_schemas(const db::config& cfg, std::string_view 
                 schema = b.build();
             }
             real_db.tables.emplace_back(dd_impl, dd_impl.unwrap(ks), std::move(schema), true);
+        } else if (auto p = dynamic_cast<cql3::statements::create_view_statement*>(statement)) {
+            auto&& [view, warnings] = p->prepare_view(db);
+            auto it = std::find_if(real_db.tables.begin(), real_db.tables.end(), [&] (const table& t) { return t.schema->ks_name() == view->ks_name() && t.schema->cf_name() == view->cf_name(); });
+            if (it != real_db.tables.end()) {
+                continue; // view already exists
+            }
+            real_db.tables.emplace_back(dd_impl, dd_impl.unwrap(ks), view, true);
+        } else if (auto p = dynamic_cast<cql3::statements::create_index_statement*>(statement)) {
+            auto res = p->build_index_schema(db);
+            if (!res) {
+                continue; // index already exists
+            }
+            auto [new_base_schema, index] = *res;
+            auto it = std::find_if(real_db.tables.begin(), real_db.tables.end(), [&] (const table& t) { return t.schema->id() == new_base_schema->id(); });
+            if (it == real_db.tables.end()) { // shouldn't happen but let's handle it
+                throw std::runtime_error(fmt::format("tools::do_load_schemas(): failed to look up base table {}.{}, while creating index on it", new_base_schema->ks_name(), new_base_schema->cf_name()));
+            }
+            it->schema = std::move(new_base_schema);
+            it->secondary_idx_man.reload();
+            const bool new_token_column_computation = db.features().correct_idx_token_in_secondary_index;
+            auto view = it->secondary_idx_man.create_view_for_index(index, new_token_column_computation);
+            real_db.tables.emplace_back(dd_impl, dd_impl.unwrap(ks), view, true);
         } else if (auto p = dynamic_cast<cql3::statements::update_statement*>(statement)) {
             if (p->keyspace() != db::schema_tables::NAME && p->column_family() != db::schema_tables::DROPPED_COLUMNS) {
                 throw std::runtime_error(fmt::format("tools::do_load_schemas(): expected modification statement to be against {}.{}, but it is against {}.{}",
