@@ -73,8 +73,7 @@ create_index_statement::validate(query_processor& qp, const service::client_stat
     _properties->validate();
 }
 
-std::vector<::shared_ptr<index_target>> create_index_statement::validate_while_executing(query_processor& qp) const {
-    auto db = qp.db();
+std::vector<::shared_ptr<index_target>> create_index_statement::validate_while_executing(data_dictionary::database db) const {
     auto schema = validation::validate_column_family(db, keyspace(), column_family());
 
     if (schema->is_counter()) {
@@ -327,10 +326,9 @@ void create_index_statement::validate_targets_for_multi_column_index(std::vector
     }
 }
 
-schema_ptr create_index_statement::build_index_schema(query_processor& qp) const {
-    auto targets = validate_while_executing(qp);
+schema_ptr create_index_statement::build_index_schema(data_dictionary::database db) const {
+    auto targets = validate_while_executing(db);
 
-    data_dictionary::database db = qp.db();
     auto schema = db.find_schema(keyspace(), column_family());
 
     sstring accepted_name = _index_name;
@@ -378,7 +376,7 @@ schema_ptr create_index_statement::build_index_schema(query_processor& qp) const
 future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>>
 create_index_statement::prepare_schema_mutations(query_processor& qp, api::timestamp_type ts) const {
     using namespace cql_transport;
-    auto schema = build_index_schema(qp);
+    auto schema = build_index_schema(qp.db());
 
     ::shared_ptr<event::schema_change> ret;
     std::vector<mutation> m;
