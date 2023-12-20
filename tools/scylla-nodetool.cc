@@ -25,9 +25,9 @@ using namespace tools::utils;
 
 namespace {
 
-const auto app_name = "scylla-nodetool";
+const auto app_name = "nodetool";
 
-logging::logger nlog(app_name);
+logging::logger nlog(format("scylla-{}", app_name));
 
 class scylla_rest_client {
     sstring _host;
@@ -170,7 +170,7 @@ void help_operation(const tool_app_template::config& cfg, const bpo::variables_m
         // This will be addressed once https://github.com/scylladb/seastar/pull/1762
         // goes in.
 
-        bpo::options_description opts_desc(fmt::format("{} options", app_name));
+        bpo::options_description opts_desc(fmt::format("scylla-{} options", app_name));
         opts_desc.add_options()
                 ("help,h", "show help message")
                 ;
@@ -519,7 +519,7 @@ int scylla_nodetool_main(int argc, char** argv) {
     nlog.debug("replacement argv: {}", replacement_argv);
 
     constexpr auto description_template =
-R"(scylla-nodetool - a command-line tool to administer local or remote ScyllaDB nodes
+R"(scylla-{} - a command-line tool to administer local or remote ScyllaDB nodes
 
 # Operations
 
@@ -536,10 +536,10 @@ For more information, see: https://opensource.docs.scylladb.com/stable/operating
     const auto operations = boost::copy_range<std::vector<operation>>(get_operations_with_func() | boost::adaptors::map_keys);
     tool_app_template::config app_cfg{
             .name = app_name,
-            .description = format(description_template, app_name, boost::algorithm::join(operations | boost::adaptors::transformed([] (const auto& op) {
+            .description = format(description_template, app_name, nlog.name(), boost::algorithm::join(operations | boost::adaptors::transformed([] (const auto& op) {
                 return format("* {}: {}", op.name(), op.summary());
             }), "\n")),
-            .logger_name = app_name,
+            .logger_name = nlog.name(),
             .lsa_segment_pool_backend_size_mb = 1,
             .operations = std::move(operations),
             .global_options = &global_options};

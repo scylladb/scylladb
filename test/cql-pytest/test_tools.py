@@ -843,3 +843,13 @@ def test_scrub_validate_mode(scylla_path, scrub_workdir, scrub_schema_file, scru
 
         # Check that validate did not move the bad sstable into qurantine
         assert os.path.exists(scrub_bad_sstable)
+
+
+def test_scylla_sstable_no_args(scylla_path):
+    res = subprocess.run([scylla_path, "sstable"], capture_output=True, text=True)
+
+    assert res.stdout == ""
+    assert res.stderr == """\
+Usage: scylla sstable OPERATION [OPTIONS] ...
+Try `scylla sstable --help` for more information.
+"""
