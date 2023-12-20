@@ -49,12 +49,12 @@ struct table;
 
 struct database {
     db::extensions extensions;
-    db::config& cfg;
+    const db::config& cfg;
     gms::feature_service& features;
     std::list<keyspace> keyspaces;
     std::list<table> tables;
 
-    database(db::config& cfg, gms::feature_service& features) : cfg(cfg), features(features)
+    database(const db::config& cfg, gms::feature_service& features) : cfg(cfg), features(features)
     { }
 };
 
@@ -209,12 +209,8 @@ sstring read_file(std::filesystem::path path) {
     return util::read_entire_stream_contiguous(fstream).get();
 }
 
-std::vector<schema_ptr> do_load_schemas(std::string_view schema_str) {
+std::vector<schema_ptr> do_load_schemas(const db::config& cfg, std::string_view schema_str) {
     cql3::cql_stats cql_stats;
-
-    db::config cfg;
-    cfg.enable_cache(false);
-    cfg.volatile_system_keyspace_for_testing(true);
 
     gms::feature_service feature_service(gms::feature_config_from_db_config(cfg));
     feature_service.enable(feature_service.supported_feature_set()).get();
@@ -334,13 +330,12 @@ std::vector<schema_ptr> do_load_schemas(std::string_view schema_str) {
 
 struct sstable_manager_service {
     db::nop_large_data_handler large_data_handler;
-    db::config dbcfg;
     gms::feature_service feature_service;
     cache_tracker tracker;
     sstables::directory_semaphore dir_sem;
     sstables::sstables_manager sst_man;
 
-    explicit sstable_manager_service()
+    explicit sstable_manager_service(const db::config& dbcfg)
         : feature_service(gms::feature_config_from_db_config(dbcfg))
         , dir_sem(1)
         , sst_man("schema_loader", large_data_handler, dbcfg, feature_service, tracker, memory::stats().total_memory(), dir_sem, []{ return locator::host_id{}; }) {
@@ -516,12 +511,12 @@ std::unordered_map<schema_ptr, std::string> get_schema_table_directories(std::fi
     return schema_table_table_dir;
 }
 
-schema_ptr do_load_schema_from_schema_tables(std::filesystem::path scylla_data_path, std::string_view keyspace, std::string_view table) {
+schema_ptr do_load_schema_from_schema_tables(const db::config& dbcfg, std::filesystem::path scylla_data_path, std::string_view keyspace, std::string_view table) {
     reader_concurrency_semaphore rcs_sem(reader_concurrency_semaphore::no_limits{}, __FUNCTION__, reader_concurrency_semaphore::register_metrics::no);
     auto stop_semaphore = deferred_stop(rcs_sem);
 
     sharded<sstable_manager_service> sst_man;
-    sst_man.start().get();
+    sst_man.start(std::ref(dbcfg)).get();
     auto stop_sst_man_service = deferred_stop(sst_man);
 
     auto schema_table_table_dir = get_schema_table_directories(scylla_data_path);
@@ -582,7 +577,6 @@ schema_ptr do_load_schema_from_schema_tables(std::filesystem::path scylla_data_p
         }
     }
 
-    db::config dbcfg;
     auto user_type_storage = std::make_shared<single_keyspace_user_types_storage>(std::move(utm));
     gms::feature_service features(gms::feature_config_from_db_config(dbcfg));
     db::schema_ctxt ctxt(dbcfg, user_type_storage, features);
@@ -596,15 +590,15 @@ schema_ptr do_load_schema_from_schema_tables(std::filesystem::path scylla_data_p
 
 namespace tools {
 
-future<std::vector<schema_ptr>> load_schemas(std::string_view schema_str) {
-    return async([schema_str] () mutable {
-        return do_load_schemas(schema_str);
+future<std::vector<schema_ptr>> load_schemas(const db::config& dbcfg, std::string_view schema_str) {
+    return async([&dbcfg, schema_str] () mutable {
+        return do_load_schemas(dbcfg, schema_str);
     });
 }
 
-future<schema_ptr> load_one_schema_from_file(std::filesystem::path path) {
-    return async([path] () mutable {
-        auto schemas = do_load_schemas(read_file(path));
+future<schema_ptr> load_one_schema_from_file(const db::config& dbcfg, std::filesystem::path path) {
+    return async([&dbcfg, path] () mutable {
+        auto schemas = do_load_schemas(dbcfg, read_file(path));
         if (schemas.size() != 1) {
             throw std::runtime_error(fmt::format("Schema file {} expected to contain exactly 1 schema, actually has {}", path.native(), schemas.size()));
         }
@@ -612,9 +606,7 @@ future<schema_ptr> load_one_schema_from_file(std::filesystem::path path) {
     });
 }
 
-schema_ptr load_system_schema(std::string_view keyspace, std::string_view table) {
-    db::config cfg;
-    cfg.experimental_features.set(db::experimental_features_t::all());
+schema_ptr load_system_schema(const db::config& cfg, std::string_view keyspace, std::string_view table) {
     const std::unordered_map<std::string_view, std::vector<schema_ptr>> schemas{
         {db::schema_tables::NAME, db::schema_tables::all_tables(db::schema_features::full())},
         {db::system_keyspace::NAME, db::system_keyspace::all_tables(cfg)},
@@ -634,9 +626,9 @@ schema_ptr load_system_schema(std::string_view keyspace, std::string_view table)
     return *tb_it;
 }
 
-future<schema_ptr> load_schema_from_schema_tables(std::filesystem::path scylla_data_path, std::string_view keyspace, std::string_view table) {
-    return async([=] () mutable {
-        return do_load_schema_from_schema_tables(scylla_data_path, keyspace, table);
+future<schema_ptr> load_schema_from_schema_tables(const db::config& cfg, std::filesystem::path scylla_data_path, std::string_view keyspace, std::string_view table) {
+    return async([=, &cfg] () mutable {
+        return do_load_schema_from_schema_tables(cfg, scylla_data_path, keyspace, table);
     });
 }
 

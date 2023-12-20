@@ -200,7 +200,7 @@ std::optional<schema_with_source> try_load_schema_from_user_provided_source(cons
         if (!app_config["schema-file"].defaulted()) {
             schema_source_opt = "schema-file";
             const auto schema_file_path = std::filesystem::path(app_config["schema-file"].as<sstring>());
-            return schema_with_source{.schema = tools::load_one_schema_from_file(schema_file_path).get(),
+            return schema_with_source{.schema = tools::load_one_schema_from_file(cfg, schema_file_path).get(),
                 .source = schema_source_opt,
                 .path = schema_file_path,
                 .obtained_from = "--schema-file parameter"};
@@ -209,14 +209,14 @@ std::optional<schema_with_source> try_load_schema_from_user_provided_source(cons
         const auto [keyspace_name, table_name] = get_keyspace_and_table_options(app_config);
         if (app_config.contains("system-schema")) {
             schema_source_opt = "system-schema";
-            return schema_with_source{.schema = tools::load_system_schema(keyspace_name, table_name),
+            return schema_with_source{.schema = tools::load_system_schema(cfg, keyspace_name, table_name),
                 .source = schema_source_opt,
                 .obtained_from = "--system-schema parameter"};
         }
         if (app_config.contains("scylla-data-dir")) {
             schema_source_opt = "schema-tables";
             const auto data_dir_path = std::filesystem::path(app_config["scylla-data-dir"].as<sstring>());
-            return schema_with_source{.schema = tools::load_schema_from_schema_tables(data_dir_path, keyspace_name, table_name).get(),
+            return schema_with_source{.schema = tools::load_schema_from_schema_tables(cfg, data_dir_path, keyspace_name, table_name).get(),
                 .source= schema_source_opt,
                 .path = data_dir_path,
                 .obtained_from = "--scylla-data-dir parameter"};
@@ -224,7 +224,7 @@ std::optional<schema_with_source> try_load_schema_from_user_provided_source(cons
         if (app_config.contains("scylla-yaml-file")) {
             schema_source_opt = "schema-tables";
             const auto data_dir_path = std::filesystem::path(cfg.data_file_directories()[0]);
-            return schema_with_source{.schema = tools::load_schema_from_schema_tables(data_dir_path, keyspace_name, table_name).get(),
+            return schema_with_source{.schema = tools::load_schema_from_schema_tables(cfg, data_dir_path, keyspace_name, table_name).get(),
                 .source = schema_source_opt,
                 .path = data_dir_path,
                 .obtained_from = "--scylla-yaml-file parameter"};
@@ -241,7 +241,7 @@ std::optional<schema_with_source> try_load_schema_from_user_provided_source(cons
 std::optional<schema_with_source> try_load_schema_autodetect(const bpo::variables_map& app_config, db::config& cfg) {
     try {
         const auto schema_file_path = std::filesystem::path(app_config["schema-file"].as<sstring>());
-        return schema_with_source{.schema = tools::load_one_schema_from_file(schema_file_path).get(),
+        return schema_with_source{.schema = tools::load_one_schema_from_file(cfg, schema_file_path).get(),
             .source = "schema-file",
             .path = schema_file_path,
             .obtained_from = "--schema-file parameters (default value)"};
@@ -252,7 +252,7 @@ std::optional<schema_with_source> try_load_schema_autodetect(const bpo::variable
     if (app_config.count("sstables")) {
         try {
             auto info = extract_from_sstable_path(app_config);
-            return schema_with_source{.schema = tools::load_schema_from_schema_tables(info.data_dir_path, info.keyspace, info.table).get(),
+            return schema_with_source{.schema = tools::load_schema_from_schema_tables(cfg, info.data_dir_path, info.keyspace, info.table).get(),
                 .source = "schema-tables",
                 .path = info.data_dir_path,
                 .obtained_from = format("sstable path ({})", info.sstable_path)};
@@ -266,7 +266,7 @@ std::optional<schema_with_source> try_load_schema_autodetect(const bpo::variable
     try {
         const auto [keyspace_name, table_name] = get_keyspace_and_table_options(app_config);
         const auto data_dir_path = std::filesystem::path(cfg.data_file_directories().at(0));
-        return schema_with_source{.schema = tools::load_schema_from_schema_tables(data_dir_path, keyspace_name, table_name).get(),
+        return schema_with_source{.schema = tools::load_schema_from_schema_tables(cfg, data_dir_path, keyspace_name, table_name).get(),
             .source = "schema-tables",
             .path = data_dir_path,
             .obtained_from = "data dir"};
@@ -2996,8 +2996,12 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
             dbcfg.setup_directories();
             sst_log.debug("Successfully read scylla.yaml from {} location of {}", scylla_yaml_path_source, scylla_yaml_path);
         } else {
+            dbcfg.experimental_features.set(db::experimental_features_t::all());
             sst_log.debug("Failed to read scylla.yaml from {} location of {}, some functionality may be unavailable", scylla_yaml_path_source, scylla_yaml_path);
         }
+
+        dbcfg.enable_cache(false);
+        dbcfg.volatile_system_keyspace_for_testing(true);
 
         {
             unsigned schema_sources = 0;

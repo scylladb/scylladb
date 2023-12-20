@@ -12,6 +12,10 @@
 #include "seastarx.hh"
 #include "schema/schema.hh"
 
+namespace db {
+class config;
+}
+
 namespace tools {
 
 /// Load the schema(s) from the specified string
@@ -28,13 +32,13 @@ namespace tools {
 ///
 /// [1] Currently some global services has to be instantiated (snitch) to
 /// be able to load the schema(s), these survive the call.
-future<std::vector<schema_ptr>> load_schemas(std::string_view schema_str);
+future<std::vector<schema_ptr>> load_schemas(const db::config& dbcfg, std::string_view schema_str);
 
 /// Load exactly one schema from the specified path
 ///
 /// If the file at the specified path contains more or less then one schema,
 /// an exception will be thrown. See \ref load_schemas().
-future<schema_ptr> load_one_schema_from_file(std::filesystem::path path);
+future<schema_ptr> load_one_schema_from_file(const db::config& dbcfg, std::filesystem::path path);
 
 /// Load the system schema, with the given keyspace and table
 ///
@@ -47,7 +51,7 @@ future<schema_ptr> load_one_schema_from_file(std::filesystem::path path);
 ///
 /// Any table from said keyspaces can be loaded. The keyspaces are created with
 /// all schema and experimental features enabled.
-schema_ptr load_system_schema(std::string_view keyspace, std::string_view table);
+schema_ptr load_system_schema(const db::config& dbcfg, std::string_view keyspace, std::string_view table);
 
 /// Load the schema of the table with the designated keyspace and table name,
 /// from the system schema table sstables.
@@ -56,6 +60,6 @@ schema_ptr load_system_schema(std::string_view keyspace, std::string_view table)
 /// tries very hard to have no side-effects.
 /// The \p scylla_data_path parameter is expected to point to the scylla data
 /// directory, which is usually /var/lib/scylla/data.
-future<schema_ptr> load_schema_from_schema_tables(std::filesystem::path scylla_data_path, std::string_view keyspace, std::string_view table);
+future<schema_ptr> load_schema_from_schema_tables(const db::config& dbcfg, std::filesystem::path scylla_data_path, std::string_view keyspace, std::string_view table);
 
 } // namespace tools
