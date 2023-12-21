@@ -164,6 +164,10 @@ schema_ptr schema_registry::get_or_load(table_schema_version v, const schema_loa
     return e.get_schema();
 }
 
+void schema_registry::clear() {
+    _entries.clear();
+}
+
 schema_ptr schema_registry_entry::load(frozen_schema fs) {
     _frozen_schema = std::move(fs);
     auto s = get_schema();

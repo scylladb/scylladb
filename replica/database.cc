@@ -636,6 +636,7 @@ void database::set_format(sstables::sstable_version_types format) noexcept {
 
 database::~database() {
     _user_types->deactivate();
+    local_schema_registry().clear();
 }
 
 void database::update_version(const table_schema_version& version) {

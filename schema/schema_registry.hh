@@ -150,6 +150,12 @@ public:
     // The schema instance pointed to by the argument will be attached to the registry
     // entry and will keep it alive.
     schema_ptr learn(const schema_ptr&);
+
+    // Removes all entries from the registry. This in turn removes all dependencies
+    // on the Seastar reactor.
+    //
+    // Prerequisite: all futures from get_or_load() are resolved.
+    void clear();
 };
 
 schema_registry& local_schema_registry();

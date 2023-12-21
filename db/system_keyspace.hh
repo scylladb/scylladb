@@ -24,6 +24,7 @@
 #include "cdc/generation_id.hh"
 #include "locator/host_id.hh"
 #include "mutation/canonical_mutation.hh"
+#include "virtual_tables.hh"
 
 namespace sstables {
     struct entry_descriptor;
@@ -112,6 +113,7 @@ class system_keyspace : public seastar::peering_sharded_service<system_keyspace>
     cql3::query_processor& _qp;
     replica::database& _db;
     std::unique_ptr<local_cache> _cache;
+    virtual_tables_registry _virtual_tables_registry;
 
     static schema_ptr raft_snapshot_config();
     static schema_ptr local();
@@ -521,6 +523,7 @@ public:
     ~system_keyspace();
     future<> shutdown();
 
+    virtual_tables_registry& get_virtual_tables_registry() { return _virtual_tables_registry; }
 private:
     future<::shared_ptr<cql3::untyped_result_set>> execute_cql(const sstring& query_string, const std::initializer_list<data_value>& values);
     template <typename... Args>
