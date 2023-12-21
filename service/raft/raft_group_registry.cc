@@ -78,12 +78,12 @@ public:
 // {{{ gossiper_state_change_subscriber_proxy
 
 class gossiper_state_change_subscriber_proxy: public gms::i_endpoint_state_change_subscriber {
-    raft_address_map& _address_map;
+    raft_group_registry& _registry;
 
     void
     on_endpoint_change(gms::inet_address endpoint, raft::server_id id, gms::generation_type generation) {
         rslog.debug("gossiper_state_change_subscriber_proxy::on_endpoint_change() {} {} generation={}", endpoint, id, generation);
-        _address_map.add_or_update_entry(id, endpoint, generation);
+        _registry.address_map().add_or_update_entry(id, endpoint, generation);
     }
 
     future<>
@@ -97,8 +97,8 @@ class gossiper_state_change_subscriber_proxy: public gms::i_endpoint_state_chang
     }
 
 public:
-    gossiper_state_change_subscriber_proxy(raft_address_map& address_map)
-            : _address_map(address_map)
+    gossiper_state_change_subscriber_proxy(raft_group_registry& registry)
+            : _registry(registry)
     {}
 
     virtual future<>
@@ -170,12 +170,13 @@ raft_group_registry::raft_group_registry(
         netw::messaging_service& ms, gms::gossiper& gossiper, direct_failure_detector::failure_detector& fd)
     : _ms(ms)
     , _gossiper(gossiper)
-    , _gossiper_proxy(make_shared<gossiper_state_change_subscriber_proxy>(address_map))
     , _address_map{address_map}
     , _direct_fd(fd)
     , _direct_fd_proxy(make_shared<direct_fd_proxy>(my_id))
     , _my_id(my_id)
 {
+    // Make the proxy after all other members are initialized
+    _gossiper_proxy = make_shared<gossiper_state_change_subscriber_proxy>(*this);
 }
 
 void raft_group_registry::init_rpc_verbs() {
