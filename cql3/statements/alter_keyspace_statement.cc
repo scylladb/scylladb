@@ -56,6 +56,12 @@ void cql3::statements::alter_keyspace_statement::validate(query_processor& qp, c
                 throw exceptions::invalid_request_exception(format("Cannot alter storage options: {} to {} is not supported",
                         current_options.type_string(), new_options.type_string()));
             }
+
+            auto new_ks = _attrs->as_ks_metadata_update(ks.metadata(), *qp.proxy().get_token_metadata_ptr());
+            auto new_rs = locator::abstract_replication_strategy::create_replication_strategy(new_ks->strategy_name(), new_ks->strategy_options());
+            if (new_rs->is_per_table() != ks.get_replication_strategy().is_per_table()) {
+                throw exceptions::invalid_request_exception(format("Cannot alter replication strategy vnode/tablets flavor"));
+            }
         } catch (const std::runtime_error& e) {
             throw exceptions::invalid_request_exception(e.what());
         }
