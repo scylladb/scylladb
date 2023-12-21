@@ -1552,14 +1552,14 @@ public:
     future<> apply_locally(storage_proxy::clock_type::time_point timeout, tracing::trace_state_ptr tr_state) {
         return _mutation_holder->apply_locally(*_proxy, timeout, std::move(tr_state),
             adjust_rate_limit_for_local_operation(_rate_limit_info),
-            {_effective_replication_map_ptr->get_token_metadata().get_version()});
+            storage_proxy::get_fence(*_effective_replication_map_ptr));
     }
     future<> apply_remotely(gms::inet_address ep, const inet_address_vector_replica_set& forward,
             storage_proxy::response_id_type response_id, storage_proxy::clock_type::time_point timeout,
             tracing::trace_state_ptr tr_state) {
         return _mutation_holder->apply_remotely(*_proxy, ep, forward,
             response_id, timeout, std::move(tr_state), _rate_limit_info,
-            {_effective_replication_map_ptr->get_token_metadata().get_version()});
+            storage_proxy::get_fence(*_effective_replication_map_ptr));
     }
     const schema_ptr& get_schema() const {
         return _mutation_holder->schema();
@@ -2988,6 +2988,23 @@ future<T> storage_proxy::apply_fence(future<T> future, fencing_token fence, gms:
         auto stale = apply_fence(fence, caller_address);
         return stale ? make_exception_future<T>(std::move(*stale)) : std::move(f);
     });
+}
+
+fencing_token storage_proxy::get_fence(const locator::effective_replication_map& erm) {
+    // Writes to and reads from local tables don't have to be fenced. Moreover, they shouldn't, as they
+    // can cause errors on the bootstrapping node. A specific scenario:
+    // 1. A write request on a bootstrapping node is initiated. The write handler captures the
+    // effective replication map. Let's suppose its version is 5.
+    // 2. The handler is yielded on some co_await.
+    // 3. The topology coordinator is progressing, and it doesn't wait for pending requests on this
+    // node because it's not in the list of normal nodes.
+    // 4. The topology coordinator increments the fencing version to 6 and writes it to the RAFT table.
+    // 5. The bootstrapping node processes this Raft log entry. The fence version is updated to 6.
+    // 6. The initial write handler wakes up. It sees that 6 > 5 and fails.
+    // This scenario is only possible for local writes. Non-local writes never happen on the
+    // bootstrapping node because it hasn't been published to clients yet.
+    return erm.get_replication_strategy().get_type() == locator::replication_strategy_type::local ?
+            fencing_token{} : fencing_token{erm.get_token_metadata().get_version()};
 }
 
 future<>
@@ -4821,10 +4838,6 @@ private:
         return _effective_replication_map_ptr->get_topology();
     }
 
-    fencing_token get_fence() const {
-        return {_effective_replication_map_ptr->get_token_metadata().get_version()};
-    }
-
 public:
     abstract_read_executor(schema_ptr s, lw_shared_ptr<replica::column_family> cf, shared_ptr<storage_proxy> proxy,
             locator::effective_replication_map_ptr ermp,
@@ -4853,13 +4866,14 @@ public:
 protected:
     future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>> make_mutation_data_request(lw_shared_ptr<query::read_command> cmd, gms::inet_address ep, clock_type::time_point timeout) {
         ++_proxy->get_stats().mutation_data_read_attempts.get_ep_stat(get_topology(), ep);
+        auto fence = storage_proxy::get_fence(*_effective_replication_map_ptr);
         if (_proxy->is_me(ep)) {
             tracing::trace(_trace_state, "read_mutation_data: querying locally");
-            return _proxy->apply_fence(_proxy->query_mutations_locally(_schema, cmd, _partition_range, timeout, _trace_state), get_fence(), _proxy->my_address());
+            return _proxy->apply_fence(_proxy->query_mutations_locally(_schema, cmd, _partition_range, timeout, _trace_state), fence, _proxy->my_address());
         } else {
             return _proxy->remote().send_read_mutation_data(netw::messaging_service::msg_addr{ep, 0}, timeout,
                 _trace_state, *cmd, _partition_range,
-                get_fence());
+                fence);
         }
     }
     future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>> make_data_request(gms::inet_address ep, clock_type::time_point timeout, bool want_digest) {
@@ -4867,26 +4881,28 @@ protected:
         auto opts = want_digest
                   ? query::result_options{query::result_request::result_and_digest, digest_algorithm(*_proxy)}
                   : query::result_options{query::result_request::only_result, query::digest_algorithm::none};
+        auto fence = storage_proxy::get_fence(*_effective_replication_map_ptr);
         if (_proxy->is_me(ep)) {
             tracing::trace(_trace_state, "read_data: querying locally");
-            return _proxy->apply_fence(_proxy->query_result_local(_effective_replication_map_ptr, _schema, _cmd, _partition_range, opts, _trace_state, timeout, adjust_rate_limit_for_local_operation(_rate_limit_info)), get_fence(), _proxy->my_address());
+            return _proxy->apply_fence(_proxy->query_result_local(_effective_replication_map_ptr, _schema, _cmd, _partition_range, opts, _trace_state, timeout, adjust_rate_limit_for_local_operation(_rate_limit_info)), fence, _proxy->my_address());
         } else {
             return _proxy->remote().send_read_data(netw::messaging_service::msg_addr{ep, 0}, timeout,
                 _trace_state, *_cmd, _partition_range, opts.digest_algo, _rate_limit_info,
-                get_fence());
+                fence);
         }
     }
     future<rpc::tuple<query::result_digest, api::timestamp_type, cache_temperature, std::optional<full_position>>> make_digest_request(gms::inet_address ep, clock_type::time_point timeout) {
         ++_proxy->get_stats().digest_read_attempts.get_ep_stat(get_topology(), ep);
+        auto fence = storage_proxy::get_fence(*_effective_replication_map_ptr);
         if (_proxy->is_me(ep)) {
             tracing::trace(_trace_state, "read_digest: querying locally");
             return _proxy->apply_fence(_proxy->query_result_local_digest(_effective_replication_map_ptr, _schema, _cmd, _partition_range, _trace_state,
-                        timeout, digest_algorithm(*_proxy), adjust_rate_limit_for_local_operation(_rate_limit_info)), get_fence(), _proxy->my_address());
+                        timeout, digest_algorithm(*_proxy), adjust_rate_limit_for_local_operation(_rate_limit_info)), fence, _proxy->my_address());
         } else {
             tracing::trace(_trace_state, "read_digest: sending a message to /{}", ep);
             return _proxy->remote().send_read_digest(netw::messaging_service::msg_addr{ep, 0}, timeout,
                 _trace_state, *_cmd, _partition_range, digest_algorithm(*_proxy), _rate_limit_info,
-                get_fence());
+                fence);
         }
     }
     void make_mutation_data_requests(lw_shared_ptr<query::read_command> cmd, data_resolver_ptr resolver, targets_iterator begin, targets_iterator end, clock_type::time_point timeout) {
