@@ -40,6 +40,7 @@
 #include "gms/feature_service.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "tools/schema_loader.hh"
+#include "view_info.hh"
 
 namespace {
 
@@ -641,10 +642,18 @@ future<std::vector<schema_ptr>> load_schemas(const db::config& dbcfg, std::strin
 future<schema_ptr> load_one_schema_from_file(const db::config& dbcfg, std::filesystem::path path) {
     return async([&dbcfg, path] () mutable {
         auto schemas = do_load_schemas(dbcfg, read_file(path));
-        if (schemas.size() != 1) {
-            throw std::runtime_error(fmt::format("Schema file {} expected to contain exactly 1 schema, actually has {}", path.native(), schemas.size()));
+        if (schemas.size() == 1) {
+            return std::move(schemas.front());
+        } else if (schemas.size() == 2) {
+            // We expect a base table at index 0 and a view/index on it at index 1
+            if (!schemas[0]->is_view() && schemas[1]->is_view() && schemas[0]->id() == schemas[1]->view_info()->base_id()) {
+                return std::move(schemas[1]);
+            }
         }
-        return std::move(schemas.front());
+        throw std::runtime_error(fmt::format(
+                    "Schema file {} expected to contain exactly 1 schema or 2 schemas (base table and view), actually has {} non-related schemas",
+                    path.native(),
+                    schemas.size()));
     });
 }
 
