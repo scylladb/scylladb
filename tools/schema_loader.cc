@@ -515,6 +515,7 @@ std::unordered_map<schema_ptr, std::string> get_schema_table_directories(std::fi
     const std::vector<schema_ptr> schemas{
             db::schema_tables::types(),
             db::schema_tables::tables(),
+            db::schema_tables::views(),
             db::schema_tables::columns(),
             db::schema_tables::view_virtual_columns(),
             db::schema_tables::computed_columns(),
@@ -565,6 +566,9 @@ schema_ptr do_load_schema_from_schema_tables(const db::config& dbcfg, std::files
     auto schema_table_table_dir = get_schema_table_directories(scylla_data_path);
     auto schema_tables_path = scylla_data_path / db::schema_tables::NAME;
 
+    auto empty = [] (const mutation_opt& mopt) {
+        return !mopt || !mopt->partition().row_count();
+    };
     auto do_load = [&] (std::function<const schema_ptr()> schema_factory) {
         auto s = schema_factory();
         return read_schema_table_mutation(
@@ -576,6 +580,7 @@ schema_ptr do_load_schema_from_schema_tables(const db::config& dbcfg, std::files
                 {table});
     };
     mutation_opt tables = do_load(db::schema_tables::tables);
+    mutation_opt views = do_load(db::schema_tables::views);
     mutation_opt columns = do_load(db::schema_tables::columns);
     mutation_opt view_virtual_columns = do_load(db::schema_tables::view_virtual_columns);
     mutation_opt computed_columns = do_load(db::schema_tables::computed_columns);
@@ -583,7 +588,7 @@ schema_ptr do_load_schema_from_schema_tables(const db::config& dbcfg, std::files
     mutation_opt dropped_columns = do_load(db::schema_tables::dropped_columns);
     mutation_opt scylla_tables = do_load([] () { return db::schema_tables::scylla_tables(); });
 
-    if ((!tables || !tables->partition().row_count()) || (!columns || !columns->partition().row_count())) {
+    if ((empty(tables) && empty(views)) || empty(columns)) {
         throw std::runtime_error(fmt::format("Failed to find {}.{} in schema tables", keyspace, table));
     }
 
@@ -624,9 +629,17 @@ schema_ptr do_load_schema_from_schema_tables(const db::config& dbcfg, std::files
     gms::feature_service features(gms::feature_config_from_db_config(dbcfg));
     db::schema_ctxt ctxt(dbcfg, user_type_storage, features);
 
+    if (empty(tables)) {
+        tables = std::move(views);
+    }
+
     schema_mutations muts(std::move(*tables), std::move(*columns), std::move(view_virtual_columns), std::move(computed_columns), std::move(indexes),
             std::move(dropped_columns), std::move(scylla_tables));
-    return db::schema_tables::create_table_from_mutations(ctxt, muts);
+    if (muts.is_view()) {
+        return db::schema_tables::create_view_from_mutations(ctxt, muts);
+    } else {
+        return db::schema_tables::create_table_from_mutations(ctxt, muts);
+    }
 }
 
 } // anonymous namespace
