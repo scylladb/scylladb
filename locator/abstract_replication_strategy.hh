@@ -51,7 +51,8 @@ using can_yield = utils::can_yield;
 using replication_strategy_config_options = std::map<sstring, sstring>;
 struct replication_strategy_params {
     const replication_strategy_config_options& options;
-    explicit replication_strategy_params(const replication_strategy_config_options& o) noexcept : options(o) {}
+    std::optional<unsigned> initial_tablets;
+    explicit replication_strategy_params(const replication_strategy_config_options& o, std::optional<unsigned> it) noexcept : options(o), initial_tablets(it) {}
 };
 
 using replication_map = std::unordered_map<token, inet_address_vector_replica_set>;

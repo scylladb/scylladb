@@ -267,7 +267,7 @@ void simple_test() {
         {"101", "2"},
         {"102", "3"}
     };
-    locator::replication_strategy_params params323(options323);
+    locator::replication_strategy_params params323(options323, std::nullopt);
 
     auto ars_ptr = abstract_replication_strategy::create_replication_strategy(
         "NetworkTopologyStrategy", params323);
@@ -281,7 +281,7 @@ void simple_test() {
         {"101", "2"},
         {"102", "0"}
     };
-    locator::replication_strategy_params params320(options320);
+    locator::replication_strategy_params params320(options320, std::nullopt);
 
     ars_ptr = abstract_replication_strategy::create_replication_strategy(
         "NetworkTopologyStrategy", params320);
@@ -367,7 +367,7 @@ void heavy_origin_test() {
         }
     }).get();
 
-    locator::replication_strategy_params params(config_options);
+    locator::replication_strategy_params params(config_options, std::nullopt);
     auto ars_ptr = abstract_replication_strategy::create_replication_strategy(
         "NetworkTopologyStrategy", params);
 
@@ -435,7 +435,7 @@ SEASTAR_THREAD_TEST_CASE(NetworkTopologyStrategy_tablets_test) {
             {"102", "3"},
             {"initial_tablets", "100"}
     };
-    locator::replication_strategy_params params323(options323);
+    locator::replication_strategy_params params323(options323, std::nullopt);
 
     auto ars_ptr = abstract_replication_strategy::create_replication_strategy(
             "NetworkTopologyStrategy", params323);
@@ -459,7 +459,7 @@ SEASTAR_THREAD_TEST_CASE(NetworkTopologyStrategy_tablets_test) {
             {"102", "0"},
             {"initial_tablets", "100"}
     };
-    locator::replication_strategy_params params320(options320);
+    locator::replication_strategy_params params320(options320, std::nullopt);
 
     ars_ptr = abstract_replication_strategy::create_replication_strategy(
             "NetworkTopologyStrategy", params320);
@@ -476,7 +476,7 @@ SEASTAR_THREAD_TEST_CASE(NetworkTopologyStrategy_tablets_test) {
             {"102", "2"},
             {"initial_tablets", "100"}
     };
-    locator::replication_strategy_params params324(options324);
+    locator::replication_strategy_params params324(options324, std::nullopt);
 
     ars_ptr = abstract_replication_strategy::create_replication_strategy(
             "NetworkTopologyStrategy", params324);
@@ -654,7 +654,7 @@ static void test_equivalence(const shared_token_metadata& stm, const locator::to
                                                     | boost::adaptors::transformed(
                                                                     [](const std::pair<sstring, size_t>& p) {
                                                                         return std::make_pair(p.first, to_sstring(p.second));
-                                                                    }))));
+                                                                    })), std::nullopt));
 
     const token_metadata& tm = *stm.get();
     for (size_t i = 0; i < 1000; ++i) {

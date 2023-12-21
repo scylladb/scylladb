@@ -1183,7 +1183,7 @@ future<>
 keyspace::create_replication_strategy(const locator::shared_token_metadata& stm) {
     using namespace locator;
 
-    locator::replication_strategy_params params(_metadata->strategy_options());
+    locator::replication_strategy_params params(_metadata->strategy_options(), _metadata->initial_tablets());
     _replication_strategy =
             abstract_replication_strategy::create_replication_strategy(_metadata->strategy_name(), params);
     rslogger.debug("replication strategy for keyspace {} is {}, opts={}",
