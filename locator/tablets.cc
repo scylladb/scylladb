@@ -524,7 +524,8 @@ size_t tablet_aware_replication_strategy::parse_initial_tablets(const sstring& v
     }
 }
 
-void tablet_aware_replication_strategy::validate_tablet_options(const gms::feature_service& fs,
+void tablet_aware_replication_strategy::validate_tablet_options(const abstract_replication_strategy& ars,
+                                                                const gms::feature_service& fs,
                                                                 const replication_strategy_config_options& opts) const {
     for (auto& c: opts) {
         if (c.first == "initial_tablets") {
