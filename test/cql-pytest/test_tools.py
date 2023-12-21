@@ -509,7 +509,7 @@ def test_scylla_sstable_script(cql, test_keyspace, scylla_path, scylla_data_dir,
 class TestScyllaSsstableSchemaLoadingBase:
 
     def check(self, scylla_path, extra_args, sstable, dump_reference, cwd=None, env=None):
-        dump_common_args = [scylla_path, "sstable", "dump-data", "--output-format", "json", "--logger-log-level", "scylla-sstable=debug"]
+        dump_common_args = [scylla_path, "sstable", "dump-data", "--output-format", "json", "--logger-log-level", "scylla-sstable=debug:schema_loader=trace"]
         dump = json.loads(subprocess.check_output(dump_common_args + extra_args + [sstable], cwd=cwd, env=env))["sstables"]
         dump = list(dump.values())[0]
         assert dump == dump_reference
@@ -768,6 +768,190 @@ class TestScyllaSsstableSchemaLoading(TestScyllaSsstableSchemaLoadingBase):
                 ["--scylla-yaml-file", scylla_yaml_file, "--keyspace", self.keyspace, "--table", "non-existent-table"],
                 ext_sstable,
                 error_msg="error processing arguments: could not load schema via schema-tables: std::runtime_error (Failed to find system.non-existent-table in schema tables)")
+
+
+@pytest.fixture(scope="class")
+def schema_test_base_table(cql, test_keyspace):
+    with util.new_test_table(cql, test_keyspace, "pk int, v1 text, v2 text, PRIMARY KEY (pk)") as table:
+        yield table
+
+
+@pytest.fixture(scope="class")
+def schema_test_mv(cql, schema_test_base_table):
+    with util.new_materialized_view(cql, schema_test_base_table,
+                                    '*', 'v1, pk', 'v1 is not null and pk is not null') as mv:
+        yield mv
+
+
+@pytest.fixture(scope="class")
+def schema_test_si(cql, schema_test_base_table):
+    keyspace, base_table = schema_test_base_table.split(".")
+    si_name = f"{base_table}_by_v2"
+    with util.new_secondary_index(cql, schema_test_base_table, "v2", name=si_name) as si:
+        yield si + "_index"
+
+
+@pytest.fixture(scope="class")
+def schema_test_mv_sstable_prepared(cql, test_keyspace, schema_test_base_table, schema_test_mv, scylla_data_dir):
+    def write():
+        cql.execute(f"INSERT INTO {schema_test_base_table} (pk, v1, v2) VALUES (0, 'v1-0', 'v2-0')")
+        cql.execute(f"INSERT INTO {schema_test_base_table} (pk, v1, v2) VALUES (1, 'v1-1', 'v2-1')")
+        cql.execute(f"INSERT INTO {schema_test_base_table} (pk, v1, v2) VALUES (2, 'v1-1', 'v2-2')")
+
+    with _prepare_sstable(cql, scylla_data_dir, schema_test_mv, write) as sst:
+        yield sst
+
+
+@pytest.fixture(scope="class")
+def schema_test_si_sstable_prepared(cql, test_keyspace, schema_test_base_table, schema_test_si, scylla_data_dir):
+    def write():
+        cql.execute(f"INSERT INTO {schema_test_base_table} (pk, v1, v2) VALUES (0, 'v1-0', 'v2-0')")
+        cql.execute(f"INSERT INTO {schema_test_base_table} (pk, v1, v2) VALUES (1, 'v1-1', 'v2-1')")
+        cql.execute(f"INSERT INTO {schema_test_base_table} (pk, v1, v2) VALUES (2, 'v1-1', 'v2-2')")
+
+    with _prepare_sstable(cql, scylla_data_dir, schema_test_si, write) as sst:
+        yield sst
+
+
+@pytest.fixture(scope="class")
+def schema_test_mv_schema_file(schema_test_base_table, schema_test_mv):
+    """ Prepares a schema.cql with the schema of the view, matching that in the `mv_sstable_prepared` fixture. """
+    with tempfile.NamedTemporaryFile("w+t") as f:
+        f.write(f"CREATE TABLE {schema_test_base_table} (pk int, v1 text, v2 text, PRIMARY KEY (pk));")
+        f.write(f"CREATE MATERIALIZED VIEW {schema_test_mv} AS")
+        f.write(f"    SELECT * FROM {schema_test_base_table} WHERE v1 IS NOT NULL AND pk IS NOT NULL")
+        f.write("     PRIMARY KEY (v1, pk);")
+        f.flush()
+        yield f.name
+
+
+@pytest.fixture(scope="class")
+def schema_test_si_schema_file(schema_test_base_table, schema_test_si):
+    """ Prepares a schema.cql with the schema of the index, matching that in the `si_sstable_prepared` fixture. """
+    keyspace, base_table = schema_test_base_table.split(".")
+    with tempfile.NamedTemporaryFile("w+t") as f:
+        f.write(f"CREATE TABLE {schema_test_base_table} (pk int, v1 text, v2 text, PRIMARY KEY (pk));")
+        f.write(f"CREATE INDEX {base_table}_by_v2 ON {schema_test_base_table}(v2);")
+        f.flush()
+        yield f.name
+
+
+@pytest.fixture(scope="class")
+def schema_test_mv_reference_dump(scylla_path, schema_test_mv, schema_test_mv_sstable_prepared):
+    with tempfile.NamedTemporaryFile("w+t") as f:
+        f.write(f"CREATE TABLE {schema_test_mv} (v1 text, pk int, v2 text, PRIMARY KEY (v1, pk))")
+        f.flush()
+        return _produce_reference_dump(scylla_path, ["--schema-file", f.name], schema_test_mv_sstable_prepared)
+
+
+@pytest.fixture(scope="class")
+def schema_test_si_reference_dump(scylla_path, schema_test_si, schema_test_si_sstable_prepared):
+    with tempfile.NamedTemporaryFile("w+t") as f:
+        f.write(f"CREATE TABLE {schema_test_si} (v2 text, idx_token bigint, pk int, PRIMARY KEY (v2, idx_token, pk))")
+        f.flush()
+        return _produce_reference_dump(scylla_path, ["--schema-file", f.name], schema_test_si_sstable_prepared)
+
+
+class TestScyllaSsstableViewSchemaLoading(TestScyllaSsstableSchemaLoadingBase):
+    """ Test class containing schema-loading tests for materialized views and indexes.
+
+    Similar to TestScyllaSsstableSchemaLoading, but focuses on testing that
+    materialized view and index schemas can be loaded with all methods.
+    Not focusing on exhaustively testing data directory discovery, that is
+    already tested by TestScyllaSsstableSchemaLoading.
+    """
+
+    def test_mv_table_dir_schema_file(self, scylla_path, schema_test_mv_sstable_prepared,
+                                      schema_test_mv_reference_dump, schema_test_mv_schema_file):
+        self.check(
+                scylla_path,
+                ["--schema-file", schema_test_mv_schema_file],
+                schema_test_mv_sstable_prepared,
+                schema_test_mv_reference_dump)
+
+    def test_mv_external_dir_schema_file(self, scylla_path, schema_test_mv_sstable_prepared,
+                                         schema_test_mv_reference_dump, schema_test_mv_schema_file, temp_workdir):
+        ext_sstable = self.copy_sstable_to_external_dir(schema_test_mv_sstable_prepared, temp_workdir)
+        self.check(
+                scylla_path,
+                ["--schema-file", schema_test_mv_schema_file],
+                ext_sstable,
+                schema_test_mv_reference_dump)
+
+    def test_mv_table_dir_autodeduced(self, scylla_path, schema_test_mv, schema_test_mv_sstable_prepared,
+                                      schema_test_mv_reference_dump, scylla_home_dir):
+        self.check(
+                scylla_path,
+                [],
+                schema_test_mv_sstable_prepared,
+                schema_test_mv_reference_dump)
+
+    def test_mv_table_dir_scylla_yaml(self, scylla_path, schema_test_mv, schema_test_mv_sstable_prepared,
+                                      schema_test_mv_reference_dump, scylla_home_dir):
+        scylla_yaml_file = os.path.join(scylla_home_dir, "conf", "scylla.yaml")
+        keyspace, table = schema_test_mv.split(".")
+        self.check(
+                scylla_path,
+                ["--scylla-yaml-file", scylla_yaml_file, "--keyspace", keyspace, "--table", table],
+                schema_test_mv_sstable_prepared,
+                schema_test_mv_reference_dump)
+
+    def test_mv_external_dir_scylla_yaml(self, scylla_path, schema_test_mv, schema_test_mv_sstable_prepared,
+                                         schema_test_mv_reference_dump, scylla_home_dir, temp_workdir):
+        ext_sstable = self.copy_sstable_to_external_dir(schema_test_mv_sstable_prepared, temp_workdir)
+        scylla_yaml_file = os.path.join(scylla_home_dir, "conf", "scylla.yaml")
+        keyspace, table = schema_test_mv.split(".")
+        self.check(
+                scylla_path,
+                ["--scylla-yaml-file", scylla_yaml_file, "--keyspace", keyspace, "--table", table],
+                ext_sstable,
+                schema_test_mv_reference_dump)
+
+    def test_si_table_dir_schema_file(self, scylla_path, schema_test_si_sstable_prepared,
+                                      schema_test_si_reference_dump, schema_test_si_schema_file):
+        self.check(
+                scylla_path,
+                ["--schema-file", schema_test_si_schema_file],
+                schema_test_si_sstable_prepared,
+                schema_test_si_reference_dump)
+
+    def test_si_external_dir_schema_file(self, scylla_path, schema_test_si_sstable_prepared,
+                                         schema_test_si_reference_dump, schema_test_si_schema_file, temp_workdir):
+        ext_sstable = self.copy_sstable_to_external_dir(schema_test_si_sstable_prepared, temp_workdir)
+        self.check(
+                scylla_path,
+                ["--schema-file", schema_test_si_schema_file],
+                ext_sstable,
+                schema_test_si_reference_dump)
+
+    def test_si_table_dir_autodeduced(self, scylla_path, schema_test_si, schema_test_si_sstable_prepared,
+                                      schema_test_si_reference_dump, scylla_home_dir):
+        self.check(
+                scylla_path,
+                [],
+                schema_test_si_sstable_prepared,
+                schema_test_si_reference_dump)
+
+    def test_si_table_dir_scylla_yaml(self, scylla_path, schema_test_si, schema_test_si_sstable_prepared,
+                                      schema_test_si_reference_dump, scylla_home_dir):
+        scylla_yaml_file = os.path.join(scylla_home_dir, "conf", "scylla.yaml")
+        keyspace, table = schema_test_si.split(".")
+        self.check(
+                scylla_path,
+                ["--scylla-yaml-file", scylla_yaml_file, "--keyspace", keyspace, "--table", table],
+                schema_test_si_sstable_prepared,
+                schema_test_si_reference_dump)
+
+    def test_si_external_dir_scylla_yaml(self, scylla_path, schema_test_si, schema_test_si_sstable_prepared,
+                                         schema_test_si_reference_dump, scylla_home_dir, temp_workdir):
+        ext_sstable = self.copy_sstable_to_external_dir(schema_test_si_sstable_prepared, temp_workdir)
+        scylla_yaml_file = os.path.join(scylla_home_dir, "conf", "scylla.yaml")
+        keyspace, table = schema_test_si.split(".")
+        self.check(
+                scylla_path,
+                ["--scylla-yaml-file", scylla_yaml_file, "--keyspace", keyspace, "--table", table],
+                ext_sstable,
+                schema_test_si_reference_dump)
 
 
 @pytest.fixture(scope="module")
