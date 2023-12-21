@@ -80,13 +80,18 @@ public:
 class gossiper_state_change_subscriber_proxy: public gms::i_endpoint_state_change_subscriber {
     raft_address_map& _address_map;
 
+    void
+    on_endpoint_change(gms::inet_address endpoint, raft::server_id id, gms::generation_type generation) {
+        rslog.debug("gossiper_state_change_subscriber_proxy::on_endpoint_change() {} {} generation={}", endpoint, id, generation);
+        _address_map.add_or_update_entry(id, endpoint, generation);
+    }
+
     future<>
     on_endpoint_change(gms::inet_address endpoint, gms::endpoint_state_ptr ep_state) {
         auto app_state_ptr = ep_state->get_application_state_ptr(gms::application_state::HOST_ID);
         if (app_state_ptr) {
             raft::server_id id(utils::UUID(app_state_ptr->value()));
-            rslog.debug("gossiper_state_change_subscriber_proxy::on_endpoint_change() {} {}", endpoint, id);
-            _address_map.add_or_update_entry(id, endpoint, ep_state->get_heart_beat_state().get_generation());
+            on_endpoint_change(endpoint, id, ep_state->get_heart_beat_state().get_generation());
         }
         return make_ready_future<>();
     }
