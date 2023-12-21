@@ -86,7 +86,10 @@ private:
 
     void init_rpc_verbs();
     seastar::future<> uninit_rpc_verbs();
-    seastar::future<> stop_servers() noexcept;
+
+    // Stops all servers in the background,
+    // under the async_gate()
+    void stop_servers() noexcept;
 
     raft_server_for_group& server_for_group(raft::group_id id);
 
