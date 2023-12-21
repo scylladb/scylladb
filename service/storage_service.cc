@@ -1107,10 +1107,12 @@ future<> storage_service::update_topology_with_local_metadata(raft::server& raft
 
 future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspace>& sys_dist_ks,
         sharded<service::storage_proxy>& proxy,
+        sharded<gms::gossiper>& gossiper,
         std::unordered_set<gms::inet_address> initial_contact_nodes,
         std::unordered_set<gms::inet_address> loaded_endpoints,
         std::unordered_map<gms::inet_address, sstring> loaded_peer_features,
-        std::chrono::milliseconds delay) {
+        std::chrono::milliseconds delay,
+        start_hint_manager start_hm) {
     std::unordered_set<token> bootstrap_tokens;
     gms::application_state_map app_states;
     /* The timestamp of the CDC streams generation that this node has proposed when joining.
@@ -1378,6 +1380,16 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
     } ();
 
     co_await _gossiper.wait_for_gossip_to_settle();
+
+    // This is the moment when the locator::topology has gathered information about other nodes
+    // in the cluster -- either through gossiper, or by loading it from disk -- so it's safe
+    // to start the hint managers.
+    if (start_hm) {
+        co_await proxy.invoke_on_all([&gossiper] (storage_proxy& local_proxy) {
+            return local_proxy.start_hints_manager(gossiper.local().shared_from_this());
+        });
+    }
+    
     // TODO: Look at the group 0 upgrade state and use it to decide whether to attach or not
     if (!_raft_topology_change_enabled) {
         co_await _feature_service.enable_features_on_join(_gossiper, _sys_ks.local());
@@ -2359,7 +2371,8 @@ bool storage_service::is_topology_coordinator_enabled() const {
     return _raft_topology_change_enabled;
 }
 
-future<> storage_service::join_cluster(sharded<db::system_distributed_keyspace>& sys_dist_ks, sharded<service::storage_proxy>& proxy) {
+future<> storage_service::join_cluster(sharded<db::system_distributed_keyspace>& sys_dist_ks, sharded<service::storage_proxy>& proxy,
+        sharded<gms::gossiper>& gossiper, start_hint_manager start_hm) {
     assert(this_shard_id() == 0);
 
     set_mode(mode::STARTING);
@@ -2429,7 +2442,8 @@ future<> storage_service::join_cluster(sharded<db::system_distributed_keyspace>&
     for (auto& x : loaded_peer_features) {
         slogger.info("peer={}, supported_features={}", x.first, x.second);
     }
-    co_return co_await join_token_ring(sys_dist_ks, proxy, std::move(initial_contact_nodes), std::move(loaded_endpoints), std::move(loaded_peer_features), get_ring_delay());
+    co_return co_await join_token_ring(sys_dist_ks, proxy, gossiper, std::move(initial_contact_nodes),
+            std::move(loaded_endpoints), std::move(loaded_peer_features), get_ring_delay(), start_hm);
 }
 
 future<> storage_service::replicate_to_all_cores(mutable_token_metadata_ptr tmptr) noexcept {

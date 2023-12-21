@@ -3069,6 +3069,8 @@ storage_proxy::create_write_response_handler_helper(schema_ptr s, const dht::tok
 
     auto all = boost::range::join(natural_endpoints, pending_endpoints);
 
+    // If the manager hasn't started yet, no mutation will be performed to another node.
+    // No hint will need to be stored.
     if (cannot_hint(all, type)) {
         get_stats().writes_failed_due_to_too_many_in_flight_hints++;
         // avoid OOMing due to excess hints.  we need to do this check even for "live" nodes, since we can
@@ -3795,7 +3797,9 @@ mutation storage_proxy::do_get_batchlog_mutation_for(schema_ptr schema, const st
 template<typename Range>
 bool storage_proxy::cannot_hint(const Range& targets, db::write_type type) const {
     // if hints are disabled we "can always hint" since there's going to be no hint generated in this case
-    return hints_enabled(type) && boost::algorithm::any_of(targets, std::bind(&db::hints::manager::too_many_in_flight_hints_for, &_hints_manager, std::placeholders::_1));
+    return hints_enabled(type) &&
+            _hints_manager.started() &&
+            boost::algorithm::any_of(targets, std::bind(&db::hints::manager::too_many_in_flight_hints_for, &_hints_manager, std::placeholders::_1));
 }
 
 future<> storage_proxy::send_to_endpoint(
