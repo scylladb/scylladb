@@ -11,8 +11,11 @@
 #include "db/tags/extension.hh"
 #include "schema/schema_builder.hh"
 #include "schema/schema_registry.hh"
+#include "seastar/core/on_internal_error.hh"
 #include "service/storage_proxy.hh"
 #include "data_dictionary/data_dictionary.hh"
+
+static logging::logger tlogger("tags");
 
 namespace db {
 
@@ -30,8 +33,11 @@ std::optional<std::string> find_tag(const schema& s, const sstring& tag) {
     if (it1 == s.extensions().end()) {
         return std::nullopt;
     }
-    const std::map<sstring, sstring>& tags_map =
-        static_pointer_cast<tags_extension>(it1->second)->tags();
+    auto ext = dynamic_pointer_cast<tags_extension>(it1->second);
+    if (!ext) {
+        on_internal_error(tlogger, fmt::format("tag extension found in table {}.{}, but has wrong type", s.ks_name(), s.cf_name()));
+    }
+    const std::map<sstring, sstring>& tags_map = ext->tags();
     auto it2 = tags_map.find(tag);
     if (it2 == tags_map.end()) {
         return std::nullopt;
