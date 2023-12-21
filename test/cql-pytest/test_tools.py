@@ -506,6 +506,34 @@ def test_scylla_sstable_script(cql, test_keyspace, scylla_path, scylla_data_dir,
         assert slice_lua_json == cxx_json
 
 
+class TestScyllaSsstableSchemaLoadingBase:
+
+    def check(self, scylla_path, extra_args, sstable, dump_reference, cwd=None, env=None):
+        dump_common_args = [scylla_path, "sstable", "dump-data", "--output-format", "json", "--logger-log-level", "scylla-sstable=debug"]
+        dump = json.loads(subprocess.check_output(dump_common_args + extra_args + [sstable], cwd=cwd, env=env))["sstables"]
+        dump = list(dump.values())[0]
+        assert dump == dump_reference
+
+    def check_fail(self, scylla_path, extra_args, sstable, error_msg=None):
+        common_args = [scylla_path, "sstable", "dump-data", "--logger-log-level", "scylla-sstable=debug:schema_loader=trace"]
+        res = subprocess.run(common_args + extra_args + [sstable], capture_output=True, text=True)
+        print(res.stderr)
+        if error_msg is None:
+            error_msg = "Failed to autodetect and load schema, try again with --logger-log-level scylla-sstable=debug to learn more or provide the schema source manually"
+        assert res.stderr.split('\n')[-2] == error_msg
+        assert res.returncode != 0
+
+    def copy_sstable_to_external_dir(self, system_scylla_local_sstable_prepared, temp_workdir):
+        table_data_dir, sstable_filename = os.path.split(system_scylla_local_sstable_prepared)
+        sstable_glob = "-".join(sstable_filename.split("-")[:-1]) + "*"
+        sstable_components = glob.glob(os.path.join(table_data_dir, sstable_glob))
+
+        for c in sstable_components:
+            shutil.copy(c, temp_workdir)
+
+        return glob.glob(os.path.join(temp_workdir, "*-Data.db"))[0]
+
+
 @pytest.fixture(scope="class")
 def system_scylla_local_sstable_prepared(cql, scylla_data_dir):
     """ Prepares the system.scylla_local table for the needs of the schema loading tests.
@@ -571,7 +599,7 @@ def system_scylla_local_reference_dump(scylla_path, system_scylla_local_sstable_
     return list(dump_reference.values())[0]
 
 
-class TestScyllaSsstableSchemaLoading:
+class TestScyllaSsstableSchemaLoading(TestScyllaSsstableSchemaLoadingBase):
     """ Test class containing all the schema loader tests.
 
     Helps in providing a natural scope of all the specialized fixtures shared by
@@ -579,31 +607,6 @@ class TestScyllaSsstableSchemaLoading:
     """
     keyspace = "system"
     table = "scylla_local"
-
-    def check(self, scylla_path, extra_args, sstable, dump_reference, cwd=None, env=None):
-        dump_common_args = [scylla_path, "sstable", "dump-data", "--output-format", "json", "--logger-log-level", "scylla-sstable=debug"]
-        dump = json.loads(subprocess.check_output(dump_common_args + extra_args + [sstable], cwd=cwd, env=env))["sstables"]
-        dump = list(dump.values())[0]
-        assert dump == dump_reference
-
-    def check_fail(self, scylla_path, extra_args, sstable, error_msg=None):
-        common_args = [scylla_path, "sstable", "dump-data", "--logger-log-level", "scylla-sstable=debug:schema_loader=trace"]
-        res = subprocess.run(common_args + extra_args + [sstable], capture_output=True, text=True)
-        print(res.stderr)
-        if error_msg is None:
-            error_msg = "Failed to autodetect and load schema, try again with --logger-log-level scylla-sstable=debug to learn more or provide the schema source manually"
-        assert res.stderr.split('\n')[-2] == error_msg
-        assert res.returncode != 0
-
-    def copy_sstable_to_external_dir(self, system_scylla_local_sstable_prepared, temp_workdir):
-        table_data_dir, sstable_filename = os.path.split(system_scylla_local_sstable_prepared)
-        sstable_glob = "-".join(sstable_filename.split("-")[:-1]) + "*"
-        sstable_components = glob.glob(os.path.join(table_data_dir, sstable_glob))
-
-        for c in sstable_components:
-            shutil.copy(c, temp_workdir)
-
-        return glob.glob(os.path.join(temp_workdir, "*-Data.db"))[0]
 
     def test_table_dir_system_schema(self, scylla_path, system_scylla_local_sstable_prepared, system_scylla_local_reference_dump):
         self.check(
