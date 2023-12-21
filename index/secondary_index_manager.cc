@@ -20,6 +20,7 @@
 #include "replica/database.hh"
 #include "db/view/view.hh"
 #include "concrete_types.hh"
+#include "db/tags/extension.hh"
 
 #include <boost/range/adaptor/map.hpp>
 #include <boost/algorithm/cxx11/any_of.hpp>
@@ -281,6 +282,13 @@ view_ptr secondary_index_manager::create_view_for_index(const index_metadata& im
         format("{} IS NOT NULL", index_target->name_as_cql_string()) :
         "";
     builder.with_view_info(*schema, false, where_clause);
+    // A local secondary index should be backed by a *synchronous* view,
+    // see #16371. A view is marked synchronous with a tag. Non-local indexes
+    // do not need the tags schema extension at all.
+    if (im.local()) {
+        std::map<sstring, sstring> tags_map = {{db::SYNCHRONOUS_VIEW_UPDATES_TAG_KEY, "true"}};
+        builder.add_extension(db::tags_extension::NAME, ::make_shared<db::tags_extension>(tags_map));
+    }
     return view_ptr{builder.build()};
 }
 

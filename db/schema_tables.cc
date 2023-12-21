@@ -2732,14 +2732,31 @@ static void make_update_indices_mutations(
         make_drop_table_or_view_mutations(views(), view, timestamp, mutations);
     }
 
-    // newly added indices and old indices with updated attributes
-    for (auto&& name : boost::range::join(diff.entries_differing, diff.entries_only_on_right)) {
+    auto add_index = [&](const sstring& name) -> view_ptr {
         const index_metadata& index = new_table->all_indices().at(name);
         add_index_to_schema_mutation(new_table, index, timestamp, indices_mutation);
         auto& cf = db.find_column_family(new_table);
         auto view = cf.get_index_manager().create_view_for_index(index, new_token_column_computation);
         auto view_mutations = make_view_mutations(view, timestamp, true);
         view_mutations.copy_to(mutations);
+        return view;
+    };
+
+    // old indices with updated attributes
+    for (auto&& name : diff.entries_differing) {
+        add_index(name);
+    }
+    // Newly added indices. Because these are newly created tables (views),
+    // we need to call the before_create_column_family callback for them.
+    // If we don't, among other things *tablets* will not be created for
+    // these new views.
+    // The callbacks must be called in a Seastar thread, which means that
+    // *this* function must be called in a Seastar thread when creating an
+    // index.
+    for (auto&& name : diff.entries_only_on_right) {
+        auto view = add_index(name);
+        auto ksm = db.find_keyspace(new_table->ks_name()).metadata();
+        db.get_notifier().before_create_column_family(*ksm, *view, mutations, timestamp);
     }
 
     mutations.emplace_back(std::move(indices_mutation));
