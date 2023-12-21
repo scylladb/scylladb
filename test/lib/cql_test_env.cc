@@ -902,7 +902,7 @@ private:
             });
 
             try {
-                _ss.local().join_cluster(_sys_dist_ks, _proxy).get();
+                _ss.local().join_cluster(_sys_dist_ks, _proxy, _gossiper, service::start_hint_manager::no).get();
             } catch (std::exception& e) {
                 // if any of the defers crashes too, we'll never see
                 // the error
