@@ -272,6 +272,7 @@ schema_ptr scylla_keyspaces() {
         {
             {"storage_type", utf8_type},
             {"storage_options", map_type_impl::get_instance(utf8_type, utf8_type, false)},
+            {"initial_tablets", int32_type},
         },
         // static columns
         {},
@@ -2130,6 +2131,10 @@ std::vector<mutation> make_create_keyspace_mutations(schema_features features, l
             scylla_m.set_cell(ckey, "storage_type", storage_type, timestamp);
             store_map(scylla_m, ckey, "storage_options", timestamp, storage_map);
         }
+        auto initial_tablets = keyspace->initial_tablets();
+        if (initial_tablets.has_value()) {
+            scylla_m.set_cell(ckey, "initial_tablets", int32_t(*initial_tablets), timestamp);
+        }
         mutations.emplace_back(std::move(scylla_m));
     }
 
@@ -2191,7 +2196,7 @@ lw_shared_ptr<keyspace_metadata> create_keyspace_from_schema_partition(const sch
     bool durable_writes = row.get_nonnull<bool>("durable_writes");
 
     data_dictionary::storage_options storage_opts;
-    std::optional<unsigned> initial_tablets; // FIXME -- initialize
+    std::optional<unsigned> initial_tablets;
     // Scylla-specific row will only be present if SCYLLA_KEYSPACES schema feature is available in the cluster
     if (scylla_specific_rs) {
         if (!scylla_specific_rs->empty()) {
@@ -2205,6 +2210,7 @@ lw_shared_ptr<keyspace_metadata> create_keyspace_from_schema_partition(const sch
                 }
                 storage_opts.value = data_dictionary::storage_options::from_map(std::string_view(*storage_type), values);
             }
+            initial_tablets = row.get<int>("initial_tablets");
         }
     }
     return make_lw_shared<keyspace_metadata>(keyspace_name, strategy_name, strategy_options, initial_tablets, durable_writes,

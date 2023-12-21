@@ -433,9 +433,8 @@ SEASTAR_THREAD_TEST_CASE(NetworkTopologyStrategy_tablets_test) {
             {"100", "3"},
             {"101", "2"},
             {"102", "3"},
-            {"initial_tablets", "100"}
     };
-    locator::replication_strategy_params params323(options323, std::nullopt);
+    locator::replication_strategy_params params323(options323, 100);
 
     auto ars_ptr = abstract_replication_strategy::create_replication_strategy(
             "NetworkTopologyStrategy", params323);
@@ -457,9 +456,8 @@ SEASTAR_THREAD_TEST_CASE(NetworkTopologyStrategy_tablets_test) {
             {"100", "3"},
             {"101", "2"},
             {"102", "0"},
-            {"initial_tablets", "100"}
     };
-    locator::replication_strategy_params params320(options320, std::nullopt);
+    locator::replication_strategy_params params320(options320, 100);
 
     ars_ptr = abstract_replication_strategy::create_replication_strategy(
             "NetworkTopologyStrategy", params320);
@@ -474,9 +472,8 @@ SEASTAR_THREAD_TEST_CASE(NetworkTopologyStrategy_tablets_test) {
             {"100", "3"},
             {"101", "4"},
             {"102", "2"},
-            {"initial_tablets", "100"}
     };
-    locator::replication_strategy_params params324(options324, std::nullopt);
+    locator::replication_strategy_params params324(options324, 100);
 
     ars_ptr = abstract_replication_strategy::create_replication_strategy(
             "NetworkTopologyStrategy", params324);

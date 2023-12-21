@@ -30,6 +30,12 @@ static std::map<sstring, sstring> prepare_options(
         return options;
     }
 
+    auto itt = options.find("initial_tablets");
+    if (itt != options.end()) {
+        initial_tablets = std::stol(itt->second);
+        options.erase(itt);
+    }
+
     // For users' convenience, expand the 'replication_factor' option into a replication factor for each DC.
     // If the user simply switches from another strategy without providing any options,
     // but the other strategy used the 'replication_factor' option, it will also be expanded.
@@ -114,7 +120,7 @@ std::optional<sstring> ks_prop_defs::get_replication_strategy_class() const {
 
 lw_shared_ptr<data_dictionary::keyspace_metadata> ks_prop_defs::as_ks_metadata(sstring ks_name, const locator::token_metadata& tm) {
     auto sc = get_replication_strategy_class().value();
-    std::optional<unsigned> initial_tablets; // FIXME -- initialize
+    std::optional<unsigned> initial_tablets;
     auto options = prepare_options(sc, tm, get_replication_options(), initial_tablets);
     return data_dictionary::keyspace_metadata::new_keyspace(ks_name, sc,
             std::move(options), initial_tablets, get_boolean(KW_DURABLE_WRITES, true), std::vector<schema_ptr>{}, get_storage_options());
@@ -124,12 +130,13 @@ lw_shared_ptr<data_dictionary::keyspace_metadata> ks_prop_defs::as_ks_metadata_u
     std::map<sstring, sstring> options;
     const auto& old_options = old->strategy_options();
     auto sc = get_replication_strategy_class();
-    std::optional<unsigned> initial_tablets; // FIXME -- initialize
+    std::optional<unsigned> initial_tablets;
     if (sc) {
         options = prepare_options(*sc, tm, get_replication_options(), initial_tablets, old_options);
     } else {
         sc = old->strategy_name();
         options = old_options;
+        initial_tablets = old->initial_tablets();
     }
 
     return data_dictionary::keyspace_metadata::new_keyspace(old->name(), *sc, options, initial_tablets, get_boolean(KW_DURABLE_WRITES, true), std::vector<schema_ptr>{}, get_storage_options());
