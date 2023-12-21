@@ -29,9 +29,8 @@ struct hash<locator::endpoint_dc_rack> {
 
 namespace locator {
 
-network_topology_strategy::network_topology_strategy(
-    const replication_strategy_config_options& config_options) :
-        abstract_replication_strategy(config_options,
+network_topology_strategy::network_topology_strategy(replication_strategy_params params) :
+        abstract_replication_strategy(params,
                                       replication_strategy_type::network_topology) {
     auto opts = _config_options;
     process_tablet_options(*this, opts);
@@ -332,7 +331,7 @@ future<tablet_map> network_topology_strategy::allocate_tablets_for_new_table(sch
     co_return tablets;
 }
 
-using registry = class_registrator<abstract_replication_strategy, network_topology_strategy, const replication_strategy_config_options&>;
+using registry = class_registrator<abstract_replication_strategy, network_topology_strategy, replication_strategy_params>;
 static registry registrator("org.apache.cassandra.locator.NetworkTopologyStrategy");
 static registry registrator_short_name("NetworkTopologyStrategy");
 }

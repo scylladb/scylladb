@@ -642,13 +642,13 @@ static void test_equivalence(const shared_token_metadata& stm, const locator::to
         using network_topology_strategy::calculate_natural_endpoints;
     };
 
-    my_network_topology_strategy nts(
+    my_network_topology_strategy nts(replication_strategy_params(
                     boost::copy_range<std::map<sstring, sstring>>(
                                     datacenters
                                                     | boost::adaptors::transformed(
                                                                     [](const std::pair<sstring, size_t>& p) {
                                                                         return std::make_pair(p.first, to_sstring(p.second));
-                                                                    })));
+                                                                    }))));
 
     const token_metadata& tm = *stm.get();
     for (size_t i = 0; i < 1000; ++i) {

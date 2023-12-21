@@ -34,16 +34,15 @@ static endpoint_set resolve_endpoints(const host_id_set& host_ids, const token_m
 logging::logger rslogger("replication_strategy");
 
 abstract_replication_strategy::abstract_replication_strategy(
-    const replication_strategy_config_options& config_options,
+    replication_strategy_params params,
     replication_strategy_type my_type)
-        : _config_options(config_options)
+        : _config_options(params.options)
         , _my_type(my_type) {}
 
 abstract_replication_strategy::ptr_type abstract_replication_strategy::create_replication_strategy(const sstring& strategy_name, const replication_strategy_config_options& config_options) {
     try {
-        return create_object<abstract_replication_strategy,
-                             const replication_strategy_config_options&>
-            (strategy_name, config_options);
+        replication_strategy_params params(config_options);
+        return create_object<abstract_replication_strategy, replication_strategy_params>(strategy_name, std::move(params));
     } catch (const no_such_class& e) {
         throw exceptions::configuration_exception(e.what());
     }
@@ -75,7 +74,7 @@ future<endpoint_set> abstract_replication_strategy::calculate_natural_ips(const 
 
 using strategy_class_registry = class_registry<
     locator::abstract_replication_strategy,
-    const locator::replication_strategy_config_options&>;
+    replication_strategy_params>;
 
 sstring abstract_replication_strategy::to_qualified_class_name(std::string_view strategy_class_name) {
     return strategy_class_registry::to_qualified_class_name(strategy_class_name);

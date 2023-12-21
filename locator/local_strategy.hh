@@ -23,7 +23,7 @@ using token = dht::token;
 
 class local_strategy : public abstract_replication_strategy {
 public:
-    local_strategy(const replication_strategy_config_options& config_options);
+    local_strategy(replication_strategy_params params);
     virtual ~local_strategy() {};
     virtual size_t get_replication_factor(const token_metadata&) const override;
 

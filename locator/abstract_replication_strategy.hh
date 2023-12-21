@@ -49,6 +49,10 @@ enum class replication_strategy_type {
 using can_yield = utils::can_yield;
 
 using replication_strategy_config_options = std::map<sstring, sstring>;
+struct replication_strategy_params {
+    const replication_strategy_config_options& options;
+    explicit replication_strategy_params(const replication_strategy_config_options& o) noexcept : options(o) {}
+};
 
 using replication_map = std::unordered_map<token, inet_address_vector_replica_set>;
 
@@ -91,7 +95,7 @@ public:
     using ptr_type = seastar::shared_ptr<abstract_replication_strategy>;
 
     abstract_replication_strategy(
-        const replication_strategy_config_options& config_options,
+        replication_strategy_params params,
         replication_strategy_type my_type);
 
     // Evaluates to true iff calculate_natural_endpoints
