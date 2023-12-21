@@ -49,7 +49,8 @@ void cql3::statements::alter_keyspace_statement::validate(query_processor& qp, c
             throw exceptions::configuration_exception("Missing replication strategy class");
         }
         try {
-            data_dictionary::storage_options current_options = qp.db().find_keyspace(_name).metadata()->get_storage_options();
+            auto ks = qp.db().find_keyspace(_name);
+            data_dictionary::storage_options current_options = ks.metadata()->get_storage_options();
             data_dictionary::storage_options new_options = _attrs->get_storage_options();
             if (!current_options.can_update_to(new_options)) {
                 throw exceptions::invalid_request_exception(format("Cannot alter storage options: {} to {} is not supported",
