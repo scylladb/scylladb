@@ -20,7 +20,7 @@ namespace locator {
 
 simple_strategy::simple_strategy(const replication_strategy_config_options& config_options) :
         abstract_replication_strategy(config_options, replication_strategy_type::simple) {
-    for (auto& config_pair : config_options) {
+    for (auto& config_pair : _config_options) {
         auto& key = config_pair.first;
         auto& val = config_pair.second;
 

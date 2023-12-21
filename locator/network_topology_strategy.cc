@@ -33,7 +33,7 @@ network_topology_strategy::network_topology_strategy(
     const replication_strategy_config_options& config_options) :
         abstract_replication_strategy(config_options,
                                       replication_strategy_type::network_topology) {
-    auto opts = config_options;
+    auto opts = _config_options;
     process_tablet_options(*this, opts);
 
     for (auto& config_pair : opts) {
