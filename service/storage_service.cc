@@ -5544,8 +5544,17 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
             node_ops_insert(ops_uuid, coordinator, std::move(req.ignore_nodes), [this, coordinator, req = std::move(req)] () mutable {
                 return mutate_token_metadata([this, coordinator, req = std::move(req)] (mutable_token_metadata_ptr tmptr) mutable {
                     for (auto& node : req.leaving_nodes) {
+                        // Decommission calls leave_ring() as one of its last steps.
+                        // The leave_ring() function removes the endpoint from the local token_metadata,
+                        // sends a notification about this through gossiper (node status becomes 'left')
+                        // and waits for ring_delay. It's possible the node being decommissioned might
+                        // die after it has sent this notification. If this happens, the node would
+                        // have already been removed from this token_metadata, so we wouldn't find it here.
+                        const auto node_id = tmptr->get_host_id_if_known(node);
                         slogger.info("decommission[{}]: Removed node={} as leaving node, coordinator={}", req.ops_uuid, node, coordinator);
-                        tmptr->del_leaving_endpoint(tmptr->get_host_id(node));
+                        if (node_id) {
+                            tmptr->del_leaving_endpoint(*node_id);
+                        }
                     }
                     return update_topology_change_info(tmptr, ::format("decommission {}", req.leaving_nodes));
                 });
