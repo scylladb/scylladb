@@ -400,7 +400,8 @@ seastar::future<> raft_group_registry::stop() {
 }
 
 seastar::future<> raft_group_registry::drain_on_shutdown() noexcept {
-    return stop_servers();
+    co_await stop_servers();
+    co_await async_gate().close();
 }
 
 raft_server_for_group& raft_group_registry::server_for_group(raft::group_id gid) {

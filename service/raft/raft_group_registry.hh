@@ -96,6 +96,8 @@ private:
     // My Raft ID. Shared between different Raft groups.
     raft::server_id _my_id;
 
+    mutable gate _gate;
+
 public:
     raft_group_registry(raft::server_id my_id, raft_address_map&, netw::messaging_service& ms,
             gms::gossiper& gs, direct_failure_detector::failure_detector& fd);
@@ -143,6 +145,10 @@ public:
     shared_ptr<raft::failure_detector> failure_detector();
     raft_address_map& address_map() { return _address_map; }
     direct_failure_detector::failure_detector& direct_fd() { return _direct_fd; }
+
+    gate& async_gate() const noexcept {
+        return _gate;
+    }
 };
 
 // Implementation of `direct_failure_detector::pinger` which uses DIRECT_FD_PING verb for pinging.
