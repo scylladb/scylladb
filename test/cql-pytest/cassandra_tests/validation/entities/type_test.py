@@ -7,7 +7,6 @@
 
 from cassandra_tests.porting import *
 
-@pytest.mark.xfail(reason="Issue #9082")
 def testNonExistingOnes(cql, test_keyspace):
     # The Scylla and Cassandra error messages are slightly different, but both
     # include the type's full name and the word "exist":
