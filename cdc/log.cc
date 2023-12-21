@@ -272,7 +272,8 @@ private:
     // to be attempted - in particular the log table we try to create will not
     // have tablets, and will cause a failure.
     static void ensure_that_table_uses_vnodes(const keyspace_metadata& ksm, const schema& schema) {
-        auto rs = locator::abstract_replication_strategy::create_replication_strategy(ksm.strategy_name(), ksm.strategy_options());
+        locator::replication_strategy_params params(ksm.strategy_options());
+        auto rs = locator::abstract_replication_strategy::create_replication_strategy(ksm.strategy_name(), params);
         if (rs->uses_tablets()) {
             throw exceptions::invalid_request_exception(format("Cannot create CDC log for a table {}.{}, because keyspace uses tablets. See issue #16317.",
                 schema.ks_name(), schema.cf_name()));

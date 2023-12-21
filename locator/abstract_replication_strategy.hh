@@ -111,10 +111,10 @@ public:
     future<endpoint_set> calculate_natural_ips(const token& search_token, const token_metadata& tm) const;
 
     virtual ~abstract_replication_strategy() {}
-    static ptr_type create_replication_strategy(const sstring& strategy_name, const replication_strategy_config_options& config_options);
+    static ptr_type create_replication_strategy(const sstring& strategy_name, replication_strategy_params params);
     static void validate_replication_strategy(const sstring& ks_name,
                                               const sstring& strategy_name,
-                                              const replication_strategy_config_options& config_options,
+                                              replication_strategy_params params,
                                               const gms::feature_service& fs,
                                               const topology& topology);
     static void validate_replication_factor(sstring rf);

@@ -267,9 +267,10 @@ void simple_test() {
         {"101", "2"},
         {"102", "3"}
     };
+    locator::replication_strategy_params params323(options323);
 
     auto ars_ptr = abstract_replication_strategy::create_replication_strategy(
-        "NetworkTopologyStrategy", options323);
+        "NetworkTopologyStrategy", params323);
 
     full_ring_check(ring_points, options323, ars_ptr, stm.get());
 
@@ -280,9 +281,10 @@ void simple_test() {
         {"101", "2"},
         {"102", "0"}
     };
+    locator::replication_strategy_params params320(options320);
 
     ars_ptr = abstract_replication_strategy::create_replication_strategy(
-        "NetworkTopologyStrategy", options320);
+        "NetworkTopologyStrategy", params320);
 
     full_ring_check(ring_points, options320, ars_ptr, stm.get());
 
@@ -365,8 +367,9 @@ void heavy_origin_test() {
         }
     }).get();
 
+    locator::replication_strategy_params params(config_options);
     auto ars_ptr = abstract_replication_strategy::create_replication_strategy(
-        "NetworkTopologyStrategy", config_options);
+        "NetworkTopologyStrategy", params);
 
     full_ring_check(ring_points, config_options, ars_ptr, stm.get());
 }
@@ -432,9 +435,10 @@ SEASTAR_THREAD_TEST_CASE(NetworkTopologyStrategy_tablets_test) {
             {"102", "3"},
             {"initial_tablets", "100"}
     };
+    locator::replication_strategy_params params323(options323);
 
     auto ars_ptr = abstract_replication_strategy::create_replication_strategy(
-            "NetworkTopologyStrategy", options323);
+            "NetworkTopologyStrategy", params323);
 
     auto tab_awr_ptr = ars_ptr->maybe_as_tablet_aware();
     BOOST_REQUIRE(tab_awr_ptr);
@@ -455,9 +459,10 @@ SEASTAR_THREAD_TEST_CASE(NetworkTopologyStrategy_tablets_test) {
             {"102", "0"},
             {"initial_tablets", "100"}
     };
+    locator::replication_strategy_params params320(options320);
 
     ars_ptr = abstract_replication_strategy::create_replication_strategy(
-            "NetworkTopologyStrategy", options320);
+            "NetworkTopologyStrategy", params320);
     tab_awr_ptr = ars_ptr->maybe_as_tablet_aware();
     BOOST_REQUIRE(tab_awr_ptr);
 
@@ -471,9 +476,10 @@ SEASTAR_THREAD_TEST_CASE(NetworkTopologyStrategy_tablets_test) {
             {"102", "2"},
             {"initial_tablets", "100"}
     };
+    locator::replication_strategy_params params324(options324);
 
     ars_ptr = abstract_replication_strategy::create_replication_strategy(
-            "NetworkTopologyStrategy", options324);
+            "NetworkTopologyStrategy", params324);
     tab_awr_ptr = ars_ptr->maybe_as_tablet_aware();
     BOOST_REQUIRE(tab_awr_ptr);
 

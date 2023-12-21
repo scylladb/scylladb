@@ -39,9 +39,8 @@ abstract_replication_strategy::abstract_replication_strategy(
         : _config_options(params.options)
         , _my_type(my_type) {}
 
-abstract_replication_strategy::ptr_type abstract_replication_strategy::create_replication_strategy(const sstring& strategy_name, const replication_strategy_config_options& config_options) {
+abstract_replication_strategy::ptr_type abstract_replication_strategy::create_replication_strategy(const sstring& strategy_name, replication_strategy_params params) {
     try {
-        replication_strategy_params params(config_options);
         return create_object<abstract_replication_strategy, replication_strategy_params>(strategy_name, std::move(params));
     } catch (const no_such_class& e) {
         throw exceptions::configuration_exception(e.what());
@@ -50,15 +49,15 @@ abstract_replication_strategy::ptr_type abstract_replication_strategy::create_re
 
 void abstract_replication_strategy::validate_replication_strategy(const sstring& ks_name,
                                                                   const sstring& strategy_name,
-                                                                  const replication_strategy_config_options& config_options,
+                                                                  replication_strategy_params params,
                                                                   const gms::feature_service& fs,
                                                                   const topology& topology)
 {
-    auto strategy = create_replication_strategy(strategy_name, config_options);
+    auto strategy = create_replication_strategy(strategy_name, params);
     strategy->validate_options(fs);
     auto expected = strategy->recognized_options(topology);
     if (expected) {
-        for (auto&& item : config_options) {
+        for (auto&& item : params.options) {
             sstring key = item.first;
             if (!expected->contains(key)) {
                  throw exceptions::configuration_exception(format("Unrecognized strategy option {{{}}} passed to {} for keyspace {}", key, strategy_name, ks_name));
