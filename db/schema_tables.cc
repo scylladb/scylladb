@@ -2191,6 +2191,7 @@ lw_shared_ptr<keyspace_metadata> create_keyspace_from_schema_partition(const sch
     bool durable_writes = row.get_nonnull<bool>("durable_writes");
 
     data_dictionary::storage_options storage_opts;
+    std::optional<unsigned> initial_tablets; // FIXME -- initialize
     // Scylla-specific row will only be present if SCYLLA_KEYSPACES schema feature is available in the cluster
     if (scylla_specific_rs) {
         if (!scylla_specific_rs->empty()) {
@@ -2206,7 +2207,7 @@ lw_shared_ptr<keyspace_metadata> create_keyspace_from_schema_partition(const sch
             }
         }
     }
-    return make_lw_shared<keyspace_metadata>(keyspace_name, strategy_name, strategy_options, durable_writes,
+    return make_lw_shared<keyspace_metadata>(keyspace_name, strategy_name, strategy_options, initial_tablets, durable_writes,
             std::vector<schema_ptr>{}, data_dictionary::user_types_metadata{}, storage_opts);
 }
 

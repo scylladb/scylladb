@@ -769,7 +769,7 @@ future<> database::modify_keyspace_on_all_shards(sharded<database>& sharded_db, 
 
 future<> database::update_keyspace(const keyspace_metadata& tmp_ksm) {
     auto& ks = find_keyspace(tmp_ksm.name());
-    auto new_ksm = ::make_lw_shared<keyspace_metadata>(tmp_ksm.name(), tmp_ksm.strategy_name(), tmp_ksm.strategy_options(), tmp_ksm.durable_writes(),
+    auto new_ksm = ::make_lw_shared<keyspace_metadata>(tmp_ksm.name(), tmp_ksm.strategy_name(), tmp_ksm.strategy_options(), tmp_ksm.initial_tablets(), tmp_ksm.durable_writes(),
                     boost::copy_range<std::vector<schema_ptr>>(ks.metadata()->cf_meta_data() | boost::adaptors::map_values), std::move(ks.metadata()->user_types()));
 
     bool old_durable_writes = ks.metadata()->durable_writes();
@@ -846,6 +846,7 @@ future<> database::create_local_system_table(
         auto ksm = make_lw_shared<keyspace_metadata>(ks_name,
                 "org.apache.cassandra.locator.LocalStrategy",
                 std::map<sstring, sstring>{},
+                std::nullopt,
                 durable
                 );
         co_await create_keyspace(ksm, erm_factory, replica::database::system_keyspace::yes);

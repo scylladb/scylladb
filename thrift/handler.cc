@@ -1424,6 +1424,7 @@ private:
             ks_def.name,
             ks_def.strategy_class,
             std::map<sstring, sstring>{ks_def.strategy_options.begin(), ks_def.strategy_options.end()},
+            std::nullopt,
             ks_def.durable_writes,
             std::move(cf_defs));
     }

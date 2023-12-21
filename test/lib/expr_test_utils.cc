@@ -500,6 +500,7 @@ public:
           _keyspace_metadata(data_dictionary::keyspace_metadata::new_keyspace(_table_schema->ks_name(),
                                                                               "MockReplicationStrategy",
                                                                               {},
+                                                                              {},
                                                                               false,
                                                                               {_table_schema})) {}
 

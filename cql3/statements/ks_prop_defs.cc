@@ -113,14 +113,16 @@ std::optional<sstring> ks_prop_defs::get_replication_strategy_class() const {
 
 lw_shared_ptr<data_dictionary::keyspace_metadata> ks_prop_defs::as_ks_metadata(sstring ks_name, const locator::token_metadata& tm) {
     auto sc = get_replication_strategy_class().value();
+    std::optional<unsigned> initial_tablets; // FIXME -- initialize
     return data_dictionary::keyspace_metadata::new_keyspace(ks_name, sc,
-            prepare_options(sc, tm, get_replication_options()), get_boolean(KW_DURABLE_WRITES, true), std::vector<schema_ptr>{}, get_storage_options());
+            prepare_options(sc, tm, get_replication_options()), initial_tablets, get_boolean(KW_DURABLE_WRITES, true), std::vector<schema_ptr>{}, get_storage_options());
 }
 
 lw_shared_ptr<data_dictionary::keyspace_metadata> ks_prop_defs::as_ks_metadata_update(lw_shared_ptr<data_dictionary::keyspace_metadata> old, const locator::token_metadata& tm) {
     std::map<sstring, sstring> options;
     const auto& old_options = old->strategy_options();
     auto sc = get_replication_strategy_class();
+    std::optional<unsigned> initial_tablets; // FIXME -- initialize
     if (sc) {
         options = prepare_options(*sc, tm, get_replication_options(), old_options);
     } else {
@@ -128,7 +130,7 @@ lw_shared_ptr<data_dictionary::keyspace_metadata> ks_prop_defs::as_ks_metadata_u
         options = old_options;
     }
 
-    return data_dictionary::keyspace_metadata::new_keyspace(old->name(), *sc, options, get_boolean(KW_DURABLE_WRITES, true), std::vector<schema_ptr>{}, get_storage_options());
+    return data_dictionary::keyspace_metadata::new_keyspace(old->name(), *sc, options, initial_tablets, get_boolean(KW_DURABLE_WRITES, true), std::vector<schema_ptr>{}, get_storage_options());
 }
 
 

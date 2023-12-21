@@ -26,6 +26,7 @@ class keyspace_metadata final : public keyspace_element {
     sstring _name;
     sstring _strategy_name;
     locator::replication_strategy_config_options _strategy_options;
+    std::optional<unsigned> _initial_tablets;
     std::unordered_map<sstring, schema_ptr> _cf_meta_data;
     bool _durable_writes;
     user_types_metadata _user_types;
@@ -34,17 +35,20 @@ public:
     keyspace_metadata(std::string_view name,
                  std::string_view strategy_name,
                  locator::replication_strategy_config_options strategy_options,
+                 std::optional<unsigned> initial_tablets,
                  bool durable_writes,
                  std::vector<schema_ptr> cf_defs = std::vector<schema_ptr>{});
     keyspace_metadata(std::string_view name,
                  std::string_view strategy_name,
                  locator::replication_strategy_config_options strategy_options,
+                 std::optional<unsigned> initial_tablets,
                  bool durable_writes,
                  std::vector<schema_ptr> cf_defs,
                  user_types_metadata user_types);
     keyspace_metadata(std::string_view name,
                  std::string_view strategy_name,
                  locator::replication_strategy_config_options strategy_options,
+                 std::optional<unsigned> initial_tablets,
                  bool durable_writes,
                  std::vector<schema_ptr> cf_defs,
                  user_types_metadata user_types,
@@ -53,6 +57,7 @@ public:
     new_keyspace(std::string_view name,
                  std::string_view strategy_name,
                  locator::replication_strategy_config_options options,
+                 std::optional<unsigned> initial_tablets,
                  bool durables_writes,
                  std::vector<schema_ptr> cf_defs = std::vector<schema_ptr>{},
                  storage_options storage_opts = {});
@@ -67,6 +72,9 @@ public:
     }
     const locator::replication_strategy_config_options& strategy_options() const {
         return _strategy_options;
+    }
+    std::optional<unsigned> initial_tablets() const {
+        return _initial_tablets;
     }
     const std::unordered_map<sstring, schema_ptr>& cf_meta_data() const {
         return _cf_meta_data;

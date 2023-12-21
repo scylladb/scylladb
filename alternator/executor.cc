@@ -4520,6 +4520,7 @@ static lw_shared_ptr<keyspace_metadata> create_keyspace_metadata(std::string_vie
                 keyspace_name, rf, endpoint_count);
     }
     auto opts = get_network_topology_options(sp, gossiper, rf);
+    std::optional<unsigned> initial_tablets; // FIXME -- initialize
 
     // Tablets are not yet enabled by default on Alternator tables, because of
     // missing support for CDC (see issue #16313). Until then, allow
@@ -4533,7 +4534,7 @@ static lw_shared_ptr<keyspace_metadata> create_keyspace_metadata(std::string_vie
         opts.emplace("initial_tablets", tags_map.at(INITIAL_TABLETS_TAG_KEY));
     }
 
-    return keyspace_metadata::new_keyspace(keyspace_name, "org.apache.cassandra.locator.NetworkTopologyStrategy", std::move(opts), true);
+    return keyspace_metadata::new_keyspace(keyspace_name, "org.apache.cassandra.locator.NetworkTopologyStrategy", std::move(opts), initial_tablets, true);
 }
 
 future<> executor::start() {

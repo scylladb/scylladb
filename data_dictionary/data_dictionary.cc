@@ -201,11 +201,13 @@ impl::~impl() = default;
 keyspace_metadata::keyspace_metadata(std::string_view name,
              std::string_view strategy_name,
              locator::replication_strategy_config_options strategy_options,
+             std::optional<unsigned> initial_tablets,
              bool durable_writes,
              std::vector<schema_ptr> cf_defs)
     : keyspace_metadata(name,
                         strategy_name,
                         std::move(strategy_options),
+                        initial_tablets,
                         durable_writes,
                         std::move(cf_defs),
                         user_types_metadata{}) { }
@@ -213,12 +215,14 @@ keyspace_metadata::keyspace_metadata(std::string_view name,
 keyspace_metadata::keyspace_metadata(std::string_view name,
              std::string_view strategy_name,
              locator::replication_strategy_config_options strategy_options,
+             std::optional<unsigned> initial_tablets,
              bool durable_writes,
              std::vector<schema_ptr> cf_defs,
              user_types_metadata user_types)
     : keyspace_metadata(name,
                         strategy_name,
                         std::move(strategy_options),
+                        initial_tablets,
                         durable_writes,
                         std::move(cf_defs),
                         std::move(user_types),
@@ -227,6 +231,7 @@ keyspace_metadata::keyspace_metadata(std::string_view name,
 keyspace_metadata::keyspace_metadata(std::string_view name,
              std::string_view strategy_name,
              locator::replication_strategy_config_options strategy_options,
+             std::optional<unsigned> initial_tablets,
              bool durable_writes,
              std::vector<schema_ptr> cf_defs,
              user_types_metadata user_types,
@@ -234,6 +239,7 @@ keyspace_metadata::keyspace_metadata(std::string_view name,
     : _name{name}
     , _strategy_name{locator::abstract_replication_strategy::to_qualified_class_name(strategy_name.empty() ? "NetworkTopologyStrategy" : strategy_name)}
     , _strategy_options{std::move(strategy_options)}
+    , _initial_tablets(initial_tablets)
     , _durable_writes{durable_writes}
     , _user_types{std::move(user_types)}
     , _storage_options(make_lw_shared<storage_options>(std::move(storage_opts)))
@@ -253,16 +259,17 @@ lw_shared_ptr<keyspace_metadata>
 keyspace_metadata::new_keyspace(std::string_view name,
                                 std::string_view strategy_name,
                                 locator::replication_strategy_config_options options,
+                                std::optional<unsigned> initial_tablets,
                                 bool durables_writes,
                                 std::vector<schema_ptr> cf_defs,
                                 storage_options storage_opts)
 {
-    return ::make_lw_shared<keyspace_metadata>(name, strategy_name, options, durables_writes, cf_defs, user_types_metadata{}, storage_opts);
+    return ::make_lw_shared<keyspace_metadata>(name, strategy_name, options, initial_tablets, durables_writes, cf_defs, user_types_metadata{}, storage_opts);
 }
 
 lw_shared_ptr<keyspace_metadata>
 keyspace_metadata::new_keyspace(const keyspace_metadata& ksm) {
-    return new_keyspace(ksm.name(), ksm.strategy_name(), ksm.strategy_options(), ksm.durable_writes(), std::vector<schema_ptr>{}, ksm.get_storage_options());
+    return new_keyspace(ksm.name(), ksm.strategy_name(), ksm.strategy_options(), ksm.initial_tablets(), ksm.durable_writes(), std::vector<schema_ptr>{}, ksm.get_storage_options());
 }
 
 void keyspace_metadata::add_user_type(const user_type ut) {
