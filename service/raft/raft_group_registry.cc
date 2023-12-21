@@ -6,6 +6,8 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 #include "service/raft/raft_group_registry.hh"
+#include "gms/generation-number.hh"
+#include "gms/inet_address.hh"
 #include "service/raft/raft_rpc.hh"
 #include "service/raft/raft_address_map.hh"
 #include "db/system_keyspace.hh"
@@ -123,13 +125,30 @@ public:
 
     virtual future<>
     on_alive(gms::inet_address endpoint, gms::endpoint_state_ptr ep_state, gms::permit_id) override {
-        co_await utils::get_local_injector().inject_with_handler("raft_group_registry::on_alive", [endpoint, ep_state] (auto& handler) -> future<> {
-            auto app_state_ptr = ep_state->get_application_state_ptr(gms::application_state::HOST_ID);
-            if (!app_state_ptr) {
-                co_return;
-            }
-            
-            raft::server_id id(utils::UUID(app_state_ptr->value()));
+        auto app_state_ptr = ep_state->get_application_state_ptr(gms::application_state::HOST_ID);
+        if (!app_state_ptr) {
+            return make_ready_future();
+        }
+        raft::server_id id(utils::UUID(app_state_ptr->value()));
+        auto generation = ep_state->get_heart_beat_state().get_generation();
+
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+        on_endpoint_change(endpoint, id, generation);
+        return make_ready_future();
+#else
+        // wait in the background since this notification callabck is called
+        // with the endpoint locked
+        // It is safe to discard this future as the gate is closed in drain_on_shutdown()
+        (void)with_gate(_registry.async_gate(), [this, endpoint, id, generation] {
+            return on_alive_with_error_injection(endpoint, id, generation);
+        });
+        return make_ready_future();
+#endif
+    }
+
+#ifdef SCYLLA_ENABLE_ERROR_INJECTION
+    future<> on_alive_with_error_injection(gms::inet_address endpoint, raft::server_id id, gms::generation_type generation) {
+        co_await utils::get_local_injector().inject_with_handler("raft_group_registry::on_alive", coroutine::lambda([endpoint, id] (auto& handler) -> future<> {
             rslog.info("gossiper_state_change_subscriber_proxy::on_alive() {} {}", endpoint, id);
             auto second_node_ip = handler.get("second_node_ip");
             assert(second_node_ip);
@@ -139,9 +158,10 @@ public:
                 co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::minutes{1});
                 rslog.info("Finished Sleeping before handling on_alive");
             }
-        });
-        co_await on_endpoint_change(endpoint, ep_state);
+        }));
+        on_endpoint_change(endpoint, id, generation);
     }
+#endif
 
     virtual future<>
     on_dead(gms::inet_address endpoint, gms::endpoint_state_ptr state, gms::permit_id) override {
