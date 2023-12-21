@@ -265,7 +265,7 @@ std::optional<schema_with_source> try_load_schema_autodetect(const bpo::variable
 
     try {
         const auto [keyspace_name, table_name] = get_keyspace_and_table_options(app_config);
-        const auto data_dir_path = std::filesystem::path(cfg.data_file_directories()[0]);
+        const auto data_dir_path = std::filesystem::path(cfg.data_file_directories().at(0));
         return schema_with_source{.schema = tools::load_schema_from_schema_tables(data_dir_path, keyspace_name, table_name).get(),
             .source = "schema-tables",
             .path = data_dir_path,

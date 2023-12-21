@@ -41,6 +41,8 @@
 
 namespace {
 
+logging::logger sllog("schema_loader");
+
 class data_dictionary_impl;
 struct keyspace;
 struct table;
@@ -351,6 +353,15 @@ struct sstable_manager_service {
 
 mutation_opt read_schema_table_mutation(sharded<sstable_manager_service>& sst_man, std::filesystem::path schema_table_data_path,
         std::function<schema_ptr()> schema_factory, reader_permit permit, std::string_view keyspace, std::vector<std::string_view> ck_strings) {
+    if (sllog.level() == log_level::trace) {
+        auto schema = schema_factory();
+        sllog.trace("read_schema_table_mutation(): path={}, table={}.{}, pk={}, ck={}",
+                schema_table_data_path.native(),
+                schema->ks_name(),
+                schema->cf_name(),
+                keyspace,
+                ck_strings);
+    }
 
     sharded<sstables::sstable_directory> sst_dirs;
     sst_dirs.start(
@@ -382,6 +393,12 @@ mutation_opt read_schema_table_mutation(sharded<sstable_manager_service>& sst_ma
     auto schema_table_schema = schema_factory();
 
     if (sstable_open_infos.empty()) {
+        sllog.debug("read_schema_table_mutation(): no sstables found for path={}, table={}.{}, pk={}, ck={}",
+                schema_table_data_path.native(),
+                schema_table_schema->ks_name(),
+                schema_table_schema->cf_name(),
+                keyspace,
+                ck_strings);
         return {};
     }
 
@@ -406,6 +423,16 @@ mutation_opt read_schema_table_mutation(sharded<sstable_manager_service>& sst_ma
             .with_range(cr)
             .build();
 
+    sllog.trace("read_schema_table_mutation(): preparing to read {} sstables for table={}.{}, pr={} ({}), cr={} ({})\n{}",
+            sstable_open_infos.size(),
+            schema_table_schema->ks_name(),
+            schema_table_schema->cf_name(),
+            pr,
+            keyspace,
+            cr,
+            ck_strings,
+            sstables);
+
     std::vector<flat_mutation_reader_v2> readers;
     readers.reserve(sstables.size());
     for (const auto& sst : sstables) {
@@ -413,7 +440,28 @@ mutation_opt read_schema_table_mutation(sharded<sstable_manager_service>& sst_ma
     }
     auto reader = make_combined_reader(schema_table_schema, permit, std::move(readers));
 
-    return read_mutation_from_flat_mutation_reader(reader).get();
+    auto mut_opt = read_mutation_from_flat_mutation_reader(reader).get();
+
+    if (mut_opt) {
+        sllog.debug("read_schema_table_mutation(): read mutation for table={}.{}, pr={} ({}), cr={} ({})\n{}",
+                schema_table_schema->ks_name(),
+                schema_table_schema->cf_name(),
+                pr,
+                keyspace,
+                cr,
+                ck_strings,
+                *mut_opt);
+    } else {
+        sllog.debug("read_schema_table_mutation(): read empty mutation for table={}.{}, pr={} ({}), cr={} ({})",
+                schema_table_schema->ks_name(),
+                schema_table_schema->cf_name(),
+                pr,
+                keyspace,
+                cr,
+                ck_strings);
+    }
+
+    return mut_opt;
 }
 
 class single_keyspace_user_types_storage : public data_dictionary::user_types_storage {
@@ -497,8 +545,8 @@ schema_ptr do_load_schema_from_schema_tables(std::filesystem::path scylla_data_p
     mutation_opt dropped_columns = do_load(db::schema_tables::dropped_columns);
     mutation_opt scylla_tables = do_load([] () { return db::schema_tables::scylla_tables(); });
 
-    if (!tables || !columns) {
-        throw std::runtime_error(fmt::format("Failed to find {}.{} in 'tables' and/or 'columns' schema tables", keyspace, table));
+    if ((!tables || !tables->partition().row_count()) || (!columns || !columns->partition().row_count())) {
+        throw std::runtime_error(fmt::format("Failed to find {}.{} in schema tables", keyspace, table));
     }
 
     data_dictionary::user_types_metadata utm;

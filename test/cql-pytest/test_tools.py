@@ -586,6 +586,15 @@ class TestScyllaSsstableSchemaLoading:
         dump = list(dump.values())[0]
         assert dump == dump_reference
 
+    def check_fail(self, scylla_path, extra_args, sstable, error_msg=None):
+        common_args = [scylla_path, "sstable", "dump-data", "--logger-log-level", "scylla-sstable=debug:schema_loader=trace"]
+        res = subprocess.run(common_args + extra_args + [sstable], capture_output=True, text=True)
+        print(res.stderr)
+        if error_msg is None:
+            error_msg = "Failed to autodetect and load schema, try again with --logger-log-level scylla-sstable=debug to learn more or provide the schema source manually"
+        assert res.stderr.split('\n')[-2] == error_msg
+        assert res.returncode != 0
+
     def copy_sstable_to_external_dir(self, system_scylla_local_sstable_prepared, temp_workdir):
         table_data_dir, sstable_filename = os.path.split(system_scylla_local_sstable_prepared)
         sstable_glob = "-".join(sstable_filename.split("-")[:-1]) + "*"
@@ -718,6 +727,31 @@ class TestScyllaSsstableSchemaLoading:
                 ext_sstable,
                 system_scylla_local_reference_dump,
                 env={"SCYLLA_HOME": scylla_home_dir})
+
+    def test_fail_schema_autodetect(self, scylla_path, system_scylla_local_sstable_prepared, temp_workdir):
+        ext_sstable = self.copy_sstable_to_external_dir(system_scylla_local_sstable_prepared, temp_workdir)
+        self.check_fail(
+                scylla_path,
+                ["--keyspace", self.keyspace, "--table", self.table],
+                ext_sstable)
+
+    def test_fail_nonexistent_keyspace(self, scylla_path, system_scylla_local_sstable_prepared, temp_workdir, scylla_home_dir):
+        ext_sstable = self.copy_sstable_to_external_dir(system_scylla_local_sstable_prepared, temp_workdir)
+        scylla_yaml_file = os.path.join(scylla_home_dir, "conf", "scylla.yaml")
+        self.check_fail(
+                scylla_path,
+                ["--scylla-yaml-file", scylla_yaml_file, "--keyspace", "non-existent-keyspace", "--table", self.table],
+                ext_sstable,
+                error_msg="error processing arguments: could not load schema via schema-tables: std::runtime_error (Failed to find non-existent-keyspace.scylla_local in schema tables)")
+
+    def test_fail_nonexistent_table(self, scylla_path, system_scylla_local_sstable_prepared, temp_workdir, scylla_home_dir):
+        ext_sstable = self.copy_sstable_to_external_dir(system_scylla_local_sstable_prepared, temp_workdir)
+        scylla_yaml_file = os.path.join(scylla_home_dir, "conf", "scylla.yaml")
+        self.check_fail(
+                scylla_path,
+                ["--scylla-yaml-file", scylla_yaml_file, "--keyspace", self.keyspace, "--table", "non-existent-table"],
+                ext_sstable,
+                error_msg="error processing arguments: could not load schema via schema-tables: std::runtime_error (Failed to find system.non-existent-table in schema tables)")
 
 
 @pytest.fixture(scope="module")
