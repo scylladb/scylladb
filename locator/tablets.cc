@@ -537,7 +537,8 @@ void tablet_aware_replication_strategy::validate_tablet_options(const gms::featu
 }
 
 void tablet_aware_replication_strategy::process_tablet_options(abstract_replication_strategy& ars,
-                                                               replication_strategy_config_options& opts) {
+                                                               replication_strategy_config_options& opts,
+                                                               replication_strategy_params params) {
     auto i = opts.find("initial_tablets");
     if (i != opts.end()) {
         _initial_tablets = parse_initial_tablets(i->second);
