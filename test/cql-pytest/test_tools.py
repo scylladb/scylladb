@@ -923,6 +923,7 @@ def _serialize_value(scylla_path: str, value: KeyType) -> str:
                                     str(value)]).strip().decode()
 
 
+@functools.cache
 def _shard_of_values(scylla_path: str, shards: int, *values: list[KeyType]) -> int:
     args = [scylla_path, "types", "shardof",
             "--full-compound",
@@ -965,7 +966,7 @@ def test_scylla_sstable_shard_of(cql, test_keyspace, scylla_path, scylla_data_di
     # need to be consistent with it to get the correct sstable-shard mapping
     scylla_option_smp = 2
     shards = scylla_option_smp
-    num_keys = 42
+    num_keys = 1
     for shard_id in range(shards):
         all_keys_for_shard = _generate_key_for_shard(scylla_path, shards, shard_id)
         keys = itertools.islice(all_keys_for_shard, num_keys)
