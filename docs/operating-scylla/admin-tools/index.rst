@@ -21,6 +21,7 @@ Admin Tools
    Virtual Tables </operating-scylla/admin-tools/virtual-tables/>
    SELECT * FROM MUTATION_FRAGMENTS() Statement </operating-scylla/admin-tools/select-from-mutation-fragments/>
    Maintenance socket </operating-scylla/admin-tools/maintenance-socket/>
+   Maintenance mode </operating-scylla/admin-tools/maintenance-mode/>
 
 .. panel-box::
   :title: Admin Tools
