@@ -1718,6 +1718,28 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             //FIXME: discarded future
             (void)api::set_server_cache(ctx);
 
+            if (cfg->maintenance_mode()) {
+                startlog.info("entering maintenance mode.");
+
+                ss.local().start_maintenance_mode().get();
+
+                seastar::set_abort_on_ebadf(cfg->abort_on_ebadf());
+                api::set_server_done(ctx).get();
+                {
+                    auto do_drain = defer_verbose_shutdown("local storage", [&ss] {
+                        // Flush all memtables and stop ongoing compactions
+                        ss.local().drain_on_shutdown().get();
+                    });
+
+                    startlog.info("Scylla version {} initialization completed (maintenance mode).", scylla_version());
+                    stop_signal.wait().get();
+                    startlog.info("Signal received; shutting down");
+                }
+                startlog.info("Scylla version {} shutdown complete.", scylla_version());
+                _exit(0);
+                return 0;
+            }
+
             sys_dist_ks.start(std::ref(qp), std::ref(mm), std::ref(proxy)).get();
             auto stop_sdks = defer_verbose_shutdown("system distributed keyspace", [] {
                 sys_dist_ks.invoke_on_all(&db::system_distributed_keyspace::stop).get();
