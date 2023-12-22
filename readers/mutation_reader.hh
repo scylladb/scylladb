@@ -409,18 +409,21 @@ public:
     ~mutation_reader();
 
     future<mutation_fragment_v2_opt> operator()() {
+        _impl->set_close_required();
         return _impl->operator()();
     }
 
     template <typename Consumer>
     requires FlatMutationReaderConsumerV2<Consumer>
     auto consume_pausable(Consumer consumer) {
+        _impl->set_close_required();
         return _impl->consume_pausable(std::move(consumer));
     }
 
     template <typename Consumer>
     requires FlattenedConsumerV2<Consumer>
     auto consume(Consumer consumer) {
+        _impl->set_close_required();
         return _impl->consume(std::move(consumer));
     }
 
@@ -472,12 +475,14 @@ public:
     template<typename Consumer, typename Filter>
     requires FlattenedConsumerV2<Consumer> && FlattenedConsumerFilterV2<Filter>
     auto consume_in_thread(Consumer consumer, Filter filter) {
+        _impl->set_close_required();
         return _impl->consume_in_thread(std::move(consumer), std::move(filter));
     }
 
     template<typename Consumer>
     requires FlattenedConsumerV2<Consumer>
     auto consume_in_thread(Consumer consumer) {
+        _impl->set_close_required();
         return consume_in_thread(std::move(consumer), no_filter{});
     }
 
