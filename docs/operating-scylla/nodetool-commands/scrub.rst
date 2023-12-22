@@ -4,7 +4,9 @@ Nodetool scrub
 NAME
 ....
 
-**scrub** - Scrub the SSTable files in the specified keyspace or table(s)
+**scrub** - Help identify and fix corrupted SSTable.
+Remove faulty data,  eliminate tombstoned rows that have surpassed the table's gc_grace period, and fix out-of-order rows and partitions.
+
 
 SYNOPSIS
 ........
