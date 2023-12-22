@@ -770,7 +770,7 @@ future<> database::modify_keyspace_on_all_shards(sharded<database>& sharded_db, 
 future<> database::update_keyspace(const keyspace_metadata& tmp_ksm) {
     auto& ks = find_keyspace(tmp_ksm.name());
     auto new_ksm = ::make_lw_shared<keyspace_metadata>(tmp_ksm.name(), tmp_ksm.strategy_name(), tmp_ksm.strategy_options(), tmp_ksm.durable_writes(),
-                    boost::copy_range<std::vector<schema_ptr>>(ks.metadata()->cf_meta_data() | boost::adaptors::map_values), std::move(ks.metadata()->user_types()));
+                    boost::copy_range<std::vector<schema_ptr>>(ks.metadata()->cf_meta_data() | boost::adaptors::map_values), std::move(ks.metadata()->user_types()), tmp_ksm.get_storage_options());
 
     bool old_durable_writes = ks.metadata()->durable_writes();
     bool new_durable_writes = new_ksm->durable_writes();
