@@ -2008,7 +2008,11 @@ public:
         }
         sstlog.trace("validating_consumer {}: {}({}, {})", fmt::ptr(this), __FUNCTION__, _current_pos, new_current_tomb);
         validate_fragment_order(mutation_fragment_v2::kind::range_tombstone_change, new_current_tomb);
-        return data_consumer::proceed(!need_preempt());
+        if (_expected_clustering_block) {
+            return data_consumer::proceed(!_expected_clustering_block->done);
+        } else {
+            return data_consumer::proceed(!need_preempt());
+        }
     }
 
     data_consumer::proceed consume_range_tombstone(const std::vector<fragmented_temporary_buffer>& ecp, sstables::bound_kind_m kind, tombstone end_tombstone, tombstone start_tombstone) {
