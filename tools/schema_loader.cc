@@ -410,6 +410,7 @@ mutation_opt read_schema_table_mutation(sharded<sstable_manager_service>& sst_ma
         readers.emplace_back(sst->make_reader(schema_table_schema, permit, pr, ps));
     }
     auto reader = make_combined_reader(schema_table_schema, permit, std::move(readers));
+    auto close_reader = deferred_close(reader);
 
     return read_mutation_from_flat_mutation_reader(reader).get();
 }
