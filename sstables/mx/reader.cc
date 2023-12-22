@@ -1934,6 +1934,9 @@ public:
     void set_index_expected_clustering_block(position_in_partition_view start, position_in_partition_view end) {
         _expected_clustering_block.emplace(start, end);
     }
+    bool in_expected_clustering_block() const {
+        return _expected_clustering_block && !_expected_clustering_block->done;
+    }
 
     void report_error(sstring what) {
         ++_error_count;
@@ -2104,7 +2107,7 @@ future<uint64_t> validate(
             bool first_block = true;
 
             do {
-                if (idx_cursor && (current_pi_block = co_await idx_cursor->next_entry())) {
+                if (!consumer.in_expected_clustering_block() && idx_cursor && (current_pi_block = co_await idx_cursor->next_entry())) {
                     // The mx format always has position-in-partition in the variant.
                     const auto start = std::get<position_in_partition_view>(current_pi_block->start);
                     const auto end = std::get<position_in_partition_view>(current_pi_block->end);
