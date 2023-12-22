@@ -534,22 +534,33 @@ class TestScyllaSsstableSchemaLoadingBase:
         return glob.glob(os.path.join(temp_workdir, "*-Data.db"))[0]
 
 
-@pytest.fixture(scope="class")
-def system_scylla_local_sstable_prepared(cql, scylla_data_dir):
-    """ Prepares the system.scylla_local table for the needs of the schema loading tests.
+@contextlib.contextmanager
+def _prepare_sstable(cql, scylla_data_dir, table, write_fun=None):
+    """ Prepares the table for the needs of the schema loading tests.
 
     Namely:
-    * Disable auto-compaction for the system-schema keyspace and system.scylla_local table.
+    * Disable auto-compaction for the system-schema keyspace and table's keyspace.
     * Flushes said keyspaces.
-    * Locates an sstable belonging to system.scylla_local and returns it.
+    * Locates an sstable belonging to the table and returns it.
     """
-    with nodetool.no_autocompaction_context(cql, "system.scylla_local", "system_schema"):
+    keyspace_name, table_name = table.split(".")
+    with nodetool.no_autocompaction_context(cql, keyspace_name, "system_schema"):
+        if write_fun is not None:
+            write_fun()
+
         # Need to flush system keyspaces whose sstables we want to meddle
         # with, to make sure they are actually on disk.
         nodetool.flush_keyspace(cql, "system_schema")
-        nodetool.flush_keyspace(cql, "system")
-        sstables = glob.glob(os.path.join(scylla_data_dir, "system", "scylla_local-*", "*-Data.db"))
+        nodetool.flush_keyspace(cql, keyspace_name)
+
+        sstables = glob.glob(os.path.join(scylla_data_dir, keyspace_name, table_name + "-*", "*-Data.db"))
         yield sstables[0]
+
+
+@pytest.fixture(scope="class")
+def system_scylla_local_sstable_prepared(cql, scylla_data_dir):
+    with _prepare_sstable(cql, scylla_data_dir, "system.scylla_local") as sst:
+        yield sst
 
 
 @pytest.fixture(scope="class")
@@ -582,21 +593,23 @@ def scylla_home_dir(scylla_data_dir):
         yield scylla_home
 
 
-@pytest.fixture(scope="class")
-def system_scylla_local_reference_dump(scylla_path, system_scylla_local_sstable_prepared):
-    """ Produce a reference json dump of the system.scylla_local sstable. """
+def _produce_reference_dump(scylla_path, schema_args, sstable):
+    """ Produce a json dump, to be used as a reference, of the specified sstable. """
     dump_reference = subprocess.check_output([
         scylla_path,
         "sstable",
         "dump-data",
         "--output-format", "json",
         "--logger-log-level", "scylla-sstable=debug",
-        "--system-schema",
-        "--keyspace", "system",
-        "--table", "scylla_local",
-        system_scylla_local_sstable_prepared])
+        ] + schema_args + [sstable])
     dump_reference = json.loads(dump_reference)["sstables"]
     return list(dump_reference.values())[0]
+
+
+@pytest.fixture(scope="class")
+def system_scylla_local_reference_dump(scylla_path, system_scylla_local_sstable_prepared):
+    return _produce_reference_dump(scylla_path, ["--system-schema", "--keyspace", "system", "--table", "scylla_local"],
+                                   system_scylla_local_sstable_prepared)
 
 
 class TestScyllaSsstableSchemaLoading(TestScyllaSsstableSchemaLoadingBase):
