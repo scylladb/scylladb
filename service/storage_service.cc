@@ -5874,6 +5874,14 @@ bool storage_service::is_repair_based_node_ops_enabled(streaming::stream_reason 
     return global_enabled && enabled_set.contains(reason);
 }
 
+future<> storage_service::start_maintenance_mode() {
+    set_mode(mode::MAINTENANCE);
+
+    return mutate_token_metadata([this] (mutable_token_metadata_ptr token_metadata) -> future<> {
+        return token_metadata->update_normal_tokens({ dht::token{} }, get_token_metadata_ptr()->get_topology().my_host_id());
+    }, acquire_merge_lock::yes);
+}
+
 node_ops_meta_data::node_ops_meta_data(
         node_ops_id ops_uuid,
         gms::inet_address coordinator,
