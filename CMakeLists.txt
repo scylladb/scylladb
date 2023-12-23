@@ -28,9 +28,18 @@ include(mode.common)
 if(CMAKE_CONFIGURATION_TYPES)
     foreach(config ${CMAKE_CONFIGURATION_TYPES})
         include(mode.${config})
+        list(APPEND scylla_build_modes ${scylla_build_mode})
     endforeach()
+    add_custom_target(mode_list
+        COMMAND ${CMAKE_COMMAND} -E echo "$<JOIN:${scylla_build_modes}, >"
+        COMMENT "List configured modes"
+        BYPRODUCTS mode-list.phony.stamp
+        COMMAND_EXPAND_LISTS)
 else()
     include(mode.${CMAKE_BUILD_TYPE})
+    add_custom_target(mode_list
+        ${CMAKE_COMMAND} -E echo "${scylla_build_mode}"
+        COMMENT "List configured modes")
 endif()
 
 add_compile_definitions(
