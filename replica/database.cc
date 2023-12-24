@@ -229,7 +229,7 @@ void database::setup_scylla_memory_diagnostics_producer() {
             const auto initial_res = sem.initial_resources();
             const auto available_res = sem.available_resources();
             if (sem.is_unlimited()) {
-                writeln("    {}: {}/∞, {}/∞\n",
+                writeln("    {}: {}/unlimited, {}/unlimited\n",
                         name,
                         initial_res.count - available_res.count,
                         utils::to_hr_size(initial_res.memory - available_res.memory),
