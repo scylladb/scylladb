@@ -36,6 +36,22 @@ def table1(cql, test_keyspace):
 def test_group_by_partition(cql, table1):
     assert {(0,0,0,1), (1,0,0,5)} == set(cql.execute(f'SELECT p,c1,c2,v FROM {table1} GROUP BY p'))
 
+# Try the same restricting the scan to a single partition instead of a
+# whole-table scan. We should get just one row (the first row in the
+# clustering order).
+# Reproduces #16531.
+@pytest.mark.xfail(reason="issue #16531")
+def test_group_by_partition_one_partition(cql, table1):
+    assert {(0,0,0,1)} == set(cql.execute(f'SELECT p,c1,c2,v FROM {table1} WHERE p=0 GROUP BY p'))
+    # Try the same with "SELECT *" instead of "SELECT p,c1,c2,v". Shouldn't
+    # make any difference, but bug #16531 was that it did!
+    assert {(0,0,0,1)} == set(cql.execute(f'SELECT * FROM {table1} WHERE p=0 GROUP BY p'))
+
+# And if filtering excludes some rows, the GROUP BY should return the first
+# row that matches the filter.
+def test_group_by_partition_with_filtering(cql, table1):
+    assert {(0,0,1,2), (1,0,1,6)} == set(cql.execute(f'SELECT p,c1,c2,v FROM {table1} WHERE c2>0 GROUP BY p ALLOW FILTERING'))
+
 # Similarly, GROUP BY a partition key plus just a prefix of the clustering
 # key retrieves the first row in each of the clustering ranges
 def test_group_by_clustering_prefix(cql, table1):
