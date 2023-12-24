@@ -1606,8 +1606,8 @@ get_view_natural_endpoint(
 }
 
 static future<> apply_to_remote_endpoints(service::storage_proxy& proxy, locator::effective_replication_map_ptr ermp,
-        gms::inet_address target, inet_address_vector_topology_change&& pending_endpoints,
-        frozen_mutation_and_schema&& mut, const dht::token& base_token, const dht::token& view_token,
+        gms::inet_address target, inet_address_vector_topology_change pending_endpoints,
+        frozen_mutation_and_schema mut, const dht::token& base_token, const dht::token& view_token,
         service::allow_hints allow_hints, tracing::trace_state_ptr tr_state) {
     // The "delay_before_remote_view_update" injection point can be
     // used to add a short delay (currently 0.5 seconds) before a base
