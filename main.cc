@@ -2037,12 +2037,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 ss.local().drain_on_shutdown().get();
             });
 
-            auto drain_view_builder = defer_verbose_shutdown("view builder ops", [cfg] {
-                if (cfg->view_building()) {
-                    view_builder.invoke_on_all(&db::view::view_builder::drain).get();
-                }
-            });
-
             startlog.info("Scylla version {} initialization completed.", scylla_version());
             stop_signal.wait().get();
             startlog.info("Signal received; shutting down");
