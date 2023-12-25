@@ -18,34 +18,16 @@ version_ge() {
 # Install capabilities.conf when AmbientCapabilities supported
 . /etc/os-release
 
-# the command below will still work in systems without systemctl (like docker) and across all
-# versions of systemd. We will set the version to 0 if systemctl is not found and then be able
-# to use that in tests.
-SYSTEMD_VER=$(( systemctl --version 2>/dev/null || echo 0 0) | head -n1 | awk '{print $2}')
-RHEL=$(echo $ID $ID_LIKE | grep -oi rhel)
-SYSTEMD_REL=0
-if [ "$RHEL" ]; then
-    SYSTEMD_REL=`rpm -q systemd --qf %{release}|sed -n "s/\([0-9]*\).*/\1/p"`
-fi
-
-AMB_SUPPORT=`grep -c ^CapAmb: /proc/self/status`
-
 KERNEL_VER=$(uname -r)
 
-# AmbientCapabilities supported from v229 but it backported to v219-33 on RHEL7
-if [ $SYSTEMD_VER -ge 229 ] || [[ $SYSTEMD_VER -eq 219 && $SYSTEMD_REL -ge 33 ]]; then
-    if [ $AMB_SUPPORT -eq 1 ]; then
-        AMB_CAPABILITIES="CAP_SYS_NICE CAP_IPC_LOCK"
-        # CAP_PERFMON is only available on linux-5.8+
-        if version_ge $KERNEL_VER 5.8; then
-            AMB_CAPABILITIES="$AMB_CAPABILITIES CAP_PERFMON"
-        fi
-        mkdir -p /etc/systemd/system/scylla-server.service.d/
-        cat << EOS > /etc/systemd/system/scylla-server.service.d/capabilities.conf
+# CAP_PERFMON is only available on linux-5.8+
+if version_ge $KERNEL_VER 5.8; then
+    AMB_CAPABILITIES="$AMB_CAPABILITIES CAP_PERFMON"
+    mkdir -p /etc/systemd/system/scylla-server.service.d/
+    cat << EOS > /etc/systemd/system/scylla-server.service.d/capabilities.conf
 [Service]
-AmbientCapabilities=$AMB_CAPABILITIES
+AmbientCapabilities=CAP_PERFMON
 EOS
-    fi
 fi
 
 # For systems with not a lot of memory, override default reservations for the slices
@@ -59,18 +41,6 @@ if [ $MEMTOTAL_BYTES -lt 23008753371 ]; then
 [Slice]
 MemoryHigh=1200M
 MemoryMax=1400M
-MemoryLimit=1400M
-EOS
-
-# On CentOS7, systemd does not support percentage-based parameter.
-# To apply memory parameter on CentOS7, we need to override the parameter
-# in bytes, instead of percentage.
-elif [ "$RHEL" -a "$VERSION_ID" = "7" ]; then
-    MEMORY_LIMIT=$((MEMTOTAL_BYTES / 100 * 5))
-    mkdir -p /etc/systemd/system/scylla-helper.slice.d/
-    cat << EOS > /etc/systemd/system/scylla-helper.slice.d/memory.conf
-[Slice]
-MemoryLimit=$MEMORY_LIMIT
 EOS
 fi
 
