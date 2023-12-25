@@ -11,6 +11,7 @@ import math
 from decimal import Decimal
 from util import new_test_table, unique_key_int, project, new_type
 from cassandra.util import Date
+from cassandra.protocol import SyntaxException
 from cassandra_tests.porting import assert_invalid_message
 
 @pytest.fixture(scope="module")
@@ -241,3 +242,22 @@ def test_sum_case_sensitive_column(cql, table2):
                            f'select sum("someColumn") from {table2} where p = {p}')
     assert_invalid_message(cql, table2, 'othercolumn',
                            f'select sum(OtherColumn) from {table2} where p = {p}')
+
+# Check that a simple case of summing up a specific int column in a partition
+# works correctly
+def test_sum_in_partition(cql, table1):
+    p = unique_key_int()
+    stmt = cql.prepare(f"insert into {table1} (p, c, v) values (?, ?, ?)")
+    cql.execute(stmt, [p, 1, 4])
+    cql.execute(stmt, [p, 2, 5])
+    cql.execute(stmt, [p, 3, 6])
+    assert [(15,)] == list(cql.execute(f"select sum(v) from {table1} where p = {p}"))
+
+# Check that you *can't* do "sum(*)" expecting (perhaps) sums of all the
+# columns. It's a synax error: The grammar allows "count(*)" because it has
+# a separate rule for # "count", but other functions and aggregators (like
+# "sum") don't allow "*" and expect a real column name as a parameter.
+def test_sum_star(cql, table1):
+    p = unique_key_int()
+    with pytest.raises(SyntaxException):
+        cql.execute(f"select sum(*) from {table1} where p = {p}")

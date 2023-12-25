@@ -1927,6 +1927,21 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
     // Force aggregation if GROUP BY is used. This will wrap every column x as first(x).
     if (!_group_by_columns.empty()) {
         aggregation_depth = std::max(aggregation_depth, 1u);
+        if (prepared_selectors.empty()) {
+            // We have a "SELECT * GROUP BY". If we leave prepared_selectors
+            // empty, below we choose selection::wildcard() for SELECT *, and
+            // forget to do the "levellize" trick needed for the GROUP BY.
+            // So we need to set prepared_selectors. See #16531.
+            auto all_columns = selection::selection::wildcard_columns(schema);
+            std::vector<::shared_ptr<selection::raw_selector>> select_all;
+            select_all.reserve(all_columns.size());
+            for (const column_definition *cdef : all_columns) {
+                auto name = ::make_shared<cql3::column_identifier::raw>(cdef->name_as_text(), true);
+                select_all.push_back(::make_shared<selection::raw_selector>(
+                    expr::unresolved_identifier(std::move(name)), nullptr));
+            }
+            prepared_selectors = selection::raw_selector::to_prepared_selectors(select_all, *schema, db, keyspace());
+        }
     }
 
     for (auto& ps : prepared_selectors) {
