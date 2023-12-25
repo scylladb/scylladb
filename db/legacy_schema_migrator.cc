@@ -549,6 +549,7 @@ public:
             auto ksm = ::make_lw_shared<keyspace_metadata>(ks.name
                             , ks.replication_params["class"] // TODO, make ksm like c3?
                             , ks.replication_params
+                            , std::nullopt
                             , ks.durable_writes);
 
             // we want separate time stamps for tables/types, so cannot bulk them into the ksm.

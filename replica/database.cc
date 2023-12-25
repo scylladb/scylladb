@@ -769,7 +769,7 @@ future<> database::modify_keyspace_on_all_shards(sharded<database>& sharded_db, 
 
 future<> database::update_keyspace(const keyspace_metadata& tmp_ksm) {
     auto& ks = find_keyspace(tmp_ksm.name());
-    auto new_ksm = ::make_lw_shared<keyspace_metadata>(tmp_ksm.name(), tmp_ksm.strategy_name(), tmp_ksm.strategy_options(), tmp_ksm.durable_writes(),
+    auto new_ksm = ::make_lw_shared<keyspace_metadata>(tmp_ksm.name(), tmp_ksm.strategy_name(), tmp_ksm.strategy_options(), tmp_ksm.initial_tablets(), tmp_ksm.durable_writes(),
                     boost::copy_range<std::vector<schema_ptr>>(ks.metadata()->cf_meta_data() | boost::adaptors::map_values), std::move(ks.metadata()->user_types()), tmp_ksm.get_storage_options());
 
     bool old_durable_writes = ks.metadata()->durable_writes();
@@ -846,6 +846,7 @@ future<> database::create_local_system_table(
         auto ksm = make_lw_shared<keyspace_metadata>(ks_name,
                 "org.apache.cassandra.locator.LocalStrategy",
                 std::map<sstring, sstring>{},
+                std::nullopt,
                 durable
                 );
         co_await create_keyspace(ksm, erm_factory, replica::database::system_keyspace::yes);
@@ -1182,9 +1183,9 @@ future<>
 keyspace::create_replication_strategy(const locator::shared_token_metadata& stm) {
     using namespace locator;
 
+    locator::replication_strategy_params params(_metadata->strategy_options(), _metadata->initial_tablets());
     _replication_strategy =
-            abstract_replication_strategy::create_replication_strategy(
-                _metadata->strategy_name(), _metadata->strategy_options());
+            abstract_replication_strategy::create_replication_strategy(_metadata->strategy_name(), params);
     rslogger.debug("replication strategy for keyspace {} is {}, opts={}",
             _metadata->name(), _metadata->strategy_name(), _metadata->strategy_options());
     if (!_replication_strategy->is_per_table()) {

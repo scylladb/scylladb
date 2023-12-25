@@ -29,12 +29,11 @@ struct hash<locator::endpoint_dc_rack> {
 
 namespace locator {
 
-network_topology_strategy::network_topology_strategy(
-    const replication_strategy_config_options& config_options) :
-        abstract_replication_strategy(config_options,
+network_topology_strategy::network_topology_strategy(replication_strategy_params params) :
+        abstract_replication_strategy(params,
                                       replication_strategy_type::network_topology) {
-    auto opts = config_options;
-    process_tablet_options(*this, opts);
+    auto opts = _config_options;
+    process_tablet_options(*this, opts, params);
 
     for (auto& config_pair : opts) {
         auto& key = config_pair.first;
@@ -259,7 +258,7 @@ void network_topology_strategy::validate_options(const gms::feature_service& fs)
     if(_config_options.empty()) {
         throw exceptions::configuration_exception("Configuration for at least one datacenter must be present");
     }
-    validate_tablet_options(fs, _config_options);
+    validate_tablet_options(*this, fs, _config_options);
     auto tablet_opts = recognized_tablet_options();
     for (auto& c : _config_options) {
         if (tablet_opts.contains(c.first)) {
@@ -332,7 +331,7 @@ future<tablet_map> network_topology_strategy::allocate_tablets_for_new_table(sch
     co_return tablets;
 }
 
-using registry = class_registrator<abstract_replication_strategy, network_topology_strategy, const replication_strategy_config_options&>;
+using registry = class_registrator<abstract_replication_strategy, network_topology_strategy, replication_strategy_params>;
 static registry registrator("org.apache.cassandra.locator.NetworkTopologyStrategy");
 static registry registrator_short_name("NetworkTopologyStrategy");
 }

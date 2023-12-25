@@ -237,6 +237,7 @@ std::vector<schema_ptr> do_load_schemas(std::string_view schema_str) {
                 db::schema_tables::NAME,
                 "org.apache.cassandra.locator.LocalStrategy",
                 std::map<sstring, sstring>{},
+                std::nullopt,
                 false));
     real_db.tables.emplace_back(dd_impl, real_db.keyspaces.back(), db::schema_tables::dropped_columns());
 
@@ -562,7 +563,7 @@ schema_ptr do_load_schema_from_schema_tables(std::filesystem::path scylla_data_p
     if (types_mut) {
         query::result_set result(*types_mut);
 
-        auto ks = make_lw_shared<keyspace_metadata>(keyspace, "org.apache.cassandra.locator.LocalStrategy", std::map<sstring, sstring>{}, false);
+        auto ks = make_lw_shared<keyspace_metadata>(keyspace, "org.apache.cassandra.locator.LocalStrategy", std::map<sstring, sstring>{}, std::nullopt, false);
         db::cql_type_parser::raw_builder ut_builder(*ks);
 
         auto get_list = [] (const query::result_set_row& row, const char* name) {

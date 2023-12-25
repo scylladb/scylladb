@@ -16,7 +16,7 @@
 namespace locator {
 class everywhere_replication_strategy : public abstract_replication_strategy {
 public:
-    everywhere_replication_strategy(const replication_strategy_config_options& config_options);
+    everywhere_replication_strategy(replication_strategy_params params);
 
     virtual future<host_id_set> calculate_natural_endpoints(const token& search_token, const token_metadata& tm) const override;
 

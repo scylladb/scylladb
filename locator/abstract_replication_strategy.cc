@@ -34,16 +34,14 @@ static endpoint_set resolve_endpoints(const host_id_set& host_ids, const token_m
 logging::logger rslogger("replication_strategy");
 
 abstract_replication_strategy::abstract_replication_strategy(
-    const replication_strategy_config_options& config_options,
+    replication_strategy_params params,
     replication_strategy_type my_type)
-        : _config_options(config_options)
+        : _config_options(params.options)
         , _my_type(my_type) {}
 
-abstract_replication_strategy::ptr_type abstract_replication_strategy::create_replication_strategy(const sstring& strategy_name, const replication_strategy_config_options& config_options) {
+abstract_replication_strategy::ptr_type abstract_replication_strategy::create_replication_strategy(const sstring& strategy_name, replication_strategy_params params) {
     try {
-        return create_object<abstract_replication_strategy,
-                             const replication_strategy_config_options&>
-            (strategy_name, config_options);
+        return create_object<abstract_replication_strategy, replication_strategy_params>(strategy_name, std::move(params));
     } catch (const no_such_class& e) {
         throw exceptions::configuration_exception(e.what());
     }
@@ -51,15 +49,15 @@ abstract_replication_strategy::ptr_type abstract_replication_strategy::create_re
 
 void abstract_replication_strategy::validate_replication_strategy(const sstring& ks_name,
                                                                   const sstring& strategy_name,
-                                                                  const replication_strategy_config_options& config_options,
+                                                                  replication_strategy_params params,
                                                                   const gms::feature_service& fs,
                                                                   const topology& topology)
 {
-    auto strategy = create_replication_strategy(strategy_name, config_options);
+    auto strategy = create_replication_strategy(strategy_name, params);
     strategy->validate_options(fs);
     auto expected = strategy->recognized_options(topology);
     if (expected) {
-        for (auto&& item : config_options) {
+        for (auto&& item : params.options) {
             sstring key = item.first;
             if (!expected->contains(key)) {
                  throw exceptions::configuration_exception(format("Unrecognized strategy option {{{}}} passed to {} for keyspace {}", key, strategy_name, ks_name));
@@ -75,7 +73,7 @@ future<endpoint_set> abstract_replication_strategy::calculate_natural_ips(const 
 
 using strategy_class_registry = class_registry<
     locator::abstract_replication_strategy,
-    const locator::replication_strategy_config_options&>;
+    replication_strategy_params>;
 
 sstring abstract_replication_strategy::to_qualified_class_name(std::string_view strategy_class_name) {
     return strategy_class_registry::to_qualified_class_name(strategy_class_name);

@@ -198,6 +198,7 @@ db::schema_features feature_service::cluster_schema_features() const {
     f.set_if<db::schema_feature::CDC_OPTIONS>(cdc);
     f.set_if<db::schema_feature::PER_TABLE_PARTITIONERS>(per_table_partitioners);
     f.set_if<db::schema_feature::SCYLLA_KEYSPACES>(keyspace_storage_options);
+    f.set_if<db::schema_feature::SCYLLA_KEYSPACES>(tablets);
     f.set_if<db::schema_feature::SCYLLA_AGGREGATES>(aggregate_storage_options);
     f.set_if<db::schema_feature::TABLE_DIGEST_INSENSITIVE_TO_EXPIRY>(table_digest_insensitive_to_expiry);
     f.set_if<db::schema_feature::GROUP0_SCHEMA_VERSIONING>(group0_schema_versioning);

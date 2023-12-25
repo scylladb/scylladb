@@ -267,9 +267,10 @@ void simple_test() {
         {"101", "2"},
         {"102", "3"}
     };
+    locator::replication_strategy_params params323(options323, std::nullopt);
 
     auto ars_ptr = abstract_replication_strategy::create_replication_strategy(
-        "NetworkTopologyStrategy", options323);
+        "NetworkTopologyStrategy", params323);
 
     full_ring_check(ring_points, options323, ars_ptr, stm.get());
 
@@ -280,9 +281,10 @@ void simple_test() {
         {"101", "2"},
         {"102", "0"}
     };
+    locator::replication_strategy_params params320(options320, std::nullopt);
 
     ars_ptr = abstract_replication_strategy::create_replication_strategy(
-        "NetworkTopologyStrategy", options320);
+        "NetworkTopologyStrategy", params320);
 
     full_ring_check(ring_points, options320, ars_ptr, stm.get());
 
@@ -365,8 +367,9 @@ void heavy_origin_test() {
         }
     }).get();
 
+    locator::replication_strategy_params params(config_options, std::nullopt);
     auto ars_ptr = abstract_replication_strategy::create_replication_strategy(
-        "NetworkTopologyStrategy", config_options);
+        "NetworkTopologyStrategy", params);
 
     full_ring_check(ring_points, config_options, ars_ptr, stm.get());
 }
@@ -430,11 +433,11 @@ SEASTAR_THREAD_TEST_CASE(NetworkTopologyStrategy_tablets_test) {
             {"100", "3"},
             {"101", "2"},
             {"102", "3"},
-            {"initial_tablets", "100"}
     };
+    locator::replication_strategy_params params323(options323, 100);
 
     auto ars_ptr = abstract_replication_strategy::create_replication_strategy(
-            "NetworkTopologyStrategy", options323);
+            "NetworkTopologyStrategy", params323);
 
     auto tab_awr_ptr = ars_ptr->maybe_as_tablet_aware();
     BOOST_REQUIRE(tab_awr_ptr);
@@ -453,11 +456,11 @@ SEASTAR_THREAD_TEST_CASE(NetworkTopologyStrategy_tablets_test) {
             {"100", "3"},
             {"101", "2"},
             {"102", "0"},
-            {"initial_tablets", "100"}
     };
+    locator::replication_strategy_params params320(options320, 100);
 
     ars_ptr = abstract_replication_strategy::create_replication_strategy(
-            "NetworkTopologyStrategy", options320);
+            "NetworkTopologyStrategy", params320);
     tab_awr_ptr = ars_ptr->maybe_as_tablet_aware();
     BOOST_REQUIRE(tab_awr_ptr);
 
@@ -469,11 +472,11 @@ SEASTAR_THREAD_TEST_CASE(NetworkTopologyStrategy_tablets_test) {
             {"100", "3"},
             {"101", "4"},
             {"102", "2"},
-            {"initial_tablets", "100"}
     };
+    locator::replication_strategy_params params324(options324, 100);
 
     ars_ptr = abstract_replication_strategy::create_replication_strategy(
-            "NetworkTopologyStrategy", options324);
+            "NetworkTopologyStrategy", params324);
     tab_awr_ptr = ars_ptr->maybe_as_tablet_aware();
     BOOST_REQUIRE(tab_awr_ptr);
 
@@ -642,13 +645,13 @@ static void test_equivalence(const shared_token_metadata& stm, const locator::to
         using network_topology_strategy::calculate_natural_endpoints;
     };
 
-    my_network_topology_strategy nts(
+    my_network_topology_strategy nts(replication_strategy_params(
                     boost::copy_range<std::map<sstring, sstring>>(
                                     datacenters
                                                     | boost::adaptors::transformed(
                                                                     [](const std::pair<sstring, size_t>& p) {
                                                                         return std::make_pair(p.first, to_sstring(p.second));
-                                                                    })));
+                                                                    })), std::nullopt));
 
     const token_metadata& tm = *stm.get();
     for (size_t i = 0; i < 1000; ++i) {

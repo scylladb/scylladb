@@ -21,8 +21,7 @@ namespace locator {
 class network_topology_strategy : public abstract_replication_strategy
                                 , public tablet_aware_replication_strategy {
 public:
-    network_topology_strategy(
-        const replication_strategy_config_options& config_options);
+    network_topology_strategy(replication_strategy_params params);
 
     virtual size_t get_replication_factor(const token_metadata&) const override {
         return _rep_factor;

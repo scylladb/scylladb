@@ -22,11 +22,18 @@ static std::map<sstring, sstring> prepare_options(
         const sstring& strategy_class,
         const locator::token_metadata& tm,
         std::map<sstring, sstring> options,
+        std::optional<unsigned>& initial_tablets,
         const std::map<sstring, sstring>& old_options = {}) {
     options.erase(ks_prop_defs::REPLICATION_STRATEGY_CLASS_KEY);
 
     if (locator::abstract_replication_strategy::to_qualified_class_name(strategy_class) != "org.apache.cassandra.locator.NetworkTopologyStrategy") {
         return options;
+    }
+
+    auto itt = options.find("initial_tablets");
+    if (itt != options.end()) {
+        initial_tablets = std::stol(itt->second);
+        options.erase(itt);
     }
 
     // For users' convenience, expand the 'replication_factor' option into a replication factor for each DC.
@@ -113,22 +120,26 @@ std::optional<sstring> ks_prop_defs::get_replication_strategy_class() const {
 
 lw_shared_ptr<data_dictionary::keyspace_metadata> ks_prop_defs::as_ks_metadata(sstring ks_name, const locator::token_metadata& tm) {
     auto sc = get_replication_strategy_class().value();
+    std::optional<unsigned> initial_tablets;
+    auto options = prepare_options(sc, tm, get_replication_options(), initial_tablets);
     return data_dictionary::keyspace_metadata::new_keyspace(ks_name, sc,
-            prepare_options(sc, tm, get_replication_options()), get_boolean(KW_DURABLE_WRITES, true), std::vector<schema_ptr>{}, get_storage_options());
+            std::move(options), initial_tablets, get_boolean(KW_DURABLE_WRITES, true), std::vector<schema_ptr>{}, get_storage_options());
 }
 
 lw_shared_ptr<data_dictionary::keyspace_metadata> ks_prop_defs::as_ks_metadata_update(lw_shared_ptr<data_dictionary::keyspace_metadata> old, const locator::token_metadata& tm) {
     std::map<sstring, sstring> options;
     const auto& old_options = old->strategy_options();
     auto sc = get_replication_strategy_class();
+    std::optional<unsigned> initial_tablets;
     if (sc) {
-        options = prepare_options(*sc, tm, get_replication_options(), old_options);
+        options = prepare_options(*sc, tm, get_replication_options(), initial_tablets, old_options);
     } else {
         sc = old->strategy_name();
         options = old_options;
+        initial_tablets = old->initial_tablets();
     }
 
-    return data_dictionary::keyspace_metadata::new_keyspace(old->name(), *sc, options, get_boolean(KW_DURABLE_WRITES, true), std::vector<schema_ptr>{}, get_storage_options());
+    return data_dictionary::keyspace_metadata::new_keyspace(old->name(), *sc, options, initial_tablets, get_boolean(KW_DURABLE_WRITES, true), std::vector<schema_ptr>{}, get_storage_options());
 }
 
 

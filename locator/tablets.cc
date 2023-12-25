@@ -524,32 +524,31 @@ size_t tablet_aware_replication_strategy::parse_initial_tablets(const sstring& v
     }
 }
 
-void tablet_aware_replication_strategy::validate_tablet_options(const gms::feature_service& fs,
+void tablet_aware_replication_strategy::validate_tablet_options(const abstract_replication_strategy& ars,
+                                                                const gms::feature_service& fs,
                                                                 const replication_strategy_config_options& opts) const {
-    for (auto& c: opts) {
-        if (c.first == "initial_tablets") {
-            if (!fs.tablets) {
-                throw exceptions::configuration_exception("Tablet replication is not enabled");
-            }
-            parse_initial_tablets(c.second);
-        }
+    if (ars._uses_tablets && !fs.tablets) {
+        throw exceptions::configuration_exception("Tablet replication is not enabled");
     }
 }
 
 void tablet_aware_replication_strategy::process_tablet_options(abstract_replication_strategy& ars,
-                                                               replication_strategy_config_options& opts) {
+                                                               replication_strategy_config_options& opts,
+                                                               replication_strategy_params params) {
     auto i = opts.find("initial_tablets");
     if (i != opts.end()) {
-        _initial_tablets = parse_initial_tablets(i->second);
+        throw exceptions::configuration_exception("initial_tablets is reserved name for NetworkTopologyStrategy");
+    }
+
+    if (params.initial_tablets.has_value()) {
+        _initial_tablets = *params.initial_tablets;
         ars._uses_tablets = true;
         mark_as_per_table(ars);
-        opts.erase(i);
     }
 }
 
 std::unordered_set<sstring> tablet_aware_replication_strategy::recognized_tablet_options() const {
     std::unordered_set<sstring> opts;
-    opts.insert("initial_tablets");
     return opts;
 }
 
