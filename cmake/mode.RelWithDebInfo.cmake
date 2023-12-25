@@ -1,3 +1,8 @@
+# it's important to *set* CMAKE_CXX_FLAGS_RELWITHDEBINFO here. otherwise,
+# CMAKE_CXX_FLAGS_RELWITHDEBINFO would be initialized with
+# CMAKE_CXX_FLAGS_RELWITHDEBUGINF_INIT, which is "-O2 -g -DNDEBUG",
+# in CMake 3.27, but we need to enable "assert()" even with the release
+# builds. so let's set this flagset instead of appending to it.
 set(CMAKE_CXX_FLAGS_RELWITHDEBINFO
   "-ffunction-sections -fdata-sections"
   CACHE
