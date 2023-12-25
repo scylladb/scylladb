@@ -759,6 +759,15 @@ public:
         return has_component(component_type::Scylla);
     }
 
+    // Returns an optional boolean value set to true iff the
+    // sstable's `originating_host_id` in stats metadata equals
+    // this node's host_id.
+    //
+    // The returned value may be nullopt if:
+    // - The sstable format is older than version_types::me, or
+    // - The local host_id is unknown yet (may happen early in the start-up process)
+    std::optional<bool> originated_on_this_node() const;
+
     void validate_originating_host_id() const;
 
     bool has_correct_promoted_index_entries() const {

@@ -27,6 +27,7 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/util/closeable.hh>
 #include <seastar/core/shared_ptr.hh>
+#include <seastar/core/shard_id.hh>
 
 #include "dht/i_partitioner.hh"
 #include "sstables/exceptions.hh"
@@ -759,14 +760,9 @@ private:
             // sstable than just adding up the lengths of individual sstables.
             _estimated_partitions += sst->get_estimated_key_count();
             _compacting_data_file_size += sst->ondisk_data_size();
-            // TODO:
-            // Note that this is not fully correct. Since we might be merging sstables that originated on
-            // another shard (#cpu changed), we might be comparing RP:s with differing shard ids,
-            // which might vary in "comparable" size quite a bit. However, since the worst that happens
-            // is that we might miss a high water mark for the commit log replayer,
-            // this is kind of ok, esp. since we will hopefully not be trying to recover based on
-            // compacted sstables anyway (CL should be clean by then).
-            _rp = std::max(_rp, sst_stats.position);
+            if (sst->originated_on_this_node().value_or(false) && sst_stats.position.shard_id() == this_shard_id()) {
+                _rp = std::max(_rp, sst_stats.position);
+            }
         }
         log_info("{} {}", report_start_desc(), formatted_msg);
         if (ssts->size() < _sstables.size()) {

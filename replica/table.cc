@@ -2168,7 +2168,9 @@ future<db::replay_position> table::discard_sstables(db_clock::time_point truncat
                                             replica::enable_backlog_tracker enable_backlog_tracker) mutable {
                 pruning->for_each_sstable([&] (const sstables::shared_sstable& p) mutable {
                     if (p->max_data_age() <= gc_trunc) {
-                        rp = std::max(p->get_stats_metadata().position, rp);
+                        if (p->originated_on_this_node().value_or(false) && p->get_stats_metadata().position.shard_id() == this_shard_id()) {
+                            rp = std::max(p->get_stats_metadata().position, rp);
+                        }
                         remove.emplace_back(removed_sstable{cg, p, enable_backlog_tracker});
                         return;
                     }

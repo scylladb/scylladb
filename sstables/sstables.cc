@@ -1939,6 +1939,32 @@ bool sstable::has_component(component_type f) const {
     return _recognized_components.contains(f);
 }
 
+std::optional<bool> sstable::originated_on_this_node() const {
+    if (_version < version_types::me) {
+        // earlier formats do not store originating host id
+        return std::nullopt;
+    }
+
+    auto originating_host_id = get_stats_metadata().originating_host_id;
+    if (!originating_host_id) {
+        // Scylla always fills in originating host id when writing
+        // sstables, so an ME-and-up sstable that does not have it is
+        // invalid
+        on_internal_error(sstlog, format("No originating host id in SSTable: {}. Load foreign SSTables via the upload dir instead.", get_filename()));
+    }
+
+    auto local_host_id = _manager.get_local_host_id();
+    if (!local_host_id) {
+        // we don't know the local host id before it is loaded from
+        // (or generated and written to) system.local, but some system
+        // sstable reads must happen before the bootstrap process gets
+        // there (like in ther resharding case)
+        return std::nullopt;
+    }
+
+    return *originating_host_id == local_host_id;
+}
+
 void sstable::validate_originating_host_id() const {
     if (_version < version_types::me) {
         // earlier formats do not store originating host id
