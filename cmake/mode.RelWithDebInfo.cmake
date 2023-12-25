@@ -7,8 +7,9 @@ update_cxx_flags(CMAKE_CXX_FLAGS_RELWITHDEBINFO
   WITH_DEBUG_INFO
   OPTIMIZATION_LEVEL "3")
 
+set(scylla_build_mode "release")
 add_compile_definitions(
-    $<$<CONFIG:RelWithDebInfo>:SCYLLA_BUILD_MODE=release>)
+    $<$<CONFIG:RelWithDebInfo>:SCYLLA_BUILD_MODE=${scylla_build_mode}>)
 
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "arm64|aarch64")
   set(clang_inline_threshold 300)
