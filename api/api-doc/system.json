@@ -179,6 +179,21 @@
                ]
             }
          ]
+      },
+      {
+         "path":"/system/dump_llvm_profile",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"Dump llvm profile data (raw profile data) that can later be used for coverage reporting or PGO (no-op if the current binary is not instrumented)",
+               "type":"void",
+               "nickname":"dump_profile",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[]
+            }
+         ]
       }
    ]
 }
