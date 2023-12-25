@@ -233,6 +233,7 @@ private:
     future<> do_build_step();
     void execute(build_step&, exponential_backoff_retry);
     future<> maybe_mark_view_as_built(view_ptr, dht::token);
+    future<> mark_as_built(view_ptr);
     void setup_metrics();
 
     struct consumer;
