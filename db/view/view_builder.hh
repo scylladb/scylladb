@@ -219,6 +219,9 @@ public:
 
     future<std::unordered_map<sstring, sstring>> view_build_statuses(sstring keyspace, sstring view_name) const;
 
+    // Can only be called on shard-0
+    future<> mark_existing_views_as_built();
+
 private:
     build_step& get_or_create_build_step(table_id);
     future<> initialize_reader_at_current_token(build_step&);

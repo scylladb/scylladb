@@ -2587,6 +2587,15 @@ void view_builder::execute(build_step& step, exponential_backoff_retry r) {
     }).get();
 }
 
+future<> view_builder::mark_existing_views_as_built() {
+    assert(this_shard_id() == 0);
+    auto views = _db.get_views();
+    co_await coroutine::parallel_for_each(views, [this] (view_ptr& view) -> future<> {
+        co_await _sys_ks.mark_view_as_built(view->ks_name(), view->cf_name());
+        co_await _sys_dist_ks.finish_view_build(view->ks_name(), view->cf_name());
+    });
+}
+
 future<> view_builder::maybe_mark_view_as_built(view_ptr view, dht::token next_token) {
     _built_views.emplace(view->id());
     vlogger.debug("Shard finished building view {}.{}", view->ks_name(), view->cf_name());

@@ -393,8 +393,6 @@ public:
 
 private:
     void set_mode(mode m);
-    // Can only be called on shard-0
-    future<> mark_existing_views_as_built();
 
     // Stream data for which we become a new replica.
     // Before that, if we're not replacing another node, inform other nodes about our chosen tokens
