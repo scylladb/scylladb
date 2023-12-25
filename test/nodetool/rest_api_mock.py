@@ -233,7 +233,11 @@ def get_expected_requests(server):
     ip, port = server
     r = requests.get(f"http://{ip}:{port}/{rest_server.EXPECTED_REQUESTS_PATH}")
     r.raise_for_status()
-    return [_make_expected_request(r) for r in r.json()]
+    try:
+        return [_make_expected_request(r) for r in r.json()]
+    except json.decoder.JSONDecodeError:
+        logger.exception('unable to decode server response as JSON: %r', r)
+        raise
 
 
 def clear_expected_requests(server):
