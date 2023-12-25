@@ -62,8 +62,7 @@ function(add_scylla_test name)
   elseif(kind STREQUAL "BOOST")
     target_link_libraries(${name}
       PRIVATE
-        Boost::unit_test_framework
-        Boost::dynamic_linking)
+        Boost::unit_test_framework)
   elseif(kind STREQUAL "UNIT")
     target_link_libraries(${name}
       PRIVATE
