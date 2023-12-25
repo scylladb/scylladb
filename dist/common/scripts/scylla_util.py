@@ -12,8 +12,9 @@ import shutil
 import subprocess
 import yaml
 import sys
+import time
 from pathlib import Path, PurePath
-from subprocess import run, DEVNULL
+from subprocess import run, DEVNULL, PIPE, CalledProcessError
 from datetime import datetime, timedelta
 
 import distro
@@ -25,7 +26,6 @@ from multiprocessing import cpu_count
 import traceback
 import traceback_with_variables
 import logging
-
 
 def scylla_excepthook(etype, value, tb):
     os.makedirs('/var/tmp/scylla', mode=0o755, exist_ok=True)
@@ -311,14 +311,38 @@ def apt_is_updated():
         return False
     return datetime.now() - datetime.fromtimestamp(cache_mtime) <= timedelta(days=1)
 
+APT_GET_UPDATE_NUM_RETRY = 30
+APT_GET_UPDATE_RETRY_INTERVAL = 10
 def apt_install(pkg):
     if is_offline():
         pkg_error_exit(pkg)
-    if not apt_is_updated():
-        run('apt-get update', shell=True, check=True)
+
+    # The lock for update and install/remove are different, and
+    # DPkg::Lock::Timeout will only wait for install/remove lock.
+    # So we need to manually retry apt-get update.
+    for i in range(APT_GET_UPDATE_NUM_RETRY):
+        if apt_is_updated():
+            break
+        try:
+            res = run('apt-get update', shell=True, check=True, stderr=PIPE, encoding='utf-8')
+            break
+        except CalledProcessError as e:
+            print(e.stderr, end='')
+            # if error is "Could not get lock", wait a while and retry
+            match = re.match('^E: Could not get lock ', e.stderr, re.MULTILINE)
+            if match:
+                print('Sleep 10 seconds to wait for apt lock...')
+                time.sleep(APT_GET_UPDATE_RETRY_INTERVAL)
+                # if this is last time to retry, re-raise exception
+                if i == APT_GET_UPDATE_NUM_RETRY - 1:
+                    raise
+            # if error is not "Could not get lock", re-raise Exception
+            else:
+                raise
+
     apt_env = os.environ.copy()
     apt_env['DEBIAN_FRONTEND'] = 'noninteractive'
-    return run(f'apt-get install -y {pkg}', shell=True, check=True, env=apt_env)
+    return run(f'apt-get -o DPkg::Lock::Timeout=300 install -y {pkg}', shell=True, check=True, env=apt_env)
 
 def emerge_install(pkg):
     if is_offline():
@@ -361,7 +385,7 @@ def yum_uninstall(pkg):
 def apt_uninstall(pkg):
     apt_env = os.environ.copy()
     apt_env['DEBIAN_FRONTEND'] = 'noninteractive'
-    return run(f'apt-get remove -y {pkg}', shell=True, check=True, env=apt_env)
+    return run(f'apt-get -o DPkg::Lock::Timeout=300 remove -y {pkg}', shell=True, check=True, env=apt_env)
 
 def emerge_uninstall(pkg):
     return run(f'emerge --deselect {pkg}', shell=True, check=True)
