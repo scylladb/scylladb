@@ -433,12 +433,17 @@ protected:
     }
 };
 
-::shared_ptr<selection> selection::wildcard(schema_ptr schema) {
+// Return a list of columns that "SELECT *" should show - these are all
+// columns except potentially some that are is_hidden_from_cql() (currently,
+// those can be the "virtual columns" used in materialized views).
+// The list points to column_definition objects in the given schema_ptr,
+// which can be used only as long as the caller keeps the schema_ptr alive.
+std::vector<const column_definition*> selection::wildcard_columns(schema_ptr schema) {
     auto columns = schema->all_columns_in_select_order();
     // filter out hidden columns, which should not be seen by the
     // user when doing "SELECT *". We also disallow selecting them
     // individually (see column_identifier::new_selector_factory()).
-    auto cds = boost::copy_range<std::vector<const column_definition*>>(
+    return boost::copy_range<std::vector<const column_definition*>>(
         columns |
         boost::adaptors::filtered([](const column_definition& c) {
             return !c.is_hidden_from_cql();
@@ -446,7 +451,10 @@ protected:
         boost::adaptors::transformed([](const column_definition& c) {
             return &c;
         }));
-    return simple_selection::make(schema, std::move(cds), true);
+}
+
+::shared_ptr<selection> selection::wildcard(schema_ptr schema) {
+    return simple_selection::make(schema, wildcard_columns(schema), true);
 }
 
 ::shared_ptr<selection> selection::for_columns(schema_ptr schema, std::vector<const column_definition*> columns) {

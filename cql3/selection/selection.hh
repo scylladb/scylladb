@@ -118,6 +118,7 @@ public:
     }
 
     static ::shared_ptr<selection> wildcard(schema_ptr schema);
+    static std::vector<const column_definition*> wildcard_columns(schema_ptr schema);
     static ::shared_ptr<selection> for_columns(schema_ptr schema, std::vector<const column_definition*> columns);
 
     // Adds a column to the selection and result set. Returns an index within the result set row.
