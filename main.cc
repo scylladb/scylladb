@@ -1179,6 +1179,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             static sharded<db::system_distributed_keyspace> sys_dist_ks;
             static sharded<db::system_keyspace> sys_ks;
             static sharded<db::view::view_update_generator> view_update_generator;
+            static sharded<db::view::view_builder> view_builder;
             static sharded<cdc::generation_service> cdc_generation_service;
 
             db::sstables_format_selector sst_format_selector(db);
@@ -1790,6 +1791,12 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 mm_notifier.local().unregister_listener(&ss.local()).get();
             });
 
+            supervisor::notify("starting the view builder");
+            view_builder.start(std::ref(db), std::ref(sys_ks), std::ref(sys_dist_ks), std::ref(mm_notifier), std::ref(view_update_generator)).get();
+            auto stop_view_builder = defer_verbose_shutdown("view builder", [cfg] {
+                view_builder.stop().get();
+            });
+
             /*
              * FIXME. In bb07678346 commit the API toggle for autocompaction was
              * (partially) delayed until system prepared to join the ring. Probably
@@ -1931,17 +1938,9 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 view_update_generator.invoke_on_all(&db::view::view_update_generator::start).get();
             }
 
-            static sharded<db::view::view_builder> view_builder;
             if (cfg->view_building()) {
-                supervisor::notify("starting the view builder");
-                view_builder.start(std::ref(db), std::ref(sys_ks), std::ref(sys_dist_ks), std::ref(mm_notifier), std::ref(view_update_generator)).get();
                 view_builder.invoke_on_all(&db::view::view_builder::start, std::ref(mm)).get();
             }
-            auto stop_view_builder = defer_verbose_shutdown("view builder", [cfg] {
-                if (cfg->view_building()) {
-                    view_builder.stop().get();
-                }
-            });
 
             api::set_server_view_builder(ctx, view_builder).get();
             auto stop_vb_api = defer_verbose_shutdown("view builder API", [&ctx] {
