@@ -1347,7 +1347,7 @@ static future<> do_merge_schema(distributed<service::storage_proxy>& proxy, shar
 
 future<lw_shared_ptr<query::result_set>> extract_scylla_specific_keyspace_info(distributed<service::storage_proxy>& proxy, const schema_result_value_type& partition) {
     lw_shared_ptr<query::result_set> scylla_specific_rs;
-    if (proxy.local().features().cluster_schema_features().contains<schema_feature::SCYLLA_KEYSPACES>()) {
+    if (proxy.local().local_db().has_schema(NAME, SCYLLA_KEYSPACES)) {
         auto&& rs = partition.second;
         if (rs->empty()) {
             co_await coroutine::return_exception(std::runtime_error("query result has no rows"));
