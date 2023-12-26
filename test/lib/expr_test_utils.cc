@@ -497,12 +497,12 @@ class mock_database_impl : public data_dictionary::impl {
 public:
     explicit mock_database_impl(schema_ptr table_schema)
         : _table_schema(table_schema),
-          _keyspace_metadata(data_dictionary::keyspace_metadata::new_keyspace(_table_schema->ks_name(),
+          _keyspace_metadata(make_lw_shared<data_dictionary::keyspace_metadata>(_table_schema->ks_name(),
                                                                               "MockReplicationStrategy",
-                                                                              {},
-                                                                              {},
+                                                                              locator::replication_strategy_config_options{},
+                                                                              std::nullopt,
                                                                               false,
-                                                                              {_table_schema})) {}
+                                                                              std::vector<schema_ptr>({_table_schema}))) {}
 
     static std::pair<data_dictionary::database, std::unique_ptr<mock_database_impl>> make(schema_ptr table_schema) {
         std::unique_ptr<mock_database_impl> mock_db = std::make_unique<mock_database_impl>(table_schema);
