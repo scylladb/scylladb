@@ -115,8 +115,7 @@ void memtable::memtable_encoding_stats_collector::update(const ::schema& s, cons
 }
 
 memtable::memtable(schema_ptr schema, dirty_memory_manager& dmm,
-    logalloc::allocating_section& read_section,
-    logalloc::allocating_section& allocating_section,
+    memtable_table_shared_data& table_shared_data,
     replica::table_stats& table_stats,
     memtable_list* memtable_list, seastar::scheduling_group compaction_scheduling_group)
         : dirty_memory_manager_logalloc::size_tracked_region()
@@ -125,8 +124,7 @@ memtable::memtable(schema_ptr schema, dirty_memory_manager& dmm,
                    [this] (size_t freed) { remove_flushed_memory(freed); })
         , _memtable_list(memtable_list)
         , _schema(std::move(schema))
-        , _read_section(read_section)
-        , _allocating_section(allocating_section)
+        , _table_shared_data(table_shared_data)
         , partitions(dht::raw_token_less_comparator{})
         , _table_stats(table_stats) {
     logalloc::region::listen(&dmm.region_group());
@@ -134,12 +132,11 @@ memtable::memtable(schema_ptr schema, dirty_memory_manager& dmm,
 
 static thread_local dirty_memory_manager mgr_for_tests;
 static thread_local replica::table_stats stats_for_tests;
-static thread_local logalloc::allocating_section memtable_read_section_for_tests;
-static thread_local logalloc::allocating_section memtable_allocating_section_for_tests;
+static thread_local memtable_table_shared_data memtable_shared_data_for_tests;
 
 memtable::memtable(schema_ptr schema)
         : memtable(std::move(schema), mgr_for_tests,
-                 memtable_read_section_for_tests, memtable_allocating_section_for_tests, stats_for_tests)
+                 memtable_shared_data_for_tests, stats_for_tests)
 { }
 
 memtable::~memtable() {
@@ -346,7 +343,7 @@ protected:
     }
 
     logalloc::allocating_section& read_section() {
-        return _memtable->_read_section;
+        return _memtable->_table_shared_data.read_section;
     }
 
     lw_shared_ptr<memtable> mtbl() {
@@ -714,7 +711,7 @@ memtable::make_flat_reader_opt(schema_ptr s,
     bool is_reversed = slice.is_reversed();
     if (query::is_single_partition(range) && !fwd_mr) {
         const query::ring_position& pos = range.start()->value();
-        auto snp = _read_section(*this, [&] () -> partition_snapshot_ptr {
+        auto snp = _table_shared_data.read_section(*this, [&] () -> partition_snapshot_ptr {
             auto i = partitions.find(pos, dht::ring_position_comparator(*_schema));
             if (i != partitions.end()) {
                 upgrade_entry(*i);
@@ -733,7 +730,7 @@ memtable::make_flat_reader_opt(schema_ptr s,
         auto cr = query::clustering_key_filter_ranges(ranges);
 
         bool digest_requested = slice.options.contains<query::partition_slice::option::with_digest>();
-        auto rd = make_partition_snapshot_flat_reader_from_snp_schema(is_reversed, std::move(permit), std::move(dk), std::move(cr), std::move(snp), digest_requested, *this, _read_section, shared_from_this(), fwd, *this);
+        auto rd = make_partition_snapshot_flat_reader_from_snp_schema(is_reversed, std::move(permit), std::move(dk), std::move(cr), std::move(snp), digest_requested, *this, _table_shared_data.read_section, shared_from_this(), fwd, *this);
         rd.upgrade_schema(s);
         return rd;
     } else {
@@ -782,7 +779,7 @@ memtable::apply(memtable& mt, reader_permit permit) {
 void
 memtable::apply(const mutation& m, db::rp_handle&& h) {
     with_allocator(allocator(), [this, &m] {
-        _allocating_section(*this, [&, this] {
+        _table_shared_data.allocating_section(*this, [&, this] {
             auto& p = find_or_create_partition(m.decorated_key());
             _stats_collector.update(*m.schema(), m.partition());
             p.apply(region(), cleaner(), *_schema, m.partition(), *m.schema(), _table_stats.memtable_app_stats);
@@ -794,7 +791,7 @@ memtable::apply(const mutation& m, db::rp_handle&& h) {
 void
 memtable::apply(const frozen_mutation& m, const schema_ptr& m_schema, db::rp_handle&& h) {
     with_allocator(allocator(), [this, &m, &m_schema] {
-        _allocating_section(*this, [&, this] {
+        _table_shared_data.allocating_section(*this, [&, this] {
             auto& p = find_or_create_partition_slow(m.key());
             mutation_partition mp(*m_schema);
             partition_builder pb(*m_schema, mp);
