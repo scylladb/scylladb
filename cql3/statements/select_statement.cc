@@ -226,7 +226,8 @@ future<> select_statement::check_access(query_processor& qp, const service::clie
     }
     if (!_selection->is_trivial()) {
         std::vector<::shared_ptr<functions::function>> used_functions = _selection->used_functions();
-        for (const auto& used_function : used_functions) {
+        auto not_native = [] (::shared_ptr<functions::function> func) { return !func->is_native(); };
+        for (const auto& used_function : used_functions | std::ranges::views::filter(not_native)) {
             sstring encoded_signature = auth::encode_signature(used_function->name().name, used_function->arg_types());
             co_await state.has_function_access(used_function->name().keyspace, encoded_signature, auth::permission::EXECUTE);
         }
