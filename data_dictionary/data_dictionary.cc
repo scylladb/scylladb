@@ -203,36 +203,6 @@ keyspace_metadata::keyspace_metadata(std::string_view name,
              locator::replication_strategy_config_options strategy_options,
              std::optional<unsigned> initial_tablets,
              bool durable_writes,
-             std::vector<schema_ptr> cf_defs)
-    : keyspace_metadata(name,
-                        strategy_name,
-                        std::move(strategy_options),
-                        initial_tablets,
-                        durable_writes,
-                        std::move(cf_defs),
-                        user_types_metadata{}) { }
-
-keyspace_metadata::keyspace_metadata(std::string_view name,
-             std::string_view strategy_name,
-             locator::replication_strategy_config_options strategy_options,
-             std::optional<unsigned> initial_tablets,
-             bool durable_writes,
-             std::vector<schema_ptr> cf_defs,
-             user_types_metadata user_types)
-    : keyspace_metadata(name,
-                        strategy_name,
-                        std::move(strategy_options),
-                        initial_tablets,
-                        durable_writes,
-                        std::move(cf_defs),
-                        std::move(user_types),
-                        storage_options{}) { }
-
-keyspace_metadata::keyspace_metadata(std::string_view name,
-             std::string_view strategy_name,
-             locator::replication_strategy_config_options strategy_options,
-             std::optional<unsigned> initial_tablets,
-             bool durable_writes,
              std::vector<schema_ptr> cf_defs,
              user_types_metadata user_types,
              storage_options storage_opts)
