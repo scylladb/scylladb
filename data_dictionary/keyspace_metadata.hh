@@ -45,7 +45,7 @@ public:
                  std::string_view strategy_name,
                  locator::replication_strategy_config_options options,
                  std::optional<unsigned> initial_tablets,
-                 bool durables_writes,
+                 bool durables_writes = true,
                  std::vector<schema_ptr> cf_defs = std::vector<schema_ptr>{},
                  storage_options storage_opts = {});
     static lw_shared_ptr<keyspace_metadata>
