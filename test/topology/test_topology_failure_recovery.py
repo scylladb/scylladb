@@ -50,6 +50,16 @@ async def test_topology_streaming_failure(request, manager: ManagerClient):
     assert s not in servers
     matches = [await log.grep("storage_service - rollback.*after bootstrapping failure to state left_token_ring", from_mark=mark) for log, mark in zip(logs, marks)]
     assert sum(len(x) for x in matches) == 1
+    # bootstrap failure in raft barrier
+    marks = [await log.mark() for log in logs]
+    servers = await manager.running_servers()
+    s = await manager.server_add(start=False)
+    await manager.api.enable_injection(servers[1].ip_addr, 'raft_topology_barrier_fail', one_shot=True)
+    await manager.server_start(s.server_id, expected_error="Bootstrap failed. See earlier errors")
+    servers = await manager.running_servers()
+    assert s not in servers
+    matches = [await log.grep("storage_service - rollback.*after bootstrapping failure to state left_token_ring", from_mark=mark) for log, mark in zip(logs, marks)]
+    assert sum(len(x) for x in matches) == 1
     # replace failure
     marks = [await log.mark() for log in logs]
     servers = await manager.running_servers()

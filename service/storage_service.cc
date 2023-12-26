@@ -6387,6 +6387,8 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
 
         switch (cmd.cmd) {
             case raft_topology_cmd::command::barrier: {
+                utils::get_local_injector().inject("raft_topology_barrier_fail",
+                                       [] { throw std::runtime_error("raft topology barrier failed due to error injection"); });
                 // This barrier might have been issued by the topology coordinator
                 // as a step in enabling a feature, i.e. it noticed that all
                 // nodes support some feature, then issue the barrier to make
