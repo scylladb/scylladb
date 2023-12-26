@@ -534,3 +534,22 @@ def test_create_on_existing_table(cql):
                     user_session.execute(f"CREATE TABLE IF NOT EXISTS {table}(a int primary key)")
                     ensure_updated_permissions()
                     ensure_all_table_permissions_unauthorized(user_session)
+
+# Test that native functions permissions are always implicitly granted.
+# every user with SELECT permission for a table should be able to use
+# the native functions (non UDF/UDA functions)
+# ref: https://github.com/scylladb/scylladb/issues/16526
+def test_native_functions_always_exeutable(cql):
+    schema = "a int primary key"
+    with new_test_keyspace(cql,"WITH REPLICATION = { 'class': 'NetworkTopologyStrategy', 'replication_factor': 1 }") as keyspace:
+        with new_test_table(cql,keyspace,schema) as table:
+            cql.execute(f'INSERT INTO {table}(a) VALUES(15)')
+            cql.execute(f'INSERT INTO {table}(a) VALUES(3)')
+            cql.execute(f'INSERT INTO {table}(a) VALUES(84)')
+            with new_user(cql) as username:
+                grant(cql, 'SELECT', table, username)
+                with new_session(cql,username) as user_session:
+                    assert list(user_session.execute(f"SELECT count(*) FROM {table}")) == [(3,)]
+                    assert list(user_session.execute(f"SELECT max(a) FROM {table}")) == [(84,)]
+                    assert list(user_session.execute(f"SELECT min(a) FROM {table}")) == [(3,)]
+                    assert list(user_session.execute(f"SELECT sum(a) FROM {table}")) == [(102,)]
