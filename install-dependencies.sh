@@ -48,6 +48,7 @@ debian_base_packages=(
     libdeflate-dev
     libabsl-dev
     librapidxml-dev
+    libcrypto++-dev
 )
 
 fedora_packages=(
@@ -67,6 +68,7 @@ fedora_packages=(
     libdeflate-devel
     systemd-devel
     abseil-cpp-devel
+    cryptopp-devel
     git
     python
     sudo
