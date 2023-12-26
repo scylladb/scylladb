@@ -2213,8 +2213,7 @@ lw_shared_ptr<keyspace_metadata> create_keyspace_from_schema_partition(const sch
             initial_tablets = row.get<int>("initial_tablets");
         }
     }
-    return make_lw_shared<keyspace_metadata>(keyspace_name, strategy_name, strategy_options, initial_tablets, durable_writes,
-            std::vector<schema_ptr>{}, data_dictionary::user_types_metadata{}, storage_opts);
+    return keyspace_metadata::new_keyspace(keyspace_name, strategy_name, strategy_options, initial_tablets, durable_writes, storage_opts);
 }
 
 template<typename V>
