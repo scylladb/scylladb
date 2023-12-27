@@ -180,8 +180,7 @@ future<> service::create_keyspace_if_missing(::service::migration_manager& mm) c
                     meta::AUTH_KS,
                     "org.apache.cassandra.locator.SimpleStrategy",
                     opts,
-                    std::nullopt,
-                    true);
+                    std::nullopt);
 
             try {
                 co_return co_await mm.announce(::service::prepare_new_keyspace_announcement(db.real_database(), ksm, ts),

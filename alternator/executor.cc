@@ -4534,7 +4534,7 @@ static lw_shared_ptr<keyspace_metadata> create_keyspace_metadata(std::string_vie
         initial_tablets = std::stol(tags_map.at(INITIAL_TABLETS_TAG_KEY));
     }
 
-    return keyspace_metadata::new_keyspace(keyspace_name, "org.apache.cassandra.locator.NetworkTopologyStrategy", std::move(opts), initial_tablets, true);
+    return keyspace_metadata::new_keyspace(keyspace_name, "org.apache.cassandra.locator.NetworkTopologyStrategy", std::move(opts), initial_tablets);
 }
 
 future<> executor::start() {
