@@ -503,6 +503,14 @@ class ScyllaServer:
         if not self.cmd:
             return
 
+        # Dump the profile if exists and supported by the API.
+        try:
+            api = ScyllaRESTAPIClient()
+            await api.dump_llvm_profile(self.ip_addr)
+        except:
+            # since it is not part of the test functionality, allow
+            # this step to fail unconditionally.
+            pass
         await self.shutdown_control_connection()
         try:
             self.cmd.kill()

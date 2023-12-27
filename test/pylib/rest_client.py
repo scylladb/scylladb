@@ -271,7 +271,11 @@ class ScyllaRESTAPIClient():
         if table is not None:
             url += "?cf={table}"
         await self.client.post(url, host=node_ip)
-
+    async def dump_llvm_profile(self, node_ip : str):
+        """Dump llvm profile to disk that can later be used for PGO or coverage reporting.
+           no-op if the scylla binary is not instrumented."""
+        url = "/system/dump_llvm_profile"
+        await self.client.post(url, host=node_ip)
 
 class ScyllaMetrics:
     def __init__(self, lines: list[str]):
