@@ -2156,6 +2156,7 @@ class topology_coordinator {
                     // FIXME: nodes that cannot be reached need to be isolated either automatically or
                     // by an administrator
                     co_await sleep_abortable(_ring_delay, _as);
+                    node = retake_node(co_await start_operation(), node.id);
                 }
                 switch(node.rs->state) {
                 case node_state::bootstrapping: {
@@ -2360,6 +2361,7 @@ class topology_coordinator {
                     // Lets wait for the ring delay for those writes to complete and new topology to propagate
                     // before continuing.
                     co_await sleep_abortable(_ring_delay, _as);
+                    node = retake_node(co_await start_operation(), node.id);
                 }
 
                 // Tell the node to shut down.
