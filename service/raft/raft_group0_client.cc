@@ -294,7 +294,7 @@ future<group0_guard> raft_group0_client::start_operation(seastar::abort_source* 
 }
 
 template<typename Command>
-requires std::same_as<Command, schema_change> || std::same_as<Command, topology_change>
+requires std::same_as<Command, schema_change> || std::same_as<Command, topology_change> || std::same_as<Command, write_mutations>
 group0_command raft_group0_client::prepare_command(Command change, group0_guard& guard, std::string_view description) {
     group0_command group0_cmd {
         .change{std::move(change)},
@@ -335,6 +335,10 @@ group0_command raft_group0_client::prepare_command(Command change, std::string_v
 
 raft_group0_client::raft_group0_client(service::raft_group_registry& raft_gr, db::system_keyspace& sys_ks, maintenance_mode_enabled maintenance_mode)
         : _raft_gr(raft_gr), _sys_ks(sys_ks), _maintenance_mode(maintenance_mode) {
+}
+
+size_t raft_group0_client::max_command_size() const {
+    return _raft_gr.group0().max_command_size();
 }
 
 future<> raft_group0_client::init() {
@@ -483,6 +487,7 @@ void raft_group0_client::set_query_result(utils::UUID query_id, service::broadca
 
 template group0_command raft_group0_client::prepare_command(schema_change change, group0_guard& guard, std::string_view description);
 template group0_command raft_group0_client::prepare_command(topology_change change, group0_guard& guard, std::string_view description);
+template group0_command raft_group0_client::prepare_command(write_mutations change, group0_guard& guard, std::string_view description);
 template group0_command raft_group0_client::prepare_command(broadcast_table_query change, std::string_view description);
 template group0_command raft_group0_client::prepare_command(write_mutations change, std::string_view description);
 
