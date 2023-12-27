@@ -1611,7 +1611,7 @@ static future<> apply_to_remote_endpoints(service::storage_proxy& proxy, locator
         service::allow_hints allow_hints, tracing::trace_state_ptr tr_state) {
     // The "delay_before_remote_view_update" injection point can be
     // used to add a short delay (currently 0.5 seconds) before a base
-    // replica sends its update to the remove view replica.
+    // replica sends its update to the remote view replica.
     co_await utils::get_local_injector().inject("delay_before_remote_view_update", 500ms);
     tracing::trace(tr_state, "Sending view update for {}.{} to {}, with pending endpoints = {}; base token = {}; view token = {}",
             mut.s->ks_name(), mut.s->cf_name(), target, pending_endpoints, base_token, view_token);
