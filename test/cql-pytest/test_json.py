@@ -342,6 +342,41 @@ def test_tojson_timestamp(cql, table1):
     cql.execute(stmt, [p, datetime(2014, 1, 1, 12, 15, 45)])
     assert list(cql.execute(f"SELECT toJson(ts) from {table1} where p = {p}")) == [('"2014-01-01 12:15:45.000Z"',)]
 
+# Although toJson() converts a timestamp to one specific textual format (as we
+# saw in the previous test), following Postel's law several other alternative
+# formats are recognized by fromJson():
+def test_fromjson_timestamp(cql, table1):
+    stmt = cql.prepare(f"INSERT INTO {table1} (p, ts) VALUES (?, fromJson(?))")
+    for json in [
+        '"2014-01-01 12:15:45.000Z"',
+        '"2014-01-01T12:15:45.000Z"',
+        '"2014-01-01 12:15:45.000+0000"',
+        '"2014-01-01 12:15:45+0000"',
+    ]:
+        p = unique_key_int()
+        cql.execute(stmt, [p, json])
+        assert list(cql.execute(f"SELECT ts from {table1} where p = {p}")) == [(datetime(2014, 1, 1, 12, 15, 45),)]
+
+# However, there is one variation on the timestamp format that Scylla refuses
+# to accept, while Cassandra allows: Scylla allows the *fractional* second
+# to only have millisecond precision because that's the precision that
+# timestamps actually have. So Scylla allows "2014-01-01 12:15:45.000Z"
+# but forbids "2014-01-01 12:15:45.000000Z" - whereas Cassandra allows both,
+# and this is what this test shows. Because this is a difference between
+# Scylla and Cassandra, we have this test as xfail - but perhaps it should
+# be considered a meaningless difference.
+#
+# See also issue #16575 which is about Scylla mistakenly using this
+# forbidden format when outputting JSON - which is a problem because then
+# we can't read the JSON we wrote.
+@pytest.mark.xfail(reason="Scylla doesn't accept sub-milisecond also #16575")
+def test_fromjson_timestamp_submilli(cql, table1):
+    stmt = cql.prepare(f"INSERT INTO {table1} (p, ts) VALUES (?, fromJson(?))")
+    p = unique_key_int()
+    json = '"2014-01-01 12:15:45.0000000Z"'
+    cql.execute(stmt, [p, json])
+    assert list(cql.execute(f"SELECT ts from {table1} where p = {p}")) == [(datetime(2014, 1, 1, 12, 15, 45),)]
+
 # Test that toJson() can prints a decimal type with a very high mantissa.
 # Reproduces issue #8002, where it was written as 1 and a billion zeroes,
 # running out of memory.
