@@ -485,6 +485,7 @@ ExecStart=
 ExecStart=$rprefix/bin/scylla \$SCYLLA_ARGS \$SEASTAR_IO \$DEV_MODE \$CPUSET
 ExecStopPost=
 User=
+AmbientCapabilities=
 EOS
     else
         cat << EOS > "$rsystemd"/scylla-server.service.d/nonroot.conf
@@ -498,6 +499,7 @@ ExecStart=
 ExecStart=$rprefix/bin/scylla \$SCYLLA_ARGS \$SEASTAR_IO \$DEV_MODE \$CPUSET
 ExecStopPost=
 User=
+AmbientCapabilities=
 StandardOutput=
 StandardOutput=file:$rprefix/scylla-server.log
 StandardError=
