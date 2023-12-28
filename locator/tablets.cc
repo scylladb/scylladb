@@ -414,6 +414,14 @@ sstring resize_decision::type_name() const {
     return index_to_string[way.index()];
 }
 
+resize_decision::seq_number_t resize_decision::next_sequence_number() const {
+    // Doubt we'll ever wrap around, but just in case.
+    // Even if sequence number is bumped every second, it would take 292471208677 years
+    // for it to happen, about 21x the age of the universe, or ~11x according to the new
+    // prediction after james webb.
+    return (sequence_number == std::numeric_limits<seq_number_t>::max()) ? 0 : sequence_number + 1;
+}
+
 table_load_stats& table_load_stats::operator+=(const table_load_stats& s) noexcept {
     size_in_bytes = size_in_bytes + s.size_in_bytes;
     split_ready_seq_number = std::min(split_ready_seq_number, s.split_ready_seq_number);

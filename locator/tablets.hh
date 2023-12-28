@@ -258,6 +258,7 @@ struct resize_decision {
     }
     bool operator==(const resize_decision&) const;
     sstring type_name() const;
+    seq_number_t next_sequence_number() const;
 };
 
 struct table_load_stats {

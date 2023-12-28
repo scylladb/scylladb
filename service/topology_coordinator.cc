@@ -879,6 +879,19 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             co_await coroutine::maybe_yield();
             generate_migration_update(out, guard, mig);
         }
+
+        for (auto [table_id, resize_decision] : plan.resize_plan().resize) {
+            auto s = _db.find_schema(table_id);
+            auto& tmap = get_token_metadata_ptr()->tablets().get_tablet_map(table_id);
+            // Sequence number is monotonically increasing, globally. Therefore, it can be used to identify a decision.
+            resize_decision.sequence_number = tmap.resize_decision().next_sequence_number();
+            rtlogger.debug("Generating resize decision for table {} of type {} and sequence number {}",
+                           table_id, resize_decision.type_name(), resize_decision.sequence_number);
+            out.emplace_back(
+                replica::tablet_mutation_builder(guard.write_timestamp(), table_id)
+                    .set_resize_decision(std::move(resize_decision))
+                    .build());
+        }
     }
 
     // When "drain" is true, we migrate tablets only as long as there are nodes to drain
