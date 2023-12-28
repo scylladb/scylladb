@@ -1430,6 +1430,10 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
         }
 
         co_await _group0->finish_setup_after_join(*this, _qp, _migration_manager.local(), _raft_topology_change_enabled);
+
+        // Initializes monitor only after updating local topology.
+        start_tablet_split_monitor();
+
         co_return;
     }
 
@@ -2552,6 +2556,9 @@ future<> storage_service::replicate_to_all_cores(mutable_token_metadata_ptr tmpt
             for (auto it = table_erms.begin(); it != table_erms.end(); ) {
                 auto& cf = db.find_column_family(it->first);
                 cf.update_effective_replication_map(std::move(it->second));
+                if (cf.uses_tablets()) {
+                    register_tablet_split_candidate(it->first);
+                }
                 it = table_erms.erase(it);
             }
 
@@ -2576,6 +2583,8 @@ future<> storage_service::stop() {
     _listeners.clear();
     co_await _async_gate.close();
     co_await std::move(_node_ops_abort_thread);
+    _tablet_split_monitor_event.signal();
+    co_await std::move(_tablet_split_monitor);
 }
 
 future<> storage_service::wait_for_group0_stop() {
@@ -4496,6 +4505,89 @@ future<> storage_service::load_tablet_metadata() {
         tmptr->set_tablets(co_await replica::read_tablet_metadata(_qp));
         tmptr->tablets().set_balancing_enabled(_topology_state_machine._topology.tablet_balancing_enabled);
     }, acquire_merge_lock::no);
+}
+
+future<> storage_service::process_tablet_split_candidate(table_id table) {
+    auto all_compaction_groups_split = [&] () mutable {
+        return _db.map_reduce0([table_ = table] (replica::database& db) {
+            auto all_split = db.find_column_family(table_).all_storage_groups_split();
+            return make_ready_future<bool>(all_split);
+        }, bool{true}, std::logical_and<bool>());
+    };
+
+    auto split_all_compaction_groups = [&] () -> future<> {
+        return _db.invoke_on_all([table] (replica::database& db) -> future<> {
+            return db.find_column_family(table).split_all_storage_groups();
+        });
+    };
+
+    exponential_backoff_retry split_retry = exponential_backoff_retry(std::chrono::seconds(5), std::chrono::seconds(300));
+    bool sleep = false;
+
+    while (!_async_gate.is_closed() && !_group0_as.abort_requested()) {
+        try {
+            // Ensures that latest changes to tablet metadata, in group0, are visible
+            auto guard = co_await _group0->client().start_operation(&_group0_as);
+            auto& tmap = get_token_metadata().tablets().get_tablet_map(table);
+            if (!tmap.needs_split()) {
+                release_guard(std::move(guard));
+                break;
+            }
+
+            if (co_await all_compaction_groups_split()) {
+                slogger.info0("All compaction groups of table {} are split ready.", table);
+                release_guard(std::move(guard));
+                break;
+            } else {
+                release_guard(std::move(guard));
+                co_await split_all_compaction_groups();
+            }
+        } catch (...) {
+            slogger.error("Failed to complete splitting of table {} due to {}, retrying after {} seconds",
+                          table, std::current_exception(), split_retry.sleep_time());
+            sleep = true;
+            break;
+        }
+        if (sleep) {
+            co_await split_retry.retry(_group0_as);
+        }
+    }
+}
+
+void storage_service::register_tablet_split_candidate(table_id table) noexcept {
+    if (this_shard_id() != 0) {
+        return;
+    }
+    try {
+        if (get_token_metadata().tablets().get_tablet_map(table).needs_split()) {
+            _tablet_split_candidates.push_back(table);
+            _tablet_split_monitor_event.signal();
+        }
+    } catch (...) {
+        slogger.error("Unable to register table {} as candidate for tablet splitting, due to {}", table, std::current_exception());
+    }
+}
+
+future<> storage_service::run_tablet_split_monitor() {
+    while (!_async_gate.is_closed() && !_group0_as.abort_requested()) {
+        while (!_tablet_split_candidates.empty()) {
+            auto candidate = _tablet_split_candidates.front();
+            _tablet_split_candidates.pop_front();
+            co_await process_tablet_split_candidate(candidate);
+        }
+        co_await _tablet_split_monitor_event.when();
+    }
+}
+
+void storage_service::start_tablet_split_monitor() {
+    if (this_shard_id() != 0) {
+        return;
+    }
+    if (!_db.local().get_config().check_experimental(db::experimental_features_t::feature::TABLETS)) {
+        return;
+    }
+    slogger.info("Starting the tablet split monitor...");
+    _tablet_split_monitor = run_tablet_split_monitor();
 }
 
 future<> storage_service::snitch_reconfigured() {

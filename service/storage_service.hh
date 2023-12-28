@@ -152,6 +152,10 @@ private:
     std::vector<std::any> _listeners;
     gate _async_gate;
 
+    condition_variable _tablet_split_monitor_event;
+    std::deque<table_id> _tablet_split_candidates;
+    future<> _tablet_split_monitor = make_ready_future<>();
+
     std::unordered_map<node_ops_id, node_ops_meta_data> _node_ops;
     std::list<std::optional<node_ops_id>> _node_ops_abort_queue;
     seastar::condition_variable _node_ops_abort_cond;
@@ -172,6 +176,9 @@ private:
     inet_address host2ip(locator::host_id);
     // Handler for table load stats RPC.
     future<locator::load_stats> load_stats_for_tablet_based_tables();
+    future<> process_tablet_split_candidate(table_id);
+    void register_tablet_split_candidate(table_id) noexcept;
+    future<> run_tablet_split_monitor();
 public:
     storage_service(abort_source& as, distributed<replica::database>& db,
         gms::gossiper& gossiper,
@@ -197,6 +204,7 @@ public:
     future<> uninit_messaging_service();
 
     future<> load_tablet_metadata();
+    void start_tablet_split_monitor();
 private:
     using acquire_merge_lock = bool_class<class acquire_merge_lock_tag>;
 
