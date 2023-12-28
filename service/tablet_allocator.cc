@@ -307,7 +307,8 @@ public:
             plan.merge(std::move(dc_plan));
         }
 
-        lblogger.info("Prepared {} migrations", plan.size());
+        lblogger.info("Prepared {} migration plans, out of which there were {} tablet migration(s) and {} resize decision(s)",
+                      plan.size(), plan.tablet_migration_count(), plan.resize_decision_count());
         co_return std::move(plan);
     }
 

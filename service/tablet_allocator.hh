@@ -38,14 +38,17 @@ public:
     using migrations_vector = utils::chunked_vector<tablet_migration_info>;
 private:
     migrations_vector _migrations;
+    table_resize_plan _resize_plan;
     bool _has_nodes_to_drain = false;
 public:
     /// Returns true iff there are decommissioning nodes which own some tablet replicas.
     bool has_nodes_to_drain() const { return _has_nodes_to_drain; }
 
     const migrations_vector& migrations() const { return _migrations; }
-    bool empty() const { return _migrations.empty(); }
-    size_t size() const { return _migrations.size(); }
+    bool empty() const { return _migrations.empty() && !_resize_plan.size(); }
+    size_t size() const { return _migrations.size() + _resize_plan.size(); }
+    size_t tablet_migration_count() const { return _migrations.size(); }
+    size_t resize_decision_count() const { return _resize_plan.size(); }
 
     void add(tablet_migration_info info) {
         _migrations.emplace_back(std::move(info));
@@ -54,10 +57,17 @@ public:
     void merge(migration_plan&& other) {
         std::move(other._migrations.begin(), other._migrations.end(), std::back_inserter(_migrations));
         _has_nodes_to_drain |= other._has_nodes_to_drain;
+        _resize_plan.merge(std::move(other._resize_plan));
     }
 
     void set_has_nodes_to_drain(bool b) {
         _has_nodes_to_drain = b;
+    }
+
+    const table_resize_plan& resize_plan() const { return _resize_plan; }
+
+    void set_resize_plan(table_resize_plan resize_plan) {
+        _resize_plan = std::move(resize_plan);
     }
 };
 
