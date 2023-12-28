@@ -535,6 +535,11 @@ private:
     bool _is_bootstrap_or_replace = false;
     sstables::shared_sstable make_sstable(sstables::sstable_state state);
 
+    // Every table replica that completes split work will load the seq number from tablet metadata into its local
+    // state. So when coordinator pull the local state of a table, it will know whether the table is ready for the
+    // current split, and not a previously revoked (stale) decision.
+    // The minimum value, which is a negative number, is not used by coordinator for first decision.
+    locator::resize_decision::seq_number_t _split_ready_seq_number = std::numeric_limits<locator::resize_decision::seq_number_t>::min();
 public:
     void deregister_metrics();
 
@@ -999,6 +1004,10 @@ public:
     table_stats& get_stats() const {
         return _stats;
     }
+
+    // The tablet filter is used to not double account migrating tablets, so it's important that
+    // only one of pending or leaving replica is accounted based on current migration stage.
+    locator::table_load_stats table_load_stats(std::function<bool(locator::global_tablet_id)> tablet_filter) const noexcept;
 
     const db::view::stats& get_view_stats() const {
         return _view_stats;

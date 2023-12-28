@@ -1838,6 +1838,24 @@ table::table(schema_ptr schema, config config, lw_shared_ptr<const storage_optio
     set_metrics();
 }
 
+locator::table_load_stats table::table_load_stats(std::function<bool(locator::global_tablet_id)> tablet_filter) const noexcept {
+    locator::table_load_stats stats;
+    stats.split_ready_seq_number = _split_ready_seq_number;
+
+    for (unsigned id = 0; id < _storage_groups.size(); id++) {
+        auto& sg = _storage_groups[id];
+        if (!sg) {
+            continue;
+        }
+        locator::global_tablet_id gid { _schema->id(), locator::tablet_id(id) };
+        if (!tablet_filter(gid)) {
+            continue;
+        }
+        stats.size_in_bytes += sg->live_disk_space_used();
+    }
+    return stats;
+}
+
 void table::update_effective_replication_map(locator::effective_replication_map_ptr erm) {
     auto old_erm = std::exchange(_erm, std::move(erm));
     if (old_erm) {
