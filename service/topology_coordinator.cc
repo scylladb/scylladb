@@ -9,6 +9,7 @@
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/as_future.hh>
+#include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/core/future.hh>
 #include <seastar/core/sharded.hh>
 #include <seastar/util/noncopyable_function.hh>
@@ -20,6 +21,7 @@
 #include "gms/gossiper.hh"
 #include "locator/tablets.hh"
 #include "locator/token_metadata.hh"
+#include "locator/network_topology_strategy.hh"
 #include "message/messaging_service.hh"
 #include "replica/database.hh"
 #include "replica/tablet_mutation_builder.hh"
@@ -83,6 +85,13 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     raft_topology_cmd_handler_type _raft_topology_cmd_handler;
 
     tablet_allocator& _tablet_allocator;
+
+    // The reason load_stats_ptr is a shared ptr is that load balancer can yield, and we don't want it
+    // to suffer lifetime issues when stats refresh fiber overrides the current stats.
+    locator::load_stats_ptr _tablet_load_stats;
+    // FIXME: make frequency per table in order to reduce work in each iteration.
+    //  Bigger tables will take longer to be resized. similar-sized tables can be batched into same iteration.
+    static constexpr std::chrono::seconds tablet_load_stats_refresh_interval = std::chrono::seconds(60);
 
     std::chrono::milliseconds _ring_delay;
 
@@ -1982,6 +1991,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     // Returns true if the state machine was transitioned into tablet migration path.
     future<bool> maybe_start_tablet_migration(group0_guard);
 
+    future<locator::load_stats> refresh_tablet_load_stats();
+    future<> start_tablet_load_stats_refresher();
+
     future<> await_event() {
         _as.check();
         co_await _topo_sm.event.when();
@@ -2019,6 +2031,10 @@ public:
 future<bool> topology_coordinator::maybe_start_tablet_migration(group0_guard guard) {
     rtlogger.debug("Evaluating tablet balance");
 
+    if (utils::get_local_injector().enter("tablet_load_stats_refresh_before_rebalancing")) {
+        _tablet_load_stats = make_lw_shared<const locator::load_stats>(co_await refresh_tablet_load_stats());
+    }
+
     auto tm = get_token_metadata_ptr();
     auto plan = co_await _tablet_allocator.balance_tablets(tm);
     if (plan.empty()) {
@@ -2038,6 +2054,110 @@ future<bool> topology_coordinator::maybe_start_tablet_migration(group0_guard gua
 
     co_await update_topology_state(std::move(guard), std::move(updates), "Starting tablet migration");
     co_return true;
+}
+
+future<locator::load_stats> topology_coordinator::refresh_tablet_load_stats() {
+    auto tm = get_token_metadata_ptr();
+    auto& topology = tm->get_topology();
+
+    locator::load_stats stats;
+    static constexpr std::chrono::seconds wait_for_live_nodes_timeout{30};
+
+    std::unordered_map<table_id, size_t> total_replicas;
+
+    for (auto& [dc, nodes] : topology.get_datacenter_nodes()) {
+        locator::load_stats dc_stats;
+        rtlogger.info("raft topology: Refreshing table load stats for DC {} that has {} endpoints", dc, nodes.size());
+        co_await coroutine::parallel_for_each(nodes, [&] (const auto& node) -> future<> {
+            auto dst = node->host_id();
+
+            _as.check();
+
+            // FIXME: if a node is down, completion status cannot be relied upon, but the average tablet size
+            //  could still be inferred from the replicas available.
+
+            auto timeout = netw::messaging_service::clock_type::now() + wait_for_live_nodes_timeout;
+
+            abort_source as;
+            auto request_abort = [&as] () mutable noexcept {
+                as.request_abort();
+            };
+            auto t = timer<lowres_clock>(request_abort);
+            t.arm(timeout);
+            auto sub = _as.subscribe(request_abort);
+
+            auto node_stats = co_await ser::storage_service_rpc_verbs::send_table_load_stats(&_messaging,
+                                                                                             netw::msg_addr(id2ip(dst)),
+                                                                                             as,
+                                                                                             raft::server_id(dst.uuid()));
+
+            dc_stats += node_stats;
+        });
+
+        for (auto& [table_id, table_stats] : dc_stats.tables) {
+            co_await coroutine::maybe_yield();
+
+            auto& t = _db.find_column_family(table_id);
+            auto& rs = t.get_effective_replication_map()->get_replication_strategy();
+            if (!rs.uses_tablets()) {
+                continue;
+            }
+            const auto* nts_ptr = dynamic_cast<const locator::network_topology_strategy*>(&rs);
+            if (!nts_ptr) {
+                on_internal_error(rtlogger, "Cannot convert replication_strategy that uses tablets into network_topology_strategy");
+            }
+
+            auto rf_for_this_dc = nts_ptr->get_replication_factor(dc);
+            if (rf_for_this_dc <= 0) {
+                continue;
+            }
+            total_replicas[table_id] += rf_for_this_dc;
+            rtlogger.debug("raft topology: Refreshed table load stats for DC {}, table={}, RF={}, size_in_bytes={}, split_ready_seq_number={}",
+                          dc, table_id, rf_for_this_dc, table_stats.size_in_bytes, table_stats.split_ready_seq_number);
+        }
+
+        stats += dc_stats;
+    }
+
+    for (auto& [table_id, table_load_stats] : stats.tables) {
+        auto table_total_replicas = total_replicas.at(table_id);
+        if (table_total_replicas == 0) {
+            continue;
+        }
+        // Takes into account the RF of each DC, so we can compute the average total size
+        // for a single table replica. This allows the load balancer to compute, in turn,
+        // the average tablet size by dividing total size by tablet count.
+        table_load_stats.size_in_bytes /= table_total_replicas;
+    }
+    rtlogger.debug("raft topology: Refreshed table load stats for all DC(s).");
+
+    co_return std::move(stats);
+}
+
+future<> topology_coordinator::start_tablet_load_stats_refresher() {
+    auto can_proceed = [this] { return !_async_gate.is_closed() && !_as.abort_requested(); };
+    while (can_proceed()) {
+        bool sleep = true;
+        try {
+            _tablet_load_stats = make_lw_shared<const locator::load_stats>(co_await refresh_tablet_load_stats());
+            _topo_sm.event.broadcast(); // wake up load balancer.
+        } catch (raft::request_aborted&) {
+            rtlogger.debug("raft topology: Tablet load stats refresher aborted");
+            sleep = false;
+        } catch (seastar::abort_requested_exception) {
+            rtlogger.debug("raft topology: Tablet load stats refresher aborted");
+            sleep = false;
+        } catch (...) {
+            rtlogger.warn("Found error while refreshing load stats for tablets: {}, retrying...", std::current_exception());
+        }
+        if (sleep && can_proceed()) {
+            try {
+                co_await seastar::sleep_abortable(tablet_load_stats_refresh_interval, _as);
+            } catch (...) {
+                rtlogger.debug("raft topology: Tablet load stats refresher: sleep failed: {}", std::current_exception());
+            }
+        }
+    }
 }
 
 future<> topology_coordinator::fence_previous_coordinator() {
@@ -2142,6 +2262,7 @@ future<> topology_coordinator::run() {
 
     co_await fence_previous_coordinator();
     auto cdc_generation_publisher = cdc_generation_publisher_fiber();
+    auto tablet_load_stats_refresher = start_tablet_load_stats_refresher();
 
     while (!_as.abort_requested()) {
         bool sleep = false;
@@ -2189,6 +2310,7 @@ future<> topology_coordinator::run() {
     }
 
     co_await _async_gate.close();
+    co_await std::move(tablet_load_stats_refresher);
     co_await std::move(cdc_generation_publisher);
 }
 

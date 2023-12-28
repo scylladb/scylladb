@@ -282,6 +282,8 @@ struct load_stats {
     }
 };
 
+using load_stats_ptr = lw_shared_ptr<const load_stats>;
+
 /// Stores information about tablets of a single table.
 ///
 /// The map contains a constant number of tablets, tablet_count().
