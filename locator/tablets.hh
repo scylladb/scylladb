@@ -235,6 +235,32 @@ enum tablet_range_side {
     right = 1,
 };
 
+// The decision of whether tablets of a given should be split, merged, or none, is made
+// by the load balancer. This decision is recorded in the tablet_map and stored in group0.
+struct resize_decision {
+    struct none {};
+    struct split {};
+    struct merge {};
+
+    using seq_number_t = int64_t;
+
+    std::variant<none, split, merge> way;
+    // The sequence number globally identifies a resize decision.
+    // It's monotonically increasing, globally.
+    // Needed to distinguish stale decision from latest one, in case coordinator
+    // revokes the current decision and signal it again later.
+    seq_number_t sequence_number = 0;
+
+    resize_decision() = default;
+    resize_decision(sstring decision, uint64_t seq_number);
+    bool split_or_merge() const {
+        return !std::holds_alternative<resize_decision::none>(way);
+    }
+    bool operator==(const resize_decision&) const;
+    sstring type_name() const;
+};
+
+
 /// Stores information about tablets of a single table.
 ///
 /// The map contains a constant number of tablets, tablet_count().

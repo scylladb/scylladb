@@ -374,6 +374,34 @@ size_t tablet_map::external_memory_usage() const {
     return result;
 }
 
+bool resize_decision::operator==(const resize_decision& o) const {
+    return way.index() == o.way.index() && sequence_number == o.sequence_number;
+}
+
+static auto to_resize_type(sstring decision) {
+    static const std::unordered_map<sstring, decltype(resize_decision::way)> string_to_type = {
+        {"none", resize_decision::none{}},
+        {"split", resize_decision::split{}},
+        {"merge", resize_decision::merge{}},
+    };
+    return string_to_type.at(decision);
+}
+
+resize_decision::resize_decision(sstring decision, uint64_t seq_number)
+    : way(to_resize_type(decision))
+    , sequence_number(seq_number) {
+}
+
+sstring resize_decision::type_name() const {
+    static const std::array<sstring, 3> index_to_string = {
+        "none",
+        "split",
+        "merge",
+    };
+    static_assert(std::variant_size_v<decltype(way)> == index_to_string.size());
+    return index_to_string[way.index()];
+}
+
 // Estimates the external memory usage of std::unordered_map<>.
 // Does not include external memory usage of elements.
 template <typename K, typename V>
