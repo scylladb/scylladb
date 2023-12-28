@@ -15,6 +15,24 @@ namespace service {
 
 using tablet_migration_info = locator::tablet_migration_info;
 
+/// Represents intention to emit resize (split or merge) request for a
+/// table, and finalize or revoke the request previously initiated.
+struct table_resize_plan {
+    std::unordered_map<table_id, locator::resize_decision> resize;
+    std::unordered_set<table_id> finalize_resize;
+
+    size_t size() const { return resize.size() + finalize_resize.size(); }
+
+    void merge(table_resize_plan&& other) {
+        for (auto&& [id, other_resize] : other.resize) {
+            if (!resize.contains(id) || other_resize.sequence_number > resize[id].sequence_number) {
+                resize[id] = std::move(other_resize);
+            }
+        }
+        finalize_resize.merge(std::move(other.finalize_resize));
+    }
+};
+
 class migration_plan {
 public:
     using migrations_vector = utils::chunked_vector<tablet_migration_info>;
