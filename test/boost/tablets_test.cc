@@ -444,6 +444,42 @@ SEASTAR_TEST_CASE(test_mutation_builder) {
             auto tm_from_disk = read_tablet_metadata(e.local_qp()).get0();
             BOOST_REQUIRE_EQUAL(expected_tmap, tm_from_disk.get_tablet_map(table1));
         }
+
+        static const auto resize_decision = locator::resize_decision("split", 1);
+
+        {
+            tablet_mutation_builder b(ts++, table1);
+            auto last_token = tm.get_tablet_map(table1).get_last_token(tid1);
+            b.set_replicas(last_token, tablet_replica_set {
+                    tablet_replica {h1, 2},
+                    tablet_replica {h2, 3},
+            });
+            b.del_transition(last_token);
+            b.set_resize_decision(resize_decision);
+            e.local_db().apply({freeze(b.build())}, db::no_timeout).get();
+        }
+
+        {
+            tablet_map expected_tmap(2);
+            tid = expected_tmap.first_tablet();
+            expected_tmap.set_tablet(tid, tablet_info {
+                    tablet_replica_set {
+                            tablet_replica {h1, 0},
+                            tablet_replica {h3, 5},
+                    }
+            });
+            tid1 = *expected_tmap.next_tablet(tid);
+            expected_tmap.set_tablet(tid1, tablet_info {
+                    tablet_replica_set {
+                            tablet_replica {h1, 2},
+                            tablet_replica {h2, 3},
+                    }
+            });
+            expected_tmap.set_resize_decision(resize_decision);
+
+            auto tm_from_disk = read_tablet_metadata(e.local_qp()).get0();
+            BOOST_REQUIRE_EQUAL(expected_tmap, tm_from_disk.get_tablet_map(table1));
+        }
     }, tablet_cql_test_config());
 }
 

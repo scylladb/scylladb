@@ -155,6 +155,13 @@ tablet_mutation_builder::del_transition(dht::token last_token) {
     return *this;
 }
 
+tablet_mutation_builder&
+tablet_mutation_builder::set_resize_decision(locator::resize_decision resize_decision) {
+    _m.set_static_cell("resize_type", data_value(resize_decision.type_name()), _ts);
+    _m.set_static_cell("resize_seq_number", data_value(int64_t(resize_decision.sequence_number)), _ts);
+    return *this;
+}
+
 mutation make_drop_tablet_map_mutation(table_id id, api::timestamp_type ts) {
     auto s = db::system_keyspace::tablets();
     mutation m(s, partition_key::from_single_value(*s,
