@@ -5095,6 +5095,79 @@ future<> storage_service::move_tablet(table_id table, dht::token token, locator:
     });
 }
 
+future<locator::load_stats> storage_service::load_stats_for_tablet_based_tables() {
+    auto holder = _async_gate.hold();
+
+    if (this_shard_id() != 0) {
+        // topology coordinator only exists in shard 0.
+        co_return co_await container().invoke_on(0, [&] (auto& ss) {
+            return ss.load_stats_for_tablet_based_tables();
+        });
+    }
+
+    using table_erms_t = std::unordered_map<table_id, const locator::effective_replication_map_ptr>;
+    // Creates a snapshot of transitions, so different shards will find their tablet replicas in the
+    // same migration stage. Important for intra-node migration.
+    const auto erms = co_await std::invoke([this] () -> future<table_erms_t> {
+        table_erms_t erms;
+        co_await _db.local().get_tables_metadata().for_each_table_gently([&] (table_id id, lw_shared_ptr<replica::table> table) mutable {
+            if (table->uses_tablets()) {
+                erms.emplace(id, table->get_effective_replication_map());
+            }
+            return make_ready_future<>();
+        });
+        co_return std::move(erms);
+    });
+
+    // Each node combines a per-table load map from all of its shards and returns it to the coordinator.
+    // So if there are 1k nodes, there will be 1k RPCs in total.
+    auto load_stats = co_await _db.map_reduce0([&erms] (replica::database& db) -> future<locator::load_stats> {
+        locator::load_stats load_stats{};
+        auto& tables_metadata = db.get_tables_metadata();
+
+        for (const auto& [id, erm] : erms) {
+            auto table = tables_metadata.get_table_if_exists(id);
+            if (!table) {
+                continue;
+            }
+
+            auto& token_metadata = erm->get_token_metadata();
+            auto& tmap = token_metadata.tablets().get_tablet_map(id);
+            auto me = locator::tablet_replica { token_metadata.get_my_id(), this_shard_id() };
+
+            // It's important to tackle the anomaly in reported size, since both leaving and
+            // pending replicas could otherwise be accounted during tablet migration.
+            // If transition hasn't reached cleanup stage, then leaving replicas are accounted.
+            // If transition is past cleanup stage, then pending replicas are accounted.
+            // This helps to reduce the discrepancy window.
+            auto tablet_filter = [&tmap, &me] (locator::global_tablet_id id) {
+                auto transition = tmap.get_tablet_transition_info(id.tablet);
+                auto& info = tmap.get_tablet_info(id.tablet);
+
+                // if tablet is not in transit, it's filtered in.
+                if (!transition) {
+                    return true;
+                }
+
+                bool is_pending = transition->pending_replica == me;
+                bool is_leaving = locator::get_leaving_replica(info, *transition) == me;
+                auto s = transition->stage;
+
+                return (!is_pending && !is_leaving)
+                       || (is_leaving && s < locator::tablet_transition_stage::cleanup)
+                       || (is_pending && s >= locator::tablet_transition_stage::cleanup);
+            };
+
+            load_stats.tables.emplace(id, table->table_load_stats(tablet_filter));
+            co_await coroutine::maybe_yield();
+        }
+
+        co_return std::move(load_stats);
+    }, locator::load_stats{}, std::plus<locator::load_stats>());
+
+    co_return std::move(load_stats);
+}
+
 future<> storage_service::set_tablet_balancing_enabled(bool enabled) {
     auto holder = _async_gate.hold();
 
@@ -5512,6 +5585,11 @@ void storage_service::init_messaging_service(bool raft_topology_change_enabled) 
         ser::storage_service_rpc_verbs::register_tablet_cleanup(&_messaging.local(), [handle_raft_rpc] (raft::server_id dst_id, locator::global_tablet_id tablet) {
             return handle_raft_rpc(dst_id, [tablet] (auto& ss) {
                 return ss.cleanup_tablet(tablet);
+            });
+        });
+        ser::storage_service_rpc_verbs::register_table_load_stats(&_messaging.local(), [handle_raft_rpc] (raft::server_id dst_id) {
+            return handle_raft_rpc(dst_id, [] (auto& ss) mutable {
+                return ss.load_stats_for_tablet_based_tables();
             });
         });
         ser::join_node_rpc_verbs::register_join_node_request(&_messaging.local(), [handle_raft_rpc] (raft::server_id dst_id, service::join_node_request_params params) {

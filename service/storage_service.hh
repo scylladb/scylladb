@@ -170,6 +170,8 @@ private:
     future<> stream_tablet(locator::global_tablet_id);
     future<> cleanup_tablet(locator::global_tablet_id);
     inet_address host2ip(locator::host_id);
+    // Handler for table load stats RPC.
+    future<locator::load_stats> load_stats_for_tablet_based_tables();
 public:
     storage_service(abort_source& as, distributed<replica::database>& db,
         gms::gossiper& gossiper,

@@ -618,6 +618,7 @@ static constexpr unsigned do_get_rpc_client_idx(messaging_verb verb) {
     case messaging_verb::TABLET_STREAM_FILES:
     case messaging_verb::TABLET_STREAM_DATA:
     case messaging_verb::TABLET_CLEANUP:
+    case messaging_verb::TABLE_LOAD_STATS:
         return 1;
     case messaging_verb::CLIENT_ID:
     case messaging_verb::MUTATION:
