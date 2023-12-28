@@ -362,20 +362,22 @@ def test_fromjson_timestamp(cql, table1):
 # to only have millisecond precision because that's the precision that
 # timestamps actually have. So Scylla allows "2014-01-01 12:15:45.000Z"
 # but forbids "2014-01-01 12:15:45.000000Z" - whereas Cassandra allows both,
-# and this is what this test shows. Because this is a difference between
-# Scylla and Cassandra, we have this test as xfail - but perhaps it should
-# be considered a meaningless difference.
+# and this is what this test shows.
+# The same difference is reproduced in the test
+#    test_type_timestamp.py::test_type_timestamp_from_string_overprecise
+# and there we decided to accept Scylla's error handling as the better
+# approach, and mark this test a Cassandra bug, so we do the same here.
 #
 # See also issue #16575 which is about Scylla mistakenly using this
-# forbidden format when outputting JSON - which is a problem because then
+# forbidden format when outputting JSON - which was a problem because then
 # we can't read the JSON we wrote.
-@pytest.mark.xfail(reason="Scylla doesn't accept sub-milisecond also #16575")
-def test_fromjson_timestamp_submilli(cql, table1):
+def test_fromjson_timestamp_submilli(cql, table1, cassandra_bug):
     stmt = cql.prepare(f"INSERT INTO {table1} (p, ts) VALUES (?, fromJson(?))")
     p = unique_key_int()
     json = '"2014-01-01 12:15:45.0000000Z"'
-    cql.execute(stmt, [p, json])
-    assert list(cql.execute(f"SELECT ts from {table1} where p = {p}")) == [(datetime(2014, 1, 1, 12, 15, 45),)]
+    with pytest.raises(FunctionFailure, match='Milliseconds'):
+        cql.execute(stmt, [p, json])
+        assert list(cql.execute(f"SELECT ts from {table1} where p = {p}")) == [(datetime(2014, 1, 1, 12, 15, 45),)]
 
 # Test that toJson() can prints a decimal type with a very high mantissa.
 # Reproduces issue #8002, where it was written as 1 and a billion zeroes,
