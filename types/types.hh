@@ -34,6 +34,7 @@
 #include "utils/bit_cast.hh"
 #include "utils/chunked_vector.hh"
 #include "utils/lexicographical_compare.hh"
+#include "utils/overloaded_functor.hh"
 #include "tasks/types.hh"
 
 class tuple_type_impl;
@@ -1004,4 +1005,33 @@ struct appending_hash<data_type> {
     }
 };
 
-using data_value_list = std::initializer_list<data_value>;
+struct unset_value {
+    bool operator==(const unset_value&) const noexcept { return true; }
+};
+
+using data_value_or_unset = std::variant<data_value, unset_value>;
+
+template <>
+struct fmt::formatter<unset_value> : fmt::formatter<std::string_view> {
+    template <typename FormatContext>
+    auto format(const unset_value& u, FormatContext& ctx) const {
+        return fmt::format_to(ctx.out(), "unset");
+    }
+};
+
+template <>
+struct fmt::formatter<data_value_or_unset> : fmt::formatter<std::string_view> {
+    template <typename FormatContext>
+    auto format(const data_value_or_unset& var, FormatContext& ctx) const {
+        return std::visit(overloaded_functor {
+            [&ctx] (const data_value& v) {
+                return fmt::format_to(ctx.out(), "{}", v);
+            },
+            [&ctx] (const unset_value& u) {
+                return fmt::format_to(ctx.out(), "{}", u);
+            }
+        }, var);
+    }
+};
+
+using data_value_list = std::initializer_list<data_value_or_unset>;

@@ -771,16 +771,26 @@ query_options query_processor::make_internal_options(
                 format("Invalid number of values. Expecting {:d} but got {:d}", p->bound_names.size(), values.size()));
     }
     auto ni = p->bound_names.begin();
-    std::vector<cql3::raw_value> bound_values;
-    for (auto& v : values) {
-        auto& n = *ni++;
-        if (v.type() == bytes_type) {
-            bound_values.push_back(cql3::raw_value::make_value(value_cast<bytes>(v)));
-        } else if (v.is_null()) {
-            bound_values.push_back(cql3::raw_value::make_null());
-        } else {
-            bound_values.push_back(cql3::raw_value::make_value(n->type->decompose(v)));
-        }
+    raw_value_vector_with_unset bound_values;
+    bound_values.values.reserve(values.size());
+    bound_values.unset.resize(values.size());
+    for (auto& var : values) {
+        auto& n = *ni;
+        std::visit(overloaded_functor {
+            [&] (const data_value& v) {
+                if (v.type() == bytes_type) {
+                    bound_values.values.emplace_back(cql3::raw_value::make_value(value_cast<bytes>(v)));
+                } else if (v.is_null()) {
+                    bound_values.values.emplace_back(cql3::raw_value::make_null());
+                } else {
+                    bound_values.values.emplace_back(cql3::raw_value::make_value(n->type->decompose(v)));
+                }
+            }, [&] (const unset_value&) {
+                bound_values.values.emplace_back(cql3::raw_value::make_null());
+                bound_values.unset[std::distance(p->bound_names.begin(), ni)] = true;
+            }
+        }, var);
+        ++ni;
     }
     if (page_size > 0) {
         lw_shared_ptr<service::pager::paging_state> paging_state;
@@ -788,10 +798,10 @@ query_options query_processor::make_internal_options(
         api::timestamp_type ts = api::missing_timestamp;
         return query_options(
                 cl,
-                bound_values,
+                std::move(bound_values),
                 cql3::query_options::specific_options{page_size, std::move(paging_state), serial_consistency, ts});
     }
-    return query_options(cl, bound_values);
+    return query_options(cl, std::move(bound_values));
 }
 
 statements::prepared_statement::checked_weak_ptr query_processor::prepare_internal(const sstring& query_string) {
