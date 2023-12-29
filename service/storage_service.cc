@@ -2286,8 +2286,20 @@ class topology_coordinator {
                         co_await update_topology_state(take_guard(std::move(node)), {builder.build()},
                                                        "start decommission");
                         break;
-                    case topology_request::remove:
+                    case topology_request::remove: {
                         assert(node.rs->ring);
+
+                        auto ip = id2ip(locator::host_id(node.id.uuid()));
+                        if (_gossiper.is_alive(ip)) {
+                            builder.with_node(node.id)
+                                   .del("topology_request");
+                            co_await update_topology_state(take_guard(std::move(node)), {builder.build()},
+                                                           "reject removenode");
+                            slogger.warn("raft topology: rejected removenode operation for node {} "
+                                         "because it is alive", node.id);
+                            break;
+                        }
+
                         builder.set_transition_state(topology::transition_state::tablet_draining)
                                .set_version(_topo_sm._topology.version + 1)
                                .with_node(node.id)
@@ -2296,6 +2308,7 @@ class topology_coordinator {
                         co_await update_topology_state(take_guard(std::move(node)), {builder.build()},
                                                        "start removenode");
                         break;
+                        }
                     case topology_request::replace: {
                         assert(!node.rs->ring);
                         builder.set_transition_state(topology::transition_state::join_group0)
