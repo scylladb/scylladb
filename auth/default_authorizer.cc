@@ -9,6 +9,7 @@
  */
 
 #include "auth/default_authorizer.hh"
+#include "db/system_auth_keyspace.hh"
 
 extern "C" {
 #include <crypt.h>
@@ -181,23 +182,24 @@ default_authorizer::modify(
         permission_set set,
         const resource& resource,
         std::string_view op) {
-    return do_with(
-            format("UPDATE {}.{} SET {} = {} {} ? WHERE {} = ? AND {} = ?",
-                    _auth_ks_name,
-                    PERMISSIONS_CF,
-                    PERMISSIONS_NAME,
-                    PERMISSIONS_NAME,
-                    op,
-                    ROLE_NAME,
-                    RESOURCE_NAME),
-            [this, &role_name, set, &resource](const auto& query) {
-        return _qp.execute_internal(
+    const sstring query = format("UPDATE {}.{} SET {} = {} {} ? WHERE {} = ? AND {} = ?",
+            _auth_ks_name,
+            PERMISSIONS_CF,
+            PERMISSIONS_NAME,
+            PERMISSIONS_NAME,
+            op,
+            ROLE_NAME,
+            RESOURCE_NAME);
+    if (legacy_mode(_qp)) {
+        co_return co_await _qp.execute_internal(
                 query,
                 db::consistency_level::ONE,
                 internal_distributed_query_state(),
                 {permissions::to_strings(set), sstring(role_name), resource.name()},
                 cql3::query_processor::cache_internal::no).discard_result();
-    });
+    }
+    co_return co_await announce_mutations(_qp, _group0_client, query,
+        {permissions::to_strings(set), sstring(role_name), resource.name()}, &_as);
 }
 
 
@@ -243,13 +245,19 @@ future<> default_authorizer::revoke_all(std::string_view role_name) {
             _auth_ks_name,
             PERMISSIONS_CF,
             ROLE_NAME);
+    auto f = make_ready_future<>();
+    if (legacy_mode(_qp)) {
+        f = _qp.execute_internal(
+                query,
+                db::consistency_level::ONE,
+                internal_distributed_query_state(),
+                {sstring(role_name)},
+                cql3::query_processor::cache_internal::no).discard_result();
+    } else {
+        f = announce_mutations(_qp, _group0_client, query, {sstring(role_name)}, &_as);
+    }
 
-    return _qp.execute_internal(
-            query,
-            db::consistency_level::ONE,
-            internal_distributed_query_state(),
-            {sstring(role_name)},
-            cql3::query_processor::cache_internal::no).discard_result().handle_exception([role_name](auto ep) {
+    return f.handle_exception([role_name](auto ep) {
         try {
             std::rethrow_exception(ep);
         } catch (exceptions::request_execution_exception& e) {
@@ -258,7 +266,7 @@ future<> default_authorizer::revoke_all(std::string_view role_name) {
     });
 }
 
-future<> default_authorizer::revoke_all(const resource& resource) {
+future<> default_authorizer::revoke_all_legacy(const resource& resource) {
     static const sstring query = format("SELECT {} FROM {}.{} WHERE {} = ? ALLOW FILTERING",
             ROLE_NAME,
             _auth_ks_name,
@@ -301,6 +309,51 @@ future<> default_authorizer::revoke_all(const resource& resource) {
             return make_ready_future();
         }
     });
+}
+
+future<> default_authorizer::revoke_all(const resource& resource) {
+    if (legacy_mode(_qp)) {
+        co_return co_await revoke_all_legacy(resource);
+    }
+    auto name = resource.name();
+    try {
+        auto gen = [this, name] (api::timestamp_type& t) -> mutations_generator {
+            static const sstring query = format("SELECT {} FROM {}.{} WHERE {} = ? ALLOW FILTERING",
+                    ROLE_NAME,
+                    _auth_ks_name,
+                    PERMISSIONS_CF,
+                    RESOURCE_NAME);
+            auto res = co_await _qp.execute_internal(
+                    query,
+                    db::consistency_level::LOCAL_ONE,
+                    {name},
+                    cql3::query_processor::cache_internal::no);
+            for (const auto& r : *res) {
+                static const sstring query = format("DELETE FROM {}.{} WHERE {} = ? AND {} = ?",
+                        _auth_ks_name,
+                        PERMISSIONS_CF,
+                        ROLE_NAME,
+                        RESOURCE_NAME);
+                auto muts = co_await _qp.get_mutations_internal(
+                        query,
+                        internal_distributed_query_state(),
+                        t,
+                        {r.get_as<sstring>(ROLE_NAME), name});
+                if (muts.size() != 1) {
+                    on_internal_error(alogger,
+                        format("expecting single delete mutation, got {}", muts.size()));
+                }
+                co_yield std::move(muts[0]);
+            }
+        };
+        co_await announce_mutations_with_batching(
+                _group0_client,
+                std::bind_front(&::service::raft_group0_client::start_operation, &_group0_client),
+                std::move(gen),
+                &_as);
+    } catch (exceptions::request_execution_exception& e) {
+        alogger.warn("CassandraAuthorizer failed to revoke all permissions on {}: {}", name, e);
+    }
 }
 
 const resource_set& default_authorizer::protected_resources() const {
