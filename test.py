@@ -1626,6 +1626,12 @@ async def workaround_python26789() -> int:
 
 if __name__ == "__main__":
     colorama.init()
+    # gh-16583: ignore the inherited client host's ScyllaDB environment,
+    # since it may break the tests
+    if "SCYLLA_CONF" in os.environ:
+        del os.environ["SCYLLA_CONF"]
+    if "SCYLLA_HOME" in os.environ:
+        del os.environ["SCYLLA_HOME"]
 
     if sys.version_info < (3, 7):
         print("Python 3.7 or newer is required to run this program")
