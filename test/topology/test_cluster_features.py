@@ -199,7 +199,6 @@ async def test_partial_upgrade_can_be_finished_with_removenode(manager: ManagerC
 
     # Remove the last node
     await manager.server_stop(servers[-1].server_id)
-    await manager.server_not_sees_other_server(servers[0].ip_addr, servers[-1].ip_addr)
     await manager.remove_node(servers[0].server_id, servers[-1].server_id)
 
     # The feature should eventually become enabled

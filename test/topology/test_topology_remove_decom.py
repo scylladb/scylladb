@@ -112,9 +112,6 @@ async def test_remove_node_with_concurrent_ddl(manager: ManagerClient, random_ta
             await manager.wait_for_host_known(initiator_info.ip_addr, target_host_id)
             logger.info(f'do_remove_node [{i}], stopping target server [{target_info.ip_addr}], host_id [{target_host_id}]')
             await manager.server_stop_gracefully(target_info.server_id)
-            logger.info(f'do_remove_node [{i}], target server [{target_info.ip_addr}] stopped, '
-                        f'waiting for it to be down on [{initiator_info.ip_addr}]')
-            await manager.wait_for_host_down(initiator_info.ip_addr, target_info.ip_addr)
             logger.info(f'do_remove_node [{i}], invoking remove_node')
             await manager.remove_node(initiator_info.server_id, target_info.server_id, [target_info.ip_addr])
             # TODO: check that group 0 no longer contains the removed node (#12153)
