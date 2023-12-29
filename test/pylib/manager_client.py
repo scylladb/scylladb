@@ -363,14 +363,6 @@ class ManagerClient():
 
         return await wait_for(host_is_known, deadline or (time() + 30))
 
-    async def wait_for_host_down(self, dst_server_ip: IPAddress, server_ip: IPAddress, deadline: Optional[float] = None) -> None:
-        """Waits for dst_server_id to consider server_id as down, with timeout"""
-        async def host_is_down():
-            down_endpoints = await self.api.get_down_endpoints(dst_server_ip)
-            return True if server_ip in down_endpoints else None
-
-        return await wait_for(host_is_down, deadline or (time() + 30))
-
     async def get_host_ip(self, server_id: ServerNum) -> IPAddress:
         """Get host IP Address"""
         try:
