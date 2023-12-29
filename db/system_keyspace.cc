@@ -84,6 +84,7 @@ namespace {
             system_keyspace::PEERS,
             system_keyspace::SCYLLA_LOCAL,
             system_keyspace::COMMITLOG_CLEANUPS,
+            system_keyspace::SERVICE_LEVELS_V2,
             system_keyspace::v3::CDC_LOCAL
         };
         if (ks_name == system_keyspace::NAME && tables.contains(cf_name)) {
@@ -1119,6 +1120,19 @@ schema_ptr system_keyspace::tablets() {
     return schema;
 }
 
+schema_ptr system_keyspace::service_levels_v2() {
+    static thread_local auto schema = [] {
+        auto id = generate_legacy_id(NAME, SERVICE_LEVELS_V2);
+        return schema_builder(NAME, SERVICE_LEVELS_V2, id)
+                .with_column("service_level", utf8_type, column_kind::partition_key)
+                .with_column("timeout", duration_type)
+                .with_column("workload_type", utf8_type)
+                .with_version(db::system_keyspace::generate_schema_version(id))
+                .build();
+    }();
+    return schema;
+}
+
 schema_ptr system_keyspace::legacy::hints() {
     static thread_local auto schema = [] {
         schema_builder builder(generate_legacy_id(NAME, HINTS), NAME, HINTS,
@@ -2107,7 +2121,7 @@ std::vector<schema_ptr> system_keyspace::all_tables(const db::config& cfg) {
     r.insert(r.end(), {raft(), raft_snapshots(), raft_snapshot_config(), group0_history(), discovery()});
 
     if (cfg.check_experimental(db::experimental_features_t::feature::CONSISTENT_TOPOLOGY_CHANGES)) {
-        r.insert(r.end(), {topology(), cdc_generations_v3(), topology_requests()});
+        r.insert(r.end(), {topology(), cdc_generations_v3(), topology_requests(), service_levels_v2()});
     }
 
     if (cfg.check_experimental(db::experimental_features_t::feature::CONSISTENT_TOPOLOGY_CHANGES)) {

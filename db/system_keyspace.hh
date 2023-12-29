@@ -173,6 +173,7 @@ public:
     static constexpr auto SSTABLES_REGISTRY = "sstables";
     static constexpr auto CDC_GENERATIONS_V3 = "cdc_generations_v3";
     static constexpr auto TABLETS = "tablets";
+    static constexpr auto SERVICE_LEVELS_V2 = "service_levels_v2";
 
     struct v3 {
         static constexpr auto BATCHES = "batches";
@@ -259,6 +260,7 @@ public:
     static schema_ptr sstables_registry();
     static schema_ptr cdc_generations_v3();
     static schema_ptr tablets();
+    static schema_ptr service_levels_v2();
 
     static table_schema_version generate_schema_version(table_id table_id, uint16_t offset = 0);
 
