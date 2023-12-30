@@ -119,7 +119,27 @@ template <typename T> static T to_int(const rjson::value& value) {
                 "for int64 type: {} (it should not contain fractional part {})", value, fractional));
         }
 
-        if (std::numeric_limits<T>::min() > double_value || double_value > std::numeric_limits<T>::max()) {
+        // At this point we know that `double_value` is an integer.
+        // Now we only have to check that it's within the target type's limits.
+        //
+        // It's tempting to check that `double_value <= std::numeric_limits<T>::max()`,
+        // but that's wrong because the right side might not be exactly representable as a double,
+        // and can get rounded up. 
+        //
+        // For example, in the C++ expression `std::ldexp(1, 64) <= std::numeric_limits<uint64_t>::max()`,
+        // the right side will (most likely) be rounded up to `std::ldexp(1, 64)`, and the comparison
+        // will evaluate to `true` even though `std::ldexp(1, 64)` doesn't fit into `uint64_t`.
+        //
+        // So we have to be careful.
+        // Instead of `double_value <= std::numeric_limits<T>::max()`,
+        // we use `double_value < max_limit`, where `max_limit` is a `double` *mathematically*
+        // equal to `std::numeric_limits<T>::max() + 1`. This value is a power of 2, so it's
+        // exactly representable in `double`.
+        //
+        // The formula for `max_limit` is carefully constructed so that float arithmetic
+        // happens on powers of 2, without any rounding.
+        constexpr double max_limit = 2.0 * ((std::numeric_limits<T>::max() / 2) + 1);
+        if (std::numeric_limits<T>::min() > double_value || double_value >= max_limit) {
             throw marshal_exception(format("Value {} out of range", double_value));
         }
 
