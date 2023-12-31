@@ -44,6 +44,7 @@
 #include "gms/generation-number.hh"
 #include "locator/token_metadata.hh"
 #include "utils/exceptions.hh"
+#include "utils/error_injection.hh"
 
 namespace gms {
 
@@ -1616,6 +1617,24 @@ void gossiper::mark_alive(inet_address addr) {
 }
 
 future<> gossiper::real_mark_alive(inet_address addr) {
+    co_await utils::get_local_injector().inject_with_handler("gossiper::real_mark_alive", [this, endpoint = addr] (auto& handler) -> future<> {
+        auto app_state_ptr = get_application_state_ptr(endpoint, application_state::HOST_ID);
+        if (!app_state_ptr) {
+            co_return;
+        }
+
+        locator::host_id id(utils::UUID(app_state_ptr->value()));
+        auto second_node_ip = handler.get("second_node_ip");
+        assert(second_node_ip);
+
+        logger.info("real_mark_alive {}/{} second_node_ip={}", id, endpoint, *second_node_ip);
+        if (endpoint == gms::inet_address(sstring{*second_node_ip})) {
+            logger.info("Sleeping before real_mark_alive for {}/{}", id, endpoint);
+            co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::minutes{1});
+            logger.info("Finished sleeping before real_mark_alive for {}/{}", id, endpoint);
+        }
+    });
+
     auto permit = co_await lock_endpoint(addr, null_permit_id);
 
     // After sending echo message, the Node might not be in the
