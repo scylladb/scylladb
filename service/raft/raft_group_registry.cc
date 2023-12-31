@@ -14,7 +14,6 @@
 #include "gms/i_endpoint_state_change_subscriber.hh"
 #include "serializer_impl.hh"
 #include "idl/raft.dist.hh"
-#include "utils/error_injection.hh"
 
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/when_all.hh>
@@ -118,24 +117,7 @@ public:
 
     virtual future<>
     on_alive(gms::inet_address endpoint, gms::endpoint_state_ptr ep_state, gms::permit_id) override {
-        co_await utils::get_local_injector().inject_with_handler("raft_group_registry::on_alive", [endpoint, ep_state] (auto& handler) -> future<> {
-            auto app_state_ptr = ep_state->get_application_state_ptr(gms::application_state::HOST_ID);
-            if (!app_state_ptr) {
-                co_return;
-            }
-            
-            raft::server_id id(utils::UUID(app_state_ptr->value()));
-            rslog.info("gossiper_state_change_subscriber_proxy::on_alive() {} {}", endpoint, id);
-            auto second_node_ip = handler.get("second_node_ip");
-            assert(second_node_ip);
-
-            if (endpoint == gms::inet_address(sstring{*second_node_ip})) {
-                rslog.info("Sleeping before handling on_alive");
-                co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::minutes{1});
-                rslog.info("Finished Sleeping before handling on_alive");
-            }
-        });
-        co_await on_endpoint_change(endpoint, ep_state);
+        return on_endpoint_change(endpoint, ep_state);
     }
 
     virtual future<>

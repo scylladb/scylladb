@@ -20,8 +20,8 @@ logger = logging.getLogger(__name__)
 async def test_old_ip_notification_repro(manager: ManagerClient) -> None:
     """
     Regression test for #14257.
-    It starts two nodes. It introduces a sleep in raft_group_registry::on_alive
-    (in raft_group_registry.cc) when receiving a gossip notification about
+    It starts two nodes. It introduces a sleep in gossiper::real_mark_alive
+    when receiving a gossip notification about
     HOST_ID update from the second node. Then it restarts the second node with
     a different IP. Due to the sleep, the old notification from the old IP arrives
     after the second node has restarted. If the bug is present, this notification
@@ -30,7 +30,7 @@ async def test_old_ip_notification_repro(manager: ManagerClient) -> None:
     """
     s1 = await manager.server_add()
     s2 = await manager.server_add(start=False)
-    async with inject_error(manager.api, s1.ip_addr, 'raft_group_registry::on_alive',
+    async with inject_error(manager.api, s1.ip_addr, 'gossiper::real_mark_alive',
                             parameters={ "second_node_ip": s2.ip_addr }) as handler:
         # This injection delays the gossip notification from the initial IP of s2.
         logger.info(f"Starting {s2}")
