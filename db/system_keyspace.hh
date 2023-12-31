@@ -25,6 +25,7 @@
 #include "locator/host_id.hh"
 #include "mutation/canonical_mutation.hh"
 #include "virtual_tables.hh"
+#include "types/types.hh"
 
 namespace sstables {
     struct entry_descriptor;
@@ -128,8 +129,6 @@ class system_keyspace : public seastar::peering_sharded_service<system_keyspace>
     static schema_ptr large_cells();
     static schema_ptr scylla_local();
     future<> force_blocking_flush(sstring cfname);
-    template <typename Value>
-    future<> update_cached_values(gms::inet_address ep, sstring column_name, Value value);
 public:
     static schema_ptr size_estimates();
 public:
@@ -258,16 +257,22 @@ public:
     */
     future<> update_tokens(const std::unordered_set<dht::token>& tokens);
 
-    /**
-     * Record tokens being used by another node in the PEERS table.
-     */
-    future<> update_tokens(gms::inet_address ep, const std::unordered_set<dht::token>& tokens);
-
     future<std::unordered_map<gms::inet_address, gms::inet_address>> get_preferred_ips();
 
 public:
-    template <typename Value>
-    future<> update_peer_info(gms::inet_address ep, sstring column_name, Value value);
+    struct peer_info {
+        std::optional<sstring> data_center;
+        std::optional<utils::UUID> host_id;
+        std::optional<net::inet_address> preferred_ip;
+        std::optional<sstring> rack;
+        std::optional<sstring> release_version;
+        std::optional<net::inet_address> rpc_address;
+        std::optional<utils::UUID> schema_version;
+        std::optional<std::unordered_set<dht::token>> tokens;
+        std::optional<sstring> supported_features;
+    };
+
+    future<> update_peer_info(gms::inet_address ep, const peer_info& info);
 
     future<> remove_endpoint(gms::inet_address ep);
 
@@ -525,7 +530,7 @@ public:
 
     virtual_tables_registry& get_virtual_tables_registry() { return _virtual_tables_registry; }
 private:
-    future<::shared_ptr<cql3::untyped_result_set>> execute_cql(const sstring& query_string, const std::initializer_list<data_value>& values);
+    future<::shared_ptr<cql3::untyped_result_set>> execute_cql(const sstring& query_string, const data_value_list& values);
     template <typename... Args>
     future<::shared_ptr<cql3::untyped_result_set>> execute_cql_with_timeout(sstring req, db::timeout_clock::time_point timeout, Args&&... args);
 

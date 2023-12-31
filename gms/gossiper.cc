@@ -474,7 +474,7 @@ gossiper::handle_get_endpoint_states_msg(gossip_get_endpoint_states_request requ
     for (const auto& [node, state] : _endpoint_state_map) {
         const heart_beat_state& hbs = state->get_heart_beat_state();
         auto state_wanted = endpoint_state(hbs);
-        const std::map<application_state, versioned_value>& apps = state->get_application_state_map();
+        auto& apps = state->get_application_state_map();
         for (const auto& app : apps) {
             if (application_states_wanted.count(app.first) > 0) {
                 state_wanted.get_application_state_map().emplace(app);
@@ -1784,7 +1784,7 @@ future<> gossiper::apply_new_states(inet_address addr, endpoint_state local_stat
     //     local_state.get_heart_beat_state().get_heart_beat_version(), oldVersion, addr);
     // }
 
-    utils::chunked_vector<application_state> changed;
+    application_state_map changed;
     auto&& remote_map = remote_state.get_application_state_map();
 
     std::exception_ptr ep;
@@ -1804,7 +1804,7 @@ future<> gossiper::apply_new_states(inet_address addr, endpoint_state local_stat
 
             const versioned_value* local_val = local_state.get_application_state_ptr(remote_key);
             if (!local_val || remote_value.version() > local_val->version()) {
-                changed.push_back(remote_key);
+                changed.emplace(remote_key, remote_value);
                 local_state.add_application_state(remote_key, remote_value);
             }
         }
@@ -1823,9 +1823,7 @@ future<> gossiper::apply_new_states(inet_address addr, endpoint_state local_stat
     // Some values are set only once, so listeners would never be re-run.
     // Listeners should decide which failures are non-fatal and swallow them.
     try {
-        for (auto&& key: changed) {
-            co_await do_on_change_notifications(addr, key, remote_map.at(key), pid);
-        }
+        co_await do_on_change_notifications(addr, changed, pid);
     } catch (...) {
         auto msg = format("Gossip change listener failed: {}", std::current_exception());
         if (_abort_source.abort_requested()) {
@@ -1838,18 +1836,12 @@ future<> gossiper::apply_new_states(inet_address addr, endpoint_state local_stat
     maybe_rethrow_exception(std::move(ep));
 }
 
-future<> gossiper::do_before_change_notifications(inet_address addr, endpoint_state_ptr ep_state, const application_state& ap_state, const versioned_value& new_value) const {
-    co_await _subscribers.for_each([addr, ep_state, ap_state, new_value] (shared_ptr<i_endpoint_state_change_subscriber> subscriber) {
-        return subscriber->before_change(addr, ep_state, ap_state, new_value);
-    });
-}
-
-future<> gossiper::do_on_change_notifications(inet_address addr, const application_state& state, const versioned_value& value, permit_id pid) const {
-    co_await _subscribers.for_each([this, addr, state, value, pid] (shared_ptr<i_endpoint_state_change_subscriber> subscriber) {
+future<> gossiper::do_on_change_notifications(inet_address addr, const gms::application_state_map& states, permit_id pid) const {
+    co_await _subscribers.for_each([&] (shared_ptr<i_endpoint_state_change_subscriber> subscriber) {
         // Once _abort_source is aborted, don't attempt to process any further notifications
         // because that would violate monotonicity due to partially failed notification.
         _abort_source.check();
-        return subscriber->on_change(addr, state, value, pid);
+        return subscriber->on_change(addr, states, pid);
     });
 }
 
@@ -1945,7 +1937,7 @@ void gossiper::examine_gossiper(utils::chunked_vector<gossip_digest>& g_digest_l
     }
 }
 
-future<> gossiper::start_gossiping(gms::generation_type generation_nbr, std::map<application_state, versioned_value> preload_local_states, gms::advertise_myself advertise) {
+future<> gossiper::start_gossiping(gms::generation_type generation_nbr, application_state_map preload_local_states, gms::advertise_myself advertise) {
     auto permit = co_await lock_endpoint(get_broadcast_address(), null_permit_id);
     co_await container().invoke_on_all([advertise] (gossiper& g) {
         if (!advertise) {
@@ -2113,16 +2105,14 @@ future<> gossiper::add_local_application_state(application_state state, versione
 future<> gossiper::add_local_application_state(std::initializer_list<std::pair<application_state, utils::in<versioned_value>>> args) {
     using in_pair_type = std::pair<application_state, utils::in<versioned_value>>;
     using out_pair_type = std::pair<application_state, versioned_value>;
-    using vector_type = std::list<out_pair_type>;
 
-    return add_local_application_state(boost::copy_range<vector_type>(args | boost::adaptors::transformed([](const in_pair_type& p) {
+    return add_local_application_state(boost::copy_range<application_state_map>(args | boost::adaptors::transformed([](const in_pair_type& p) {
         return out_pair_type(p.first, p.second.move());
     })));
 }
 
 
 // Depends on:
-// - before_change callbacks
 // - on_change callbacks
 // #2894. Similar to origin fix, but relies on non-interruptability to ensure we apply
 // values "in order".
@@ -2133,7 +2123,7 @@ future<> gossiper::add_local_application_state(std::initializer_list<std::pair<a
 // change later, if needed.
 // Retaining the slightly broken signature is also consistent with origin. Hooray.
 //
-future<> gossiper::add_local_application_state(std::list<std::pair<application_state, versioned_value>> states) {
+future<> gossiper::add_local_application_state(application_state_map states) {
     if (states.empty()) {
         co_return;
     }
@@ -2147,14 +2137,6 @@ future<> gossiper::add_local_application_state(std::list<std::pair<application_s
                 auto err = format("endpoint_state_map does not contain endpoint = {}, application_states = {}",
                                   ep_addr, states);
                 co_await coroutine::return_exception(std::runtime_error(err));
-            }
-
-            for (auto& p : states) {
-                auto& state = p.first;
-                auto& value = p.second;
-                // Fire "before change" notifications:
-                // Not explicit, but apparently we allow this to defer (inside out implicit seastar::async)
-                co_await gossiper.do_before_change_notifications(ep_addr, ep_state_before, state, value);
             }
 
             auto es = gossiper.get_endpoint_state_ptr(ep_addr);
@@ -2180,15 +2162,11 @@ future<> gossiper::add_local_application_state(std::list<std::pair<application_s
             // will be called in the order given by `states` anyhow.
             co_await gossiper.replicate(ep_addr, std::move(local_state), permit.id());
 
-            for (auto& p : states) {
-                auto& state = p.first;
-                auto& value = p.second;
-                // fire "on change" notifications:
-                // now we might defer again, so this could be reordered. But we've
-                // ensured the whole set of values are monotonically versioned and
-                // applied to endpoint state.
-                co_await gossiper.do_on_change_notifications(ep_addr, state, value, permit.id());
-            }
+            // fire "on change" notifications:
+            // now we might defer again, so this could be reordered. But we've
+            // ensured the whole set of values are monotonically versioned and
+            // applied to endpoint state.
+            co_await gossiper.do_on_change_notifications(ep_addr, states, permit.id());
         });
     } catch (...) {
         logger.warn("Fail to apply application_state: {}", std::current_exception());

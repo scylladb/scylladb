@@ -44,6 +44,7 @@
 #include "cdc/generation.hh"
 #include "replica/tablets.hh"
 #include "replica/query.hh"
+#include "types/types.hh"
 
 using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
 
@@ -1564,25 +1565,26 @@ static std::vector<cdc::generation_id_v2> decode_cdc_generations_ids(const set_t
     return gen_ids_list;
 }
 
-future<> system_keyspace::update_tokens(gms::inet_address ep, const std::unordered_set<dht::token>& tokens)
-{
-    if (_db.get_token_metadata().get_topology().is_me(ep)) {
-        co_return co_await remove_endpoint(ep);
+static locator::host_id get_host_id(const gms::inet_address& peer, const cql3::untyped_result_set::row& row) {
+    locator::host_id host_id;
+    if (row.has("host_id")) {
+        host_id = locator::host_id(row.get_as<utils::UUID>("host_id"));
     }
-
-    sstring req = format("INSERT INTO system.{} (peer, tokens) VALUES (?, ?)", PEERS);
-    slogger.debug("INSERT INTO system.{} (peer, tokens) VALUES ({}, {})", PEERS, ep, tokens);
-    auto set_type = set_type_impl::get_instance(utf8_type, true);
-    co_await execute_cql(req, ep.addr(), make_set_value(set_type, prepare_tokens(tokens))).discard_result();
+    if (!host_id) {
+        slogger.warn("Peer {} has no host_id in system.{}", peer, system_keyspace::PEERS);
+    }
+    return host_id;
 }
 
-
 future<std::unordered_map<gms::inet_address, std::unordered_set<dht::token>>> system_keyspace::load_tokens() {
-    sstring req = format("SELECT peer, tokens FROM system.{}", PEERS);
+    sstring req = format("SELECT peer, host_id, tokens FROM system.{}", PEERS);
     return execute_cql(req).then([] (::shared_ptr<cql3::untyped_result_set> cql_result) {
         std::unordered_map<gms::inet_address, std::unordered_set<dht::token>> ret;
         for (auto& row : *cql_result) {
             auto peer = gms::inet_address(row.get_as<net::inet_address>("peer"));
+            if (!get_host_id(peer, row)) {
+                continue;
+            }
             if (row.has("tokens")) {
                 ret.emplace(peer, decode_tokens(deserialize_set_column(*peers(), row, "tokens")));
             }
@@ -1597,8 +1599,8 @@ future<std::unordered_map<gms::inet_address, locator::host_id>> system_keyspace:
         std::unordered_map<gms::inet_address, locator::host_id> ret;
         for (auto& row : *cql_result) {
             auto peer = gms::inet_address(row.get_as<net::inet_address>("peer"));
-            if (row.has("host_id")) {
-                ret.emplace(peer, locator::host_id(row.get_as<utils::UUID>("host_id")));
+            if (auto host_id = get_host_id(peer, row)) {
+                ret.emplace(peer, host_id);
             }
         }
         return ret;
@@ -1606,11 +1608,15 @@ future<std::unordered_map<gms::inet_address, locator::host_id>> system_keyspace:
 }
 
 future<std::vector<gms::inet_address>> system_keyspace::load_peers() {
-    auto res = co_await execute_cql(format("SELECT peer, tokens FROM system.{}", PEERS));
+    auto res = co_await execute_cql(format("SELECT peer, host_id, tokens FROM system.{}", PEERS));
     assert(res);
 
     std::vector<gms::inet_address> ret;
     for (auto& row: *res) {
+        auto peer = gms::inet_address(row.get_as<net::inet_address>("peer"));
+        if (!get_host_id(peer, row)) {
+            continue;
+        }
         if (!row.has("tokens")) {
             // Ignore rows that don't have tokens. Such rows may
             // be introduced by code that persists parts of peer
@@ -1618,7 +1624,7 @@ future<std::vector<gms::inet_address>> system_keyspace::load_peers() {
             // race with deleting a peer (during node removal).
             continue;
         }
-        ret.emplace_back(row.get_as<net::inet_address>("peer"));
+        ret.emplace_back(peer);
     }
     co_return ret;
 }
@@ -1653,26 +1659,59 @@ future<std::unordered_map<gms::inet_address, gms::inet_address>> system_keyspace
     });
 }
 
-template <typename Value>
-future<> system_keyspace::update_cached_values(gms::inet_address ep, sstring column_name, Value value) {
-    return make_ready_future<>();
+namespace {
+template <typename T>
+static data_value_or_unset make_data_value_or_unset(const std::optional<T>& opt, bool& any_set) {
+    if (opt) {
+        any_set = true;
+        return data_value(*opt);
+    } else {
+        return unset_value{};
+    }
+};
+
+static data_value_or_unset make_data_value_or_unset(const std::optional<std::unordered_set<dht::token>>& opt, bool& any_set) {
+    if (opt) {
+        any_set = true;
+        auto set_type = set_type_impl::get_instance(utf8_type, true);
+        return make_set_value(set_type, prepare_tokens(*opt));
+    } else {
+        return unset_value{};
+    }
+};
 }
 
-template <typename Value>
-future<> system_keyspace::update_peer_info(gms::inet_address ep, sstring column_name, Value value) {
+future<> system_keyspace::update_peer_info(gms::inet_address ep, const peer_info& info) {
     if (_db.get_token_metadata().get_topology().is_me(ep)) {
+        on_internal_error(slogger, format("update_peer_info called for this node: {}", ep));
+    }
+
+    bool any_set = false;
+    data_value_list values = {
+        data_value_or_unset(data_value(ep.addr())),
+        make_data_value_or_unset(info.data_center, any_set),
+        make_data_value_or_unset(info.host_id, any_set),
+        make_data_value_or_unset(info.preferred_ip, any_set),
+        make_data_value_or_unset(info.rack, any_set),
+        make_data_value_or_unset(info.release_version, any_set),
+        make_data_value_or_unset(info.rpc_address, any_set),
+        make_data_value_or_unset(info.schema_version, any_set),
+        make_data_value_or_unset(info.tokens, any_set),
+        make_data_value_or_unset(info.supported_features, any_set),
+    };
+
+    if (!any_set) {
         co_return;
     }
 
-    co_await update_cached_values(ep, column_name, value);
-    sstring req = format("INSERT INTO system.{} (peer, {}) VALUES (?, ?)", PEERS, column_name);
-    slogger.debug("INSERT INTO system.{} (peer, {}) VALUES ({}, {})", PEERS, column_name, ep, value);
-    co_await execute_cql(req, ep.addr(), value).discard_result();
+    auto query = fmt::format("INSERT INTO system.{} "
+            "(peer,data_center,host_id,preferred_ip,rack,release_version,rpc_address,schema_version,tokens,supported_features) VALUES"
+            "(?,?,?,?,?,?,?,?,?,?)", PEERS);
+
+    slogger.debug("{}: values={}", query, values);
+
+    co_await _qp.execute_internal(query, db::consistency_level::ONE, values, cql3::query_processor::cache_internal::yes);
 }
-// sets are not needed, since tokens are updated by another method
-template future<> system_keyspace::update_peer_info<sstring>(gms::inet_address ep, sstring column_name, sstring);
-template future<> system_keyspace::update_peer_info<utils::UUID>(gms::inet_address ep, sstring column_name, utils::UUID);
-template future<> system_keyspace::update_peer_info<net::inet_address>(gms::inet_address ep, sstring column_name, net::inet_address);
 
 template <typename T>
 future<> system_keyspace::set_scylla_local_param_as(const sstring& key, const T& value, bool visible_before_cl_replay) {
@@ -2830,7 +2869,7 @@ future<> system_keyspace::shutdown() {
     co_return;
 }
 
-future<::shared_ptr<cql3::untyped_result_set>> system_keyspace::execute_cql(const sstring& query_string, const std::initializer_list<data_value>& values) {
+future<::shared_ptr<cql3::untyped_result_set>> system_keyspace::execute_cql(const sstring& query_string, const data_value_list& values) {
     return _qp.execute_internal(query_string, values, cql3::query_processor::cache_internal::yes);
 }
 

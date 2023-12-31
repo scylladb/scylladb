@@ -429,13 +429,14 @@ future<> storage_service::topology_state_load() {
                 // Populate the table with the state from the gossiper here since storage_service::on_change()
                 // (which is called each time gossiper state changes) may have skipped it because the tokens
                 // for the node were not in the 'normal' state yet
-                co_await update_peer_info(ip);
+                auto info = get_peer_info_for_update(ip);
                 // And then amend with the info from raft
-                co_await _sys_ks.local().update_tokens(ip, rs.ring.value().tokens);
-                co_await _sys_ks.local().update_peer_info(ip, "data_center", rs.datacenter);
-                co_await _sys_ks.local().update_peer_info(ip, "rack", rs.rack);
-                co_await _sys_ks.local().update_peer_info(ip, "host_id", id.uuid());
-                co_await _sys_ks.local().update_peer_info(ip, "release_version", rs.release_version);
+                info.tokens = rs.ring.value().tokens;
+                info.data_center = rs.datacenter;
+                info.rack = rs.rack;
+                info.host_id = id.uuid();
+                info.release_version = rs.release_version;
+                co_await _sys_ks.local().update_peer_info(ip, info);
             } else {
                 co_await _sys_ks.local().update_tokens(rs.ring.value().tokens);
                 co_await _gossiper.add_local_application_state({{ gms::application_state::STATUS, gms::versioned_value::normal(rs.ring.value().tokens) }});
@@ -485,8 +486,9 @@ future<> storage_service::topology_state_load() {
                 if (rs.ring.has_value()) {
                     if (!is_me(ip)) {
                         // Save ip -> id mapping in peers table because we need it on restart, but do not save tokens until owned
-                        co_await _sys_ks.local().update_tokens(ip, {});
-                        co_await _sys_ks.local().update_peer_info(ip, "host_id", id.uuid());
+                        db::system_keyspace::peer_info info;
+                        info.host_id = id.uuid();
+                        co_await _sys_ks.local().update_peer_info(ip, info);
                     }
                     update_topology(host_id, ip, rs);
                     if (_topology_state_machine._topology.normal_nodes.empty()) {
@@ -3000,7 +3002,7 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
         std::unordered_map<gms::inet_address, sstring> loaded_peer_features,
         std::chrono::milliseconds delay) {
     std::unordered_set<token> bootstrap_tokens;
-    std::map<gms::application_state, gms::versioned_value> app_states;
+    gms::application_state_map app_states;
     /* The timestamp of the CDC streams generation that this node has proposed when joining.
      * This value is nullopt only when:
      * 1. this node is being upgraded from a non-CDC version,
@@ -3882,10 +3884,11 @@ future<> storage_service::handle_state_normal(inet_address endpoint, gms::permit
         co_await remove_endpoint(ep, ep == endpoint ? pid : gms::null_permit_id);
     }
     slogger.debug("handle_state_normal: endpoint={} is_normal_token_owner={} endpoint_to_remove={} owned_tokens={}", endpoint, is_normal_token_owner, endpoints_to_remove.contains(endpoint), owned_tokens);
-    if (!owned_tokens.empty() && !endpoints_to_remove.count(endpoint)) {
-        co_await update_peer_info(endpoint);
+    if (!is_me(endpoint) && !owned_tokens.empty() && !endpoints_to_remove.count(endpoint)) {
         try {
-            co_await _sys_ks.local().update_tokens(endpoint, owned_tokens);
+            auto info = get_peer_info_for_update(endpoint);
+            info.tokens = std::move(owned_tokens);
+            co_await _sys_ks.local().update_peer_info(endpoint, info);
         } catch (...) {
             slogger.error("handle_state_normal: fail to update tokens for {}: {}", endpoint, std::current_exception());
         }
@@ -3962,9 +3965,7 @@ future<> storage_service::handle_state_removed(inet_address endpoint, std::vecto
 
 future<> storage_service::on_join(gms::inet_address endpoint, gms::endpoint_state_ptr ep_state, gms::permit_id pid) {
     slogger.debug("endpoint={} on_join: permit_id={}", endpoint, pid);
-    for (const auto& e : ep_state->get_application_state_map()) {
-        co_await on_change(endpoint, e.first, e.second, pid);
-    }
+    co_await on_change(endpoint, ep_state->get_application_state_map(), pid);
 }
 
 future<> storage_service::on_alive(gms::inet_address endpoint, gms::endpoint_state_ptr state, gms::permit_id pid) {
@@ -3985,18 +3986,15 @@ future<> storage_service::on_alive(gms::inet_address endpoint, gms::endpoint_sta
     }
 }
 
-future<> storage_service::before_change(gms::inet_address endpoint, gms::endpoint_state_ptr current_state, gms::application_state new_state_key, const gms::versioned_value& new_value) {
-    slogger.debug("endpoint={} before_change: new app_state={}, new versioned_value={}", endpoint, new_state_key, new_value);
-    return make_ready_future();
-}
-
-future<> storage_service::on_change(inet_address endpoint, application_state state, const versioned_value& value, gms::permit_id pid) {
-    slogger.debug("endpoint={} on_change:     app_state={}, versioned_value={}, permit_id={}", endpoint, state, value, pid);
-    if (state == application_state::STATUS) {
+future<> storage_service::on_change(gms::inet_address endpoint, const gms::application_state_map& states_, gms::permit_id pid) {
+    // copy the states map locally since the coroutine may yield
+    auto states = states_;
+    slogger.debug("endpoint={} on_change:     states={}, permit_id={}", endpoint, states, pid);
+    co_await on_application_state_change(endpoint, states, application_state::STATUS, pid, [this] (inet_address endpoint, const gms::versioned_value& value, gms::permit_id pid) -> future<> {
         std::vector<sstring> pieces;
         boost::split(pieces, value.value(), boost::is_any_of(sstring(versioned_value::DELIMITER_STR)));
         if (pieces.empty()) {
-            slogger.warn("Fail to split status in on_change: endpoint={}, app_state={}, value={}", endpoint, state, value);
+            slogger.warn("Fail to split status in on_change: endpoint={}, app_state={}, value={}", endpoint, application_state::STATUS, value);
             co_return;
         }
         const sstring& move_name = pieces[0];
@@ -4012,30 +4010,32 @@ future<> storage_service::on_change(inet_address endpoint, application_state sta
         } else {
             co_return; // did nothing.
         }
-    } else {
-        auto ep_state = _gossiper.get_endpoint_state_ptr(endpoint);
-        if (!ep_state || _gossiper.is_dead_state(*ep_state)) {
-            slogger.debug("Ignoring state change for dead or unknown endpoint: {}", endpoint);
-            co_return;
-        }
-        const auto host_id = _gossiper.get_host_id(endpoint);
-        const auto& tm = get_token_metadata();
-        const auto ep = tm.get_endpoint_for_host_id_if_known(host_id);
-        // The check *ep == endpoint is needed when a node changes
-        // its IP - on_change can be called by the gossiper for old IP as part
-        // of its removal, after handle_state_normal has already been called for
-        // the new one. Without the check, the do_update_system_peers_table call
-        // overwrites the IP back to its old value.
-        // In essence, the code under the 'if' should fire if the given IP is a normal_token_owner.
-        if (ep && *ep == endpoint && tm.is_normal_token_owner(host_id)) {
+    });
+    auto ep_state = _gossiper.get_endpoint_state_ptr(endpoint);
+    if (!ep_state || _gossiper.is_dead_state(*ep_state)) {
+        slogger.debug("Ignoring state change for dead or unknown endpoint: {}", endpoint);
+        co_return;
+    }
+    const auto host_id = _gossiper.get_host_id(endpoint);
+    const auto& tm = get_token_metadata();
+    const auto ep = tm.get_endpoint_for_host_id_if_known(host_id);
+    // The check *ep == endpoint is needed when a node changes
+    // its IP - on_change can be called by the gossiper for old IP as part
+    // of its removal, after handle_state_normal has already been called for
+    // the new one. Without the check, the do_update_system_peers_table call
+    // overwrites the IP back to its old value.
+    // In essence, the code under the 'if' should fire if the given IP is a normal_token_owner.
+    if (ep && *ep == endpoint && tm.is_normal_token_owner(host_id)) {
+        if (!is_me(endpoint)) {
             slogger.debug("endpoint={}/{} on_change:     updating system.peers table", endpoint, host_id);
-            co_await do_update_system_peers_table(endpoint, state, value);
-            if (state == application_state::RPC_READY) {
-                slogger.debug("Got application_state::RPC_READY for node {}, is_cql_ready={}", endpoint, ep_state->is_cql_ready());
-                co_await notify_cql_change(endpoint, ep_state->is_cql_ready());
-            } else if (state == application_state::INTERNAL_IP) {
-                co_await maybe_reconnect_to_preferred_ip(endpoint, inet_address(value.value()));
-            }
+            co_await _sys_ks.local().update_peer_info(endpoint, get_peer_info_for_update(endpoint, states));
+        }
+        if (states.contains(application_state::RPC_READY)) {
+            slogger.debug("Got application_state::RPC_READY for node {}, is_cql_ready={}", endpoint, ep_state->is_cql_ready());
+            co_await notify_cql_change(endpoint, ep_state->is_cql_ready());
+        }
+        if (auto it = states.find(application_state::INTERNAL_IP); it != states.end()) {
+            co_await maybe_reconnect_to_preferred_ip(endpoint, inet_address(it->second.value()));
         }
     }
 }
@@ -4084,64 +4084,73 @@ future<> storage_service::on_restart(gms::inet_address endpoint, gms::endpoint_s
     return make_ready_future();
 }
 
-template <typename T>
-future<> storage_service::update_table(gms::inet_address endpoint, sstring col, T value) {
-    try {
-        co_await _sys_ks.local().update_peer_info(endpoint, col, value);
-    } catch (...) {
-        slogger.error("fail to update {} for {}: {}", col, endpoint, std::current_exception());
-    }
-}
-
-future<> storage_service::do_update_system_peers_table(gms::inet_address endpoint, const application_state& state, const versioned_value& value) {
-    slogger.debug("Update system.peers table: endpoint={}, app_state={}, versioned_value={}", endpoint, state, value);
-    if (state == application_state::RELEASE_VERSION) {
-        co_await update_table(endpoint, "release_version", value.value());
-    } else if (state == application_state::DC) {
-        co_await update_table(endpoint, "data_center", value.value());
-    } else if (state == application_state::RACK) {
-        co_await update_table(endpoint, "rack", value.value());
-    } else if (state == application_state::INTERNAL_IP) {
-        auto col = sstring("preferred_ip");
-        inet_address ep;
-        try {
-            ep = gms::inet_address(value.value());
-        } catch (...) {
-            slogger.error("fail to update {} for {}: invalid address {}", col, endpoint, value.value());
-            co_return;
-        }
-        co_await update_table(endpoint, col, ep.addr());
-    } else if (state == application_state::RPC_ADDRESS) {
-        auto col = sstring("rpc_address");
-        inet_address ep;
-        try {
-            ep = gms::inet_address(value.value());
-        } catch (...) {
-            slogger.error("fail to update {} for {}: invalid rcpaddr {}", col, endpoint, value.value());
-            co_return;
-        }
-        co_await update_table(endpoint, col, ep.addr());
-    } else if (state == application_state::SCHEMA) {
-        co_await update_table(endpoint, "schema_version", utils::UUID(value.value()));
-    } else if (state == application_state::HOST_ID) {
-        co_await update_table(endpoint, "host_id", utils::UUID(value.value()));
-    } else if (state == application_state::SUPPORTED_FEATURES) {
-        co_await update_table(endpoint, "supported_features", value.value());
-    }
-}
-
-future<> storage_service::update_peer_info(gms::inet_address endpoint) {
-    slogger.debug("Update peer info: endpoint={}", endpoint);
-    using namespace gms;
+db::system_keyspace::peer_info storage_service::get_peer_info_for_update(inet_address endpoint) {
     auto ep_state = _gossiper.get_endpoint_state_ptr(endpoint);
     if (!ep_state) {
-        co_return;
+        return db::system_keyspace::peer_info{};
     }
-    for (auto& entry : ep_state->get_application_state_map()) {
-        auto& app_state = entry.first;
-        auto& value = entry.second;
-        co_await do_update_system_peers_table(endpoint, app_state, value);
+    return get_peer_info_for_update(endpoint, ep_state->get_application_state_map());
+}
+
+db::system_keyspace::peer_info storage_service::get_peer_info_for_update(inet_address endpoint, const gms::application_state_map& app_state_map) {
+    db::system_keyspace::peer_info ret;
+
+    auto insert_string = [&] (std::optional<sstring>& opt, const gms::versioned_value& value, std::string_view) {
+        opt.emplace(value.value());
+    };
+    auto insert_address = [&] (std::optional<net::inet_address>& opt, const gms::versioned_value& value, std::string_view name) {
+        net::inet_address addr;
+        try {
+            addr = net::inet_address(value.value());
+        } catch (...) {
+            on_internal_error(slogger, format("failed to parse {} {} for {}: {}", name, value.value(), endpoint, std::current_exception()));
+        }
+        opt.emplace(addr);
+    };
+    auto insert_uuid = [&] (std::optional<utils::UUID>& opt, const gms::versioned_value& value, std::string_view name) {
+        utils::UUID id;
+        try {
+            id = utils::UUID(value.value());
+        } catch (...) {
+            on_internal_error(slogger, format("failed to parse {} {} for {}: {}", name, value.value(), endpoint, std::current_exception()));
+        }
+        opt.emplace(id);
+    };
+
+    for (const auto& [state, value] : app_state_map) {
+        switch (state) {
+        case application_state::DC:
+            insert_string(ret.data_center, value, "data_center");
+            break;
+        case application_state::HOST_ID:
+            insert_uuid(ret.host_id, value, "host_id");
+            break;
+        case application_state::INTERNAL_IP:
+            insert_address(ret.preferred_ip, value, "preferred_ip");
+            break;
+        case application_state::RACK:
+            insert_string(ret.rack, value, "rack");
+            break;
+        case application_state::RELEASE_VERSION:
+            insert_string(ret.release_version, value, "release_version");
+            break;
+        case application_state::RPC_ADDRESS:
+            insert_address(ret.rpc_address, value, "rpc_address");
+            break;
+        case application_state::SCHEMA:
+            insert_uuid(ret.schema_version, value, "schema_version");
+            break;
+        case application_state::TOKENS:
+            // tokens are updated separately
+            break;
+        case application_state::SUPPORTED_FEATURES:
+            insert_string(ret.supported_features, value, "supported_features");
+            break;
+        default:
+            break;
+        }
     }
+    return ret;
 }
 
 std::unordered_set<locator::token> storage_service::get_tokens_for(inet_address endpoint) {

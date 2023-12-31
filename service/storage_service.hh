@@ -12,6 +12,7 @@
 #pragma once
 
 #include <seastar/core/shared_future.hh>
+#include "gms/endpoint_state.hh"
 #include "gms/i_endpoint_state_change_subscriber.hh"
 #include "service/endpoint_lifecycle_subscriber.hh"
 #include "service/topology_guard.hh"
@@ -408,7 +409,6 @@ public:
             const dht::token_range_vector& ranges) const;
 public:
     virtual future<> on_join(gms::inet_address endpoint, gms::endpoint_state_ptr ep_state, gms::permit_id) override;
-    virtual future<> before_change(gms::inet_address endpoint, gms::endpoint_state_ptr current_state, gms::application_state new_state_key, const gms::versioned_value& new_value) override;
     /*
      * Handle the reception of a new particular ApplicationState for a particular endpoint. Note that the value of the
      * ApplicationState has not necessarily "changed" since the last known value, if we already received the same update
@@ -437,7 +437,7 @@ public:
      * Note: Any time a node state changes from STATUS_NORMAL, it will not be visible to new nodes. So it follows that
      * you should never bootstrap a new node during a removenode, decommission or move.
      */
-    virtual future<> on_change(inet_address endpoint, application_state state, const versioned_value& value, gms::permit_id) override;
+    virtual future<> on_change(gms::inet_address endpoint, const gms::application_state_map& states, gms::permit_id) override;
     virtual future<> on_alive(gms::inet_address endpoint, gms::endpoint_state_ptr state, gms::permit_id) override;
     virtual future<> on_dead(gms::inet_address endpoint, gms::endpoint_state_ptr state, gms::permit_id) override;
     virtual future<> on_remove(gms::inet_address endpoint, gms::permit_id) override;
@@ -467,10 +467,8 @@ public:
     virtual void on_drop_aggregate(const sstring& ks_name, const sstring& aggregate_name) override {}
     virtual void on_drop_view(const sstring& ks_name, const sstring& view_name) override {}
 private:
-    template <typename T>
-    future<> update_table(gms::inet_address endpoint, sstring col, T value);
-    future<> update_peer_info(inet_address endpoint);
-    future<> do_update_system_peers_table(gms::inet_address endpoint, const application_state& state, const versioned_value& value);
+    db::system_keyspace::peer_info get_peer_info_for_update(inet_address endpoint);
+    static db::system_keyspace::peer_info get_peer_info_for_update(inet_address endpoint, const gms::application_state_map& app_state_map);
 
     std::unordered_set<token> get_tokens_for(inet_address endpoint);
     std::optional<locator::endpoint_dc_rack> get_dc_rack_for(const gms::endpoint_state& ep_state);

@@ -763,7 +763,7 @@ std::pair<std::reference_wrapper<struct query_processor::remote>, gate::holder> 
 
 query_options query_processor::make_internal_options(
         const statements::prepared_statement::checked_weak_ptr& p,
-        const std::initializer_list<data_value>& values,
+        const data_value_list& values,
         db::consistency_level cl,
         int32_t page_size) const {
     if (p->bound_names.size() != values.size()) {
@@ -771,16 +771,26 @@ query_options query_processor::make_internal_options(
                 format("Invalid number of values. Expecting {:d} but got {:d}", p->bound_names.size(), values.size()));
     }
     auto ni = p->bound_names.begin();
-    std::vector<cql3::raw_value> bound_values;
-    for (auto& v : values) {
-        auto& n = *ni++;
-        if (v.type() == bytes_type) {
-            bound_values.push_back(cql3::raw_value::make_value(value_cast<bytes>(v)));
-        } else if (v.is_null()) {
-            bound_values.push_back(cql3::raw_value::make_null());
-        } else {
-            bound_values.push_back(cql3::raw_value::make_value(n->type->decompose(v)));
-        }
+    raw_value_vector_with_unset bound_values;
+    bound_values.values.reserve(values.size());
+    bound_values.unset.resize(values.size());
+    for (auto& var : values) {
+        auto& n = *ni;
+        std::visit(overloaded_functor {
+            [&] (const data_value& v) {
+                if (v.type() == bytes_type) {
+                    bound_values.values.emplace_back(cql3::raw_value::make_value(value_cast<bytes>(v)));
+                } else if (v.is_null()) {
+                    bound_values.values.emplace_back(cql3::raw_value::make_null());
+                } else {
+                    bound_values.values.emplace_back(cql3::raw_value::make_value(n->type->decompose(v)));
+                }
+            }, [&] (const unset_value&) {
+                bound_values.values.emplace_back(cql3::raw_value::make_null());
+                bound_values.unset[std::distance(p->bound_names.begin(), ni)] = true;
+            }
+        }, var);
+        ++ni;
     }
     if (page_size > 0) {
         lw_shared_ptr<service::pager::paging_state> paging_state;
@@ -788,10 +798,10 @@ query_options query_processor::make_internal_options(
         api::timestamp_type ts = api::missing_timestamp;
         return query_options(
                 cl,
-                bound_values,
+                std::move(bound_values),
                 cql3::query_options::specific_options{page_size, std::move(paging_state), serial_consistency, ts});
     }
-    return query_options(cl, bound_values);
+    return query_options(cl, std::move(bound_values));
 }
 
 statements::prepared_statement::checked_weak_ptr query_processor::prepare_internal(const sstring& query_string) {
@@ -814,7 +824,7 @@ struct internal_query_state {
 internal_query_state query_processor::create_paged_state(
         const sstring& query_string,
         db::consistency_level cl,
-        const std::initializer_list<data_value>& values,
+        const data_value_list& values,
         int32_t page_size) {
     auto p = prepare_internal(query_string);
     auto opts = make_internal_options(p, values, cl, page_size);
@@ -882,7 +892,7 @@ future<::shared_ptr<untyped_result_set>>
 query_processor::execute_internal(
         const sstring& query_string,
         db::consistency_level cl,
-        const std::initializer_list<data_value>& values,
+        const data_value_list& values,
         cache_internal cache) {
     auto qs = query_state_for_internal_call();
     co_return co_await execute_internal(query_string, cl, qs, values, cache);
@@ -893,7 +903,7 @@ query_processor::execute_internal(
         const sstring& query_string,
         db::consistency_level cl,
         service::query_state& query_state,
-        const std::initializer_list<data_value>& values,
+        const data_value_list& values,
         cache_internal cache) {
 
     if (log.is_enabled(logging::log_level::trace)) {
@@ -915,7 +925,7 @@ query_processor::execute_with_params(
         statements::prepared_statement::checked_weak_ptr p,
         db::consistency_level cl,
         service::query_state& query_state,
-        const std::initializer_list<data_value>& values) {
+        const data_value_list& values) {
     auto opts = make_internal_options(p, values, cl);
     auto statement = p->statement;
 
@@ -1123,7 +1133,7 @@ bool query_processor::migration_subscriber::should_invalidate(
 future<> query_processor::query_internal(
         const sstring& query_string,
         db::consistency_level cl,
-        const std::initializer_list<data_value>& values,
+        const data_value_list& values,
         int32_t page_size,
         noncopyable_function<future<stop_iteration>(const cql3::untyped_result_set_row&)>&& f) {
     auto query_state = create_paged_state(query_string, cl, values, page_size);

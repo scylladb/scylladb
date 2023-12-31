@@ -43,7 +43,7 @@ class heart_beat_state {
 
 class endpoint_state {
     gms::heart_beat_state get_heart_beat_state();
-    std::map<gms::application_state, gms::versioned_value> get_application_state_map();
+    std::unordered_map<gms::application_state, gms::versioned_value> get_application_state_map();
 };
 
 class gossip_digest {

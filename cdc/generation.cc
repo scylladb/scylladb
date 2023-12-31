@@ -14,6 +14,7 @@
 #include <seastar/core/coroutine.hh>
 
 #include "gms/endpoint_state.hh"
+#include "gms/versioned_value.hh"
 #include "keys.hh"
 #include "schema/schema_builder.hh"
 #include "replica/database.hh"
@@ -800,27 +801,18 @@ future<> generation_service::leave_ring() {
 }
 
 future<> generation_service::on_join(gms::inet_address ep, gms::endpoint_state_ptr ep_state, gms::permit_id pid) {
-    assert_shard_zero(__PRETTY_FUNCTION__);
-
-    auto val = ep_state->get_application_state_ptr(gms::application_state::CDC_GENERATION_ID);
-    if (!val) {
-        return make_ready_future();
-    }
-
-    return on_change(ep, gms::application_state::CDC_GENERATION_ID, *val, pid);
+    return on_change(ep, ep_state->get_application_state_map(), pid);
 }
 
-future<> generation_service::on_change(gms::inet_address ep, gms::application_state app_state, const gms::versioned_value& v, gms::permit_id) {
+future<> generation_service::on_change(gms::inet_address ep, const gms::application_state_map& states, gms::permit_id pid) {
     assert_shard_zero(__PRETTY_FUNCTION__);
 
-    if (app_state != gms::application_state::CDC_GENERATION_ID) {
-        return make_ready_future();
-    }
+    return on_application_state_change(ep, states, gms::application_state::CDC_GENERATION_ID, pid, [this] (gms::inet_address ep, const gms::versioned_value& v, gms::permit_id) {
+        auto gen_id = gms::versioned_value::cdc_generation_id_from_string(v.value());
+        cdc_log.debug("Endpoint: {}, CDC generation ID change: {}", ep, gen_id);
 
-    auto gen_id = gms::versioned_value::cdc_generation_id_from_string(v.value());
-    cdc_log.debug("Endpoint: {}, CDC generation ID change: {}", ep, gen_id);
-
-    return legacy_handle_cdc_generation(gen_id);
+        return legacy_handle_cdc_generation(gen_id);
+    });
 }
 
 future<> generation_service::check_and_repair_cdc_streams() {

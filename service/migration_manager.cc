@@ -1271,8 +1271,8 @@ future<> migration_manager::on_join(gms::inet_address endpoint, gms::endpoint_st
     return make_ready_future();
 }
 
-future<> migration_manager::on_change(gms::inet_address endpoint, gms::application_state state, const gms::versioned_value& value, gms::permit_id) {
-    if (state == gms::application_state::SCHEMA) {
+future<> migration_manager::on_change(gms::inet_address endpoint, const gms::application_state_map& states, gms::permit_id pid) {
+    return on_application_state_change(endpoint, states, gms::application_state::SCHEMA, pid, [this] (gms::inet_address endpoint, const gms::versioned_value&, gms::permit_id) {
         auto ep_state = _gossiper.get_endpoint_state_ptr(endpoint);
         if (!ep_state || _gossiper.is_dead_state(*ep_state)) {
             mlogger.debug("Ignoring state change for dead or unknown endpoint: {}", endpoint);
@@ -1282,8 +1282,8 @@ future<> migration_manager::on_change(gms::inet_address endpoint, gms::applicati
         if (_storage_proxy.get_token_metadata_ptr()->is_normal_token_owner(host_id)) {
             schedule_schema_pull(endpoint, *ep_state);
         }
-    }
-    return make_ready_future();
+        return make_ready_future<>();
+    });
 }
 
 future<> migration_manager::on_alive(gms::inet_address endpoint, gms::endpoint_state_ptr state, gms::permit_id) {

@@ -9,6 +9,7 @@
  */
 
 #include "gms/endpoint_state.hh"
+#include "gms/i_endpoint_state_change_subscriber.hh"
 #include <optional>
 #include <ostream>
 #include <boost/lexical_cast.hpp>
@@ -19,7 +20,7 @@ static_assert(std::is_default_constructible_v<heart_beat_state>);
 static_assert(std::is_nothrow_copy_constructible_v<heart_beat_state>);
 static_assert(std::is_nothrow_move_constructible_v<heart_beat_state>);
 
-static_assert(std::is_nothrow_default_constructible_v<std::map<application_state, versioned_value>>);
+static_assert(std::is_nothrow_default_constructible_v<application_state_map>);
 
 // Note: although std::map::find is not guaranteed to be noexcept
 // it depends on the comperator used and in this case comparing application_state
@@ -53,6 +54,16 @@ bool endpoint_state::is_cql_ready() const noexcept {
     } catch (...) {
         return false;
     }
+}
+
+future<> i_endpoint_state_change_subscriber::on_application_state_change(inet_address endpoint,
+        const gms::application_state_map& states, application_state app_state, permit_id pid,
+        std::function<future<>(inet_address, const gms::versioned_value&, permit_id)> func) {
+    auto it = states.find(app_state);
+    if (it != states.end()) {
+        return func(endpoint, it->second, pid);
+    }
+    return make_ready_future<>();
 }
 
 }

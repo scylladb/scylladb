@@ -522,13 +522,9 @@ private:
     // Must be called under lock_endpoint.
     future<> apply_new_states(inet_address addr, endpoint_state local_state, const endpoint_state& remote_state, permit_id);
 
-    // notify that a local application state is going to change (doesn't get triggered for remote changes)
-    // Must be called under lock_endpoint.
-    future<> do_before_change_notifications(inet_address addr, endpoint_state_ptr ep_state, const application_state& ap_state, const versioned_value& new_value) const;
-
     // notify that an application state has changed
     // Must be called under lock_endpoint.
-    future<> do_on_change_notifications(inet_address addr, const application_state& state, const versioned_value& value, permit_id) const;
+    future<> do_on_change_notifications(inet_address addr, const application_state_map& states, permit_id) const;
 
     // notify that a node is DOWN (dead)
     // Must be called under lock_endpoint.
@@ -588,7 +584,7 @@ public:
      * existing nodes can talk to the replacing node. So the probability of
      * replacing node being talked to is pretty high.
      */
-    future<> start_gossiping(gms::generation_type generation_nbr, std::map<application_state, versioned_value> preload_local_states = {},
+    future<> start_gossiping(gms::generation_type generation_nbr, application_state_map preload_local_states = {},
             gms::advertise_myself advertise = gms::advertise_myself::yes);
 
 public:
@@ -615,7 +611,7 @@ public:
      * Applies all states in set "atomically", as in guaranteed monotonic versions and
      * inserted into endpoint state together (and assuming same grouping, overwritten together).
      */
-    future<> add_local_application_state(std::list<std::pair<application_state, versioned_value>>);
+    future<> add_local_application_state(application_state_map states);
 
     /**
      * Intentionally overenginered to avoid very rare string copies.
