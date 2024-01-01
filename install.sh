@@ -317,11 +317,15 @@ fi
 # scylla-conf
 install -d -m755 "$retc"/scylla
 install -d -m755 "$retc"/scylla.d
-grep -v api_ui_dir conf/scylla.yaml | grep -v api_doc_dir > /tmp/scylla.yaml
-echo "api_ui_dir: /opt/scylladb/swagger-ui/dist/" >> /tmp/scylla.yaml
-echo "api_doc_dir: /opt/scylladb/api/api-doc/" >> /tmp/scylla.yaml
-installconfig 644 /tmp/scylla.yaml "$retc"/scylla
-rm -f /tmp/scylla.yaml
+
+scylla_yaml_dir=$(mktemp -d)
+scylla_yaml=$scylla_yaml_dir/scylla.yaml
+grep -v api_ui_dir conf/scylla.yaml | grep -v api_doc_dir > $scylla_yaml
+echo "api_ui_dir: /opt/scylladb/swagger-ui/dist/" >> $scylla_yaml
+echo "api_doc_dir: /opt/scylladb/api/api-doc/" >> $scylla_yaml
+installconfig 644 $scylla_yaml "$retc"/scylla
+rm -rf $scylla_yaml_dir
+
 installconfig 644 conf/cassandra-rackdc.properties "$retc"/scylla
 if $housekeeping; then
     installconfig 644 conf/housekeeping.cfg "$retc"/scylla.d
