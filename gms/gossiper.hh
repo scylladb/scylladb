@@ -248,22 +248,26 @@ private:
     // Must be called on shard 0.
     future<semaphore_units<>> lock_endpoint_update_semaphore();
 
+    struct live_and_unreachable_endpoints {
+        std::unordered_set<inet_address> live;
+        std::unordered_map<inet_address, clk::time_point> unreachable;
+    };
+
     // Must be called on shard 0.
     // Update _live_endpoints and/or _unreachable_endpoints
     // on shard 0, after acquiring `lock_endpoint_update_semaphore`.
-    // replicate_live_endpoints_on_change is called to replicate the changes to
-    // all shards and _live_endpoints_version is bumped unconditionally.
     //
-    // FIXME: The function is not exception safe so some shards
-    // may be left with stale _live_endpoints or _unreachable_endpoints.
-    // In this case, the _live_endpoints_version on that shard will not be updated.
-    // That can be examined under the endpoint_update_semaphore to make sure
-    // they all shards are consistent with each other.
-    future<> mutate_live_and_unreachable_endpoints(std::function<void(gossiper&)>);
+    // The called function modifies a copy of live_and_unreachable_endpoints
+    // which is then copied to temporary copies for all shards
+    // and then applied atomcically on all shards.
+    //
+    // Finally, the `on_success` callback is called on shard 0 iff replication was successful.
+    future<> mutate_live_and_unreachable_endpoints(std::function<void(live_and_unreachable_endpoints&)> func,
+            std::function<void(gossiper&)> on_success = [] (gossiper&) {});
 
     // replicate shard 0 live and unreachable endpoints sets across all other shards.
     // _endpoint_update_semaphore must be held for the whole duration
-    future<> replicate_live_endpoints_on_change();
+    future<> replicate_live_endpoints_on_change(foreign_ptr<std::unique_ptr<live_and_unreachable_endpoints>>, uint64_t new_live_endpoints_version);
 
     void run();
     // Replicates given endpoint_state to all other shards.
