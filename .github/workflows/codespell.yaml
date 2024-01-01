@@ -14,5 +14,5 @@ jobs:
       - uses: codespell-project/actions-codespell@master
         with:
           only_warn: 1
-          ignore_words_list: "ser"
-          skip: "./.git,build/*,tools/*,*.js,*.thrift,test/*"
+          ignore_words_list: "ser,ue,crate"
+          skip: "./.git,./build,./tools,*.js,*.thrift,*.lock,./test"
