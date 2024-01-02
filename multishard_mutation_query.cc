@@ -326,7 +326,7 @@ flat_mutation_reader_v2 read_context::create_reader(
         auto msg = format("Unexpected request to create reader for shard {}."
                 " The reader is expected to be in either `used`, `successful_lookup` or `inexistent` state,"
                 " but is in `{}` state instead.", shard, reader_state_to_string(rm.state));
-        mmq_log.warn(msg.c_str());
+        mmq_log.warn("{}", msg);
         throw std::logic_error(msg.c_str());
     }
 

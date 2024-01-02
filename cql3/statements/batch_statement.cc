@@ -215,10 +215,10 @@ void batch_statement::verify_batch_size(query_processor& qp, const std::vector<m
                     mutations.size(), fmt::join(ks_cf_pairs, ", "), size, type, threshold, size - threshold);
         };
         if (size > fail_threshold) {
-            _logger.error(error("FAIL", fail_threshold).c_str());
+            _logger.error("{}", error("FAIL", fail_threshold).c_str());
             throw exceptions::invalid_request_exception("Batch too large");
         } else {
-            _logger.warn(error("WARN", warn_threshold).c_str());
+            _logger.warn("{}", error("WARN", warn_threshold).c_str());
         }
     }
 }

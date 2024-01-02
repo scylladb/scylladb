@@ -78,7 +78,7 @@ raft_rpc::two_way_rpc(sloc loc, raft::server_id id,
     return verb(&_messaging, netw::msg_addr(*ip_addr), db::no_timeout, _group_id, _my_id, id, std::forward<Args>(args)...)
         .handle_exception_type([loc= std::move(loc), id] (const seastar::rpc::closed_error& e) {;
             const auto msg = format("Failed to execute {} on leader {}: {}", loc.function_name(), id, e);
-            rlogger.trace(std::string_view(msg));
+            rlogger.trace("{}", msg);
             return make_exception_future<Ret>(raft::transport_error(msg));
     });
 }

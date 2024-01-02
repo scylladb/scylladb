@@ -5278,7 +5278,7 @@ future<> storage_service::removenode(locator::host_id host_id, std::list<locator
                     "removenode[{}]: Rejected removenode operation (node={}); "
                     "the node being removed is alive, maybe you should use decommission instead?",
                     uuid, *endpoint_opt);
-                slogger.warn(std::string_view(message));
+                slogger.warn("{}", message);
                 throw std::runtime_error(message);
             }
 
