@@ -1197,6 +1197,7 @@ future<> repair::user_requested_repair_task_impl::run() {
     return module->run(id, [this, &rs, &db, id, keyspace = _status.keyspace, germs = std::move(_germs),
             &cfs = _cfs, &ranges = _ranges, hosts = std::move(_hosts), data_centers = std::move(_data_centers), ignore_nodes = std::move(_ignore_nodes)] () mutable {
         auto uuid = node_ops_id{id.uuid().uuid()};
+        auto start_time = std::chrono::steady_clock::now();
 
         bool needs_flush_before_repair = false;
         if (db.features().tombstone_gc_options) {
@@ -1323,6 +1324,8 @@ future<> repair::user_requested_repair_task_impl::run() {
             }
             return make_ready_future<>();
         }).get();
+        auto duration = std::chrono::duration<float>(std::chrono::steady_clock::now() - start_time);
+        rlogger.info("repair[{}]: Finished user-requested repair for vnode keyspace={} tables={} repair_id={} duration={}", id.uuid(), keyspace, cfs, id.id, duration);
     }).handle_exception([id, &rs] (std::exception_ptr ep) {
         rlogger.warn("repair[{}]: user-requested repair failed: {}", id.uuid(), ep);
         // If abort was requested, throw abort_requested_exception instead of wrapped exceptions from all shards,
