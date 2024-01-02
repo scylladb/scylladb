@@ -82,6 +82,8 @@ public:
     float repair_finished_percentage();
 };
 
+using host2ip_t = std::function<future<gms::inet_address> (locator::host_id)>;
+
 class repair_service : public seastar::peering_sharded_service<repair_service> {
     distributed<gms::gossiper>& _gossiper;
     netw::messaging_service& _messaging;
