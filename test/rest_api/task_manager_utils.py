@@ -58,7 +58,8 @@ def assert_task_does_not_exist(rest_api, task_id):
 def check_child_parent_relationship(rest_api, parent, tree_depth, allow_no_children, depth=0):
     assert allow_no_children or parent.get("children_ids", []), "Child tasks were not created"
 
-    for child_id in parent.get("children_ids", []):
+    for child_ident in parent.get("children_ids", []):
+        child_id = child_ident["task_id"]
         child = wait_for_task(rest_api, child_id)
         assert parent["sequence_number"] == child["sequence_number"], f"Child task with id {child_id} did not inherit parent's sequence number"
         assert child["parent_id"] == parent["id"], f"Parent id of task with id {child_id} is not set"
