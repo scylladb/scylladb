@@ -30,7 +30,7 @@ async def test_banned_node_cannot_communicate(manager: ManagerClient) -> None:
     config = {
         'failure_detector_timeout_in_ms': 2000
     }
-    srvs = [await manager.server_add(config=config) for _ in range(3)]
+    srvs = await manager.servers_add(3, config=config)
     cql = manager.get_cql()
 
     # Use RF=2 keyspace and below CL=ALL so that performing an INSERT requires

@@ -24,7 +24,7 @@ async def test_raft_replace_ignore_nodes(manager: ManagerClient) -> None:
        we want to run it only in dev mode.
     """
     logger.info(f"Booting initial cluster")
-    servers = [await manager.server_add(config={'failure_detector_timeout_in_ms': 2000}) for _ in range(7)]
+    servers = await manager.servers_add(7, config={'failure_detector_timeout_in_ms': 2000})
     s1_id = await manager.get_host_id(servers[1].server_id)
     s2_id = await manager.get_host_id(servers[2].server_id)
     logger.info(f"Stopping servers {servers[:3]}")
@@ -60,7 +60,7 @@ async def test_raft_remove_ignore_nodes(manager: ManagerClient) -> None:
        we want to run it only in dev mode.
     """
     logger.info(f"Booting initial cluster")
-    servers = [await manager.server_add() for _ in range(7)]
+    servers = await manager.servers_add(7)
     s1_id = await manager.get_host_id(servers[1].server_id)
     s2_id = await manager.get_host_id(servers[2].server_id)
     logger.info(f"Stopping servers {servers[:3]}")

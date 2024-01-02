@@ -61,7 +61,7 @@ def all_hints_metrics(metrics: ScyllaMetrics) -> list[str]:
 @pytest.mark.asyncio
 async def test_fence_writes(request, manager: ManagerClient):
     logger.info("Bootstrapping first two nodes")
-    servers = [await manager.server_add(), await manager.server_add()]
+    servers = await manager.servers_add(2)
 
     # The third node is started as the last one, so we can be sure that is has
     # the latest topology version
@@ -115,8 +115,7 @@ async def test_fence_hints(request, manager: ManagerClient):
     s0 = await manager.server_add(config={
         'error_injections_at_startup': ['decrease_hints_flush_period']
     }, cmdline=['--logger-log-level', 'hints_manager=trace'])
-    s1 = await manager.server_add()
-    s2 = await manager.server_add()
+    [s1, s2] = await manager.servers_add(2)
 
     logger.info(f'Creating test table')
     random_tables = RandomTables(request.node.name, manager, unique_name(), 3)

@@ -257,7 +257,10 @@ class ManagerClient():
                           property_file: Optional[dict[str, Any]] = None,
                           start: bool = True,
                           expected_error: Optional[str] = None) -> [ServerInfo]:
-        """Add new servers concurrently"""
+        """Add new servers concurrently.
+        This function can be called only if the cluster uses consistent topology changes, which support
+        concurrent bootstraps. If your test does not fulfill this condition and you want to add multiple
+        servers, you should use multiple server_add calls."""
         assert servers_num > 0, f"servers_add: cannot add {servers_num} servers, servers_num must be positive"
 
         try:

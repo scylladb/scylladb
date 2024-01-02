@@ -27,12 +27,12 @@ async def test_different_group0_ids(manager: ManagerClient):
     "zero replica after the removal" thrown by the repair service.
     """
 
-    # Consistent cluster management is disabled to use repair based node operations.
+    # Consistent topology changes are disabled to use repair based node operations.
     scylla_a = await manager.server_add(config={
-        'experimental_features': ["udf"] # disable consistent cluster management
+        'experimental_features': ["udf"] # disable consistent topology changes
     })
     scylla_b = await manager.server_add(start=False, config={
-        'experimental_features': ["udf"], # disable consistent cluster management
+        'experimental_features': ["udf"] # disable consistent topology changes
     })
     await manager.server_update_config(scylla_b.server_id, key='seed_provider', value=[{
             'class_name': 'org.apache.cassandra.locator.SimpleSeedProvider',
