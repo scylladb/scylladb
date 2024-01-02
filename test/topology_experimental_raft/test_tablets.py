@@ -378,3 +378,33 @@ async def test_table_dropped_during_streaming(manager: ManagerClient):
     logger.info("Verifying tablet replica")
     replica = await get_tablet_replica(manager, servers[0], 'test', 'test2', tablet_token)
     assert replica == (UUID(s1_host_id), 0)
+
+@pytest.mark.repair
+@pytest.mark.asyncio
+async def test_tablet_repair(manager: ManagerClient):
+    logger.info("Bootstrapping cluster")
+    servers = [await manager.server_add(), await manager.server_add(), await manager.server_add()]
+
+    cql = manager.get_cql()
+    await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', "
+                  "'replication_factor': 2} AND tablets = {'initial': 32};")
+    await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, c int);")
+
+    logger.info("Populating table")
+
+    keys = range(256)
+    await asyncio.gather(*[cql.run_async(f"INSERT INTO test.test (pk, c) VALUES ({k}, {k});") for k in keys])
+
+    logger.info("Repair table")
+    await manager.api.repair(servers[0].ip_addr, "test", "test")
+
+    async def check():
+        logger.info("Checking table")
+        rows = await cql.run_async("SELECT * FROM test.test;")
+        assert len(rows) == len(keys)
+        for r in rows:
+            assert r.c == r.pk
+
+    await check()
+
+    await cql.run_async("DROP KEYSPACE test;")
