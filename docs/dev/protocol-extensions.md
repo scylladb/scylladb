@@ -213,3 +213,14 @@ When the driver receives information about the tablet, it has to check if any of
 the previously received tablets has an overlapping token range.
 The group of tablets that meets this criterion has to be deleted, and the new
 tablet should replace them.
+
+## Negotiate sending tablets info to the drivers
+
+This extension allows the driver to inform the database that it is aware of
+tablets and is able to intepret the tablet information sent in `custom_payload`.
+
+Having a designated flag gives the ability to skip tablet metadata generation
+(which is quite expensive) if driver is not aware of tablets. 
+
+The feature is identified by the `TABLETS_ROUTING_V1` key, which is meant to be sent
+in the SUPPORTED message.
