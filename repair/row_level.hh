@@ -160,6 +160,11 @@ private:
             streaming::stream_reason reason,
             shared_ptr<node_ops_info> ops_info);
 
+public:
+    future<> repair_tablets(repair_uniq_id id, sstring keyspace_name, std::vector<sstring> table_names, host2ip_t host2ip, bool primary_replica_only = true);
+
+private:
+
     future<repair_update_system_table_response> repair_update_system_table_handler(
             gms::inet_address from,
             repair_update_system_table_request req);
@@ -237,6 +242,7 @@ public:
 
     friend class repair::user_requested_repair_task_impl;
     friend class repair::data_sync_repair_task_impl;
+    friend class repair::tablet_repair_task_impl;
 };
 
 class repair_info;

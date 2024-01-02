@@ -260,6 +260,16 @@ struct repair_flush_hints_batchlog_request {
 struct repair_flush_hints_batchlog_response {
 };
 
+struct tablet_repair_task_meta {
+    sstring keyspace_name;
+    sstring table_name;
+    table_id tid;
+    shard_id master_shard_id;
+    dht::token_range range;
+    repair_neighbors neighbors;
+    locator::tablet_replica_set replicas;
+};
+
 namespace std {
 
 template<>

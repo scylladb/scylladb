@@ -101,6 +101,31 @@ protected:
     virtual std::optional<double> expected_children_number() const override;
 };
 
+class tablet_repair_task_impl : public repair_task_impl {
+private:
+    sstring _keyspace;
+    std::vector<sstring> _tables;
+    std::vector<tablet_repair_task_meta> _metas;
+    optimized_optional<abort_source::subscription> _abort_subscription;
+public:
+    tablet_repair_task_impl(tasks::task_manager::module_ptr module, repair_uniq_id id, sstring keyspace, std::vector<sstring> tables, streaming::stream_reason reason, std::vector<tablet_repair_task_meta> metas)
+        : repair_task_impl(module, id.uuid(), id.id, "keyspace", keyspace, "", "", tasks::task_id::create_null_id(), reason)
+        , _keyspace(std::move(keyspace))
+        , _tables(std::move(tables))
+        , _metas(std::move(metas))
+    {
+    }
+
+    virtual tasks::is_abortable is_abortable() const noexcept override {
+        return tasks::is_abortable(!_abort_subscription);
+    }
+protected:
+    future<> run() override;
+
+    virtual future<std::optional<double>> expected_total_workload() const override;
+    virtual std::optional<double> expected_children_number() const override;
+};
+
 class shard_repair_task_impl : public repair_task_impl {
 public:
     repair_service& rs;
