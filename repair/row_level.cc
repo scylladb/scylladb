@@ -100,7 +100,10 @@ enum class repair_state : uint16_t {
 struct repair_node_state {
     gms::inet_address node;
     repair_state state = repair_state::unknown;
+    // The shard that repair instance runs on
+    shard_id shard;
     explicit repair_node_state(gms::inet_address n) : node(n) { }
+    explicit repair_node_state(gms::inet_address n, shard_id s) : node(n), shard(s) { }
 };
 
 // Wraps sink and source objects for repair master or repair follower nodes.
