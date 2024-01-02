@@ -134,6 +134,7 @@ class repair_neighbors {
 public:
     std::vector<gms::inet_address> all;
     std::vector<gms::inet_address> mandatory;
+    std::unordered_map<gms::inet_address, shard_id> shard_map;
     repair_neighbors() = default;
     explicit repair_neighbors(std::vector<gms::inet_address> a)
         : all(std::move(a)) {
@@ -142,6 +143,7 @@ public:
         : all(std::move(a))
         , mandatory(std::move(m)) {
     }
+    repair_neighbors(std::vector<gms::inet_address> nodes, std::vector<shard_id> shards);
 };
 
 future<uint64_t> estimate_partitions(seastar::sharded<replica::database>& db, const sstring& keyspace,

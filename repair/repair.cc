@@ -211,6 +211,17 @@ void remove_item(Collection& c, T& item) {
     }
 }
 
+repair_neighbors::repair_neighbors(std::vector<gms::inet_address> nodes, std::vector<shard_id> shards)
+    : all(std::move(nodes))
+{
+    if (all.size() != shards.size()) {
+        throw std::runtime_error("The number of shards and nodes do not match");
+    }
+    for (int i = 0; i < all.size(); i++) {
+        shard_map[all[i]] = shards[i];
+    }
+}
+
 // Return all of the neighbors with whom we share the provided range.
 static std::vector<gms::inet_address> get_neighbors(
         const locator::effective_replication_map& erm,
