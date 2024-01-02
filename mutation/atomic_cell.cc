@@ -198,8 +198,9 @@ operator<<(std::ostream& os, const atomic_cell& ac) {
     return os << atomic_cell_view(ac);
 }
 
-std::ostream&
-operator<<(std::ostream& os, const atomic_cell_view::printer& acvp) {
+auto fmt::formatter<atomic_cell_view::printer>::format(const atomic_cell_view::printer& acvp,
+                                                       fmt::format_context& ctx) const
+    ->decltype(ctx.out()) {
     auto& type = acvp._type;
     auto& acv = acvp._cell;
     if (acv.is_live()) {
@@ -214,21 +215,15 @@ operator<<(std::ostream& os, const atomic_cell_view::printer& acvp) {
         } else {
             fmt::print(cell_value_string_builder, "{}", type.to_string(to_bytes(acv.value())));
         }
-        fmt::print(os, "atomic_cell{{{},ts={:d},expiry={:d},ttl={:d}}}",
+        return fmt::format_to(ctx.out(), "atomic_cell{{{},ts={:d},expiry={:d},ttl={:d}}}",
             cell_value_string_builder.str(),
             acv.timestamp(),
             acv.is_live_and_has_ttl() ? acv.expiry().time_since_epoch().count() : -1,
             acv.is_live_and_has_ttl() ? acv.ttl().count() : 0);
     } else {
-        fmt::print(os, "atomic_cell{{DEAD,ts={:d},deletion_time={:d}}}",
+        return fmt::format_to(ctx.out(), "atomic_cell{{DEAD,ts={:d},deletion_time={:d}}}",
             acv.timestamp(), acv.deletion_time().time_since_epoch().count());
     }
-    return os;
-}
-
-std::ostream&
-operator<<(std::ostream& os, const atomic_cell::printer& acp) {
-    return operator<<(os, static_cast<const atomic_cell_view::printer&>(acp));
 }
 
 std::ostream& operator<<(std::ostream& os, const atomic_cell_or_collection::printer& p) {
@@ -241,7 +236,7 @@ std::ostream& operator<<(std::ostream& os, const atomic_cell_or_collection::prin
         auto cmv = p._cell.as_collection_mutation();
         os << collection_mutation_view::printer(*p._cdef.type, cmv);
     } else {
-        os << atomic_cell_view::printer(*p._cdef.type, p._cell.as_atomic_cell(p._cdef));
+        fmt::print(os, "{}", atomic_cell_view::printer(*p._cdef.type, p._cell.as_atomic_cell(p._cdef)));
     }
     return os << " }";
 }
