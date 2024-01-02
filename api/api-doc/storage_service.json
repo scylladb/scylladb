@@ -2547,6 +2547,14 @@
                      "allowMultiple":false,
                      "type":"integer",
                      "paramType":"query"
+                  },
+                  {
+                     "name":"force",
+                     "description":"When set to true, replication strategy constraints can be broken (false by default)",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"boolean",
+                     "paramType":"query"
                   }
                ]
             }

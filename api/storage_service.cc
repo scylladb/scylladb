@@ -1478,10 +1478,13 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         auto ks = req->get_query_param("ks");
         auto table = req->get_query_param("table");
         auto table_id = ctx.db.local().find_column_family(ks, table).schema()->id();
+        auto force_str = req->get_query_param("force");
+        auto force = service::loosen_constraints(force_str == "" ? false : validate_bool(force_str));
 
         co_await ss.local().move_tablet(table_id, token,
             locator::tablet_replica{src_host_id, src_shard_id},
-            locator::tablet_replica{dst_host_id, dst_shard_id});
+            locator::tablet_replica{dst_host_id, dst_shard_id},
+            force);
 
         co_return json_void();
     });
