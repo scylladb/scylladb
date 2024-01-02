@@ -2152,7 +2152,8 @@ static future<> repair_get_row_diff_with_rpc_stream_handler(
                             source,
                             error,
                             current_set_diff,
-                            std::move(hash_cmd_opt)).handle_exception([sink, &error] (std::exception_ptr ep) mutable {
+                            std::move(hash_cmd_opt)).handle_exception([from, repair_meta_id, sink, &error] (std::exception_ptr ep) mutable {
+                        rlogger.warn("repair_get_row_diff_with_rpc_stream_handler: from={} repair_meta_id={} error={}", from, repair_meta_id, ep);
                         error = true;
                         return sink(repair_row_on_wire_with_cmd{repair_stream_cmd::error, repair_row_on_wire()}).then([] {
                             return make_ready_future<stop_iteration>(stop_iteration::no);
@@ -2191,7 +2192,8 @@ static future<> repair_put_row_diff_with_rpc_stream_handler(
                             source,
                             error,
                             current_rows,
-                            std::move(row_opt)).handle_exception([sink, &error] (std::exception_ptr ep) mutable {
+                            std::move(row_opt)).handle_exception([from, repair_meta_id, sink, &error] (std::exception_ptr ep) mutable {
+                        rlogger.warn("repair_put_row_diff_with_rpc_stream_handler: from={} repair_meta_id={} error={}", from, repair_meta_id, ep);
                         error = true;
                         return sink(repair_stream_cmd::error).then([] {
                             return make_ready_future<stop_iteration>(stop_iteration::no);
@@ -2229,7 +2231,8 @@ static future<> repair_get_full_row_hashes_with_rpc_stream_handler(
                             sink,
                             source,
                             error,
-                            std::move(status_opt)).handle_exception([sink, &error] (std::exception_ptr ep) mutable {
+                            std::move(status_opt)).handle_exception([from, repair_meta_id, sink, &error] (std::exception_ptr ep) mutable {
+                        rlogger.warn("repair_get_full_row_hashes_with_rpc_stream_handler: from={} repair_meta_id={} error={}", from, repair_meta_id, ep);
                         error = true;
                         return sink(repair_hash_with_cmd{repair_stream_cmd::error, repair_hash()}).then([] () {
                             return make_ready_future<stop_iteration>(stop_iteration::no);
