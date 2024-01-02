@@ -291,8 +291,15 @@ public:
         const atomic_cell_view& _cell;
     public:
         printer(const abstract_type& type, const atomic_cell_view& cell) : _type(type), _cell(cell) {}
-        friend std::ostream& operator<<(std::ostream& os, const printer& acvp);
+        friend fmt::formatter<printer>;
     };
+};
+
+template <>
+struct fmt::formatter<atomic_cell_view::printer> {
+    constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
+    auto format(const atomic_cell_view::printer&, fmt::format_context& ctx) const
+        -> decltype(ctx.out());
 };
 
 class atomic_cell_mutable_view final : public basic_atomic_cell_view<mutable_view::yes> {
@@ -377,8 +384,17 @@ public:
     class printer : atomic_cell_view::printer {
     public:
         printer(const abstract_type& type, const atomic_cell_view& cell) : atomic_cell_view::printer(type, cell) {}
-        friend std::ostream& operator<<(std::ostream& os, const printer& acvp);
+        friend fmt::formatter<printer>;
     };
+};
+
+template <>
+struct fmt::formatter<atomic_cell::printer> {
+    constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
+    auto format(const atomic_cell::printer& acp, fmt::format_context& ctx) const
+        -> decltype(ctx.out()) {
+        return fmt::format_to(ctx.out(), "{}", static_cast<const atomic_cell_view::printer&>(acp));
+    }
 };
 
 class column_definition;
@@ -387,3 +403,4 @@ std::strong_ordering compare_atomic_cell_for_merge(atomic_cell_view left, atomic
 void merge_column(const abstract_type& def,
         atomic_cell_or_collection& old,
         const atomic_cell_or_collection& neww);
+
