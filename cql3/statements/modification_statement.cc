@@ -291,7 +291,7 @@ modification_statement::do_execute(query_processor& qp, service::query_state& qs
     auto result = seastar::make_shared<cql_transport::messages::result_message::void_message>();
     if (keys_size_one) {
         auto&& table = s->table();
-        if (_may_use_token_aware_routing && table.uses_tablets()) {
+        if (_may_use_token_aware_routing && table.uses_tablets() && qs.get_client_state().is_protocol_extension_set(cql_transport::cql_protocol_extension::TABLETS_ROUTING_V1)) {
             auto erm = table.get_effective_replication_map();
             auto tablet_info = erm->check_locality(token);
             if (tablet_info.has_value()) {
@@ -358,7 +358,7 @@ modification_statement::execute_with_condition(query_processor& qp, service::que
     std::optional<locator::tablet_routing_info> tablet_info = locator::tablet_routing_info{locator::tablet_replica_set(), std::pair<dht::token, dht::token>()};
 
     auto&& table = s->table();
-    if (_may_use_token_aware_routing && table.uses_tablets()) {
+    if (_may_use_token_aware_routing && table.uses_tablets() && qs.get_client_state().is_protocol_extension_set(cql_transport::cql_protocol_extension::TABLETS_ROUTING_V1)) {
         auto erm = table.get_effective_replication_map();
         tablet_info = erm->check_locality(token);
     }
