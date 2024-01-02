@@ -24,9 +24,14 @@ using namespace locator;
 
 static thread_local auto replica_type = tuple_type_impl::get_instance({uuid_type, int32_type});
 static thread_local auto replica_set_type = list_type_impl::get_instance(replica_type, false);
+static thread_local auto tablet_info_type = tuple_type_impl::get_instance({long_type, long_type, replica_set_type});
 
 data_type get_replica_set_type() {
     return replica_set_type;
+}
+
+data_type get_tablet_info_type() {
+    return tablet_info_type;
 }
 
 schema_ptr make_tablets_schema() {

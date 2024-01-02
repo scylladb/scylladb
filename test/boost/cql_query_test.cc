@@ -5721,7 +5721,7 @@ cql_test_config tablet_cql_test_config() {
 static
 bool has_tablet_routing(::shared_ptr<cql_transport::messages::result_message> result) {
     auto custom_payload = result->custom_payload();
-    if (!custom_payload.has_value() || custom_payload->find("tablet_replicas") == custom_payload->end() || custom_payload->find("token_range") == custom_payload->end()) {
+    if (!custom_payload.has_value() || custom_payload->find("tablets-routing-v1") == custom_payload->end()) {
         return false;
     }
     return true;

@@ -33,6 +33,8 @@ namespace replica {
 
 data_type get_replica_set_type();
 
+data_type get_tablet_info_type();
+
 schema_ptr make_tablets_schema();
 
 std::vector<data_value> replicas_to_data_value(const locator::tablet_replica_set& replicas);
