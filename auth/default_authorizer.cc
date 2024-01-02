@@ -47,10 +47,12 @@ static const class_registrator<
         authorizer,
         default_authorizer,
         cql3::query_processor&,
+        ::service::raft_group0_client&,
         ::service::migration_manager&> password_auth_reg("org.apache.cassandra.auth.CassandraAuthorizer");
 
-default_authorizer::default_authorizer(cql3::query_processor& qp, ::service::migration_manager& mm)
+default_authorizer::default_authorizer(cql3::query_processor& qp, ::service::raft_group0_client& g0, ::service::migration_manager& mm)
         : _qp(qp)
+        , _group0_client(g0)
         , _migration_manager(mm)
         , _auth_ks_name(get_auth_ks_name(qp)) {
 }

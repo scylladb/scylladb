@@ -23,6 +23,7 @@
 #include "auth/permissions_cache.hh"
 #include "auth/role_manager.hh"
 #include "seastarx.hh"
+#include "service/raft/raft_group0_client.hh"
 #include "utils/observable.hh"
 #include "utils/serialized_action.hh"
 #include "db/config.hh"
@@ -115,6 +116,7 @@ public:
     service(
             utils::loading_cache_config,
             cql3::query_processor&,
+            ::service::raft_group0_client&,
             ::service::migration_notifier&,
             ::service::migration_manager&,
             const service_config&,

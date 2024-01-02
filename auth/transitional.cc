@@ -14,6 +14,7 @@
 #include "auth/default_authorizer.hh"
 #include "auth/password_authenticator.hh"
 #include "auth/permission.hh"
+#include "service/raft/raft_group0_client.hh"
 #include "utils/class_registrator.hh"
 
 namespace auth {
@@ -36,8 +37,8 @@ class transitional_authenticator : public authenticator {
 public:
     static const sstring PASSWORD_AUTHENTICATOR_NAME;
 
-    transitional_authenticator(cql3::query_processor& qp, ::service::migration_manager& mm)
-            : transitional_authenticator(std::make_unique<password_authenticator>(qp, mm)) {
+    transitional_authenticator(cql3::query_processor& qp, ::service::raft_group0_client& g0, ::service::migration_manager& mm)
+            : transitional_authenticator(std::make_unique<password_authenticator>(qp, g0, mm)) {
     }
     transitional_authenticator(std::unique_ptr<authenticator> a)
             : _authenticator(std::move(a)) {
@@ -152,8 +153,8 @@ class transitional_authorizer : public authorizer {
     std::unique_ptr<authorizer> _authorizer;
 
 public:
-    transitional_authorizer(cql3::query_processor& qp, ::service::migration_manager& mm)
-            : transitional_authorizer(std::make_unique<default_authorizer>(qp, mm)) {
+    transitional_authorizer(cql3::query_processor& qp, ::service::raft_group0_client& g0, ::service::migration_manager& mm)
+            : transitional_authorizer(std::make_unique<default_authorizer>(qp, g0, mm)) {
     }
     transitional_authorizer(std::unique_ptr<authorizer> a)
             : _authorizer(std::move(a)) {
@@ -221,10 +222,12 @@ static const class_registrator<
         auth::authenticator,
         auth::transitional_authenticator,
         cql3::query_processor&,
+        ::service::raft_group0_client&,
         ::service::migration_manager&> transitional_authenticator_reg(auth::PACKAGE_NAME + "TransitionalAuthenticator");
 
 static const class_registrator<
         auth::authorizer,
         auth::transitional_authorizer,
         cql3::query_processor&,
+        ::service::raft_group0_client&,
         ::service::migration_manager&> transitional_authorizer_reg(auth::PACKAGE_NAME + "TransitionalAuthorizer");

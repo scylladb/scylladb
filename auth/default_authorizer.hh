@@ -35,7 +35,7 @@ class default_authorizer : public authorizer {
     std::string_view _auth_ks_name;
 
 public:
-    default_authorizer(cql3::query_processor&, ::service::migration_manager&);
+    default_authorizer(cql3::query_processor&, ::service::raft_group0_client&, ::service::migration_manager&);
 
     ~default_authorizer();
 

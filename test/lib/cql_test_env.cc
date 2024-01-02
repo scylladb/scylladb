@@ -923,7 +923,7 @@ private:
             auth_config.authenticator_java_name = qualified_authenticator_name;
             auth_config.role_manager_java_name = qualified_role_manager_name;
 
-            _auth_service.start(perm_cache_config, std::ref(_qp), std::ref(_mnotifier), std::ref(_mm), auth_config, maintenance_socket_enabled::no).get();
+            _auth_service.start(perm_cache_config, std::ref(_qp), std::ref(group0_client), std::ref(_mnotifier), std::ref(_mm), auth_config, maintenance_socket_enabled::no).get();
             _auth_service.invoke_on_all([this] (auth::service& auth) {
                 return auth.start(_mm.local());
             }).get();

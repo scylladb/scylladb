@@ -30,13 +30,14 @@ static const std::string cfg_source_altname = "ALTNAME";
 static const class_registrator<auth::authenticator
     , auth::certificate_authenticator
     , cql3::query_processor&
+    , ::service::raft_group0_client&
     , ::service::migration_manager&> cert_auth_reg(CERT_AUTH_NAME);
 
 enum class auth::certificate_authenticator::query_source {
     subject, altname
 };
 
-auth::certificate_authenticator::certificate_authenticator(cql3::query_processor& qp, ::service::migration_manager&)
+auth::certificate_authenticator::certificate_authenticator(cql3::query_processor& qp, ::service::raft_group0_client&, ::service::migration_manager&)
     : _queries([&] {
         auto& conf = qp.db().get_config();
         auto queries = conf.auth_certificate_role_queries();

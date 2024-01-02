@@ -147,6 +147,7 @@ service::service(
 service::service(
         utils::loading_cache_config c,
         cql3::query_processor& qp,
+        ::service::raft_group0_client& g0,
         ::service::migration_notifier& mn,
         ::service::migration_manager& mm,
         const service_config& sc,
@@ -155,9 +156,9 @@ service::service(
                       std::move(c),
                       qp,
                       mn,
-                      create_object<authorizer>(sc.authorizer_java_name, qp, mm),
-                      create_object<authenticator>(sc.authenticator_java_name, qp, mm),
-                      create_object<role_manager>(sc.role_manager_java_name, qp, mm),
+                      create_object<authorizer>(sc.authorizer_java_name, qp, g0, mm),
+                      create_object<authenticator>(sc.authenticator_java_name, qp, g0, mm),
+                      create_object<role_manager>(sc.role_manager_java_name, qp, g0, mm),
                       used_by_maintenance_socket) {
 }
 

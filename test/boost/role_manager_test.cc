@@ -18,7 +18,7 @@ auto make_manager(cql_test_env& env) {
         std::default_delete<auth::standard_role_manager>()(m);
     };
     return std::unique_ptr<auth::standard_role_manager, decltype(stop_role_manager)>(
-            new auth::standard_role_manager(env.local_qp(), env.migration_manager().local()),
+            new auth::standard_role_manager(env.local_qp(), env.get_raft_group0_client(), env.migration_manager().local()),
             std::move(stop_role_manager));
 }
 
