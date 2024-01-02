@@ -80,6 +80,11 @@ struct repair_uniq_id {
 };
 std::ostream& operator<<(std::ostream& os, const repair_uniq_id& x);
 
+// If the repair master sets the dst_cpu_id to repair_unspecified_shard. It
+// means the repair master does not choose shard id for the repair follower.
+// The repair follower should choose the shard id itself.
+constexpr shard_id repair_unspecified_shard = shard_id(-1);
+
 // NOTE: repair_start() can be run on any node, but starts a node-global
 // operation.
 // repair_start() starts the requested repair on this node. It returns an

@@ -67,6 +67,16 @@ extern logging::logger rlogger;
 
 static bool inject_rpc_stream_error = false;
 
+static shard_id get_dst_shard_id(uint32_t src_cpu_id, const rpc::optional<shard_id>& dst_cpu_id_opt) {
+    uint32_t dst_cpu_id = 0;
+    if (dst_cpu_id_opt && *dst_cpu_id_opt != repair_unspecified_shard) {
+        dst_cpu_id = *dst_cpu_id_opt;
+    } else {
+        dst_cpu_id = src_cpu_id % smp::count;
+    }
+    return dst_cpu_id;
+}
+
 enum class repair_state : uint16_t {
     unknown,
     row_level_start_started,
