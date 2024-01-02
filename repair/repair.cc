@@ -549,33 +549,6 @@ future<uint64_t> estimate_partitions(seastar::sharded<replica::database>& db, co
     );
 }
 
-static
-const dht::sharder&
-get_sharder_for_tables(seastar::sharded<replica::database>& db, const sstring& keyspace, const std::vector<table_id>& table_ids) {
-    schema_ptr last_s;
-    for (size_t idx = 0 ; idx < table_ids.size(); idx++) {
-        schema_ptr s;
-        if (const auto* cf = find_column_family_if_exists(db.local(), table_ids[idx])) {
-            s = cf->schema();
-        } else {
-            continue;
-        }
-        if (last_s && last_s->get_sharder() != s->get_sharder()) {
-            throw std::runtime_error(
-                    format("All tables repaired together have to have the same sharding logic. "
-                        "Different sharding logic found: {} (for table {}) and {} (for table {})",
-                        last_s->get_sharder(), last_s->cf_name(),
-                        s->get_sharder(), s->cf_name()));
-        }
-        last_s = std::move(s);
-    }
-    if (!last_s) {
-        throw std::runtime_error(format("Failed to find sharder for keyspace={}, tables={}, no table in this keyspace",
-                keyspace, table_ids));
-    }
-    return last_s->get_sharder();
-}
-
 repair::shard_repair_task_impl::shard_repair_task_impl(tasks::task_manager::module_ptr module,
         tasks::task_id id,
         const sstring& keyspace,
@@ -597,7 +570,6 @@ repair::shard_repair_task_impl::shard_repair_task_impl(tasks::task_manager::modu
     , messaging(repair.get_messaging().container())
     , mm(repair.get_migration_manager())
     , gossiper(repair.get_gossiper())
-    , sharder(get_sharder_for_tables(db, keyspace, table_ids_))
     , erm(std::move(erm_))
     , ranges(ranges_)
     , cfs(get_table_names(db.local(), table_ids_))

@@ -108,7 +108,6 @@ public:
     seastar::sharded<netw::messaging_service>& messaging;
     service::migration_manager& mm;
     gms::gossiper& gossiper;
-    const dht::sharder& sharder;
     locator::effective_replication_map_ptr erm;
     dht::token_range_vector ranges;
     std::vector<sstring> cfs;
