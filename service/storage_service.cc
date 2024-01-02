@@ -3673,7 +3673,7 @@ future<> storage_service::handle_state_normal(inet_address endpoint, gms::permit
     slogger.debug("endpoint={} handle_state_normal: permit_id={}", endpoint, pid);
 
     if (_raft_topology_change_enabled) {
-        slogger.debug("ignore handle_state_normal since topology change are using raft");
+        slogger.debug("ignore handle_state_normal since topology changes are using raft");
         co_return;
     }
 
@@ -3910,13 +3910,13 @@ future<> storage_service::handle_state_normal(inet_address endpoint, gms::permit
 }
 
 future<> storage_service::handle_state_left(inet_address endpoint, std::vector<sstring> pieces, gms::permit_id pid) {
+    slogger.debug("endpoint={} handle_state_left: permit_id={}", endpoint, pid);
 
     if (_raft_topology_change_enabled) {
-        slogger.debug("ignore handle_state_left since topology change are using raft");
+        slogger.debug("ignore handle_state_left since topology changes are using raft");
         co_return;
     }
 
-    slogger.debug("endpoint={} handle_state_left", endpoint);
     if (pieces.size() < 2) {
         slogger.warn("Fail to handle_state_left endpoint={} pieces={}", endpoint, pieces);
         co_return;
@@ -3975,6 +3975,9 @@ future<> storage_service::on_alive(gms::inet_address endpoint, gms::endpoint_sta
     bool is_normal_token_owner = tm_host_id_opt && tm.is_normal_token_owner(*tm_host_id_opt);
     if (is_normal_token_owner) {
         co_await notify_up(endpoint);
+    } else if (_raft_topology_change_enabled) {
+        slogger.debug("ignore on_alive since topology changes are using raft and "
+                      "endpoint {}/{} is not a normal token owner", endpoint, tm_host_id_opt);
     } else {
         auto tmlock = co_await get_token_metadata_lock();
         auto tmptr = co_await get_mutable_token_metadata_ptr();
@@ -4057,6 +4060,12 @@ future<> storage_service::maybe_reconnect_to_preferred_ip(inet_address ep, inet_
 
 future<> storage_service::on_remove(gms::inet_address endpoint, gms::permit_id pid) {
     slogger.debug("endpoint={} on_remove: permit_id={}", endpoint, pid);
+
+    if (_raft_topology_change_enabled) {
+        slogger.debug("ignore on_remove since topology changes are using raft");
+        co_return;
+    }
+
     auto tmlock = co_await get_token_metadata_lock();
     auto tmptr = co_await get_mutable_token_metadata_ptr();
     // We should handle the case when we aren't able to find endpoint -> ip mapping in token_metadata.
