@@ -266,7 +266,7 @@ void test_main_thread(cql_test_env& env) {
     stats_collector sc(sem, stats_collector_params);
     try {
         auto _ = sc.collect();
-        memory::set_heap_profiling_enabled(true);
+        memory::set_heap_profiling_sampling_rate(100);
         execute_reads(*s, sem, reads, read_concurrency, [&] (unsigned i) {
             return env.execute_cql(format("select * from ks.test where pk = 0 and ck > {} limit 100;",
                     tests::random::get_int(rows / 2))).discard_result();
@@ -274,7 +274,7 @@ void test_main_thread(cql_test_env& env) {
     } catch (...) {
         testlog.error("Reads aborted due to exception: {}", std::current_exception());
     }
-    memory::set_heap_profiling_enabled(false);
+    memory::set_heap_profiling_sampling_rate(0);
     sc.write_stats().get();
 
     auto occupancy = logalloc::shard_tracker().occupancy();
