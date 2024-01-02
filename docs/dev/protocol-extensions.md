@@ -197,5 +197,19 @@ use that information for every subsequent query.
 If we send the query to the wrong node/shard, we want to send the RESULT 
 message with additional information about the tablet in `custom_payload`:
 
-  - `tablet_replicas` - information about tablet replicas, for every replica there is information about the host and shard.
-  - `token_range` - information about token range for that tablet in format `(first_token, last_token]`.
+  - `tablets-routing-v1` - tablets routing information, which contains info about token
+    range (in format `(first_token, last_token]`) and tablet replicas, for every replica
+    there is information about the host and shard.
+
+The driver has to be able to receive `custom_payload` and deserialise its field
+from `bytes` to:
+
+  - for `tablets-routing-v1` - `TupleType(LongType, LongType, ListType(TupleType(UUIDType, Int32Type)))`,
+    two `LongType` represent first and last token, `ListType(TupleType(UUIDType, Int32Type))`
+    contains informations about replicas (for every replica there is a tuple with two elements
+    `UUIDType` and `Int32Type` representing host and shard ids).
+
+When the driver receives information about the tablet, it has to check if any of
+the previously received tablets has an overlapping token range.
+The group of tablets that meets this criterion has to be deleted, and the new
+tablet should replace them.
