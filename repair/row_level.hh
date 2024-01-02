@@ -16,6 +16,7 @@
 #include "locator/abstract_replication_strategy.hh"
 #include <seastar/core/distributed.hh>
 #include <seastar/util/bool_class.hh>
+#include "service/raft/raft_address_map.hh"
 
 using namespace seastar;
 
@@ -89,6 +90,7 @@ class repair_service : public seastar::peering_sharded_service<repair_service> {
     netw::messaging_service& _messaging;
     sharded<replica::database>& _db;
     sharded<service::storage_proxy>& _sp;
+    sharded<service::raft_address_map>& _addr_map;
     sharded<db::batchlog_manager>& _bm;
     sharded<db::system_distributed_keyspace>& _sys_dist_ks;
     sharded<db::system_keyspace>& _sys_ks;
@@ -115,6 +117,7 @@ public:
             netw::messaging_service& ms,
             sharded<replica::database>& db,
             sharded<service::storage_proxy>& sp,
+            sharded<service::raft_address_map>& addr_map,
             sharded<db::batchlog_manager>& bm,
             sharded<db::system_distributed_keyspace>& sys_dist_ks,
             sharded<db::system_keyspace>& sys_ks,

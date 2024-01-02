@@ -1568,7 +1568,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // both)
             supervisor::notify("starting repair service");
             auto max_memory_repair = memory::stats().total_memory() * 0.1;
-            repair.start(std::ref(gossiper), std::ref(messaging), std::ref(db), std::ref(proxy), std::ref(bm), std::ref(sys_dist_ks), std::ref(sys_ks), std::ref(view_update_generator), std::ref(task_manager), std::ref(mm), max_memory_repair).get();
+            repair.start(std::ref(gossiper), std::ref(messaging), std::ref(db), std::ref(proxy), std::ref(raft_address_map), std::ref(bm), std::ref(sys_dist_ks), std::ref(sys_ks), std::ref(view_update_generator), std::ref(task_manager), std::ref(mm), max_memory_repair).get();
             auto stop_repair_service = defer_verbose_shutdown("repair service", [&repair] {
                 repair.stop().get();
             });
