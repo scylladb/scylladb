@@ -37,7 +37,7 @@ public:
     }
 
     future<> mark_alive(direct_failure_detector::pinger::endpoint_id id) override {
-        static const auto msg = "marking Raft server {} as alive for raft groups";
+        static constexpr auto msg = "marking Raft server {} as alive for raft groups";
 
         auto raft_id = raft::server_id{id};
         _alive_set.insert(raft_id);
@@ -54,7 +54,7 @@ public:
     }
 
     future<> mark_dead(direct_failure_detector::pinger::endpoint_id id) override {
-        static const auto msg = "marking Raft server {} as dead for raft groups";
+        static constexpr auto msg = "marking Raft server {} as dead for raft groups";
 
         auto raft_id = raft::server_id{id};
         _alive_set.erase(raft_id);

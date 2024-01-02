@@ -42,7 +42,7 @@ shared_ptr<stream_result_future> stream_result_future::init_receiving_side(strea
     if (sr) {
         auto err = fmt::format("[Stream #{}] GOT PREPARE_MESSAGE from {}, description={},"
                           "stream_plan exists, duplicated message received?", plan_id, description, from);
-        sslog.warn(err.c_str());
+        sslog.warn("{}", err);
         throw std::runtime_error(err);
     }
     sslog.info("[Stream #{}] Executing streaming plan for {} with peers={}, slave", plan_id, description, from);

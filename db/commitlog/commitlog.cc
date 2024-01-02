@@ -1568,7 +1568,7 @@ db::commitlog::segment_manager::list_descriptors(sstring dirname) const {
             try {
                 result.emplace_back(de.name, cfg.fname_prefix);
             } catch (std::domain_error& e) {
-                clogger.warn(e.what());
+                clogger.warn("{}", e.what());
             }
         }
     });

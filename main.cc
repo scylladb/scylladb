@@ -407,9 +407,9 @@ verify_seastar_io_scheduler(const boost::program_options::variables_map& opts, b
 
         sstring devmode_msg = msg + "To ignore this, see the developer-mode configuration option.";
         if (developer_mode) {
-            startlog.warn(msg.c_str());
+            startlog.warn("{}", msg.c_str());
         } else {
-            startlog.error(devmode_msg.c_str());
+            startlog.error("{}", devmode_msg.c_str());
             throw std::runtime_error("Bad I/O Scheduler configuration");
         }
     };

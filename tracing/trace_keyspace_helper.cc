@@ -234,7 +234,7 @@ void trace_keyspace_helper::write_one_session_records(lw_shared_ptr<one_session_
                 tlogger.warn("Tracing is enabled but {}", e.what());
             }
         } catch (std::logic_error& e) {
-            tlogger.error(e.what());
+            tlogger.error("{}", e.what());
         } catch (...) {
             // TODO: Handle some more exceptions maybe?
         }

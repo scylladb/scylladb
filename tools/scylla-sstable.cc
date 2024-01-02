@@ -1752,7 +1752,7 @@ class json_mutation_stream_parser {
 #else
             auto parse_error = fmt::format(msg, std::forward<decltype(args)>(args)...);
 #endif
-            sst_log.trace(parse_error.c_str());
+            sst_log.trace("{}", parse_error);
             _queue.abort(std::make_exception_ptr(std::runtime_error(parse_error)));
             return false;
         }
