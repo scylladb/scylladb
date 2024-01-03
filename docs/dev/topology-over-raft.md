@@ -16,12 +16,17 @@ Node state can be one of those:
 Nodes in state left are never removed from the state.
 
 State transition diagram for nodes:
-```
-{none} ------> {bootstrapping|replacing} ------> {normal} <---> {rebuilding}
- |                   |                              |
- |                   |                              |
- |                   V                              V
- ----------------> {left}  <--------  {decommissioning|removing}
+```mermaid
+stateDiagram-v2
+    none --> bootstrapping|replacing
+    none --> left: topology coordinator rejects the node
+    bootstrapping|replacing --> normal: operation succeeded
+    bootstrapping|replacing --> left: operation failed
+    normal --> rebuilding: rebuild
+    normal --> decommissioning|removing: leave or remove
+    rebuilding --> normal: streaming completed
+    decommissioning|removing --> left: operation succeeded
+    decommissioning|removing --> normal: operation failed
 ```
 
 
