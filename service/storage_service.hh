@@ -799,7 +799,7 @@ private:
     // raft_group0_client::_read_apply_mutex must be held
     future<> merge_topology_snapshot(raft_topology_snapshot snp);
 
-    canonical_mutation build_mutation_from_join_params(const join_node_request_params& params, service::group0_guard& guard);
+    std::vector<canonical_mutation> build_mutation_from_join_params(const join_node_request_params& params, service::group0_guard& guard);
 
     future<join_node_request_result> join_node_request_handler(join_node_request_params params);
     future<join_node_response_result> join_node_response_handler(join_node_response_params params);
