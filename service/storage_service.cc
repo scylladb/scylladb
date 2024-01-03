@@ -3346,6 +3346,7 @@ canonical_mutation storage_service::build_mutation_from_join_params(const join_n
         node_builder
             .set("topology_request", topology_request::join);
     }
+    node_builder.set("request_id", guard.new_group0_state_id());
 
     return builder.build();
 }
@@ -5379,7 +5380,8 @@ future<> storage_service::raft_decommission() {
         slogger.info("raft topology: request decommission for: {}", raft_server.id());
         topology_mutation_builder builder(guard.write_timestamp());
         builder.with_node(raft_server.id())
-               .set("topology_request", topology_request::leave);
+               .set("topology_request", topology_request::leave)
+               .set("request_id", guard.new_group0_state_id());
         topology_change change{{builder.build()}};
         group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard, ::format("decommission: request decommission for {}", raft_server.id()));
 
@@ -5745,7 +5747,8 @@ future<> storage_service::raft_removenode(locator::host_id host_id, std::list<lo
         topology_mutation_builder builder(guard.write_timestamp());
         builder.with_node(id)
                .set("ignore_nodes", ignored_ids)
-               .set("topology_request", topology_request::remove);
+               .set("topology_request", topology_request::remove)
+               .set("request_id", guard.new_group0_state_id());
         topology_change change{{builder.build()}};
         group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard, ::format("removenode: request remove for {}", id));
 
@@ -6404,7 +6407,8 @@ future<> storage_service::raft_rebuild(sstring source_dc) {
         topology_mutation_builder builder(guard.write_timestamp());
         builder.with_node(raft_server.id())
                .set("topology_request", topology_request::rebuild)
-               .set("rebuild_option", source_dc);
+               .set("rebuild_option", source_dc)
+               .set("request_id", guard.new_group0_state_id());
         topology_change change{{builder.build()}};
         group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard, ::format("rebuild: request rebuild for {} ({})", raft_server.id(), source_dc));
 

@@ -94,6 +94,7 @@ struct replica_state {
     uint8_t ignore_msb;
     std::set<sstring> supported_features;
     cleanup_status cleanup;
+    utils::UUID request_id; // id of the current request for the node or the last one if no current one exists
 };
 
 struct topology_features {

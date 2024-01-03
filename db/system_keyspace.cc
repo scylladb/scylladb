@@ -225,6 +225,7 @@ schema_ptr system_keyspace::topology() {
             .with_column("ignore_msb", int32_type)
             .with_column("cleanup_status", utf8_type)
             .with_column("supported_features", set_type_impl::get_instance(utf8_type, true))
+            .with_column("request_id", timeuuid_type)
             .with_column("new_cdc_generation_data_uuid", timeuuid_type, column_kind::static_column)
             .with_column("version", long_type, column_kind::static_column)
             .with_column("fence_version", long_type, column_kind::static_column)
@@ -2518,6 +2519,7 @@ future<service::topology> system_keyspace::load_topology_state() {
         size_t shard_count = row.get_as<int32_t>("shard_count");
         uint8_t ignore_msb = row.get_as<int32_t>("ignore_msb");
         sstring cleanup_status = row.get_as<sstring>("cleanup_status");
+        utils::UUID request_id = row.get_as<utils::UUID>("request_id");
 
         service::node_state nstate = service::node_state_from_string(row.get_as<sstring>("node_state"));
 
@@ -2653,7 +2655,7 @@ future<service::topology> system_keyspace::load_topology_state() {
             map->emplace(host_id, service::replica_state{
                 nstate, std::move(datacenter), std::move(rack), std::move(release_version),
                 ring_slice, shard_count, ignore_msb, std::move(supported_features),
-                service::cleanup_status_from_string(cleanup_status)});
+                service::cleanup_status_from_string(cleanup_status), request_id});
         }
     }
 
