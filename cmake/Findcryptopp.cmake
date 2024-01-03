@@ -1,10 +1,8 @@
-/*
- * Copyright (C) 2018-present ScyllaDB
- */
-
-/*
- * SPDX-License-Identifier: (AGPL-3.0-or-later and Apache-2.0)
- */
+#
+# Copyright (C) 2018-present ScyllaDB
+#
+# SPDX-License-Identifier: (AGPL-3.0-or-later and Apache-2.0)
+#
 
 find_library (cryptopp_LIBRARY
   NAMES cryptopp)
