@@ -231,8 +231,8 @@ private:
     flat_mutation_reader_v2_opt _reader;
 
 private:
-    void do_pause(flat_mutation_reader_v2 reader);
-    void maybe_pause(flat_mutation_reader_v2 reader);
+    void do_pause(flat_mutation_reader_v2 reader) noexcept;
+    void maybe_pause(flat_mutation_reader_v2 reader) noexcept;
     flat_mutation_reader_v2_opt try_resume();
     void update_next_position();
     void adjust_partition_slice();
@@ -281,12 +281,12 @@ public:
     }
 };
 
-void evictable_reader_v2::do_pause(flat_mutation_reader_v2 reader) {
+void evictable_reader_v2::do_pause(flat_mutation_reader_v2 reader) noexcept {
     assert(!_irh);
     _irh = _permit.semaphore().register_inactive_read(std::move(reader));
 }
 
-void evictable_reader_v2::maybe_pause(flat_mutation_reader_v2 reader) {
+void evictable_reader_v2::maybe_pause(flat_mutation_reader_v2 reader) noexcept {
     if (_auto_pause) {
         do_pause(std::move(reader));
     } else {
@@ -649,8 +649,17 @@ future<> evictable_reader_v2::fast_forward_to(const dht::partition_range& pr) {
         co_return;
     }
     if (auto reader_opt = try_resume()) {
-        co_await reader_opt->fast_forward_to(pr);
-        _range_override.reset();
+        std::exception_ptr ex;
+        try {
+            co_await reader_opt->fast_forward_to(pr);
+            _range_override.reset();
+        } catch (...) {
+            ex = std::current_exception();
+        }
+        if (ex) {
+            co_await reader_opt->close();
+            std::rethrow_exception(std::move(ex));
+        }
         maybe_pause(std::move(*reader_opt));
     }
 }
