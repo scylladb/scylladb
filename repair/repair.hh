@@ -8,7 +8,6 @@
 
 #pragma once
 
-#include <unordered_set>
 #include <unordered_map>
 #include <exception>
 #include <absl/container/btree_set.h>
@@ -23,12 +22,8 @@
 #include "locator/abstract_replication_strategy.hh"
 #include "replica/database_fwd.hh"
 #include "mutation/frozen_mutation.hh"
-#include "utils/UUID.hh"
 #include "utils/hash.hh"
-#include "streaming/stream_reason.hh"
-#include "locator/token_metadata.hh"
 #include "repair/hash.hh"
-#include "node_ops/id.hh"
 #include "repair/sync_boundary.hh"
 #include "tasks/types.hh"
 

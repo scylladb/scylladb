@@ -10,6 +10,7 @@
 
 #include "node_ops/node_ops_ctl.hh"
 #include "repair/repair.hh"
+#include "streaming/stream_reason.hh"
 #include "tasks/task_manager.hh"
 
 namespace repair {
