@@ -164,9 +164,9 @@ SEASTAR_TEST_CASE(test_memtable_flush_reader) {
     return seastar::async([] {
         tests::reader_concurrency_semaphore_wrapper semaphore;
 
-        auto make_memtable = [] (replica::dirty_memory_manager& mgr, logalloc::allocating_section& read_section, logalloc::allocating_section& allocating_section, replica::table_stats& tbl_stats, std::vector<mutation> muts) {
+        auto make_memtable = [] (replica::dirty_memory_manager& mgr, replica::memtable_table_shared_data& table_shared_data, replica::table_stats& tbl_stats, std::vector<mutation> muts) {
             assert(!muts.empty());
-            auto mt = make_lw_shared<replica::memtable>(muts.front().schema(), mgr, read_section, allocating_section, tbl_stats);
+            auto mt = make_lw_shared<replica::memtable>(muts.front().schema(), mgr, table_shared_data, tbl_stats);
             for (auto& m : muts) {
                 mt->apply(m);
             }
@@ -176,8 +176,7 @@ SEASTAR_TEST_CASE(test_memtable_flush_reader) {
         auto test_random_streams = [&] (random_mutation_generator&& gen) {
             for (auto i = 0; i < 4; i++) {
                 replica::table_stats tbl_stats;
-                logalloc::allocating_section read_section;
-                logalloc::allocating_section allocating_section;
+                replica::memtable_table_shared_data table_shared_data;
                 replica::dirty_memory_manager mgr;
                 const auto muts = gen(4);
                 const auto now = gc_clock::now();
@@ -187,7 +186,7 @@ SEASTAR_TEST_CASE(test_memtable_flush_reader) {
                 }
 
                 testlog.info("Simple read");
-                auto mt = make_memtable(mgr, read_section, allocating_section, tbl_stats, muts);
+                auto mt = make_memtable(mgr, table_shared_data, tbl_stats, muts);
 
                 assert_that(mt->make_flush_reader(gen.schema(), semaphore.make_permit()))
                     .produces_compacted(compacted_muts[0], now)
@@ -197,7 +196,7 @@ SEASTAR_TEST_CASE(test_memtable_flush_reader) {
                     .produces_end_of_stream();
 
                 testlog.info("Read with next_partition() calls between partition");
-                mt = make_memtable(mgr, read_section, allocating_section, tbl_stats, muts);
+                mt = make_memtable(mgr, table_shared_data, tbl_stats, muts);
                 assert_that(mt->make_flush_reader(gen.schema(), semaphore.make_permit()))
                     .next_partition()
                     .produces_compacted(compacted_muts[0], now)
@@ -211,7 +210,7 @@ SEASTAR_TEST_CASE(test_memtable_flush_reader) {
                     .produces_end_of_stream();
 
                 testlog.info("Read with next_partition() calls inside partitions");
-                mt = make_memtable(mgr, read_section, allocating_section, tbl_stats, muts);
+                mt = make_memtable(mgr, table_shared_data, tbl_stats, muts);
                 assert_that(mt->make_flush_reader(gen.schema(), semaphore.make_permit()))
                     .produces_compacted(compacted_muts[0], now)
                     .produces_partition_start(muts[1].decorated_key(), muts[1].partition().partition_tombstone())
@@ -290,11 +289,10 @@ SEASTAR_TEST_CASE(test_unspooled_dirty_accounting_on_flush) {
         tests::reader_concurrency_semaphore_wrapper semaphore;
 
         replica::dirty_memory_manager mgr;
-        logalloc::allocating_section read_section;
-        logalloc::allocating_section allocating_section;
+        replica::memtable_table_shared_data table_shared_data;
         replica::table_stats tbl_stats;
 
-        auto mt = make_lw_shared<replica::memtable>(s, mgr, read_section, allocating_section, tbl_stats);
+        auto mt = make_lw_shared<replica::memtable>(s, mgr, table_shared_data, tbl_stats);
 
         std::vector<mutation> ring = make_ring(s, 3);
         std::vector<mutation> current_ring;
@@ -427,11 +425,10 @@ SEASTAR_TEST_CASE(test_segment_migration_during_flush) {
         tests::reader_concurrency_semaphore_wrapper semaphore;
 
         replica::table_stats tbl_stats;
-        logalloc::allocating_section read_section;
-        logalloc::allocating_section allocating_section;
+        replica::memtable_table_shared_data table_shared_data;
         replica::dirty_memory_manager mgr;
 
-        auto mt = make_lw_shared<replica::memtable>(s, mgr, read_section, allocating_section, tbl_stats);
+        auto mt = make_lw_shared<replica::memtable>(s, mgr, table_shared_data, tbl_stats);
 
         const int rows_per_partition = 300;
         const int partitions = 3;

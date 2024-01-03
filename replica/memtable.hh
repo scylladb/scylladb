@@ -97,6 +97,12 @@ public:
 
 namespace replica {
 
+// Statistics that need to be shared across all memtables for a single table
+struct memtable_table_shared_data {
+    logalloc::allocating_section read_section;
+    logalloc::allocating_section allocating_section;
+};
+
 class dirty_memory_manager;
 
 struct table_stats;
@@ -112,8 +118,7 @@ private:
     mutation_cleaner _cleaner;
     memtable_list *_memtable_list;
     schema_ptr _schema;
-    logalloc::allocating_section& _read_section;
-    logalloc::allocating_section& _allocating_section;
+    memtable_table_shared_data& _table_shared_data;
     partitions_type partitions;
     size_t nr_partitions = 0;
     db::replay_position _replay_position;
@@ -173,8 +178,7 @@ private:
     uint64_t dirty_size() const;
 public:
     explicit memtable(schema_ptr schema, dirty_memory_manager&,
-            logalloc::allocating_section& read_section,
-            logalloc::allocating_section& allocating_section,
+            memtable_table_shared_data& shared_data,
             replica::table_stats& table_stats, memtable_list *memtable_list = nullptr,
             seastar::scheduling_group compaction_scheduling_group = seastar::current_scheduling_group());
     // Used for testing that want to control the flush process.

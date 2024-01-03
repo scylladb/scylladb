@@ -171,8 +171,7 @@ private:
     seal_immediate_fn_type _seal_immediate_fn;
     std::function<schema_ptr()> _current_schema;
     replica::dirty_memory_manager* _dirty_memory_manager;
-    logalloc::allocating_section _read_section;
-    logalloc::allocating_section _allocating_section;
+    memtable_table_shared_data _table_shared_data;
     std::optional<shared_future<>> _flush_coalescing;
     seastar::scheduling_group _compaction_scheduling_group;
     replica::table_stats& _table_stats;
@@ -184,21 +183,24 @@ public:
             seal_immediate_fn_type seal_immediate_fn,
             std::function<schema_ptr()> cs,
             dirty_memory_manager* dirty_memory_manager,
+            memtable_table_shared_data& table_shared_data,
             replica::table_stats& table_stats,
             seastar::scheduling_group compaction_scheduling_group = seastar::current_scheduling_group())
         : _memtables({})
         , _seal_immediate_fn(seal_immediate_fn)
         , _current_schema(cs)
         , _dirty_memory_manager(dirty_memory_manager)
+        , _table_shared_data(table_shared_data)
         , _compaction_scheduling_group(compaction_scheduling_group)
         , _table_stats(table_stats) {
         add_memtable();
     }
 
     memtable_list(std::function<schema_ptr()> cs, dirty_memory_manager* dirty_memory_manager,
+            memtable_table_shared_data& table_shared_data,
             replica::table_stats& table_stats,
             seastar::scheduling_group compaction_scheduling_group = seastar::current_scheduling_group())
-        : memtable_list({}, std::move(cs), dirty_memory_manager, table_stats, compaction_scheduling_group) {
+        : memtable_list({}, std::move(cs), dirty_memory_manager, table_shared_data, table_stats, compaction_scheduling_group) {
     }
 
     bool may_flush() const noexcept {
@@ -433,6 +435,7 @@ private:
     config _config;
     locator::effective_replication_map_ptr _erm;
     lw_shared_ptr<const storage_options> _storage_opts;
+    memtable_table_shared_data _memtable_shared_data;
     mutable table_stats _stats;
     mutable db::view::stats _view_stats;
     mutable row_locker::stats _row_locker_stats;
