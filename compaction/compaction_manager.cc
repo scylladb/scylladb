@@ -2050,6 +2050,10 @@ void compaction_manager::add(table_state& t) {
 
 future<> compaction_manager::remove(table_state& t) noexcept {
     auto& c_state = get_compaction_state(&t);
+    auto erase_state = defer([&t, &c_state, this] () noexcept {
+       c_state.backlog_tracker->disable();
+       _compaction_state.erase(&t);
+    });
 
     // We need to guarantee that a task being stopped will not retry to compact
     // a table being removed.
@@ -2063,10 +2067,6 @@ future<> compaction_manager::remove(table_state& t) noexcept {
         co_await stop_ongoing_compactions("table removal", &t);
         co_await std::move(close_gate);
     }
-
-    c_state.backlog_tracker->disable();
-
-    _compaction_state.erase(&t);
 
 #ifdef DEBUG
     auto found = false;
