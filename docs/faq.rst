@@ -512,7 +512,16 @@ Do I need to run a tool like ``upgradesstables`` when moving to a new format?
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 Unlike Apache Cassandra, Scylla does not ship with upgradesstables, a tool that converts SSTables to newer formats. When upgrading to a new table format, Scylla can still continue to read from the old format. Having this option, ensures a smoother transition and upgrade. New writes use the new format and reads will use both formats until the old tables are removed. If you want to purge all of the old SSTables in a single step, generate a compaction with :doc:`nodetool compact </operating-scylla/nodetool-commands/compact/>` follow by :doc:`nodetool cleanup </operating-scylla/nodetool-commands/cleanup/>` to remove no longer needed token ranges that belong to that node.
- 
+
+Operations
+-----------
+
+
+What is the difference between node tool remove node and decommission operations?
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+:doc:`Decommission </operating-scylla/nodetool-commands/decommission>` removes a **live** node from the cluster, while :doc:`Removenode </operating-scylla/nodetool-commands/removenode>` removes a **dead** node.
+Both operations are used to remove a node from the cluster; both operations include data streaming. Decommission is preferred since it uses the removed node for streaming; use it when possible.
 
 
 .. include:: /rst_include/apache-copyrights.rst
