@@ -156,6 +156,7 @@ public:
     static constexpr auto DISCOVERY = "discovery";
     static constexpr auto BROADCAST_KV_STORE = "broadcast_kv_store";
     static constexpr auto TOPOLOGY = "topology";
+    static constexpr auto TOPOLOGY_REQUESTS = "topology_requests";
     static constexpr auto SSTABLES_REGISTRY = "sstables";
     static constexpr auto CDC_GENERATIONS_V3 = "cdc_generations_v3";
     static constexpr auto TABLETS = "tablets";
@@ -240,6 +241,7 @@ public:
     static schema_ptr discovery();
     static schema_ptr broadcast_kv_store();
     static schema_ptr topology();
+    static schema_ptr topology_requests();
     static schema_ptr sstables_registry();
     static schema_ptr cdc_generations_v3();
     static schema_ptr tablets();

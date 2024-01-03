@@ -53,6 +53,7 @@ namespace {
             schema_tables::SCYLLA_TABLE_SCHEMA_HISTORY,
             system_keyspace::BROADCAST_KV_STORE,
             system_keyspace::TOPOLOGY,
+            system_keyspace::TOPOLOGY_REQUESTS,
             system_keyspace::CDC_GENERATIONS_V3,
         };
         if (ks_name == system_keyspace::NAME && tables.contains(cf_name)) {
@@ -64,6 +65,7 @@ namespace {
             system_keyspace::PAXOS,
             system_keyspace::BROADCAST_KV_STORE,
             system_keyspace::TOPOLOGY,
+            system_keyspace::TOPOLOGY_REQUESTS,
             system_keyspace::CDC_GENERATIONS_V3,
         };
         if (ks_name == system_keyspace::NAME && tables.contains(cf_name)) {
@@ -235,6 +237,23 @@ schema_ptr system_keyspace::topology() {
             .with_column("session", uuid_type, column_kind::static_column)
             .with_column("tablet_balancing_enabled", boolean_type, column_kind::static_column)
             .set_comment("Current state of topology change machine")
+            .with_version(generate_schema_version(id))
+            .build();
+    }();
+    return schema;
+}
+
+schema_ptr system_keyspace::topology_requests() {
+    static thread_local auto schema = [] {
+        auto id = generate_legacy_id(NAME, TOPOLOGY_REQUESTS);
+        return schema_builder(NAME, TOPOLOGY_REQUESTS, std::optional(id))
+            .with_column("id", timeuuid_type, column_kind::partition_key)
+            .with_column("initiating_host", uuid_type)
+            .with_column("start_time", timestamp_type)
+            .with_column("done", boolean_type)
+            .with_column("error", utf8_type)
+            .with_column("end_time", timestamp_type)
+            .set_comment("Topology request tracking")
             .with_version(generate_schema_version(id))
             .build();
     }();
@@ -1919,7 +1938,7 @@ std::vector<schema_ptr> system_keyspace::all_tables(const db::config& cfg) {
     r.insert(r.end(), {raft(), raft_snapshots(), raft_snapshot_config(), group0_history(), discovery()});
 
     if (cfg.check_experimental(db::experimental_features_t::feature::CONSISTENT_TOPOLOGY_CHANGES)) {
-        r.insert(r.end(), {topology(), cdc_generations_v3()});
+        r.insert(r.end(), {topology(), cdc_generations_v3(), topology_requests()});
     }
 
     if (cfg.check_experimental(db::experimental_features_t::feature::BROADCAST_TABLES)) {
