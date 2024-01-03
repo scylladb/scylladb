@@ -3013,6 +3013,14 @@ struct append_entry {
     elem_t digest;
 };
 
+template <>
+struct fmt::formatter<append_entry> {
+    constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
+    auto format(const append_entry& e, fmt::format_context& ctx) const {
+        return fmt::format_to(ctx.out(), "{}", e.elem);
+    }
+};
+
 std::ostream& operator<<(std::ostream& os, const append_entry& e) {
     return os << e.elem;
 }
