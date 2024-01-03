@@ -34,6 +34,20 @@
 
 #include "utils/to_string.hh"
 
+namespace std {
+
+std::ostream& operator<<(std::ostream& os, const std::monostate&) {
+    return os << "";
+}
+
+template <typename T, typename... Ts>
+std::ostream& operator<<(std::ostream& os, const std::variant<T, Ts...>& v) {
+    std::visit([&os] (auto& arg) { os << arg; }, v);
+    return os;
+}
+
+} // namespace std
+
 using namespace seastar;
 using namespace std::chrono_literals;
 
@@ -2857,20 +2871,6 @@ struct stop_crash {
         return os << "";
     }
 };
-
-namespace std {
-
-std::ostream& operator<<(std::ostream& os, const std::monostate&) {
-    return os << "";
-}
-
-template <typename T, typename... Ts>
-std::ostream& operator<<(std::ostream& os, const std::variant<T, Ts...>& v) {
-    std::visit([&os] (auto& arg) { os << arg; }, v);
-    return os;
-}
-
-} // namespace std
 
 namespace operation {
 
