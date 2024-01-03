@@ -870,14 +870,18 @@ future<> gossiper::mutate_live_and_unreachable_endpoints(std::function<void(live
 }
 
 future<std::set<inet_address>> gossiper::get_live_members_synchronized() {
-    return container().invoke_on(0, [] (gms::gossiper& g) {
-        return g.get_live_members();
+    return container().invoke_on(0, [] (gms::gossiper& g) -> future<std::set<inet_address>> {
+        // Make sure the value we return is synchronized on all shards
+        auto lock = co_await g.lock_endpoint_update_semaphore();
+        co_return g.get_live_members();
     });
 }
 
 future<std::set<inet_address>> gossiper::get_unreachable_members_synchronized() {
-    return container().invoke_on(0, [] (gms::gossiper& g) {
-        return g.get_unreachable_members();
+    return container().invoke_on(0, [] (gms::gossiper& g) -> future<std::set<inet_address>> {
+        // Make sure the value we return is synchronized on all shards
+        auto lock = co_await g.lock_endpoint_update_semaphore();
+        co_return g.get_unreachable_members();
     });
 }
 
