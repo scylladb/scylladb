@@ -3007,17 +3007,19 @@ struct inconsistency {
     std::string what;
 };
 
-struct append_reg_model {
+struct append_entry {
     using elem_t = typename append_seq::elem_t;
+    elem_t elem;
+    elem_t digest;
+};
 
-    struct entry {
-        elem_t elem;
-        elem_t digest;
-    };
+std::ostream& operator<<(std::ostream& os, const append_entry& e) {
+    return os << e.elem;
+}
 
-    friend std::ostream& operator<<(std::ostream& os, const entry& e) {
-        return os << e.elem;
-    }
+struct append_reg_model {
+    using elem_t = typename append_entry::elem_t;
+    using entry = append_entry;
 
     std::vector<entry> seq{{0, 0}};
     std::unordered_map<elem_t, size_t> index{{0, 0}};
