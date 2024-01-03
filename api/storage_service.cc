@@ -1469,6 +1469,22 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         co_return json_void();
     });
 
+    ss::upgrade_to_raft_topology.set(r,
+            [&ss] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
+        co_await ss.invoke_on(0, [] (auto& ss) {
+            return ss.start_upgrade_to_raft_topology();
+        });
+        co_return json_void();
+    });
+
+    ss::raft_topology_upgrade_status.set(r,
+            [&ss] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
+        const auto ustate = co_await ss.invoke_on(0, [] (auto& ss) {
+            return ss.get_topology_upgrade_state();
+        });
+        co_return sstring(format("{}", ustate));
+    });
+
     ss::move_tablet.set(r, [&ctx, &ss] (std::unique_ptr<http::request> req) -> future<json_return_type> {
         auto src_host_id = validate_host_id(req->get_query_param("src_host"));
         shard_id src_shard_id = validate_int(req->get_query_param("src_shard"));
@@ -1593,6 +1609,8 @@ void unset_storage_service(http_context& ctx, routes& r) {
     ss::get_effective_ownership.unset(r);
     ss::sstable_info.unset(r);
     ss::reload_raft_topology_state.unset(r);
+    ss::upgrade_to_raft_topology.unset(r);
+    ss::raft_topology_upgrade_status.unset(r);
     ss::move_tablet.unset(r);
     ss::tablet_balancing_enable.unset(r);
     sp::get_schema_versions.unset(r);

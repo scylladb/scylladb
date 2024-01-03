@@ -839,6 +839,13 @@ public:
 
     future<> do_cluster_cleanup();
 
+    // Starts the upgrade procedure to topology on raft.
+    // Must be called on shard 0.
+    future<> start_upgrade_to_raft_topology();
+
+    // Must be called on shard 0.
+    topology::upgrade_state_type get_topology_upgrade_state() const;
+
 private:
     // Tracks progress of the upgrade to topology coordinator.
     future<> _upgrade_to_topology_coordinator_fiber = make_ready_future<>();
