@@ -11,13 +11,7 @@
 #include "locator/tablet_metadata_guard.hh"
 #include "locator/tablet_sharder.hh"
 #include "locator/token_range_splitter.hh"
-#include "types/types.hh"
-#include "types/tuple.hh"
-#include "types/set.hh"
-#include "utils/hash.hh"
 #include "db/system_keyspace.hh"
-#include "cql3/query_processor.hh"
-#include "cql3/untyped_result_set.hh"
 #include "replica/database.hh"
 #include "utils/stall_free.hh"
 

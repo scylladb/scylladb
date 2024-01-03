@@ -24,8 +24,6 @@
 #include <seastar/util/noncopyable_function.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 
-#include <vector>
-
 namespace locator {
 
 extern seastar::logger tablet_logger;
