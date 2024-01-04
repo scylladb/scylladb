@@ -165,6 +165,39 @@ sstring index_name_from_table_name(const sstring& table_name) {
     return table_name.substr(0, table_name.size() - 6); // remove the _index suffix from an index name;
 }
 
+std::set<sstring>
+existing_index_names(const std::vector<schema_ptr>& tables, std::string_view cf_to_exclude) {
+    std::set<sstring> names;
+    for (auto& schema : tables) {
+        if (!cf_to_exclude.empty() && schema->cf_name() == cf_to_exclude) {
+            continue;
+        }
+        for (const auto& index_name : schema->index_names()) {
+            names.emplace(index_name);
+        }
+    }
+    return names;
+}
+
+sstring get_available_index_name(
+        std::string_view ks_name,
+        std::string_view cf_name,
+        std::optional<sstring> index_name_root,
+        const std::set<sstring>& existing_names,
+        std::function<bool(std::string_view, std::string_view)> has_schema) {
+    auto base_name = index_metadata::get_default_index_name(sstring(cf_name), index_name_root);
+    sstring accepted_name = base_name;
+    int i = 0;
+    auto name_accepted = [&] {
+        auto index_table_name = secondary_index::index_table_name(accepted_name);
+        return !has_schema(ks_name, index_table_name) && !existing_names.contains(accepted_name);
+    };
+    while (!name_accepted()) {
+        accepted_name = base_name + "_" + std::to_string(++i);
+    }
+    return accepted_name;
+}
+
 static bytes get_available_column_name(const schema& schema, const bytes& root) {
     bytes accepted_name = root;
     int i = 0;

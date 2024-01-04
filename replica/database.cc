@@ -1362,16 +1362,7 @@ database::drop_caches() const {
 
 std::set<sstring>
 database::existing_index_names(const sstring& ks_name, const sstring& cf_to_exclude) const {
-    std::set<sstring> names;
-    for (auto& schema : find_keyspace(ks_name).metadata()->tables()) {
-        if (!cf_to_exclude.empty() && schema->cf_name() == cf_to_exclude) {
-            continue;
-        }
-        for (const auto& index_name : schema->index_names()) {
-            names.emplace(index_name);
-        }
-    }
-    return names;
+    return secondary_index::existing_index_names(find_keyspace(ks_name).metadata()->tables(), cf_to_exclude);
 }
 
 namespace {
@@ -2189,18 +2180,8 @@ namespace replica {
 sstring database::get_available_index_name(const sstring &ks_name, const sstring &cf_name,
                                            std::optional<sstring> index_name_root) const
 {
-    auto existing_names = existing_index_names(ks_name);
-    auto base_name = index_metadata::get_default_index_name(cf_name, index_name_root);
-    sstring accepted_name = base_name;
-    int i = 0;
-    auto name_accepted = [&] {
-        auto index_table_name = secondary_index::index_table_name(accepted_name);
-        return !has_schema(ks_name, index_table_name) && !existing_names.contains(accepted_name);
-    };
-    while (!name_accepted()) {
-        accepted_name = base_name + "_" + std::to_string(++i);
-    }
-    return accepted_name;
+    return secondary_index::get_available_index_name(ks_name, cf_name, index_name_root, existing_index_names(ks_name),
+            [this] (std::string_view ks, std::string_view cf) { return has_schema(ks, cf); });
 }
 
 schema_ptr database::find_indexed_table(const sstring& ks_name, const sstring& index_name) const {

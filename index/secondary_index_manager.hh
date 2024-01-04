@@ -35,6 +35,21 @@ sstring index_table_name(const sstring& index_name);
  */
 sstring index_name_from_table_name(const sstring& table_name);
 
+/// Given a list of base-table schemas, return all their secondary indexes, except that specified in cf_to_exclude.
+std::set<sstring>
+existing_index_names(const std::vector<schema_ptr>& tables, std::string_view cf_to_exclude);
+
+/// Given a base-table keyspace and table name, return the first available index
+/// name (containing index_name_root if specified).
+/// If needed, a running counder is appended to the index name, if it is already
+/// taken (existing_names contains it).
+sstring get_available_index_name(
+        std::string_view ks_name,
+        std::string_view cf_name,
+        std::optional<sstring> index_name_root,
+        const std::set<sstring>& existing_names,
+        std::function<bool(std::string_view, std::string_view)> has_schema);
+
 class index {
     index_metadata _im;
     cql3::statements::index_target::target_type _target_type;
