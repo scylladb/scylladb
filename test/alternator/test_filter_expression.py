@@ -40,7 +40,7 @@ def random_sets():
 def random_bool():
     return bool(random.randint(0,1))
 def random_item(p, i):
-    item = {'p': p, 'c': i, 's': random_s(), 'b': random_b(), 'i': random_i(),
+    item = {'p': p, 'c': i, 's': random_s(), 'b': random_b(), 'i': i,
             'l': random_l(), 'm': random_m(), 'ns': random_set(), 'ss': random_sets(), 'bool': random_bool() }
     # The "r" attribute doesn't appears on all items, and when it does it has a random type
     if i == 0:
