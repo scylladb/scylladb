@@ -1971,16 +1971,17 @@ class topology_coordinator {
                 // Note: if there was a replace or removenode going on, we'd need to put the replaced/removed
                 // node into `exclude_nodes` parameter in `exec_global_command`, but CDC generations are never
                 // introduced during replace/remove.
-                {
-                    auto f = co_await coroutine::as_future(exec_global_command(std::move(guard),
-                        raft_topology_cmd::command::barrier,
-                        {_raft.id()}));
-                    if (f.failed()) {
-                        slogger.error("raft topology: transition_state::commit_cdc_generation, "
-                                      "raft_topology_cmd::command::barrier failed, error {}", f.get_exception());
-                        break;
-                    }
-                    guard = std::move(f).get();
+                try {
+                    guard = co_await exec_global_command(std::move(guard), raft_topology_cmd::command::barrier, {_raft.id()});
+                } catch (term_changed_error&) {
+                    throw;
+                } catch (group0_concurrent_modification&) {
+                    throw;
+                } catch (...) {
+                    slogger.error("raft topology: transition_state::commit_cdc_generation, "
+                                    "raft_topology_cmd::command::barrier failed, error {}", std::current_exception());
+                    _rollback = true;
+                    break;
                 }
 
                 // We don't need to add delay to the generation timestamp if this is the first generation.
@@ -6417,6 +6418,8 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
 
         switch (cmd.cmd) {
             case raft_topology_cmd::command::barrier: {
+                utils::get_local_injector().inject("raft_topology_barrier_fail",
+                                       [] { throw std::runtime_error("raft topology barrier failed due to error injection"); });
                 // This barrier might have been issued by the topology coordinator
                 // as a step in enabling a feature, i.e. it noticed that all
                 // nodes support some feature, then issue the barrier to make
