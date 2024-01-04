@@ -2249,8 +2249,8 @@ class topology_coordinator {
                                 .response = std::move(validation_result),
                             });
                         } catch (const std::runtime_error& e) {
-                            slogger.warn("raft topology: attempt to send rejection response to {} failed: {}. "
-                                         "The node may hang. It's safe to shut it down manually now.",
+                            slogger.warn("raft topology: attempt to send rejection response to {} failed. "
+                                         "The node may hang. It's safe to shut it down manually now. Error: {}",
                                          node.id, e.what());
                         }
 
@@ -2506,8 +2506,8 @@ class topology_coordinator {
             });
             responded = true;
         } catch (const std::runtime_error& e) {
-            slogger.warn("raft topology: attempt to send acceptance response to {} failed: {}. "
-                         "The node may hang. It's safe to shut it down manually now.",
+            slogger.warn("raft topology: attempt to send acceptance response to {} failed. "
+                         "The node may hang. It's safe to shut it down manually now. Error: {}",
                          node.id, e.what());
         }
 
