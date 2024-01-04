@@ -739,7 +739,7 @@
                "parameters":[
                   {
                      "name":"keyspace",
-                     "description":"The keyspace to query about",
+                     "description":"The keyspace to compact",
                      "required":true,
                      "allowMultiple":false,
                      "type":"string",
@@ -779,7 +779,7 @@
                "parameters":[
                   {
                      "name":"keyspace",
-                     "description":"The keyspace to query about",
+                     "description":"The keyspace to cleanup",
                      "required":true,
                      "allowMultiple":false,
                      "type":"string",
