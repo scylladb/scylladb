@@ -134,6 +134,10 @@ def assert_invalid_message(cql, table, message, cmd, *args):
 
 assertInvalidMessage = assert_invalid_message
 
+def assert_invalid_message_ignore_case(cql, table, message, cmd, *args):
+    with pytest.raises(InvalidRequest, match=re.compile(re.escape(message), re.IGNORECASE)):
+        execute(cql, table, cmd, *args)
+
 def assert_invalid_syntax_message(cql, table, message, cmd, *args):
     with pytest.raises(SyntaxException, match=re.escape(message)):
         execute(cql, table, cmd, *args)
@@ -191,12 +195,15 @@ def result_cleanup(item):
         return { freeze(x) for x in item }
     return item
 
-def assert_rows(result, *expected):
+def assert_rows_list(result, expected):
     allresults = list(result)
     assert len(allresults) == len(expected)
     for r,e in zip(allresults, expected):
         r = [result_cleanup(col) for col in r]
         assert r == e
+
+def assert_rows(result, *expected):
+    assert_rows_list(result, expected)
 
 assertRows = assert_rows
 assertRowsNet = assert_rows
@@ -335,3 +342,7 @@ null = None
 
 def unset():
     return UNSET_VALUE
+
+# Java true and false are lowercase
+true = True
+false = False
