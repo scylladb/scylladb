@@ -481,7 +481,7 @@ future<> create_role(
                 options,
                 ser.underlying_authenticator().supported_options()).then([&ser, name, &options] {
             return ser.underlying_authenticator().create(name, options);
-        }).handle_exception([&ser, &name](std::exception_ptr ep) {
+        }).handle_exception([&ser, name](std::exception_ptr ep) {
             // Roll-back.
             return ser.underlying_role_manager().drop(name).then([ep = std::move(ep)] {
                 std::rethrow_exception(ep);
