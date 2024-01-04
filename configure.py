@@ -1522,7 +1522,6 @@ def get_warning_options(cxx):
         '-Wno-overloaded-virtual',
         '-Wno-unused-command-line-argument',
         '-Wno-unsupported-friend',
-        '-Wno-implicit-int-float-conversion',
         # https://gcc.gnu.org/bugzilla/show_bug.cgi?id=77728
         '-Wno-psabi',
         '-Wno-narrowing',
