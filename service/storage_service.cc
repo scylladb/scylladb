@@ -7119,6 +7119,7 @@ future<join_node_response_result> storage_service::join_node_response_handler(jo
         co_return join_node_response_result{};
     }
 
+    try {
     co_return co_await std::visit(overloaded_functor {
         [&] (const join_node_response_params::accepted& acc) -> future<join_node_response_result> {
             // Allow other nodes to mark the replacing node as alive. It has
@@ -7210,6 +7211,14 @@ future<join_node_response_result> storage_service::join_node_response_handler(jo
             co_return join_node_response_result{};
         },
     }, params.response);
+    } catch (...) {
+        auto eptr = std::current_exception();
+        slogger.warn("raft topology: error while handling the join response from the topology coordinator. "
+                "The node will not join the cluster. Error: {}", eptr);
+        _join_node_response_done.set_exception(std::move(eptr));
+
+        throw;
+    }
 }
 
 void storage_service::init_messaging_service(bool raft_topology_change_enabled) {
