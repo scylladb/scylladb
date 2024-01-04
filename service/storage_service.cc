@@ -559,9 +559,16 @@ future<> storage_service::topology_state_load() {
     // will be up to date and reachable at the time of restart.
     const auto tmptr = get_token_metadata_ptr();
     for (const auto& e: tmptr->get_all_endpoints()) {
+        if (is_me(e)) {
+            continue;
+        }
         const auto ep = tmptr->get_endpoint_for_host_id(e);
-        if (!is_me(e) && !_gossiper.get_endpoint_state_ptr(ep)) {
-            co_await _gossiper.add_saved_endpoint(ep);
+        auto permit = co_await _gossiper.lock_endpoint(ep, gms::null_permit_id);
+        // Add the endpoint if it doesn't exist yet in gossip
+        // since it is not loaded in join_cluster in the
+        // _raft_topology_change_enabled case.
+        if (!_gossiper.get_endpoint_state_ptr(ep)) {
+            co_await _gossiper.add_saved_endpoint(ep, permit.id());
         }
     }
 
@@ -3077,7 +3084,9 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
         }
         co_await _gossiper.reset_endpoint_state_map();
         for (auto ep : loaded_endpoints) {
-            co_await _gossiper.add_saved_endpoint(ep);
+            // gossiping hasn't started yet
+            // so no need to lock the endpoint
+            co_await _gossiper.add_saved_endpoint(ep, gms::null_permit_id);
         }
     }
     auto features = _feature_service.supported_feature_set();
@@ -4289,7 +4298,9 @@ future<> storage_service::join_cluster(sharded<db::system_distributed_keyspace>&
                 co_await tmptr->update_normal_tokens(tokens, hostIdIt->second);
                 tmptr->update_host_id(hostIdIt->second, ep);
                 loaded_endpoints.insert(ep);
-                co_await _gossiper.add_saved_endpoint(ep);
+                // gossiping hasn't started yet
+                // so no need to lock the endpoint
+                co_await _gossiper.add_saved_endpoint(ep, gms::null_permit_id);
             }
         }
         co_await replicate_to_all_cores(std::move(tmptr));

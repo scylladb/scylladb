@@ -44,6 +44,7 @@
 #include "gms/generation-number.hh"
 #include "locator/token_metadata.hh"
 #include "utils/exceptions.hh"
+#include "utils/error_injection.hh"
 
 namespace gms {
 
@@ -1631,6 +1632,24 @@ void gossiper::mark_alive(inet_address addr) {
 }
 
 future<> gossiper::real_mark_alive(inet_address addr) {
+    co_await utils::get_local_injector().inject_with_handler("gossiper::real_mark_alive", [this, endpoint = addr] (auto& handler) -> future<> {
+        auto app_state_ptr = get_application_state_ptr(endpoint, application_state::HOST_ID);
+        if (!app_state_ptr) {
+            co_return;
+        }
+
+        locator::host_id id(utils::UUID(app_state_ptr->value()));
+        auto second_node_ip = handler.get("second_node_ip");
+        assert(second_node_ip);
+
+        logger.info("real_mark_alive {}/{} second_node_ip={}", id, endpoint, *second_node_ip);
+        if (endpoint == gms::inet_address(sstring{*second_node_ip})) {
+            logger.info("Sleeping before real_mark_alive for {}/{}", id, endpoint);
+            co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::minutes{1});
+            logger.info("Finished sleeping before real_mark_alive for {}/{}", id, endpoint);
+        }
+    });
+
     auto permit = co_await lock_endpoint(addr, null_permit_id);
 
     // After sending echo message, the Node might not be in the
@@ -2081,22 +2100,30 @@ void gossiper::build_seeds_list() {
     }
 }
 
-future<> gossiper::add_saved_endpoint(inet_address ep) {
+future<> gossiper::add_saved_endpoint(inet_address ep, permit_id pid) {
     if (ep == get_broadcast_address()) {
         logger.debug("Attempt to add self as saved endpoint");
         co_return;
     }
 
-    auto permit = co_await lock_endpoint(ep, null_permit_id);
+    auto permit = co_await lock_endpoint(ep, pid);
 
     //preserve any previously known, in-memory data about the endpoint (such as DC, RACK, and so on)
     auto ep_state = endpoint_state();
     auto es = get_endpoint_state_ptr(ep);
     if (es) {
+        if (es->get_heart_beat_state().get_generation()) {
+            auto msg = fmt::format("Attempted to add saved endpoint {} after endpoint_state was already established with gossip: {}, at {}", ep, es->get_heart_beat_state(), current_backtrace());
+            on_internal_error(logger, msg);
+        }
         ep_state = *es;
         logger.debug("not replacing a previous ep_state for {}, but reusing it: {}", ep, ep_state);
-        ep_state.set_heart_beat_state_and_update_timestamp(heart_beat_state());
+        ep_state.update_timestamp();
     }
+    // It's okay to use the local version generator for the loaded application state values
+    // As long as the endpoint_state has zero generation.
+    // It will get updated as a whole by handle_major_state_change
+    // via do_apply_state_locally when (remote_generation > local_generation)
     const auto tmptr = get_token_metadata_ptr();
     auto host_id = tmptr->get_host_id_if_known(ep);
     if (host_id) {

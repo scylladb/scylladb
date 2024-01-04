@@ -607,7 +607,7 @@ public:
     /**
      * Add an endpoint we knew about previously, but whose state is unknown
      */
-    future<> add_saved_endpoint(inet_address ep);
+    future<> add_saved_endpoint(inet_address ep, permit_id);
 
     future<> add_local_application_state(application_state state, versioned_value value);
 
