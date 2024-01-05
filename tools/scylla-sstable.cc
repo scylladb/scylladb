@@ -3013,7 +3013,9 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
             if (!schema_sources) {
                 sst_log.debug("No user-provided schema source, attempting to auto-detect it");
                 schema_with_source = try_load_schema_autodetect(app_config, dbcfg);
-            } else if (schema_sources == 1) {
+            } else if (schema_sources == 1 || (schema_sources == 2 && app_config.contains("scylla-yaml-file"))) {
+                // We make an exception for the case where 2 schema sources are provided, but one of them is scylla-yaml file.
+                // We want to always accept the --scylla-yaml-file option.
                 sst_log.debug("Single schema source provided");
                 schema_with_source = try_load_schema_from_user_provided_source(app_config, dbcfg);
             } else {
