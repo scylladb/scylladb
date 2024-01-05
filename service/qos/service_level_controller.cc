@@ -557,7 +557,7 @@ future<> service_level_controller::do_remove_service_level(sstring name, bool re
 
 void service_level_controller::on_join_cluster(const gms::inet_address& endpoint) { }
 
-void service_level_controller::on_leave_cluster(const gms::inet_address& endpoint) {
+void service_level_controller::on_leave_cluster(const gms::inet_address& endpoint, const locator::host_id& hid) {
     auto my_address = _auth_service.local().query_processor().proxy().local_db().get_token_metadata().get_topology().my_address();
     if (this_shard_id() == global_controller && endpoint == my_address) {
         _global_controller_db->dist_data_update_aborter.request_abort();
