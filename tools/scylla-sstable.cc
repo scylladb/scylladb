@@ -2951,7 +2951,7 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
         reader_concurrency_semaphore rcs_sem(reader_concurrency_semaphore::no_limits{}, app_name);
         auto stop_semaphore = deferred_stop(rcs_sem);
 
-        const auto permit = rcs_sem.make_tracking_only_permit(schema.get(), app_name, db::no_timeout, {});
+        const auto permit = rcs_sem.make_tracking_only_permit(schema, app_name, db::no_timeout, {});
 
         try {
             operations_with_func.at(operation)(schema, permit, sstables, sst_man, app_config);

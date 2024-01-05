@@ -144,7 +144,7 @@ public:
     }
 };
 
-void execute_reads(const schema& s, reader_concurrency_semaphore& sem, unsigned reads, unsigned concurrency, std::function<future<>(unsigned)> read) {
+void execute_reads(const schema_ptr& schema, reader_concurrency_semaphore& sem, unsigned reads, unsigned concurrency, std::function<future<>(unsigned)> read) {
     const reader_resources initial_res = sem.available_resources();
     unsigned n = 0;
     gate g;
@@ -175,7 +175,7 @@ void execute_reads(const schema& s, reader_concurrency_semaphore& sem, unsigned 
 
         if (sem.get_stats().waiters) {
             testlog.trace("Waiting for queue to drain");
-            sem.obtain_permit(&s, "drain", 1, db::no_timeout, {}).get();
+            sem.obtain_permit(schema, "drain", 1, db::no_timeout, {}).get();
         }
     }
 
@@ -267,7 +267,7 @@ void test_main_thread(cql_test_env& env) {
     try {
         auto _ = sc.collect();
         memory::set_heap_profiling_enabled(true);
-        execute_reads(*s, sem, reads, read_concurrency, [&] (unsigned i) {
+        execute_reads(s, sem, reads, read_concurrency, [&] (unsigned i) {
             return env.execute_cql(format("select * from ks.test where pk = 0 and ck > {} limit 100;",
                     tests::random::get_int(rows / 2))).discard_result();
         });
