@@ -4727,7 +4727,7 @@ SEASTAR_THREAD_TEST_CASE(test_cache_reader_semaphore_oom_kill) {
     // Check different amounts of memory consumed before the read, so the OOM kill is triggered in different places.
     for (unsigned memory = 1; memory <= 512; memory *= 2) {
         semaphore.set_resources({1, memory});
-        auto permit = semaphore.obtain_permit(s.schema().get(), "read", 0, db::no_timeout, {}).get();
+        auto permit = semaphore.obtain_permit(s.schema(), "read", 0, db::no_timeout, {}).get();
         auto create_reader_and_read_all = [&] {
             auto rd = cache.make_reader(s.schema(), permit, pr, &gc_state);
             auto close_rd = deferred_close(rd);

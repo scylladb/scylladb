@@ -2951,7 +2951,7 @@ SEASTAR_THREAD_TEST_CASE(test_evictable_reader_self_validation) {
     reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::no_limits{}, get_name());
     auto stop_sem = deferred_stop(semaphore);
     simple_schema s;
-    auto permit = semaphore.make_tracking_only_permit(s.schema().get(), get_name(), db::no_timeout, {});
+    auto permit = semaphore.make_tracking_only_permit(s.schema(), get_name(), db::no_timeout, {});
 
     auto pkeys = s.make_pkeys(4);
     std::ranges::sort(pkeys, dht::decorated_key::less_comparator(s.schema()));
@@ -3229,7 +3229,7 @@ SEASTAR_THREAD_TEST_CASE(test_evictable_reader_recreate_before_fast_forward_to) 
     reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::no_limits{}, get_name());
     auto stop_sem = deferred_stop(semaphore);
     simple_schema s;
-    auto permit = semaphore.make_tracking_only_permit(s.schema().get(), get_name(), db::no_timeout, {});
+    auto permit = semaphore.make_tracking_only_permit(s.schema(), get_name(), db::no_timeout, {});
     auto pkeys = s.make_pkeys(6);
     boost::sort(pkeys, dht::decorated_key::less_comparator(s.schema()));
 
@@ -3279,7 +3279,7 @@ SEASTAR_THREAD_TEST_CASE(test_evictable_reader_drop_flags) {
     reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::for_tests{}, get_name(), 1, 0);
     auto stop_sem = deferred_stop(semaphore);
     simple_schema s;
-    auto permit = semaphore.make_tracking_only_permit(s.schema().get(), get_name(), db::no_timeout, {});
+    auto permit = semaphore.make_tracking_only_permit(s.schema(), get_name(), db::no_timeout, {});
 
     auto pkeys = s.make_pkeys(2);
     std::sort(pkeys.begin(), pkeys.end(), [&s] (const auto& pk1, const auto& pk2) {
@@ -3506,7 +3506,7 @@ SEASTAR_THREAD_TEST_CASE(test_evictable_reader_non_monotonic_positions) {
     auto stop_sem = deferred_stop(semaphore);
     simple_schema s;
     auto schema = s.schema();
-    auto permit = semaphore.make_tracking_only_permit(s.schema().get(), get_name(), db::no_timeout, {});
+    auto permit = semaphore.make_tracking_only_permit(s.schema(), get_name(), db::no_timeout, {});
 
     auto pkey = s.make_pkey();
     const auto prange = dht::partition_range::make_open_ended_both_sides();
@@ -3564,7 +3564,7 @@ SEASTAR_THREAD_TEST_CASE(test_evictable_reader_clear_tombstone_in_discontinued_p
     auto stop_sem = deferred_stop(semaphore);
     simple_schema s;
     auto schema = s.schema();
-    auto permit = semaphore.make_tracking_only_permit(s.schema().get(), get_name(), db::no_timeout, {});
+    auto permit = semaphore.make_tracking_only_permit(s.schema(), get_name(), db::no_timeout, {});
 
     auto pkeys = s.make_pkeys(2);
     std::sort(pkeys.begin(), pkeys.end(), [&s] (const auto& pk1, const auto& pk2) {
@@ -3662,7 +3662,7 @@ SEASTAR_THREAD_TEST_CASE(test_evictable_reader_next_pos_is_partition_start) {
     auto stop_sem = deferred_stop(semaphore);
     simple_schema s;
     auto schema = s.schema();
-    auto permit = semaphore.make_tracking_only_permit(s.schema().get(), get_name(), db::no_timeout, {});
+    auto permit = semaphore.make_tracking_only_permit(s.schema(), get_name(), db::no_timeout, {});
 
     auto pk = s.make_pkey();
     const auto prange = dht::partition_range::make_open_ended_both_sides();

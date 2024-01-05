@@ -11,6 +11,7 @@
 #include <seastar/core/memory.hh>
 #include "seastarx.hh"
 #include "reader_concurrency_semaphore.hh"
+#include "schema/schema.hh"
 
 
 uint64_t perf_mallocs() {

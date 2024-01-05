@@ -66,7 +66,7 @@ SEASTAR_THREAD_TEST_CASE(mutation_fragment_sanity_check) {
     reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::no_limits{}, __FILE__);
     auto stop_semaphore = deferred_stop(semaphore);
     simple_schema s;
-    auto permit = semaphore.make_tracking_only_permit(s.schema().get(), "test", db::no_timeout, {});
+    auto permit = semaphore.make_tracking_only_permit(s.schema(), "test", db::no_timeout, {});
     gc_clock::time_point ts(gc_clock::duration(1234567890000));
 
     auto check_hash = [&] (const mutation_fragment& mf, uint64_t expected) {

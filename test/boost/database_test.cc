@@ -1351,7 +1351,7 @@ SEASTAR_TEST_CASE(database_drop_column_family_clears_querier_cache) {
         auto q = query::querier(
                 tbl.as_mutation_source(),
                 tbl.schema(),
-                database_test(db).get_user_read_concurrency_semaphore().make_tracking_only_permit(s.get(), "test", db::no_timeout, {}),
+                database_test(db).get_user_read_concurrency_semaphore().make_tracking_only_permit(s, "test", db::no_timeout, {}),
                 query::full_partition_range,
                 s->full_slice(),
                 nullptr);
