@@ -392,7 +392,7 @@ future<> storage_service::sync_raft_topology_nodes(mutable_token_metadata_ptr tm
         tmptr->update_host_id(id, ip);
     };
 
-    for (const auto& id: _topology_state_machine._topology.left_nodes) {
+    auto process_left_node = [&] (raft::server_id id) -> future<> {
         auto ip = co_await id2ip(id);
         if (_gossiper.get_live_members().contains(ip) || _gossiper.get_unreachable_members().contains(ip)) {
             co_await remove_endpoint(ip, gms::null_permit_id);
@@ -404,6 +404,10 @@ future<> storage_service::sync_raft_topology_nodes(mutable_token_metadata_ptr tm
         //
         // However if we do that, we need to also implement unbanning a node and do it if `removenode` is aborted.
         co_await _messaging.local().ban_host(locator::host_id{id.uuid()});
+    };
+
+    for (const auto& id: _topology_state_machine._topology.left_nodes) {
+        co_await process_left_node(id);
     }
 
     auto process_normal_node = [&] (raft::server_id id, const replica_state& rs) -> future<> {
@@ -439,7 +443,7 @@ future<> storage_service::sync_raft_topology_nodes(mutable_token_metadata_ptr tm
         co_await process_normal_node(id, rs);
     }
 
-    for (const auto& [id, rs]: _topology_state_machine._topology.transition_nodes) {
+    auto process_transition_node = [&](raft::server_id id, const replica_state& rs) -> future<> {
         locator::host_id host_id{id.uuid()};
         auto ip = co_await id2ip(id);
 
@@ -509,6 +513,10 @@ future<> storage_service::sync_raft_topology_nodes(mutable_token_metadata_ptr tm
         default:
             on_fatal_internal_error(slogger, ::format("Unexpected state {} for node {}", rs.state, id));
         }
+    };
+
+    for (const auto& [id, rs]: _topology_state_machine._topology.transition_nodes) {
+        co_await process_transition_node(id, rs);
     }
 }
 
