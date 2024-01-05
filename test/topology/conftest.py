@@ -49,6 +49,14 @@ def pytest_addoption(parser):
                         help='username for authentication')
     parser.addoption('--auth_password', action='store', default=None,
                         help='password for authentication')
+    # The default timeouts should have been more than enough, but in some
+    # extreme cases with a very slow debug build running on a slow or very busy
+    # machine, they may not be. Observed tests reach 160 seconds. So it's
+    # incremented to 200 seconds.
+    # See issue #11289.
+    # NOTE: request_timeout is the main cause of timeouts, even if logs say heartbeat
+    parser.addoption('--request-timeout', type=int, action='store', default=200,
+                     help='request timeout for driver in seconds')
 
 
 # This is a constant used in `pytest_runtest_makereport` below to store a flag
@@ -84,7 +92,7 @@ class CustomConnection(Cluster.connection_class):
 
 
 # cluster_con helper: set up client object for communicating with the CQL API.
-def cluster_con(hosts: List[IPAddress], port: int, use_ssl: bool, auth_provider=None):
+def cluster_con(hosts: List[IPAddress], port: int, use_ssl: bool, request_timeout: int, auth_provider=None):
     """Create a CQL Cluster connection object according to configuration.
        It does not .connect() yet."""
     assert len(hosts) > 0, "python driver connection needs at least one host to connect to"
@@ -92,18 +100,12 @@ def cluster_con(hosts: List[IPAddress], port: int, use_ssl: bool, auth_provider=
         load_balancing_policy=RoundRobinPolicy(),
         consistency_level=ConsistencyLevel.LOCAL_QUORUM,
         serial_consistency_level=ConsistencyLevel.LOCAL_SERIAL,
-        # The default timeouts should have been more than enough, but in some
-        # extreme cases with a very slow debug build running on a slow or very busy
-        # machine, they may not be. Observed tests reach 160 seconds. So it's
-        # incremented to 200 seconds.
-        # See issue #11289.
-        # NOTE: request_timeout is the main cause of timeouts, even if logs say heartbeat
-        request_timeout=200)
+        request_timeout=request_timeout)
     whitelist_profile = ExecutionProfile(
         load_balancing_policy=TokenAwarePolicy(WhiteListRoundRobinPolicy(hosts)),
         consistency_level=ConsistencyLevel.LOCAL_QUORUM,
         serial_consistency_level=ConsistencyLevel.LOCAL_SERIAL,
-        request_timeout=200)
+        request_timeout=request_timeout)
     if use_ssl:
         # Scylla does not support any earlier TLS protocol. If you try,
         # you will get mysterious EOF errors (see issue #6971) :-(
@@ -127,12 +129,12 @@ def cluster_con(hosts: List[IPAddress], port: int, use_ssl: bool, auth_provider=
                    # machine, they may not be. Observed tests reach 160 seconds. So it's
                    # incremented to 200 seconds.
                    # See issue #11289.
-                   connect_timeout = 200,
-                   control_connection_timeout = 200,
+                   connect_timeout=request_timeout,
+                   control_connection_timeout=request_timeout,
                    # NOTE: max_schema_agreement_wait must be 2x or 3x smaller than request_timeout
                    # else the driver can't handle a server being down
                    max_schema_agreement_wait=20,
-                   idle_heartbeat_timeout=200,
+                   idle_heartbeat_timeout=request_timeout,
                    # The default reconnection policy has a large maximum interval
                    # between retries (600 seconds). In tests that restart/replace nodes,
                    # where a node can be unavailable for an extended period of time,
@@ -161,7 +163,12 @@ async def manager_internal(event_loop, request):
         auth_provider = PlainTextAuthProvider(username=auth_username, password=auth_password)
     else:
         auth_provider = None
-    manager_int = ManagerClient(request.config.getoption('manager_api'), port, use_ssl, auth_provider, cluster_con)
+    request_timeout = request.config.getoption('request_timeout')
+
+    def con_gen(hosts, port, use_ssl, auth_provider=None):
+        return cluster_con(hosts, port, use_ssl, request_timeout, auth_provider)
+
+    manager_int = ManagerClient(request.config.getoption('manager_api'), port, use_ssl, auth_provider, con_gen)
     yield manager_int
     await manager_int.stop()  # Stop client session and close driver after last test
 
