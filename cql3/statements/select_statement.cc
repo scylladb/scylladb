@@ -2013,6 +2013,11 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
         );
     };
 
+    auto is_local_table = [&] {
+        return underlying_schema->table().get_effective_replication_map()->get_replication_strategy().get_type()
+                == locator::replication_strategy_type::local;
+    };
+
     // Used to determine if an execution of this statement can be parallelized
     // using `forward_service`.
     auto can_be_forwarded = [&] {
@@ -2024,7 +2029,8 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
             )
             && !restrictions->need_filtering()  // No filtering
             && group_by_cell_indices->empty()   // No GROUP BY
-            && db.get_config().enable_parallelized_aggregation();
+            && db.get_config().enable_parallelized_aggregation()
+            && !is_local_table();
     };
 
     if (_parameters->is_prune_materialized_view()) {
