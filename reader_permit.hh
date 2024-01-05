@@ -104,9 +104,9 @@ private:
 private:
     reader_permit() = default;
     reader_permit(shared_ptr<impl>);
-    explicit reader_permit(reader_concurrency_semaphore& semaphore, const schema* const schema, std::string_view op_name,
+    explicit reader_permit(reader_concurrency_semaphore& semaphore, schema_ptr schema, std::string_view op_name,
             reader_resources base_resources, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_ptr);
-    explicit reader_permit(reader_concurrency_semaphore& semaphore, const schema* const schema, sstring&& op_name,
+    explicit reader_permit(reader_concurrency_semaphore& semaphore, schema_ptr schema, sstring&& op_name,
             reader_resources base_resources, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_ptr);
 
     reader_permit::impl& operator*() { return *_impl; }
@@ -143,7 +143,7 @@ public:
 
     reader_concurrency_semaphore& semaphore();
 
-    const ::schema* get_schema() const;
+    const schema_ptr& get_schema() const;
     std::string_view get_op_name() const;
     state get_state() const;
 

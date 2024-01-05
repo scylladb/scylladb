@@ -1222,7 +1222,7 @@ future<> sstable::load_first_and_last_position_in_partition() {
     }
 
     auto& sem = _manager.sstable_metadata_concurrency_sem();
-    reader_permit permit = co_await sem.obtain_permit(&*_schema, "sstable::load_first_and_last_position_range", sstable_buffer_size, db::no_timeout, {});
+    reader_permit permit = co_await sem.obtain_permit(_schema, "sstable::load_first_and_last_position_range", sstable_buffer_size, db::no_timeout, {});
     auto first_pos_opt = co_await find_first_position_in_partition(permit, get_first_decorated_key(), false);
     auto last_pos_opt = co_await find_first_position_in_partition(permit, get_last_decorated_key(), true);
 
@@ -1859,7 +1859,7 @@ future<> sstable::generate_summary() {
 
         auto s = summary_generator(_schema->get_partitioner(), _components->summary, _manager.config().sstable_summary_ratio());
             auto ctx = make_lw_shared<index_consume_entry_context<summary_generator>>(
-                    *this, sem.make_tracking_only_permit(_schema.get(), "generate-summary", db::no_timeout, {}), s, trust_promoted_index::yes,
+                    *this, sem.make_tracking_only_permit(_schema, "generate-summary", db::no_timeout, {}), s, trust_promoted_index::yes,
                     make_file_input_stream(index_file, 0, index_size, std::move(options)), 0, index_size,
                     (_version >= sstable_version_types::mc
                         ? std::make_optional(get_clustering_values_fixed_lengths(get_serialization_header()))
@@ -2746,7 +2746,7 @@ future<bool> sstable::has_partition_key(const utils::hashed_key& hk, const dht::
     auto sem = reader_concurrency_semaphore(reader_concurrency_semaphore::no_limits{}, "sstables::has_partition_key()",
             reader_concurrency_semaphore::register_metrics::no);
     try {
-        auto lh_index_ptr = std::make_unique<sstables::index_reader>(s, sem.make_tracking_only_permit(_schema.get(), s->get_filename(), db::no_timeout, {}));
+        auto lh_index_ptr = std::make_unique<sstables::index_reader>(s, sem.make_tracking_only_permit(_schema, s->get_filename(), db::no_timeout, {}));
         present = co_await lh_index_ptr->advance_lower_and_check_if_present(dk);
     } catch (...) {
         ex = std::current_exception();

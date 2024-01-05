@@ -357,7 +357,7 @@ SEASTAR_THREAD_TEST_CASE(test_mutation_fragment_mutate_exception_safety) {
 
     reader_concurrency_semaphore sem(reader_concurrency_semaphore::for_tests{}, get_name(), 1, 100);
     auto stop_sem = deferred_stop(sem);
-    auto permit = sem.make_tracking_only_permit(s.schema().get(), get_name(), db::no_timeout, {});
+    auto permit = sem.make_tracking_only_permit(s.schema(), get_name(), db::no_timeout, {});
 
     const auto available_res = sem.available_resources();
     const sstring val(1024, 'a');
@@ -427,7 +427,7 @@ SEASTAR_THREAD_TEST_CASE(test_mutation_fragment_stream_validator) {
 
     reader_concurrency_semaphore sem(reader_concurrency_semaphore::for_tests{}, get_name(), 1, 100);
     auto stop_sem = deferred_stop(sem);
-    auto permit = sem.make_tracking_only_permit(ss.schema().get(), get_name(), db::no_timeout, {});
+    auto permit = sem.make_tracking_only_permit(ss.schema(), get_name(), db::no_timeout, {});
 
     auto expect = [&] (bool expect_valid, const char* desc, unsigned at, auto&& first_mf, auto&&... mf) {
         std::vector<mutation_fragment_v2> mfs;
@@ -618,7 +618,7 @@ SEASTAR_THREAD_TEST_CASE(test_mutation_fragment_stream_validator_mixed_api_usage
 
     reader_concurrency_semaphore sem(reader_concurrency_semaphore::for_tests{}, get_name(), 1, 100);
     auto stop_sem = deferred_stop(sem);
-    auto permit = sem.make_tracking_only_permit(ss.schema().get(), get_name(), db::no_timeout, {});
+    auto permit = sem.make_tracking_only_permit(ss.schema(), get_name(), db::no_timeout, {});
 
     mutation_fragment_stream_validator validator(*ss.schema());
 

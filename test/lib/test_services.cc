@@ -87,7 +87,7 @@ public:
         return _compaction_strategy_state;
     }
     reader_permit make_compaction_reader_permit() const override {
-        return table().compaction_concurrency_semaphore().make_tracking_only_permit(&*schema(), "table_for_tests::table_state", db::no_timeout, {});
+        return table().compaction_concurrency_semaphore().make_tracking_only_permit(schema(), "table_for_tests::table_state", db::no_timeout, {});
     }
     sstables::sstables_manager& get_sstables_manager() noexcept override {
         return _sstables_manager;

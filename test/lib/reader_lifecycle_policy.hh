@@ -99,7 +99,7 @@ public:
         return *_contexts[shard]->semaphore;
     }
     virtual future<reader_permit> obtain_reader_permit(schema_ptr schema, const char* const description, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_ptr) override {
-        return semaphore().obtain_permit(schema.get(), description, 128 * 1024, timeout, std::move(trace_ptr));
+        return semaphore().obtain_permit(schema, description, 128 * 1024, timeout, std::move(trace_ptr));
     }
 };
 

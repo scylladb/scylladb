@@ -13,6 +13,7 @@
 #include "utils/buffer_input_stream.hh"
 #include "test/lib/reader_concurrency_semaphore.hh"
 #include "test/lib/random_utils.hh"
+#include "schema/schema.hh"
 #include "sstables/processing_result_generator.hh"
 
 #include <boost/test/unit_test.hpp>
