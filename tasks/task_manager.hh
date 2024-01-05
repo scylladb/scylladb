@@ -170,7 +170,6 @@ public:
         void unregister_task() noexcept;
         const foreign_task_list& get_children() const noexcept;
         bool is_complete() const noexcept;
-        void release_resources() noexcept;
 
         friend class test_task;
         friend class ::repair::task_manager_module;

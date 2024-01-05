@@ -573,7 +573,6 @@ future<compaction_manager::compaction_stats_opt> compaction_manager::perform_com
     auto unregister_task = defer([this, task_executor] {
         _tasks.remove(task_executor);
         task_executor->switch_state(compaction_task_executor::state::none);
-        task_executor->release_resources();
     });
 
     if (parent_info) {
