@@ -4,7 +4,6 @@
  * Copyright (C) 2020-present ScyllaDB
  */
 
-#include <any>
 #include <seastar/core/sstring.hh>
 #include <seastar/core/seastar.hh>
 #include <seastar/core/smp.hh>
@@ -13,7 +12,6 @@
 #include "gms/feature.hh"
 #include "gms/feature_service.hh"
 #include "db/system_keyspace.hh"
-#include "utils/to_string.hh"
 #include <boost/algorithm/string/classification.hpp>
 #include <boost/algorithm/string/split.hpp>
 #include <boost/range/adaptor/map.hpp>

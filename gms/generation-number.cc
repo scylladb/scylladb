@@ -9,7 +9,6 @@
 #include <cassert>
 #include <chrono>
 #include <utility>
-#include <exception>
 
 #include <fmt/format.h>
 

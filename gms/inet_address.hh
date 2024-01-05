@@ -18,7 +18,6 @@
 #include <functional>
 
 #include "bytes.hh"
-#include "seastarx.hh"
 
 namespace gms {
 
