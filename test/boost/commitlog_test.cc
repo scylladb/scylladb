@@ -953,7 +953,7 @@ SEASTAR_TEST_CASE(test_commitlog_replay_invalid_key){
         {
             std::vector<flat_mutation_reader_v2> readers;
             readers.reserve(memtables.size());
-            auto permit = db.get_reader_concurrency_semaphore().make_tracking_only_permit(s.get(), "test", db::no_timeout, {});
+            auto permit = db.get_reader_concurrency_semaphore().make_tracking_only_permit(s, "test", db::no_timeout, {});
             for (auto mt : memtables) {
                 readers.push_back(mt->make_flat_reader(s, permit));
             }

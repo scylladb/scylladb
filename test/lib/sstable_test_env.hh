@@ -194,7 +194,7 @@ public:
     tmpdir& tempdir() noexcept { return _impl->dir; }
     data_dictionary::storage_options get_storage_options() const noexcept { return _impl->storage; }
 
-    reader_permit make_reader_permit(const schema* const s, const char* n, db::timeout_clock::time_point timeout) {
+    reader_permit make_reader_permit(const schema_ptr &s, const char* n, db::timeout_clock::time_point timeout) {
         return _impl->semaphore.make_tracking_only_permit(s, n, timeout, {});
     }
     reader_permit make_reader_permit(db::timeout_clock::time_point timeout = db::no_timeout) {
