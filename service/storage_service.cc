@@ -1070,7 +1070,7 @@ class topology_coordinator {
             slogger.trace("raft topology: do update {} reason {}", updates, reason);
             topology_change change{std::move(updates)};
             group0_command g0_cmd = _group0.client().prepare_command(std::move(change), guard, reason);
-            co_await _group0.client().add_entry(std::move(g0_cmd), std::move(guard));
+            co_await _group0.client().add_entry(std::move(g0_cmd), std::move(guard), &_as);
         } catch (group0_concurrent_modification&) {
             slogger.info("raft topology: race while changing state: {}. Retrying", reason);
             throw;
@@ -1297,7 +1297,7 @@ class topology_coordinator {
                 slogger.trace("raft topology: do update {} reason {}", m, reason);
                 write_mutations change{{std::move(m)}};
                 group0_command g0_cmd = _group0.client().prepare_command(std::move(change), reason);
-                return _group0.client().add_entry_unguarded(std::move(g0_cmd));
+                return _group0.client().add_entry_unguarded(std::move(g0_cmd), &_as);
             });
 
             guard = co_await start_operation();
@@ -2502,7 +2502,7 @@ class topology_coordinator {
 
         assert(!_topo_sm._topology.transition_nodes.empty());
         if (!_raft.get_configuration().contains(id)) {
-            co_await _raft.modify_config({raft::config_member({id, {}}, {})}, {});
+            co_await _raft.modify_config({raft::config_member({id, {}}, {})}, {}, &_as);
         }
 
         release_node(std::move(node));
@@ -6909,7 +6909,7 @@ future<> storage_service::move_tablet(table_id table, dht::token token, locator:
         topology_change change{std::move(updates)};
         group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard, reason);
         try {
-            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard));
+            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), &_abort_source);
             break;
         } catch (group0_concurrent_modification&) {
             slogger.debug("move_tablet(): concurrent modification, retrying");
@@ -6953,7 +6953,7 @@ future<> storage_service::set_tablet_balancing_enabled(bool enabled) {
         topology_change change{std::move(updates)};
         group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard, reason);
         try {
-            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard));
+            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), &_abort_source);
             break;
         } catch (group0_concurrent_modification&) {
             slogger.debug("set_tablet_balancing_enabled(): concurrent modification");
