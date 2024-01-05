@@ -44,11 +44,11 @@ future<std::map<sstring, double>> load_meter::get_load_map() {
                 load_map.emplace(format("{}", x.first), x.second);
                 llogger.debug("get_load_map endpoint={}, load={}", x.first, x.second);
             }
+            load_map.emplace(format("{}",
+                    _lb->gossiper().get_broadcast_address()), get_load());
         } else {
             llogger.debug("load_broadcaster is not set yet!");
         }
-        load_map.emplace(format("{}",
-                _lb->gossiper().get_broadcast_address()), get_load());
         return load_map;
     });
 }
