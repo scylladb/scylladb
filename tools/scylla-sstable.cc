@@ -2992,7 +2992,9 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
         }
 
         if (file_exists(scylla_yaml_path).get()) {
-            dbcfg.read_from_file(scylla_yaml_path).get();
+            dbcfg.read_from_file(scylla_yaml_path, [] (const sstring& opt, const sstring& msg, std::optional<::utils::config_file::value_status> status) {
+                sst_log.debug("error processing configuration item: {} : {}", msg, opt);
+            }).get();
             dbcfg.setup_directories();
             sst_log.debug("Successfully read scylla.yaml from {} location of {}", scylla_yaml_path_source, scylla_yaml_path);
         } else {

@@ -993,3 +993,29 @@ def test_scylla_sstable_no_args(scylla_path):
 Usage: scylla sstable OPERATION [OPTIONS] ...
 Try `scylla sstable --help` for more information.
 """
+
+
+def test_scylla_sstable_bad_scylla_yaml(cql, test_keyspace, scylla_path, scylla_data_dir):
+    """ scylla-sstable should not choke on deprecated/unrecognized/etc options in scylla.yaml
+    It should just log a debug-level log and proceed with reading it.
+    This test checks that the config is successfully read, even if there are errors.
+    Reproduces: https://github.com/scylladb/scylladb/issues/16538
+    """
+    with scylla_sstable(simple_clustering_table, cql, test_keyspace, scylla_data_dir) as (schema_file, sstables):
+        with tempfile.NamedTemporaryFile("w+t") as scylla_yaml:
+            scylla_yaml.write("foo: bar")
+            scylla_yaml.flush()
+            res = subprocess.run([scylla_path,
+                                  "sstable", "dump-data",
+                                  "--scylla-yaml", scylla_yaml.name,
+                                  "--schema-file", schema_file,
+                                  "--logger-log-level", "scylla-sstable=debug"]
+                                 + sstables,
+                                 text=True, stderr=subprocess.PIPE)
+            assert res.returncode == 0
+            print(res.stderr)  # when the test fails, it helps to see what the actual output is
+            stderr_lines = res.stderr.split('\n')
+            for expected_msg in (
+                    "error processing configuration item: Unknown option : foo",
+                    "Successfully read scylla.yaml from"):
+                assert any(map(lambda stderr_line: expected_msg in stderr_line, stderr_lines))
