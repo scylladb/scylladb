@@ -29,7 +29,7 @@ struct raft_topology_cmd {
         barrier,
         barrier_and_drain,
         stream_ranges,
-        fence
+        shutdown
     };
     service::raft_topology_cmd::command cmd;
 };
