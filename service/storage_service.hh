@@ -40,6 +40,7 @@
 #include "raft/raft.hh"
 #include "node_ops/id.hh"
 #include "raft/server.hh"
+#include "service/raft/raft_address_map.hh"
 #include "service/topology_state_machine.hh"
 #include "service/tablet_allocator.hh"
 
@@ -334,6 +335,10 @@ public:
     future<> join_cluster(sharded<db::system_distributed_keyspace>& sys_dist_ks, sharded<service::storage_proxy>& proxy);
 
     void set_group0(service::raft_group0&, bool raft_topology_change_enabled);
+
+    future<> init_address_map(raft_address_map& address_map);
+
+    future<> uninit_address_map();
 
     future<> drain_on_shutdown();
 
@@ -758,6 +763,10 @@ private:
         raft::term_t term{0};
         uint64_t last_index{0};
     } _raft_topology_cmd_handler_state;
+    class gossiper_state_change_subscriber_proxy;
+    // A proxy class representing subscription to on_change
+    // events, and updating the address map on this events.
+    shared_ptr<gossiper_state_change_subscriber_proxy> _gossiper_proxy;
 
     std::unordered_set<raft::server_id> find_raft_nodes_from_hoeps(const std::list<locator::host_id_or_endpoint>& hoeps);
 

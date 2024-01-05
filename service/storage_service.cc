@@ -622,6 +622,64 @@ future<> storage_service::merge_topology_snapshot(raft_topology_snapshot snp) {
    co_await _db.local().apply(freeze(muts), db::no_timeout);
 }
 
+// {{{ gossiper_state_change_subscriber_proxy
+
+class storage_service::gossiper_state_change_subscriber_proxy: public gms::i_endpoint_state_change_subscriber {
+    raft_address_map& _address_map;
+
+    future<>
+    on_endpoint_change(gms::inet_address endpoint, gms::endpoint_state_ptr ep_state) {
+        auto app_state_ptr = ep_state->get_application_state_ptr(gms::application_state::HOST_ID);
+        if (app_state_ptr) {
+            raft::server_id id(utils::UUID(app_state_ptr->value()));
+            rslog.debug("gossiper_state_change_subscriber_proxy::on_endpoint_change() {} {}", endpoint, id);
+            _address_map.add_or_update_entry(id, endpoint, ep_state->get_heart_beat_state().get_generation());
+        }
+        return make_ready_future<>();
+    }
+
+public:
+    gossiper_state_change_subscriber_proxy(raft_address_map& address_map)
+        : _address_map(address_map)
+    {}
+
+    virtual future<>
+    on_join(gms::inet_address endpoint, gms::endpoint_state_ptr ep_state, gms::permit_id) override {
+        return on_endpoint_change(endpoint, ep_state);
+    }
+
+    virtual future<>
+    on_change(gms::inet_address endpoint, const gms::application_state_map& states, gms::permit_id) override {
+        // Raft server ID never changes - do nothing
+        return make_ready_future<>();
+    }
+
+    virtual future<>
+    on_alive(gms::inet_address endpoint, gms::endpoint_state_ptr ep_state, gms::permit_id) override {
+        return on_endpoint_change(endpoint, ep_state);
+    }
+
+    virtual future<>
+    on_dead(gms::inet_address endpoint, gms::endpoint_state_ptr state, gms::permit_id) override {
+        return make_ready_future<>();
+    }
+
+    virtual future<>
+    on_remove(gms::inet_address endpoint, gms::permit_id) override {
+        // The mapping is removed when the server is removed from
+        // Raft configuration, not when it's dead or alive, or
+        // removed
+        return make_ready_future<>();
+    }
+
+    virtual future<>
+    on_restart(gms::inet_address endpoint, gms::endpoint_state_ptr ep_state, gms::permit_id) override {
+        return on_endpoint_change(endpoint, ep_state);
+    }
+};
+
+// }}} gossiper_state_change_subscriber_proxy
+
 template<typename Builder>
 class topology_mutation_builder_base {
 private:
@@ -4326,6 +4384,18 @@ future<> storage_service::drain_on_shutdown() {
 void storage_service::set_group0(raft_group0& group0, bool raft_topology_change_enabled) {
     _group0 = &group0;
     _raft_topology_change_enabled = raft_topology_change_enabled;
+}
+
+future<> storage_service::init_address_map(raft_address_map& address_map) {
+    for (auto [ip, host] : co_await _sys_ks.local().load_host_ids()) {
+        address_map.add_or_update_entry(raft::server_id(host.uuid()), ip);
+    }
+    _gossiper_proxy = make_shared<gossiper_state_change_subscriber_proxy>(address_map);
+    _gossiper.register_(_gossiper_proxy);
+}
+
+future<> storage_service::uninit_address_map() {
+    return _gossiper.unregister_(_gossiper_proxy);
 }
 
 future<> storage_service::join_cluster(sharded<db::system_distributed_keyspace>& sys_dist_ks, sharded<service::storage_proxy>& proxy) {
