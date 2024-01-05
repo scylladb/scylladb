@@ -347,7 +347,7 @@ public:
                                       table_name = std::move(table_name)] (replica::database& db) mutable {
           auto& cf = db.find_column_family(ks_name, table_name);
           auto schema = cf.schema();
-          auto permit = db.get_reader_concurrency_semaphore().make_tracking_only_permit(schema.get(), "require_column_has_value()", db::no_timeout);
+          auto permit = db.get_reader_concurrency_semaphore().make_tracking_only_permit(schema, "require_column_has_value()", db::no_timeout);
           return cf.find_partition_slow(schema, permit, pkey)
                   .then([schema, ckey, column_name, exp] (replica::column_family::const_mutation_partition_ptr p) {
             assert(p != nullptr);

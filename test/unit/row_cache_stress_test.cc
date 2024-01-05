@@ -54,7 +54,7 @@ struct table {
     }
 
     reader_permit make_permit() {
-        return semaphore.make_tracking_only_permit(s.schema().get(), "test", db::no_timeout);
+        return semaphore.make_tracking_only_permit(s.schema(), "test", db::no_timeout);
     }
     future<> stop() noexcept {
         return semaphore.stop();
