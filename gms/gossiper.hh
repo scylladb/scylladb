@@ -10,7 +10,6 @@
 
 #pragma once
 
-#include "unimplemented.hh"
 #include <seastar/core/distributed.hh>
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/gate.hh>
@@ -23,7 +22,6 @@
 #include "gms/versioned_value.hh"
 #include "gms/application_state.hh"
 #include "gms/endpoint_state.hh"
-#include "gms/feature.hh"
 #include "gms/gossip_digest_syn.hh"
 #include "gms/gossip_digest.hh"
 #include "utils/loading_shared_values.hh"
@@ -31,7 +29,6 @@
 #include "utils/in.hh"
 #include "message/messaging_service_fwd.hh"
 #include <optional>
-#include <algorithm>
 #include <chrono>
 #include <set>
 #include <seastar/core/condition-variable.hh>

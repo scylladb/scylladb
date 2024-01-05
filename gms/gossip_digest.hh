@@ -11,7 +11,6 @@
 #pragma once
 
 #include <seastar/core/sstring.hh>
-#include "utils/serialization.hh"
 #include "gms/inet_address.hh"
 #include "gms/generation-number.hh"
 #include "gms/version_generator.hh"

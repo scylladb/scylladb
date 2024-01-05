@@ -33,6 +33,7 @@
 #include "cql3/functions/user_aggregate.hh"
 #include "cql3/functions/user_function.hh"
 #include "cql3/functions/function_name.hh"
+#include "unimplemented.hh"
 
 namespace service {
 

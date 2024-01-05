@@ -12,7 +12,6 @@
 
 #include "gms/generation-number.hh"
 #include "gms/version_generator.hh"
-#include "utils/serialization.hh"
 #include <ostream>
 #include <limits>
 
