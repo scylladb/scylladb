@@ -137,6 +137,7 @@ void task_manager::task::impl::finish() noexcept {
         _status.end_time = db_clock::now();
         _status.state = task_manager::task_state::done;
         _done.set_value();
+        release_resources();
     }
 }
 
@@ -146,6 +147,7 @@ void task_manager::task::impl::finish_failed(std::exception_ptr ex, std::string 
         _status.state = task_manager::task_state::failed;
         _status.error = std::move(error);
         _done.set_exception(ex);
+        release_resources();
     }
 }
 
@@ -255,10 +257,6 @@ const task_manager::foreign_task_list& task_manager::task::get_children() const 
 
 bool task_manager::task::is_complete() const noexcept {
     return _impl->is_complete();
-}
-
-void task_manager::task::release_resources() noexcept {
-    return _impl->release_resources();
 }
 
 task_manager::module::module(task_manager& tm, std::string name) noexcept : _tm(tm), _name(std::move(name)) {

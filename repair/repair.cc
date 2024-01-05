@@ -1322,9 +1322,6 @@ future<> repair::user_requested_repair_task_impl::run() {
                 auto task = co_await local_repair._repair_module->make_and_start_task<repair::shard_repair_task_impl>(parent_data, tasks::task_id::create_random_id(), keyspace,
                         local_repair, germs->get().shared_from_this(), std::move(ranges), std::move(table_ids),
                         id, std::move(data_centers), std::move(hosts), std::move(ignore_nodes), streaming::stream_reason::repair, hints_batchlog_flushed, small_table_optimization, ranges_parallelism);
-                auto release_task_resources = defer([&] () noexcept {
-                    task->release_resources();
-                });
                 co_await task->done();
             });
             repair_results.push_back(std::move(f));
@@ -1447,9 +1444,6 @@ future<> repair::data_sync_repair_task_impl::run() {
                         id, std::move(data_centers), std::move(hosts), std::move(ignore_nodes), reason, hints_batchlog_flushed, small_table_optimization, ranges_parallelism);
                 task_impl_ptr->neighbors = std::move(neighbors);
                 auto task = co_await local_repair._repair_module->make_task(std::move(task_impl_ptr), parent_data);
-                auto release_task_resources = defer([&] () noexcept {
-                    task->release_resources();
-                });
                 task->start();
                 co_await task->done();
             });
