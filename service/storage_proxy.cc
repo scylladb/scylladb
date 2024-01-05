@@ -123,6 +123,19 @@ seastar::metrics::label_instance current_scheduling_group_label() {
 
 }
 
+[[maybe_unused]] static locator::host_id convert_ep_to_hid_with_erm(locator::effective_replication_map_ptr ermptr,
+        const gms::inet_address& ep) {
+    const auto& tm = ermptr->get_token_metadata();
+    const auto& maybe_hid = tm.get_host_id_if_known(ep);
+    if (maybe_hid) {
+        return *maybe_hid;
+    }
+    if (tm.get_topology().is_me(ep)) {
+        return tm.get_topology().my_host_id();
+    }
+    on_internal_error(slogger, seastar::format("No mapping for {} in the passed effective replication map", ep));
+}
+
 template<typename ResultType>
 static future<ResultType> encode_replica_exception_for_rpc(gms::feature_service& features, std::exception_ptr eptr) {
     if (features.typed_errors_in_read_rpc) {
