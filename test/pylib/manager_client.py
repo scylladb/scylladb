@@ -143,10 +143,10 @@ class ManagerClient():
         logger.debug("ManagerClient stopping %s", server_id)
         await self.client.put_json(f"/cluster/server/{server_id}/stop")
 
-    async def server_stop_gracefully(self, server_id: ServerNum) -> None:
+    async def server_stop_gracefully(self, server_id: ServerNum, timeout: float = 60) -> None:
         """Stop specified server gracefully"""
         logger.debug("ManagerClient stopping gracefully %s", server_id)
-        await self.client.put_json(f"/cluster/server/{server_id}/stop_gracefully")
+        await self.client.put_json(f"/cluster/server/{server_id}/stop_gracefully", timeout=timeout)
 
     async def server_start(self, server_id: ServerNum, expected_error: Optional[str] = None,
                            wait_others: int = 0, wait_interval: float = 45) -> None:
