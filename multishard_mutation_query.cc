@@ -213,7 +213,7 @@ public:
             tracing::trace_state_ptr trace_state, db::timeout_clock::time_point timeout)
             : _db(db)
             , _schema(std::move(s))
-            , _permit(_db.local().get_reader_concurrency_semaphore().make_tracking_only_permit(_schema.get(), "multishard-mutation-query", timeout))
+            , _permit(_db.local().get_reader_concurrency_semaphore().make_tracking_only_permit(_schema, "multishard-mutation-query", timeout))
             , _cmd(cmd)
             , _ranges(ranges)
             , _trace_state(std::move(trace_state))
