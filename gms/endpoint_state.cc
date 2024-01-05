@@ -23,7 +23,7 @@ static_assert(std::is_nothrow_move_constructible_v<heart_beat_state>);
 static_assert(std::is_nothrow_default_constructible_v<application_state_map>);
 
 // Note: although std::map::find is not guaranteed to be noexcept
-// it depends on the comperator used and in this case comparing application_state
+// it depends on the comparator used and in this case comparing application_state
 // is noexcept.  Therefore, we can safely mark this method noexcept.
 const versioned_value* endpoint_state::get_application_state_ptr(application_state key) const noexcept {
     auto it = _application_state.find(key);
