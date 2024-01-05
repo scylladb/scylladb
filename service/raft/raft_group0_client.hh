@@ -104,9 +104,9 @@ public:
     // Call after `system_keyspace` is initialized.
     future<> init();
 
-    future<> add_entry(group0_command group0_cmd, group0_guard guard, seastar::abort_source* as = nullptr);
+    future<> add_entry(group0_command group0_cmd, group0_guard guard, seastar::abort_source* as);
 
-    future<> add_entry_unguarded(group0_command group0_cmd, seastar::abort_source* as = nullptr);
+    future<> add_entry_unguarded(group0_command group0_cmd, seastar::abort_source* as);
 
     // Ensures that all previously finished operations on group 0 are visible on this node;
     // in particular, performs a Raft read barrier on group 0.
@@ -128,7 +128,7 @@ public:
     // FIXME?: this is kind of annoying for the user.
     // we could forward the call to shard 0, have group0_guard keep a foreign_ptr to the internal data structures on shard 0,
     // and add_entry would again forward to shard 0.
-    future<group0_guard> start_operation(seastar::abort_source* as = nullptr);
+    future<group0_guard> start_operation(seastar::abort_source* as);
 
     template<typename Command>
     requires std::same_as<Command, broadcast_table_query> || std::same_as<Command, write_mutations>

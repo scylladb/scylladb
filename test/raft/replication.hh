@@ -951,7 +951,7 @@ future<> raft_cluster<Clock>::add_entry(size_t val, std::optional<size_t> server
     while (true) {
         try {
             auto& at = _servers[server ? *server : _leader].server;
-            co_await at->add_entry(create_command(val), raft::wait_type::committed);
+            co_await at->add_entry(create_command(val), raft::wait_type::committed, nullptr);
             break;
         } catch (raft::commit_status_unknown& e) {
             // FIXME: in some cases when we get `commit_status_unknown` the entry may have been applied.
@@ -1201,7 +1201,7 @@ future<> raft_cluster<Clock>::change_configuration(set_config sc) {
     }
 
     tlogger.debug("Changing configuration on leader {}", _leader);
-    co_await _servers[_leader].server->set_configuration(std::move(set));
+    co_await _servers[_leader].server->set_configuration(std::move(set), nullptr);
 
     if (!new_config.contains(_leader)) {
         co_await free_election();
@@ -1211,7 +1211,7 @@ future<> raft_cluster<Clock>::change_configuration(set_config sc) {
     // Add a dummy entry to confirm new configuration was committed
     try {
         co_await _servers[_leader].server->add_entry(create_command(dummy_command),
-                raft::wait_type::committed);
+                raft::wait_type::committed, nullptr);
     } catch (raft::not_a_leader& e) {
         // leader stepped down, implying config fully changed
     } catch (raft::commit_status_unknown& e) {}
@@ -1338,7 +1338,7 @@ future<> raft_cluster<Clock>::tick(::tick t) {
 
 template <typename Clock>
 future<> raft_cluster<Clock>::read(read_value r) {
-    co_await _servers[r.node_idx].server->read_barrier();
+    co_await _servers[r.node_idx].server->read_barrier(nullptr);
     auto val = _servers[r.node_idx].sm->hasher->finalize_uint64();
     auto expected = hasher_int::hash_range(r.expected_index).finalize_uint64();
     BOOST_CHECK_MESSAGE(val == expected,

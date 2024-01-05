@@ -30,7 +30,7 @@ bool is_broadcast_table_statement(const sstring& keyspace, const sstring& column
 future<query_result> execute(service::raft_group0_client& group0_client, const query& query) {
     auto group0_cmd = group0_client.prepare_command(broadcast_table_query{query}, "broadcast_tables query");
     auto guard = group0_client.create_result_guard(group0_cmd.new_state_id);
-    co_await group0_client.add_entry_unguarded(std::move(group0_cmd));
+    co_await group0_client.add_entry_unguarded(std::move(group0_cmd), nullptr);
     co_return guard.get();
 }
 
