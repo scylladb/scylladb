@@ -35,7 +35,7 @@ const versioned_value* endpoint_state::get_application_state_ptr(application_sta
 }
 
 std::ostream& operator<<(std::ostream& os, const endpoint_state& x) {
-    os << "HeartBeatState = " << x._heart_beat_state << ", AppStateMap =";
+    fmt::print(os, "HeartBeatState = {}, AppStateMap =", x._heart_beat_state);
     for (auto&entry : x._application_state) {
         const application_state& state = entry.first;
         const versioned_value& value = entry.second;
