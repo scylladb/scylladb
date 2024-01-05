@@ -406,7 +406,7 @@ future<> storage_service::sync_raft_topology_nodes(mutable_token_metadata_ptr tm
         co_await _messaging.local().ban_host(locator::host_id{id.uuid()});
     }
 
-    auto add_normal_node = [&] (raft::server_id id, const replica_state& rs) -> future<> {
+    auto process_normal_node = [&] (raft::server_id id, const replica_state& rs) -> future<> {
         locator::host_id host_id{id.uuid()};
         auto ip = co_await id2ip(id);
 
@@ -436,7 +436,7 @@ future<> storage_service::sync_raft_topology_nodes(mutable_token_metadata_ptr tm
     };
 
     for (const auto& [id, rs]: _topology_state_machine._topology.normal_nodes) {
-        co_await add_normal_node(id, rs);
+        co_await process_normal_node(id, rs);
     }
 
     for (const auto& [id, rs]: _topology_state_machine._topology.transition_nodes) {
@@ -498,13 +498,13 @@ future<> storage_service::sync_raft_topology_nodes(mutable_token_metadata_ptr tm
             break;
         case node_state::rebuilding:
             // Rebuilding node is normal
-            co_await add_normal_node(id, rs);
+            co_await process_normal_node(id, rs);
             break;
         case node_state::left_token_ring:
             break;
         case node_state::rollback_to_normal:
             // no need for double writes anymore since op failed
-            co_await add_normal_node(id, rs);
+            co_await process_normal_node(id, rs);
             break;
         default:
             on_fatal_internal_error(slogger, ::format("Unexpected state {} for node {}", rs.state, id));
