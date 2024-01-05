@@ -370,9 +370,9 @@ static locator::node::state to_topology_node_state(node_state ns) {
 
 // Synchronizes the local node state (token_metadata, system.peers/system.local tables,
 // gossiper) to align it with the other raft topology nodes.
-future<> storage_service::sync_raft_topology_nodes(mutable_token_metadata_ptr tmptr) {
+future<> storage_service::sync_raft_topology_nodes(mutable_token_metadata_ptr tmptr, std::optional<locator::host_id> target_node) {
     const auto& am = _group0->address_map();
-    auto id2ip = [this, &am] (raft::server_id id) -> future<gms::inet_address> {
+    auto id2ip = [&] (raft::server_id id) -> future<gms::inet_address> {
         auto ip = am.find(id);
         while (!ip) {
             static logger::rate_limit rate_limit{std::chrono::seconds(1)};
@@ -509,6 +509,18 @@ future<> storage_service::sync_raft_topology_nodes(mutable_token_metadata_ptr tm
 
     const auto& t = _topology_state_machine._topology;
 
+    if (target_node) {
+        raft::server_id raft_id{target_node->uuid()};
+        if (t.left_nodes.contains(raft_id)) {
+            co_await process_left_node(raft_id);
+        } else if (auto it = t.normal_nodes.find(raft_id); it != t.normal_nodes.end()) {
+            co_await process_normal_node(raft_id, it->second);
+        } else if ((it = t.transition_nodes.find(raft_id)) != t.transition_nodes.end()) {
+            co_await process_transition_node(raft_id, it->second);
+        }
+        co_return;
+    }
+
     for (const auto& id: t.left_nodes) {
         co_await process_left_node(id);
     }
@@ -578,7 +590,7 @@ future<> storage_service::topology_state_load() {
         }, _topology_state_machine._topology.tstate);
         tmptr->set_read_new(read_new);
 
-        co_await sync_raft_topology_nodes(tmptr);
+        co_await sync_raft_topology_nodes(tmptr, std::nullopt);
 
         if (_db.local().get_config().check_experimental(db::experimental_features_t::feature::TABLETS)) {
             tmptr->set_tablets(co_await replica::read_tablet_metadata(_qp));
