@@ -386,6 +386,12 @@ future<> storage_service::sync_raft_topology_nodes(mutable_token_metadata_ptr tm
         co_return *ip;
     };
 
+    auto update_topology = [&] (locator::host_id id, inet_address ip, const replica_state& rs) {
+        tmptr->update_topology(id, locator::endpoint_dc_rack{rs.datacenter, rs.rack},
+                               to_topology_node_state(rs.state), rs.shard_count);
+        tmptr->update_host_id(id, ip);
+    };
+
     for (const auto& id: _topology_state_machine._topology.left_nodes) {
         auto ip = co_await id2ip(id);
         if (_gossiper.get_live_members().contains(ip) || _gossiper.get_unreachable_members().contains(ip)) {
@@ -399,12 +405,6 @@ future<> storage_service::sync_raft_topology_nodes(mutable_token_metadata_ptr tm
         // However if we do that, we need to also implement unbanning a node and do it if `removenode` is aborted.
         co_await _messaging.local().ban_host(locator::host_id{id.uuid()});
     }
-
-    auto update_topology = [&] (locator::host_id id, inet_address ip, const replica_state& rs) {
-        tmptr->update_topology(id, locator::endpoint_dc_rack{rs.datacenter, rs.rack},
-                               to_topology_node_state(rs.state), rs.shard_count);
-        tmptr->update_host_id(id, ip);
-    };
 
     auto add_normal_node = [&] (raft::server_id id, const replica_state& rs) -> future<> {
         locator::host_id host_id{id.uuid()};
