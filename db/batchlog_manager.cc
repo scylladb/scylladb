@@ -27,8 +27,6 @@
 #include "log.hh"
 #include "db_clock.hh"
 #include "unimplemented.hh"
-#include "gms/gossiper.hh"
-#include "schema/schema_registry.hh"
 #include "idl/frozen_schema.dist.hh"
 #include "idl/frozen_schema.dist.impl.hh"
 #include "db/schema_tables.hh"

@@ -45,14 +45,12 @@
 #include "rp_set.hh"
 #include "db/config.hh"
 #include "db/extensions.hh"
-#include "utils/data_input.hh"
 #include "utils/crc.hh"
 #include "utils/runtime.hh"
 #include "utils/flush_queue.hh"
 #include "log.hh"
 #include "commitlog_entry.hh"
 #include "commitlog_extensions.hh"
-#include "serializer.hh"
 
 #include <boost/range/numeric.hpp>
 #include <boost/range/adaptor/transformed.hpp>

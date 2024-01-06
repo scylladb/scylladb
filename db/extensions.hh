@@ -10,7 +10,6 @@
 #pragma once
 
 #include <set>
-#include <stdexcept>
 #include <functional>
 #include <map>
 #include <variant>

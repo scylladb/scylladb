@@ -8,8 +8,8 @@
 
 #include <string_view>
 #include <boost/algorithm/string.hpp>
-#include "locator/token_metadata.hh"
-#include "utils/to_string.hh"
+#include "locator/topology.hh"
+#include "gms/inet_address.hh"
 #include "host_filter.hh"
 
 namespace db {

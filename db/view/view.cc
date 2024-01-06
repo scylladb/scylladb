@@ -54,7 +54,6 @@
 #include "utils/small_vector.hh"
 #include "view_info.hh"
 #include "view_update_checks.hh"
-#include "types/user.hh"
 #include "types/list.hh"
 #include "types/map.hh"
 #include "utils/error_injection.hh"

@@ -26,23 +26,14 @@
 
 // Scylla includes.
 #include "db/hints/internal/hint_logger.hh"
-#include "db/extensions.hh"
-#include "db/timeout_clock.hh"
 #include "gms/gossiper.hh"
-#include "gms/versioned_value.hh"
 #include "locator/abstract_replication_strategy.hh"
-#include "mutation/mutation_partition_view.hh"
 #include "replica/database.hh"
 #include "service/storage_proxy.hh"
 #include "utils/directories.hh"
-#include "utils/disk-error-handler.hh"
-#include "utils/div_ceil.hh"
 #include "utils/error_injection.hh"
 #include "utils/lister.hh"
-#include "utils/runtime.hh"
-#include "converting_mutation_partition_applier.hh"
 #include "seastarx.hh"
-#include "service_permit.hh"
 
 // STD.
 #include <algorithm>

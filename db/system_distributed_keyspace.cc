@@ -21,7 +21,6 @@
 #include "cql3/query_processor.hh"
 #include "service/storage_proxy.hh"
 #include "service/migration_manager.hh"
-#include "db/config.hh"
 #include "locator/host_id.hh"
 
 #include <seastar/core/seastar.hh>
@@ -35,7 +34,6 @@
 
 #include <optional>
 #include <vector>
-#include <set>
 
 static logging::logger dlogger("system_distributed_keyspace");
 extern logging::logger cdc_log;

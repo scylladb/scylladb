@@ -25,7 +25,6 @@
 #include "release.hh"
 #include "replica/database.hh"
 #include "schema/schema_builder.hh"
-#include "schema/schema_registry.hh"
 #include "service/raft/raft_group_registry.hh"
 #include "service/storage_service.hh"
 #include "types/list.hh"

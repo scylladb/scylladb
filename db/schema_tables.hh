@@ -10,7 +10,6 @@
 #pragma once
 
 #include "mutation/mutation.hh"
-#include "db/commitlog/replay_position.hh"
 #include "schema/schema_fwd.hh"
 #include "schema_features.hh"
 #include "utils/hashing.hh"

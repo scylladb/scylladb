@@ -11,6 +11,7 @@
 #include "db/chained_delegating_reader.hh"
 #include "readers/queue.hh"
 #include "readers/reversing_v2.hh"
+#include "readers/filtering.hh"
 #include "readers/forwardable_v2.hh"
 #include "readers/slicing_filtering.hh"
 #include "dht/i_partitioner.hh"

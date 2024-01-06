@@ -10,7 +10,6 @@
 
 #pragma once
 
-#include <unordered_map>
 #include <seastar/core/future.hh>
 #include <seastar/core/shared_future.hh>
 #include <seastar/core/distributed.hh>
@@ -20,12 +19,9 @@
 #include <seastar/core/abort_source.hh>
 
 #include "db_clock.hh"
-#include "mutation/mutation.hh"
-#include "utils/UUID.hh"
 
 #include <chrono>
 #include <limits>
-#include <random>
 
 namespace cql3 {
 
