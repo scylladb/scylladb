@@ -10,7 +10,6 @@
 
 #include "serializer.hh"
 #include "schema/schema.hh"
-#include "db/extensions.hh"
 
 namespace db {
 

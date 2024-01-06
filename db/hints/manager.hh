@@ -27,8 +27,6 @@
 #include "db/hints/host_filter.hh"
 #include "db/hints/sync_point.hh"
 #include "locator/abstract_replication_strategy.hh"
-#include "utils/loading_shared_values.hh"
-#include "inet_address_vectors.hh"
 
 // STD.
 #include <chrono>

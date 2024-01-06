@@ -19,11 +19,9 @@
 #include "db_clock.hh"
 #include "mutation_query.hh"
 #include "system_keyspace_view_types.hh"
-#include <map>
 #include <seastar/core/distributed.hh>
 #include "cdc/generation_id.hh"
 #include "locator/host_id.hh"
-#include "mutation/canonical_mutation.hh"
 #include "virtual_tables.hh"
 #include "types/types.hh"
 

@@ -20,7 +20,6 @@
 // the new.
 
 #include <unordered_map>
-#include <memory>
 
 #include <seastar/core/rwlock.hh>
 #include <seastar/core/future.hh>
@@ -28,9 +27,10 @@
 #include "db/timeout_clock.hh"
 #include "schema/schema_fwd.hh"
 #include "dht/i_partitioner_fwd.hh"
-#include "query-request.hh"
+#include "dht/decorated_key.hh"
 #include "utils/estimated_histogram.hh"
 #include "utils/latency.hh"
+#include "keys.hh"
 
 class row_locker {
 public:

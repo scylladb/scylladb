@@ -8,7 +8,6 @@
 
 #pragma once
 
-#include "bytes.hh"
 #include "schema/schema_fwd.hh"
 #include "service/qos/qos_common.hh"
 #include "utils/UUID.hh"

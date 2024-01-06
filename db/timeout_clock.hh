@@ -10,7 +10,6 @@
 
 #include <seastar/core/lowres_clock.hh>
 #include <seastar/core/semaphore.hh>
-#include <chrono>
 
 namespace db {
 using timeout_clock = seastar::lowres_clock;

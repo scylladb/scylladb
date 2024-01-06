@@ -10,7 +10,6 @@
 
 #include <seastar/core/future.hh>
 #include "streaming/stream_reason.hh"
-#include "locator/host_id.hh"
 #include "seastarx.hh"
 
 namespace replica {

@@ -11,7 +11,6 @@
 #include "query-request.hh"
 #include "service/migration_listener.hh"
 #include "utils/serialized_action.hh"
-#include "utils/UUID.hh"
 #include "replica/database.hh"
 
 #include <seastar/core/abort_source.hh>

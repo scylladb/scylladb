@@ -14,9 +14,7 @@
 #include <seastar/coroutine/parallel_for_each.hh>
 #include "system_keyspace.hh"
 #include "cql3/untyped_result_set.hh"
-#include "utils/hash.hh"
 #include "thrift/server.hh"
-#include "exceptions/exceptions.hh"
 #include "cql3/query_processor.hh"
 #include "partition_slice_builder.hh"
 #include "db/config.hh"
@@ -27,7 +25,6 @@
 #include "log.hh"
 #include <seastar/core/enum.hh>
 #include "gms/inet_address.hh"
-#include "index/secondary_index.hh"
 #include "message/messaging_service.hh"
 #include "mutation_query.hh"
 #include "db/timeout_clock.hh"

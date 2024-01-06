@@ -18,7 +18,6 @@
 #include <seastar/core/sstring.hh>
 #include "schema/schema.hh"
 #include "replica/database.hh"
-#include "unimplemented.hh"
 #include "db/read_repair_decision.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "locator/network_topology_strategy.hh"
