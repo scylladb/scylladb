@@ -410,6 +410,11 @@ future<> storage_service::topology_state_load() {
         co_return *ip;
     };
 
+    co_await mutate_token_metadata(seastar::coroutine::lambda([this, &id2ip, &am] (mutable_token_metadata_ptr tmptr) -> future<> {
+        co_await tmptr->clear_gently(); // drop previous state
+
+        tmptr->set_version(_topology_state_machine._topology.version);
+
     for (const auto& id: _topology_state_machine._topology.left_nodes) {
         auto ip = co_await id2ip(id);
         if (_gossiper.get_live_members().contains(ip) || _gossiper.get_unreachable_members().contains(ip)) {
@@ -423,11 +428,6 @@ future<> storage_service::topology_state_load() {
         // However if we do that, we need to also implement unbanning a node and do it if `removenode` is aborted.
         co_await _messaging.local().ban_host(locator::host_id{id.uuid()});
     }
-
-    co_await mutate_token_metadata(seastar::coroutine::lambda([this, &id2ip, &am] (mutable_token_metadata_ptr tmptr) -> future<> {
-        co_await tmptr->clear_gently(); // drop previous state
-
-        tmptr->set_version(_topology_state_machine._topology.version);
 
         auto update_topology = [&] (locator::host_id id, inet_address ip, const replica_state& rs) {
             tmptr->update_topology(id, locator::endpoint_dc_rack{rs.datacenter, rs.rack},
