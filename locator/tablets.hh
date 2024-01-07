@@ -287,6 +287,7 @@ private:
     tablet_container _tablets;
     size_t _log2_tablets; // log_2(_tablets.size())
     std::unordered_map<tablet_id, tablet_transition_info> _transitions;
+    resize_decision _resize_decision;
 public:
     /// Constructs a tablet map.
     ///
@@ -375,9 +376,14 @@ public:
     size_t external_memory_usage() const;
 
     bool operator==(const tablet_map&) const = default;
+
+    bool needs_split() const;
+
+    const locator::resize_decision& resize_decision() const;
 public:
     void set_tablet(tablet_id, tablet_info);
     void set_tablet_transition_info(tablet_id, tablet_transition_info);
+    void set_resize_decision(locator::resize_decision);
     void clear_transitions();
 
     // Destroys gently.

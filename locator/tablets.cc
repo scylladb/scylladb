@@ -222,6 +222,10 @@ void tablet_map::set_tablet_transition_info(tablet_id id, tablet_transition_info
     _transitions.insert_or_assign(id, std::move(info));
 }
 
+void tablet_map::set_resize_decision(locator::resize_decision decision) {
+    _resize_decision = std::move(decision);
+}
+
 future<> tablet_map::for_each_tablet(seastar::noncopyable_function<void(tablet_id, const tablet_info&)> func) const {
     std::optional<tablet_id> tid = first_tablet();
     for (const tablet_info& ti : tablets()) {
@@ -376,6 +380,14 @@ size_t tablet_map::external_memory_usage() const {
 
 bool resize_decision::operator==(const resize_decision& o) const {
     return way.index() == o.way.index() && sequence_number == o.sequence_number;
+}
+
+bool tablet_map::needs_split() const {
+    return std::holds_alternative<resize_decision::split>(_resize_decision.way);
+}
+
+const locator::resize_decision& tablet_map::resize_decision() const {
+    return _resize_decision;
 }
 
 static auto to_resize_type(sstring decision) {

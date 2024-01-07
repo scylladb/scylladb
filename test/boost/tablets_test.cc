@@ -230,6 +230,18 @@ SEASTAR_TEST_CASE(test_tablet_metadata_persistence) {
             }
 
             verify_tablet_metadata_persistence(e, tm, ts);
+
+            // Change resize decision of table1
+            {
+                tablet_map tmap(1);
+                locator::resize_decision decision;
+                decision.way = locator::resize_decision::split{},
+                decision.sequence_number = 1;
+                tmap.set_resize_decision(decision);
+                tm.set_tablet_map(table1, std::move(tmap));
+            }
+
+            verify_tablet_metadata_persistence(e, tm, ts);
         }
     }, tablet_cql_test_config());
 }
