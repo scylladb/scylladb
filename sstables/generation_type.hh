@@ -14,9 +14,7 @@
 #include <cstdint>
 #include <compare>
 #include <limits>
-#include <iostream>
 #include <stdexcept>
-#include <type_traits>
 #include <boost/range/adaptors.hpp>
 #include <seastar/core/on_internal_error.hh>
 #include <boost/regex.hpp>

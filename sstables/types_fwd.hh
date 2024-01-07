@@ -8,7 +8,6 @@
 
 #pragma once
 
-#include "shared_sstable.hh"
 #include "utils/UUID.hh"
 
 namespace sstables {

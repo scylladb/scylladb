@@ -11,7 +11,7 @@
 #include "sstables/consumer.hh"
 #include "sstables/types.hh"
 #include "sstables/column_translation.hh"
-#include "sstables/m_format_read_helpers.hh"
+#include "sstables/mx/types.hh"
 #include "mutation/position_in_partition.hh"
 
 namespace sstables {

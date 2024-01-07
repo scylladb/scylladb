@@ -18,13 +18,11 @@
 #include "seastarx.hh"
 #include "sstables/shared_sstable.hh"            // sstables::shared_sstable
 #include "sstables/version.hh"                   // sstable versions
-#include "compaction/compaction_descriptor.hh"     // for compaction_sstable_creator_fn
 #include "data_dictionary/storage_options.hh"
 #include "sstables/open_info.hh"                 // for entry_descriptor and foreign_sstable_open_info, chunked_vector wants to know if they are move constructible
 #include "utils/chunked_vector.hh"
 #include "utils/phased_barrier.hh"
 #include "utils/disk-error-handler.hh"
-#include "utils/lister.hh"
 #include "sstables/generation_type.hh"
 
 class compaction_manager;
@@ -98,7 +96,7 @@ public:
 
         void handle(sstables::entry_descriptor desc, std::filesystem::path filename);
 
-        fs::path _directory;
+        std::filesystem::path _directory;
         std::unique_ptr<scan_state> _state;
 
         future<> garbage_collect(storage&);

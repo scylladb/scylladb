@@ -12,6 +12,7 @@
 #include <seastar/core/enum.hh>
 #include "bytes.hh"
 #include "gc_clock.hh"
+#include "locator/host_id.hh"
 #include "mutation/tombstone.hh"
 #include "utils/streaming_histogram.hh"
 #include "utils/estimated_histogram.hh"
@@ -24,8 +25,6 @@
 #include <concepts>
 #include "version.hh"
 #include "encoding_stats.hh"
-#include "utils/UUID.hh"
-#include "locator/host_id.hh"
 #include "types_fwd.hh"
 
 // While the sstable code works with char, bytes_view works with int8_t
