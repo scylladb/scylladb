@@ -2672,7 +2672,13 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                            .del("tokens")
                            .set("node_state", next_state);
                     auto str = ::format("{}: read fence completed", node.rs->state);
-                    co_await update_topology_state(take_guard(std::move(node)), {builder.build(), rtbuilder.build()}, std::move(str));
+                    std::vector<canonical_mutation> muts;
+                    muts.reserve(2);
+                    muts.push_back(builder.build());
+                    if (next_state == node_state::left) {
+                        muts.push_back(rtbuilder.build());
+                    }
+                    co_await update_topology_state(take_guard(std::move(node)), std::move(muts), std::move(str));
                 }
                     break;
                 case node_state::replacing: {
@@ -2921,6 +2927,12 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     node = retake_node(co_await start_operation(), node.id);
                 }
 
+                topology_request_tracking_mutation_builder rtbuilder(node.rs->request_id);
+
+                rtbuilder.done();
+
+                co_await update_topology_state(take_guard(std::move(node)), {rtbuilder.build()}, "report request completion in left_token_ring sate");
+
                 // Tell the node to shut down.
                 // This is done to improve user experience when there are no failures.
                 // In the next state (`node_state::left`), the node will be banned by the rest of the cluster,
@@ -2933,7 +2945,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 auto node_id = node.id;
                 bool shutdown_failed = false;
                 try {
-                    node = co_await exec_direct_command(std::move(node), raft_topology_cmd::command::shutdown);
+                    node = co_await exec_direct_command(std::move(node), raft_topology_cmd::command::barrier);
                 } catch (...) {
                     slogger.warn("raft topology: failed to tell node {} to shut down - it may hang."
                                  " It's safe to shut it down manually now. (Exception: {})",
@@ -2975,14 +2987,17 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 node = retake_node(std::move(node.guard), node.id);
 
                 topology_mutation_builder builder(node.guard.write_timestamp());
+                topology_request_tracking_mutation_builder rtbuilder(node.rs->request_id);
                 builder.set_fence_version(_topo_sm._topology.version) // fence requests in case the drain above failed
                        .set_transition_state(topology::transition_state::tablet_migration) // in case tablet drain failed we need to complete tablet transitions
                        .with_node(node.id)
                        .set("node_state", node_state::normal);
+                rtbuilder.done();
+
                 auto str = fmt::format("complete rollback of {} to state normal", node.id);
 
                 slogger.info("{}", str);
-                co_await update_topology_state(std::move(node.guard), {builder.build()}, str);
+                co_await update_topology_state(std::move(node.guard), {builder.build(), rtbuilder.build()}, str);
             }
                 break;
             case node_state::bootstrapping:
@@ -3263,7 +3278,7 @@ future<> topology_coordinator::rollback_current_topology_op(group0_guard&& guard
            .set_version(_topo_sm._topology.version + 1)
            .with_node(node.id)
            .set("node_state", state);
-    rtbuilder.done("rolled back");
+    rtbuilder.set("error", "rolled back");
 
     std::vector<canonical_mutation> muts;
     // We are in the process of aborting remove or decommission which may have streamed some
@@ -5459,10 +5474,6 @@ future<> storage_service::raft_decommission() {
     auto& raft_server = _group0->group0_server();
     utils::UUID request_id;
 
-    auto disengage_shutdown_promise = defer([this] {
-        _shutdown_request_promise = std::nullopt;
-    });
-
     while (true) {
         auto guard = co_await _group0->client().start_operation(&_group0_as);
 
@@ -5502,32 +5513,13 @@ future<> storage_service::raft_decommission() {
         break;
     }
 
-    // Wait for the coordinator to tell us to shut down or for decomission request to disappear
-    bool abort_wait = false;
+    auto error = co_await wait_for_topology_request_completion(request_id);
 
-    auto f1 = _shutdown_request_promise.emplace().get_future().then([this, &abort_wait] {
-        // shutdown was signalled, abort the wait for the topology event
-       abort_wait = true;
-        _topology_state_machine.event.broadcast();
-    });
-
-    auto f2 = wait_for_topology_request_completion(request_id, &abort_wait).then([this] (sstring error) {
-        if (!error.empty()) {
-            // Got error here. Abort the wait for the shutdown event
-            _shutdown_request_promise->set_exception(std::runtime_error("Decommission failure"));
-        }
-        return error;
-    });
-
-
-    slogger.info("raft topology: decommission: wait for completion");
-    auto res = co_await when_all(std::move(f1), std::move(f2));
-
-    if (!std::get<0>(res).failed()) {
+    if (error.empty()) {
         // Need to set it otherwise gossiper will try to send shutdown on exit
         co_await _gossiper.add_local_application_state({{ gms::application_state::STATUS, gms::versioned_value::left({}, _gossiper.now().time_since_epoch().count()) }});
-    } else {
-        auto err = fmt::format("Decommission failed. See earlier errors ({})", std::get<1>(res).get0());
+    } else  {
+        auto err = fmt::format("Decommission failed. See earlier errors ({})", error);
         slogger.error("{}", err);
         throw std::runtime_error(err);
     }
@@ -6474,8 +6466,8 @@ future<> storage_service::do_cluster_cleanup() {
     slogger.info("raft topology: cluster cleanup done");
 }
 
-future<sstring> storage_service::wait_for_topology_request_completion(utils::UUID id, bool* stop_waiting) {
-    while (!stop_waiting || !*stop_waiting) {
+future<sstring> storage_service::wait_for_topology_request_completion(utils::UUID id) {
+    while (true) {
         auto [done, error] = co_await  _sys_ks.local().get_topology_request_state(id);
         if (done) {
             co_return error;
@@ -7340,13 +7332,6 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                 }
             }
             break;
-            case raft_topology_cmd::command::shutdown:
-                if (_shutdown_request_promise) {
-                    std::exchange(_shutdown_request_promise, std::nullopt)->set_value();
-                } else {
-                    slogger.warn("raft topology: got shutdown request while not decommissioning");
-                }
-                break;
             case raft_topology_cmd::command::wait_for_ip: {
                 std::vector<raft::server_id> ids;
                 {

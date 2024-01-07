@@ -209,7 +209,6 @@ struct raft_topology_cmd {
           barrier_and_drain,    // same + drain requests which use previous versions
           stream_ranges,        // request to stream data, return when streaming is
                                 // done
-          shutdown,             // a decommissioning node should shut down
           wait_for_ip           // wait for a joining node IP to appear in raft_address_map
       };
       command cmd;
