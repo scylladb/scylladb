@@ -169,8 +169,7 @@ future<> view_update_generator::start() {
                     auto close_sr = deferred_close(staging_sstable_reader);
 
                     inject_failure("view_update_generator_consume_staging_sstable");
-                    auto result = staging_sstable_reader.consume_in_thread(view_updating_consumer(*this, s, std::move(permit), *t, sstables, _as, staging_sstable_reader_handle),
-                        dht::incremental_owned_ranges_checker::make_partition_filter(_db.get_keyspace_local_ranges(s->ks_name())));
+                    auto result = staging_sstable_reader.consume_in_thread(view_updating_consumer(*this, s, std::move(permit), *t, sstables, _as, staging_sstable_reader_handle));
                     if (result == stop_iteration::yes) {
                         break;
                     }
