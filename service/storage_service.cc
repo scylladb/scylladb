@@ -627,7 +627,7 @@ future<> storage_service::topology_transition() {
 
 future<> storage_service::merge_topology_snapshot(raft_topology_snapshot snp) {
    std::vector<mutation> muts;
-   muts.reserve(snp.topology_mutations.size() + (snp.cdc_generation_mutations.size()));
+   muts.reserve(snp.topology_mutations.size() + snp.cdc_generation_mutations.size() + snp.topology_requests_mutations.size());
    {
        auto s = _db.local().find_schema(db::system_keyspace::NAME, db::system_keyspace::TOPOLOGY);
        boost::transform(snp.topology_mutations, std::back_inserter(muts), [s] (const canonical_mutation& m) {
@@ -637,6 +637,12 @@ future<> storage_service::merge_topology_snapshot(raft_topology_snapshot snp) {
    if (snp.cdc_generation_mutations.size() > 0) {
        auto s = _db.local().find_schema(db::system_keyspace::NAME, db::system_keyspace::CDC_GENERATIONS_V3);
        boost::transform(snp.cdc_generation_mutations, std::back_inserter(muts), [s] (const canonical_mutation& m) {
+           return m.to_mutation(s);
+       });
+   }
+   if (snp.topology_requests_mutations.size()) {
+       auto s = _db.local().find_schema(db::system_keyspace::NAME, db::system_keyspace::TOPOLOGY_REQUESTS);
+       boost::transform(snp.topology_requests_mutations, std::back_inserter(muts), [s] (const canonical_mutation& m) {
            return m.to_mutation(s);
        });
    }
@@ -7897,9 +7903,25 @@ void storage_service::init_messaging_service(bool raft_topology_change_enabled) 
                     });
                 }
 
+                std::vector<canonical_mutation> topology_requests_mutations;
+                {
+                    // FIXME: make it an rwlock, here we only need to lock for reads,
+                    // might be useful if multiple nodes are trying to pull concurrently.
+                    auto read_apply_mutex_holder = co_await ss._group0->client().hold_read_apply_mutex();
+                    auto rs = co_await db::system_keyspace::query_mutations(
+                        ss._db, db::system_keyspace::NAME, db::system_keyspace::TOPOLOGY_REQUESTS);
+                    auto s = ss._db.local().find_schema(db::system_keyspace::NAME, db::system_keyspace::TOPOLOGY_REQUESTS);
+                    topology_requests_mutations.reserve(rs->partitions().size());
+                    boost::range::transform(
+                            rs->partitions(), std::back_inserter(topology_requests_mutations), [s] (const partition& p) {
+                        return canonical_mutation{p.mut().unfreeze(s)};
+                    });
+                }
+
                 co_return raft_topology_snapshot{
                     .topology_mutations = std::move(topology_mutations),
                     .cdc_generation_mutations = std::move(cdc_generation_mutations),
+                    .topology_requests_mutations = std::move(topology_requests_mutations),
                 };
             });
         });

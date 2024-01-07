@@ -187,6 +187,9 @@ struct raft_topology_snapshot {
 
     // Mutations for system.cdc_generations_v3, contains all the CDC generation data.
     std::vector<canonical_mutation> cdc_generation_mutations;
+
+    // Mutations for system.topology_requests table
+    std::vector<canonical_mutation> topology_requests_mutations;
 };
 
 struct raft_topology_pull_params {
