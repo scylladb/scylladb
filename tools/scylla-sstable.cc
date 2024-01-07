@@ -13,6 +13,7 @@
 #include <source_location>
 #include <fmt/chrono.h>
 #include <seastar/core/coroutine.hh>
+#include <seastar/core/queue.hh>
 #include <seastar/util/closeable.hh>
 
 #include "compaction/compaction.hh"

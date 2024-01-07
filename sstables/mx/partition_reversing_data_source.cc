@@ -15,7 +15,7 @@
 #include "sstables/shared_sstable.hh"
 #include "sstables/sstables.hh"
 #include "sstables/types.hh"
-#include "vint-serialization.hh"
+#include "utils/buffer_input_stream.hh"
 
 namespace sstables {
 

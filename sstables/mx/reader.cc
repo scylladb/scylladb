@@ -11,6 +11,7 @@
 #include "mutation/mutation_fragment_stream_validator.hh"
 #include "sstables/liveness_info.hh"
 #include "sstables/mutation_fragment_filter.hh"
+#include "sstables/m_format_read_helpers.hh"
 #include "sstables/sstable_mutation_reader.hh"
 #include "sstables/processing_result_generator.hh"
 

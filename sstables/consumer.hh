@@ -11,7 +11,6 @@
 #include "vint-serialization.hh"
 #include <seastar/core/future.hh>
 #include <seastar/core/iostream.hh>
-#include "sstables/exceptions.hh"
 #include "sstables/progress_monitor.hh"
 #include <seastar/core/byteorder.hh>
 #include <seastar/util/variant_utils.hh>
@@ -19,7 +18,6 @@
 #include "bytes.hh"
 #include "reader_permit.hh"
 #include "utils/fragmented_temporary_buffer.hh"
-#include "utils/overloaded_functor.hh"
 #include "utils/small_vector.hh"
 
 #include <variant>

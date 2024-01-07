@@ -9,7 +9,6 @@
 #include "log.hh"
 #include <concepts>
 #include <vector>
-#include <typeinfo>
 #include <limits>
 #include <seastar/core/future.hh>
 #include <seastar/core/future-util.hh>
@@ -44,9 +43,7 @@
 #include "metadata_collector.hh"
 #include "progress_monitor.hh"
 #include "compress.hh"
-#include "unimplemented.hh"
 #include "index_reader.hh"
-#include "replica/memtable.hh"
 #include "downsampling.hh"
 #include <boost/algorithm/string.hpp>
 #include <boost/range/adaptor/map.hpp>
@@ -56,15 +53,13 @@
 #include <boost/regex.hpp>
 #include <seastar/core/align.hh>
 #include "mutation/range_tombstone_list.hh"
-#include "counters.hh"
 #include "binary_search.hh"
 #include "utils/bloom_filter.hh"
 #include "utils/cached_file.hh"
 #include "utils/stall_free.hh"
 #include "checked-file-impl.hh"
 #include "db/extensions.hh"
-#include "unimplemented.hh"
-#include "vint-serialization.hh"
+#include "sstables/partition_index_cache.hh"
 #include "db/large_data_handler.hh"
 #include "db/config.hh"
 #include "sstables/random_access_reader.hh"
@@ -79,6 +74,7 @@
 #include "utils/cached_file.hh"
 #include "tombstone_gc.hh"
 #include "reader_concurrency_semaphore.hh"
+#include "readers/mutation_source.hh"
 #include "readers/reversing_v2.hh"
 #include "readers/forwardable_v2.hh"
 

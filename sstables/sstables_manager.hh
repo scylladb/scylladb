@@ -18,7 +18,6 @@
 #include "sstables/shareable_components.hh"
 #include "sstables/shared_sstable.hh"
 #include "sstables/version.hh"
-#include "sstables/component_type.hh"
 #include "db/cache_tracker.hh"
 #include "locator/host_id.hh"
 #include "reader_concurrency_semaphore.hh"

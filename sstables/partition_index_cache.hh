@@ -9,13 +9,10 @@
 #pragma once
 
 #include "index_entry.hh"
-#include <vector>
 #include <seastar/core/future.hh>
 #include <seastar/core/loop.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
-#include "utils/loading_shared_values.hh"
-#include "utils/chunked_vector.hh"
 #include "utils/bptree.hh"
 #include "utils/lru.hh"
 #include "utils/lsa/weak_ptr.hh"

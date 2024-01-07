@@ -15,7 +15,6 @@
 #include <boost/variant/get.hpp>
 #include <unordered_map>
 #include <type_traits>
-#include <deque>
 #include "mutation/atomic_cell.hh"
 
 namespace sstables {

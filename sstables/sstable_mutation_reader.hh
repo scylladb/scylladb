@@ -5,19 +5,12 @@
 /*
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
-#include "mutation/mutation.hh"
 #include <seastar/core/future-util.hh>
 #include <seastar/core/coroutine.hh>
-#include "key.hh"
 #include "keys.hh"
 #include <seastar/core/do_with.hh>
-#include "unimplemented.hh"
 #include <seastar/core/byteorder.hh>
 #include "index_reader.hh"
-#include "counters.hh"
-#include "utils/data_input.hh"
-#include "clustering_ranges_walker.hh"
-#include "binary_search.hh"
 #include "sstables/mx/partition_reversing_data_source.hh"
 
 namespace sstables {

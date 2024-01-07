@@ -10,10 +10,9 @@
 #include "sstables.hh"
 #include "consumer.hh"
 #include "downsampling.hh"
+#include "exceptions.hh"
 #include "sstables/partition_index_cache.hh"
 #include <seastar/util/bool_class.hh>
-#include "utils/buffer_input_stream.hh"
-#include "sstables/prepended_input_stream.hh"
 #include "tracing/traced_file.hh"
 #include "sstables/scanning_clustered_index_cursor.hh"
 #include "sstables/mx/bsearch_clustered_cursor.hh"

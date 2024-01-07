@@ -10,12 +10,9 @@
 
 #pragma once
 
-#include <list>
-#include <map>
 #include <vector>
 #include <array>
 #include <algorithm>
-#include <iterator>
 #include <cassert>
 
 namespace sstables {

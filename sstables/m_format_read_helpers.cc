@@ -7,10 +7,10 @@
  */
 
 #include "vint-serialization.hh"
-#include "sstables/types.hh"
 #include "sstables/m_format_read_helpers.hh"
 #include "sstables/exceptions.hh"
 #include "sstables/random_access_reader.hh"
+#include "sstables/mx/types.hh"
 
 namespace sstables {
 
