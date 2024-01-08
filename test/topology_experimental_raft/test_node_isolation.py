@@ -44,8 +44,6 @@ async def test_banned_node_cannot_communicate(manager: ManagerClient) -> None:
     # that we solved the harder problem of safely removing nodes which didn't shut down.
     logger.info(f"Pausing server {srvs[2]}")
     await manager.server_pause(srvs[2].server_id)
-    logger.info(f"Waiting until server {srvs[0]} marks {srvs[2]} as dead")
-    await manager.server_not_sees_other_server(srvs[0].ip_addr, srvs[2].ip_addr)
     logger.info(f"Removing {srvs[2]} using {srvs[0]}")
     await manager.remove_node(srvs[0].server_id, srvs[2].server_id)
     # Perform a read barrier on srvs[1] so it learns about the ban.

@@ -82,8 +82,6 @@ async def test_remove_garbage_group0_members(manager: ManagerClient):
     logging.info(f'stop {servers[1]}')
     await manager.server_stop_gracefully(servers[1].server_id)
 
-    logging.debug(f'waiting for {servers[2]} to see {servers[1]} is down')
-    await manager.server_not_sees_other_server(servers[2].ip_addr, servers[1].ip_addr)
     logging.info(f'removenode {servers[1]} using {servers[2]}')
     await manager.remove_node(servers[2].server_id, servers[1].server_id)
 

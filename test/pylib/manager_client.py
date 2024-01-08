@@ -292,9 +292,20 @@ class ManagerClient():
 
     async def remove_node(self, initiator_id: ServerNum, server_id: ServerNum,
                           ignore_dead: List[IPAddress] | List[HostID] = list[IPAddress](),
-                          expected_error: str | None = None) -> None:
+                          expected_error: str | None = None,
+                          wait_removed_dead: bool = True) -> None:
         """Invoke remove node Scylla REST API for a specified server"""
         logger.debug("ManagerClient remove node %s on initiator %s", server_id, initiator_id)
+
+        # If we remove a node, we should wait until other nodes see it as dead
+        # because the removenode operation can be rejected if the node being
+        # removed is considered alive. However, we sometimes do not want to
+        # wait, for example, when we test that removenode fails as expected.
+        # Therefore, we make waiting optional and default.
+        if wait_removed_dead:
+            removed_ip = await self.get_host_ip(server_id)
+            await self.others_not_see_server(removed_ip)
+
         data = {"server_id": server_id, "ignore_dead": ignore_dead, "expected_error": expected_error}
         await self.client.put_json(f"/cluster/remove-node/{initiator_id}", data,
                                    timeout=ScyllaServer.TOPOLOGY_TIMEOUT)
@@ -354,14 +365,6 @@ class ManagerClient():
             return True if any(entry for entry in host_id_map if entry['value'] == expect_host_id) else None
 
         return await wait_for(host_is_known, deadline or (time() + 30))
-
-    async def wait_for_host_down(self, dst_server_ip: IPAddress, server_ip: IPAddress, deadline: Optional[float] = None) -> None:
-        """Waits for dst_server_id to consider server_id as down, with timeout"""
-        async def host_is_down():
-            down_endpoints = await self.api.get_down_endpoints(dst_server_ip)
-            return True if server_ip in down_endpoints else None
-
-        return await wait_for(host_is_down, deadline or (time() + 30))
 
     async def get_host_ip(self, server_id: ServerNum) -> IPAddress:
         """Get host IP Address"""
