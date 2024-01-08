@@ -186,20 +186,33 @@ void stream_manager::init_messaging_service_handler(abort_source& as) {
                     }
                 });
             };
+          using received_partitions_t = std::pair<uint64_t, std::unique_ptr<dht::auto_refreshing_sharder>>;
           auto sink = _ms.local().make_sink_for_stream_mutation_fragments(source);
           try {
-            // Make sure the table with cf_id is still present at this point.
-            // Close the sink in case the table is dropped.
+           auto distribute = [this, cf_id, s] (flat_mutation_reader_v2 producer,
+                std::function<future<> (flat_mutation_reader_v2)> consumer) -> future<received_partitions_t> {
+            try {
             auto& table = _db.local().find_column_family(cf_id);
             auto op = table.stream_in_progress();
             auto sharder_ptr = std::make_unique<dht::auto_refreshing_sharder>(table.shared_from_this());
             auto& sharder = *sharder_ptr;
-            //FIXME: discarded future.
-            (void)mutation_writer::distribute_reader_and_consume_on_shards(s, sharder,
-                make_generating_reader_v1(s, permit, std::move(get_next_mutation_fragment)),
-                make_streaming_consumer("streaming", _db, _sys_dist_ks, _view_update_generator, estimated_partitions, reason, is_offstrategy_supported(reason), topo_guard),
+            uint64_t received_partitions = co_await mutation_writer::distribute_reader_and_consume_on_shards(s, sharder,
+                std::move(producer),
+                std::move(consumer),
                 std::move(op)
-            ).then_wrapped([s, plan_id, from, sink, estimated_partitions, log_done, sh_ptr = std::move(sharder_ptr)] (future<uint64_t> f) mutable {
+            );
+            // Keep sharder_ptr alive in "then_wrapped".
+            co_return std::make_pair(std::move(received_partitions), std::move(sharder_ptr));
+            } catch (data_dictionary::no_such_column_family) {
+                co_return coroutine::return_exception_ptr(std::current_exception());
+            }
+          };
+
+            //FIXME: discarded future.
+            (void)distribute(
+                make_generating_reader_v1(s, permit, std::move(get_next_mutation_fragment)),
+                make_streaming_consumer("streaming", _db, _sys_dist_ks, _view_update_generator, estimated_partitions, reason, is_offstrategy_supported(reason), topo_guard)
+            ).then_wrapped([s, plan_id, from, sink, estimated_partitions, log_done] (future<std::pair<uint64_t, std::unique_ptr<dht::auto_refreshing_sharder>>> f) mutable {
                 int32_t status = 0;
                 uint64_t received_partitions = 0;
                 if (f.failed()) {
@@ -217,7 +230,7 @@ void stream_manager::init_messaging_service_handler(abort_source& as) {
                     sslog.log(level, "[Stream #{}] Failed to handle STREAM_MUTATION_FRAGMENTS (receive and distribute phase) for ks={}, cf={}, peer={}: {}",
                             plan_id, s->ks_name(), s->cf_name(), from.addr, ex);
                 } else {
-                    received_partitions = f.get0();
+                    received_partitions = f.get0().first;
                 }
                 if (received_partitions) {
                     sslog.info("[Stream #{}] Write to sstable for ks={}, cf={}, estimated_partitions={}, received_partitions={}",
