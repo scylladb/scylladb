@@ -132,7 +132,6 @@ future<> send_mutation_fragments(lw_shared_ptr<send_info> si) {
                         if (status == -1) {
                             *got_error_from_peer = true;
                         } else if (status == -2) {
-                            *got_error_from_peer = true;
                             *table_is_dropped = true;
                         }
                         sslog.debug("Got status code from peer={}, plan_id={}, cf_id={}, status={}", si->id.addr, si->plan_id, si->cf_id, status);
@@ -148,12 +147,12 @@ future<> send_mutation_fragments(lw_shared_ptr<send_info> si) {
             });
         }();
 
-        auto sink_op = [sink, si, got_error_from_peer] () mutable -> future<> {
+        auto sink_op = [sink, si, got_error_from_peer, table_is_dropped] () mutable -> future<> {
             mutation_fragment_stream_validator validator(*(si->reader.schema()));
-            return do_with(std::move(sink), std::move(validator), [si, got_error_from_peer] (rpc::sink<frozen_mutation_fragment, stream_mutation_fragments_cmd>& sink, mutation_fragment_stream_validator& validator) {
-                return repeat([&sink, &validator, si, got_error_from_peer] () mutable {
-                    return si->reader().then([&sink, &validator, si, s = si->reader.schema(), got_error_from_peer] (mutation_fragment_opt mf) mutable {
-                        if (*got_error_from_peer) {
+            return do_with(std::move(sink), std::move(validator), [si, got_error_from_peer, table_is_dropped] (rpc::sink<frozen_mutation_fragment, stream_mutation_fragments_cmd>& sink, mutation_fragment_stream_validator& validator) {
+                return repeat([&sink, &validator, si, got_error_from_peer, table_is_dropped] () mutable {
+                    return si->reader().then([&sink, &validator, si, s = si->reader.schema(), got_error_from_peer, table_is_dropped] (mutation_fragment_opt mf) mutable {
+                        if (*got_error_from_peer || *table_is_dropped) {
                             return make_exception_future<stop_iteration>(std::runtime_error("Got status error code from peer"));
                         }
                         if (mf) {
@@ -175,11 +174,14 @@ future<> send_mutation_fragments(lw_shared_ptr<send_info> si) {
                     });
                 }).then([&sink] () mutable {
                     return sink(frozen_mutation_fragment(bytes_ostream()), stream_mutation_fragments_cmd::end_of_stream);
-                }).handle_exception([&sink] (std::exception_ptr ep) mutable {
+                }).handle_exception([&sink, got_error_from_peer] (std::exception_ptr ep) mutable {
                     // Notify the receiver the sender has failed
+                    if (*got_error_from_peer) {
                     return sink(frozen_mutation_fragment(bytes_ostream()), stream_mutation_fragments_cmd::error).then([ep = std::move(ep)] () mutable {
                         return make_exception_future<>(std::move(ep));
                     });
+                    }
+                    return make_ready_future();
                 }).finally([&sink] () mutable {
                     return sink.close();
                 });
@@ -187,13 +189,11 @@ future<> send_mutation_fragments(lw_shared_ptr<send_info> si) {
         }();
 
         return when_all_succeed(std::move(source_op), std::move(sink_op)).then_unpack([got_error_from_peer, table_is_dropped, si] {
-            if (*got_error_from_peer) {
                 if (*table_is_dropped) {
                      sslog.info("[Stream #{}] Skipped streaming the dropped table {}.{}", si->plan_id, si->cf->schema()->ks_name(), si->cf->schema()->cf_name());
-                } else {
+                } else if (*got_error_from_peer) {
                     throw std::runtime_error(format("Peer failed to process mutation_fragment peer={}, plan_id={}, cf_id={}", si->id.addr, si->plan_id, si->cf_id));
                 }
-            }
         });
     });
   });
