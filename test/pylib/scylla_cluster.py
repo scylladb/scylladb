@@ -535,7 +535,7 @@ class ScyllaServer:
         except ProcessLookupError:
             pass
         else:
-            STOP_TIMEOUT_SECONDS = 60
+            STOP_TIMEOUT_SECONDS = 120
             wait_task = self.cmd.wait()
             try:
                 await asyncio.wait_for(wait_task, timeout=STOP_TIMEOUT_SECONDS)
