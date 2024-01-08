@@ -8,7 +8,6 @@
 
 #pragma once
 
-#include <stdexcept>
 #include <seastar/core/sstring.hh>
 
 #include "seastarx.hh"

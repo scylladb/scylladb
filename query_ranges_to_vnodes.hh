@@ -9,9 +9,7 @@
 #pragma once
 
 #include "dht/i_partitioner_fwd.hh"
-#include "locator/token_metadata.hh"
 #include "locator/token_range_splitter.hh"
-#include "schema/schema.hh"
 
 class query_ranges_to_vnodes_generator {
     schema_ptr _s;

@@ -10,7 +10,6 @@
 
 #include "schema/schema_fwd.hh"
 #include "query-request.hh"
-#include "partition_slice_builder.hh"
 #include "mutation/mutation_fragment.hh"
 #include "mutation/partition_version.hh"
 #include "tracing/tracing.hh"
