@@ -948,6 +948,17 @@ class TopologyTest(PythonTest):
 
     def __init__(self, test_no: int, shortname: str, suite) -> None:
         super().__init__(test_no, shortname, suite)
+        self.server_log_filenames: list[pathlib.Path] = []
+
+    def print_summary(self) -> None:
+        print("Output of {} {}:".format(self.path, " ".join(self.args)))
+        print(read_log(self.log_filename))
+        for index, log_filename in enumerate(self.server_log_filenames):
+            print(f"Server log of the server.{index + 1}: {log_filename}")
+
+    def _reset(self) -> None:
+        PythonTest._reset()
+        self.server_log_filenames = []
 
     async def run(self, options: argparse.Namespace) -> Test:
 
@@ -964,12 +975,14 @@ class TopologyTest(PythonTest):
                 self.success = await run_test(self, options)
             except Exception as e:
                 self.server_log = next(manager.cluster.read_server_log())
-                self.server_log_filename = next(manager.cluster.server_log_filename())
+                self.server_log_filenames = list(manager.cluster.server_log_filename())
                 if manager.is_before_test_ok is False:
                     print("Test {} pre-check failed: {}".format(self.name, str(e)))
                     print("Server log of the first server:\n{}".format(self.server_log))
                     # Don't try to continue if the cluster is broken
                     raise
+            if not self.success:
+                self.server_log_filenames = list(manager.cluster.server_log_filename())
             manager.logger.info("Test %s %s", self.uname, "succeeded" if self.success else "failed ")
         return self
 
