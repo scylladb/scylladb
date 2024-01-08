@@ -53,6 +53,7 @@ class ManagerClient():
     async def stop(self):
         """Close driver"""
         self.driver_close()
+        await self.client.shutdown()
 
     async def driver_connect(self, server: Optional[ServerInfo] = None) -> None:
         """Connect to cluster"""
