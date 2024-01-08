@@ -7,7 +7,6 @@
  */
 
 #include "init.hh"
-#include "utils/to_string.hh"
 #include "gms/inet_address.hh"
 #include "seastarx.hh"
 #include "db/config.hh"

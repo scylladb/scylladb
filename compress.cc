@@ -11,6 +11,7 @@
 #include <snappy-c.h>
 
 #include "compress.hh"
+#include "exceptions/exceptions.hh"
 #include "utils/class_registrator.hh"
 
 const sstring compressor::namespace_prefix = "org.apache.cassandra.io.compress.";

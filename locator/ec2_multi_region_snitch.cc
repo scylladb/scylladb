@@ -9,6 +9,7 @@
  */
 
 #include "locator/ec2_multi_region_snitch.hh"
+#include "exceptions/exceptions.hh"
 #include "gms/gossiper.hh"
 
 static constexpr const char* PUBLIC_IP_QUERY_REQ  = "/latest/meta-data/public-ipv4";

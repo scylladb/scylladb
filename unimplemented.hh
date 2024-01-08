@@ -8,7 +8,6 @@
 
 #pragma once
 
-#include <iosfwd>
 #include <seastar/core/print.hh>
 #include <seastar/core/sstring.hh>
 #include <seastar/core/enum.hh>

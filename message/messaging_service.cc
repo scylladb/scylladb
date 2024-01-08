@@ -18,8 +18,6 @@
 #include "gms/gossip_digest_syn.hh"
 #include "gms/gossip_digest_ack.hh"
 #include "gms/gossip_digest_ack2.hh"
-#include "locator/tablets.hh"
-#include "query-request.hh"
 #include "query-result.hh"
 #include <seastar/rpc/rpc.hh>
 #include "mutation/canonical_mutation.hh"

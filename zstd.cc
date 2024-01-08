@@ -14,6 +14,7 @@
 #include "zstd.h"
 
 #include "compress.hh"
+#include "exceptions/exceptions.hh"
 #include "utils/class_registrator.hh"
 #include "utils/reusable_buffer.hh"
 #include <concepts>
