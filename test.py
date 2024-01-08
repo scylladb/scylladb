@@ -787,8 +787,8 @@ Check test log at {}.""".format(self.log_filename))
                 # 1) failed pre-check, e.g. start failure
                 # 2) failed test execution.
                 if self.is_executed_ok is False:
-                    self.server_log = cluster.read_server_log()
-                    self.server_log_filename = cluster.server_log_filename()
+                    self.server_log = next(cluster.read_server_log())
+                    self.server_log_filename = next(cluster.server_log_filename())
                     if self.is_before_test_ok is False:
                         set_summary("pre-check failed: {}".format(e))
                         print("Test {} {}".format(self.name, self.summary))
@@ -921,8 +921,8 @@ class PythonTest(Test):
             self.is_after_test_ok = True
             self.success = status
         except Exception as e:
-            self.server_log = cluster.read_server_log()
-            self.server_log_filename = cluster.server_log_filename()
+            self.server_log = next(cluster.read_server_log())
+            self.server_log_filename = next(cluster.server_log_filename())
             if self.is_before_test_ok is False:
                 print("Test {} pre-check failed: {}".format(self.name, str(e)))
                 print("Server log of the first server:\n{}".format(self.server_log))
@@ -963,8 +963,8 @@ class TopologyTest(PythonTest):
                 await manager.start()
                 self.success = await run_test(self, options)
             except Exception as e:
-                self.server_log = manager.cluster.read_server_log()
-                self.server_log_filename = manager.cluster.server_log_filename()
+                self.server_log = next(manager.cluster.read_server_log())
+                self.server_log_filename = next(manager.cluster.server_log_filename())
                 if manager.is_before_test_ok is False:
                     print("Test {} pre-check failed: {}".format(self.name, str(e)))
                     print("Server log of the first server:\n{}".format(self.server_log))

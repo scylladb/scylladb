@@ -18,7 +18,7 @@ import shutil
 import tempfile
 import time
 import traceback
-from typing import Any, Optional, Dict, List, Set, Tuple, Callable, AsyncIterator, NamedTuple, Union
+from typing import Any, Optional, Dict, List, Set, Tuple, Callable, AsyncIterator, Iterator, NamedTuple, Union
 import uuid
 from enum import Enum
 from io import BufferedWriter
@@ -809,21 +809,15 @@ class ScyllaCluster:
         for server in self.running.values():
             server.take_log_savepoint()
 
-    def read_server_log(self) -> str:
+    def read_server_log(self) -> Iterator[str]:
         """Read log data of failed server"""
-        # FIXME: pick failed server
-        if self.running:
-            return next(iter(self.running.values())).read_log()
-        else:
-            return ""
+        for server in self.running.values():
+            yield server.read_log()
 
-    def server_log_filename(self) -> Optional[pathlib.Path]:
+    def server_log_filename(self) -> Iterator[pathlib.Path]:
         """The log file name of the failed server"""
-        # FIXME: pick failed server
-        if self.running:
-            return next(server for server in self.running.values()).log_filename
-        else:
-            return None
+        for server in self.running.values():
+            yield server.log_filename
 
     def __str__(self):
         running = ", ".join(str(server) for server in self.running.values())
