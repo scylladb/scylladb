@@ -122,6 +122,9 @@ class UnixRESTClient(RESTClient):
         self.default_host: str = f"{os.path.basename(sock_path)}"
         self.connector = UnixConnector(path=sock_path)
 
+    async def shutdown(self):
+        await self.connector.close()
+
 
 class TCPRESTClient(RESTClient):
     """An async helper for REST API operations"""
