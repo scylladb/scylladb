@@ -91,7 +91,7 @@ future<> space_watchdog::stop() noexcept {
 }
 
 // Called under the end_point_hints_manager::file_update_mutex() of the corresponding end_point_hints_manager instance.
-future<> space_watchdog::scan_one_ep_dir(fs::path path, manager& shard_manager, ep_key_type ep_key) {
+future<> space_watchdog::scan_one_ep_dir(fs::path path, manager& shard_manager, endpoint_id ep_key) {
     return do_with(std::move(path), [this, ep_key, &shard_manager] (fs::path& path) {
         // It may happen that we get here and the directory has already been deleted in the context of manager::drain_for().
         // In this case simply bail out.
@@ -146,14 +146,14 @@ void space_watchdog::on_timer() {
                 // not hintable).
                 // If exists - let's take a file update lock so that files are not changed under our feet. Otherwise, simply
                 // continue to enumeration - there is no one to change them.
-                const internal::endpoint_id ep{de.name};
+                const internal::endpoint_id ep{utils::UUID{de.name}};
 
                 if (shard_manager.have_ep_manager(ep)) {
-                    return shard_manager.with_file_update_mutex_for(ep, [this, &shard_manager, dir = std::move(dir), ep_name = std::move(de.name)] () mutable {
-                        return scan_one_ep_dir(dir / ep_name, shard_manager, ep_key_type(ep_name));
+                    return shard_manager.with_file_update_mutex_for(ep, [this, ep, &shard_manager, dir = std::move(dir), ep_name = std::move(de.name)] () mutable {
+                        return scan_one_ep_dir(dir / ep_name, shard_manager, ep);
                     });
                 } else {
-                    return scan_one_ep_dir(dir / de.name, shard_manager, ep_key_type(de.name));
+                    return scan_one_ep_dir(dir / de.name, shard_manager, ep);
                 }
             }).get();
         }

@@ -80,9 +80,17 @@ future<> hint_sender::do_send_one_mutation(frozen_mutation_and_schema m, locator
     return futurize_invoke([this, m = std::move(m), ermp = std::move(ermp), &natural_endpoints] () mutable -> future<> {
         // The fact that we send with CL::ALL in both cases below ensures that new hints are not going
         // to be generated as a result of hints sending.
-        if (boost::range::find(natural_endpoints, end_point_key()) != natural_endpoints.end()) {
+        const auto maybe_addr = [&] () -> std::optional<gms::inet_address> {
+            const auto& tm = ermp->get_token_metadata();
+            if (auto maybe_ep = tm.get_endpoint_for_host_id_if_known(end_point_key())) {
+                return *maybe_ep;
+            }
+            return {};
+        } ();
+
+        if (maybe_addr && boost::range::find(natural_endpoints, *maybe_addr) != natural_endpoints.end()) {
             manager_logger.trace("Sending directly to {}", end_point_key());
-            return _proxy.send_hint_to_endpoint(std::move(m), std::move(ermp), end_point_key());
+            return _proxy.send_hint_to_endpoint(std::move(m), std::move(ermp), *maybe_addr);
         } else {
             manager_logger.trace("Endpoints set has changed and {} is no longer a replica. Mutating from scratch...", end_point_key());
             return _proxy.send_hint_to_all_replicas(std::move(m));
@@ -95,17 +103,27 @@ bool hint_sender::can_send() noexcept {
         return false;
     }
 
+    const auto tmptr = _shard_manager._proxy.get_token_metadata_ptr();
+    // A host ID cannot change. Hint senders can only be created towards other nodes,
+    // so it's impossible that _ep_key points to the local node.
+    // That's why we don't need to check `tmptr->get_topology().is_me(_ep_key)`.
+    const auto maybe_ep = tmptr->get_endpoint_for_host_id_if_known(_ep_key);
+    
     try {
-        if (_gossiper.is_alive(end_point_key())) {
+        // `hint_sender` can never target this node, so if the returned optional is empty,
+        // that must mean the current locator::token_metadata doesn't store the information
+        // about the target node.
+        if (maybe_ep && _gossiper.is_alive(*maybe_ep)) {
             _state.remove(state::ep_state_left_the_ring);
             return true;
         } else {
             if (!_state.contains(state::ep_state_left_the_ring)) {
-                const auto& tm = _shard_manager.local_db().get_token_metadata();
-                const auto host_id = tm.get_host_id_if_known(end_point_key());
-                _state.set_if<state::ep_state_left_the_ring>(!host_id || !tm.is_normal_token_owner(*host_id));
+                _state.set_if<state::ep_state_left_the_ring>(!tmptr->is_normal_token_owner(_ep_key));
             }
-            // send the hints out if the destination Node is part of the ring - we will send to all new replicas in this case
+            // If the node is not part of the ring, we will send hints to all new replicas.
+            // Note that if the optional -- `maybe_ep` -- is empty, that could mean that `_ep_key`
+            // is the locator::host_id of THIS node. However, that's impossible because instances
+            // of `hint_sender` are only created for OTHER nodes, so this logic is correct.
             return _state.contains(state::ep_state_left_the_ring);
         }
     } catch (...) {

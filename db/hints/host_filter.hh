@@ -15,6 +15,7 @@
 
 #include <seastar/core/sstring.hh>
 #include "seastarx.hh"
+#include "db/hints/internal/common.hh"
 
 namespace gms {
     class inet_address;
@@ -28,6 +29,8 @@ namespace hints {
 // host_filter tells hints_manager towards which endpoints it is allowed to generate hints.
 class host_filter final {
 private:
+    using endpoint_id = internal::endpoint_id;
+    
     enum class enabled_kind {
         enabled_for_all,
         enabled_selectively,
@@ -58,7 +61,7 @@ public:
     // Parses hint filtering configuration from a list of DCs.
     static host_filter parse_from_dc_list(sstring opt);
 
-    bool can_hint_for(const locator::topology& topo, gms::inet_address ep) const;
+    bool can_hint_for(const locator::topology& topo, endpoint_id ep) const;
 
     inline const std::unordered_set<sstring>& get_dcs() const {
         return _dcs;

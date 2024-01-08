@@ -70,13 +70,13 @@ public:
         }
 
         const auto units = co_await seastar::get_units(_lock, 1);
-        
+
         utils::directories::set dir_set;
         dir_set.add_sharded(_hints_directory);
-        
+
         manager_logger.debug("Creating and validating hint directories: {}", _hints_directory);
         co_await _dirs.create_and_verify(std::move(dir_set));
-        
+
         _state = state::created_and_validated;
     }
 
@@ -90,7 +90,7 @@ public:
         }
 
         const auto units = co_await seastar::get_units(_lock, 1);
-        
+
         manager_logger.debug("Rebalancing hints in {}", _hints_directory);
         co_await rebalance_hints(fs::path{_hints_directory});
 
@@ -169,7 +169,7 @@ void manager::register_metrics(const sstring& group_name) {
         sm::make_counter("corrupted_files", _stats.corrupted_files,
                         sm::description("Number of hints files that were discarded during sending because the file was corrupted.")),
 
-        sm::make_gauge("pending_drains", 
+        sm::make_gauge("pending_drains",
                         sm::description("Number of tasks waiting in the queue for draining hints"),
                         [this] { return _drain_lock.waiters(); }),
 
@@ -185,7 +185,7 @@ future<> manager::start(shared_ptr<gms::gossiper> gossiper_ptr) {
 
     co_await lister::scan_dir(_hints_dir, lister::dir_entry_types::of<directory_entry_type::directory>(),
             [this] (fs::path datadir, directory_entry de) {
-        endpoint_id ep = endpoint_id{de.name};
+        endpoint_id ep = endpoint_id{utils::UUID{de.name}};
 
         if (!check_dc_for(ep)) {
             return make_ready_future<>();
@@ -193,7 +193,7 @@ future<> manager::start(shared_ptr<gms::gossiper> gossiper_ptr) {
 
         return get_ep_manager(ep).populate_segments_to_replay();
     });
-    
+
     co_await compute_hints_dir_device_id();
     set_started();
 }
@@ -237,7 +237,7 @@ void manager::forbid_hints() {
 
 void manager::forbid_hints_for_eps_with_pending_hints() {
     manager_logger.trace("space_watchdog: Going to block hints to: {}", _eps_with_pending_hints);
-    
+
     for (auto& [_, ep_man] : _ep_managers) {
         if (has_ep_with_pending_hints(ep_man.end_point_key())) {
             ep_man.forbid_hints();
@@ -247,14 +247,21 @@ void manager::forbid_hints_for_eps_with_pending_hints() {
     }
 }
 
-sync_point::shard_rps manager::calculate_current_sync_point(std::span<const endpoint_id> target_eps) const {
+sync_point::shard_rps manager::calculate_current_sync_point(std::span<const gms::inet_address> target_eps) const {
     sync_point::shard_rps rps;
+    const auto tmptr = _proxy.get_token_metadata_ptr();
 
     for (auto addr : target_eps) {
-        auto it = _ep_managers.find(addr);
+        const auto hid = tmptr->get_host_id_if_known(addr);
+        // Ignore the IPs that we cannot map.
+        if (!hid) {
+            continue;
+        }
+
+        auto it = _ep_managers.find(*hid);
         if (it != _ep_managers.end()) {
             const hint_endpoint_manager& ep_man = it->second;
-            rps[ep_man.end_point_key()] = ep_man.last_written_replay_position();
+            rps[addr] = ep_man.last_written_replay_position();
         }
     }
 
@@ -274,27 +281,39 @@ future<> manager::wait_for_sync_point(abort_source& as, const sync_point::shard_
         local_as.request_abort();
     }
 
+    const auto tmptr = _proxy.get_token_metadata_ptr();
+    std::unordered_map<endpoint_id, replay_position> hid_rps{};
+    hid_rps.reserve(rps.size());
+
+    for (const auto& [addr, rp] : rps) {
+        const auto maybe_hid = tmptr->get_host_id_if_known(addr);
+        // Ignore the IPs we cannot map.
+        if (maybe_hid) [[likely]] {
+            hid_rps.emplace(*maybe_hid, rp);
+        }
+    }
+
     bool was_aborted = false;
     co_await coroutine::parallel_for_each(_ep_managers,
-            coroutine::lambda([&rps, &local_as, &was_aborted] (auto& pair) -> future<> {
+            coroutine::lambda([&hid_rps, &local_as, &was_aborted] (auto& pair) -> future<> {
         auto& [ep, ep_man] = pair;
 
-        // When `rps` doesn't specify a replay position for a given endpoint, we use
+        // When `hid_rps` doesn't specify a replay position for a given endpoint, we use
         // its default value. Normally, it should be equal to returning a ready future here.
         // However, foreign segments (i.e. segments that were moved from another shard at start-up)
         // are treated differently from "regular" segments -- we can think of their replay positions
         // as equal to negative infinity or simply smaller from any other replay position, which
         // also includes the default value. Because of that, we don't have a choice -- we have to
-        // pass either rps[ep] or the default replay position to the endpoint manager because
+        // pass either hid_rps[ep] or the default replay position to the endpoint manager because
         // some hints MIGHT need to be sent.
         const replay_position rp = [&] {
-            auto it = rps.find(ep);
-            if (it == rps.end()) {
+            auto it = hid_rps.find(ep);
+            if (it == hid_rps.end()) {
                 return replay_position{};
             }
             return it->second;
         } ();
-        
+
         try {
             co_await ep_man.wait_until_hints_are_replayed_up_to(local_as, rp);
         } catch (abort_requested_exception&) {
@@ -316,7 +335,7 @@ hint_endpoint_manager& manager::get_ep_manager(endpoint_id ep) {
 
     if (emplaced) {
         manager_logger.trace("Created an endpoint manager for {}", ep);
-        ep_man.start();    
+        ep_man.start();
     }
 
     return ep_man;
@@ -352,10 +371,15 @@ bool manager::store_hint(endpoint_id ep, schema_ptr s, lw_shared_ptr<const froze
 bool manager::too_many_in_flight_hints_for(endpoint_id ep) const noexcept {
     // There is no need to check the DC here because if there is an in-flight hint for this
     // endpoint, then this means that its DC has already been checked and found to be ok.
-    return _stats.size_of_hints_in_progress > MAX_SIZE_OF_HINTS_IN_PROGRESS
+    if (!(_stats.size_of_hints_in_progress > MAX_SIZE_OF_HINTS_IN_PROGRESS
             && !_proxy.local_db().get_token_metadata().get_topology().is_me(ep)
-            && hints_in_progress_for(ep) > 0
-            && local_gossiper().get_endpoint_downtime(ep) <= _max_hint_window_us;
+            && hints_in_progress_for(ep) > 0)) {
+        return false;
+    }
+
+    return std::ranges::any_of(local_gossiper().get_nodes_with_host_id(ep), [this] (const auto& ip) {
+        return local_gossiper().get_endpoint_downtime(ip) <= _max_hint_window_us;
+    });
 }
 
 bool manager::can_hint_for(endpoint_id ep) const noexcept {
@@ -387,9 +411,13 @@ bool manager::can_hint_for(endpoint_id ep) const noexcept {
     }
 
     // Check if the endpoint has been down for too long.
-    const auto ep_downtime = local_gossiper().get_endpoint_downtime(ep);
-    if (ep_downtime > _max_hint_window_us) {
-        manager_logger.trace("{} has been down for {}, not hinting", ep, ep_downtime);
+    const auto addrs = local_gossiper().get_nodes_with_host_id(ep);
+    const bool node_is_alive = std::ranges::any_of(addrs, [this] (const auto& addr) {
+        return local_gossiper().get_endpoint_downtime(addr) <= _max_hint_window_us;
+    });
+
+    if (!node_is_alive) {
+        manager_logger.trace("{} has been down for too long, not hinting", ep);
         return false;
     }
 
@@ -422,7 +450,7 @@ future<> manager::change_host_filter(host_filter filter) {
         // for some of them
         co_await lister::scan_dir(_hints_dir, lister::dir_entry_types::of<directory_entry_type::directory>(),
                 [this] (fs::path datadir, directory_entry de) {
-            const endpoint_id ep = endpoint_id{de.name};
+            const endpoint_id ep = endpoint_id{utils::UUID{de.name}};
 
             const auto& topology = _proxy.get_token_metadata_ptr()->get_topology();
             if (_ep_managers.contains(ep) || !_host_filter.can_hint_for(topology, ep)) {
@@ -437,7 +465,7 @@ future<> manager::change_host_filter(host_filter filter) {
         _host_filter = std::move(filter);
         eptr = std::current_exception();
     }
-    
+
     try {
         // Remove endpoint managers which are rejected by the filter.
         co_await coroutine::parallel_for_each(_ep_managers, [this] (auto& pair) {
@@ -446,7 +474,7 @@ future<> manager::change_host_filter(host_filter filter) {
             if (_host_filter.can_hint_for(_proxy.get_token_metadata_ptr()->get_topology(), ep)) {
                 return make_ready_future<>();
             }
-            
+
             return ep_man.stop(drain::no).finally([this, ep] {
                 _ep_managers.erase(ep);
             });
@@ -494,7 +522,7 @@ future<> manager::drain_for(endpoint_id endpoint) noexcept {
 
     if (_proxy.local_db().get_token_metadata().get_topology().is_me(endpoint)) {
         set_draining_all();
-        
+
         try {
             co_await coroutine::parallel_for_each(_ep_managers | boost::adaptors::map_values,
                     [&drain_ep_manager] (hint_endpoint_manager& ep_man) {
@@ -507,7 +535,7 @@ future<> manager::drain_for(endpoint_id endpoint) noexcept {
         _ep_managers.clear();
     } else {
         auto it = _ep_managers.find(endpoint);
-        
+
         if (it != _ep_managers.end()) {
             try {
                 co_await drain_ep_manager(it->second);
