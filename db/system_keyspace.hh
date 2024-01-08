@@ -43,6 +43,7 @@ namespace paxos {
     class proposal;
 } // namespace service::paxos
 
+struct topology_request_state;
 }
 
 namespace netw {
@@ -519,6 +520,7 @@ public:
     future<bool> get_must_synchronize_topology();
     future<> set_must_synchronize_topology(bool);
 
+    future<service::topology_request_state> get_topology_request_state(utils::UUID id);
 private:
     static service::topology_features decode_topology_features_state(::shared_ptr<cql3::untyped_result_set> rs);
 

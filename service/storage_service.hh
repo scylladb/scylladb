@@ -810,6 +810,9 @@ private:
 
     future<> _sstable_cleanup_fiber = make_ready_future<>();
     future<> sstable_cleanup_fiber(raft::server& raft, sharded<service::storage_proxy>& proxy) noexcept;
+    // Waits for a topology request with a given ID to complete and return non empty error string
+    // if request completes with an error
+    future<sstring> wait_for_topology_request_completion(utils::UUID id, bool* stop_waiting = nullptr);
 
     // We need to be able to abort all group0 operation during shutdown, so we need special abort source for that
     abort_source _group0_as;

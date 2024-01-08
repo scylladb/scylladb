@@ -238,6 +238,11 @@ struct fencing_token {
     }
 };
 
+struct topology_request_state {
+    bool done;
+    sstring error;
+};
+
 std::ostream& operator<<(std::ostream& os, const fencing_token& fencing_token);
 std::ostream& operator<<(std::ostream& os, topology::transition_state s);
 topology::transition_state transition_state_from_string(const sstring& s);

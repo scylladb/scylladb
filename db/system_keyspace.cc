@@ -2872,6 +2872,23 @@ future<> system_keyspace::sstables_registry_list(sstring location, sstable_regis
     });
 }
 
+future<service::topology_request_state> system_keyspace::get_topology_request_state(utils::UUID id) {
+    auto rs = co_await execute_cql(
+        format("SELECT done, error FROM system.{} WHERE id = {}", TOPOLOGY_REQUESTS, id));
+    if (!rs || rs->empty()) {
+        on_internal_error(slogger, format("no entry for request id {}", id));
+    }
+
+    auto& row = rs->one();
+    sstring error;
+
+    if (row.has("error")) {
+        error = row.get_as<sstring>("error");
+    }
+
+    co_return service::topology_request_state{row.get_as<bool>("done"), std::move(error)};
+}
+
 sstring system_keyspace_name() {
     return system_keyspace::NAME;
 }
