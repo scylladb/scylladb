@@ -7,7 +7,6 @@
  */
 
 #include "query_ranges_to_vnodes.hh"
-#include "dht/i_partitioner.hh"
 
 static inline
 const dht::token& start_token(const dht::partition_range& r) {

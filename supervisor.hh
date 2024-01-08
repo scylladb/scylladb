@@ -10,9 +10,9 @@
 
 #include <seastar/core/sstring.hh>
 #include <seastar/core/print.hh>
+#include <seastar/util/log.hh>
 #include "seastarx.hh"
 #include <systemd/sd-daemon.h>
-#include "log.hh"
 
 extern logger startlog;
 

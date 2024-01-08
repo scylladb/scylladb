@@ -20,7 +20,6 @@
 #include "utils/histogram.hh"
 #include "mutation/partition_version.hh"
 #include <seastar/core/metrics_registration.hh>
-#include "mutation/mutation_cleaner.hh"
 #include "utils/double-decker.hh"
 #include "db/cache_tracker.hh"
 #include "readers/empty_v2.hh"

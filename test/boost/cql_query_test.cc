@@ -30,6 +30,7 @@
 #include "types/list.hh"
 #include "types/set.hh"
 #include "db/config.hh"
+#include "db/extensions.hh"
 #include "cql3/cql_config.hh"
 #include "test/lib/exception_utils.hh"
 #include "utils/rjson.hh"

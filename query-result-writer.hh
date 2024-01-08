@@ -9,12 +9,12 @@
 #pragma once
 
 #include "types/types.hh"
-#include "mutation/atomic_cell.hh"
 #include "query-request.hh"
 #include "query-result.hh"
 #include "utils/digest_algorithm.hh"
 #include "utils/digester.hh"
 #include "full_position.hh"
+#include "mutation/tombstone.hh"
 #include "idl/query.dist.hh"
 #include "idl/query.dist.impl.hh"
 

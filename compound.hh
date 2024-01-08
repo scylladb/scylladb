@@ -9,7 +9,6 @@
 #pragma once
 
 #include "types/types.hh"
-#include <iosfwd>
 #include <algorithm>
 #include <vector>
 #include <span>
