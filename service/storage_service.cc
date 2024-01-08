@@ -372,30 +372,20 @@ static locator::node::state to_topology_node_state(node_state ns) {
 // gossiper) to align it with the other raft topology nodes.
 future<> storage_service::sync_raft_topology_nodes(mutable_token_metadata_ptr tmptr, std::optional<locator::host_id> target_node) {
     const auto& am = _group0->address_map();
-    auto id2ip = [&] (raft::server_id id) -> future<gms::inet_address> {
-        auto ip = am.find(id);
-        while (!ip) {
-            static logger::rate_limit rate_limit{std::chrono::seconds(1)};
-            slogger.log(log_level::warn, rate_limit, "raft topology: cannot map {} to ip, retrying.", id);
-            // FIXME: https://github.com/scylladb/scylladb/issues/12279
-            // Loop until gossiper figures the address
-            // but the solution is to change token_metadata to work with server_ids instead of ips
-            co_await sleep_abortable(std::chrono::milliseconds(5), _abort_source);
-            ip = am.find(id);
-        }
-        co_return *ip;
-    };
 
-    auto update_topology = [&] (locator::host_id id, inet_address ip, const replica_state& rs) {
+    auto update_topology = [&] (locator::host_id id, std::optional<inet_address> ip, const replica_state& rs) {
         tmptr->update_topology(id, locator::endpoint_dc_rack{rs.datacenter, rs.rack},
                                to_topology_node_state(rs.state), rs.shard_count);
-        tmptr->update_host_id(id, ip);
+        if (ip) {
+            tmptr->update_host_id(id, *ip);
+        }
     };
 
     auto process_left_node = [&] (raft::server_id id) -> future<> {
-        auto ip = co_await id2ip(id);
-        if (_gossiper.get_live_members().contains(ip) || _gossiper.get_unreachable_members().contains(ip)) {
-            co_await remove_endpoint(ip, gms::null_permit_id);
+        auto ip = am.find(id);
+
+        if (ip && (_gossiper.get_live_members().contains(*ip) || _gossiper.get_unreachable_members().contains(*ip))) {
+            co_await remove_endpoint(*ip, gms::null_permit_id);
         }
 
         // FIXME: when removing a node from the cluster through `removenode`, we should ban it early,
@@ -408,28 +398,31 @@ future<> storage_service::sync_raft_topology_nodes(mutable_token_metadata_ptr tm
 
     auto process_normal_node = [&] (raft::server_id id, const replica_state& rs) -> future<> {
         locator::host_id host_id{id.uuid()};
-        auto ip = co_await id2ip(id);
+        auto ip = am.find(id);
 
         slogger.trace("raft topology: loading topology: raft id={} ip={} node state={} dc={} rack={} tokens state={} tokens={} shards={}",
                       id, ip, rs.state, rs.datacenter, rs.rack, _topology_state_machine._topology.tstate, rs.ring.value().tokens, rs.shard_count);
         // Save tokens, not needed for raft topology management, but needed by legacy
         // Also ip -> id mapping is needed for address map recreation on reboot
-        if (!is_me(ip)) {
+        if (is_me(host_id)) {
+            co_await _sys_ks.local().update_tokens(rs.ring.value().tokens);
+            co_await _gossiper.add_local_application_state({{ gms::application_state::STATUS, gms::versioned_value::normal(rs.ring.value().tokens) }});
+        } else if (ip && !is_me(*ip)) {
+            // In replace-with-same-ip scenario the replaced node IP will be the same
+            // as ours, we shouldn't put it into system.peers.
+
             // Some state that is used to fill in 'peeers' table is still propagated over gossiper.
             // Populate the table with the state from the gossiper here since storage_service::on_change()
             // (which is called each time gossiper state changes) may have skipped it because the tokens
             // for the node were not in the 'normal' state yet
-            auto info = get_peer_info_for_update(ip);
+            auto info = get_peer_info_for_update(*ip);
             // And then amend with the info from raft
             info.tokens = rs.ring.value().tokens;
             info.data_center = rs.datacenter;
             info.rack = rs.rack;
             info.host_id = id.uuid();
             info.release_version = rs.release_version;
-            co_await _sys_ks.local().update_peer_info(ip, info);
-        } else {
-            co_await _sys_ks.local().update_tokens(rs.ring.value().tokens);
-            co_await _gossiper.add_local_application_state({{ gms::application_state::STATUS, gms::versioned_value::normal(rs.ring.value().tokens) }});
+            co_await _sys_ks.local().update_peer_info(*ip, info);
         }
         update_topology(host_id, ip, rs);
         co_await tmptr->update_normal_tokens(rs.ring.value().tokens, host_id);
@@ -437,7 +430,7 @@ future<> storage_service::sync_raft_topology_nodes(mutable_token_metadata_ptr tm
 
     auto process_transition_node = [&](raft::server_id id, const replica_state& rs) -> future<> {
         locator::host_id host_id{id.uuid()};
-        auto ip = co_await id2ip(id);
+        auto ip = am.find(id);
 
         slogger.trace("raft topology: loading topology: raft id={} ip={} node state={} dc={} rack={} tokens state={} tokens={}",
                       id, ip, rs.state, rs.datacenter, rs.rack, _topology_state_machine._topology.tstate,
@@ -448,11 +441,11 @@ future<> storage_service::sync_raft_topology_nodes(mutable_token_metadata_ptr tm
         switch (rs.state) {
         case node_state::bootstrapping:
             if (rs.ring.has_value()) {
-                if (!is_me(ip)) {
+                if (ip && !is_me(*ip)) {
                     // Save ip -> id mapping in peers table because we need it on restart, but do not save tokens until owned
                         db::system_keyspace::peer_info info;
                         info.host_id = id.uuid();
-                        co_await _sys_ks.local().update_peer_info(ip, info);
+                        co_await _sys_ks.local().update_peer_info(*ip, info);
                 }
                 update_topology(host_id, ip, rs);
                 if (_topology_state_machine._topology.normal_nodes.empty()) {
@@ -614,6 +607,9 @@ future<> storage_service::topology_state_load() {
             continue;
         }
         const auto ep = tmptr->get_endpoint_for_host_id(e);
+        if (ep == inet_address{}) {
+            continue;
+        }
         auto permit = co_await _gossiper.lock_endpoint(ep, gms::null_permit_id);
         // Add the endpoint if it doesn't exist yet in gossip
         // since it is not loaded in join_cluster in the
