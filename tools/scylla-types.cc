@@ -12,7 +12,6 @@
 
 #include "compound.hh"
 #include "db/marshal/type_parser.hh"
-#include "log.hh"
 #include "schema/schema_builder.hh"
 #include "tools/utils.hh"
 #include "dht/i_partitioner.hh"
