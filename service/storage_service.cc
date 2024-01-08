@@ -654,21 +654,49 @@ future<> storage_service::merge_topology_snapshot(raft_topology_snapshot snp) {
 
 class storage_service::gossiper_state_change_subscriber_proxy: public gms::i_endpoint_state_change_subscriber {
     raft_address_map& _address_map;
+    storage_service& _ss;
 
     future<>
     on_endpoint_change(gms::inet_address endpoint, gms::endpoint_state_ptr ep_state) {
         auto app_state_ptr = ep_state->get_application_state_ptr(gms::application_state::HOST_ID);
-        if (app_state_ptr) {
-            raft::server_id id(utils::UUID(app_state_ptr->value()));
-            rslog.debug("gossiper_state_change_subscriber_proxy::on_endpoint_change() {} {}", endpoint, id);
-            _address_map.add_or_update_entry(id, endpoint, ep_state->get_heart_beat_state().get_generation());
+        if (!app_state_ptr) {
+            co_return;
         }
-        return make_ready_future<>();
+        raft::server_id id(utils::UUID(app_state_ptr->value()));
+        rslog.debug("gossiper_state_change_subscriber_proxy::on_endpoint_change() {} {}", endpoint, id);
+
+        const auto prev_ip = _address_map.find(id);
+        _address_map.add_or_update_entry(id, endpoint, ep_state->get_heart_beat_state().get_generation());
+
+        // If the host_id <-> IP mapping has changed, we need to update system tables, token_metadat and erm.
+        if (_ss._raft_topology_change_enabled && prev_ip != endpoint && _address_map.find(id) == endpoint) {
+            rslog.debug("gossiper_state_change_subscriber_proxy::on_endpoint_change(), host_id {}, "
+                        "ip changed from [{}] to [{}], "
+                        "waiting for group 0 read/apply mutex before reloading Raft topology state...",
+                id, prev_ip, endpoint);
+
+            // We're in a gossiper event handler, so gossiper is currently holding a lock
+            // for the endpoint parameter of on_endpoint_change.
+            // The topology_state_load function can also try to acquire gossiper locks.
+            // If we call sync_raft_topology_nodes here directly, a gossiper lock and
+            // the _group0.read_apply_mutex could be taken in cross-order leading to a deadlock.
+            // To avoid this, we don't wait for sync_raft_topology_nodes to finish.
+            (void)_ss._group0->client().hold_read_apply_mutex().then([this, id, endpoint](semaphore_units<> g) {
+                const auto hid = locator::host_id{id.uuid()};
+                if (_address_map.find(id) == endpoint && _ss.get_token_metadata().get_endpoint_for_host_id_if_known(hid) != endpoint) {
+                    return _ss.mutate_token_metadata([this, hid](mutable_token_metadata_ptr t) {
+                        return _ss.sync_raft_topology_nodes(std::move(t), hid);
+                    }).finally([g = std::move(g)]{});
+                }
+                return make_ready_future<>();
+            }).finally([h = _ss._async_gate.hold()] {});
+        }
     }
 
 public:
-    gossiper_state_change_subscriber_proxy(raft_address_map& address_map)
+    gossiper_state_change_subscriber_proxy(raft_address_map& address_map, storage_service& ss)
         : _address_map(address_map)
+        , _ss(ss)
     {}
 
     virtual future<>
@@ -4418,7 +4446,7 @@ future<> storage_service::init_address_map(raft_address_map& address_map) {
     for (auto [ip, host] : co_await _sys_ks.local().load_host_ids()) {
         address_map.add_or_update_entry(raft::server_id(host.uuid()), ip);
     }
-    _gossiper_proxy = make_shared<gossiper_state_change_subscriber_proxy>(address_map);
+    _gossiper_proxy = make_shared<gossiper_state_change_subscriber_proxy>(address_map, *this);
     _gossiper.register_(_gossiper_proxy);
 }
 
