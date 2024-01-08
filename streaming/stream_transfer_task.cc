@@ -32,6 +32,7 @@
 #include "replica/database.hh"
 #include "repair/table_check.hh"
 #include "gms/feature_service.hh"
+#include "utils/error_injection.hh"
 
 namespace streaming {
 
@@ -239,8 +240,11 @@ future<> stream_transfer_task::execute() {
         }).then([this, id, plan_id] {
             _mutation_done_sent = true;
             sslog.debug("[Stream #{}] GOT STREAM_MUTATION_DONE Reply from {}", plan_id, id.addr);
-        }).handle_exception([plan_id, id] (std::exception_ptr ep) {
+        }).handle_exception([plan_id, id, &sm] (std::exception_ptr ep) {
             sslog.warn("[Stream #{}] stream_transfer_task: Fail to send to {}: {}", plan_id, id, ep);
+            utils::get_local_injector().inject("stream_mutation_fragments_table_dropped", [&sm] () {
+                sm.db().find_column_family(table_id::create_null_id());
+            });
             std::rethrow_exception(ep);
         });
     });

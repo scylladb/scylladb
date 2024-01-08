@@ -191,6 +191,9 @@ void stream_manager::init_messaging_service_handler(abort_source& as) {
             // Make sure the table with cf_id is still present at this point.
             // Close the sink in case the table is dropped.
             auto& table = _db.local().find_column_family(cf_id);
+            utils::get_local_injector().inject("stream_mutation_fragments_table_dropped", [this] () {
+                _db.local().find_column_family(table_id::create_null_id());
+            });
             auto op = table.stream_in_progress();
             auto sharder_ptr = std::make_unique<dht::auto_refreshing_sharder>(table.shared_from_this());
             auto& sharder = *sharder_ptr;
