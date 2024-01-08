@@ -81,14 +81,14 @@ public:
 
 
     // server interface
-    future<> add_entry(command command, wait_type type, seastar::abort_source* as = nullptr) override;
-    future<> set_configuration(config_member_set c_new, seastar::abort_source* as = nullptr) override;
+    future<> add_entry(command command, wait_type type, seastar::abort_source* as) override;
+    future<> set_configuration(config_member_set c_new, seastar::abort_source* as) override;
     raft::configuration get_configuration() const override;
     future<> start() override;
     future<> abort(sstring reason) override;
     bool is_alive() const override;
     term_t get_current_term() const override;
-    future<> read_barrier(seastar::abort_source* as = nullptr) override;
+    future<> read_barrier(seastar::abort_source* as) override;
     void wait_until_candidate() override;
     future<> wait_election_done() override;
     future<> wait_log_idx_term(std::pair<index_t, term_t> idx_log) override;
@@ -100,7 +100,7 @@ public:
     raft::server_id id() const override;
     void set_applier_queue_max_size(size_t queue_max_size) override;
     future<> stepdown(logical_clock::duration timeout) override;
-    future<> modify_config(std::vector<config_member> add, std::vector<server_id> del, seastar::abort_source* as = nullptr) override;
+    future<> modify_config(std::vector<config_member> add, std::vector<server_id> del, seastar::abort_source* as) override;
     future<entry_id> add_entry_on_leader(command command, seastar::abort_source* as);
     void register_metrics() override;
     size_t max_command_size() const override;
@@ -276,7 +276,7 @@ private:
     // A helper to wait for a leader to get elected
     future<> wait_for_leader(seastar::abort_source* as);
 
-    future<> wait_for_state_change(seastar::abort_source* as = nullptr) override;
+    future<> wait_for_state_change(seastar::abort_source* as) override;
 
     // Get "safe to read" index from a leader
     future<read_barrier_reply> get_read_idx(server_id leader, seastar::abort_source* as);

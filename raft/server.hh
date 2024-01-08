@@ -77,6 +77,7 @@ public:
     // committed locally means simply that the commit index is beyond this entry's index.
     //
     // The caller may pass a pointer to an abort_source to make the operation abortable.
+    // It it passes nullptr, the operation is unabortable.
     //
     // Successful `add_entry` with `wait_type::committed` does not guarantee that `state_machine::apply` will be called
     // locally for this entry. Between the commit and the application we may receive a snapshot containing this entry,
@@ -98,7 +99,7 @@ public:
     //     Thrown if abort() was called on the server instance.
     // raft::not_a_leader
     //     Thrown if the node is not a leader and forwarding is not enabled through enable_forwarding config option.
-    virtual future<> add_entry(command command, wait_type type, seastar::abort_source* as = nullptr) = 0;
+    virtual future<> add_entry(command command, wait_type type, seastar::abort_source* as) = 0;
 
     // Set a new cluster configuration. If the configuration is
     // identical to the previous one does nothing.
@@ -124,6 +125,7 @@ public:
     // returned even in case of a successful config change.
     //
     // The caller may pass a pointer to an abort_source to make the operation abortable.
+    // It it passes nullptr, the operation is unabortable.
     //
     // Exceptions:
     // raft::conf_change_in_progress
@@ -135,7 +137,7 @@ public:
     //     forwarding the corresponding add_entry to the leader.
     // raft::request_aborted
     //     Thrown if abort is requested before the operation finishes.
-    virtual future<> set_configuration(config_member_set c_new, seastar::abort_source* as = nullptr) = 0;
+    virtual future<> set_configuration(config_member_set c_new, seastar::abort_source* as) = 0;
 
     // A simplified wrapper around set_configuration() which adds
     // and deletes servers. Unlike set_configuration(),
@@ -158,6 +160,7 @@ public:
     //
     // The caller may pass a pointer to an abort_source to make the operation abortable.
     // If abort is requested before the operation finishes, the future will contain `raft::request_aborted` exception.
+    // It the caller passes nullptr, the operation is unabortable.
     //
     // Exceptions:
     // raft::commit_status_unknown
@@ -173,7 +176,7 @@ public:
     // raft::conf_change_in_progress
     //     Thrown if the previous set_configuration/modify_config is not completed.
     virtual future<> modify_config(std::vector<config_member> add,
-        std::vector<server_id> del, seastar::abort_source* as = nullptr) = 0;
+        std::vector<server_id> del, seastar::abort_source* as) = 0;
 
     // Return the currently known configuration
     virtual raft::configuration get_configuration() const = 0;
@@ -203,13 +206,14 @@ public:
     // future has resolved successfully.
     //
     // The caller may pass a pointer to an abort_source to make the operation abortable.
+    // It it passes nullptr, the operation is unabortable.
     //
     // Exceptions:
     // raft::request_aborted
     //     Thrown if abort is requested before the operation finishes.
     // raft::stopped_error
     //     Thrown if abort() was called on the server instance.
-    virtual future<> read_barrier(seastar::abort_source* as = nullptr) = 0;
+    virtual future<> read_barrier(seastar::abort_source* as) = 0;
 
     // Initiate leader stepdown process.
     //
@@ -245,7 +249,10 @@ public:
     // State changes can be coalesced, so it is not guaranteed that the caller will
     // get notification about each one of them. The state can even be the same after
     // the call as before, but term should be different.
-    virtual future<> wait_for_state_change(seastar::abort_source* as = nullptr) = 0;
+    //
+    // The caller may pass a pointer to an abort_source to make the function abortable.
+    // It it passes nullptr, the function is unabortable.
+    virtual future<> wait_for_state_change(seastar::abort_source* as) = 0;
 
     // Ad hoc functions for testing
     virtual void wait_until_candidate() = 0;
