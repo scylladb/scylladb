@@ -12,7 +12,6 @@
 #include <vector>
 #include "range.hh"
 #include "dht/ring_position.hh"
-#include "query-request.hh"
 
 namespace compat {
 

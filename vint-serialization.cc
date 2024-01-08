@@ -15,7 +15,6 @@
 #include <algorithm>
 #include <array>
 #include <limits>
-#include <type_traits>
 
 static_assert(-1 == ~0, "Not a twos-complement architecture");
 

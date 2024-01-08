@@ -18,7 +18,6 @@
 #include <boost/algorithm/cxx11/any_of.hpp>
 #include <boost/range/adaptor/transformed.hpp>
 #include "db/marshal/type_parser.hh"
-#include "version.hh"
 #include "schema_registry.hh"
 #include <boost/range/adaptor/map.hpp>
 #include <boost/range/algorithm.hpp>

@@ -14,6 +14,7 @@
 #include <seastar/core/simple-stream.hh>
 #include "idl/paging_state.dist.hh"
 #include "idl/paging_state.dist.impl.hh"
+#include "exceptions/exceptions.hh"
 #include "message/messaging_service.hh"
 #include "utils/bit_cast.hh"
 

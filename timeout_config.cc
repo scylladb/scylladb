@@ -9,7 +9,6 @@
 
 #include "timeout_config.hh"
 #include "db/config.hh"
-#include "db/timeout_clock.hh"
 #include <chrono>
 #include <seastar/core/future.hh>
 

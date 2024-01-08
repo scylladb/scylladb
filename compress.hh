@@ -14,9 +14,7 @@
 #include <seastar/core/future.hh>
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/sstring.hh>
-
-#include "exceptions/exceptions.hh"
-
+#include "seastarx.hh"
 
 class compressor {
     sstring _name;

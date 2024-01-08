@@ -12,7 +12,6 @@
 #include "gc_clock.hh"
 #include "dht/token.hh"
 #include "schema/schema_fwd.hh"
-#include "range.hh"
 #include "interval.hh"
 
 namespace dht {

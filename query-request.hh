@@ -15,6 +15,7 @@
 #include "db/functions/function_name.hh"
 #include "db/functions/function.hh"
 #include "db/functions/aggregate_function.hh"
+#include "db/consistency_level_type.hh"
 #include "keys.hh"
 #include "dht/ring_position.hh"
 #include "enum_set.hh"
@@ -23,7 +24,6 @@
 #include "utils/small_vector.hh"
 #include "db/per_partition_rate_limit_info.hh"
 #include "query_id.hh"
-#include "utils/UUID.hh"
 #include "bytes.hh"
 #include "cql_serialization_format.hh"
 

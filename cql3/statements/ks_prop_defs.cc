@@ -13,6 +13,7 @@
 #include "data_dictionary/keyspace_metadata.hh"
 #include "locator/token_metadata.hh"
 #include "locator/abstract_replication_strategy.hh"
+#include "exceptions/exceptions.hh"
 
 namespace cql3 {
 

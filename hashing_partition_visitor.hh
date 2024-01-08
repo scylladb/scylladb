@@ -12,8 +12,6 @@
 #include "utils/hashing.hh"
 #include "schema/schema.hh"
 #include "mutation/atomic_cell_hash.hh"
-#include "keys.hh"
-#include "counters.hh"
 #include "mutation/position_in_partition.hh"
 
 // Calculates a hash of a mutation_partition which is consistent with

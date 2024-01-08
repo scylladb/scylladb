@@ -7,22 +7,14 @@
  */
 #pragma once
 
-#include <vector>
-#include <unordered_set>
-#include <list>
-#include <array>
 #include <seastar/core/sstring.hh>
-#include <unordered_map>
 #include <optional>
-#include "enum_set.hh"
 #include "utils/managed_bytes.hh"
 #include "bytes_ostream.hh"
 #include <seastar/core/simple-stream.hh>
 #include "boost/variant/variant.hpp"
 #include "bytes_ostream.hh"
-#include "utils/input_stream.hh"
 #include "utils/fragment_range.hh"
-#include "utils/chunked_vector.hh"
 #include <variant>
 
 #include <boost/range/algorithm/for_each.hpp>

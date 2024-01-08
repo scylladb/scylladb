@@ -11,7 +11,6 @@
 
 #include "db/timeout_clock.hh"
 #include "utils/updateable_value.hh"
-#include <chrono>
 
 namespace db { class config; }
 

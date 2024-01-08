@@ -9,6 +9,9 @@
 #pragma once
 
 #include "serializer.hh"
+#include "enum_set.hh"
+#include "utils/chunked_vector.hh"
+#include "utils/input_stream.hh"
 #include <seastar/util/bool_class.hh>
 #include "utils/small_vector.hh"
 #include <absl/container/btree_set.h>

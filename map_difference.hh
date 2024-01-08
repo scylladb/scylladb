@@ -8,7 +8,6 @@
 
 #pragma once
 
-#include <map>
 #include <set>
 
 template<typename Key>

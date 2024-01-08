@@ -12,6 +12,7 @@
 #include <seastar/coroutine/maybe_yield.hh>
 
 #include "simple_strategy.hh"
+#include "exceptions/exceptions.hh"
 #include "utils/class_registrator.hh"
 #include <boost/algorithm/string.hpp>
 #include "utils/sequenced_set.hh"
