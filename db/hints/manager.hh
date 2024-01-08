@@ -26,6 +26,7 @@
 #include "db/hints/resource_manager.hh"
 #include "db/hints/host_filter.hh"
 #include "db/hints/sync_point.hh"
+#include "gms/inet_address.hh"
 #include "locator/abstract_replication_strategy.hh"
 
 // STD.
@@ -243,7 +244,7 @@ public:
     }
 
     /// \brief Returns a set of replay positions for hint queues towards endpoints from the `target_eps`.
-    sync_point::shard_rps calculate_current_sync_point(std::span<const endpoint_id> target_eps) const;
+    sync_point::shard_rps calculate_current_sync_point(std::span<const gms::inet_address> target_eps) const;
 
     /// \brief Waits until hint replay reach replay positions described in `rps`.
     future<> wait_for_sync_point(abort_source& as, const sync_point::shard_rps& rps);
