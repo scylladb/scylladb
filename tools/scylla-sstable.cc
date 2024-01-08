@@ -10,11 +10,11 @@
 #include <boost/algorithm/string/join.hpp>
 #include <filesystem>
 #include <set>
-#include <source_location>
 #include <fmt/chrono.h>
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/queue.hh>
 #include <seastar/util/closeable.hh>
+#include <seastar/core/queue.hh>
 
 #include "compaction/compaction.hh"
 #include "compaction/compaction_strategy.hh"
@@ -30,9 +30,6 @@
 #include "sstables/sstables_manager.hh"
 #include "sstables/sstable_directory.hh"
 #include "sstables/open_info.hh"
-#include "types/user.hh"
-#include "types/set.hh"
-#include "types/map.hh"
 #include "tools/json_writer.hh"
 #include "tools/lua_sstable_consumer.hh"
 #include "tools/schema_loader.hh"
