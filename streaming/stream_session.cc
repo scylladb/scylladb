@@ -192,6 +192,9 @@ void stream_manager::init_messaging_service_handler(abort_source& as) {
                     auto distribute = [this, cf_id, s] (flat_mutation_reader_v2 producer,
                             std::function<future<> (flat_mutation_reader_v2)> consumer) -> future<received_partitions_t> {
                         try {
+                            utils::get_local_injector().inject("stream_mutation_fragments_table_dropped", [this] () {
+                                _db.local().find_column_family(table_id::create_null_id());
+                            });
                             auto& table = _db.local().find_column_family(cf_id);
                             auto op = table.stream_in_progress();
                             auto sharder_ptr = std::make_unique<dht::auto_refreshing_sharder>(table.shared_from_this());
