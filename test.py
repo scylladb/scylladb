@@ -797,7 +797,7 @@ class CQLApprovalTest(Test):
                 cm.dirty = cluster.is_dirty
                 self.is_after_test_ok = True
 
-                if self.is_executed_ok is False:
+                if not self.is_executed_ok:
                     set_summary("""returned non-zero return status.\n
 Check test log at {}.""".format(self.log_filename))
                 elif not os.path.isfile(self.tmpfile):
@@ -807,7 +807,7 @@ Check test log at {}.""".format(self.log_filename))
                     self.is_new = True
                 else:
                     self.is_equal_result = filecmp.cmp(self.result, self.tmpfile)
-                    if self.is_equal_result is False:
+                    if not self.is_equal_result:
                         self.unidiff = format_unidiff(str(self.result), self.tmpfile)
                         set_summary("failed: test output does not match expected result")
                         assert self.unidiff is not None
@@ -820,10 +820,10 @@ Check test log at {}.""".format(self.log_filename))
                 # cases. So only grab it when it's relevant:
                 # 1) failed pre-check, e.g. start failure
                 # 2) failed test execution.
-                if self.is_executed_ok is False:
+                if not self.is_executed_ok:
                     self.server_log = cluster.read_server_log()
                     self.server_log_filename = cluster.server_log_filename()
-                    if self.is_before_test_ok is False:
+                    if not self.is_before_test_ok:
                         set_summary("pre-check failed: {}".format(e))
                         print("Test {} {}".format(self.name, self.summary))
                         print("Server log  of the first server:\n{}".format(self.server_log))
@@ -832,7 +832,7 @@ Check test log at {}.""".format(self.log_filename))
                 set_summary("failed: {}".format(e))
             finally:
                 if os.path.exists(self.tmpfile):
-                    if self.is_executed_ok and (self.is_new or self.is_equal_result is False):
+                    if self.is_executed_ok and (self.is_new or not self.is_equal_result):
                         # Move the .reject file close to the .result file
                         # so that it's easy to analyze the diff or overwrite .result
                         # with .reject.
@@ -845,19 +845,19 @@ Check test log at {}.""".format(self.log_filename))
     def print_summary(self) -> None:
         print("Test {} ({}) {}".format(palette.path(self.name), self.mode,
                                        self.summary))
-        if self.is_executed_ok is False:
+        if not self.is_executed_ok:
             print(read_log(self.log_filename))
             if self.server_log is not None:
                 print("Server log of the first server:")
                 print(self.server_log)
-        elif self.is_equal_result is False and self.unidiff:
+        elif not self.is_equal_result and self.unidiff:
             print(self.unidiff)
 
     def write_junit_failure_report(self, xml_res: ET.Element) -> None:
         assert not self.success
         xml_fail = ET.SubElement(xml_res, 'failure')
         xml_fail.text = self.summary
-        if self.is_executed_ok is False:
+        if not self.is_executed_ok:
             if self.log_filename.exists():
                 system_out = ET.SubElement(xml_res, 'system-out')
                 system_out.text = read_log(self.log_filename)
@@ -957,11 +957,11 @@ class PythonTest(Test):
         except Exception as e:
             self.server_log = cluster.read_server_log()
             self.server_log_filename = cluster.server_log_filename()
-            if self.is_before_test_ok is False:
+            if not self.is_before_test_ok:
                 print("Test {} pre-check failed: {}".format(self.name, str(e)))
                 print("Server log of the first server:\n{}".format(self.server_log))
                 logger.info(f"Discarding cluster after failed start for test %s...", self.name)
-            elif self.is_after_test_ok is False:
+            elif not self.is_after_test_ok:
                 print("Test {} post-check failed: {}".format(self.name, str(e)))
                 print("Server log of the first server:\n{}".format(self.server_log))
                 logger.info(f"Discarding cluster after failed test %s...", self.name)
@@ -999,7 +999,7 @@ class TopologyTest(PythonTest):
             except Exception as e:
                 self.server_log = manager.cluster.read_server_log()
                 self.server_log_filename = manager.cluster.server_log_filename()
-                if manager.is_before_test_ok is False:
+                if not manager.is_before_test_ok:
                     print("Test {} pre-check failed: {}".format(self.name, str(e)))
                     print("Server log of the first server:\n{}".format(self.server_log))
                     # Don't try to continue if the cluster is broken
@@ -1093,7 +1093,7 @@ class TabularConsoleOutput:
             status,
             test.uname
         )
-        if self.verbose is False:
+        if not self.verbose:
             if test.success:
                 print("\r" + " " * self.last_line_len, end="")
                 self.last_line_len = len(msg)
