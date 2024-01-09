@@ -3,8 +3,8 @@ import sys
 # Use the util.py library from ../cql-pytest:
 sys.path.insert(1, sys.path[0] + '/../cql-pytest')
 from util import new_test_table, new_test_keyspace
-from rest_util import set_tmp_task_ttl
-from task_manager_utils import wait_for_task, list_tasks, check_child_parent_relationship, drain_module_tasks
+from rest_util import set_tmp_task_ttl, scylla_inject_error
+from task_manager_utils import wait_for_task, list_tasks, check_child_parent_relationship, drain_module_tasks, abort_task, get_task_status
 
 module_name = "compaction"
 long_time = 1000000000
@@ -78,13 +78,16 @@ def test_regular_compaction_task(cql, this_dc, rest_api):
                 cql.execute(stmt, [0, 'hello'])
                 cql.execute(stmt, [1, 'world'])
 
-                [_, table] = t0.split(".")
-                resp = rest_api.send("POST", f"column_family/autocompaction/{keyspace}:{table}")
-                resp.raise_for_status()
+                injection = "compaction_regular_compaction_task_executor_do_run"
+                with scylla_inject_error(rest_api, injection, True):
+                    [_, table] = t0.split(".")
+                    resp = rest_api.send("POST", f"column_family/autocompaction/{keyspace}:{table}")
+                    resp.raise_for_status()
 
-                statuses = [wait_for_task(rest_api, task["task_id"]) for task in list_tasks(rest_api, "compaction") if task["type"] == "regular compaction" and task["keyspace"] == keyspace and task["table"] == table]
-                assert statuses, f"regular compaction task for {t0} was not created"
+                    statuses = [get_task_status(rest_api, task["task_id"]) for task in list_tasks(rest_api, "compaction", internal=True) if task["type"] == "regular compaction" and task["keyspace"] == keyspace and task["table"] == table]
+                    assert statuses, f"regular compaction task for {t0} was not created"
+                    assert all([s["state"] != "done" and s["state"] != "failed" for s in statuses]), "Regular compaction task isn't unregiatered after it completes"
 
-                failed = [status["task_id"] for status in statuses if status["state"] != "done"]
-                assert not failed, f"Regular compaction tasks with ids = {failed} failed"
+                    resp = rest_api.send("POST", f"v2/error_injection/injection/{injection}/message")
+                    resp.raise_for_status()
     drain_module_tasks(rest_api, module_name)
