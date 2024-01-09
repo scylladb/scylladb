@@ -184,7 +184,13 @@ void utils::config_file::named_value<T>::add_command_line_option(boost::program_
     // NOTE. We are not adding default values. We could, but must in that case manually (in some way) generate the textual
     // version, since the available ostream operators for things like pairs and collections don't match what we can deal with parser-wise.
     // See removed ostream operators above.
-    init(hyphenated_name.data(), value_ex<T>()->notifier([this](T new_val) { set(std::move(new_val), config_source::CommandLine); }), desc().data());
+    init(hyphenated_name.data(), value_ex<T>()->notifier([this](T new_val) {
+        try {
+            set(std::move(new_val), config_source::CommandLine);
+        } catch (const std::invalid_argument& e) {
+            throw bpo::invalid_option_value(e.what());
+        }
+    }), desc().data());
 
     if (!alias().empty()) {
         const auto alias_desc = fmt::format("Alias for {}", hyphenated_name);
