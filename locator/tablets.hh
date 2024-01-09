@@ -260,6 +260,27 @@ struct resize_decision {
     sstring type_name() const;
 };
 
+struct table_load_stats {
+    uint64_t size_in_bytes = 0;
+    // Stores the minimum seq number among all replicas, as coordinator wants to know if
+    // all replicas have completed splitting, which happens when they all store the
+    // seq number of the current split decision.
+    resize_decision::seq_number_t split_ready_seq_number = std::numeric_limits<resize_decision::seq_number_t>::max();
+
+    table_load_stats& operator+=(const table_load_stats& s) noexcept;
+    friend table_load_stats operator+(table_load_stats a, const table_load_stats& b) {
+        return a += b;
+    }
+};
+
+struct load_stats {
+    std::unordered_map<table_id, table_load_stats> tables;
+
+    load_stats& operator+=(const load_stats& s);
+    friend load_stats operator+(load_stats a, const load_stats& b) {
+        return a += b;
+    }
+};
 
 /// Stores information about tablets of a single table.
 ///

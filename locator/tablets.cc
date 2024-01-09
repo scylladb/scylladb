@@ -414,6 +414,19 @@ sstring resize_decision::type_name() const {
     return index_to_string[way.index()];
 }
 
+table_load_stats& table_load_stats::operator+=(const table_load_stats& s) noexcept {
+    size_in_bytes = size_in_bytes + s.size_in_bytes;
+    split_ready_seq_number = std::min(split_ready_seq_number, s.split_ready_seq_number);
+    return *this;
+}
+
+load_stats& load_stats::operator+=(const load_stats& s) {
+    for (auto& [id, stats] : s.tables) {
+        tables[id] += stats;
+    }
+    return *this;
+}
+
 // Estimates the external memory usage of std::unordered_map<>.
 // Does not include external memory usage of elements.
 template <typename K, typename V>
