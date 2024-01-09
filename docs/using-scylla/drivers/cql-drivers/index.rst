@@ -27,36 +27,29 @@ The following table lists the available ScyllaDB drivers, specifying which suppo
 or include a library for :doc:`CDC </using-scylla/cdc/cdc-intro>`.
 
 .. list-table:: 
-   :widths: 25 25 25 25
+   :widths: 30 35 35 
    :header-rows: 1
 
    * - 
      - ScyllaDB Driver
-     - ScyllaDB Cloud Serverless
      - CDC Connector
    * - :doc:`Python</using-scylla/drivers/cql-drivers/scylla-python-driver>`
      - |v| 
-     - |v|
      - |x| 
    * - :doc:`Java </using-scylla/drivers/cql-drivers/scylla-java-driver>`
      - |v| 
      - |v|
-     - |v|
    * - :doc:`Go </using-scylla/drivers/cql-drivers/scylla-go-driver>`
      - |v| 
-     - |v|
      - |v|
    * - :doc:`Go Extension </using-scylla/drivers/cql-drivers/scylla-gocqlx-driver>`
      - |v|
      - |x| 
-     - |x| 
    * - :doc:`C++ </using-scylla/drivers/cql-drivers/scylla-cpp-driver>`
      - |v|
      - |x| 
-     - |x| 
    * - :doc:`Rust </using-scylla/drivers/cql-drivers/scylla-rust-driver>`
      - |v| 
-     - |v|
      - |v| 
 
 
