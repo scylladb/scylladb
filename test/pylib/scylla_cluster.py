@@ -110,6 +110,8 @@ def make_scylla_conf(workdir: pathlib.Path, host_addr: str, seed_addrs: List[str
         'reader_concurrency_semaphore_kill_limit_multiplier': 0,
 
         'maintenance_socket': 'workdir',
+
+        'service_levels_interval_ms': 500,
     }
 
 # Seastar options can not be passed through scylla.yaml, use command line
