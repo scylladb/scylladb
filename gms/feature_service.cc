@@ -52,16 +52,13 @@ feature_config feature_config_from_db_config(const db::config& cfg, std::set<sst
     fcfg._disabled_features = std::move(disabled);
 
     switch (sstables::version_from_string(cfg.sstable_format())) {
-    case sstables::sstable_version_types::ka:
-    case sstables::sstable_version_types::la:
-    case sstables::sstable_version_types::mc:
-        fcfg._disabled_features.insert("MD_SSTABLE_FORMAT"s);
-        [[fallthrough]];
     case sstables::sstable_version_types::md:
         fcfg._disabled_features.insert("ME_SSTABLE_FORMAT"s);
-        [[fallthrough]];
+        break;
     case sstables::sstable_version_types::me:
         break;
+    default:
+        assert(false && "Invalid sstable_format");
     }
 
     if (!cfg.enable_user_defined_functions()) {
