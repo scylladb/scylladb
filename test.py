@@ -92,7 +92,11 @@ def path_to(mode, *components):
 
 def ninja(target):
     """Build specified target using ninja"""
-    return subprocess.Popen(['ninja', target], stdout=subprocess.PIPE).communicate()[0].decode()
+    build_dir = 'build'
+    args = ['ninja', target]
+    if os.path.exists(os.path.join(build_dir, 'build.ninja')):
+        args = ['ninja', '-C', build_dir, target]
+    return subprocess.Popen(args, stdout=subprocess.PIPE).communicate()[0].decode()
 
 
 class TestSuite(ABC):
