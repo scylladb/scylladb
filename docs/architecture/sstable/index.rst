@@ -9,6 +9,8 @@ ScyllaDB SSTable Format
 
 .. include:: _common/sstable_what_is.rst
 
+* In Scylla 5.5 and above, *me* format is enabled by default.
+
 * In Scylla Enterprise 2021.1, Scylla 4.3 and above, *md* format is enabled by default.
   
 * In Scylla 3.1 and above, *mc* format is enabled by default. 

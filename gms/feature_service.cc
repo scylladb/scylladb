@@ -53,8 +53,8 @@ feature_config feature_config_from_db_config(const db::config& cfg, std::set<sst
 
     switch (sstables::version_from_string(cfg.sstable_format())) {
     case sstables::sstable_version_types::md:
-        fcfg._disabled_features.insert("ME_SSTABLE_FORMAT"s);
-        [[fallthrough]];
+        logger.warn("sstable_format must be 'me', '{}' is specified", cfg.sstable_format());
+        break;
     case sstables::sstable_version_types::me:
         break;
     default:
