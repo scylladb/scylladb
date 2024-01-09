@@ -81,6 +81,15 @@ class palette:
         return palette.ansi_escape.sub('', text)
 
 
+def path_to(mode, *components):
+    """Resolve path to built executable"""
+    build_dir = 'build'
+    if os.path.exists(os.path.join(build_dir, 'build.ninja')):
+        *dir_components, basename = components
+        return os.path.join(build_dir, *dir_components, all_modes[mode], basename)
+    return os.path.join(build_dir, mode, *components)
+
+
 class TestSuite(ABC):
     """A test suite is a folder with tests of the same type.
     E.g. it can be unit tests, boost tests, or CQL tests."""
@@ -269,7 +278,7 @@ class UnitTestSuite(TestSuite):
         self.all_can_run_compaction_groups_except = cfg.get("all_can_run_compaction_groups_except")
 
     async def create_test(self, shortname, suite, args):
-        exe = os.path.join("build", suite.mode, "test", suite.name, shortname)
+        exe = path_to(suite.mode, "test", suite.name, shortname)
         if not os.access(exe, os.X_OK):
             print(palette.warn(f"Unit test executable {exe} not found."))
             return
@@ -305,7 +314,7 @@ class BoostTestSuite(UnitTestSuite):
         super().__init__(path, cfg, options, mode)
 
     async def create_test(self, shortname: str, suite, args) -> None:
-        exe = os.path.join("build", suite.mode, "test", suite.name, shortname)
+        exe = path_to(suite.mode, "test", suite.name, shortname)
         if not os.access(exe, os.X_OK):
             print(palette.warn(f"Boost test executable {exe} not found."))
             return
@@ -349,7 +358,7 @@ class PythonTestSuite(TestSuite):
 
     def __init__(self, path, cfg: dict, options: argparse.Namespace, mode: str) -> None:
         super().__init__(path, cfg, options, mode)
-        self.scylla_exe = os.path.join("build", self.mode, "scylla")
+        self.scylla_exe = path_to(self.mode, "scylla")
         if self.mode == "coverage":
             self.scylla_env = coverage.env(self.scylla_exe, distinct_id=self.name)
         else:
@@ -487,7 +496,7 @@ class RunTestSuite(TestSuite):
 
     def __init__(self, path: str, cfg, options: argparse.Namespace, mode: str) -> None:
         super().__init__(path, cfg, options, mode)
-        self.scylla_exe = os.path.join("build", self.mode, "scylla")
+        self.scylla_exe = path_to(self.mode, "scylla")
         if self.mode == "coverage":
             self.scylla_env = coverage.env(self.scylla_exe, distinct_id=self.name)
         else:
@@ -603,7 +612,7 @@ class UnitTest(Test):
 
     def __init__(self, test_no: int, shortname: str, suite, args: str) -> None:
         super().__init__(test_no, shortname, suite)
-        self.path = os.path.join("build", self.mode, "test", self.name)
+        self.path = path_to(self.mode, "test", self.name)
         self.args = shlex.split(args) + UnitTest.standard_args
         if self.mode == "coverage":
             self.env = coverage.env(self.path)
@@ -1599,7 +1608,7 @@ async def main() -> int:
         write_consolidated_boost_junit_xml(options.tmpdir, mode)
 
     if 'coverage' in options.modes:
-        coverage.generate_coverage_report("build/coverage", "tests")
+        coverage.generate_coverage_report(path_to("coverage", "tests"))
 
     # Note: failure codes must be in the ranges 0-124, 126-127,
     #       to cooperate with git bisect's expectations
