@@ -45,9 +45,12 @@ launch_time = time.monotonic()
 
 output_is_a_tty = sys.stdout.isatty()
 
-all_modes = set(['debug', 'release', 'dev', 'sanitize', 'coverage'])
+all_modes = {'debug': 'Debug',
+             'release': 'RelWithDebInfo',
+             'dev': 'Dev',
+             'sanitize': 'Sanitize',
+             'coverage': 'Coverage'}
 debug_modes = set(['debug', 'sanitize'])
-
 
 def create_formatter(*decorators) -> Callable[[Any], str]:
     """Return a function which decorates its argument with the given
@@ -1199,7 +1202,7 @@ def parse_cmd_line() -> argparse.Namespace:
         help="""Path to temporary test data and log files. The data is
         further segregated per build mode. Default: ./testlog.""",
     )
-    parser.add_argument('--mode', choices=all_modes, action="append", dest="modes",
+    parser.add_argument('--mode', choices=all_modes.keys(), action="append", dest="modes",
                         help="Run only tests for given build mode(s)")
     parser.add_argument('--repeat', action="store", default="1", type=int,
                         help="number of times to repeat test execution")
