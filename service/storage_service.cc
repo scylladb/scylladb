@@ -7114,8 +7114,16 @@ future<join_node_response_result> storage_service::join_node_response_handler(jo
     co_await _join_node_request_done.get_shared_future(_group0_as);
 
     if (_join_node_response_done.available()) {
-        // We already handled this RPC. No need to retry it. Return immediately for idempotence.
+        // We already handled this RPC. No need to retry it.
         slogger.info("raft topology: the node got join_node_response RPC for the second time, ignoring");
+
+        if (std::holds_alternative<join_node_response_params::accepted>(params.response)
+                &&  _join_node_response_done.failed()) {
+            // The topology coordinator accepted the node that was rejected before or failed while handling
+            // the response. Inform the coordinator about it so it moves the node to the left state.
+            throw _join_node_response_done.get_shared_future().get_exception();
+        }
+
         co_return join_node_response_result{};
     }
 
