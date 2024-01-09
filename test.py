@@ -90,6 +90,11 @@ def path_to(mode, *components):
     return os.path.join(build_dir, mode, *components)
 
 
+def ninja(target):
+    """Build specified target using ninja"""
+    return subprocess.Popen(['ninja', target], stdout=subprocess.PIPE).communicate()[0].decode()
+
+
 class TestSuite(ABC):
     """A test suite is a folder with tests of the same type.
     E.g. it can be unit tests, boost tests, or CQL tests."""
@@ -1277,7 +1282,7 @@ def parse_cmd_line() -> argparse.Namespace:
 
     if not args.modes:
         try:
-            out = subprocess.Popen(['ninja', 'mode_list'], stdout=subprocess.PIPE).communicate()[0].decode()
+            out = ninja('mode_list')
             # [1/1] List configured modes
             # debug release dev
             args.modes = re.sub(r'.* List configured modes\n(.*)\n', r'\1',
@@ -1303,7 +1308,7 @@ def parse_cmd_line() -> argparse.Namespace:
 
     # Get the list of tests configured by configure.py
     try:
-        out = subprocess.Popen(['ninja', 'unit_test_list'], stdout=subprocess.PIPE).communicate()[0].decode()
+        out = ninja('unit_test_list')
         # [1/1] List configured unit tests
         args.tests = set(re.sub(r'.* List configured unit tests\n(.*)\n', r'\1', out, 1, re.DOTALL).split("\n"))
     except Exception:
