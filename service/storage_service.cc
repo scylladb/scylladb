@@ -14,6 +14,7 @@
 #include "service/topology_guard.hh"
 #include "service/session.hh"
 #include "dht/boot_strapper.hh"
+#include <optional>
 #include <seastar/core/distributed.hh>
 #include <seastar/util/defer.hh>
 #include <seastar/coroutine/as_future.hh>
@@ -772,6 +773,7 @@ private:
     row& row();
     api::timestamp_type timestamp() const;
     const schema& schema() const;
+    ttl_opt ttl() const { return std::nullopt; }
 
 public:
     topology_node_mutation_builder(topology_mutation_builder&, raft::server_id);
@@ -808,6 +810,7 @@ private:
     row& row();
     api::timestamp_type timestamp() const;
     const schema& schema() const;
+    ttl_opt ttl() const { return std::nullopt; }
 
 public:
     topology_mutation_builder(api::timestamp_type ts);
@@ -847,7 +850,7 @@ template<typename Builder>
 Builder& topology_mutation_builder_base<Builder>::apply_atomic(const char* cell, const data_value& value) {
     const column_definition* cdef = self().schema().get_column_definition(cell);
     assert(cdef);
-    self().row().apply(*cdef, atomic_cell::make_live(*cdef->type, self().timestamp(), cdef->type->decompose(value)));
+    self().row().apply(*cdef, atomic_cell::make_live(*cdef->type, self().timestamp(), cdef->type->decompose(value), self().ttl()));
     return self();
 }
 
@@ -867,7 +870,7 @@ Builder& topology_mutation_builder_base<Builder>::apply_set(const char* cell, co
     collection_mutation_description cm;
     cm.cells.reserve(cset.size());
     for (const bytes& raw : cset) {
-        cm.cells.emplace_back(raw, atomic_cell::make_live(*bytes_type, self().timestamp(), bytes_view()));
+        cm.cells.emplace_back(raw, atomic_cell::make_live(*bytes_type, self().timestamp(), bytes_view(), self().ttl()));
     }
 
     if (apply_mode == collection_apply_mode::overwrite) {
@@ -1054,6 +1057,8 @@ public:
     row& row();
     const schema& schema() const;
     api::timestamp_type timestamp() const;
+    ttl_opt ttl() const;
+
 
     topology_request_tracking_mutation_builder(utils::UUID id);
 
@@ -1071,7 +1076,12 @@ topology_request_tracking_mutation_builder::topology_request_tracking_mutation_b
         _m(_s, partition_key::from_singular(*_s, id)),
         _ts(utils::UUID_gen::micros_timestamp(id)),
         _r(_m.partition().clustered_row(*_s, clustering_key::make_empty())) {
-    _r.apply(row_marker(_ts));
+    _r.apply(row_marker(_ts, *ttl(), gc_clock::now() + *ttl()));
+}
+
+ttl_opt topology_request_tracking_mutation_builder::ttl() const {
+    return std::chrono::duration_cast<std::chrono::seconds>(std::chrono::microseconds(_ts)) + std::chrono::months(1)
+        - std::chrono::duration_cast<std::chrono::seconds>(gc_clock::now().time_since_epoch());
 }
 
 const schema& topology_request_tracking_mutation_builder::schema() const {
