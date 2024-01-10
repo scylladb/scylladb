@@ -149,8 +149,10 @@ public:
 
     bool is_cql_ready() const noexcept;
 
-    friend std::ostream& operator<<(std::ostream& os, const endpoint_state& x);
+    friend fmt::formatter<endpoint_state>;
 };
+
+std::ostream& operator<<(std::ostream& os, const endpoint_state& x);
 
 using endpoint_state_ptr = lw_shared_ptr<const endpoint_state>;
 
@@ -174,3 +176,9 @@ using permit_id = utils::tagged_uuid<struct permit_id_tag>;
 constexpr permit_id null_permit_id = permit_id::create_null_id();
 
 } // gms
+
+template <>
+struct fmt::formatter<gms::endpoint_state> {
+    constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
+    auto format(const gms::endpoint_state&, fmt::format_context& ctx) const -> decltype(ctx.out());
+};

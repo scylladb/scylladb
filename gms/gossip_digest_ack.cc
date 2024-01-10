@@ -21,7 +21,7 @@ std::ostream& operator<<(std::ostream& os, const gossip_digest_ack& ack) {
     os << "} ";
     os << "endpoint_state:{";
     for (auto& d : ack._map) {
-        os << "[" << d.first << "->" << d.second << "]";
+        fmt::print(os, "[{}->{}]", d.first, d.second);
     }
     return os << "}";
 }
