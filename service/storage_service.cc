@@ -2282,18 +2282,15 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         }
         auto ts = guard.write_timestamp();
         for (auto& [id, req] : _topo_sm._topology.requests) {
+            topology_mutation_builder builder(ts);
+            topology_request_tracking_mutation_builder rtbuilder(_topo_sm._topology.find(id)->second.request_id);
+            auto node_builder = builder.with_node(id).del("topology_request");
+            rtbuilder.done("canceled");
             switch (req) {
                 case topology_request::replace:
                 [[fallthrough]];
                 case topology_request::join: {
-                    topology_mutation_builder builder(ts);
-                    topology_request_tracking_mutation_builder rtbuilder(_topo_sm._topology.find(id)->second.request_id);
-                    builder.with_node(id)
-                           .set("node_state", node_state::left)
-                           .del("topology_request");
-                    rtbuilder.done("canceled");
-                    muts.emplace_back(builder.build());
-                    muts.emplace_back(rtbuilder.build());
+                    node_builder.set("node_state", node_state::left);
                     reject_join.emplace_back(id);
                     try {
                         co_await wait_for_ip(id, _address_map, _as);
@@ -2307,16 +2304,11 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 case topology_request::rebuild:
                 [[fallthrough]];
                 case topology_request::remove: {
-                    topology_mutation_builder builder(ts);
-                    topology_request_tracking_mutation_builder rtbuilder(_topo_sm._topology.find(id)->second.request_id);
-                    builder.with_node(id)
-                           .del("topology_request");
-                    rtbuilder.done("canceled");
-                    muts.emplace_back(builder.build());
-                    muts.emplace_back(rtbuilder.build());
                 }
                 break;
             }
+            muts.emplace_back(builder.build());
+            muts.emplace_back(rtbuilder.build());
         }
 
         co_await update_topology_state(std::move(guard), std::move(muts), "cancel all topology requests");
