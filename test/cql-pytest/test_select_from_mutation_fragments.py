@@ -27,7 +27,8 @@ def test_table(cql, test_keyspace):
         yield table
 
 
-def test_smoke(cql, test_table, scylla_only):
+# xfail_tablets due to https://github.com/scylladb/scylladb/issues/16484
+def test_smoke(cql, test_table, scylla_only, xfail_tablets):
     """ Simple smoke tests, this should fail first if something is very wrong. """
     partitions = {}
     for i in range(0, 1):
@@ -157,7 +158,8 @@ def test_count(cql, test_table, scylla_only):
     check_count('partition end', 1)
 
 
-def test_many_partition_scan(cql, test_keyspace, scylla_only):
+# xfail_tablets due to https://github.com/scylladb/scylladb/issues/16484
+def test_many_partition_scan(cql, test_keyspace, scylla_only, xfail_tablets):
     """
     Full scans work like secondary-index based scans. First, a query is
     issued to obtain partition-keys, then each partition is read individually.
@@ -199,7 +201,8 @@ def test_many_partition_scan(cql, test_keyspace, scylla_only):
         assert actual_partitions == partitions
 
 
-def test_metadata_and_value(cql, test_keyspace, scylla_path, scylla_data_dir, scylla_only):
+# xfail_tablets due to https://github.com/scylladb/scylladb/issues/16484
+def test_metadata_and_value(cql, test_keyspace, scylla_path, scylla_data_dir, scylla_only, xfail_tablets):
     """
     Test that metadata + value columns allow reconstructing a full sstable dump.
     Meaning that their json representation of metadata and value is the same.
@@ -424,7 +427,8 @@ def test_ck_in_query(cql, test_table):
             assert getattr(row, col_name) == expected_value
 
 
-def test_many_partitions(cql, test_keyspace, scylla_only):
+# xfail_tablets due to https://github.com/scylladb/scylladb/issues/16484
+def test_many_partitions(cql, test_keyspace, scylla_only, xfail_tablets):
     num_partitions = 5000
     with util.new_test_table(cql, test_keyspace, 'pk int PRIMARY KEY, v int') as table:
         delete_id = cql.prepare(f"DELETE FROM {table} WHERE pk = ?")

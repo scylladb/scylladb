@@ -42,6 +42,8 @@ def pytest_addoption(parser):
     # presence.
     parser.addoption('--omit-scylla-output', action='store_true',
         help='Omit scylla\'s output from the test output')
+    parser.addoption('--replication', action='store', choices=['tablets', 'vnodes', 'all'], default='all',
+        help='Which replication method to use')
 
 # "cql" fixture: set up client object for communicating with the CQL API.
 # The host/port combination of the server are determined by the --host and
@@ -93,9 +95,21 @@ def this_dc(cql):
 # and automatically deleted at the end. We use scope="session" so that all
 # tests will reuse the same keyspace.
 @pytest.fixture(scope="session")
-def test_keyspace(cql, this_dc):
+def test_keyspace(request, cql, this_dc):
+    replication = request.config.getoption('replication')
+    is_tablets = replication == 'tablets' or (replication == 'all' and getattr(request, 'param', None) == 'tablets')
+
     name = unique_name()
-    cql.execute("CREATE KEYSPACE " + name + " WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 1 }")
+    if is_tablets:
+        name += '_tablets'
+
+    stmt = "CREATE KEYSPACE " + name + " WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 1 }"
+    if is_tablets:
+        stmt += " AND TABLETS = {'initial': 4}"
+    else:
+        stmt += " AND TABLETS = {'enabled': false}"
+
+    cql.execute(stmt)
     yield name
     cql.execute("DROP KEYSPACE " + name)
 
@@ -221,3 +235,22 @@ def temp_workdir():
     """ Creates a temporary work directory, for the scope of a single test. """
     with tempfile.TemporaryDirectory() as workdir:
         yield workdir
+
+@pytest.fixture(scope="function")
+def xfail_tablets(test_keyspace):
+    if test_keyspace.endswith('_tablets'):
+        pytest.xfail("test fails with tablets")
+
+# Automatically parameterize each test, via the test_keyspace fixture, which is
+# used by every test (either directly or indirectly).
+# The test_keyspace fixture is parameterized with the replication strategy to
+# use: vnodes or tablets. It receives said parameter via the request.param field.
+def pytest_generate_tests(metafunc):
+    if metafunc.config.getoption("replication") != "all":
+        return
+
+    if 'test_keyspace' in metafunc.fixturenames:
+        metafunc.parametrize(
+                "test_keyspace",
+                ["tablets", "vnodes"],
+                indirect=True)

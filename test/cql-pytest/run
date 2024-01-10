@@ -27,7 +27,16 @@ run.wait_for_services(pid, [
     lambda: run.check_rest_api(ip),
     lambda: check_cql(ip)
 ])
-success = run.run_pytest(sys.path[0], ['--host=' + ip] + sys.argv[1:])
+
+args = ['--host=' + ip]
+if not any(map(lambda x: x.startswith('--replication'), sys.argv)):
+    # The default for --replication is "all". To faciliate iterative
+    # development, with short compile+test cycles, we only run the test with
+    # --replication=tablets, when running them via 'run'.
+    # If the user already provided this option, don't overwrite it.
+    args.append('--replication=tablets')
+
+success = run.run_pytest(sys.path[0], args + sys.argv[1:])
 
 run.summary = 'Scylla tests pass' if success else 'Scylla tests failure'
 

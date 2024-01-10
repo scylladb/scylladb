@@ -247,7 +247,8 @@ def check_pages_many_partitions(results, expected):
         assert p == expected_pages.get(i, [])
 
 
-def test_partition_tombstone_prefix(cql, test_keyspace, lowered_tombstone_limit, driver_bug_1):
+# xfail_tablets due to https://github.com/scylladb/scylladb/issues/16486
+def test_partition_tombstone_prefix(cql, test_keyspace, lowered_tombstone_limit, driver_bug_1, xfail_tablets):
     with new_test_table(cql, test_keyspace, 'pk int, ck int, v int, PRIMARY KEY (pk, ck)') as table:
         insert_row_id = cql.prepare(f"INSERT INTO {table} (pk, ck, v) VALUES (?, ?, ?)")
         delete_partition_id = cql.prepare(f"DELETE FROM {table} WHERE pk = ?")
@@ -267,8 +268,8 @@ def test_partition_tombstone_prefix(cql, test_keyspace, lowered_tombstone_limit,
         check_pages_many_partitions(cql.execute(statement), {-1: all_pks[-1]})
 
 
-
-def test_partition_tombstone_span(cql, test_keyspace, lowered_tombstone_limit, driver_bug_1):
+# xfail_tablets due to https://github.com/scylladb/scylladb/issues/16486
+def test_partition_tombstone_span(cql, test_keyspace, lowered_tombstone_limit, driver_bug_1, xfail_tablets):
     with new_test_table(cql, test_keyspace, 'pk int, ck int, v int, PRIMARY KEY (pk, ck)') as table:
         insert_row_id = cql.prepare(f"INSERT INTO {table} (pk, ck, v) VALUES (?, ?, ?)")
         delete_partition_id = cql.prepare(f"DELETE FROM {table} WHERE pk = ?")
@@ -288,7 +289,8 @@ def test_partition_tombstone_span(cql, test_keyspace, lowered_tombstone_limit, d
         check_pages_many_partitions(cql.execute(statement), {0: all_pks[0], -1: all_pks[-1]})
 
 
-def test_static_row_tombstone_prefix(cql, test_keyspace, lowered_tombstone_limit, driver_bug_1):
+# xfail_tablets due to https://github.com/scylladb/scylladb/issues/16486
+def test_static_row_tombstone_prefix(cql, test_keyspace, lowered_tombstone_limit, driver_bug_1, xfail_tablets):
     with new_test_table(cql, test_keyspace, 'pk int, ck int, v int, s int static, PRIMARY KEY (pk, ck)') as table:
         upsert_row_id = cql.prepare(f"UPDATE {table} SET s = ? WHERE pk = ?")
         delete_partition_id = cql.prepare(f"DELETE FROM {table} WHERE pk = ?")
@@ -308,7 +310,8 @@ def test_static_row_tombstone_prefix(cql, test_keyspace, lowered_tombstone_limit
         check_pages_many_partitions(cql.execute(statement), {-1: all_pks[-1]})
 
 
-def test_static_row_tombstone_span(cql, test_keyspace, lowered_tombstone_limit, driver_bug_1):
+# xfail_tablets due to https://github.com/scylladb/scylladb/issues/16486
+def test_static_row_tombstone_span(cql, test_keyspace, lowered_tombstone_limit, driver_bug_1, xfail_tablets):
     with new_test_table(cql, test_keyspace, 'pk int, ck int, v int, s int static, PRIMARY KEY (pk, ck)') as table:
         upsert_row_id = cql.prepare(f"UPDATE {table} SET s = ? WHERE pk = ?")
         delete_partition_id = cql.prepare(f"DELETE FROM {table} WHERE pk = ?")
