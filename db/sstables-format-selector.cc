@@ -66,7 +66,6 @@ sstables_format_listener::sstables_format_listener(gms::gossiper& g, sharded<gms
     : _gossiper(g)
     , _features(f)
     , _selector(selector)
-    , _md_feature_listener(*this, sstables::sstable_version_types::md)
     , _me_feature_listener(*this, sstables::sstable_version_types::me)
 { }
 
@@ -87,7 +86,6 @@ future<> sstables_format_listener::start() {
     // The listener may fire immediately, create a thread for that case.
     co_await seastar::async([this] {
         _features.local().me_sstable.when_enabled(_me_feature_listener);
-        _features.local().md_sstable.when_enabled(_md_feature_listener);
     });
 }
 
