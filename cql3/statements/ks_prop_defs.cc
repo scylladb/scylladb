@@ -108,7 +108,7 @@ data_dictionary::storage_options ks_prop_defs::get_storage_options() const {
     return opts;
 }
 
-std::optional<unsigned> ks_prop_defs::get_initial_tablets(const sstring& strategy_class) const {
+std::optional<unsigned> ks_prop_defs::get_initial_tablets(const sstring& strategy_class, bool enabled_by_default) const {
     // FIXME -- this should be ignored somehow else
     if (locator::abstract_replication_strategy::to_qualified_class_name(strategy_class) != "org.apache.cassandra.locator.NetworkTopologyStrategy") {
         return std::nullopt;
@@ -116,7 +116,7 @@ std::optional<unsigned> ks_prop_defs::get_initial_tablets(const sstring& strateg
 
     auto tablets_options = get_map(KW_TABLETS);
     if (!tablets_options) {
-        return std::nullopt;
+        return enabled_by_default ? std::optional<unsigned>(0) : std::nullopt;
     }
 
     std::optional<unsigned> ret;
@@ -159,7 +159,7 @@ std::optional<sstring> ks_prop_defs::get_replication_strategy_class() const {
 
 lw_shared_ptr<data_dictionary::keyspace_metadata> ks_prop_defs::as_ks_metadata(sstring ks_name, const locator::token_metadata& tm, const gms::feature_service& feat) {
     auto sc = get_replication_strategy_class().value();
-    std::optional<unsigned> initial_tablets = get_initial_tablets(sc);
+    std::optional<unsigned> initial_tablets = get_initial_tablets(sc, feat.tablets);
     auto options = prepare_options(sc, tm, get_replication_options(), initial_tablets);
     return data_dictionary::keyspace_metadata::new_keyspace(ks_name, sc,
             std::move(options), initial_tablets, get_boolean(KW_DURABLE_WRITES, true), get_storage_options());
@@ -171,7 +171,7 @@ lw_shared_ptr<data_dictionary::keyspace_metadata> ks_prop_defs::as_ks_metadata_u
     auto sc = get_replication_strategy_class();
     std::optional<unsigned> initial_tablets;
     if (sc) {
-        initial_tablets = get_initial_tablets(*sc);
+        initial_tablets = get_initial_tablets(*sc, old->initial_tablets().has_value());
         options = prepare_options(*sc, tm, get_replication_options(), initial_tablets, old_options);
     } else {
         sc = old->strategy_name();
