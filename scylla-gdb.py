@@ -18,6 +18,7 @@ import subprocess
 import time
 import socket
 import string
+import math
 
 
 def align_up(ptr, alignment):
@@ -5079,6 +5080,113 @@ class scylla_small_objects(gdb.Command):
             gdb.write("[{}] 0x{:x} {}\n".format(offset + i, obj, sym_text))
 
 
+class scylla_large_objects(gdb.Command):
+    """List live objects from one of the seastar allocator's large pools
+
+    The pool is selected with the `-o|--object-size` flag. Results are paginated by
+    default as there can be thousands of objects. Default page size is 20.
+    To list a certain page, use the `-p|--page` flag. To find out the number of
+    total objects and pages, use `--summarize`.
+    To sample random pages, use `--random-page`.
+
+    For usage see: scylla large-objects --help
+
+    Examples:
+
+    (gdb) scylla large-objects -o 32768 --summarize
+    number of objects: 9737
+    page size        : 20
+    number of pages  : 487
+
+    (gdb) scylla large-objects -o 131072 --random-page
+    [40] 0x60001cb40000
+    [41] 0x60001cb60000
+    [42] 0x60001cb80000
+    [43] 0x60001cba0000
+    [44] 0x60001cbc0000
+    [45] 0x60001cbe0000
+    [46] 0x60001cc00000
+    [47] 0x60001cc20000
+    [48] 0x60001cc40000
+    [49] 0x60001cc60000
+    [50] 0x60001cc80000
+    [51] 0x60001cca0000
+    [52] 0x60001ccc0000
+    [53] 0x60001cce0000
+    [54] 0x60001cd00000
+    [55] 0x60001cd20000
+    [56] 0x60001cd40000
+    [57] 0x60001cd60000
+    [58] 0x60001cd80000
+    [59] 0x60001cda0000
+    """
+
+    def __init__(self):
+        gdb.Command.__init__(self, 'scylla large-objects', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND)
+        self._parser = None
+        self._objects = None
+        self._object_size = None
+
+    def init_parser(self):
+        parser = argparse.ArgumentParser(description="scylla large-objects")
+        parser.add_argument("-o", "--object-size", action="store", type=int, required=True,
+                            help="Object size, valid sizes are powers of two, above {}".format(int(gdb.parse_and_eval("seastar::memory::max_small_allocation"))))
+        parser.add_argument("-p", "--page", action="store", type=int, default=0, help="Page to show.")
+        parser.add_argument("-s", "--page-size", action="store", type=int, default=20,
+                help="Number of objects in a page. A page size of 0 turns off paging.")
+        parser.add_argument("--random-page", action="store_true", help="Show a random page.")
+        parser.add_argument("--summarize", action="store_true",
+                help="Print the number of objects and pages in the pool.")
+        parser.add_argument("--verbose", action="store_true",
+                help="Print additional details on what is going on.")
+
+        self._parser = parser
+
+    def invoke(self, arg, from_tty):
+        if self._parser is None:
+            self.init_parser()
+
+        try:
+            args = self._parser.parse_args(arg.split())
+        except SystemExit:
+            return
+
+        object_size = int(args.object_size / int(gdb.parse_and_eval('\'seastar::memory::page_size\'')))
+
+        if self._objects is None or object_size != self._object_size:
+            if args.verbose:
+                gdb.write(f"Object size changed ({self._object_size} pages -> {object_size} pages), scanning spans.\n")
+            # We materialize all relevant spans. There aren't usually that many
+            # of them. Rewrite this to be lazy if this proves problematic with
+            # certain cores.
+            self._objects = [s for s in spans() if s.is_large() and not s.is_free() and s.size() == object_size]
+
+        self._object_size = object_size
+
+        if args.summarize:
+            gdb.write("number of objects: {}\n"
+                      "page size        : {}\n"
+                      "number of pages  : {}\n"
+                      .format(
+                          len(self._objects),
+                          args.page_size,
+                          math.ceil(len(self._objects) / args.page_size)))
+            return
+
+        if args.random_page:
+            page = random.randint(0, int(len(self._objects) / args.page_size) - 1)
+        else:
+            page = args.page
+
+        if page >= len(self._objects)/args.page_size:
+            return
+
+        start = page * args.page_size
+        end = start + args.page_size
+        for index, span in enumerate(self._objects[start:end]):
+            gdb.write("[{}] 0x{:x}\n".format(start + index, span.start))
+
+
 class scylla_compaction_tasks(gdb.Command):
     """Summarize the compaction::compaction_task_executor instances.
 
@@ -5963,6 +6071,7 @@ scylla_smp_queues()
 scylla_features()
 scylla_repairs()
 scylla_small_objects()
+scylla_large_objects()
 scylla_compaction_tasks()
 scylla_set_schema()
 scylla_schema()
