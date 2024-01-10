@@ -8,12 +8,10 @@
 
 #pragma once
 
-#include "cql3/statements/property_definitions.hh"
 #include "compaction_backlog_manager.hh"
 #include "compaction_strategy.hh"
 #include "db_clock.hh"
 #include "compaction_descriptor.hh"
-#include "tombstone_gc.hh"
 
 namespace sstables {
 

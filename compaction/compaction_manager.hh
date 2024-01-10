@@ -21,7 +21,6 @@
 #include <seastar/core/scheduling.hh>
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/condition-variable.hh>
-#include "log.hh"
 #include "sstables/shared_sstable.hh"
 #include "utils/exponential_backoff_retry.hh"
 #include "utils/updateable_value.hh"
@@ -29,7 +28,6 @@
 #include <vector>
 #include <list>
 #include <functional>
-#include <algorithm>
 #include "compaction.hh"
 #include "compaction_backlog_manager.hh"
 #include "compaction/compaction_descriptor.hh"

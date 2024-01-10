@@ -11,7 +11,6 @@
 #include "time_window_compaction_strategy.hh"
 #include "leveled_compaction_strategy.hh"
 #include <utility>
-#include <type_traits>
 #include <variant>
 
 namespace compaction {
