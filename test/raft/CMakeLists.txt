@@ -35,3 +35,7 @@ add_scylla_test(randomized_nemesis_test
 add_scylla_test(replication_test
   KIND SEASTAR
   LIBRARIES test-raft)
+
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/suite.yaml")
+  set(scylla_tests "${scylla_tests}" PARENT_SCOPE)
+endif()
