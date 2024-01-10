@@ -45,9 +45,12 @@ launch_time = time.monotonic()
 
 output_is_a_tty = sys.stdout.isatty()
 
-all_modes = set(['debug', 'release', 'dev', 'sanitize', 'coverage'])
+all_modes = {'debug': 'Debug',
+             'release': 'RelWithDebInfo',
+             'dev': 'Dev',
+             'sanitize': 'Sanitize',
+             'coverage': 'Coverage'}
 debug_modes = set(['debug', 'sanitize'])
-
 
 def create_formatter(*decorators) -> Callable[[Any], str]:
     """Return a function which decorates its argument with the given
@@ -76,6 +79,24 @@ class palette:
     @staticmethod
     def nocolor(text: str) -> str:
         return palette.ansi_escape.sub('', text)
+
+
+def path_to(mode, *components):
+    """Resolve path to built executable"""
+    build_dir = 'build'
+    if os.path.exists(os.path.join(build_dir, 'build.ninja')):
+        *dir_components, basename = components
+        return os.path.join(build_dir, *dir_components, all_modes[mode], basename)
+    return os.path.join(build_dir, mode, *components)
+
+
+def ninja(target):
+    """Build specified target using ninja"""
+    build_dir = 'build'
+    args = ['ninja', target]
+    if os.path.exists(os.path.join(build_dir, 'build.ninja')):
+        args = ['ninja', '-C', build_dir, target]
+    return subprocess.Popen(args, stdout=subprocess.PIPE).communicate()[0].decode()
 
 
 class TestSuite(ABC):
@@ -266,7 +287,7 @@ class UnitTestSuite(TestSuite):
         self.all_can_run_compaction_groups_except = cfg.get("all_can_run_compaction_groups_except")
 
     async def create_test(self, shortname, suite, args):
-        exe = os.path.join("build", suite.mode, "test", suite.name, shortname)
+        exe = path_to(suite.mode, "test", suite.name, shortname)
         if not os.access(exe, os.X_OK):
             print(palette.warn(f"Unit test executable {exe} not found."))
             return
@@ -302,7 +323,7 @@ class BoostTestSuite(UnitTestSuite):
         super().__init__(path, cfg, options, mode)
 
     async def create_test(self, shortname: str, suite, args) -> None:
-        exe = os.path.join("build", suite.mode, "test", suite.name, shortname)
+        exe = path_to(suite.mode, "test", suite.name, shortname)
         if not os.access(exe, os.X_OK):
             print(palette.warn(f"Boost test executable {exe} not found."))
             return
@@ -346,7 +367,7 @@ class PythonTestSuite(TestSuite):
 
     def __init__(self, path, cfg: dict, options: argparse.Namespace, mode: str) -> None:
         super().__init__(path, cfg, options, mode)
-        self.scylla_exe = os.path.join("build", self.mode, "scylla")
+        self.scylla_exe = path_to(self.mode, "scylla")
         if self.mode == "coverage":
             self.scylla_env = coverage.env(self.scylla_exe, distinct_id=self.name)
         else:
@@ -484,7 +505,7 @@ class RunTestSuite(TestSuite):
 
     def __init__(self, path: str, cfg, options: argparse.Namespace, mode: str) -> None:
         super().__init__(path, cfg, options, mode)
-        self.scylla_exe = os.path.join("build", self.mode, "scylla")
+        self.scylla_exe = path_to(self.mode, "scylla")
         if self.mode == "coverage":
             self.scylla_env = coverage.env(self.scylla_exe, distinct_id=self.name)
         else:
@@ -600,7 +621,7 @@ class UnitTest(Test):
 
     def __init__(self, test_no: int, shortname: str, suite, args: str) -> None:
         super().__init__(test_no, shortname, suite)
-        self.path = os.path.join("build", self.mode, "test", self.name)
+        self.path = path_to(self.mode, "test", self.name)
         self.args = shlex.split(args) + UnitTest.standard_args
         if self.mode == "coverage":
             self.env = coverage.env(self.path)
@@ -1199,7 +1220,7 @@ def parse_cmd_line() -> argparse.Namespace:
         help="""Path to temporary test data and log files. The data is
         further segregated per build mode. Default: ./testlog.""",
     )
-    parser.add_argument('--mode', choices=all_modes, action="append", dest="modes",
+    parser.add_argument('--mode', choices=all_modes.keys(), action="append", dest="modes",
                         help="Run only tests for given build mode(s)")
     parser.add_argument('--repeat', action="store", default="1", type=int,
                         help="number of times to repeat test execution")
@@ -1265,7 +1286,7 @@ def parse_cmd_line() -> argparse.Namespace:
 
     if not args.modes:
         try:
-            out = subprocess.Popen(['ninja', 'mode_list'], stdout=subprocess.PIPE).communicate()[0].decode()
+            out = ninja('mode_list')
             # [1/1] List configured modes
             # debug release dev
             args.modes = re.sub(r'.* List configured modes\n(.*)\n', r'\1',
@@ -1291,7 +1312,7 @@ def parse_cmd_line() -> argparse.Namespace:
 
     # Get the list of tests configured by configure.py
     try:
-        out = subprocess.Popen(['ninja', 'unit_test_list'], stdout=subprocess.PIPE).communicate()[0].decode()
+        out = ninja('unit_test_list')
         # [1/1] List configured unit tests
         args.tests = set(re.sub(r'.* List configured unit tests\n(.*)\n', r'\1', out, 1, re.DOTALL).split("\n"))
     except Exception:
@@ -1596,7 +1617,7 @@ async def main() -> int:
         write_consolidated_boost_junit_xml(options.tmpdir, mode)
 
     if 'coverage' in options.modes:
-        coverage.generate_coverage_report("build/coverage", "tests")
+        coverage.generate_coverage_report(path_to("coverage", "tests"))
 
     # Note: failure codes must be in the ranges 0-124, 126-127,
     #       to cooperate with git bisect's expectations
