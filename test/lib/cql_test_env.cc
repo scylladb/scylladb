@@ -747,7 +747,7 @@ private:
             });
 
             _qp.invoke_on_all([this, &group0_client] (cql3::query_processor& qp) {
-                qp.start_remote(_mm.local(), _forward_service.local(), group0_client);
+                qp.start_remote(_mm.local(), _forward_service.local(), _ss.local(), group0_client);
             }).get();
             auto stop_qp_remote = defer([this] {
                 _qp.invoke_on_all(&cql3::query_processor::stop_remote).get();

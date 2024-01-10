@@ -113,6 +113,9 @@ tablet_migration_streaming_info get_migration_streaming_info(const locator::topo
             });
 
             return result;
+        case tablet_transition_kind::rf_change:
+            // TODO: implement, what exactly to do here?
+            return result;
     }
     on_internal_error(tablet_logger, format("Invalid tablet transition kind: {}", static_cast<int>(trinfo.transition)));
 }
@@ -341,6 +344,7 @@ tablet_transition_stage tablet_transition_stage_from_string(const sstring& name)
 static const std::unordered_map<tablet_transition_kind, sstring> tablet_transition_kind_to_name = {
         {tablet_transition_kind::migration, "migration"},
         {tablet_transition_kind::rebuild, "rebuild"},
+        {tablet_transition_kind::rf_change, "rf_change"},
 };
 
 static const std::unordered_map<sstring, tablet_transition_kind> tablet_transition_kind_from_name = std::invoke([] {

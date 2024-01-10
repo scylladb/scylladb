@@ -251,6 +251,8 @@ future<tablet_metadata> read_tablet_metadata(cql3::query_processor& qp) {
                 pending.erase(r);
             }
             if (pending.size() == 0) {
+            // TODO: below helps mitigate an error when removing tablets replicas, but causes scylla to crash
+            // if (pending.empty() && transition != tablet_transition_kind::rf_change) {
                 throw std::runtime_error(format("Stage set but no pending replica for table {} tablet {}",
                                                 table, current->tid));
             }

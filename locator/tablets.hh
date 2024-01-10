@@ -181,6 +181,10 @@ enum class tablet_transition_kind {
     // The new replica is (tablet_transition_info::next - tablet_info::replicas).
     // The leaving replica is (tablet_info::replicas - tablet_transition_info::next).
     rebuild,
+
+    // Tablet replica is either added or removed.
+    // The new replica is the same as the one it clones, except it's located on a different node/shard.
+    rf_change,
 };
 
 sstring tablet_transition_stage_to_string(tablet_transition_stage);

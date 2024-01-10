@@ -51,6 +51,7 @@ private:
 public:
     void validate();
     std::map<sstring, sstring> get_replication_options() const;
+    std::map<sstring, sstring> get_replication_map() const;
     std::optional<sstring> get_replication_strategy_class() const;
     std::optional<unsigned> get_initial_tablets(const sstring& strategy_class, bool enabled_by_default) const;
     data_dictionary::storage_options get_storage_options() const;

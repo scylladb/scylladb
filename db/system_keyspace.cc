@@ -232,6 +232,8 @@ schema_ptr system_keyspace::topology() {
             .with_column("request_id", timeuuid_type)
             .with_column("ignore_nodes", set_type_impl::get_instance(uuid_type, true), column_kind::static_column)
             .with_column("new_cdc_generation_data_uuid", timeuuid_type, column_kind::static_column)
+            .with_column("new_keyspace_rf_change_ks_name", utf8_type, column_kind::static_column)
+            .with_column("new_keyspace_rf_change_rf_per_dc", map_type_impl::get_instance(utf8_type, utf8_type, false), column_kind::static_column)
             .with_column("version", long_type, column_kind::static_column)
             .with_column("fence_version", long_type, column_kind::static_column)
             .with_column("transition_state", utf8_type, column_kind::static_column)
@@ -2917,6 +2919,11 @@ future<service::topology> system_keyspace::load_topology_state(const std::unorde
             ret.committed_cdc_generations = decode_cdc_generations_ids(deserialize_set_column(*topology(), some_row, "committed_cdc_generations"));
         }
 
+        if (some_row.has("new_keyspace_rf_change_rf_per_dc")) {
+            ret.new_keyspace_rf_change_ks_name = some_row.get_as<sstring>("new_keyspace_rf_change_ks_name");
+            ret.new_keyspace_rf_change_rf_per_dc = some_row.get_map<sstring,sstring>("new_keyspace_rf_change_rf_per_dc");
+        }
+        
         if (!ret.committed_cdc_generations.empty()) {
             // Sanity check for CDC generation data consistency.
             auto gen_id = ret.committed_cdc_generations.back();

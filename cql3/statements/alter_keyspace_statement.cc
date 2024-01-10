@@ -37,6 +37,9 @@ future<> cql3::statements::alter_keyspace_statement::check_access(query_processo
 }
 
 void cql3::statements::alter_keyspace_statement::validate(query_processor& qp, const service::client_state& state) const {
+        // TODO: when processing a tablet-enabled keyspace,
+        //       we must check if the new RF differs by at most 1 from the old RF,
+        //       and fail the query if that's not the case
         auto tmp = _name;
         std::transform(tmp.begin(), tmp.end(), tmp.begin(), ::tolower);
         if (is_system_keyspace(tmp)) {
@@ -109,14 +112,30 @@ cql3::statements::alter_keyspace_statement::prepare(data_dictionary::database db
 
 static logging::logger mylogger("alter_keyspace");
 
+// TODO: when we execute 2 ALTER KS statements fast enough,
+//       cqlsh returns `NoHostAvailable:` error,
+//       which is not especially informative - this needs to be improved.
 future<::shared_ptr<cql_transport::messages::result_message>>
 cql3::statements::alter_keyspace_statement::execute(query_processor& qp, service::query_state& state, const query_options& options, std::optional<service::group0_guard> guard) const {
     std::vector<sstring> warnings = check_against_restricted_replication_strategies(qp, keyspace(), *_attrs, qp.get_cql_stats());
-    return schema_altering_statement::execute(qp, state, options, std::move(guard)).then([warnings = std::move(warnings)] (::shared_ptr<messages::result_message> msg) {
-        for (const auto& warning : warnings) {
-            msg->add_warning(warning);
-            mylogger.warn("{}", warning);
-        }
-        return msg;
-    });
+
+    auto&& replication_strategy = qp.db().find_keyspace(_name).get_replication_strategy();
+    if (replication_strategy.uses_tablets()) {
+        // TODO: should we always bounce to shard 0? If yes, then alter_keyspace_statement's ctor
+        //       would need to set needs_guard = true
+        // TODO: alter_tablets_keyspace takes guard& as a parameter below. This guard can be "consumed" by its internal
+        //       implementation, and if that happens, a new guard will be created in its place,
+        //       so that later this guard can be safely moved to schema_altering_statement::execute,
+        //       but it also means this whole operation will NOT execute under a single raft guard.
+        //       A possible solution is to merge mutations created within this function with later mutations.
+        co_await qp.alter_tablets_keyspace(_name, _attrs->get_replication_map(), guard);
+    }
+    co_return co_await schema_altering_statement::execute(qp, state, options, std::move(guard)).then(
+            [warnings = std::move(warnings)](::shared_ptr<messages::result_message> msg) {
+                for (const auto &warning: warnings) {
+                    msg->add_warning(warning);
+                    mylogger.warn("{}", warning);
+                }
+                return msg;
+            });
 }

@@ -96,6 +96,15 @@ std::map<sstring, sstring> ks_prop_defs::get_replication_options() const {
     return std::map<sstring, sstring>{};
 }
 
+
+std::map<sstring, sstring> ks_prop_defs::get_replication_map() const {
+    auto replication_map = get_replication_options();
+    if (auto iter = replication_map.find(REPLICATION_STRATEGY_CLASS_KEY); iter != replication_map.end()) {
+        replication_map.erase(iter);
+    }
+    return replication_map;
+}
+
 data_dictionary::storage_options ks_prop_defs::get_storage_options() const {
     data_dictionary::storage_options opts;
     auto options_map = get_map(KW_STORAGE);
