@@ -1310,6 +1310,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
 
     struct cancel_requests {
         group0_guard guard;
+        std::unordered_set<raft::server_id> dead_nodes;
     };
 
     struct start_cleanup {
@@ -1391,7 +1392,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             // We did not find a request that has enough live node to proceed
             // Cancel all requests to let admin know that no operation can succeed
             slogger.warn("topology coordinator: cancel request queue because no request can proceed. Dead nodes: {}", dead_nodes);
-            return cancel_requests{std::move(guard)};
+            return cancel_requests{std::move(guard), std::move(dead_nodes)};
         }
 
         auto [id, req] = *next_req;
@@ -2274,7 +2275,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         return std::make_pair(false, std::move(guard));
     }
 
-    future<> cancel_all_requests(group0_guard guard) {
+    future<> cancel_all_requests(group0_guard guard, std::unordered_set<raft::server_id> dead_nodes) {
         std::vector<canonical_mutation> muts;
         std::vector<raft::server_id> reject_join;
         if (_topo_sm._topology.requests.empty()) {
@@ -2285,7 +2286,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             topology_mutation_builder builder(ts);
             topology_request_tracking_mutation_builder rtbuilder(_topo_sm._topology.find(id)->second.request_id);
             auto node_builder = builder.with_node(id).del("topology_request");
-            rtbuilder.done("canceled");
+            rtbuilder.done(fmt::format("Canceled. Dead nodes: {}", dead_nodes));
             switch (req) {
                 case topology_request::replace:
                 [[fallthrough]];
@@ -2342,7 +2343,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             }
 
             if (auto* cancel = std::get_if<cancel_requests>(&work)) {
-                co_await cancel_all_requests(std::move(cancel->guard));
+                co_await cancel_all_requests(std::move(cancel->guard), std::move(cancel->dead_nodes));
                 co_return true;
             }
 
