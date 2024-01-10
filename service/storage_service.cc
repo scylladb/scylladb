@@ -1253,8 +1253,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
 
     using drop_guard_and_retake = bool_class<class retake_guard_tag>;
 
-    // True if an ongoing topology change should be rolled back
-    bool _rollback = false;
+    // Engaged if an ongoing topology change should be rolled back. The string inside
+    // will indicate a reason for the rollback.
+    std::optional<sstring> _rollback;
 
     const locator::token_metadata& get_token_metadata() const noexcept {
         return *_shared_tm.get();
@@ -2457,7 +2458,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 } catch (...) {
                     slogger.error("raft topology: transition_state::commit_cdc_generation, "
                                     "raft_topology_cmd::command::barrier failed, error {}", std::current_exception());
-                    _rollback = true;
+                    _rollback = fmt::format("Failed to commit cdc generation: {}", std::current_exception());
                     break;
                 }
 
@@ -2535,7 +2536,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     throw;
                 } catch (...) {
                     slogger.error("raft topology: tablets draining failed with {}. Aborting the topology operation", std::current_exception());
-                    _rollback = true;
+                    _rollback = fmt::format("Failed to drain tablets: {}", std::current_exception());
                 }
                 break;
             case topology::transition_state::write_both_read_old: {
@@ -2552,7 +2553,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     slogger.error("raft topology: transition_state::write_both_read_old, "
                                     "global_token_metadata_barrier failed, error {}",
                                     std::current_exception());
-                    _rollback = true;
+                    _rollback = fmt::format("global_token_metadata_barrier failed in write_both_read_old state {}", std::current_exception());
                     break;
                 }
 
@@ -2606,7 +2607,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 } catch (...) {
                     slogger.error("raft topology: send_raft_topology_cmd(stream_ranges) failed with exception"
                                     " (node state is {}): {}", node.rs->state, std::current_exception());
-                    _rollback = true;
+                    _rollback = fmt::format("Failed stream ranges: {}", std::current_exception());
                     break;
                 }
                 // Streaming completed. We can now move tokens state to topology::transition_state::write_both_read_new
@@ -3281,7 +3282,7 @@ future<> topology_coordinator::rollback_current_topology_op(group0_guard&& guard
            .set_version(_topo_sm._topology.version + 1)
            .with_node(node.id)
            .set("node_state", state);
-    rtbuilder.set("error", "rolled back");
+    rtbuilder.set("error", fmt::format("Rolled back: {}", *_rollback));
 
     std::vector<canonical_mutation> muts;
     // We are in the process of aborting remove or decommission which may have streamed some
@@ -3316,7 +3317,7 @@ future<> topology_coordinator::run() {
 
             if (_rollback) {
                 co_await rollback_current_topology_op(std::move(guard));
-                _rollback = false;
+                _rollback = std::nullopt;
                 continue;
             }
 
