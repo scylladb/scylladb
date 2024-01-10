@@ -445,7 +445,7 @@ describe_statement::execute(cql3::query_processor& qp, service::query_state& sta
     auto& client_state = state.get_client_state();
 
     auto descriptions = co_await describe(qp, client_state);
-    auto result = std::make_unique<result_set>(get_column_specifications(client_state));
+    auto result = std::make_unique<result_set>(get_column_specifications(qp.proxy().local_db(), client_state));
 
     for (auto&& row: descriptions) {
         result->add_row(std::move(row));
@@ -475,9 +475,9 @@ std::vector<lw_shared_ptr<column_specification>> cluster_describe_statement::get
     };
 }
 
-std::vector<lw_shared_ptr<column_specification>> cluster_describe_statement::get_column_specifications(const service::client_state& client_state) const {
+std::vector<lw_shared_ptr<column_specification>> cluster_describe_statement::get_column_specifications(replica::database& db, const service::client_state& client_state) const {
     auto spec = get_column_specifications();
-    if (should_add_range_ownership(client_state)) {
+    if (should_add_range_ownership(db, client_state)) {
         auto map_type = range_ownership_type().second;
         spec.push_back(
             make_lw_shared<column_specification>("system", "describe", ::make_shared<column_identifier>("range_ownership", true), map_type)
@@ -487,9 +487,16 @@ std::vector<lw_shared_ptr<column_specification>> cluster_describe_statement::get
     return spec;
 }
 
-bool cluster_describe_statement::should_add_range_ownership(const service::client_state& client_state) const {
+bool cluster_describe_statement::should_add_range_ownership(replica::database& db, const service::client_state& client_state) const {
     auto ks = client_state.get_raw_keyspace();
-    return !ks.empty() && !is_system_keyspace(ks) && !is_internal_keyspace(ks);
+    //TODO: produce range ownership for tables using tablets too
+    bool uses_tablets = false;
+    try {
+        uses_tablets = !ks.empty() && db.find_keyspace(ks).get_replication_strategy().uses_tablets();
+    } catch (const data_dictionary::no_such_keyspace&) {
+        // ignore
+    }
+    return !ks.empty() && !is_system_keyspace(ks) && !is_internal_keyspace(ks) && !uses_tablets;
 }
 
 future<bytes_opt> cluster_describe_statement::range_ownership(const service::storage_proxy& proxy, const sstring& ks) const {
@@ -530,7 +537,7 @@ future<std::vector<std::vector<bytes_opt>>> cluster_describe_statement::describe
         {snitch}
     };
 
-    if (should_add_range_ownership(client_state)) {
+    if (should_add_range_ownership(proxy.local_db(), client_state)) {
         auto ro_map = co_await range_ownership(proxy, client_state.get_raw_keyspace());
         row.push_back(std::move(ro_map));
     }

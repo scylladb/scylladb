@@ -27,6 +27,12 @@
  *  (see `data_dictionary/keyspace_element.hh`)
  */
 
+namespace replica {
+
+class database;
+
+}
+
 namespace cql3 {
 
 class query_processor;
@@ -40,7 +46,7 @@ protected:
     describe_statement();
 
     virtual std::vector<lw_shared_ptr<column_specification>> get_column_specifications() const = 0;
-    virtual std::vector<lw_shared_ptr<column_specification>> get_column_specifications(const service::client_state& client_state) const {
+    virtual std::vector<lw_shared_ptr<column_specification>> get_column_specifications(replica::database& db, const service::client_state& client_state) const {
         return get_column_specifications();
     }
     virtual seastar::future<std::vector<std::vector<bytes_opt>>> describe(cql3::query_processor& qp, const service::client_state& client_state) const = 0;
@@ -56,12 +62,12 @@ public:
 
 class cluster_describe_statement : public describe_statement {
 private:
-    bool should_add_range_ownership(const service::client_state& client_state) const;
+    bool should_add_range_ownership(replica::database& db, const service::client_state& client_state) const;
     future<bytes_opt> range_ownership(const service::storage_proxy& proxy, const sstring& ks) const;
 
 protected:
     virtual std::vector<lw_shared_ptr<column_specification>> get_column_specifications() const override;
-    virtual std::vector<lw_shared_ptr<column_specification>> get_column_specifications(const service::client_state& client_state) const override;
+    virtual std::vector<lw_shared_ptr<column_specification>> get_column_specifications(replica::database& db, const service::client_state& client_state) const override;
     virtual seastar::future<std::vector<std::vector<bytes_opt>>> describe(cql3::query_processor& qp, const service::client_state& client_state) const override;
 
 public:
