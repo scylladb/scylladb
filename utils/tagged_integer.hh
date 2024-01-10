@@ -13,6 +13,8 @@
 #include <iostream>
 #include <type_traits>
 
+#include <fmt/core.h>
+
 namespace utils {
 
 // Note: do not use directly, use utils::tagged_integer instead.
@@ -83,6 +85,15 @@ template <typename Tag, std::integral ValueType>
 using tagged_integer = tagged_tagged_integer<struct final, Tag, ValueType>;
 
 } // namespace utils
+
+template <typename Final, typename Tag, std::integral ValueType>
+struct fmt::formatter<utils::tagged_tagged_integer<Final, Tag, ValueType>> {
+    constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
+    auto format(const utils::tagged_tagged_integer<Final, Tag, ValueType>& x,
+		fmt::format_context& ctx) const {
+        return fmt::format_to(ctx.out(), "{}", x.value());
+    }
+};
 
 namespace std {
 
