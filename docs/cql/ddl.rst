@@ -225,8 +225,12 @@ Options:
 ===================================== ====== =============================================
 sub-option                             type  description
 ===================================== ====== =============================================
+``'enabled'``                          bool  Whether or not to enable tablets for keyspace
 ``'initial'``                          int   The number of tablets to start with
 ===================================== ====== =============================================
+
+By default if tablets cluster feature is enabled, any keyspace will be created with tablets
+enabled. The ``tablets`` option is used to opt-out a keyspace from tablets replication.
 
 A good rule of thumb to calculate initial tablets is to divide the expected total storage used
 by tables in this keyspace by (``replication_factor`` * 5GB). For example, if you expect a 30TB

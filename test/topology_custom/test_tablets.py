@@ -48,10 +48,10 @@ async def test_tablet_default_initialization(manager: ManagerClient):
     server = await manager.server_add(config=cfg)
 
     cql = manager.get_cql()
-    await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1};")
+    await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'enabled': true};")
 
     res = await cql.run_async("SELECT * FROM system_schema.scylla_keyspaces WHERE keyspace_name = 'test'")
-    assert res[0].initial_tablets > 0, "initial_tablets not configured"
+    assert res[0].initial_tablets == 0, "initial_tablets not configured"
 
     await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, c int);")
     res = await cql.run_async("SELECT * FROM system.tablets")

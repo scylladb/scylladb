@@ -121,7 +121,22 @@ std::optional<unsigned> ks_prop_defs::get_initial_tablets(const sstring& strateg
 
     std::optional<unsigned> ret;
 
-    auto it = tablets_options->find("initial");
+    auto it = tablets_options->find("enabled");
+    if (it != tablets_options->end()) {
+        auto enabled = it->second;
+        tablets_options->erase(it);
+
+        if (enabled == "true") {
+            ret = 0; // even if 'initial' is not set, it'll start with auto-detection
+        } else if (enabled == "false") {
+            assert(!ret.has_value());
+            return ret;
+        } else {
+            throw exceptions::configuration_exception(sstring("Tablets enabled value must be true or false; found ") + it->second);
+        }
+    }
+
+    it = tablets_options->find("initial");
     if (it != tablets_options->end()) {
         try {
             ret = std::stol(it->second);
