@@ -3702,7 +3702,7 @@ future<> storage_service::handle_state_normal(inet_address endpoint, gms::permit
 
     auto tokens = get_tokens_for(endpoint);
 
-    slogger.debug("Node {} state normal, token {}", endpoint, tokens);
+    slogger.info("Node {} is in normal state, tokens: {}", endpoint, tokens);
 
     auto tmlock = std::make_unique<token_metadata_lock>(co_await get_token_metadata_lock());
     auto tmptr = co_await get_mutable_token_metadata_ptr();
@@ -3723,7 +3723,7 @@ future<> storage_service::handle_state_normal(inet_address endpoint, gms::permit
     // Order Matters, TM.updateHostID() should be called before TM.updateNormalToken(), (see CASSANDRA-4300).
     auto host_id = _gossiper.get_host_id(endpoint);
     if (tmptr->is_normal_token_owner(host_id)) {
-        slogger.info("Node {}/{} state jump to normal", endpoint, host_id);
+        slogger.info("handle_state_normal: node {}/{} was already a normal token owner", endpoint, host_id);
     }
     auto existing = tmptr->get_endpoint_for_host_id_if_known(host_id);
 
@@ -3775,7 +3775,10 @@ future<> storage_service::handle_state_normal(inet_address endpoint, gms::permit
         // We do this after update_normal_tokens, allowing for tokens to be properly
         // migrated to the new host_id.
 
+        slogger.info("Host ID {} continues to be owned by {}", host_id, endpoint);
         if (const auto old_host_id = tmptr->get_host_id_if_known(endpoint); old_host_id && *old_host_id != host_id) {
+            // Replace with same IP scenario
+            slogger.info("The IP {} previously owned host ID {}", endpoint, *old_host_id);
             replaced_id = *old_host_id;
         }
     } else {
@@ -3827,7 +3830,7 @@ future<> storage_service::handle_state_normal(inet_address endpoint, gms::permit
         }
         auto current_owner = current->second;
         if (endpoint == current_owner) {
-            slogger.debug("handle_state_normal: endpoint={} == current_owner={} token {}", endpoint, current_owner, t);
+            slogger.info("handle_state_normal: endpoint={} == current_owner={} token {}", endpoint, current_owner, t);
             // set state back to normal, since the node may have tried to leave, but failed and is now back up
             owned_tokens.insert(t);
         } else if (_gossiper.compare_endpoint_startup(endpoint, current_owner) > 0) {
@@ -3854,7 +3857,7 @@ future<> storage_service::handle_state_normal(inet_address endpoint, gms::permit
     if (!candidates_for_removal.empty()) {
         for (const auto& [t, ep] : token_to_endpoint_map) {
             if (candidates_for_removal.contains(ep)) {
-                slogger.debug("handle_state_normal: endpoint={} still owns tokens, will not be removed", ep);
+                slogger.info("handle_state_normal: endpoint={} still owns tokens, will not be removed", ep);
                 candidates_for_removal.erase(ep);
                 if (candidates_for_removal.empty()) {
                     break;
@@ -3930,6 +3933,7 @@ future<> storage_service::handle_state_normal(inet_address endpoint, gms::permit
         }
     }
     _normal_state_handled_on_boot.insert(endpoint);
+    slogger.info("handle_state_normal for {}/{} finished", endpoint, host_id);
 }
 
 future<> storage_service::handle_state_left(inet_address endpoint, std::vector<sstring> pieces, gms::permit_id pid) {
