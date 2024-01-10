@@ -596,3 +596,16 @@ struct fmt::formatter<cql3::expr::column_mutation_attribute::attribute_kind> : f
         return fmt::format_to(ctx.out(), "unrecognized_attribute_kind({})", static_cast<int>(k));
     }
 };
+
+template <>
+struct fmt::formatter<cql3::expr::oper_t> {
+    constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
+
+    template <typename FormatContext>
+    auto format(const cql3::expr::oper_t& op, FormatContext& ctx) const {
+        return fmt::format_to(ctx.out(), "{}", to_string(op));
+    }
+
+private:
+    static std::string_view to_string(const cql3::expr::oper_t& op);
+};

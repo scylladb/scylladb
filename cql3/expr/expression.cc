@@ -1498,31 +1498,8 @@ expression search_and_replace(const expression& e,
 }
 
 std::ostream& operator<<(std::ostream& s, oper_t op) {
-    switch (op) {
-    case oper_t::EQ:
-        return s << "=";
-    case oper_t::NEQ:
-        return s << "!=";
-    case oper_t::LT:
-        return s << "<";
-    case oper_t::LTE:
-        return s << "<=";
-    case oper_t::GT:
-        return s << ">";
-    case oper_t::GTE:
-        return s << ">=";
-    case oper_t::IN:
-        return s << "IN";
-    case oper_t::CONTAINS:
-        return s << "CONTAINS";
-    case oper_t::CONTAINS_KEY:
-        return s << "CONTAINS KEY";
-    case oper_t::IS_NOT:
-        return s << "IS NOT";
-    case oper_t::LIKE:
-        return s << "LIKE";
-    }
-    __builtin_unreachable();
+    fmt::print(s, "{}", op);
+    return s;
 }
 
 std::vector<expression> extract_single_column_restrictions_for_column(const expression& expr,
@@ -3000,3 +2977,33 @@ split_aggregation(std::span<const expression> aggregation) {
 
 } // namespace expr
 } // namespace cql3
+
+std::string_view fmt::formatter<cql3::expr::oper_t>::to_string(const cql3::expr::oper_t& op) {
+    using cql3::expr::oper_t;
+
+    switch (op) {
+    case oper_t::EQ:
+        return "=";
+    case oper_t::NEQ:
+        return "!=";
+    case oper_t::LT:
+        return "<";
+    case oper_t::LTE:
+        return "<=";
+    case oper_t::GT:
+        return ">";
+    case oper_t::GTE:
+        return ">=";
+    case oper_t::IN:
+        return "IN";
+    case oper_t::CONTAINS:
+        return "CONTAINS";
+    case oper_t::CONTAINS_KEY:
+        return "CONTAINS KEY";
+    case oper_t::IS_NOT:
+        return "IS NOT";
+    case oper_t::LIKE:
+        return "LIKE";
+    }
+    __builtin_unreachable();
+}
