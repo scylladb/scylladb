@@ -8,6 +8,7 @@
 
 #include "sstables/sstables.hh"
 #include "size_tiered_compaction_strategy.hh"
+#include "cql3/statements/property_definitions.hh"
 
 #include <boost/range/adaptor/transformed.hpp>
 #include <boost/range/adaptors.hpp>

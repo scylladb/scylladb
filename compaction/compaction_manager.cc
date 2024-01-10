@@ -21,7 +21,6 @@
 #include <seastar/coroutine/maybe_yield.hh>
 #include "sstables/exceptions.hh"
 #include "sstables/sstable_directory.hh"
-#include "locator/abstract_replication_strategy.hh"
 #include "utils/error_injection.hh"
 #include "utils/UUID_gen.hh"
 #include "db/system_keyspace.hh"

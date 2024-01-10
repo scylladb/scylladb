@@ -7,9 +7,10 @@
  */
 
 #include "time_window_compaction_strategy.hh"
-#include "leveled_manifest.hh"
 #include "mutation_writer/timestamp_based_splitting_writer.hh"
 #include "mutation/mutation_source_metadata.hh"
+#include "cql3/statements/property_definitions.hh"
+#include "sstables/sstables.hh"
 #include "compaction_strategy_state.hh"
 
 #include <boost/range/algorithm/find.hpp>

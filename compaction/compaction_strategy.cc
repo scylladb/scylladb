@@ -15,12 +15,11 @@
 #include "seastar/core/on_internal_error.hh"
 #include "sstables/shared_sstable.hh"
 #include "sstables/sstables.hh"
-#include "compaction.hh"
 #include "compaction_strategy.hh"
 #include "compaction_strategy_impl.hh"
 #include "compaction_strategy_state.hh"
+#include "cql3/statements/property_definitions.hh"
 #include "schema/schema.hh"
-#include "sstables/sstable_set.hh"
 #include <boost/range/algorithm/find.hpp>
 #include <boost/range/algorithm/remove_if.hpp>
 #include <boost/range/adaptors.hpp>

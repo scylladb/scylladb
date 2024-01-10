@@ -16,7 +16,6 @@
 #include <seastar/core/file.hh>
 #include "sstables/types_fwd.hh"
 #include "sstables/sstable_set.hh"
-#include "utils/UUID.hh"
 #include "compaction_fwd.hh"
 #include "mutation_writer/token_group_based_splitting_writer.hh"
 
