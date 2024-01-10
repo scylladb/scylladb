@@ -41,6 +41,7 @@ public:
     static constexpr auto KW_DURABLE_WRITES = "durable_writes";
     static constexpr auto KW_REPLICATION = "replication";
     static constexpr auto KW_STORAGE = "storage";
+    static constexpr auto KW_TABLETS = "tablets";
 
     static constexpr auto REPLICATION_STRATEGY_CLASS_KEY = "class";
     static constexpr auto REPLICATION_FACTOR_KEY = "replication_factor";
@@ -50,6 +51,7 @@ public:
     void validate();
     std::map<sstring, sstring> get_replication_options() const;
     std::optional<sstring> get_replication_strategy_class() const;
+    std::optional<unsigned> get_initial_tablets(const sstring& strategy_class) const;
     data_dictionary::storage_options get_storage_options() const;
     lw_shared_ptr<data_dictionary::keyspace_metadata> as_ks_metadata(sstring ks_name, const locator::token_metadata&);
     lw_shared_ptr<data_dictionary::keyspace_metadata> as_ks_metadata_update(lw_shared_ptr<data_dictionary::keyspace_metadata> old, const locator::token_metadata&);

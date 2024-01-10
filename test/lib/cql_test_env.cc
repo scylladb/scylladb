@@ -396,8 +396,8 @@ public:
     }
 
     future<> create_keyspace(const cql_test_config& cfg, std::string_view name) {
-        auto query = format("create keyspace {} with replication = {{ 'class' : 'org.apache.cassandra.locator.NetworkTopologyStrategy', 'replication_factor' : 1{}}};", name,
-                            cfg.initial_tablets ? format(", 'initial_tablets' : {}", *cfg.initial_tablets) : "");
+        auto query = format("create keyspace {} with replication = {{ 'class' : 'org.apache.cassandra.locator.NetworkTopologyStrategy', 'replication_factor' : 1}}{};", name,
+                            cfg.initial_tablets ? format(" and tablets = {{'initial' : {}}}", *cfg.initial_tablets) : "");
         return execute_cql(query).discard_result();
     }
 

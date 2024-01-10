@@ -83,8 +83,7 @@ async def test_tablet_drain_failure_during_decommission(manager: ManagerClient):
     marks = [await log.mark() for log in logs]
 
     cql = manager.get_cql()
-    await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', "
-                  "'replication_factor': 1, 'initial_tablets': 32};")
+    await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 32};")
     await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, c int);")
 
     logger.info("Populating table")

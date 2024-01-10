@@ -91,8 +91,7 @@ async def test_tablet_metadata_propagates_with_schema_changes_in_snapshot_mode(m
     await manager.server_stop_gracefully(s0)
 
     cql = manager.get_cql()
-    await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', "
-                        "'replication_factor': 3, 'initial_tablets': 100};")
+    await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 100};")
 
     # force s0 to catch up later from the snapshot and not the raft log
     await inject_error_one_shot_on(manager, 'raft_server_force_snapshot', not_s0)
@@ -113,8 +112,7 @@ async def test_tablet_metadata_propagates_with_schema_changes_in_snapshot_mode(m
     await wait_for_cql_and_get_hosts(cql, [servers[0]], time.time() + 60)
 
     # Trigger a schema change to invoke schema agreement waiting to make sure that s0 has the latest schema
-    await cql.run_async("CREATE KEYSPACE test_dummy WITH replication = {'class': 'NetworkTopologyStrategy', "
-                        "'replication_factor': 1, 'initial_tablets': 1};")
+    await cql.run_async("CREATE KEYSPACE test_dummy WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1};")
 
     await asyncio.gather(*[cql.run_async(f"INSERT INTO test.test (pk, c) VALUES ({k}, 2);", execution_profile='whitelist')
                            for k in keys])
@@ -154,8 +152,7 @@ async def test_scans(manager: ManagerClient):
     servers = await manager.servers_add(3)
 
     cql = manager.get_cql()
-    await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', "
-                  "'replication_factor': 1, 'initial_tablets': 8};")
+    await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 8};")
     await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, c int);")
 
     keys = range(100)
@@ -185,7 +182,7 @@ async def test_table_drop_with_auto_snapshot(manager: ManagerClient):
 
     for i in range(3):
         await cql.run_async("DROP KEYSPACE IF EXISTS test;")
-        await cql.run_async("CREATE KEYSPACE IF NOT EXISTS test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1, 'initial_tablets': 8 };")
+        await cql.run_async("CREATE KEYSPACE IF NOT EXISTS test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 8 };")
         await cql.run_async("CREATE TABLE IF NOT EXISTS test.tbl_sample_kv (id int, value text, PRIMARY KEY (id));")
         await cql.run_async("INSERT INTO test.tbl_sample_kv (id, value) VALUES (1, 'ala');")
 
@@ -198,8 +195,7 @@ async def test_topology_changes(manager: ManagerClient):
     servers = await manager.servers_add(3)
 
     cql = manager.get_cql()
-    await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', "
-                  "'replication_factor': 1, 'initial_tablets': 32};")
+    await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 32};")
     await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, c int);")
 
     logger.info("Populating table")
@@ -247,8 +243,7 @@ async def test_streaming_is_guarded_by_topology_guard(manager: ManagerClient):
     await manager.api.disable_tablet_balancing(servers[0].ip_addr)
 
     cql = manager.get_cql()
-    await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', "
-                        "'replication_factor': 1, 'initial_tablets': 1};")
+    await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1};")
     await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, c int);")
 
     servers.append(await manager.server_add(cmdline=cmdline))
@@ -323,8 +318,7 @@ async def test_table_dropped_during_streaming(manager: ManagerClient):
     await manager.api.disable_tablet_balancing(servers[0].ip_addr)
 
     cql = manager.get_cql()
-    await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', "
-                        "'replication_factor': 1, 'initial_tablets': 1};")
+    await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1};")
     await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, c int);")
     await cql.run_async("CREATE TABLE test.test2 (pk int PRIMARY KEY, c int);")
 
