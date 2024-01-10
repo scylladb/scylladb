@@ -127,11 +127,19 @@ future<> controller::start_server() {
             }
         }
         bool alternator_enforce_authorization = _config.alternator_enforce_authorization();
-        _server.invoke_on_all(
-                [this, addr, alternator_port, alternator_https_port, creds = std::move(creds), alternator_enforce_authorization] (server& server) mutable {
+        std::function<future<>(server&)> server_init =
+            [this, addr, alternator_port, alternator_https_port, creds = std::move(creds), alternator_enforce_authorization] (server& server) mutable {
             return server.init(addr, alternator_port, alternator_https_port, creds, alternator_enforce_authorization,
                     &_memory_limiter.local().get_semaphore(),
                     _config.max_concurrent_requests_per_shard);
+        };
+        // Because of Seastar issue #2036, we can't simply invoke_on_all()
+        // to initialize the server on all shards in parallel: We must first
+        // initialize it on this shard (shard 0), detect any errors like busy
+        // ports, and only if successful we can invoke the initialization on
+        // all other shards.
+        futurize_invoke(server_init, _server.local()).then([this, &server_init] {
+            return _server.invoke_on_others(server_init);
         }).handle_exception([this, addr, alternator_port, alternator_https_port] (std::exception_ptr ep) {
             logger.error("Failed to set up Alternator HTTP server on {} port {}, TLS port {}: {}",
                     addr, alternator_port ? std::to_string(*alternator_port) : "OFF", alternator_https_port ? std::to_string(*alternator_https_port) : "OFF", ep);
