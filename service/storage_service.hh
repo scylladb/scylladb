@@ -763,10 +763,12 @@ private:
         raft::term_t term{0};
         uint64_t last_index{0};
     } _raft_topology_cmd_handler_state;
-    class gossiper_state_change_subscriber_proxy;
-    // A proxy class representing subscription to on_change
-    // events, and updating the address map on this events.
-    shared_ptr<gossiper_state_change_subscriber_proxy> _gossiper_proxy;
+    class raft_ip_address_updater;
+    // Represents a subscription to gossiper on_change events,
+    // updating the raft data structures that depend on
+    // IP addresses (raft_address_map, token_metadata.topology, erm-s),
+    // as well as the system.peers table.
+    shared_ptr<raft_ip_address_updater> _raft_ip_address_updater;
 
     std::unordered_set<raft::server_id> find_raft_nodes_from_hoeps(const std::list<locator::host_id_or_endpoint>& hoeps);
 
