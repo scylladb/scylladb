@@ -160,9 +160,9 @@ public:
         endpoint_locks_map::entry_ptr _ptr;
         permit_id _permit_id;
         inet_address _addr;
-        std::string _caller;
+        seastar::compat::source_location _caller;
     public:
-        endpoint_permit(endpoint_locks_map::entry_ptr&& ptr, inet_address addr, std::string caller) noexcept;
+        endpoint_permit(endpoint_locks_map::entry_ptr&& ptr, inet_address addr, seastar::compat::source_location caller) noexcept;
         endpoint_permit(endpoint_permit&&) noexcept;
         ~endpoint_permit();
         bool release() noexcept;
