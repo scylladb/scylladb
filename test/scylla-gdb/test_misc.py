@@ -81,6 +81,12 @@ def test_small_object_1(gdb):
 def test_small_object_2(gdb):
     scylla(gdb, 'small-object -o 64 --summarize')
 
+def test_large_objects_1(gdb):
+    scylla(gdb, 'large-objects -o 131072 --random-page')
+
+def test_large_objects_2(gdb):
+    scylla(gdb, 'large-objects -o 32768 --summarize')
+
 def test_lsa(gdb):
     scylla(gdb, 'lsa')
 
