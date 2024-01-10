@@ -35,12 +35,7 @@ const versioned_value* endpoint_state::get_application_state_ptr(application_sta
 }
 
 std::ostream& operator<<(std::ostream& os, const endpoint_state& x) {
-    fmt::print(os, "HeartBeatState = {}, AppStateMap =", x._heart_beat_state);
-    for (auto&entry : x._application_state) {
-        const application_state& state = entry.first;
-        const versioned_value& value = entry.second;
-        os << " { " << state << " : " << value << " } ";
-    }
+    fmt::print(os, "{}", x);
     return os;
 }
 
@@ -66,4 +61,14 @@ future<> i_endpoint_state_change_subscriber::on_application_state_change(inet_ad
     return make_ready_future<>();
 }
 
+}
+
+auto fmt::formatter<gms::endpoint_state>::format(const gms::endpoint_state& x,
+                                                 fmt::format_context& ctx) const -> decltype(ctx.out()) {
+    auto out = ctx.out();
+    out = fmt::format_to(out, "HeartBeatState = {}, AppStateMap =", x._heart_beat_state);
+    for (auto& [state, value] : x._application_state) {
+        out = fmt::format_to(out, " {{ {} : {} }} ", state, value);
+    }
+    return out;
 }
