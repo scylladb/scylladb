@@ -1,3 +1,5 @@
+---
+
 # Scylla
 
 [![Slack](https://img.shields.io/badge/slack-scylla-brightgreen.svg?logo=slack)](http://slack.scylladb.com)
@@ -33,7 +35,7 @@ Building Scylla with the frozen toolchain `dbuild` is as easy as:
 $ git submodule update --init --force --recursive
 $ ./tools/toolchain/dbuild ./configure.py
 $ ./tools/toolchain/dbuild ninja build/release/scylla
-```
+
 
 For further information, please see:
 
@@ -78,33 +80,28 @@ and the current compatibility of this feature as well as Scylla-specific extensi
 
 ## Documentation
 
-Documentation can be found [here](docs/dev/README.md).
-Seastar documentation can be found [here](http://docs.seastar.io/master/index.html).
-User documentation can be found [here](https://docs.scylladb.com/).
+- **[Developer Documentation](docs/dev/README.md):** Detailed information on Scylla development.
+- **[Seastar Documentation](http://docs.seastar.io/master/index.html):** Documentation for the Seastar framework used in Scylla.
+- **[User Documentation](https://docs.scylladb.com/):** User guides and resources for Scylla users.
 
-## Training 
+## Training
 
-Training material and online courses can be found at [Scylla University](https://university.scylladb.com/). 
-The courses are free, self-paced and include hands-on examples. They cover a variety of topics including Scylla data modeling, 
-administration, architecture, basic NoSQL concepts, using drivers for application development, Scylla setup, failover, compactions, 
-multi-datacenters and how Scylla integrates with third-party applications.
+Explore free, self-paced online courses and training materials at [Scylla University](https://university.scylladb.com/). These resources cover various topics, including:
+- Scylla data modeling
+- Administration and architecture
+- Basic NoSQL concepts
+- Application development using Scylla drivers
+- Scylla setup, failover, and compactions
+- Multi-datacenters and integration with third-party applications
 
 ## Contributing to Scylla
 
-If you want to report a bug or submit a pull request or a patch, please read the [contribution guidelines].
-
-If you are a developer working on Scylla, please read the [developer guidelines].
-
-[contribution guidelines]: CONTRIBUTING.md
-[developer guidelines]: HACKING.md
+- **[Contribution Guidelines](CONTRIBUTING.md):** Learn how to report bugs, submit pull requests, or patches.
+- **[Developer Guidelines](HACKING.md):** Guidelines for developers contributing to Scylla development.
 
 ## Contact
 
-* The [community forum] and [Slack channel] are for users to discuss configuration, management, and operations of the ScyllaDB open source.
-* The [developers mailing list] is for developers and people interested in following the development of ScyllaDB to discuss technical topics.
+- **[Community Forum](https://forum.scylladb.com/):** Discuss ScyllaDB configuration, management, and operations with other users.
+- **[Slack Channel](http://slack.scylladb.com/):** Join the ScyllaDB Slack channel for real-time discussions.
+- **[Developers Mailing List](https://groups.google.com/forum/#!forum/scylladb-dev):** Participate in technical discussions about ScyllaDB development.
 
-[Community forum]: https://forum.scylladb.com/
-
-[Slack channel]: http://slack.scylladb.com/
-
-[Developers mailing list]: https://groups.google.com/forum/#!forum/scylladb-dev
