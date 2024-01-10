@@ -441,7 +441,6 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             if (binfo && binfo->bootstrap_tokens.contains(end)) {
                 return {binfo->rs.shard_count, binfo->rs.ignore_msb};
             } else {
-                // FIXME: token metadata should directly return host ID for given token. See #12279
                 auto ep = tmptr->get_endpoint(end);
                 if (!ep) {
                     // get_sharding_info is only called for bootstrap tokens
