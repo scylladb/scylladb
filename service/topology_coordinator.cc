@@ -511,7 +511,14 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             return {rs.shard_count, rs.ignore_msb};
         };
 
-        auto [gen_uuid, gen_mutations] = co_await prepare_new_cdc_generation_data(tmptr, guard, binfo, get_sharding_info_for_host_id);
+        co_return co_await prepare_and_broadcast_cdc_generation_data(tmptr, std::move(guard), binfo, get_sharding_info_for_host_id);
+    }
+
+    future<std::tuple<utils::UUID, group0_guard, canonical_mutation>> prepare_and_broadcast_cdc_generation_data(
+            locator::token_metadata_ptr tmptr, group0_guard guard, std::optional<bootstrapping_info> binfo,
+            noncopyable_function<std::pair<size_t, uint8_t>(locator::host_id)> get_sharding_info_for_host_id) {
+
+        auto [gen_uuid, gen_mutations] = co_await prepare_new_cdc_generation_data(tmptr, guard, binfo, std::move(get_sharding_info_for_host_id));
 
         if (gen_mutations.empty()) {
             on_internal_error(rtlogger, "cdc_generation_data: gen_mutations is empty");
