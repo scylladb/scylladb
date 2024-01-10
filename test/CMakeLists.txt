@@ -44,6 +44,12 @@ function(add_scylla_test name)
   add_executable(${name} ${src})
   add_dependencies(tests ${name})
 
+  cmake_path(RELATIVE_PATH CMAKE_CURRENT_SOURCE_DIR
+    BASE_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    OUTPUT_VARIABLE dirname)
+  list(APPEND scylla_tests "${dirname}/${name}")
+  set(scylla_tests "${scylla_tests}" PARENT_SCOPE)
+
   target_include_directories(${name}
     PRIVATE
       ${CMAKE_SOURCE_DIR})
@@ -87,3 +93,12 @@ if(BUILD_TESTING)
     add_subdirectory(raft)
     add_subdirectory(resource/wasm)
 endif()
+
+if(CMAKE_CONFIGURATION_TYPES)
+  set(by_products_option BYPRODUCTS test-list.phony.stamp)
+endif()
+add_custom_target(unit_test_list
+  COMMAND echo -e "'$<LIST:JOIN,${scylla_tests},\\n>'"
+  COMMENT "List configured unit tests"
+  ${by_products_option}
+  COMMAND_EXPAND_LISTS)

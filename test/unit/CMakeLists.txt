@@ -20,3 +20,7 @@ add_scylla_test(row_cache_alloc_stress_test
   KIND UNIT)
 add_scylla_test(row_cache_stress_test
   KIND UNIT)
+
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/suite.yaml")
+  set(scylla_tests "${scylla_tests}" PARENT_SCOPE)
+endif()
