@@ -13,6 +13,7 @@
 #include "locator/host_id.hh"
 #include "service/session.hh"
 #include "dht/i_partitioner_fwd.hh"
+#include "dht/ring_position.hh"
 #include "schema/schema_fwd.hh"
 #include "utils/chunked_vector.hh"
 #include "utils/hash.hh"
@@ -466,6 +467,35 @@ future<bool> check_tablet_replica_shards(const tablet_metadata& tm, host_id this
 struct tablet_routing_info {
     tablet_replica_set tablet_replicas;
     std::pair<dht::token, dht::token> token_range;
+};
+
+/// Split a list of ranges, such that conceptually each input range is
+/// intersected with each tablet range.
+/// Tablets are pre-filtered, slecting only tablets that have a replica on the
+/// given host.
+/// Return the resulting intersections, in order.
+/// The ranges are generated lazily (one at a time).
+///
+/// Note: the caller is expected to pin tablets, by keeping an
+/// effective-replication-map alive.
+class tablet_range_splitter {
+public:
+    struct range_split_result {
+        shard_id shard; // shard where the tablet owning this range lives
+        dht::partition_range range;
+    };
+
+private:
+    schema_ptr _schema;
+    const dht::partition_range_vector& _ranges;
+    dht::partition_range_vector::const_iterator _ranges_it;
+    std::vector<range_split_result> _tablet_ranges;
+    std::vector<range_split_result>::iterator _tablet_ranges_it;
+
+public:
+    tablet_range_splitter(schema_ptr schema, const tablet_map& tablets, host_id host, const dht::partition_range_vector& ranges);
+    /// Returns nullopt when there are no more ranges.
+    std::optional<range_split_result> operator()();
 };
 
 }
