@@ -173,15 +173,6 @@ public:
         const permit_id& id() const noexcept { return _permit_id; }
     };
     // Must be called on shard 0
-    //
-    // When lock_endpoint is called on a nested path (typically a subscriber that calls back into the gossiper),
-    // and on the same endpoint, the caller must pass along the permit_id passed to it by gossiper
-    // to prevent a deadlock.  Otherwise, lock_endpoint will block on an already-locked lock forever.
-    // In this case, lock_endpoint asserts that the lock is currently held using the same permit_id.
-    //
-    // When operating on a different endpoint, or when lock_endpoint is called on a non-nested path,
-    // A null_permit_id should be passed to indicate that lock_endpoint should acquire the endpoint lock
-    // and dispatch a new, unique permit_id.
     future<endpoint_permit> lock_endpoint(inet_address, permit_id pid, seastar::compat::source_location l = seastar::compat::source_location::current());
 
 private:
