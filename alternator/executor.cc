@@ -6,13 +6,10 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#include "utils/base64.hh"
-
 #include <seastar/core/sleep.hh>
 #include "alternator/executor.hh"
 #include "log.hh"
 #include "schema/schema_builder.hh"
-#include "data_dictionary/keyspace_metadata.hh"
 #include "exceptions/exceptions.hh"
 #include "timestamp.hh"
 #include "types/map.hh"
@@ -21,17 +18,13 @@
 #include "query-result-reader.hh"
 #include "cql3/selection/selection.hh"
 #include "cql3/result_set.hh"
-#include "cql3/type_json.hh"
 #include "bytes.hh"
-#include "cql3/update_parameters.hh"
-#include "server.hh"
 #include "service/pager/query_pagers.hh"
 #include <functional>
 #include "error.hh"
 #include "serialization.hh"
 #include "expressions.hh"
 #include "conditions.hh"
-#include "cql3/constants.hh"
 #include "cql3/util.hh"
 #include <optional>
 #include "utils/overloaded_functor.hh"
@@ -41,6 +34,7 @@
 #include "schema/schema.hh"
 #include "db/tags/extension.hh"
 #include "db/tags/utils.hh"
+#include "replica/database.hh"
 #include "alternator/rmw_operation.hh"
 #include <seastar/core/coroutine.hh>
 #include <boost/range/adaptors.hpp>
@@ -48,7 +42,6 @@
 #include <unordered_set>
 #include "service/storage_proxy.hh"
 #include "gms/gossiper.hh"
-#include "schema/schema_registry.hh"
 #include "utils/error_injection.hh"
 #include "db/schema_tables.hh"
 #include "utils/rjson.hh"

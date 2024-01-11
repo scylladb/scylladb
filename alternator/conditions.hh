@@ -18,8 +18,6 @@
 
 #pragma once
 
-#include "cql3/restrictions/statement_restrictions.hh"
-#include "serialization.hh"
 #include "expressions_types.hh"
 
 namespace alternator {

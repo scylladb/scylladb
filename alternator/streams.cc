@@ -13,8 +13,6 @@
 
 #include <seastar/json/formatter.hh>
 
-#include "utils/base64.hh"
-#include "log.hh"
 #include "db/config.hh"
 
 #include "cdc/log.hh"
@@ -25,7 +23,6 @@
 #include "utils/UUID_gen.hh"
 #include "cql3/selection/selection.hh"
 #include "cql3/result_set.hh"
-#include "cql3/type_json.hh"
 #include "cql3/column_identifier.hh"
 #include "schema/schema_builder.hh"
 #include "service/storage_proxy.hh"
@@ -33,7 +30,6 @@
 #include "gms/feature_service.hh"
 
 #include "executor.hh"
-#include "rmw_operation.hh"
 #include "data_dictionary/data_dictionary.hh"
 
 /**
