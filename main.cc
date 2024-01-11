@@ -1653,7 +1653,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             perm_cache_config.refresh = std::chrono::milliseconds(cfg->permissions_update_interval_in_ms());
 
             auto start_auth_service = [&mm] (sharded<auth::service>& auth_service, std::any& stop_auth_service, const char* what) {
-                supervisor::notify("starting {}", what);
+                supervisor::notify(fmt::format("starting {}", what));
                 auth_service.invoke_on_all(&auth::service::start, std::ref(mm)).get();
 
                 stop_auth_service = defer_verbose_shutdown(what, [&auth_service] {
@@ -1662,7 +1662,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             };
 
             auto start_cql = [&dbcfg] (cql_transport::controller& controller, std::any& stop_cql, const char* what) {
-                supervisor::notify("starting {}", what);
+                supervisor::notify(fmt::format("starting {}", what));
                 with_scheduling_group(dbcfg.statement_scheduling_group, [&controller] {
                     return controller.start_server();
                 }).get();
