@@ -56,6 +56,23 @@ BOOST_AUTO_TEST_CASE(test_print_data_size_IEC) {
     }
 }
 
+BOOST_AUTO_TEST_CASE(test_print_data_size_IEC_SANS_I) {
+    struct {
+        size_t n;
+        std::string_view formatted;
+    } sizes[] = {
+        {0ULL, "0B"},
+        {1ULL, "1B"},
+        {42ULL, "42B"},
+        {8'192LL, "8K"},
+    };
+    for (auto [n, expected] : sizes) {
+        std::string actual;
+        fmt::format_to(std::back_inserter(actual), "{:I}", utils::pretty_printed_data_size{n});
+        BOOST_CHECK_EQUAL(actual, expected);
+    }
+}
+
 BOOST_AUTO_TEST_CASE(test_print_throughput) {
     struct {
         size_t n;

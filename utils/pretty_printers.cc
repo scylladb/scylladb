@@ -52,6 +52,13 @@ auto fmt::formatter<utils::pretty_printed_data_size>::format(utils::pretty_print
         static constexpr auto suffixes = {"Ki", "Mi", "Gi", "Ti", "Pi"};
         auto [n, suffix, bytes] = do_format(data_size._size, suffixes, 1024, 8192, _bytes);
         return fmt::format_to(ctx.out(), "{}{}{}", n, suffix, bytes);
+    } else if (_prefix == prefix_type::IEC_SANS_I) {
+        static constexpr auto suffixes = {"K", "M", "G", "T", "P"};
+        auto [n, suffix, bytes] = do_format(data_size._size, suffixes, 1024, 8192, false);
+        if (suffix.empty()) {
+            bytes = "B";
+        }
+        return fmt::format_to(ctx.out(), "{}{}{}", n, suffix, bytes);
     } else {
         // SI units
         static constexpr auto suffixes = {"k", "M", "G", "T", "P"};
