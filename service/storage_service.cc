@@ -2372,6 +2372,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             co_return false;
         }
 
+        rtlogger.info("entered `{}` transition state", *tstate);
         switch (*tstate) {
             case topology::transition_state::join_group0: {
                 auto [node, accepted] = co_await finish_accepting_node(get_node_to_work_on(std::move(guard)));
