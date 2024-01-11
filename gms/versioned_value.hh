@@ -17,7 +17,6 @@
 #include "gms/inet_address.hh"
 #include "dht/token.hh"
 #include "schema/schema_fwd.hh"
-#include "utils/to_string.hh"
 #include "version.hh"
 #include "cdc/generation_id.hh"
 #include <unordered_set>

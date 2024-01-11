@@ -14,8 +14,6 @@
 #include "gms/application_state.hh"
 #include "gms/versioned_value.hh"
 #include "locator/host_id.hh"
-#include <optional>
-#include <chrono>
 
 namespace gms {
 
