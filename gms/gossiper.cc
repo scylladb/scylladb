@@ -1483,7 +1483,7 @@ future<> gossiper::reset_endpoint_state_map() {
     });
 }
 
-const std::unordered_map<inet_address, endpoint_state_ptr>& gms::gossiper::get_endpoint_states() const noexcept {
+std::unordered_map<inet_address, endpoint_state_ptr> gms::gossiper::get_endpoint_states() const {
     return _endpoint_state_map._state_map;
 }
 
