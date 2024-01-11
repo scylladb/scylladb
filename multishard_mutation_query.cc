@@ -12,6 +12,7 @@
 #include "replica/database.hh"
 #include "db/config.hh"
 #include "query-result-writer.hh"
+#include "query_result_merger.hh"
 #include "readers/multishard.hh"
 
 #include <fmt/core.h>
@@ -756,7 +757,7 @@ future<page_consume_result<ResultBuilder>> read_page(
 }
 
 template <typename ResultBuilder>
-future<foreign_ptr<lw_shared_ptr<typename ResultBuilder::result_type>>> do_query(
+future<foreign_ptr<lw_shared_ptr<typename ResultBuilder::result_type>>> do_query_vnodes(
         distributed<replica::database>& db,
         schema_ptr s,
         const query::read_command& cmd,
@@ -787,6 +788,44 @@ future<foreign_ptr<lw_shared_ptr<typename ResultBuilder::result_type>>> do_query
 }
 
 template <typename ResultBuilder>
+future<foreign_ptr<lw_shared_ptr<typename ResultBuilder::result_type>>> do_query_tablets(
+        distributed<replica::database>& db,
+        schema_ptr s,
+        const query::read_command& cmd,
+        const dht::partition_range_vector& ranges,
+        tracing::trace_state_ptr trace_state,
+        db::timeout_clock::time_point timeout,
+        noncopyable_function<ResultBuilder()> result_builder_factory) {
+    auto& table = db.local().find_column_family(s);
+    auto erm = table.get_effective_replication_map();
+    const auto& token_metadata = erm->get_token_metadata();
+    const auto& tablets = token_metadata.tablets().get_tablet_map(s->id());
+    const auto this_node_id = token_metadata.get_topology().this_node()->host_id();
+
+    auto query_cmd = cmd;
+    auto result_builder = result_builder_factory();
+
+    std::vector<foreign_ptr<lw_shared_ptr<typename ResultBuilder::result_type>>> results;
+    locator::tablet_range_splitter range_splitter{s, tablets, this_node_id, ranges};
+    while (auto range_opt = range_splitter()) {
+        auto& r = *results.emplace_back(co_await db.invoke_on(range_opt->shard,
+                    [&result_builder, gs = global_schema_ptr(s), &query_cmd, &range_opt, gts = tracing::global_trace_state_ptr(trace_state), timeout] (replica::database& db) {
+            return result_builder.query(db, gs, query_cmd, range_opt->range, gts, timeout);
+        }));
+
+        // Substract result from limit, watch for underflow
+        query_cmd.partition_limit -= std::min(query_cmd.partition_limit, ResultBuilder::get_partition_count(r));
+        query_cmd.set_row_limit(query_cmd.get_row_limit() - std::min(query_cmd.get_row_limit(), ResultBuilder::get_row_count(r)));
+
+        if (!query_cmd.partition_limit || !query_cmd.get_row_limit() || r.is_short_read()) {
+            break;
+        }
+    }
+
+    co_return result_builder.merge(std::move(results));
+}
+
+template <typename ResultBuilder>
 static future<std::tuple<foreign_ptr<lw_shared_ptr<typename ResultBuilder::result_type>>, cache_temperature>> do_query_on_all_shards(
         distributed<replica::database>& db,
         schema_ptr s,
@@ -805,10 +844,13 @@ static future<std::tuple<foreign_ptr<lw_shared_ptr<typename ResultBuilder::resul
     auto& stats = local_db.get_stats();
     const auto short_read_allowed = query::short_read(cmd.slice.options.contains<query::partition_slice::option::allow_short_read>());
 
+    const auto& keyspace = local_db.find_keyspace(s->ks_name());
+    auto query_method = keyspace.get_replication_strategy().uses_tablets() ? do_query_tablets<ResultBuilder> : do_query_vnodes<ResultBuilder>;
+
     try {
         auto accounter = co_await local_db.get_result_memory_limiter().new_mutation_read(*cmd.max_result_size, short_read_allowed);
 
-        auto result = co_await do_query<ResultBuilder>(db, s, cmd, ranges, std::move(trace_state), timeout,
+        auto result = co_await query_method(db, s, cmd, ranges, std::move(trace_state), timeout,
                 [result_builder_factory, accounter = std::move(accounter)] () mutable {
 			return result_builder_factory(std::move(accounter));
 		});
@@ -831,10 +873,13 @@ public:
 
 private:
     reconcilable_result_builder _builder;
+    schema_ptr _s;
 
 public:
     mutation_query_result_builder(const schema& s, const query::partition_slice& slice, query::result_memory_accounter&& accounter)
-        : _builder(s, slice, std::move(accounter)) { }
+        : _builder(s, slice, std::move(accounter))
+        , _s(s.shared_from_this())
+     { }
 
     void consume_new_partition(const dht::decorated_key& dk) { _builder.consume_new_partition(dk); }
     void consume(tombstone t) { _builder.consume(t); }
@@ -844,7 +889,31 @@ public:
     stop_iteration consume_end_of_partition()  { return _builder.consume_end_of_partition(); }
     result_type consume_end_of_stream() { return _builder.consume_end_of_stream(); }
 
+    future<foreign_ptr<lw_shared_ptr<result_type>>> query(
+            replica::database& db,
+            schema_ptr schema,
+            const query::read_command& cmd,
+            const dht::partition_range& range,
+            tracing::trace_state_ptr trace_state,
+            db::timeout_clock::time_point timeout) {
+        auto res = co_await db.query_mutations(std::move(schema), cmd, range, std::move(trace_state), timeout);
+        co_return make_foreign(make_lw_shared<result_type>(std::get<0>(std::move(res))));
+    }
+
+    foreign_ptr<lw_shared_ptr<result_type>> merge(std::vector<foreign_ptr<lw_shared_ptr<result_type>>> results) {
+        if (results.empty()) {
+            return make_foreign(make_lw_shared<result_type>());
+        }
+        auto& first = results.front();
+        for (auto it = results.begin() + 1; it != results.end(); ++it) {
+            first->merge_disjoint(_s, **it);
+        }
+        return std::move(first);
+    }
+
     static void maybe_set_last_position(result_type& r, std::optional<full_position> full_position) { }
+    static uint32_t get_partition_count(result_type& r) { return r.partitions().size(); }
+    static uint64_t get_row_count(result_type& r) { return r.row_count(); }
 };
 
 class data_query_result_builder {
@@ -854,12 +923,15 @@ public:
 private:
     std::unique_ptr<query::result::builder> _res_builder;
     query_result_builder _builder;
+    query::result_options _opts;
 
 public:
     data_query_result_builder(const schema& s, const query::partition_slice& slice, query::result_options opts,
             query::result_memory_accounter&& accounter, uint64_t tombstone_limit)
         : _res_builder(std::make_unique<query::result::builder>(slice, opts, std::move(accounter), tombstone_limit))
-        , _builder(s, *_res_builder) { }
+        , _builder(s, *_res_builder)
+        , _opts(opts)
+    { }
 
     void consume_new_partition(const dht::decorated_key& dk) { _builder.consume_new_partition(dk); }
     void consume(tombstone t) { _builder.consume(t); }
@@ -872,8 +944,41 @@ public:
         return _res_builder->build();
     }
 
+    future<foreign_ptr<lw_shared_ptr<result_type>>> query(
+            replica::database& db,
+            schema_ptr schema,
+            const query::read_command& cmd,
+            const dht::partition_range& range,
+            tracing::trace_state_ptr trace_state,
+            db::timeout_clock::time_point timeout) {
+        dht::partition_range_vector ranges;
+        ranges.emplace_back(range);
+        auto res = co_await db.query(std::move(schema), cmd, _opts, ranges, std::move(trace_state), timeout);
+        co_return std::get<0>(std::move(res));
+    }
+
+    foreign_ptr<lw_shared_ptr<result_type>> merge(std::vector<foreign_ptr<lw_shared_ptr<result_type>>> results) {
+        if (results.empty()) {
+            return make_foreign(make_lw_shared<result_type>());
+        }
+        query::result_merger merger(query::max_rows, query::max_partitions);
+        merger.reserve(results.size());
+        for (auto&& r: results) {
+            merger(std::move(r));
+        }
+        return merger.get();
+    }
+
     static void maybe_set_last_position(result_type& r, std::optional<full_position> full_position) {
         r.set_last_position(std::move(full_position));
+    }
+    static uint32_t get_partition_count(result_type& r) {
+        r.ensure_counts();
+        return *r.partition_count();
+    }
+    static uint64_t get_row_count(result_type& r) {
+        r.ensure_counts();
+        return *r.row_count();
     }
 };
 
