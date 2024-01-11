@@ -1294,11 +1294,11 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             if (!to_remove.empty()) {
                 // Remove from group 0 nodes that left. They may failed to do so by themselves
                 try {
-                    rtlogger.trace("topology coordinator fiber removing {}"
+                    rtlogger.debug("topology coordinator fiber removing {}"
                                   " from raft since they are in `left` state", to_remove);
                     co_await _group0.group0_server().modify_config({}, to_remove, &_as);
                 } catch (const raft::commit_status_unknown&) {
-                    rtlogger.trace("topology coordinator fiber got unknown status"
+                    rtlogger.warn("topology coordinator fiber got commit_status_unknown status"
                                   " while removing {} from raft", to_remove);
                 }
             }
@@ -1507,7 +1507,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             co_await coroutine::exception(std::make_exception_ptr(
                     std::runtime_error(::format("no ip address mapping for {}", id))));
         }
-        rtlogger.trace("send {} command with term {} and index {} to {}/{}",
+        rtlogger.debug("send {} command with term {} and index {} to {}/{}",
             cmd.cmd, _term, cmd_index, id, *ip);
         auto result = _db.get_token_metadata().get_topology().is_me(*ip) ?
                     co_await _raft_topology_cmd_handler(_term, cmd_index, cmd) :
@@ -1785,7 +1785,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     //
     // It also continually cleans the obsolete CDC generation data.
     future<> cdc_generation_publisher_fiber() {
-        rtlogger.trace("start CDC generation publisher fiber");
+        rtlogger.debug("start CDC generation publisher fiber");
 
         while (!_as.abort_requested()) {
             co_await utils::get_local_injector().inject_with_handler("cdc_generation_publisher_fiber", [] (auto& handler) -> future<> {
@@ -1812,11 +1812,11 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
 
                 if (_topo_sm._topology.unpublished_cdc_generations.empty()) {
                     // No CDC generations to publish. Wait until one appears or the topology coordinator aborts.
-                    rtlogger.trace("CDC generation publisher fiber has nothing to do. Sleeping.");
+                    rtlogger.debug("CDC generation publisher fiber has nothing to do. Sleeping.");
                     co_await _topo_sm.event.when([&] () {
                         return !_topo_sm._topology.unpublished_cdc_generations.empty() || _as.abort_requested();
                     });
-                    rtlogger.trace("CDC generation publisher fiber wakes up");
+                    rtlogger.debug("CDC generation publisher fiber wakes up");
                 }
             } catch (raft::request_aborted&) {
                 rtlogger.debug("CDC generation publisher fiber aborted");
@@ -1989,7 +1989,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         if (!holder || holder->failed()) {
             holder = futurize_invoke(action)
                         .finally([this, g = _async_gate.hold(), gid, name] () noexcept {
-                rtlogger.trace("{} for tablet {} resolved.", name, gid);
+                rtlogger.debug("{} for tablet {} resolved.", name, gid);
                 _tablets_ready = true;
                 _topo_sm.event.broadcast();
             });
@@ -1997,7 +1997,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         }
 
         if (!holder->available()) {
-            rtlogger.trace("Tablet {} still doing {}", gid, name);
+            rtlogger.debug("Tablet {} still doing {}", gid, name);
             return false;
         }
 
@@ -2052,7 +2052,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         // If progress cannot be made, e.g. because all transitions are streaming, we block
         // and wait for notification.
 
-        rtlogger.trace("handle_tablet_migration()");
+        rtlogger.debug("handle_tablet_migration()");
         std::vector<canonical_mutation> updates;
         bool needs_barrier = false;
         bool has_transitions = false;
@@ -2079,7 +2079,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             };
 
             auto transition_to = [&] (locator::tablet_transition_stage stage) {
-                rtlogger.trace("Will set tablet {} stage to {}", gid, stage);
+                rtlogger.debug("Will set tablet {} stage to {}", gid, stage);
                 updates.emplace_back(get_mutation_builder()
                         .set_stage(last_token, stage)
                         .build());
@@ -2101,7 +2101,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             switch (trinfo.stage) {
                 case locator::tablet_transition_stage::allow_write_both_read_old:
                     if (do_barrier()) {
-                        rtlogger.trace("Will set tablet {} stage to {}", gid, locator::tablet_transition_stage::write_both_read_old);
+                        rtlogger.debug("Will set tablet {} stage to {}", gid, locator::tablet_transition_stage::write_both_read_old);
                         updates.emplace_back(get_mutation_builder()
                             .set_stage(last_token, locator::tablet_transition_stage::write_both_read_old)
                             // Create session a bit earlier to avoid adding barrier
@@ -2127,7 +2127,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         return ser::storage_service_rpc_verbs::send_tablet_stream_data(&_messaging,
                                    netw::msg_addr(id2ip(dst)), _as, raft::server_id(dst.uuid()), gid);
                     })) {
-                        rtlogger.trace("Will set tablet {} stage to {}", gid, locator::tablet_transition_stage::write_both_read_new);
+                        rtlogger.debug("Will set tablet {} stage to {}", gid, locator::tablet_transition_stage::write_both_read_new);
                         updates.emplace_back(get_mutation_builder()
                             .set_stage(last_token, locator::tablet_transition_stage::write_both_read_new)
                             .del_session(last_token)
@@ -2220,7 +2220,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             // Streaming may have finished after we checked. To avoid missed notification, we need
             // to check atomically with event.wait()
             if (!_tablets_ready) {
-                rtlogger.trace("Going to sleep with active tablet transitions");
+                rtlogger.debug("Going to sleep with active tablet transitions");
                 release_guard(std::move(guard));
                 co_await await_event();
             }
@@ -3325,9 +3325,9 @@ future<> topology_coordinator::run() {
             bool had_work = co_await handle_topology_transition(std::move(guard));
             if (!had_work) {
                 // Nothing to work on. Wait for topology change event.
-                rtlogger.trace("topology coordinator fiber has nothing to do. Sleeping.");
+                rtlogger.debug("topology coordinator fiber has nothing to do. Sleeping.");
                 co_await await_event();
-                rtlogger.trace("topology coordinator fiber got an event");
+                rtlogger.debug("topology coordinator fiber got an event");
             }
         } catch (raft::request_aborted&) {
             rtlogger.debug("topology change coordinator fiber aborted");
@@ -7063,7 +7063,7 @@ future<> storage_service::snitch_reconfigured() {
 
 future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft::term_t term, uint64_t cmd_index, const raft_topology_cmd& cmd) {
     raft_topology_cmd_result result;
-    rtlogger.trace("topology cmd rpc {} is called", cmd.cmd);
+    rtlogger.debug("topology cmd rpc {} is called", cmd.cmd);
 
     // The retrier does:
     // If no operation was previously started - start it now
