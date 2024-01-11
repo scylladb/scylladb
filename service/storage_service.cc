@@ -3838,8 +3838,9 @@ storage_service::get_range_to_address_map(locator::vnode_effective_replication_m
     co_return co_await construct_range_to_endpoint_map(erm, co_await get_all_ranges(sorted_tokens));
 }
 
-future<> storage_service::handle_state_bootstrap(inet_address endpoint, gms::permit_id pid) {
-    slogger.debug("endpoint={} handle_state_bootstrap: permit_id={}", endpoint, pid);
+future<> storage_service::handle_state_bootstrap(inet_address endpoint, locator::host_id host_id, gms::endpoint_state_ptr eps, gms::permit_id pid) {
+    slogger.info("endpoint={}/{} handle_state_bootstrap: permit_id={}", host_id, endpoint, pid);
+
     // explicitly check for TOKENS, because a bootstrapping node might be bootstrapping in legacy mode; that is, not using vnodes and no token specified
     auto tokens = get_tokens_for(endpoint);
 
@@ -3850,7 +3851,6 @@ future<> storage_service::handle_state_bootstrap(inet_address endpoint, gms::per
     // continue.
     auto tmlock = co_await get_token_metadata_lock();
     auto tmptr = co_await get_mutable_token_metadata_ptr();
-    const auto host_id = _gossiper.get_host_id(endpoint);
     if (tmptr->is_normal_token_owner(host_id)) {
         // If isLeaving is false, we have missed both LEAVING and LEFT. However, if
         // isLeaving is true, we have only missed LEFT. Waiting time between completing
@@ -3870,8 +3870,8 @@ future<> storage_service::handle_state_bootstrap(inet_address endpoint, gms::per
     co_await replicate_to_all_cores(std::move(tmptr));
 }
 
-future<> storage_service::handle_state_normal(inet_address endpoint, gms::permit_id pid) {
-    slogger.debug("endpoint={} handle_state_normal: permit_id={}", endpoint, pid);
+future<> storage_service::handle_state_normal(inet_address endpoint, locator::host_id host_id, gms::endpoint_state_ptr eps, gms::permit_id pid) {
+    slogger.info("endpoint={}/{} handle_state_normal: permit_id={}", host_id, endpoint, pid);
 
     if (_raft_topology_change_enabled) {
         slogger.debug("ignore handle_state_normal since topology changes are using raft");
@@ -3899,7 +3899,6 @@ future<> storage_service::handle_state_normal(inet_address endpoint, gms::permit
         endpoints_to_remove.insert_or_assign(node, force);
     };
     // Order Matters, TM.updateHostID() should be called before TM.updateNormalToken(), (see CASSANDRA-4300).
-    auto host_id = _gossiper.get_host_id(endpoint);
     if (tmptr->is_normal_token_owner(host_id)) {
         slogger.info("handle_state_normal: node {}/{} was already a normal token owner", endpoint, host_id);
     }
@@ -4114,8 +4113,8 @@ future<> storage_service::handle_state_normal(inet_address endpoint, gms::permit
     slogger.info("handle_state_normal for {}/{} finished", endpoint, host_id);
 }
 
-future<> storage_service::handle_state_left(inet_address endpoint, std::vector<sstring> pieces, gms::permit_id pid) {
-    slogger.debug("endpoint={} handle_state_left: permit_id={}", endpoint, pid);
+future<> storage_service::handle_state_left(inet_address endpoint, locator::host_id host_id, gms::endpoint_state_ptr eps, std::vector<sstring> pieces, gms::permit_id pid) {
+    slogger.info("endpoint={}/{} handle_state_left: permit_id={}", host_id, endpoint, pid);
 
     if (_raft_topology_change_enabled) {
         slogger.debug("ignore handle_state_left since topology changes are using raft");
@@ -4126,7 +4125,7 @@ future<> storage_service::handle_state_left(inet_address endpoint, std::vector<s
         slogger.warn("Fail to handle_state_left endpoint={} pieces={}", endpoint, pieces);
         co_return;
     }
-    const auto host_id = _gossiper.get_host_id(endpoint);
+
     auto tokens = get_tokens_for(endpoint);
     slogger.debug("Node {}/{} state left, tokens {}", endpoint, host_id, tokens);
     if (tokens.empty()) {
@@ -4143,8 +4142,8 @@ future<> storage_service::handle_state_left(inet_address endpoint, std::vector<s
     co_await excise(tokens, endpoint, extract_expire_time(pieces), pid);
 }
 
-future<> storage_service::handle_state_removed(inet_address endpoint, std::vector<sstring> pieces, gms::permit_id pid) {
-    slogger.debug("endpoint={} handle_state_removed: permit_id={}", endpoint, pid);
+future<> storage_service::handle_state_removed(inet_address endpoint, locator::host_id host_id, gms::endpoint_state_ptr eps, std::vector<sstring> pieces, gms::permit_id pid) {
+    slogger.info("endpoint={}/{} handle_state_removed: permit_id={}", host_id, endpoint, pid);
 
     if (endpoint == get_broadcast_address()) {
         slogger.info("Received removenode gossip about myself. Is this node rejoining after an explicit removenode?");
@@ -4156,7 +4155,6 @@ future<> storage_service::handle_state_removed(inet_address endpoint, std::vecto
         }
         co_return;
     }
-    const auto host_id = _gossiper.get_host_id(endpoint);
     if (get_token_metadata().is_normal_token_owner(host_id)) {
         auto state = pieces[0];
         auto remove_tokens = get_token_metadata().get_tokens(host_id);
@@ -4197,8 +4195,16 @@ future<> storage_service::on_alive(gms::inet_address endpoint, gms::endpoint_sta
 future<> storage_service::on_change(gms::inet_address endpoint, const gms::application_state_map& states_, gms::permit_id pid) {
     // copy the states map locally since the coroutine may yield
     auto states = states_;
-    slogger.debug("endpoint={} on_change:     states={}, permit_id={}", endpoint, states, pid);
-    co_await on_application_state_change(endpoint, states, application_state::STATUS, pid, [this] (inet_address endpoint, const gms::versioned_value& value, gms::permit_id pid) -> future<> {
+    auto ep_state = _gossiper.get_endpoint_state_ptr(endpoint);
+    if (!ep_state) {
+        on_internal_error(slogger, format("No endpoint state found for node {}", endpoint));
+    }
+    auto host_id = ep_state->get_host_id();
+    if (!host_id) {
+        on_internal_error(slogger, format("No host_id found for node {}", endpoint));
+    }
+    slogger.debug("endpoint={}/{} on_change:     states={}, permit_id={}", host_id, endpoint, states, pid);
+    co_await on_application_state_change(endpoint, states, application_state::STATUS, pid, [&] (inet_address endpoint, const gms::versioned_value& value, gms::permit_id pid) -> future<> {
         std::vector<sstring> pieces;
         boost::split(pieces, value.value(), boost::is_any_of(sstring(versioned_value::DELIMITER_STR)));
         if (pieces.empty()) {
@@ -4207,24 +4213,22 @@ future<> storage_service::on_change(gms::inet_address endpoint, const gms::appli
         }
         const sstring& move_name = pieces[0];
         if (move_name == sstring(versioned_value::STATUS_BOOTSTRAPPING)) {
-            co_await handle_state_bootstrap(endpoint, pid);
+            co_await handle_state_bootstrap(endpoint, host_id, ep_state, pid);
         } else if (move_name == sstring(versioned_value::STATUS_NORMAL) ||
                    move_name == sstring(versioned_value::SHUTDOWN)) {
-            co_await handle_state_normal(endpoint, pid);
+            co_await handle_state_normal(endpoint, host_id, ep_state, pid);
         } else if (move_name == sstring(versioned_value::REMOVED_TOKEN)) {
-            co_await handle_state_removed(endpoint, std::move(pieces), pid);
+            co_await handle_state_removed(endpoint, host_id, ep_state, std::move(pieces), pid);
         } else if (move_name == sstring(versioned_value::STATUS_LEFT)) {
-            co_await handle_state_left(endpoint, std::move(pieces), pid);
+            co_await handle_state_left(endpoint, host_id, ep_state, std::move(pieces), pid);
         } else {
             co_return; // did nothing.
         }
     });
-    auto ep_state = _gossiper.get_endpoint_state_ptr(endpoint);
-    if (!ep_state || _gossiper.is_dead_state(*ep_state)) {
+    if (_gossiper.is_dead_state(*ep_state)) {
         slogger.debug("Ignoring state change for dead or unknown endpoint: {}", endpoint);
         co_return;
     }
-    const auto host_id = _gossiper.get_host_id(endpoint);
     const auto& tm = get_token_metadata();
     const auto ep = tm.get_endpoint_for_host_id_if_known(host_id);
     // The check *ep == endpoint is needed when a node changes
