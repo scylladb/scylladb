@@ -291,11 +291,11 @@ private:
         }
         _fwd--;
         if (val != *_fwd) {
-            fmt::print(std::cout, "Iterator broken, {:d} != {:d}\n", val, *_fwd);
+            fmt::print(std::cout, "Iterator broken, {} != {}\n", val, *_fwd);
             throw "iterator";
         }
         if (val < _fprev) {
-            fmt::print(std::cout, "Iterator broken, {:d} < {:d}\n", val, _fprev);
+            fmt::print(std::cout, "Iterator broken, {} < {}\n", val, _fprev);
             throw "iterator";
         }
         _fprev = val;
