@@ -44,4 +44,4 @@ async def test_removing_alive_node_fails(manager: ManagerClient) -> None:
     # topology_coordinator::handle_node_transition).
     logging.info(f"Removing {srv3} initiated by {srv2}")
     await manager.remove_node(srv2.server_id, srv3.server_id, [], "Removenode failed. See earlier errors", False)
-    await log_file1.wait_for("raft topology: rejected removenode operation for node", timeout=60)
+    await log_file1.wait_for("raft_topology - rejected removenode operation for node", timeout=60)

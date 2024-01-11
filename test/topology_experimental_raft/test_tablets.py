@@ -79,6 +79,7 @@ async def test_tablet_metadata_propagates_with_schema_changes_in_snapshot_mode(m
         '--logger-log-level', 'query_processor=trace',
         '--logger-log-level', 'gossip=trace',
         '--logger-log-level', 'storage_service=trace',
+        '--logger-log-level', 'raft_topology=trace',
         '--logger-log-level', 'messaging_service=trace',
         '--logger-log-level', 'rpc=trace',
         ]
@@ -237,6 +238,7 @@ async def test_streaming_is_guarded_by_topology_guard(manager: ManagerClient):
     logger.info("Bootstrapping cluster")
     cmdline = [
         '--logger-log-level', 'storage_service=trace',
+        '--logger-log-level', 'raft_topology=trace',
     ]
     servers = [await manager.server_add(cmdline=cmdline)]
 

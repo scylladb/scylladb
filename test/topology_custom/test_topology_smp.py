@@ -50,7 +50,7 @@ async def test_nodes_with_different_smp(request: FixtureRequest, manager: Manage
         log_args = [
             '--default-log-level', 'debug',
             '--logger-log-level', 'raft_group0=trace:group0_client=trace:storage_service=trace'
-                                  ':raft=trace:raft_group_registry=trace'
+                                  ':raft=trace:raft_group_registry=trace:raft_topology=trace'
         ]
 
     logger.info(f'Adding --smp=3 server')
