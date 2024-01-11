@@ -8,12 +8,9 @@
 
 #pragma once
 
-#include <vector>
 #include <boost/dynamic_bitset.hpp>
-#include "schema/schema_fwd.hh"
 #include "replica/database_fwd.hh"
 #include "timestamp.hh"
-#include "bytes.hh"
 #include <seastar/util/noncopyable_function.hh>
 
 class mutation;

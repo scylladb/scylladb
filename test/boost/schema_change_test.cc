@@ -20,6 +20,7 @@
 #include "service/storage_proxy.hh"
 #include "schema/schema_builder.hh"
 #include "schema/schema_registry.hh"
+#include "db/extensions.hh"
 #include "db/schema_tables.hh"
 #include "types/list.hh"
 #include "types/user.hh"
