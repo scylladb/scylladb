@@ -39,7 +39,8 @@ extensions = [
     "sphinx_scylladb_markdown",
     "sphinxcontrib.datatemplates",
     "scylladb_cc_properties",
-    "scylladb_aws_images"
+    "scylladb_aws_images",
+    "scylladb_include_flag"
 ]
 
 # The suffix(es) of source filenames.
