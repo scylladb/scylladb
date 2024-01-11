@@ -2578,7 +2578,7 @@ static size_t concrete_serialized_size(const inet_addr_type_impl::native_type& v
 
 static size_t concrete_serialized_size_aux(const boost::multiprecision::cpp_int& num) {
     if (num) {
-        return align_up(boost::multiprecision::msb(num) + 2, 8u) / 8;
+        return align_up<size_t>(boost::multiprecision::msb(num) + 2, 8u) / 8;
     } else {
         return 1;
     }
