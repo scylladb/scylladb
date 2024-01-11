@@ -731,7 +731,7 @@ future<> gossiper::do_status_check() {
 
     auto now = this->now();
 
-    for (const auto& endpoint : get_endpoints()) {
+    for (const auto& [endpoint, eps] : _endpoint_state_map) {
         if (endpoint == get_broadcast_address()) {
             continue;
         }
@@ -739,10 +739,6 @@ future<> gossiper::do_status_check() {
         auto permit = co_await lock_endpoint(endpoint, null_permit_id);
         const auto& pid = permit.id();
 
-        auto eps = get_endpoint_state_ptr(endpoint);
-        if (!eps) {
-            continue;
-        }
         auto& ep_state = *eps;
         bool is_alive = this->is_alive(endpoint);
         auto update_timestamp = ep_state.get_update_timestamp();
@@ -759,7 +755,7 @@ future<> gossiper::do_status_check() {
 
         // check for dead state removal
         auto expire_time = get_expire_time_for_endpoint(endpoint);
-        const auto host_id = get_host_id(endpoint);
+        const auto host_id = get_host_id(endpoint, ep_state);
         if (!is_alive && (now > expire_time)
              && (!get_token_metadata_ptr()->is_normal_token_owner(host_id))) {
             logger.debug("time is expiring for endpoint : {} ({})", endpoint, expire_time.time_since_epoch().count());
@@ -1362,7 +1358,7 @@ future<> gossiper::assassinate_endpoint(sstring address) {
         std::vector<dht::token> tokens;
         logger.warn("Assassinating {} via gossip", endpoint);
         if (es) {
-            const auto host_id = gossiper.get_host_id(endpoint);
+            const auto host_id = gossiper.get_host_id(endpoint, *es);
             tokens = gossiper.get_token_metadata_ptr()->get_tokens(host_id);
             if (tokens.empty()) {
                 logger.warn("Unable to calculate tokens for {}.  Will use a random one", address);
@@ -1448,7 +1444,7 @@ bool gossiper::is_gossip_only_member(inet_address endpoint) const {
     if (!es) {
         return false;
     }
-    const auto host_id = get_host_id(endpoint);
+    const auto host_id = get_host_id(endpoint, *es);
     return !is_dead_state(*es) && !get_token_metadata_ptr()->is_normal_token_owner(host_id);
 }
 
@@ -1540,19 +1536,25 @@ bool gossiper::is_cql_ready(const inet_address& endpoint) const {
     return ready;
 }
 
-locator::host_id gossiper::get_host_id(inet_address endpoint) const {
-    auto app_state = get_application_state_ptr(endpoint, application_state::HOST_ID);
-    if (!app_state) {
-        throw std::runtime_error(format("Host {} does not have HOST_ID application_state", endpoint));
+locator::host_id gossiper::get_host_id(inet_address endpoint, const endpoint_state& ep_state) {
+    auto host_id = ep_state.get_host_id();
+    if (!host_id) {
+        throw std::runtime_error(format("Node {} does not have HOST_ID application_state", endpoint));
     }
-    return locator::host_id(utils::UUID(app_state->value()));
+    return host_id;
+}
+
+locator::host_id gossiper::get_host_id(inet_address endpoint) const {
+    if (auto eps = get_endpoint_state_ptr(endpoint)) {
+        return get_host_id(endpoint, *eps);
+    }
+    throw std::runtime_error(format("Node {} does no endpoint_state", endpoint));
 }
 
 std::set<gms::inet_address> gossiper::get_nodes_with_host_id(locator::host_id host_id) const {
     std::set<gms::inet_address> nodes;
     for (const auto& [node, eps] : get_endpoint_states()) {
-        auto app_state = eps->get_application_state_ptr(application_state::HOST_ID);
-        if (app_state && host_id == locator::host_id(utils::UUID(app_state->value()))) {
+        if (host_id == eps->get_host_id()) {
             nodes.insert(node);
         }
     }
@@ -2559,11 +2561,10 @@ bool gossiper::is_safe_for_restart(inet_address endpoint, locator::host_id host_
         versioned_value::REMOVED_TOKEN,
     };
     bool allowed = true;
-    for (auto& x : _endpoint_state_map) {
-        auto node = x.first;
+    for (const auto& [node, eps] : _endpoint_state_map) {
         try {
             auto status = get_gossip_status(node);
-            auto id = get_host_id(node);
+            auto id = get_host_id(node, *eps);
             logger.debug("is_safe_for_restart: node={}, host_id={}, status={}, my_ip={}, my_host_id={}",
                     node, id, status, endpoint, host_id);
             if (host_id == id && not_allowed_statuses.contains(status)) {

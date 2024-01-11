@@ -149,6 +149,13 @@ public:
 
     bool is_cql_ready() const noexcept;
 
+    locator::host_id get_host_id() const {
+        if (auto app_state = get_application_state_ptr(application_state::HOST_ID)) {
+            return locator::host_id(utils::UUID(app_state->value()));
+        }
+        return locator::host_id::create_null_id();
+    }
+
     friend fmt::formatter<endpoint_state>;
 };
 

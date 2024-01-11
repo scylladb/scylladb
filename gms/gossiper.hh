@@ -454,6 +454,7 @@ public:
     // Called function must not yield
     stop_iteration for_each_endpoint_state_until(std::function<stop_iteration(const inet_address&, const endpoint_state&)>) const;
 
+    static locator::host_id get_host_id(inet_address endpoint, const endpoint_state& ep_state);
     locator::host_id get_host_id(inet_address endpoint) const;
 
     locator::host_id my_host_id() const {
