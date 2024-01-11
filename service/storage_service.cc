@@ -1455,7 +1455,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     future<> update_topology_state(
             group0_guard guard, std::vector<canonical_mutation>&& updates, const sstring& reason) {
         try {
-            rtlogger.trace("do update {} reason {}", updates, reason);
+            rtlogger.info("updating topology state: {}", reason);
+            rtlogger.trace("update_topology_state mutations: {}", updates);
             topology_change change{std::move(updates)};
             group0_command g0_cmd = _group0.client().prepare_command(std::move(change), guard, reason);
             co_await _group0.client().add_entry(std::move(g0_cmd), std::move(guard), &_as);
@@ -1544,6 +1545,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             group0_guard guard, const raft_topology_cmd& cmd,
             const std::unordered_set<raft::server_id>& exclude_nodes,
             drop_guard_and_retake drop_and_retake = drop_guard_and_retake::yes) {
+        rtlogger.info("executing global topology command {}, excluded nodes: {}", cmd.cmd, exclude_nodes);
         auto nodes = _topo_sm._topology.normal_nodes
             | boost::adaptors::filtered([&exclude_nodes] (const std::pair<const raft::server_id, replica_state>& n) {
                 return !exclude_nodes.contains(n.first);
