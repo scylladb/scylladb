@@ -4708,8 +4708,8 @@ future<> storage_service::check_for_endpoint_collision(std::unordered_set<gms::i
                 // Raft is responsible for consistency, so in case it is enable no need to check here
                 !_raft_topology_change_enabled) {
                 found_bootstrapping_node = false;
-                for (const auto& addr : _gossiper.get_endpoints()) {
-                    auto state = _gossiper.get_gossip_status(addr);
+                _gossiper.for_each_endpoint_state_until([&] (const auto& addr, const gms::endpoint_state& ep_state) {
+                    auto state = _gossiper.get_gossip_status(ep_state);
                     if (state == sstring(versioned_value::STATUS_UNKNOWN)) {
                         throw std::runtime_error(::format("Node {} has gossip status=UNKNOWN. Try fixing it before adding new node to the cluster.", addr));
                     }
@@ -4725,10 +4725,11 @@ future<> storage_service::check_for_endpoint_collision(std::unordered_set<gms::i
                             auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(gms::gossiper::clk::now() - t).count();
                             slogger.info("Checking bootstrapping/leaving/moving nodes: node={}, status={}, sleep 1 second and check again ({} seconds elapsed) (check_for_endpoint_collision)", addr, saved_state, elapsed);
                             sleep_abortable(std::chrono::seconds(1), _abort_source).get();
-                            break;
+                            return stop_iteration::yes;
                         }
                     }
-                }
+                    return stop_iteration::no;
+                });
             }
         } while (found_bootstrapping_node);
         slogger.info("Checking bootstrapping/leaving/moving nodes: ok (check_for_endpoint_collision)");
@@ -4796,7 +4797,7 @@ storage_service::prepare_replacement_info(std::unordered_set<gms::inet_address> 
     }
 
     // Reject to replace a node that has left the ring
-    auto status = _gossiper.get_gossip_status(replace_address);
+    auto status = _gossiper.get_gossip_status(*state);
     if (status == gms::versioned_value::STATUS_LEFT || status == gms::versioned_value::REMOVED_TOKEN) {
         throw std::runtime_error(::format("Cannot replace_address {} because it has left the ring, status={}", replace_address, status));
     }

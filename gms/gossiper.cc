@@ -2467,7 +2467,7 @@ static std::string_view do_get_gossip_status(const gms::versioned_value* app_sta
     return std::string_view(value.data(), pos);
 }
 
-std::string_view gossiper::get_gossip_status(const endpoint_state& ep_state) const noexcept {
+std::string_view gossiper::get_gossip_status(const endpoint_state& ep_state) noexcept {
     return do_get_gossip_status(ep_state.get_application_state_ptr(application_state::STATUS));
 }
 

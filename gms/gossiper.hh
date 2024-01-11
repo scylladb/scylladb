@@ -662,7 +662,7 @@ public:
     bool is_silent_shutdown_state(const endpoint_state& ep_state) const;
     void force_newer_generation();
 public:
-    std::string_view get_gossip_status(const endpoint_state& ep_state) const noexcept;
+    static std::string_view get_gossip_status(const endpoint_state& ep_state) noexcept;
     std::string_view get_gossip_status(const inet_address& endpoint) const noexcept;
 public:
     future<> wait_for_gossip_to_settle() const;
