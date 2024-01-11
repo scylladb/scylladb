@@ -506,14 +506,6 @@ private:
     future<> handle_state_left(inet_address endpoint, std::vector<sstring> pieces, gms::permit_id);
 
     /**
-     * Handle node moving inside the ring.
-     *
-     * @param endpoint moving endpoint address
-     * @param pieces STATE_MOVING, token
-     */
-    void handle_state_moving(inet_address endpoint, std::vector<sstring> pieces, gms::permit_id);
-
-    /**
      * Handle notification that a node being actively removed from the ring via 'removenode'
      *
      * @param endpoint node
