@@ -14,8 +14,6 @@
 
 #include "utils/managed_bytes.hh"
 #include "utils/logalloc.hh"
-#include "utils/managed_ref.hh"
-#include "test/perf/perf.hh"
 #include "log.hh"
 
 void print_stats() {
