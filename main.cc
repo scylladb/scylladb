@@ -863,6 +863,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 prometheus::config pctx;
                 pctx.metric_help = "Scylla server statistics";
                 pctx.prefix = cfg->prometheus_prefix();
+                pctx.allow_protobuf = cfg->prometheus_allow_protobuf();
                 prometheus::start(prometheus_server, pctx).get();
                 with_scheduling_group(maintenance_scheduling_group, [&] {
                   return prometheus_server.listen(socket_address{ip, cfg->prometheus_port()}).handle_exception([&ip, &cfg] (auto ep) {
