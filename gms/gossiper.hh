@@ -456,6 +456,10 @@ public:
 
     locator::host_id get_host_id(inet_address endpoint) const;
 
+    locator::host_id my_host_id() const {
+        return get_token_metadata_ptr()->get_my_id();
+    }
+
     std::set<gms::inet_address> get_nodes_with_host_id(locator::host_id host_id) const;
 
     std::optional<endpoint_state> get_state_for_version_bigger_than(inet_address for_endpoint, version_type version) const;
