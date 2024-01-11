@@ -782,6 +782,10 @@ gossiper::endpoint_permit::endpoint_permit(endpoint_locks_map::entry_ptr&& ptr, 
     , _caller(std::move(caller))
 {
     ++_ptr->holders;
+    if (!_ptr->first_holder) {
+        _ptr->first_holder = _caller;
+    }
+    _ptr->last_holder = _caller;
     logger.debug("{}: lock_endpoint {}: acquired: permit_id={} holders={}", _caller.function_name(), _addr, _permit_id, _ptr->holders);
 }
 
@@ -804,6 +808,7 @@ bool gossiper::endpoint_permit::release() noexcept {
             logger.debug("{}: lock_endpoint {}: released: permit_id={}", _caller.function_name(), _addr, _permit_id);
             ptr->units.return_all();
             ptr->pid = null_permit_id;
+            ptr->first_holder = ptr->last_holder = std::nullopt;
             _permit_id = null_permit_id;
             return true;
         }
@@ -833,7 +838,39 @@ future<gossiper::endpoint_permit> gossiper::lock_endpoint(inet_address ep, permi
     }
     pid = permit_id::create_random_id();
     logger.debug("{}: lock_endpoint {}: waiting: permit_id={}", l.function_name(), ep, pid);
-    eptr->units = co_await get_units(eptr->sem, 1, _abort_source);
+    while (true) {
+        _abort_source.check();
+        static constexpr auto duration = std::chrono::minutes{1};
+        abort_on_expiry aoe(lowres_clock::now() + duration);
+        auto sub = _abort_source.subscribe([&aoe] () noexcept {
+            aoe.abort_source().request_abort();
+        });
+        assert(sub); // due to check() above
+        try {
+            eptr->units = co_await get_units(eptr->sem, 1, aoe.abort_source());
+            break;
+        } catch (const abort_requested_exception&) {
+            if (_abort_source.abort_requested()) {
+                throw;
+            }
+
+            // If we didn't rethrow above, the abort had to come from `abort_on_expiry`'s timer.
+
+            static constexpr auto fmt_loc = [] (const seastar::compat::source_location& l) {
+                return fmt::format("{}({}:{}) `{}`", l.file_name(), l.line(), l.column(), l.function_name());
+            };
+            static constexpr auto fmt_loc_opt = [] (const std::optional<seastar::compat::source_location>& l) {
+                if (!l) {
+                    return "null"s;
+                }
+                return fmt_loc(*l);
+            };
+            logger.error(
+                "{}: waiting for endpoint lock (ep={}) took more than {}, signifying possible deadlock;"
+                " holders: {}, first holder: {}, last holder (might not be current): {}",
+                fmt_loc(l), ep, duration, eptr->holders, fmt_loc_opt(eptr->first_holder), fmt_loc_opt(eptr->last_holder));
+        }
+    }
     eptr->pid = pid;
     if (eptr->holders) {
         on_internal_error_noexcept(logger, fmt::format("{}: lock_endpoint {}: newly held endpoint_lock_entry has {} holders", l.function_name(), ep, eptr->holders));

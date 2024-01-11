@@ -152,6 +152,10 @@ public:
         permit_id pid;
         semaphore_units<> units;
         size_t holders = 0;
+        std::optional<seastar::compat::source_location> first_holder;
+        // last_holder is the caller of endpoint_permit who last took this entry,
+        // it might not be a current holder (the permit might've been destroyed)
+        std::optional<seastar::compat::source_location> last_holder;
 
         endpoint_lock_entry() noexcept;
     };
