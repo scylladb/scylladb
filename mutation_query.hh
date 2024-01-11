@@ -108,6 +108,10 @@ public:
 
     bool operator==(const reconcilable_result& other) const;
 
+    // other must be disjoint with this
+    // does not merge or update memory trackers
+    void merge_disjoint(schema_ptr schema, const reconcilable_result& other);
+
     struct printer {
         const reconcilable_result& self;
         schema_ptr schema;
