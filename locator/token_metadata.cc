@@ -579,6 +579,7 @@ void token_metadata_impl::remove_endpoint(host_id endpoint) {
     _topology.remove_endpoint(endpoint);
     _leaving_endpoints.erase(endpoint);
     del_replacing_endpoint(endpoint);
+    remove_by_value(_replacing_endpoints, endpoint);
     invalidate_cached_rings();
 }
 
