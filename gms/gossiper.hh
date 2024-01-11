@@ -21,7 +21,7 @@
 #include "gms/generation-number.hh"
 #include "gms/versioned_value.hh"
 #include "gms/application_state.hh"
-#include "gms/endpoint_state.hh"
+#include "gms/endpoint_state_map.hh"
 #include "gms/gossip_digest_syn.hh"
 #include "gms/gossip_digest.hh"
 #include "utils/loading_shared_values.hh"
@@ -184,7 +184,7 @@ private:
     }
 
     /* map where key is the endpoint and value is the state associated with the endpoint */
-    std::unordered_map<inet_address, endpoint_state_ptr> _endpoint_state_map;
+    endpoint_state_map _endpoint_state_map;
     // Used for serializing changes to _endpoint_state_map and running of associated change listeners.
     endpoint_locks_map _endpoint_locks;
 
@@ -420,7 +420,9 @@ public:
     // Otherwise, returns a null ptr.
     // The endpoint_state is immutable (except for its update_timestamp), guaranteed not to change while
     // the endpoint_state_ptr is held.
-    endpoint_state_ptr get_endpoint_state_ptr(inet_address ep) const noexcept;
+    endpoint_state_ptr get_endpoint_state_ptr(inet_address ep) const noexcept {
+        return _endpoint_state_map.get_endpoint_state_ptr(ep);
+    }
 
     // Return this node's endpoint_state_ptr
     endpoint_state_ptr get_this_endpoint_state_ptr() const noexcept {
@@ -434,7 +436,9 @@ public:
     // Must be called on shard 0
     future<> reset_endpoint_state_map();
 
-    std::vector<inet_address> get_endpoints() const;
+    std::vector<inet_address> get_endpoints() const {
+        return _endpoint_state_map.get_endpoints();
+    }
 
     size_t num_endpoints() const noexcept {
         return _endpoint_state_map.size();
@@ -443,16 +447,15 @@ public:
     // Calls func for each endpoint_state.
     // Called function must not yield
     void for_each_endpoint_state(std::function<void(const inet_address&, const endpoint_state&)> func) const {
-        for_each_endpoint_state_until([func = std::move(func)] (const inet_address& node, const endpoint_state& eps) {
-            func(node, eps);
-            return stop_iteration::no;
-        });
+        _endpoint_state_map.for_each_endpoint_state(std::move(func));
     }
 
     // Calls func for each endpoint_state until it returns stop_iteration::yes
     // Returns stop_iteration::yes iff `func` returns stop_iteration::yes.
     // Called function must not yield
-    stop_iteration for_each_endpoint_state_until(std::function<stop_iteration(const inet_address&, const endpoint_state&)>) const;
+    stop_iteration for_each_endpoint_state_until(std::function<stop_iteration(const inet_address&, const endpoint_state&)> func) const {
+        return _endpoint_state_map.for_each_endpoint_state_until(std::move(func));
+    }
 
     static locator::host_id get_host_id(inet_address endpoint, const endpoint_state& ep_state);
 
@@ -681,7 +684,7 @@ private:
     utils::updateable_value<int32_t> _force_gossip_generation;
     gossip_config _gcfg;
     // Get features supported by a particular node
-    std::set<sstring> get_supported_features(inet_address endpoint) const;
+    static std::set<sstring> get_supported_features(inet_address endpoint, const endpoint_state& ep_state);
     locator::token_metadata_ptr get_token_metadata_ptr() const noexcept;
 public:
     void check_knows_remote_features(std::set<std::string_view>& local_features, const std::unordered_map<inet_address, sstring>& loaded_peer_features) const;

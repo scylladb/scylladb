@@ -9,7 +9,7 @@
  */
 
 #include "gms/inet_address.hh"
-#include "gms/endpoint_state.hh"
+#include "gms/endpoint_state_map.hh"
 #include "gms/gossip_digest.hh"
 #include "gms/gossip_digest_syn.hh"
 #include "gms/gossip_digest_ack.hh"
@@ -35,7 +35,6 @@
 #include "db/config.hh"
 #include "locator/host_id.hh"
 #include <boost/range/algorithm/set_algorithm.hpp>
-#include <boost/range/adaptors.hpp>
 #include <boost/range/algorithm/count_if.hpp>
 #include <boost/range/algorithm/partition.hpp>
 #include <boost/algorithm/string/split.hpp>
@@ -472,17 +471,17 @@ future<gossip_get_endpoint_states_response>
 gossiper::handle_get_endpoint_states_msg(gossip_get_endpoint_states_request request) {
     std::unordered_map<gms::inet_address, gms::endpoint_state> map;
     const auto& application_states_wanted = request.application_states;
-    for (const auto& [node, state] : _endpoint_state_map) {
-        const heart_beat_state& hbs = state->get_heart_beat_state();
+    _endpoint_state_map.for_each_endpoint_state([&] (const inet_address& node, const endpoint_state& state) {
+        const heart_beat_state& hbs = state.get_heart_beat_state();
         auto state_wanted = endpoint_state(hbs);
-        auto& apps = state->get_application_state_map();
+        auto& apps = state.get_application_state_map();
         for (const auto& app : apps) {
             if (application_states_wanted.count(app.first) > 0) {
                 state_wanted.get_application_state_map().emplace(app);
             }
         }
         map.emplace(node, std::move(state_wanted));
-    }
+    });
     return make_ready_future<gossip_get_endpoint_states_response>(gossip_get_endpoint_states_response{std::move(map)});
 }
 
@@ -1151,9 +1150,9 @@ void gossiper::run() {
         }
 
         if (logger.is_enabled(logging::log_level::trace)) {
-            for (auto& x : _endpoint_state_map) {
-                logger.trace("ep={}, eps={}", x.first, *x.second);
-            }
+            _endpoint_state_map.for_each_endpoint_state([] (const inet_address& ep, const endpoint_state& eps) {
+                logger.trace("ep={}, eps={}", ep, eps);
+            });
         }
         if (is_enabled()) {
             _scheduled_gossip_task.arm(INTERVAL);
@@ -1281,20 +1280,12 @@ void gossiper::make_random_gossip_digest(utils::chunked_vector<gossip_digest>& g
     version_type max_version;
 
     // local epstate will be part of _endpoint_state_map
-    utils::chunked_vector<inet_address> endpoints;
-    for (auto&& x : _endpoint_state_map) {
-        endpoints.push_back(x.first);
-    }
-    std::shuffle(endpoints.begin(), endpoints.end(), _random_engine);
-    for (auto& endpoint : endpoints) {
-        auto es = get_endpoint_state_ptr(endpoint);
-        if (es) {
-            auto& eps = *es;
-            generation = eps.get_heart_beat_state().get_generation();
-            max_version = get_max_endpoint_state_version(eps);
-        }
+    _endpoint_state_map.for_each_endpoint_state([&] (const inet_address& endpoint, const endpoint_state& eps) {
+        generation = eps.get_heart_beat_state().get_generation();
+        max_version = get_max_endpoint_state_version(eps);
         g_digests.push_back(gossip_digest(endpoint, generation, max_version));
-    }
+    });
+    std::shuffle(g_digests.begin(), g_digests.end(), _random_engine);
 }
 
 future<> gossiper::replicate(inet_address ep, endpoint_state es, permit_id pid) {
@@ -1319,7 +1310,7 @@ future<> gossiper::replicate(inet_address ep, endpoint_state es, permit_id pid) 
     try {
         co_return co_await container().invoke_on_all([&] (gossiper& g) {
             auto eps = ep_states[this_shard_id()].release();
-            g._endpoint_state_map[ep] = std::move(eps);
+            g._endpoint_state_map.insert(ep, std::move(eps));
         });
     } catch (...) {
         on_fatal_internal_error(logger, fmt::format("Failed to replicate endpoint_state: {}", std::current_exception()));
@@ -1459,33 +1450,25 @@ clk::time_point gossiper::get_expire_time_for_endpoint(inet_address endpoint) co
     }
 }
 
-endpoint_state_ptr gossiper::get_endpoint_state_ptr(inet_address ep) const noexcept {
-    auto it = _endpoint_state_map.find(ep);
-    if (it == _endpoint_state_map.end()) {
-        return nullptr;
-    } else {
-        return it->second;
-    }
-}
-
 void gossiper::update_timestamp(const endpoint_state_ptr& eps) noexcept {
     const_cast<endpoint_state&>(*eps).update_timestamp();
 }
 
 const endpoint_state& gossiper::get_endpoint_state(inet_address ep) const {
-    auto it = _endpoint_state_map.find(ep);
-    if (it == _endpoint_state_map.end()) {
+    auto eps = _endpoint_state_map.get_endpoint_state_ptr(ep);
+    if (!eps) {
         throw std::out_of_range(format("ep={}", ep));
     }
-    return *it->second;
+    return const_cast<endpoint_state&>(*eps);
 }
 
 endpoint_state& gossiper::get_or_create_endpoint_state(inet_address ep) {
-    auto it = _endpoint_state_map.find(ep);
-    if (it == _endpoint_state_map.end()) {
-        it = _endpoint_state_map.emplace(ep, make_endpoint_state_ptr({})).first;
+    auto eps = _endpoint_state_map.get_endpoint_state_ptr(ep);
+    if (!eps) {
+        eps = make_endpoint_state_ptr({});
+        _endpoint_state_map.insert(ep, eps);
     }
-    return const_cast<endpoint_state&>(*it->second);
+    return const_cast<endpoint_state&>(*eps);
 }
 
 future<> gossiper::reset_endpoint_state_map() {
@@ -1496,25 +1479,12 @@ future<> gossiper::reset_endpoint_state_map() {
         g._unreachable_endpoints.clear();
         g._live_endpoints.clear();
         g._live_endpoints_version = version;
-        g._endpoint_state_map.clear();
+        return g._endpoint_state_map.clear_gently();
     });
 }
 
 const std::unordered_map<inet_address, endpoint_state_ptr>& gms::gossiper::get_endpoint_states() const noexcept {
-    return _endpoint_state_map;
-}
-
-std::vector<inet_address> gossiper::get_endpoints() const {
-    return boost::copy_range<std::vector<inet_address>>(_endpoint_state_map | boost::adaptors::map_keys);
-}
-
-stop_iteration gossiper::for_each_endpoint_state_until(std::function<stop_iteration(const inet_address&, const endpoint_state&)> func) const {
-    for (const auto& [node, eps] : _endpoint_state_map) {
-        if (func(node, *eps) == stop_iteration::yes) {
-            return stop_iteration::yes;
-        }
-    }
-    return stop_iteration::no;
+    return _endpoint_state_map._state_map;
 }
 
 bool gossiper::is_cql_ready(const inet_address& endpoint) const {
@@ -1546,11 +1516,11 @@ locator::host_id gossiper::get_host_id(inet_address endpoint, const endpoint_sta
 
 std::set<gms::inet_address> gossiper::get_nodes_with_host_id(locator::host_id host_id) const {
     std::set<gms::inet_address> nodes;
-    for (const auto& [node, eps] : get_endpoint_states()) {
-        if (host_id == eps->get_host_id()) {
+    _endpoint_state_map.for_each_endpoint_state([&] (const inet_address& node, const endpoint_state& eps) {
+        if (host_id == eps.get_host_id()) {
             nodes.insert(node);
         }
-    }
+    });
     return nodes;
 }
 
@@ -1947,9 +1917,9 @@ void gossiper::examine_gossiper(utils::chunked_vector<gossip_digest>& g_digest_l
              * gossip, and we should reply with everything we know.
              */
         logger.debug("Shadow request received, adding all states");
-        for (auto& entry : _endpoint_state_map) {
-            g_digest_list.emplace_back(entry.first);
-        }
+        _endpoint_state_map.for_each_endpoint_state([&] (const inet_address& addr, const endpoint_state&) {
+            g_digest_list.emplace_back(addr);
+        });
     }
     for (gossip_digest& g_digest : g_digest_list) {
         auto remote_generation = g_digest.get_generation();
@@ -2549,32 +2519,33 @@ bool gossiper::is_safe_for_restart(inet_address endpoint, locator::host_id host_
     // Reject to restart a node in case:
     // *) if the node has been removed from the cluster by nodetool decommission or
     //    nodetool removenode
-    std::unordered_set<std::string_view> not_allowed_statuses{
+    static const std::unordered_set<std::string_view> not_allowed_statuses{
         versioned_value::STATUS_LEFT,
         versioned_value::REMOVED_TOKEN,
     };
     bool allowed = true;
-    for (const auto& [node, eps] : _endpoint_state_map) {
+    _endpoint_state_map.for_each_endpoint_state_until([&] (const inet_address& node, const endpoint_state& ep_state) {
         try {
-            auto status = get_gossip_status(node);
-            auto id = get_host_id(node, *eps);
+            auto status = get_gossip_status(ep_state);
+            auto id = get_host_id(node, ep_state);
             logger.debug("is_safe_for_restart: node={}, host_id={}, status={}, my_ip={}, my_host_id={}",
                     node, id, status, endpoint, host_id);
             if (host_id == id && not_allowed_statuses.contains(status)) {
                 allowed = false;
                 logger.error("is_safe_for_restart: node={}, host_id={}, status={}, my_ip={}, my_host_id={}",
                         node, id, status, endpoint, host_id);
-                break;
+                return stop_iteration::yes;
             }
         } catch (...) {
             logger.info("is_safe_for_restart: node={} doesn't not have status or host_id yet in gossip", node);
         }
-    }
+        return stop_iteration::no;
+    });
     return allowed;
 }
 
-std::set<sstring> gossiper::get_supported_features(inet_address endpoint) const {
-    auto app_state = get_application_state_ptr(endpoint, application_state::SUPPORTED_FEATURES);
+std::set<sstring> gossiper::get_supported_features(inet_address endpoint, const endpoint_state& ep_state) {
+    auto app_state = ep_state.get_application_state_ptr(application_state::SUPPORTED_FEATURES);
     if (!app_state) {
         return {};
     }
@@ -2594,12 +2565,11 @@ std::set<sstring> gossiper::get_supported_features(const std::unordered_map<gms:
         }
     }
 
-    for (auto& x : _endpoint_state_map) {
-        auto endpoint = x.first;
-        auto features = get_supported_features(endpoint);
+    _endpoint_state_map.for_each_endpoint_state([&] (const inet_address& endpoint, const endpoint_state& ep_state) {
+        auto features = get_supported_features(endpoint, ep_state);
         if (ignore_local_node && endpoint == get_broadcast_address()) {
             logger.debug("Ignore SUPPORTED_FEATURES of local node: features={}", features);
-            continue;
+            return;
         }
         if (features.empty()) {
             auto it = loaded_peer_features.find(endpoint);
@@ -2612,7 +2582,7 @@ std::set<sstring> gossiper::get_supported_features(const std::unordered_map<gms:
             // Replace the features with live info
             features_map[endpoint] = std::move(features);
         }
-    }
+    });
 
     if (ignore_local_node) {
         features_map.erase(get_broadcast_address());
@@ -2646,16 +2616,16 @@ void gossiper::check_knows_remote_features(std::set<std::string_view>& local_fea
 }
 
 void gossiper::check_snitch_name_matches(sstring local_snitch_name) const {
-    for (const auto& [address, state] : _endpoint_state_map) {
-        const auto remote_snitch_name = state->get_application_state_ptr(application_state::SNITCH_NAME);
+    _endpoint_state_map.for_each_endpoint_state([&] (const inet_address& address, const endpoint_state& state) {
+        const auto remote_snitch_name = state.get_application_state_ptr(application_state::SNITCH_NAME);
         if (!remote_snitch_name) {
-            continue;
+            return;
         }
 
         if (remote_snitch_name->value() != local_snitch_name) {
             throw std::runtime_error(format("Snitch check failed. This node cannot join the cluster because it uses {} and not {}", local_snitch_name, remote_snitch_name->value()));
         }
-    }
+    });
 }
 
 int gossiper::get_down_endpoint_count() const noexcept {
@@ -2663,9 +2633,11 @@ int gossiper::get_down_endpoint_count() const noexcept {
 }
 
 int gossiper::get_up_endpoint_count() const noexcept {
-    return boost::count_if(_endpoint_state_map | boost::adaptors::map_keys, [this] (const inet_address& ep) {
-        return is_alive(ep);
+    int num_alive = 0;
+    _endpoint_state_map.for_each_endpoint_state([&] (const inet_address& ep, const endpoint_state&) {
+        num_alive += is_alive(ep);
     });
+    return num_alive;
 }
 
 void gossiper::append_endpoint_state(std::stringstream& ss, const endpoint_state& state) {
