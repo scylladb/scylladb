@@ -3842,7 +3842,7 @@ future<> storage_service::handle_state_bootstrap(inet_address endpoint, locator:
     slogger.info("endpoint={}/{} handle_state_bootstrap: permit_id={}", host_id, endpoint, pid);
 
     // explicitly check for TOKENS, because a bootstrapping node might be bootstrapping in legacy mode; that is, not using vnodes and no token specified
-    auto tokens = get_tokens_for(endpoint);
+    auto tokens = get_tokens_for(endpoint, *eps);
 
     slogger.debug("Node {} state bootstrapping, token {}", endpoint, tokens);
 
@@ -3878,7 +3878,7 @@ future<> storage_service::handle_state_normal(inet_address endpoint, locator::ho
         co_return;
     }
 
-    auto tokens = get_tokens_for(endpoint);
+    auto tokens = get_tokens_for(endpoint, *eps);
 
     slogger.info("Node {} is in normal state, tokens: {}", endpoint, tokens);
 
@@ -4126,7 +4126,7 @@ future<> storage_service::handle_state_left(inet_address endpoint, locator::host
         co_return;
     }
 
-    auto tokens = get_tokens_for(endpoint);
+    auto tokens = get_tokens_for(endpoint, *eps);
     slogger.debug("Node {}/{} state left, tokens {}", endpoint, host_id, tokens);
     if (tokens.empty()) {
         auto eps = _gossiper.get_endpoint_state_ptr(endpoint);
@@ -4371,8 +4371,12 @@ db::system_keyspace::peer_info storage_service::get_peer_info_for_update(inet_ad
     return ret;
 }
 
-std::unordered_set<locator::token> storage_service::get_tokens_for(inet_address endpoint) {
-    auto tokens_string = _gossiper.get_application_state_value(endpoint, application_state::TOKENS);
+std::unordered_set<token> storage_service::get_tokens_for(inet_address endpoint, const gms::endpoint_state& ep_state) {
+    auto state = ep_state.get_application_state_ptr(application_state::TOKENS);
+    if (!state) {
+        return {};
+    }
+    const auto& tokens_string = state->value();
     slogger.trace("endpoint={}, tokens_string={}", endpoint, tokens_string);
     auto ret = versioned_value::tokens_from_string(tokens_string);
     slogger.trace("endpoint={}, tokens={}", endpoint, ret);
@@ -4808,7 +4812,7 @@ storage_service::prepare_replacement_info(std::unordered_set<gms::inet_address> 
 
     std::unordered_set<dht::token> tokens;
     if (!_raft_topology_change_enabled) {
-        tokens = get_tokens_for(replace_address);
+        tokens = get_tokens_for(replace_address, *state);
         if (tokens.empty()) {
             throw std::runtime_error(::format("Could not find tokens for {} to replace", replace_address));
         }

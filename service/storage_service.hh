@@ -475,7 +475,7 @@ private:
     db::system_keyspace::peer_info get_peer_info_for_update(inet_address endpoint);
     static db::system_keyspace::peer_info get_peer_info_for_update(inet_address endpoint, const gms::application_state_map& app_state_map);
 
-    std::unordered_set<token> get_tokens_for(inet_address endpoint);
+    static std::unordered_set<token> get_tokens_for(inet_address endpoint, const gms::endpoint_state& ep_state);
     std::optional<locator::endpoint_dc_rack> get_dc_rack_for(const gms::endpoint_state& ep_state);
     std::optional<locator::endpoint_dc_rack> get_dc_rack_for(inet_address endpoint);
 private:
