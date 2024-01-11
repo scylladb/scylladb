@@ -11,7 +11,6 @@
 #include "log.hh"
 #include "serialization.hh"
 #include "error.hh"
-#include "rapidjson/writer.h"
 #include "concrete_types.hh"
 #include "cql3/type_json.hh"
 #include "mutation/position_in_partition.hh"

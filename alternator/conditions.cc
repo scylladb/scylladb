@@ -6,12 +6,9 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#include <list>
-#include <map>
 #include <string_view>
 #include "alternator/conditions.hh"
 #include "alternator/error.hh"
-#include "cql3/constants.hh"
 #include <unordered_map>
 #include "utils/rjson.hh"
 #include "serialization.hh"

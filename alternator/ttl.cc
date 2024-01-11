@@ -32,7 +32,6 @@
 #include "service/pager/paging_state.hh"
 #include "service/pager/query_pagers.hh"
 #include "gms/feature_service.hh"
-#include "sstables/types.hh"
 #include "mutation/mutation.hh"
 #include "types/types.hh"
 #include "types/map.hh"
