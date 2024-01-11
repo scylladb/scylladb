@@ -14,10 +14,6 @@
 
 #pragma once
 
-#include <functional>
-#include <optional>
-#include <map>
-#include <string>
 #include <vector>
 
 #include <seastar/core/future.hh>
@@ -25,11 +21,9 @@
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/sstring.hh>
 
-#include "exceptions/exceptions.hh"
 #include "timestamp.hh"
 #include "tracing/trace_state.hh"
 #include "utils/UUID.hh"
-#include "locator/host_id.hh"
 
 class schema;
 using schema_ptr = seastar::lw_shared_ptr<const schema>;

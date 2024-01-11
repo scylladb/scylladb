@@ -10,7 +10,6 @@
 
 #include <seastar/core/sstring.hh>
 
-#include "bytes.hh"
 #include "dht/i_partitioner.hh"
 
 class schema;

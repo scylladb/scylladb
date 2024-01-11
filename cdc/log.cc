@@ -24,7 +24,6 @@
 #include "bytes.hh"
 #include "replica/database.hh"
 #include "db/schema_tables.hh"
-#include "partition_slice_builder.hh"
 #include "schema/schema.hh"
 #include "schema/schema_builder.hh"
 #include "service/migration_listener.hh"
@@ -36,13 +35,11 @@
 #include "utils/rjson.hh"
 #include "utils/UUID_gen.hh"
 #include "utils/managed_bytes.hh"
-#include "utils/fragment_range.hh"
 #include "types/types.hh"
 #include "concrete_types.hh"
 #include "types/listlike_partial_deserializing_iterator.hh"
 #include "tracing/trace_state.hh"
 #include "stats.hh"
-#include "compaction/compaction_strategy.hh"
 
 namespace std {
 

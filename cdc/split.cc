@@ -16,8 +16,6 @@
 #include "log.hh"
 #include "change_visitor.hh"
 
-#include <type_traits>
-
 struct atomic_column_update {
     column_id id;
     atomic_cell cell;

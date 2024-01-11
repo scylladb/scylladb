@@ -16,7 +16,6 @@
 #include "gms/endpoint_state.hh"
 #include "gms/versioned_value.hh"
 #include "keys.hh"
-#include "schema/schema_builder.hh"
 #include "replica/database.hh"
 #include "db/system_keyspace.hh"
 #include "db/system_distributed_keyspace.hh"
@@ -33,6 +32,7 @@
 #include "cdc/generation.hh"
 #include "cdc/cdc_options.hh"
 #include "cdc/generation_service.hh"
+#include "cdc/log.hh"
 
 extern logging::logger cdc_log;
 
