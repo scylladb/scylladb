@@ -731,7 +731,7 @@ future<> gossiper::do_status_check() {
 
     auto now = this->now();
 
-    for (const auto& [endpoint, eps] : _endpoint_state_map) {
+    for (const auto& [endpoint, eps] : get_endpoint_states()) {
         if (endpoint == get_broadcast_address()) {
             continue;
         }
@@ -1542,13 +1542,6 @@ locator::host_id gossiper::get_host_id(inet_address endpoint, const endpoint_sta
         throw std::runtime_error(format("Node {} does not have HOST_ID application_state", endpoint));
     }
     return host_id;
-}
-
-locator::host_id gossiper::get_host_id(inet_address endpoint) const {
-    if (auto eps = get_endpoint_state_ptr(endpoint)) {
-        return get_host_id(endpoint, *eps);
-    }
-    throw std::runtime_error(format("Node {} does no endpoint_state", endpoint));
 }
 
 std::set<gms::inet_address> gossiper::get_nodes_with_host_id(locator::host_id host_id) const {

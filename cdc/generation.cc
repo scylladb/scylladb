@@ -189,7 +189,7 @@ static std::vector<stream_id> create_stream_ids(
 bool should_propose_first_generation(const gms::inet_address& me, const gms::gossiper& g) {
     auto my_host_id = g.my_host_id();
     return g.for_each_endpoint_state_until([&] (const gms::inet_address& node, const gms::endpoint_state& eps) {
-        return stop_iteration(my_host_id < g.get_host_id(node));
+        return stop_iteration(my_host_id < g.get_host_id(node, eps));
     }) == stop_iteration::no;
 }
 

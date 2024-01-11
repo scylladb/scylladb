@@ -3320,7 +3320,7 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
         auto endpoint = get_broadcast_address();
         auto eps = _gossiper.get_endpoint_state_ptr(endpoint);
         if (eps) {
-            auto replace_host_id = _gossiper.get_host_id(get_broadcast_address());
+            auto replace_host_id = _gossiper.get_host_id(get_broadcast_address(), *eps);
             slogger.info("Host {}/{} is replacing {}/{} using the same address", local_host_id, endpoint, replace_host_id, endpoint);
         }
         tmptr->update_host_id(local_host_id, get_broadcast_address());
@@ -4185,7 +4185,7 @@ future<> storage_service::on_alive(gms::inet_address endpoint, gms::endpoint_sta
         auto tmlock = co_await get_token_metadata_lock();
         auto tmptr = co_await get_mutable_token_metadata_ptr();
         const auto dc_rack = get_dc_rack_for(endpoint);
-        const auto host_id = _gossiper.get_host_id(endpoint);
+        const auto host_id = _gossiper.get_host_id(endpoint, *state);
         tmptr->update_host_id(host_id, endpoint);
         tmptr->update_topology(host_id, dc_rack);
         co_await replicate_to_all_cores(std::move(tmptr));
@@ -4817,7 +4817,7 @@ storage_service::prepare_replacement_info(std::unordered_set<gms::inet_address> 
     auto dc_rack = get_dc_rack_for(replace_address).value_or(locator::endpoint_dc_rack::default_location);
 
     if (!replace_host_id) {
-        replace_host_id = _gossiper.get_host_id(replace_address);
+        replace_host_id = _gossiper.get_host_id(replace_address, *state);
     }
     slogger.info("Host {}/{} is replacing {}/{}", get_token_metadata().get_my_id(), get_broadcast_address(), replace_host_id, replace_address);
     co_await _gossiper.reset_endpoint_state_map();
