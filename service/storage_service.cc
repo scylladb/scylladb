@@ -756,6 +756,17 @@ protected:
     template<std::ranges::range C>
     requires std::convertible_to<std::ranges::range_value_t<C>, data_value>
     Builder& apply_set(const char* cell, collection_apply_mode apply_mode, const C& c);
+    Builder& set(const char* cell, node_state value);
+    Builder& set(const char* cell, topology_request value);
+    Builder& set(const char* cell, const sstring& value);
+    Builder& set(const char* cell, const raft::server_id& value);
+    Builder& set(const char* cell, const uint32_t& value);
+    Builder& set(const char* cell, cleanup_status value);
+    Builder& set(const char* cell, const utils::UUID& value);
+    Builder& set(const char* cell, bool value);
+    Builder& set(const char* cell, const char* value);
+    Builder& set(const char* cell, const db_clock::time_point& value);
+
     Builder& del(const char* cell);
 };
 
@@ -778,19 +789,14 @@ private:
 public:
     topology_node_mutation_builder(topology_mutation_builder&, raft::server_id);
 
-    topology_node_mutation_builder& set(const char* cell, node_state value);
-    topology_node_mutation_builder& set(const char* cell, topology_request value);
-    topology_node_mutation_builder& set(const char* cell, const sstring& value);
-    topology_node_mutation_builder& set(const char* cell, const raft::server_id& value);
+    using builder_base::set;
+    using builder_base::del;
     topology_node_mutation_builder& set(const char* cell, const std::unordered_set<raft::server_id>& nodes_ids);
     topology_node_mutation_builder& set(const char* cell, const std::unordered_set<dht::token>& value);
     template<typename S>
     requires std::constructible_from<sstring, S>
     topology_node_mutation_builder& set(const char* cell, const std::set<S>& value);
-    topology_node_mutation_builder& set(const char* cell, const uint32_t& value);
-    topology_node_mutation_builder& set(const char* cell, cleanup_status value);
-    topology_node_mutation_builder& set(const char* cell, const utils::UUID& value);
-    topology_node_mutation_builder& del(const char* cell);
+
     canonical_mutation build();
 };
 
@@ -895,6 +901,57 @@ Builder& topology_mutation_builder_base<Builder>::del(const char* cell) {
     return self();
 }
 
+
+template<typename Builder>
+Builder& topology_mutation_builder_base<Builder>::set(const char* cell, node_state value) {
+    return apply_atomic(cell, sstring{::format("{}", value)});
+}
+
+template<typename Builder>
+Builder& topology_mutation_builder_base<Builder>::set(const char* cell, topology_request value) {
+    return apply_atomic(cell, sstring{::format("{}", value)});
+}
+
+template<typename Builder>
+Builder& topology_mutation_builder_base<Builder>::set(const char* cell, const sstring& value) {
+    return apply_atomic(cell, value);
+}
+
+template<typename Builder>
+Builder& topology_mutation_builder_base<Builder>::set(const char* cell, const raft::server_id& value) {
+    return apply_atomic(cell, value.uuid());
+}
+
+template<typename Builder>
+Builder& topology_mutation_builder_base<Builder>::set(const char* cell, const uint32_t& value) {
+    return apply_atomic(cell, int32_t(value));
+}
+
+template<typename Builder>
+Builder& topology_mutation_builder_base<Builder>::set(const char* cell, cleanup_status value) {
+    return apply_atomic(cell, sstring{::format("{}", value)});
+}
+
+template<typename Builder>
+Builder& topology_mutation_builder_base<Builder>::set(const char* cell, const utils::UUID& value) {
+    return apply_atomic(cell, value);
+}
+
+template<typename Builder>
+Builder& topology_mutation_builder_base<Builder>::set(const char* cell, bool value) {
+    return apply_atomic(cell, value);
+}
+
+template<typename Builder>
+Builder& topology_mutation_builder_base<Builder>::set(const char* cell, const char* value) {
+    return apply_atomic(cell, value);
+}
+
+template<typename Builder>
+Builder& topology_mutation_builder_base<Builder>::set(const char* cell, const db_clock::time_point& value) {
+    return apply_atomic(cell, value);
+}
+
 row& topology_node_mutation_builder::row() {
     return _r.cells();
 }
@@ -905,39 +962,6 @@ api::timestamp_type topology_node_mutation_builder::timestamp() const {
 
 const schema& topology_node_mutation_builder::schema() const {
     return *_builder._s;
-}
-
-topology_node_mutation_builder& topology_node_mutation_builder::set(const char* cell, node_state value) {
-    return apply_atomic(cell, sstring{::format("{}", value)});
-}
-
-topology_node_mutation_builder& topology_node_mutation_builder::set(const char* cell, topology_request value) {
-    return apply_atomic(cell, sstring{::format("{}", value)});
-}
-
-topology_node_mutation_builder& topology_node_mutation_builder::set(const char* cell, const sstring& value) {
-    return apply_atomic(cell, value);
-}
-
-topology_node_mutation_builder& topology_node_mutation_builder::set(const char* cell, const raft::server_id& value) {
-    return apply_atomic(cell, value.uuid());
-}
-
-topology_node_mutation_builder& topology_node_mutation_builder::set(const char* cell, const uint32_t& value) {
-    return apply_atomic(cell, int32_t(value));
-}
-
-topology_node_mutation_builder& topology_node_mutation_builder::set(const char* cell, cleanup_status value) {
-    return apply_atomic(cell, sstring{::format("{}", value)});
-}
-
-topology_node_mutation_builder& topology_node_mutation_builder::set(
-        const char* cell, const utils::UUID& value) {
-    return apply_atomic(cell, value);
-}
-
-topology_node_mutation_builder& topology_node_mutation_builder::del(const char* cell) {
-    return builder_base::del(cell);
 }
 
 topology_node_mutation_builder& topology_node_mutation_builder::set(const char* cell, const std::unordered_set<raft::server_id>& nodes_ids) {
@@ -1059,14 +1083,9 @@ public:
     api::timestamp_type timestamp() const;
     ttl_opt ttl() const;
 
-
     topology_request_tracking_mutation_builder(utils::UUID id);
-
-    topology_request_tracking_mutation_builder& set(const char* cell, const utils::UUID& value);
-    topology_request_tracking_mutation_builder& set(const char* cell, const db_clock::time_point& value);
-    topology_request_tracking_mutation_builder& set(const char* cell, bool value);
-    topology_request_tracking_mutation_builder& set(const char* cell, const sstring& value);
-    topology_request_tracking_mutation_builder& del(const char* cell);
+    using builder_base::set;
+    using builder_base::del;
     topology_request_tracking_mutation_builder& done(std::optional<sstring> error = std::nullopt);
     canonical_mutation build() { return canonical_mutation{std::move(_m)}; }
 };
@@ -1094,30 +1113,6 @@ row& topology_request_tracking_mutation_builder::row() {
 
 api::timestamp_type topology_request_tracking_mutation_builder::timestamp() const {
     return _ts;
-}
-
-topology_request_tracking_mutation_builder& topology_request_tracking_mutation_builder::set(
-        const char* cell, const utils::UUID& value) {
-    return apply_atomic(cell, value);
-}
-
-topology_request_tracking_mutation_builder& topology_request_tracking_mutation_builder::set(
-        const char* cell, const db_clock::time_point& value) {
-    return apply_atomic(cell, value);
-}
-
-topology_request_tracking_mutation_builder& topology_request_tracking_mutation_builder::set(
-        const char* cell, bool value) {
-    return apply_atomic(cell, value);
-}
-
-topology_request_tracking_mutation_builder& topology_request_tracking_mutation_builder::set(
-        const char* cell, const sstring& value) {
-    return apply_atomic(cell, value);
-}
-
-topology_request_tracking_mutation_builder& topology_request_tracking_mutation_builder::del(const char* cell) {
-    return builder_base::del(cell);
 }
 
 topology_request_tracking_mutation_builder& topology_request_tracking_mutation_builder::done(std::optional<sstring> error) {
