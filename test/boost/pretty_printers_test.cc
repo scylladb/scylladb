@@ -12,7 +12,7 @@
 #include <boost/test/unit_test.hpp>
 #include "utils/pretty_printers.hh"
 
-BOOST_AUTO_TEST_CASE(test_print_data_size) {
+BOOST_AUTO_TEST_CASE(test_print_data_size_SI) {
     struct {
         size_t n;
         std::string_view formatted;
@@ -20,7 +20,9 @@ BOOST_AUTO_TEST_CASE(test_print_data_size) {
         {0ULL, "0 bytes"},
         {1ULL, "1 byte"},
         {42ULL, "42 bytes"},
+        {9'000ULL, "9000 bytes"},
         {10'000ULL, "10kB"},
+        {10'001ULL, "10kB"},
         {10'000'000ULL, "10MB"},
         {10'000'000'000ULL, "10GB"},
         {10'000'000'000'000ULL, "10TB"},
@@ -30,6 +32,26 @@ BOOST_AUTO_TEST_CASE(test_print_data_size) {
     for (auto [n, expected] : sizes) {
         std::string actual;
         fmt::format_to(std::back_inserter(actual), "{}", utils::pretty_printed_data_size{n});
+        BOOST_CHECK_EQUAL(actual, expected);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(test_print_data_size_IEC) {
+    struct {
+        size_t n;
+        std::string_view formatted;
+    } sizes[] = {
+        {0ULL, "0 bytes"},
+        {1ULL, "1 byte"},
+        {42ULL, "42 bytes"},
+        {8'191LL, "8191 bytes"},
+        {8'192LL, "8KiB"},
+        {8'193LL, "8KiB"},
+        {10'000ULL, "9KiB"},
+    };
+    for (auto [n, expected] : sizes) {
+        std::string actual;
+        fmt::format_to(std::back_inserter(actual), "{:i}", utils::pretty_printed_data_size{n});
         BOOST_CHECK_EQUAL(actual, expected);
     }
 }
