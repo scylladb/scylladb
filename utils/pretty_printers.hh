@@ -42,6 +42,8 @@ public:
 //   fmt::print("{:i}", 42);   // prints "42 bytes"
 //   fmt::print("{:ib}", 10'024); // prints "10Ki", IEC unit is used, without
 //                                // the " bytes" or "B" unit
+//   fmt::print("{:I}", 1024); // prints "1K", IEC unit is used, but without
+//                             // the "iB" postifx.
 //   fmt::print("{:s}", 10); // prints "10 bytes", SI unit is used
 //   fmt::print("{:sb}", 10'000); // prints "10k", SI unit is used, without
 //                                // the unit postfix
@@ -50,6 +52,7 @@ struct fmt::formatter<utils::pretty_printed_data_size> {
     enum class prefix_type {
         SI,
         IEC,
+        IEC_SANS_I,
     };
     prefix_type _prefix = prefix_type::SI;
     bool _bytes = true;
@@ -62,6 +65,9 @@ struct fmt::formatter<utils::pretty_printed_data_size> {
                 ++it;
             } else if (*it == 'i') {
                 _prefix = prefix_type::IEC;
+                ++it;
+            } else if (*it == 'I') {
+                _prefix = prefix_type::IEC_SANS_I;
                 ++it;
             }
             if (*it == 'b') {

@@ -8,18 +8,26 @@
 
 #include "pretty_printers.hh"
 #include <tuple>
+#include <cassert>
 
 template <typename Suffixes>
 static constexpr std::tuple<size_t, std::string_view, std::string_view>
-do_format(size_t n, Suffixes suffixes, unsigned scale, bool bytes) {
+do_format(size_t n, Suffixes suffixes, unsigned scale, unsigned precision, bool bytes) {
+    assert(scale < precision);
     size_t factor = n;
     const char* suffix = "";
+    size_t remainder = 0;
     for (auto next_suffix : suffixes) {
-        size_t next_factor = factor / scale;
-        if (next_factor == 0) {
+        if (factor < precision && remainder == 0) {
+            // If there is no remainder we go below precision because we don't
+            // loose any.
             break;
         }
-        factor = next_factor;
+        if (factor < scale) {
+            break;
+        }
+        remainder = factor % scale;
+        factor /= scale;
         suffix = next_suffix;
     }
     if (!bytes) {
@@ -42,12 +50,19 @@ auto fmt::formatter<utils::pretty_printed_data_size>::format(utils::pretty_print
     if (_prefix == prefix_type::IEC) {
         // ISO/IEC units
         static constexpr auto suffixes = {"Ki", "Mi", "Gi", "Ti", "Pi"};
-        auto [n, suffix, bytes] = do_format(data_size._size, suffixes, 1024, _bytes);
+        auto [n, suffix, bytes] = do_format(data_size._size, suffixes, 1024, 8192, _bytes);
+        return fmt::format_to(ctx.out(), "{}{}{}", n, suffix, bytes);
+    } else if (_prefix == prefix_type::IEC_SANS_I) {
+        static constexpr auto suffixes = {"K", "M", "G", "T", "P"};
+        auto [n, suffix, bytes] = do_format(data_size._size, suffixes, 1024, 8192, false);
+        if (suffix.empty()) {
+            bytes = "B";
+        }
         return fmt::format_to(ctx.out(), "{}{}{}", n, suffix, bytes);
     } else {
         // SI units
         static constexpr auto suffixes = {"k", "M", "G", "T", "P"};
-        auto [n, suffix, bytes] = do_format(data_size._size, suffixes, 1000, _bytes);
+        auto [n, suffix, bytes] = do_format(data_size._size, suffixes, 1000, 10000, _bytes);
         return fmt::format_to(ctx.out(), "{}{}{}", n, suffix, bytes);
     }
 }
