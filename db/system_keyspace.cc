@@ -2907,7 +2907,7 @@ future<service::topology> system_keyspace::load_topology_state() {
     co_return ret;
 }
 
-future<service::topology_features> system_keyspace::load_topology_features_state() {
+future<std::optional<service::topology_features>> system_keyspace::load_topology_features_state() {
     auto rs = co_await execute_cql(
         format("SELECT host_id, node_state, supported_features, enabled_features FROM system.{} WHERE key = '{}'", TOPOLOGY, TOPOLOGY));
     assert(rs);
@@ -2915,11 +2915,16 @@ future<service::topology_features> system_keyspace::load_topology_features_state
     co_return decode_topology_features_state(std::move(rs));
 }
 
-service::topology_features system_keyspace::decode_topology_features_state(::shared_ptr<cql3::untyped_result_set> rs) {
+std::optional<service::topology_features> system_keyspace::decode_topology_features_state(::shared_ptr<cql3::untyped_result_set> rs) {
     service::topology_features ret;
 
     if (rs->empty()) {
-        return ret;
+        return std::nullopt;
+    }
+
+    auto& some_row = *rs->begin();
+    if (!some_row.has("enabled_features")) {
+        return std::nullopt;
     }
 
     for (auto& row : *rs) {
@@ -2936,10 +2941,7 @@ service::topology_features system_keyspace::decode_topology_features_state(::sha
         }
     }
 
-    auto& some_row = *rs->begin();
-    if (some_row.has("enabled_features")) {
-        ret.enabled_features = decode_features(deserialize_set_column(*topology(), some_row, "enabled_features"));
-    }
+    ret.enabled_features = decode_features(deserialize_set_column(*topology(), some_row, "enabled_features"));
 
     return ret;
 }
