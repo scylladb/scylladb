@@ -14,9 +14,7 @@
 #include <seastar/core/sharded.hh>
 #include <unordered_map>
 #include <functional>
-#include <exception>
 #include <set>
-#include <any>
 #include "seastarx.hh"
 #include "db/schema_features.hh"
 #include "gms/feature.hh"

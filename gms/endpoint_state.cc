@@ -10,7 +10,6 @@
 
 #include "gms/endpoint_state.hh"
 #include "gms/i_endpoint_state_change_subscriber.hh"
-#include <optional>
 #include <ostream>
 #include <boost/lexical_cast.hpp>
 
