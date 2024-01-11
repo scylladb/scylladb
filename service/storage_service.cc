@@ -1563,7 +1563,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
 
     std::unordered_set<raft::server_id> get_excluded_nodes(raft::server_id id, const std::optional<topology_request>& req, const std::optional<request_param>& req_param) {
         auto exclude_nodes = parse_ignore_nodes(req_param);
-        exclude_nodes.insert(parse_replaced_node(req_param));
+        if (auto replaced_node = parse_replaced_node(req_param)) {
+            exclude_nodes.insert(replaced_node);
+        }
         if (req && *req == topology_request::remove) {
             exclude_nodes.insert(id);
         }
