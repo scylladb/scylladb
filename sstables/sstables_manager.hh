@@ -89,7 +89,7 @@ private:
     // that format. read_sstables_format() also overwrites _sstables_format
     // if an sstable format was chosen earlier (and this choice was persisted
     // in the system table).
-    sstable_version_types _format = sstable_version_types::mc;
+    sstable_version_types _format = sstable_version_types::md;
 
     // _active and _undergoing_close are used in scylla-gdb.py to fetch all sstables
     // on current shard using "scylla sstables" command. If those fields are renamed,
