@@ -2882,6 +2882,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 node = co_await exec_direct_command(
                         std::move(node), raft_topology_cmd::command::stream_ranges);
                 topology_mutation_builder builder(node.guard.write_timestamp());
+                builder.del_session();
                 topology_request_tracking_mutation_builder rtbuilder(node.rs->request_id);
                 builder.with_node(node.id)
                        .set("node_state", node_state::normal)
@@ -6501,6 +6502,7 @@ future<> storage_service::raft_rebuild(sstring source_dc) {
 
         slogger.info("raft topology: request rebuild for: {}", raft_server.id());
         topology_mutation_builder builder(guard.write_timestamp());
+        builder.set_session(session_id(guard.new_group0_state_id()));
         builder.with_node(raft_server.id())
                .set("topology_request", topology_request::rebuild)
                .set("rebuild_option", source_dc)
