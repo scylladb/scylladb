@@ -1175,11 +1175,11 @@ class topology_coordinator {
             group0_guard guard, const raft_topology_cmd& cmd,
             const std::unordered_set<raft::server_id>& exclude_nodes,
             drop_guard_and_retake drop_and_retake = drop_guard_and_retake::yes) {
-        auto nodes = _topo_sm._topology.normal_nodes | boost::adaptors::filtered(
-                [&exclude_nodes] (const std::pair<const raft::server_id, replica_state>& n) {
-                    return std::none_of(exclude_nodes.begin(), exclude_nodes.end(),
-                            [&n] (const raft::server_id& m) { return n.first == m; });
-                }) | boost::adaptors::map_keys;
+        auto nodes = _topo_sm._topology.normal_nodes
+            | boost::adaptors::filtered([&exclude_nodes] (const std::pair<const raft::server_id, replica_state>& n) {
+                return !exclude_nodes.contains(n.first);
+            })
+            | boost::adaptors::map_keys;
         if (drop_and_retake) {
             release_guard(std::move(guard));
         }
