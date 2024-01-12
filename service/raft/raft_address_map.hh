@@ -379,7 +379,4 @@ public:
 
 using raft_address_map = raft_address_map_t<seastar::lowres_clock>;
 
-// Populates the given raft_address_map from the mapping stored in the system.peers table.
-future<> load_address_map(db::system_keyspace&, raft_address_map&);
-
 } // end of namespace service

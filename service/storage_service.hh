@@ -40,6 +40,7 @@
 #include "raft/raft.hh"
 #include "node_ops/id.hh"
 #include "raft/server.hh"
+#include "service/raft/raft_address_map.hh"
 #include "service/topology_state_machine.hh"
 #include "service/tablet_allocator.hh"
 
@@ -334,6 +335,10 @@ public:
     future<> join_cluster(sharded<db::system_distributed_keyspace>& sys_dist_ks, sharded<service::storage_proxy>& proxy);
 
     void set_group0(service::raft_group0&, bool raft_topology_change_enabled);
+
+    future<> init_address_map(raft_address_map& address_map);
+
+    future<> uninit_address_map();
 
     future<> drain_on_shutdown();
 
@@ -750,6 +755,12 @@ private:
         raft::term_t term{0};
         uint64_t last_index{0};
     } _raft_topology_cmd_handler_state;
+    class raft_ip_address_updater;
+    // Represents a subscription to gossiper on_change events,
+    // updating the raft data structures that depend on
+    // IP addresses (raft_address_map, token_metadata.topology, erm-s),
+    // as well as the system.peers table.
+    shared_ptr<raft_ip_address_updater> _raft_ip_address_updater;
 
     std::unordered_set<raft::server_id> find_raft_nodes_from_hoeps(const std::list<locator::host_id_or_endpoint>& hoeps);
 
@@ -774,6 +785,10 @@ public:
     future<> set_tablet_balancing_enabled(bool);
 
 private:
+    // Synchronizes the local node state (token_metadata, system.peers/system.local tables,
+    // gossiper) to align it with the other raft topology nodes.
+    // Optional target_node can be provided to restrict the synchronization to the specified node.
+    future<> sync_raft_topology_nodes(mutable_token_metadata_ptr tmptr, std::optional<locator::host_id> target_node);
     // load topology state machine snapshot into memory
     // raft_group0_client::_read_apply_mutex must be held
     future<> topology_state_load();

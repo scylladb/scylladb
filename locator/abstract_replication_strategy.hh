@@ -55,7 +55,7 @@ struct replication_strategy_params {
     explicit replication_strategy_params(const replication_strategy_config_options& o, std::optional<unsigned> it) noexcept : options(o), initial_tablets(it) {}
 };
 
-using replication_map = std::unordered_map<token, inet_address_vector_replica_set>;
+using replication_map = std::unordered_map<token, host_id_vector_replica_set>;
 
 using endpoint_set = utils::basic_sequenced_set<inet_address, inet_address_vector_replica_set>;
 using host_id_set = utils::basic_sequenced_set<locator::host_id, host_id_vector_replica_set>;
@@ -163,7 +163,7 @@ public:
     future<dht::token_range_vector> get_pending_address_ranges(const token_metadata_ptr tmptr, std::unordered_set<token> pending_tokens, locator::host_id pending_address, locator::endpoint_dc_rack dr) const;
 };
 
-using ring_mapping = boost::icl::interval_map<token, std::unordered_set<inet_address>>;
+using ring_mapping = boost::icl::interval_map<token, std::unordered_set<locator::host_id>>;
 using replication_strategy_ptr = seastar::shared_ptr<const abstract_replication_strategy>;
 using mutable_replication_strategy_ptr = seastar::shared_ptr<abstract_replication_strategy>;
 
@@ -230,7 +230,7 @@ public:
     /// Returns true if there are any pending ranges for this endpoint.
     /// This operation is expensive, for vnode_erm it iterates
     /// over all pending ranges which is O(number of tokens).
-    virtual bool has_pending_ranges(inet_address endpoint) const = 0;
+    virtual bool has_pending_ranges(locator::host_id endpoint) const = 0;
 
     /// Returns a token_range_splitter which is line with the replica assignment of this replication map.
     /// The splitter can live longer than this instance.
@@ -303,7 +303,7 @@ public: // effective_replication_map
     inet_address_vector_topology_change get_pending_endpoints(const token& search_token) const override;
     inet_address_vector_replica_set get_endpoints_for_reading(const token& search_token) const override;
     std::optional<tablet_routing_info> check_locality(const token& token) const override;
-    bool has_pending_ranges(inet_address endpoint) const override;
+    bool has_pending_ranges(locator::host_id endpoint) const override;
     std::unique_ptr<token_range_splitter> make_splitter() const override;
     const dht::sharder& get_sharder(const schema& s) const override;
 public:
@@ -326,8 +326,6 @@ public:
     // boost::icl::interval_map is not no_throw_move_constructible -> can't return cloned_data by val,
     // since future_state requires T to be no_throw_move_constructible.
     future<std::unique_ptr<cloned_data>> clone_data_gently() const;
-
-    stop_iteration for_each_natural_endpoint_until(const token& search_token, const noncopyable_function<stop_iteration(const inet_address&)>& func) const;
 
     // get_ranges() returns the list of ranges held by the given endpoint.
     // The list is sorted, and its elements are non overlapping and non wrap-around.
@@ -359,7 +357,8 @@ public:
 
 private:
     dht::token_range_vector do_get_ranges(noncopyable_function<stop_iteration(bool& add_range, const inet_address& natural_endpoint)> consider_range_for_endpoint) const;
-    const inet_address_vector_replica_set& do_get_natural_endpoints(const token& tok, bool is_vnode) const;
+    inet_address_vector_replica_set do_get_natural_endpoints(const token& tok, bool is_vnode) const;
+    stop_iteration for_each_natural_endpoint_until(const token& vnode_tok, const noncopyable_function<stop_iteration(const inet_address&)>& func) const;
 
 public:
     static factory_key make_factory_key(const replication_strategy_ptr& rs, const token_metadata_ptr& tmptr);

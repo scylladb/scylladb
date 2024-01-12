@@ -18,10 +18,6 @@
 #include "direct_failure_detector/failure_detector.hh"
 #include "service/raft/group0_fwd.hh"
 
-namespace gms {
-class gossiper;
-}
-
 namespace db {
 class system_keyspace;
 }
@@ -57,7 +53,6 @@ struct raft_server_for_group {
 
 class direct_fd_pinger;
 class direct_fd_proxy;
-class gossiper_state_change_subscriber_proxy;
 
 // This class is responsible for creating, storing and accessing raft servers.
 // It also manages the raft rpc verbs initialization.
@@ -67,10 +62,6 @@ class gossiper_state_change_subscriber_proxy;
 class raft_group_registry : public seastar::peering_sharded_service<raft_group_registry> {
 private:
     netw::messaging_service& _ms;
-    gms::gossiper& _gossiper;
-    // A proxy class representing subscription to on_change
-    // events, and updating the address map on this events.
-    shared_ptr<gossiper_state_change_subscriber_proxy> _gossiper_proxy;
     // Raft servers along with the corresponding timers to tick each instance.
     // Currently ticking every 100ms.
     std::unordered_map<raft::group_id, raft_server_for_group> _servers;
@@ -98,7 +89,7 @@ private:
 
 public:
     raft_group_registry(raft::server_id my_id, raft_address_map&, netw::messaging_service& ms,
-            gms::gossiper& gs, direct_failure_detector::failure_detector& fd);
+            direct_failure_detector::failure_detector& fd);
     ~raft_group_registry();
 
     // Called manually at start on every shard.

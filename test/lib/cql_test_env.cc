@@ -726,7 +726,7 @@ private:
             _group0_registry.start(
                 raft::server_id{host_id.id},
                 std::ref(_raft_address_map),
-                std::ref(_ms), std::ref(_gossiper), std::ref(_fd)).get();
+                std::ref(_ms), std::ref(_fd)).get();
             auto stop_raft_gr = deferred_stop(_group0_registry);
 
             _stream_manager.start(std::ref(*cfg), std::ref(_db), std::ref(_sys_dist_ks), std::ref(_view_update_generator), std::ref(_ms), std::ref(_mm), std::ref(_gossiper), scheduling_groups.streaming_scheduling_group).get();
@@ -890,6 +890,12 @@ private:
                     cfg->check_experimental(db::experimental_features_t::feature::CONSISTENT_TOPOLOGY_CHANGES);
 
             _ss.local().set_group0(group0_service, raft_topology_change_enabled);
+
+            // Load address_map from system.peers and subscribe to gossiper events to keep it updated.
+            _ss.local().init_address_map(_raft_address_map.local()).get();
+            auto cancel_address_map_subscription = defer([this] {
+                _ss.local().uninit_address_map().get();
+            });
 
             auto stop_group0_usage_in_storage_service = defer([this] {
                 _ss.local().wait_for_group0_stop().get();

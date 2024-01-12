@@ -1721,12 +1721,6 @@ std::ostream& operator<<(std::ostream& os, group0_upgrade_state state) {
     return os;
 }
 
-future<> load_address_map(db::system_keyspace& sys_ks, raft_address_map& address_map) {
-    for (auto [ip, host] : co_await sys_ks.load_host_ids()) {
-        address_map.add_or_update_entry(raft::server_id(host.uuid()), ip);
-    }
-}
-
 
 } // end of namespace service
 
