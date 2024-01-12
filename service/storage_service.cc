@@ -293,6 +293,25 @@ static std::unordered_map<token, gms::inet_address> get_token_to_endpoint(const 
     return result;
 }
 
+static future<inet_address> wait_for_ip(raft::server_id id, const raft_address_map& am, abort_source& as) {
+    const auto timeout = std::chrono::seconds{30};
+    const auto deadline = lowres_clock::now() + timeout;
+    while (true) {
+        const auto ip = am.find(id);
+        if (ip) {
+            co_return *ip;
+        }
+        if (lowres_clock::now() > deadline) {
+            co_await coroutine::exception(std::make_exception_ptr(
+                std::runtime_error(format("failed to obtain an IP for {} in {}s",
+                    id, std::chrono::duration_cast<std::chrono::seconds>(timeout).count()))));
+        }
+        static thread_local logger::rate_limit rate_limit{std::chrono::seconds(1)};
+        slogger.log(log_level::warn, rate_limit, "raft topology: cannot map {} to ip, retrying.", id);
+        co_await sleep_abortable(std::chrono::milliseconds(5), as);
+    }
+}
+
 /*
  * The helper waits for two things
  *  1) for schema agreement
@@ -2241,6 +2260,51 @@ class topology_coordinator {
                     slogger.info("raft topology: skipping join node handshake for the first node in the cluster");
                 } else {
                     auto validation_result = validate_joining_node(node);
+
+                    // When the validation succeeded, it's important that all nodes in the
+                    // cluster are aware of the IP address of the new node before we proceed to
+                    // the topology::transition_state::join_group0 state, since in this state
+                    // node IPs are already used to populate pending nodes in erm.
+                    // This applies both to new and replacing nodes.
+                    // If the wait_for_ip is unsuccessful, we should inform the new
+                    // node about this failure.
+                    // If the validation doesn't pass, we only need to call wait_for_ip on the current node,
+                    // so that we can communicate the failure of the join request directly to
+                    // the joining node.
+
+                    {
+                        std::exception_ptr wait_for_ip_error;
+                        try {
+                            if (holds_alternative<join_node_response_params::rejected>(validation_result)) {
+                                release_guard(std::move(node.guard));
+                                co_await wait_for_ip(node.id, _address_map, _as);
+                                node.guard = co_await start_operation();
+                            } else {
+                                auto exclude_nodes = get_excluded_nodes(node);
+                                exclude_nodes.insert(node.id);
+                                node.guard = co_await exec_global_command(std::move(node.guard),
+                                    raft_topology_cmd::command::wait_for_ip,
+                                    exclude_nodes);
+                            }
+                        } catch (term_changed_error&) {
+                            throw;
+                        } catch(...) {
+                            wait_for_ip_error = std::current_exception();
+                            slogger.warn("raft_topology_cmd::command::wait_for_ip failed, error {}",
+                                wait_for_ip_error);
+                        }
+                        if (wait_for_ip_error) {
+                            node.guard = co_await start_operation();
+                        }
+                        node = retake_node(std::move(node.guard), node.id);
+
+                        if (wait_for_ip_error && holds_alternative<join_node_response_params::accepted>(validation_result)) {
+                            validation_result = join_node_response_params::rejected {
+                                .reason = ::format("wait_for_ip failed, error {}", wait_for_ip_error)
+                            };
+                        }
+                    }
+
                     if (auto* reject = std::get_if<join_node_response_params::rejected>(&validation_result)) {
                         // Transition to left
                         topology_mutation_builder builder(node.guard.write_timestamp());
@@ -6662,6 +6726,23 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                     slogger.warn("raft topology: got shutdown request while not decommissioning");
                 }
                 break;
+            case raft_topology_cmd::command::wait_for_ip: {
+                std::vector<raft::server_id> ids;
+                {
+                    const auto& new_nodes = _topology_state_machine._topology.new_nodes;
+                    ids.reserve(new_nodes.size());
+                    for (const auto& [id, rs]: new_nodes) {
+                        ids.push_back(id);
+                    }
+                }
+                slogger.debug("Got raft_topology_cmd::wait_for_ip, new nodes [{}]", ids);
+                for (const auto& id: ids) {
+                    co_await wait_for_ip(id, _group0->address_map(), _abort_source);
+                }
+                slogger.debug("raft_topology_cmd::wait_for_ip done [{}]", ids);
+                result.status = raft_topology_cmd_result::command_status::success;
+                break;
+            }
         }
     } catch (...) {
         slogger.error("raft topology: raft_topology_cmd failed with: {}", std::current_exception());

@@ -211,6 +211,9 @@ std::ostream& operator<<(std::ostream& os, const raft_topology_cmd::command& cmd
         case raft_topology_cmd::command::shutdown:
             os << "shutdown";
             break;
+        case raft_topology_cmd::command::wait_for_ip:
+            os << "wait_for_ip";
+            break;
     }
     return os;
 }
