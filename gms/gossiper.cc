@@ -775,14 +775,18 @@ future<> gossiper::do_status_check() {
     }
 }
 
-gossiper::endpoint_permit::endpoint_permit(endpoint_locks_map::entry_ptr&& ptr, inet_address addr, std::string caller) noexcept
+gossiper::endpoint_permit::endpoint_permit(endpoint_locks_map::entry_ptr&& ptr, inet_address addr, seastar::compat::source_location caller) noexcept
     : _ptr(std::move(ptr))
     , _permit_id(_ptr->pid)
     , _addr(std::move(addr))
     , _caller(std::move(caller))
 {
     ++_ptr->holders;
-    logger.debug("{}: lock_endpoint {}: acquired: permit_id={} holders={}", _caller, _addr, _permit_id, _ptr->holders);
+    if (!_ptr->first_holder) {
+        _ptr->first_holder = _caller;
+    }
+    _ptr->last_holder = _caller;
+    logger.debug("{}: lock_endpoint {}: acquired: permit_id={} holders={}", _caller.function_name(), _addr, _permit_id, _ptr->holders);
 }
 
 gossiper::endpoint_permit::endpoint_permit(endpoint_permit&& o) noexcept
@@ -799,11 +803,12 @@ gossiper::endpoint_permit::~endpoint_permit() {
 bool gossiper::endpoint_permit::release() noexcept {
     if (auto ptr = std::exchange(_ptr, nullptr)) {
         assert(ptr->pid == _permit_id);
-        logger.debug("{}: lock_endpoint {}: released: permit_id={} holders={}", _caller, _addr, _permit_id, ptr->holders);
+        logger.debug("{}: lock_endpoint {}: released: permit_id={} holders={}", _caller.function_name(), _addr, _permit_id, ptr->holders);
         if (!--ptr->holders) {
-            logger.debug("{}: lock_endpoint {}: released: permit_id={}", _caller, _addr, _permit_id);
+            logger.debug("{}: lock_endpoint {}: released: permit_id={}", _caller.function_name(), _addr, _permit_id);
             ptr->units.return_all();
             ptr->pid = null_permit_id;
+            ptr->first_holder = ptr->last_holder = std::nullopt;
             _permit_id = null_permit_id;
             return true;
         }
@@ -820,27 +825,58 @@ future<gossiper::endpoint_permit> gossiper::lock_endpoint(inet_address ep, permi
     if (this_shard_id() != 0) {
         on_internal_error(logger, "lock_endpoint must be called on shard 0");
     }
-    std::string caller = l.function_name();
     auto eptr = co_await _endpoint_locks.get_or_load(ep, [] (const inet_address& ep) { return endpoint_lock_entry(); });
     if (pid) {
         if (eptr->pid == pid) {
             // Already locked with the same permit
-            co_return endpoint_permit(std::move(eptr), std::move(ep), std::move(caller));
+            co_return endpoint_permit(std::move(eptr), std::move(ep), std::move(l));
         } else {
             // permit_id mismatch means either that the endpoint lock was released,
             // or maybe we're passed a permit_id that was acquired for a different endpoint.
-            on_internal_error_noexcept(logger, fmt::format("{}: lock_endpoint {}: permit_id={}: endpoint_lock_entry has mismatching permit_id={}", caller, ep, pid, eptr->pid));
+            on_internal_error_noexcept(logger, fmt::format("{}: lock_endpoint {}: permit_id={}: endpoint_lock_entry has mismatching permit_id={}", l.function_name(), ep, pid, eptr->pid));
         }
     }
     pid = permit_id::create_random_id();
-    logger.debug("{}: lock_endpoint {}: waiting: permit_id={}", caller, ep, pid);
-    eptr->units = co_await get_units(eptr->sem, 1, _abort_source);
+    logger.debug("{}: lock_endpoint {}: waiting: permit_id={}", l.function_name(), ep, pid);
+    while (true) {
+        _abort_source.check();
+        static constexpr auto duration = std::chrono::minutes{1};
+        abort_on_expiry aoe(lowres_clock::now() + duration);
+        auto sub = _abort_source.subscribe([&aoe] () noexcept {
+            aoe.abort_source().request_abort();
+        });
+        assert(sub); // due to check() above
+        try {
+            eptr->units = co_await get_units(eptr->sem, 1, aoe.abort_source());
+            break;
+        } catch (const abort_requested_exception&) {
+            if (_abort_source.abort_requested()) {
+                throw;
+            }
+
+            // If we didn't rethrow above, the abort had to come from `abort_on_expiry`'s timer.
+
+            static constexpr auto fmt_loc = [] (const seastar::compat::source_location& l) {
+                return fmt::format("{}({}:{}) `{}`", l.file_name(), l.line(), l.column(), l.function_name());
+            };
+            static constexpr auto fmt_loc_opt = [] (const std::optional<seastar::compat::source_location>& l) {
+                if (!l) {
+                    return "null"s;
+                }
+                return fmt_loc(*l);
+            };
+            logger.error(
+                "{}: waiting for endpoint lock (ep={}) took more than {}, signifying possible deadlock;"
+                " holders: {}, first holder: {}, last holder (might not be current): {}",
+                fmt_loc(l), ep, duration, eptr->holders, fmt_loc_opt(eptr->first_holder), fmt_loc_opt(eptr->last_holder));
+        }
+    }
     eptr->pid = pid;
     if (eptr->holders) {
-        on_internal_error_noexcept(logger, fmt::format("{}: lock_endpoint {}: newly held endpoint_lock_entry has {} holders", caller, ep, eptr->holders));
+        on_internal_error_noexcept(logger, fmt::format("{}: lock_endpoint {}: newly held endpoint_lock_entry has {} holders", l.function_name(), ep, eptr->holders));
     }
     _abort_source.check();
-    co_return endpoint_permit(std::move(eptr), std::move(ep), std::move(caller));
+    co_return endpoint_permit(std::move(eptr), std::move(ep), std::move(l));
 }
 
 void gossiper::permit_internal_error(const inet_address& addr, permit_id pid) {
