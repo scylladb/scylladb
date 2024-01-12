@@ -15,6 +15,11 @@
 
 namespace auth {
 
+std::ostream& boost_test_print_type(std::ostream& os, const resource& r) {
+    fmt::print(os, "{}", r);
+    return os;
+}
+
 std::ostream& boost_test_print_type(std::ostream& os, const resource_kind& kind) {
     fmt::print(os, "{}", kind);
     return os;

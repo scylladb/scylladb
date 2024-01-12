@@ -15,6 +15,7 @@
 #include <optional>
 #include <utility>
 
+#include <fmt/core.h>
 #include <seastar/core/future.hh>
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/sstring.hh>
@@ -30,7 +31,7 @@
 namespace std {
 
 inline std::ostream& operator<<(std::ostream& os, const pair<auth::role_or_anonymous, auth::resource>& p) {
-    os << "{role: " << p.first << ", resource: " << p.second << "}";
+    fmt::print(os, "{{role: {}, resource: {}}}", p.first, p.second);
     return os;
 }
 

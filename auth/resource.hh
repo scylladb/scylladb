@@ -11,13 +11,13 @@
 #pragma once
 
 #include <string_view>
-#include <iostream>
 #include <optional>
 #include <stdexcept>
 #include <tuple>
 #include <vector>
 #include <unordered_set>
 
+#include <fmt/core.h>
 #include <boost/range/adaptor/transformed.hpp>
 #include <seastar/core/print.hh>
 #include <seastar/core/sstring.hh>
@@ -123,8 +123,6 @@ private:
 
 bool operator<(const resource&, const resource&);
 
-std::ostream& operator<<(std::ostream&, const resource&);
-
 class resource_kind_mismatch : public std::invalid_argument {
 public:
     explicit resource_kind_mismatch(resource_kind expected, resource_kind actual)
@@ -150,8 +148,6 @@ public:
     std::optional<std::string_view> table() const;
 };
 
-std::ostream& operator<<(std::ostream&, const data_resource_view&);
-
 ///
 /// A "role" view of \ref resource.
 ///
@@ -169,8 +165,6 @@ public:
     std::optional<std::string_view> role() const;
 };
 
-std::ostream& operator<<(std::ostream&, const role_resource_view&);
-
 ///
 /// A "service_level" view of \ref resource.
 ///
@@ -182,8 +176,6 @@ public:
     explicit service_level_resource_view(const resource&);
 
 };
-
-std::ostream& operator<<(std::ostream&, const service_level_resource_view&);
 
 ///
 /// A "function" view of \ref resource.
@@ -201,8 +193,6 @@ public:
     std::optional<std::string_view> function_name() const;
     std::optional<std::vector<std::string_view>> function_args() const;
 };
-
-std::ostream& operator<<(std::ostream&, const functions_resource_view&);
 
 ///
 /// Parse a resource from its name.
@@ -321,3 +311,13 @@ using resource_set = std::unordered_set<resource>;
 resource_set expand_resource_family(const resource&);
 
 }
+
+template <> struct fmt::formatter<auth::data_resource_view> {
+    constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
+    auto format(const auth::data_resource_view&, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
+
+template <> struct fmt::formatter<auth::resource> {
+    constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
+    auto format(const auth::resource&, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
