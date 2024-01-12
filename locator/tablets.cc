@@ -528,7 +528,7 @@ void tablet_aware_replication_strategy::validate_tablet_options(const abstract_r
                                                                 const gms::feature_service& fs,
                                                                 const replication_strategy_config_options& opts) const {
     if (ars._uses_tablets && !fs.tablets) {
-        throw exceptions::configuration_exception("Tablet replication is not enabled");
+        throw exceptions::invalid_request_exception("Tablet replication is not enabled. To enable it, you have to uncomment experimental_features and two of its options: - consistent-topology-changes and - tablets in configuration file.");
     }
 }
 
