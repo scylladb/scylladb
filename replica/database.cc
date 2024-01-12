@@ -2157,23 +2157,6 @@ std::ostream& operator<<(std::ostream& os, const write_type& t) {
     abort();
 }
 
-std::ostream& operator<<(std::ostream& os, db::consistency_level cl) {
-    switch (cl) {
-    case db::consistency_level::ANY: return os << "ANY";
-    case db::consistency_level::ONE: return os << "ONE";
-    case db::consistency_level::TWO: return os << "TWO";
-    case db::consistency_level::THREE: return os << "THREE";
-    case db::consistency_level::QUORUM: return os << "QUORUM";
-    case db::consistency_level::ALL: return os << "ALL";
-    case db::consistency_level::LOCAL_QUORUM: return os << "LOCAL_QUORUM";
-    case db::consistency_level::EACH_QUORUM: return os << "EACH_QUORUM";
-    case db::consistency_level::SERIAL: return os << "SERIAL";
-    case db::consistency_level::LOCAL_SERIAL: return os << "LOCAL_SERIAL";
-    case db::consistency_level::LOCAL_ONE: return os << "LOCAL_ONE";
-    default: abort();
-    }
-}
-
 std::ostream& operator<<(std::ostream& os, operation_type op_type) {
     switch (op_type) {
     case operation_type::read: return os << "read";
@@ -2182,6 +2165,36 @@ std::ostream& operator<<(std::ostream& os, operation_type op_type) {
     abort();
 }
 
+}
+
+std::string_view fmt::formatter<db::consistency_level>::to_string(db::consistency_level cl) {
+    switch (cl) {
+    using enum db::consistency_level;
+    case ANY:
+        return "ANY";
+    case ONE:
+        return "ONE";
+    case TWO:
+        return "TWO";
+    case THREE:
+        return "THREE";
+    case QUORUM:
+        return "QUORUM";
+    case ALL:
+        return "ALL";
+    case LOCAL_QUORUM:
+        return "LOCAL_QUORUM";
+    case EACH_QUORUM:
+        return "EACH_QUORUM";
+    case SERIAL:
+        return "SERIAL";
+    case LOCAL_SERIAL:
+        return "LOCAL_SERIAL";
+    case LOCAL_ONE:
+        return "LOCAL_ONE";
+    default:
+        abort();
+    }
 }
 
 namespace replica {
