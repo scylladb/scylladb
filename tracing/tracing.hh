@@ -10,7 +10,6 @@
 #pragma once
 
 #include <vector>
-#include <atomic>
 #include <random>
 #include <seastar/core/sharded.hh>
 #include <seastar/core/sstring.hh>
