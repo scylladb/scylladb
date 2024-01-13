@@ -10,7 +10,6 @@
 
 #pragma once
 
-#include <type_traits>
 #include "service/migration_listener.hh"
 #include "gms/endpoint_state.hh"
 #include <seastar/core/distributed.hh>

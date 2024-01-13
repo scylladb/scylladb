@@ -22,6 +22,7 @@
 #include <boost/algorithm/string/trim_all.hpp>
 #include <boost/algorithm/string/case_conv.hpp>
 #include <boost/functional/hash.hpp>
+#include "service/raft/raft_group0_client.hh"
 #include "service/storage_service.hh"
 #include "service/load_meter.hh"
 #include "db/commitlog/commitlog.hh"

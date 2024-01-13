@@ -9,15 +9,12 @@
 #pragma once
 
 #include "seastarx.hh"
-#include "log.hh"
 #include "auth/role_manager.hh"
-#include "auth/authenticated_user.hh"
 #include <seastar/core/sstring.hh>
 #include <seastar/core/distributed.hh>
 #include <seastar/core/abort_source.hh>
 #include "auth/service.hh"
 #include <map>
-#include <unordered_set>
 #include "qos_common.hh"
 #include "service/endpoint_lifecycle_subscriber.hh"
 #include "qos_configuration_change_subscriber.hh"

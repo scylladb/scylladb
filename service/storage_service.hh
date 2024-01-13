@@ -30,13 +30,13 @@
 #include "replica/database_fwd.hh"
 #include "streaming/stream_reason.hh"
 #include <seastar/core/distributed.hh>
-#include "utils/disk-error-handler.hh"
 #include "service/migration_listener.hh"
 #include <seastar/core/metrics_registration.hh>
 #include <seastar/core/rwlock.hh>
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/lowres_clock.hh>
 #include "cdc/generation_id.hh"
+#include "db/system_keyspace.hh"
 #include "raft/raft.hh"
 #include "node_ops/id.hh"
 #include "raft/server.hh"
@@ -90,6 +90,7 @@ class storage_service;
 class storage_proxy;
 class migration_manager;
 class raft_group0;
+class group0_guard;
 class group0_info;
 
 struct join_node_request_params;

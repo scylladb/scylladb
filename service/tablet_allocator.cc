@@ -10,13 +10,12 @@
 #include "replica/tablets.hh"
 #include "locator/tablet_replication_strategy.hh"
 #include "replica/database.hh"
-#include "service/migration_manager.hh"
+#include "service/migration_listener.hh"
 #include "service/tablet_allocator.hh"
 #include "utils/error_injection.hh"
 #include "utils/stall_free.hh"
 #include "db/config.hh"
 #include "locator/load_sketch.hh"
-#include "utils/div_ceil.hh"
 
 using namespace locator;
 using namespace replica;
