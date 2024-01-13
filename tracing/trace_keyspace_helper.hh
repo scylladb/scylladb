@@ -9,7 +9,6 @@
  */
 #pragma once
 
-#include <tuple>
 #include <seastar/core/gate.hh>
 #include <seastar/core/metrics_registration.hh>
 #include "tracing/tracing.hh"

@@ -10,14 +10,10 @@
 #include <chrono>
 #include "cql3/statements/prepared_statement.hh"
 #include "tracing/trace_state.hh"
-#include "tracing/trace_keyspace_helper.hh"
-#include "service/storage_proxy.hh"
-#include "utils/to_string.hh"
 #include "timestamp.hh"
 
 #include "cql3/values.hh"
 #include "cql3/query_options.hh"
-#include "utils/UUID_gen.hh"
 
 namespace tracing {
 

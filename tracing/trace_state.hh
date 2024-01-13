@@ -10,7 +10,6 @@
 #pragma once
 
 #include <deque>
-#include <unordered_set>
 #include <seastar/util/lazy.hh>
 #include <seastar/core/weak_ptr.hh>
 #include <seastar/core/checked_ptr.hh>
