@@ -46,14 +46,14 @@ size_t block_for(const locator::effective_replication_map& erm, consistency_leve
 
 bool is_datacenter_local(consistency_level l);
 
-inet_address_vector_replica_set
+host_id_vector_replica_set
 filter_for_query(consistency_level cl,
                  const locator::effective_replication_map& erm,
-                 inet_address_vector_replica_set live_endpoints,
-                 const inet_address_vector_replica_set& preferred_endpoints,
+                 host_id_vector_replica_set live_endpoints,
+                 const host_id_vector_replica_set& preferred_endpoints,
                  read_repair_decision read_repair,
                  const gms::gossiper& g,
-                 std::optional<gms::inet_address>* extra,
+                 std::optional<locator::host_id>* extra,
                  replica::column_family* cf);
 
 struct dc_node_count {
@@ -64,7 +64,7 @@ struct dc_node_count {
 bool
 is_sufficient_live_nodes(consistency_level cl,
                          const locator::effective_replication_map& erm,
-                         const inet_address_vector_replica_set& live_endpoints);
+                         const host_id_vector_replica_set& live_endpoints);
 
 template<typename Range, typename PendingRange = std::array<gms::inet_address, 0>>
 void assure_sufficient_live_nodes(

@@ -94,7 +94,7 @@
                "parameters":[
                   {
                      "name":"addr",
-                     "description":"The endpoint address",
+                     "description":"The endpoint IP address ot Host ID",
                      "required":true,
                      "allowMultiple":false,
                      "type":"string",

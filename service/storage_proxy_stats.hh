@@ -12,6 +12,7 @@
 #include "utils/estimated_histogram.hh"
 #include "utils/histogram.hh"
 #include <seastar/core/metrics.hh>
+#include "locator/host_id.hh"
 
 namespace locator { class topology; }
 
@@ -64,7 +65,7 @@ public:
      *
      * @return a reference to the requested counter
      */
-    uint64_t& get_ep_stat(const locator::topology& topo, gms::inet_address ep) noexcept;
+    uint64_t& get_ep_stat(const locator::topology& topo, const locator::host_id& ep) noexcept;
 };
 
 struct write_stats {

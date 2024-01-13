@@ -59,7 +59,7 @@
                "parameters":[
                   {
                      "name":"addr",
-                     "description":"The endpoint address",
+                     "description":"The endpoint IP address or Host ID",
                      "required":true,
                      "allowMultiple":false,
                      "type":"string",
@@ -83,7 +83,7 @@
                "parameters":[
                   {
                      "name":"addr",
-                     "description":"The endpoint address",
+                     "description":"The endpoint IP address or Host ID",
                      "required":true,
                      "allowMultiple":false,
                      "type":"string",
@@ -107,7 +107,7 @@
                "parameters":[
                   {
                      "name":"addr",
-                     "description":"The endpoint address",
+                     "description":"The endpoint IP address or Host ID",
                      "required":true,
                      "allowMultiple":false,
                      "type":"string",
@@ -131,7 +131,7 @@
                "parameters":[
                   {
                      "name":"addr",
-                     "description":"The endpoint address",
+                     "description":"The endpoint IP address or Host ID",
                      "required":true,
                      "allowMultiple":false,
                      "type":"string",
@@ -163,7 +163,7 @@
                "parameters":[
                   {
                      "name":"addr",
-                     "description":"The endpoint address",
+                     "description":"The endpoint IP address or Host ID",
                      "required":true,
                      "allowMultiple":false,
                      "type":"string",

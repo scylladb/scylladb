@@ -131,7 +131,7 @@ public:
  * The chosen condition is arbitrary, it only tries to make sure that no two nodes propose a generation of streams
  * when upgrading, and nothing bad happens if they for some reason do (it's mostly an optimization).
  */
-bool should_propose_first_generation(const gms::inet_address& me, const gms::gossiper&);
+bool should_propose_first_generation(const locator::host_id& me, const gms::gossiper&);
 
 /*
  * Checks if the CDC generation is optimal, which is true if its `topology_description` is consistent

@@ -14,6 +14,7 @@
 #include <seastar/core/shared_future.hh>
 #include "gms/endpoint_state.hh"
 #include "gms/i_endpoint_state_change_subscriber.hh"
+#include "locator/token_metadata.hh"
 #include "service/endpoint_lifecycle_subscriber.hh"
 #include "service/topology_guard.hh"
 #include "locator/abstract_replication_strategy.hh"
@@ -269,6 +270,9 @@ private:
     inet_address get_broadcast_address() const noexcept {
         return get_token_metadata_ptr()->get_topology().my_address();
     }
+    locator::host_id my_host_id() const noexcept {
+        return get_token_metadata_ptr()->get_topology().my_host_id();
+    }
     bool is_me(inet_address addr) const noexcept {
         return get_token_metadata_ptr()->get_topology().is_me(addr);
     }
@@ -327,7 +331,7 @@ private:
 
 public:
 
-    static std::unordered_set<gms::inet_address> parse_node_list(sstring comma_separated_list, const locator::token_metadata& tm);
+    static void parse_node_list(sstring comma_separated_list, const locator::token_metadata& tm, std::function<void(const locator::host_id_or_endpoint& hoep)> func);
 
     future<> check_for_endpoint_collision(std::unordered_set<gms::inet_address> initial_contact_nodes,
             const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features);
@@ -353,7 +357,7 @@ private:
     future<> join_token_ring(sharded<db::system_distributed_keyspace>& sys_dist_ks,
             sharded<service::storage_proxy>& proxy,
             std::unordered_set<gms::inet_address> initial_contact_nodes,
-            std::unordered_set<gms::inet_address> loaded_endpoints,
+            std::unordered_map<locator::host_id, gms::inet_address> loaded_endpoints,
             std::unordered_map<gms::inet_address, sstring> loaded_peer_features,
             std::chrono::milliseconds);
     future<> start_sys_dist_ks();
@@ -413,7 +417,7 @@ public:
             locator::vnode_effective_replication_map_ptr erm,
             const dht::token_range_vector& ranges) const;
 public:
-    virtual future<> on_join(gms::inet_address endpoint, gms::endpoint_state_ptr ep_state, gms::permit_id) override;
+    virtual future<> on_join(locator::host_id host_id, gms::inet_address endpoint, gms::endpoint_state_ptr ep_state, gms::permit_id) override;
     /*
      * Handle the reception of a new particular ApplicationState for a particular endpoint. Note that the value of the
      * ApplicationState has not necessarily "changed" since the last known value, if we already received the same update
@@ -442,11 +446,11 @@ public:
      * Note: Any time a node state changes from STATUS_NORMAL, it will not be visible to new nodes. So it follows that
      * you should never bootstrap a new node during a removenode, decommission or move.
      */
-    virtual future<> on_change(gms::inet_address endpoint, const gms::application_state_map& states, gms::permit_id) override;
-    virtual future<> on_alive(gms::inet_address endpoint, gms::endpoint_state_ptr state, gms::permit_id) override;
-    virtual future<> on_dead(gms::inet_address endpoint, gms::endpoint_state_ptr state, gms::permit_id) override;
-    virtual future<> on_remove(gms::inet_address endpoint, gms::permit_id) override;
-    virtual future<> on_restart(gms::inet_address endpoint, gms::endpoint_state_ptr state, gms::permit_id) override;
+    virtual future<> on_change(locator::host_id host_id, gms::inet_address endpoint, const gms::application_state_map& states, gms::permit_id) override;
+    virtual future<> on_alive(locator::host_id host_id, gms::inet_address endpoint, gms::endpoint_state_ptr state, gms::permit_id) override;
+    virtual future<> on_dead(locator::host_id host_id, gms::inet_address endpoint, gms::endpoint_state_ptr state, gms::permit_id) override;
+    virtual future<> on_remove(locator::host_id host_id, gms::inet_address endpoint, gms::permit_id) override;
+    virtual future<> on_restart(locator::host_id host_id, gms::inet_address endpoint, gms::endpoint_state_ptr state, gms::permit_id) override;
 
 public:
     // For migration_listener
@@ -519,11 +523,11 @@ private:
     future<> handle_state_removed(inet_address endpoint, locator::host_id, gms::endpoint_state_ptr eps, std::vector<sstring> pieces, gms::permit_id);
 
 private:
-    future<> excise(std::unordered_set<token> tokens, inet_address endpoint, gms::permit_id);
-    future<> excise(std::unordered_set<token> tokens, inet_address endpoint, long expire_time, gms::permit_id);
+    future<> excise(std::unordered_set<token> tokens, inet_address endpoint, locator::host_id host_id, gms::permit_id);
+    future<> excise(std::unordered_set<token> tokens, inet_address endpoint, locator::host_id host_id, long expire_time, gms::permit_id);
 
     /** unlike excise we just need this endpoint gone without going through any notifications **/
-    future<> remove_endpoint(inet_address endpoint, gms::permit_id pid, bool force = false);
+    future<> remove_endpoint(inet_address endpoint, locator::host_id host_id, gms::permit_id pid, bool force = false);
 
     void add_expire_time_if_found(inet_address endpoint, int64_t expire_time);
 
@@ -715,19 +719,19 @@ private:
     void do_isolate_on_error(disk_error type);
     future<> isolate();
 
-    future<> notify_down(inet_address endpoint);
-    future<> notify_left(inet_address endpoint);
-    future<> notify_up(inet_address endpoint);
-    future<> notify_joined(inet_address endpoint);
-    future<> notify_cql_change(inet_address endpoint, bool ready);
+    future<> notify_down(locator::host_id host_it, inet_address endpoint);
+    future<> notify_left(locator::host_id host_it, inet_address endpoint);
+    future<> notify_up(locator::host_id host_it, inet_address endpoint);
+    future<> notify_joined(locator::host_id host_it, inet_address endpoint, gms::endpoint_state_ptr eps);
+    future<> notify_cql_change(locator::host_id host_it, inet_address endpoint, bool ready);
 public:
     future<bool> is_cleanup_allowed(sstring keyspace);
     bool is_repair_based_node_ops_enabled(streaming::stream_reason reason);
     future<> update_fence_version(token_metadata::version_t version);
 
 private:
-    std::unordered_set<gms::inet_address> _normal_state_handled_on_boot;
-    bool is_normal_state_handled_on_boot(gms::inet_address);
+    std::unordered_set<locator::host_id> _normal_state_handled_on_boot;
+    bool is_normal_state_handled_on_boot(const locator::host_id&);
     future<> wait_for_normal_state_handled_on_boot();
 
     friend class group0_state_machine;

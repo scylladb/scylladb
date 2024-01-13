@@ -332,12 +332,12 @@ private:
     bool cannot_hint(const Range& targets, db::write_type type) const;
     bool hints_enabled(db::write_type type) const noexcept;
     db::hints::manager& hints_manager_for(db::write_type type);
-    void sort_endpoints_by_proximity(const locator::topology& topo, inet_address_vector_replica_set& eps) const;
-    inet_address_vector_replica_set get_endpoints_for_reading(const sstring& ks_name, const locator::effective_replication_map& erm, const dht::token& token) const;
-    inet_address_vector_replica_set filter_replicas_for_read(db::consistency_level, const locator::effective_replication_map&, inet_address_vector_replica_set live_endpoints, const inet_address_vector_replica_set& preferred_endpoints, db::read_repair_decision, std::optional<gms::inet_address>* extra, replica::column_family*) const;
+    void sort_endpoints_by_proximity(const locator::topology& topo, host_id_vector_replica_set& eps) const;
+    host_id_vector_replica_set get_endpoints_for_reading(const sstring& ks_name, const locator::effective_replication_map& erm, const dht::token& token) const;
+    host_id_vector_replica_set filter_replicas_for_read(db::consistency_level, const locator::effective_replication_map&, host_id_vector_replica_set live_endpoints, const host_id_vector_replica_set& preferred_endpoints, db::read_repair_decision, std::optional<locator::host_id>* extra, replica::column_family*) const;
     // As above with read_repair_decision=NONE, extra=nullptr.
-    inet_address_vector_replica_set filter_replicas_for_read(db::consistency_level, const locator::effective_replication_map&, const inet_address_vector_replica_set& live_endpoints, const inet_address_vector_replica_set& preferred_endpoints, replica::column_family*) const;
-    bool is_alive(const gms::inet_address&) const;
+    host_id_vector_replica_set filter_replicas_for_read(db::consistency_level, const locator::effective_replication_map&, const host_id_vector_replica_set& live_endpoints, const host_id_vector_replica_set& preferred_endpoints, replica::column_family*) const;
+    bool is_alive(const locator::host_id&) const;
     db::read_repair_decision new_read_repair_decision(const schema& s);
     result<::shared_ptr<abstract_read_executor>> get_read_executor(lw_shared_ptr<query::read_command> cmd,
             locator::effective_replication_map_ptr ermp,
@@ -346,7 +346,7 @@ private:
             db::consistency_level cl,
             db::read_repair_decision repair_decision,
             tracing::trace_state_ptr trace_state,
-            const inet_address_vector_replica_set& preferred_endpoints,
+            const host_id_vector_replica_set& preferred_endpoints,
             bool& is_bounced_read,
             service_permit permit);
     future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>> query_result_local(
@@ -425,7 +425,7 @@ private:
             std::unique_ptr<mutation_holder> m,
             locator::effective_replication_map_ptr ermp,
             gms::inet_address target,
-            inet_address_vector_topology_change pending_endpoints,
+            host_id_vector_topology_change pending_endpoints,
             db::write_type type,
             tracing::trace_state_ptr tr_state,
             write_stats& stats,
@@ -496,11 +496,13 @@ public:
     future<> stop_remote();
 
     gms::inet_address my_address() const noexcept;
+    locator::host_id my_host_id() const noexcept;
 
     bool is_me(gms::inet_address addr) const noexcept;
+    bool is_me(const locator::host_id& id) const noexcept;
 
 private:
-    bool only_me(const inet_address_vector_replica_set& replicas) const noexcept;
+    bool only_me(const host_id_vector_replica_set& replicas) const noexcept;
 
     // Throws an error if remote is not initialized.
     const struct remote& remote() const;
@@ -604,15 +606,15 @@ public:
     // Inspired by Cassandra's StorageProxy.sendToHintedEndpoints but without
     // hinted handoff support, and just one target. See also
     // send_to_live_endpoints() - another take on the same original function.
-    future<> send_to_endpoint(frozen_mutation_and_schema fm_a_s, locator::effective_replication_map_ptr ermp, gms::inet_address target, inet_address_vector_topology_change pending_endpoints, db::write_type type,
+    future<> send_to_endpoint(frozen_mutation_and_schema fm_a_s, locator::effective_replication_map_ptr ermp, gms::inet_address target, host_id_vector_topology_change pending_endpoints, db::write_type type,
             tracing::trace_state_ptr tr_state, write_stats& stats, allow_hints, is_cancellable);
-    future<> send_to_endpoint(frozen_mutation_and_schema fm_a_s, locator::effective_replication_map_ptr ermp, gms::inet_address target, inet_address_vector_topology_change pending_endpoints, db::write_type type,
+    future<> send_to_endpoint(frozen_mutation_and_schema fm_a_s, locator::effective_replication_map_ptr ermp, gms::inet_address target, host_id_vector_topology_change pending_endpoints, db::write_type type,
             tracing::trace_state_ptr tr_state, allow_hints, is_cancellable);
 
     // Send a mutation to a specific remote target as a hint.
     // Unlike regular mutations during write operations, hints are sent on the streaming connection
     // and use different RPC verb.
-    future<> send_hint_to_endpoint(frozen_mutation_and_schema fm_a_s, locator::effective_replication_map_ptr ermp, gms::inet_address target);
+    future<> send_hint_to_endpoint(frozen_mutation_and_schema fm_a_s, locator::effective_replication_map_ptr ermp, locator::host_id target);
 
     /**
      * Performs the truncate operatoin, which effectively deletes all data from
@@ -707,10 +709,10 @@ public:
 
     static unsigned cas_shard(const schema& s, dht::token token);
 
-    virtual void on_join_cluster(const gms::inet_address& endpoint) override;
-    virtual void on_leave_cluster(const gms::inet_address& endpoint) override;
-    virtual void on_up(const gms::inet_address& endpoint) override;
-    virtual void on_down(const gms::inet_address& endpoint) override;
+    virtual void on_join_cluster(const locator::host_id& host_id, const gms::inet_address& endpoint) override;
+    virtual void on_leave_cluster(const locator::host_id& host_id, const gms::inet_address& endpoint) override;
+    virtual void on_up(const locator::host_id& host_id, const gms::inet_address& endpoint) override;
+    virtual void on_down(const locator::host_id& host_id, const gms::inet_address& endpoint) override;
 
     friend class abstract_read_executor;
     friend class abstract_write_response_handler;

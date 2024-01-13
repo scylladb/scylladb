@@ -76,7 +76,7 @@ future<timespec> hint_sender::get_last_file_modification(const sstring& fname) {
     });
 }
 
-future<> hint_sender::do_send_one_mutation(frozen_mutation_and_schema m, locator::effective_replication_map_ptr ermp, const inet_address_vector_replica_set& natural_endpoints) noexcept {
+future<> hint_sender::do_send_one_mutation(frozen_mutation_and_schema m, locator::effective_replication_map_ptr ermp, const host_id_vector_replica_set& natural_endpoints) noexcept {
     return futurize_invoke([this, m = std::move(m), ermp = std::move(ermp), &natural_endpoints] () mutable -> future<> {
         // The fact that we send with CL::ALL in both cases below ensures that new hints are not going
         // to be generated as a result of hints sending.
@@ -260,7 +260,7 @@ void hint_sender::start() {
 future<> hint_sender::send_one_mutation(frozen_mutation_and_schema m) {
     auto erm = _db.find_column_family(m.s).get_effective_replication_map();
     auto token = dht::get_token(*m.s, m.fm.key());
-    inet_address_vector_replica_set natural_endpoints = erm->get_natural_endpoints(std::move(token));
+    auto natural_endpoints = erm->get_natural_endpoints(std::move(token));
 
     return do_send_one_mutation(std::move(m), std::move(erm), std::move(natural_endpoints));
 }

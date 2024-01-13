@@ -210,19 +210,19 @@ public:
     /// operation which adds a replica which has the same address as the replaced replica.
     /// Use get_natural_endpoints_without_node_being_replaced() to get replicas without any pending replicas.
     /// This won't be necessary after we implement https://github.com/scylladb/scylladb/issues/6403.
-    virtual inet_address_vector_replica_set get_natural_endpoints(const token& search_token) const = 0;
+    virtual host_id_vector_replica_set get_natural_endpoints(const token& search_token) const = 0;
 
     /// Returns addresses of replicas for a given token.
     /// Does not include pending replicas.
-    virtual inet_address_vector_replica_set get_natural_endpoints_without_node_being_replaced(const token& search_token) const = 0;
+    virtual host_id_vector_replica_set get_natural_endpoints_without_node_being_replaced(const token& search_token) const = 0;
 
     /// Returns the set of pending replicas for a given token.
     /// Pending replica is a replica which gains ownership of data.
     /// Non-empty only during topology change.
-    virtual inet_address_vector_topology_change get_pending_endpoints(const token& search_token) const = 0;
+    virtual host_id_vector_replica_set get_pending_endpoints(const token& search_token) const = 0;
 
     /// Returns a list of nodes to which a read request should be directed.
-    virtual inet_address_vector_replica_set get_endpoints_for_reading(const token& search_token) const = 0;
+    virtual host_id_vector_replica_set get_endpoints_for_reading(const token& search_token) const = 0;
 
     virtual std::optional<tablet_routing_info> check_locality(const token& token) const = 0;
 
@@ -298,10 +298,10 @@ private:
     friend class abstract_replication_strategy;
     friend class effective_replication_map_factory;
 public: // effective_replication_map
-    inet_address_vector_replica_set get_natural_endpoints(const token& search_token) const override;
-    inet_address_vector_replica_set get_natural_endpoints_without_node_being_replaced(const token& search_token) const override;
-    inet_address_vector_topology_change get_pending_endpoints(const token& search_token) const override;
-    inet_address_vector_replica_set get_endpoints_for_reading(const token& search_token) const override;
+    host_id_vector_replica_set get_natural_endpoints(const token& search_token) const override;
+    host_id_vector_replica_set get_natural_endpoints_without_node_being_replaced(const token& search_token) const override;
+    host_id_vector_replica_set get_pending_endpoints(const token& search_token) const override;
+    host_id_vector_replica_set get_endpoints_for_reading(const token& search_token) const override;
     std::optional<tablet_routing_info> check_locality(const token& token) const override;
     bool has_pending_ranges(locator::host_id endpoint) const override;
     std::unique_ptr<token_range_splitter> make_splitter() const override;
@@ -503,6 +503,6 @@ private:
 
 void maybe_remove_node_being_replaced(const token_metadata&,
                                       const abstract_replication_strategy&,
-                                      inet_address_vector_replica_set& natural_endpoints);
+                                      host_id_vector_replica_set& natural_endpoints);
 
 }

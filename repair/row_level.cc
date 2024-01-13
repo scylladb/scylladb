@@ -3027,35 +3027,41 @@ public:
         }
     }
     virtual future<> on_join(
+            locator::host_id host_id,
             gms::inet_address endpoint,
             gms::endpoint_state_ptr ep_state,
             gms::permit_id) override {
         return make_ready_future();
     }
     virtual future<> on_change(
+            locator::host_id host_id,
             gms::inet_address endpoint,
             const gms::application_state_map& states,
             gms::permit_id) override {
         return make_ready_future();
     }
     virtual future<> on_alive(
+            locator::host_id host_id,
             gms::inet_address endpoint,
             gms::endpoint_state_ptr state,
             gms::permit_id) override {
         return make_ready_future();
     }
     virtual future<> on_dead(
+            locator::host_id host_id,
             gms::inet_address endpoint,
             gms::endpoint_state_ptr state,
             gms::permit_id) override {
         return remove_row_level_repair(endpoint);
     }
     virtual future<> on_remove(
+            locator::host_id host_id,
             gms::inet_address endpoint,
             gms::permit_id) override {
         return remove_row_level_repair(endpoint);
     }
     virtual future<> on_restart(
+            locator::host_id host_id,
             gms::inet_address endpoint,
             gms::endpoint_state_ptr ep_state,
             gms::permit_id) override {

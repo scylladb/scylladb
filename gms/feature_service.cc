@@ -219,19 +219,19 @@ public:
             , _sys_ks(s)
     {
     }
-    future<> on_join(inet_address ep, endpoint_state_ptr state, gms::permit_id) override {
+    future<> on_join(locator::host_id, inet_address ep, endpoint_state_ptr state, gms::permit_id) override {
         return enable_features();
     }
-    future<> on_change(inet_address ep, const gms::application_state_map& states, gms::permit_id pid) override {
+    future<> on_change(locator::host_id, inet_address ep, const gms::application_state_map& states, gms::permit_id pid) override {
         if (states.contains(application_state::SUPPORTED_FEATURES)) {
             return enable_features();
         }
         return make_ready_future();
     }
-    future<> on_alive(inet_address, endpoint_state_ptr, gms::permit_id) override { return make_ready_future(); }
-    future<> on_dead(inet_address, endpoint_state_ptr, gms::permit_id) override { return make_ready_future(); }
-    future<> on_remove(inet_address, gms::permit_id) override { return make_ready_future(); }
-    future<> on_restart(inet_address, endpoint_state_ptr, gms::permit_id) override { return make_ready_future(); }
+    future<> on_alive(locator::host_id, inet_address, endpoint_state_ptr, gms::permit_id) override { return make_ready_future(); }
+    future<> on_dead(locator::host_id, inet_address, endpoint_state_ptr, gms::permit_id) override { return make_ready_future(); }
+    future<> on_remove(locator::host_id, inet_address, gms::permit_id) override { return make_ready_future(); }
+    future<> on_restart(locator::host_id, inet_address, endpoint_state_ptr, gms::permit_id) override { return make_ready_future(); }
 
     future<> enable_features();
 };

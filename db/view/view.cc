@@ -1551,7 +1551,7 @@ bool needs_static_row(const mutation_partition& mp, const std::vector<view_and_b
 //
 // If the assumption that the given base token belongs to this replica
 // does not hold, we return an empty optional.
-static std::optional<gms::inet_address>
+static std::optional<locator::host_id>
 get_view_natural_endpoint(
         const locator::effective_replication_map_ptr& base_erm,
         const locator::effective_replication_map_ptr& view_erm,
@@ -1560,9 +1560,9 @@ get_view_natural_endpoint(
         const dht::token& view_token,
         bool use_legacy_self_pairing) {
     auto& topology = base_erm->get_token_metadata_ptr()->get_topology();
-    auto my_address = topology.my_address();
+    auto my_address = topology.my_host_id();
     auto my_datacenter = topology.get_datacenter();
-    std::vector<gms::inet_address> base_endpoints, view_endpoints;
+    std::vector<locator::host_id> base_endpoints, view_endpoints;
     for (auto&& base_endpoint : base_erm->get_natural_endpoints(base_token)) {
         if (!network_topology || topology.get_datacenter(base_endpoint) == my_datacenter) {
             base_endpoints.push_back(base_endpoint);
@@ -1605,7 +1605,7 @@ get_view_natural_endpoint(
 }
 
 static future<> apply_to_remote_endpoints(service::storage_proxy& proxy, locator::effective_replication_map_ptr ermp,
-        gms::inet_address target, inet_address_vector_topology_change pending_endpoints,
+        gms::inet_address target, host_id_vector_topology_change pending_endpoints,
         frozen_mutation_and_schema mut, const dht::token& base_token, const dht::token& view_token,
         service::allow_hints allow_hints, tracing::trace_state_ptr tr_state) {
     // The "delay_before_remote_view_update" injection point can be

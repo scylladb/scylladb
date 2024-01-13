@@ -15,6 +15,7 @@
 #include <seastar/util/closeable.hh>
 #include <seastar/util/defer.hh>
 
+#include "gms/inet_address.hh"
 #include "replica/database.hh"
 #include "replica/data_dictionary_impl.hh"
 #include "replica/compaction_group.hh"
@@ -2507,7 +2508,7 @@ table::cache_hit_rate table::get_hit_rate(const gms::gossiper& gossiper, gms::in
     auto it = _cluster_cache_hit_rates.find(addr);
     if (it == _cluster_cache_hit_rates.end()) {
         // no data yet, get it from the gossiper
-        auto eps = gossiper.get_endpoint_state_ptr(addr);
+        auto eps = gossiper.get_endpoint_state_map().get_ptr(addr);
         if (eps) {
             auto* state = eps->get_application_state_ptr(gms::application_state::CACHE_HITRATES);
             float f = -1.0f; // missing state means old node
@@ -2529,7 +2530,7 @@ table::cache_hit_rate table::get_hit_rate(const gms::gossiper& gossiper, gms::in
     }
 }
 
-void table::drop_hit_rate(gms::inet_address addr) {
+void table::drop_hit_rate(const gms::inet_address& addr) {
     _cluster_cache_hit_rates.erase(addr);
 }
 

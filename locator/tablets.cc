@@ -15,6 +15,7 @@
 #include "replica/database.hh"
 #include "utils/stall_free.hh"
 
+#include <boost/range/adaptor/transformed.hpp>
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 
@@ -334,13 +335,10 @@ class tablet_effective_replication_map : public effective_replication_map {
     table_id _table;
     tablet_sharder _sharder;
 private:
-    inet_address_vector_replica_set to_replica_set(const tablet_replica_set& replicas) const {
-        inet_address_vector_replica_set result;
-        result.reserve(replicas.size());
-        for (auto&& replica : replicas) {
-            result.emplace_back(_tmptr->get_endpoint_for_host_id(replica.host));
-        }
-        return result;
+    host_id_vector_replica_set to_replica_set(const tablet_replica_set& replicas) const {
+        return boost::copy_range<host_id_vector_replica_set>(replicas | boost::adaptors::transformed([] (const auto& replica) {
+            return replica.host;
+        }));
     }
     const tablet_map& get_tablet_map() const {
         return _tmptr->tablets().get_tablet_map(_table);
@@ -357,7 +355,7 @@ public:
 
     virtual ~tablet_effective_replication_map() = default;
 
-    virtual inet_address_vector_replica_set get_natural_endpoints(const token& search_token) const override {
+    virtual host_id_vector_replica_set get_natural_endpoints(const token& search_token) const override {
         auto&& tablets = get_tablet_map();
         auto tablet = tablets.get_tablet_id(search_token);
         auto* info = tablets.get_tablet_transition_info(tablet);
@@ -380,13 +378,13 @@ public:
         return to_replica_set(replicas);
     }
 
-    virtual inet_address_vector_replica_set get_natural_endpoints_without_node_being_replaced(const token& search_token) const override {
+    virtual host_id_vector_replica_set get_natural_endpoints_without_node_being_replaced(const token& search_token) const override {
         auto result = get_natural_endpoints(search_token);
         maybe_remove_node_being_replaced(*_tmptr, *_rs, result);
         return result;
     }
 
-    virtual inet_address_vector_topology_change get_pending_endpoints(const token& search_token) const override {
+    virtual host_id_vector_topology_change get_pending_endpoints(const token& search_token) const override {
         auto&& tablets = get_tablet_map();
         auto tablet = tablets.get_tablet_id(search_token);
         auto&& info = tablets.get_tablet_transition_info(tablet);
@@ -399,14 +397,14 @@ public:
             case write_replica_set_selector::both:
                 tablet_logger.trace("get_pending_endpoints({}): table={}, tablet={}, replica={}",
                                     search_token, _table, tablet, info->pending_replica);
-                return {_tmptr->get_endpoint_for_host_id(info->pending_replica.host)};
+                return {info->pending_replica.host};
             case write_replica_set_selector::next:
                 return {};
         }
         on_internal_error(tablet_logger, format("Invalid replica selector", static_cast<int>(info->writes)));
     }
 
-    virtual inet_address_vector_replica_set get_endpoints_for_reading(const token& search_token) const override {
+    virtual host_id_vector_replica_set get_endpoints_for_reading(const token& search_token) const override {
         auto&& tablets = get_tablet_map();
         auto tablet = tablets.get_tablet_id(search_token);
         auto&& info = tablets.get_tablet_transition_info(tablet);

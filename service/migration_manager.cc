@@ -211,7 +211,7 @@ future<> migration_notifier::unregister_listener(migration_listener* listener)
     return _listeners.remove(listener);
 }
 
-void migration_manager::schedule_schema_pull(const gms::inet_address& endpoint, const gms::endpoint_state& state)
+void migration_manager::schedule_schema_pull(const locator::host_id& host_id, const gms::inet_address& endpoint, const gms::endpoint_state& state)
 {
     if (!_enable_schema_pulls) {
         mlogger.debug("Not pulling schema because schema pulls were disabled due to Raft.");
@@ -222,8 +222,8 @@ void migration_manager::schedule_schema_pull(const gms::inet_address& endpoint, 
 
     if (endpoint != _messaging.broadcast_address() && value) {
         // FIXME: discarded future
-        (void)maybe_schedule_schema_pull(table_schema_version(utils::UUID{value->value()}), endpoint).handle_exception([endpoint] (auto ep) {
-            mlogger.warn("Fail to pull schema from {}: {}", endpoint, ep);
+        (void)maybe_schedule_schema_pull(table_schema_version(utils::UUID{value->value()}), host_id).handle_exception([host_id, endpoint] (auto ep) {
+            mlogger.warn("Fail to pull schema from {}/{}: {}", host_id, endpoint, ep);
         });
     }
 }
@@ -236,21 +236,22 @@ bool migration_manager::have_schema_agreement() {
     auto our_version = _storage_proxy.get_db().local().get_version();
     bool match = false;
     static thread_local logger::rate_limit rate_limit{std::chrono::seconds{5}};
-    _gossiper.for_each_endpoint_state_until([&, my_address = _messaging.broadcast_address()] (const gms::inet_address& endpoint, const gms::endpoint_state& eps) {
-        if (endpoint == my_address || !_gossiper.is_alive(endpoint)) {
+    _gossiper.get_endpoint_state_map().for_each([&, my_host_id = _gossiper.my_host_id()] (const locator::host_id& host_id, const gms::endpoint_state& eps) {
+        if (host_id == my_host_id || !_gossiper.is_alive(host_id)) {
             return stop_iteration::no;
         }
-        mlogger.debug("Checking schema state for {}.", endpoint);
+        const auto& endpoint = eps.get_address();
+        mlogger.debug("Checking schema state for {}/{}.", host_id, endpoint);
         auto schema = eps.get_application_state_ptr(gms::application_state::SCHEMA);
         if (!schema) {
-            mlogger.log(log_level::info, rate_limit, "Schema state not yet available for {}.", endpoint);
+            mlogger.log(log_level::info, rate_limit, "Schema state not yet available for {}/{}.", host_id, endpoint);
             match = false;
             return stop_iteration::yes;
         }
         auto remote_version = table_schema_version(utils::UUID{schema->value()});
         if (our_version != remote_version) {
-            mlogger.log(log_level::info, rate_limit, "Schema mismatch for {} ({} != {}).",
-                        endpoint, our_version, remote_version);
+            mlogger.log(log_level::info, rate_limit, "Schema mismatch for {}/{} ({} != {}).",
+                        host_id, endpoint, our_version, remote_version);
             match = false;
             return stop_iteration::yes;
         } else {
@@ -280,7 +281,7 @@ future<> migration_manager::wait_for_schema_agreement(const replica::database& d
  * If versions differ this node sends request with local migration list to the endpoint
  * and expecting to receive a list of migrations to apply locally.
  */
-future<> migration_manager::maybe_schedule_schema_pull(const table_schema_version& their_version, const gms::inet_address& endpoint)
+future<> migration_manager::maybe_schedule_schema_pull(const table_schema_version& their_version, const locator::host_id& endpoint)
 {
     auto& proxy = _storage_proxy;
     auto& db = proxy.get_db().local();
@@ -328,14 +329,14 @@ future<> migration_manager::disable_schema_pulls() {
     });
 }
 
-future<> migration_manager::submit_migration_task(const gms::inet_address& endpoint, bool can_ignore_down_node)
+future<> migration_manager::submit_migration_task(const locator::host_id& endpoint, const gms::inet_address& addr, bool can_ignore_down_node)
 {
     if (!_gossiper.is_alive(endpoint)) {
         auto msg = format("Can't send migration request: node {} is down.", endpoint);
         mlogger.warn("{}", msg);
         return can_ignore_down_node ? make_ready_future<>() : make_exception_future<>(std::runtime_error(msg));
     }
-    netw::messaging_service::msg_addr id{endpoint, 0};
+    netw::messaging_service::msg_addr id{addr, 0};
     return merge_schema_from(id).handle_exception([](std::exception_ptr e) {
         try {
             std::rethrow_exception(e);
@@ -406,14 +407,14 @@ future<> migration_manager::reload_schema() {
     return db::schema_tables::merge_schema(_sys_ks, _storage_proxy.container(), _feat, std::move(mutations), true);
 }
 
-bool migration_manager::has_compatible_schema_tables_version(const gms::inet_address& endpoint) {
-    auto* version = _gossiper.get_application_state_ptr(endpoint, gms::application_state::SCHEMA_TABLES_VERSION);
+bool migration_manager::has_compatible_schema_tables_version(const locator::host_id& host_id) {
+    auto* version = _gossiper.get_endpoint_state_map().get_application_state_ptr(host_id, gms::application_state::SCHEMA_TABLES_VERSION);
     return version && version->value() == db::schema_tables::version;
 }
 
-bool migration_manager::should_pull_schema_from(const gms::inet_address& endpoint) {
-    return has_compatible_schema_tables_version(endpoint)
-            && !_gossiper.is_gossip_only_member(endpoint);
+bool migration_manager::should_pull_schema_from(const locator::host_id& host_id) {
+    return has_compatible_schema_tables_version(host_id)
+            && !_gossiper.is_gossip_only_member(host_id);
 }
 
 future<> migration_notifier::on_schema_change(std::function<void(migration_listener*)> notify, std::function<std::string(std::exception_ptr)> describe_error) {
@@ -1267,19 +1268,18 @@ future<column_mapping> get_column_mapping(db::system_keyspace& sys_ks, table_id 
     return db::schema_tables::get_column_mapping(sys_ks, table_id, v);
 }
 
-future<> migration_manager::on_join(gms::inet_address endpoint, gms::endpoint_state_ptr ep_state, gms::permit_id) {
-    schedule_schema_pull(endpoint, *ep_state);
+future<> migration_manager::on_join(locator::host_id host_id, gms::inet_address endpoint, gms::endpoint_state_ptr ep_state, gms::permit_id) {
+    schedule_schema_pull(host_id, endpoint, *ep_state);
     return make_ready_future();
 }
 
-future<> migration_manager::on_change(gms::inet_address endpoint, const gms::application_state_map& states, gms::permit_id pid) {
-    return on_application_state_change(endpoint, states, gms::application_state::SCHEMA, pid, [this] (gms::inet_address endpoint, const gms::versioned_value&, gms::permit_id) {
-        auto ep_state = _gossiper.get_endpoint_state_ptr(endpoint);
+future<> migration_manager::on_change(locator::host_id host_id, gms::inet_address endpoint, const gms::application_state_map& states, gms::permit_id pid) {
+    return on_application_state_change(endpoint, states, gms::application_state::SCHEMA, pid, [this] (locator::host_id host_id, gms::inet_address endpoint, const gms::versioned_value&, gms::permit_id) {
+        auto ep_state = _gossiper.get_endpoint_state_ptr(host_id);
         if (!ep_state || _gossiper.is_dead_state(*ep_state)) {
-            mlogger.debug("Ignoring state change for dead or unknown endpoint: {}", endpoint);
+            mlogger.debug("Ignoring state change for dead or unknown endpoint: {}/{}", host_id, endpoint);
             return make_ready_future();
         }
-        const auto host_id = _gossiper.get_host_id(endpoint, *ep_state);
         if (_storage_proxy.get_token_metadata_ptr()->is_normal_token_owner(host_id)) {
             schedule_schema_pull(endpoint, *ep_state);
         }
@@ -1287,7 +1287,7 @@ future<> migration_manager::on_change(gms::inet_address endpoint, const gms::app
     });
 }
 
-future<> migration_manager::on_alive(gms::inet_address endpoint, gms::endpoint_state_ptr state, gms::permit_id) {
+future<> migration_manager::on_alive(locator::host_id host_id, gms::inet_address endpoint, gms::endpoint_state_ptr state, gms::permit_id) {
     schedule_schema_pull(endpoint, *state);
     return make_ready_future();
 }

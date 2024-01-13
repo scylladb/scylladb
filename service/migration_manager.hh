@@ -99,7 +99,7 @@ public:
     // Disable schema pulls when Raft group 0 is fully responsible for managing schema.
     future<> disable_schema_pulls();
 
-    future<> submit_migration_task(const gms::inet_address& endpoint, bool can_ignore_down_node = true);
+    future<> submit_migration_task(const locator::host_id& endpoint, const gms::inet_address& addr, bool can_ignore_down_node = true);
 
     // Makes sure that this node knows about all schema changes known by "nodes" that were made prior to this call.
     future<> sync_schema(const replica::database& db, const std::vector<gms::inet_address>& nodes);
@@ -117,8 +117,8 @@ public:
     // Incremented each time the function above is called. Needed by tests.
     size_t canonical_mutation_merge_count = 0;
 
-    bool should_pull_schema_from(const gms::inet_address& endpoint);
-    bool has_compatible_schema_tables_version(const gms::inet_address& endpoint);
+    bool should_pull_schema_from(const locator::host_id& host_id);
+    bool has_compatible_schema_tables_version(const locator::host_id& host_id);
 
     // The function needs to be called if the user wants to read most up-to-date group 0 state (including schema state)
     // (the function ensures that all previously finished group0 operations are visible on this node) or to write it.
@@ -156,9 +156,9 @@ private:
 
     future<> passive_announce();
 
-    void schedule_schema_pull(const gms::inet_address& endpoint, const gms::endpoint_state& state);
+    void schedule_schema_pull(const locator::host_id& host_id, const gms::inet_address& endpoint, const gms::endpoint_state& state);
 
-    future<> maybe_schedule_schema_pull(const table_schema_version& their_version, const gms::inet_address& endpoint);
+    future<> maybe_schedule_schema_pull(const table_schema_version& their_version, const locator::host_id& endpoint);
 
     future<> announce_with_raft(std::vector<mutation> schema, group0_guard, std::string_view description);
     future<> announce_without_raft(std::vector<mutation> schema, group0_guard);
@@ -177,12 +177,12 @@ public:
     future<schema_ptr> get_schema_for_write(table_schema_version, netw::msg_addr from, netw::messaging_service& ms, abort_source& as);
 
 private:
-    virtual future<> on_join(gms::inet_address endpoint, gms::endpoint_state_ptr ep_state, gms::permit_id) override;
-    virtual future<> on_change(gms::inet_address endpoint, const gms::application_state_map& states, gms::permit_id) override;
-    virtual future<> on_alive(gms::inet_address endpoint, gms::endpoint_state_ptr state, gms::permit_id) override;
-    virtual future<> on_dead(gms::inet_address endpoint, gms::endpoint_state_ptr state, gms::permit_id) override { return make_ready_future(); }
-    virtual future<> on_remove(gms::inet_address endpoint, gms::permit_id) override { return make_ready_future(); }
-    virtual future<> on_restart(gms::inet_address endpoint, gms::endpoint_state_ptr state, gms::permit_id) override { return make_ready_future(); }
+    virtual future<> on_join(locator::host_id host_id, gms::inet_address endpoint, gms::endpoint_state_ptr ep_state, gms::permit_id) override;
+    virtual future<> on_change(locator::host_id host_id, gms::inet_address endpoint, const gms::application_state_map& states, gms::permit_id) override;
+    virtual future<> on_alive(locator::host_id host_id, gms::inet_address endpoint, gms::endpoint_state_ptr state, gms::permit_id) override;
+    virtual future<> on_dead(locator::host_id host_id, gms::inet_address endpoint, gms::endpoint_state_ptr state, gms::permit_id) override { return make_ready_future(); }
+    virtual future<> on_remove(locator::host_id host_id, gms::inet_address endpoint, gms::permit_id) override { return make_ready_future(); }
+    virtual future<> on_restart(locator::host_id host_id, gms::inet_address endpoint, gms::endpoint_state_ptr state, gms::permit_id) override { return make_ready_future(); }
 
 public:
     // For tests only.

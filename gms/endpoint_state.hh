@@ -33,6 +33,7 @@ private:
     /* fields below do not get serialized */
     clk::time_point _update_timestamp;
     bool _is_normal = false;
+    inet_address _address;
 
 public:
     bool operator==(const endpoint_state& other) const {
@@ -154,6 +155,14 @@ public:
             return locator::host_id(utils::UUID(app_state->value()));
         }
         return locator::host_id::create_null_id();
+    }
+
+    const inet_address& get_address() const noexcept {
+        return _address;
+    }
+
+    void set_address(const inet_address& addr) noexcept {
+        _address = addr;
     }
 
     friend fmt::formatter<endpoint_state>;

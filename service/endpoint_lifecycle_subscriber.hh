@@ -12,6 +12,7 @@
 
 #include "gms/inet_address.hh"
 #include "utils/atomic_vector.hh"
+#include "locator/host_id.hh"
 
 namespace service {
 
@@ -34,28 +35,28 @@ public:
      *
      * @param endpoint the newly added endpoint.
      */
-    virtual void on_join_cluster(const gms::inet_address& endpoint) = 0;
+    virtual void on_join_cluster(const locator::host_id& host_id, const gms::inet_address& endpoint) = 0;
 
     /**
      * Called when a new node leave the cluster (decommission or removeToken).
      *
      * @param endpoint the endpoint that is leaving.
      */
-    virtual void on_leave_cluster(const gms::inet_address& endpoint) = 0;
+    virtual void on_leave_cluster(const locator::host_id& host_id, const gms::inet_address& endpoint) = 0;
 
     /**
      * Called when a node is marked UP.
      *
      * @param endpoint the endpoint marked UP.
      */
-    virtual void on_up(const gms::inet_address& endpoint) = 0;
+    virtual void on_up(const locator::host_id& host_id, const gms::inet_address& endpoint) = 0;
 
     /**
      * Called when a node is marked DOWN.
      *
      * @param endpoint the endpoint marked DOWN.
      */
-    virtual void on_down(const gms::inet_address& endpoint) = 0;
+    virtual void on_down(const locator::host_id& host_id, const gms::inet_address& endpoint) = 0;
 };
 
 class endpoint_lifecycle_notifier {
@@ -65,10 +66,10 @@ public:
     void register_subscriber(endpoint_lifecycle_subscriber* subscriber);
     future<> unregister_subscriber(endpoint_lifecycle_subscriber* subscriber) noexcept;
 
-    future<> notify_down(gms::inet_address endpoint);
-    future<> notify_left(gms::inet_address endpoint);
-    future<> notify_up(gms::inet_address endpoint);
-    future<> notify_joined(gms::inet_address endpoint);
+    future<> notify_down(locator::host_id host_id, gms::inet_address endpoint);
+    future<> notify_left(locator::host_id host_id, gms::inet_address endpoint);
+    future<> notify_up(locator::host_id host_id, gms::inet_address endpoint);
+    future<> notify_joined(locator::host_id host_id, gms::inet_address endpoint);
 };
 
 }

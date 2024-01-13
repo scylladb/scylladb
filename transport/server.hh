@@ -327,10 +327,10 @@ public:
     virtual void on_drop_function(const sstring& ks_name, const sstring& function_name) override;
     virtual void on_drop_aggregate(const sstring& ks_name, const sstring& aggregate_name) override;
 
-    virtual void on_join_cluster(const gms::inet_address& endpoint) override;
-    virtual void on_leave_cluster(const gms::inet_address& endpoint) override;
-    virtual void on_up(const gms::inet_address& endpoint) override;
-    virtual void on_down(const gms::inet_address& endpoint) override;
+    virtual void on_join_cluster(const locator::host_id& host_id, const gms::inet_address& endpoint) override;
+    virtual void on_leave_cluster(const locator::host_id& host_id, const gms::inet_address& endpoint) override;
+    virtual void on_up(const locator::host_id& host_id, const gms::inet_address& endpoint) override;
+    virtual void on_down(const locator::host_id& host_id, const gms::inet_address& endpoint) override;
 };
 
 inline service::endpoint_lifecycle_subscriber* cql_server::get_lifecycle_listener() const noexcept { return _notifier.get(); }

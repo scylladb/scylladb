@@ -80,15 +80,15 @@ sstring abstract_replication_strategy::to_qualified_class_name(std::string_view 
     return strategy_class_registry::to_qualified_class_name(strategy_class_name);
 }
 
-inet_address_vector_replica_set vnode_effective_replication_map::get_natural_endpoints_without_node_being_replaced(const token& search_token) const {
-    inet_address_vector_replica_set natural_endpoints = get_natural_endpoints(search_token);
+host_id_vector_replica_set vnode_effective_replication_map::get_natural_endpoints_without_node_being_replaced(const token& search_token) const {
+    auto natural_endpoints = get_natural_endpoints(search_token);
     maybe_remove_node_being_replaced(*_tmptr, *_rs, natural_endpoints);
     return natural_endpoints;
 }
 
 void maybe_remove_node_being_replaced(const token_metadata& tm,
                                       const abstract_replication_strategy& rs,
-                                      inet_address_vector_replica_set& natural_endpoints) {
+                                      host_id_vector_replica_set& natural_endpoints) {
     if (tm.is_any_node_being_replaced() &&
         rs.allow_remove_node_being_replaced_from_natural_endpoints()) {
         // When a new node is started to replace an existing dead node, we want
@@ -110,7 +110,7 @@ void maybe_remove_node_being_replaced(const token_metadata& tm,
     }
 }
 
-static const std::unordered_set<locator::host_id>* find_token(const ring_mapping& ring_mapping, const token& token) {
+static const host_id_vector_replica_set* find_token(const ring_mapping& ring_mapping, const token& token) {
     if (ring_mapping.empty()) {
         return nullptr;
     }
@@ -119,22 +119,21 @@ static const std::unordered_set<locator::host_id>* find_token(const ring_mapping
     return it != ring_mapping.end() ? &it->second : nullptr;
 }
 
-inet_address_vector_topology_change vnode_effective_replication_map::get_pending_endpoints(const token& search_token) const {
-    inet_address_vector_topology_change endpoints;
+host_id_vector_replica_set vnode_effective_replication_map::get_pending_endpoints(const token& search_token) const {
     const auto* pending_endpoints = find_token(_pending_endpoints, search_token);
     if (pending_endpoints) {
         // interval_map does not work with std::vector, convert to inet_address_vector_topology_change
-        endpoints = resolve_endpoints<inet_address_vector_topology_change>(*pending_endpoints, *_tmptr);
+        return *pending_endpoints;
     }
-    return endpoints;
+    return {};
 }
 
-inet_address_vector_replica_set vnode_effective_replication_map::get_endpoints_for_reading(const token& token) const {
+host_id_vector_replica_set vnode_effective_replication_map::get_endpoints_for_reading(const token& token) const {
     const auto* endpoints = find_token(_read_endpoints, token);
     if (endpoints == nullptr) {
         return get_natural_endpoints_without_node_being_replaced(token);
     }
-    return resolve_endpoints<inet_address_vector_replica_set>(*endpoints, *_tmptr);
+    return *endpoints;
 }
 
 std::optional<tablet_routing_info> vnode_effective_replication_map::check_locality(const token& token) const {
@@ -144,8 +143,10 @@ std::optional<tablet_routing_info> vnode_effective_replication_map::check_locali
 bool vnode_effective_replication_map::has_pending_ranges(locator::host_id endpoint) const {
     for (const auto& item : _pending_endpoints) {
         const auto& nodes = item.second;
-        if (nodes.contains(endpoint)) {
-            return true;
+        for (const auto& node : nodes) {
+            if (node == endpoint) {
+                return true;
+            }
         }
     }
     return false;

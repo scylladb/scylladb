@@ -217,9 +217,9 @@ void cql_server::event_notifier::on_drop_aggregate(const sstring& ks_name, const
     elogger.warn("%s event ignored", __func__);
 }
 
-void cql_server::event_notifier::on_join_cluster(const gms::inet_address& endpoint)
+void cql_server::event_notifier::on_join_cluster(const locator::host_id& host_id, const gms::inet_address& endpoint)
 {
-    if (!_server._gossiper.is_cql_ready(endpoint)) {
+    if (!_server._gossiper.is_cql_ready(host_id)) {
         _endpoints_pending_joined_notification.insert(endpoint);
         return;
     }
@@ -237,7 +237,7 @@ void cql_server::event_notifier::send_join_cluster(const gms::inet_address& endp
     }
 }
 
-void cql_server::event_notifier::on_leave_cluster(const gms::inet_address& endpoint)
+void cql_server::event_notifier::on_leave_cluster(const locator::host_id& host_id, const gms::inet_address& endpoint)
 {
     for (auto&& conn : _topology_change_listeners) {
         using namespace cql_transport;
@@ -247,7 +247,7 @@ void cql_server::event_notifier::on_leave_cluster(const gms::inet_address& endpo
     }
 }
 
-void cql_server::event_notifier::on_up(const gms::inet_address& endpoint)
+void cql_server::event_notifier::on_up(const locator::host_id& host_id, const gms::inet_address& endpoint)
 {
     if (_endpoints_pending_joined_notification.erase(endpoint)) {
         send_join_cluster(endpoint);
@@ -265,7 +265,7 @@ void cql_server::event_notifier::on_up(const gms::inet_address& endpoint)
     }
 }
 
-void cql_server::event_notifier::on_down(const gms::inet_address& endpoint)
+void cql_server::event_notifier::on_down(const locator::host_id& host_id, const gms::inet_address& endpoint)
 {
     bool was_down = _last_status_change.contains(endpoint) && _last_status_change.at(endpoint) == event::status_change::status_type::DOWN;
     _last_status_change[endpoint] = event::status_change::status_type::DOWN;

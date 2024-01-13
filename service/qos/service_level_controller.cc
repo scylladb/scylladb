@@ -430,18 +430,18 @@ future<> service_level_controller::do_remove_service_level(sstring name, bool re
     return make_ready_future();
 }
 
-void service_level_controller::on_join_cluster(const gms::inet_address& endpoint) { }
+void service_level_controller::on_join_cluster(const locator::host_id& host_id, const gms::inet_address& endpoint) { }
 
-void service_level_controller::on_leave_cluster(const gms::inet_address& endpoint) {
-    auto my_address = _auth_service.local().query_processor().proxy().local_db().get_token_metadata().get_topology().my_address();
-    if (this_shard_id() == global_controller && endpoint == my_address) {
+void service_level_controller::on_leave_cluster(const locator::host_id& host_id, const gms::inet_address& endpoint) {
+    bool is_me = _auth_service.local().query_processor().proxy().local_db().get_token_metadata().get_topology().is_me(host_id);
+    if (is_me && this_shard_id() == global_controller) {
         _global_controller_db->dist_data_update_aborter.request_abort();
     }
 }
 
-void service_level_controller::on_up(const gms::inet_address& endpoint) { }
+void service_level_controller::on_up(const locator::host_id& host_id, const gms::inet_address& endpoint) { }
 
-void service_level_controller::on_down(const gms::inet_address& endpoint) { }
+void service_level_controller::on_down(const locator::host_id& host_id, const gms::inet_address& endpoint) { }
 
 void service_level_controller::register_subscriber(qos_configuration_change_subscriber* subscriber) {
     _subscribers.add(subscriber);

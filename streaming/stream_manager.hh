@@ -170,12 +170,12 @@ public:
     shared_ptr<stream_session> get_session(streaming::plan_id plan_id, gms::inet_address from, const char* verb, std::optional<table_id> cf_id = {});
 
 public:
-    virtual future<> on_join(inet_address endpoint, endpoint_state_ptr ep_state, gms::permit_id) override { return make_ready_future(); }
-    virtual future<> on_change(gms::inet_address, const gms::application_state_map& states, gms::permit_id) override  { return make_ready_future(); }
-    virtual future<> on_alive(inet_address endpoint, endpoint_state_ptr state, gms::permit_id) override { return make_ready_future(); }
-    virtual future<> on_dead(inet_address endpoint, endpoint_state_ptr state, gms::permit_id) override;
-    virtual future<> on_remove(inet_address endpoint, gms::permit_id) override;
-    virtual future<> on_restart(inet_address endpoint, endpoint_state_ptr ep_state, gms::permit_id) override;
+    virtual future<> on_join(locator::host_id, inet_address endpoint, endpoint_state_ptr ep_state, gms::permit_id) override { return make_ready_future(); }
+    virtual future<> on_change(locator::host_id, gms::inet_address, const gms::application_state_map& states, gms::permit_id) override  { return make_ready_future(); }
+    virtual future<> on_alive(locator::host_id, inet_address endpoint, endpoint_state_ptr state, gms::permit_id) override { return make_ready_future(); }
+    virtual future<> on_dead(locator::host_id, inet_address endpoint, endpoint_state_ptr state, gms::permit_id) override;
+    virtual future<> on_remove(locator::host_id, inet_address endpoint, gms::permit_id) override;
+    virtual future<> on_restart(locator::host_id, inet_address endpoint, endpoint_state_ptr ep_state, gms::permit_id) override;
 
 private:
     void fail_all_sessions();
