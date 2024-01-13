@@ -9,12 +9,10 @@
  */
 
 #include "client_state.hh"
-#include "auth/authorizer.hh"
 #include "auth/authenticator.hh"
 #include "auth/common.hh"
 #include "auth/resource.hh"
 #include "exceptions/exceptions.hh"
-#include "validation.hh"
 #include "db/system_keyspace.hh"
 #include "db/schema_tables.hh"
 #include "tracing/trace_keyspace_helper.hh"

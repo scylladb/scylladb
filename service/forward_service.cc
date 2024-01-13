@@ -15,7 +15,6 @@
 #include <stdexcept>
 
 #include "db/consistency_level.hh"
-#include "dht/i_partitioner.hh"
 #include "dht/sharder.hh"
 #include "gms/gossiper.hh"
 #include "idl/forward_request.dist.hh"
@@ -37,16 +36,13 @@
 #include "types/types.hh"
 #include "service/storage_proxy.hh"
 
-#include "cql3/functions/aggregate_function.hh"
 #include "cql3/column_identifier.hh"
 #include "cql3/cql_config.hh"
 #include "cql3/query_options.hh"
 #include "cql3/result_set.hh"
 #include "cql3/selection/raw_selector.hh"
-#include "cql3/selection/selectable-expr.hh"
 #include "cql3/selection/selection.hh"
 #include "cql3/functions/functions.hh"
-#include "cql3/functions/user_aggregate.hh"
 #include "cql3/expr/expr-utils.hh"
 
 namespace service {

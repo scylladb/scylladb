@@ -12,18 +12,13 @@
 
 #include "auth/service.hh"
 #include "exceptions/exceptions.hh"
-#include "unimplemented.hh"
 #include "timeout_config.hh"
 #include "timestamp.hh"
-#include "db_clock.hh"
 #include "replica/database_fwd.hh"
 #include "auth/authenticated_user.hh"
 #include "auth/authenticator.hh"
 #include "auth/permission.hh"
-#include "tracing/tracing.hh"
-#include "tracing/trace_state.hh"
 
-#include "enum_set.hh"
 #include "transport/cql_protocol_extension.hh"
 #include "service/qos/service_level_controller.hh"
 

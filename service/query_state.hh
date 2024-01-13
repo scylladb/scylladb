@@ -12,6 +12,7 @@
 
 #include "service/client_state.hh"
 #include "tracing/tracing.hh"
+#include "tracing/trace_state.hh"
 #include "service_permit.hh"
 
 namespace qos {

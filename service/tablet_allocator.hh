@@ -9,9 +9,7 @@
 #pragma once
 
 #include "replica/database.hh"
-#include "service/migration_manager.hh"
 #include "locator/tablets.hh"
-#include <any>
 
 namespace service {
 

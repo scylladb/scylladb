@@ -6,11 +6,9 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#include <algorithm>
 #include <seastar/core/sleep.hh>
 #include <seastar/core/thread.hh>
 #include "service_level_controller.hh"
-#include "message/messaging_service.hh"
 #include "db/system_distributed_keyspace.hh"
 #include "cql3/query_processor.hh"
 #include "service/storage_proxy.hh"

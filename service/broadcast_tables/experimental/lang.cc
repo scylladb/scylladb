@@ -11,9 +11,7 @@
 #include <seastar/core/future.hh>
 
 #include "data_dictionary/data_dictionary.hh"
-#include "db/config.hh"
 #include "db/system_keyspace.hh"
-#include "exceptions/exceptions.hh"
 #include "service/broadcast_tables/experimental/query_result.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "partition_slice_builder.hh"

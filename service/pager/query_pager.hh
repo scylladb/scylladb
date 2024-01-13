@@ -14,8 +14,6 @@
 #include "cql3/result_set.hh"
 #include "cql3/selection/selection.hh"
 #include "service/query_state.hh"
-#include "utils/result.hh"
-#include "exceptions/exceptions.hh"
 #include "exceptions/coordinator_result.hh"
 
 namespace service {

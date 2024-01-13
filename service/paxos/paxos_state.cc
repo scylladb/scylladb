@@ -12,7 +12,6 @@
 #include "service/paxos/proposal.hh"
 #include "service/paxos/paxos_state.hh"
 #include "db/system_keyspace.hh"
-#include "schema/schema_registry.hh"
 #include "replica/database.hh"
 
 #include "utils/error_injection.hh"
