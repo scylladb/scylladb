@@ -1291,6 +1291,11 @@ uint64_t compaction_group::live_disk_space_used() const noexcept {
     return _main_sstables->bytes_on_disk() + _maintenance_sstables->bytes_on_disk();
 }
 
+uint64_t storage_group::live_disk_space_used() const noexcept {
+    auto cgs = const_cast<storage_group&>(*this).compaction_groups();
+    return boost::accumulate(cgs | boost::adaptors::transformed(std::mem_fn(&compaction_group::live_disk_space_used)), uint64_t(0));
+}
+
 uint64_t compaction_group::total_disk_space_used() const noexcept {
     return live_disk_space_used() + boost::accumulate(_sstables_compacted_but_not_deleted | boost::adaptors::transformed(std::mem_fn(&sstables::sstable::bytes_on_disk)), uint64_t(0));
 }

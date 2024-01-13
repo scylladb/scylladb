@@ -190,6 +190,8 @@ public:
     compaction_group_ptr& main_compaction_group() noexcept;
     compaction_group_ptr& select_compaction_group(locator::tablet_range_side) noexcept;
 
+    uint64_t live_disk_space_used() const noexcept;
+
     utils::small_vector<compaction_group*, 3> compaction_groups() noexcept;
 
     // Puts the storage group in split mode, in which it internally segregates data
