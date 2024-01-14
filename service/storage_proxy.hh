@@ -29,6 +29,7 @@
 #include "cdc/stats.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "db/hints/host_filter.hh"
+#include "utils/phased_barrier.hh"
 #include "utils/small_vector.hh"
 #include "service/endpoint_lifecycle_subscriber.hh"
 #include <seastar/core/circular_buffer.hh>
@@ -299,6 +300,9 @@ private:
     cdc::cdc_service* _cdc = nullptr;
 
     cdc_stats _cdc_stats;
+
+    // Needed by sstable cleanup fiber to wait for all ongoing writes to complete
+    utils::phased_barrier _pending_writes_phaser;
 private:
     future<result<coordinator_query_result>> query_singular(lw_shared_ptr<query::read_command> cmd,
             dht::partition_range_vector&& partition_ranges,
@@ -527,6 +531,10 @@ private:
     // Returns fencing_token based on effective_replication_map.
     static fencing_token get_fence(const locator::effective_replication_map& erm);
 
+    utils::phased_barrier::operation start_write() {
+        return _pending_writes_phaser.start();
+    }
+
     mutation do_get_batchlog_mutation_for(schema_ptr schema, const std::vector<mutation>& mutations, const utils::UUID& id, int32_t version, db_clock::time_point now);
 public:
     // Applies mutation on this node.
@@ -706,6 +714,10 @@ public:
     }
 
     static unsigned cas_shard(const schema& s, dht::token token);
+
+    future<> await_pending_writes() noexcept {
+        return _pending_writes_phaser.advance_and_await();
+    }
 
     virtual void on_join_cluster(const gms::inet_address& endpoint) override;
     virtual void on_leave_cluster(const gms::inet_address& endpoint) override;

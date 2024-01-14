@@ -39,12 +39,22 @@ enum class node_state: uint16_t {
     rollback_to_normal,  // the node rolls back failed decommission/remove node operation
 };
 
+// The order of the requests is a priority
+// order in which requests are executes in case
+// there are multiple requests in the queue.
+// The order tries to minimize the amount of cleanups.
 enum class topology_request: uint16_t {
-    join,
-    leave,
-    remove,
     replace,
+    join,
+    remove,
+    leave,
     rebuild
+};
+
+enum class cleanup_status : uint16_t {
+    clean,
+    needed,
+    running,
 };
 
 struct join_param {
@@ -68,6 +78,7 @@ using request_param = std::variant<join_param, rebuild_param, removenode_param, 
 
 enum class global_topology_request: uint16_t {
     new_cdc_generation,
+    cleanup,
 };
 
 struct ring_slice {
@@ -83,6 +94,7 @@ struct replica_state {
     size_t shard_count;
     uint8_t ignore_msb;
     std::set<sstring> supported_features;
+    cleanup_status cleanup;
 };
 
 struct topology_features {
@@ -233,4 +245,6 @@ topology_request topology_request_from_string(const sstring& s);
 std::ostream& operator<<(std::ostream&, const global_topology_request&);
 global_topology_request global_topology_request_from_string(const sstring&);
 std::ostream& operator<<(std::ostream& os, const raft_topology_cmd::command& cmd);
+std::ostream& operator<<(std::ostream& os, cleanup_status s);
+cleanup_status cleanup_status_from_string(const sstring& s);
 }

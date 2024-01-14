@@ -407,6 +407,11 @@ class ManagerClient():
                 return True
         await wait_for(_sees_another_server, time() + interval, period=.5)
 
+    async def servers_see_each_other(self, servers: List[ServerInfo], interval: float = 45.):
+        """Wait till all servers see all other servers in the list"""
+        others = [self.server_sees_others(srv.server_id, len(servers) - 1, interval) for srv in servers]
+        await asyncio.gather(*others)
+
     async def server_not_sees_other_server(self, server_ip: IPAddress, other_ip: IPAddress,
                                            interval: float = 45.):
         """Wait till a server sees another specific server IP as dead"""

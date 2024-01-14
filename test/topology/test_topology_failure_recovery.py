@@ -39,6 +39,7 @@ async def test_topology_streaming_failure(request, manager: ManagerClient):
     matches = [await log.grep("storage_service - rollback.*after removing failure to state rollback_to_normal", from_mark=mark) for log, mark in zip(logs, marks)]
     assert sum(len(x) for x in matches) == 1
     await manager.server_start(servers[3].server_id)
+    await manager.servers_see_each_other(servers)
     # bootstrap failure
     marks = [await log.mark() for log in logs]
     servers = await manager.running_servers()
@@ -99,4 +100,3 @@ async def test_tablet_drain_failure_during_decommission(manager: ManagerClient):
     assert sum(len(x) for x in matches) == 1
 
     await cql.run_async("DROP KEYSPACE test;")
-

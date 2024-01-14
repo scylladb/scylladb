@@ -339,6 +339,7 @@ public:
     future<> init_address_map(raft_address_map& address_map);
 
     future<> uninit_address_map();
+    bool is_topology_coordinator_enabled() const;
 
     future<> drain_on_shutdown();
 
@@ -780,6 +781,7 @@ public:
     // Public for `reload_raft_topology_state` REST API.
     future<> topology_transition();
 
+    future<> do_cluster_cleanup();
 public:
     future<> move_tablet(table_id, dht::token, locator::tablet_replica src, locator::tablet_replica dst);
     future<> set_tablet_balancing_enabled(bool);
@@ -804,6 +806,9 @@ private:
     shared_promise<> _join_node_group0_started;
     shared_promise<> _join_node_response_done;
     semaphore _join_node_response_handler_mutex{1};
+
+    future<> _sstable_cleanup_fiber = make_ready_future<>();
+    future<> sstable_cleanup_fiber(raft::server& raft, sharded<service::storage_proxy>& proxy) noexcept;
 
     // We need to be able to abort all group0 operation during shutdown, so we need special abort source for that
     abort_source _group0_as;

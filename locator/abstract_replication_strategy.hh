@@ -292,6 +292,7 @@ private:
     replication_map _replication_map;
     ring_mapping _pending_endpoints;
     ring_mapping _read_endpoints;
+    std::unordered_set<locator::host_id> _dirty_endpoints;
     std::optional<factory_key> _factory_key = std::nullopt;
     effective_replication_map_factory* _factory = nullptr;
 
@@ -308,11 +309,12 @@ public: // effective_replication_map
     const dht::sharder& get_sharder(const schema& s) const override;
 public:
     explicit vnode_effective_replication_map(replication_strategy_ptr rs, token_metadata_ptr tmptr, replication_map replication_map,
-            ring_mapping pending_endpoints, ring_mapping read_endpoints, size_t replication_factor) noexcept
+            ring_mapping pending_endpoints, ring_mapping read_endpoints, std::unordered_set<locator::host_id> dirty_endpoints, size_t replication_factor) noexcept
         : effective_replication_map(std::move(rs), std::move(tmptr), replication_factor)
         , _replication_map(std::move(replication_map))
         , _pending_endpoints(std::move(pending_endpoints))
         , _read_endpoints(std::move(read_endpoints))
+        , _dirty_endpoints(std::move(dirty_endpoints))
     { }
     vnode_effective_replication_map() = delete;
     vnode_effective_replication_map(vnode_effective_replication_map&&) = default;
@@ -322,6 +324,7 @@ public:
         replication_map replication_map;
         ring_mapping pending_endpoints;
         ring_mapping read_endpoints;
+        std::unordered_set<locator::host_id> dirty_endpoints;
     };
     // boost::icl::interval_map is not no_throw_move_constructible -> can't return cloned_data by val,
     // since future_state requires T to be no_throw_move_constructible.
@@ -355,6 +358,15 @@ public:
     future<std::unordered_map<dht::token_range, inet_address_vector_replica_set>>
     get_range_addresses() const;
 
+    // Returns a set of dirty endpoint. An endpoint is dirty if it may have a data
+    // for a range it does not own any longer. Will be empty if there is no topology
+    // change. During topology can be empty as well (for instance for everywhere strategy)
+    const std::unordered_set<locator::host_id>& get_dirty_endpoints() const {
+        return _dirty_endpoints;
+    }
+
+    std::unordered_set<locator::host_id> get_all_pending_nodes() const;
+
 private:
     dht::token_range_vector do_get_ranges(noncopyable_function<stop_iteration(bool& add_range, const inet_address& natural_endpoint)> consider_range_for_endpoint) const;
     inet_address_vector_replica_set do_get_natural_endpoints(const token& tok, bool is_vnode) const;
@@ -387,10 +399,10 @@ using vnode_erm_ptr = vnode_effective_replication_map_ptr;
 using mutable_vnode_erm_ptr = mutable_vnode_effective_replication_map_ptr;
 
 inline mutable_vnode_erm_ptr make_effective_replication_map(replication_strategy_ptr rs, token_metadata_ptr tmptr, replication_map replication_map, ring_mapping pending_endpoints,
-    ring_mapping read_endpoints, size_t replication_factor) {
+    ring_mapping read_endpoints, std::unordered_set<locator::host_id> dirty_endpoints, size_t replication_factor) {
     return seastar::make_shared<vnode_effective_replication_map>(
             std::move(rs), std::move(tmptr), std::move(replication_map),
-        std::move(pending_endpoints), std::move(read_endpoints), replication_factor);
+        std::move(pending_endpoints), std::move(read_endpoints), std::move(dirty_endpoints), replication_factor);
 }
 
 // Apply the replication strategy over the current configuration and the given token_metadata.

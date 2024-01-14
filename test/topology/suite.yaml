@@ -13,6 +13,7 @@ skip_in_release:
     - test_cluster_features
     - test_replace_alive_node
     - test_topology_failure_recovery
+    - test_coordinator_queue_management
 skip_in_debug:
     - test_replace_alive_node
 run_in_release:

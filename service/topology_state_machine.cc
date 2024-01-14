@@ -177,6 +177,7 @@ topology_request topology_request_from_string(const sstring& s) {
 
 static std::unordered_map<global_topology_request, sstring> global_topology_request_to_name_map = {
     {global_topology_request::new_cdc_generation, "new_cdc_generation"},
+    {global_topology_request::cleanup, "cleanup"},
 };
 
 std::ostream& operator<<(std::ostream& os, const global_topology_request& req) {
@@ -217,4 +218,25 @@ std::ostream& operator<<(std::ostream& os, const raft_topology_cmd::command& cmd
     }
     return os;
 }
+
+static std::unordered_map<cleanup_status, sstring> cleanup_status_to_name_map = {
+    {cleanup_status::clean, "clean"},
+    {cleanup_status::needed, "needed"},
+    {cleanup_status::running, "running"},
+};
+
+std::ostream& operator<<(std::ostream& os, cleanup_status status) {
+    os << cleanup_status_to_name_map[status];
+    return os;
+}
+
+cleanup_status cleanup_status_from_string(const sstring& s) {
+    for (auto&& e : cleanup_status_to_name_map) {
+        if (e.second == s) {
+            return e.first;
+        }
+    }
+    throw std::runtime_error(fmt::format("cannot map name {} to cleanup_status", s));
+}
+
 }

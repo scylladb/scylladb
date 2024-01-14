@@ -10,12 +10,7 @@ import utils
 
 def test_cleanup(nodetool):
     nodetool("cleanup", expected_requests=[
-        expected_request("GET", "/storage_service/keyspaces", params={"type": "non_local_strategy"},
-                         response=["ks1", "ks2"]),
-        expected_request("GET", "/storage_service/keyspaces", multiple=expected_request.ANY,
-                         response=["ks1", "ks2", "system"]),
-        expected_request("POST", "/storage_service/keyspace_cleanup/ks1", response=0),
-        expected_request("POST", "/storage_service/keyspace_cleanup/ks2", response=0),
+        expected_request("POST", "/storage_service/cleanup_all", response=0),
     ])
 
 
