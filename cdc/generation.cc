@@ -823,11 +823,11 @@ future<> generation_service::check_and_repair_cdc_streams() {
 
     std::optional<cdc::generation_id> latest = _gen_id;
     _gossiper.for_each_endpoint_state([&] (const gms::inet_address& addr, const gms::endpoint_state& state) {
-        if (_gossiper.is_left(addr)) {
+        if (_gossiper.is_left(state)) {
             cdc_log.info("check_and_repair_cdc_streams ignored node {} because it is in LEFT state", addr);
             return;
         }
-        if (!_gossiper.is_normal(addr)) {
+        if (!_gossiper.is_normal(state)) {
             throw std::runtime_error(format("All nodes must be in NORMAL or LEFT state while performing check_and_repair_cdc_streams"
                     " ({} is in state {})", addr, _gossiper.get_gossip_status(state)));
         }

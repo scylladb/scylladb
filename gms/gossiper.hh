@@ -411,9 +411,9 @@ private:
 
     future<> do_status_check();
 
-    std::unordered_map<inet_address, endpoint_state_ptr> get_endpoint_states() const;
-
 public:
+    endpoint_state_map::map_type get_endpoint_states() const;
+
     clk::time_point get_expire_time_for_endpoint(inet_address endpoint) const noexcept;
 
     // Gets a shared pointer to the endpoint_state, if exists.
@@ -653,13 +653,13 @@ public:
     static clk::time_point compute_expire_time();
 public:
     bool is_seed(const inet_address& endpoint) const;
-    bool is_shutdown(const inet_address& endpoint) const;
-    bool is_normal(const inet_address& endpoint) const;
-    bool is_left(const inet_address& endpoint) const;
+    bool is_shutdown(const endpoint_state& ep_state) const;
+    bool is_normal(const endpoint_state& ep_state) const;
+    bool is_left(const endpoint_state& ep_state) const;
     // Check if a node is in NORMAL or SHUTDOWN status which means the node is
     // part of the token ring from the gossip point of view and operates in
     // normal status or was in normal status but is shutdown.
-    bool is_normal_ring_member(const inet_address& endpoint) const;
+    bool is_normal_ring_member(const endpoint_state& ep_state) const;
     bool is_cql_ready(const inet_address& endpoint) const;
     bool is_silent_shutdown_state(const endpoint_state& ep_state) const;
     void force_newer_generation();

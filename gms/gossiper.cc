@@ -1178,8 +1178,10 @@ std::set<inet_address> gossiper::get_live_members() const {
     std::set<inet_address> live_members(_live_endpoints.begin(), _live_endpoints.end());
     auto myip = get_broadcast_address();
     logger.debug("live_members before={}", live_members);
-    live_members.insert(myip);
-    if (is_shutdown(myip)) {
+    auto eps = get_endpoint_state_ptr(myip);
+    if (!eps || !is_shutdown(*eps)) {
+        live_members.insert(myip);
+    } else {
         live_members.erase(myip);
     }
     logger.debug("live_members after={}", live_members);
@@ -1228,7 +1230,7 @@ future<> gossiper::convict(inet_address endpoint) {
     if (!state || !is_alive(endpoint)) {
         co_return;
     }
-    if (is_shutdown(endpoint)) {
+    if (is_shutdown(*state)) {
         co_await mark_as_shutdown(endpoint, permit.id());
     } else {
         co_await mark_dead(endpoint, state, permit.id());
@@ -1482,7 +1484,7 @@ future<> gossiper::reset_endpoint_state_map() {
     });
 }
 
-std::unordered_map<inet_address, endpoint_state_ptr> gms::gossiper::get_endpoint_states() const {
+endpoint_state_map::map_type gms::gossiper::get_endpoint_states() const {
     return _endpoint_state_map._state_map;
 }
 
@@ -1764,10 +1766,10 @@ future<> gossiper::handle_major_state_change(inet_address ep, endpoint_state eps
         co_await _subscribers.for_each([ep, eps_new, pid] (shared_ptr<i_endpoint_state_change_subscriber> subscriber) {
             return subscriber->on_join(ep, eps_new, pid);
         });
-    }
-    // check this at the end so nodes will learn about the endpoint
-    if (is_shutdown(ep)) {
-        co_await mark_as_shutdown(ep, pid);
+        // check this at the end so nodes will learn about the endpoint
+        if (is_shutdown(*eps_new)) {
+            co_await mark_as_shutdown(ep, pid);
+        }
     }
 }
 
@@ -1781,21 +1783,21 @@ bool gossiper::is_dead_state(const endpoint_state& eps) const {
     return false;
 }
 
-bool gossiper::is_shutdown(const inet_address& endpoint) const {
-    return get_gossip_status(endpoint) == sstring(versioned_value::SHUTDOWN);
+bool gossiper::is_shutdown(const endpoint_state& ep_state) const {
+    return get_gossip_status(ep_state) == sstring(versioned_value::SHUTDOWN);
 }
 
-bool gossiper::is_normal(const inet_address& endpoint) const {
-    return get_gossip_status(endpoint) == sstring(versioned_value::STATUS_NORMAL);
+bool gossiper::is_normal(const endpoint_state& ep_state) const {
+    return get_gossip_status(ep_state) == sstring(versioned_value::STATUS_NORMAL);
 }
 
-bool gossiper::is_left(const inet_address& endpoint) const {
-    auto status = get_gossip_status(endpoint);
+bool gossiper::is_left(const endpoint_state& ep_state) const {
+    auto status = get_gossip_status(ep_state);
     return status == sstring(versioned_value::STATUS_LEFT) || status == sstring(versioned_value::REMOVED_TOKEN);
 }
 
-bool gossiper::is_normal_ring_member(const inet_address& endpoint) const {
-    auto status = get_gossip_status(endpoint);
+bool gossiper::is_normal_ring_member(const endpoint_state& ep_state) const {
+    auto status = get_gossip_status(ep_state);
     return status == sstring(versioned_value::STATUS_NORMAL) || status == sstring(versioned_value::SHUTDOWN);
 }
 

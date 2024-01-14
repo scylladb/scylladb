@@ -19,7 +19,11 @@ namespace gms {
 class gossiper;
 
 class endpoint_state_map {
-    std::unordered_map<inet_address, endpoint_state_ptr> _state_map;
+public:
+    using map_type = std::unordered_map<inet_address, endpoint_state_ptr>;
+
+private:
+    map_type _state_map;
 
     friend class gossiper;
 public:

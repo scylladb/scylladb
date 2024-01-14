@@ -3966,7 +3966,10 @@ future<> storage_service::handle_state_normal(inet_address endpoint, locator::ho
         // existing node in the cluster.
 
         auto nodes = _gossiper.get_nodes_with_host_id(host_id);
-        bool left = std::any_of(nodes.begin(), nodes.end(), [this] (const gms::inet_address& node) { return _gossiper.is_left(node); });
+        bool left = std::any_of(nodes.begin(), nodes.end(), [this] (const gms::inet_address& node) {
+            auto eps = _gossiper.get_endpoint_state_ptr(node);
+            return eps && _gossiper.is_left(*eps);
+        });
         if (left) {
             slogger.info("Skip to set host_id={} to be owned by node={}, because the node is removed from the cluster, nodes {} used to own the host_id", host_id, endpoint, nodes);
             _normal_state_handled_on_boot.insert(endpoint);
@@ -7815,7 +7818,8 @@ future<> endpoint_lifecycle_notifier::notify_joined(gms::inet_address endpoint) 
 }
 
 future<> storage_service::notify_joined(inet_address endpoint) {
-    if (!_gossiper.is_normal(endpoint)) {
+    auto eps = _gossiper.get_endpoint_state_ptr(endpoint);
+    if (!eps || !_gossiper.is_normal(*eps)) {
         co_return;
     }
 
@@ -7844,42 +7848,50 @@ bool storage_service::is_normal_state_handled_on_boot(gms::inet_address node) {
 // Wait for normal state handlers to finish on boot
 future<> storage_service::wait_for_normal_state_handled_on_boot() {
     static logger::rate_limit rate_limit{std::chrono::seconds{5}};
-    static auto fmt_nodes_with_statuses = [this] (const auto& eps) {
+    static auto fmt_nodes_with_statuses = [this] (const gms::endpoint_state_map::map_type& nodes) {
         return boost::algorithm::join(
-                eps | boost::adaptors::transformed([this] (const auto& ep) {
-                    return ::format("({}, status={})", ep, _gossiper.get_gossip_status(ep));
+                nodes | boost::adaptors::transformed([this] (const auto& x) {
+                    return ::format("({}, status={})", x.first, _gossiper.get_gossip_status(*x.second));
                 }), ", ");
     };
 
     slogger.info("Started waiting for normal state handlers to finish");
     auto start_time = std::chrono::steady_clock::now();
-    std::vector<gms::inet_address> eps;
+    gms::endpoint_state_map::map_type nodes;
+    const auto& topo = get_token_metadata().get_topology();
     while (true) {
-        eps = _gossiper.get_endpoints();
-        auto it = std::partition(eps.begin(), eps.end(),
-                [this, me = get_broadcast_address()] (const gms::inet_address& ep) {
-            return ep == me || !_gossiper.is_normal_ring_member(ep) || is_normal_state_handled_on_boot(ep);
-        });
+        gms::endpoint_state_map::map_type wait_for;
+        nodes = _gossiper.get_endpoint_states();
+        wait_for.reserve(nodes.size());
+        for (const auto& [ep, eps] : nodes) {
+            if (!topo.is_me(ep) && _gossiper.is_normal_ring_member(*eps) && !is_normal_state_handled_on_boot(ep)) {
+                wait_for.emplace(ep, eps);
+            }
+        }
 
-        if (it == eps.end()) {
+        if (wait_for.empty()) {
             break;
         }
 
+        auto wait_for_msg = fmt_nodes_with_statuses(wait_for);
+        co_await utils::clear_gently(wait_for);
+        co_await utils::clear_gently(nodes);
+
         if (std::chrono::steady_clock::now() > start_time + std::chrono::seconds(60)) {
             auto err = ::format("Timed out waiting for normal state handlers to finish for nodes {}",
-                    fmt_nodes_with_statuses(boost::make_iterator_range(it, eps.end())));
+                    wait_for_msg);
             slogger.error("{}", err);
             throw std::runtime_error{std::move(err)};
         }
 
         slogger.log(log_level::info, rate_limit, "Normal state handlers not yet finished for nodes {}",
-                    fmt_nodes_with_statuses(boost::make_iterator_range(it, eps.end())));
+                    wait_for_msg);
 
         co_await sleep_abortable(std::chrono::milliseconds{100}, _abort_source);
     }
 
     slogger.info("Finished waiting for normal state handlers; endpoints observed in gossip: {}",
-                 fmt_nodes_with_statuses(eps));
+                 fmt_nodes_with_statuses(nodes));
 }
 
 future<bool> storage_service::is_cleanup_allowed(sstring keyspace) {

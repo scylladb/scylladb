@@ -1103,7 +1103,8 @@ future<int> repair_service::do_repair_start(sstring keyspace, std::unordered_map
         co_return id.id;
     }
 
-    if (!_gossiper.local().is_normal(my_address)) {
+    auto eps = _gossiper.local().get_endpoint_state_ptr(my_address);
+    if (!eps || !_gossiper.local().is_normal(*eps)) {
         throw std::runtime_error("Node is not in NORMAL status yet!");
     }
 
