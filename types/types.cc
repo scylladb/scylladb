@@ -3679,11 +3679,17 @@ make_user_value(data_type type, user_type_impl::native_type value) {
     return data_value::make_new(std::move(type), std::move(value));
 }
 
-std::ostream& operator<<(std::ostream& out, const data_value& v) {
+ auto fmt::formatter<data_value>::format(const data_value& v,
+                                         fmt::format_context& ctx) const -> decltype(ctx.out()) {
     if (v.is_null()) {
-        return out << "null";
+        return fmt::format_to(ctx.out(), "null");
     }
-    return out << v.type()->to_string_impl(v);
+    return fmt::format_to(ctx.out(), "{}", v.type()->to_string_impl(v));
+}
+
+std::ostream& operator<<(std::ostream& out, const data_value& v) {
+    fmt::print(out, "{}", v);
+    return out;
 }
 
 shared_ptr<const reversed_type_impl> reversed_type_impl::get_instance(data_type type) {
