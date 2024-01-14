@@ -27,7 +27,7 @@
  */
 
 #include <string>
-#include <stdexcept>
+#include <string_view>
 #include "utils/base64.hh"
 
 #include <seastar/core/future.hh>

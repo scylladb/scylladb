@@ -1,6 +1,7 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/print.hh>
 #include <seastar/core/seastar.hh>
+#include <seastar/core/on_internal_error.hh>
 #include <seastar/util/log.hh>
 #include "utils/lister.hh"
 #include "checked-file-impl.hh"

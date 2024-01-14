@@ -16,6 +16,7 @@
 #include "gms/inet_address.hh"
 #include <seastar/rpc/rpc_types.hh>
 #include <unordered_map>
+#include "gc_clock.hh"
 #include "range.hh"
 #include "schema/schema_fwd.hh"
 #include "streaming/stream_fwd.hh"

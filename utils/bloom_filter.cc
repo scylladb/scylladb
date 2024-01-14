@@ -10,13 +10,13 @@
 
 #include "i_filter.hh"
 #include "bytes.hh"
-#include "utils/murmur_hash.hh"
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/align.hh>
 #include <seastar/core/loop.hh>
 #include "utils/large_bitset.hh"
 #include <array>
 #include <cstdlib>
+#include "utils/bloom_calculations.hh"
 #include "bloom_filter.hh"
 
 namespace utils {

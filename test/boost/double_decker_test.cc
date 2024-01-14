@@ -15,6 +15,7 @@
 #include <string>
 
 #include "utils/double-decker.hh"
+#include "utils/logalloc.hh"
 #include "test/lib/random_utils.hh"
 
 class compound_key {

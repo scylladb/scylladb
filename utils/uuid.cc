@@ -14,7 +14,6 @@
 #include <boost/algorithm/string.hpp>
 #include <string>
 #include <seastar/core/sstring.hh>
-#include "utils/serialization.hh"
 #include "marshal_exception.hh"
 
 namespace utils {

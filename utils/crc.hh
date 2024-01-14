@@ -12,7 +12,6 @@
 #pragma once
 
 #include <cstdint>
-#include <type_traits>
 #include <seastar/net/byteorder.hh>
 #include <seastar/core/byteorder.hh>
 

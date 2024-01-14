@@ -8,7 +8,6 @@
 
 #pragma once
 
-#include <functional>
 #include <seastar/core/future-util.hh>
 #include <seastar/util/noncopyable_function.hh>
 

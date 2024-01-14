@@ -12,6 +12,7 @@
 #include <utility>
 #include "utils/UUID_gen.hh"
 #include "utils/lexicographical_compare.hh"
+#include "marshal_exception.hh"
 
 BOOST_AUTO_TEST_CASE(test_generation_of_name_based_UUID) {
     auto uuid = utils::UUID_gen::get_name_UUID("systembatchlog");

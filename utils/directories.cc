@@ -13,7 +13,6 @@
 #include "directories.hh"
 #include "utils/disk-error-handler.hh"
 #include "utils/fmt-compat.hh"
-#include "db/config.hh"
 #include "utils/lister.hh"
 
 namespace utils {

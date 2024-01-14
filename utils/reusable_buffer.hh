@@ -11,7 +11,6 @@
 #include "utils/fragmented_temporary_buffer.hh"
 #include <seastar/core/timer.hh>
 #include <seastar/core/memory.hh>
-#include <chrono>
 #include <bit>
 
 namespace utils {

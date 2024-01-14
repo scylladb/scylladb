@@ -13,11 +13,8 @@
 
 #include <exception>
 #include <system_error>
-#include <atomic>
 #include "exceptions.hh"
 #include "utils/abi/eh_ia64.hh"
-
-#include <iostream>
 
 bool check_exception(system_error_lambda_t f)
 {
