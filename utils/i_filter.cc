@@ -10,6 +10,7 @@
 #include "log.hh"
 #include "bloom_filter.hh"
 #include "bloom_calculations.hh"
+#include "utils/murmur_hash.hh"
 #include <seastar/core/thread.hh>
 
 namespace utils {

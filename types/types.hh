@@ -13,6 +13,7 @@
 #include <iosfwd>
 #include <sstream>
 #include <initializer_list>
+#include <unordered_set>
 
 #include <seastar/core/sstring.hh>
 #include <seastar/core/shared_ptr.hh>

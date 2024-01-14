@@ -10,7 +10,6 @@
 #pragma once
 
 #include "bytes.hh"
-#include "bloom_calculations.hh"
 
 namespace utils {
 

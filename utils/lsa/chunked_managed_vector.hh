@@ -19,7 +19,6 @@
 #include <boost/range/algorithm/equal.hpp>
 #include <boost/algorithm/clamp.hpp>
 #include <boost/version.hpp>
-#include <memory>
 #include <type_traits>
 #include <iterator>
 #include <utility>

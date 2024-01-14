@@ -12,10 +12,7 @@
  */
 #pragma once
 #include "i_filter.hh"
-#include "utils/murmur_hash.hh"
 #include "utils/large_bitset.hh"
-
-#include <vector>
 
 namespace utils {
 namespace filter {

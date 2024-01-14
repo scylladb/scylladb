@@ -10,7 +10,6 @@
 
 #include "multiprecision_int.hh"
 #include <boost/multiprecision/cpp_int.hpp>
-#include <ostream>
 #include <compare>
 #include <concepts>
 

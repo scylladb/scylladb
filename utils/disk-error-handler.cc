@@ -6,6 +6,7 @@
  */
 
 #include "utils/disk-error-handler.hh"
+#include "utils/exceptions.hh"
 
 thread_local disk_error_signal_type commit_error;
 thread_local disk_error_signal_type general_disk_error;

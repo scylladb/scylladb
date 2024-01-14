@@ -12,7 +12,6 @@
 #include <type_traits>
 #include <concepts>
 
-#include "utils/exceptions.hh"
 #include <seastar/core/future.hh>
 
 #include "seastarx.hh"

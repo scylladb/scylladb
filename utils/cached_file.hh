@@ -11,6 +11,7 @@
 #include "reader_permit.hh"
 #include "utils/div_ceil.hh"
 #include "utils/bptree.hh"
+#include "utils/logalloc.hh"
 #include "utils/lru.hh"
 #include "utils/error_injection.hh"
 #include "tracing/trace_state.hh"
@@ -19,8 +20,6 @@
 #include <seastar/core/file.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
-
-#include <map>
 
 using namespace seastar;
 

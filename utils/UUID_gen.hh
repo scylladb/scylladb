@@ -12,13 +12,11 @@
 #include <stdint.h>
 #include <assert.h>
 
-#include <memory>
 #include <chrono>
 #include <random>
 #include <limits>
 
 #include "UUID.hh"
-#include "db_clock.hh"
 
 namespace utils {
 
