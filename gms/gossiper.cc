@@ -18,7 +18,6 @@
 #include "gms/gossiper.hh"
 #include "gms/feature_service.hh"
 #include "gms/application_state.hh"
-#include "gms/i_failure_detection_event_listener.hh"
 #include "gms/i_endpoint_state_change_subscriber.hh"
 #include "message/messaging_service.hh"
 #include "log.hh"
