@@ -12,7 +12,6 @@
 
 #include "cql3/cql_statement.hh"
 #include "cql3/statements/modification_statement.hh"
-#include "service/broadcast_tables/experimental/lang.hh"
 
 namespace cql3 {
 

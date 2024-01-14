@@ -10,7 +10,6 @@
 
 #include "cql3/prepared_statements_cache.hh"
 #include "auth/authenticated_user.hh"
-#include "auth/permissions_cache.hh"
 
 namespace cql3 {
 

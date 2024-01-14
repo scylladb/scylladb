@@ -14,7 +14,6 @@
 #include "data_dictionary/data_dictionary.hh"
 #include "delete_statement.hh"
 #include "raw/delete_statement.hh"
-#include "utils/overloaded_functor.hh"
 #include "mutation/mutation.hh"
 #include "cql3/expr/expression.hh"
 #include "cql3/expr/expr-utils.hh"

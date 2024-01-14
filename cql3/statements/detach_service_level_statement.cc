@@ -8,7 +8,6 @@
 
 #include "seastarx.hh"
 #include "cql3/statements/detach_service_level_statement.hh"
-#include "service/qos/service_level_controller.hh"
 #include "transport/messages/result_message.hh"
 #include "service/client_state.hh"
 #include "service/query_state.hh"

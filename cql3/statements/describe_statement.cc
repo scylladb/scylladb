@@ -5,10 +5,8 @@
 /*
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
-#include <exception>
 #include <memory>
 #include <optional>
-#include <stdexcept>
 #include <boost/range/adaptor/transformed.hpp>
 #include <boost/range/algorithm/sort.hpp>
 #include <boost/range/iterator_range_core.hpp>
@@ -17,7 +15,6 @@
 #include "cql3/functions/function_name.hh"
 #include "cql3/statements/prepared_statement.hh"
 #include "exceptions/exceptions.hh"
-#include "keys.hh"
 #include <seastar/core/on_internal_error.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include "service/client_state.hh"
@@ -38,7 +35,6 @@
 #include "types/map.hh"
 #include "types/list.hh"
 #include "cql3/functions/functions.hh"
-#include "types/user.hh"
 #include "view_info.hh"
 #include "index/secondary_index_manager.hh"
 #include "cql3/functions/user_function.hh"

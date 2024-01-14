@@ -9,8 +9,6 @@
 #include "cql3/statements/function_statement.hh"
 #include "cql3/functions/functions.hh"
 #include "cql3/functions/user_function.hh"
-#include "cql3/util.hh"
-#include "db/config.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "gms/feature_service.hh"
 #include "service/storage_proxy.hh"

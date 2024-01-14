@@ -11,7 +11,6 @@
 #include <seastar/core/sstring.hh>
 #include "cql3/cql_statement.hh"
 #include "cql3/statements/raw/describe_statement.hh"
-#include <memory>
 
 /**
  *  SERVER-SIDE DESCRIBE STATEMENT

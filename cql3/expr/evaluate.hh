@@ -6,7 +6,6 @@
 #include "expression.hh"
 
 #include "bytes.hh"
-#include <vector>
 
 namespace cql3 {
 

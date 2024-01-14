@@ -12,7 +12,6 @@
 
 #include "cql3/expr/expression.hh"
 #include "cql3/statements/select_statement.hh"
-#include "service/broadcast_tables/experimental/lang.hh"
 
 namespace cql3 {
 

@@ -7,10 +7,9 @@
  */
 
 #include "castas_fcts.hh"
-#include "concrete_types.hh"
+#include "utils/big_decimal.hh"
 #include "utils/UUID_gen.hh"
 #include "cql3/functions/native_scalar_function.hh"
-#include "utils/date.h"
 #include <boost/date_time/posix_time/posix_time.hpp>
 
 namespace cql3 {

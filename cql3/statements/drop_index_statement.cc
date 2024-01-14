@@ -16,7 +16,6 @@
 #include "schema/schema_builder.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "mutation/mutation.hh"
-#include "gms/feature_service.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/index_name.hh"
 

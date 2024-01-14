@@ -17,7 +17,6 @@
 #include <seastar/core/shared_ptr.hh>
 #include "transport/messages/result_message.hh"
 #include "index/secondary_index_manager.hh"
-#include "exceptions/exceptions.hh"
 #include "exceptions/coordinator_result.hh"
 #include "locator/host_id.hh"
 

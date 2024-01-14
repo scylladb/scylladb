@@ -11,17 +11,9 @@
 #pragma once
 
 #include "function.hh"
-#include "aggregate_fcts.hh"
-#include "time_uuid_fcts.hh"
-#include "uuid_fcts.hh"
-#include "bytes_conversion_fcts.hh"
-#include "aggregate_fcts.hh"
-#include "bytes_conversion_fcts.hh"
 #include "cql3/assignment_testable.hh"
 #include "cql3/cql3_type.hh"
-#include "cql3/column_identifier.hh"
-#include "utils/to_string.hh"
-#include "log.hh"
+#include "cql3/functions/function_name.hh"
 #include "schema/schema.hh"
 #include <unordered_map>
 

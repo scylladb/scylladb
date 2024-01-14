@@ -24,7 +24,6 @@
 #include "exceptions/exceptions.hh"
 #include "service/migration_listener.hh"
 #include "transport/messages/result_message.hh"
-#include "service/qos/service_level_controller.hh"
 #include "service/client_state.hh"
 #include "service/broadcast_tables/experimental/query_result.hh"
 #include "utils/observable.hh"

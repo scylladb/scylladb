@@ -43,6 +43,7 @@
 #include "cql3/selection/raw_selector.hh"
 #include "cql3/selection/selection.hh"
 #include "cql3/functions/functions.hh"
+#include "cql3/functions/aggregate_fcts.hh"
 #include "cql3/expr/expr-utils.hh"
 
 namespace service {

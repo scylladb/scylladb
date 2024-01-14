@@ -10,7 +10,6 @@
 
 #pragma once
 
-#include "cql3/functions/function.hh"
 #include "cql3/functions/scalar_function.hh"
 #include "cql3/functions/function_name.hh"
 #include "cql3/cql3_type.hh"

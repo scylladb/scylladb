@@ -11,12 +11,10 @@
 #pragma once
 
 #include "cql3/stats.hh"
-#include "cql3/column_identifier.hh"
 #include "cql3/update_parameters.hh"
 #include "cql3/cql_statement.hh"
 #include "cql3/restrictions/statement_restrictions.hh"
 #include "cql3/statements/statement_type.hh"
-#include "exceptions/exceptions.hh"
 #include "exceptions/coordinator_result.hh"
 
 #include <seastar/core/shared_ptr.hh>

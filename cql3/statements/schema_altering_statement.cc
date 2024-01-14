@@ -12,11 +12,7 @@
 #include "cql3/statements/schema_altering_statement.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "data_dictionary/data_dictionary.hh"
-#include "mutation/mutation.hh"
 #include "cql3/query_processor.hh"
-#include "transport/messages/result_message.hh"
-#include "service/raft/raft_group_registry.hh"
-#include "service/migration_manager.hh"
 
 namespace cql3 {
 

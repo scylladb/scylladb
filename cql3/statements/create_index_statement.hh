@@ -17,10 +17,7 @@
 
 #include <seastar/core/shared_ptr.hh>
 
-#include <unordered_map>
-#include <utility>
 #include <vector>
-#include <set>
 
 
 namespace cql3 {

@@ -23,9 +23,6 @@
 #include <fmt/ostream.h>
 #include <unordered_map>
 
-#include "cql3/constants.hh"
-#include "cql3/lists.hh"
-#include "cql3/statements/request_validations.hh"
 #include "cql3/selection/selection.hh"
 #include "cql3/util.hh"
 #include "index/secondary_index_manager.hh"
@@ -35,10 +32,6 @@
 #include "utils/like_matcher.hh"
 #include "query-result-reader.hh"
 #include "types/user.hh"
-#include "cql3/lists.hh"
-#include "cql3/sets.hh"
-#include "cql3/maps.hh"
-#include "cql3/user_types.hh"
 #include "cql3/functions/scalar_function.hh"
 #include "cql3/functions/first_function.hh"
 #include "cql3/prepare_context.hh"

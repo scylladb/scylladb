@@ -8,11 +8,10 @@
 
 #pragma once
 
-#include "abstract_function.hh"
 #include "scalar_function.hh"
-#include "aggregate_function.hh"
-#include "db/functions/stateless_aggregate_function.hh"
 #include "data_dictionary/keyspace_element.hh"
+#include "cql3/functions/function_name.hh"
+#include "db/functions/aggregate_function.hh"
 
 namespace cql3 {
 namespace functions {

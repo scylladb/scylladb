@@ -13,13 +13,8 @@
 #include "auth/service.hh"
 #include "db/system_keyspace.hh"
 #include "permission_altering_statement.hh"
-#include "cql3/functions/functions.hh"
-#include "cql3/functions/user_aggregate.hh"
-#include "cql3/functions/user_function.hh"
 #include "cql3/query_processor.hh"
-#include "cql3/query_options.hh"
 #include "cql3/role_name.hh"
-#include "cql3/selection/selection.hh"
 #include "gms/feature_service.hh"
 
 static auth::permission_set filter_applicable_permissions(const auth::permission_set& ps, const auth::resource& r) {
