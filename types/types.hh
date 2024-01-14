@@ -269,7 +269,6 @@ public:
     friend class empty_type_impl;
     template <typename T> friend const T& value_cast(const data_value&);
     template <typename T> friend T&& value_cast(data_value&&);
-    friend std::ostream& operator<<(std::ostream&, const data_value&);
     friend data_value make_tuple_value(data_type, maybe_empty<std::vector<data_value>>);
     friend data_value make_set_value(data_type, maybe_empty<std::vector<data_value>>);
     friend data_value make_list_value(data_type, maybe_empty<std::vector<data_value>>);
@@ -1034,4 +1033,12 @@ struct fmt::formatter<data_value_or_unset> : fmt::formatter<std::string_view> {
     }
 };
 
+template <> struct fmt::formatter<data_value> {
+    constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
+    auto format(const data_value&, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
+
+std::ostream& operator<<(std::ostream& out, const data_value& v);
+
 using data_value_list = std::initializer_list<data_value_or_unset>;
+
