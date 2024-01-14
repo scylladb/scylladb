@@ -12,8 +12,6 @@
 
 #include "cql3/keyspace_element_name.hh"
 
-#include <seastar/core/shared_ptr.hh>
-
 namespace cql3 {
 
 class cf_name;

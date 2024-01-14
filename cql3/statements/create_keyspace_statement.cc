@@ -17,7 +17,6 @@
 #include "mutation/mutation.hh"
 #include "service/migration_manager.hh"
 #include "service/storage_proxy.hh"
-#include "transport/messages/result_message.hh"
 #include "cql3/query_processor.hh"
 #include "db/config.hh"
 #include "gms/feature_service.hh"

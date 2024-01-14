@@ -15,7 +15,6 @@
 #include "service/storage_proxy.hh"
 #include "validation.hh"
 #include "view_info.hh"
-#include "db/extensions.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "cql3/query_processor.hh"
 

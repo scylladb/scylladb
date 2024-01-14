@@ -18,8 +18,6 @@
 #include "cql3/cql3_type.hh"
 #include "cql3/functions/function_name.hh"
 #include "seastarx.hh"
-#include "utils/overloaded_functor.hh"
-#include "utils/variant_element.hh"
 #include "cql3/values.hh"
 
 class row;

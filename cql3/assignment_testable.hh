@@ -12,8 +12,6 @@
 
 #include "column_specification.hh"
 #include "data_dictionary/data_dictionary.hh"
-#include <memory>
-#include <vector>
 
 namespace cql3 {
 

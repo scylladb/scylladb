@@ -10,10 +10,8 @@
 
 #pragma once
 
-#include "types/types.hh"
 #include "native_scalar_function.hh"
 #include "dht/i_partitioner.hh"
-#include "utils/UUID.hh"
 #include "unimplemented.hh"
 
 namespace cql3 {

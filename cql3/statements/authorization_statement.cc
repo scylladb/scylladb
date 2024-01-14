@@ -9,7 +9,6 @@
  */
 
 #include "authorization_statement.hh"
-#include "transport/messages/result_message.hh"
 #include "service/client_state.hh"
 #include "auth/resource.hh"
 #include "cql3/query_processor.hh"
@@ -17,7 +16,6 @@
 #include <boost/algorithm/string/join.hpp>
 #include <boost/algorithm/string/split.hpp>
 #include <boost/algorithm/string/classification.hpp>
-#include "cql3/util.hh"
 #include "db/cql_type_parser.hh"
 
 uint32_t cql3::statements::authorization_statement::get_bound_terms() const {

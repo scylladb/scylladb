@@ -13,14 +13,11 @@
 #include <seastar/core/metrics.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 
-#include "lang/wasm_alien_thread_runner.hh"
-#include "lang/wasm_instance_cache.hh"
 #include "service/storage_proxy.hh"
 #include "service/migration_manager.hh"
 #include "service/forward_service.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "cql3/CqlParser.hpp"
-#include "cql3/error_collector.hh"
 #include "cql3/statements/batch_statement.hh"
 #include "cql3/statements/modification_statement.hh"
 #include "cql3/util.hh"

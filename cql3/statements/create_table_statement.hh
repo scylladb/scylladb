@@ -21,7 +21,6 @@
 
 #include <seastar/util/indirect.hh>
 #include <unordered_map>
-#include <utility>
 #include <vector>
 #include <set>
 #include <optional>

@@ -7,7 +7,6 @@
  */
 
 #include "service_level_statement.hh"
-#include "transport/messages/result_message.hh"
 
 namespace cql3 {
 

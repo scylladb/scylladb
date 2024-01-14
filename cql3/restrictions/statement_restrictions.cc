@@ -19,19 +19,14 @@
 #include "cql3/expr/expression.hh"
 #include "cql3/expr/evaluate.hh"
 #include "cql3/expr/expr-utils.hh"
-#include "query-result-reader.hh"
 #include "statement_restrictions.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "cartesian_product.hh"
-#include "cql3/cql_config.hh"
 
-#include "cql3/constants.hh"
-#include "cql3/lists.hh"
+#include "cql3/cql_config.hh"
+#include "cql3/query_options.hh"
 #include "cql3/selection/selection.hh"
 #include "cql3/statements/request_validations.hh"
-#include "types/list.hh"
-#include "types/map.hh"
-#include "types/set.hh"
 #include "dht/i_partitioner.hh"
 
 namespace {

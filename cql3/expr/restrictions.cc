@@ -14,7 +14,6 @@
 #include "cql3/expr/expr-utils.hh"
 #include "types/list.hh"
 #include <iterator>
-#include <ranges>
 
 namespace cql3 {
 namespace expr {

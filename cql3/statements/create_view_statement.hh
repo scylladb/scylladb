@@ -15,7 +15,6 @@
 
 #include <utility>
 #include <vector>
-#include <optional>
 
 namespace cql3 {
 

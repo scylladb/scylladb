@@ -12,7 +12,6 @@
 
 #include "cql3/cql_statement.hh"
 #include "raw/parsed_statement.hh"
-#include "transport/messages_fwd.hh"
 
 namespace cql3 {
 

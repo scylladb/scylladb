@@ -12,7 +12,6 @@
 
 #include <seastar/core/shared_ptr.hh>
 #include "cql3/cql3_type.hh"
-#include "exceptions/exceptions.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "update_parameters.hh"
 #include "cql3/column_identifier.hh"

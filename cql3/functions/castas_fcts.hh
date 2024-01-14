@@ -10,14 +10,8 @@
 
 #pragma once
 
-#include <tuple>
-#include <unordered_map>
-
 #include "cql3/functions/function.hh"
-#include "cql3/functions/abstract_function.hh"
-#include "exceptions/exceptions.hh"
 #include <seastar/core/print.hh>
-#include "cql3/cql3_type.hh"
 
 namespace cql3 {
 namespace functions {

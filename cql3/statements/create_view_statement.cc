@@ -28,7 +28,6 @@
 #include "schema/schema_builder.hh"
 #include "service/storage_proxy.hh"
 #include "validation.hh"
-#include "db/extensions.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "gms/feature_service.hh"
 #include "db/view/view.hh"

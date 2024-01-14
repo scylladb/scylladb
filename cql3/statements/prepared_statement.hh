@@ -13,7 +13,6 @@
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/weak_ptr.hh>
 #include <seastar/core/checked_ptr.hh>
-#include <optional>
 #include <vector>
 
 #include "exceptions/exceptions.hh"

@@ -9,7 +9,6 @@
  */
 
 #include "cql3/cql_statement.hh"
-#include "types/map.hh"
 #include "cql3/statements/modification_statement.hh"
 #include "cql3/statements/strongly_consistent_modification_statement.hh"
 #include "cql3/statements/raw/modification_statement.hh"
@@ -24,12 +23,9 @@
 #include <boost/range/adaptor/transformed.hpp>
 #include <boost/range/adaptor/map.hpp>
 #include <boost/range/adaptor/indirected.hpp>
-#include "db/config.hh"
 #include "transport/messages/result_message.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include <seastar/core/execution_stage.hh>
-#include "utils/UUID_gen.hh"
-#include "partition_slice_builder.hh"
 #include "cas_request.hh"
 #include "cql3/query_processor.hh"
 #include "service/storage_proxy.hh"

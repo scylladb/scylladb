@@ -12,7 +12,6 @@
 
 #include "operation.hh"
 #include "update_parameters.hh"
-#include "constants.hh"
 
 namespace cql3 {
 

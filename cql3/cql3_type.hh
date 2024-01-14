@@ -12,7 +12,6 @@
 
 #include "types/types.hh"
 #include "data_dictionary/data_dictionary.hh"
-#include "exceptions/exceptions.hh"
 #include <iosfwd>
 #include "enum_set.hh"
 
