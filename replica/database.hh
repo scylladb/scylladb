@@ -580,7 +580,15 @@ public:
 
     bool all_storage_groups_split();
     future<> split_all_storage_groups();
+
+    // Splits compaction group of a single tablet, if and only if the underlying table has
+    // split request emitted by coordinator (found in tablet metadata).
+    // If split is required, then the compaction group of the given tablet is guaranteed to
+    // be split once it returns.
+    future<> maybe_split_compaction_group_of(locator::tablet_id);
 private:
+    sstables::compaction_type_options::split split_compaction_options() const noexcept;
+
     // Select a compaction group from a given token.
     std::pair<size_t, locator::tablet_range_side> storage_group_of(dht::token token) const noexcept;
     size_t storage_group_id_for_token(dht::token token) const noexcept;

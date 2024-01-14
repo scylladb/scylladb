@@ -678,18 +678,39 @@ bool table::all_storage_groups_split() {
                                std::bind(&storage_group::set_split_mode, std::placeholders::_1, std::ref(_compaction_groups)));
 }
 
-future<> table::split_all_storage_groups() {
-    sstables::compaction_type_options::split opt {[this] (dht::token t) {
+sstables::compaction_type_options::split table::split_compaction_options() const noexcept {
+    return {[this](dht::token t) {
         // Classifies the input stream into either left or right side.
         auto [_, side] = storage_group_of(t);
         return mutation_writer::token_group_id(side);
     }};
+}
+
+future<> table::split_all_storage_groups() {
+    sstables::compaction_type_options::split opt = split_compaction_options();
 
     auto holder = async_gate().hold();
 
     for (auto& storage_group : _storage_groups) {
         co_await storage_group->split(_compaction_groups, opt);
     }
+}
+
+future<> table::maybe_split_compaction_group_of(locator::tablet_id tablet_id) {
+    auto table_id = _schema->id();
+    if (!_erm->get_token_metadata().tablets().get_tablet_map(table_id).needs_split()) {
+        return make_ready_future<>();
+    }
+
+    auto holder = async_gate().hold();
+
+    auto& sg = _storage_groups[tablet_id.value()];
+    if (!sg) {
+        on_internal_error(tlogger, format("Tablet {} of table {}.{} is not allocated in this shard",
+                                          tablet_id, _schema->ks_name(), _schema->cf_name()));
+    }
+
+    return sg->split(_compaction_groups, split_compaction_options());
 }
 
 std::unique_ptr<storage_group_manager> table::make_storage_group_manager() {

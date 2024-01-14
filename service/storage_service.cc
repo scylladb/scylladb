@@ -4978,6 +4978,23 @@ future<> storage_service::stream_tablet(locator::global_tablet_id tablet) {
         }
         streamer->add_rx_ranges(table.schema()->ks_name(), std::move(ranges_per_endpoint));
         co_await streamer->stream_async();
+
+        // If new pending tablet replica needs splitting, streaming waits for it to complete.
+        // That's to provide a guarantee that once migration is over, the coordinator can finalize
+        // splitting under the promise that compaction groups of tablets are all split, ready
+        // for the subsequent topology change.
+        //
+        // FIXME:
+        //  We could do the splitting not in the streaming stage, but in a later stage, so that
+        //  from the tablet scheduler's perspective migrations blocked on compaction are not
+        //  participating in streaming anymore (which is true), so it could schedule more
+        //  migrations. This way compaction would run in parallel with streaming which can
+        //  reduce the delay.
+        co_await _db.invoke_on(trinfo->pending_replica.shard, [tablet] (replica::database& db) {
+            auto& table = db.find_column_family(tablet.table);
+            return table.maybe_split_compaction_group_of(tablet.tablet);
+        });
+
         co_return;
     });
 }
