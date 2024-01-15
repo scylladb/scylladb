@@ -225,11 +225,6 @@ static std::unordered_map<cleanup_status, sstring> cleanup_status_to_name_map = 
     {cleanup_status::running, "running"},
 };
 
-std::ostream& operator<<(std::ostream& os, cleanup_status status) {
-    os << cleanup_status_to_name_map[status];
-    return os;
-}
-
 cleanup_status cleanup_status_from_string(const sstring& s) {
     for (auto&& e : cleanup_status_to_name_map) {
         if (e.second == s) {
@@ -239,4 +234,9 @@ cleanup_status cleanup_status_from_string(const sstring& s) {
     throw std::runtime_error(fmt::format("cannot map name {} to cleanup_status", s));
 }
 
+}
+
+auto fmt::formatter<service::cleanup_status>::format(service::cleanup_status status,
+                                                     fmt::format_context& ctx) const -> decltype(ctx.out()) {
+    return fmt::format_to(ctx.out(), "{}", service::cleanup_status_to_name_map[status]);
 }
