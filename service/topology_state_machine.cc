@@ -219,17 +219,19 @@ std::ostream& operator<<(std::ostream& os, const raft_topology_cmd::command& cmd
     return os;
 }
 
-static std::unordered_map<cleanup_status, sstring> cleanup_status_to_name_map = {
-    {cleanup_status::clean, "clean"},
-    {cleanup_status::needed, "needed"},
-    {cleanup_status::running, "running"},
+static const std::string_view cleanup_status_names[] {
+    "clean",
+    "needed",
+    "running",
 };
 
 cleanup_status cleanup_status_from_string(const sstring& s) {
-    for (auto&& e : cleanup_status_to_name_map) {
-        if (e.second == s) {
-            return e.first;
+    uint16_t index = 0;
+    for (auto&& name : cleanup_status_names) {
+        if (s == name) {
+            return static_cast<cleanup_status>(index);
         }
+        index++;
     }
     throw std::runtime_error(fmt::format("cannot map name {} to cleanup_status", s));
 }
@@ -238,5 +240,6 @@ cleanup_status cleanup_status_from_string(const sstring& s) {
 
 auto fmt::formatter<service::cleanup_status>::format(service::cleanup_status status,
                                                      fmt::format_context& ctx) const -> decltype(ctx.out()) {
-    return fmt::format_to(ctx.out(), "{}", service::cleanup_status_to_name_map[status]);
+    auto index = static_cast<uint16_t>(status);
+    return fmt::format_to(ctx.out(), "{}", service::cleanup_status_names[index]);
 }
