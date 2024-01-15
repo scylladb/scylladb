@@ -1258,6 +1258,9 @@ private:
 
 public:
     explicit keyspace(lw_shared_ptr<keyspace_metadata> metadata, config cfg, locator::effective_replication_map_factory& erm_factory);
+    keyspace(const keyspace&) = delete;
+    void operator=(const keyspace&) = delete;
+    keyspace(keyspace&&) = default;
 
     future<> shutdown() noexcept;
 

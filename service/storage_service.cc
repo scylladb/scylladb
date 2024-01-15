@@ -1087,7 +1087,7 @@ future<> storage_service::sstable_cleanup_fiber(raft::server& server, sharded<se
                 tasks.reserve(keyspaces.size());
 
                 co_await coroutine::parallel_for_each(keyspaces.begin(), keyspaces.end(), [this, &tasks, &do_cleanup_ks] (const sstring& ks_name) -> future<> {
-                    auto ks = _db.local().find_keyspace(ks_name);
+                    auto& ks = _db.local().find_keyspace(ks_name);
                     if (ks.get_replication_strategy().is_per_table() || is_system_keyspace(ks_name)) {
                         // Skip tablets tables since they do their own cleanup and system tables
                         // since they are local and not affected by range movements.
