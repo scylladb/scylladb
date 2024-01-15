@@ -713,6 +713,18 @@ private:
             co_return co_await encode_replica_exception_for_rpc<Result>(p->features(), f_s.get_exception());
         }
         schema_ptr s = f_s.get();
+
+        co_await utils::get_local_injector().inject_with_handler("storage_proxy::handle_read", [s] (auto& handler) -> future<> {
+            const auto cf_name = handler.get("cf_name");
+            assert(cf_name);
+            if (s->cf_name() != cf_name) {
+                co_return;
+            }
+            slogger.info("storage_proxy::handle_read injection hit");
+            co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::minutes{1});
+            slogger.info("storage_proxy::handle_read injection done");
+        });
+
         auto pr2 = ::compat::unwrap(std::move(pr), *s);
         auto do_query = [&]() {
             if constexpr (verb == read_verb::read_data) {
