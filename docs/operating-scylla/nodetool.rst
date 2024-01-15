@@ -39,6 +39,7 @@ Nodetool
    nodetool-commands/refresh
    nodetool-commands/removenode
    nodetool-commands/repair
+   nodetool-commands/resetlocalschema
    nodetool-commands/ring
    nodetool-commands/scrub
    nodetool-commands/settraceprobability
@@ -116,6 +117,7 @@ Operations that are not listed below are currently not available.
 * :doc:`refresh </operating-scylla/nodetool-commands/refresh/>`- Load newly placed SSTables to the system without restart
 * :doc:`removenode </operating-scylla/nodetool-commands/removenode/>`- Remove node with the provided ID
 * :doc:`repair <nodetool-commands/repair/>`  :code:`<keyspace>` :code:`<table>` - Repair one or more tables
+* :doc:`resetlocalschema </operating-scylla/nodetool-commands/resetlocalschema/>` - Reset the node's local schema.
 * :doc:`ring <nodetool-commands/ring/>` - The nodetool ring command display the token ring information.
 * :doc:`scrub </operating-scylla/nodetool-commands/scrub>` :code:`[-m mode] [--no-snapshot] <keyspace> [<table>...]` - Scrub the SSTable files in the specified keyspace or table(s)
 * :doc:`setlogginglevel</operating-scylla/nodetool-commands/setlogginglevel>` - sets the logging level threshold for Scylla classes
