@@ -17,6 +17,7 @@ skip_in_release:
   - test_cdc_generation_publishing
   - test_raft_cluster_features
   - test_raft_ignore_nodes
+  - test_topology_upgrade
 skip_in_debug:
   - test_cdc_generation_clearing
   - test_cdc_generation_publishing

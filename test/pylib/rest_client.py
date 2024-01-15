@@ -288,6 +288,16 @@ class ScyllaRESTAPIClient():
         url = "/system/dump_llvm_profile"
         await self.client.post(url, host=node_ip)
 
+    async def upgrade_to_raft_topology(self, node_ip: str) -> None:
+        """Start the upgrade to raft topology"""
+        await self.client.post("/storage_service/raft_topology/upgrade", host=node_ip)
+
+    async def raft_topology_upgrade_status(self, node_ip: str) -> str:
+        """Returns the current state of upgrade to raft topology"""
+        data = await self.client.get_json("/storage_service/raft_topology/upgrade", host=node_ip)
+        assert(type(data) == str)
+        return data
+
     async def repair(self, node_ip: str, keyspace: str, table: str) -> None:
         """Repair the given table and wait for it to complete"""
         sequence_number = await self.client.post_json(f"/storage_service/repair_async/{keyspace}", host=node_ip, params={"columnFamilies": table})
