@@ -256,8 +256,16 @@ future<> sstables_loader::load_new_sstables(sstring ks_name, sstring cf_name,
     } else {
         _loading_new_sstables = true;
     }
+
+    sstring load_and_stream_desc = fmt::format("{}", load_and_stream);
+    const auto& rs = _db.local().find_keyspace(ks_name).get_replication_strategy();
+    if (rs.is_per_table() && !load_and_stream) {
+        load_and_stream = true;
+        load_and_stream_desc = "auto-enabled-for-tablets";
+    }
+
     llog.info("Loading new SSTables for keyspace={}, table={}, load_and_stream={}, primary_replica_only={}",
-            ks_name, cf_name, load_and_stream, primary_replica_only);
+            ks_name, cf_name, load_and_stream_desc, primary_replica_only);
     try {
         if (load_and_stream) {
             ::table_id table_id;
