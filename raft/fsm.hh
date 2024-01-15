@@ -46,14 +46,6 @@ struct fsm_output {
     bool state_changed = false;
     // Set to true if a leadership transfer was aborted since the last output
     bool abort_leadership_transfer;
-
-    // True if there is no new output
-    bool empty() const {
-        return !term_and_vote &&
-            log_entries.size() == 0 && messages.size() == 0 &&
-            committed.size() == 0 && !snp && snps_to_drop.empty() &&
-            !configuration && !max_read_id_with_quorum;
-    }
 };
 
 struct fsm_config {
