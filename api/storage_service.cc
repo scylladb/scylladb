@@ -768,6 +768,12 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         auto& db = ctx.db;
         auto keyspace = validate_keyspace(ctx, req->param);
         auto table_infos = parse_table_infos(keyspace, ctx, req->query_parameters, "cf");
+        const auto& rs = db.local().find_keyspace(keyspace).get_replication_strategy();
+        if (rs.get_type() == locator::replication_strategy_type::local || !rs.is_vnode_based()) {
+            auto reason = rs.get_type() == locator::replication_strategy_type::local ? "require" : "support";
+            apilog.info("Keyspace {} does not {} cleanup", keyspace, reason);
+            co_return json::json_return_type(0);
+        }
         apilog.info("force_keyspace_cleanup: keyspace={} tables={}", keyspace, table_infos);
         if (!co_await ss.local().is_cleanup_allowed(keyspace)) {
             auto msg = "Can not perform cleanup operation when topology changes";
