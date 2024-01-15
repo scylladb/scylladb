@@ -1015,12 +1015,15 @@ class ToolTest(Test):
 
     def __init__(self, test_no: int, shortname: str, suite) -> None:
         super().__init__(test_no, shortname, suite)
-        self.path = "pytest"
+        launcher = self.suite.cfg.get("launcher", "pytest")
+        self.path = launcher.split(maxsplit=1)[0]
         self.xmlout = os.path.join(self.suite.options.tmpdir, self.mode, "xml", self.uname + ".xunit.xml")
         ToolTest._reset(self)
 
     def _prepare_pytest_params(self, options: argparse.Namespace):
-        self.args = [
+        launcher = self.suite.cfg.get("launcher", "pytest")
+        self.args = launcher.split()[1:]
+        self.args += [
             "-s",  # don't capture print() output inside pytest
             "--log-level=DEBUG",   # Capture logs
             "-o",
