@@ -122,11 +122,25 @@ def jmx(request, rest_api_mock_server):
     jmx_process.wait()
 
 
+all_modes = {'debug': 'Debug',
+             'release': 'RelWithDebInfo',
+             'dev': 'Dev',
+             'sanitize': 'Sanitize',
+             'coverage': 'Coverage'}
+
+
+def _path_to_scylla(mode):
+    build_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "build"))
+    if os.path.exists(os.path.join(build_dir, 'build.ninja')):
+        return os.path.join(build_dir, all_modes[mode], "scylla")
+    return os.path.join(build_dir, mode, "scylla")
+
+
 @pytest.fixture(scope="session")
 def nodetool_path(request):
     if request.config.getoption("nodetool") == "scylla":
         mode = request.config.getoption("mode")
-        return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "build", mode, "scylla"))
+        return _path_to_scylla(mode)
 
     path = request.config.getoption("nodetool_path")
     if path is not None:
