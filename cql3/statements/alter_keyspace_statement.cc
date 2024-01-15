@@ -9,7 +9,9 @@
  */
 
 #include <boost/range/algorithm.hpp>
+#include <fmt/format.h>
 #include <seastar/core/coroutine.hh>
+#include <stdexcept>
 #include "alter_keyspace_statement.hh"
 #include "prepared_statement.hh"
 #include "service/migration_manager.hh"
@@ -40,10 +42,21 @@ future<> cql3::statements::alter_keyspace_statement::check_access(query_processo
     return state.has_keyspace_access(_name, auth::permission::ALTER);
 }
 
+static bool validate_rf_difference(const std::string_view curr_rf, const std::string_view new_rf) {
+    auto to_number = [] (const std::string_view rf) {
+        int result;
+        // We assume the passed string view represents a valid decimal number,
+        // so we don't need the error code.
+        (void) std::from_chars(rf.begin(), rf.end(), result);
+        return result;
+    };
+
+    // We want to ensure that each DC's RF is going to change by at most 1
+    // because in that case the old and new quorums must overlap.
+    return std::abs(to_number(curr_rf) - to_number(new_rf)) <= 1;
+}
+
 void cql3::statements::alter_keyspace_statement::validate(query_processor& qp, const service::client_state& state) const {
-        // TODO: when processing a tablet-enabled keyspace,
-        //       we must check if the new RF differs by at most 1 from the old RF,
-        //       and fail the query if that's not the case
         auto tmp = _name;
         std::transform(tmp.begin(), tmp.end(), tmp.begin(), ::tolower);
         if (is_system_keyspace(tmp)) {
@@ -68,6 +81,17 @@ void cql3::statements::alter_keyspace_statement::validate(query_processor& qp, c
             }
 
             auto new_ks = _attrs->as_ks_metadata_update(ks.metadata(), *qp.proxy().get_token_metadata_ptr(), qp.proxy().features());
+
+            if (ks.get_replication_strategy().uses_tablets()) {
+                const std::map<sstring, sstring>& current_rfs = ks.metadata()->strategy_options();
+                for (const auto& [new_dc, new_rf] : _attrs->get_replication_options()) {
+                    auto it = current_rfs.find(new_dc);
+                    if (it != current_rfs.end() && !validate_rf_difference(it->second, new_rf)) {
+                        throw exceptions::invalid_request_exception("Cannot modify replication factor of any DC by more than 1 at a time.");
+                    }
+                }
+            }
+
             locator::replication_strategy_params params(new_ks->strategy_options(), new_ks->initial_tablets());
             auto new_rs = locator::abstract_replication_strategy::create_replication_strategy(new_ks->strategy_name(), params);
             if (new_rs->is_per_table() != ks.get_replication_strategy().is_per_table()) {
