@@ -1024,7 +1024,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             }
         }
         if (!preempt) {
-            auto plan = co_await _tablet_allocator.balance_tablets(get_token_metadata_ptr());
+            auto plan = co_await _tablet_allocator.balance_tablets(get_token_metadata_ptr(), _tablet_load_stats);
             if (!drain || plan.has_nodes_to_drain()) {
                 co_await generate_migration_updates(updates, guard, plan);
             }
@@ -2036,7 +2036,7 @@ future<bool> topology_coordinator::maybe_start_tablet_migration(group0_guard gua
     }
 
     auto tm = get_token_metadata_ptr();
-    auto plan = co_await _tablet_allocator.balance_tablets(tm);
+    auto plan = co_await _tablet_allocator.balance_tablets(tm, _tablet_load_stats);
     if (plan.empty()) {
         rtlogger.debug("Tablets are balanced");
         co_return false;
