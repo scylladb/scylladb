@@ -1493,7 +1493,7 @@ future<> server_impl::abort(sstring reason) {
     }
 
     if (_state_change_promise) {
-        _state_change_promise->set_exception(stopped_error());
+        _state_change_promise->set_exception(stopped_error(*_aborted));
     }
 
     abort_snapshot_transfers();
