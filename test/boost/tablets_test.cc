@@ -30,7 +30,11 @@ using namespace locator;
 using namespace replica;
 using namespace service;
 
-static api::timestamp_type next_timestamp = api::new_timestamp();
+static api::timestamp_type current_timestamp(cql_test_env& e) {
+    // Mutations in system.tablets got there via group0, so in order for new
+    // mutations to take effect, their timestamp should be "later" than that
+    return utils::UUID_gen::micros_timestamp(e.get_system_keyspace().local().get_last_group0_state_id().get0()) + 1;
+}
 
 static utils::UUID next_uuid() {
     static uint64_t counter = 1;
@@ -40,8 +44,8 @@ static utils::UUID next_uuid() {
 }
 
 static
-void verify_tablet_metadata_persistence(cql_test_env& env, const tablet_metadata& tm) {
-    save_tablet_metadata(env.local_db(), tm, next_timestamp++).get();
+void verify_tablet_metadata_persistence(cql_test_env& env, const tablet_metadata& tm, api::timestamp_type& ts) {
+    save_tablet_metadata(env.local_db(), tm, ts++).get();
     auto tm2 = read_tablet_metadata(env.local_qp()).get0();
     BOOST_REQUIRE_EQUAL(tm, tm2);
 }
@@ -52,6 +56,7 @@ cql_test_config tablet_cql_test_config() {
     c.db_config->experimental_features({
             db::experimental_features_t::feature::TABLETS,
         }, db::config::config_source::CommandLine);
+    c.initial_tablets = 2;
     return c;
 }
 
@@ -75,12 +80,10 @@ SEASTAR_TEST_CASE(test_tablet_metadata_persistence) {
 
         auto table1 = add_table(e).get0();
         auto table2 = add_table(e).get0();
+        auto ts = current_timestamp(e);
 
         {
-            tablet_metadata tm;
-
-            // Empty
-            verify_tablet_metadata_persistence(e, tm);
+            tablet_metadata tm = read_tablet_metadata(e.local_qp()).get0();
 
             // Add table1
             {
@@ -95,7 +98,7 @@ SEASTAR_TEST_CASE(test_tablet_metadata_persistence) {
                 tm.set_tablet_map(table1, std::move(tmap));
             }
 
-            verify_tablet_metadata_persistence(e, tm);
+            verify_tablet_metadata_persistence(e, tm, ts);
 
             // Add table2
             {
@@ -127,7 +130,7 @@ SEASTAR_TEST_CASE(test_tablet_metadata_persistence) {
                 tm.set_tablet_map(table2, std::move(tmap));
             }
 
-            verify_tablet_metadata_persistence(e, tm);
+            verify_tablet_metadata_persistence(e, tm, ts);
 
             // Increase RF of table2
             {
@@ -156,7 +159,7 @@ SEASTAR_TEST_CASE(test_tablet_metadata_persistence) {
                 });
             }
 
-            verify_tablet_metadata_persistence(e, tm);
+            verify_tablet_metadata_persistence(e, tm, ts);
 
             // Reduce tablet count in table2
             {
@@ -176,7 +179,7 @@ SEASTAR_TEST_CASE(test_tablet_metadata_persistence) {
                 tm.set_tablet_map(table2, std::move(tmap));
             }
 
-            verify_tablet_metadata_persistence(e, tm);
+            verify_tablet_metadata_persistence(e, tm, ts);
 
             // Reduce RF for table1, increasing tablet count
             {
@@ -196,7 +199,7 @@ SEASTAR_TEST_CASE(test_tablet_metadata_persistence) {
                 tm.set_tablet_map(table1, std::move(tmap));
             }
 
-            verify_tablet_metadata_persistence(e, tm);
+            verify_tablet_metadata_persistence(e, tm, ts);
 
             // Reduce tablet count for table1
             {
@@ -210,7 +213,7 @@ SEASTAR_TEST_CASE(test_tablet_metadata_persistence) {
                 tm.set_tablet_map(table1, std::move(tmap));
             }
 
-            verify_tablet_metadata_persistence(e, tm);
+            verify_tablet_metadata_persistence(e, tm, ts);
 
             // Change replica of table1
             {
@@ -224,7 +227,7 @@ SEASTAR_TEST_CASE(test_tablet_metadata_persistence) {
                 tm.set_tablet_map(table1, std::move(tmap));
             }
 
-            verify_tablet_metadata_persistence(e, tm);
+            verify_tablet_metadata_persistence(e, tm, ts);
         }
     }, tablet_cql_test_config());
 }
@@ -288,6 +291,7 @@ SEASTAR_TEST_CASE(test_mutation_builder) {
         auto h3 = host_id(utils::UUID_gen::get_time_UUID());
 
         auto table1 = add_table(e).get0();
+        auto ts = current_timestamp(e);
 
         tablet_metadata tm;
         tablet_id tid(0);
@@ -312,10 +316,10 @@ SEASTAR_TEST_CASE(test_mutation_builder) {
             tm.set_tablet_map(table1, std::move(tmap));
         }
 
-        save_tablet_metadata(e.local_db(), tm, next_timestamp++).get();
+        save_tablet_metadata(e.local_db(), tm, ts++).get();
 
         {
-            tablet_mutation_builder b(next_timestamp++, "ks", table1);
+            tablet_mutation_builder b(ts++, "ks", table1);
             auto last_token = tm.get_tablet_map(table1).get_last_token(tid1);
             b.set_new_replicas(last_token, tablet_replica_set {
                     tablet_replica {h1, 2},
@@ -355,7 +359,7 @@ SEASTAR_TEST_CASE(test_mutation_builder) {
         }
 
         {
-            tablet_mutation_builder b(next_timestamp++, "ks", table1);
+            tablet_mutation_builder b(ts++, "ks", table1);
             auto last_token = tm.get_tablet_map(table1).get_last_token(tid1);
             b.set_stage(last_token, tablet_transition_stage::use_new);
             e.local_db().apply({freeze(b.build())}, db::no_timeout).get();
@@ -391,7 +395,7 @@ SEASTAR_TEST_CASE(test_mutation_builder) {
         }
 
         {
-            tablet_mutation_builder b(next_timestamp++, "ks", table1);
+            tablet_mutation_builder b(ts++, "ks", table1);
             auto last_token = tm.get_tablet_map(table1).get_last_token(tid1);
             b.set_replicas(last_token, tablet_replica_set {
                 tablet_replica {h1, 2},
@@ -555,7 +559,8 @@ SEASTAR_TEST_CASE(test_large_tablet_metadata) {
             tm.set_tablet_map(id, std::move(tmap));
         }
 
-        verify_tablet_metadata_persistence(e, tm);
+        auto ts = current_timestamp(e);
+        verify_tablet_metadata_persistence(e, tm, ts);
     }, tablet_cql_test_config());
 }
 

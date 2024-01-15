@@ -57,7 +57,7 @@ void cql3::statements::alter_keyspace_statement::validate(query_processor& qp, c
                         current_options.type_string(), new_options.type_string()));
             }
 
-            auto new_ks = _attrs->as_ks_metadata_update(ks.metadata(), *qp.proxy().get_token_metadata_ptr());
+            auto new_ks = _attrs->as_ks_metadata_update(ks.metadata(), *qp.proxy().get_token_metadata_ptr(), qp.proxy().features());
             locator::replication_strategy_params params(new_ks->strategy_options(), new_ks->initial_tablets());
             auto new_rs = locator::abstract_replication_strategy::create_replication_strategy(new_ks->strategy_name(), params);
             if (new_rs->is_per_table() != ks.get_replication_strategy().is_per_table()) {
@@ -87,8 +87,9 @@ cql3::statements::alter_keyspace_statement::prepare_schema_mutations(query_proce
     try {
         auto old_ksm = qp.db().find_keyspace(_name).metadata();
         const auto& tm = *qp.proxy().get_token_metadata_ptr();
+        const auto& feat = qp.proxy().features();
 
-        auto m = service::prepare_keyspace_update_announcement(qp.db().real_database(), _attrs->as_ks_metadata_update(old_ksm, tm), ts);
+        auto m = service::prepare_keyspace_update_announcement(qp.db().real_database(), _attrs->as_ks_metadata_update(old_ksm, tm, feat), ts);
 
         using namespace cql_transport;
         auto ret = ::make_shared<event::schema_change>(

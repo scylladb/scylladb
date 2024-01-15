@@ -5730,7 +5730,7 @@ bool has_tablet_routing(::shared_ptr<cql_transport::messages::result_message> re
 SEASTAR_TEST_CASE(test_sending_tablet_info_unprepared_insert) {
     BOOST_ASSERT(smp::count == 2);
     return do_with_cql_env_thread([](cql_test_env& e) {
-        e.execute_cql("create keyspace ks_tablet with replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1, 'initial_tablets': 8};").get();
+        e.execute_cql("create keyspace ks_tablet with replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1 } and tablets = {'initial': 8};").get();
         e.execute_cql("create table ks_tablet.test_tablet (pk int, ck int, v int, PRIMARY KEY (pk, ck));").get();
 
         smp::submit_to(0, [&] {
@@ -5751,7 +5751,7 @@ SEASTAR_TEST_CASE(test_sending_tablet_info_unprepared_insert) {
 
 SEASTAR_TEST_CASE(test_sending_tablet_info_unprepared_select) {
     return do_with_cql_env_thread([](cql_test_env& e) {
-        e.execute_cql("create keyspace ks_tablet with replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1, 'initial_tablets': 8};").get();
+        e.execute_cql("create keyspace ks_tablet with replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1 } and tablets = {'initial': 8};").get();
         e.execute_cql("create table ks_tablet.test_tablet (pk int, ck int, v int, PRIMARY KEY (pk, ck));").get();
         e.execute_cql("insert into ks_tablet.test_tablet (pk, ck, v) VALUES (1, 2, 3);").get();
 
@@ -5773,7 +5773,7 @@ SEASTAR_TEST_CASE(test_sending_tablet_info_unprepared_select) {
 
 SEASTAR_TEST_CASE(test_sending_tablet_info_insert) {
     return do_with_cql_env_thread([](cql_test_env& e) {
-        e.execute_cql("create keyspace ks_tablet with replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1, 'initial_tablets': 8};").get();
+        e.execute_cql("create keyspace ks_tablet with replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1 } and tablets = {'initial': 8};").get();
         e.execute_cql("create table ks_tablet.test_tablet (pk int, ck int, v int, PRIMARY KEY (pk, ck));").get();
         auto insert = e.prepare("insert into ks_tablet.test_tablet (pk, ck, v) VALUES (?, ?, ?);").get0();
         
@@ -5816,7 +5816,7 @@ SEASTAR_TEST_CASE(test_sending_tablet_info_insert) {
 
 SEASTAR_TEST_CASE(test_sending_tablet_info_select) {
     return do_with_cql_env_thread([](cql_test_env& e) {
-        e.execute_cql("create keyspace ks_tablet with replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1, 'initial_tablets': 8};").get();
+        e.execute_cql("create keyspace ks_tablet with replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} and tablets = {'initial': 8};").get();
         e.execute_cql("create table ks_tablet.test_tablet (pk int, ck int, v int, PRIMARY KEY (pk, ck));").get();
         e.execute_cql("insert into ks_tablet.test_tablet (pk, ck, v) VALUES (1, 2, 3);").get();
         

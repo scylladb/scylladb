@@ -86,7 +86,7 @@ async def test_tablet_mv_create(manager: ManagerClient):
     servers = await manager.servers_add(1)
     cql = manager.get_cql()
 
-    await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1, 'initial_tablets': 100}")
+    await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 100}")
     await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, c int)")
     await cql.run_async("CREATE MATERIALIZED VIEW test.tv AS SELECT * FROM test.test WHERE c IS NOT NULL AND pk IS NOT NULL PRIMARY KEY (c, pk)")
     await cql.run_async("DROP KEYSPACE test")
@@ -104,7 +104,7 @@ async def test_tablet_mv_simple(manager: ManagerClient):
     servers = await manager.servers_add(1)
     cql = manager.get_cql()
 
-    await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1, 'initial_tablets': 100}")
+    await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 100}")
     await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, c int)")
     await cql.run_async("CREATE MATERIALIZED VIEW test.tv AS SELECT * FROM test.test WHERE c IS NOT NULL AND pk IS NOT NULL PRIMARY KEY (c, pk) WITH SYNCHRONOUS_UPDATES = TRUE")
     await cql.run_async("INSERT INTO test.test (pk, c) VALUES (2, 3)")
@@ -126,7 +126,7 @@ async def test_tablet_mv_simple_6node(manager: ManagerClient):
     """
     servers = await manager.servers_add(6)
     cql = manager.get_cql()
-    await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1, 'initial_tablets': 100}")
+    await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 100}")
     await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, c int)")
     await cql.run_async("CREATE MATERIALIZED VIEW test.tv AS SELECT * FROM test.test WHERE c IS NOT NULL AND pk IS NOT NULL PRIMARY KEY (c, pk) WITH SYNCHRONOUS_UPDATES = TRUE")
     await cql.run_async("INSERT INTO test.test (pk, c) VALUES (2, 3)")
@@ -262,7 +262,7 @@ async def test_tablet_si_create(manager: ManagerClient):
     servers = await manager.servers_add(1)
     cql = manager.get_cql()
 
-    await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1, 'initial_tablets': 100}")
+    await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 100}")
     await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, c int)")
     await cql.run_async("CREATE INDEX my_idx ON test.test(c)")
     await cql.run_async("DROP INDEX test.my_idx")
@@ -277,7 +277,7 @@ async def test_tablet_lsi_create(manager: ManagerClient):
     servers = await manager.servers_add(1)
     cql = manager.get_cql()
 
-    await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1, 'initial_tablets': 100}")
+    await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 100}")
     await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, c int)")
     await cql.run_async("CREATE INDEX my_idx ON test.test((pk),c)")
     await cql.run_async("DROP INDEX test.my_idx")
@@ -306,7 +306,7 @@ async def test_tablet_cql_lsi(manager: ManagerClient):
     # Create a table with an LSI, using tablets. Use just 1 tablets,
     # which is silly in any real-world use case, but makes this test simpler
     # and faster.
-    await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1, 'initial_tablets': 1}")
+    await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}")
     await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, c int)")
     await cql.run_async("CREATE INDEX my_idx ON test.test((pk),c)")
 

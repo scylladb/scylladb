@@ -525,11 +525,6 @@ void tablet_aware_replication_strategy::validate_tablet_options(const abstract_r
 void tablet_aware_replication_strategy::process_tablet_options(abstract_replication_strategy& ars,
                                                                replication_strategy_config_options& opts,
                                                                replication_strategy_params params) {
-    auto i = opts.find("initial_tablets");
-    if (i != opts.end()) {
-        throw exceptions::configuration_exception("initial_tablets is reserved name for NetworkTopologyStrategy");
-    }
-
     if (params.initial_tablets.has_value()) {
         _initial_tablets = *params.initial_tablets;
         ars._uses_tablets = true;

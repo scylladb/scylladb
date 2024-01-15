@@ -30,12 +30,6 @@ static std::map<sstring, sstring> prepare_options(
         return options;
     }
 
-    auto itt = options.find("initial_tablets");
-    if (itt != options.end()) {
-        initial_tablets = std::stol(itt->second);
-        options.erase(itt);
-    }
-
     // For users' convenience, expand the 'replication_factor' option into a replication factor for each DC.
     // If the user simply switches from another strategy without providing any options,
     // but the other strategy used the 'replication_factor' option, it will also be expanded.
@@ -83,7 +77,7 @@ void ks_prop_defs::validate() {
         return;
     }
 
-    static std::set<sstring> keywords({ sstring(KW_DURABLE_WRITES), sstring(KW_REPLICATION), sstring(KW_STORAGE) });
+    static std::set<sstring> keywords({ sstring(KW_DURABLE_WRITES), sstring(KW_REPLICATION), sstring(KW_STORAGE), sstring(KW_TABLETS) });
     property_definitions::validate(keywords);
 
     auto replication_options = get_replication_options();
@@ -114,24 +108,70 @@ data_dictionary::storage_options ks_prop_defs::get_storage_options() const {
     return opts;
 }
 
+std::optional<unsigned> ks_prop_defs::get_initial_tablets(const sstring& strategy_class, bool enabled_by_default) const {
+    // FIXME -- this should be ignored somehow else
+    if (locator::abstract_replication_strategy::to_qualified_class_name(strategy_class) != "org.apache.cassandra.locator.NetworkTopologyStrategy") {
+        return std::nullopt;
+    }
+
+    auto tablets_options = get_map(KW_TABLETS);
+    if (!tablets_options) {
+        return enabled_by_default ? std::optional<unsigned>(0) : std::nullopt;
+    }
+
+    std::optional<unsigned> ret;
+
+    auto it = tablets_options->find("enabled");
+    if (it != tablets_options->end()) {
+        auto enabled = it->second;
+        tablets_options->erase(it);
+
+        if (enabled == "true") {
+            ret = 0; // even if 'initial' is not set, it'll start with auto-detection
+        } else if (enabled == "false") {
+            assert(!ret.has_value());
+            return ret;
+        } else {
+            throw exceptions::configuration_exception(sstring("Tablets enabled value must be true or false; found ") + it->second);
+        }
+    }
+
+    it = tablets_options->find("initial");
+    if (it != tablets_options->end()) {
+        try {
+            ret = std::stol(it->second);
+        } catch (...) {
+            throw exceptions::configuration_exception(sstring("Initial tablets value should be numeric; found ") + it->second);
+        }
+        tablets_options->erase(it);
+    }
+
+    if (!tablets_options->empty()) {
+        throw exceptions::configuration_exception(sstring("Unrecognized tablets option ") + tablets_options->begin()->first);
+    }
+
+    return ret;
+}
+
 std::optional<sstring> ks_prop_defs::get_replication_strategy_class() const {
     return _strategy_class;
 }
 
-lw_shared_ptr<data_dictionary::keyspace_metadata> ks_prop_defs::as_ks_metadata(sstring ks_name, const locator::token_metadata& tm) {
+lw_shared_ptr<data_dictionary::keyspace_metadata> ks_prop_defs::as_ks_metadata(sstring ks_name, const locator::token_metadata& tm, const gms::feature_service& feat) {
     auto sc = get_replication_strategy_class().value();
-    std::optional<unsigned> initial_tablets;
+    std::optional<unsigned> initial_tablets = get_initial_tablets(sc, feat.tablets);
     auto options = prepare_options(sc, tm, get_replication_options(), initial_tablets);
     return data_dictionary::keyspace_metadata::new_keyspace(ks_name, sc,
             std::move(options), initial_tablets, get_boolean(KW_DURABLE_WRITES, true), get_storage_options());
 }
 
-lw_shared_ptr<data_dictionary::keyspace_metadata> ks_prop_defs::as_ks_metadata_update(lw_shared_ptr<data_dictionary::keyspace_metadata> old, const locator::token_metadata& tm) {
+lw_shared_ptr<data_dictionary::keyspace_metadata> ks_prop_defs::as_ks_metadata_update(lw_shared_ptr<data_dictionary::keyspace_metadata> old, const locator::token_metadata& tm, const gms::feature_service& feat) {
     std::map<sstring, sstring> options;
     const auto& old_options = old->strategy_options();
     auto sc = get_replication_strategy_class();
     std::optional<unsigned> initial_tablets;
     if (sc) {
+        initial_tablets = get_initial_tablets(*sc, old->initial_tablets().has_value());
         options = prepare_options(*sc, tm, get_replication_options(), initial_tablets, old_options);
     } else {
         sc = old->strategy_name();

@@ -19,9 +19,9 @@ async def test_tablet_change_replication_vnode_to_tablets(manager: ManagerClient
     server = await manager.server_add(config=cfg)
 
     cql = manager.get_cql()
-    await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1};")
+    await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'enabled': false};")
     with pytest.raises(InvalidRequest):
-        await cql.run_async("ALTER KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1, 'initial_tablets': 1};")
+        await cql.run_async("ALTER KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1};")
 
 
 @pytest.mark.asyncio
@@ -48,10 +48,10 @@ async def test_tablet_default_initialization(manager: ManagerClient):
     server = await manager.server_add(config=cfg)
 
     cql = manager.get_cql()
-    await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1, 'initial_tablets': 1};")
+    await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1};")
 
     res = await cql.run_async("SELECT * FROM system_schema.scylla_keyspaces WHERE keyspace_name = 'test'")
-    assert res[0].initial_tablets > 0, "initial_tablets not configured"
+    assert res[0].initial_tablets == 0, "initial_tablets not configured"
 
     await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, c int);")
     res = await cql.run_async("SELECT * FROM system.tablets")
@@ -64,14 +64,27 @@ async def test_tablet_default_initialization(manager: ManagerClient):
 
 
 @pytest.mark.asyncio
+async def test_tablet_explicit_disabling(manager: ManagerClient):
+    cfg = {'enable_user_defined_functions': False,
+           'experimental_features': ['tablets', 'consistent-topology-changes']}
+    server = await manager.server_add(config=cfg)
+
+    cql = manager.get_cql()
+    await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'enabled': false};")
+
+    res = await cql.run_async("SELECT * FROM system_schema.scylla_keyspaces WHERE keyspace_name = 'test'")
+    assert len(res) == 0, "tablets replication strategy turned on"
+
+
+@pytest.mark.asyncio
 async def test_tablet_change_initial_tablets(manager: ManagerClient):
     cfg = {'enable_user_defined_functions': False,
            'experimental_features': ['tablets', 'consistent-topology-changes']}
     server = await manager.server_add(config=cfg)
 
     cql = manager.get_cql()
-    await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1, 'initial_tablets': 1};")
+    await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1};")
 
-    await cql.run_async("ALTER KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1, 'initial_tablets': 2};")
+    await cql.run_async("ALTER KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2};")
     res = await cql.run_async("SELECT * FROM system_schema.scylla_keyspaces WHERE keyspace_name = 'test'")
     assert res[0].initial_tablets == 2, "initial_tablets not altered"

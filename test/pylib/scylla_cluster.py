@@ -76,8 +76,7 @@ def make_scylla_conf(workdir: pathlib.Path, host_addr: str, seed_addrs: List[str
                                   'alternator-streams',
                                   'consistent-topology-changes',
                                   'broadcast-tables',
-                                  'keyspace-storage-options',
-                                  'tablets'],
+                                  'keyspace-storage-options'],
 
         'skip_wait_for_gossip_to_settle': 0,
         'ring_delay_ms': 0,

@@ -189,7 +189,7 @@ future<> create_keyspace_if_not_exists_impl(seastar::sharded<service::storage_pr
             attrs.add_property(cql3::statements::ks_prop_defs::KW_REPLICATION, replication_properties);
             attrs.validate();
 
-            ksms.push_back(attrs.as_ks_metadata(ks_name, *tm));
+            ksms.push_back(attrs.as_ks_metadata(ks_name, *tm, proxy.local().features()));
         }
 
         auto group0_guard = co_await mml.start_group0_operation();
