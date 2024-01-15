@@ -178,6 +178,11 @@ distributed_loader::process_upload_dir(distributed<replica::database>& db, distr
     seastar::thread_attributes attr;
     attr.sched_group = db.local().get_streaming_scheduling_group();
 
+    const auto& rs = db.local().find_keyspace(ks).get_replication_strategy();
+    if (rs.is_per_table()) {
+        on_internal_error(dblog, "process_upload_dir is not supported with tablets");
+    }
+
     return seastar::async(std::move(attr), [&db, &view_update_generator, &sys_dist_ks, ks = std::move(ks), cf = std::move(cf)] {
         auto global_table = get_table_on_all_shards(db, ks, cf).get0();
 
