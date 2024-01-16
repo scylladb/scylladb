@@ -10,6 +10,7 @@
 
 #include "replica/database.hh"
 #include "locator/tablets.hh"
+#include "tablet_allocator_fwd.hh"
 
 namespace service {
 
@@ -70,8 +71,6 @@ public:
         _resize_plan = std::move(resize_plan);
     }
 };
-
-class tablet_allocator_impl;
 
 class tablet_allocator {
 public:
