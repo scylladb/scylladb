@@ -239,6 +239,13 @@ public:
     future<> force_new_active_segment() noexcept;
 
     /**
+     * Waits for all segment deletes issued up until now to complete.
+     * Segment delete is done when a segment no longer is active or dirty,
+     * thus most often by calls to `discard_completed_segments` above.
+    */
+    future<> wait_for_pending_deletes() noexcept;
+
+    /**
      * A 'flush_handler' is invoked when the CL determines that size on disk has
      * exceeded allowable threshold. It is called once for every currently active
      * CF id with the highest replay_position which we would prefer to free "until".
