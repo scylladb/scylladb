@@ -39,6 +39,7 @@
 #include "log.hh"
 #include "release.hh"
 #include "compaction/compaction_manager.hh"
+#include "compaction/task_manager_module.hh"
 #include "sstables/sstables.hh"
 #include "replica/database.hh"
 #include "db/extensions.hh"
@@ -785,7 +786,8 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         }
 
         auto& compaction_module = db.local().get_compaction_manager().get_task_manager_module();
-        auto task = co_await compaction_module.make_and_start_task<cleanup_keyspace_compaction_task_impl>({}, std::move(keyspace), db, table_infos);
+        auto task = co_await compaction_module.make_and_start_task<cleanup_keyspace_compaction_task_impl>(
+            {}, std::move(keyspace), db, table_infos, flush_mode::all_tables);
         try {
             co_await task->done();
         } catch (...) {
