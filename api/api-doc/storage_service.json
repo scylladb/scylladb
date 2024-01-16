@@ -702,6 +702,30 @@
          ]
       },
       {
+         "path":"/storage_service/compact",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"Forces major compaction in all keyspaces",
+               "type":"void",
+               "nickname":"force_compaction",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"flush_memtables",
+                     "description":"Controls flushing of memtables before compaction (true by default). Set to \"false\" to skip automatic flushing of memtables before compaction, e.g. when tables were flushed explicitly before invoking the compaction api.",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"boolean",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
          "path":"/storage_service/keyspace_compaction/{keyspace}",
          "operations":[
             {
@@ -727,6 +751,14 @@
                      "required":false,
                      "allowMultiple":false,
                      "type":"string",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"flush_memtables",
+                     "description":"Controls flushing of memtables before compaction (true by default). Set to \"false\" to skip automatic flushing of memtables before compaction, e.g. when tables were flushed explicitly before invoking the compaction api.",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"boolean",
                      "paramType":"query"
                   }
                ]
@@ -909,6 +941,21 @@
                      "paramType":"query"
                   }
                ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_service/flush",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"Flush all memtables in all keyspaces.",
+               "type":"void",
+               "nickname":"force_flush",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[]
             }
          ]
       },

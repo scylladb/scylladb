@@ -86,37 +86,103 @@ public:
     }
 };
 
+std::vector<sstring> get_keyspaces(scylla_rest_client& client, std::optional<sstring> type = {}) {
+    std::unordered_map<sstring, sstring> params;
+    if (type) {
+        params["type"] = *type;
+    }
+    auto keyspaces_json = client.get("/storage_service/keyspaces", std::move(params));
+    std::vector<sstring> keyspaces;
+    for (const auto& keyspace_json : keyspaces_json.GetArray()) {
+        keyspaces.emplace_back(rjson::to_string_view(keyspace_json));
+    }
+    return keyspaces;
+}
+
+struct keyspace_and_tables {
+    sstring keyspace;
+    std::vector<sstring> tables;
+};
+
+keyspace_and_tables parse_keyspace_and_tables(scylla_rest_client& client, const bpo::variables_map& vm, const char* common_keyspace_table_arg_name) {
+    keyspace_and_tables ret;
+
+    const auto args = vm[common_keyspace_table_arg_name].as<std::vector<sstring>>();
+
+    ret.keyspace = args.at(0);
+
+    const auto all_keyspaces = get_keyspaces(client);
+    if (std::ranges::find(all_keyspaces, ret.keyspace) == all_keyspaces.end()) {
+        throw std::invalid_argument(fmt::format("keyspace {} does not exist", ret.keyspace));
+    }
+
+    if (args.size() > 1) {
+        ret.tables.insert(ret.tables.end(), args.begin() + 1, args.end());
+    }
+
+    return ret;
+}
+
+keyspace_and_tables parse_keyspace_and_tables(scylla_rest_client& client, const bpo::variables_map& vm, bool keyspace_required = true) {
+    keyspace_and_tables ret;
+
+    if (vm.contains("keyspace")) {
+        ret.keyspace = vm["keyspace"].as<sstring>();
+    } else if (keyspace_required) {
+        throw std::invalid_argument(fmt::format("keyspace must be specified"));
+    } else {
+        return ret;
+    }
+
+    const auto all_keyspaces = get_keyspaces(client);
+    if (std::ranges::find(all_keyspaces, ret.keyspace) == all_keyspaces.end()) {
+        throw std::invalid_argument(fmt::format("keyspace {} does not exist", ret.keyspace));
+    }
+
+    if (vm.count("table")) {
+        ret.tables = vm["table"].as<std::vector<sstring>>();
+    }
+
+    return ret;
+}
+
 using operation_func = void(*)(scylla_rest_client&, const bpo::variables_map&);
 
 std::map<operation, operation_func> get_operations_with_func();
+
+void cleanup_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    if (vm.count("cleanup_arg")) {
+        const auto [keyspace, tables] = parse_keyspace_and_tables(client, vm, "cleanup_arg");
+        std::unordered_map<sstring, sstring> params;
+        if (!tables.empty()) {
+            params["cf"] = fmt::to_string(fmt::join(tables.begin(), tables.end(), ","));
+        }
+        client.post(format("/storage_service/keyspace_cleanup/{}", keyspace), std::move(params));
+    } else {
+        for (const auto& keyspace : get_keyspaces(client, "non_local_strategy")) {
+            client.post(format("/storage_service/keyspace_cleanup/{}", keyspace));
+        }
+    }
+}
 
 void compact_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     if (vm.count("user-defined")) {
         throw std::invalid_argument("--user-defined flag is unsupported");
     }
 
-    auto keyspaces_json = client.get("/storage_service/keyspaces", {});
-    std::vector<sstring> all_keyspaces;
-    for (const auto& keyspace_json : keyspaces_json.GetArray()) {
-        all_keyspaces.emplace_back(rjson::to_string_view(keyspace_json));
+    std::unordered_map<sstring, sstring> params;
+    if (vm.count("flush-memtables")) {
+        params["flush_memtables"] = vm["flush-memtables"].as<bool>() ? "true" : "false";
     }
 
     if (vm.count("compaction_arg")) {
-        auto args = vm["compaction_arg"].as<std::vector<sstring>>();
-        std::unordered_map<sstring, sstring> params;
-        const auto keyspace = args[0];
-        if (std::ranges::find(all_keyspaces, keyspace) == all_keyspaces.end()) {
-            throw std::invalid_argument(fmt::format("keyspace {} does not exist", keyspace));
-        }
-
-        if (args.size() > 1) {
-            params["cf"] = fmt::to_string(fmt::join(args.begin() + 1, args.end(), ","));
+        const auto [keyspace, tables] = parse_keyspace_and_tables(client, vm, "compaction_arg");
+        if (!tables.empty()) {
+            params["cf"] = fmt::to_string(fmt::join(tables.begin(), tables.end(), ","));
         }
         client.post(format("/storage_service/keyspace_compaction/{}", keyspace), std::move(params));
     } else {
-        for (const auto& keyspace : all_keyspaces) {
-            client.post(format("/storage_service/keyspace_compaction/{}", keyspace));
-        }
+        client.post("/storage_service/compact", std::move(params));
     }
 }
 
@@ -142,6 +208,19 @@ void enablebinary_operation(scylla_rest_client& client, const bpo::variables_map
 
 void enablegossip_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     client.post("/storage_service/gossiping");
+}
+
+void flush_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    const auto [keyspace, tables] = parse_keyspace_and_tables(client, vm, false);
+    if (keyspace.empty()) {
+        client.post("/storage_service/flush");
+        return;
+    }
+    std::unordered_map<sstring, sstring> params;
+    if (!tables.empty()) {
+        params["cf"] = fmt::to_string(fmt::join(tables.begin(), tables.end(), ","));
+    }
+    client.post(format("/storage_service/keyspace_flush/{}", keyspace), std::move(params));
 }
 
 void gettraceprobability_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
@@ -267,6 +346,29 @@ std::map<operation, operation_func> get_operations_with_func() {
     const static std::map<operation, operation_func> operations_with_func {
         {
             {
+                "cleanup",
+                "Triggers removal of data that the node no longer owns",
+R"(
+You should run nodetool cleanup whenever you scale-out (expand) your cluster, and
+new nodes are added to the same DC. The scale out process causes the token ring
+to get re-distributed. As a result, some of the nodes will have replicas for
+tokens that they are no longer responsible for (taking up disk space). This data
+continues to consume diskspace until you run nodetool cleanup. The cleanup
+operation deletes these replicas and frees up disk space.
+
+Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/cleanup.html
+)",
+                {
+                    typed_option<int64_t>("jobs,j", "The number of compaction jobs to be used for the cleanup (unused)"),
+                },
+                {
+                    typed_option<std::vector<sstring>>("cleanup_arg", "[<keyspace> <tables>...]", -1),
+                }
+            },
+            cleanup_operation
+        },
+        {
+            {
                 "compact",
                 "Force a (major) compaction on one or more tables",
 R"(
@@ -282,6 +384,8 @@ command-line arguments, the compaction will run on these tables.
 Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/compact.html
 )",
                 {
+                    typed_option<bool>("flush-memtables", "Control flushing of tables before major compaction (true by default)"),
+
                     typed_option<>("split-output,s", "Don't create a single big file (unused)"),
                     typed_option<>("user-defined", "Submit listed SStable files for user-defined compaction (unused)"),
                     typed_option<int64_t>("start-token", "Specify a token at which the compaction range starts (unused)"),
@@ -356,6 +460,24 @@ Fore more information, see: https://opensource.docs.scylladb.com/stable/operatin
 )",
             },
             enablegossip_operation
+        },
+        {
+            {
+                "flush",
+                "Flush one or more tables",
+R"(
+Specify a keyspace and one or more tables that you want to flush from the
+memtable to on disk SSTables.
+
+Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/flush.html
+)",
+                { },
+                {
+                    typed_option<sstring>("keyspace", "The keyspace to flush", 1),
+                    typed_option<std::vector<sstring>>("table", "The table(s) to flush", -1),
+                }
+            },
+            flush_operation
         },
         {
             {

@@ -1373,8 +1373,10 @@ compaction_group::update_main_sstable_list_on_compaction_completion(sstables::co
 }
 
 future<>
-table::compact_all_sstables(std::optional<tasks::task_info> info) {
-    co_await flush();
+table::compact_all_sstables(std::optional<tasks::task_info> info, do_flush do_flush) {
+    if (do_flush) {
+        co_await flush();
+    }
     // Forces off-strategy before major, so sstables previously sitting on maintenance set will be included
     // in the compaction's input set, to provide same semantics as before maintenance set came into existence.
     co_await perform_offstrategy_compaction(info);

@@ -859,10 +859,12 @@ public:
 
     bool can_flush() const;
 
+    using do_flush = bool_class<struct do_flush_tag>;
+
     // Start a compaction of all sstables in a process known as major compaction
     // Active memtable is flushed first to guarantee that data like tombstone,
     // sitting in the memtable, will be compacted with shadowed data.
-    future<> compact_all_sstables(std::optional<tasks::task_info> info = std::nullopt);
+    future<> compact_all_sstables(std::optional<tasks::task_info> info = std::nullopt, do_flush = do_flush::yes);
 
     future<bool> snapshot_exists(sstring name);
 
@@ -1444,6 +1446,8 @@ private:
     serialized_action _update_memtable_flush_static_shares_action;
     utils::observer<float> _memtable_flush_static_shares_observer;
 
+    db_clock::time_point _all_tables_flushed_at;
+
 public:
     data_dictionary::database as_data_dictionary() const;
     db::commitlog* commitlog_for(const schema_ptr& schema);
@@ -1731,6 +1735,12 @@ public:
     static future<> flush_tables_on_all_shards(sharded<database>& sharded_db, std::string_view ks_name, std::vector<sstring> table_names);
     // flush all tables in a keyspace on all shards.
     static future<> flush_keyspace_on_all_shards(sharded<database>& sharded_db, std::string_view ks_name);
+    // flush all tables on this shard.
+    // Note: force_new_active_segment in the commitlog, so that
+    // flushing all tables will allow reclaiming of all commitlog segments
+    future<> flush_all_tables();
+
+    static future<db_clock::time_point> get_all_tables_flushed_at(sharded<database>& sharded_db);
 
     static future<> drop_cache_for_table_on_all_shards(sharded<database>& sharded_db, table_id id);
     static future<> drop_cache_for_keyspace_on_all_shards(sharded<database>& sharded_db, std::string_view ks_name);

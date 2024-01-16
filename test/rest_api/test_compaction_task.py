@@ -27,7 +27,7 @@ def check_compaction_task(cql, this_dc, rest_api, run_compaction, compaction_typ
 
                 # Get list of compaction tasks.
                 tasks = [task for task in list_tasks(rest_api, module_name) if task["type"] == compaction_type]
-                assert tasks, "compaction task was not created"
+                assert tasks, f"{compaction_type} task was not created"
 
                 # Check if all tasks finished successfully.
                 statuses = [wait_for_task(rest_api, task["task_id"]) for task in tasks]
@@ -38,12 +38,28 @@ def check_compaction_task(cql, this_dc, rest_api, run_compaction, compaction_typ
                     check_child_parent_relationship(rest_api, top_level_task, depth, allow_no_children)
     drain_module_tasks(rest_api, module_name)
 
+def test_global_major_keyspace_compaction_task(cql, this_dc, rest_api):
+    task_tree_depth = 4
+    # global major compaction
+    check_compaction_task(cql, this_dc, rest_api, lambda _, __: rest_api.send("POST", f"storage_service/compact"), "major compaction", task_tree_depth, allow_no_children=True)
+
+    # global major compaction, flush option
+    check_compaction_task(cql, this_dc, rest_api, lambda _, __: rest_api.send("POST", f"storage_service/compact?flush_memtables=true"), "major compaction", task_tree_depth, allow_no_children=True)
+    check_compaction_task(cql, this_dc, rest_api, lambda _, __: rest_api.send("POST", f"storage_service/compact?flush_memtables=false"), "major compaction", task_tree_depth, allow_no_children=True)
+
 def test_major_keyspace_compaction_task(cql, this_dc, rest_api):
     task_tree_depth = 3
     # keyspace major compaction
     check_compaction_task(cql, this_dc, rest_api, lambda keyspace, _: rest_api.send("POST", f"storage_service/keyspace_compaction/{keyspace}"), "major compaction", task_tree_depth)
     # column family major compaction
     check_compaction_task(cql, this_dc, rest_api, lambda keyspace, table: rest_api.send("POST", f"column_family/major_compaction/{keyspace}:{table}"), "major compaction", task_tree_depth)
+
+    # keyspace major compaction, flush option
+    check_compaction_task(cql, this_dc, rest_api, lambda keyspace, _: rest_api.send("POST", f"storage_service/keyspace_compaction/{keyspace}?flush_memtables=true"), "major compaction", task_tree_depth)
+    check_compaction_task(cql, this_dc, rest_api, lambda keyspace, _: rest_api.send("POST", f"storage_service/keyspace_compaction/{keyspace}?flush_memtables=false"), "major compaction", task_tree_depth)
+    # column family major compaction, flush option
+    check_compaction_task(cql, this_dc, rest_api, lambda keyspace, table: rest_api.send("POST", f"column_family/major_compaction/{keyspace}:{table}?flush_memtables=true"), "major compaction", task_tree_depth)
+    check_compaction_task(cql, this_dc, rest_api, lambda keyspace, table: rest_api.send("POST", f"column_family/major_compaction/{keyspace}:{table}?flush_memtables=false"), "major compaction", task_tree_depth)
 
 def test_cleanup_keyspace_compaction_task(cql, this_dc, rest_api):
     task_tree_depth = 3

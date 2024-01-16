@@ -68,7 +68,7 @@ def jmx(request, rest_api_mock_server):
 
     jmx_path = request.config.getoption("jmx_path")
     if jmx_path is None:
-        jmx_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "scylla-jmx", "scripts",
+        jmx_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "tools", "jmx", "scripts",
                                                 "scylla-jmx"))
     else:
         jmx_path = os.path.abspath(jmx_path)
@@ -139,6 +139,12 @@ def nodetool_path(request):
 def scylla_only(request):
     if request.config.getoption("nodetool") != "scylla":
         pytest.skip('Scylla-only test skipped')
+
+
+@pytest.fixture(scope="function")
+def cassandra_only(request):
+    if request.config.getoption("nodetool") != "cassandra":
+        pytest.skip('Cassandra-only test skipped')
 
 
 @pytest.fixture(scope="module")
