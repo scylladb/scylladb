@@ -858,14 +858,15 @@ size_t memtable_entry::object_memory_size(allocation_strategy& allocator) {
     return memtable::partitions_type::estimated_object_memory_size_in_allocator(allocator, this);
 }
 
-std::ostream& operator<<(std::ostream& out, memtable& mt) {
+}
+
+auto fmt::formatter<replica::memtable_entry>::format(const replica::memtable_entry& mt,
+                                                     fmt::format_context& ctx) const -> decltype(ctx.out()) {
+    return fmt::format_to(ctx.out(), "{{{}: {}}}", mt.key(), partition_entry::printer(mt.partition()));
+}
+
+auto fmt::formatter<replica::memtable>::format(replica::memtable& mt,
+                                        fmt::format_context& ctx) const -> decltype(ctx.out()) {
     logalloc::reclaim_lock rl(mt);
-    fmt::print(out, "{{memtable: [{}]}}", fmt::join(mt.partitions, ",\n"));
-    return out;
-}
-
-std::ostream& operator<<(std::ostream& out, const memtable_entry& mt) {
-    return out << "{" << mt.key() << ": " << partition_entry::printer(mt.partition()) << "}";
-}
-
+    return fmt::format_to(ctx.out(), "{{memtable: [{}]}}", fmt::join(mt.partitions, ",\n"));
 }
