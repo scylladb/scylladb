@@ -1003,10 +1003,10 @@ future<> server_impl::io_fiber(index_t last_stable) {
             }
 
             if (batch.snp) {
-                auto& [snp, is_local] = *batch.snp;
+                auto& [snp, is_local, max_trailing_entries] = *batch.snp;
                 logger.trace("[{}] io_fiber storing snapshot {}", _id, snp.id);
                 // Persist the snapshot
-                co_await _persistence->store_snapshot_descriptor(snp, is_local ? _config.snapshot_trailing : 0);
+                co_await _persistence->store_snapshot_descriptor(snp, max_trailing_entries);
                 _stats.store_snapshot++;
                 // If this is locally generated snapshot there is no need to
                 // load it.

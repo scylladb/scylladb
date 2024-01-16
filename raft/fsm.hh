@@ -21,6 +21,11 @@ struct fsm_output {
     struct applied_snapshot {
         snapshot_descriptor snp;
         bool is_local;
+
+        // Always 0 for non-local snapshots.
+        size_t max_trailing_entries;
+
+        // FIXME: include max_trailing_bytes here and in store_snapshot_descriptor
     };
     std::optional<std::pair<term_t, server_id>> term_and_vote;
     std::vector<log_entry_ptr> log_entries;
