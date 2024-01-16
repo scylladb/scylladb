@@ -5,47 +5,40 @@ ScyllaDB for Developers
    :maxdepth: 2
    :hidden: 
 
-   learn
-   Scylla Alternator <alternator/index>
-   Scylla Features <features>
-   Scylla Drivers <drivers/index>
+   Develop with ScyllaDB <https://docs.scylladb.com/stable/get-started/develop-with-scylladb/index.html>
+   Tutorials and Example Projects <https://docs.scylladb.com/stable/get-started/develop-with-scylladb/tutorials-example-projects.html>
+   Learn to Use ScyllaDB <https://docs.scylladb.com/stable/get-started/learn-resources/index.html>
+   ScyllaDB Alternator <alternator/index>
+   ScyllaDB Features <features>
+   ScyllaDB Drivers <drivers/index>
    Workload Attributes <workload-attributes>
 
 
 .. panel-box::
-  :title: Develop Your App with Scylla 
+  :title: Get Started
   :id: "getting-started"
   :class: my-panel
 
-  * :doc:`Scylla Drivers </using-scylla/drivers/index>` - Scylla and third-party drivers for CQL and DynamoDB
-  * :doc:`Scylla Alternator </using-scylla/alternator/index>` - The Open Source DynamoDB-compatible API
+  * `Get Started with ScyllaDB <https://docs.scylladb.com/stable/get-started/index.html>`_
+  * `Tutorials and Example Projects <https://docs.scylladb.com/stable/get-started/develop-with-scylladb/tutorials-example-projects.html>`_
+  * `Learn to Use ScyllaDB <https://docs.scylladb.com/stable/get-started/learn-resources/index.html>`_
+
+.. panel-box::
+  :title: Develop Your App with ScyllaDB 
+  :id: "getting-started"
+  :class: my-panel
+
+  * :doc:`ScyllaDB Drivers </using-scylla/drivers/index>` - ScyllaDB and third-party drivers for CQL and DynamoDB
+  * :doc:`ScyllaDB Alternator </using-scylla/alternator/index>` - The Open Source DynamoDB-compatible API
   * :doc:`CQL Reference </cql/index>` - Reference for the Apache Cassandra Query Language (CQL) and its ScyllaDB extensions
 
-.. panel-box::
-  :title: Features
-  :id: "getting-started"
-  :class: my-panel
-
-  * :doc:`Workload Attributes </using-scylla/workload-attributes/>`
-
-  
   
 .. panel-box::
-  :title: Scylla Tools and Resources
+  :title: ScyllaDB Tools and Resources
   :id: "getting-started"
   :class: my-panel
  
-  * :doc:`Scylla Tools </operating-scylla/admin-tools/index>` - Tools for testing and integrating with Scylla
+  * :doc:`ScyllaDB Tools </operating-scylla/admin-tools/index>` - Tools for testing and integrating with Scylla
   * :doc:`cqlsh </cql/cqlsh>` - A command line shell for interacting with ScyllaDB through CQL
  
- 
-.. panel-box::
-  :title: Learn More About Scylla
-  :id: "getting-started"
-  :class: my-panel
-   
-  * :doc:`Learn To Use Scylla </using-scylla/learn/>` - Scylla University offers many courses.  Pick a course and get started on your path to becoming a Scylla expert.
-  * :doc:`Scylla Features </using-scylla/features/>` - Feature list for Scylla Open Source and Scylla Enterprise
 
-
-.. include:: /rst_include/apache-copyrights.rst

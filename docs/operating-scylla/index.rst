@@ -58,7 +58,6 @@ ScyllaDB for Administrators
   :id: "getting-started"
   :class: my-panel
    
-  * :doc:`Learn To Use Scylla </using-scylla/learn>` - Scylla University offers many courses.  Pick a course and get started on your path to becoming a Scylla expert.
   * :doc:`Scylla Features </using-scylla/features>` - Feature list for Scylla Open Source and Scylla Enterprise
 
 
