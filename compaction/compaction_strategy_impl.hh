@@ -12,6 +12,7 @@
 #include "compaction_strategy.hh"
 #include "db_clock.hh"
 #include "compaction_descriptor.hh"
+#include "sstables/shared_sstable.hh"
 
 namespace sstables {
 
@@ -43,7 +44,7 @@ protected:
             uint64_t max_sstable_bytes = compaction_descriptor::default_max_sstable_bytes);
 public:
     virtual ~compaction_strategy_impl() {}
-    virtual compaction_descriptor get_sstables_for_compaction(table_state& table_s, strategy_control& control) = 0;
+    virtual compaction_descriptor get_sstables_for_compaction(table_state& table_s, strategy_control& control, std::optional<std::vector<shared_sstable>> candidates_opt) = 0;
     virtual compaction_descriptor get_major_compaction_job(table_state& table_s, std::vector<sstables::shared_sstable> candidates) {
         return make_major_compaction_job(std::move(candidates));
     }

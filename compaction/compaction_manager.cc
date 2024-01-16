@@ -697,7 +697,9 @@ compaction_manager::compaction_reenabler::~compaction_reenabler() {
     if (_table && --_compaction_state.compaction_disabled_counter == 0 && !_compaction_state.gate.is_closed()) {
         cmlog.debug("Reenabling compaction for {}", *_table);
         try {
-            _cm.submit(*_table);
+            // We can safely call get_candidates here since
+            // compaction is known to be disabled.
+            _cm.submit(*_table, _cm.get_candidates(*_table));
         } catch (...) {
             cmlog.warn("compaction_reenabler could not reenable compaction for {}: {}",
                     *_table, std::current_exception());
@@ -1171,10 +1173,12 @@ future<stop_iteration> compaction_task_executor::maybe_retry(std::exception_ptr 
 namespace compaction {
 
 class regular_compaction_task_executor : public compaction_task_executor, public regular_compaction_task_impl {
+    std::optional<std::vector<sstables::shared_sstable>> _candidates_opt;
 public:
-    regular_compaction_task_executor(compaction_manager& mgr, throw_if_stopping do_throw_if_stopping, table_state& t)
+    regular_compaction_task_executor(compaction_manager& mgr, throw_if_stopping do_throw_if_stopping, table_state& t, std::optional<std::vector<sstables::shared_sstable>> candidates_opt)
         : compaction_task_executor(mgr, do_throw_if_stopping, &t, sstables::compaction_type::Compaction, "Compaction")
         , regular_compaction_task_impl(mgr._task_manager_module, tasks::task_id::create_random_id(), mgr._task_manager_module->new_sequence_number(), t.schema()->ks_name(), t.schema()->cf_name(), "", tasks::task_id::create_null_id())
+        , _candidates_opt(std::move(candidates_opt))
     {}
 
     virtual future<> abort() noexcept override {
@@ -1206,7 +1210,7 @@ protected:
 
             table_state& t = *_compacting_table;
             sstables::compaction_strategy cs = t.get_compaction_strategy();
-            sstables::compaction_descriptor descriptor = cs.get_sstables_for_compaction(t, _cm.get_strategy_control());
+            sstables::compaction_descriptor descriptor = cs.get_sstables_for_compaction(t, _cm.get_strategy_control(), std::exchange(_candidates_opt, std::nullopt));
             int weight = calculate_weight(descriptor);
 
             if (descriptor.sstables.empty() || !can_proceed() || t.is_auto_compaction_disabled_by_user()) {
@@ -1267,8 +1271,12 @@ protected:
 
 }
 
-void compaction_manager::submit(table_state& t) {
+void compaction_manager::submit(table_state& t, std::optional<std::vector<sstables::shared_sstable>> candidates_opt) {
     if (t.is_auto_compaction_disabled_by_user()) {
+        return;
+    }
+
+    if (candidates_opt && candidates_opt->empty()) {
         return;
     }
 
@@ -1279,7 +1287,7 @@ void compaction_manager::submit(table_state& t) {
 
     // OK to drop future.
     // waited via compaction_task_executor::compaction_done()
-    (void)perform_compaction<regular_compaction_task_executor>(throw_if_stopping::no, tasks::task_info{}, t).then_wrapped([gh = std::move(gh)] (auto f) { f.ignore_ready_future(); });
+    (void)perform_compaction<regular_compaction_task_executor>(throw_if_stopping::no, tasks::task_info{}, t, std::move(candidates_opt)).then_wrapped([gh = std::move(gh)] (auto f) { f.ignore_ready_future(); });
 }
 
 bool compaction_manager::can_perform_regular_compaction(table_state& t) {

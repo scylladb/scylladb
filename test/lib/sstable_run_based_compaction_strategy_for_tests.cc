@@ -13,9 +13,20 @@ namespace sstables {
 
 sstable_run_based_compaction_strategy_for_tests::sstable_run_based_compaction_strategy_for_tests() = default;
 
-compaction_descriptor sstable_run_based_compaction_strategy_for_tests::get_sstables_for_compaction(table_state& table_s, strategy_control& control) {
+compaction_descriptor sstable_run_based_compaction_strategy_for_tests::get_sstables_for_compaction(table_state& table_s, strategy_control& control, std::optional<std::vector<shared_sstable>> candidates_opt) {
+    std::optional<sstable_set> ss;
+    const sstable_set* ssp;
+    if (candidates_opt.has_value()) {
+         ss = make_partitioned_sstable_set(table_s.schema());
+         for (const auto& sst : *candidates_opt) {
+            ss->insert(sst);
+         }
+         ssp = &*ss;
+    } else {
+        ssp = &table_s.main_sstable_set();
+    }
     // Get unique runs from all uncompacting sstables
-    std::vector<frozen_sstable_run> runs = table_s.main_sstable_set().all_sstable_runs();
+    std::vector<frozen_sstable_run> runs = ssp->all_sstable_runs();
 
     // Group similar sized runs into a bucket.
     std::map<uint64_t, std::vector<frozen_sstable_run>> similar_sized_runs;

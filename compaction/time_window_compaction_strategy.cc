@@ -315,10 +315,10 @@ time_window_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> i
 }
 
 compaction_descriptor
-time_window_compaction_strategy::get_sstables_for_compaction(table_state& table_s, strategy_control& control) {
+time_window_compaction_strategy::get_sstables_for_compaction(table_state& table_s, strategy_control& control, std::optional<std::vector<shared_sstable>> candidates_opt) {
     auto& state = get_state(table_s);
     auto compaction_time = gc_clock::now();
-    auto candidates = control.candidates(table_s);
+    auto candidates = candidates_opt ? std::move(*candidates_opt) : control.candidates(table_s);
 
     if (candidates.empty()) {
         state.estimated_remaining_tasks = 0;

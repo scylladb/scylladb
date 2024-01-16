@@ -118,18 +118,17 @@ static flat_mutation_reader_v2 sstable_reader(shared_sstable sst, schema_ptr s, 
 
 class strategy_control_for_test : public strategy_control {
     bool _has_ongoing_compaction;
-    std::optional<std::vector<shared_sstable>> _candidates_opt;
 public:
-    explicit strategy_control_for_test(bool has_ongoing_compaction, std::optional<std::vector<shared_sstable>> candidates) noexcept
+    explicit strategy_control_for_test(bool has_ongoing_compaction) noexcept
         : _has_ongoing_compaction(has_ongoing_compaction)
-        , _candidates_opt(candidates) {}
+    {}
 
     bool has_ongoing_compaction(table_state& table_s) const noexcept override {
         return _has_ongoing_compaction;
     }
 
     std::vector<sstables::shared_sstable> candidates(table_state& t) const override {
-        return _candidates_opt.value_or(boost::copy_range<std::vector<sstables::shared_sstable>>(*t.main_sstable_set().all()));
+        return boost::copy_range<std::vector<sstables::shared_sstable>>(*t.main_sstable_set().all());
     }
 
     std::vector<sstables::frozen_sstable_run> candidates_as_runs(table_state& t) const override {
@@ -137,17 +136,17 @@ public:
     }
 };
 
-static std::unique_ptr<strategy_control> make_strategy_control_for_test(bool has_ongoing_compaction, std::optional<std::vector<shared_sstable>> candidates = std::nullopt) {
-    return std::make_unique<strategy_control_for_test>(has_ongoing_compaction, std::move(candidates));
+static std::unique_ptr<strategy_control> make_strategy_control_for_test(bool has_ongoing_compaction) {
+    return std::make_unique<strategy_control_for_test>(has_ongoing_compaction);
 }
 
 template <typename CompactionStrategy>
-requires requires(CompactionStrategy cs, table_state& t, strategy_control& c) {
-    { cs.get_sstables_for_compaction(t, c) } -> std::same_as<sstables::compaction_descriptor>;
+requires requires(CompactionStrategy cs, table_state& t, strategy_control& c, std::optional<std::vector<shared_sstable>> co) {
+    { cs.get_sstables_for_compaction(t, c, co) } -> std::same_as<sstables::compaction_descriptor>;
 }
 static compaction_descriptor get_sstables_for_compaction(CompactionStrategy& cs, table_state& t, std::vector<shared_sstable> candidates) {
-    auto control = make_strategy_control_for_test(false, std::move(candidates));
-    return cs.get_sstables_for_compaction(t, *control);
+    auto control = make_strategy_control_for_test(false);
+    return cs.get_sstables_for_compaction(t, *control, std::move(candidates));
 }
 
 static void assert_table_sstable_count(table_for_tests& t, size_t expected_count) {
