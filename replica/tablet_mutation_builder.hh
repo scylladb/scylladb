@@ -10,8 +10,8 @@
 
 #include "mutation/mutation.hh"
 #include "db/system_keyspace.hh"
-#include "replica/tablets.hh"
 #include "service/session.hh"
+#include "locator/tablets.hh"
 
 namespace replica {
 

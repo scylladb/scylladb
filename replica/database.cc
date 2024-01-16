@@ -29,7 +29,6 @@
 #include <boost/algorithm/string/erase.hpp>
 #include "sstables/sstables.hh"
 #include "sstables/sstables_manager.hh"
-#include "compaction/compaction.hh"
 #include <boost/range/adaptor/map.hpp>
 #include <boost/algorithm/cxx11/any_of.hpp>
 #include <boost/range/algorithm/find_if.hpp>
@@ -51,7 +50,6 @@
 #include "multishard_mutation_query.hh"
 
 #include "utils/human_readable.hh"
-#include "utils/stall_free.hh"
 #include "utils/fmt-compat.hh"
 #include "utils/error_injection.hh"
 

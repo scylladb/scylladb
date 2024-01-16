@@ -8,8 +8,6 @@
 
 #pragma once
 
-#include <map>
-#include <memory>
 #include <fmt/core.h>
 #include "replica/database_fwd.hh"
 #include "dht/decorated_key.hh"
@@ -21,7 +19,6 @@
 #include "db/commitlog/rp_set.hh"
 #include "utils/extremum_tracking.hh"
 #include "mutation/mutation_cleaner.hh"
-#include "sstables/types.hh"
 #include "utils/double-decker.hh"
 #include "readers/empty_v2.hh"
 #include "readers/mutation_source.hh"
