@@ -199,14 +199,17 @@ class cleanup_keyspace_compaction_task_impl : public cleanup_compaction_task_imp
 private:
     sharded<replica::database>& _db;
     std::vector<table_info> _table_infos;
+    const flush_mode _flush_mode;
 public:
     cleanup_keyspace_compaction_task_impl(tasks::task_manager::module_ptr module,
             std::string keyspace,
             sharded<replica::database>& db,
-            std::vector<table_info> table_infos) noexcept
+            std::vector<table_info> table_infos,
+            flush_mode mode) noexcept
         : cleanup_compaction_task_impl(module, tasks::task_id::create_random_id(), module->new_sequence_number(), "keyspace", std::move(keyspace), "", "", tasks::task_id::create_null_id())
         , _db(db)
         , _table_infos(std::move(table_infos))
+        , _flush_mode(mode)
     {}
 protected:
     virtual future<> run() override;

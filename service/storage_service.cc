@@ -10,6 +10,7 @@
  */
 
 #include "storage_service.hh"
+#include "compaction/task_manager_module.hh"
 #include "gc_clock.hh"
 #include "service/topology_guard.hh"
 #include "service/session.hh"
@@ -763,7 +764,9 @@ future<> storage_service::sstable_cleanup_fiber(raft::server& server, sharded<se
                     co_return co_await sp.await_pending_writes();
                 });
                 auto& compaction_module = _db.local().get_compaction_manager().get_task_manager_module();
-                auto task = co_await compaction_module.make_and_start_task<cleanup_keyspace_compaction_task_impl>({}, ks_name, _db, table_infos);
+                // we flush all tables before cleanup the keyspaces individually, so skip the flush-tables step here
+                auto task = co_await compaction_module.make_and_start_task<cleanup_keyspace_compaction_task_impl>(
+                    {}, ks_name, _db, table_infos, flush_mode::skip);
                 try {
                     co_return co_await task->done();
                 } catch (...) {
@@ -788,6 +791,9 @@ future<> storage_service::sstable_cleanup_fiber(raft::server& server, sharded<se
 
                 tasks.reserve(keyspaces.size());
 
+                co_await _db.invoke_on_all([&] (replica::database& db) {
+                    return db.flush_all_tables();
+                });
                 co_await coroutine::parallel_for_each(keyspaces.begin(), keyspaces.end(), [this, &tasks, &do_cleanup_ks] (const sstring& ks_name) -> future<> {
                     auto& ks = _db.local().find_keyspace(ks_name);
                     if (ks.get_replication_strategy().is_per_table() || is_system_keyspace(ks_name)) {

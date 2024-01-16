@@ -423,6 +423,9 @@ future<> table_major_keyspace_compaction_task_impl::run() {
 
 future<> cleanup_keyspace_compaction_task_impl::run() {
     co_await _db.invoke_on_all([&] (replica::database& db) -> future<> {
+        if (_flush_mode == flush_mode::all_tables) {
+            co_await db.flush_all_tables();
+        }
         auto& module = db.get_compaction_manager().get_task_manager_module();
         auto task = co_await module.make_and_start_task<shard_cleanup_keyspace_compaction_task_impl>({_status.id, _status.shard}, _status.keyspace, _status.id, db, _table_infos);
         co_await task->done();
@@ -445,7 +448,8 @@ future<> table_cleanup_keyspace_compaction_task_impl::run() {
     co_await wait_for_your_turn(_cv, _current_task, _status.id);
     auto owned_ranges_ptr = compaction::make_owned_ranges_ptr(_db.get_keyspace_local_ranges(_status.keyspace));
     co_await run_on_table("force_keyspace_cleanup", _db, _status.keyspace, _ti, [&] (replica::table& t) {
-        return t.perform_cleanup_compaction(owned_ranges_ptr, tasks::task_info{_status.id, _status.shard});
+        // skip the flush, as cleanup_keyspace_compaction_task_impl::run should have done this.
+        return t.perform_cleanup_compaction(owned_ranges_ptr, tasks::task_info{_status.id, _status.shard}, replica::table::do_flush::no);
     });
 }
 
