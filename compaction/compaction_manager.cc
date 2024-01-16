@@ -1892,7 +1892,7 @@ future<> compaction_manager::perform_cleanup(owned_ranges_ptr sorted_owned_range
 
         auto has_sstables_eligible_for_compaction = [&] {
             for (auto& sst : cs.sstables_requiring_cleanup) {
-                if (sstables::is_eligible_for_compaction(sst)) {
+                if (eligible_for_compaction(sst)) {
                     return true;
                 }
             }
