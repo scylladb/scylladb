@@ -10,7 +10,7 @@
 
 #include <map>
 #include <memory>
-#include <iosfwd>
+#include <fmt/core.h>
 #include "replica/database_fwd.hh"
 #include "dht/decorated_key.hh"
 #include "dht/ring_position.hh"
@@ -90,7 +90,6 @@ public:
     }
 
     friend dht::ring_position_view ring_position_view_to_compare(const memtable_entry& mt) { return mt._key; }
-    friend std::ostream& operator<<(std::ostream&, const memtable_entry&);
 };
 
 }
@@ -297,7 +296,17 @@ public:
         return _dirty_mgr;
     }
 
-    friend std::ostream& operator<<(std::ostream&, memtable&);
+    friend fmt::formatter<memtable>;
 };
 
 }
+
+template <> struct fmt::formatter<replica::memtable_entry> {
+    constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
+    auto format(const replica::memtable_entry&, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
+
+template <> struct fmt::formatter<replica::memtable> {
+    constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
+    auto format(replica::memtable&, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
