@@ -915,7 +915,7 @@ public:
 
     // Waits for a topology request with a given ID to complete and return non empty error string
     // if request completes with an error
-    future<sstring> wait_for_topology_request_completion(utils::UUID id);
+    future<sstring> wait_for_topology_request_completion(utils::UUID id, bool require_entry = true);
     future<> wait_for_topology_not_busy();
 
 private:

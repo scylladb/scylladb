@@ -4577,9 +4577,9 @@ future<> storage_service::do_cluster_cleanup() {
     rtlogger.info("cluster cleanup done");
 }
 
-future<sstring> storage_service::wait_for_topology_request_completion(utils::UUID id) {
+future<sstring> storage_service::wait_for_topology_request_completion(utils::UUID id, bool require_entry) {
     while (true) {
-        auto [done, error] = co_await  _sys_ks.local().get_topology_request_state(id);
+        auto [done, error] = co_await  _sys_ks.local().get_topology_request_state(id, require_entry);
         if (done) {
             co_return error;
         }

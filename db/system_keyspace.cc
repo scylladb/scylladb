@@ -47,6 +47,8 @@
 #include "types/types.hh"
 #include "service/raft/raft_group0_client.hh"
 
+#include <unordered_map>
+
 using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
 
 namespace db {
@@ -3259,11 +3261,15 @@ future<> system_keyspace::sstables_registry_list(sstring location, sstable_regis
     });
 }
 
-future<service::topology_request_state> system_keyspace::get_topology_request_state(utils::UUID id) {
+future<service::topology_request_state> system_keyspace::get_topology_request_state(utils::UUID id, bool require_entry) {
     auto rs = co_await execute_cql(
         format("SELECT done, error FROM system.{} WHERE id = {}", TOPOLOGY_REQUESTS, id));
     if (!rs || rs->empty()) {
-        on_internal_error(slogger, format("no entry for request id {}", id));
+        if (require_entry) {
+            on_internal_error(slogger, format("no entry for request id {}", id));
+        } else {
+            co_return service::topology_request_state{false, ""};
+        }
     }
 
     auto& row = rs->one();
@@ -3274,6 +3280,60 @@ future<service::topology_request_state> system_keyspace::get_topology_request_st
     }
 
     co_return service::topology_request_state{row.get_as<bool>("done"), std::move(error)};
+}
+
+system_keyspace::topology_requests_entry system_keyspace::topology_request_row_to_entry(utils::UUID id, const cql3::untyped_result_set_row& row) {
+    topology_requests_entry entry;
+    entry.id = id;
+    if (row.has("initiating_host")) {
+        entry.initiating_host = row.get_as<utils::UUID>("initiating_host");
+    }
+    if (row.has("request_type")) {
+        entry.request_type = service::topology_request_from_string(row.get_as<sstring>("request_type"));
+    }
+    if (row.has("start_time")) {
+        entry.start_time = row.get_as<db_clock::time_point>("start_time");
+    }
+    if (row.has("done")) {
+        entry.done = row.get_as<bool>("done");
+    }
+    if (row.has("error")) {
+        entry.error = row.get_as<sstring>("error");
+    }
+    if (row.has("end_time")) {
+        entry.end_time = row.get_as<db_clock::time_point>("end_time");
+    }
+    return entry;
+}
+
+future<system_keyspace::topology_requests_entry> system_keyspace::get_topology_request_entry(utils::UUID id, bool require_entry) {
+    auto rs = co_await execute_cql(
+        format("SELECT * FROM system.{} WHERE id = {}", TOPOLOGY_REQUESTS, id));
+
+    if (!rs || rs->empty()) {
+        if (require_entry) {
+            on_internal_error(slogger, format("no entry for request id {}", id));
+        } else {
+            co_return topology_requests_entry{
+                .id = utils::null_uuid()
+            };
+        }
+    }
+
+    const auto& row = rs->one();
+    co_return topology_request_row_to_entry(id, row);
+}
+
+future<system_keyspace::topology_requests_entries> system_keyspace::get_topology_request_entries() {
+    auto rs = co_await execute_cql(
+        format("SELECT * FROM system.{}", TOPOLOGY_REQUESTS));
+
+    topology_requests_entries m;
+    for (const auto& row: *rs) {
+        auto id = row.get_as<utils::UUID>("id");
+        m[id] = topology_request_row_to_entry(id, row);
+    }
+    co_return m;
 }
 
 sstring system_keyspace_name() {
