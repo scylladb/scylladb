@@ -10,7 +10,7 @@
 #pragma once
 
 #include "dht/i_partitioner_fwd.hh"
-#include "readers/flat_mutation_reader_v2.hh"
+#include "dht/token.hh"
 
 namespace dht {
 
@@ -46,7 +46,6 @@ public:
         return &*_it++;
     }
 
-    static flat_mutation_reader_v2::filter make_partition_filter(const dht::token_range_vector& sorted_owned_ranges);
 };
 
 } // dht

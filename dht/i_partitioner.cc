@@ -11,7 +11,6 @@
 #include <seastar/core/seastar.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include "dht/token-sharding.hh"
-#include "dht/partition_filter.hh"
 #include "utils/class_registrator.hh"
 #include "types/types.hh"
 #include "utils/murmur_hash.hh"
@@ -390,12 +389,6 @@ split_range_to_shards(dht::partition_range pr, const schema& s, const sharder& r
         rprs = sharder.next(s);
     }
     return ret;
-}
-
-flat_mutation_reader_v2::filter incremental_owned_ranges_checker::make_partition_filter(const dht::token_range_vector& sorted_owned_ranges) {
-    return [checker = incremental_owned_ranges_checker(sorted_owned_ranges)] (const dht::decorated_key& dk) mutable {
-        return checker.belongs_to_current_node(dk.token());
-    };
 }
 
 future<dht::partition_range_vector> subtract_ranges(const schema& schema, const dht::partition_range_vector& source_ranges, dht::partition_range_vector ranges_to_subtract) {
