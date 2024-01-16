@@ -29,7 +29,6 @@ struct raft_topology_cmd {
         barrier,
         barrier_and_drain,
         stream_ranges,
-        shutdown,
         wait_for_ip
     };
     service::raft_topology_cmd::command cmd;
@@ -46,6 +45,7 @@ struct raft_topology_cmd_result {
 struct raft_topology_snapshot {
     std::vector<canonical_mutation> topology_mutations;
     std::vector<canonical_mutation> cdc_generation_mutations;
+    std::vector<canonical_mutation> topology_requests_mutations;
 };
 
 struct raft_topology_pull_params {};

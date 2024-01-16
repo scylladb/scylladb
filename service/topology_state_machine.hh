@@ -94,6 +94,7 @@ struct replica_state {
     uint8_t ignore_msb;
     std::set<sstring> supported_features;
     cleanup_status cleanup;
+    utils::UUID request_id; // id of the current request for the node or the last one if no current one exists
 };
 
 struct topology_features {
@@ -186,6 +187,9 @@ struct raft_topology_snapshot {
 
     // Mutations for system.cdc_generations_v3, contains all the CDC generation data.
     std::vector<canonical_mutation> cdc_generation_mutations;
+
+    // Mutations for system.topology_requests table
+    std::vector<canonical_mutation> topology_requests_mutations;
 };
 
 struct raft_topology_pull_params {
@@ -205,7 +209,6 @@ struct raft_topology_cmd {
           barrier_and_drain,    // same + drain requests which use previous versions
           stream_ranges,        // request to stream data, return when streaming is
                                 // done
-          shutdown,             // a decommissioning node should shut down
           wait_for_ip           // wait for a joining node IP to appear in raft_address_map
       };
       command cmd;
@@ -232,6 +235,11 @@ struct fencing_token {
     explicit operator bool() const {
         return topology_version != 0;
     }
+};
+
+struct topology_request_state {
+    bool done;
+    sstring error;
 };
 
 std::ostream& operator<<(std::ostream& os, const fencing_token& fencing_token);

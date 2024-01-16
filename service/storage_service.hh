@@ -751,8 +751,6 @@ private:
     std::optional<shared_future<>> _rebuild_result;
     std::unordered_map<raft::server_id, std::optional<shared_future<>>> _remove_result;
     tablet_op_registry _tablet_ops;
-    // During decommission, the node waits for the coordinator to tell it to shut down.
-    std::optional<promise<>> _shutdown_request_promise;
     struct {
         raft::term_t term{0};
         uint64_t last_index{0};
@@ -799,7 +797,7 @@ private:
     // raft_group0_client::_read_apply_mutex must be held
     future<> merge_topology_snapshot(raft_topology_snapshot snp);
 
-    canonical_mutation build_mutation_from_join_params(const join_node_request_params& params, service::group0_guard& guard);
+    std::vector<canonical_mutation> build_mutation_from_join_params(const join_node_request_params& params, service::group0_guard& guard);
 
     future<join_node_request_result> join_node_request_handler(join_node_request_params params);
     future<join_node_response_result> join_node_response_handler(join_node_response_params params);
@@ -810,6 +808,9 @@ private:
 
     future<> _sstable_cleanup_fiber = make_ready_future<>();
     future<> sstable_cleanup_fiber(raft::server& raft, sharded<service::storage_proxy>& proxy) noexcept;
+    // Waits for a topology request with a given ID to complete and return non empty error string
+    // if request completes with an error
+    future<sstring> wait_for_topology_request_completion(utils::UUID id);
 
     // We need to be able to abort all group0 operation during shutdown, so we need special abort source for that
     abort_source _group0_as;

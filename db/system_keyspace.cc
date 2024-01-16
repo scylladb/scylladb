@@ -53,6 +53,7 @@ namespace {
             schema_tables::SCYLLA_TABLE_SCHEMA_HISTORY,
             system_keyspace::BROADCAST_KV_STORE,
             system_keyspace::TOPOLOGY,
+            system_keyspace::TOPOLOGY_REQUESTS,
             system_keyspace::CDC_GENERATIONS_V3,
         };
         if (ks_name == system_keyspace::NAME && tables.contains(cf_name)) {
@@ -64,6 +65,7 @@ namespace {
             system_keyspace::PAXOS,
             system_keyspace::BROADCAST_KV_STORE,
             system_keyspace::TOPOLOGY,
+            system_keyspace::TOPOLOGY_REQUESTS,
             system_keyspace::CDC_GENERATIONS_V3,
         };
         if (ks_name == system_keyspace::NAME && tables.contains(cf_name)) {
@@ -223,6 +225,7 @@ schema_ptr system_keyspace::topology() {
             .with_column("ignore_msb", int32_type)
             .with_column("cleanup_status", utf8_type)
             .with_column("supported_features", set_type_impl::get_instance(utf8_type, true))
+            .with_column("request_id", timeuuid_type)
             .with_column("new_cdc_generation_data_uuid", timeuuid_type, column_kind::static_column)
             .with_column("version", long_type, column_kind::static_column)
             .with_column("fence_version", long_type, column_kind::static_column)
@@ -235,6 +238,23 @@ schema_ptr system_keyspace::topology() {
             .with_column("session", uuid_type, column_kind::static_column)
             .with_column("tablet_balancing_enabled", boolean_type, column_kind::static_column)
             .set_comment("Current state of topology change machine")
+            .with_version(generate_schema_version(id))
+            .build();
+    }();
+    return schema;
+}
+
+schema_ptr system_keyspace::topology_requests() {
+    static thread_local auto schema = [] {
+        auto id = generate_legacy_id(NAME, TOPOLOGY_REQUESTS);
+        return schema_builder(NAME, TOPOLOGY_REQUESTS, std::optional(id))
+            .with_column("id", timeuuid_type, column_kind::partition_key)
+            .with_column("initiating_host", uuid_type)
+            .with_column("start_time", timestamp_type)
+            .with_column("done", boolean_type)
+            .with_column("error", utf8_type)
+            .with_column("end_time", timestamp_type)
+            .set_comment("Topology request tracking")
             .with_version(generate_schema_version(id))
             .build();
     }();
@@ -1919,7 +1939,7 @@ std::vector<schema_ptr> system_keyspace::all_tables(const db::config& cfg) {
     r.insert(r.end(), {raft(), raft_snapshots(), raft_snapshot_config(), group0_history(), discovery()});
 
     if (cfg.check_experimental(db::experimental_features_t::feature::CONSISTENT_TOPOLOGY_CHANGES)) {
-        r.insert(r.end(), {topology(), cdc_generations_v3()});
+        r.insert(r.end(), {topology(), cdc_generations_v3(), topology_requests()});
     }
 
     if (cfg.check_experimental(db::experimental_features_t::feature::BROADCAST_TABLES)) {
@@ -2499,6 +2519,7 @@ future<service::topology> system_keyspace::load_topology_state() {
         size_t shard_count = row.get_as<int32_t>("shard_count");
         uint8_t ignore_msb = row.get_as<int32_t>("ignore_msb");
         sstring cleanup_status = row.get_as<sstring>("cleanup_status");
+        utils::UUID request_id = row.get_as<utils::UUID>("request_id");
 
         service::node_state nstate = service::node_state_from_string(row.get_as<sstring>("node_state"));
 
@@ -2634,7 +2655,7 @@ future<service::topology> system_keyspace::load_topology_state() {
             map->emplace(host_id, service::replica_state{
                 nstate, std::move(datacenter), std::move(rack), std::move(release_version),
                 ring_slice, shard_count, ignore_msb, std::move(supported_features),
-                service::cleanup_status_from_string(cleanup_status)});
+                service::cleanup_status_from_string(cleanup_status), request_id});
         }
     }
 
@@ -2849,6 +2870,23 @@ future<> system_keyspace::sstables_registry_list(sstring location, sstable_regis
         co_await consumer(std::move(status), std::move(state), std::move(desc));
         co_return stop_iteration::no;
     });
+}
+
+future<service::topology_request_state> system_keyspace::get_topology_request_state(utils::UUID id) {
+    auto rs = co_await execute_cql(
+        format("SELECT done, error FROM system.{} WHERE id = {}", TOPOLOGY_REQUESTS, id));
+    if (!rs || rs->empty()) {
+        on_internal_error(slogger, format("no entry for request id {}", id));
+    }
+
+    auto& row = rs->one();
+    sstring error;
+
+    if (row.has("error")) {
+        error = row.get_as<sstring>("error");
+    }
+
+    co_return service::topology_request_state{row.get_as<bool>("done"), std::move(error)};
 }
 
 sstring system_keyspace_name() {

@@ -27,6 +27,7 @@ struct join_node_request_params {
     uint32_t shard_count;
     uint32_t ignore_msb;
     std::vector<sstring> supported_features;
+    utils::UUID request_id;
 };
 
 struct join_node_request_result {

@@ -43,6 +43,7 @@ namespace paxos {
     class proposal;
 } // namespace service::paxos
 
+struct topology_request_state;
 }
 
 namespace netw {
@@ -156,6 +157,7 @@ public:
     static constexpr auto DISCOVERY = "discovery";
     static constexpr auto BROADCAST_KV_STORE = "broadcast_kv_store";
     static constexpr auto TOPOLOGY = "topology";
+    static constexpr auto TOPOLOGY_REQUESTS = "topology_requests";
     static constexpr auto SSTABLES_REGISTRY = "sstables";
     static constexpr auto CDC_GENERATIONS_V3 = "cdc_generations_v3";
     static constexpr auto TABLETS = "tablets";
@@ -240,6 +242,7 @@ public:
     static schema_ptr discovery();
     static schema_ptr broadcast_kv_store();
     static schema_ptr topology();
+    static schema_ptr topology_requests();
     static schema_ptr sstables_registry();
     static schema_ptr cdc_generations_v3();
     static schema_ptr tablets();
@@ -517,6 +520,7 @@ public:
     future<bool> get_must_synchronize_topology();
     future<> set_must_synchronize_topology(bool);
 
+    future<service::topology_request_state> get_topology_request_state(utils::UUID id);
 private:
     static service::topology_features decode_topology_features_state(::shared_ptr<cql3::untyped_result_set> rs);
 
