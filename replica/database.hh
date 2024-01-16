@@ -21,7 +21,6 @@
 #include <seastar/core/distributed.hh>
 #include <functional>
 #include <unordered_map>
-#include <map>
 #include <set>
 #include <boost/functional/hash.hpp>
 #include <boost/range/algorithm/find.hpp>
@@ -32,7 +31,6 @@
 #include <seastar/core/gate.hh>
 #include "db/commitlog/replay_position.hh"
 #include "db/commitlog/commitlog_types.hh"
-#include <limits>
 #include "schema/schema_fwd.hh"
 #include "db/view/view.hh"
 #include "db/snapshot-ctl.hh"

@@ -14,6 +14,7 @@
 #include "mutation/mutation_partition_view.hh"
 #include "readers/empty_v2.hh"
 #include "readers/forwardable_v2.hh"
+#include "sstables/types.hh"
 
 namespace replica {
 

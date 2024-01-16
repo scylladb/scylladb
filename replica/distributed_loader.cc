@@ -6,7 +6,6 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#include <iterator>
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/smp.hh>
 #include <seastar/coroutine/maybe_yield.hh>
@@ -20,8 +19,6 @@
 #include "db/system_keyspace.hh"
 #include "db/system_distributed_keyspace.hh"
 #include "db/schema_tables.hh"
-#include "utils/lister.hh"
-#include "compaction/compaction.hh"
 #include "compaction/compaction_manager.hh"
 #include "compaction/task_manager_module.hh"
 #include "sstables/sstables.hh"
@@ -278,7 +275,7 @@ class table_populator {
     sstring _ks;
     sstring _cf;
     global_table_ptr& _global_table;
-    fs::path _base_path;
+    std::filesystem::path _base_path;
     std::unordered_map<sstables::sstable_state, lw_shared_ptr<sharded<sstables::sstable_directory>>> _sstable_directories;
     sstables::sstable_version_types _highest_version = sstables::oldest_writable_sstable_format;
     sstables::generation_type _highest_generation;
