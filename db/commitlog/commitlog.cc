@@ -460,6 +460,7 @@ public:
     void discard_completed_segments(const cf_id_type&, const rp_set&) noexcept;
     
     future<> force_new_active_segment() noexcept;
+    future<> wait_for_pending_deletes() noexcept;
 
     void on_timer();
     void sync();
@@ -515,6 +516,7 @@ private:
     seastar::gate _gate;
     uint64_t _new_counter = 0;
     std::optional<size_t> _disk_write_alignment;
+    future<> _pending_deletes = make_ready_future<>();
 };
 
 future<> db::commitlog::segment_manager::named_file::open(open_flags flags, file_open_options opt, std::optional<uint64_t> size_in) noexcept {
@@ -2030,6 +2032,16 @@ future<> db::commitlog::segment_manager::force_new_active_segment() noexcept {
     }
 }
 
+future<> db::commitlog::segment_manager::wait_for_pending_deletes() noexcept {
+    if (_pending_deletes.available()) {
+        co_return;
+    }
+    promise<> p;
+    auto f = std::exchange(_pending_deletes, p.get_future());
+    co_await std::move(f);
+    p.set_value();
+}
+
 namespace db {
 
 std::ostream& operator<<(std::ostream& out, const db::commitlog::segment& s) {
@@ -2253,6 +2265,9 @@ future<> db::commitlog::segment_manager::do_pending_deletes() {
         co_return;
     }
 
+    promise<> deleting_done;
+    auto pending_deletes = std::exchange(_pending_deletes, deleting_done.get_future());
+
     std::exception_ptr recycle_error;
     auto exts = cfg.extensions;
 
@@ -2323,6 +2338,8 @@ future<> db::commitlog::segment_manager::do_pending_deletes() {
     if (recycle_error && _recycled_segments.empty()) {
         abort_recycled_list(recycle_error);
     }
+    co_await std::move(pending_deletes);
+    deleting_done.set_value();
 }
 
 future<> db::commitlog::segment_manager::orphan_all() {
@@ -2656,6 +2673,10 @@ void db::commitlog::discard_completed_segments(const cf_id_type& id) {
 
 future<> db::commitlog::force_new_active_segment() noexcept {
     co_await _segment_manager->force_new_active_segment();
+}
+
+future<> db::commitlog::wait_for_pending_deletes() noexcept {
+    co_await _segment_manager->wait_for_pending_deletes();
 }
 
 future<> db::commitlog::sync_all_segments() {

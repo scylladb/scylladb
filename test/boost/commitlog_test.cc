@@ -1627,3 +1627,78 @@ SEASTAR_TEST_CASE(test_delete_recycled_segment_removes_size) {
     co_await log.shutdown();
     co_await log.clear();
 }
+
+SEASTAR_TEST_CASE(test_wait_for_delete) {
+    commitlog::config cfg;
+
+    constexpr auto max_size_mb = 1;
+
+    cfg.commitlog_segment_size_in_mb = max_size_mb;
+    cfg.commitlog_total_space_in_mb = 8 * max_size_mb * smp::count;
+    cfg.allow_going_over_size_limit = false; // #9348 - now can enforce size limit always
+    cfg.use_o_dsync = true; // make sure we pre-allocate.
+
+    // not using cl_test, because we need to be able to abandon
+    // the log.
+
+    tmpdir tmp;
+    cfg.commit_log_location = tmp.path().string();
+
+    std::vector<sstring> fakes;
+
+    struct myext: public db::commitlog_file_extension {
+    public:
+        commitlog* log = nullptr;
+        std::vector<future<>> waiters;
+        bool done = false;
+
+        seastar::future<seastar::file> wrap_file(const seastar::sstring& filename, seastar::file f, seastar::open_flags flags) override {
+            co_return f;
+        }
+        seastar::future<> before_delete(const seastar::sstring& filename) override {
+            if (!done) {
+                auto f = log->wait_for_pending_deletes();
+                BOOST_REQUIRE(!f.available());
+                waiters.emplace_back(std::move(f));
+            }
+            co_return;
+        }
+    };
+
+    auto ep = std::make_unique<myext>();
+    auto& ex = *ep;
+
+    db::extensions myexts;
+    myexts.add_commitlog_file_extension("hufflepuff", std::move(ep));
+
+    cfg.extensions = &myexts;
+
+    auto log = co_await commitlog::create_commitlog(cfg);
+    ex.log = &log;
+
+    auto r = log.add_flush_handler([&](cf_id_type id, replay_position pos) {
+        log.discard_completed_segments(id);
+    });
+
+    // uncomment for verbosity
+    // logging::logger_registry().set_logger_level("commitlog", logging::log_level::debug);
+
+    auto uuid = make_table_id();
+    auto size = log.max_record_size();
+
+    while (ex.waiters.size() < 5) {
+        rp_handle h = co_await log.add_mutation(uuid, size, db::commitlog::force_sync::no, [&](db::commitlog::output& dst) {
+            dst.fill('1', size);
+        });
+        h.release();
+    }
+
+    ex.done = true; // stop adding futures
+
+    for (auto&& f : ex.waiters) {
+        co_await std::move(f);
+    }
+
+    co_await log.shutdown();
+    co_await log.clear();
+}
