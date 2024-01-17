@@ -12,6 +12,7 @@
 #include <exception>
 #include <absl/container/btree_set.h>
 #include <fmt/core.h>
+#include <boost/range/adaptors.hpp>
 
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/sstring.hh>
@@ -145,6 +146,9 @@ public:
     repair_neighbors() = default;
     explicit repair_neighbors(std::vector<gms::inet_address> a)
         : all(std::move(a)) {
+    }
+    explicit repair_neighbors(const std::unordered_map<locator::host_id, gms::inet_address>& a)
+        : all(boost::copy_range<std::vector<gms::inet_address>>(a | boost::adaptors::map_values)) {
     }
     repair_neighbors(std::vector<gms::inet_address> a, std::vector<gms::inet_address> m)
         : all(std::move(a))

@@ -116,6 +116,8 @@ class repair_service : public seastar::peering_sharded_service<repair_service> {
 
     future<> _load_history_done = make_ready_future<>();
 
+    mutable std::default_random_engine _random_engine{std::random_device{}()};
+
     future<> init_ms_handlers();
     future<> uninit_ms_handlers();
 
