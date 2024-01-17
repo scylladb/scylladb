@@ -674,8 +674,24 @@ future<> storage_group::split(compaction_group_list& list, sstables::compaction_
 }
 
 bool table::all_storage_groups_split() {
-    return std::ranges::all_of(_storage_groups,
-                               std::bind(&storage_group::set_split_mode, std::placeholders::_1, std::ref(_compaction_groups)));
+    auto id = _schema->id();
+    auto& tmap = _erm->get_token_metadata().tablets().get_tablet_map(id);
+    if (_split_ready_seq_number == tmap.resize_decision().sequence_number) {
+        return true;
+    }
+
+    auto split_ready = std::ranges::all_of(_storage_groups,
+        std::bind(&storage_group::set_split_mode, std::placeholders::_1, std::ref(_compaction_groups)));
+
+    // The table replica will say to coordinator that its split status is ready by
+    // mirroring the sequence number from tablet metadata into its local state,
+    // which is pulled periodically by coordinator.
+    if (split_ready) {
+        _split_ready_seq_number = tmap.resize_decision().sequence_number;
+        tlogger.info0("Setting split ready sequence number to {} for table {}.{}",
+                      _split_ready_seq_number, _schema->ks_name(), _schema->cf_name());
+    }
+    return split_ready;
 }
 
 sstables::compaction_type_options::split table::split_compaction_options() const noexcept {

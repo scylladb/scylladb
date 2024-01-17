@@ -578,6 +578,8 @@ public:
                        const std::vector<sstables::shared_sstable>& old_sstables);
     };
 
+    // Precondition: table needs tablet splitting.
+    // Returns true if all storage of table is ready for splitting.
     bool all_storage_groups_split();
     future<> split_all_storage_groups();
 
