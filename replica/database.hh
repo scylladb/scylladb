@@ -589,6 +589,11 @@ public:
     // be split once it returns.
     future<> maybe_split_compaction_group_of(locator::tablet_id);
 private:
+    // Called when coordinator executes tablet splitting, i.e. commit the new tablet map with
+    // each tablet split into two, so this replica will remap all of its compaction groups
+    // that were previously split.
+    void handle_tablet_split_completion(size_t old_tablet_count, const locator::tablet_map& new_tmap);
+
     sstables::compaction_type_options::split split_compaction_options() const noexcept;
 
     // Select a compaction group from a given token.
