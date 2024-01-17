@@ -704,6 +704,10 @@ public:
     virtual std::string type() const override {
         return "regular compaction";
     }
+
+    virtual tasks::is_internal is_internal() const noexcept override {
+        return tasks::is_internal::yes;
+    }
 protected:
     virtual future<> run() override = 0;
 };
