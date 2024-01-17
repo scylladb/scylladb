@@ -2686,6 +2686,14 @@ future<> table::generate_and_propagate_view_updates(shared_ptr<db::view::view_up
             std::chrono::microseconds throttle_delay =  db::view::calculate_view_update_throttling_delay(local_backlog, timeout);
 
             co_await seastar::sleep(throttle_delay);
+            if (_config.view_update_concurrency_semaphore->current() == 0) {
+                utils::get_local_injector().inject("view_update_limit", [&err] {
+                    err = std::make_exception_ptr(exceptions::view_update_generation_timeout_exception());
+                });
+                if (err) {
+                    break;
+                }
+            }
 
             if (db::timeout_clock::now() > timeout) {
                 err = std::make_exception_ptr(exceptions::view_update_generation_timeout_exception());
