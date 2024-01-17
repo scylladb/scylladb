@@ -3679,8 +3679,8 @@ make_user_value(data_type type, user_type_impl::native_type value) {
     return data_value::make_new(std::move(type), std::move(value));
 }
 
- auto fmt::formatter<data_value>::format(const data_value& v,
-                                         fmt::format_context& ctx) const -> decltype(ctx.out()) {
+auto fmt::formatter<data_value>::format(const data_value& v,
+                                        fmt::format_context& ctx) const -> decltype(ctx.out()) {
     if (v.is_null()) {
         return fmt::format_to(ctx.out(), "null");
     }
