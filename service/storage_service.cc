@@ -367,6 +367,7 @@ static locator::node::state to_topology_node_state(node_state ns) {
 // gossiper) to align it with the other raft topology nodes.
 future<> storage_service::sync_raft_topology_nodes(mutable_token_metadata_ptr tmptr, std::optional<locator::host_id> target_node) {
     const auto& am = _group0->address_map();
+    const auto& t = _topology_state_machine._topology;
 
     auto update_topology = [&] (locator::host_id id, std::optional<inet_address> ip, const replica_state& rs) {
         tmptr->update_topology(id, locator::endpoint_dc_rack{rs.datacenter, rs.rack},
@@ -376,11 +377,27 @@ future<> storage_service::sync_raft_topology_nodes(mutable_token_metadata_ptr tm
         }
     };
 
-    auto process_left_node = [&] (raft::server_id id) -> future<> {
-        auto ip = am.find(id);
+    auto get_used_ips = [&, used_ips = std::optional<std::unordered_set<inet_address>>{}]() mutable
+            -> const std::unordered_set<inet_address>&
+    {
+        if (!used_ips) {
+            used_ips.emplace();
+            for (const auto& [sid, rs]: boost::range::join(t.normal_nodes, t.transition_nodes)) {
+                if (const auto used_ip = am.find(sid)) {
+                    used_ips->insert(*used_ip);
+                }
+            }
+        }
+        return *used_ips;
+    };
 
-        if (ip && (_gossiper.get_live_members().contains(*ip) || _gossiper.get_unreachable_members().contains(*ip))) {
-            co_await remove_endpoint(*ip, gms::null_permit_id);
+    auto process_left_node = [&] (raft::server_id id) -> future<> {
+        if (const auto ip = am.find(id)) {
+            co_await _sys_ks.local().remove_endpoint(*ip);
+
+            if (_gossiper.get_endpoint_state_ptr(*ip) && !get_used_ips().contains(*ip)) {
+                co_await _gossiper.force_remove_endpoint(*ip, gms::null_permit_id);
+            }
         }
 
         // FIXME: when removing a node from the cluster through `removenode`, we should ban it early,
@@ -494,8 +511,6 @@ future<> storage_service::sync_raft_topology_nodes(mutable_token_metadata_ptr tm
             on_fatal_internal_error(slogger, ::format("Unexpected state {} for node {}", rs.state, id));
         }
     };
-
-    const auto& t = _topology_state_machine._topology;
 
     if (target_node) {
         raft::server_id raft_id{target_node->uuid()};
