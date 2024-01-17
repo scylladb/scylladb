@@ -234,7 +234,7 @@ future<> select_statement::check_access(query_processor& qp, const service::clie
 }
 
 bool select_statement::depends_on(std::string_view ks_name, std::optional<std::string_view> cf_name) const {
-    return keyspace() == ks_name && (!cf_name || column_family() == *cf_name);
+    return keyspace() == ks_name && (!cf_name || column_family() == *cf_name || (_schema->is_view() && _schema->view_info()->base_name() == *cf_name));
 }
 
 const sstring& select_statement::keyspace() const {
