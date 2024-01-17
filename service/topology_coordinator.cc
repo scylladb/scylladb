@@ -25,6 +25,7 @@
 #include "message/messaging_service.hh"
 #include "replica/database.hh"
 #include "replica/tablet_mutation_builder.hh"
+#include "replica/tablets.hh"
 #include "service/raft/join_node.hh"
 #include "service/raft/raft_address_map.hh"
 #include "service/raft/raft_group0.hh"
@@ -875,9 +876,11 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     }
 
     future<> generate_migration_updates(std::vector<canonical_mutation>& out, const group0_guard& guard, const migration_plan& plan) {
+        std::unordered_set<table_id> new_transitions;
         for (const tablet_migration_info& mig : plan.migrations()) {
             co_await coroutine::maybe_yield();
             generate_migration_update(out, guard, mig);
+            new_transitions.insert(mig.tablet.table);
         }
 
         for (auto [table_id, resize_decision] : plan.resize_plan().resize) {
@@ -891,6 +894,24 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 replica::tablet_mutation_builder(guard.write_timestamp(), table_id)
                     .set_resize_decision(std::move(resize_decision))
                     .build());
+        }
+
+        // FIXME: Finalize split requests when exiting the tablet migration track.
+        for (auto table_id : plan.resize_plan().finalize_resize) {
+            auto& tmap = get_token_metadata_ptr()->tablets().get_tablet_map(table_id);
+            // Only finalize split request if there's no ongoing transition or new ones for a given table.
+            if (tmap.transitions().size() > 0 || new_transitions.contains(table_id)) {
+                continue;
+            }
+
+            auto s = _db.find_schema(table_id);
+            auto new_tablet_map = co_await _tablet_allocator.split_tablets(get_token_metadata_ptr(), table_id);
+            out.emplace_back(co_await replica::tablet_map_to_mutation(
+                new_tablet_map,
+                table_id,
+                s->ks_name(),
+                s->cf_name(),
+                guard.write_timestamp()));
         }
     }
 

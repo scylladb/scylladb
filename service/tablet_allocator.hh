@@ -118,6 +118,8 @@ public:
     ///
     future<migration_plan> balance_tablets(locator::token_metadata_ptr, locator::load_stats_ptr = {});
 
+    future<locator::tablet_map> split_tablets(locator::token_metadata_ptr, table_id);
+
     /// Should be called when the node is no longer a leader.
     void on_leadership_lost();
 };

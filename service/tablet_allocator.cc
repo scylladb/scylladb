@@ -1169,6 +1169,33 @@ public:
         _load_balancer_stats.unregister();
     }
 
+    // The splitting of tablets today is completely based on the power-of-two constraint.
+    // A tablet of id X is split into 2 new tablets, which new ids are (x << 1) and
+    // (x << 1) + 1.
+    // So a tablet of id 0 is remapped into ids 0 and 1. Another of id 1 is remapped
+    // into ids 2 and 3, and so on.
+    future<tablet_map> split_tablets(token_metadata_ptr tm, table_id table) {
+        auto& tablets = tm->tablets().get_tablet_map(table);
+
+        tablet_map new_tablets(tablets.tablet_count() * 2);
+
+        for (tablet_id tid : tablets.tablet_ids()) {
+            co_await coroutine::maybe_yield();
+
+            tablet_id new_left_tid = tablet_id(tid.value() << 1);
+            tablet_id new_right_tid = tablet_id(new_left_tid.value() + 1);
+
+            auto& tablet_info = tablets.get_tablet_info(tid);
+
+            new_tablets.set_tablet(new_left_tid, tablet_info);
+            new_tablets.set_tablet(new_right_tid, tablet_info);
+        }
+
+        lblogger.info("Split tablets for table {}, increasing tablet count from {} to {}",
+                      table, tablets.tablet_count(), new_tablets.tablet_count());
+        co_return std::move(new_tablets);
+    }
+
     // FIXME: Handle materialized views.
 };
 
@@ -1182,6 +1209,10 @@ future<> tablet_allocator::stop() {
 
 future<migration_plan> tablet_allocator::balance_tablets(locator::token_metadata_ptr tm, locator::load_stats_ptr load_stats) {
     return impl().balance_tablets(std::move(tm), std::move(load_stats));
+}
+
+future<locator::tablet_map> tablet_allocator::split_tablets(locator::token_metadata_ptr tm, table_id table) {
+    return impl().split_tablets(std::move(tm), table);
 }
 
 tablet_allocator_impl& tablet_allocator::impl() {
