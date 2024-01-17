@@ -84,6 +84,9 @@ async def test_fence_writes(request, manager: ManagerClient):
     logger.info(f'Waiting for cql and hosts')
     host2 = (await wait_for_cql_and_get_hosts(cql, [servers[2]], time.time() + 60))[0]
 
+    # Disable load balancer as it might bump topology version, undoing the decrement below.
+    await manager.api.disable_tablet_balancing(servers[2].ip_addr)
+
     version = await get_version(manager, host2)
     logger.info(f"version on host2 {version}")
 
@@ -128,6 +131,10 @@ async def test_fence_hints(request, manager: ManagerClient):
 
     logger.info(f'Waiting for cql and hosts')
     hosts = await wait_for_cql_and_get_hosts(cql, [s0, s2], time.time() + 60)
+
+    # Disable load balancer as it might bump topology version, potentially creating a race condition
+    # with read modify write below
+    await manager.api.disable_tablet_balancing(s2.ip_addr)
 
     host2 = host_by_server(hosts, s2)
     new_version = (await get_version(manager, host2)) + 1
