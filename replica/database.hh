@@ -604,7 +604,7 @@ private:
         return _config.enable_cache && _schema->caching_options().enabled();
     }
     void update_stats_for_new_sstable(const sstables::shared_sstable& sst) noexcept;
-    future<> do_add_sstable_and_update_cache(sstables::shared_sstable sst, sstables::offstrategy offstrategy);
+    future<> do_add_sstable_and_update_cache(sstables::shared_sstable sst, sstables::offstrategy offstrategy, bool trigger_compaction);
     // Helpers which add sstable on behalf of a compaction group and refreshes compound set.
     void add_sstable(compaction_group& cg, sstables::shared_sstable sstable);
     void add_maintenance_sstable(compaction_group& cg, sstables::shared_sstable sst);
