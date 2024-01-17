@@ -16,6 +16,7 @@
 #include "auth/allow_all_authenticator.hh"
 #include "auth/allow_all_authorizer.hh"
 #include "auth/maintenance_socket_role_manager.hh"
+#include "seastar/core/timer.hh"
 #include "tasks/task_manager.hh"
 #include "utils/build_id.hh"
 #include "supervisor.hh"
@@ -1152,7 +1153,9 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             });
 
             //This starts the update loop - but no real update happens until the data accessor is not initialized.
-            sl_controller.local().update_from_distributed_data(std::chrono::seconds(10));
+            sl_controller.local().update_from_distributed_data([cfg] () {
+                return std::chrono::duration_cast<steady_clock_type::duration>(std::chrono::milliseconds(cfg->service_levels_interval()));
+            });
 
             static sharded<db::system_distributed_keyspace> sys_dist_ks;
             static sharded<db::system_keyspace> sys_ks;

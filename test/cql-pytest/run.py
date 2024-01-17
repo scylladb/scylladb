@@ -322,6 +322,7 @@ def run_scylla_cmd(pid, dir):
         '--permissions-validity-in-ms', '100',
         '--shutdown-announce-in-ms', '0',
         '--maintenance-socket', 'workdir',
+        '--service-levels-interval-ms', '500',
         ], env)
 
 # Same as run_scylla_cmd, just use SSL encryption for the CQL port (same

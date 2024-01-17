@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "seastar/core/timer.hh"
 #include "seastarx.hh"
 #include "auth/role_manager.hh"
 #include <seastar/core/sstring.hh>
@@ -127,10 +128,11 @@ public:
      * Chack the distributed data for changes in a constant interval and updates
      * the service_levels configuration in accordance (adds, removes, or updates
      * service levels as necessairy).
-     * @param interval - the interval is seconds to check the distributed data.
+     * @param interval_f - lambda function which returns a interval in miliseconds.
+                           The interval is time to check the distributed data.
      * @return a future that is resolved when the update loop stops.
      */
-    void update_from_distributed_data(std::chrono::duration<float> interval);
+    void update_from_distributed_data(std::function<steady_clock_type::duration()> interval_f);
 
     /**
      * Updates the service level data from the distributed data store.
