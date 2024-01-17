@@ -466,7 +466,10 @@ public:
     named_value<int> minimum_replication_factor_warn_threshold;
     named_value<int> maximum_replication_factor_warn_threshold;
     named_value<int> maximum_replication_factor_fail_threshold;
+
     named_value<int> tablets_initial_scale_factor;
+    named_value<uint64_t> target_tablet_size_in_bytes;
+
     named_value<std::vector<enum_option<replication_strategy_restriction_t>>> replication_strategy_warn_list;
     named_value<std::vector<enum_option<replication_strategy_restriction_t>>> replication_strategy_fail_list;
 

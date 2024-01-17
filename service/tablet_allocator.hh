@@ -8,9 +8,10 @@
 
 #pragma once
 
-#include "replica/database.hh"
+#include "replica/database_fwd.hh"
 #include "locator/tablets.hh"
 #include "tablet_allocator_fwd.hh"
+#include "locator/token_metadata_fwd.hh"
 
 namespace service {
 
@@ -71,6 +72,8 @@ public:
         _resize_plan = std::move(resize_plan);
     }
 };
+
+class migration_notifier;
 
 class tablet_allocator {
 public:

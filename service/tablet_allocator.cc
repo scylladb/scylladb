@@ -1099,8 +1099,7 @@ public:
     }
 
     future<migration_plan> balance_tablets(token_metadata_ptr tm, locator::load_stats_ptr table_load_stats) {
-        // TODO: make target size a live-update-able config for tests.
-        load_balancer lb(tm, std::move(table_load_stats), _load_balancer_stats, default_target_tablet_size);
+        load_balancer lb(tm, std::move(table_load_stats), _load_balancer_stats, _db.get_config().target_tablet_size_in_bytes());
         co_return co_await lb.make_plan();
     }
 
