@@ -41,11 +41,18 @@ struct load_balancer_node_stats {
     double load = 0;
 };
 
+struct load_balancer_cluster_stats {
+    uint64_t resizes_emitted = 0;
+    uint64_t resizes_revoked = 0;
+    uint64_t resizes_finalized = 0;
+};
+
 using dc_name = sstring;
 
 class load_balancer_stats_manager {
     std::unordered_map<dc_name, std::unique_ptr<load_balancer_dc_stats>> _dc_stats;
     std::unordered_map<host_id, std::unique_ptr<load_balancer_node_stats>> _node_stats;
+    load_balancer_cluster_stats _cluster_stats;
     seastar::metrics::label dc_label{"target_dc"};
     seastar::metrics::label node_label{"target_node"};
     seastar::metrics::metric_groups _metrics;
@@ -72,7 +79,24 @@ class load_balancer_stats_manager {
                            stats.load)(dc_lb)(node_lb)
         });
     }
+
+    void setup_metrics(load_balancer_cluster_stats& stats) {
+        namespace sm = seastar::metrics;
+        // FIXME: we can probably improve it by making it per resize type (split, merge or none).
+        _metrics.add_group("load_balancer", {
+            sm::make_counter("resizes_emitted", sm::description("number of resizes produced by the load balancer"),
+                stats.resizes_emitted),
+            sm::make_counter("resizes_revoked", sm::description("number of resizes revoked by the load balancer"),
+                stats.resizes_revoked),
+            sm::make_counter("resizes_finalized", sm::description("number of resizes finalized by the load balancer"),
+                stats.resizes_finalized)
+        });
+    }
 public:
+    load_balancer_stats_manager() {
+        setup_metrics(_cluster_stats);
+    }
+
     load_balancer_dc_stats& for_dc(const dc_name& dc) {
         auto it = _dc_stats.find(dc);
         if (it == _dc_stats.end()) {
@@ -91,6 +115,10 @@ public:
             it = _node_stats.emplace(node, std::move(stats)).first;
         }
         return *it->second;
+    }
+
+    load_balancer_cluster_stats& for_cluster() {
+        return _cluster_stats;
     }
 
     void unregister() {
@@ -506,6 +534,7 @@ public:
             lblogger.info("Emitting resize decision of type {} for table {} due to avg tablet size of {}",
                           resize_decision.type_name(), table, size_desc.avg_tablet_size);
             resize_plan.resize[table] = std::move(resize_decision);
+            _stats.for_cluster().resizes_emitted++;
 
             std::pop_heap(resize_load.tables_need_resize.begin(), resize_load.tables_need_resize.end(), resize_load.resize_urgency_cmp());
             resize_load.tables_need_resize.pop_back();
@@ -519,6 +548,7 @@ public:
         for (const auto& [table, size_desc] : resize_load.tables_being_resized) {
             if (resize_load.table_needs_resize_cancellation(size_desc)) {
                 resize_plan.resize[table] = cluster_resize_load::revoke_resize_decision();
+                _stats.for_cluster().resizes_revoked++;
                 lblogger.info("Revoking resize decision for table {} due to avg tablet size of {}", table, size_desc.avg_tablet_size);
                 continue;
             }
@@ -534,6 +564,7 @@ public:
             // load balancer can emit finalize decision, for split to be completed.
             if (table_stats->split_ready_seq_number == tmap.resize_decision().sequence_number) {
                 resize_plan.resize[table] = cluster_resize_load::revoke_resize_decision();
+                _stats.for_cluster().resizes_finalized++;
                 resize_plan.finalize_resize.insert(table);
                 lblogger.info("Finalizing resize decision for table {} as all replicas agree on sequence number {}",
                               table, table_stats->split_ready_seq_number);
