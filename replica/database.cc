@@ -2378,6 +2378,7 @@ future<> database::flush_all_tables() {
         return t->flush();
     });
     _all_tables_flushed_at = db_clock::now();
+    co_await _commitlog->wait_for_pending_deletes();
 }
 
 future<db_clock::time_point> database::get_all_tables_flushed_at(sharded<database>& sharded_db) {
