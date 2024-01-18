@@ -240,7 +240,9 @@ raft_group0::discover_group0(const std::vector<gms::inet_address>& seeds, cql3::
     auto my_id = load_my_id();
     discovery::peer_list peers;
     for (auto& ip: seeds) {
-        peers.emplace_back(discovery_peer{raft::server_id{}, ip});
+        if (ip != _gossiper.get_broadcast_address()) {
+            peers.emplace_back(discovery_peer{raft::server_id{}, ip});
+        }
     }
     discovery_peer my_addr = {my_id, _gossiper.get_broadcast_address()};
 
@@ -695,9 +697,7 @@ future<> raft_group0::setup_group0(
 
     std::vector<gms::inet_address> seeds;
     for (auto& addr: initial_contact_nodes) {
-        if (addr != _gossiper.get_broadcast_address()) {
-            seeds.push_back(addr);
-        }
+        seeds.push_back(addr);
     }
 
     group0_log.info("setup_group0: joining group 0...");
