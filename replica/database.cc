@@ -49,6 +49,7 @@
 #include "db/view/view_update_generator.hh"
 #include "multishard_mutation_query.hh"
 
+#include "utils/directories.hh"
 #include "utils/human_readable.hh"
 #include "utils/fmt-compat.hh"
 #include "utils/error_injection.hh"
@@ -307,12 +308,13 @@ public:
     }
 };
 
-database::database(const db::config& cfg, database_config dbcfg, service::migration_notifier& mn, gms::feature_service& feat, const locator::shared_token_metadata& stm,
+database::database(const db::config& cfg, const utils::directories& dirs, database_config dbcfg, service::migration_notifier& mn, gms::feature_service& feat, const locator::shared_token_metadata& stm,
         compaction_manager& cm, sstables::storage_manager& sstm, wasm::manager& wasm, sharded<sstables::directory_semaphore>& sst_dir_sem, utils::cross_shard_barrier barrier)
     : _stats(make_lw_shared<db_stats>())
     , _user_types(std::make_shared<db_user_types_storage>(*this))
     , _cl_stats(std::make_unique<cell_locker_stats>())
     , _cfg(cfg)
+    , _dirs(dirs)
     // Allow system tables a pool of 10 MB memory to write, but never block on other regions.
     , _system_dirty_memory_manager(*this, 10 << 20, cfg.unspooled_dirty_soft_limit(), default_scheduling_group())
     , _dirty_memory_manager(*this, dbcfg.available_memory * 0.50, cfg.unspooled_dirty_soft_limit(), dbcfg.statement_scheduling_group)
@@ -813,7 +815,7 @@ void database::init_schema_commitlog() {
     assert(this_shard_id() == 0);
 
     db::commitlog::config c;
-    c.commit_log_location = _cfg.schema_commitlog_directory();
+    c.commit_log_location = _dirs.get_schema_commitlog_dir();
     c.fname_prefix = db::schema_tables::COMMITLOG_FILENAME_PREFIX;
     c.metrics_category_name = "schema-commitlog";
     c.commitlog_total_space_in_mb = 2 * _cfg.schema_commitlog_segment_size_in_mb();
@@ -840,7 +842,7 @@ future<> database::create_local_system_table(
         schema_ptr table, bool write_in_user_memory, locator::effective_replication_map_factory& erm_factory) {
     auto ks_name = table->ks_name();
     if (!has_keyspace(ks_name)) {
-        bool durable = _cfg.data_file_directories().size() > 0;
+        bool durable = _dirs.get_data_file_dirs().size() > 0;
         auto ksm = make_lw_shared<keyspace_metadata>(ks_name,
                 "org.apache.cassandra.locator.LocalStrategy",
                 std::map<sstring, sstring>{},
@@ -2090,10 +2092,11 @@ future<> database::apply_hint(schema_ptr s, const frozen_mutation& m, tracing::t
 
 keyspace::config
 database::make_keyspace_config(const keyspace_metadata& ksm) {
+    const std::vector<seastar::sstring> data_file_directories = _dirs.get_data_file_dirs();
     keyspace::config cfg;
-    if (_cfg.data_file_directories().size() > 0) {
-        cfg.datadir = format("{}/{}", _cfg.data_file_directories()[0], ksm.name());
-        for (auto& extra : _cfg.data_file_directories()) {
+    if (data_file_directories.size() > 0) {
+        cfg.datadir = format("{}/{}", data_file_directories[0], ksm.name());
+        for (auto& extra : data_file_directories) {
             cfg.all_datadirs.push_back(format("{}/{}", extra, ksm.name()));
         }
         cfg.enable_disk_writes = !_cfg.enable_in_memory_data_store();
@@ -2593,7 +2596,7 @@ static std::pair<sstring, table_id> extract_cf_name_and_uuid(const sstring& dire
 }
 
 future<std::vector<database::snapshot_details_result>> database::get_snapshot_details() {
-    std::vector<sstring> data_dirs = _cfg.data_file_directories();
+    std::vector<sstring> data_dirs = _dirs.get_data_file_dirs();
     std::vector<database::snapshot_details_result> details;
 
     for (auto& datadir : data_dirs) {
@@ -2663,7 +2666,7 @@ future<std::vector<database::snapshot_details_result>> database::get_snapshot_de
 // For the filesystem operations, this code will assume that all keyspaces are visible in all shards
 // (as we have been doing for a lot of the other operations, like the snapshot itself).
 future<> database::clear_snapshot(sstring tag, std::vector<sstring> keyspace_names, const sstring& table_name) {
-    std::vector<sstring> data_dirs = _cfg.data_file_directories();
+    std::vector<sstring> data_dirs = _dirs.get_data_file_dirs();
     std::unordered_set<sstring> ks_names_set(keyspace_names.begin(), keyspace_names.end());
     auto table_name_param = table_name;
 
