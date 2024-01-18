@@ -426,6 +426,10 @@ public:
     // discarded from the state machine after applying a snapshot.
     future<fsm_output> poll_output();
 
+    // Check if there is any state machine output
+    // that `get_output()` will return.
+    bool has_output() const;
+
     // Get state machine output, if there is any. Doesn't
     // wait. It is public for use in testing.
     // May throw on allocation failure, but leaves state machine

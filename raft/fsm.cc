@@ -307,19 +307,20 @@ future<fsm_output> fsm::poll_output() {
     logger.trace("fsm::poll_output() {} stable index: {} last index: {}",
         _my_id, _log.stable_idx(), _log.last_idx());
 
-    while (true) {
-        auto diff = _log.last_idx() - _log.stable_idx();
+    co_await _sm_events.when(std::bind_front(&fsm::has_output, this));
 
-        if (diff > 0 || !_messages.empty() || !_observed.is_equal(*this) || _output.max_read_id_with_quorum ||
-                (is_leader() && leader_state().last_read_id_changed) || _output.snp || !_output.snps_to_drop.empty() || _output.state_changed) {
-            break;
-        }
-        co_await _sm_events.wait();
-    }
     while (utils::get_local_injector().enter("fsm::poll_output/pause")) {
         co_await seastar::sleep(std::chrono::milliseconds(100));
     }
     co_return get_output();
+}
+
+bool fsm::has_output() const {
+    auto diff = _log.last_idx() - _log.stable_idx();
+
+    return diff > 0 || !_messages.empty() || !_observed.is_equal(*this) || _output.max_read_id_with_quorum
+        || (is_leader() && leader_state().last_read_id_changed) || _output.snp || !_output.snps_to_drop.empty()
+        || _output.state_changed;
 }
 
 fsm_output fsm::get_output() {
