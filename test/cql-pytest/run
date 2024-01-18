@@ -14,6 +14,23 @@ else:
     cmd = run.run_scylla_cmd
     check_cql = run.check_cql
 
+# If the "--tablets" option is given, switch to the experimental Tablets-
+# based replication instead of vnodes. Some tests are expected to fail
+# when using tablets because of unimplemented features, so they use the
+# fails_with_tablets fixture that will cause them to xfail when tablets
+# are used.
+# TODO: In the near future, we should reverse this option: tests should run
+# with the tablets experimental feature by default, and a "--vnodes"
+# option will ask to run them without the tablets experimental feature.
+if '--tablets' in sys.argv:
+    sys.argv.remove('--tablets')
+    def run_with_tablets(pid, dir):
+        (c, e) = run_with_tablets.orig_cmd(pid, dir)
+        return (c + ['--experimental-features=consistent-topology-changes',
+                     '--experimental-features=tablets'], e)
+    run_with_tablets.orig_cmd = cmd
+    cmd = run_with_tablets
+
 if "-h" in sys.argv or "--help" in sys.argv:
     run.run_pytest(sys.path[0], sys.argv)
     exit(0)
