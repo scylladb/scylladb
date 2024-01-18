@@ -1441,56 +1441,55 @@ private:
             co_return;
         }
         SCYLLA_ASSERT (_current_partition_key);
-        // FIXME: fix the indent
-            if (!_index_in_current_partition) {
-                _index_in_current_partition = true;
-                // FIXME reversed multi partition reads
-                co_await get_index_reader().advance_to(*_current_partition_key);
-            }
+        if (!_index_in_current_partition) {
+            _index_in_current_partition = true;
+            // FIXME reversed multi partition reads
+            co_await get_index_reader().advance_to(*_current_partition_key);
+        }
 
-            if (reversed()) {
-                // The position `pos` conforms to the query schema (it is the start of a reversed range),
-                // which is reversed w.r.t. the table schema. We use the table schema in index_reader,
-                // so we need to unreverse `pos` before passing it into index_reader.
-                auto rev_pos = pos->reversed();
-                co_await get_index_reader().advance_reverse(std::move(rev_pos));
-                    // The reversing data source will notice the skip and update the data ranges
-                    // from which it prepares the data given to us.
+        if (reversed()) {
+            // The position `pos` conforms to the query schema (it is the start of a reversed range),
+            // which is reversed w.r.t. the table schema. We use the table schema in index_reader,
+            // so we need to unreverse `pos` before passing it into index_reader.
+            auto rev_pos = pos->reversed();
+            co_await get_index_reader().advance_reverse(std::move(rev_pos));
+            // The reversing data source will notice the skip and update the data ranges
+            // from which it prepares the data given to us.
 
-                    SCYLLA_ASSERT(_reversed_read_sstable_position);
-                    auto ip = _index_reader->data_file_positions();
-                    if (ip.end >= *_reversed_read_sstable_position) {
-                        // The reversing data source was already ahead (in reverse - its position was smaller)
-                        // than the index. We must not update the current range tombstone in this case
-                        // or reset the context since all fragments up to the new position of the index
-                        // will be (or already have been) provided to the context by the source.
-                    } else {
-                    _context->reset_after_reversed_read_skip();
-
-                    _sst->get_stats().on_partition_seek();
-                    auto open_end_marker = _index_reader->reverse_end_open_marker();
-                    if (open_end_marker) {
-                        _consumer.set_range_tombstone(open_end_marker->tomb);
-                    } else {
-                        _consumer.set_range_tombstone({});
-                    }
-                    }
+            SCYLLA_ASSERT(_reversed_read_sstable_position);
+            auto ip = _index_reader->data_file_positions();
+            if (ip.end >= *_reversed_read_sstable_position) {
+                // The reversing data source was already ahead (in reverse - its position was smaller)
+                // than the index. We must not update the current range tombstone in this case
+                // or reset the context since all fragments up to the new position of the index
+                // will be (or already have been) provided to the context by the source.
             } else {
-                co_await get_index_reader().advance_to(*pos);
-                    index_reader& idx = *_index_reader;
-                    auto index_position = idx.data_file_positions();
-                    if (index_position.start <= _context->position()) {
-                        co_return;
-                    }
-                    co_await skip_to(idx.element_kind(), index_position.start);
-                        _sst->get_stats().on_partition_seek();
-                        auto open_end_marker = idx.end_open_marker();
-                        if (open_end_marker) {
-                            _consumer.set_range_tombstone(open_end_marker->tomb);
-                        } else {
-                            _consumer.set_range_tombstone({});
-                        }
+                _context->reset_after_reversed_read_skip();
+
+                _sst->get_stats().on_partition_seek();
+                auto open_end_marker = _index_reader->reverse_end_open_marker();
+                if (open_end_marker) {
+                    _consumer.set_range_tombstone(open_end_marker->tomb);
+                } else {
+                    _consumer.set_range_tombstone({});
                 }
+            }
+        } else {
+            co_await get_index_reader().advance_to(*pos);
+            index_reader& idx = *_index_reader;
+            auto index_position = idx.data_file_positions();
+            if (index_position.start <= _context->position()) {
+                co_return;
+            }
+            co_await skip_to(idx.element_kind(), index_position.start);
+            _sst->get_stats().on_partition_seek();
+            auto open_end_marker = idx.end_open_marker();
+            if (open_end_marker) {
+                _consumer.set_range_tombstone(open_end_marker->tomb);
+            } else {
+                _consumer.set_range_tombstone({});
+            }
+        }
     }
     bool is_initialized() const {
         return bool(_context);
