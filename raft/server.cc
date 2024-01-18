@@ -225,6 +225,12 @@ private:
     // to be applied.
     void signal_applied();
 
+    // Wait until there is, and return `fsm` output that needs to be handled.
+    // This includes a list of the entries that need to be logged.
+    // The logged entries are eventually discarded from the state machine
+    // after applying a snapshot.
+    future<fsm_output> poll_fsm_output();
+
     // This fiber processes FSM output by doing the following steps in order:
     //  - persist the current term and vote
     //  - persist unstable log entries on disk.
@@ -989,11 +995,21 @@ static rpc_config_diff diff_address_sets(const server_address_set& prev, const c
     return result;
 }
 
+future<fsm_output> server_impl::poll_fsm_output() {
+    co_await _sm_events.when(std::bind_front(&fsm::has_output, _fsm.get()));
+
+    while (utils::get_local_injector().enter("poll_fsm_output/pause")) {
+        co_await seastar::sleep(std::chrono::milliseconds(100));
+    }
+
+    co_return _fsm->get_output();
+}
+
 future<> server_impl::io_fiber(index_t last_stable) {
     logger.trace("[{}] io_fiber start", _id);
     try {
         while (true) {
-            auto batch = co_await _fsm->poll_output();
+            auto batch = co_await poll_fsm_output();
             _stats.polls++;
 
             if (batch.term_and_vote) {

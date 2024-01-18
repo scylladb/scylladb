@@ -300,15 +300,6 @@ void fsm::become_candidate(bool is_prevote, bool is_leadership_transfer) {
     }
 }
 
-future<fsm_output> fsm::poll_output() {
-    co_await _sm_events.when(std::bind_front(&fsm::has_output, this));
-
-    while (utils::get_local_injector().enter("fsm::poll_output/pause")) {
-        co_await seastar::sleep(std::chrono::milliseconds(100));
-    }
-    co_return get_output();
-}
-
 bool fsm::has_output() const {
     logger.trace("fsm::has_output() {} stable index: {} last index: {}",
         _my_id, _log.stable_idx(), _log.last_idx());

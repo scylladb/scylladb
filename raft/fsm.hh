@@ -146,9 +146,13 @@ struct leader {
 // in-memory state machine with a catch-all API step(message)
 // method. The method handles any kind of input and performs the
 // needed state machine state transitions. To get state machine output
-// poll_output() function has to be called. This call produces an output
+// get_output() function has to be called. To check first if
+// any new output is present, call has_output(). To wait for new
+// new output events, use the sm_events condition variable passed
+// to fsm constructor; fs` signals it each time new output may appear.
+// The get_output() call produces an output
 // object, which encapsulates a list of actions that must be
-// performed until the next poll_output() call can be made. The time is
+// performed until the next get_output() call can be made. The time is
 // represented with a logical timer. The client is responsible for
 // periodically invoking tick() method, which advances the state
 // machine time and allows it to track such events as election or
@@ -417,13 +421,6 @@ public:
     // committed to the persistent Raft log afterwards.
     template<typename T> const log_entry& add_entry(T command);
 
-    // Wait until there is, and return state machine output that
-    // needs to be handled.
-    // This includes a list of the entries that need
-    // to be logged. The logged entries are eventually
-    // discarded from the state machine after applying a snapshot.
-    future<fsm_output> poll_output();
-
     // Check if there is any state machine output
     // that `get_output()` will return.
     bool has_output() const;
@@ -439,7 +436,7 @@ public:
 
     // Feed one Raft RPC message into the state machine.
     // Advances the state machine state and generates output,
-    // accessible via poll_output().
+    // accessible via get_output().
     template <typename Message>
     void step(server_id from, Message&& msg);
 
