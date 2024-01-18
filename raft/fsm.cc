@@ -41,10 +41,6 @@ fsm::fsm(server_id id, term_t current_term, server_id voted_for, log log,
     }
 }
 
-fsm::fsm(server_id id, term_t current_term, server_id voted_for, log log,
-        failure_detector& failure_detector, fsm_config config) :
-        fsm(id, current_term, voted_for, std::move(log), index_t{0}, failure_detector, config) {}
-
 future<semaphore_units<>> fsm::wait_for_memory_permit(seastar::abort_source* as, size_t size) {
     check_is_leader();
 

@@ -350,9 +350,6 @@ public:
     explicit fsm(server_id id, term_t current_term, server_id voted_for, log log,
             index_t commit_idx, failure_detector& failure_detector, fsm_config conf);
 
-    explicit fsm(server_id id, term_t current_term, server_id voted_for, log log,
-            failure_detector& failure_detector, fsm_config conf);
-
     bool is_leader() const {
         return std::holds_alternative<leader>(_state);
     }
