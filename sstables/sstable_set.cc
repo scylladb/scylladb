@@ -1366,14 +1366,12 @@ sstable_set::make_local_shard_sstable_reader(
         if (!predicate(*sst)) {
             return make_empty_flat_reader_v2(s, permit);
         }
-        auto make_reader = [&] () -> flat_mutation_reader_v2 {
-            return sst->make_reader(s, permit, pr, slice, trace_state, fwd, fwd_mr, monitor_generator(sst));
-        };
+        auto reader = sst->make_reader(s, permit, pr, slice, trace_state, fwd, fwd_mr, monitor_generator(sst));
         // Auto-closed sstable reader is only enabled in the context of fast-forward to partition ranges
         if (!fwd && fwd_mr) {
-            return make_auto_closed_sstable_reader(sst, make_reader(), permit);
+            return make_auto_closed_sstable_reader(sst, std::move(reader), permit);
         }
-        return make_reader();
+        return reader;
     };
     if (_impl->size() == 1) [[unlikely]] {
         auto sstables = _impl->all();
