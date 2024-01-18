@@ -331,6 +331,8 @@ add_scylla_test(user_function_test
   LIBRARIES idl)
 add_scylla_test(user_types_test
   KIND SEASTAR)
+add_scylla_test(utils_directories_test
+  KIND BOOST)
 add_scylla_test(UUID_test
   KIND BOOST)
 add_scylla_test(view_build_test

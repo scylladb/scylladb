@@ -724,6 +724,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             });
 
             cfg->setup_directories();
+            dirs.emplace(*cfg);
 
             // We're writing to a non-atomic variable here. But bool writes are atomic
             // in all supported architectures, and the broadcast_to_all_shards().get() below
@@ -972,7 +973,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             dir_set.add(cfg->data_file_directories());
             dir_set.add(cfg->commitlog_directory());
             dir_set.add(cfg->schema_commitlog_directory());
-            dirs.emplace(cfg->developer_mode());
             dirs->create_and_verify(std::move(dir_set)).get();
 
             auto hints_dir_initializer = db::hints::directory_initializer::make(*dirs, cfg->hints_directory()).get();
