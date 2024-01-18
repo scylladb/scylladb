@@ -389,7 +389,8 @@ def test_desc_schema(cql, test_keyspace, random_seed):
 
 # Test that `DESC CLUSTER` contains token ranges to endpoints map
 # The test is `scylla_only` because there is no `system.token_ring` table in Cassandra
-def test_desc_cluster(scylla_only, cql, test_keyspace):
+# fails_with_tablets due to issue #16789
+def test_desc_cluster(scylla_only, cql, test_keyspace, fails_with_tablets):
     cql.execute(f"USE {test_keyspace}")
     desc = cql.execute("DESC CLUSTER").one()
     desc_endpoints = []
@@ -534,7 +535,8 @@ def test_desc_udf_uda(cql, test_keyspace, scylla_only):
 # Example: caching = {'keys': 'ALL', 'rows_per_partition': 'ALL'}
 # Reproduces #14895
 # The test is marked scylla_only because it uses a Scylla-only property "cdc".
-def test_whitespaces_in_table_options(cql, test_keyspace, scylla_only):
+# fails_with_tablets due to issue #16317
+def test_whitespaces_in_table_options(cql, test_keyspace, scylla_only, fails_with_tablets):
     regex = "\\{[^}]*[:,][^\\s][^}]*\\}" # looks for any colon or comma without space after it inside a { }
     
     with new_test_table(cql, test_keyspace, "a int primary key", "WITH cdc = {'enabled': true}") as tbl:
