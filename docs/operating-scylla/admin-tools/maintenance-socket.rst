@@ -26,10 +26,10 @@ With python driver
 
     from cassandra.cluster import Cluster
     from cassandra.connection import UnixSocketEndPoint
-    from cassandra.policies import HostFilterPolicy, RoundRobinPolicy
+    from cassandra.policies import WhiteListRoundRobinPolicy
     
-    socket = "<node's workdir>/cql.m"
-    cluster = Cluster([UnixSocketEndPoint(socket)],
+    socket = UnixSocketEndPoint("<node's workdir>/cql.m")
+    cluster = Cluster([socket],
                       # Driver tries to connect to other nodes in the cluster, so we need to filter them out.
-                      load_balancing_policy=HostFilterPolicy(RoundRobinPolicy(), lambda h: h.address == socket))
+                      load_balancing_policy=WhiteListRoundRobinPolicy([socket]))
     session = cluster.connect()
