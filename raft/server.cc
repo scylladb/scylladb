@@ -235,6 +235,7 @@ private:
     //  - persist the current term and vote
     //  - persist unstable log entries on disk.
     //  - send out messages
+    future<> process_fsm_output(index_t& stable_idx, fsm_output&&);
     future<> io_fiber(index_t stable_idx);
 
     // This fiber runs in the background and applies committed entries.
@@ -1005,13 +1006,7 @@ future<fsm_output> server_impl::poll_fsm_output() {
     co_return _fsm->get_output();
 }
 
-future<> server_impl::io_fiber(index_t last_stable) {
-    logger.trace("[{}] io_fiber start", _id);
-    try {
-        while (true) {
-            auto batch = co_await poll_fsm_output();
-            _stats.polls++;
-
+future<> server_impl::process_fsm_output(index_t& last_stable, fsm_output&& batch) {
             if (batch.term_and_vote) {
                 // Current term and vote are always persisted
                 // together. A vote may change independently of
@@ -1144,6 +1139,16 @@ future<> server_impl::io_fiber(index_t last_stable) {
             if (_state_change_promise && batch.state_changed) {
                 std::exchange(_state_change_promise, std::nullopt)->set_value();
             }
+}
+
+future<> server_impl::io_fiber(index_t last_stable) {
+    logger.trace("[{}] io_fiber start", _id);
+    try {
+        while (true) {
+            auto batch = co_await poll_fsm_output();
+            _stats.polls++;
+
+            co_await process_fsm_output(last_stable, std::move(batch));
         }
     } catch (seastar::broken_condition_variable&) {
         // Log fiber is stopped explicitly.
