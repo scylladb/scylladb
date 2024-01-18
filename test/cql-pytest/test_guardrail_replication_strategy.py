@@ -83,7 +83,7 @@ def test_given_already_existing_ks_when_altering_ks_should_validate_against_disc
             config_value_context(cql, 'replication_strategy_fail_list', 'EverywhereStrategy'))
 
         # create a ks with "allowed" strategy
-        with new_test_keyspace(cql, " WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 3 }") as keyspace:
+        with new_test_keyspace(cql, " WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 3 } AND TABLETS = {'enabled': false}") as keyspace:
             # alter this ks to use other strategy that is NOT present on any list
             response_future = cql.execute_async(
                 "ALTER KEYSPACE " + keyspace + " WITH REPLICATION = { 'class' : 'LocalStrategy', 'replication_factor' : 3 }")
