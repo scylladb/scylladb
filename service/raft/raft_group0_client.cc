@@ -240,6 +240,10 @@ future<group0_guard> raft_group0_client::start_operation(seastar::abort_source* 
         on_internal_error(logger, "start_group0_operation: must run on shard 0");
     }
 
+    if (_maintenance_mode) {
+        throw exceptions::configuration_exception{"cannot start group0 operation in the maintenance mode"};
+    }
+
     auto [upgrade_lock_holder, upgrade_state] = co_await get_group0_upgrade_state();
     switch (upgrade_state) {
         case group0_upgrade_state::use_post_raft_procedures: {
@@ -329,8 +333,8 @@ group0_command raft_group0_client::prepare_command(Command change, std::string_v
     return group0_cmd;
 }
 
-raft_group0_client::raft_group0_client(service::raft_group_registry& raft_gr, db::system_keyspace& sys_ks)
-        : _raft_gr(raft_gr), _sys_ks(sys_ks) {
+raft_group0_client::raft_group0_client(service::raft_group_registry& raft_gr, db::system_keyspace& sys_ks, maintenance_mode_enabled maintenance_mode)
+        : _raft_gr(raft_gr), _sys_ks(sys_ks), _maintenance_mode(maintenance_mode) {
 }
 
 future<> raft_group0_client::init() {
@@ -355,7 +359,9 @@ future<> raft_group0_client::init() {
         return service::group0_upgrade_state::recovery;
     };
 
-    _upgrade_state = value(co_await _sys_ks.load_group0_upgrade_state());
+    _upgrade_state = _maintenance_mode
+        ? group0_upgrade_state::recovery
+        : value(co_await _sys_ks.load_group0_upgrade_state());
     if (_upgrade_state == group0_upgrade_state::recovery) {
         logger.warn("RECOVERY mode.");
     }
