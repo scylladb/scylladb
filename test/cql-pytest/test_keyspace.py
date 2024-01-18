@@ -206,7 +206,8 @@ def test_concurrent_create_and_drop_keyspace(cql, this_dc, fails_without_consist
 # and is not explicitly stored - since it's equal to the original storage
 def test_storage_options_local(cql, scylla_only):
     ksdef = "WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : '1' } " \
-            "AND STORAGE = { 'type' : 'LOCAL' }"
+            "AND STORAGE = { 'type' : 'LOCAL' } " \
+            "AND TABLETS = { 'enabled': false }" # because tablets use scylla_keyspaces too
     with new_test_keyspace(cql, ksdef) as keyspace:
         res = cql.execute(f"SELECT * FROM system_schema.scylla_keyspaces WHERE keyspace_name = '{keyspace}'")
         assert not res.all()
