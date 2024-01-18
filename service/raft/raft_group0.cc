@@ -236,7 +236,8 @@ raft_server_for_group raft_group0::create_server_for_group0(raft::group_id gid, 
 }
 
 future<group0_info>
-raft_group0::discover_group0(raft::server_id my_id, const std::vector<gms::inet_address>& seeds, cql3::query_processor& qp) {
+raft_group0::discover_group0(const std::vector<gms::inet_address>& seeds, cql3::query_processor& qp) {
+    auto my_id = load_my_id();
     discovery::peer_list peers;
     for (auto& ip: seeds) {
         peers.emplace_back(discovery_peer{raft::server_id{}, ip});
@@ -448,7 +449,7 @@ future<> raft_group0::join_group0(std::vector<gms::inet_address> seeds, shared_p
     auto my_id = load_my_id();
     group0_log.info("server {} found no local group 0. Discovering...", my_id);
     while (true) {
-        auto g0_info = co_await discover_group0(my_id, seeds, qp);
+        auto g0_info = co_await discover_group0(seeds, qp);
         group0_log.info("server {} found group 0 with group id {}, leader {}", my_id, g0_info.group0_id, g0_info.id);
 
         if (server && group0_id != g0_info.group0_id) {

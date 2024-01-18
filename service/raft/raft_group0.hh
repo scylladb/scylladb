@@ -288,8 +288,7 @@ private:
     // (in particular, we may become that leader).
     //
     // See 'raft-in-scylla.md', 'Establishing group 0 in a fresh cluster'.
-    future<group0_info> discover_group0(raft::server_id my_id,
-        const std::vector<gms::inet_address>& seeds, cql3::query_processor& qp);
+    future<group0_info> discover_group0(const std::vector<gms::inet_address>& seeds, cql3::query_processor& qp);
 
     // Creates or joins group 0 and switches schema/topology changes to use group 0.
     // Can be restarted after a crash. Does nothing if the procedure was already finished once.
