@@ -4328,11 +4328,6 @@ future<> storage_service::handle_state_bootstrap(inet_address endpoint, gms::per
 future<> storage_service::handle_state_normal(inet_address endpoint, gms::permit_id pid) {
     slogger.debug("endpoint={} handle_state_normal: permit_id={}", endpoint, pid);
 
-    if (_raft_topology_change_enabled) {
-        slogger.debug("ignore handle_state_normal since topology changes are using raft");
-        co_return;
-    }
-
     auto tokens = get_tokens_for(endpoint);
 
     slogger.info("Node {} is in normal state, tokens: {}", endpoint, tokens);
@@ -4572,11 +4567,6 @@ future<> storage_service::handle_state_normal(inet_address endpoint, gms::permit
 future<> storage_service::handle_state_left(inet_address endpoint, std::vector<sstring> pieces, gms::permit_id pid) {
     slogger.debug("endpoint={} handle_state_left: permit_id={}", endpoint, pid);
 
-    if (_raft_topology_change_enabled) {
-        slogger.debug("ignore handle_state_left since topology changes are using raft");
-        co_return;
-    }
-
     if (pieces.size() < 2) {
         slogger.warn("Fail to handle_state_left endpoint={} pieces={}", endpoint, pieces);
         co_return;
@@ -4653,6 +4643,9 @@ future<> storage_service::on_change(gms::inet_address endpoint, const gms::appli
     // copy the states map locally since the coroutine may yield
     auto states = states_;
     slogger.debug("endpoint={} on_change:     states={}, permit_id={}", endpoint, states, pid);
+    if (_raft_topology_change_enabled) {
+        slogger.debug("ignore status changes since topology changes are using raft");
+    } else {
     co_await on_application_state_change(endpoint, states, application_state::STATUS, pid, [this] (inet_address endpoint, const gms::versioned_value& value, gms::permit_id pid) -> future<> {
         std::vector<sstring> pieces;
         boost::split(pieces, value.value(), boost::is_any_of(sstring(versioned_value::DELIMITER_STR)));
@@ -4674,6 +4667,7 @@ future<> storage_service::on_change(gms::inet_address endpoint, const gms::appli
             co_return; // did nothing.
         }
     });
+    }
     auto ep_state = _gossiper.get_endpoint_state_ptr(endpoint);
     if (!ep_state || _gossiper.is_dead_state(*ep_state)) {
         slogger.debug("Ignoring state change for dead or unknown endpoint: {}", endpoint);
