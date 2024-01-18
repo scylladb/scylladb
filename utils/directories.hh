@@ -8,13 +8,18 @@
 
 #pragma once
 
+#include <filesystem>
 #include <set>
+#include <string_view>
 #include <vector>
+
 #include <seastar/core/future.hh>
-#include <seastar/core/smp.hh>
+#include <seastar/core/sstring.hh>
+#include <seastar/util/bool_class.hh>
+
 #include "utils/file_lock.hh"
 
-using namespace seastar;
+namespace fs = std::filesystem;
 
 namespace db {
 class config;
@@ -24,31 +29,33 @@ namespace utils {
 
 class directories {
 public:
-    class set {
-    public:
-        void add(fs::path path);
-        void add(sstring path);
-        void add(std::vector<sstring> path);
-        void add_sharded(sstring path);
-
-        const std::set<fs::path> get_paths() const {
-            return _paths;
-        }
-
-    private:
-        std::set<fs::path> _paths;
-    };
-
-    using recursive = bool_class<struct recursive_tag>;
+    class set;
+    using recursive = seastar::bool_class<struct recursive_tag>;
 
     directories(bool developer_mode);
-    future<> create_and_verify(set dir_set);
-    static future<> verify_owner_and_mode(std::filesystem::path path, recursive r = recursive::yes);
+    seastar::future<> create_and_verify(set dir_set);
+    static seastar::future<> verify_owner_and_mode(fs::path path, recursive r = recursive::yes);
+
 private:
+    static seastar::future<> do_verify_owner_and_mode(fs::path path, recursive, int level);
+
     bool _developer_mode;
     std::vector<file_lock> _locks;
+};
 
-    static future<> do_verify_owner_and_mode(std::filesystem::path path, recursive, int level);
+class directories::set {
+public:
+    void add(fs::path path);
+    void add(seastar::sstring path);
+    void add(std::vector<seastar::sstring> path);
+    void add_sharded(seastar::sstring path);
+
+    const std::set<fs::path> get_paths() const {
+        return _paths;
+    }
+
+private:
+    std::set<fs::path> _paths;
 };
 
 } // namespace utils

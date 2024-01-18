@@ -6,14 +6,18 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#include <seastar/core/seastar.hh>
 #include <seastar/core/coroutine.hh>
+#include <seastar/core/seastar.hh>
+#include <seastar/core/smp.hh>
+
 #include "init.hh"
 #include "supervisor.hh"
 #include "directories.hh"
 #include "utils/disk-error-handler.hh"
 #include "utils/fmt-compat.hh"
 #include "utils/lister.hh"
+
+using namespace seastar;
 
 namespace utils {
 
