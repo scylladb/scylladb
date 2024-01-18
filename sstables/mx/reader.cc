@@ -1346,26 +1346,25 @@ private:
     future<> advance_to_next_partition() {
         sstlog.trace("reader {}: advance_to_next_partition()", fmt::ptr(this));
         _before_partition = true;
-        auto& consumer = _consumer;
-        if (consumer.is_mutation_end()) {
+        if (_consumer.is_mutation_end()) {
             sstlog.trace("reader {}: already at partition boundary", fmt::ptr(this));
             _index_in_current_partition = false;
-            return make_ready_future<>();
+            co_return;
         }
-        return (_index_in_current_partition
-                ? _index_reader->advance_to_next_partition()
-                : get_index_reader().advance_to(dht::ring_position_view::for_after_key(*_current_partition_key))).then([this] {
-            _index_in_current_partition = true;
-            auto [start, end] = _index_reader->data_file_positions();
-            if (end && start > *end) {
-                _read_enabled = false;
-                return make_ready_future<>();
-            }
-            SCYLLA_ASSERT(_index_reader->element_kind() == indexable_element::partition);
-            return skip_to(_index_reader->element_kind(), start).then([this] {
-                _sst->get_stats().on_partition_seek();
-            });
-        });
+        if (_index_in_current_partition) {
+            co_await _index_reader->advance_to_next_partition();
+        } else {
+            co_await get_index_reader().advance_to(dht::ring_position_view::for_after_key(*_current_partition_key));
+        }
+        _index_in_current_partition = true;
+        auto [start, end] = _index_reader->data_file_positions();
+        if (end && start > *end) {
+            _read_enabled = false;
+            co_return;
+        }
+        SCYLLA_ASSERT(_index_reader->element_kind() == indexable_element::partition);
+        co_await skip_to(_index_reader->element_kind(), start);
+        _sst->get_stats().on_partition_seek();
     }
     future<> read_from_index() {
         sstlog.trace("reader {}: read from index", fmt::ptr(this));
