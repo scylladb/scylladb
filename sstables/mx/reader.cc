@@ -1438,23 +1438,22 @@ private:
     }
     future<> advance_context(std::optional<position_in_partition_view> pos) {
         if (!pos || pos->is_before_all_fragments(*_schema)) {
-            return make_ready_future<>();
+            co_return;
         }
         SCYLLA_ASSERT (_current_partition_key);
-        return [this] {
+        // FIXME: fix the indent
             if (!_index_in_current_partition) {
                 _index_in_current_partition = true;
                 // FIXME reversed multi partition reads
-                return get_index_reader().advance_to(*_current_partition_key);
+                co_await get_index_reader().advance_to(*_current_partition_key);
             }
-            return make_ready_future();
-        }().then([this, pos = *pos] {
+
             if (reversed()) {
                 // The position `pos` conforms to the query schema (it is the start of a reversed range),
                 // which is reversed w.r.t. the table schema. We use the table schema in index_reader,
                 // so we need to unreverse `pos` before passing it into index_reader.
-                auto rev_pos = pos.reversed();
-                return get_index_reader().advance_reverse(std::move(rev_pos)).then([this] {
+                auto rev_pos = pos->reversed();
+                co_await get_index_reader().advance_reverse(std::move(rev_pos));
                     // The reversing data source will notice the skip and update the data ranges
                     // from which it prepares the data given to us.
 
@@ -1465,9 +1464,7 @@ private:
                         // than the index. We must not update the current range tombstone in this case
                         // or reset the context since all fragments up to the new position of the index
                         // will be (or already have been) provided to the context by the source.
-                        return;
-                    }
-
+                    } else {
                     _context->reset_after_reversed_read_skip();
 
                     _sst->get_stats().on_partition_seek();
@@ -1477,15 +1474,15 @@ private:
                     } else {
                         _consumer.set_range_tombstone({});
                     }
-                });
+                    }
             } else {
-                return get_index_reader().advance_to(pos).then([this] {
+                co_await get_index_reader().advance_to(*pos);
                     index_reader& idx = *_index_reader;
                     auto index_position = idx.data_file_positions();
                     if (index_position.start <= _context->position()) {
-                        return make_ready_future<>();
+                        co_return;
                     }
-                    return skip_to(idx.element_kind(), index_position.start).then([this, &idx] {
+                    co_await skip_to(idx.element_kind(), index_position.start);
                         _sst->get_stats().on_partition_seek();
                         auto open_end_marker = idx.end_open_marker();
                         if (open_end_marker) {
@@ -1493,10 +1490,7 @@ private:
                         } else {
                             _consumer.set_range_tombstone({});
                         }
-                    });
-                });
-            }
-        });
+                }
     }
     bool is_initialized() const {
         return bool(_context);
