@@ -88,7 +88,10 @@ public:
     struct config {
         config() = default;
         config(const config&) = default;
-        static config from_db_config(const db::config&, seastar::scheduling_group sg, size_t shard_available_memory);
+        static config from_db_config(const db::config&,
+                const seastar::sstring& commitlog_dir,
+                seastar::scheduling_group sg,
+                size_t shard_available_memory);
 
         seastar::scheduling_group sched_group;
         sstring commit_log_location;

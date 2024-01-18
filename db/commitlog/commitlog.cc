@@ -94,11 +94,14 @@ public:
     virtual void release_cf_count(const cf_id_type&) = 0;
 };
 
-db::commitlog::config db::commitlog::config::from_db_config(const db::config& cfg, seastar::scheduling_group sg, size_t shard_available_memory) {
+db::commitlog::config db::commitlog::config::from_db_config(const db::config& cfg,
+        const seastar::sstring& commitlog_dir,
+        seastar::scheduling_group sg,
+        size_t shard_available_memory) {
     config c;
 
     c.sched_group = std::move(sg);
-    c.commit_log_location = cfg.commitlog_directory();
+    c.commit_log_location = commitlog_dir;
     c.metrics_category_name = "commitlog";
     c.commitlog_total_space_in_mb = cfg.commitlog_total_space_in_mb() >= 0 ? cfg.commitlog_total_space_in_mb() : (shard_available_memory * smp::count) >> 20;
     c.commitlog_segment_size_in_mb = cfg.commitlog_segment_size_in_mb();

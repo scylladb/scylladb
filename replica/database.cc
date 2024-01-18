@@ -733,7 +733,10 @@ database::init_commitlog() {
         return make_ready_future<>();
     }
 
-    auto config = db::commitlog::config::from_db_config(_cfg, _dbcfg.commitlog_scheduling_group, _dbcfg.available_memory);
+    auto config = db::commitlog::config::from_db_config(_cfg,
+            _dirs.get_commitlog_dir(),
+            _dbcfg.commitlog_scheduling_group,
+            _dbcfg.available_memory);
     // todo: it would be much cleaner to allow the test to set the appropriate value:
     // utils::get_local_injector().resolve("decrease_commitlog_base_segment_id")
     if (utils::get_local_injector().enter("decrease_commitlog_base_segment_id")) {
