@@ -98,6 +98,13 @@ class RESTClient(metaclass=ABCMeta):
         await self._fetch("POST", resource_uri, host = host, port = port, params = params,
                           json = json, timeout = timeout)
 
+    async def post_json(self, resource_uri: str, host: Optional[str] = None,
+                   port: Optional[int] = None, params: Optional[Mapping[str, str]] = None,
+                   json: Optional[Mapping] = None, timeout: Optional[float] = None) -> None:
+        ret = await self._fetch("POST", resource_uri, response_type = "json", host = host, port = port, params = params,
+                          json = json, timeout = timeout)
+        return ret
+
     async def put_json(self, resource_uri: str, data: Optional[Mapping] = None, host: Optional[str] = None,
                        port: Optional[int] = None, params: Optional[dict[str, str]] = None,
                        response_type: Optional[str] = None, timeout: Optional[float] = None) -> Any:
@@ -274,11 +281,18 @@ class ScyllaRESTAPIClient():
         if table is not None:
             url += "?cf={table}"
         await self.client.post(url, host=node_ip)
+
     async def dump_llvm_profile(self, node_ip : str):
         """Dump llvm profile to disk that can later be used for PGO or coverage reporting.
            no-op if the scylla binary is not instrumented."""
         url = "/system/dump_llvm_profile"
         await self.client.post(url, host=node_ip)
+
+    async def repair(self, node_ip: str, keyspace: str, table: str) -> None:
+        """Repair the given table and wait for it to complete"""
+        sequence_number = await self.client.post_json(f"/storage_service/repair_async/{keyspace}", host=node_ip, params={"columnFamilies": table})
+        status = await self.client.get_json(f"/storage_service/repair_status", host=node_ip, params={"id": str(sequence_number)})
+        return status
 
 class ScyllaMetrics:
     def __init__(self, lines: list[str]):

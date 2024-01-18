@@ -80,6 +80,11 @@ struct repair_uniq_id {
 };
 std::ostream& operator<<(std::ostream& os, const repair_uniq_id& x);
 
+// If the repair master sets the dst_cpu_id to repair_unspecified_shard. It
+// means the repair master does not choose shard id for the repair follower.
+// The repair follower should choose the shard id itself.
+constexpr shard_id repair_unspecified_shard = shard_id(-1);
+
 // NOTE: repair_start() can be run on any node, but starts a node-global
 // operation.
 // repair_start() starts the requested repair on this node. It returns an
@@ -134,6 +139,7 @@ class repair_neighbors {
 public:
     std::vector<gms::inet_address> all;
     std::vector<gms::inet_address> mandatory;
+    std::unordered_map<gms::inet_address, shard_id> shard_map;
     repair_neighbors() = default;
     explicit repair_neighbors(std::vector<gms::inet_address> a)
         : all(std::move(a)) {
@@ -142,6 +148,7 @@ public:
         : all(std::move(a))
         , mandatory(std::move(m)) {
     }
+    repair_neighbors(std::vector<gms::inet_address> nodes, std::vector<shard_id> shards);
 };
 
 future<uint64_t> estimate_partitions(seastar::sharded<replica::database>& db, const sstring& keyspace,
@@ -251,6 +258,16 @@ struct repair_flush_hints_batchlog_request {
 };
 
 struct repair_flush_hints_batchlog_response {
+};
+
+struct tablet_repair_task_meta {
+    sstring keyspace_name;
+    sstring table_name;
+    table_id tid;
+    shard_id master_shard_id;
+    dht::token_range range;
+    repair_neighbors neighbors;
+    locator::tablet_replica_set replicas;
 };
 
 namespace std {

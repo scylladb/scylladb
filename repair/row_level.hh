@@ -16,6 +16,7 @@
 #include "locator/abstract_replication_strategy.hh"
 #include <seastar/core/distributed.hh>
 #include <seastar/util/bool_class.hh>
+#include "service/raft/raft_address_map.hh"
 
 using namespace seastar;
 
@@ -82,11 +83,14 @@ public:
     float repair_finished_percentage();
 };
 
+using host2ip_t = std::function<future<gms::inet_address> (locator::host_id)>;
+
 class repair_service : public seastar::peering_sharded_service<repair_service> {
     distributed<gms::gossiper>& _gossiper;
     netw::messaging_service& _messaging;
     sharded<replica::database>& _db;
     sharded<service::storage_proxy>& _sp;
+    sharded<service::raft_address_map>& _addr_map;
     sharded<db::batchlog_manager>& _bm;
     sharded<db::system_distributed_keyspace>& _sys_dist_ks;
     sharded<db::system_keyspace>& _sys_ks;
@@ -113,6 +117,7 @@ public:
             netw::messaging_service& ms,
             sharded<replica::database>& db,
             sharded<service::storage_proxy>& sp,
+            sharded<service::raft_address_map>& addr_map,
             sharded<db::batchlog_manager>& bm,
             sharded<db::system_distributed_keyspace>& sys_dist_ks,
             sharded<db::system_keyspace>& sys_ks,
@@ -154,6 +159,11 @@ private:
             std::unordered_map<dht::token_range, repair_neighbors> neighbors,
             streaming::stream_reason reason,
             shared_ptr<node_ops_info> ops_info);
+
+public:
+    future<> repair_tablets(repair_uniq_id id, sstring keyspace_name, std::vector<sstring> table_names, host2ip_t host2ip, bool primary_replica_only = true);
+
+private:
 
     future<repair_update_system_table_response> repair_update_system_table_handler(
             gms::inet_address from,
@@ -232,6 +242,7 @@ public:
 
     friend class repair::user_requested_repair_task_impl;
     friend class repair::data_sync_repair_task_impl;
+    friend class repair::tablet_repair_task_impl;
 };
 
 class repair_info;
