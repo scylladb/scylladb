@@ -204,7 +204,9 @@ def testCreateAlterKeyspaces(cql, test_keyspace, this_dc):
 # Test {@link ConfigurationException} thrown on alter keyspace to no DC
 # option in replication configuration.
 # Reproduces CASSANDRA-12681 and Scylla #10036
-def testAlterKeyspaceWithNoOptionThrowsConfigurationException(cql, test_keyspace, this_dc):
+# fails_with_tablets because Scylla doesn't allow switching from NTS
+# with tablets to SimpleStrategy (without tablets)
+def testAlterKeyspaceWithNoOptionThrowsConfigurationException(cql, test_keyspace, this_dc, fails_with_tablets):
     # Create keyspaces
     with create_keyspace(cql, "replication={ 'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 3 }") as abc:
         with create_keyspace(cql, "replication={ 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 3 }") as xyz:
