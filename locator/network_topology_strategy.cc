@@ -305,7 +305,7 @@ static unsigned calculate_initial_tablets_from_topology(const schema& s, const t
             rf_in_dc = it->second;
         }
 
-        unsigned tablets_in_dc = (shards_in_dc + rf_in_dc - 1) / rf_in_dc;
+        unsigned tablets_in_dc = rf_in_dc > 0 ? (shards_in_dc + rf_in_dc - 1) / rf_in_dc : 0;
         initial_tablets = std::max(initial_tablets, tablets_in_dc);
     }
     rslogger.debug("Estimated {} initial tablets for table {}.{}", initial_tablets, s.ks_name(), s.cf_name());
