@@ -304,9 +304,6 @@ void fsm::become_candidate(bool is_prevote, bool is_leadership_transfer) {
 }
 
 future<fsm_output> fsm::poll_output() {
-    logger.trace("fsm::poll_output() {} stable index: {} last index: {}",
-        _my_id, _log.stable_idx(), _log.last_idx());
-
     co_await _sm_events.when(std::bind_front(&fsm::has_output, this));
 
     while (utils::get_local_injector().enter("fsm::poll_output/pause")) {
@@ -316,6 +313,9 @@ future<fsm_output> fsm::poll_output() {
 }
 
 bool fsm::has_output() const {
+    logger.trace("fsm::has_output() {} stable index: {} last index: {}",
+        _my_id, _log.stable_idx(), _log.last_idx());
+
     auto diff = _log.last_idx() - _log.stable_idx();
 
     return diff > 0 || !_messages.empty() || !_observed.is_equal(*this) || _output.max_read_id_with_quorum
