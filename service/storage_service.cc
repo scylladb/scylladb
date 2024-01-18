@@ -4760,8 +4760,12 @@ db::system_keyspace::peer_info storage_service::get_peer_info_for_update(inet_ad
 
     auto set_field = [&]<typename T> (std::optional<T>& field,
             const gms::versioned_value& value,
-            std::string_view name)
+            std::string_view name,
+            bool managed_by_raft_in_raft_topology)
     {
+        if (_raft_topology_change_enabled && managed_by_raft_in_raft_topology) {
+            return;
+        }
         try {
             field = T(value.value());
         } catch (...) {
@@ -4773,31 +4777,31 @@ db::system_keyspace::peer_info storage_service::get_peer_info_for_update(inet_ad
     for (const auto& [state, value] : app_state_map) {
         switch (state) {
         case application_state::DC:
-            set_field(ret.data_center, value, "data_center");
+            set_field(ret.data_center, value, "data_center", true);
             break;
         case application_state::HOST_ID:
-            set_field(ret.host_id, value, "host_id");
+            set_field(ret.host_id, value, "host_id", true);
             break;
         case application_state::INTERNAL_IP:
-            set_field(ret.preferred_ip, value, "preferred_ip");
+            set_field(ret.preferred_ip, value, "preferred_ip", false);
             break;
         case application_state::RACK:
-            set_field(ret.rack, value, "rack");
+            set_field(ret.rack, value, "rack", true);
             break;
         case application_state::RELEASE_VERSION:
-            set_field(ret.release_version, value, "release_version");
+            set_field(ret.release_version, value, "release_version", true);
             break;
         case application_state::RPC_ADDRESS:
-            set_field(ret.rpc_address, value, "rpc_address");
+            set_field(ret.rpc_address, value, "rpc_address", false);
             break;
         case application_state::SCHEMA:
-            set_field(ret.schema_version, value, "schema_version");
+            set_field(ret.schema_version, value, "schema_version", false);
             break;
         case application_state::TOKENS:
             // tokens are updated separately
             break;
         case application_state::SUPPORTED_FEATURES:
-            set_field(ret.supported_features, value, "supported_features");
+            set_field(ret.supported_features, value, "supported_features", true);
             break;
         default:
             break;
