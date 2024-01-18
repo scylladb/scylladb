@@ -41,6 +41,7 @@ from cassandra.cluster import Session           # pylint: disable=no-name-in-mod
 from cassandra.cluster import ExecutionProfile  # pylint: disable=no-name-in-module
 from cassandra.cluster import EXEC_PROFILE_DEFAULT  # pylint: disable=no-name-in-module
 from cassandra.policies import WhiteListRoundRobinPolicy  # type: ignore
+from cassandra.connection import UnixSocketEndPoint
 
 
 class ReplaceConfig(NamedTuple):
@@ -355,6 +356,19 @@ class ScyllaServer:
         except Exception as exc:    # pylint: disable=broad-except
             return f"Exception when reading server log {self.log_filename}: {exc}"
 
+    def in_maintenance_mode(self) -> bool:
+        """Return True if the server is in maintenance mode"""
+        return self.config.get("maintenance_mode", False)
+
+    def maintenance_socket(self) -> Optional[str]:
+        """Return the maintenance socket path"""
+        maintenance_socket_option = self.config["maintenance_socket"]
+        if maintenance_socket_option == "workdir":
+            return (self.workdir / "cql.m").absolute().as_posix()
+        elif maintenance_socket_option == "ignore":
+            return None
+        return maintenance_socket_option
+
     async def cql_is_up(self) -> CqlUpState:
         """Test that CQL is serving (a check we use at start up)."""
         caslog = logging.getLogger('cassandra')
@@ -368,8 +382,19 @@ class ScyllaServer:
         # words, even after CQL port is up, Scylla may still be
         # initializing. When the role is ready, queries begin to
         # work, so rely on this "side effect".
-        profile = ExecutionProfile(load_balancing_policy=WhiteListRoundRobinPolicy([self.rpc_address]),
-                                   request_timeout=self.TOPOLOGY_TIMEOUT)
+        in_maintenance_mode = self.in_maintenance_mode()
+
+        if in_maintenance_mode:
+            maintenance_socket = self.maintenance_socket()
+            if maintenance_socket is None:
+                raise RuntimeError("Can't check CQL in maintenance mode without a maintenance socket")
+            profile = ExecutionProfile(load_balancing_policy=WhiteListRoundRobinPolicy([UnixSocketEndPoint(maintenance_socket)]),
+                                       request_timeout=self.TOPOLOGY_TIMEOUT)
+            contact_points = [UnixSocketEndPoint(maintenance_socket)]
+        else:
+            profile = ExecutionProfile(load_balancing_policy=WhiteListRoundRobinPolicy([self.rpc_address]),
+                                       request_timeout=self.TOPOLOGY_TIMEOUT)
+            contact_points=[self.rpc_address]
         connected = False
         try:
             # In a cluster setup, it's possible that the CQL
@@ -377,7 +402,7 @@ class ScyllaServer:
             # point, so make sure we execute the checks strictly via
             # this connection
             with Cluster(execution_profiles={EXEC_PROFILE_DEFAULT: profile},
-                         contact_points=[self.rpc_address],
+                         contact_points=contact_points,
                          # This is the latest version Scylla supports
                          protocol_version=4,
                          control_connection_timeout=self.TOPOLOGY_TIMEOUT,
@@ -389,7 +414,7 @@ class ScyllaServer:
                     session.execute("SELECT key FROM system.local where key = 'local'")
                     self.control_cluster = Cluster(execution_profiles=
                                                         {EXEC_PROFILE_DEFAULT: profile},
-                                                   contact_points=[self.rpc_address],
+                                                   contact_points=contact_points,
                                                    control_connection_timeout=self.TOPOLOGY_TIMEOUT,
                                                    auth_provider=auth)
                     self.control_connection = self.control_cluster.connect()
