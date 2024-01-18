@@ -4758,56 +4758,46 @@ db::system_keyspace::peer_info storage_service::get_peer_info_for_update(inet_ad
 db::system_keyspace::peer_info storage_service::get_peer_info_for_update(inet_address endpoint, const gms::application_state_map& app_state_map) {
     db::system_keyspace::peer_info ret;
 
-    auto insert_string = [&] (std::optional<sstring>& opt, const gms::versioned_value& value, std::string_view) {
-        opt.emplace(value.value());
-    };
-    auto insert_address = [&] (std::optional<net::inet_address>& opt, const gms::versioned_value& value, std::string_view name) {
-        net::inet_address addr;
+    auto set_field = [&]<typename T> (std::optional<T>& field,
+            const gms::versioned_value& value,
+            std::string_view name)
+    {
         try {
-            addr = net::inet_address(value.value());
+            field = T(value.value());
         } catch (...) {
-            on_internal_error(slogger, format("failed to parse {} {} for {}: {}", name, value.value(), endpoint, std::current_exception()));
+            on_internal_error(slogger, format("failed to parse {} {} for {}: {}", name, value.value(),
+                endpoint, std::current_exception()));
         }
-        opt.emplace(addr);
-    };
-    auto insert_uuid = [&] (std::optional<utils::UUID>& opt, const gms::versioned_value& value, std::string_view name) {
-        utils::UUID id;
-        try {
-            id = utils::UUID(value.value());
-        } catch (...) {
-            on_internal_error(slogger, format("failed to parse {} {} for {}: {}", name, value.value(), endpoint, std::current_exception()));
-        }
-        opt.emplace(id);
     };
 
     for (const auto& [state, value] : app_state_map) {
         switch (state) {
         case application_state::DC:
-            insert_string(ret.data_center, value, "data_center");
+            set_field(ret.data_center, value, "data_center");
             break;
         case application_state::HOST_ID:
-            insert_uuid(ret.host_id, value, "host_id");
+            set_field(ret.host_id, value, "host_id");
             break;
         case application_state::INTERNAL_IP:
-            insert_address(ret.preferred_ip, value, "preferred_ip");
+            set_field(ret.preferred_ip, value, "preferred_ip");
             break;
         case application_state::RACK:
-            insert_string(ret.rack, value, "rack");
+            set_field(ret.rack, value, "rack");
             break;
         case application_state::RELEASE_VERSION:
-            insert_string(ret.release_version, value, "release_version");
+            set_field(ret.release_version, value, "release_version");
             break;
         case application_state::RPC_ADDRESS:
-            insert_address(ret.rpc_address, value, "rpc_address");
+            set_field(ret.rpc_address, value, "rpc_address");
             break;
         case application_state::SCHEMA:
-            insert_uuid(ret.schema_version, value, "schema_version");
+            set_field(ret.schema_version, value, "schema_version");
             break;
         case application_state::TOKENS:
             // tokens are updated separately
             break;
         case application_state::SUPPORTED_FEATURES:
-            insert_string(ret.supported_features, value, "supported_features");
+            set_field(ret.supported_features, value, "supported_features");
             break;
         default:
             break;
