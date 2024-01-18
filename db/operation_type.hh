@@ -9,7 +9,7 @@
 #pragma once
 
 #include <cstdint>
-#include <iosfwd>
+#include <fmt/core.h>
 
 namespace db {
 
@@ -18,6 +18,9 @@ enum class operation_type : uint8_t {
     write = 1
 };
 
-std::ostream& operator<<(std::ostream& os, operation_type op_type);
-
 }
+
+template <> struct fmt::formatter<db::operation_type> {
+    constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
+    auto format(db::operation_type, fmt::format_context& ctx) const -> decltype(ctx.out());
+};

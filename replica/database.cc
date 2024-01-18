@@ -2155,15 +2155,16 @@ std::ostream& operator<<(std::ostream& os, const write_type& t) {
     abort();
 }
 
-std::ostream& operator<<(std::ostream& os, operation_type op_type) {
+}
+
+auto fmt::formatter<db::operation_type>::format(db::operation_type op_type, fmt::format_context& ctx) const -> decltype(ctx.out()) {
     switch (op_type) {
-    case operation_type::read: return os << "read";
-    case operation_type::write: return os << "write";
+    case operation_type::read: return fmt::format_to(ctx.out(), "read");
+    case operation_type::write: return fmt::format_to(ctx.out(), "write");
     }
     abort();
 }
 
-}
 
 std::string_view fmt::formatter<db::consistency_level>::to_string(db::consistency_level cl) {
     switch (cl) {
