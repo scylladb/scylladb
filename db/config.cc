@@ -362,6 +362,8 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "If set to higher than 0, ignore the controller's output and set the compaction shares statically. Do not set this unless you know what you are doing and suspect a problem in the controller. This option will be retired when the controller reaches more maturity")
     , compaction_enforce_min_threshold(this, "compaction_enforce_min_threshold", liveness::LiveUpdate, value_status::Used, false,
         "If set to true, enforce the min_threshold option for compactions strictly. If false (default), Scylla may decide to compact even if below min_threshold")
+    , compaction_twcs_offstrategy_enabled(this, "compaction_twcs_offstrategy_enabled", liveness::LiveUpdate, value_status::Used, true,
+        "If set to true, off-strategy compaction is enabled for tables using time window strategy. Setting it to false helps to limit space overhead after streaming to 1 / N, where N is the number of windows configured.")
     , compaction_flush_all_tables_before_major_seconds(this, "compaction_flush_all_tables_before_major_seconds", value_status::Used, 86400,
         "Set the minimum interval in seconds between flushing all tables before each major compaction (default is 86400). "
         "This option is useful for maximizing tombstone garbage collection by releasing all active commitlog segments. "
