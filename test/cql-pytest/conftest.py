@@ -221,3 +221,24 @@ def temp_workdir():
     """ Creates a temporary work directory, for the scope of a single test. """
     with tempfile.TemporaryDirectory() as workdir:
         yield workdir
+
+# The "tablets" experimental feature is optionally enabled in Scylla, and
+# some tests are expected to fail on Scylla when this option is enabled,
+# but expected to pass without it enabled (and also pass on Cassandra).
+# These test should use the fails_with_tablets fixture.
+# When tablets mode becomes mainstream and no test fails with it, this
+# fixture can be removed.
+@pytest.fixture(scope="session")
+def check_experimental_tablets(cql):
+    # If not running on Scylla, return false.
+    names = [row.table_name for row in cql.execute("SELECT * FROM system_schema.tables WHERE keyspace_name = 'system'")]
+    if not any('scylla' in name for name in names):
+        return False
+    # In Scylla, we check Tablets mode by inspecting the configuration via CQL.
+    experimental_features = list(cql.execute("SELECT value FROM system.config WHERE name = 'experimental_features'"))[0].value
+    return '"tablets"' in experimental_features
+
+@pytest.fixture(scope="function")
+def fails_with_tablets(request, check_experimental_tablets):
+    if check_experimental_tablets:
+        request.node.add_marker(pytest.mark.xfail(reason='Test expected to fail with tablets experimental feature on'))
