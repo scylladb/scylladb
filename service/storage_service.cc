@@ -1492,6 +1492,15 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
             throw std::runtime_error("Cannot replace address with a node that is already bootstrapped");
         }
         ri = co_await prepare_replacement_info(initial_contact_nodes, loaded_peer_features);
+
+        const auto& my_location = tmptr->get_topology().get_location();
+        if (my_location != ri->dc_rack) {
+            auto msg = fmt::format("Cannot replace node {}/{} with a node on a different data center or rack. Current location={}/{}, new location={}/{}",
+                    ri->host_id, ri->address, ri->dc_rack.dc, ri->dc_rack.rack, my_location.dc, my_location.rack);
+            slogger.error("{}", msg);
+            throw std::runtime_error(msg);
+        }
+
         replace_address = ri->address;
         raft_replace_info = raft_group0::replace_info {
             .ip_addr = *replace_address,
