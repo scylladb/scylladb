@@ -19,9 +19,10 @@ leader::~leader() {
 }
 
 fsm::fsm(server_id id, term_t current_term, server_id voted_for, log log,
-        index_t commit_idx, failure_detector& failure_detector, fsm_config config) :
+        index_t commit_idx, failure_detector& failure_detector, fsm_config config,
+        seastar::condition_variable& sm_events) :
         _my_id(id), _current_term(current_term), _voted_for(voted_for),
-        _log(std::move(log)), _failure_detector(failure_detector), _config(config) {
+        _log(std::move(log)), _failure_detector(failure_detector), _config(config), _sm_events(sm_events) {
     if (id == raft::server_id{}) {
         throw std::invalid_argument("raft::fsm: raft instance cannot have id zero");
     }
@@ -1139,7 +1140,6 @@ void fsm::stop() {
         // (in particular, abort waits on log_limiter_semaphore and prevent new ones).
         become_follower({});
     }
-    _sm_events.broken();
 }
 
 std::ostream& operator<<(std::ostream& os, const fsm& f) {

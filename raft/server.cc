@@ -105,6 +105,8 @@ public:
     void register_metrics() override;
     size_t max_command_size() const override;
 private:
+    seastar::condition_variable _sm_events;
+
     std::unique_ptr<rpc> _rpc;
     std::unique_ptr<state_machine> _state_machine;
     std::unique_ptr<persistence> _persistence;
@@ -352,7 +354,8 @@ future<> server_impl::start() {
                                      .append_request_threshold = _config.append_request_threshold,
                                      .max_log_size = _config.max_log_size,
                                      .enable_prevoting = _config.enable_prevoting
-                                 });
+                                 },
+                                 _sm_events);
 
     _applied_idx = index_t{0};
     if (snapshot.id) {
@@ -1437,6 +1440,7 @@ future<> server_impl::abort(sstring reason) {
     _aborted = std::move(reason);
     logger.trace("[{}]: abort() called", _id);
     _fsm->stop();
+    _sm_events.broken();
 
     // IO and applier fibers may update waiters and start new snapshot
     // transfers, so abort them first

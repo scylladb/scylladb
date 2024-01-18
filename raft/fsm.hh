@@ -236,7 +236,7 @@ private:
     std::vector<std::pair<server_id, rpc_message>> _messages;
 
     // Signaled when there is a IO event to process.
-    seastar::condition_variable _sm_events;
+    seastar::condition_variable& _sm_events;
 
     // Called when one of the replicas advances its match index
     // so it may be the case that some entries are committed now.
@@ -348,7 +348,8 @@ protected: // For testing
 
 public:
     explicit fsm(server_id id, term_t current_term, server_id voted_for, log log,
-            index_t commit_idx, failure_detector& failure_detector, fsm_config conf);
+            index_t commit_idx, failure_detector& failure_detector, fsm_config conf,
+            seastar::condition_variable& sm_events);
 
     bool is_leader() const {
         return std::holds_alternative<leader>(_state);

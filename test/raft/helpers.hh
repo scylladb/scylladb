@@ -63,13 +63,18 @@ raft::command create_command(T val) {
 extern raft::fsm_config fsm_cfg;
 extern raft::fsm_config fsm_cfg_pre;
 
-class fsm_debug : public raft::fsm {
+struct sm_events_container {
+    seastar::condition_variable sm_events;
+};
+
+class fsm_debug : public sm_events_container, public raft::fsm {
 public:
     using raft::fsm::fsm;
 
     explicit fsm_debug(raft::server_id id, raft::term_t current_term, raft::server_id voted_for, raft::log log,
             raft::failure_detector& failure_detector, raft::fsm_config conf)
-        : fsm(id, current_term, voted_for, std::move(log), raft::index_t{0}, failure_detector, conf) {
+        : sm_events_container()
+        , fsm(id, current_term, voted_for, std::move(log), raft::index_t{0}, failure_detector, conf, sm_events) {
     }
 
     void become_follower(raft::server_id leader) {
