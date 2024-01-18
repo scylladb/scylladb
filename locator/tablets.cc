@@ -66,10 +66,12 @@ read_replica_set_selector get_selector_for_reads(tablet_transition_stage stage) 
 }
 
 tablet_transition_info::tablet_transition_info(tablet_transition_stage stage,
+                                               tablet_transition_kind transition,
                                                tablet_replica_set next,
                                                tablet_replica pending_replica,
                                                service::session_id session_id)
     : stage(stage)
+    , transition(transition)
     , next(std::move(next))
     , pending_replica(std::move(pending_replica))
     , session_id(session_id)
@@ -260,6 +262,31 @@ sstring tablet_transition_stage_to_string(tablet_transition_stage stage) {
 
 tablet_transition_stage tablet_transition_stage_from_string(const sstring& name) {
     return tablet_transition_stage_from_name.at(name);
+}
+
+// The names are persisted in system tables so should not be changed.
+static const std::unordered_map<tablet_transition_kind, sstring> tablet_transition_kind_to_name = {
+        {tablet_transition_kind::migration, "migration"},
+};
+
+static const std::unordered_map<sstring, tablet_transition_kind> tablet_transition_kind_from_name = std::invoke([] {
+    std::unordered_map<sstring, tablet_transition_kind> result;
+    for (auto&& [v, s] : tablet_transition_kind_to_name) {
+        result.emplace(s, v);
+    }
+    return result;
+});
+
+sstring tablet_transition_kind_to_string(tablet_transition_kind kind) {
+    auto i = tablet_transition_kind_to_name.find(kind);
+    if (i == tablet_transition_kind_to_name.end()) {
+        on_internal_error(tablet_logger, format("Invalid tablet transition kind: {}", static_cast<int>(kind)));
+    }
+    return i->second;
+}
+
+tablet_transition_kind tablet_transition_kind_from_string(const sstring& name) {
+    return tablet_transition_kind_from_name.at(name);
 }
 
 std::ostream& operator<<(std::ostream& out, tablet_id id) {
@@ -581,4 +608,9 @@ auto fmt::formatter<locator::global_tablet_id>::format(const locator::global_tab
 auto fmt::formatter<locator::tablet_transition_stage>::format(const locator::tablet_transition_stage& stage, fmt::format_context& ctx) const
         -> decltype(ctx.out()) {
     return fmt::format_to(ctx.out(), "{}", locator::tablet_transition_stage_to_string(stage));
+}
+
+auto fmt::formatter<locator::tablet_transition_kind>::format(const locator::tablet_transition_kind& kind, fmt::format_context& ctx) const
+        -> decltype(ctx.out()) {
+    return fmt::format_to(ctx.out(), "{}", locator::tablet_transition_kind_to_string(kind));
 }

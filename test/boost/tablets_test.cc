@@ -140,6 +140,7 @@ SEASTAR_TEST_CASE(test_tablet_metadata_persistence) {
 
                 tmap.set_tablet_transition_info(tb, tablet_transition_info{
                     tablet_transition_stage::allow_write_both_read_old,
+                    tablet_transition_kind::migration,
                     tablet_replica_set {
                         tablet_replica {h3, 3},
                         tablet_replica {h1, 7},
@@ -150,6 +151,7 @@ SEASTAR_TEST_CASE(test_tablet_metadata_persistence) {
                 tb = *tmap.next_tablet(tb);
                 tmap.set_tablet_transition_info(tb, tablet_transition_info{
                     tablet_transition_stage::use_new,
+                    tablet_transition_kind::migration,
                     tablet_replica_set {
                         tablet_replica {h1, 4},
                         tablet_replica {h2, 2},
@@ -262,6 +264,7 @@ SEASTAR_TEST_CASE(test_get_shard) {
             });
             tmap.set_tablet_transition_info(tid, tablet_transition_info {
                 tablet_transition_stage::allow_write_both_read_old,
+                tablet_transition_kind::migration,
                 tablet_replica_set {
                     tablet_replica {h1, 0},
                     tablet_replica {h2, 3},
@@ -326,6 +329,7 @@ SEASTAR_TEST_CASE(test_mutation_builder) {
                     tablet_replica {h2, 3},
             });
             b.set_stage(last_token, tablet_transition_stage::write_both_read_new);
+            b.set_transition(last_token, tablet_transition_kind::migration);
             e.local_db().apply({freeze(b.build())}, db::no_timeout).get();
         }
 
@@ -347,6 +351,7 @@ SEASTAR_TEST_CASE(test_mutation_builder) {
             });
             expected_tmap.set_tablet_transition_info(tid1, tablet_transition_info {
                     tablet_transition_stage::write_both_read_new,
+                    tablet_transition_kind::migration,
                     tablet_replica_set {
                             tablet_replica {h1, 2},
                             tablet_replica {h2, 3},
@@ -362,6 +367,7 @@ SEASTAR_TEST_CASE(test_mutation_builder) {
             tablet_mutation_builder b(ts++, table1);
             auto last_token = tm.get_tablet_map(table1).get_last_token(tid1);
             b.set_stage(last_token, tablet_transition_stage::use_new);
+            b.set_transition(last_token, tablet_transition_kind::migration);
             e.local_db().apply({freeze(b.build())}, db::no_timeout).get();
         }
 
@@ -383,6 +389,7 @@ SEASTAR_TEST_CASE(test_mutation_builder) {
             });
             expected_tmap.set_tablet_transition_info(tid1, tablet_transition_info {
                     tablet_transition_stage::use_new,
+                    tablet_transition_kind::migration,
                     tablet_replica_set {
                             tablet_replica {h1, 2},
                             tablet_replica {h2, 3},
@@ -471,6 +478,7 @@ SEASTAR_TEST_CASE(test_sharder) {
             });
             tmap.set_tablet_transition_info(tid, tablet_transition_info {
                 tablet_transition_stage::use_new,
+                tablet_transition_kind::migration,
                 tablet_replica_set {
                     tablet_replica {h1, 1},
                     tablet_replica {h2, 3},
@@ -608,6 +616,7 @@ static
 tablet_transition_info migration_to_transition_info(const tablet_migration_info& mig, const tablet_info& ti) {
     return tablet_transition_info {
             tablet_transition_stage::allow_write_both_read_old,
+            mig.kind,
             replace_replica(ti.replicas, mig.src, mig.dst),
             mig.dst
     };
@@ -1142,6 +1151,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_works_with_in_progress_transitions)
         }
         tmap.set_tablet_transition_info(tmap.first_tablet(), tablet_transition_info {
                 tablet_transition_stage::allow_write_both_read_old,
+                tablet_transition_kind::migration,
                 tablet_replica_set {
                         tablet_replica {host3, 0},
                         tablet_replica {host2, 0},

@@ -15,6 +15,7 @@ namespace service {
 
 /// Represents intention to move a single tablet replica from src to dst.
 struct tablet_migration_info {
+    locator::tablet_transition_kind kind;
     locator::global_tablet_id tablet;
     locator::tablet_replica src;
     locator::tablet_replica dst;

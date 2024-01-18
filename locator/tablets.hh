@@ -158,8 +158,17 @@ enum class tablet_transition_stage {
     end_migration,
 };
 
+enum class tablet_transition_kind {
+    // Tablet replica is migrating from one shard to another.
+    // The new replica is (tablet_transition_info::next - tablet_info::replicas).
+    // The leaving replica is (tablet_info::replicas - tablet_transition_info::next).
+    migration,
+};
+
 sstring tablet_transition_stage_to_string(tablet_transition_stage);
 tablet_transition_stage tablet_transition_stage_from_string(const sstring&);
+sstring tablet_transition_kind_to_string(tablet_transition_kind);
+tablet_transition_kind tablet_transition_kind_from_string(const sstring&);
 
 enum class write_replica_set_selector {
     previous, both, next
@@ -173,13 +182,17 @@ enum class read_replica_set_selector {
 /// Describes transition of a single tablet.
 struct tablet_transition_info {
     tablet_transition_stage stage;
+    tablet_transition_kind transition;
     tablet_replica_set next;
     tablet_replica pending_replica; // Optimization (next - tablet_info::replicas)
     service::session_id session_id;
     write_replica_set_selector writes;
     read_replica_set_selector reads;
 
-    tablet_transition_info(tablet_transition_stage stage, tablet_replica_set next, tablet_replica pending_replica,
+    tablet_transition_info(tablet_transition_stage stage,
+                           tablet_transition_kind kind,
+                           tablet_replica_set next,
+                           tablet_replica pending_replica,
                            service::session_id session_id = {});
 
     bool operator==(const tablet_transition_info&) const = default;
@@ -379,6 +392,11 @@ struct tablet_routing_info {
 template <>
 struct fmt::formatter<locator::tablet_transition_stage> : fmt::formatter<std::string_view> {
     auto format(const locator::tablet_transition_stage&, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
+
+template <>
+struct fmt::formatter<locator::tablet_transition_kind> : fmt::formatter<std::string_view> {
+    auto format(const locator::tablet_transition_kind&, fmt::format_context& ctx) const -> decltype(ctx.out());
 };
 
 template <>

@@ -721,7 +721,7 @@ public:
 
             auto& target_load_sketch = co_await target_info.get_load_sketch(_tm);
             auto dst = global_shard_id {target, target_load_sketch.next_shard(target)};
-            auto mig = tablet_migration_info {source_tablet, src, dst};
+            auto mig = tablet_migration_info {tablet_transition_kind::migration, source_tablet, src, dst};
 
             if (target_info.shards[dst.shard].streaming_write_load < max_write_streaming_load
                     && src_node_info.shards[src_shard].streaming_read_load < max_read_streaming_load) {
