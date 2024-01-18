@@ -56,7 +56,7 @@ def assert_task_does_not_exist(rest_api, task_id):
     assert resp.status_code == requests.codes.bad_request, f"Task {task_id} is kept in memory"
 
 def check_child_parent_relationship(rest_api, parent, tree_depth, allow_no_children, depth=0):
-    assert allow_no_children or parent.get("children_ids", []), "Child tasks were not created"
+    assert allow_no_children or parent.get("children_ids", []), f"Child tasks were not created for {parent}"
 
     for child_id in parent.get("children_ids", []):
         child = wait_for_task(rest_api, child_id)

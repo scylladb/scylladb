@@ -91,7 +91,7 @@ def test_offstrategy_keyspace_compaction_task(cql, this_dc, rest_api):
     check_compaction_task(cql, this_dc, rest_api, lambda keyspace, _: rest_api.send("POST", f"storage_service/keyspace_offstrategy_compaction/{keyspace}"), "offstrategy compaction", task_tree_depth, True)
 
 def test_rewrite_sstables_keyspace_compaction_task(cql, this_dc, rest_api):
-    task_tree_depth = 3
+    task_tree_depth = 2
     # upgrade sstables compaction
     check_compaction_task(cql, this_dc, rest_api, lambda keyspace, _: rest_api.send("GET", f"storage_service/keyspace_upgrade_sstables/{keyspace}"), "upgrade sstables compaction", task_tree_depth)
     # scrub sstables compaction

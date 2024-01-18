@@ -814,9 +814,9 @@ void table::update_stats_for_new_sstable(const sstables::shared_sstable& sst) no
 }
 
 future<>
-table::do_add_sstable_and_update_cache(sstables::shared_sstable sst, sstables::offstrategy offstrategy) {
+table::do_add_sstable_and_update_cache(sstables::shared_sstable sst, sstables::offstrategy offstrategy, bool trigger_compaction) {
     auto permit = co_await seastar::get_units(_sstable_set_mutation_sem, 1);
-    co_return co_await get_row_cache().invalidate(row_cache::external_updater([this, sst, offstrategy] () noexcept {
+    co_return co_await get_row_cache().invalidate(row_cache::external_updater([&] () noexcept {
         // FIXME: this is not really noexcept, but we need to provide strong exception guarantees.
         // atomically load all opened sstables into column family.
         compaction_group& cg = compaction_group_for_sstable(sst);
@@ -826,20 +826,24 @@ table::do_add_sstable_and_update_cache(sstables::shared_sstable sst, sstables::o
             add_maintenance_sstable(cg, sst);
         }
         update_stats_for_new_sstable(sst);
+        if (trigger_compaction) {
+            try_trigger_compaction(cg);
+        }
     }), dht::partition_range::make({sst->get_first_decorated_key(), true}, {sst->get_last_decorated_key(), true}));
 }
 
 future<>
 table::add_sstable_and_update_cache(sstables::shared_sstable sst, sstables::offstrategy offstrategy) {
-    co_await do_add_sstable_and_update_cache(std::move(sst), offstrategy);
-    trigger_compaction();
+    bool do_trigger_compaction = offstrategy == sstables::offstrategy::no;
+    co_await do_add_sstable_and_update_cache(std::move(sst), offstrategy, do_trigger_compaction);
 }
 
 future<>
 table::add_sstables_and_update_cache(const std::vector<sstables::shared_sstable>& ssts) {
+    constexpr bool do_not_trigger_compaction = false;
     for (auto& sst : ssts) {
         try {
-            co_await do_add_sstable_and_update_cache(sst, sstables::offstrategy::no);
+            co_await do_add_sstable_and_update_cache(sst, sstables::offstrategy::no, do_not_trigger_compaction);
         } catch (...) {
             tlogger.error("Failed to load SSTable {}: {}", sst->toc_filename(), std::current_exception());
             throw;
