@@ -1700,6 +1700,24 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 start_cql(cql_maintenance_server_ctl, stop_maintenance_cql, "maintenance native server");
             }
 
+            snapshot_ctl.start(std::ref(db)).get();
+            auto stop_snapshot_ctl = defer_verbose_shutdown("snapshots", [&snapshot_ctl] {
+                snapshot_ctl.stop().get();
+            });
+
+            api::set_server_snapshot(ctx, snapshot_ctl).get();
+            auto stop_api_snapshots = defer_verbose_shutdown("snapshots API", [&ctx] {
+                api::unset_server_snapshot(ctx).get();
+            });
+
+            api::set_server_tasks_compaction_module(ctx, ss, snapshot_ctl).get();
+            auto stop_tasks_api = defer_verbose_shutdown("tasks API", [&ctx] {
+                api::unset_server_tasks_compaction_module(ctx).get();
+            });
+
+            //FIXME: discarded future
+            (void)api::set_server_cache(ctx);
+
             sys_dist_ks.start(std::ref(qp), std::ref(mm), std::ref(proxy)).get();
             auto stop_sdks = defer_verbose_shutdown("system distributed keyspace", [] {
                 sys_dist_ks.invoke_on_all(&db::system_distributed_keyspace::stop).get();
@@ -1789,21 +1807,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 api::unset_server_authorization_cache(ctx).get();
             });
 
-            snapshot_ctl.start(std::ref(db)).get();
-            auto stop_snapshot_ctl = defer_verbose_shutdown("snapshots", [&snapshot_ctl] {
-                snapshot_ctl.stop().get();
-            });
-
-            api::set_server_snapshot(ctx, snapshot_ctl).get();
-            auto stop_api_snapshots = defer_verbose_shutdown("snapshots API", [&ctx] {
-                api::unset_server_snapshot(ctx).get();
-            });
-
-            api::set_server_tasks_compaction_module(ctx, ss, snapshot_ctl).get();
-            auto stop_tasks_api = defer_verbose_shutdown("tasks API", [&ctx] {
-                api::unset_server_tasks_compaction_module(ctx).get();
-            });
-
             supervisor::notify("starting batchlog manager");
             db::batchlog_manager_config bm_cfg;
             bm_cfg.write_request_timeout = cfg->write_request_timeout_in_ms() * 1ms;
@@ -1838,8 +1841,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 view_backlog_broker.stop().get();
             });
 
-            //FIXME: discarded future
-            (void)api::set_server_cache(ctx);
             startlog.info("Waiting for gossip to settle before accepting client requests...");
             gossiper.local().wait_for_gossip_to_settle().get();
             api::set_server_gossip_settle(ctx, gossiper).get();
