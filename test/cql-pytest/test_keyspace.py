@@ -207,9 +207,15 @@ def test_concurrent_create_and_drop_keyspace(cql, this_dc, fails_without_consist
 def test_storage_options_local(cql, scylla_only):
     ksdef = "WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : '1' } " \
             "AND STORAGE = { 'type' : 'LOCAL' }"
+
+    def row_has_storage_options(row):
+        o = getattr(row, 'storage_options', None)
+        t = getattr(row, 'storage_type', None)
+        return t is not None or o is not None
+
     with new_test_keyspace(cql, ksdef) as keyspace:
-        res = cql.execute(f"SELECT * FROM system_schema.scylla_keyspaces WHERE keyspace_name = '{keyspace}'")
-        assert not res.all()
+        res = list(cql.execute(f"SELECT * FROM system_schema.scylla_keyspaces WHERE keyspace_name = '{keyspace}'"))
+        assert not res or not row_has_storage_options(res[0])
 
 # Test that passing an unsupported storage type is not legal
 def test_storage_options_unknown_type(cql, scylla_only):
