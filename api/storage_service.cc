@@ -1001,7 +1001,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
 
     ss::is_initialized.set(r, [&ss](std::unique_ptr<http::request> req) {
         return ss.local().get_operation_mode().then([&ss] (auto mode) {
-            bool is_initialized = mode >= service::storage_service::mode::STARTING;
+            bool is_initialized = mode >= service::storage_service::mode::STARTING && mode != service::storage_service::mode::MAINTENANCE;
             if (mode == service::storage_service::mode::NORMAL) {
                 is_initialized = ss.local().gossiper().is_enabled();
             }
@@ -1015,7 +1015,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
 
     ss::is_joined.set(r, [&ss] (std::unique_ptr<http::request> req) {
         return ss.local().get_operation_mode().then([] (auto mode) {
-            return make_ready_future<json::json_return_type>(mode >= service::storage_service::mode::JOINING);
+            return make_ready_future<json::json_return_type>(mode >= service::storage_service::mode::JOINING && mode != service::storage_service::mode::MAINTENANCE);
         });
     });
 

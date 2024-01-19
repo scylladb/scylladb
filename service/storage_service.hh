@@ -283,7 +283,7 @@ private:
 
 public:
     std::chrono::milliseconds get_ring_delay();
-    enum class mode { NONE, STARTING, JOINING, BOOTSTRAP, NORMAL, LEAVING, DECOMMISSIONED, MOVING, DRAINING, DRAINED };
+    enum class mode { NONE, STARTING, JOINING, BOOTSTRAP, NORMAL, LEAVING, DECOMMISSIONED, MOVING, DRAINING, DRAINED, MAINTENANCE };
 private:
     mode _operation_mode = mode::NONE;
     /* Used for tracking drain progress */
@@ -837,6 +837,7 @@ struct fmt::formatter<service::storage_service::mode> : fmt::formatter<std::stri
         case MOVING:         name = "MOVING"; break;
         case DRAINING:       name = "DRAINING"; break;
         case DRAINED:        name = "DRAINED"; break;
+        case MAINTENANCE:    name = "MAINTENANCE"; break;
         }
         return fmt::format_to(ctx.out(), "{}", name);
     }
