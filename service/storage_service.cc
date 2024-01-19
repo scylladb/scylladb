@@ -1945,7 +1945,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
 
     future<group0_guard> global_tablet_token_metadata_barrier(group0_guard guard) {
         // FIXME: Don't require all nodes to be up, only tablet replicas.
-        return global_token_metadata_barrier(std::move(guard));
+        return global_token_metadata_barrier(std::move(guard), _topo_sm._topology.get_excluded_nodes());
     }
 
     // Represents a two-state state machine which changes monotonically
@@ -2025,6 +2025,10 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 func(tmap, s, gid, trinfo);
             }
         }
+    }
+
+    bool is_excluded(raft::server_id server_id) {
+        return _topo_sm._topology.get_excluded_nodes().contains(server_id);
     }
 
     void generate_migration_update(std::vector<canonical_mutation>& out, const group0_guard& guard, const tablet_migration_info& mig) {
@@ -2129,7 +2133,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                                         [] { throw std::runtime_error("stream_tablet failed due to error injection"); });
                     }
                     if (advance_in_background(gid, tablet_state.streaming, "streaming", [&] {
-                        rtlogger.info("Initiating tablet streaming of {} to {}", gid, trinfo.pending_replica);
+                        rtlogger.info("Initiating tablet streaming ({}) of {} to {}", trinfo.transition, gid, trinfo.pending_replica);
                         auto dst = trinfo.pending_replica.host;
                         return ser::storage_service_rpc_verbs::send_tablet_stream_data(&_messaging,
                                    netw::msg_addr(id2ip(dst)), _as, raft::server_id(dst.uuid()), gid);
@@ -2150,6 +2154,10 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 case locator::tablet_transition_stage::cleanup:
                     if (advance_in_background(gid, tablet_state.cleanup, "cleanup", [&] {
                         locator::tablet_replica dst = locator::get_leaving_replica(tmap.get_tablet_info(gid.tablet), trinfo);
+                        if (is_excluded(raft::server_id(dst.host.uuid()))) {
+                            rtlogger.info("Tablet cleanup of {} on {} skipped because node is excluded", gid, dst);
+                            return make_ready_future<>();
+                        }
                         rtlogger.info("Initiating tablet cleanup of {} on {}", gid, dst);
                         return ser::storage_service_rpc_verbs::send_tablet_cleanup(&_messaging,
                                                                                    netw::msg_addr(id2ip(dst.host)), _as, raft::server_id(dst.host.uuid()), gid);
@@ -7494,18 +7502,34 @@ future<> storage_service::stream_tablet(locator::global_tablet_id tablet) {
             throw std::runtime_error(format("Cannot stream within the same node, tablet: {}, shard {} -> {}",
                                             tablet, leaving_replica.shard, trinfo->pending_replica.shard));
         }
-        auto leaving_replica_ip = host2ip(leaving_replica.host);
+
+        locator::tablet_migration_streaming_info streaming_info = get_migration_streaming_info(tm->get_topology(), tinfo, *trinfo);
+
+        streaming::stream_reason reason = std::invoke([&] {
+            switch (trinfo->transition) {
+                case locator::tablet_transition_kind::migration: return streaming::stream_reason::tablet_migration;
+                case locator::tablet_transition_kind::rebuild: return streaming::stream_reason::rebuild;
+                default:
+                    throw std::runtime_error(format("stream_tablet(): Invalid tablet transition: {}", trinfo->transition));
+            }
+        });
 
         auto& table = _db.local().find_column_family(tablet.table);
         std::vector<sstring> tables = {table.schema()->cf_name()};
-        auto streamer = make_lw_shared<dht::range_streamer>(_db, _stream_manager, tm, guard.get_abort_source(),
-               tm->get_my_id(), _snitch.local()->get_location(),
-               "Tablet migration", streaming::stream_reason::tablet_migration, topo_guard, std::move(tables));
+        auto streamer = make_lw_shared<dht::range_streamer>(_db, _stream_manager, tm,
+                                                            guard.get_abort_source(),
+                                                            tm->get_my_id(), _snitch.local()->get_location(),
+                                                            format("Tablet {}", trinfo->transition),
+                                                            reason,
+                                                            topo_guard,
+                                                            std::move(tables));
         streamer->add_source_filter(std::make_unique<dht::range_streamer::failure_detector_source_filter>(
                 _gossiper.get_unreachable_members()));
 
         std::unordered_map<inet_address, dht::token_range_vector> ranges_per_endpoint;
-        ranges_per_endpoint[leaving_replica_ip].emplace_back(range);
+        for (auto r : streaming_info.read_from) {
+            ranges_per_endpoint[host2ip(r.host)].emplace_back(range);
+        }
         streamer->add_rx_ranges(table.schema()->ks_name(), std::move(ranges_per_endpoint));
         co_await streamer->stream_async();
         co_return;

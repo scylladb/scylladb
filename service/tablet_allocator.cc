@@ -331,8 +331,10 @@ public:
             if (node_ptr->dc_rack().dc != dc) {
                 return;
             }
-            if (node_ptr->get_state() == locator::node::state::normal
-                    || node_ptr->get_state() == locator::node::state::being_decommissioned) {
+            bool is_drained = node_ptr->get_state() == locator::node::state::being_decommissioned
+                              || node_ptr->get_state() == locator::node::state::being_removed
+                              || node_ptr->get_state() == locator::node::state::being_replaced;
+            if (node_ptr->get_state() == locator::node::state::normal || is_drained) {
                 node_load& load = nodes[node_ptr->host_id()];
                 load.id = node_ptr->host_id();
                 load.shard_count = node_ptr->get_shard_count();
@@ -340,9 +342,13 @@ public:
                 if (!load.shard_count) {
                     throw std::runtime_error(format("Shard count of {} not found in topology", node_ptr->host_id()));
                 }
-                if (node_ptr->get_state() == locator::node::state::being_decommissioned) {
-                    lblogger.info("Will drain node {} from DC {}", node_ptr->host_id(), dc);
+                if (is_drained) {
+                    lblogger.info("Will drain node {} ({}) from DC {}", node_ptr->host_id(), node_ptr->get_state(), dc);
                     nodes_to_drain.emplace(node_ptr->host_id());
+                } else if (node_ptr->is_excluded()) {
+                    // Excluded nodes should not be chosen as targets for migration.
+                    lblogger.debug("Ignoring excluded node {}: state={}", node_ptr->host_id(), node_ptr->get_state());
+                    nodes.erase(node_ptr->host_id());
                 }
             }
         });
@@ -415,6 +421,12 @@ public:
                           host, node.dc_rack().rack, load.avg_load, load.tablet_count, load.shard_count, node.get_state());
         }
 
+        if (!min_load_node) {
+            lblogger.debug("No candidate nodes");
+            _stats.for_dc(dc).stop_no_candidates++;
+            co_return plan;
+        }
+
         if (nodes_to_drain.empty()) {
             if (!shuffle && (max_load == min_load || !_tm->tablets().balancing_enabled())) {
                 // load is balanced.
@@ -483,7 +495,7 @@ public:
                 auto trinfo = tmap.get_tablet_transition_info(tid);
 
                 if (is_streaming(trinfo)) {
-                    apply_load(get_migration_streaming_info(ti, *trinfo));
+                    apply_load(get_migration_streaming_info(topo, ti, *trinfo));
                 }
 
                 for (auto&& replica : get_replicas_for_tablet_load(ti, trinfo)) {
@@ -748,10 +760,13 @@ public:
 
             auto& target_load_sketch = co_await target_info.get_load_sketch(_tm);
             auto dst = global_shard_id {target, target_load_sketch.next_shard(target)};
-            auto mig = tablet_migration_info {tablet_transition_kind::migration, source_tablet, src, dst};
 
             const locator::node& src_node = topo.get_node(src.host);
-            auto mig_streaming_info = get_migration_streaming_info(tmap.get_tablet_info(source_tablet.tablet), mig);
+            tablet_transition_kind kind = (src_node.get_state() == locator::node::state::being_removed
+                                           || src_node.get_state() == locator::node::state::being_replaced)
+                       ? tablet_transition_kind::rebuild : tablet_transition_kind::migration;
+            auto mig = tablet_migration_info {kind, source_tablet, src, dst};
+            auto mig_streaming_info = get_migration_streaming_info(topo, tmap.get_tablet_info(source_tablet.tablet), mig);
 
             if (can_accept_load(mig_streaming_info)) {
                 apply_load(mig_streaming_info);

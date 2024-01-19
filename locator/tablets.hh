@@ -26,6 +26,8 @@
 
 namespace locator {
 
+class topology;
+
 extern seastar::logger tablet_logger;
 
 using token = dht::token;
@@ -163,6 +165,11 @@ enum class tablet_transition_kind {
     // The new replica is (tablet_transition_info::next - tablet_info::replicas).
     // The leaving replica is (tablet_info::replicas - tablet_transition_info::next).
     migration,
+
+    // New tablet replica is replacing a dead one.
+    // The new replica is (tablet_transition_info::next - tablet_info::replicas).
+    // The leaving replica is (tablet_info::replicas - tablet_transition_info::next).
+    rebuild,
 };
 
 sstring tablet_transition_stage_to_string(tablet_transition_stage);
@@ -219,8 +226,8 @@ struct tablet_migration_streaming_info {
     std::unordered_set<tablet_replica> written_to;
 };
 
-tablet_migration_streaming_info get_migration_streaming_info(const tablet_info&, const tablet_transition_info&);
-tablet_migration_streaming_info get_migration_streaming_info(const tablet_info&, const tablet_migration_info&);
+tablet_migration_streaming_info get_migration_streaming_info(const locator::topology&, const tablet_info&, const tablet_transition_info&);
+tablet_migration_streaming_info get_migration_streaming_info(const locator::topology&, const tablet_info&, const tablet_migration_info&);
 
 // Describes if a given token is located at either left or right side of a tablet's range
 enum tablet_range_side {

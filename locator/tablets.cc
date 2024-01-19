@@ -79,22 +79,36 @@ tablet_transition_info::tablet_transition_info(tablet_transition_stage stage,
     , reads(get_selector_for_reads(stage))
 { }
 
-tablet_migration_streaming_info get_migration_streaming_info(const tablet_info& tinfo, const tablet_migration_info& trinfo) {
-    return get_migration_streaming_info(tinfo, migration_to_transition_info(tinfo, trinfo));
+tablet_migration_streaming_info get_migration_streaming_info(const locator::topology& topo, const tablet_info& tinfo, const tablet_migration_info& trinfo) {
+    return get_migration_streaming_info(topo, tinfo, migration_to_transition_info(tinfo, trinfo));
 }
 
-tablet_migration_streaming_info get_migration_streaming_info(const tablet_info& tinfo, const tablet_transition_info& trinfo) {
-    tablet_migration_streaming_info result = {
-        .read_from = std::unordered_set<tablet_replica>(tinfo.replicas.begin(), tinfo.replicas.end()),
-        .written_to = std::unordered_set<tablet_replica>(trinfo.next.begin(), trinfo.next.end())
-    };
-    for (auto&& r : trinfo.next) {
-        result.read_from.erase(r);
+tablet_migration_streaming_info get_migration_streaming_info(const locator::topology& topo, const tablet_info& tinfo, const tablet_transition_info& trinfo) {
+    tablet_migration_streaming_info result;
+    switch (trinfo.transition) {
+        case tablet_transition_kind::migration:
+            result.read_from = std::unordered_set<tablet_replica>(tinfo.replicas.begin(), tinfo.replicas.end());
+            result.written_to = std::unordered_set<tablet_replica>(trinfo.next.begin(), trinfo.next.end());
+            for (auto&& r : trinfo.next) {
+                result.read_from.erase(r);
+            }
+            for (auto&& r : tinfo.replicas) {
+                result.written_to.erase(r);
+            }
+            return result;
+        case tablet_transition_kind::rebuild:
+            result.written_to.insert(trinfo.pending_replica);
+            result.read_from = std::unordered_set<tablet_replica>(trinfo.next.begin(), trinfo.next.end());
+            result.read_from.erase(trinfo.pending_replica);
+
+            erase_if(result.read_from, [&] (const tablet_replica& r) {
+                auto* n = topo.find_node(r.host);
+                return !n || n->is_excluded();
+            });
+
+            return result;
     }
-    for (auto&& r : tinfo.replicas) {
-        result.written_to.erase(r);
-    }
-    return result;
+    on_internal_error(tablet_logger, format("Invalid tablet transition kind: {}", static_cast<int>(trinfo.transition)));
 }
 
 tablet_replica get_leaving_replica(const tablet_info& tinfo, const tablet_transition_info& trinfo) {
@@ -284,6 +298,7 @@ tablet_transition_stage tablet_transition_stage_from_string(const sstring& name)
 // The names are persisted in system tables so should not be changed.
 static const std::unordered_map<tablet_transition_kind, sstring> tablet_transition_kind_to_name = {
         {tablet_transition_kind::migration, "migration"},
+        {tablet_transition_kind::rebuild, "rebuild"},
 };
 
 static const std::unordered_map<sstring, tablet_transition_kind> tablet_transition_kind_from_name = std::invoke([] {
