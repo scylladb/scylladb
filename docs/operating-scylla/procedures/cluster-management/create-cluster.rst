@@ -56,8 +56,6 @@ For example:
 5. Verify that the node has been added to the cluster using
 ``nodetool status``
 
-6. If you are running a Scylla version earlier than Scylla Open Source 4.3 or Scylla Enterprise 2021.1, you need to update the ``seeds`` parameter in each node's ``scylla.yaml`` file to include the IP of at least one more seed node. See :ref:`Older Version Of Scylla <seeds-older-versions>` for details.
-
 -------
 Example
 -------
