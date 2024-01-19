@@ -201,6 +201,14 @@ struct tablet_transition_info {
 // Returns the leaving replica for a given transition.
 tablet_replica get_leaving_replica(const tablet_info&, const tablet_transition_info&);
 
+/// Represents intention to move a single tablet replica from src to dst.
+struct tablet_migration_info {
+    locator::tablet_transition_kind kind;
+    locator::global_tablet_id tablet;
+    locator::tablet_replica src;
+    locator::tablet_replica dst;
+};
+
 /// Describes streaming required for a given tablet transition.
 struct tablet_migration_streaming_info {
     std::unordered_set<tablet_replica> read_from;
