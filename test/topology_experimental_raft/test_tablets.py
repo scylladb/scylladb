@@ -50,7 +50,6 @@ async def get_tablet_replicas(manager: ManagerClient, server: ServerInfo, keyspa
 
     table_id = await manager.get_table_id(keyspace_name, table_name)
     rows = await manager.cql.run_async(f"SELECT last_token, replicas FROM system.tablets where "
-                                       f"keyspace_name = '{keyspace_name}' and "
                                        f"table_id = {table_id}", host=host)
     for row in rows:
         if row.last_token >= token:

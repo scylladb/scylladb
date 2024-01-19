@@ -40,9 +40,9 @@ schema_ptr make_tablets_schema() {
     // replica_set_type = frozen<list<tablet_replica>>
     auto id = generate_legacy_id(db::system_keyspace::NAME, db::system_keyspace::TABLETS);
     return schema_builder(db::system_keyspace::NAME, db::system_keyspace::TABLETS, id)
-            .with_column("keyspace_name", utf8_type, column_kind::partition_key)
             .with_column("table_id", uuid_type, column_kind::partition_key)
             .with_column("tablet_count", int32_type, column_kind::static_column)
+            .with_column("keyspace_name", utf8_type, column_kind::static_column)
             .with_column("table_name", utf8_type, column_kind::static_column)
             .with_column("last_token", long_type, column_kind::clustering_key)
             .with_column("replicas", replica_set_type)
@@ -72,12 +72,12 @@ tablet_map_to_mutation(const tablet_map& tablets, table_id id, const sstring& ke
     auto gc_now = gc_clock::now();
     auto tombstone_ts = ts - 1;
 
-    mutation m(s, partition_key::from_exploded(*s, {
-        data_value(keyspace_name).serialize_nonnull(),
+    mutation m(s, partition_key::from_single_value(*s,
         data_value(id.uuid()).serialize_nonnull()
-    }));
+    ));
     m.partition().apply(tombstone(tombstone_ts, gc_now));
     m.set_static_cell("tablet_count", data_value(int(tablets.tablet_count())), ts);
+    m.set_static_cell("keyspace_name", data_value(keyspace_name), ts);
     m.set_static_cell("table_name", data_value(table_name), ts);
 
     tablet_id tid = tablets.first_tablet();
@@ -141,12 +141,11 @@ tablet_mutation_builder::del_transition(dht::token last_token) {
     return *this;
 }
 
-mutation make_drop_tablet_map_mutation(const sstring& keyspace_name, table_id id, api::timestamp_type ts) {
+mutation make_drop_tablet_map_mutation(table_id id, api::timestamp_type ts) {
     auto s = db::system_keyspace::tablets();
-    mutation m(s, partition_key::from_exploded(*s, {
-        data_value(keyspace_name).serialize_nonnull(),
+    mutation m(s, partition_key::from_single_value(*s,
         data_value(id.uuid()).serialize_nonnull()
-    }));
+    ));
     m.partition().apply(tombstone(ts, gc_clock::now()));
     return m;
 }

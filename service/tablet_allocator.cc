@@ -839,7 +839,7 @@ public:
         std::vector<mutation> result;
         if (rs.uses_tablets()) {
             auto tm = _db.get_shared_token_metadata().get();
-            muts.emplace_back(make_drop_tablet_map_mutation(s.keypace_name(), s.id(), ts));
+            muts.emplace_back(make_drop_tablet_map_mutation(s.id(), ts));
         }
     }
 
@@ -849,7 +849,7 @@ public:
         if (rs.uses_tablets()) {
             auto tm = _db.get_shared_token_metadata().get();
             for (auto&& [name, s] : ks.metadata()->cf_meta_data()) {
-                muts.emplace_back(make_drop_tablet_map_mutation(keyspace_name, s->id(), ts));
+                muts.emplace_back(make_drop_tablet_map_mutation(s->id(), ts));
             }
         }
     }

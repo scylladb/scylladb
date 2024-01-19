@@ -319,7 +319,7 @@ SEASTAR_TEST_CASE(test_mutation_builder) {
         save_tablet_metadata(e.local_db(), tm, ts++).get();
 
         {
-            tablet_mutation_builder b(ts++, "ks", table1);
+            tablet_mutation_builder b(ts++, table1);
             auto last_token = tm.get_tablet_map(table1).get_last_token(tid1);
             b.set_new_replicas(last_token, tablet_replica_set {
                     tablet_replica {h1, 2},
@@ -359,7 +359,7 @@ SEASTAR_TEST_CASE(test_mutation_builder) {
         }
 
         {
-            tablet_mutation_builder b(ts++, "ks", table1);
+            tablet_mutation_builder b(ts++, table1);
             auto last_token = tm.get_tablet_map(table1).get_last_token(tid1);
             b.set_stage(last_token, tablet_transition_stage::use_new);
             e.local_db().apply({freeze(b.build())}, db::no_timeout).get();
@@ -395,7 +395,7 @@ SEASTAR_TEST_CASE(test_mutation_builder) {
         }
 
         {
-            tablet_mutation_builder b(ts++, "ks", table1);
+            tablet_mutation_builder b(ts++, table1);
             auto last_token = tm.get_tablet_map(table1).get_last_token(tid1);
             b.set_replicas(last_token, tablet_replica_set {
                 tablet_replica {h1, 2},

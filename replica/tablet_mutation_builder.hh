@@ -24,13 +24,12 @@ private:
         return clustering_key::from_single_value(*_s, data_value(dht::token::to_int64(last_token)).serialize_nonnull());
     }
 public:
-    tablet_mutation_builder(api::timestamp_type ts, const sstring& keyspace_name, table_id table)
+    tablet_mutation_builder(api::timestamp_type ts, table_id table)
             : _ts(ts)
             , _s(db::system_keyspace::tablets())
-            , _m(_s, partition_key::from_exploded(*_s, {
-                    data_value(keyspace_name).serialize_nonnull(),
+            , _m(_s, partition_key::from_single_value(*_s,
                     data_value(table.uuid()).serialize_nonnull()
-            }))
+            ))
     { }
 
     tablet_mutation_builder& set_new_replicas(dht::token last_token, locator::tablet_replica_set replicas);
