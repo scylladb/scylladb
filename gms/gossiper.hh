@@ -74,6 +74,7 @@ struct gossip_config {
     uint32_t shadow_round_ms = 300 * 1000;
     uint32_t shutdown_announce_ms = 2 * 1000;
     uint32_t skip_wait_for_gossip_to_settle = -1;
+    uint32_t endpoint_expiration_time = 24 * 60 * 60 * 3;
 };
 
 /**
@@ -200,7 +201,6 @@ public:
         versioned_value::STATUS_UNKNOWN,
     };
     static constexpr std::chrono::milliseconds INTERVAL{1000};
-    static constexpr std::chrono::hours A_VERY_LONG_TIME{24 * 3};
 
     static constexpr std::chrono::milliseconds GOSSIP_SETTLE_MIN_WAIT_MS{5000};
 
@@ -640,7 +640,7 @@ public:
 public:
     void add_expire_time_for_endpoint(inet_address endpoint, clk::time_point expire_time);
 
-    static clk::time_point compute_expire_time();
+    clk::time_point compute_expire_time() const;
 public:
     bool is_seed(const inet_address& endpoint) const;
     bool is_shutdown(const inet_address& endpoint) const;

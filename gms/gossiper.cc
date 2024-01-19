@@ -53,7 +53,6 @@ using clk = gossiper::clk;
 static logging::logger logger("gossip");
 
 constexpr std::chrono::milliseconds gossiper::INTERVAL;
-constexpr std::chrono::hours gossiper::A_VERY_LONG_TIME;
 constexpr generation_type::value_type gossiper::MAX_GENERATION_DIFFERENCE;
 
 netw::msg_addr gossiper::get_msg_addr(inet_address to) const noexcept {
@@ -1450,7 +1449,6 @@ bool gossiper::is_gossip_only_member(inet_address endpoint) const {
 }
 
 clk::time_point gossiper::get_expire_time_for_endpoint(inet_address endpoint) const noexcept {
-    /* default expire_time is A_VERY_LONG_TIME */
     auto it = _expire_time_endpoint_map.find(endpoint);
     if (it == _expire_time_endpoint_map.end()) {
         return compute_expire_time();
@@ -1706,7 +1704,7 @@ future<> gossiper::real_mark_alive(inet_address addr) {
 
     logger.debug("Mark Node {} alive after EchoMessage", addr);
 
-    // prevents do_status_check from racing us and evicting if it was down > A_VERY_LONG_TIME
+    // prevents do_status_check from racing us and evicting if it was down > endpoint_expiration_time
     update_timestamp(es);
 
     logger.debug("removing expire time for endpoint : {}", addr);
@@ -2344,8 +2342,8 @@ void gossiper::add_expire_time_for_endpoint(inet_address endpoint, clk::time_poi
     _expire_time_endpoint_map[endpoint] = expire_time;
 }
 
-clk::time_point gossiper::compute_expire_time() {
-    return now() + A_VERY_LONG_TIME;
+clk::time_point gossiper::compute_expire_time() const {
+    return now() + std::chrono::seconds(_gcfg.endpoint_expiration_time);
 }
 
 bool gossiper::is_alive(inet_address ep) const {
