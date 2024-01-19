@@ -209,6 +209,9 @@ struct tablet_migration_info {
     locator::tablet_replica dst;
 };
 
+/// Returns the replica set which will become the replica set of the tablet after executing a given tablet transition.
+tablet_replica_set get_new_replicas(const tablet_info&, const tablet_migration_info&);
+
 /// Describes streaming required for a given tablet transition.
 struct tablet_migration_streaming_info {
     std::unordered_set<tablet_replica> read_from;

@@ -107,6 +107,10 @@ tablet_replica get_leaving_replica(const tablet_info& tinfo, const tablet_transi
     return *leaving.begin();
 }
 
+tablet_replica_set get_new_replicas(const tablet_info& tinfo, const tablet_migration_info& mig) {
+    return replace_replica(tinfo.replicas, mig.src, mig.dst);
+}
+
 const tablet_map& tablet_metadata::get_tablet_map(table_id id) const {
     try {
         return _tablets.at(id);

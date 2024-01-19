@@ -2044,7 +2044,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         }
         out.emplace_back(
             replica::tablet_mutation_builder(guard.write_timestamp(), mig.tablet.table)
-                .set_new_replicas(last_token, replace_replica(tmap.get_tablet_info(mig.tablet.tablet).replicas, mig.src, mig.dst))
+                .set_new_replicas(last_token, locator::get_new_replicas(tmap.get_tablet_info(mig.tablet.tablet), mig))
                 .set_stage(last_token, locator::tablet_transition_stage::allow_write_both_read_old)
                 .set_transition(last_token, mig.kind)
                 .build());

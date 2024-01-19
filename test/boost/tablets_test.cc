@@ -617,7 +617,7 @@ tablet_transition_info migration_to_transition_info(const tablet_migration_info&
     return tablet_transition_info {
             tablet_transition_stage::allow_write_both_read_old,
             mig.kind,
-            replace_replica(ti.replicas, mig.src, mig.dst),
+            get_new_replicas(ti, mig),
             mig.dst
     };
 }
