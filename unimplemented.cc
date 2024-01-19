@@ -19,36 +19,36 @@ static thread_local std::unordered_map<cause, bool> _warnings;
 
 static logging::logger ulogger("unimplemented");
 
-std::ostream& operator<<(std::ostream& out, cause c) {
+std::string_view format_as(cause c) {
     switch (c) {
-        case cause::INDEXES: return out << "INDEXES";
-        case cause::LWT: return out << "LWT";
-        case cause::PAGING: return out << "PAGING";
-        case cause::AUTH: return out << "AUTH";
-        case cause::PERMISSIONS: return out << "PERMISSIONS";
-        case cause::TRIGGERS: return out << "TRIGGERS";
-        case cause::COUNTERS: return out << "COUNTERS";
-        case cause::METRICS: return out << "METRICS";
-        case cause::MIGRATIONS: return out << "MIGRATIONS";
-        case cause::GOSSIP: return out << "GOSSIP";
-        case cause::TOKEN_RESTRICTION: return out << "TOKEN_RESTRICTION";
-        case cause::LEGACY_COMPOSITE_KEYS: return out << "LEGACY_COMPOSITE_KEYS";
-        case cause::COLLECTION_RANGE_TOMBSTONES: return out << "COLLECTION_RANGE_TOMBSTONES";
-        case cause::RANGE_DELETES: return out << "RANGE_DELETES";
-        case cause::THRIFT: return out << "THRIFT";
-        case cause::VALIDATION: return out << "VALIDATION";
-        case cause::REVERSED: return out << "REVERSED";
-        case cause::COMPRESSION: return out << "COMPRESSION";
-        case cause::NONATOMIC: return out << "NONATOMIC";
-        case cause::CONSISTENCY: return out << "CONSISTENCY";
-        case cause::HINT: return out << "HINT";
-        case cause::SUPER: return out << "SUPER";
-        case cause::WRAP_AROUND: return out << "WRAP_AROUND";
-        case cause::STORAGE_SERVICE: return out << "STORAGE_SERVICE";
-        case cause::API: return out << "API";
-        case cause::SCHEMA_CHANGE: return out << "SCHEMA_CHANGE";
-        case cause::MIXED_CF: return out << "MIXED_CF";
-        case cause::SSTABLE_FORMAT_M: return out << "SSTABLE_FORMAT_M";
+        case cause::INDEXES: return "INDEXES";
+        case cause::LWT: return "LWT";
+        case cause::PAGING: return "PAGING";
+        case cause::AUTH: return "AUTH";
+        case cause::PERMISSIONS: return "PERMISSIONS";
+        case cause::TRIGGERS: return "TRIGGERS";
+        case cause::COUNTERS: return "COUNTERS";
+        case cause::METRICS: return "METRICS";
+        case cause::MIGRATIONS: return "MIGRATIONS";
+        case cause::GOSSIP: return "GOSSIP";
+        case cause::TOKEN_RESTRICTION: return "TOKEN_RESTRICTION";
+        case cause::LEGACY_COMPOSITE_KEYS: return "LEGACY_COMPOSITE_KEYS";
+        case cause::COLLECTION_RANGE_TOMBSTONES: return "COLLECTION_RANGE_TOMBSTONES";
+        case cause::RANGE_DELETES: return "RANGE_DELETES";
+        case cause::THRIFT: return "THRIFT";
+        case cause::VALIDATION: return "VALIDATION";
+        case cause::REVERSED: return "REVERSED";
+        case cause::COMPRESSION: return "COMPRESSION";
+        case cause::NONATOMIC: return "NONATOMIC";
+        case cause::CONSISTENCY: return "CONSISTENCY";
+        case cause::HINT: return "HINT";
+        case cause::SUPER: return "SUPER";
+        case cause::WRAP_AROUND: return "WRAP_AROUND";
+        case cause::STORAGE_SERVICE: return "STORAGE_SERVICE";
+        case cause::API: return "API";
+        case cause::SCHEMA_CHANGE: return "SCHEMA_CHANGE";
+        case cause::MIXED_CF: return "MIXED_CF";
+        case cause::SSTABLE_FORMAT_M: return "SSTABLE_FORMAT_M";
     }
     abort();
 }
@@ -56,12 +56,12 @@ std::ostream& operator<<(std::ostream& out, cause c) {
 void warn(cause c) {
     if (!_warnings.contains(c)) {
         _warnings.insert({c, true});
-        ulogger.debug("{}", c);
+        ulogger.debug("{}", format_as(c));
     }
 }
 
 void fail(cause c) {
-    throw std::runtime_error(format("Not implemented: {}", c));
+    throw std::runtime_error(fmt::format("Not implemented: {}", format_as(c)));
 }
 
 }
