@@ -132,7 +132,8 @@ struct topology {
     // Nodes that are waiting to be joined by the topology coordinator
     std::unordered_map<raft::server_id, replica_state> new_nodes;
     // Nodes that are in the process to be added to the ring
-    // Currently only at most one node at a time will be here
+    // Currently at most one node at a time will be here, but the code shouldn't assume it
+    // because we might support parallel operations in the future.
     std::unordered_map<raft::server_id, replica_state> transition_nodes;
 
     // Pending topology requests
