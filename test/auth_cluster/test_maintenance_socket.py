@@ -12,7 +12,6 @@ from test.pylib.manager_client import ManagerClient
 
 import pytest
 
-@pytest.mark.xfail(reason="regression in python driver (https://github.com/scylladb/python-driver/issues/278)")
 @pytest.mark.asyncio
 async def test_maintenance_socket(manager: ManagerClient):
     """
