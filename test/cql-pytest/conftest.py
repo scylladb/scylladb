@@ -21,7 +21,7 @@ import tempfile
 import time
 import random
 
-from util import unique_name, new_test_table, cql_session, local_process_id, is_scylla
+from util import unique_name, new_test_keyspace, keyspace_has_tablets, cql_session, local_process_id, is_scylla
 
 
 print(f"Driver name {DRIVER_NAME}, version {DRIVER_VERSION}")
@@ -220,3 +220,18 @@ def temp_workdir():
     """ Creates a temporary work directory, for the scope of a single test. """
     with tempfile.TemporaryDirectory() as workdir:
         yield workdir
+
+@pytest.fixture(scope="session")
+def has_tablets(cql):
+    with new_test_keyspace(cql, " WITH REPLICATION = {'class' : 'NetworkTopologyStrategy', 'replication_factor': 1}") as keyspace:
+        return keyspace_has_tablets(cql, keyspace)
+
+@pytest.fixture(scope="function")
+def xfail_tablets(request, has_tablets):
+    if has_tablets:
+        request.node.add_marker(pytest.mark.xfail(reason='Test expected to fail with tablets experimental feature on'))
+
+@pytest.fixture(scope="function")
+def skip_with_tablets(has_tablets):
+    if has_tablets:
+        pytest.skip("Test may crash with tablets experimental feature on")
