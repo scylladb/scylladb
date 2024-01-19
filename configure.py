@@ -778,7 +778,10 @@ arg_parser.add_argument('--list-artifacts', dest='list_artifacts', action='store
 arg_parser.add_argument('--date-stamp', dest='date_stamp', type=str,
                         help='Set datestamp for SCYLLA-VERSION-GEN')
 arg_parser.add_argument('--use-cmake', action='store_true', help='Use CMake as the build system')
+arg_parser.add_argument('--coverage', action = 'store_true', help = 'Compile scylla with coverage instrumentation')
 args = arg_parser.parse_args()
+
+PROFILES_LIST_FILE_NAME = "coverage_sources.list"
 
 if args.list_artifacts:
     for artifact in sorted(all_artifacts):
@@ -1418,6 +1421,15 @@ tests_not_using_seastar_test_framework = set([
     'test/unit/cross_shard_barrier_test',
 ]) | pure_boost_tests
 
+
+COVERAGE_INST_FLAGS = ['-fprofile-instr-generate', '-fcoverage-mapping', f'-fprofile-list=./{PROFILES_LIST_FILE_NAME}']
+if args.coverage:
+    for _, mode in filter(lambda m: m[0] != "coverage", modes.items()):
+        mode['cxx_ld_flags'] += ' ' + ' '.join(COVERAGE_INST_FLAGS)
+        mode['cxx_ld_flags'] = mode['cxx_ld_flags'].strip()
+        mode['cxxflags'] += ' ' + ' '.join(COVERAGE_INST_FLAGS)
+        mode['cxxflags'] = mode['cxxflags'].strip()
+
 for t in tests_not_using_seastar_test_framework:
     if t not in scylla_tests:
         raise Exception("Test %s not found in scylla_tests" % (t))
@@ -1671,13 +1683,19 @@ def real_relpath(path, start):
 def configure_seastar(build_dir, mode, mode_config):
     seastar_build_dir = os.path.join(build_dir, mode, 'seastar')
 
+    seastar_cxx_ld_flags = mode_config['cxx_ld_flags']
+    # We want to "undo" coverage for seastar if we have it enabled.
+    if args.coverage:
+        for flag in COVERAGE_INST_FLAGS:
+            seastar_cxx_ld_flags = seastar_cxx_ld_flags.replace(' ' + flag, '')
+            seastar_cxx_ld_flags = seastar_cxx_ld_flags.replace(flag, '')
     seastar_cmake_args = [
         '-DCMAKE_BUILD_TYPE={}'.format(mode_config['cmake_build_type']),
         '-DCMAKE_C_COMPILER={}'.format(args.cc),
         '-DCMAKE_CXX_COMPILER={}'.format(args.cxx),
         '-DCMAKE_EXPORT_NO_PACKAGE_REGISTRY=ON',
         '-DSeastar_CXX_FLAGS=SHELL:{}'.format(mode_config['lib_cflags']),
-        '-DSeastar_LD_FLAGS={}'.format(semicolon_separated(mode_config['lib_ldflags'], mode_config['cxx_ld_flags'])),
+        '-DSeastar_LD_FLAGS={}'.format(semicolon_separated(mode_config['lib_ldflags'], seastar_cxx_ld_flags)),
         '-DSeastar_CXX_DIALECT=gnu++20',
         '-DSeastar_API_LEVEL=7',
         '-DSeastar_UNUSED_RESULT_ERROR=ON',

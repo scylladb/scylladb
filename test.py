@@ -40,6 +40,10 @@ from test.pylib.util import LogPrefixAdapter
 from test.pylib.scylla_cluster import ScyllaServer, ScyllaCluster, get_cluster_manager, merge_cmdline_options
 from test.pylib.minio_server import MinioServer
 from typing import Dict, List, Callable, Any, Iterable, Optional, Awaitable, Union
+import logging
+from test.pylib import coverage_utils
+import humanfriendly
+import treelib
 
 launch_time = time.monotonic()
 
@@ -145,7 +149,15 @@ class TestSuite(ABC):
                 continue
             skip_in_m = set(self.cfg.get("run_in_" + a, []))
             self.disabled_tests.update(skip_in_m - run_in_m)
-
+        # environment variables that should be the base of all processes running in this suit
+        self.base_env = {}
+        if self.need_coverage():
+            # Set the coverage data from each instrumented object to use the same file (and merged into it with locking)
+            # as long as we don't need test specific coverage data, this looks sufficient. The benefit of doing this in
+            # this way is that the storage will not be bloated with coverage files (each can weigh 10s of MBs so for several
+            # thousands of tests it can easily reach 10 of GBs)
+            # ref: https://clang.llvm.org/docs/SourceBasedCodeCoverage.html#running-the-instrumented-program
+            self.base_env["LLVM_PROFILE_FILE"] = os.path.join(options.tmpdir,self.mode, "coverage", self.name, "%m.profraw")
     # Generate a unique ID for `--repeat`ed tests
     # We want these tests to have different XML IDs so test result
     # processors (Jenkins) don't merge results for different iterations of
@@ -274,7 +286,8 @@ class TestSuite(ABC):
                 task.cancel()
             await asyncio.gather(*pending, return_exceptions=True)
             raise
-
+    def need_coverage(self):
+        return self.options.coverage and (self.mode in self.options.coverage_modes) and bool(self.cfg.get("coverage",True))
 
 class UnitTestSuite(TestSuite):
     """TestSuite instantiation for non-boost unit tests"""
@@ -368,10 +381,9 @@ class PythonTestSuite(TestSuite):
     def __init__(self, path, cfg: dict, options: argparse.Namespace, mode: str) -> None:
         super().__init__(path, cfg, options, mode)
         self.scylla_exe = path_to(self.mode, "scylla")
+        self.scylla_env = dict(self.base_env)
         if self.mode == "coverage":
-            self.scylla_env = coverage.env(self.scylla_exe, distinct_id=self.name)
-        else:
-            self.scylla_env = dict()
+            self.scylla_env.update(coverage.env(self.scylla_exe, distinct_id=self.name))
         self.scylla_env['SCYLLA'] = self.scylla_exe
 
         cluster_cfg = self.cfg.get("cluster", {"initial_size": 1})
@@ -419,7 +431,8 @@ class PythonTestSuite(TestSuite):
                 seeds=create_cfg.seeds,
                 cmdline_options=cmdline_options,
                 config_options=config_options,
-                property_file=create_cfg.property_file)
+                property_file=create_cfg.property_file,
+                append_env=self.base_env)
 
             return server
 
@@ -506,10 +519,10 @@ class RunTestSuite(TestSuite):
     def __init__(self, path: str, cfg, options: argparse.Namespace, mode: str) -> None:
         super().__init__(path, cfg, options, mode)
         self.scylla_exe = path_to(self.mode, "scylla")
+        self.scylla_env = dict(self.base_env)
         if self.mode == "coverage":
             self.scylla_env = coverage.env(self.scylla_exe, distinct_id=self.name)
-        else:
-            self.scylla_env = dict()
+
         self.scylla_env['SCYLLA'] = self.scylla_exe
 
     async def add_test(self, shortname) -> None:
@@ -569,6 +582,7 @@ class Test:
         # True if the test was cancelled by a ctrl-c or timeout, so
         # shouldn't be retried, even if it is flaky
         self.is_cancelled = False
+        self.env = dict(self.suite.base_env)
         Test._reset(self)
 
     def reset(self) -> None:
@@ -624,9 +638,8 @@ class UnitTest(Test):
         self.path = path_to(self.mode, "test", self.name)
         self.args = shlex.split(args) + UnitTest.standard_args
         if self.mode == "coverage":
-            self.env = coverage.env(self.path)
-        else:
-            self.env = dict()
+            self.env.update(coverage.env(self.path))
+
         UnitTest._reset(self)
 
     def _reset(self) -> None:
@@ -1256,7 +1269,19 @@ def parse_cmd_line() -> argparse.Namespace:
                              "is only supported by python tests for now, other tests ignore it. "
                              "By default, the marker filter is not applied and all tests will be run without exception."
                              "To exclude e.g. slow tests you can write --markers 'not slow'.")
-
+    parser.add_argument('--coverage', action = 'store_true', default = False,
+                        help="When running code instrumented with coverage support"
+                             "Will route the profiles to `tmpdir`/mode/coverage/`suite` and post process them in order to generate "
+                             "lcov file per suite, lcov file per mode, and an lcov file for the entire run, "
+                             "The lcov files can eventually be used for generating coverage reports")
+    parser.add_argument("--coverage-mode",action = 'append', type = str, dest = "coverage_modes",
+                        help = "Collect and process coverage only for the modes specified. implies: --coverage, defalt: All built modes")
+    parser.add_argument("--coverage-keep-raw",action = 'store_true',
+                        help = "Do not delete llvm raw profiles when processing coverage reports.")
+    parser.add_argument("--coverage-keep-indexed",action = 'store_true',
+                        help = "Do not delete llvm indexed profiles when processing coverage reports.")
+    parser.add_argument("--coverage-keep-lcovs",action = 'store_true',
+                        help = "Do not delete intermediate lcov traces when processing coverage reports.")
     scylla_additional_options = parser.add_argument_group('Additional options for Scylla tests')
     scylla_additional_options.add_argument('--x-log2-compaction-groups', action="store", default="0", type=int,
                              help="Controls number of compaction groups to be used by Scylla tests. Value of 3 implies 8 groups.")
@@ -1295,6 +1320,19 @@ def parse_cmd_line() -> argparse.Namespace:
             print(palette.fail("Failed to read output of `ninja mode_list`: please run ./configure.py first"))
             raise
 
+    if not args.coverage_modes and args.coverage:
+        args.coverage_modes = list(args.modes)
+        if "coverage" in args.coverage_modes:
+            args.coverage_modes.remove("coverage")
+        if not args.coverage_modes:
+            args.coverage = False
+    elif args.coverage_modes:
+        if "coverage" in args.coverage_modes:
+            raise RuntimeError("'coverage' mode is not allowed in --coverage-mode")
+        missing_coverage_modes = set(args.coverage_modes).difference(set(args.modes))
+        if len(missing_coverage_modes) > 0:
+            raise RuntimeError(f"The following modes weren't built or ran (using the '--mode' option): {missing_coverage_modes}")
+        args.coverage = True
     def prepare_dir(dirname, pattern):
         # Ensure the dir exists
         pathlib.Path(dirname).mkdir(parents=True, exist_ok=True)
@@ -1619,10 +1657,264 @@ async def main() -> int:
     if 'coverage' in options.modes:
         coverage.generate_coverage_report(path_to("coverage", "tests"))
 
+    if options.coverage:
+        await process_coverage(options)
+
     # Note: failure codes must be in the ranges 0-124, 126-127,
     #       to cooperate with git bisect's expectations
     return 0 if not failed_tests else 1
 
+async def process_coverage(options):
+    total_processing_time = time.time()
+    logger = LogPrefixAdapter(logging.getLogger("coverage"), {'prefix' : 'coverage'})
+    modes_for_coverage = options.coverage_modes
+    # use about 75% of the machine's processing power.
+    concurrency = max(int(multiprocessing.cpu_count() * 0.75), 1)
+    logger.info(f"Processing coverage information for modes: {modes_for_coverage}, using {concurrency} cpus")
+    semaphore = asyncio.Semaphore(concurrency)
+    build_paths = [pathlib.Path(f"build/{mode}") for mode in modes_for_coverage]
+    paths_for_id_search = [bp / p for bp, p in itertools.product(build_paths, ["scylla", "test", "seastar"])]
+    logger.info("Getting binary ids for coverage conversion...")
+    files_to_ids_map = await coverage_utils.get_binary_ids_map(paths = paths_for_id_search,
+                                                               filter = coverage_utils.PROFILED_ELF_TYPES,
+                                                               semaphore = semaphore,
+                                                               logger = logger)
+    logger.debug(f"Binary ids map is: {files_to_ids_map}")
+    logger.info("Done getting binary ids for coverage conversion")
+    # get the suits that have actually been ran
+    suits_to_exclude = ["pylib_test", "nodetool"]
+    sources_to_exclude = [line for line in open("coverage_excludes.txt", 'r').read().split('\n') if line and not line.startswith('#')]
+    ran_suites = list({test.suite for test in TestSuite.all_tests() if test.suite.need_coverage()})
+
+    def suite_coverage_path(suite) -> pathlib.Path:
+        return pathlib.Path(suite.options.tmpdir) / suite.mode / 'coverage' / suite.name
+
+    def pathsize(path : pathlib.Path):
+        if path.is_file():
+            return os.path.getsize(path)
+        elif path.is_dir():
+            return sum([os.path.getsize(f) for f in path.glob("**/*") if f.is_file()])
+        else:
+            return 0
+    class Stats:
+        def __init__(self, name = "", size = 0, time = 0) -> None:
+            self.name = name
+            self.size = size
+            self.time = time
+        def __add__(self, other):
+            return Stats(self.name,
+                         size = self.size + other.size,
+                         time = self.time + other.time)
+        def __str__(self):
+            name = f"{self.name} - " if self.name else ""
+            fields = []
+            if self.size:
+                fields.append(f"size: {humanfriendly.format_size(self.size)}")
+            if self.time:
+                fields.append(f"time: {humanfriendly.format_timespan(self.time)}")
+            fields = ', '.join(fields)
+            return f"{name}{fields}"
+        @property
+        def asstring(self):
+            return str(self)
+
+    # a nested map of: mode -> suite -> unified_coverage_file
+    suits_trace_files = {}
+    stats = treelib.Tree()
+
+    RAW_PROFILE_STATS = "raw profiles"
+    INDEXED_PROFILE_STATS = "indexed profiles"
+    LCOV_CONVERSION_STATS = "lcov conversion"
+    LCOV_SUITES_MEREGE_STATS = "lcov per suite merge"
+    LCOV_MODES_MERGE_STATS = "lcov merge for mode"
+    LCOV_MERGE_ALL_STATS = "lcov merge all stats"
+    ROOT_NODE = stats.create_node(tag = time.time(),
+                                  identifier = "root",
+                                  data = Stats("Coverage Processing Stats", 0, 0))
+
+    for suite in list(ran_suites):
+        coverage_path = suite_coverage_path(suite)
+        if not coverage_path.exists():
+            logger.warning(f"Coverage dir for suite '{suite.name}' in mode '{suite.mode}' wasn't found, common reasons:\n\t"
+                "1. The suite doesn't use any instrumented binaries.\n\t"
+                "2. The binaries weren't compiled with coverage instrumentation.")
+            continue
+
+        # 1. Transform every suite raw profiles into indexed profiles
+        raw_profiles = list(coverage_path.glob("*.profraw"))
+        if len(raw_profiles) == 0:
+            logger.warning(f"Couldn't find any raw profiles for suite '{suite.name}' in mode '{suite.mode}' ({coverage_path}):\n\t"
+                "1. The binaries are killed instead of terminating which bypasses profile dump.\n\t"
+                "2. The suite tempres with the LLVM_PROFILE_FILE which causes the profile to be dumped\n\t"
+                "   to somewhere else.")
+            continue
+        mode_stats = stats.get_node(suite.mode)
+        if not mode_stats:
+            mode_stats = stats.create_node(tag = time.time(),
+                                           identifier = suite.mode,
+                                           parent = ROOT_NODE,
+                                           data = Stats(f"{suite.mode} mode processing stats", 0, 0))
+
+        raw_stats_node = stats.get_node(mode_stats.identifier + RAW_PROFILE_STATS)
+        if not raw_stats_node:
+            raw_stats_node = stats.create_node(tag = time.time(),
+                                               identifier = mode_stats.identifier + RAW_PROFILE_STATS,
+                                               parent = mode_stats,
+                                               data = Stats(RAW_PROFILE_STATS, 0, 0))
+        stat = stats.create_node(tag = time.time(),
+                                 identifier = raw_stats_node.identifier + suite.name,
+                                 parent = raw_stats_node,
+                                 data = Stats(suite.name, pathsize(coverage_path), 0))
+        raw_stats_node.data += stat.data
+        mode_stats.data.time += stat.data.time
+        mode_stats.data.size = max(mode_stats.data.size, raw_stats_node.data.size)
+
+
+        logger.info(f"{suite.name}: Converting raw profiles into indexed profiles - {stat.data}.")
+        start_time = time.time()
+        merge_result = await coverage_utils.merge_profiles(profiles = raw_profiles,
+                                            path_for_merged = coverage_path,
+                                            clear_on_success = (not options.coverage_keep_raw),
+                                            semaphore = semaphore,
+                                            logger = logger)
+        indexed_stats_node = stats.get_node(mode_stats.identifier +INDEXED_PROFILE_STATS)
+        if not indexed_stats_node:
+            indexed_stats_node = stats.create_node(tag = time.time(),
+                                                   identifier = mode_stats.identifier +INDEXED_PROFILE_STATS,
+                                                   parent = mode_stats,
+                                                   data = Stats(INDEXED_PROFILE_STATS, 0, 0))
+        stat = stats.create_node(tag = time.time(),
+                                 identifier = indexed_stats_node.identifier + suite.name,
+                                 parent = indexed_stats_node,
+                                 data = Stats(suite.name, pathsize(coverage_path), time.time() - start_time))
+        indexed_stats_node.data += stat.data
+        mode_stats.data.time += stat.data.time
+        mode_stats.data.size = max(mode_stats.data.size, indexed_stats_node.data.size)
+
+        logger.info(f"{suite.name}: Done converting raw profiles into indexed profiles - {humanfriendly.format_timespan(stat.data.time)}.")
+
+        # 2. Transform every indexed profile into an lcov trace file,
+        #    after this step, the dependency upon the build artifacts
+        #    ends and processing of the files can be done using the source
+        #    code only.
+
+        logger.info(f"{suite.name}: Converting indexed profiles into lcov trace files.")
+        start_time = time.time()
+        if len(merge_result.errors) > 0:
+            raise RuntimeError(merge_result.errors)
+        await coverage_utils.profdata_to_lcov(profiles = merge_result.generated_profiles,
+                                              excludes = sources_to_exclude,
+                                              known_file_ids = files_to_ids_map,
+                                              clear_on_success = (not options.coverage_keep_indexed),
+                                              semaphore = semaphore,
+                                              logger = logger
+                                              )
+        lcov_conversion_stats_node = stats.get_node(mode_stats.identifier + LCOV_CONVERSION_STATS)
+        if not lcov_conversion_stats_node:
+            lcov_conversion_stats_node = stats.create_node(tag = time.time(),
+                                                           identifier = mode_stats.identifier + LCOV_CONVERSION_STATS,
+                                                           parent = mode_stats,
+                                                           data = Stats(LCOV_CONVERSION_STATS, 0, 0))
+        stat = stats.create_node(tag = time.time(),
+                                 identifier = lcov_conversion_stats_node.identifier + suite.name,
+                                 parent = lcov_conversion_stats_node,
+                                 data = Stats(suite.name, pathsize(coverage_path), time.time() - start_time))
+        lcov_conversion_stats_node.data += stat.data
+        mode_stats.data.time += stat.data.time
+        mode_stats.data.size = max(mode_stats.data.size, lcov_conversion_stats_node.data.size)
+
+        logger.info(f"{suite.name}: Done converting indexed profiles into lcov trace files - {humanfriendly.format_timespan(stat.data.time)}.")
+
+        # 3. combine all tracefiles
+        logger.info(f"{suite.name} in mode {suite.mode}: Combinig lcov trace files.")
+        start_time = time.time()
+        trace_files = list(coverage_path.glob("**/*.info"))
+        target_trace_file = coverage_path / (suite.name + ".info")
+        if len(trace_files) == 0: # No coverage data, can skip
+            logger.warning(f"{suite.name} in mode  {suite.mode}: No coverage tracefiles found")
+        elif len(trace_files) == 1: # No need to merge, we can just rename the file
+            trace_files[0].rename(str(target_trace_file))
+        else:
+            await coverage_utils.lcov_combine_traces(lcovs = trace_files,
+                                                     output_lcov = target_trace_file,
+                                                     clear_on_success = (not options.coverage_keep_lcovs),
+                                                     files_per_chunk = 10,
+                                                     semaphore = semaphore,
+                                                     logger = logger)
+        lcov_merge_stats_node = stats.get_node(mode_stats.identifier + LCOV_SUITES_MEREGE_STATS)
+        if not lcov_merge_stats_node:
+            lcov_merge_stats_node = stats.create_node(tag = time.time(),
+                                                      identifier = mode_stats.identifier + LCOV_SUITES_MEREGE_STATS,
+                                                      parent = mode_stats,
+                                                      data = Stats(LCOV_SUITES_MEREGE_STATS, 0, 0))
+        stat = stats.create_node(tag = time.time(),
+                                 identifier = lcov_merge_stats_node.identifier + suite.name,
+                                 parent = lcov_merge_stats_node,
+                                 data = Stats(suite.name, pathsize(coverage_path), time.time() - start_time))
+        lcov_merge_stats_node.data += stat.data
+        mode_stats.data.time += stat.data.time
+        mode_stats.data.size = max(mode_stats.data.size, lcov_merge_stats_node.data.size)
+
+        suits_trace_files.setdefault(suite.mode, {})[suite.name] = target_trace_file
+        logger.info(f"{suite.name}: Done combinig lcov trace files - {humanfriendly.format_timespan(stat.data.time)}")
+
+    #4. combine the suite lcovs into per mode trace files
+    modes_trace_files  = {}
+    for mode, suite_traces in suits_trace_files.items():
+
+        target_trace_file = pathlib.Path(options.tmpdir) / mode / "coverage" / f"{mode}_coverage.info"
+        start_time = time.time()
+        logger.info(f"Consolidating trace files for mode {mode}.")
+        await coverage_utils.lcov_combine_traces(lcovs = suite_traces.values(),
+                                                 output_lcov = target_trace_file,
+                                                 clear_on_success = False,
+                                                 files_per_chunk = 10,
+                                                 semaphore = semaphore,
+                                                 logger = logger)
+        mode_stats = stats[mode]
+        stat = stats.create_node(tag = time.time(),
+                                 identifier = mode_stats.identifier + LCOV_MODES_MERGE_STATS,
+                                 parent = mode_stats,
+                                 data = Stats(LCOV_MODES_MERGE_STATS, None, time.time() - start_time))
+        mode_stats.data.time += stat.data.time
+        ROOT_NODE.data.size += mode_stats.data.size
+        modes_trace_files[mode] = target_trace_file
+        logger.info(f"Done consolidating trace files for mode {mode} - time: {humanfriendly.format_timespan(stat.data.time)}.")
+    #5. create one consolidated file with all trace information
+    logger.info(f"Consolidating all trace files for this run.")
+    start_time = time.time()
+    target_trace_file = pathlib.Path(options.tmpdir) / "test_coverage.info"
+    await coverage_utils.lcov_combine_traces(lcovs = modes_trace_files.values(),
+                                             output_lcov = target_trace_file,
+                                             clear_on_success = False,
+                                             files_per_chunk = 10,
+                                             semaphore = semaphore,
+                                             logger = logger)
+    stats.create_node(tag = time.time(),
+                      identifier = LCOV_MERGE_ALL_STATS,
+                      parent = ROOT_NODE,
+                      data = Stats(LCOV_MERGE_ALL_STATS, None, time.time() - start_time))
+    logger.info(f"Done consolidating all trace files for this run - time: {humanfriendly.format_timespan(time.time() - start_time)}.")
+
+    logger.info(f"Creating textual report.")
+    proc = await asyncio.create_subprocess_shell(f"lcov --summary --rc lcov_branch_coverage=1 {options.tmpdir}/test_coverage.info 2>/dev/null > {options.tmpdir}/test_coverage_report.txt")
+    await proc.wait()
+    with open(pathlib.Path(options.tmpdir) /"test_coverage_report.txt") as f:
+        summary = f.readlines()
+    proc = await asyncio.create_subprocess_shell(f"lcov --list --rc lcov_branch_coverage=1 {options.tmpdir}/test_coverage.info  2>/dev/null >> {options.tmpdir}/test_coverage_report.txt")
+    await proc.wait()
+    logger.info(f"Done creating textual report. ({options.tmpdir}/test_coverage_report.txt)")
+    total_processing_time = time.time() - total_processing_time
+    ROOT_NODE.data.time = total_processing_time
+
+
+
+
+    stats_str ="\n" + stats.show(stdout=False,
+                                 data_property="asstring")
+    summary = ["\n" + l for l in summary]
+    logger.info(stats_str)
+    logger.info("".join(summary))
 
 async def workaround_python26789() -> int:
     """Workaround for https://bugs.python.org/issue26789.

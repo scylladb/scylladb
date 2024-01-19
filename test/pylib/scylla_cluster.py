@@ -212,7 +212,8 @@ class ScyllaServer:
                  cluster_name: str, ip_addr: str, seeds: List[str],
                  cmdline_options: List[str],
                  config_options: Dict[str, Any],
-                 property_file: Dict[str, Any]) -> None:
+                 property_file: Dict[str, Any],
+                 append_env: Dict[str,Any]) -> None:
         # pylint: disable=too-many-arguments
         self.server_id = ServerNum(ScyllaServer.newid())
         self.exe = pathlib.Path(exe).resolve()
@@ -239,6 +240,7 @@ class ScyllaServer:
                 cluster_name = self.cluster_name) \
             | config_options
         self.property_file = property_file
+        self.append_env = append_env
 
     def change_ip(self, ip_addr: IPAddress) -> None:
         """Change IP address of the current server. Pre: the server is
@@ -415,6 +417,7 @@ class ScyllaServer:
 
         env = os.environ.copy()
         env.clear()     # pass empty env to make user user's SCYLLA_HOME has no impact
+        env.update(self.append_env)
         self.cmd = await asyncio.create_subprocess_exec(
             self.exe,
             *self.cmdline_options,
