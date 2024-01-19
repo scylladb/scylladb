@@ -112,8 +112,12 @@ def test_alter_keyspace_invalid(cql, this_dc):
 # replication_factor option. However, this is only true in Scylla - in
 # Cassandra 4.1 and above, a missing replication_factor *is* allowed,
 # because there is a default_keyspace_rf configuration. See issue #16028.
-def test_alter_keyspace_missing_rf(cql, this_dc, scylla_only):
-    with new_test_keyspace(cql, "WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 1 }") as keyspace:
+def test_alter_keyspace_missing_rf(cql, this_dc, scylla_only, has_tablets):
+    if has_tablets:
+        extra_opts = " AND TABLETS = {'enabled': false}"
+    else:
+        extra_opts = ""
+    with new_test_keyspace(cql, "WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 1 }" + extra_opts) as keyspace:
         # SimpleStrategy, if not outright forbidden, requires a
         # replication_factor option.
         with pytest.raises(ConfigurationException):
