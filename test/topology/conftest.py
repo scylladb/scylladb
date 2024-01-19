@@ -24,6 +24,7 @@ from cassandra.policies import TokenAwarePolicy                          # type:
 from cassandra.policies import WhiteListRoundRobinPolicy                 # type: ignore
 from cassandra.connection import DRIVER_NAME       # type: ignore # pylint: disable=no-name-in-module
 from cassandra.connection import DRIVER_VERSION    # type: ignore # pylint: disable=no-name-in-module
+from cassandra.connection import EndPoint          # type: ignore # pylint: disable=no-name-in-module
 
 
 Session.run_async = run_async     # patch Session for convenience
@@ -84,12 +85,12 @@ class CustomConnection(Cluster.connection_class):
 
 
 # cluster_con helper: set up client object for communicating with the CQL API.
-def cluster_con(hosts: List[IPAddress], port: int, use_ssl: bool, auth_provider=None):
+def cluster_con(hosts: List[IPAddress | EndPoint], port: int, use_ssl: bool, auth_provider=None, load_balancing_policy=RoundRobinPolicy()):
     """Create a CQL Cluster connection object according to configuration.
        It does not .connect() yet."""
     assert len(hosts) > 0, "python driver connection needs at least one host to connect to"
     profile = ExecutionProfile(
-        load_balancing_policy=RoundRobinPolicy(),
+        load_balancing_policy=load_balancing_policy,
         consistency_level=ConsistencyLevel.LOCAL_QUORUM,
         serial_consistency_level=ConsistencyLevel.LOCAL_SERIAL,
         # The default timeouts should have been more than enough, but in some
