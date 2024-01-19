@@ -64,6 +64,7 @@
 #include "cdc/log.hh"
 #include "cdc/stats.hh"
 #include "cdc/cdc_options.hh"
+#include "utils/directories.hh"
 #include "utils/histogram_metrics_helper.hh"
 #include "service/paxos/prepare_summary.hh"
 #include "service/migration_manager.hh"
@@ -2832,8 +2833,14 @@ storage_proxy::~storage_proxy() {
     assert(!_remote);
 }
 
-storage_proxy::storage_proxy(distributed<replica::database>& db, storage_proxy::config cfg, db::view::node_update_backlog& max_view_update_backlog,
-        scheduling_group_key stats_key, gms::feature_service& feat, const locator::shared_token_metadata& stm, locator::effective_replication_map_factory& erm_factory)
+storage_proxy::storage_proxy(distributed<replica::database>& db,
+        const utils::directories& dirs,
+        storage_proxy::config cfg,
+        db::view::node_update_backlog& max_view_update_backlog,
+        scheduling_group_key stats_key,
+        gms::feature_service& feat,
+        const locator::shared_token_metadata& stm,
+        locator::effective_replication_map_factory& erm_factory)
     : _db(db)
     , _shared_token_metadata(stm)
     , _erm_factory(erm_factory)
@@ -2844,9 +2851,9 @@ storage_proxy::storage_proxy(distributed<replica::database>& db, storage_proxy::
     , _write_ack_smp_service_group(cfg.write_ack_smp_service_group)
     , _next_response_id(std::chrono::system_clock::now().time_since_epoch()/1ms)
     , _hints_resource_manager(*this, cfg.available_memory / 10, _db.local().get_config().max_hinted_handoff_concurrency)
-    , _hints_manager(*this, _db.local().get_config().hints_directory(), cfg.hinted_handoff_enabled, _db.local().get_config().max_hint_window_in_ms(), _hints_resource_manager, _db)
+    , _hints_manager(*this, dirs.get_hints_dir(), cfg.hinted_handoff_enabled, _db.local().get_config().max_hint_window_in_ms(), _hints_resource_manager, _db)
     , _hints_directory_initializer(std::move(cfg.hints_directory_initializer))
-    , _hints_for_views_manager(*this, _db.local().get_config().view_hints_directory(), {}, _db.local().get_config().max_hint_window_in_ms(), _hints_resource_manager, _db)
+    , _hints_for_views_manager(*this, dirs.get_view_hints_dir(), {}, _db.local().get_config().max_hint_window_in_ms(), _hints_resource_manager, _db)
     , _stats_key(stats_key)
     , _features(feat)
     , _background_write_throttle_threahsold(cfg.available_memory / 10)

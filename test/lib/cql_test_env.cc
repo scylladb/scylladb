@@ -602,7 +602,7 @@ private:
             db::view::node_update_backlog b(smp::count, 10ms);
             scheduling_group_key_config sg_conf =
                     make_scheduling_group_key_config<service::storage_proxy_stats::stats>();
-            _proxy.start(std::ref(_db), spcfg, std::ref(b), scheduling_group_key_create(sg_conf).get0(), std::ref(_feature_service), std::ref(_token_metadata), std::ref(_erm_factory)).get();
+            _proxy.start(std::ref(_db), std::ref(*_dirs), spcfg, std::ref(b), scheduling_group_key_create(sg_conf).get0(), std::ref(_feature_service), std::ref(_token_metadata), std::ref(_erm_factory)).get();
             auto stop_proxy = defer([this] { _proxy.stop().get(); });
 
             _cql_config.start(cql3::cql_config::default_tag{}).get();
