@@ -1986,8 +1986,16 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 // Prevent warnings about abandoned failed future. Logged below.
                 holder->ignore_ready_future();
             }
-            holder = futurize_invoke(action)
-                        .finally([this, g = _async_gate.hold(), gid, name] () noexcept {
+            holder = futurize_invoke(action).then_wrapped([this, gid, name] (future<> f) {
+                if (f.failed()) {
+                    auto ep = f.get_exception();
+                    rtlogger.error("{} for tablet {} failed: {}", name, gid, ep);
+                    return seastar::sleep_abortable(std::chrono::seconds(1), _as).then([ep] () mutable {
+                        std::rethrow_exception(ep);
+                    });
+                }
+                return f;
+            }).finally([this, g = _async_gate.hold(), gid, name] () noexcept {
                 rtlogger.debug("{} for tablet {} resolved.", name, gid);
                 _tablets_ready = true;
                 _topo_sm.event.broadcast();
