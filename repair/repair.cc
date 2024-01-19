@@ -219,7 +219,7 @@ repair_neighbors::repair_neighbors(std::vector<gms::inet_address> nodes, std::ve
     if (all.size() != shards.size()) {
         throw std::runtime_error("The number of shards and nodes do not match");
     }
-    for (int i = 0; i < all.size(); i++) {
+    for (unsigned i = 0; i < all.size(); i++) {
         shard_map[all[i]] = shards[i];
     }
 }

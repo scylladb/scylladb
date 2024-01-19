@@ -902,7 +902,7 @@ public:
             }
             assert(all_live_peer_shards.size() == all_live_peer_nodes.size());
             _all_node_states.push_back(repair_node_state(_myip, this_shard_id()));
-            for (int i = 0; i < all_live_peer_nodes.size(); i++) {
+            for (unsigned i = 0; i < all_live_peer_nodes.size(); i++) {
                 _all_node_states.push_back(repair_node_state(all_live_peer_nodes[i], all_live_peer_shards[i].value_or(repair_unspecified_shard)));
             }
     }
