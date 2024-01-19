@@ -1982,6 +1982,10 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     bool advance_in_background(locator::global_tablet_id gid, background_action_holder& holder, const char* name,
                                std::function<future<>()> action) {
         if (!holder || holder->failed()) {
+            if (holder && holder->failed()) {
+                // Prevent warnings about abandoned failed future. Logged below.
+                holder->ignore_ready_future();
+            }
             holder = futurize_invoke(action)
                         .finally([this, g = _async_gate.hold(), gid, name] () noexcept {
                 rtlogger.debug("{} for tablet {} resolved.", name, gid);
