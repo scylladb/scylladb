@@ -2772,6 +2772,18 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         }
                     }
 
+                    co_await utils::get_local_injector().inject_with_handler("topology_coordinator_after_wait_for_ip",
+                        [new_node_ip = _address_map.find(node.id).value()] (auto& handler) -> future<> {
+                            const auto target_node_ip = handler.get("target_node_ip");
+                            assert(target_node_ip);
+                            if (*target_node_ip != new_node_ip.to_sstring()) {
+                                co_return;
+                            }
+                            slogger.info("topology_coordinator_after_wait_for_ip hit {}", target_node_ip);
+                            co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::minutes{1});
+                            slogger.info("topology_coordinator_after_wait_for_ip resume {}", target_node_ip);
+                        });
+
                     if (auto* reject = std::get_if<join_node_response_params::rejected>(&validation_result)) {
                         // Transition to left
                         topology_mutation_builder builder(node.guard.write_timestamp());
