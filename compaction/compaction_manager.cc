@@ -1878,6 +1878,11 @@ const std::unordered_set<sstables::shared_sstable>& compaction_manager::sstables
 }
 
 future<> compaction_manager::perform_cleanup(owned_ranges_ptr sorted_owned_ranges, table_state& t, std::optional<tasks::task_info> info) {
+    auto gh = start_compaction(t);
+    if (!gh) {
+        co_return;
+    }
+
     constexpr auto sleep_duration = std::chrono::seconds(10);
     constexpr auto max_idle_duration = std::chrono::seconds(300);
     auto& cs = get_compaction_state(&t);
