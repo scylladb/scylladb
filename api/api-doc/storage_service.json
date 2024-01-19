@@ -802,7 +802,7 @@
          "operations":[
             {
                "method":"POST",
-               "summary":"Trigger a global cluster cleanup through the topology coordinator",
+               "summary":"Trigger a global cleanup",
                "type":"long",
                "nickname":"cleanup_all",
                "produces":[

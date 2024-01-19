@@ -214,6 +214,22 @@ protected:
     virtual future<> run() override;
 };
 
+class global_cleanup_compaction_task_impl : public compaction_task_impl {
+private:
+    sharded<replica::database>& _db;
+public:
+    global_cleanup_compaction_task_impl(tasks::task_manager::module_ptr module,
+            sharded<replica::database>& db) noexcept
+        : compaction_task_impl(module, tasks::task_id::create_random_id(), module->new_sequence_number(), "global", "", "", "", tasks::task_id::create_null_id())
+        , _db(db)
+    {}
+    std::string type() const final {
+        return "global cleanup compaction";
+    }
+private:
+    future<> run() final;
+};
+
 class shard_cleanup_keyspace_compaction_task_impl : public cleanup_compaction_task_impl {
 private:
     replica::database& _db;

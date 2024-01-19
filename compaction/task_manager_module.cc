@@ -7,6 +7,7 @@
  */
 
 #include <boost/range/algorithm/min_element.hpp>
+#include <seastar/coroutine/parallel_for_each.hh>
 
 #include "compaction/task_manager_module.hh"
 #include "compaction/compaction_manager.hh"
@@ -420,6 +421,35 @@ future<> cleanup_keyspace_compaction_task_impl::run() {
         auto& module = db.get_compaction_manager().get_task_manager_module();
         auto task = co_await module.make_and_start_task<shard_cleanup_keyspace_compaction_task_impl>({_status.id, _status.shard}, _status.keyspace, _status.id, db, _table_infos);
         co_await task->done();
+    });
+}
+
+future<> global_cleanup_compaction_task_impl::run() {
+    co_await _db.invoke_on_all([&] (replica::database& db) -> future<> {
+        co_await db.flush_all_tables();
+        const auto keyspaces = _db.local().get_non_local_strategy_keyspaces();
+        co_await coroutine::parallel_for_each(keyspaces, [&] (const sstring& ks) -> future<> {
+            const auto& keyspace = db.find_keyspace(ks);
+            const auto& replication_strategy = keyspace.get_replication_strategy();
+            if (replication_strategy.get_type() == locator::replication_strategy_type::local) {
+                // this keyspace does not require cleanup
+                co_return;
+            }
+            if (replication_strategy.uses_tablets()) {
+                // this keyspace does not support cleanup
+                co_return;
+            }
+            std::vector<table_info> tables;
+            const auto& cf_meta_data = db.find_keyspace(ks).metadata().get()->cf_meta_data();
+            for (auto& [name, schema] : cf_meta_data) {
+                tables.emplace_back(name, schema->id());
+            }
+            auto& module = db.get_compaction_manager().get_task_manager_module();
+            const tasks::task_info task_info{_status.id, _status.shard};
+            auto task = co_await module.make_and_start_task<shard_cleanup_keyspace_compaction_task_impl>(
+                task_info, _status.keyspace, _status.id, db, std::move(tables));
+            co_await task->done();
+        });
     });
 }
 
