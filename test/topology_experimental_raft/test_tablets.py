@@ -409,6 +409,7 @@ async def test_tablet_repair(manager: ManagerClient):
 
     await cql.run_async("DROP KEYSPACE test;")
 
+@pytest.mark.skip(reason="failing a lot, see https://github.com/scylladb/scylladb/issues/16859")
 @pytest.mark.repair
 @pytest.mark.asyncio
 async def test_tablet_missing_data_repair(manager: ManagerClient):
