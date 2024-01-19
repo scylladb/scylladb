@@ -9,6 +9,8 @@
 
 #include <boost/range/algorithm.hpp>
 #include <boost/range/adaptor/transformed.hpp>
+#include <boost/functional/hash.hpp>
+#include <boost/icl/interval_map.hpp>
 
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
@@ -83,6 +85,7 @@ namespace {
             system_keyspace::LOCAL,
             system_keyspace::PEERS,
             system_keyspace::SCYLLA_LOCAL,
+            system_keyspace::COMMITLOG_CLEANUPS,
             system_keyspace::v3::CDC_LOCAL
         };
         if (ks_name == system_keyspace::NAME && tables.contains(cf_name)) {
@@ -863,6 +866,35 @@ schema_ptr system_keyspace::v3::truncated() {
     return local;
 }
 
+thread_local data_type replay_position_type = tuple_type_impl::get_instance({long_type, int32_type});
+
+schema_ptr system_keyspace::v3::commitlog_cleanups() {
+    static thread_local auto local = [] {
+        schema_builder builder(generate_legacy_id(NAME, COMMITLOG_CLEANUPS), NAME, COMMITLOG_CLEANUPS,
+        // partition key
+        {{"shard", int32_type}},
+        // clustering key
+        {
+            {"position", replay_position_type},
+            {"table_uuid", uuid_type},
+            {"start_token_exclusive", long_type},
+            {"end_token_inclusive", long_type},
+        },
+        // regular columns
+        {},
+        // static columns
+        {},
+        // regular column name type
+        utf8_type,
+        // comment
+        "information about cleanups, for filtering commitlog replay"
+       );
+       builder.with_version(generate_schema_version(builder.uuid()));
+       return builder.build(schema_builder::compact_storage::no);
+    }();
+    return local;
+}
+
 schema_ptr system_keyspace::v3::peers() {
     // identical
     return db::system_keyspace::peers();
@@ -1534,6 +1566,125 @@ future<replay_positions> system_keyspace::get_truncated_positions(table_id cf_id
     co_return result;
 }
 
+future<> system_keyspace::drop_all_commitlog_cleanup_records() {
+    // In this function we want to clear the entire COMMITLOG_CLEANUPS table.
+    //
+    // We can't use TRUNCATE, since it's a system table. So we have to delete each partition.
+    //
+    // The partition key is the shard number. If we knew how many shards there were in
+    // the previous boot cycle, we could just issue DELETEs for 1..N.
+    //
+    // But we don't know that here, so we have to SELECT the set of partition keys,
+    // and issue DELETEs on that.
+    sstring req = format("SELECT shard from system.{}", COMMITLOG_CLEANUPS);
+    auto rs = co_await execute_cql(req);
+
+    co_await coroutine::parallel_for_each(rs->begin(), rs->end(), [&] (const cql3::untyped_result_set_row& row) -> future<> {
+        auto shard = row.get_as<int32_t>("shard");
+        co_await execute_cql(format("DELETE FROM system.{} WHERE shard = {}", COMMITLOG_CLEANUPS, shard));
+    });
+}
+
+future<> system_keyspace::drop_old_commitlog_cleanup_records(replay_position min_position) {
+    auto pos = make_tuple_value(replay_position_type, tuple_type_impl::native_type({
+        int64_t(min_position.base_id()),
+        int32_t(min_position.pos)
+    }));
+    sstring req = format("DELETE FROM system.{} WHERE shard = ? AND position < ?", COMMITLOG_CLEANUPS);
+    co_await _qp.execute_internal(req, {int32_t(min_position.shard_id()), pos}, cql3::query_processor::cache_internal::yes);
+}
+
+future<> system_keyspace::save_commitlog_cleanup_record(table_id table, dht::token_range tr, db::replay_position rp) {
+    auto [start_token_exclusive, end_token_inclusive] = canonical_token_range(tr);
+    auto pos = make_tuple_value(replay_position_type, tuple_type_impl::native_type({int64_t(rp.base_id()), int32_t(rp.pos)}));
+    sstring req = format("INSERT INTO system.{} (shard, position, table_uuid, start_token_exclusive, end_token_inclusive) VALUES(?,?,?,?,?)", COMMITLOG_CLEANUPS);
+    co_await _qp.execute_internal(req, {int32_t(rp.shard_id()), pos, table.uuid(), start_token_exclusive, end_token_inclusive}, cql3::query_processor::cache_internal::yes);
+}
+
+std::pair<int64_t, int64_t> system_keyspace::canonical_token_range(dht::token_range tr) {
+    // closed_full_range represents a full interval using only regular token values. (No infinities).
+    auto closed_full_range = dht::token_range::make({dht::first_token()}, dht::token::from_int64(std::numeric_limits<int64_t>::max()));
+    // By intersecting with closed_full_range we get rid of all the crazy infinities that can be represented by dht::token_range.
+    auto finite_tr = tr.intersection(closed_full_range, dht::token_comparator());
+    if (!finite_tr) {
+        // If we got here, the interval was degenerate, with only infinities.
+        // So we return an empty (x, x] interval.
+        // We arbitrarily choose `min` as the `x`.
+        //
+        // Note: (x, x] is interpreted by the interval classes from `interval.hh` as the
+        // *full* (wrapping) interval, not an empty interval, so be careful about this if you ever
+        // want to implement a conversion from the output of this function back to `dht::token_range`.
+        // Nota bene, this `interval.hh` convention means that there is no way to represent an empty
+        // interval, so it is objectively bad.
+        //
+        // Note: (x, x] is interpreted by boost::icl as an empty interval, so it doesn't need any special
+        // treatment before use in `boost::icl::interval_map`.
+        return {std::numeric_limits<int64_t>::min(), std::numeric_limits<int64_t>::min()};
+    }
+    // After getting rid of possible infinities, we only have to adjust the openness of bounds.
+    int64_t start_token_exclusive = dht::token::to_int64(finite_tr->start().value().value());
+    if (finite_tr->start()->is_inclusive()) {
+        start_token_exclusive -= 1;
+    }
+    int64_t end_token_inclusive = dht::token::to_int64(finite_tr->end().value().value());
+    if (!finite_tr->end()->is_inclusive()) {
+        end_token_inclusive -= 1;
+    }
+    return {start_token_exclusive, end_token_inclusive};
+}
+
+size_t system_keyspace::commitlog_cleanup_map_hash::operator()(const std::pair<table_id, int32_t>& p) const {
+    size_t seed = 0;
+    boost::hash_combine(seed, std::hash<utils::UUID>()(p.first.uuid()));
+    boost::hash_combine(seed, std::hash<int32_t>()(p.second));
+    return seed;
+}
+
+struct system_keyspace::commitlog_cleanup_local_map::impl {
+    boost::icl::interval_map<
+        int64_t,
+        db::replay_position,
+        boost::icl::partial_absorber,
+        std::less,
+        boost::icl::inplace_max,
+        boost::icl::inter_section,
+        boost::icl::left_open_interval<int64_t>
+    > _map;
+};
+
+system_keyspace::commitlog_cleanup_local_map::~commitlog_cleanup_local_map() {
+}
+system_keyspace::commitlog_cleanup_local_map::commitlog_cleanup_local_map()
+    : _pimpl(std::make_unique<impl>())
+{}
+std::optional<db::replay_position> system_keyspace::commitlog_cleanup_local_map::get(int64_t token) const {
+    if (auto it = _pimpl->_map.find(token); it != _pimpl->_map.end()) {
+        return it->second;
+    }
+    return std::nullopt;
+}
+
+future<system_keyspace::commitlog_cleanup_map> system_keyspace::get_commitlog_cleanup_records() {
+    commitlog_cleanup_map ret;
+    const auto req = format("SELECT * from system.{}", COMMITLOG_CLEANUPS);
+    auto result_set = co_await execute_cql(req);
+    for (const auto& row: *result_set) {
+        auto table = table_id(row.get_as<utils::UUID>("table_uuid"));
+        auto shard = row.get_as<int32_t>("shard");
+        auto start_token_exclusive = row.get_as<int64_t>("start_token_exclusive");
+        auto end_token_inclusive = row.get_as<int64_t>("end_token_inclusive");
+        auto pos_tuple = value_cast<tuple_type_impl::native_type>(replay_position_type->deserialize(row.get_view("position")));
+        auto rp = db::replay_position(
+            shard,
+            value_cast<int64_t>(pos_tuple[0]),
+            value_cast<int32_t>(pos_tuple[1])
+        );
+        auto& inner_map = ret.try_emplace(std::make_pair(table, shard)).first->second;
+        inner_map._pimpl->_map += std::make_pair(boost::icl::left_open_interval<int64_t>(start_token_exclusive, end_token_inclusive), rp);
+    }
+    co_return ret;
+}
+
 static set_type_impl::native_type deserialize_set_column(const schema& s, const cql3::untyped_result_set_row& row, const char* name) {
     auto blob = row.get_blob(name);
     auto cdef = s.get_column_definition(name);
@@ -1933,6 +2084,7 @@ std::vector<schema_ptr> system_keyspace::all_tables(const db::config& cfg) {
                     v3::views_builds_in_progress(), v3::built_views(),
                     v3::scylla_views_builds_in_progress(),
                     v3::truncated(),
+                    v3::commitlog_cleanups(),
                     v3::cdc_local(),
     });
 

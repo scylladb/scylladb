@@ -138,6 +138,7 @@ public:
     static constexpr auto BUILT_INDEXES = "IndexInfo";
     static constexpr auto LOCAL = "local";
     static constexpr auto TRUNCATED = "truncated";
+    static constexpr auto COMMITLOG_CLEANUPS = "commitlog_cleanups";
     static constexpr auto PEERS = "peers";
     static constexpr auto PEER_EVENTS = "peer_events";
     static constexpr auto RANGE_XFERS = "range_xfers";
@@ -182,6 +183,7 @@ public:
         static schema_ptr built_indexes();
         static schema_ptr local();
         static schema_ptr truncated();
+        static schema_ptr commitlog_cleanups();
         static schema_ptr peers();
         static schema_ptr peer_events();
         static schema_ptr range_xfers();
@@ -363,6 +365,51 @@ public:
     future<> save_truncation_record(const replica::column_family&, db_clock::time_point truncated_at, db::replay_position);
     future<replay_positions> get_truncated_positions(table_id);
     future<> drop_truncation_rp_records();
+
+    // Converts a `dht::token_range` object to the left-open integer range (x,y] form.
+    //
+    // Note: perhaps this should be extracted to `dht/`, or somewhere.
+    static std::pair<int64_t, int64_t> canonical_token_range(dht::token_range tr);
+
+    // When a commitlog replay happens after a successful cleanup operation,
+    // we have to filter out the mutations affected by the cleanup,
+    // to avoid data resurrection.
+    //
+    // For this purpose, records of cleanup operations (the affected token ranges
+    // and commitlog ranges) are kept in a system table.
+    //
+    // The below functions manipulate these records. 
+
+    // Saves a record of a token range affected by cleanup.
+    // After reboot, tokens from this range will be replayed only if they are on replay positions
+    // strictly greater than the given one.
+    future<> save_commitlog_cleanup_record(table_id, dht::token_range, db::replay_position);
+    struct commitlog_cleanup_map_hash {
+        size_t operator()(const std::pair<table_id, int32_t>& p) const;
+    };
+    // For a given token, this map returns the maximum replay position affected by cleanups.
+    // A mutation in commitlog should only be replayed if it lies on a replay position
+    // greater than that maximum for its token.
+    struct commitlog_cleanup_local_map {
+        // pimpl to avoid transitive #include of boost/icl.
+        class impl;
+        std::unique_ptr<impl> _pimpl;
+        ~commitlog_cleanup_local_map();
+        commitlog_cleanup_local_map();
+        std::optional<db::replay_position> get(int64_t token) const;
+    };
+    using commitlog_cleanup_map = std::unordered_map<
+        std::pair<table_id, int32_t>,
+        commitlog_cleanup_local_map,
+        commitlog_cleanup_map_hash
+        >;
+    future<commitlog_cleanup_map> get_commitlog_cleanup_records();
+    // Drops all cleanup records which apply to positions older than the given one.
+    // Used to drop records which only apply to segments which have already been deleted.
+    future<> drop_old_commitlog_cleanup_records(replay_position);
+    // Cleans all records. Used after a successful replay, since the records only
+    // apply to the commitlog of the last boot cycle, and can be wrong in this cycle.
+    future<> drop_all_commitlog_cleanup_records();
 
     /**
      * Return a map of stored tokens to IP addresses
