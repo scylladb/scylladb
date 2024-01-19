@@ -2021,7 +2021,6 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     }
 
     void generate_migration_update(std::vector<canonical_mutation>& out, const group0_guard& guard, const tablet_migration_info& mig) {
-        auto s = _db.find_schema(mig.tablet.table);
         auto& tmap = get_token_metadata_ptr()->tablets().get_tablet_map(mig.tablet.table);
         auto last_token = tmap.get_last_token(mig.tablet.tablet);
         if (tmap.get_tablet_transition_info(mig.tablet.tablet)) {
@@ -2029,7 +2028,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             return;
         }
         out.emplace_back(
-            replica::tablet_mutation_builder(guard.write_timestamp(), s->ks_name(), mig.tablet.table)
+            replica::tablet_mutation_builder(guard.write_timestamp(), mig.tablet.table)
                 .set_new_replicas(last_token, replace_replica(tmap.get_tablet_info(mig.tablet.tablet).replicas, mig.src, mig.dst))
                 .set_stage(last_token, locator::tablet_transition_stage::allow_write_both_read_old)
                 .build());
@@ -2075,7 +2074,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             table_id table = s->id();
 
             auto get_mutation_builder = [&] () {
-                return replica::tablet_mutation_builder(guard.write_timestamp(), s->ks_name(), table);
+                return replica::tablet_mutation_builder(guard.write_timestamp(), table);
             };
 
             auto transition_to = [&] (locator::tablet_transition_stage stage) {
@@ -7574,7 +7573,6 @@ future<> storage_service::move_tablet(table_id table, dht::token token, locator:
         }
 
         std::vector<canonical_mutation> updates;
-        auto ks_name = _db.local().find_schema(table)->ks_name();
         auto& tmap = get_token_metadata().tablets().get_tablet_map(table);
         auto tid = tmap.get_tablet_id(token);
         auto& tinfo = tmap.get_tablet_info(tid);
@@ -7601,7 +7599,7 @@ future<> storage_service::move_tablet(table_id table, dht::token token, locator:
             co_return;
         }
 
-        updates.push_back(canonical_mutation(replica::tablet_mutation_builder(guard.write_timestamp(), ks_name, table)
+        updates.push_back(canonical_mutation(replica::tablet_mutation_builder(guard.write_timestamp(), table)
             .set_new_replicas(last_token, locator::replace_replica(tinfo.replicas, src, dst))
             .set_stage(last_token, locator::tablet_transition_stage::allow_write_both_read_old)
             .build()));
