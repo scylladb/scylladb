@@ -20,7 +20,8 @@ def wait_for_first_cdc_generation(cql, timeout):
         assert time.time() < deadline, "Timed out waiting for the first CDC generation"
         time.sleep(1)
 
-def test_cdc_log_entries_use_cdc_streams(scylla_only, cql, test_keyspace):
+# xfail_tablets due to https://github.com/scylladb/scylladb/issues/16317
+def test_cdc_log_entries_use_cdc_streams(scylla_only, cql, test_keyspace, xfail_tablets):
     '''Test that the stream IDs chosen for CDC log entries come from the CDC generation
     whose streams are listed in the streams description table. Since this test is executed
     on a single-node cluster, there is only one generation.'''
@@ -49,7 +50,8 @@ def test_cdc_log_entries_use_cdc_streams(scylla_only, cql, test_keyspace):
 
 # Test for #10473 - reading logs (from sstable) after dropping
 # column in base.
-def test_cdc_alter_table_drop_column(scylla_only, cql, test_keyspace):
+# xfail_tablets due to https://github.com/scylladb/scylladb/issues/16317
+def test_cdc_alter_table_drop_column(scylla_only, cql, test_keyspace, xfail_tablets):
     schema = "pk int primary key, v int"
     extra = " with cdc = {'enabled': true}"
     with new_test_table(cql, test_keyspace, schema, extra) as table:
@@ -62,7 +64,8 @@ def test_cdc_alter_table_drop_column(scylla_only, cql, test_keyspace):
 
 # Regression test for #12098 - check that LWT inserts don't observe
 # themselves inside preimages
-def test_cdc_with_lwt_preimage(scylla_only, cql, test_keyspace):
+# xfail_tablets due to https://github.com/scylladb/scylladb/issues/16317
+def test_cdc_with_lwt_preimage(scylla_only, cql, test_keyspace, xfail_tablets):
     schema = "pk int primary key"
     extra = " with cdc = {'enabled': true, 'preimage':true}"
     with new_test_table(cql, test_keyspace, schema, extra) as table:

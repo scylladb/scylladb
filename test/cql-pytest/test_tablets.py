@@ -25,7 +25,7 @@ from cassandra.protocol import ConfigurationException
 def test_keyspace_128_tablets(cql, this_dc):
     name = unique_name()
     try:
-        cql.execute("CREATE KEYSPACE " + name + " WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" + this_dc + "': 1, 'initial_tablets': 128 }")
+        cql.execute("CREATE KEYSPACE " + name + " WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" + this_dc + "': 1 } AND TABLETS = { 'enabled': true, 'initial': 128 }")
     except ConfigurationException:
         pytest.skip('Scylla does not support initial_tablets, or the tablets feature is not enabled')
     yield name

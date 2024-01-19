@@ -63,6 +63,39 @@ def format_tuples(tuples=None, **kwargs):
     body = ', '.join(f"'{key}': '{value}'" for key, value in tuples.items())
     return f'{{ {body} }}'
 
+def is_scylla(cql):
+    """ Check whether we are running against Scylla or not """
+    # We recognize Scylla by checking if there is any system table whose name
+    # contains the word "scylla":
+    names = [row.table_name for row in cql.execute("SELECT * FROM system_schema.tables WHERE keyspace_name = 'system'")]
+    return any('scylla' in name for name in names)
+
+def keyspace_has_tablets(cql, keyspace):
+    """ Return true if the keyspace was created with tablets.
+
+    We support running cql-pytest against an older version of scylla, so we do
+    the detection in a way that accounts for scylla possibly not even knowing
+    what tablets is.
+    For cassandra, this will always return no.
+
+    If the keyspace was created with tablets, it will have an entry in
+    `system_schema.scylla_keyspaces`, with `initial_tablets` set.
+    So here, we simply query this table, looking for a partition for the
+    appropriate keyspace. If the result has the `initial_tablets` column and it
+    is set, the keyspace has tablets.
+    """
+    if not is_scylla(cql):
+        return False
+
+    # Need to use network strategy, otherwise tablets will not be enabled.
+    res = list(cql.execute(f"SELECT * FROM system_schema.scylla_keyspaces WHERE keyspace_name='{keyspace}'"))
+    # The row migh exist due to storage related options, but the tablets related fields are null.
+    # So we check that:
+    # * the row exists
+    # * `initial_tablets` has a value
+    if not res:
+        return False
+    return getattr(res[0], "initial_tablets", None) is not None
 
 # A utility function for creating a new temporary keyspace with given options.
 # It can be used in a "with", as:

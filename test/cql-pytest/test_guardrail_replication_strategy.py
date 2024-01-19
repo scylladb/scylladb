@@ -73,7 +73,7 @@ def test_given_non_empty_warn_and_fail_lists_when_creating_ks_should_fail_query_
                                                      warnings_count=0, fails_count=1)
 
 
-def test_given_already_existing_ks_when_altering_ks_should_validate_against_discouraged_strategies(cql, this_dc):
+def test_given_already_existing_ks_when_altering_ks_should_validate_against_discouraged_strategies(cql, this_dc, has_tablets):
     with ExitStack() as config_modifications:
         # place 1 strategy on warn list, 1 strategy on fail list and leave remaining strategies unspecified,
         # i.e. let them be allowed
@@ -82,8 +82,13 @@ def test_given_already_existing_ks_when_altering_ks_should_validate_against_disc
         config_modifications.enter_context(
             config_value_context(cql, 'replication_strategy_fail_list', 'EverywhereStrategy'))
 
+        if has_tablets:
+            extra_opts = " AND TABLETS = {'enabled': false}"
+        else:
+            extra_opts = ""
+
         # create a ks with "allowed" strategy
-        with new_test_keyspace(cql, " WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 3 }") as keyspace:
+        with new_test_keyspace(cql, " WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 3 }" + extra_opts) as keyspace:
             # alter this ks to use other strategy that is NOT present on any list
             response_future = cql.execute_async(
                 "ALTER KEYSPACE " + keyspace + " WITH REPLICATION = { 'class' : 'LocalStrategy', 'replication_factor' : 3 }")
