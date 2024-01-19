@@ -1351,12 +1351,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     }
 
     std::optional<request_param> get_request_param(raft::server_id id) {
-        std::optional<request_param> req_param;
-        auto rit = _topo_sm._topology.req_param.find(id);
-        if (rit != _topo_sm._topology.req_param.end()) {
-            req_param = rit->second;
-        }
-        return req_param;
+        return _topo_sm._topology.get_request_param(id);
     };
 
     // Returns:
@@ -1482,27 +1477,11 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     };
 
     raft::server_id parse_replaced_node(const std::optional<request_param>& req_param) {
-        if (req_param) {
-            auto *param = std::get_if<replace_param>(&*req_param);
-            if (param) {
-                return param->replaced_id;
-            }
-        }
-        return {};
+        return service::topology::parse_replaced_node(req_param);
     }
 
     std::unordered_set<raft::server_id> parse_ignore_nodes(const std::optional<request_param>& req_param) {
-        if (req_param) {
-            auto* remove_param = std::get_if<removenode_param>(&*req_param);
-            if (remove_param) {
-                return remove_param->ignored_ids;
-            }
-            auto* rep_param = std::get_if<replace_param>(&*req_param);
-            if (rep_param) {
-                return rep_param->ignored_ids;
-            }
-        }
-        return {};
+        return service::topology::parse_ignore_nodes(req_param);
     }
 
     inet_address id2ip(locator::host_id id) {
@@ -1577,14 +1556,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     }
 
     std::unordered_set<raft::server_id> get_excluded_nodes(raft::server_id id, const std::optional<topology_request>& req, const std::optional<request_param>& req_param) {
-        auto exclude_nodes = parse_ignore_nodes(req_param);
-        if (auto replaced_node = parse_replaced_node(req_param)) {
-            exclude_nodes.insert(replaced_node);
-        }
-        if (req && *req == topology_request::remove) {
-            exclude_nodes.insert(id);
-        }
-        return exclude_nodes;
+        return service::topology::get_excluded_nodes(id, req, req_param);
     }
 
     std::unordered_set<raft::server_id> get_excluded_nodes(const node_to_work_on& node) {

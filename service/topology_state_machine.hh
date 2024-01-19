@@ -177,6 +177,11 @@ struct topology {
     // Returns false iff we can safely start a new topology change.
     bool is_busy() const;
 
+    std::optional<request_param> get_request_param(raft::server_id) const;
+    static raft::server_id parse_replaced_node(const std::optional<request_param>&);
+    static std::unordered_set<raft::server_id> parse_ignore_nodes(const std::optional<request_param>&);
+    static std::unordered_set<raft::server_id> get_excluded_nodes(raft::server_id id, const std::optional<topology_request>& req, const std::optional<request_param>& req_param);
+
     // Calculates a set of features that are supported by all normal nodes but not yet enabled.
     std::set<sstring> calculate_not_yet_enabled_features() const;
 };
