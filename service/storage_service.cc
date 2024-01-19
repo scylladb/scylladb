@@ -4983,7 +4983,7 @@ future<> storage_service::cleanup_tablet(locator::global_tablet_id tablet) {
         }
         return _db.invoke_on(shard, [tablet, &sys_ks = _sys_ks] (replica::database& db) {
             auto& table = db.find_column_family(tablet.table);
-            return table.cleanup_tablet(sys_ks.local(), tablet.tablet);
+            return table.cleanup_tablet(db, sys_ks.local(), tablet.tablet);
         });
     });
 }
