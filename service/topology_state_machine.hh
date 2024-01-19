@@ -177,6 +177,10 @@ struct topology {
     // Returns false iff we can safely start a new topology change.
     bool is_busy() const;
 
+    // Returns the set of nodes currently excluded from synchronization-with in the topology.
+    // Barrier should not wait for those nodes.
+    std::unordered_set<raft::server_id> get_excluded_nodes() const;
+
     std::optional<request_param> get_request_param(raft::server_id) const;
     static raft::server_id parse_replaced_node(const std::optional<request_param>&);
     static std::unordered_set<raft::server_id> parse_ignore_nodes(const std::optional<request_param>&);

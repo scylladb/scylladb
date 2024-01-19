@@ -88,6 +88,25 @@ std::optional<request_param> topology::get_request_param(raft::server_id id) con
     return std::nullopt;
 };
 
+std::unordered_set<raft::server_id> topology::get_excluded_nodes() const {
+    std::unordered_set<raft::server_id> result;
+
+    for (auto& [id, rs] : transition_nodes) {
+        std::optional<topology_request> req;
+        auto req_i = requests.find(id);
+        if (req_i != requests.end()) {
+            req = req_i->second;
+        }
+        if (rs.state == node_state::removing) {
+            result.insert(id);
+        }
+        auto excluded = get_excluded_nodes(id, req, get_request_param(id));
+        result.insert(excluded.begin(), excluded.end());
+    }
+
+    return result;
+}
+
 std::set<sstring> calculate_not_yet_enabled_features(const std::set<sstring>& enabled_features, const auto& supported_features) {
     std::set<sstring> to_enable;
     bool first = true;
