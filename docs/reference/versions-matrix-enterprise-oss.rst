@@ -14,6 +14,8 @@ The following table shows ScyllaDB Enterprise versions and their corresponding S
 
    * - ScyllaDB Enterprise
      - ScyllaDB Open Source
+   * - 2024.1
+     - 5.4
    * - 2023.1
      - 5.2
    * - 2022.2
