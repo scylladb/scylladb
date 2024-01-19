@@ -68,6 +68,9 @@ namespace db {
 class system_distributed_keyspace;
 class system_keyspace;
 class batchlog_manager;
+namespace view {
+class view_builder;
+}
 }
 
 namespace netw {
@@ -187,6 +190,7 @@ public:
         sharded<locator::snitch_ptr>& snitch,
         sharded<service::tablet_allocator>& tablet_allocator,
         sharded<cdc::generation_service>& cdc_gs,
+        sharded<db::view::view_builder>& view_builder,
         cql3::query_processor& qp);
 
     // Needed by distributed<>
@@ -365,8 +369,6 @@ public:
 
 private:
     void set_mode(mode m);
-    // Can only be called on shard-0
-    future<> mark_existing_views_as_built();
 
     // Stream data for which we become a new replica.
     // Before that, if we're not replacing another node, inform other nodes about our chosen tokens
@@ -488,6 +490,7 @@ private:
     locator::snitch_signal_slot_t _snitch_reconfigure;
     sharded<service::tablet_allocator>& _tablet_allocator;
     sharded<cdc::generation_service>& _cdc_gens;
+    sharded<db::view::view_builder>& _view_builder;
 private:
     /**
      * Handle node bootstrap
