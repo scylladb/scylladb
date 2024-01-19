@@ -1,4 +1,4 @@
-Create a ScyllaDB Cluster - Single Data Center (DC)
+Create a ScyllaDB Cluster - Single Datacenter (DC)
 ****************************************************
 
 -------------
@@ -13,17 +13,17 @@ Procedure
 
 These steps need to be done for each of the nodes in the new cluster.
 
-1. Install Scylla on a node. See :doc:`Getting Started</getting-started/index>` for further instructions.
-Follow the Scylla install procedure up to ``scylla.yaml`` configuration phase.
+1. Install ScyllaDB on a node. See :doc:`Getting Started</getting-started/index>` for further instructions.
+Follow the ScyllaDB install procedure up to ``scylla.yaml`` configuration phase.
 
-In case that the node starts during the process follow :doc:`these instructions </operating-scylla/procedures/cluster-management/clear-data>` 
+In case the node starts during the process, follow :doc:`these instructions </operating-scylla/procedures/cluster-management/clear-data>` 
 
 2. In the ``scylla.yaml`` file, edit the parameters listed below.
 The file can be found under ``/etc/scylla/``
 
 - **cluster_name** - Set the selected cluster_name
 - **seeds** - Specify the IP of the first node and **only the first node**. New nodes will use the IP of this seed node to connect to the cluster and learn the cluster topology and state.
-- **listen_address** - IP address that Scylla used to connect to other Scylla nodes in the cluster
+- **listen_address** - IP address that ScyllaDB used to connect to other ScyllaDB nodes in the cluster
 - **endpoint_snitch** - Set the selected snitch
 - **rpc_address** - Address for client connection (Thrift, CQL)
 
@@ -49,7 +49,7 @@ For example:
    # prefer_local=<false | true>
    # dc_suffix=<Data Center name suffix, used by EC2SnitchXXX snitches>
    
-4. After Scylla has been installed and configured, edit ``scylla.yaml`` file on all the nodes, using the first node as the seed node. Start the seed node, and once it is in **UN** state, repeat for all the other nodes, each after the previous is in **UN** state.
+4. After ScyllaDB has been installed and configured, edit ``scylla.yaml`` file on all the nodes, using the first node as the seed node. Start the seed node, and once it is in **UN** state, repeat for all the other nodes, each after the previous is in **UN** state.
 
 .. include:: /rst_include/scylla-commands-start-index.rst
 
@@ -60,9 +60,9 @@ For example:
 Example
 -------
 
-This example shows how to install and configure a three nodes cluster using GossipingPropertyFileSnitch as the endpoint_snitch, each node on a different rack.
+This example shows how to install and configure a three-node cluster using GossipingPropertyFileSnitch as the endpoint_snitch, each node on a different rack.
 
-1. Installing Three Scylla nodes, the IP's are:
+1. Install three ScyllaDB nodes; the IPs are:
 
 .. code-block:: shell
 
@@ -70,7 +70,7 @@ This example shows how to install and configure a three nodes cluster using Goss
    192.168.1.202 
    192.168.1.203
 
-2. In each Scylla node, edit the ``scylla.yaml`` file
+2. In each ScyllaDB node, edit the ``scylla.yaml`` file
 
 **192.168.1.201**
 
@@ -102,8 +102,8 @@ This example shows how to install and configure a three nodes cluster using Goss
    rpc_address: "192.168.1.203"
    listen_address: "192.168.1.203"
 
-3. This step needs to be done only if using **GossipingPropertyFileSnitch**.
-In each Scylla node, edit the ``cassandra-rackdc.properties`` file
+3. This step only needs to be done if you're using **GossipingPropertyFileSnitch**.
+   In each ScyllaDB node, edit the ``cassandra-rackdc.properties`` file.
 
 **192.168.1.201**
 
@@ -151,7 +151,7 @@ In each Scylla node, edit the ``cassandra-rackdc.properties`` file
    # prefer_local=<false | true>
    # dc_suffix=<Data Center name suffix, used by EC2SnitchXXX snitches>
 
-4. Starting Scylla nodes, since our seed node is ``192.168.1.201`` we will start it first, wait until it is in a **UN** state, and repeat for the other nodes.
+4. Starting ScyllaDB nodes, since our seed node is ``192.168.1.201`` we will start it first, wait until it is in a **UN** state, and repeat for the other nodes.
 
 .. include:: /rst_include/scylla-commands-start-index.rst
 
