@@ -111,6 +111,15 @@ tablet_replica_set get_new_replicas(const tablet_info& tinfo, const tablet_migra
     return replace_replica(tinfo.replicas, mig.src, mig.dst);
 }
 
+tablet_transition_info migration_to_transition_info(const tablet_info& ti, const tablet_migration_info& mig) {
+    return tablet_transition_info {
+            tablet_transition_stage::allow_write_both_read_old,
+            mig.kind,
+            get_new_replicas(ti, mig),
+            mig.dst
+    };
+}
+
 const tablet_map& tablet_metadata::get_tablet_map(table_id id) const {
     try {
         return _tablets.at(id);

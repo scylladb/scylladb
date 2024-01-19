@@ -612,23 +612,13 @@ void apply_plan(token_metadata& tm, const migration_plan& plan) {
     }
 }
 
-static
-tablet_transition_info migration_to_transition_info(const tablet_migration_info& mig, const tablet_info& ti) {
-    return tablet_transition_info {
-            tablet_transition_stage::allow_write_both_read_old,
-            mig.kind,
-            get_new_replicas(ti, mig),
-            mig.dst
-    };
-}
-
 // Reflects the plan in a given token metadata as if the migrations were started but not yet executed.
 static
 void apply_plan_as_in_progress(token_metadata& tm, const migration_plan& plan) {
     for (auto&& mig : plan.migrations()) {
         tablet_map& tmap = tm.tablets().get_tablet_map(mig.tablet.table);
         auto tinfo = tmap.get_tablet_info(mig.tablet.tablet);
-        tmap.set_tablet_transition_info(mig.tablet.tablet, migration_to_transition_info(mig, tinfo));
+        tmap.set_tablet_transition_info(mig.tablet.tablet, migration_to_transition_info(tinfo, mig));
     }
 }
 
