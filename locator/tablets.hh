@@ -220,6 +220,7 @@ struct tablet_migration_streaming_info {
 };
 
 tablet_migration_streaming_info get_migration_streaming_info(const tablet_info&, const tablet_transition_info&);
+tablet_migration_streaming_info get_migration_streaming_info(const tablet_info&, const tablet_migration_info&);
 
 // Describes if a given token is located at either left or right side of a tablet's range
 enum tablet_range_side {
