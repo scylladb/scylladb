@@ -26,7 +26,7 @@ async def test_current_cdc_generation_is_not_removed(manager: ManagerClient):
     # We enable the injection to ensure that a too-late timestamp does not prevent removing the CDC generation.
     logger.info("Bootstrapping first node")
     server = await manager.server_add(
-        cmdline=['--logger-log-level', 'storage_service=trace'],
+        cmdline=['--logger-log-level', 'storage_service=trace:raft_topology=trace'],
         config={'error_injections_at_startup': ['clean_obsolete_cdc_generations_ignore_ts']}
     )
 
@@ -53,7 +53,7 @@ async def test_dependency_on_timestamps(manager: ManagerClient):
        and the topology coordinator's clock is too small. Then, test that the CDC generation publisher removes
        the clean-up candidate (together with older generations) if its timestamp is old enough."""
     logger.info("Bootstrapping first node")
-    servers = [await manager.server_add(cmdline=['--logger-log-level', 'storage_service=trace'])]
+    servers = [await manager.server_add(cmdline=['--logger-log-level', 'storage_service=trace:raft_topology=trace'])]
 
     log_file1 = await manager.server_open_log(servers[0].server_id)
     mark: Optional[int] = None
