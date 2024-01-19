@@ -369,6 +369,11 @@ public:
 
     gc_clock::time_point min_gc_time(const cf_id_type&) const;
 
+    // Return the lowest possible replay position across all existing or future commitlog segments.
+    // In other words, only positions greater or equal to min_position() can
+    // be replayed on the next reboot.
+    replay_position min_position() const;
+
     typedef std::function<future<>(buffer_and_replay_position)> commit_load_reader_func;
 
     class segment_error : public std::exception {};

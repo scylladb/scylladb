@@ -321,6 +321,8 @@ public:
     requires std::derived_from<T, db::commitlog::entry_writer> && std::same_as<R, decltype(std::declval<T>().result())>
     future<R> allocate_when_possible(T writer, db::timeout_clock::time_point timeout);
 
+    replay_position min_position();
+
     template<typename T>
     struct byte_flow {
         T bytes_written = 0;
@@ -1409,6 +1411,14 @@ public:
         return i == _cf_min_time.end() ? gc_clock::time_point::max() : i->second;
     }
 };
+
+db::replay_position db::commitlog::segment_manager::min_position() {
+    if (_segments.empty()) {
+        return {_ids, 0};
+    } else {
+        return {_segments.front()->_desc.id, 0};
+    }
+}
 
 template<typename T, typename R>
 requires std::derived_from<T, db::commitlog::entry_writer> && std::same_as<R, decltype(std::declval<T>().result())>
@@ -3251,6 +3261,10 @@ future<std::vector<sstring>> db::commitlog::list_existing_segments(const sstring
 
 gc_clock::time_point db::commitlog::min_gc_time(const cf_id_type& id) const {
     return _segment_manager->min_gc_time(id);
+}
+
+db::replay_position db::commitlog::min_position() const {
+    return _segment_manager->min_position();
 }
 
 future<std::vector<sstring>> db::commitlog::get_segments_to_replay() const {
