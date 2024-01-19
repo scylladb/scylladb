@@ -10,14 +10,13 @@
 
 #include "auth/password_authenticator.hh"
 
-#include <algorithm>
-#include <chrono>
 #include <random>
 #include <string_view>
 #include <optional>
 
 #include <boost/algorithm/cxx11/all_of.hpp>
 #include <seastar/core/seastar.hh>
+#include <seastar/core/sleep.hh>
 
 #include "auth/authenticated_user.hh"
 #include "auth/common.hh"

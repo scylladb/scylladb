@@ -12,8 +12,6 @@
 
 #include <string_view>
 #include <memory>
-#include <set>
-#include <stdexcept>
 #include <unordered_map>
 #include <optional>
 #include <functional>
@@ -26,9 +24,6 @@
 #include "auth/authentication_options.hh"
 #include "auth/resource.hh"
 #include "auth/sasl_challenge.hh"
-#include "bytes.hh"
-#include "enum_set.hh"
-#include "exceptions/exceptions.hh"
 
 namespace db {
     class config;

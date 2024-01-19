@@ -11,7 +11,6 @@
 #include "auth/role_manager.hh"
 
 #include <string_view>
-#include <unordered_set>
 
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/future.hh>

@@ -12,6 +12,7 @@
 
 #include <seastar/core/abort_source.hh>
 
+#include "db/consistency_level_type.hh"
 #include "auth/authenticator.hh"
 
 namespace db {

@@ -19,8 +19,6 @@
 #include <boost/algorithm/string/split.hpp>
 #include <boost/algorithm/string/classification.hpp>
 
-#include "service/storage_proxy.hh"
-#include "data_dictionary/user_types_metadata.hh"
 #include "cql3/util.hh"
 #include "db/marshal/type_parser.hh"
 

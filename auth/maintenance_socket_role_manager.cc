@@ -11,7 +11,6 @@
 #include <seastar/core/future.hh>
 #include <stdexcept>
 #include <string_view>
-#include "log.hh"
 #include "utils/class_registrator.hh"
 
 namespace auth {

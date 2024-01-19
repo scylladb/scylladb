@@ -8,7 +8,6 @@
 
 #pragma once
 
-#include <chrono>
 #include <string_view>
 
 #include <seastar/core/future.hh>
@@ -19,9 +18,7 @@
 #include <seastar/core/sstring.hh>
 #include <seastar/core/smp.hh>
 
-#include "log.hh"
 #include "seastarx.hh"
-#include "utils/exponential_backoff_retry.hh"
 
 using namespace std::chrono_literals;
 

@@ -27,7 +27,6 @@
 #include "exceptions/exceptions.hh"
 #include "log.hh"
 #include "utils/class_registrator.hh"
-#include "replica/database.hh"
 #include "service/migration_manager.hh"
 #include "password_authenticator.hh"
 

@@ -9,7 +9,6 @@
 #include "auth/permissions_cache.hh"
 
 #include "auth/authorizer.hh"
-#include "auth/common.hh"
 #include "auth/service.hh"
 
 namespace auth {
