@@ -11,7 +11,6 @@
 #include "auth/service.hh"
 
 #include <algorithm>
-#include <map>
 
 #include <seastar/core/future-util.hh>
 #include <seastar/core/sharded.hh>
@@ -21,20 +20,17 @@
 #include "auth/allow_all_authorizer.hh"
 #include "auth/common.hh"
 #include "auth/role_or_anonymous.hh"
-#include "cql3/functions/function_name.hh"
 #include "cql3/functions/functions.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/untyped_result_set.hh"
 #include "db/config.hh"
 #include "db/consistency_level_type.hh"
 #include "db/functions/function_name.hh"
-#include "exceptions/exceptions.hh"
 #include "log.hh"
 #include "service/migration_manager.hh"
 #include "utils/class_registrator.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "data_dictionary/keyspace_metadata.hh"
-#include "mutation/mutation.hh"
 
 namespace auth {
 

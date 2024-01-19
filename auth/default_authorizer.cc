@@ -15,14 +15,11 @@ extern "C" {
 #include <unistd.h>
 }
 
-#include <chrono>
-#include <random>
-
 #include <boost/algorithm/string/join.hpp>
 #include <boost/range.hpp>
 #include <seastar/core/seastar.hh>
+#include <seastar/core/sleep.hh>
 
-#include "auth/authenticated_user.hh"
 #include "auth/common.hh"
 #include "auth/permission.hh"
 #include "auth/role_or_anonymous.hh"
@@ -30,7 +27,6 @@ extern "C" {
 #include "cql3/untyped_result_set.hh"
 #include "exceptions/exceptions.hh"
 #include "log.hh"
-#include "replica/database.hh"
 #include "utils/class_registrator.hh"
 
 namespace auth {

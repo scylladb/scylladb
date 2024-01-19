@@ -8,7 +8,6 @@
 
 #pragma once
 
-#include <iosfwd>
 #include <optional>
 #include <stdexcept>
 #include <unordered_map>

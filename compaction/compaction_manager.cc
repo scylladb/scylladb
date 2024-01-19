@@ -1627,6 +1627,9 @@ future<compaction_manager::compaction_stats_opt> compaction_manager::perform_tas
             return a->data_size() > b->data_size();
         });
     });
+    if (sstables.empty()) {
+        co_return std::nullopt;
+    }
     co_return co_await perform_compaction<TaskType>(throw_if_stopping::no, info, &t, info.value_or(tasks::task_info{}).id, std::move(options), std::move(owned_ranges_ptr), std::move(sstables), std::move(compacting), std::forward<Args>(args)...);
 }
 
@@ -1892,7 +1895,7 @@ future<> compaction_manager::perform_cleanup(owned_ranges_ptr sorted_owned_range
 
         auto has_sstables_eligible_for_compaction = [&] {
             for (auto& sst : cs.sstables_requiring_cleanup) {
-                if (sstables::is_eligible_for_compaction(sst)) {
+                if (eligible_for_compaction(sst)) {
                     return true;
                 }
             }

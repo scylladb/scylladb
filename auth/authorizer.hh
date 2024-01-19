@@ -11,8 +11,6 @@
 #pragma once
 
 #include <string_view>
-#include <functional>
-#include <optional>
 #include <stdexcept>
 #include <tuple>
 #include <vector>

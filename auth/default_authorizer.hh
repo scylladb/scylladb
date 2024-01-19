@@ -10,8 +10,6 @@
 
 #pragma once
 
-#include <functional>
-
 #include <seastar/core/abort_source.hh>
 
 #include "auth/authorizer.hh"

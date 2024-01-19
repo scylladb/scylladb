@@ -11,7 +11,6 @@
 #include <string_view>
 #include <memory>
 #include <optional>
-#include <stdexcept>
 #include <unordered_set>
 
 #include <seastar/core/future.hh>

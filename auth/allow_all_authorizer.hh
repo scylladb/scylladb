@@ -9,7 +9,6 @@
 #pragma once
 
 #include "auth/authorizer.hh"
-#include "exceptions/exceptions.hh"
 
 namespace cql3 {
 class query_processor;

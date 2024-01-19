@@ -9,7 +9,6 @@
 #include "auth/passwords.hh"
 
 #include <cerrno>
-#include <optional>
 
 extern "C" {
 #include <crypt.h>

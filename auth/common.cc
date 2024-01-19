@@ -6,14 +6,14 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#include <seastar/core/coroutine.hh>
 #include "auth/common.hh"
 
+#include <seastar/core/coroutine.hh>
 #include <seastar/core/shared_ptr.hh>
 
+#include "utils/exponential_backoff_retry.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/statements/create_table_statement.hh"
-#include "replica/database.hh"
 #include "schema/schema_builder.hh"
 #include "service/migration_manager.hh"
 #include "timeout_config.hh"
