@@ -2,3 +2,8 @@ type: Python
 pool_size: 4
 dirties_cluster:
   - test_native_transport
+extra_scylla_cmdline_options:
+  - '--experimental-features=udf'
+  - '--experimental-features=consistent-topology-changes'
+  - '--experimental-features=keyspace-storage-options'
+  - '--experimental-features=tablets'
