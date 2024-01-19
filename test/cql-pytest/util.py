@@ -63,6 +63,12 @@ def format_tuples(tuples=None, **kwargs):
     body = ', '.join(f"'{key}': '{value}'" for key, value in tuples.items())
     return f'{{ {body} }}'
 
+def is_scylla(cql):
+    """ Check whether we are running against Scylla or not """
+    # We recognize Scylla by checking if there is any system table whose name
+    # contains the word "scylla":
+    names = [row.table_name for row in cql.execute("SELECT * FROM system_schema.tables WHERE keyspace_name = 'system'")]
+    return any('scylla' in name for name in names)
 
 # A utility function for creating a new temporary keyspace with given options.
 # It can be used in a "with", as:

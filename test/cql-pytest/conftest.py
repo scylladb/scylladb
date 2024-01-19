@@ -21,7 +21,7 @@ import tempfile
 import time
 import random
 
-from util import unique_name, new_test_table, cql_session, local_process_id
+from util import unique_name, new_test_table, cql_session, local_process_id, is_scylla
 
 
 print(f"Driver name {DRIVER_NAME}, version {DRIVER_VERSION}")
@@ -106,8 +106,7 @@ def test_keyspace(cql, this_dc):
 def scylla_only(cql):
     # We recognize Scylla by checking if there is any system table whose name
     # contains the word "scylla":
-    names = [row.table_name for row in cql.execute("SELECT * FROM system_schema.tables WHERE keyspace_name = 'system'")]
-    if not any('scylla' in name for name in names):
+    if not is_scylla(cql):
         pytest.skip('Scylla-only test skipped')
 
 # "cassandra_bug" is similar to "scylla_only", except instead of skipping
