@@ -31,6 +31,7 @@
 #include "sstables/sstables.hh"
 #include "replica/database.hh"
 #include "gms/feature_service.hh"
+#include "utils/error_injection.hh"
 
 namespace streaming {
 
@@ -211,6 +212,9 @@ future<> stream_transfer_task::execute() {
     auto& sm = session->manager();
     auto topo_guard = session->topo_guard();
     return sm.container().invoke_on_all([plan_id, cf_id, id, dst_cpu_id, ranges=this->_ranges, reason, topo_guard] (stream_manager& sm) mutable {
+        utils::get_local_injector().inject("stream_transfer_task_execute_table_dropped", [&db = sm.db()] () {
+            db.find_column_family(table_id::create_null_id());
+        });
         auto tbl = sm.db().find_column_family(cf_id).shared_from_this();
       return sm.db().obtain_reader_permit(*tbl, "stream-transfer-task", db::no_timeout, {}).then([&sm, tbl, plan_id, cf_id, id, dst_cpu_id, ranges=std::move(ranges), reason, topo_guard] (reader_permit permit) mutable {
         auto si = make_lw_shared<send_info>(sm.ms(), plan_id, tbl, std::move(permit), std::move(ranges), id, dst_cpu_id, reason, topo_guard, [&sm, plan_id, addr = id.addr] (size_t sz) {
@@ -242,7 +246,11 @@ future<> stream_transfer_task::execute() {
         // errors and make the stream successful. This allows user to
         // drop tables during node operations like decommission or
         // bootstrap.
-        if (!session->manager().db().column_family_exists(cf_id)) {
+        auto dropped = false;
+        utils::get_local_injector().inject("stream_transfer_task_execute_table_dropped", [&dropped] () {
+            dropped = true;
+        });
+        if (dropped || !session->manager().db().column_family_exists(cf_id)) {
             sslog.warn("[Stream #{}] Ignore the table with table_id {} which is dropped during streaming: {}", plan_id, cf_id, ep);
             if (!_mutation_done_sent) {
                 return session->manager().ms().send_stream_mutation_done(id, plan_id, _ranges, cf_id, session->dst_cpu_id);
