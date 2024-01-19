@@ -7344,7 +7344,8 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                 }
                 slogger.debug("Got raft_topology_cmd::wait_for_ip, new nodes [{}]", ids);
                 for (const auto& id: ids) {
-                    co_await wait_for_ip(id, _group0->address_map(), _abort_source);
+                    const auto ip = co_await wait_for_ip(id, _group0->address_map(), _abort_source);
+                    co_await _sys_ks.local().update_peer_info(ip, {.host_id = id.uuid()});
                 }
                 slogger.debug("raft_topology_cmd::wait_for_ip done [{}]", ids);
                 result.status = raft_topology_cmd_result::command_status::success;
