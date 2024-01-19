@@ -177,9 +177,9 @@ future<> send_mutation_fragments(lw_shared_ptr<send_info> si) {
                 }).handle_exception([&sink, got_error_from_peer] (std::exception_ptr ep) mutable {
                     // Notify the receiver the sender has failed
                     if (*got_error_from_peer) {
-                    return sink(frozen_mutation_fragment(bytes_ostream()), stream_mutation_fragments_cmd::error).then([ep = std::move(ep)] () mutable {
-                        return make_exception_future<>(std::move(ep));
-                    });
+                        return sink(frozen_mutation_fragment(bytes_ostream()), stream_mutation_fragments_cmd::error).then([ep = std::move(ep)] () mutable {
+                            return make_exception_future<>(std::move(ep));
+                        });
                     }
                     return make_ready_future();
                 }).finally([&sink] () mutable {
@@ -189,11 +189,11 @@ future<> send_mutation_fragments(lw_shared_ptr<send_info> si) {
         }();
 
         return when_all_succeed(std::move(source_op), std::move(sink_op)).then_unpack([got_error_from_peer, table_is_dropped, si] {
-                if (*table_is_dropped) {
-                     sslog.info("[Stream #{}] Skipped streaming the dropped table {}.{}", si->plan_id, si->cf->schema()->ks_name(), si->cf->schema()->cf_name());
-                } else if (*got_error_from_peer) {
-                    throw std::runtime_error(format("Peer failed to process mutation_fragment peer={}, plan_id={}, cf_id={}", si->id.addr, si->plan_id, si->cf_id));
-                }
+            if (*table_is_dropped) {
+                sslog.info("[Stream #{}] Skipped streaming the dropped table {}.{}", si->plan_id, si->cf->schema()->ks_name(), si->cf->schema()->cf_name());
+            } else if (*got_error_from_peer) {
+                throw std::runtime_error(format("Peer failed to process mutation_fragment peer={}, plan_id={}, cf_id={}", si->id.addr, si->plan_id, si->cf_id));
+            }
         });
     });
   });

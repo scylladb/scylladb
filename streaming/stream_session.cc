@@ -121,140 +121,140 @@ void stream_manager::init_messaging_service_handler(abort_source& as) {
                     _db.local().get_token_metadata().get_topology().my_address())));
         }
         return _mm.local().get_schema_for_write(schema_id, from, _ms.local(), as).then([this, from, estimated_partitions, plan_id, cf_id, source, reason, topo_guard, &as] (schema_ptr s) mutable {
-          return _db.local().obtain_reader_permit(s, "stream-session", db::no_timeout, {}).then([this, from, estimated_partitions, plan_id, cf_id, source, reason, topo_guard, s, &as] (reader_permit permit) mutable {
-            struct stream_mutation_fragments_cmd_status {
-                bool got_cmd = false;
-                bool got_end_of_stream = false;
-            };
-            auto cmd_status = make_lw_shared<stream_mutation_fragments_cmd_status>();
-            auto offstrategy_update = make_lw_shared<offstrategy_trigger>(_db, cf_id, plan_id);
-            auto guard = service::topology_guard(s->table(), topo_guard);
+            return _db.local().obtain_reader_permit(s, "stream-session", db::no_timeout, {}).then([this, from, estimated_partitions, plan_id, cf_id, source, reason, topo_guard, s, &as] (reader_permit permit) mutable {
+                struct stream_mutation_fragments_cmd_status {
+                    bool got_cmd = false;
+                    bool got_end_of_stream = false;
+                };
+                auto cmd_status = make_lw_shared<stream_mutation_fragments_cmd_status>();
+                auto offstrategy_update = make_lw_shared<offstrategy_trigger>(_db, cf_id, plan_id);
+                auto guard = service::topology_guard(s->table(), topo_guard);
 
-            // Will log a message when streaming is done. Used to synchronize tests.
-            lw_shared_ptr<std::any> log_done;
-            if (utils::get_local_injector().is_enabled("stream_mutation_fragments")) {
-                log_done = make_lw_shared<std::any>(seastar::make_shared(seastar::defer([] {
-                    sslog.info("stream_mutation_fragments: done");
-                })));
-            }
+                // Will log a message when streaming is done. Used to synchronize tests.
+                lw_shared_ptr<std::any> log_done;
+                if (utils::get_local_injector().is_enabled("stream_mutation_fragments")) {
+                    log_done = make_lw_shared<std::any>(seastar::make_shared(seastar::defer([] {
+                        sslog.info("stream_mutation_fragments: done");
+                    })));
+                }
 
-            auto get_next_mutation_fragment = [guard = std::move(guard), &as, &sm = container(), source, plan_id, from, s, cmd_status, offstrategy_update, permit] () mutable {
-                guard.check();
-                return source().then([&sm, &guard, &as, plan_id, from, s, cmd_status, offstrategy_update, permit] (std::optional<std::tuple<frozen_mutation_fragment, rpc::optional<stream_mutation_fragments_cmd>>> opt) mutable {
-                    if (opt) {
-                        auto cmd = std::get<1>(*opt);
-                        if (cmd) {
-                            cmd_status->got_cmd = true;
-                            switch (*cmd) {
-                            case stream_mutation_fragments_cmd::mutation_fragment_data:
-                                break;
-                            case stream_mutation_fragments_cmd::error:
-                                return make_exception_future<mutation_fragment_opt>(std::runtime_error("Sender failed"));
-                            case stream_mutation_fragments_cmd::end_of_stream:
-                                cmd_status->got_end_of_stream = true;
-                                return make_ready_future<mutation_fragment_opt>();
-                            default:
-                                return make_exception_future<mutation_fragment_opt>(std::runtime_error("Sender sent wrong cmd"));
+                auto get_next_mutation_fragment = [guard = std::move(guard), &as, &sm = container(), source, plan_id, from, s, cmd_status, offstrategy_update, permit] () mutable {
+                    guard.check();
+                    return source().then([&sm, &guard, &as, plan_id, from, s, cmd_status, offstrategy_update, permit] (std::optional<std::tuple<frozen_mutation_fragment, rpc::optional<stream_mutation_fragments_cmd>>> opt) mutable {
+                        if (opt) {
+                            auto cmd = std::get<1>(*opt);
+                            if (cmd) {
+                                cmd_status->got_cmd = true;
+                                switch (*cmd) {
+                                case stream_mutation_fragments_cmd::mutation_fragment_data:
+                                    break;
+                                case stream_mutation_fragments_cmd::error:
+                                    return make_exception_future<mutation_fragment_opt>(std::runtime_error("Sender failed"));
+                                case stream_mutation_fragments_cmd::end_of_stream:
+                                    cmd_status->got_end_of_stream = true;
+                                    return make_ready_future<mutation_fragment_opt>();
+                                default:
+                                    return make_exception_future<mutation_fragment_opt>(std::runtime_error("Sender sent wrong cmd"));
+                                }
                             }
+                            frozen_mutation_fragment& fmf = std::get<0>(*opt);
+                            auto sz = fmf.representation().size();
+                            auto mf = fmf.unfreeze(*s, permit);
+                            sm.local().update_progress(plan_id, from.addr, progress_info::direction::IN, sz);
+                            offstrategy_update->update();
+
+                            return utils::get_local_injector().inject_with_handler("stream_mutation_fragments", [&guard, &as] (auto& handler) -> future<> {
+                                auto& guard_ = guard;
+                                auto& as_ = as;
+                                sslog.info("stream_mutation_fragments: waiting");
+                                while (!handler.poll_for_message()) {
+                                    guard_.check();
+                                    co_await sleep_abortable(std::chrono::milliseconds(5), as_);
+                                }
+                                sslog.info("stream_mutation_fragments: released");
+                            }).then([mf = std::move(mf)] () mutable {
+                                return mutation_fragment_opt(std::move(mf));
+                            });
+                        } else {
+                            // If the sender has sent stream_mutation_fragments_cmd it means it is
+                            // a node that understands the new protocol. It must send end_of_stream
+                            // before close the stream.
+                            if (cmd_status->got_cmd && !cmd_status->got_end_of_stream) {
+                                return make_exception_future<mutation_fragment_opt>(std::runtime_error("Sender did not sent end_of_stream"));
+                            }
+                            return make_ready_future<mutation_fragment_opt>();
                         }
-                        frozen_mutation_fragment& fmf = std::get<0>(*opt);
-                        auto sz = fmf.representation().size();
-                        auto mf = fmf.unfreeze(*s, permit);
-                        sm.local().update_progress(plan_id, from.addr, progress_info::direction::IN, sz);
-                        offstrategy_update->update();
+                    });
+                };
+                using received_partitions_t = std::pair<uint64_t, std::unique_ptr<dht::auto_refreshing_sharder>>;
+                auto sink = _ms.local().make_sink_for_stream_mutation_fragments(source);
+                try {
+                    auto distribute = [this, cf_id, s] (flat_mutation_reader_v2 producer,
+                            std::function<future<> (flat_mutation_reader_v2)> consumer) -> future<received_partitions_t> {
+                        try {
+                            auto& table = _db.local().find_column_family(cf_id);
+                            auto op = table.stream_in_progress();
+                            auto sharder_ptr = std::make_unique<dht::auto_refreshing_sharder>(table.shared_from_this());
+                            auto& sharder = *sharder_ptr;
+                            uint64_t received_partitions = co_await mutation_writer::distribute_reader_and_consume_on_shards(s, sharder,
+                                std::move(producer),
+                                std::move(consumer),
+                                std::move(op)
+                            );
+                            // Keep sharder_ptr alive in "then_wrapped".
+                            co_return std::make_pair(std::move(received_partitions), std::move(sharder_ptr));
+                        } catch (data_dictionary::no_such_column_family) {
+                            co_return coroutine::return_exception_ptr(std::current_exception());
+                        }
+                    };
 
-                        return utils::get_local_injector().inject_with_handler("stream_mutation_fragments", [&guard, &as] (auto& handler) -> future<> {
-                            auto& guard_ = guard;
-                            auto& as_ = as;
-                            sslog.info("stream_mutation_fragments: waiting");
-                            while (!handler.poll_for_message()) {
-                                guard_.check();
-                                co_await sleep_abortable(std::chrono::milliseconds(5), as_);
+                    //FIXME: discarded future.
+                    (void)distribute(
+                        make_generating_reader_v1(s, permit, std::move(get_next_mutation_fragment)),
+                        make_streaming_consumer("streaming", _db, _sys_dist_ks, _view_update_generator, estimated_partitions, reason, is_offstrategy_supported(reason), topo_guard)
+                    ).then_wrapped([s, plan_id, from, sink, estimated_partitions, log_done] (future<std::pair<uint64_t, std::unique_ptr<dht::auto_refreshing_sharder>>> f) mutable {
+                        int32_t status = 0;
+                        uint64_t received_partitions = 0;
+                        if (f.failed()) {
+                            auto ex = f.get_exception();
+                            auto level = seastar::log_level::error;
+                            if (try_catch<seastar::rpc::stream_closed>(ex)) {
+                                level = seastar::log_level::debug;
                             }
-                            sslog.info("stream_mutation_fragments: released");
-                        }).then([mf = std::move(mf)] () mutable {
-                            return mutation_fragment_opt(std::move(mf));
+                            status = -1;
+                            // The status code -2 means error and the table is dropped
+                            if (try_catch<data_dictionary::no_such_column_family>(ex)) {
+                                level = seastar::log_level::debug;
+                                status = -2;
+                            }
+                            sslog.log(level, "[Stream #{}] Failed to handle STREAM_MUTATION_FRAGMENTS (receive and distribute phase) for ks={}, cf={}, peer={}: {}",
+                                    plan_id, s->ks_name(), s->cf_name(), from.addr, ex);
+                        } else {
+                            received_partitions = f.get0().first;
+                        }
+                        if (received_partitions) {
+                            sslog.info("[Stream #{}] Write to sstable for ks={}, cf={}, estimated_partitions={}, received_partitions={}",
+                                    plan_id, s->ks_name(), s->cf_name(), estimated_partitions, received_partitions);
+                        }
+                        return sink(status).finally([sink] () mutable {
+                            return sink.close();
                         });
-                    } else {
-                        // If the sender has sent stream_mutation_fragments_cmd it means it is
-                        // a node that understands the new protocol. It must send end_of_stream
-                        // before close the stream.
-                        if (cmd_status->got_cmd && !cmd_status->got_end_of_stream) {
-                            return make_exception_future<mutation_fragment_opt>(std::runtime_error("Sender did not sent end_of_stream"));
+                    }).handle_exception([s, plan_id, from, sink] (std::exception_ptr ep) {
+                        auto level = seastar::log_level::error;
+                        if (try_catch<seastar::rpc::closed_error>(ep)) {
+                            level = seastar::log_level::debug;
                         }
-                        return make_ready_future<mutation_fragment_opt>();
-                    }
-                });
-            };
-          using received_partitions_t = std::pair<uint64_t, std::unique_ptr<dht::auto_refreshing_sharder>>;
-          auto sink = _ms.local().make_sink_for_stream_mutation_fragments(source);
-          try {
-           auto distribute = [this, cf_id, s] (flat_mutation_reader_v2 producer,
-                std::function<future<> (flat_mutation_reader_v2)> consumer) -> future<received_partitions_t> {
-            try {
-            auto& table = _db.local().find_column_family(cf_id);
-            auto op = table.stream_in_progress();
-            auto sharder_ptr = std::make_unique<dht::auto_refreshing_sharder>(table.shared_from_this());
-            auto& sharder = *sharder_ptr;
-            uint64_t received_partitions = co_await mutation_writer::distribute_reader_and_consume_on_shards(s, sharder,
-                std::move(producer),
-                std::move(consumer),
-                std::move(op)
-            );
-            // Keep sharder_ptr alive in "then_wrapped".
-            co_return std::make_pair(std::move(received_partitions), std::move(sharder_ptr));
-            } catch (data_dictionary::no_such_column_family) {
-                co_return coroutine::return_exception_ptr(std::current_exception());
-            }
-          };
-
-            //FIXME: discarded future.
-            (void)distribute(
-                make_generating_reader_v1(s, permit, std::move(get_next_mutation_fragment)),
-                make_streaming_consumer("streaming", _db, _sys_dist_ks, _view_update_generator, estimated_partitions, reason, is_offstrategy_supported(reason), topo_guard)
-            ).then_wrapped([s, plan_id, from, sink, estimated_partitions, log_done] (future<std::pair<uint64_t, std::unique_ptr<dht::auto_refreshing_sharder>>> f) mutable {
-                int32_t status = 0;
-                uint64_t received_partitions = 0;
-                if (f.failed()) {
-                    auto ex = f.get_exception();
-                    auto level = seastar::log_level::error;
-                    if (try_catch<seastar::rpc::stream_closed>(ex)) {
-                        level = seastar::log_level::debug;
-                    }
-                    status = -1;
-                    // The status code -2 means error and the table is dropped
-                    if (try_catch<data_dictionary::no_such_column_family>(ex)) {
-                        level = seastar::log_level::debug;
-                        status = -2;
-                    }
-                    sslog.log(level, "[Stream #{}] Failed to handle STREAM_MUTATION_FRAGMENTS (receive and distribute phase) for ks={}, cf={}, peer={}: {}",
-                            plan_id, s->ks_name(), s->cf_name(), from.addr, ex);
-                } else {
-                    received_partitions = f.get0().first;
+                        sslog.log(level, "[Stream #{}] Failed to handle STREAM_MUTATION_FRAGMENTS (respond phase) for ks={}, cf={}, peer={}: {}",
+                                plan_id, s->ks_name(), s->cf_name(), from.addr, ep);
+                    });
+                } catch (...) {
+                    return sink.close().then([sink, eptr = std::current_exception()] () -> future<rpc::sink<int>> {
+                        return make_exception_future<rpc::sink<int>>(eptr);
+                    });
                 }
-                if (received_partitions) {
-                    sslog.info("[Stream #{}] Write to sstable for ks={}, cf={}, estimated_partitions={}, received_partitions={}",
-                            plan_id, s->ks_name(), s->cf_name(), estimated_partitions, received_partitions);
-                }
-                return sink(status).finally([sink] () mutable {
-                    return sink.close();
-                });
-            }).handle_exception([s, plan_id, from, sink] (std::exception_ptr ep) {
-                auto level = seastar::log_level::error;
-                if (try_catch<seastar::rpc::closed_error>(ep)) {
-                    level = seastar::log_level::debug;
-                }
-                sslog.log(level, "[Stream #{}] Failed to handle STREAM_MUTATION_FRAGMENTS (respond phase) for ks={}, cf={}, peer={}: {}",
-                        plan_id, s->ks_name(), s->cf_name(), from.addr, ep);
+                return make_ready_future<rpc::sink<int>>(sink);
             });
-          } catch (...) {
-            return sink.close().then([sink, eptr = std::current_exception()] () -> future<rpc::sink<int>> {
-                return make_exception_future<rpc::sink<int>>(eptr);
-            });
-          }
-            return make_ready_future<rpc::sink<int>>(sink);
         });
-      });
     });
     ms.register_stream_mutation_done([this] (const rpc::client_info& cinfo, streaming::plan_id plan_id, dht::token_range_vector ranges, table_id cf_id, unsigned dst_cpu_id) {
         const auto& from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
