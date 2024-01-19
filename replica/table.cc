@@ -3205,7 +3205,7 @@ future<> compaction_group::cleanup() {
     co_await _t._cache.invalidate(std::move(updater), p_range);
 }
 
-future<> table::cleanup_tablet(locator::tablet_id tid) {
+future<> table::cleanup_tablet(db::system_keyspace& sys_ks, locator::tablet_id tid) {
     auto holder = async_gate().hold();
 
     auto& sg = _storage_groups[tid.value()];
@@ -3221,6 +3221,19 @@ future<> table::cleanup_tablet(locator::tablet_id tid) {
         //co_await _cg.stop();
         co_await cg_ptr->flush();
         co_await cg_ptr->cleanup();
+        // FIXME: at this point _highest_rp might be greater than the replay_position of the last cleaned mutation,
+        // and can cover some mutations which weren't cleaned, causing them to be lost during replay.
+        //
+        // This should be okay, because writes are not supposed to race with cleanups
+        // in the first place, but it would be better to extract the exact replay_position from
+        // the actually flushed/deleted sstables, like discard_sstable() does, so that the mutations
+        // cleaned from sstables are exactly the same as the ones cleaned from commitlog.
+        co_await sys_ks.save_commitlog_cleanup_record(schema()->id(), sg->token_range(), _highest_rp);
+        // This is the only place (outside of reboot) where we delete unneeded commitlog cleanup
+        // records. This isn't ideal -- it would be more natural if the unneeded records
+        // were deleted as soon as they become unneeded -- but this gets the job done with a
+        // minimal amount of code.
+        co_await sys_ks.drop_old_range_cleanup_records(db.commitlog()->min_position());
     }
 
     tlogger.info("Cleaned up tablet {} of table {}.{} successfully.", tid, _schema->ks_name(), _schema->cf_name());
