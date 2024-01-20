@@ -534,6 +534,12 @@ future<> storage_service::sync_raft_topology_nodes(mutable_token_metadata_ptr tm
     for (const auto& [id, rs]: t.transition_nodes) {
         co_await process_transition_node(id, rs);
     }
+    for (auto id : t.get_excluded_nodes()) {
+        locator::node* n = tmptr->get_topology().find_node(locator::host_id(id.uuid()));
+        if (n) {
+            n->set_excluded(true);
+        }
+    }
 }
 
 future<> storage_service::topology_state_load() {
@@ -634,6 +640,8 @@ future<> storage_service::topology_state_load() {
         rtlogger.debug("topology_state_load: current CDC generation ID: {}", *gen_id);
         co_await _cdc_gens.local().handle_cdc_generation(*gen_id);
     }
+
+    slogger.debug("topology_state_load: excluded nodes: {}", _topology_state_machine._topology.get_excluded_nodes());
 }
 
 future<> storage_service::topology_transition() {

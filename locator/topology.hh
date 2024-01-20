@@ -63,6 +63,7 @@ private:
     endpoint_dc_rack _dc_rack;
     state _state;
     shard_id _shard_count = 0;
+    bool _excluded = false;
 
     // Is this node the `localhost` instance
     this_node _is_this_node;
@@ -117,6 +118,16 @@ public:
 
     bool is_normal() const noexcept {
         return _state == state::normal;
+    }
+
+    // Excluded nodes are still part of topology, possibly present in replica sets, but
+    // are not going to be up again and can be ignored in barriers.
+    bool is_excluded() const {
+        return _excluded;
+    }
+
+    void set_excluded(bool excluded) {
+        _excluded = excluded;
     }
 
     bool is_leaving() const noexcept {
@@ -208,6 +219,7 @@ public:
     // Looks up a node by its host_id.
     // Returns a pointer to the node if found, or nullptr otherwise.
     const node* find_node(host_id id) const noexcept;
+    node* find_node(host_id id) noexcept;
 
     const node& get_node(host_id id) const {
         auto n = find_node(id);
