@@ -15,22 +15,11 @@
 #include "converting_mutation_partition_applier.hh"
 #include "partition_builder.hh"
 #include "query-result-writer.hh"
-#include "atomic_cell_hash.hh"
-#include "reversibly_mergeable.hh"
-#include "mutation_fragment.hh"
-#include "mutation_query.hh"
-#include "mutation_compactor.hh"
 #include "counters.hh"
 #include "row_cache.hh"
-#include "view_info.hh"
-#include "mutation_cleaner.hh"
 #include <seastar/core/execution_stage.hh>
-#include "types/map.hh"
 #include "compaction/compaction_garbage_collector.hh"
-#include "utils/exceptions.hh"
-#include "clustering_key_filter.hh"
 #include "mutation_partition_view.hh"
-#include "tombstone_gc.hh"
 #include "utils/unconst.hh"
 
 extern logging::logger mplog;

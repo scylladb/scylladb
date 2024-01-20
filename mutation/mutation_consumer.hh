@@ -8,8 +8,6 @@
 
 #pragma once
 
-#include "mutation_consumer_concepts.hh"
-
 enum class consume_in_reverse {
     no = 0,
     yes,

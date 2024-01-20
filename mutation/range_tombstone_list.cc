@@ -9,7 +9,6 @@
 #include <boost/range/adaptor/reversed.hpp>
 #include "range_tombstone_list.hh"
 #include "utils/allocation_strategy.hh"
-#include "utils/amortized_reserve.hh"
 #include <seastar/util/variant_utils.hh>
 
 range_tombstone_list::range_tombstone_list(const range_tombstone_list& x)
