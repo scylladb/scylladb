@@ -13,11 +13,9 @@
 #include "index/secondary_index_manager.hh"
 
 #include "cql3/statements/index_target.hh"
-#include "cql3/util.hh"
 #include "cql3/expr/expression.hh"
 #include "index/target_parser.hh"
 #include "schema/schema_builder.hh"
-#include "replica/database.hh"
 #include "db/view/view.hh"
 #include "concrete_types.hh"
 #include "db/tags/extension.hh"

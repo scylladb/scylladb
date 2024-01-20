@@ -16,10 +16,10 @@
 #include <boost/range/algorithm/find_if.hpp>
 #include <boost/algorithm/string/join.hpp>
 #include <boost/range/adaptors.hpp>
+#include <seastar/util/log.hh>
 
 #include "exceptions/exceptions.hh"
 #include "utils/rjson.hh"
-#include "log.hh"
 
 const sstring db::index::secondary_index::custom_index_option_name = "class_name";
 

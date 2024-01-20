@@ -16,7 +16,6 @@
 #include "cql3/statements/index_target.hh"
 
 #include <vector>
-#include <set>
 
 namespace cql3::expr {
 
