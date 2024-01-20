@@ -120,8 +120,6 @@ gms::application_state_map gossiping_property_file_snitch::get_app_states() cons
 }
 
 future<> gossiping_property_file_snitch::read_property_file() {
-    using namespace exceptions;
-
     return load_property_file().then([this] {
         return reload_configuration();
     }).then_wrapped([this] (auto&& f) {
