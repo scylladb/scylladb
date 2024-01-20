@@ -9,11 +9,10 @@
 #include <algorithm>
 #include <limits>
 #include <ostream>
-#include <utility>
+#include <boost/lexical_cast.hpp>
 
 #include "dht/token.hh"
 #include "dht/token-sharding.hh"
-#include "dht/i_partitioner.hh"
 
 namespace dht {
 

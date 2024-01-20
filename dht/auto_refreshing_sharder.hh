@@ -8,7 +8,6 @@
 
 #pragma once
 
-#include "dht/sharder.hh"
 #include "replica/database.hh"
 
 namespace dht {

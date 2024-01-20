@@ -10,7 +10,6 @@
 
 #include "i_partitioner.hh"
 #include "bytes.hh"
-#include <vector>
 
 namespace dht {
 

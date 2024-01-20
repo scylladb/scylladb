@@ -9,12 +9,10 @@
 #pragma once
 
 #include "bytes.hh"
-#include "utils/managed_bytes.hh"
 #include "types/types.hh"
 
 #include <seastar/net/byteorder.hh>
 #include <fmt/format.h>
-#include <array>
 #include <functional>
 #include <utility>
 #include <compare>

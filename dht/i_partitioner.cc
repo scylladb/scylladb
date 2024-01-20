@@ -12,10 +12,6 @@
 #include <seastar/coroutine/maybe_yield.hh>
 #include "dht/token-sharding.hh"
 #include "utils/class_registrator.hh"
-#include "types/types.hh"
-#include "utils/murmur_hash.hh"
-#include "utils/div_ceil.hh"
-#include <deque>
 #include <boost/range/adaptor/map.hpp>
 #include <boost/range/irange.hpp>
 #include <boost/range/adaptor/transformed.hpp>

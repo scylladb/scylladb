@@ -14,7 +14,6 @@
 #include "gms/gossiper.hh"
 #include "log.hh"
 #include "streaming/stream_plan.hh"
-#include "streaming/stream_state.hh"
 #include "db/config.hh"
 #include <seastar/core/semaphore.hh>
 #include <boost/range/adaptors.hpp>
