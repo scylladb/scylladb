@@ -16,6 +16,7 @@
 #include "gms/feature_service.hh"
 #include "db/system_keyspace.hh"
 #include "utils/s3/client.hh"
+#include "exceptions/exceptions.hh"
 
 namespace sstables {
 

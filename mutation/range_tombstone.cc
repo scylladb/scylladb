@@ -7,10 +7,9 @@
  */
 
 #include "range_tombstone.hh"
-#include "mutation/mutation_fragment.hh"
-#include "mutation/mutation_fragment_v2.hh"
 
 #include <boost/range/algorithm/upper_bound.hpp>
+#include <boost/range/numeric.hpp>
 
 std::optional<range_tombstone> range_tombstone::apply(const schema& s, range_tombstone&& src)
 {

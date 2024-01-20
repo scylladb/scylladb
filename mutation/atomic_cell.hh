@@ -17,7 +17,6 @@
 #include <seastar/util/bool_class.hh>
 #include <cstdint>
 #include <iosfwd>
-#include <concepts>
 #include "utils/fragmented_temporary_buffer.hh"
 
 #include "serializer.hh"

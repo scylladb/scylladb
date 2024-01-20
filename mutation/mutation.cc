@@ -10,6 +10,7 @@
 #include "query-result-writer.hh"
 #include "mutation_rebuilder.hh"
 #include "mutation/json.hh"
+#include "types/collection.hh"
 #include "types/tuple.hh"
 #include "dht/i_partitioner.hh"
 

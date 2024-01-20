@@ -8,7 +8,6 @@
 
 #pragma once
 
-#include "mutation_partition.hh"
 #include "mutation_fragment.hh"
 #include "position_in_partition.hh"
 
@@ -18,7 +17,6 @@
 
 #include <seastar/core/future-util.hh>
 
-#include "db/timeout_clock.hh"
 #include "reader_permit.hh"
 
 // Mutation fragment which represents a range tombstone boundary.

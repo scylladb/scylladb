@@ -11,7 +11,6 @@
 #include "compaction/compaction_garbage_collector.hh"
 #include "mutation_fragment.hh"
 #include "mutation_fragment_stream_validator.hh"
-#include "range_tombstone_assembler.hh"
 #include "tombstone_gc.hh"
 #include "full_position.hh"
 

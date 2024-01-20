@@ -13,7 +13,6 @@
 #include "query-request.hh"
 #include "utils/preempt.hh"
 #include "utils/chunked_vector.hh"
-#include <iosfwd>
 #include <variant>
 
 class position_in_partition_view;

@@ -13,8 +13,6 @@
 #include "mutation_partition_view.hh"
 #include "schema/schema.hh"
 #include "atomic_cell.hh"
-#include "utils/data_input.hh"
-#include "mutation_partition_serializer.hh"
 #include "mutation_partition.hh"
 #include "counters.hh"
 #include "frozen_mutation.hh"

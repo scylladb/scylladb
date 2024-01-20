@@ -17,6 +17,7 @@
 #include "mutation_fragment_v2.hh"
 #include "mutation_consumer.hh"
 #include "range_tombstone_change_generator.hh"
+#include "mutation/mutation_consumer_concepts.hh"
 #include "utils/preempt.hh"
 
 #include <seastar/util/optimized_optional.hh>

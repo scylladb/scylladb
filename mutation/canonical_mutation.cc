@@ -13,8 +13,6 @@
 #include "mutation_partition_serializer.hh"
 #include "counters.hh"
 #include "converting_mutation_partition_applier.hh"
-#include "hashing_partition_visitor.hh"
-#include "idl/mutation.dist.hh"
 #include "idl/mutation.dist.impl.hh"
 #include <iostream>
 

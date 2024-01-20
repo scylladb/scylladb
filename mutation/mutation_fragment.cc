@@ -6,10 +6,8 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#include <stack>
 #include <boost/range/algorithm/heap_algorithm.hpp>
 
-#include "mutation.hh"
 #include "mutation_fragment.hh"
 #include "mutation_fragment_v2.hh"
 #include "clustering_interval_set.hh"

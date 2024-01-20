@@ -16,7 +16,6 @@
 
 #include <seastar/core/future-util.hh>
 
-#include "db/timeout_clock.hh"
 #include "reader_permit.hh"
 #include "mutation_fragment_fwd.hh"
 

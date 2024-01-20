@@ -9,7 +9,6 @@
 #pragma once
 
 #include <iosfwd>
-#include <map>
 #include <boost/intrusive/set.hpp>
 #include <boost/range/iterator_range.hpp>
 #include <boost/range/adaptor/filtered.hpp>
