@@ -17,6 +17,8 @@
 #include <boost/algorithm/string/split.hpp>
 #include <boost/algorithm/string/classification.hpp>
 
+#include "utils/class_registrator.hh"
+
 namespace locator {
 
 gce_snitch::gce_snitch(const snitch_config& cfg) : production_snitch_base(cfg) {

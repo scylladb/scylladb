@@ -16,6 +16,8 @@
 #include "locator/network_topology_strategy.hh"
 #include "locator/load_sketch.hh"
 #include <boost/algorithm/string.hpp>
+#include "exceptions/exceptions.hh"
+#include "utils/class_registrator.hh"
 #include "utils/hash.hh"
 
 namespace std {

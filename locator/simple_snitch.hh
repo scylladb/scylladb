@@ -10,7 +10,6 @@
 
 #pragma once
 #include "snitch_base.hh"
-#include <memory>
 
 namespace locator {
 

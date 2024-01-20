@@ -1,11 +1,14 @@
 #include "locator/ec2_snitch.hh"
 #include <seastar/core/seastar.hh>
+#include <seastar/core/coroutine.hh>
 #include <seastar/core/sleep.hh>
 #include <seastar/core/do_with.hh>
 #include <seastar/http/reply.hh>
 
 #include <boost/algorithm/string/classification.hpp>
 #include <boost/algorithm/string/split.hpp>
+
+#include "utils/class_registrator.hh"
 
 namespace locator {
 

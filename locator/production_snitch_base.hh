@@ -11,12 +11,8 @@
 #pragma once
 
 #include <unordered_map>
-#include <utility>
-#include <optional>
 #include <unordered_set>
 
-#include "gms/endpoint_state.hh"
-#include "locator/token_metadata.hh"
 #include <seastar/core/sstring.hh>
 #include "snitch_base.hh"
 

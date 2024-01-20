@@ -9,15 +9,10 @@
 #pragma once
 
 #include "locator/abstract_replication_strategy.hh"
-#include "exceptions/exceptions.hh"
 #include "locator/token_metadata.hh"
 #include "locator/tablets.hh"
 
 #include <seastar/core/sstring.hh>
-
-#include <optional>
-#include <set>
-#include <string_view>
 
 namespace locator {
 

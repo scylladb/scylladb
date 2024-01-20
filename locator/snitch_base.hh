@@ -10,20 +10,15 @@
 
 #pragma once
 
-#include <unordered_set>
-#include <vector>
 #include <boost/signals2.hpp>
 #include <boost/signals2/dummy_mutex.hpp>
 
 #include "gms/endpoint_state.hh"
 #include "locator/types.hh"
 #include "gms/inet_address.hh"
-#include "inet_address_vectors.hh"
-#include "gms/versioned_value.hh"
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/thread.hh>
 #include <seastar/core/distributed.hh>
-#include "utils/class_registrator.hh"
 #include "log.hh"
 
 namespace gms {

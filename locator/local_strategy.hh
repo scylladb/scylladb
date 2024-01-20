@@ -11,7 +11,6 @@
 #include "abstract_replication_strategy.hh"
 
 #include <optional>
-#include <set>
 
 // forward declaration since replica/database.hh includes this file
 class keyspace;

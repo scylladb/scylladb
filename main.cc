@@ -44,6 +44,7 @@
 #include "db/hints/manager.hh"
 #include "db/commitlog/commitlog_replayer.hh"
 #include "db/view/view_builder.hh"
+#include "utils/class_registrator.hh"
 #include "utils/error_injection.hh"
 #include "utils/runtime.hh"
 #include "log.hh"
