@@ -21,6 +21,8 @@
 #include <boost/algorithm/string/split.hpp>
 #include <fmt/format.h>
 
+#include "utils/class_registrator.hh"
+
 namespace locator {
 
 const std::string azure_snitch::REGION_NAME_QUERY_PATH = fmt::format(AZURE_QUERY_PATH_TEMPLATE, "location");

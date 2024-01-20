@@ -8,6 +8,7 @@
  */
 
 #include "locator/rack_inferring_snitch.hh"
+#include "utils/class_registrator.hh"
 
 namespace locator {
 using registry = class_registrator<i_endpoint_snitch, rack_inferring_snitch, const snitch_config&>;

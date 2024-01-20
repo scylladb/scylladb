@@ -8,8 +8,8 @@
 
 #pragma once
 
+#include "dht/token-sharding.hh"
 #include "locator/tablets.hh"
-#include "dht/sharder.hh"
 #include "locator/token_metadata.hh"
 
 namespace locator {

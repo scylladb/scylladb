@@ -10,6 +10,7 @@
 
 #include "locator/snitch_base.hh"
 #include "gms/application_state.hh"
+#include "utils/class_registrator.hh"
 
 namespace locator {
 
