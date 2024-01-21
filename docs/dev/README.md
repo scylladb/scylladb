@@ -14,3 +14,7 @@ User documentation can be found on
 
 For information on how to build Scylla and how to contribute visit
 [HACKING.md](../../HACKING.md) and [CONTRIBUTING.md](../../CONTRIBUTING.md).
+
+Index
+=====
+[Module list and depedencies](modules.md)
