@@ -806,3 +806,17 @@ def test_mv_with_only_primary_key_rows(scylla_only, cql, test_keyspace):
             nodetool.flush(cql, view)
             assert(set([row.id for row in cql.execute(f'SELECT id FROM {view}')]) == set([1, 2, 3]))
             # We now believe that empty value serialization/deserialization is correct
+
+# This test is regression testing added after fixing:
+# https://github.com/scylladb/scylladb/issues/16392 - the gist of the issue is that
+# prepared statements on views are not invalidated when the base table changes.
+def test_mv_prepared_statement_with_altered_base(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'id int PRIMARY KEY, v1 int') as base:
+        with new_materialized_view(cql, table=base, select='*', pk='id', where='id IS NOT NULL') as view:
+            base_query = cql.prepare(f"SELECT * FROM {base} WHERE id=?")
+            view_query = cql.prepare(f"SELECT * FROM {view} WHERE id=?")
+            cql.execute(f"INSERT INTO {base} (id,v1) VALUES (0,0)")
+            assert cql.execute(base_query,[0]) == cql.execute(view_query,[0])
+            cql.execute(f"ALTER TABLE {base} ADD (v2 int)")
+            cql.execute(f"INSERT INTO {base} (id,v1,v2) VALUES (1,1,1)")
+            assert list(cql.execute(base_query,[1])) == list(cql.execute(view_query,[1]))
