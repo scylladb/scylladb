@@ -106,8 +106,6 @@ public:
     chunked_vector(chunked_vector&& x) noexcept;
     template <typename Iterator>
     chunked_vector(Iterator begin, Iterator end);
-    template <std::ranges::range Range>
-    chunked_vector(const Range& r) : chunked_vector(r.begin(), r.end()) {}
     explicit chunked_vector(size_t n, const T& value = T());
     ~chunked_vector();
     chunked_vector& operator=(const chunked_vector& x);
