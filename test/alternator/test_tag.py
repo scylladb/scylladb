@@ -342,3 +342,106 @@ def test_concurrent_tag(dynamodb, test_table):
     t2.start()
     t1.join()
     t2.join()
+
+# An empty string is allowed as a tag's value
+# Reproduces #16904.
+def test_empty_tag_value(dynamodb, test_table):
+    client = dynamodb.meta.client
+    arn = client.describe_table(TableName=test_table.name)['Table']['TableArn']
+    tag = random_string()
+    client.tag_resource(ResourceArn=arn, Tags=[{'Key': tag, 'Value': ''}])
+    # Verify that the tag with the empty value was correctly saved:
+    tags = client.list_tags_of_resource(ResourceArn=arn)['Tags']
+    assert {'Key': tag, 'Value': ''} in tags
+    # Clean up the tag we just added
+    client.untag_resource(ResourceArn=arn, TagKeys=[tag])
+
+# However, an empty string is NOT allowed as a tag's key
+def test_empty_tag_key(dynamodb, test_table):
+    client = dynamodb.meta.client
+    arn = client.describe_table(TableName=test_table.name)['Table']['TableArn']
+    with pytest.raises(ClientError, match='ValidationException'):
+        client.tag_resource(ResourceArn=arn, Tags=[{'Key': '', 'Value': 'dog'}])
+
+# Although an empty Value is allowed for a tag, a *missing* Value is not
+# allowed:
+def test_missing_tag_value(dynamodb, test_table):
+    client = dynamodb.meta.client
+    arn = client.describe_table(TableName=test_table.name)['Table']['TableArn']
+    with pytest.raises(ClientError, match='ValidationException'):
+        client.tag_resource(ResourceArn=arn, Tags=[{'Key': 'dog'}])
+
+# According to the DynamoDB documentation, the maximum tag key length allowed
+# is 128 characters. Actually, it's 128 *unicode* characters which are
+# allowed, not 128 bytes.
+# Reproduces #16908
+@pytest.mark.parametrize("is_ascii", [
+        True,
+        pytest.param(False, marks=pytest.mark.xfail(reason="#16908"))])
+def test_tag_key_length_128_allowed(dynamodb, test_table, is_ascii):
+    client = dynamodb.meta.client
+    arn = client.describe_table(TableName=test_table.name)['Table']['TableArn']
+    tag = ('x' if is_ascii else 'א') * 128
+    client.tag_resource(ResourceArn=arn, Tags=[{'Key': tag, 'Value': 'dog'}])
+    tags = client.list_tags_of_resource(ResourceArn=arn)['Tags']
+    assert {'Key': tag, 'Value': 'dog'} in tags
+    client.untag_resource(ResourceArn=arn, TagKeys=[tag])
+
+def test_tag_key_length_129_forbidden(dynamodb, test_table):
+    client = dynamodb.meta.client
+    arn = client.describe_table(TableName=test_table.name)['Table']['TableArn']
+    tag = 'x'*129
+    with pytest.raises(ClientError, match='ValidationException'):
+        client.tag_resource(ResourceArn=arn, Tags=[{'Key': tag, 'Value': 'dog'}])
+
+# According to the DynamoDB documentation, the maximum tag value length
+# allowed is 256 characters. Actually, it's 256 *unicode* characters which
+# are allowed, not 256 bytes.
+# Reproduces #16908
+@pytest.mark.parametrize("is_ascii", [
+        True,
+        pytest.param(False, marks=pytest.mark.xfail(reason="#16908"))])
+def test_tag_value_length_256_allowed(dynamodb, test_table, is_ascii):
+    client = dynamodb.meta.client
+    arn = client.describe_table(TableName=test_table.name)['Table']['TableArn']
+    tag = random_string()
+    value = ('x' if is_ascii else 'א') * 256
+    client.tag_resource(ResourceArn=arn, Tags=[{'Key': tag, 'Value': value}])
+    tags = client.list_tags_of_resource(ResourceArn=arn)['Tags']
+    assert {'Key': tag, 'Value': value} in tags
+    client.untag_resource(ResourceArn=arn, TagKeys=[tag])
+
+def test_tag_value_length_257_forbidden(dynamodb, test_table):
+    client = dynamodb.meta.client
+    arn = client.describe_table(TableName=test_table.name)['Table']['TableArn']
+    value = 'x'*257
+    with pytest.raises(ClientError, match='ValidationException'):
+        client.tag_resource(ResourceArn=arn, Tags=[{'Key': 'dog', 'Value': value}])
+
+# According to the DynamoDB documentation, only letters, whitespace, numbers,
+# and the characters [+-=._:/] are allowed in both tag keys or values.
+# Let's check that other non-letter characters are not allowed in either
+# key or value.
+def test_tag_forbidden_chars(dynamodb, test_table):
+    client = dynamodb.meta.client
+    arn = client.describe_table(TableName=test_table.name)['Table']['TableArn']
+    for x in ['hi!', 'd%g', '"hello"']:
+        with pytest.raises(ClientError, match='ValidationException'):
+            client.tag_resource(ResourceArn=arn, Tags=[{'Key': x, 'Value': 'dog'}])
+        with pytest.raises(ClientError, match='ValidationException'):
+            client.tag_resource(ResourceArn=arn, Tags=[{'Key': 'dog', 'Value': x}])
+
+# Check that's it's allowed to reassign a new value to an existing tag.
+def test_tag_reassign(dynamodb, test_table):
+    client = dynamodb.meta.client
+    arn = client.describe_table(TableName=test_table.name)['Table']['TableArn']
+    tag = random_string()
+    value1 = random_string()
+    value2 = random_string()
+    client.tag_resource(ResourceArn=arn, Tags=[{'Key': tag, 'Value': value1}])
+    tags = client.list_tags_of_resource(ResourceArn=arn)['Tags']
+    assert {'Key': tag, 'Value': value1} in tags
+    client.tag_resource(ResourceArn=arn, Tags=[{'Key': tag, 'Value': value2}])
+    tags = client.list_tags_of_resource(ResourceArn=arn)['Tags']
+    assert {'Key': tag, 'Value': value2} in tags
+    client.untag_resource(ResourceArn=arn, TagKeys=[tag])
