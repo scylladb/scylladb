@@ -160,17 +160,7 @@ public:
 };
 }
 
-namespace std { // for prepared_statements_cache log printouts
-inline std::ostream& operator<<(std::ostream& os, const typename cql3::prepared_cache_key_type::cache_key_type& p) {
-    os << "{cql_id: " << p.first << ", thrift_id: " << p.second << "}";
-    return os;
-}
-
-inline std::ostream& operator<<(std::ostream& os, const cql3::prepared_cache_key_type& p) {
-    os << p.key();
-    return os;
-}
-
+namespace std {
 template<>
 struct hash<cql3::prepared_cache_key_type> final {
     size_t operator()(const cql3::prepared_cache_key_type& k) const {
@@ -178,3 +168,18 @@ struct hash<cql3::prepared_cache_key_type> final {
     }
 };
 }
+
+// for prepared_statements_cache log printouts
+template <> struct fmt::formatter<cql3::prepared_cache_key_type::cache_key_type> {
+    constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
+    auto format(const cql3::prepared_cache_key_type::cache_key_type& p, fmt::format_context& ctx) const {
+        return fmt::format_to(ctx.out(), "{{cql_id: {}, thrift_id: {}}}", p.first, p.second);
+    }
+};
+
+template <> struct fmt::formatter<cql3::prepared_cache_key_type> {
+    constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
+    auto format(const cql3::prepared_cache_key_type& p, fmt::format_context& ctx) const {
+        return fmt::format_to(ctx.out(), "{}", p.key());
+    }
+};
