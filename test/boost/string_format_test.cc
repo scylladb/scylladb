@@ -188,7 +188,7 @@ BOOST_AUTO_TEST_CASE(test_vector_format) {
     auto small_vector = utils::small_vector<int, 1>(ints);
     test_format_range("small_vector", small_vector, ordered_strings);
 
-    auto chunked_vector = utils::chunked_vector<int, 131072>(ints);
+    auto chunked_vector = boost::copy_range<utils::chunked_vector<int, 131072>>(ints);
     test_format_range("chunked_vector", chunked_vector, ordered_strings);
 
     test_format_range("initializer_list", std::initializer_list<std::string>{"1", "2", "3"}, ordered_strings);
