@@ -145,7 +145,7 @@ public:
     void set_maintenance_sstables(lw_shared_ptr<sstables::sstable_set> new_maintenance_sstables);
 
     // Makes a compound set, which includes main and maintenance sets
-    lw_shared_ptr<sstables::sstable_set> make_compound_sstable_set();
+    lw_shared_ptr<sstables::sstable_set> make_compound_sstable_set() const;
 
     const std::vector<sstables::shared_sstable>& compacted_undeleted_sstables() const noexcept;
     // Triggers regular compaction.
