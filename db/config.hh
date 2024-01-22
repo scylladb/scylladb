@@ -126,8 +126,6 @@ struct replication_strategy_restriction_t {
 
 constexpr unsigned default_murmur3_partitioner_ignore_msb_bits = 12;
 
-using maintenance_socket_enabled = bool_class<class maintenance_socket_enabled_tag>;
-
 class config final : public utils::config_file {
 public:
     config();

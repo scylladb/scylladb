@@ -188,7 +188,7 @@ event::event_type parse_event_type(const sstring& value)
     }
 }
 
-cql_sg_stats::cql_sg_stats(db::maintenance_socket_enabled used_by_maintenance_socket)
+cql_sg_stats::cql_sg_stats(maintenance_socket_enabled used_by_maintenance_socket)
     : _cql_requests_stats(static_cast<uint8_t>(cql_binary_opcode::OPCODES_COUNT))
 {
     if (used_by_maintenance_socket) {
@@ -236,7 +236,7 @@ void cql_sg_stats::register_metrics()
 cql_server::cql_server(distributed<cql3::query_processor>& qp, auth::service& auth_service,
         service::memory_limiter& ml, cql_server_config config, const db::config& db_cfg,
         qos::service_level_controller& sl_controller, gms::gossiper& g, scheduling_group_key stats_key,
-        db::maintenance_socket_enabled used_by_maintenance_socket)
+        maintenance_socket_enabled used_by_maintenance_socket)
     : server("CQLServer", clogger)
     , _query_processor(qp)
     , _config(std::move(config))

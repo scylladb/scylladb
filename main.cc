@@ -1685,11 +1685,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             maintenance_auth_config.authenticator_java_name = sstring{auth::allow_all_authenticator_name};
             maintenance_auth_config.role_manager_java_name = sstring{auth::maintenance_socket_role_manager_name};
 
-            maintenance_auth_service.start(perm_cache_config, std::ref(qp), std::ref(mm_notifier), std::ref(mm), maintenance_auth_config, db::maintenance_socket_enabled::yes).get();
+            maintenance_auth_service.start(perm_cache_config, std::ref(qp), std::ref(mm_notifier), std::ref(mm), maintenance_auth_config, maintenance_socket_enabled::yes).get();
 
             scheduling_group_key_config maintenance_cql_sg_stats_cfg =
-            make_scheduling_group_key_config<cql_transport::cql_sg_stats>(db::maintenance_socket_enabled::yes);
-            cql_transport::controller cql_maintenance_server_ctl(maintenance_auth_service, mm_notifier, gossiper, qp, service_memory_limiter, sl_controller, lifecycle_notifier, *cfg, scheduling_group_key_create(maintenance_cql_sg_stats_cfg).get0(), db::maintenance_socket_enabled::yes);
+            make_scheduling_group_key_config<cql_transport::cql_sg_stats>(maintenance_socket_enabled::yes);
+            cql_transport::controller cql_maintenance_server_ctl(maintenance_auth_service, mm_notifier, gossiper, qp, service_memory_limiter, sl_controller, lifecycle_notifier, *cfg, scheduling_group_key_create(maintenance_cql_sg_stats_cfg).get0(), maintenance_socket_enabled::yes);
 
             std::any stop_maintenance_auth_service;
             std::any stop_maintenance_cql;
@@ -1778,7 +1778,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             auth_config.authenticator_java_name = qualified_authenticator_name;
             auth_config.role_manager_java_name = qualified_role_manager_name;
 
-            auth_service.start(std::move(perm_cache_config), std::ref(qp), std::ref(mm_notifier), std::ref(mm), auth_config, db::maintenance_socket_enabled::no).get();
+            auth_service.start(std::move(perm_cache_config), std::ref(qp), std::ref(mm_notifier), std::ref(mm), auth_config, maintenance_socket_enabled::no).get();
 
             std::any stop_auth_service;
             start_auth_service(auth_service, stop_auth_service, "auth service");
@@ -1877,8 +1877,8 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             notify_set.notify_all(configurable::system_state::started).get();
 
-            scheduling_group_key_config cql_sg_stats_cfg = make_scheduling_group_key_config<cql_transport::cql_sg_stats>(db::maintenance_socket_enabled::no);
-            cql_transport::controller cql_server_ctl(auth_service, mm_notifier, gossiper, qp, service_memory_limiter, sl_controller, lifecycle_notifier, *cfg, scheduling_group_key_create(cql_sg_stats_cfg).get0(), db::maintenance_socket_enabled::no);
+            scheduling_group_key_config cql_sg_stats_cfg = make_scheduling_group_key_config<cql_transport::cql_sg_stats>(maintenance_socket_enabled::no);
+            cql_transport::controller cql_server_ctl(auth_service, mm_notifier, gossiper, qp, service_memory_limiter, sl_controller, lifecycle_notifier, *cfg, scheduling_group_key_create(cql_sg_stats_cfg).get0(), maintenance_socket_enabled::no);
 
             ss.local().register_protocol_server(cql_server_ctl);
 
