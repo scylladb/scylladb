@@ -52,6 +52,8 @@ class tablet_allocator_impl;
 
 class tablet_allocator {
 public:
+    struct config {
+    };
     class impl {
     public:
         virtual ~impl() = default;
@@ -60,7 +62,7 @@ private:
     std::unique_ptr<impl> _impl;
     tablet_allocator_impl& impl();
 public:
-    tablet_allocator(service::migration_notifier& mn, replica::database& db);
+    tablet_allocator(config cfg, service::migration_notifier& mn, replica::database& db);
 public:
     future<> stop();
 
