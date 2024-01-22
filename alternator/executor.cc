@@ -763,15 +763,33 @@ enum class update_tags_action { add_tags, delete_tags };
 static void update_tags_map(const rjson::value& tags, std::map<sstring, sstring>& tags_map, update_tags_action action) {
     if (action == update_tags_action::add_tags) {
         for (auto it = tags.Begin(); it != tags.End(); ++it) {
-            const rjson::value& key = (*it)["Key"];
-            const rjson::value& value = (*it)["Value"];
-            auto tag_key = rjson::to_string_view(key);
-            if (tag_key.empty() || tag_key.size() > 128 || !validate_legal_tag_chars(tag_key)) {
-                throw api_error::validation("The Tag Key provided is invalid string");
+            if (!it->IsObject()) {
+                throw api_error::validation("invalid tag object");
             }
-            auto tag_value = rjson::to_string_view(value);
-            if (tag_value.empty() || tag_value.size() > 256 || !validate_legal_tag_chars(tag_value)) {
-                throw api_error::validation("The Tag Value provided is invalid string");
+            const rjson::value* key = rjson::find(*it, "Key");
+            const rjson::value* value = rjson::find(*it, "Value");
+            if (!key || !key->IsString() || !value || !value->IsString()) {
+                throw api_error::validation("string Key and Value required");
+            }
+            auto tag_key = rjson::to_string_view(*key);
+            auto tag_value = rjson::to_string_view(*value);
+
+            if (tag_key.empty()) {
+                throw api_error::validation("A tag Key cannot be empty");
+            }
+            if (tag_key.size() > 128) {
+                throw api_error::validation("A tag Key is limited to 128 characters");
+            }
+            if (!validate_legal_tag_chars(tag_key)) {
+                throw api_error::validation("A tag Key can only contain letters, spaces, and [+-=._:/]");
+            }
+            // Note tag values are limited similarly to tag keys, but have a
+            // longer length limit, and *can* be empty.
+            if (tag_value.size() > 256) {
+                throw api_error::validation("A tag Value is limited to 256 characters");
+            }
+            if (!validate_legal_tag_chars(tag_value)) {
+                throw api_error::validation("A tag Value can only contain letters, spaces, and [+-=._:/]");
             }
             tags_map[sstring(tag_key)] = sstring(tag_value);
         }
