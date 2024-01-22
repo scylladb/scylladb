@@ -1364,6 +1364,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                     gossiper.local(), feature_service.local(), sys_ks.local(), group0_client};
 
             service::tablet_allocator::config tacfg;
+            tacfg.initial_tablets_scale = cfg->tablets_initial_scale_factor();
             distributed<service::tablet_allocator> tablet_allocator;
             if (cfg->check_experimental(db::experimental_features_t::feature::TABLETS) &&
                 !cfg->check_experimental(db::experimental_features_t::feature::CONSISTENT_TOPOLOGY_CHANGES)) {
