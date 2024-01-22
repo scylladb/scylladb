@@ -44,7 +44,7 @@ protected:
 public:
     /// Generates tablet_map for a new table.
     /// Runs under group0 guard.
-    virtual future<tablet_map> allocate_tablets_for_new_table(schema_ptr, token_metadata_ptr) const = 0;
+    virtual future<tablet_map> allocate_tablets_for_new_table(schema_ptr, token_metadata_ptr, unsigned initial_scale) const = 0;
 };
 
 } // namespace locator

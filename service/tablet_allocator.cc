@@ -804,7 +804,9 @@ public:
             : _config(std::move(cfg))
             , _migration_notifier(mn)
             , _db(db) {
-        (void)_config;
+        if (_config.initial_tablets_scale == 0) {
+            throw std::runtime_error("Initial tablets scale must be positive");
+        }
         if (db.get_config().check_experimental(db::experimental_features_t::feature::TABLETS)) {
             _migration_notifier.register_listener(this);
         }
@@ -831,7 +833,7 @@ public:
         auto rs = abstract_replication_strategy::create_replication_strategy(ksm.strategy_name(), params);
         if (auto&& tablet_rs = rs->maybe_as_tablet_aware()) {
             auto tm = _db.get_shared_token_metadata().get();
-            auto map = tablet_rs->allocate_tablets_for_new_table(s.shared_from_this(), tm).get0();
+            auto map = tablet_rs->allocate_tablets_for_new_table(s.shared_from_this(), tm, _config.initial_tablets_scale).get0();
             muts.emplace_back(tablet_map_to_mutation(map, s.id(), s.keypace_name(), s.cf_name(), ts).get0());
         }
     }
