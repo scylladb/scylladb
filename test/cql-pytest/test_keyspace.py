@@ -99,7 +99,19 @@ def test_drop_keyspace_nonexistent(cql):
 # Test trying to ALTER a keyspace.
 def test_alter_keyspace(cql, this_dc):
     with new_test_keyspace(cql, "WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 1 }") as keyspace:
-        cql.execute(f"ALTER KEYSPACE {keyspace} WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 3 }} AND DURABLE_WRITES = false")
+        cql.execute(f"ALTER KEYSPACE {keyspace} WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 2 }} AND DURABLE_WRITES = false")
+
+# Test trying to ALTER RF of tablets-enabled KS by more than 1 at a time
+def test_alter_keyspace_rf_by_more_than_1(cql, this_dc):
+    with new_test_keyspace(cql, "WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 1 }") as keyspace:
+        with pytest.raises(InvalidRequest):
+            cql.execute(f"ALTER KEYSPACE {keyspace} WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 3 }} AND DURABLE_WRITES = false")
+
+# Test trying to ALTER a tablets-enabled KS by providing the 'replication_factor' tag
+def test_alter_keyspace_with_replication_factor_tag(cql):
+    with new_test_keyspace(cql, "WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }") as keyspace:
+        with pytest.raises(InvalidRequest):
+            cql.execute(f"ALTER KEYSPACE {keyspace} WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 2 }}")
 
 # Test trying to ALTER a keyspace with invalid options.
 def test_alter_keyspace_invalid(cql, this_dc):
