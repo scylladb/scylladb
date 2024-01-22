@@ -12,9 +12,10 @@
 #pragma once
 
 #include <boost/program_options/errors.hpp>
-#include <iostream>
+#include <iosfwd>
 #include <sstream>
 #include <type_traits>
+#include <fmt/ostream.h>
 
 template<typename T>
 concept HasMapInterface = requires(T t) {
@@ -105,13 +106,27 @@ class enum_option {
     }
 
     // For various printers and formatters:
-    friend std::ostream& operator<<(std::ostream& s, const enum_option<Mapper>& opt) {
+    friend fmt::formatter<enum_option<Mapper>>;
+};
+
+template <typename Mapper>
+struct fmt::formatter<enum_option<Mapper>> {
+    constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
+    auto format(const enum_option<Mapper>& opt, fmt::format_context& ctx) const {
         auto found = find_if(opt._map.cbegin(), opt._map.cend(),
-                             [&opt](const typename map_t::value_type& e) { return e.second == opt._value; });
+                             [&opt](const auto& e) {
+                                 return e.second == opt._value;
+                             });
         if (found == opt._map.cend()) {
-            return s << "?unknown";
+            return fmt::format_to(ctx.out(), "?unknown");
         } else {
-            return s << found->first;
+            return fmt::format_to(ctx.out(), "{}", found->first);
         }
     }
 };
+
+template <typename Mapper>
+std::ostream& operator<<(std::ostream& s, const enum_option<Mapper>& opt) {
+    fmt::print(s, "{}", opt);
+    return s;
+}
