@@ -635,7 +635,7 @@ class UnitTest(Test):
 
     def __init__(self, test_no: int, shortname: str, suite, args: str) -> None:
         super().__init__(test_no, shortname, suite)
-        self.path = path_to(self.mode, "test", self.name)
+        self.path = path_to(self.mode, "test", suite.name, shortname.split('.')[0])
         self.args = shlex.split(args) + UnitTest.standard_args
         if self.mode == "coverage":
             self.env.update(coverage.env(self.path))
