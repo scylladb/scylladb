@@ -118,7 +118,7 @@ table::make_sstable_reader(schema_ptr s,
     }
 }
 
-lw_shared_ptr<sstables::sstable_set> compaction_group::make_compound_sstable_set() {
+lw_shared_ptr<sstables::sstable_set> compaction_group::make_compound_sstable_set() const {
     return make_lw_shared(sstables::make_compound_sstable_set(_t.schema(), { _main_sstables, _maintenance_sstables }));
 }
 
