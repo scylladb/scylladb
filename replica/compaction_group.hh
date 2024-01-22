@@ -200,6 +200,8 @@ public:
 
     utils::small_vector<compaction_group*, 3> compaction_groups() noexcept;
 
+    lw_shared_ptr<sstables::sstable_set> make_compound_sstable_set() const;
+
     // Puts the storage group in split mode, in which it internally segregates data
     // into two sstable sets and two memtable sets corresponding to the two adjacent
     // tablets post-split.

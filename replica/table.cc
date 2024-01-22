@@ -740,6 +740,23 @@ utils::small_vector<compaction_group*, 3> storage_group::compaction_groups() noe
     return cgs;
 }
 
+lw_shared_ptr<sstables::sstable_set> storage_group::make_compound_sstable_set() const {
+    if (!splitting_mode()) {
+        return _main_cg->make_compound_sstable_set();
+    }
+    auto schema = _main_cg->as_table_state().schema();
+    std::vector<lw_shared_ptr<sstables::sstable_set>> underlying;
+    underlying.reserve(1 + bool(_left_cg) + bool(_right_cg));
+    underlying.emplace_back(_main_cg->make_compound_sstable_set());
+    if (_left_cg) {
+        underlying.emplace_back(_left_cg->make_compound_sstable_set());
+    }
+    if (_right_cg) {
+        underlying.emplace_back(_right_cg->make_compound_sstable_set());
+    }
+    return make_lw_shared(sstables::make_compound_sstable_set(schema, std::move(underlying)));
+}
+
 bool storage_group::set_split_mode(compaction_group_list& list) {
     if (!splitting_mode()) {
         auto create_cg = [this, &list] () -> compaction_group_ptr {
