@@ -919,7 +919,7 @@ future<> reader_concurrency_semaphore::execution_loop() noexcept {
             permit.on_executing();
             auto e = std::move(permit.aux_data());
 
-            tracing::trace(permit.trace_state(), "[reader concurrency semaphore] executing read");
+            tracing::trace(permit.trace_state(), "[reader concurrency semaphore {}] executing read", _name);
 
             try {
                 e.func(reader_permit(permit.shared_from_this())).forward_to(std::move(e.pr));
@@ -1201,7 +1201,7 @@ void reader_concurrency_semaphore::do_detach_inactive_reader(reader_permit::impl
     ir.ttl_timer.cancel();
     ir.detach();
     ir.reader.permit()->on_evicted();
-    tracing::trace(permit.trace_state(), "[reader_concurrency_semaphore] evicted, reason: {}", reason);
+    tracing::trace(permit.trace_state(), "[reader_concurrency_semaphore {}] evicted, reason: {}", _name, reason);
     try {
         if (ir.notify_handler) {
             ir.notify_handler(reason);
@@ -1379,7 +1379,7 @@ future<> reader_concurrency_semaphore::do_wait_admission(reader_permit::impl& pe
 
     const auto [admit, why] = can_admit_read(permit);
     ++(_stats.*stats_table[static_cast<int>(why)]);
-    tracing::trace(permit.trace_state(), "[reader concurrency semaphore] {}", result_as_string[static_cast<int>(why)]);
+    tracing::trace(permit.trace_state(), "[reader concurrency semaphore {}] {}", _name, result_as_string[static_cast<int>(why)]);
     if (admit != can_admit::yes || !_wait_list.empty()) {
         auto fut = enqueue_waiter(permit, wait_on::admission);
         if (admit == can_admit::yes && !_wait_list.empty()) {
@@ -1390,7 +1390,7 @@ future<> reader_concurrency_semaphore::do_wait_admission(reader_permit::impl& pe
             maybe_dump_reader_permit_diagnostics(*this, "semaphore could admit new reads yet there are waiters");
             maybe_admit_waiters();
         } else if (admit == can_admit::maybe) {
-            tracing::trace(permit.trace_state(), "[reader concurrency semaphore] evicting inactive reads in the background to free up resources");
+            tracing::trace(permit.trace_state(), "[reader concurrency semaphore {}] evicting inactive reads in the background to free up resources", _name);
             ++_stats.reads_queued_with_eviction;
             evict_readers_in_background();
         }
