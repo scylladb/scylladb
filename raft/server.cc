@@ -142,10 +142,14 @@ private:
     struct stop_apply_fiber{}; // exception to send when apply fiber is needs to be stopepd
 
     struct removed_from_config{}; // sent to applier_fiber when we're not a leader and we're outside the current configuration
+
+    struct trigger_snapshot_msg{};
+
     using applier_fiber_message = std::variant<
         std::vector<log_entry_ptr>,
         snapshot_descriptor,
-        removed_from_config>;
+        removed_from_config,
+        trigger_snapshot_msg>;
     queue<applier_fiber_message> _apply_entries = queue<applier_fiber_message>(10);
 
     struct stats {
@@ -220,8 +224,10 @@ private:
     absl::flat_hash_map<server_id, append_request_queue> _append_request_status;
 
     struct server_requests {
+        bool snapshot = false;
+
         bool empty() const {
-            return true;
+            return !snapshot;
         }
     };
 
@@ -297,6 +303,8 @@ private:
     future<> wait_for_leader(seastar::abort_source* as);
 
     future<> wait_for_state_change(seastar::abort_source* as) override;
+
+    virtual future<bool> trigger_snapshot(seastar::abort_source* as) override;
 
     // Get "safe to read" index from a leader
     future<read_barrier_reply> get_read_idx(server_id leader, seastar::abort_source* as);
@@ -452,6 +460,54 @@ future<> server_impl::wait_for_state_change(seastar::abort_source* as) {
     } catch (abort_requested_exception&) {
         throw request_aborted();
     }
+}
+
+future<bool> server_impl::trigger_snapshot(seastar::abort_source* as) {
+    check_not_aborted();
+
+    if (_applied_idx <= _snapshot_desc_idx) {
+        logger.debug(
+            "[{}] trigger_snapshot: last persisted snapshot descriptor index is up-to-date"
+            ", applied index: {}, persisted snapshot descriptor index: {}, last fsm log index: {}"
+            ", last fsm snapshot index: {}", _id, _applied_idx, _snapshot_desc_idx,
+            _fsm->log_last_idx(), _fsm->log_last_snapshot_idx());
+        co_return false;
+    }
+
+    _new_server_requests.snapshot = true;
+    _events.signal();
+
+    // Wait for persisted snapshot index to catch up to this index.
+    auto awaited_idx = _applied_idx;
+
+    logger.debug("[{}] snapshot request waiting for index {}", _id, awaited_idx);
+
+    try {
+        optimized_optional<abort_source::subscription> sub;
+        if (as) {
+            as->check();
+            sub = as->subscribe([this] () noexcept { _snapshot_desc_idx_changed.broadcast(); });
+            assert(sub); // due to `check()` above
+        }
+        co_await _snapshot_desc_idx_changed.when([this, as, awaited_idx] {
+            return (as && as->abort_requested()) || awaited_idx <= _snapshot_desc_idx;
+        });
+        if (as) {
+            as->check();
+        }
+    } catch (abort_requested_exception&) {
+        throw request_aborted();
+    } catch (seastar::broken_condition_variable&) {
+        throw request_aborted();
+    }
+
+    logger.debug(
+        "[{}] snapshot request satisfied, awaited index {}, persisted snapshot descriptor index: {}"
+        ", current applied index {}, last fsm log index {}, last fsm snapshot index {}",
+        _id, awaited_idx, _snapshot_desc_idx, _applied_idx,
+        _fsm->log_last_idx(), _fsm->log_last_snapshot_idx());
+
+    co_return true;
 }
 
 future<> server_impl::wait_for_entry(entry_id eid, wait_type type, seastar::abort_source* as) {
@@ -1146,7 +1202,9 @@ future<> server_impl::process_fsm_output(index_t& last_stable, fsm_output&& batc
 }
 
 future<> server_impl::process_server_requests(server_requests&& requests) {
-    co_return;
+    if (requests.snapshot) {
+        co_await _apply_entries.push_eventually(trigger_snapshot_msg{});
+    }
 }
 
 future<> server_impl::io_fiber(index_t last_stable) {
@@ -1311,9 +1369,9 @@ future<> server_impl::applier_fiber() {
                    // Note that at this point (after the `co_await`), _fsm may already have applied a later snapshot.
                    // That's fine, `_fsm->apply_snapshot` will simply ignore our current attempt; we will soon receive
                    // a later snapshot from the queue.
-                   if (!_fsm->apply_snapshot(snp,
-                                             force_snapshot ? 0 : _config.snapshot_trailing,
-                                             force_snapshot ? 0 : _config.snapshot_trailing_size, true)) {
+                   auto max_trailing = force_snapshot ? 0 : _config.snapshot_trailing;
+                   auto max_trailing_bytes = force_snapshot ? 0 : _config.snapshot_trailing_size;
+                   if (!_fsm->apply_snapshot(snp, max_trailing, max_trailing_bytes, true)) {
                        logger.trace("[{}] applier fiber: while taking snapshot term={} idx={} id={},"
                               " fsm received a later snapshot at idx={}", _id, snp.term, snp.idx, snp.id, _fsm->log_last_snapshot_idx());
                    }
@@ -1335,6 +1393,23 @@ future<> server_impl::applier_fiber() {
                 // it may never know the status of entries it submitted.
                 drop_waiters();
                 co_return;
+            },
+            [this] (const trigger_snapshot_msg&) -> future<> {
+                auto applied_term = _fsm->log_term_for(_applied_idx);
+                // last truncation index <= snapshot index <= applied index
+                assert(applied_term);
+
+                snapshot_descriptor snp;
+                snp.term = *applied_term;
+                snp.idx = _applied_idx;
+                snp.config = _fsm->log_last_conf_for(_applied_idx);
+                logger.trace("[{}] taking snapshot at term={}, idx={} due to request", _id, snp.term, snp.idx);
+                snp.id = co_await _state_machine->take_snapshot();
+                if (!_fsm->apply_snapshot(snp, 0, 0, true)) {
+                    logger.trace("[{}] while taking snapshot term={} idx={} id={} due to request,"
+                           " fsm received a later snapshot at idx={}", _id, snp.term, snp.idx, snp.id, _fsm->log_last_snapshot_idx());
+                }
+                _stats.snapshots_taken++;
             }
             ), v);
 
@@ -1489,6 +1564,7 @@ future<> server_impl::abort(sstring reason) {
     logger.trace("[{}]: abort() called", _id);
     _fsm->stop();
     _events.broken();
+    _snapshot_desc_idx_changed.broken();
 
     // IO and applier fibers may update waiters and start new snapshot
     // transfers, so abort them first
