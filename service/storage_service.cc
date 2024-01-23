@@ -2982,6 +2982,45 @@ future<> topology_coordinator::run() {
     co_await std::move(cdc_generation_publisher);
 }
 
+static future<> run_topology_coordinator(
+        seastar::sharded<db::system_distributed_keyspace>& sys_dist_ks, gms::gossiper& gossiper,
+        netw::messaging_service& messaging, locator::shared_token_metadata& shared_tm,
+        db::system_keyspace& sys_ks, replica::database& db, service::raft_group0& group0,
+        service::topology_state_machine& topo_sm, seastar::abort_source& as, raft::server& raft,
+        raft_topology_cmd_handler_type raft_topology_cmd_handler,
+        tablet_allocator& tablet_allocator,
+        std::chrono::milliseconds ring_delay,
+        endpoint_lifecycle_notifier& lifecycle_notifier) {
+
+    topology_coordinator coordinator{
+            sys_dist_ks, gossiper, messaging, shared_tm,
+            sys_ks, db, group0, topo_sm, as, raft,
+            std::move(raft_topology_cmd_handler),
+            tablet_allocator,
+            ring_delay};
+
+    std::exception_ptr ex;
+    lifecycle_notifier.register_subscriber(&coordinator);
+    try {
+        co_await coordinator.run();
+    } catch (...) {
+        ex = std::current_exception();
+    }
+    if (ex) {
+        try {
+            if (raft.is_leader()) {
+                rtlogger.warn("unhandled exception in topology_coordinator::run: {}; stepping down as a leader", ex);
+                const auto stepdown_timeout_ticks = std::chrono::seconds(5) / raft_tick_interval;
+                co_await raft.stepdown(raft::logical_clock::duration(stepdown_timeout_ticks));
+            }
+        } catch (...) {
+            rtlogger.error("failed to step down before aborting: {}", std::current_exception());
+        }
+        on_fatal_internal_error(rtlogger, format("unhandled exception in topology_coordinator::run: {}", ex));
+    }
+    co_await lifecycle_notifier.unregister_subscriber(&coordinator);
+}
+
 future<> storage_service::raft_state_monitor_fiber(raft::server& raft, sharded<db::system_distributed_keyspace>& sys_dist_ks) {
     std::optional<abort_source> as;
 
@@ -3005,36 +3044,13 @@ future<> storage_service::raft_state_monitor_fiber(raft::server& raft, sharded<d
             // We are the leader now but that can change any time!
             as.emplace();
             // start topology change coordinator in the background
-            _topology_change_coordinator = do_with(
-                std::make_unique<topology_coordinator>(
+            _topology_change_coordinator = run_topology_coordinator(
                     sys_dist_ks, _gossiper, _messaging.local(), _shared_token_metadata,
                     _sys_ks.local(), _db.local(), *_group0, _topology_state_machine, *as, raft,
                     std::bind_front(&storage_service::raft_topology_cmd_handler, this),
                     _tablet_allocator.local(),
-                    get_ring_delay()),
-                    std::ref(raft),
-                [this] (std::unique_ptr<topology_coordinator>& coordinator, raft::server& raft) -> future<> {
-                    std::exception_ptr ex;
-                    _lifecycle_notifier.register_subscriber(&*coordinator);
-                    try {
-                        co_await coordinator->run();
-                    } catch (...) {
-                        ex = std::current_exception();
-                    }
-                    if (ex) {
-                        try {
-                            if (raft.is_leader()) {
-                                rtlogger.warn("unhandled exception in topology_coordinator::run: {}; stepping down as a leader", ex);
-                                const auto stepdown_timeout_ticks = std::chrono::seconds(5) / raft_tick_interval;
-                                co_await raft.stepdown(raft::logical_clock::duration(stepdown_timeout_ticks));
-                            }
-                        } catch (...) {
-                            rtlogger.error("failed to step down before aborting: {}", std::current_exception());
-                        }
-                        on_fatal_internal_error(rtlogger, format("unhandled exception in topology_coordinator::run: {}", ex));
-                    }
-                    co_await _lifecycle_notifier.unregister_subscriber(&*coordinator);
-                });
+                    get_ring_delay(),
+                    _lifecycle_notifier);
         }
     } catch (...) {
         rtlogger.info("raft_state_monitor_fiber aborted with {}", std::current_exception());
