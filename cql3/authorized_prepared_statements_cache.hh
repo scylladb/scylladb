@@ -179,8 +179,12 @@ struct hash<cql3::authorized_prepared_statements_cache_key> final {
     }
 };
 
-inline std::ostream& operator<<(std::ostream& out, const cql3::authorized_prepared_statements_cache_key& k) {
-    fmt::print(out, "{{{}, {}}}", k.key().first, k.key().second);
-    return out;
 }
-}
+
+template <>
+struct fmt::formatter<cql3::authorized_prepared_statements_cache_key> {
+    constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
+    auto format(const cql3::authorized_prepared_statements_cache_key& k, fmt::format_context& ctx) const {
+        return fmt::format_to(ctx.out(), "{{{}, {}}}", k.key().first, k.key().second);
+    }
+};
