@@ -218,6 +218,7 @@ enum class repair_stream_cmd : uint8_t {
     end_of_current_rows,
     get_full_row_hashes,
     put_rows_done,
+    table_dropped,
 };
 
 struct repair_hash_with_cmd {

@@ -1878,7 +1878,7 @@ private:
                 if (status_opt) {
                     repair_stream_cmd status = std::move(std::get<0>(status_opt.value()));
                     rlogger.trace("put_row_diff: Got status code from follower={} for put_row_diff, status={}", remote_node, int(status));
-                    if (status == repair_stream_cmd::put_rows_done) {
+                    if (status == repair_stream_cmd::put_rows_done || status == repair_stream_cmd::table_dropped) {
                         return make_ready_future<stop_iteration>(stop_iteration::yes);
                     } else if (status == repair_stream_cmd::error) {
                         throw std::runtime_error(format("put_row_diff: Repair follower={} failed in put_row_diff handler, status={}", remote_node, int(status)));
@@ -2195,6 +2195,13 @@ static future<> repair_put_row_diff_with_rpc_stream_handler(
                             current_rows,
                             std::move(row_opt)).handle_exception([from, repair_meta_id, sink, &error] (std::exception_ptr ep) mutable {
                         rlogger.warn("repair_put_row_diff_with_rpc_stream_handler: from={} repair_meta_id={} error={}", from, repair_meta_id, ep);
+                        if (try_catch<replica::no_such_column_family>(ep)) {
+                            return sink(repair_stream_cmd::table_dropped).then([sink] () mutable {
+                                return sink.flush();
+                            }).then([] () mutable {
+                                return make_ready_future<stop_iteration>(stop_iteration::no);
+                            });
+                        }
                         error = true;
                         return sink(repair_stream_cmd::error).then([] {
                             return make_ready_future<stop_iteration>(stop_iteration::no);
