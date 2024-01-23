@@ -31,6 +31,7 @@ import aiohttp
 import aiohttp.web
 import yaml
 import signal
+import glob
 
 from cassandra import InvalidRequest                    # type: ignore
 from cassandra import OperationTimedOut                 # type: ignore
@@ -266,6 +267,12 @@ class ScyllaServer:
             raise RuntimeError(f"Can't change RPC IP of a running server {self.config['rpc_address']}.")
         self.config["rpc_address"] = rpc_address
         self._write_config_file()
+
+    def wipe_sstables(self, keyspace: str, table: str):
+        root_dir = self.workdir/"data"
+        for f in glob.iglob(f"./{keyspace}/{table}-????????????????????????????????/**/*", root_dir=root_dir, recursive=True):
+            if ((root_dir/f).is_file()):
+                (root_dir/f).unlink()
 
     async def install_and_start(self, api: ScyllaRESTAPIClient, expected_error: Optional[str] = None) -> None:
         """Setup and start this server"""
@@ -1001,6 +1008,14 @@ class ScyllaCluster:
         server.change_rpc_address(rpc_address)
         return rpc_address
 
+    def wipe_sstables(self, server_id: ServerNum, keyspace: str, table: str):
+        """Delete all sstable files for the given <node, keyspace, table>."""
+        assert server_id in self.servers, f"Server {server_id} unknown"
+        server = self.servers[server_id]
+        assert not server.is_running, f"Server {server_id} is running: stop it first and then delete its files"
+        self.is_dirty = True
+        server.wipe_sstables(keyspace, table)
+
 class ScyllaClusterManager:
     """Manages a Scylla cluster for running test cases
        Provides an async API for tests to request changes in the Cluster.
@@ -1130,6 +1145,7 @@ class ScyllaClusterManager:
         add_get('/cluster/server/{server_id}/get_log_filename', self._server_get_log_filename)
         add_get('/cluster/server/{server_id}/workdir', self._server_get_workdir)
         add_get('/cluster/server/{server_id}/exe', self._server_get_exe)
+        add_put('/cluster/server/{server_id}/wipe_sstables', self._cluster_server_wipe_sstables)
 
     async def _manager_up(self, _request) -> bool:
         return self.is_running
@@ -1390,6 +1406,10 @@ class ScyllaClusterManager:
     async def _server_get_exe(self, request: aiohttp.web.Request) -> str:
         return str(await self._server_get_attribute(request, "exe"))
 
+    async def _cluster_server_wipe_sstables(self, request: aiohttp.web.Request):
+        data = await request.json()
+        server_id = ServerNum(int(request.match_info["server_id"]))
+        return self.cluster.wipe_sstables(server_id, data["keyspace"], data["table"])
 
 @asynccontextmanager
 async def get_cluster_manager(test_uname: str, clusters: Pool[ScyllaCluster], test_path: str) \

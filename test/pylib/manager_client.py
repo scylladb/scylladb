@@ -197,6 +197,11 @@ class ManagerClient():
         logger.debug("ManagerClient unpausing %s", server_id)
         await self.client.put_json(f"/cluster/server/{server_id}/unpause")
 
+    async def server_wipe_sstables(self, server_id: ServerNum, keyspace: str, table: str) -> None:
+        """Delete all files for the given table from the data directory"""
+        logger.debug("ManagerClient wiping sstables on %s, keyspace=%s, table=%s", server_id, keyspace, table)
+        await self.client.put_json(f"/cluster/server/{server_id}/wipe_sstables", {"keyspace": keyspace, "table": table})
+
     def _create_server_add_data(self, replace_cfg: Optional[ReplaceConfig] = None,
                                 cmdline: Optional[List[str]] = None,
                                 config: Optional[dict[str, Any]] = None,
