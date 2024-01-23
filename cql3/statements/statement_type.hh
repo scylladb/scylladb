@@ -10,7 +10,7 @@
 
 #pragma once
 
-#include <ostream>
+#include <fmt/core.h>
 
 namespace cql3 {
 
@@ -58,18 +58,33 @@ public:
 
     bool operator==(const statement_type&) const = default;
 
-    friend std::ostream &operator<<(std::ostream &os, const statement_type& t) {
-        switch (t._type) {
-        case type::insert: return os << "INSERT";
-        case type::update: return os << "UPDATE";
-        case type::del: return os << "DELETE";
-        case type::select : return os << "SELECT";
-
-        case type::last : return os << "LAST";
-        }
-        return os;
-    }
+    friend fmt::formatter<statement_type>;
 };
 
 }
 }
+
+template <> struct fmt::formatter<cql3::statements::statement_type> {
+    constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
+    auto format(const cql3::statements::statement_type& t, fmt::format_context& ctx) const {
+        std::string_view name;
+        switch (t._type) {
+            using enum cql3::statements::statement_type::type;
+            case insert:
+                name = "INSERT";
+                break;
+            case update:
+                name = "UPDATE";
+                break;
+            case del:
+                name = "DELETE";
+                break;
+            case select:
+                name = "SELECT";
+                break;
+            case last:
+                name = "LAST";
+        }
+        return fmt::format_to(ctx.out(), "{}", name);
+    }
+};
