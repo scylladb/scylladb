@@ -40,6 +40,8 @@ extensions = [
     "sphinxcontrib.datatemplates",
     "scylladb_cc_properties",
     "scylladb_aws_images",
+    "scylladb_azure_images",
+    "scylladb_gcp_images",
     "scylladb_include_flag"
 ]
 
@@ -107,6 +109,16 @@ scylladb_aws_images_base_url = "https://s3.amazonaws.com/downloads.scylladb.com"
 scylladb_aws_images_ami_bucket_directory = "downloads/scylla/aws/ami/"
 scylladb_aws_images_ami_download_directory = "_data/opensource/aws/ami"
 scylladb_aws_images_cloudformation_bucket_directory = "downloads/scylla/aws/cloudformation/"
+
+# -- Options for scylladb_azure_images extension
+scylladb_azure_images_base_url = "https://s3.amazonaws.com/downloads.scylladb.com"
+scylladb_azure_images_bucket_directory = "downloads/scylla/azure/"
+scylladb_azure_images_download_directory = "_data/opensource/azure"
+
+# -- Options for scylladb_gcp_images extension
+scylladb_gcp_images_base_url = "https://s3.amazonaws.com/downloads.scylladb.com"
+scylladb_gcp_images_bucket_directory = "downloads/scylla/gce/"
+scylladb_gcp_images_download_directory = "_data/opensource/gce"
 
 # -- Options for HTML output
 

@@ -8,7 +8,8 @@ import jinja2
 from sphinx import addnodes
 from sphinx.application import Sphinx
 from sphinx.directives import ObjectDescription
-from sphinx.util import logging, status_iterator, ws_re
+from sphinx.util import logging, ws_re
+from sphinx.util.display import status_iterator
 from sphinx.util.docfields import Field
 from sphinx.util.docutils import switch_source_input, SphinxDirective
 from sphinx.util.nodes import make_id, nested_parse_with_titles
