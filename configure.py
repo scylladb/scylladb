@@ -503,6 +503,7 @@ scylla_tests = set([
     'test/boost/crc_test',
     'test/boost/data_listeners_test',
     'test/boost/database_test',
+    'test/boost/commitlog_cleanup_test',
     'test/boost/dirty_memory_manager_test',
     'test/boost/duration_test',
     'test/boost/dynamic_bitset_test',

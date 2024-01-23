@@ -42,5 +42,7 @@ custom_args:
         - '-c2 -m3G'
     cache_algorithm_test:
         - '-c1 -m256M'
+    commitlog_cleanup_test:
+        - '-c1 -m2G'
 run_in_debug:
     - logalloc_standard_allocator_segment_pool_backend_test
