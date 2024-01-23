@@ -1287,6 +1287,43 @@ static future<> check_remote_group0_upgrade_state_dry_run(
     }
 }
 
+future<> raft_group0::wait_for_all_nodes_to_finish_upgrade(abort_source& as) {
+    static constexpr auto rpc_timeout = std::chrono::seconds{5};
+    static constexpr auto max_concurrency = 10;
+
+    for (sleep_with_exponential_backoff sleep;; co_await sleep(as)) {
+        group0_members members0{_raft_gr.group0(), _raft_gr.address_map()};
+        auto current_config = members0.get_inet_addrs();
+        if (current_config.empty()) {
+            continue;
+        }
+
+        std::unordered_set<gms::inet_address> pending_nodes{current_config.begin(), current_config.end()};
+        co_await max_concurrent_for_each(current_config, max_concurrency, [&] (const gms::inet_address& node) -> future<> {
+            try {
+                upgrade_log.info("wait_for_everybody_to_finish_upgrade: `send_get_group0_upgrade_state({})`", node);
+                const auto upgrade_state = co_await with_timeout(as, rpc_timeout, std::bind_front(send_get_group0_upgrade_state, std::ref(_ms.local()), node));
+                if (upgrade_state == group0_upgrade_state::use_post_raft_procedures) {
+                    pending_nodes.erase(node);
+                }
+            } catch (abort_requested_exception&) {
+                upgrade_log.warn("wait_for_everybody_to_finish_upgrade: abort requested during `send_get_group0_upgrade_state({})`", node);
+                throw;
+            } catch (...) {
+                upgrade_log.warn(
+                        "wait_for_everybody_to_finish_upgrade: `send_get_group0_upgrade_state({})` failed: {}",
+                        node, std::current_exception());
+            }
+        });
+
+        if (pending_nodes.empty()) {
+            co_return;
+        } else {
+            upgrade_log.warn("wait_for_everybody_to_finish_upgrade: nodes {} didn't finish upgrade yet", pending_nodes);
+        }
+    }
+}
+
 // Wait until all members of group 0 enter `group0_upgrade_state::synchronize` or some node enters
 // `group0_upgrade_state::use_post_raft_procedures` (the latter meaning upgrade is finished and we can also finish).
 //

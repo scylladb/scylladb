@@ -261,6 +261,10 @@ public:
     // or when joining an old cluster which does not support JOIN_NODE RPC).
     shared_ptr<group0_handshaker> make_legacy_handshaker(bool can_vote);
 
+    // Waits until all upgrade to raft group 0 finishes and all nodes switched
+    // to use_post_raft_procedures.
+    future<> wait_for_all_nodes_to_finish_upgrade(abort_source& as);
+
     raft_group0_client& client() {
         return _client;
     }

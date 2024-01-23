@@ -1013,7 +1013,8 @@ future<> storage_service::raft_initialize_discovery_leader(raft::server& raft_se
         // We are the first node and we define the cluster.
         // Set the enabled_features field to our features.
         topology_mutation_builder builder(guard.write_timestamp());
-        builder.add_enabled_features(boost::copy_range<std::set<sstring>>(params.supported_features));
+        builder.add_enabled_features(boost::copy_range<std::set<sstring>>(params.supported_features))
+                .set_upgrade_state(topology::upgrade_state_type::done); // Skip upgrade, start right in the topology-on-raft mode
         auto enable_features_mutation = builder.build();
 
         insert_join_request_mutations.push_back(std::move(enable_features_mutation));
