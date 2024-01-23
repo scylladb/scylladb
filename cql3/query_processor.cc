@@ -576,7 +576,8 @@ query_processor::execute_direct_without_checking_exception_message(const sstring
         if (!queryState.getClientState().isInternal)
             metrics.regularStatementsExecuted.inc();
 #endif
-    tracing::trace(query_state.get_trace_state(), "Processing a statement");
+    auto user = query_state.get_client_state().user();
+    tracing::trace(query_state.get_trace_state(), "Processing a statement for authenticated user: {}", user ? (user->name ? *user->name : "anonymous") : "no user authenticated");
     return execute_maybe_with_guard(query_state, std::move(statement), options, &query_processor::do_execute_direct, std::move(warnings));
 }
 
