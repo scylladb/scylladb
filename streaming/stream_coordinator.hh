@@ -15,7 +15,6 @@
 #include "streaming/stream_session.hh"
 #include "streaming/session_info.hh"
 #include <map>
-#include <algorithm>
 
 namespace streaming {
 

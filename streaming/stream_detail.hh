@@ -10,10 +10,7 @@
 
 #pragma once
 
-#include "query-request.hh"
 #include "schema/schema_fwd.hh"
-#include <vector>
-#include "range.hh"
 
 namespace streaming {
 
