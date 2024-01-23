@@ -292,7 +292,8 @@ class ScyllaRESTAPIClient():
         """Repair the given table and wait for it to complete"""
         sequence_number = await self.client.post_json(f"/storage_service/repair_async/{keyspace}", host=node_ip, params={"columnFamilies": table})
         status = await self.client.get_json(f"/storage_service/repair_status", host=node_ip, params={"id": str(sequence_number)})
-        return status
+        if status != 'SUCCESSFUL':
+            raise Exception(f"Repair id {sequence_number} on node {node_ip} for table {keyspace}.{table} failed: status={status}")
 
 class ScyllaMetrics:
     def __init__(self, lines: list[str]):
