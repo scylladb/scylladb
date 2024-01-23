@@ -257,11 +257,6 @@ def has_tablets(cql):
         return keyspace_has_tablets(cql, keyspace)
 
 @pytest.fixture(scope="function")
-def xfail_tablets(request, has_tablets):
-    if has_tablets:
-        request.node.add_marker(pytest.mark.xfail(reason='Test expected to fail with tablets experimental feature on'))
-
-@pytest.fixture(scope="function")
 def skip_with_tablets(has_tablets):
     if has_tablets:
         pytest.skip("Test may crash with tablets experimental feature on")
