@@ -3,8 +3,6 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
-from uuid import UUID
-
 from cassandra.query import SimpleStatement, ConsistencyLevel
 
 from test.pylib.internal_types import ServerInfo
@@ -14,12 +12,14 @@ from test.pylib.rest_client import inject_error
 from test.pylib.util import wait_for_cql_and_get_hosts, read_barrier
 from test.topology.conftest import skip_mode
 from test.topology.util import reconnect_driver
+from test.pylib.internal_types import HostID
 
 import pytest
 import asyncio
 import logging
 import time
-
+import random
+from typing import NamedTuple
 
 logger = logging.getLogger(__name__)
 
@@ -33,30 +33,47 @@ async def inject_error_on(manager, error_name, servers):
     errs = [manager.api.enable_injection(s.ip_addr, error_name, False) for s in servers]
     await asyncio.gather(*errs)
 
+class TabletReplicas(NamedTuple):
+    last_token: int
+    replicas: list[tuple[HostID, int]]
 
-async def get_tablet_replicas(manager: ManagerClient, server: ServerInfo, keyspace_name: str, table_name: str, token: int):
+async def get_all_tablet_replicas(manager: ManagerClient, server: ServerInfo, keyspace_name: str, table_name: str) -> list[TabletReplicas]:
+    """
+    Retrieves the tablet distribution for a given table.
+    This call is guaranteed to see all prior changes applied to group0 tables.
+
+    :param server: server to query. Can be any live node.
+    """
+
+    host = manager.get_cql().cluster.metadata.get_host(server.ip_addr)
+
+    # read_barrier is needed to ensure that local tablet metadata on the queried node
+    # reflects the finalized tablet movement.
+    await read_barrier(manager.get_cql(), host)
+
+    table_id = await manager.get_table_id(keyspace_name, table_name)
+    rows = await manager.get_cql().run_async(f"SELECT last_token, replicas FROM system.tablets where "
+                                       f"table_id = {table_id}", host=host)
+    return [TabletReplicas(
+        last_token=x.last_token,
+        replicas=[(HostID(str(host)), shard) for (host, shard) in x.replicas]
+    ) for x in rows]
+
+async def get_tablet_replicas(manager: ManagerClient, server: ServerInfo, keyspace_name: str, table_name: str, token: int) -> list[tuple[HostID, int]]:
     """
     Gets tablet replicas of the tablet which owns a given token of a given table.
     This call is guaranteed to see all prior changes applied to group0 tables.
 
     :param server: server to query. Can be any live node.
     """
-
-    host = manager.cql.cluster.metadata.get_host(server.ip_addr)
-
-    # read_barrier is needed to ensure that local tablet metadata on the queried node
-    # reflects the finalized tablet movement.
-    await read_barrier(manager.cql, host)
-
-    table_id = await manager.get_table_id(keyspace_name, table_name)
-    rows = await manager.cql.run_async(f"SELECT last_token, replicas FROM system.tablets where "
-                                       f"table_id = {table_id}", host=host)
+    rows = await get_all_tablet_replicas(manager, server, keyspace_name, table_name)
     for row in rows:
         if row.last_token >= token:
             return row.replicas
+    return []
 
 
-async def get_tablet_replica(manager: ManagerClient, server: ServerInfo, keyspace_name: str, table_name: str, token: int):
+async def get_tablet_replica(manager: ManagerClient, server: ServerInfo, keyspace_name: str, table_name: str, token: int) -> tuple[HostID, int]:
     """
     Get the first replica of the tablet which owns a given token of a given table.
     This call is guaranteed to see all prior changes applied to group0 tables.
@@ -383,12 +400,12 @@ async def test_table_dropped_during_streaming(manager: ManagerClient):
     logger.info("Verifying that moving the other tablet works")
     replica = await get_tablet_replica(manager, servers[0], 'test', 'test2', tablet_token)
     s0_host_id = await manager.get_host_id(servers[0].server_id)
-    assert replica[0] == UUID(s0_host_id)
+    assert replica[0] == s0_host_id
     await manager.api.move_tablet(servers[0].ip_addr, "test", "test2", replica[0], replica[1], s1_host_id, 0, tablet_token)
 
     logger.info("Verifying tablet replica")
     replica = await get_tablet_replica(manager, servers[0], 'test', 'test2', tablet_token)
-    assert replica == (UUID(s1_host_id), 0)
+    assert replica == (s1_host_id, 0)
 
 @pytest.mark.repair
 @pytest.mark.asyncio
@@ -466,3 +483,71 @@ async def test_tablet_missing_data_repair(manager: ManagerClient):
         await manager.server_start(s)
 
     await cql.run_async("DROP KEYSPACE test;")
+
+@pytest.mark.asyncio
+async def test_tablet_cleanup(manager: ManagerClient):
+    cmdline = ['--smp=2', '--commitlog-sync=batch']
+
+    logger.info("Start first node")
+    servers = [await manager.server_add(cmdline=cmdline)]
+    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+
+    logger.info("Populate table")
+    cql = manager.get_cql()
+    n_tablets = 32
+    n_partitions = 1000
+    await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+    await cql.run_async("CREATE KEYSPACE test WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} AND tablets = {{'initial': {}}};".format(n_tablets))
+    await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY);")
+    await asyncio.gather(*[cql.run_async(f"INSERT INTO test.test (pk) VALUES ({k});") for k in range(1000)])
+
+    logger.info("Start second node")
+    servers.append(await manager.server_add())
+
+    s0_host_id = await manager.get_host_id(servers[0].server_id)
+    s1_host_id = await manager.get_host_id(servers[1].server_id)
+
+    logger.info("Read system.tablets")
+    tablet_replicas = await get_all_tablet_replicas(manager, servers[0], 'test', 'test')
+    assert len(tablet_replicas) == n_tablets
+
+    # Randomly select half of all tablets.
+    sample = random.sample(tablet_replicas, n_tablets // 2)
+    moved_tokens = [x.last_token for x in sample]
+    moved_src = [x.replicas[0] for x in sample]
+    moved_dst = [(s1_host_id, random.choice([0, 1])) for _ in sample]
+
+    # Migrate the selected tablets to second node.
+    logger.info("Migrate half of all tablets to second node")
+    for t, s, d in zip(moved_tokens, moved_src, moved_dst):
+        await manager.api.move_tablet(servers[0].ip_addr, "test", "test", *s, *d, t)
+
+    # Sanity check. All data we inserted should be still there.
+    assert n_partitions == (await cql.run_async("SELECT COUNT(*) FROM test.test"))[0].count
+
+    # Wipe data on second node.
+    logger.info("Wipe data on second node")
+    await manager.server_stop_gracefully(servers[1].server_id, timeout=120)
+    await manager.server_wipe_sstables(servers[1].server_id, "test", "test")
+    await manager.server_start(servers[1].server_id)
+    await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+    partitions_after_loss = (await cql.run_async("SELECT COUNT(*) FROM test.test"))[0].count
+    assert partitions_after_loss < n_partitions
+
+    # Migrate all tablets back to their original position.
+    # Check that this doesn't resurrect cleaned data.
+    logger.info("Migrate the migrated tablets back")
+    for t, s, d in zip(moved_tokens, moved_dst, moved_src):
+        await manager.api.move_tablet(servers[0].ip_addr, "test", "test", *s, *d, t)
+    assert partitions_after_loss == (await cql.run_async("SELECT COUNT(*) FROM test.test"))[0].count
+
+    # Kill and restart first node.
+    # Check that this doesn't resurrect cleaned data.
+    logger.info("Brutally restart first node")
+    await manager.server_stop(servers[0].server_id)
+    await manager.server_start(servers[0].server_id)
+    hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+    assert partitions_after_loss == (await cql.run_async("SELECT COUNT(*) FROM test.test"))[0].count
+
+    # Bonus: check that commitlog_cleanups doesn't have any garbage after restart.
+    assert 0 == (await cql.run_async("SELECT COUNT(*) FROM system.commitlog_cleanups", host=hosts[0]))[0].count
