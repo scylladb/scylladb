@@ -447,7 +447,7 @@ SEASTAR_THREAD_TEST_CASE(NetworkTopologyStrategy_tablets_test) {
         .with_column("v", utf8_type)
         .build();
 
-    auto tmap = tab_awr_ptr->allocate_tablets_for_new_table(s, stm.get()).get0();
+    auto tmap = tab_awr_ptr->allocate_tablets_for_new_table(s, stm.get(), 1).get0();
     full_ring_check(tmap, options323, ars_ptr, stm.get());
 
     ///////////////
@@ -464,7 +464,7 @@ SEASTAR_THREAD_TEST_CASE(NetworkTopologyStrategy_tablets_test) {
     tab_awr_ptr = ars_ptr->maybe_as_tablet_aware();
     BOOST_REQUIRE(tab_awr_ptr);
 
-    tmap = tab_awr_ptr->allocate_tablets_for_new_table(s, stm.get()).get0();
+    tmap = tab_awr_ptr->allocate_tablets_for_new_table(s, stm.get(), 1).get0();
     full_ring_check(tmap, options320, ars_ptr, stm.get());
 
     // Test the case of not enough nodes to meet RF in DC 102
@@ -480,7 +480,7 @@ SEASTAR_THREAD_TEST_CASE(NetworkTopologyStrategy_tablets_test) {
     tab_awr_ptr = ars_ptr->maybe_as_tablet_aware();
     BOOST_REQUIRE(tab_awr_ptr);
 
-    tmap = tab_awr_ptr->allocate_tablets_for_new_table(s, stm.get()).get0();
+    tmap = tab_awr_ptr->allocate_tablets_for_new_table(s, stm.get(), 1).get0();
     full_ring_check(tmap, options324, ars_ptr, stm.get());
 }
 

@@ -794,14 +794,19 @@ public:
 
 class tablet_allocator_impl : public tablet_allocator::impl
                             , public service::migration_listener::empty_listener {
+    const tablet_allocator::config _config;
     service::migration_notifier& _migration_notifier;
     replica::database& _db;
     load_balancer_stats_manager _load_balancer_stats;
     bool _stopped = false;
 public:
-    tablet_allocator_impl(service::migration_notifier& mn, replica::database& db)
-            : _migration_notifier(mn)
+    tablet_allocator_impl(tablet_allocator::config cfg, service::migration_notifier& mn, replica::database& db)
+            : _config(std::move(cfg))
+            , _migration_notifier(mn)
             , _db(db) {
+        if (_config.initial_tablets_scale == 0) {
+            throw std::runtime_error("Initial tablets scale must be positive");
+        }
         if (db.get_config().check_experimental(db::experimental_features_t::feature::TABLETS)) {
             _migration_notifier.register_listener(this);
         }
@@ -828,7 +833,7 @@ public:
         auto rs = abstract_replication_strategy::create_replication_strategy(ksm.strategy_name(), params);
         if (auto&& tablet_rs = rs->maybe_as_tablet_aware()) {
             auto tm = _db.get_shared_token_metadata().get();
-            auto map = tablet_rs->allocate_tablets_for_new_table(s.shared_from_this(), tm).get0();
+            auto map = tablet_rs->allocate_tablets_for_new_table(s.shared_from_this(), tm, _config.initial_tablets_scale).get0();
             muts.emplace_back(tablet_map_to_mutation(map, s.id(), s.keypace_name(), s.cf_name(), ts).get0());
         }
     }
@@ -861,8 +866,8 @@ public:
     // FIXME: Handle materialized views.
 };
 
-tablet_allocator::tablet_allocator(service::migration_notifier& mn, replica::database& db)
-    : _impl(std::make_unique<tablet_allocator_impl>(mn, db)) {
+tablet_allocator::tablet_allocator(config cfg, service::migration_notifier& mn, replica::database& db)
+    : _impl(std::make_unique<tablet_allocator_impl>(std::move(cfg), mn, db)) {
 }
 
 future<> tablet_allocator::stop() {
