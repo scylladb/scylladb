@@ -2013,11 +2013,9 @@ future<> gossiper::start_gossiping(gms::generation_type generation_nbr, applicat
         local_state.add_application_state(entry.first, entry.second);
     }
 
-    auto generation = local_state.get_heart_beat_state().get_generation();
+    co_await replicate(get_broadcast_address(), local_state, permit.id());
 
-    co_await replicate(get_broadcast_address(), std::move(local_state), permit.id());
-
-    logger.trace("gossip started with generation {}", generation);
+    logger.info("Gossip started with local state: {}", local_state);
     _enabled = true;
     _nr_run = 0;
     _scheduled_gossip_task.arm(INTERVAL);
