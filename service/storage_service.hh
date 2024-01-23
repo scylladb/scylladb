@@ -349,7 +349,7 @@ public:
     future<> join_cluster(sharded<db::system_distributed_keyspace>& sys_dist_ks, sharded<service::storage_proxy>& proxy,
             sharded<gms::gossiper>& gossiper_ptr, start_hint_manager start_hm);
 
-    void set_group0(service::raft_group0&, bool raft_topology_change_enabled);
+    void set_group0(service::raft_group0&, bool raft_experimental_topology);
 
     future<> init_address_map(raft_address_map& address_map);
 
@@ -749,7 +749,29 @@ private:
     future<> wait_for_normal_state_handled_on_boot();
 
     friend class group0_state_machine;
-    bool _raft_topology_change_enabled = false;
+
+    bool _raft_experimental_topology = false;
+    enum class topology_change_kind {
+        // The node is still starting and didn't determine yet which ops kind to use
+        unknown,
+        // The node uses legacy, gossip-based topology operations
+        legacy,
+        // The node is in the process of upgrading to raft-based topology operations
+        upgrading_to_raft,
+        // The node uses raft-based topology operations
+        raft
+    };
+    topology_change_kind _topology_change_kind_enabled = topology_change_kind::unknown;
+
+public:
+    bool raft_topology_change_enabled() const {
+        return _topology_change_kind_enabled == topology_change_kind::raft;
+    }
+    bool legacy_topology_change_enabled() const {
+        return _topology_change_kind_enabled == topology_change_kind::legacy;
+    }
+
+private:
     future<> _raft_state_monitor = make_ready_future<>();
     // This fibers monitors raft state and start/stops the topology change
     // coordinator fiber
