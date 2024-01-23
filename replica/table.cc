@@ -3193,6 +3193,7 @@ future<> compaction_group::cleanup() {
             _t.subtract_compaction_group_from_stats(_cg);
             _cg.set_main_sstables(std::move(_empty_main_set));
             _cg.set_maintenance_sstables(std::move(_empty_maintenance_set));
+            _t.refresh_compound_sstable_set();
         }
     };
 
