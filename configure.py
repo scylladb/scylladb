@@ -1193,6 +1193,7 @@ scylla_core = (['message/messaging_service.cc',
                 'utils/to_string.cc',
                 'service/topology_state_machine.cc',
                 'service/topology_mutation.cc',
+                'service/topology_coordinator.cc',
                 'node_ops/node_ops_ctl.cc'
                 ] + [Antlr3Grammar('cql3/Cql.g')] + [Thrift('interface/cassandra.thrift', 'Cassandra')] \
                   + scylla_raft_core

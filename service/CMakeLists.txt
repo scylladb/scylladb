@@ -27,6 +27,7 @@ target_sources(service
     storage_proxy.cc
     storage_service.cc
     tablet_allocator.cc
+    topology_coordinator.cc
     topology_mutation.cc
     topology_state_machine.cc)
 target_include_directories(service
