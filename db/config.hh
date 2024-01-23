@@ -351,6 +351,7 @@ public:
     named_value<uint16_t> prometheus_port;
     named_value<sstring> prometheus_address;
     named_value<sstring> prometheus_prefix;
+    named_value<bool> prometheus_allow_protobuf;
     named_value<bool> abort_on_lsa_bad_alloc;
     named_value<unsigned> murmur3_partitioner_ignore_msb_bits;
     named_value<double> unspooled_dirty_soft_limit;
