@@ -81,6 +81,7 @@ struct loaded_endpoint_state {
     gms::inet_address endpoint;
     std::unordered_set<dht::token> tokens;
     std::optional<locator::endpoint_dc_rack> opt_dc_rack;
+    std::optional<gms::versioned_value> opt_status;
 };
 
 std::ostream& operator<<(std::ostream& os, const loaded_endpoint_state& st);

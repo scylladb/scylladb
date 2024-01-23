@@ -716,6 +716,11 @@ future<> storage_service::topology_state_load() {
             st.endpoint = ep;
             st.tokens = boost::copy_range<std::unordered_set<dht::token>>(tmptr->get_tokens(e));
             st.opt_dc_rack = node->dc_rack();
+            // Save tokens, not needed for raft topology management, but needed by legacy
+            // Also ip -> id mapping is needed for address map recreation on reboot
+            if (node->is_this_node() && !st.tokens.empty()) {
+                st.opt_status = gms::versioned_value::normal(st.tokens);
+            }
             co_await _gossiper.add_saved_endpoint(e, std::move(st), permit.id());
         }
     }
