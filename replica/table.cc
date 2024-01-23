@@ -1784,8 +1784,13 @@ future<> compaction_group::stop() noexcept {
         co_return;
     }
     co_await _async_gate.close();
-    co_await flush();
+
+    auto flush_future = co_await seastar::coroutine::as_future(flush());
     co_await _t._compaction_manager.remove(as_table_state());
+
+    if (flush_future.failed()) {
+        co_await seastar::coroutine::return_exception_ptr(flush_future.get_exception());
+    }
 }
 
 bool compaction_group::empty() const noexcept {
