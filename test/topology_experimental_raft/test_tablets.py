@@ -66,6 +66,16 @@ async def get_tablet_replica(manager: ManagerClient, server: ServerInfo, keyspac
     replicas = await get_tablet_replicas(manager, server, keyspace_name, table_name, token)
     return replicas[0]
 
+async def repair_on_node(manager: ManagerClient, server: ServerInfo, servers: list[ServerInfo]):
+    node = server.ip_addr
+    await manager.servers_see_each_other(servers)
+    live_nodes_wanted = [s.ip_addr for s in servers]
+    live_nodes = await manager.api.get_alive_endpoints(node)
+    live_nodes_wanted.sort()
+    live_nodes.sort()
+    assert live_nodes == live_nodes_wanted
+    logger.info(f"Repair table on node {node} live_nodes={live_nodes} live_nodes_wanted={live_nodes_wanted}")
+    await manager.api.repair(node, "test", "test")
 
 @pytest.mark.asyncio
 async def test_tablet_metadata_propagates_with_schema_changes_in_snapshot_mode(manager: ManagerClient):
@@ -396,8 +406,7 @@ async def test_tablet_repair(manager: ManagerClient):
     keys = range(256)
     await asyncio.gather(*[cql.run_async(f"INSERT INTO test.test (pk, c) VALUES ({k}, {k});") for k in keys])
 
-    logger.info("Repair table")
-    await manager.api.repair(servers[0].ip_addr, "test", "test")
+    await repair_on_node(manager, servers[0], servers)
 
     async def check():
         logger.info("Checking table")
@@ -440,8 +449,8 @@ async def test_tablet_missing_data_repair(manager: ManagerClient):
         logger.info(f"Started server {idx}");
 
     await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
-    logger.info("Repair table")
-    await manager.api.repair(servers[0].ip_addr, "test", "test")
+
+    await repair_on_node(manager, servers[0], servers)
 
     async def check():
         logger.info("Checking table")
