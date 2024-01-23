@@ -22,7 +22,6 @@
 #include "gms/application_state.hh"
 #include <seastar/core/semaphore.hh>
 #include <seastar/core/metrics_registration.hh>
-#include <map>
 
 namespace db {
 class config;

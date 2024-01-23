@@ -11,7 +11,7 @@
 #pragma once
 
 #include "streaming/session_info.hh"
-#include "streaming/stream_plan.hh"
+#include "streaming/stream_fwd.hh"
 #include <vector>
 
 namespace streaming {

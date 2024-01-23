@@ -10,7 +10,6 @@
 
 #pragma once
 
-#include "gms/i_endpoint_state_change_subscriber.hh"
 #include <seastar/core/distributed.hh>
 #include "message/messaging_service_fwd.hh"
 #include "streaming/stream_session_state.hh"
@@ -18,15 +17,12 @@
 #include "streaming/stream_receive_task.hh"
 #include "streaming/stream_request.hh"
 #include "streaming/prepare_message.hh"
-#include "streaming/stream_detail.hh"
 #include "streaming/stream_manager.hh"
 #include "streaming/stream_reason.hh"
 #include "streaming/session_info.hh"
 #include "service/topology_guard.hh"
-#include "query-request.hh"
 #include <map>
 #include <vector>
-#include <memory>
 
 namespace db {
 

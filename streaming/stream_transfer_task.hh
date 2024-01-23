@@ -12,8 +12,7 @@
 
 #include "streaming/stream_fwd.hh"
 #include "streaming/stream_task.hh"
-#include "streaming/stream_detail.hh"
-#include <map>
+#include "dht/i_partitioner_fwd.hh"
 #include <seastar/core/semaphore.hh>
 
 namespace streaming {

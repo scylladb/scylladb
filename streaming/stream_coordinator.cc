@@ -8,7 +8,6 @@
  * SPDX-License-Identifier: (AGPL-3.0-or-later and Apache-2.0)
  */
 
-#include "streaming/stream_detail.hh"
 #include "streaming/stream_session_state.hh"
 #include "streaming/stream_coordinator.hh"
 #include "log.hh"

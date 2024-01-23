@@ -9,7 +9,6 @@
  */
 
 #include "streaming/stream_request.hh"
-#include "query-request.hh"
 
 namespace streaming {
 
