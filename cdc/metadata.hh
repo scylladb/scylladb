@@ -42,7 +42,9 @@ class metadata final {
 
     container_t::const_iterator gen_used_at(api::timestamp_type ts) const;
 public:
-    /* Is a generation with the given timestamp already known or superseded by a newer generation? */
+    /* Is a generation with the given timestamp already known or obsolete? It is obsolete if and only if
+     * it is older than the generation operating at `now - cdc::generation_leeway`.
+     */
     bool known_or_obsolete(db_clock::time_point) const;
 
     /* Are there streams available. I.e. valid for time == now. If this is false, any writes to 
@@ -54,8 +56,9 @@ public:
      *
      * If the provided timestamp is too far away "into the future" (where "now" is defined according to our local clock),
      * we reject the get_stream query. This is because the resulting stream might belong to a generation which we don't
-     * yet know about. The amount of leeway (how much "into the future" we allow `ts` to be) is defined
-     * by the `cdc::generation_leeway` constant.
+     * yet know about. Similarly, we reject queries to the previous generations if the timestamp is too far away "into
+     * the past". The amount of leeway (how much "into the future" or "into the past" we allow `ts` to be) is defined by
+     * the `cdc::generation_leeway` constant.
      */
     stream_id get_stream(api::timestamp_type ts, dht::token tok);
 
