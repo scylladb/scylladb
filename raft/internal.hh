@@ -7,8 +7,6 @@
  */
 #pragma once
 
-#include <ostream>
-#include <functional>
 #include "utils/UUID.hh"
 #include "utils/tagged_integer.hh"
 
