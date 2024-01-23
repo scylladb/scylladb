@@ -240,6 +240,7 @@ schema_ptr system_keyspace::topology() {
             .with_column("enabled_features", set_type_impl::get_instance(utf8_type, true), column_kind::static_column)
             .with_column("session", uuid_type, column_kind::static_column)
             .with_column("tablet_balancing_enabled", boolean_type, column_kind::static_column)
+            .with_column("upgrade_state", utf8_type, column_kind::static_column)
             .set_comment("Current state of topology change machine")
             .with_version(generate_schema_version(id))
             .build();
@@ -2663,6 +2664,12 @@ future<service::topology> system_keyspace::load_topology_state() {
     }
 
     for (auto& row : *rs) {
+        if (!row.has("host_id")) {
+            // There are no clustering rows, only the static row.
+            // Skip the whole loop, the static row is handled later.
+            break;
+        }
+
         raft::server_id host_id{row.get_as<utils::UUID>("host_id")};
         auto datacenter = row.get_as<sstring>("datacenter");
         auto rack = row.get_as<sstring>("rack");
@@ -2889,6 +2896,12 @@ future<service::topology> system_keyspace::load_topology_state() {
         } else {
             ret.tablet_balancing_enabled = true;
         }
+
+        if (some_row.has("upgrade_state")) {
+            ret.upgrade_state = service::upgrade_state_from_string(some_row.get_as<sstring>("upgrade_state"));
+        } else {
+            ret.upgrade_state = service::topology::upgrade_state_type::not_upgraded;
+        }
     }
 
     co_return ret;
@@ -2910,6 +2923,12 @@ service::topology_features system_keyspace::decode_topology_features_state(::sha
     }
 
     for (auto& row : *rs) {
+        if (!row.has("host_id")) {
+            // There are no clustering rows, only the static row.
+            // Skip the whole loop, the static row is handled later.
+            break;
+        }
+
         raft::server_id host_id{row.get_as<utils::UUID>("host_id")};
         service::node_state nstate = service::node_state_from_string(row.get_as<sstring>("node_state"));
         if (row.has("supported_features") && nstate == service::node_state::normal) {
