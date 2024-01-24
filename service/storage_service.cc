@@ -366,7 +366,7 @@ static locator::node::state to_topology_node_state(node_state ns) {
 
 // Synchronizes the local node state (token_metadata, system.peers/system.local tables,
 // gossiper) to align it with the other raft topology nodes.
-future<> storage_service::sync_raft_topology_nodes(mutable_token_metadata_ptr tmptr, std::optional<locator::host_id> target_node) {
+future<> storage_service::sync_raft_topology_nodes(mutable_token_metadata_ptr tmptr, std::optional<locator::host_id> target_node, std::unordered_set<raft::server_id> prev_normal) {
     const auto& am = _group0->address_map();
     const auto& t = _topology_state_machine._topology;
 
@@ -437,6 +437,9 @@ future<> storage_service::sync_raft_topology_nodes(mutable_token_metadata_ptr tm
             info.host_id = id.uuid();
             info.release_version = rs.release_version;
             co_await _sys_ks.local().update_peer_info(*ip, info);
+            if (!prev_normal.contains(id)) {
+                co_await notify_joined(*ip);
+            }
         }
         update_topology(host_id, ip, rs);
         co_await tmptr->update_normal_tokens(rs.ring.value().tokens, host_id);
@@ -552,6 +555,8 @@ future<> storage_service::topology_state_load() {
     }
 
     rtlogger.debug("reload raft topology state");
+    std::unordered_set<raft::server_id> prev_normal = boost::copy_range<std::unordered_set<raft::server_id>>(_topology_state_machine._topology.normal_nodes | boost::adaptors::map_keys);
+
     // read topology state from disk and recreate token_metadata from it
     _topology_state_machine._topology = co_await _sys_ks.local().load_topology_state();
 
@@ -595,7 +600,7 @@ future<> storage_service::topology_state_load() {
         }, _topology_state_machine._topology.tstate);
         tmptr->set_read_new(read_new);
 
-        co_await sync_raft_topology_nodes(tmptr, std::nullopt);
+        co_await sync_raft_topology_nodes(tmptr, std::nullopt, std::move(prev_normal));
 
         if (_db.local().get_config().check_experimental(db::experimental_features_t::feature::TABLETS)) {
             tmptr->set_tablets(co_await replica::read_tablet_metadata(_qp));
@@ -703,7 +708,7 @@ class storage_service::raft_ip_address_updater: public gms::i_endpoint_state_cha
                 const auto hid = locator::host_id{id.uuid()};
                 if (_address_map.find(id) == endpoint && _ss.get_token_metadata().get_endpoint_for_host_id_if_known(hid) != endpoint) {
                     return _ss.mutate_token_metadata([this, hid](mutable_token_metadata_ptr t) {
-                        return _ss.sync_raft_topology_nodes(std::move(t), hid);
+                        return _ss.sync_raft_topology_nodes(std::move(t), hid, {});
                     }).finally([g = std::move(g)]{});
                 }
                 return make_ready_future<>();
