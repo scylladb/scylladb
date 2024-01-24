@@ -329,15 +329,6 @@ tasks::is_abortable compaction_task_impl::is_abortable() const noexcept {
     return tasks::is_abortable{!_parent_id};
 }
 
-sstring major_compaction_task_impl::to_string(flush_mode fm) {
-    switch (fm) {
-    case flush_mode::skip: return "skip";
-    case flush_mode::compacted_tables: return "compacted_tables";
-    case flush_mode::all_tables: return "all_tables";
-    }
-    __builtin_unreachable();
-}
-
 static future<bool> maybe_flush_all_tables(sharded<replica::database>& db) {
     auto interval = db.local().get_config().compaction_flush_all_tables_before_major_seconds();
     if (interval) {
@@ -663,4 +654,21 @@ future<> shard_resharding_compaction_task_impl::run() {
     co_await _dir.local().move_foreign_sstables(_dir);
 }
 
+}
+
+auto fmt::formatter<compaction::flush_mode>::format(compaction::flush_mode fm, fmt::format_context& ctx) const -> decltype(ctx.out()) {
+    std::string_view name;
+    switch (fm) {
+    using enum compaction::flush_mode;
+    case skip:
+        name = "skip";
+        break;
+    case compacted_tables:
+        name = "compacted_tables";
+        break;
+    case all_tables:
+        name = "all_tables";
+        break;
+    }
+    return fmt::format_to(ctx.out(), "{}", name);
 }
