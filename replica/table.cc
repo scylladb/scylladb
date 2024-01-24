@@ -812,8 +812,21 @@ compaction_group& table::compaction_group_for_key(partition_key_view key, const 
 }
 
 compaction_group& table::compaction_group_for_sstable(const sstables::shared_sstable& sst) const noexcept {
-    // FIXME: a sstable can belong to more than one group, change interface to reflect that.
-    return compaction_group_for_token(sst->get_first_decorated_key().token());
+    auto [first_id, first_range_side] = storage_group_of(sst->get_first_decorated_key().token());
+    auto [last_id, last_range_side] = storage_group_of(sst->get_last_decorated_key().token());
+
+    if (first_id != last_id) {
+        on_internal_error(tlogger, format("Unable to load SSTable {} that belongs to tablets {} and {}",
+                                          sst->get_filename(), first_id, last_id));
+    }
+
+    auto& sg = _storage_groups[first_id];
+
+    if (first_range_side != last_range_side) {
+        return *sg->main_compaction_group();
+    }
+
+    return *sg->select_compaction_group(first_range_side);
 }
 
 compaction_group_list& table::compaction_groups() const noexcept {
