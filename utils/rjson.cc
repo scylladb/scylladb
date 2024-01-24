@@ -565,7 +565,3 @@ sstring quote_json_string(const sstring& value) {
 }
 
 } // end namespace rjson
-
-std::ostream& std::operator<<(std::ostream& os, const rjson::value& v) {
-    return os << rjson::print(v);
-}

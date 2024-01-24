@@ -397,6 +397,9 @@ public:
 
 } // end namespace rjson
 
-namespace std {
-std::ostream& operator<<(std::ostream& os, const rjson::value& v);
-}
+template <> struct fmt::formatter<rjson::value> {
+    constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
+    auto format(const rjson::value& v, fmt::format_context& ctx) const {
+        return fmt::format_to(ctx.out(), "{}", rjson::print(v));
+    }
+};
