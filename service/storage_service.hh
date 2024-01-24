@@ -761,6 +761,17 @@ private:
         // The node uses raft-based topology operations
         raft
     };
+    // The _topology_change_kind_enabled variable is first initialized in `join_cluster`.
+    // After the node successfully joins, the control over the variable is yielded
+    // to `topology_state_load`, so that it can control it during the upgrade from gossiper
+    // based topology to raft-based topology.
+    // FIXME: This boolean flag is mostly needed because, shortly after starting
+    // a new group 0, the state of `system.topology` is empty, and updating the
+    // `_topology_change_kind_enabled` variable from group 0 state would lead
+    // to wrong results. This could be fixed by writing an initial `system.topology`
+    // state before creating the group 0 (also making sure to set the correct
+    // group 0 state id so that the timestamps of further mutations are correct).
+    bool _manage_topology_change_kind_from_group0 = false;
     topology_change_kind _topology_change_kind_enabled = topology_change_kind::unknown;
 
     // Throws an exception if the node is either starting and didn't determine which
@@ -768,6 +779,8 @@ private:
     // on raft. The name only serves for display purposes (i.e. it will be included
     // in the exception, if one is thrown).
     void check_ability_to_perform_topology_operation(std::string_view operation_name) const;
+
+    topology_change_kind upgrade_state_to_topology_op_kind(topology::upgrade_state_type upgrade_state) const;
 
 public:
     bool raft_topology_change_enabled() const {
