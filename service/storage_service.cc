@@ -398,6 +398,7 @@ future<> storage_service::sync_raft_topology_nodes(mutable_token_metadata_ptr tm
 
             if (_gossiper.get_endpoint_state_ptr(*ip) && !get_used_ips().contains(*ip)) {
                 co_await _gossiper.force_remove_endpoint(*ip, gms::null_permit_id);
+                co_await notify_left(*ip);
             }
         }
 
