@@ -9,8 +9,8 @@
 #pragma once
 
 #include <functional>
-
-#include "feed_writers.hh"
+#include "readers/flat_mutation_reader_v2.hh"
+#include "dht/token.hh"
 
 namespace mutation_writer {
 

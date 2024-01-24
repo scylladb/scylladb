@@ -8,10 +8,10 @@
 
 #include "mutation_writer/token_group_based_splitting_writer.hh"
 
-#include <cinttypes>
 #include <seastar/core/shared_mutex.hh>
 #include <seastar/core/on_internal_error.hh>
-#include "dht/i_partitioner.hh"
+
+#include "mutation_writer/feed_writers.hh"
 
 namespace mutation_writer {
 

@@ -9,8 +9,7 @@
 #pragma once
 
 #include <seastar/util/noncopyable_function.hh>
-
-#include "feed_writers.hh"
+#include "readers/flat_mutation_reader_v2.hh"
 
 namespace mutation_writer {
 
