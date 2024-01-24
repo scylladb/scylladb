@@ -48,14 +48,14 @@ protected:
     future<tasks::task_manager::task::progress> get_progress(const sstables::compaction_data& cdata, const sstables::compaction_progress_monitor& progress_monitor) const;
 };
 
+enum class flush_mode {
+    skip,               // Skip flushing.  Useful when application explicitly flushes all tables prior to compaction
+    compacted_tables,   // Flush only the compacted keyspace/tables
+    all_tables          // Flush all tables in the database prior to compaction
+};
+
 class major_compaction_task_impl : public compaction_task_impl {
 public:
-    enum class flush_mode {
-        skip,               // Skip flushing.  Useful when application explicitly flushes all tables prior to compaction
-        compacted_tables,   // Flush only the compacted keyspace/tables
-        all_tables          // Flush all tables in the database prior to compaction
-    };
-
     major_compaction_task_impl(tasks::task_manager::module_ptr module,
             tasks::task_id id,
             unsigned sequence_number,
@@ -718,10 +718,10 @@ protected:
 } // namespace compaction
 
 template <>
-struct fmt::formatter<major_compaction_task_impl::flush_mode> {
+struct fmt::formatter<compaction::flush_mode> {
     constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
     template <typename FormatContext>
-    auto format(const major_compaction_task_impl::flush_mode& fm, FormatContext& ctx) const {
+    auto format(const compaction::flush_mode& fm, FormatContext& ctx) const {
         return fmt::format_to(ctx.out(), "{}", major_compaction_task_impl::to_string(fm));
     }
 };
