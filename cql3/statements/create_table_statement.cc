@@ -71,24 +71,21 @@ std::vector<column_definition> create_table_statement::get_columns() const
 
 future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>>
 create_table_statement::prepare_schema_mutations(query_processor& qp, api::timestamp_type ts) const {
-    ::shared_ptr<cql_transport::event::schema_change> ret;
     std::vector<mutation> m;
 
     try {
         m = co_await service::prepare_new_column_family_announcement(qp.proxy(), get_cf_meta_data(qp.db()), ts);
-
-        using namespace cql_transport;
-        ret = ::make_shared<event::schema_change>(
-            event::schema_change::change_type::CREATED,
-            event::schema_change::target_type::TABLE,
-            keyspace(),
-            column_family());
     } catch (const exceptions::already_exists_exception& e) {
         if (!_if_not_exists) {
             co_return coroutine::exception(std::current_exception());
         }
     }
 
+    auto ret = ::make_shared<cql_transport::event::schema_change>(
+        cql_transport::event::schema_change::change_type::CREATED,
+        cql_transport::event::schema_change::target_type::TABLE,
+        keyspace(),
+        column_family());
     co_return std::make_tuple(std::move(ret), std::move(m), std::vector<sstring>());
 }
 
