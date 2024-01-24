@@ -1530,7 +1530,7 @@ def write_junit_report(tmpdir: str, mode: str) -> None:
         ET.ElementTree(xml_results).write(f, encoding="unicode")
 
 
-def summarize_tests(tests):
+def summarize_boost_tests(tests):
     # in case we run a certain test multiple times
     # - if any of the runs failed, the test is considered failed, and
     #   the last failed run is returned.
@@ -1614,7 +1614,7 @@ def write_consolidated_boost_junit_xml(tmpdir: str, mode: str) -> None:
             key=BoostTest.test_path_of_element):
         # dedup the tests with the same name, so only the representative one is
         # preserved
-        test_case = summarize_tests(tests)
+        test_case = summarize_boost_tests(tests)
         test_case.attrib.pop('path')
         test_case.attrib.pop('mode')
 
