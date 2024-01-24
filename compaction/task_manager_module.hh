@@ -75,7 +75,6 @@ public:
         return "major compaction";
     }
 
-    static sstring to_string(flush_mode);
 protected:
     flush_mode _flush_mode;
 
@@ -723,8 +722,5 @@ protected:
 template <>
 struct fmt::formatter<compaction::flush_mode> {
     constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
-    template <typename FormatContext>
-    auto format(const compaction::flush_mode& fm, FormatContext& ctx) const {
-        return fmt::format_to(ctx.out(), "{}", major_compaction_task_impl::to_string(fm));
-    }
+    auto format(compaction::flush_mode, fmt::format_context& ctx) const -> decltype(ctx.out());
 };
