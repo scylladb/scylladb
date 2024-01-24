@@ -38,8 +38,6 @@ private:
     cf_properties _properties;
     bool _if_not_exists;
 
-    std::pair<view_ptr, cql3::cql_warnings_vec> prepare_view(data_dictionary::database db) const;
-
 public:
     create_view_statement(
             cf_name view_name,
@@ -49,6 +47,8 @@ public:
             std::vector<::shared_ptr<cql3::column_identifier::raw>> partition_keys,
             std::vector<::shared_ptr<cql3::column_identifier::raw>> clustering_keys,
             bool if_not_exists);
+
+    std::pair<view_ptr, cql3::cql_warnings_vec> prepare_view(data_dictionary::database db) const;
 
     auto& properties() {
         return _properties;

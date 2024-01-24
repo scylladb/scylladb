@@ -19,6 +19,8 @@
 #include "cql3/statements/create_keyspace_statement.hh"
 #include "cql3/statements/create_table_statement.hh"
 #include "cql3/statements/create_type_statement.hh"
+#include "cql3/statements/create_view_statement.hh"
+#include "cql3/statements/create_index_statement.hh"
 #include "cql3/statements/update_statement.hh"
 #include "db/cql_type_parser.hh"
 #include "db/config.hh"
@@ -38,6 +40,7 @@
 #include "gms/feature_service.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "tools/schema_loader.hh"
+#include "view_info.hh"
 
 namespace {
 
@@ -56,6 +59,7 @@ struct database {
 
     database(const db::config& cfg, gms::feature_service& features) : cfg(cfg), features(features)
     { }
+    database(database&&) = delete;
 };
 
 struct keyspace {
@@ -63,14 +67,17 @@ struct keyspace {
 
     explicit keyspace(lw_shared_ptr<keyspace_metadata> metadata) : metadata(std::move(metadata))
     { }
+    keyspace(keyspace&&) = delete;
 };
 
 struct table {
-    keyspace& ks;
+    const keyspace& ks;
     schema_ptr schema;
     secondary_index::secondary_index_manager secondary_idx_man;
+    bool user;
 
-    table(data_dictionary_impl& impl, keyspace& ks, schema_ptr schema);
+    table(data_dictionary_impl& impl, const keyspace& ks, schema_ptr schema, bool user);
+    table(table&&) = delete;
 };
 
 class data_dictionary_impl : public data_dictionary::impl {
@@ -157,12 +164,21 @@ private:
         static const std::vector<view_ptr> empty;
         return empty;
     }
-    virtual sstring get_available_index_name(data_dictionary::database db, std::string_view ks_name, std::string_view table_name,
+    virtual sstring get_available_index_name(data_dictionary::database db, std::string_view ks_name, std::string_view cf_name,
             std::optional<sstring> index_name_root) const override {
-        throw std::bad_function_call();
+        auto has_schema = [&] (std::string_view ks_name, std::string_view table_name) {
+            const auto& tables = unwrap(db).tables;
+            return std::find_if(tables.begin(), tables.end(), [&] (const table& t) {
+                return t.schema->ks_name() == ks_name && t.schema->cf_name() == table_name;
+            }) != tables.end();
+        };
+        return secondary_index::get_available_index_name(ks_name, cf_name, index_name_root, existing_index_names(db, ks_name), has_schema);
     }
     virtual std::set<sstring> existing_index_names(data_dictionary::database db, std::string_view ks_name, std::string_view cf_to_exclude = {}) const override {
-        return {};
+        auto tables = boost::copy_range<std::vector<schema_ptr>>(unwrap(db).tables
+                | boost::adaptors::filtered([ks_name] (const table& t) { return t.schema->ks_name() == ks_name; })
+                | boost::adaptors::transformed([] (const table& t) { return t.schema; }));
+        return secondary_index::existing_index_names(tables, cf_to_exclude);
     }
     virtual schema_ptr find_indexed_table(data_dictionary::database db, std::string_view ks_name, std::string_view index_name) const override {
         return {};
@@ -199,8 +215,8 @@ public:
     }
 };
 
-table::table(data_dictionary_impl& impl, keyspace& ks, schema_ptr schema) :
-    ks(ks), schema(std::move(schema)), secondary_idx_man(impl.wrap(*this))
+table::table(data_dictionary_impl& impl, const keyspace& ks, schema_ptr schema, bool user) :
+    ks(ks), schema(std::move(schema)), secondary_idx_man(impl.wrap(*this)), user(user)
 { }
 
 sstring read_file(std::filesystem::path path) {
@@ -235,9 +251,7 @@ std::vector<schema_ptr> do_load_schemas(const db::config& cfg, std::string_view 
                 std::map<sstring, sstring>{},
                 std::nullopt,
                 false));
-    real_db.tables.emplace_back(dd_impl, real_db.keyspaces.back(), db::schema_tables::dropped_columns());
-
-    std::vector<schema_ptr> schemas;
+    real_db.tables.emplace_back(dd_impl, real_db.keyspaces.back(), db::schema_tables::dropped_columns(), false);
 
     auto find_or_create_keyspace = [&] (const sstring& name) -> data_dictionary::keyspace {
         try {
@@ -276,14 +290,37 @@ std::vector<schema_ptr> do_load_schemas(const db::config& cfg, std::string_view 
         } else if (auto p = dynamic_cast<cql3::statements::create_type_statement*>(statement)) {
             dd_impl.unwrap(ks).metadata->add_user_type(p->create_type(db));
         } else if (auto p = dynamic_cast<cql3::statements::create_table_statement*>(statement)) {
-            schemas.push_back(p->get_cf_meta_data(db));
+            auto schema = p->get_cf_meta_data(db);
             // CDC tables use a custom partitioner, which is not reflected when
             // dumping the schema to schema.cql, so we have to manually set it here.
-            if (cdc::is_log_name(schemas.back()->cf_name())) {
-                schema_builder b(std::move(schemas.back()));
+            if (cdc::is_log_name(schema->cf_name())) {
+                schema_builder b(std::move(schema));
                 b.with_partitioner(cdc::cdc_partitioner::classname);
-                schemas.back() = b.build();
+                schema = b.build();
             }
+            real_db.tables.emplace_back(dd_impl, dd_impl.unwrap(ks), std::move(schema), true);
+        } else if (auto p = dynamic_cast<cql3::statements::create_view_statement*>(statement)) {
+            auto&& [view, warnings] = p->prepare_view(db);
+            auto it = std::find_if(real_db.tables.begin(), real_db.tables.end(), [&] (const table& t) { return t.schema->ks_name() == view->ks_name() && t.schema->cf_name() == view->cf_name(); });
+            if (it != real_db.tables.end()) {
+                continue; // view already exists
+            }
+            real_db.tables.emplace_back(dd_impl, dd_impl.unwrap(ks), view, true);
+        } else if (auto p = dynamic_cast<cql3::statements::create_index_statement*>(statement)) {
+            auto res = p->build_index_schema(db);
+            if (!res) {
+                continue; // index already exists
+            }
+            auto [new_base_schema, index] = *res;
+            auto it = std::find_if(real_db.tables.begin(), real_db.tables.end(), [&] (const table& t) { return t.schema->id() == new_base_schema->id(); });
+            if (it == real_db.tables.end()) { // shouldn't happen but let's handle it
+                throw std::runtime_error(fmt::format("tools::do_load_schemas(): failed to look up base table {}.{}, while creating index on it", new_base_schema->ks_name(), new_base_schema->cf_name()));
+            }
+            it->schema = std::move(new_base_schema);
+            it->secondary_idx_man.reload();
+            const bool new_token_column_computation = db.features().correct_idx_token_in_secondary_index;
+            auto view = it->secondary_idx_man.create_view_for_index(index, new_token_column_computation);
+            real_db.tables.emplace_back(dd_impl, dd_impl.unwrap(ks), view, true);
         } else if (auto p = dynamic_cast<cql3::statements::update_statement*>(statement)) {
             if (p->keyspace() != db::schema_tables::NAME && p->column_family() != db::schema_tables::DROPPED_COLUMNS) {
                 throw std::runtime_error(fmt::format("tools::do_load_schemas(): expected modification statement to be against {}.{}, but it is against {}.{}",
@@ -308,17 +345,18 @@ std::vector<schema_ptr> do_load_schemas(const db::config& cfg, std::string_view 
             for (auto& row : rs.rows()) {
                 const auto keyspace_name = row.get_nonnull<sstring>("keyspace_name");
                 const auto table_name = row.get_nonnull<sstring>("table_name");
-                auto it = std::find_if(schemas.begin(), schemas.end(), [&] (schema_ptr s) {
+                auto it = std::find_if(real_db.tables.begin(), real_db.tables.end(), [&] (const table& t) {
+                    auto& s = t.schema;
                     return s->ks_name() == keyspace_name && s->cf_name() == table_name;
                 });
-                if (it == schemas.end()) {
+                if (it == real_db.tables.end()) {
                     throw std::runtime_error(fmt::format("tools::do_load_schemas(): failed applying update to {}.{}, the table it applies to is not found: {}.{}",
                             db::schema_tables::NAME, db::schema_tables::DROPPED_COLUMNS, keyspace_name, table_name));
                 }
                 auto name = row.get_nonnull<sstring>("column_name");
                 auto type = db::cql_type_parser::parse(keyspace_name, row.get_nonnull<sstring>("type"), user_types_storage(real_db));
                 auto time = row.get_nonnull<db_clock::time_point>("dropped_time");
-                *it = schema_builder(*it).without_column(std::move(name), std::move(type), time.time_since_epoch().count()).build();
+                it->schema = schema_builder(std::move(it->schema)).without_column(std::move(name), std::move(type), time.time_since_epoch().count()).build();
             }
         } else {
             throw std::runtime_error(fmt::format("tools::do_load_schemas(): expected statement to be one of (create keyspace, create type, create table), got: {}",
@@ -326,7 +364,10 @@ std::vector<schema_ptr> do_load_schemas(const db::config& cfg, std::string_view 
         }
     }
 
-    return schemas;
+    return boost::copy_range<std::vector<schema_ptr>>(
+            real_db.tables |
+            boost::adaptors::filtered([] (const table& t) { return t.user; }) |
+            boost::adaptors::transformed([] (const table& t) { return t.schema; }));
 }
 
 struct sstable_manager_service {
@@ -474,6 +515,7 @@ std::unordered_map<schema_ptr, std::string> get_schema_table_directories(std::fi
     const std::vector<schema_ptr> schemas{
             db::schema_tables::types(),
             db::schema_tables::tables(),
+            db::schema_tables::views(),
             db::schema_tables::columns(),
             db::schema_tables::view_virtual_columns(),
             db::schema_tables::computed_columns(),
@@ -524,6 +566,9 @@ schema_ptr do_load_schema_from_schema_tables(const db::config& dbcfg, std::files
     auto schema_table_table_dir = get_schema_table_directories(scylla_data_path);
     auto schema_tables_path = scylla_data_path / db::schema_tables::NAME;
 
+    auto empty = [] (const mutation_opt& mopt) {
+        return !mopt || !mopt->partition().row_count();
+    };
     auto do_load = [&] (std::function<const schema_ptr()> schema_factory) {
         auto s = schema_factory();
         return read_schema_table_mutation(
@@ -535,6 +580,7 @@ schema_ptr do_load_schema_from_schema_tables(const db::config& dbcfg, std::files
                 {table});
     };
     mutation_opt tables = do_load(db::schema_tables::tables);
+    mutation_opt views = do_load(db::schema_tables::views);
     mutation_opt columns = do_load(db::schema_tables::columns);
     mutation_opt view_virtual_columns = do_load(db::schema_tables::view_virtual_columns);
     mutation_opt computed_columns = do_load(db::schema_tables::computed_columns);
@@ -542,7 +588,7 @@ schema_ptr do_load_schema_from_schema_tables(const db::config& dbcfg, std::files
     mutation_opt dropped_columns = do_load(db::schema_tables::dropped_columns);
     mutation_opt scylla_tables = do_load([] () { return db::schema_tables::scylla_tables(); });
 
-    if ((!tables || !tables->partition().row_count()) || (!columns || !columns->partition().row_count())) {
+    if ((empty(tables) && empty(views)) || empty(columns)) {
         throw std::runtime_error(fmt::format("Failed to find {}.{} in schema tables", keyspace, table));
     }
 
@@ -583,9 +629,17 @@ schema_ptr do_load_schema_from_schema_tables(const db::config& dbcfg, std::files
     gms::feature_service features(gms::feature_config_from_db_config(dbcfg));
     db::schema_ctxt ctxt(dbcfg, user_type_storage, features);
 
+    if (empty(tables)) {
+        tables = std::move(views);
+    }
+
     schema_mutations muts(std::move(*tables), std::move(*columns), std::move(view_virtual_columns), std::move(computed_columns), std::move(indexes),
             std::move(dropped_columns), std::move(scylla_tables));
-    return db::schema_tables::create_table_from_mutations(ctxt, muts);
+    if (muts.is_view()) {
+        return db::schema_tables::create_view_from_mutations(ctxt, muts);
+    } else {
+        return db::schema_tables::create_table_from_mutations(ctxt, muts);
+    }
 }
 
 } // anonymous namespace
@@ -601,10 +655,18 @@ future<std::vector<schema_ptr>> load_schemas(const db::config& dbcfg, std::strin
 future<schema_ptr> load_one_schema_from_file(const db::config& dbcfg, std::filesystem::path path) {
     return async([&dbcfg, path] () mutable {
         auto schemas = do_load_schemas(dbcfg, read_file(path));
-        if (schemas.size() != 1) {
-            throw std::runtime_error(fmt::format("Schema file {} expected to contain exactly 1 schema, actually has {}", path.native(), schemas.size()));
+        if (schemas.size() == 1) {
+            return std::move(schemas.front());
+        } else if (schemas.size() == 2) {
+            // We expect a base table at index 0 and a view/index on it at index 1
+            if (!schemas[0]->is_view() && schemas[1]->is_view() && schemas[0]->id() == schemas[1]->view_info()->base_id()) {
+                return std::move(schemas[1]);
+            }
         }
-        return std::move(schemas.front());
+        throw std::runtime_error(fmt::format(
+                    "Schema file {} expected to contain exactly 1 schema or 2 schemas (base table and view), actually has {} non-related schemas",
+                    path.native(),
+                    schemas.size()));
     });
 }
 
