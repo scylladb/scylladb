@@ -282,7 +282,7 @@ const std::vector<sstables::shared_sstable> load_sstables(schema_ptr schema, sst
 
     parallel_for_each(sstable_names, [schema, &sst_man, &sstable_names, &sstables] (const sstring& sst_name) -> future<> {
         const auto i = std::distance(sstable_names.begin(), std::find(sstable_names.begin(), sstable_names.end(), sst_name));
-        const auto sst_path = std::filesystem::path(sst_name);
+        const auto sst_path = std::filesystem::canonical(std::filesystem::path(sst_name));
 
         if (const auto ftype_opt = co_await file_type(sst_path.c_str(), follow_symlink::yes)) {
             if (!ftype_opt) {
