@@ -2098,7 +2098,10 @@ table::make_partition_presence_checker(lw_shared_ptr<sstables::sstable_set> ssta
 snapshot_source
 table::sstables_as_snapshot_source() {
     return snapshot_source([this] () {
-        auto sst_set = _sstables;
+        // Copy the _sstables set to get a snapshot of it
+        // now that table_sstable_set no longer keeps a snapshot
+        // of all compaction_groups sstable_sets
+        auto sst_set = make_lw_shared<sstables::sstable_set>(*_sstables);
         return mutation_source([this, sst_set] (schema_ptr s,
                 reader_permit permit,
                 const dht::partition_range& r,
