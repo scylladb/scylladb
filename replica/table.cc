@@ -196,7 +196,10 @@ table::add_memtables_to_reader_list(std::vector<flat_mutation_reader_v2>& reader
     // point queries can be optimized as they span a single compaction group.
     if (range.is_singular() && range.start()->value().has_key()) {
         const dht::ring_position& pos = range.start()->value();
-        auto sg = storage_group_for_token(pos.token());
+        auto sg = shard_local_storage_group_for_token(pos.token());
+        if (!sg) {
+            return;
+        }
         reserve_fn(sg->memtable_count());
         for (auto& cg : sg->compaction_groups()) {
             add_memtables_from_cg(*cg);
@@ -558,13 +561,19 @@ public:
     std::pair<size_t, locator::tablet_range_side> storage_group_of(dht::token) const override {
         return {0, locator::tablet_range_side{}};
     }
+    storage_group* shard_local_storage_group_at(size_t idx) const noexcept override {
+        if (idx == 0) {
+            return _storage_groups[0].get();
+        }
+        return nullptr;
+    }
     size_t log2_storage_groups() const override {
         return 0;
     }
     size_t storage_group_id_for_token(dht::token) const noexcept override {
         return 0;
     }
-    storage_group* storage_group_for_token(dht::token token) const noexcept override {
+    storage_group* shard_local_storage_group_for_token(dht::token token) const noexcept override {
         return _storage_groups.begin()->get();
     }
     compaction_group& compaction_group_for_token(dht::token token) const noexcept override {
@@ -634,14 +643,25 @@ public:
         }
         return { idx, side };
     }
+    storage_group* shard_local_storage_group_at(size_t idx) const noexcept override {
+        if (idx >= _storage_groups.size()) {
+            return nullptr;
+        }
+        auto& tmap = tablet_map();
+        auto shard = tmap.get_shard(locator::tablet_id(idx), _my_host_id);
+        if (shard && *shard == this_shard_id()) {
+            return _storage_groups[idx].get();
+        }
+        return nullptr;
+    }
     size_t log2_storage_groups() const override {
         return log2ceil(tablet_map().tablet_count());
     }
     size_t storage_group_id_for_token(dht::token t) const noexcept override {
         return storage_group_of(t).first;
     }
-    storage_group* storage_group_for_token(dht::token token) const noexcept override {
-        return _storage_groups[storage_group_of(token).first].get();
+    storage_group* shard_local_storage_group_for_token(dht::token token) const noexcept override {
+        return shard_local_storage_group_at(storage_group_of(token).first);
     }
     compaction_group& compaction_group_for_token(dht::token token) const noexcept override {
         auto [idx, range_side] = storage_group_of(token);
@@ -656,7 +676,7 @@ public:
         size_t candidate_end = tr.end() ? storage_group_id_for_token(tr.end()->value()) : (storage_groups().size() - 1);
 
         while (candidate_start <= candidate_end) {
-            auto& sg = storage_groups()[candidate_start++];
+            auto* sg = shard_local_storage_group_at(candidate_start++);
             if (!sg) {
                 continue;
             }
@@ -831,8 +851,12 @@ size_t table::storage_group_id_for_token(dht::token token) const noexcept {
     return _sg_manager->storage_group_id_for_token(token);
 }
 
-storage_group* table::storage_group_for_token(dht::token token) const noexcept {
-    return _sg_manager->storage_group_for_token(token);
+storage_group* table::shard_local_storage_group_for_token(dht::token token) const noexcept {
+    return _sg_manager->shard_local_storage_group_for_token(token);
+}
+
+storage_group* table::shard_local_storage_group_at(size_t idx) const noexcept {
+    return _sg_manager->shard_local_storage_group_at(idx);
 }
 
 compaction_group& table::compaction_group_for_token(dht::token token) const noexcept {
@@ -3210,7 +3234,10 @@ table::as_mutation_source_excluding_staging() const {
 }
 
 std::vector<mutation_source> table::select_memtables_as_mutation_sources(dht::token token) const {
-    auto sg = storage_group_for_token(token);
+    auto sg = shard_local_storage_group_for_token(token);
+    if (!sg) {
+        return {};
+    }
     std::vector<mutation_source> mss;
     mss.reserve(sg->memtable_count());
     for (auto& cg : sg->compaction_groups()) {

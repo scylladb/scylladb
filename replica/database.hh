@@ -597,7 +597,10 @@ private:
     // Select a compaction group from a given token.
     std::pair<size_t, locator::tablet_range_side> storage_group_of(dht::token token) const noexcept;
     size_t storage_group_id_for_token(dht::token token) const noexcept;
-    storage_group* storage_group_for_token(dht::token token) const noexcept;
+    storage_group* shard_local_storage_group_for_token(dht::token token) const noexcept;
+    // Returns a pointer to the storage_group at the given index
+    // if it's owned by this shard, otherwise return nullptr.
+    storage_group* shard_local_storage_group_at(size_t idx) const noexcept;
 
     std::unique_ptr<storage_group_manager> make_storage_group_manager();
     // Return compaction group if table owns a single one. Otherwise, null is returned.
