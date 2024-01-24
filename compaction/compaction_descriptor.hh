@@ -209,7 +209,11 @@ struct compaction_descriptor {
     // Return fan-in of this job, which is equal to its number of runs.
     unsigned fan_in() const;
     // Enables garbage collection for this descriptor, meaning that compaction will be able to purge expired data
-    void enable_garbage_collection(sstables::sstable_set snapshot) { all_sstables_snapshot = std::move(snapshot); }
+    void enable_garbage_collection(const sstables::sstable_set& sstables) {
+        // Copy the sstable set to take a snapshot of it
+        // as the table_sstable_set is not immutable.
+        all_sstables_snapshot.emplace(sstables);
+    }
     // Returns total size of all sstables contained in this descriptor
     uint64_t sstables_size() const;
 };
