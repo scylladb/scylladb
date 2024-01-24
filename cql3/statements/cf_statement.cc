@@ -39,6 +39,11 @@ void cf_statement::prepare_keyspace(std::string_view keyspace)
     }
 }
 
+bool cf_statement::has_keyspace() const {
+    assert(_cf_name.has_value());
+    return _cf_name->has_keyspace();
+}
+
 const sstring& cf_statement::keyspace() const
 {
     assert(_cf_name->has_keyspace()); // "The statement hasn't be prepared correctly";

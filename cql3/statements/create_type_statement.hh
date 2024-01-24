@@ -35,6 +35,10 @@ public:
 
     virtual void validate(query_processor&, const service::client_state& state) const override;
 
+    virtual bool has_keyspace() const override {
+        return true;
+    }
+
     virtual const sstring& keyspace() const override;
 
     future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>> prepare_schema_mutations(query_processor& qp, api::timestamp_type) const override;

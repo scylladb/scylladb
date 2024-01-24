@@ -29,6 +29,9 @@ class alter_keyspace_statement : public schema_altering_statement {
 public:
     alter_keyspace_statement(sstring name, ::shared_ptr<ks_prop_defs> attrs);
 
+    bool has_keyspace() const override {
+        return true;
+    }
     const sstring& keyspace() const override;
 
     future<> check_access(query_processor& qp, const service::client_state& state) const override;
