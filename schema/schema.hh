@@ -450,6 +450,7 @@ public:
     const column_mapping_entry& regular_column_at(column_id id) const {
         auto n_regular = _columns.size() - _n_static;
         if (id >= n_regular) {
+            abort();
             throw std::out_of_range(format("regular column id {:d} >= {:d}", id, n_regular));
         }
         return _columns[id + _n_static];

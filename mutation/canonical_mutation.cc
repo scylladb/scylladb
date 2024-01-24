@@ -126,10 +126,12 @@ std::ostream& operator<<(std::ostream& os, const canonical_mutation& cm) {
         }
         virtual void accept_row_cell(column_id id, atomic_cell ac) override {
             print_separator();
+            printf("accept_row_cell1\n");
             auto&& entry = _cm.regular_column_at(id);
             fmt::print(_os, "column {} {}", bytes_to_text(entry.name()), atomic_cell::printer(*entry.type(), ac));
         }
         virtual void accept_row_cell(column_id id, collection_mutation_view cmv) override {
+            printf("accept_row_cell2\n");
             print_separator();
             auto&& entry = _cm.regular_column_at(id);
             fmt::print(_os, "column {} {}", bytes_to_text(entry.name()), collection_mutation_view::printer(*entry.type(), cmv));

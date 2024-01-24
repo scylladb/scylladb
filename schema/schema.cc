@@ -101,6 +101,8 @@ std::ostream& operator<<(std::ostream& out, const column_mapping& cm) {
     column_id n_static = cm.n_static();
     column_id n_regular = cm.columns().size() - n_static;
 
+    printf("column_mapping formatter 1\n");
+
     auto pr_entry = [] (column_id i, const column_mapping_entry& e) {
         // Without schema we don't know if name is UTF8. If we had schema we could use
         // s->regular_column_name_type()->to_string(e.name()).
@@ -1618,6 +1620,11 @@ schema::regular_column_at(column_id id) const {
     if (id >= regular_columns_count()) {
         on_internal_error(dblog, format("{}.{}@{}: regular column id {:d} >= {:d}",
             ks_name(), cf_name(), version(), id, regular_columns_count()));
+    }
+    auto x = column_offset(column_kind::regular_column) + id;
+    auto sz = _raw._columns.size();
+    if (x >= sz) {
+        abort();
     }
     return _raw._columns.at(column_offset(column_kind::regular_column) + id);
 }
