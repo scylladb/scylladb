@@ -7,6 +7,7 @@
  */
 
 #include "mutation_writer/partition_based_splitting_writer.hh"
+#include "mutation_writer/feed_writers.hh"
 #include "mutation/mutation_rebuilder.hh"
 #include "replica/memtable.hh"
 

@@ -8,11 +8,11 @@
 
 #include "mutation_writer/shard_based_splitting_writer.hh"
 
-#include <cinttypes>
 #include <boost/range/adaptor/transformed.hpp>
 #include <boost/range/algorithm/min_element.hpp>
 #include <seastar/core/shared_mutex.hh>
 #include "dht/i_partitioner.hh"
+#include "mutation_writer/feed_writers.hh"
 
 namespace mutation_writer {
 
