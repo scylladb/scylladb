@@ -267,6 +267,9 @@ std::vector<schema_ptr> do_load_schemas(const db::config& cfg, std::string_view 
         if (!cf_statement) {
             continue; // we don't support any non-cf statements here
         }
+        if (!cf_statement->has_keyspace()) {
+            throw std::runtime_error("tools::do_load_schemas(): CQL statement does not have keyspace specified");
+        }
         auto ks = find_or_create_keyspace(cf_statement->keyspace());
         auto prepared_statement = cf_statement->prepare(db, cql_stats);
         auto* statement = prepared_statement->statement.get();
