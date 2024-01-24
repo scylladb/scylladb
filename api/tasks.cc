@@ -50,9 +50,9 @@ void set_tasks_compaction_module(http_context& ctx, routes& r, sharded<service::
         apilog.debug("force_keyspace_compaction_async: keyspace={} tables={}, flush={}", keyspace, table_infos, flush);
 
         auto& compaction_module = db.local().get_compaction_manager().get_task_manager_module();
-        std::optional<major_compaction_task_impl::flush_mode> fmopt;
+        std::optional<flush_mode> fmopt;
         if (!flush) {
-            fmopt = major_compaction_task_impl::flush_mode::skip;
+            fmopt = flush_mode::skip;
         }
         auto task = co_await compaction_module.make_and_start_task<major_keyspace_compaction_task_impl>({}, std::move(keyspace), tasks::task_id::create_null_id(), db, table_infos, fmopt);
 
