@@ -38,6 +38,8 @@ public:
     // Only for internal calls, use the version with ClientState for user queries
     void prepare_keyspace(std::string_view keyspace);
 
+    virtual bool has_keyspace() const;
+
     virtual const sstring& keyspace() const;
 
     virtual const sstring& column_family() const;

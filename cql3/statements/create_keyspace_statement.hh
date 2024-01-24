@@ -51,6 +51,9 @@ public:
      */
     create_keyspace_statement(const sstring& name, shared_ptr<ks_prop_defs> attrs, bool if_not_exists);
 
+    virtual bool has_keyspace() const override {
+        return true;
+    }
     virtual const sstring& keyspace() const override;
 
     virtual future<> check_access(query_processor& qp, const service::client_state& state) const override;
