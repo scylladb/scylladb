@@ -8323,10 +8323,6 @@ future<> endpoint_lifecycle_notifier::notify_joined(gms::inet_address endpoint) 
 }
 
 future<> storage_service::notify_joined(inet_address endpoint) {
-    if (!_gossiper.is_normal(endpoint)) {
-        co_return;
-    }
-
     co_await utils::get_local_injector().inject(
         "storage_service_notify_joined_sleep", std::chrono::milliseconds{500});
 
