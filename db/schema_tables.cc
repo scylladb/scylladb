@@ -1040,12 +1040,29 @@ using keyspace_name = sstring;
 
 enum class table_kind { table, view };
 
-static std::ostream& operator<<(std::ostream& os, table_kind k) {
-    switch (k) {
-        case table_kind::table: return os << "table";
-        case table_kind::view: return os << "view";
+}
+}
+
+template <> struct fmt::formatter<db::schema_tables::table_kind> {
+    constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
+    auto format(db::schema_tables::table_kind k, fmt::format_context& ctx) const {
+        switch (k) {
+        using enum db::schema_tables::table_kind;
+        case table:
+            return fmt::format_to(ctx.out(), "table");
+        case view:
+            return fmt::format_to(ctx.out(), "view");
+        }
+        abort();
     }
-    abort();
+};
+
+namespace db {
+namespace schema_tables {
+
+static std::ostream& operator<<(std::ostream& os, table_kind k) {
+    fmt::print(os, "{}", k);
+    return os;
 }
 
 static constexpr std::initializer_list<table_kind> all_table_kinds = {
