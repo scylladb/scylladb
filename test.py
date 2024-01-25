@@ -1275,7 +1275,7 @@ def parse_cmd_line() -> argparse.Namespace:
                              "lcov file per suite, lcov file per mode, and an lcov file for the entire run, "
                              "The lcov files can eventually be used for generating coverage reports")
     parser.add_argument("--coverage-mode",action = 'append', type = str, dest = "coverage_modes",
-                        help = "Collect and process coverage only for the modes specified. implies: --coverage, defalt: All built modes")
+                        help = "Collect and process coverage only for the modes specified. implies: --coverage, default: All built modes")
     parser.add_argument("--coverage-keep-raw",action = 'store_true',
                         help = "Do not delete llvm raw profiles when processing coverage reports.")
     parser.add_argument("--coverage-keep-indexed",action = 'store_true',
