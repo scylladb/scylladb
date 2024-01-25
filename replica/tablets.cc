@@ -48,6 +48,7 @@ schema_ptr make_tablets_schema() {
             .with_column("replicas", replica_set_type)
             .with_column("new_replicas", replica_set_type)
             .with_column("stage", utf8_type)
+            .with_column("transition", utf8_type)
             .with_column("session", uuid_type)
             .with_version(db::system_keyspace::generate_schema_version(id))
             .build();
@@ -87,6 +88,7 @@ tablet_map_to_mutation(const tablet_map& tablets, table_id id, const sstring& ke
         m.set_clustered_cell(ck, "replicas", make_list_value(replica_set_type, replicas_to_data_value(tablet.replicas)), ts);
         if (auto tr_info = tablets.get_tablet_transition_info(tid)) {
             m.set_clustered_cell(ck, "stage", tablet_transition_stage_to_string(tr_info->stage), ts);
+            m.set_clustered_cell(ck, "transition", tablet_transition_kind_to_string(tr_info->transition), ts);
             m.set_clustered_cell(ck, "new_replicas", make_list_value(replica_set_type, replicas_to_data_value(tr_info->next)), ts);
             if (tr_info->session_id) {
                 m.set_clustered_cell(ck, "session", data_value(tr_info->session_id.uuid()), ts);
@@ -117,6 +119,12 @@ tablet_mutation_builder::set_stage(dht::token last_token, locator::tablet_transi
 }
 
 tablet_mutation_builder&
+tablet_mutation_builder::set_transition(dht::token last_token, locator::tablet_transition_kind kind) {
+    _m.set_clustered_cell(get_ck(last_token), "transition", data_value(tablet_transition_kind_to_string(kind)), _ts);
+    return *this;
+}
+
+tablet_mutation_builder&
 tablet_mutation_builder::set_session(dht::token last_token, service::session_id session_id) {
     _m.set_clustered_cell(get_ck(last_token), "session", data_value(session_id.uuid()), _ts);
     return *this;
@@ -134,6 +142,8 @@ tablet_mutation_builder::del_transition(dht::token last_token) {
     auto ck = get_ck(last_token);
     auto stage_col = _s->get_column_definition("stage");
     _m.set_clustered_cell(ck, *stage_col, atomic_cell::make_dead(_ts, gc_clock::now()));
+    auto transition_col = _s->get_column_definition("transition");
+    _m.set_clustered_cell(ck, *transition_col, atomic_cell::make_dead(_ts, gc_clock::now()));
     auto new_replicas_col = _s->get_column_definition("new_replicas");
     _m.set_clustered_cell(ck, *new_replicas_col, atomic_cell::make_dead(_ts, gc_clock::now()));
     auto session_col = _s->get_column_definition("session");
@@ -212,6 +222,7 @@ future<tablet_metadata> read_tablet_metadata(cql3::query_processor& qp) {
 
         if (row.has("stage")) {
             auto stage = tablet_transition_stage_from_string(row.get_as<sstring>("stage"));
+            auto transition = tablet_transition_kind_from_string(row.get_as<sstring>("transition"));
 
             std::unordered_set<tablet_replica> pending(new_tablet_replicas.begin(), new_tablet_replicas.end());
             for (auto&& r : tablet_replicas) {
@@ -229,7 +240,7 @@ future<tablet_metadata> read_tablet_metadata(cql3::query_processor& qp) {
             if (row.has("session")) {
                 session_id = service::session_id(row.get_as<utils::UUID>("session"));
             }
-            current->map.set_tablet_transition_info(current->tid, tablet_transition_info{stage,
+            current->map.set_tablet_transition_info(current->tid, tablet_transition_info{stage, transition,
                     std::move(new_tablet_replicas), *pending.begin(), session_id});
         }
 

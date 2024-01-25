@@ -26,6 +26,8 @@
 
 namespace locator {
 
+class topology;
+
 extern seastar::logger tablet_logger;
 
 using token = dht::token;
@@ -158,8 +160,22 @@ enum class tablet_transition_stage {
     end_migration,
 };
 
+enum class tablet_transition_kind {
+    // Tablet replica is migrating from one shard to another.
+    // The new replica is (tablet_transition_info::next - tablet_info::replicas).
+    // The leaving replica is (tablet_info::replicas - tablet_transition_info::next).
+    migration,
+
+    // New tablet replica is replacing a dead one.
+    // The new replica is (tablet_transition_info::next - tablet_info::replicas).
+    // The leaving replica is (tablet_info::replicas - tablet_transition_info::next).
+    rebuild,
+};
+
 sstring tablet_transition_stage_to_string(tablet_transition_stage);
 tablet_transition_stage tablet_transition_stage_from_string(const sstring&);
+sstring tablet_transition_kind_to_string(tablet_transition_kind);
+tablet_transition_kind tablet_transition_kind_from_string(const sstring&);
 
 enum class write_replica_set_selector {
     previous, both, next
@@ -173,13 +189,17 @@ enum class read_replica_set_selector {
 /// Describes transition of a single tablet.
 struct tablet_transition_info {
     tablet_transition_stage stage;
+    tablet_transition_kind transition;
     tablet_replica_set next;
     tablet_replica pending_replica; // Optimization (next - tablet_info::replicas)
     service::session_id session_id;
     write_replica_set_selector writes;
     read_replica_set_selector reads;
 
-    tablet_transition_info(tablet_transition_stage stage, tablet_replica_set next, tablet_replica pending_replica,
+    tablet_transition_info(tablet_transition_stage stage,
+                           tablet_transition_kind kind,
+                           tablet_replica_set next,
+                           tablet_replica pending_replica,
                            service::session_id session_id = {});
 
     bool operator==(const tablet_transition_info&) const = default;
@@ -188,13 +208,26 @@ struct tablet_transition_info {
 // Returns the leaving replica for a given transition.
 tablet_replica get_leaving_replica(const tablet_info&, const tablet_transition_info&);
 
+/// Represents intention to move a single tablet replica from src to dst.
+struct tablet_migration_info {
+    locator::tablet_transition_kind kind;
+    locator::global_tablet_id tablet;
+    locator::tablet_replica src;
+    locator::tablet_replica dst;
+};
+
+/// Returns the replica set which will become the replica set of the tablet after executing a given tablet transition.
+tablet_replica_set get_new_replicas(const tablet_info&, const tablet_migration_info&);
+tablet_transition_info migration_to_transition_info(const tablet_info&, const tablet_migration_info&);
+
 /// Describes streaming required for a given tablet transition.
 struct tablet_migration_streaming_info {
     std::unordered_set<tablet_replica> read_from;
     std::unordered_set<tablet_replica> written_to;
 };
 
-tablet_migration_streaming_info get_migration_streaming_info(const tablet_info&, const tablet_transition_info&);
+tablet_migration_streaming_info get_migration_streaming_info(const locator::topology&, const tablet_info&, const tablet_transition_info&);
+tablet_migration_streaming_info get_migration_streaming_info(const locator::topology&, const tablet_info&, const tablet_migration_info&);
 
 // Describes if a given token is located at either left or right side of a tablet's range
 enum tablet_range_side {
@@ -379,6 +412,11 @@ struct tablet_routing_info {
 template <>
 struct fmt::formatter<locator::tablet_transition_stage> : fmt::formatter<std::string_view> {
     auto format(const locator::tablet_transition_stage&, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
+
+template <>
+struct fmt::formatter<locator::tablet_transition_kind> : fmt::formatter<std::string_view> {
+    auto format(const locator::tablet_transition_kind&, fmt::format_context& ctx) const -> decltype(ctx.out());
 };
 
 template <>

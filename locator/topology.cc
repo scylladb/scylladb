@@ -423,6 +423,12 @@ const node* topology::find_node(host_id id) const noexcept {
     return nullptr;
 }
 
+// Finds a node by its host_id
+// Returns nullptr if not found
+node* topology::find_node(host_id id) noexcept {
+    return make_mutable(const_cast<const topology*>(this)->find_node(id));
+}
+
 // Finds a node by its endpoint
 // Returns nullptr if not found
 const node* topology::find_node(const inet_address& ep) const noexcept {

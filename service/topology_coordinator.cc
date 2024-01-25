@@ -175,12 +175,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     }
 
     std::optional<request_param> get_request_param(raft::server_id id) {
-        std::optional<request_param> req_param;
-        auto rit = _topo_sm._topology.req_param.find(id);
-        if (rit != _topo_sm._topology.req_param.end()) {
-            req_param = rit->second;
-        }
-        return req_param;
+        return _topo_sm._topology.get_request_param(id);
     };
 
     // Returns:
@@ -306,27 +301,11 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     };
 
     raft::server_id parse_replaced_node(const std::optional<request_param>& req_param) {
-        if (req_param) {
-            auto *param = std::get_if<replace_param>(&*req_param);
-            if (param) {
-                return param->replaced_id;
-            }
-        }
-        return {};
+        return service::topology::parse_replaced_node(req_param);
     }
 
     std::unordered_set<raft::server_id> parse_ignore_nodes(const std::optional<request_param>& req_param) {
-        if (req_param) {
-            auto* remove_param = std::get_if<removenode_param>(&*req_param);
-            if (remove_param) {
-                return remove_param->ignored_ids;
-            }
-            auto* rep_param = std::get_if<replace_param>(&*req_param);
-            if (rep_param) {
-                return rep_param->ignored_ids;
-            }
-        }
-        return {};
+        return service::topology::parse_ignore_nodes(req_param);
     }
 
     inet_address id2ip(locator::host_id id) {
@@ -401,14 +380,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     }
 
     std::unordered_set<raft::server_id> get_excluded_nodes(raft::server_id id, const std::optional<topology_request>& req, const std::optional<request_param>& req_param) {
-        auto exclude_nodes = parse_ignore_nodes(req_param);
-        if (auto replaced_node = parse_replaced_node(req_param)) {
-            exclude_nodes.insert(replaced_node);
-        }
-        if (req && *req == topology_request::remove) {
-            exclude_nodes.insert(id);
-        }
-        return exclude_nodes;
+        return service::topology::get_excluded_nodes(id, req, req_param);
     }
 
     std::unordered_set<raft::server_id> get_excluded_nodes(const node_to_work_on& node) {
@@ -789,7 +761,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
 
     future<group0_guard> global_tablet_token_metadata_barrier(group0_guard guard) {
         // FIXME: Don't require all nodes to be up, only tablet replicas.
-        return global_token_metadata_barrier(std::move(guard));
+        return global_token_metadata_barrier(std::move(guard), _topo_sm._topology.get_excluded_nodes());
     }
 
     // Represents a two-state state machine which changes monotonically
@@ -826,8 +798,20 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     bool advance_in_background(locator::global_tablet_id gid, background_action_holder& holder, const char* name,
                                std::function<future<>()> action) {
         if (!holder || holder->failed()) {
-            holder = futurize_invoke(action)
-                        .finally([this, g = _async_gate.hold(), gid, name] () noexcept {
+            if (holder && holder->failed()) {
+                // Prevent warnings about abandoned failed future. Logged below.
+                holder->ignore_ready_future();
+            }
+            holder = futurize_invoke(action).then_wrapped([this, gid, name] (future<> f) {
+                if (f.failed()) {
+                    auto ep = f.get_exception();
+                    rtlogger.error("{} for tablet {} failed: {}", name, gid, ep);
+                    return seastar::sleep_abortable(std::chrono::seconds(1), _as).then([ep] () mutable {
+                        std::rethrow_exception(ep);
+                    });
+                }
+                return f;
+            }).finally([this, g = _async_gate.hold(), gid, name] () noexcept {
                 rtlogger.debug("{} for tablet {} resolved.", name, gid);
                 _tablets_ready = true;
                 _topo_sm.event.broadcast();
@@ -859,6 +843,10 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         }
     }
 
+    bool is_excluded(raft::server_id server_id) {
+        return _topo_sm._topology.get_excluded_nodes().contains(server_id);
+    }
+
     void generate_migration_update(std::vector<canonical_mutation>& out, const group0_guard& guard, const tablet_migration_info& mig) {
         auto& tmap = get_token_metadata_ptr()->tablets().get_tablet_map(mig.tablet.table);
         auto last_token = tmap.get_last_token(mig.tablet.tablet);
@@ -868,8 +856,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         }
         out.emplace_back(
             replica::tablet_mutation_builder(guard.write_timestamp(), mig.tablet.table)
-                .set_new_replicas(last_token, replace_replica(tmap.get_tablet_info(mig.tablet.tablet).replicas, mig.src, mig.dst))
+                .set_new_replicas(last_token, locator::get_new_replicas(tmap.get_tablet_info(mig.tablet.tablet), mig))
                 .set_stage(last_token, locator::tablet_transition_stage::allow_write_both_read_old)
+                .set_transition(last_token, mig.kind)
                 .build());
     }
 
@@ -960,7 +949,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                                         [] { throw std::runtime_error("stream_tablet failed due to error injection"); });
                     }
                     if (advance_in_background(gid, tablet_state.streaming, "streaming", [&] {
-                        rtlogger.info("Initiating tablet streaming of {} to {}", gid, trinfo.pending_replica);
+                        rtlogger.info("Initiating tablet streaming ({}) of {} to {}", trinfo.transition, gid, trinfo.pending_replica);
                         auto dst = trinfo.pending_replica.host;
                         return ser::storage_service_rpc_verbs::send_tablet_stream_data(&_messaging,
                                    netw::msg_addr(id2ip(dst)), _as, raft::server_id(dst.uuid()), gid);
@@ -981,6 +970,10 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 case locator::tablet_transition_stage::cleanup:
                     if (advance_in_background(gid, tablet_state.cleanup, "cleanup", [&] {
                         locator::tablet_replica dst = locator::get_leaving_replica(tmap.get_tablet_info(gid.tablet), trinfo);
+                        if (is_excluded(raft::server_id(dst.host.uuid()))) {
+                            rtlogger.info("Tablet cleanup of {} on {} skipped because node is excluded", gid, dst);
+                            return make_ready_future<>();
+                        }
                         rtlogger.info("Initiating tablet cleanup of {} on {}", gid, dst);
                         return ser::storage_service_rpc_verbs::send_tablet_cleanup(&_messaging,
                                                                                    netw::msg_addr(id2ip(dst.host)), _as, raft::server_id(dst.host.uuid()), gid);

@@ -35,6 +35,7 @@ public:
     tablet_mutation_builder& set_new_replicas(dht::token last_token, locator::tablet_replica_set replicas);
     tablet_mutation_builder& set_replicas(dht::token last_token, locator::tablet_replica_set replicas);
     tablet_mutation_builder& set_stage(dht::token last_token, locator::tablet_transition_stage stage);
+    tablet_mutation_builder& set_transition(dht::token last_token, locator::tablet_transition_kind);
     tablet_mutation_builder& set_session(dht::token last_token, service::session_id);
     tablet_mutation_builder& del_session(dht::token last_token);
     tablet_mutation_builder& del_transition(dht::token last_token);

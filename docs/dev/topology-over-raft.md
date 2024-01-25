@@ -104,19 +104,28 @@ that there are no tablet transitions in the system.
 Tablets are migrated in parallel and independently.
 
 There is a variant of tablet migration track called tablet draining track, which is invoked
-as a step of certain topology operations (e.g. decommission). Its goal is to readjust tablet replicas
+as a step of certain topology operations (e.g. decommission, removenode, replace). Its goal is to readjust tablet replicas
 so that a given topology change can proceed. For example, when decommissioning a node, we
 need to migrate tablet replicas away from the node being decommissioned.
 Tablet draining happens before making changes to vnode-based replication.
 
-# Tablet migration
+# Tablet transitions
 
-Each tablet has its own migration state machine stored in group0 which is part of the tablet state. It involves
+Tablets can undergo a process called "transition", which performs some maintenance action on the tablet which is
+globally driven by the topology change coordinator and serialized per-tablet. Transition can be one of:
+
+ * migration - tablet replica is moved from one shard to another (possibly on a different node)
+
+ * rebuild - new tablet replica is rebuilt from existing ones, possibly dropping old replica afterwards (on node removal or replace)
+
+Each tablet has its own state machine for keeping state of transition stored in group0 which is part of the tablet state. It involves
 these properties of a tablet:
-  - replicas: the old replicas of a table
-  - new_replicas: the new replicas of a tablet
+  - replicas: the old replicas of a table (also set when not in transition)
+  - new_replicas: the new replicas of a tablet which will become current after transition
   - stage: determines which replicas should be used by requests on the coordinator side, and which
            action should be taken by the state machine executor.
+  - transition: the kind of tablet transition (migration, rebuild, etc.). Affects the behavior of stages and actions
+    performed in those stages.
 
 Currently, the tablet state machine is driven forward by the tablet migration track of the
 topology state machine.

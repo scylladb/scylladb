@@ -515,6 +515,12 @@ future<> storage_service::sync_raft_topology_nodes(mutable_token_metadata_ptr tm
     for (const auto& [id, rs]: t.transition_nodes) {
         co_await process_transition_node(id, rs);
     }
+    for (auto id : t.get_excluded_nodes()) {
+        locator::node* n = tmptr->get_topology().find_node(locator::host_id(id.uuid()));
+        if (n) {
+            n->set_excluded(true);
+        }
+    }
 }
 
 future<> storage_service::topology_state_load() {
@@ -617,6 +623,8 @@ future<> storage_service::topology_state_load() {
         rtlogger.debug("topology_state_load: current CDC generation ID: {}", *gen_id);
         co_await _cdc_gens.local().handle_cdc_generation(*gen_id);
     }
+
+    slogger.debug("topology_state_load: excluded nodes: {}", _topology_state_machine._topology.get_excluded_nodes());
 }
 
 future<> storage_service::topology_transition() {
@@ -4940,18 +4948,34 @@ future<> storage_service::stream_tablet(locator::global_tablet_id tablet) {
             throw std::runtime_error(format("Cannot stream within the same node, tablet: {}, shard {} -> {}",
                                             tablet, leaving_replica.shard, trinfo->pending_replica.shard));
         }
-        auto leaving_replica_ip = host2ip(leaving_replica.host);
+
+        locator::tablet_migration_streaming_info streaming_info = get_migration_streaming_info(tm->get_topology(), tinfo, *trinfo);
+
+        streaming::stream_reason reason = std::invoke([&] {
+            switch (trinfo->transition) {
+                case locator::tablet_transition_kind::migration: return streaming::stream_reason::tablet_migration;
+                case locator::tablet_transition_kind::rebuild: return streaming::stream_reason::rebuild;
+                default:
+                    throw std::runtime_error(format("stream_tablet(): Invalid tablet transition: {}", trinfo->transition));
+            }
+        });
 
         auto& table = _db.local().find_column_family(tablet.table);
         std::vector<sstring> tables = {table.schema()->cf_name()};
-        auto streamer = make_lw_shared<dht::range_streamer>(_db, _stream_manager, tm, guard.get_abort_source(),
-               tm->get_my_id(), _snitch.local()->get_location(),
-               "Tablet migration", streaming::stream_reason::tablet_migration, topo_guard, std::move(tables));
+        auto streamer = make_lw_shared<dht::range_streamer>(_db, _stream_manager, tm,
+                                                            guard.get_abort_source(),
+                                                            tm->get_my_id(), _snitch.local()->get_location(),
+                                                            format("Tablet {}", trinfo->transition),
+                                                            reason,
+                                                            topo_guard,
+                                                            std::move(tables));
         streamer->add_source_filter(std::make_unique<dht::range_streamer::failure_detector_source_filter>(
                 _gossiper.get_unreachable_members()));
 
         std::unordered_map<inet_address, dht::token_range_vector> ranges_per_endpoint;
-        ranges_per_endpoint[leaving_replica_ip].emplace_back(range);
+        for (auto r : streaming_info.read_from) {
+            ranges_per_endpoint[host2ip(r.host)].emplace_back(range);
+        }
         streamer->add_rx_ranges(table.schema()->ks_name(), std::move(ranges_per_endpoint));
         co_await streamer->stream_async();
         co_return;
@@ -5044,6 +5068,7 @@ future<> storage_service::move_tablet(table_id table, dht::token token, locator:
         updates.push_back(canonical_mutation(replica::tablet_mutation_builder(guard.write_timestamp(), table)
             .set_new_replicas(last_token, locator::replace_replica(tinfo.replicas, src, dst))
             .set_stage(last_token, locator::tablet_transition_stage::allow_write_both_read_old)
+            .set_transition(last_token, locator::tablet_transition_kind::migration)
             .build()));
         updates.push_back(canonical_mutation(topology_mutation_builder(guard.write_timestamp())
             .set_transition_state(topology::transition_state::tablet_migration)
