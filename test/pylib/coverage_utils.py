@@ -758,7 +758,7 @@ async def html_fixup(*, html_dir: Path):
     files names that contain url illegal characters
     """
     html_files = [f for f in html_dir.rglob("*.html") if f.is_file()]
-    href_re = re.compile(r'href=".*\.html">')
+    href_re = re.compile(r'href=".*?\.html">')
     for html_file in html_files:
         with open(html_file, "r") as f:
             content = f.read()

@@ -555,7 +555,9 @@ class LcovRecord(metaclass = MakeLcovRouter):
         parts = line.split(":", maxsplit = 1)
         if len(parts) == 1:
             parts.append("")
-        return parts[0].strip(), [field.strip() for field in parts[1].split(",")]
+        type_str = parts[0].strip()
+        fields = [parts[1].strip()] if type_str == "SF" else [field.strip() for field in parts[1].split(",")]
+        return type_str, fields
 
     def add_line(self, line: str) -> bool:
         type_str, fields = self.get_type_and_fields(line)
