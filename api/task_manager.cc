@@ -7,13 +7,12 @@
  */
 
 #include <seastar/core/coroutine.hh>
+#include <seastar/http/exception.hh>
 
 #include "task_manager.hh"
+#include "api/api.hh"
 #include "api/api-doc/task_manager.json.hh"
 #include "db/system_keyspace.hh"
-#include "column_family.hh"
-#include "unimplemented.hh"
-#include "storage_service.hh"
 
 #include <utility>
 #include <boost/range/adaptors.hpp>

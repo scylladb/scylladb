@@ -8,7 +8,6 @@
 
 #include "api/api-doc/lsa.json.hh"
 #include "api/lsa.hh"
-#include "api/api.hh"
 
 #include <seastar/http/exception.hh>
 #include "utils/logalloc.hh"

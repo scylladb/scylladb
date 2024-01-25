@@ -8,10 +8,9 @@
 
 #pragma once
 
-#include <iostream>
-
 #include <seastar/core/sharded.hh>
-#include "api.hh"
+#include <seastar/json/json_elements.hh>
+#include "api/api_init.hh"
 #include "db/data_listeners.hh"
 
 namespace cql_transport { class controller; }

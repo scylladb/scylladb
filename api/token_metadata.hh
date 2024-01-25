@@ -9,7 +9,7 @@
 #pragma once
 
 #include <seastar/core/sharded.hh>
-#include "api.hh"
+#include "api/api_init.hh"
 
 namespace locator { class shared_token_metadata; }
 

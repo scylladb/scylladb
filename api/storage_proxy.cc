@@ -8,6 +8,7 @@
 
 #include "storage_proxy.hh"
 #include "service/storage_proxy.hh"
+#include "api/api.hh"
 #include "api/api-doc/storage_proxy.json.hh"
 #include "api/api-doc/utils.json.hh"
 #include "db/config.hh"

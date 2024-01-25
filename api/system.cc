@@ -6,21 +6,20 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include "api/api_init.hh"
 #include "api/api-doc/system.json.hh"
 #include "api/api-doc/metrics.json.hh"
+#include "replica/database.hh"
 
-#include "api/api.hh"
-
+#include <rapidjson/document.h>
 #include <seastar/core/reactor.hh>
 #include <seastar/core/metrics_api.hh>
 #include <seastar/core/relabel_config.hh>
 #include <seastar/http/exception.hh>
 #include <seastar/util/short_streams.hh>
 #include <seastar/http/short_streams.hh>
-#include "utils/rjson.hh"
 
 #include "log.hh"
-#include "replica/database.hh"
 
 extern logging::logger apilog;
 

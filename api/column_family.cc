@@ -7,6 +7,7 @@
  */
 
 #include "column_family.hh"
+#include "api/api.hh"
 #include "api/api-doc/column_family.json.hh"
 #include <vector>
 #include <seastar/http/exception.hh>

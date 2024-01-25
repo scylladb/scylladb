@@ -6,10 +6,10 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#include <algorithm>
 #include <vector>
 
 #include "hinted_handoff.hh"
+#include "api/api.hh"
 #include "api/api-doc/hinted_handoff.json.hh"
 
 #include "gms/inet_address.hh"

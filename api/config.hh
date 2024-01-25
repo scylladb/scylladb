@@ -8,7 +8,7 @@
 
 #pragma once
 
-#include "api.hh"
+#include "api/api_init.hh"
 #include <seastar/http/api_docs.hh>
 
 namespace api {
