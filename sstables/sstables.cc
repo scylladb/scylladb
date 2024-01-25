@@ -1629,16 +1629,17 @@ sstable::read_scylla_metadata() noexcept {
 }
 
 void
-sstable::write_scylla_metadata(shard_id shard, const dht::sharder& sharder, sstable_enabled_features features, struct run_identifier identifier,
+sstable::write_scylla_metadata(shard_id shard, sstable_enabled_features features, struct run_identifier identifier,
         std::optional<scylla_metadata::large_data_stats> ld_stats, sstring origin) {
     auto&& first_key = get_first_decorated_key();
     auto&& last_key = get_last_decorated_key();
 
-    auto sm = create_sharding_metadata(_schema, sharder, first_key, last_key, shard);
+    auto* sharder_opt = _schema->try_get_static_sharder();
+    auto sm = sharder_opt ? std::optional(create_sharding_metadata(_schema, *sharder_opt, first_key, last_key, shard)) : std::nullopt;
 
     // sstable write may fail to generate empty metadata if mutation source has only data from other shard.
     // see https://github.com/scylladb/scylla/issues/2932 for details on how it can happen.
-    if (sm.token_ranges.elements.empty()) {
+    if (sm && sm->token_ranges.elements.empty()) {
         throw std::runtime_error(format("Failed to generate sharding metadata for {}", get_filename()));
     }
 
@@ -1646,7 +1647,9 @@ sstable::write_scylla_metadata(shard_id shard, const dht::sharder& sharder, ssta
         _components->scylla_metadata.emplace();
     }
 
-    _components->scylla_metadata->data.set<scylla_metadata_type::Sharding>(std::move(sm));
+    if (sm) {
+        _components->scylla_metadata->data.set<scylla_metadata_type::Sharding>(std::move(*sm));
+    }
     _components->scylla_metadata->data.set<scylla_metadata_type::Features>(std::move(features));
     _components->scylla_metadata->data.set<scylla_metadata_type::RunIdentifier>(std::move(identifier));
     if (ld_stats) {

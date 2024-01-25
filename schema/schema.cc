@@ -151,13 +151,22 @@ const dht::i_partitioner& schema::get_partitioner() const {
     return _raw._partitioner.get();
 }
 
-const dht::sharder& schema::get_sharder() const {
+const dht::sharder* schema::try_get_static_sharder() const {
     auto t = maybe_table();
     if (t && !t->uses_static_sharding()) {
         // Use table()->get_effective_replication_map()->get_sharder() instead.
+        return nullptr;
+    }
+    return &_raw._sharder.get();
+}
+
+const dht::sharder& schema::get_sharder() const {
+    auto* s = try_get_static_sharder();
+    if (!s) {
+        // Use table()->get_effective_replication_map()->get_sharder() instead.
         on_internal_error(dblog, format("Attempted to obtain static sharder for table {}.{}", ks_name(), cf_name()));
     }
-    return _raw._sharder.get();
+    return *s;
 }
 
 replica::table* schema::maybe_table() const {

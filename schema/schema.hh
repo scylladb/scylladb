@@ -821,6 +821,10 @@ public:
     // To obtain a sharder which is valid for all kinds of tables, use table::get_effective_replication_map()->get_sharder()
     const dht::sharder& get_sharder() const;
 
+    // Returns a sharder for this table, but only if it is a static sharder (token->shard mappings
+    // don't change while the node is up)
+    const dht::sharder* try_get_static_sharder() const;
+
     // Returns a pointer to the table if the local database has a table which this object references by id().
     // The table pointer is not guaranteed to be stable, schema_ptr doesn't keep the table alive.
     replica::table* maybe_table() const;

@@ -39,7 +39,7 @@
 #include "readers/flat_mutation_reader_fwd.hh"
 #include "tracing/trace_state.hh"
 #include "utils/updateable_value.hh"
-#include "locator/abstract_replication_strategy.hh"
+#include "dht/decorated_key.hh"
 
 #include <seastar/util/optimized_optional.hh>
 
@@ -111,7 +111,6 @@ struct sstable_writer_config {
     run_id run_identifier = run_id::create_random_id();
     size_t summary_byte_cost;
     sstring origin;
-    locator::effective_replication_map_ptr erm;
 
 private:
     explicit sstable_writer_config() {}
@@ -642,7 +641,6 @@ private:
     future<> read_scylla_metadata() noexcept;
 
     void write_scylla_metadata(shard_id shard,
-                               const dht::sharder& sharder,
                                sstable_enabled_features features,
                                run_identifier identifier,
                                std::optional<scylla_metadata::large_data_stats> ld_stats,
