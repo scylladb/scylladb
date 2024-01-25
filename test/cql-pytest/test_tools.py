@@ -514,9 +514,9 @@ class TestScyllaSsstableSchemaLoadingBase:
         dump = list(dump.values())[0]
         assert dump == dump_reference
 
-    def check_fail(self, scylla_path, extra_args, sstable, error_msg=None):
+    def check_fail(self, scylla_path, extra_args, sstable, error_msg=None, cwd=None):
         common_args = [scylla_path, "sstable", "dump-data", "--logger-log-level", "scylla-sstable=debug:schema_loader=trace"]
-        res = subprocess.run(common_args + extra_args + [sstable], capture_output=True, text=True)
+        res = subprocess.run(common_args + extra_args + [sstable], capture_output=True, text=True, cwd=cwd, env={})
         print(res.stderr)
         if error_msg is None:
             error_msg = "Failed to autodetect and load schema, try again with --logger-log-level scylla-sstable=debug to learn more or provide the schema source manually"
@@ -746,10 +746,12 @@ class TestScyllaSsstableSchemaLoading(TestScyllaSsstableSchemaLoadingBase):
 
     def test_fail_schema_autodetect(self, scylla_path, system_scylla_local_sstable_prepared, temp_workdir):
         ext_sstable = self.copy_sstable_to_external_dir(system_scylla_local_sstable_prepared, temp_workdir)
+        # It is important to use a controlled workdir, so scylla-sstable doesn't accidentally pick up a scylla.yaml.
         self.check_fail(
                 scylla_path,
                 ["--keyspace", self.keyspace, "--table", self.table],
-                ext_sstable)
+                ext_sstable,
+                cwd=temp_workdir)
 
     def test_fail_nonexistent_keyspace(self, scylla_path, system_scylla_local_sstable_prepared, temp_workdir, scylla_home_dir):
         ext_sstable = self.copy_sstable_to_external_dir(system_scylla_local_sstable_prepared, temp_workdir)
