@@ -251,6 +251,10 @@ public:
     virtual size_t log2_storage_groups() const = 0;
     virtual size_t storage_group_id_for_token(dht::token) const noexcept = 0;
     virtual storage_group* storage_group_for_token(dht::token) const noexcept = 0;
+    // Select a compaction group from a given token.
+    virtual compaction_group& compaction_group_for_token(dht::token token) const noexcept = 0;
+    // Return compaction groups, present in this shard, that own a particular token range.
+    virtual utils::chunked_vector<compaction_group*> compaction_groups_for_token_range(dht::token_range tr) const = 0;
 };
 
 }

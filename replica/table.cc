@@ -567,6 +567,14 @@ public:
     storage_group* storage_group_for_token(dht::token token) const noexcept override {
         return _storage_groups.begin()->get();
     }
+    compaction_group& compaction_group_for_token(dht::token token) const noexcept override {
+        return _compaction_groups.front();
+    }
+    utils::chunked_vector<compaction_group*> compaction_groups_for_token_range(dht::token_range tr) const override {
+        utils::chunked_vector<compaction_group*> ret;
+        ret.push_back(&_compaction_groups.front());
+        return ret;
+    }
 };
 
 class tablet_storage_group_manager final : public storage_group_manager {
@@ -631,6 +639,32 @@ public:
     }
     storage_group* storage_group_for_token(dht::token token) const noexcept override {
         return _storage_groups[storage_group_of(token).first].get();
+    }
+    compaction_group& compaction_group_for_token(dht::token token) const noexcept override {
+        auto [idx, range_side] = storage_group_of(token);
+        auto& sg = *storage_groups()[idx];
+        return *sg.select_compaction_group(range_side);
+    }
+    utils::chunked_vector<compaction_group*> compaction_groups_for_token_range(dht::token_range tr) const override {
+        utils::chunked_vector<compaction_group*> ret;
+        auto cmp = dht::token_comparator();
+
+        size_t candidate_start = tr.start() ? storage_group_id_for_token(tr.start()->value()) : size_t(0);
+        size_t candidate_end = tr.end() ? storage_group_id_for_token(tr.end()->value()) : (storage_groups().size() - 1);
+
+        while (candidate_start <= candidate_end) {
+            auto& sg = storage_groups()[candidate_start++];
+            if (!sg) {
+                continue;
+            }
+            for (auto& cg : sg->compaction_groups()) {
+                if (cg && tr.overlaps(cg->token_range(), cmp)) {
+                    ret.push_back(cg);
+                }
+            }
+        }
+
+        return ret;
     }
 };
 
@@ -793,31 +827,11 @@ storage_group* table::storage_group_for_token(dht::token token) const noexcept {
 }
 
 compaction_group& table::compaction_group_for_token(dht::token token) const noexcept {
-    auto [idx, range_side] = storage_group_of(token);
-    auto& sg = *storage_groups()[idx];
-    return *sg.select_compaction_group(range_side);
+    return _sg_manager->compaction_group_for_token(token);
 }
 
 utils::chunked_vector<compaction_group*> table::compaction_groups_for_token_range(dht::token_range tr) const {
-    utils::chunked_vector<compaction_group*> ret;
-    auto cmp = dht::token_comparator();
-
-    size_t candidate_start = tr.start() ? storage_group_id_for_token(tr.start()->value()) : size_t(0);
-    size_t candidate_end = tr.end() ? storage_group_id_for_token(tr.end()->value()) : (storage_groups().size() - 1);
-
-    while (candidate_start <= candidate_end) {
-        auto& sg = storage_groups()[candidate_start++];
-        if (!sg) {
-            continue;
-        }
-        for (auto& cg : sg->compaction_groups()) {
-            if (cg && tr.overlaps(cg->token_range(), cmp)) {
-                ret.push_back(cg);
-            }
-        }
-    }
-
-    return ret;
+    return _sg_manager->compaction_groups_for_token_range(tr);
 }
 
 compaction_group& table::compaction_group_for_key(partition_key_view key, const schema_ptr& s) const noexcept {
