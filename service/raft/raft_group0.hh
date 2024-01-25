@@ -147,6 +147,15 @@ public:
     // Call before destroying the object.
     future<> abort();
 
+    // Run the discovery algorithm.
+    //
+    // Discovers an existing group 0 cluster or elects a server (called a 'leader')
+    // responsible for creating a new group 0 cluster if one doesn't exist
+    // (in particular, we may become that leader).
+    //
+    // See 'raft-in-scylla.md', 'Establishing group 0 in a fresh cluster'.
+    future<group0_info> discover_group0(const std::vector<gms::inet_address>& seeds, cql3::query_processor& qp);
+
     // Call during the startup procedure, after gossiping has started.
     //
     // If we're performing the replace operation, pass the IP and Raft ID of the replaced node
@@ -280,15 +289,6 @@ private:
 
     raft_server_for_group create_server_for_group0(raft::group_id id, raft::server_id my_id, service::storage_service& ss, cql3::query_processor& qp,
         service::migration_manager& mm, bool topology_change_enabled);
-
-    // Run the discovery algorithm.
-    //
-    // Discovers an existing group 0 cluster or elects a server (called a 'leader')
-    // responsible for creating a new group 0 cluster if one doesn't exist
-    // (in particular, we may become that leader).
-    //
-    // See 'raft-in-scylla.md', 'Establishing group 0 in a fresh cluster'.
-    future<group0_info> discover_group0(const std::vector<gms::inet_address>& seeds, cql3::query_processor& qp);
 
     // Creates or joins group 0 and switches schema/topology changes to use group 0.
     // Can be restarted after a crash. Does nothing if the procedure was already finished once.
