@@ -33,9 +33,9 @@ public:
     using recursive = seastar::bool_class<struct recursive_tag>;
 
     directories(const ::db::config& cfg);
-    seastar::future<> create_and_verify(set dir_set);
     static seastar::future<> verify_owner_and_mode(fs::path path, recursive r = recursive::yes);
 
+    seastar::future<> create_and_verify_sharded_directory(const seastar::sstring& dir_path);
     seastar::future<> create_and_verify_directories();
     seastar::sstring get_work_dir() const;
     seastar::sstring get_commitlog_dir() const;
@@ -46,6 +46,7 @@ public:
     std::vector<seastar::sstring> get_data_file_dirs() const;
 
 private:
+    seastar::future<> create_and_verify(set dir_set);
     static seastar::future<> do_verify_owner_and_mode(fs::path path, recursive, int level);
 
     void override_empty_paths();
@@ -61,21 +62,6 @@ private:
     fs::path _view_hints_dir{};
     fs::path _saved_caches_dir{};
     std::vector<fs::path> _data_file_dirs{};
-};
-
-class directories::set {
-public:
-    void add(fs::path path);
-    void add(seastar::sstring path);
-    void add(std::vector<seastar::sstring> path);
-    void add_sharded(seastar::sstring path);
-
-    const std::set<fs::path> get_paths() const {
-        return _paths;
-    }
-
-private:
-    std::set<fs::path> _paths;
 };
 
 } // namespace utils

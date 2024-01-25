@@ -74,27 +74,37 @@ static future<file_lock> touch_and_lock(fs::path path) {
     });
 }
 
-void directories::set::add(fs::path path) {
-    _paths.insert(path);
-}
-
-void directories::set::add(sstring path) {
-    add(fs::path(path));
-}
-
-void directories::set::add(std::vector<sstring> paths) {
-    for (auto& path : paths) {
-        add(path);
+class directories::set {
+public:
+    void add(fs::path path) {
+        _paths.insert(std::move(path));
     }
-}
 
-void directories::set::add_sharded(sstring p) {
-    fs::path path(p);
-
-    for (unsigned i = 0; i < smp::count; i++) {
-        add(path / seastar::to_sstring(i).c_str());
+    void add(const seastar::sstring& path) {
+        add(fs::path(path));
     }
-}
+
+    void add(const std::vector<seastar::sstring>& paths) {
+        for (auto& path : paths) {
+            add(path);
+        }
+    }
+
+    void add_sharded(const seastar::sstring& p) {
+        fs::path path(p);
+
+        for (unsigned i = 0; i < smp::count; i++) {
+            add(path / seastar::to_sstring(i).c_str());
+        }
+    }
+
+    std::set<fs::path> get_paths() const {
+        return _paths;
+    }
+
+private:
+    std::set<fs::path> _paths;
+};
 
 directories::directories(const ::db::config& cfg)
         : _developer_mode{cfg.developer_mode()}
@@ -206,6 +216,13 @@ future<> directories::create_and_verify_directories() {
     dir_set.add(get_data_file_dirs());
     dir_set.add(get_commitlog_dir());
     dir_set.add(get_schema_commitlog_dir());
+
+    return create_and_verify(std::move(dir_set));
+}
+
+future<> directories::create_and_verify_sharded_directory(const sstring& dir_path) {
+    utils::directories::set dir_set;
+    dir_set.add_sharded(dir_path);
 
     return create_and_verify(std::move(dir_set));
 }
