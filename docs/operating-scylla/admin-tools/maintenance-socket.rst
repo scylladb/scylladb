@@ -33,3 +33,10 @@ With python driver
                       # Driver tries to connect to other nodes in the cluster, so we need to filter them out.
                       load_balancing_policy=WhiteListRoundRobinPolicy([socket]))
     session = cluster.connect()
+
+With :doc:`CQLSh</cql/cqlsh/>`
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+.. code-block:: console
+
+    cqlsh <node's workdir>/cql.m
