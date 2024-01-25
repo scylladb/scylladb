@@ -27,31 +27,51 @@ def pytest_addoption(parser):
                      " with --nodetool=cassandra, this should be the nodetool binary")
     parser.addoption('--jmx-path', action='store', default=None,
                      help="Path to the jmx binary, only used with --nodetool=cassandra")
+    parser.addoption('--run-within-unshare', action='store_true',
+                     help="Setup the 'lo' network if launched with unshare(1)")
 
 
 @pytest.fixture(scope="session")
-def rest_api_mock_server():
-    ip = f"127.{random.randint(0, 255)}.{random.randint(0, 255)}.{random.randint(0, 255)}"
-    port = random.randint(10000, 65535)
+def maybe_setup_loopback_network(request):
+    # unshare(1) -rn drops us in a new network namespace in which the "lo" is
+    # not up yet, so let's set it up first.
+    if request.config.getoption('--run-within-unshare'):
+        try:
+            args = "ip link set lo up".split()
+            subprocess.run(args, check=True)
+        except FileNotFoundError:
+            args = "/sbin/ifconfig lo up".split()
+            subprocess.run(args, check=True)
+    yield
 
-    server_process = subprocess.Popen([
-        sys.executable,
-        os.path.join(os.path.dirname(__file__), "rest_api_mock.py"),
-        ip,
-        str(port)])
 
+@pytest.fixture(scope="session")
+def rest_api_mock_server(request, maybe_setup_loopback_network):
+    ip = '127.0.0.1'
+    port = 12345
     server = (ip, port)
 
-    i = 0
-    while True:
+    server_process = subprocess.Popen([sys.executable,
+                                       os.path.join(os.path.dirname(__file__), "rest_api_mock.py"),
+                                       ip,
+                                       str(port)])
+    # wait 5 seconds for the expected requests
+    timeout = 5
+    interval = 0.1
+    for _ in range(int(timeout / interval)):
+        returncode = server_process.poll()
+        if returncode is not None:
+            # process terminated
+            raise subprocess.CalledProcessError(returncode, server_process.args)
         try:
             rest_api_mock.get_expected_requests(server)
             break
         except requests.exceptions.ConnectionError:
-            if i == 50:  # 5 seconds
-                raise
-            time.sleep(0.1)
-            i += 1
+            time.sleep(interval)
+    else:
+        server_process.terminate()
+        server_process.wait()
+        raise subprocess.TimeoutExpired(server_process.args, timeout)
 
     try:
         yield server
