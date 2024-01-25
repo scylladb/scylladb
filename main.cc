@@ -974,10 +974,16 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             dirs.emplace(cfg->developer_mode());
             dirs->create_and_verify(std::move(dir_set)).get();
 
-            // do not recursively check data dir;
+            // The data directories are handled separately to prevent memory
+            // fragmentation in the dentry/inode cache. The top-level
+            // directories are verified first, and then the contents are
+            // verified in such a way that the files that will be closed
+            // immediately are located separately from those that will remain
+            // open for a longer duration in the dentry/inode cache.
             utils::directories::set data_dir_set;
             data_dir_set.add(cfg->data_file_directories());
-            dirs->create_and_verify(std::move(data_dir_set), utils::directories::recursive::no).get();
+            dirs->create_and_verify(data_dir_set, utils::directories::recursive::no).get();
+            utils::directories::verify_owner_and_mode_of_data_dir(std::move(data_dir_set)).get();
 
             auto hints_dir_initializer = db::hints::directory_initializer::make(*dirs, cfg->hints_directory()).get();
             auto view_hints_dir_initializer = db::hints::directory_initializer::make(*dirs, cfg->view_hints_directory()).get();

@@ -12,6 +12,8 @@
 #include "init.hh"
 #include "supervisor.hh"
 #include "directories.hh"
+#include "sstables/exceptions.hh"
+#include "sstables/open_info.hh"
 #include "utils/disk-error-handler.hh"
 #include "utils/fmt-compat.hh"
 #include "utils/lister.hh"
@@ -106,7 +108,9 @@ void verification_error(fs::path path, const char* fstr, Args&&... args) {
 // Verify that all files and directories are owned by current uid
 // and that files can be read and directories can be read, written, and looked up (execute)
 // No other file types may exist.
-future<> directories::do_verify_owner_and_mode(fs::path path, recursive recurse, int level) {
+// If a 'do_verify_subpath' function is provided, only the subpaths
+// that return true when called with that function will be verified.
+future<> directories::do_verify_owner_and_mode(fs::path path, recursive recurse, int level, std::function<bool(const fs::path&)> do_verify_subpath) {
     auto sd = co_await file_stat(path.string(), follow_symlink::no);
     // Under docker, we run with euid 0 and there is no reasonable way to enforce that the
     // in-container uid will have the same uid as files mounted from outside the container. So
@@ -131,8 +135,11 @@ future<> directories::do_verify_owner_and_mode(fs::path path, recursive recurse,
         if (level && !recurse) {
             co_return;
         }
-        co_await lister::scan_dir(path, {}, [recurse, level = level + 1] (fs::path dir, directory_entry de) -> future<> {
-            co_await do_verify_owner_and_mode(dir / de.name, recurse, level);
+        co_await lister::scan_dir(path, {}, [recurse, level = level + 1, &do_verify_subpath] (fs::path dir, directory_entry de) -> future<> {
+            auto subpath = dir / de.name;
+            if (!do_verify_subpath || do_verify_subpath(subpath)) {
+                co_await do_verify_owner_and_mode(std::move(subpath), recurse, level, do_verify_subpath);
+            }
         });
         break;
     }
@@ -143,6 +150,33 @@ future<> directories::do_verify_owner_and_mode(fs::path path, recursive recurse,
 
 future<> directories::verify_owner_and_mode(fs::path path, recursive recursive) {
     return do_verify_owner_and_mode(std::move(path), recursive, 0);
+}
+
+// Verify the data directory contents in a specific order so as to prevent
+// memory fragmentation in the inode/dentry cache. All the data and index files,
+// which will be held open for a longer duration are verified first and the
+// other files that will be closed immediately are verified later to ensure
+// their separation in the dentry/inode cache.
+future<> directories::verify_owner_and_mode_of_data_dir(directories::set dir_set) {
+    // verify data and index files in the first iteration and the other files in the second iteration.
+    for (auto verify_data_and_index_files : { true, false }) {
+        co_await coroutine::parallel_for_each(dir_set.get_paths(), [verify_data_and_index_files] (const auto &path) {
+            return do_verify_owner_and_mode(std::move(path), recursive::yes, 0, [verify_data_and_index_files] (const fs::path &path) {
+                component_type path_component_type;
+                try {
+                    // use parse_path to deduce the component type as using system calls
+                    // like stat/lstat will load the inode/dentry into the cache.
+                    auto descriptor_tuple = sstables::parse_path(path);
+                    path_component_type = std::get<0>(descriptor_tuple).component;
+                } catch (sstables::malformed_sstable_exception) {
+                    // path is not a SSTable component - do not filter it out
+                    return true;
+                }
+                auto data_or_index_file = (path_component_type == component_type::Data || path_component_type == component_type::Index);
+                return verify_data_and_index_files ? data_or_index_file : !data_or_index_file;
+            });
+        });
+    }
 }
 
 } // namespace utils
