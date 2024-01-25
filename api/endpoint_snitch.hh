@@ -8,7 +8,7 @@
 
 #pragma once
 
-#include "api.hh"
+#include "api/api_init.hh"
 
 namespace locator {
 class snitch_ptr;

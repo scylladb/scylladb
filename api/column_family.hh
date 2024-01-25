@@ -8,11 +8,11 @@
 
 #pragma once
 
-#include "api.hh"
-#include "api/api-doc/column_family.json.hh"
 #include "replica/database.hh"
 #include <seastar/core/future-util.hh>
+#include <seastar/json/json_elements.hh>
 #include <any>
+#include "api/api_init.hh"
 
 namespace db {
 class system_keyspace;

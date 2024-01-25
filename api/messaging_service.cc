@@ -11,8 +11,7 @@
 #include <seastar/rpc/rpc_types.hh>
 #include "api/api-doc/messaging_service.json.hh"
 #include "api/api-doc/error_injection.json.hh"
-#include <iostream>
-#include <sstream>
+#include "api/api.hh"
 
 using namespace seastar::httpd;
 using namespace httpd::messaging_service_json;

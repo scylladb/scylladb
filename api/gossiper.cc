@@ -12,6 +12,7 @@
 #include "api/api-doc/gossiper.json.hh"
 #include "gms/endpoint_state.hh"
 #include "gms/gossiper.hh"
+#include "api/api.hh"
 
 namespace api {
 using namespace seastar::httpd;

@@ -9,7 +9,7 @@
 #pragma once
 
 #include <seastar/core/sharded.hh>
-#include "api.hh"
+#include "api/api_init.hh"
 #include "db/config.hh"
 
 namespace tasks {

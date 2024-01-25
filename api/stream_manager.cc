@@ -9,8 +9,10 @@
 #include "stream_manager.hh"
 #include "streaming/stream_manager.hh"
 #include "streaming/stream_result_future.hh"
+#include "api/api.hh"
 #include "api/api-doc/stream_manager.json.hh"
 #include <vector>
+#include <rapidjson/document.h>
 #include "gms/gossiper.hh"
 
 namespace api {

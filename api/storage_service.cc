@@ -7,6 +7,8 @@
  */
 
 #include "storage_service.hh"
+#include "api/api.hh"
+#include "api/api-doc/column_family.json.hh"
 #include "api/api-doc/storage_service.json.hh"
 #include "api/api-doc/storage_proxy.json.hh"
 #include "api/scrub_status.hh"

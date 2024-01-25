@@ -7,7 +7,6 @@
  */
 
 #include "locator/snitch_base.hh"
-#include "locator/production_snitch_base.hh"
 #include "endpoint_snitch.hh"
 #include "api/api-doc/endpoint_snitch_info.json.hh"
 #include "api/api-doc/storage_service.json.hh"

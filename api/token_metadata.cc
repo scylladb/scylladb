@@ -6,7 +6,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#include "storage_service.hh"
+#include "api/api.hh"
 #include "api/api-doc/storage_service.json.hh"
 #include "api/api-doc/endpoint_snitch_info.json.hh"
 #include "locator/token_metadata.hh"

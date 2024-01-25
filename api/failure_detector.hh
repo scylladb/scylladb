@@ -8,7 +8,7 @@
 
 #pragma once
 
-#include "api.hh"
+#include "api_init.hh"
 
 namespace gms {
 

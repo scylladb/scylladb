@@ -11,6 +11,7 @@
 #include "db/config.hh"
 #include <sstream>
 #include <boost/algorithm/string/replace.hpp>
+#include <seastar/http/exception.hh>
 
 namespace api {
 using namespace seastar::httpd;

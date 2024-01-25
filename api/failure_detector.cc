@@ -7,6 +7,7 @@
  */
 
 #include "failure_detector.hh"
+#include "api/api.hh"
 #include "api/api-doc/failure_detector.json.hh"
 #include "gms/application_state.hh"
 #include "gms/gossiper.hh"
