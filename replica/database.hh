@@ -448,11 +448,9 @@ private:
 
     compaction_manager& _compaction_manager;
     sstables::compaction_strategy _compaction_strategy;
+    // The storage_group_manager manages either a single storage_group for vnodes or per-table storage_group for tablets.
+    // Must be initialized after _compaction_groups, as each storage_group enlists its compaction groups in that list.
     std::unique_ptr<storage_group_manager> _sg_manager;
-    // The compaction group list is only a helper for accessing the groups managed by the storage groups.
-    // The list entries are unlinked automatically when the storage group, they belong to, is removed.
-    mutable compaction_group_list _compaction_groups;
-    storage_group_vector _storage_groups;
     // Compound SSTable set for all the compaction groups, which is useful for operations spanning all of them.
     lw_shared_ptr<sstables::sstable_set> _sstables;
     // Control background fibers waiting for sstables to be deleted
@@ -615,6 +613,9 @@ private:
     compaction_group& compaction_group_for_sstable(const sstables::shared_sstable& sst) const noexcept;
     // Returns a list of all compaction groups.
     compaction_group_list& compaction_groups() const noexcept;
+    // Returns a list of all storage groups.
+    const storage_group_vector& storage_groups() const noexcept;
+    storage_group_vector& storage_groups() noexcept;
     // Safely iterate through compaction groups, while performing async operations on them.
     future<> parallel_foreach_compaction_group(std::function<future<>(compaction_group&)> action);
 
