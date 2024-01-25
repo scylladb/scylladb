@@ -38,8 +38,8 @@ namespace sstables {
 // cannot define these classes in an anonymous namespace, as we need to
 // declare these storage classes as "friend" of class sstable
 class filesystem_storage final : public sstables::storage {
-    sstring _dir;
-    std::optional<sstring> _temp_dir; // Valid while the sstable is being created, until sealed
+    std::filesystem::path _dir;
+    std::optional<std::filesystem::path> _temp_dir; // Valid while the sstable is being created, until sealed
 
 private:
     using mark_for_removal = bool_class<class mark_for_removal_tag>;
@@ -54,12 +54,12 @@ private:
     future<> rename_new_file(const sstable& sst, sstring from_name, sstring to_name) const;
 
     virtual void change_dir_for_test(sstring nd) override {
-        _dir = std::move(nd);
+        _dir = nd;
     }
 
 public:
     explicit filesystem_storage(sstring dir, sstable_state state)
-        : _dir(make_path(dir, state).native())
+        : _dir(make_path(dir, state))
     {}
 
     virtual future<> seal(const sstable& sst) override;
@@ -76,7 +76,7 @@ public:
     virtual future<> atomic_delete_complete(atomic_delete_context ctx) const override;
     virtual future<> remove_by_registry_entry(entry_descriptor desc) override;
 
-    virtual sstring prefix() const override { return _dir; }
+    virtual sstring prefix() const override { return _dir.native(); }
 };
 
 future<data_sink> filesystem_storage::make_data_or_index_sink(sstable& sst, component_type type) {
@@ -113,13 +113,13 @@ future<file> filesystem_storage::open_component(const sstable& sst, component_ty
     auto create_flags = open_flags::create | open_flags::exclusive;
     auto readonly = (flags & create_flags) != create_flags;
     auto tgt_dir = !readonly && _temp_dir ? *_temp_dir : _dir;
-    auto name = tgt_dir + "/" + sst.component_basename(type);
+    auto name = tgt_dir / sst.component_basename(type);
 
-    auto f = open_sstable_component_file_non_checked(name, flags, options, check_integrity);
+    auto f = open_sstable_component_file_non_checked(name.native(), flags, options, check_integrity);
 
     if (!readonly) {
         f = with_file_close_on_failure(std::move(f), [this, &sst, type, name = std::move(name)] (file fd) mutable {
-            return rename_new_file(sst, name, sst.filename(type)).then([fd = std::move(fd)] () mutable {
+            return rename_new_file(sst, name.native(), sst.filename(type)).then([fd = std::move(fd)] () mutable {
                 return make_ready_future<file>(std::move(fd));
             });
         });
@@ -158,14 +158,14 @@ void filesystem_storage::open(sstable& sst) {
 
     // Flushing parent directory to guarantee that temporary TOC file reached
     // the disk.
-    sst.sstable_write_io_check(sync_directory, _dir).get();
+    sst.sstable_write_io_check(sync_directory, _dir.native()).get();
 }
 
 future<> filesystem_storage::seal(const sstable& sst) {
     // SSTable sealing is about renaming temporary TOC file after guaranteeing
     // that each component reached the disk safely.
     co_await remove_temp_dir();
-    auto dir_f = co_await open_checked_directory(sst._write_error_handler, _dir);
+    auto dir_f = co_await open_checked_directory(sst._write_error_handler, _dir.native());
     // Guarantee that every component of this sstable reached the disk.
     co_await dir_f.flush();
     // Rename TOC because it's no longer temporary.
@@ -180,9 +180,9 @@ future<> filesystem_storage::touch_temp_dir(const sstable& sst) {
     if (_temp_dir) {
         co_return;
     }
-    auto tmp = fmt::format("{}/{}{}", _dir, sst._generation, tempdir_extension);
+    auto tmp = _dir / fmt::format("{}{}", sst._generation, tempdir_extension);
     sstlog.debug("Touching temp_dir={}", tmp);
-    co_await sst.sstable_touch_directory_io_check(tmp);
+    co_await sst.sstable_touch_directory_io_check(tmp.native());
     _temp_dir = std::move(tmp);
 }
 
@@ -192,7 +192,7 @@ future<> filesystem_storage::remove_temp_dir() {
     }
     sstlog.debug("Removing temp_dir={}", _temp_dir);
     try {
-        co_await remove_file(*_temp_dir);
+        co_await remove_file(_temp_dir->native());
     } catch (...) {
         sstlog.error("Could not remove temporary directory: {}", std::current_exception());
         throw;
@@ -240,7 +240,7 @@ future<> filesystem_storage::check_create_links_replay(const sstable& sst, const
         const std::vector<std::pair<sstables::component_type, sstring>>& comps) const {
     return parallel_for_each(comps, [this, &sst, &dst_dir, dst_gen] (const auto& p) mutable {
         auto comp = p.second;
-        auto src = sstable::filename(_dir, sst._schema->ks_name(), sst._schema->cf_name(), sst._version, sst._generation, sst._format, comp);
+        auto src = sstable::filename(_dir.native(), sst._schema->ks_name(), sst._schema->cf_name(), sst._version, sst._generation, sst._format, comp);
         auto dst = sstable::filename(dst_dir, sst._schema->ks_name(), sst._schema->cf_name(), sst._version, dst_gen, sst._format, comp);
         return do_with(std::move(src), std::move(dst), [this] (const sstring& src, const sstring& dst) mutable {
             return file_exists(dst).then([&, this] (bool exists) mutable {
@@ -257,7 +257,7 @@ future<> filesystem_storage::check_create_links_replay(const sstable& sst, const
                     if (!same) {
                         auto msg = format("Error while linking SSTable: {} to {}: File exists", src, dst);
                         sstlog.error("{}", msg);
-                        return make_exception_future<>(malformed_sstable_exception(msg, _dir));
+                        return make_exception_future<>(malformed_sstable_exception(msg, _dir.native()));
                     }
                     return make_ready_future<>();
                 });
@@ -314,7 +314,7 @@ future<> filesystem_storage::create_links_common(const sstable& sst, sstring dst
     co_await sst.sstable_write_io_check(idempotent_link_file, sst.filename(component_type::TOC), std::move(dst));
     co_await sst.sstable_write_io_check(sync_directory, dst_dir);
     co_await parallel_for_each(comps, [this, &sst, &dst_dir, generation] (auto p) {
-        auto src = sstable::filename(_dir, sst._schema->ks_name(), sst._schema->cf_name(), sst._version, sst._generation, sst._format, p.second);
+        auto src = sstable::filename(_dir.native(), sst._schema->ks_name(), sst._schema->cf_name(), sst._version, sst._generation, sst._format, p.second);
         auto dst = sstable::filename(dst_dir, sst._schema->ks_name(), sst._schema->cf_name(), sst._version, generation, sst._format, p.second);
         return sst.sstable_write_io_check(idempotent_link_file, std::move(src), std::move(dst));
     });
@@ -323,9 +323,9 @@ future<> filesystem_storage::create_links_common(const sstable& sst, sstring dst
     if (mark_for_removal) {
         // Now that the source sstable is linked to new_dir, mark the source links for
         // deletion by leaving a TemporaryTOC file in the source directory.
-        auto src_temp_toc = sstable::filename(_dir, sst._schema->ks_name(), sst._schema->cf_name(), sst._version, sst._generation, sst._format, component_type::TemporaryTOC);
+        auto src_temp_toc = sstable::filename(_dir.native(), sst._schema->ks_name(), sst._schema->cf_name(), sst._version, sst._generation, sst._format, component_type::TemporaryTOC);
         co_await sst.sstable_write_io_check(rename_file, std::move(dst_temp_toc), std::move(src_temp_toc));
-        co_await sst.sstable_write_io_check(sync_directory, _dir);
+        co_await sst.sstable_write_io_check(sync_directory, _dir.native());
     } else {
         // Now that the source sstable is linked to dir, remove
         // the TemporaryTOC file at the destination.
@@ -341,7 +341,7 @@ future<> filesystem_storage::create_links(const sstable& sst, const sstring& dir
 
 future<> filesystem_storage::snapshot(const sstable& sst, sstring dir, absolute_path abs) const {
     if (!abs) {
-        dir = _dir + "/" + dir + "/";
+        dir = (_dir / dir).native();
     }
     co_await sst.sstable_touch_directory_io_check(dir);
     co_await create_links(sst, dir);
@@ -349,7 +349,7 @@ future<> filesystem_storage::snapshot(const sstable& sst, sstring dir, absolute_
 
 future<> filesystem_storage::move(const sstable& sst, sstring new_dir, generation_type new_generation, delayed_commit_changes* delay_commit) {
     co_await touch_directory(new_dir);
-    sstring old_dir = _dir;
+    sstring old_dir = _dir.native();
     sstlog.debug("Moving {} old_generation={} to {} new_generation={} do_sync_dirs={}",
             sst.get_filename(), sst._generation, new_dir, new_generation, delay_commit == nullptr);
     co_await create_links_common(sst, new_dir, new_generation, mark_for_removal::yes);
@@ -448,7 +448,7 @@ future<> filesystem_storage::wipe(const sstable& sst, sync_dir sync) noexcept {
 
     if (_temp_dir) {
         try {
-            co_await recursive_remove_directory(fs::path(*_temp_dir));
+            co_await recursive_remove_directory(*_temp_dir);
             _temp_dir.reset();
         } catch (...) {
             sstlog.warn("Exception when deleting temporary sstable directory {}: {}", *_temp_dir, std::current_exception());
