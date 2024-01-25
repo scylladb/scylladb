@@ -578,6 +578,7 @@ static constexpr unsigned do_get_rpc_client_idx(messaging_verb verb) {
     case messaging_verb::RAFT_TOPOLOGY_CMD:
     case messaging_verb::JOIN_NODE_REQUEST:
     case messaging_verb::JOIN_NODE_RESPONSE:
+    case messaging_verb::JOIN_NODE_QUERY:
         // See comment above `TOPOLOGY_INDEPENDENT_IDX`.
         // DO NOT put any 'hot' (e.g. data path) verbs in this group,
         // only verbs which are 'rare' and 'cheap'.

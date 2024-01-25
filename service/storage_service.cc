@@ -5778,6 +5778,19 @@ void storage_service::init_messaging_service(bool raft_topology_change_enabled) 
                 co_return co_await ss.join_node_response_handler(std::move(params));
             });
         });
+        ser::join_node_rpc_verbs::register_join_node_query(&_messaging.local(), [handle_raft_rpc] (raft::server_id dst_id, service::join_node_query_params) {
+            return handle_raft_rpc(dst_id, [] (auto& ss) -> future<join_node_query_result> {
+                if (!ss.legacy_topology_change_enabled() && !ss.raft_topology_change_enabled()) {
+                    throw std::runtime_error("The cluster is upgrading to raft topology. Nodes cannot join at this time.");
+                }
+                auto result = join_node_query_result{
+                    .topo_mode = ss.raft_topology_change_enabled()
+                            ? join_node_query_result::topology_mode::raft
+                            : join_node_query_result::topology_mode::legacy,
+                };
+                return make_ready_future<join_node_query_result>(std::move(result));
+            });
+        });
     }
 }
 

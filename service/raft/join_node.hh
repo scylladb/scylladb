@@ -14,6 +14,20 @@
 
 namespace service {
 
+struct join_node_query_params {};
+
+struct join_node_query_result {
+    enum class topology_mode : uint8_t {
+        // The cluster uses legacy, gossiper-based topology operations
+        legacy = 0,
+
+        // The cluster uses raft-based topology operations
+        raft = 1,
+    };
+
+    topology_mode topo_mode;
+};
+
 struct join_node_request_params {
     raft::server_id host_id;
     std::optional<raft::server_id> replaced_id;
