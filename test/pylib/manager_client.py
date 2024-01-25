@@ -326,10 +326,12 @@ class ManagerClient():
                                    timeout=ScyllaServer.TOPOLOGY_TIMEOUT)
         self._driver_update()
 
-    async def rebuild_node(self, server_id: ServerNum) -> None:
+    async def rebuild_node(self, server_id: ServerNum,
+                           expected_error: str | None = None) -> None:
         """Tell a node to rebuild with Scylla REST API"""
         logger.debug("ManagerClient rebuild %s", server_id)
-        await self.client.put_json(f"/cluster/rebuild-node/{server_id}",
+        data = {"expected_error": expected_error}
+        await self.client.put_json(f"/cluster/rebuild-node/{server_id}", data,
                                    timeout=ScyllaServer.TOPOLOGY_TIMEOUT)
         self._driver_update()
 
