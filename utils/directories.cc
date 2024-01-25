@@ -77,15 +77,15 @@ directories::directories(bool developer_mode)
         : _developer_mode(developer_mode)
 { }
 
-future<> directories::create_and_verify(directories::set dir_set) {
+future<> directories::create_and_verify(directories::set dir_set, recursive recursive) {
     std::vector<file_lock> locks;
     locks.reserve(dir_set.get_paths().size());
-    co_await coroutine::parallel_for_each(dir_set.get_paths(), [this, &locks] (fs::path path) -> future<> {
+    co_await coroutine::parallel_for_each(dir_set.get_paths(), [this, &locks, recursive] (fs::path path) -> future<> {
         file_lock lock = co_await touch_and_lock(path);
         locks.emplace_back(std::move(lock));
         co_await disk_sanity(path, _developer_mode);
         try {
-            co_await directories::verify_owner_and_mode(path);
+            co_await directories::verify_owner_and_mode(path, recursive);
         } catch (...) {
             std::exception_ptr ep = std::current_exception();
             startlog.error("Failed owner and mode verification: {}", ep);

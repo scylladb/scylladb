@@ -969,11 +969,15 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             supervisor::notify("creating and verifying directories");
             utils::directories::set dir_set;
-            dir_set.add(cfg->data_file_directories());
             dir_set.add(cfg->commitlog_directory());
             dir_set.add(cfg->schema_commitlog_directory());
             dirs.emplace(cfg->developer_mode());
             dirs->create_and_verify(std::move(dir_set)).get();
+
+            // do not recursively check data dir;
+            utils::directories::set data_dir_set;
+            data_dir_set.add(cfg->data_file_directories());
+            dirs->create_and_verify(std::move(data_dir_set), utils::directories::recursive::no).get();
 
             auto hints_dir_initializer = db::hints::directory_initializer::make(*dirs, cfg->hints_directory()).get();
             auto view_hints_dir_initializer = db::hints::directory_initializer::make(*dirs, cfg->view_hints_directory()).get();
