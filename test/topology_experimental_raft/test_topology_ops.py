@@ -75,8 +75,7 @@ async def test_topology_ops(request, manager: ManagerClient):
 async def check_node_log_for_failed_mutations(manager: ManagerClient, server: ServerInfo):
     logger.info(f"Checking that node {server} had no failed mutations")
     log = await manager.server_open_log(server.server_id)
-    occurrences = await log.grep(expr="Failed to apply mutation from", \
-                                 filter_expr="replica::stale_topology_exception") # Disabled due to #15804
+    occurrences = await log.grep(expr="Failed to apply mutation from")
     assert len(occurrences) == 0
 
 

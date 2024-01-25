@@ -2641,6 +2641,13 @@ future<service::topology> system_keyspace::load_topology_state() {
             map = &ret.new_nodes;
         } else {
             map = &ret.transition_nodes;
+            // Currently, at most one node at a time can be in transitioning state.
+            if (!map->empty()) {
+                const auto& [other_id, other_rs] = *map->begin();
+                on_fatal_internal_error(slogger, format(
+                    "load_topology_state: found two nodes in transitioning state: {} in {} state and {} in {} state",
+                    other_id, other_rs.state, host_id, nstate));
+            }
             // Bootstrapping and replacing nodes don't have tokens at first,
             // they are inserted only at some point during bootstrap/replace
             if (!ring_slice
