@@ -255,6 +255,8 @@ public:
     virtual compaction_group& compaction_group_for_token(dht::token token) const noexcept = 0;
     // Return compaction groups, present in this shard, that own a particular token range.
     virtual utils::chunked_vector<compaction_group*> compaction_groups_for_token_range(dht::token_range tr) const = 0;
+    // Safely iterate through compaction groups, while performing async operations on them.
+    virtual future<> parallel_foreach_compaction_group(std::function<future<>(compaction_group&)> action) = 0;
 };
 
 }
