@@ -55,10 +55,12 @@ packages=(
     "tools/python3/build/debian/$product-python3_$version-$release-1_$arch.deb"
 )
 
+
 bcp() { buildah copy "$container" "$@"; }
 run() { buildah run "$container" "$@"; }
 bconfig() { buildah config "$@" "$container"; }
 
+echo "!"
 
 bcp "${packages[@]}" packages/
 
