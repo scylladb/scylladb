@@ -100,7 +100,7 @@ sstring simple_date_to_string(const uint32_t days_count) {
     date::year_month_day ymd{date::local_days{days}};
     std::ostringstream str;
     str << ymd;
-    return str.str();
+    return std::move(str).str();
 }
 
 sstring time_to_string(const int64_t nanoseconds_count) {
@@ -1178,14 +1178,14 @@ static sstring map_to_string(const std::vector<std::pair<data_value, data_value>
         const auto& v = p.second;
         out << "{" << k.type()->to_string_impl(k) << " : ";
         out << v.type()->to_string_impl(v) << "}";
-        return out.str();
+        return std::move(out).str();
     }), ", "));
 
     if (include_frozen_type) {
         out << ")";
     }
 
-    return out.str();
+    return std::move(out).str();
 }
 
 bytes
@@ -2839,7 +2839,7 @@ static sstring tuple_to_string(const tuple_type_impl &t, const tuple_type_impl::
         }
     }
 
-    return out.str();
+    return std::move(out).str();
 }
 
 template <typename N, typename A, typename F>
@@ -3234,7 +3234,7 @@ user_type_impl::make_name(sstring keyspace,
     if (!is_multi_cell) {
         os << ")";
     }
-    return os.str();
+    return std::move(os).str();
 }
 
 static std::optional<data_type> update_user_type_aux(
@@ -3564,7 +3564,7 @@ sstring data_value::to_parsable_string() const {
             result << (*the_list)[i].to_parsable_string();
         }
         result << "]";
-        return result.str();
+        return std::move(result).str();
         //return fmt::format("[{}]", fmt::join(*the_list | to_parsable_str_transform, ", "));
     }
 
@@ -3580,7 +3580,7 @@ sstring data_value::to_parsable_string() const {
             result << (*the_set)[i].to_parsable_string();
         }
         result << "}";
-        return result.str();
+        return std::move(result).str();
         //return fmt::format("{{{}}}", fmt::join(*the_set | to_parsable_str_transform, ", "));
     }
 
@@ -3596,7 +3596,7 @@ sstring data_value::to_parsable_string() const {
             result << (*the_map)[i].first.to_parsable_string() << ":" << (*the_map)[i].second.to_parsable_string();
         }
         result << "}";
-        return result.str();
+        return std::move(result).str();
         //auto to_map_elem_transform = boost::adaptors::transformed(
         //    [](const std::pair<data_value, data_value>& map_elem) -> sstring {
         //        return fmt::format("{{{}:{}}}", map_elem.first.to_parsable_string(), map_elem.second.to_parsable_string());
@@ -3619,7 +3619,7 @@ sstring data_value::to_parsable_string() const {
             result << user_typ->string_field_names().at(i) << ":" << (*field_values)[i].to_parsable_string();
         }
         result << "}";
-        return result.str();
+        return std::move(result).str();
     }
 
     if (_type->without_reversed().is_tuple()) {
@@ -3634,7 +3634,7 @@ sstring data_value::to_parsable_string() const {
             result << (*tuple_elements)[i].to_parsable_string();
         }
         result << ")";
-        return result.str();
+        return std::move(result).str();
     }
 
     abstract_type::kind type_kind = _type->without_reversed().get_kind();
