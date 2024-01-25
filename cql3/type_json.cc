@@ -72,7 +72,7 @@ static sstring quote_json_string(const sstring& value) {
         }
     }
     oss.put('"');
-    return oss.str();
+    return std::move(oss).str();
 }
 
 
@@ -394,7 +394,7 @@ static sstring to_json_string_aux(const map_type_impl& t, bytes_view bv) {
         out << to_json_string(*t.get_values_type(), vb);
     }
     out << '}';
-    return out.str();
+    return std::move(out).str();
 }
 
 static sstring to_json_string_aux(const set_type_impl& t, bytes_view bv) {
@@ -417,7 +417,7 @@ static sstring to_json_string_aux(const set_type_impl& t, bytes_view bv) {
         }
     });
     out << ']';
-    return out.str();
+    return std::move(out).str();
 }
 
 static sstring to_json_string_aux(const list_type_impl& t, bytes_view bv) {
@@ -439,7 +439,7 @@ static sstring to_json_string_aux(const list_type_impl& t, bytes_view bv) {
         }
     });
     out << ']';
-    return out.str();
+    return std::move(out).str();
 }
 
 static sstring to_json_string_aux(const tuple_type_impl& t, bytes_view bv) {
@@ -463,7 +463,7 @@ static sstring to_json_string_aux(const tuple_type_impl& t, bytes_view bv) {
     }
 
     out << ']';
-    return out.str();
+    return std::move(out).str();
 }
 
 static sstring to_json_string_aux(const user_type_impl& t, bytes_view bv) {
@@ -490,7 +490,7 @@ static sstring to_json_string_aux(const user_type_impl& t, bytes_view bv) {
     }
 
     out << '}';
-    return out.str();
+    return std::move(out).str();
 }
 
 namespace {
