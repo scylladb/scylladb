@@ -116,9 +116,9 @@ void set_compaction_manager(http_context& ctx, routes& r) {
             table_names = map_keys(ctx.db.local().find_keyspace(ks_name).metadata().get()->cf_meta_data());
         }
         auto type = req->get_query_param("type");
-        co_await ctx.db.invoke_on_all([&ks_name, &table_names, type] (replica::database& db) {
+        co_await ctx.db.invoke_on_all([&] (replica::database& db) {
             auto& cm = db.get_compaction_manager();
-            return parallel_for_each(table_names, [&db, &cm, &ks_name, type] (sstring& table_name) {
+            return parallel_for_each(table_names, [&] (sstring& table_name) {
                 auto& t = db.find_column_family(ks_name, table_name);
                 return t.parallel_foreach_table_state([&] (compaction::table_state& ts) {
                     return cm.stop_compaction(type, &ts);
