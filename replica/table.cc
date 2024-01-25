@@ -544,30 +544,70 @@ void table::enable_off_strategy_trigger() {
     do_update_off_strategy_trigger();
 }
 
+storage_group_manager::~storage_group_manager() = default;
+
 class single_storage_group_manager final : public storage_group_manager {
     replica::table& _t;
-public:
-    single_storage_group_manager(replica::table& t) : _t(t) {}
 
-    storage_group_vector make_storage_groups(compaction_group_list& list) const override {
+    compaction_group& get_compaction_group() const noexcept {
+        return const_cast<compaction_group&>(*_compaction_groups.begin());
+    }
+public:
+    single_storage_group_manager(replica::table& t)
+        : _t(t)
+    {
         storage_group_vector r;
         auto cg = std::make_unique<compaction_group>(_t, size_t(0), dht::token_range::make_open_ended_both_sides());
-        r.push_back(std::make_unique<storage_group>(std::move(cg), &list));
-        return r;
+        r.push_back(std::make_unique<storage_group>(std::move(cg), &_compaction_groups));
+        _storage_groups = std::move(r);
     }
+
     future<> update_effective_replication_map(const locator::effective_replication_map& erm) override { return make_ready_future(); }
+
+    compaction_group& compaction_group_for_token(dht::token token) const noexcept override {
+        return get_compaction_group();
+    }
+    utils::chunked_vector<compaction_group*> compaction_groups_for_token_range(dht::token_range tr) const override {
+        utils::chunked_vector<compaction_group*> ret;
+        ret.push_back(&get_compaction_group());
+        return ret;
+    }
+    compaction_group& compaction_group_for_key(partition_key_view key, const schema_ptr& s) const noexcept override {
+        return get_compaction_group();
+    }
+    compaction_group& compaction_group_for_sstable(const sstables::shared_sstable& sst) const noexcept override {
+        return get_compaction_group();
+    }
     std::pair<size_t, locator::tablet_range_side> storage_group_of(dht::token) const override {
         return {0, locator::tablet_range_side{}};
     }
     size_t log2_storage_groups() const override {
         return 0;
     }
+    size_t storage_group_id_for_token(dht::token) const noexcept override {
+        return 0;
+    }
+    storage_group* storage_group_for_token(dht::token token) const noexcept override {
+        return storage_groups().begin()->get();
+    }
+
+    locator::resize_decision::seq_number_t split_ready_seq_number() const noexcept override {
+        return std::numeric_limits<locator::resize_decision::seq_number_t>::min();
+    }
+    bool all_storage_groups_split() override { return true; }
+    future<> split_all_storage_groups() override { return make_ready_future(); }
+    future<> maybe_split_compaction_group_of(size_t idx) override { return make_ready_future(); }
 };
 
 class tablet_storage_group_manager final : public storage_group_manager {
     replica::table& _t;
     locator::host_id _my_host_id;
     const locator::tablet_map* _tablet_map;
+    // Every table replica that completes split work will load the seq number from tablet metadata into its local
+    // state. So when coordinator pull the local state of a table, it will know whether the table is ready for the
+    // current split, and not a previously revoked (stale) decision.
+    // The minimum value, which is a negative number, is not used by coordinator for first decision.
+    locator::resize_decision::seq_number_t _split_ready_seq_number = std::numeric_limits<locator::resize_decision::seq_number_t>::min();
 private:
     const schema_ptr& schema() const {
         return _t.schema();
@@ -576,14 +616,19 @@ private:
     const locator::tablet_map& tablet_map() const noexcept {
         return *_tablet_map;
     }
+
+    sstables::compaction_type_options::split split_compaction_options() const noexcept;
+
+    // Called when coordinator executes tablet splitting, i.e. commit the new tablet map with
+    // each tablet split into two, so this replica will remap all of its compaction groups
+    // that were previously split.
+    future<> handle_tablet_split_completion(const locator::tablet_map& old_tmap, const locator::tablet_map& new_tmap);
 public:
     tablet_storage_group_manager(table& t, const locator::effective_replication_map& erm)
         : _t(t)
         , _my_host_id(erm.get_token_metadata().get_my_id())
         , _tablet_map(&erm.get_token_metadata().tablets().get_tablet_map(schema()->id()))
-    {}
-
-    storage_group_vector make_storage_groups(compaction_group_list& list) const override {
+    {
         storage_group_vector ret;
 
         auto& tmap = tablet_map();
@@ -598,20 +643,48 @@ public:
             }
             // FIXME: don't allocate compaction groups for tablets that aren't present in this shard.
             auto cg = std::make_unique<compaction_group>(_t, tid.value(), std::move(range));
-            ret.emplace_back(std::make_unique<storage_group>(std::move(cg), &list));
+            ret.emplace_back(std::make_unique<storage_group>(std::move(cg), &_compaction_groups));
         }
-        return ret;
+        _storage_groups = std::move(ret);
     }
 
     future<> update_effective_replication_map(const locator::effective_replication_map& erm) override;
 
+    compaction_group& compaction_group_for_token(dht::token token) const noexcept override;
+    utils::chunked_vector<compaction_group*> compaction_groups_for_token_range(dht::token_range tr) const override;
+    compaction_group& compaction_group_for_key(partition_key_view key, const schema_ptr& s) const noexcept override;
+    compaction_group& compaction_group_for_sstable(const sstables::shared_sstable& sst) const noexcept override;
+
     std::pair<size_t, locator::tablet_range_side> storage_group_of(dht::token t) const override {
         auto [id, side] = tablet_map().get_tablet_id_and_range_side(t);
-        return { id.value(), side };
+        auto idx = id.value();
+        if (idx >= storage_groups().size()) {
+            on_fatal_internal_error(tlogger, format("storage_group_of: index out of range: idx={} size_log2={} size={} token={}",
+                                                    idx, log2_storage_groups(), storage_groups().size(), t));
+        }
+        auto& sg = storage_groups()[idx];
+        if (!t.is_minimum() && !t.is_maximum() && sg && !sg->token_range().contains(t, dht::token_comparator())) {
+            on_fatal_internal_error(tlogger, format("storage_group_of: storage_group idx={} range={} does not contain token={}",
+                    idx, sg->token_range(), t));
+        }
+        return { idx, side };
     }
     size_t log2_storage_groups() const override {
         return log2ceil(tablet_map().tablet_count());
     }
+    size_t storage_group_id_for_token(dht::token t) const noexcept override {
+        return storage_group_of(t).first;
+    }
+    storage_group* storage_group_for_token(dht::token token) const noexcept override {
+        return storage_groups()[storage_group_of(token).first].get();
+    }
+
+    locator::resize_decision::seq_number_t split_ready_seq_number() const noexcept override {
+        return _split_ready_seq_number;
+    }
+    bool all_storage_groups_split() override;
+    future<> split_all_storage_groups() override;
+    future<> maybe_split_compaction_group_of(size_t idx) override;
 };
 
 bool table::uses_tablets() const {
@@ -684,15 +757,14 @@ future<> storage_group::split(compaction_group_list& list, sstables::compaction_
     co_await _main_cg->get_compaction_manager().perform_split_compaction(_main_cg->as_table_state(), std::move(opt));
 }
 
-bool table::all_storage_groups_split() {
-    auto id = _schema->id();
-    auto& tmap = _erm->get_token_metadata().tablets().get_tablet_map(id);
+bool tablet_storage_group_manager::all_storage_groups_split() {
+    auto& tmap = tablet_map();
     if (_split_ready_seq_number == tmap.resize_decision().sequence_number) {
         return true;
     }
 
-    auto split_ready = std::ranges::all_of(_storage_groups,
-        std::bind(&storage_group::set_split_mode, std::placeholders::_1, std::ref(_compaction_groups)));
+    auto split_ready = std::ranges::all_of(storage_groups(),
+        std::bind(&storage_group::set_split_mode, std::placeholders::_1, std::ref(compaction_groups())));
 
     // The table replica will say to coordinator that its split status is ready by
     // mirroring the sequence number from tablet metadata into its local state,
@@ -700,12 +772,16 @@ bool table::all_storage_groups_split() {
     if (split_ready) {
         _split_ready_seq_number = tmap.resize_decision().sequence_number;
         tlogger.info0("Setting split ready sequence number to {} for table {}.{}",
-                      _split_ready_seq_number, _schema->ks_name(), _schema->cf_name());
+                      _split_ready_seq_number, schema()->ks_name(), schema()->cf_name());
     }
     return split_ready;
 }
 
-sstables::compaction_type_options::split table::split_compaction_options() const noexcept {
+bool table::all_storage_groups_split() {
+    return _sg_manager->all_storage_groups_split();
+}
+
+sstables::compaction_type_options::split tablet_storage_group_manager::split_compaction_options() const noexcept {
     return {[this](dht::token t) {
         // Classifies the input stream into either left or right side.
         auto [_, side] = storage_group_of(t);
@@ -713,86 +789,88 @@ sstables::compaction_type_options::split table::split_compaction_options() const
     }};
 }
 
-future<> table::split_all_storage_groups() {
+future<> tablet_storage_group_manager::split_all_storage_groups() {
     sstables::compaction_type_options::split opt = split_compaction_options();
 
-    auto holder = async_gate().hold();
-
-    for (auto& storage_group : _storage_groups) {
-        co_await storage_group->split(_compaction_groups, opt);
+    for (auto& storage_group : storage_groups()) {
+        co_await storage_group->split(compaction_groups(), opt);
     }
 }
 
-future<> table::maybe_split_compaction_group_of(locator::tablet_id tablet_id) {
-    auto table_id = _schema->id();
-    if (!_erm->get_token_metadata().tablets().get_tablet_map(table_id).needs_split()) {
+future<> table::split_all_storage_groups() {
+    auto holder = async_gate().hold();
+    co_await _sg_manager->split_all_storage_groups();
+}
+
+future<> tablet_storage_group_manager::maybe_split_compaction_group_of(size_t idx) {
+    if (!tablet_map().needs_split()) {
         return make_ready_future<>();
     }
 
-    auto holder = async_gate().hold();
-
-    auto& sg = _storage_groups[tablet_id.value()];
+    auto& sg = storage_groups()[idx];
     if (!sg) {
         on_internal_error(tlogger, format("Tablet {} of table {}.{} is not allocated in this shard",
-                                          tablet_id, _schema->ks_name(), _schema->cf_name()));
+                                          idx, schema()->ks_name(), schema()->cf_name()));
     }
 
-    return sg->split(_compaction_groups, split_compaction_options());
+    return sg->split(compaction_groups(), split_compaction_options());
+}
+
+future<> table::maybe_split_compaction_group_of(locator::tablet_id tablet_id) {
+    auto holder = async_gate().hold();
+    co_await _sg_manager->maybe_split_compaction_group_of(tablet_id.value());
 }
 
 std::unique_ptr<storage_group_manager> table::make_storage_group_manager() {
+    std::unique_ptr<storage_group_manager> ret;
     if (uses_tablets()) {
-        return std::make_unique<tablet_storage_group_manager>(*this, *_erm);
+        ret = std::make_unique<tablet_storage_group_manager>(*this, *_erm);
+    } else {
+        ret = std::make_unique<single_storage_group_manager>(*this);
     }
-    return std::make_unique<single_storage_group_manager>(*this);
+    return ret;
 }
 
 compaction_group* table::single_compaction_group_if_available() const noexcept {
-    return _compaction_groups.size() == 1 ? get_compaction_group(0) : nullptr;
+    return _sg_manager->single_compaction_group_if_available();
 }
 
 compaction_group* table::get_compaction_group(size_t id) const noexcept {
-    return _storage_groups[id]->main_compaction_group().get();
+    return storage_groups()[id]->main_compaction_group().get();
 }
 
 std::pair<size_t, locator::tablet_range_side>
 table::storage_group_of(dht::token token) const noexcept {
-    auto [idx, side] = _sg_manager->storage_group_of(token);
-    if (idx >= _storage_groups.size()) {
-        on_fatal_internal_error(tlogger, format("storage_group_for_token: index out of range: idx={} size_log2={} size={} token={}",
-                                                idx, _sg_manager->log2_storage_groups(), _storage_groups.size(), token));
-    }
-    auto& sg = *_storage_groups[idx];
-    if (!token.is_minimum() && !token.is_maximum() && !sg.token_range().contains(token, dht::token_comparator())) {
-        on_fatal_internal_error(tlogger, format("storage_group_for_token: storage_group idx={} range={} does not contain token={}",
-                 idx, sg.token_range(), token));
-    }
-    return {idx, side};
+    return _sg_manager->storage_group_of(token);
 }
 
 size_t table::storage_group_id_for_token(dht::token token) const noexcept {
-    return storage_group_of(token).first;
+    return _sg_manager->storage_group_id_for_token(token);
 }
 
 storage_group* table::storage_group_for_token(dht::token token) const noexcept {
-    return _storage_groups[storage_group_of(token).first].get();
+    return _sg_manager->storage_group_for_token(token);
 }
 
-compaction_group& table::compaction_group_for_token(dht::token token) const noexcept {
+compaction_group& tablet_storage_group_manager::compaction_group_for_token(dht::token token) const noexcept {
     auto [idx, range_side] = storage_group_of(token);
-    auto& sg = *_storage_groups[idx];
+    auto& sg = *storage_groups()[idx];
     return *sg.select_compaction_group(range_side);
 }
 
-utils::chunked_vector<compaction_group*> table::compaction_groups_for_token_range(dht::token_range tr) const {
+compaction_group& table::compaction_group_for_token(dht::token token) const noexcept {
+    return _sg_manager->compaction_group_for_token(token);
+}
+
+utils::chunked_vector<compaction_group*> tablet_storage_group_manager::compaction_groups_for_token_range(dht::token_range tr) const {
     utils::chunked_vector<compaction_group*> ret;
     auto cmp = dht::token_comparator();
 
     size_t candidate_start = tr.start() ? storage_group_id_for_token(tr.start()->value()) : size_t(0);
-    size_t candidate_end = tr.end() ? storage_group_id_for_token(tr.end()->value()) : (_storage_groups.size() - 1);
+    size_t candidate_end = tr.end() ? storage_group_id_for_token(tr.end()->value()) : (storage_groups().size() - 1);
 
     while (candidate_start <= candidate_end) {
-        auto& sg = _storage_groups[candidate_start++];
+        auto& sg = storage_groups()[candidate_start++];
         if (!sg) {
             continue;
         }
@@ -806,15 +884,19 @@ utils::chunked_vector<compaction_group*> table::compaction_groups_for_token_rang
     return ret;
 }
 
-compaction_group& table::compaction_group_for_key(partition_key_view key, const schema_ptr& s) const noexcept {
-    // fast path when table owns a single compaction group, to avoid overhead of calculating token.
-    if (auto cg = single_compaction_group_if_available()) {
-        return *cg;
-    }
+utils::chunked_vector<compaction_group*> table::compaction_groups_for_token_range(dht::token_range tr) const {
+    return _sg_manager->compaction_groups_for_token_range(tr);
+}
+
+compaction_group& tablet_storage_group_manager::compaction_group_for_key(partition_key_view key, const schema_ptr& s) const noexcept {
     return compaction_group_for_token(dht::get_token(*s, key));
 }
 
-compaction_group& table::compaction_group_for_sstable(const sstables::shared_sstable& sst) const noexcept {
+compaction_group& table::compaction_group_for_key(partition_key_view key, const schema_ptr& s) const noexcept {
+    return _sg_manager->compaction_group_for_key(key, s);
+}
+
+compaction_group& tablet_storage_group_manager::compaction_group_for_sstable(const sstables::shared_sstable& sst) const noexcept {
     auto [first_id, first_range_side] = storage_group_of(sst->get_first_decorated_key().token());
     auto [last_id, last_range_side] = storage_group_of(sst->get_last_decorated_key().token());
 
@@ -823,7 +905,7 @@ compaction_group& table::compaction_group_for_sstable(const sstables::shared_sst
                                           sst->get_filename(), first_id, last_id));
     }
 
-    auto& sg = _storage_groups[first_id];
+    auto& sg = storage_groups()[first_id];
 
     if (first_range_side != last_range_side) {
         return *sg->main_compaction_group();
@@ -832,8 +914,16 @@ compaction_group& table::compaction_group_for_sstable(const sstables::shared_sst
     return *sg->select_compaction_group(first_range_side);
 }
 
+compaction_group& table::compaction_group_for_sstable(const sstables::shared_sstable& sst) const noexcept {
+    return _sg_manager->compaction_group_for_sstable(sst);
+}
+
 compaction_group_list& table::compaction_groups() const noexcept {
-    return _compaction_groups;
+    return _sg_manager->compaction_groups();
+}
+
+const storage_group_vector& table::storage_groups() const noexcept {
+    return _sg_manager->storage_groups();
 }
 
 future<> table::parallel_foreach_compaction_group(std::function<future<>(compaction_group&)> action) {
@@ -1868,7 +1958,6 @@ table::table(schema_ptr schema, config config, lw_shared_ptr<const storage_optio
     , _compaction_manager(compaction_manager)
     , _compaction_strategy(make_compaction_strategy(_schema->compaction_strategy(), _schema->compaction_strategy_options()))
     , _sg_manager(make_storage_group_manager())
-    , _storage_groups(_sg_manager->make_storage_groups(_compaction_groups))
     , _sstables(make_compound_sstable_set())
     , _cache(_schema, sstables_as_snapshot_source(), row_cache_tracker, is_continuous::yes)
     , _commitlog(nullptr)
@@ -1890,10 +1979,10 @@ table::table(schema_ptr schema, config config, lw_shared_ptr<const storage_optio
 
 locator::table_load_stats table::table_load_stats(std::function<bool(locator::global_tablet_id)> tablet_filter) const noexcept {
     locator::table_load_stats stats;
-    stats.split_ready_seq_number = _split_ready_seq_number;
+    stats.split_ready_seq_number = _sg_manager->split_ready_seq_number();
 
-    for (unsigned id = 0; id < _storage_groups.size(); id++) {
-        auto& sg = _storage_groups[id];
+    for (unsigned id = 0; id < storage_groups().size(); id++) {
+        auto& sg = storage_groups()[id];
         if (!sg) {
             continue;
         }
@@ -1906,8 +1995,9 @@ locator::table_load_stats table::table_load_stats(std::function<bool(locator::gl
     return stats;
 }
 
-future<> table::handle_tablet_split_completion(size_t old_tablet_count, const locator::tablet_map& new_tmap) {
-    auto table_id = _schema->id();
+future<> tablet_storage_group_manager::handle_tablet_split_completion(const locator::tablet_map& old_tmap, const locator::tablet_map& new_tmap) {
+    auto table_id = schema()->id();
+    size_t old_tablet_count = old_tmap.tablet_count();
     storage_group_vector new_storage_groups;
     new_storage_groups.resize(new_tmap.tablet_count());
 
@@ -1929,8 +2019,8 @@ future<> table::handle_tablet_split_completion(size_t old_tablet_count, const lo
 
     // Stop the released main compaction groups asynchronously
     future<> stop_fut = make_ready_future<>();
-    for (unsigned id = 0; id < _storage_groups.size(); id++) {
-        auto& sg = _storage_groups[id];
+    for (unsigned id = 0; id < storage_groups().size(); id++) {
+        auto& sg = storage_groups()[id];
         if (!sg) {
             continue;
         }
@@ -1964,13 +2054,22 @@ future<> table::handle_tablet_split_completion(size_t old_tablet_count, const lo
                       id, table_id, fmt::join(boost::irange(first_new_id, first_new_id+split_size), ", "));
     }
 
-    auto old_groups = std::exchange(_storage_groups, std::move(new_storage_groups));
+    _storage_groups = std::move(new_storage_groups);
 
     return stop_fut;
 }
 
 future<> tablet_storage_group_manager::update_effective_replication_map(const locator::effective_replication_map& erm) {
-    _tablet_map = &erm.get_token_metadata().tablets().get_tablet_map(schema()->id());
+    auto* new_tablet_map = &erm.get_token_metadata().tablets().get_tablet_map(schema()->id());
+    auto* old_tablet_map = std::exchange(_tablet_map, new_tablet_map);
+
+    size_t old_tablet_count = old_tablet_map->tablet_count();
+    size_t new_tablet_count = new_tablet_map->tablet_count();
+    if (new_tablet_count > old_tablet_count) {
+        tlogger.info0("Detected tablet split for table {}.{}, increasing from {} to {} tablets",
+                        schema()->ks_name(), schema()->cf_name(), old_tablet_count, new_tablet_count);
+        return handle_tablet_split_completion(*old_tablet_map, *new_tablet_map);
+    }
     return make_ready_future();
 }
 
@@ -1978,22 +2077,6 @@ future<> table::update_effective_replication_map(locator::effective_replication_
     auto old_erm = std::exchange(_erm, std::move(erm));
 
     if (uses_tablets()) {
-        auto table_id = _schema->id();
-        auto tablet_count = [table_id] (locator::effective_replication_map_ptr& erm) {
-            return erm->get_token_metadata().tablets().get_tablet_map(table_id).tablet_count();
-        };
-
-        size_t old_tablet_count = tablet_count(old_erm);
-        size_t new_tablet_count = tablet_count(_erm);
-
-        if (new_tablet_count > old_tablet_count) {
-            tlogger.info0("Detected tablet split for table {}.{}, increasing from {} to {} tablets",
-                          _schema->ks_name(), _schema->cf_name(), old_tablet_count, new_tablet_count);
-            co_await handle_tablet_split_completion(old_tablet_count, _erm->get_token_metadata().tablets().get_tablet_map(table_id));
-        }
-
-        // FIXME: fold handle_tablet_split_completion into tablet_storage_group_manager
-        // update_effective_replication_map once the storage_group_vector is moved there.
         co_await _sg_manager->update_effective_replication_map(*_erm);
     }
     if (old_erm) {
@@ -3400,7 +3483,7 @@ future<> compaction_group::cleanup() {
 future<> table::cleanup_tablet(database& db, db::system_keyspace& sys_ks, locator::tablet_id tid) {
     auto holder = async_gate().hold();
 
-    auto& sg = _storage_groups[tid.value()];
+    auto& sg = storage_groups()[tid.value()];
 
     for (auto& cg_ptr : sg->compaction_groups()) {
         if (!cg_ptr) {

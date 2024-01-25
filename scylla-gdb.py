@@ -4416,21 +4416,38 @@ class scylla_memtables(gdb.Command):
         for table in for_each_table():
             gdb.write('table %s:\n' % schema_ptr(table['_schema']).table_name())
             try:
-                try:
-                    for cg in intrusive_list(table["_compaction_groups"], link='_list_hook'):
-                        scylla_memtables.dump_compaction_group_memtables(cg)
-                except gdb.error:
-                    for cg_ptr in chunked_vector(table["_compaction_groups"]):
-                        scylla_memtables.dump_compaction_group_memtables(std_unique_ptr(cg_ptr).get())
+                sg_manager = std_unique_ptr(table["_sg_manager"]).get().dereference()
+                for cg in intrusive_list(sg_manager["_compaction_groups"], link='_list_hook'):
+                    scylla_memtables.dump_compaction_group_memtables(cg)
+                return
             except gdb.error:
-                try:
-                    for cg_ptr in std_vector(table["_compaction_groups"]):
-                        scylla_memtables.dump_compaction_group_memtables(std_unique_ptr(cg_ptr).get())
-                except gdb.error:
-                    try:
-                        scylla_memtables.dump_compaction_group_memtables(std_unique_ptr(table["_compaction_group"]).get())
-                    except gdb.error:
-                        scylla_memtables.dump_memtable_list(seastar_lw_shared_ptr(table['_memtables']).get()) # Scylla 5.1 compatibility
+                pass
+
+            try:
+                for cg in intrusive_list(table["_compaction_groups"], link='_list_hook'):
+                    scylla_memtables.dump_compaction_group_memtables(cg)
+                return
+            except gdb.error:
+                pass
+
+            try:
+                for cg_ptr in chunked_vector(table["_compaction_groups"]):
+                    scylla_memtables.dump_compaction_group_memtables(std_unique_ptr(cg_ptr).get())
+                return
+            except gdb.error:
+                pass
+
+            try:
+                for cg_ptr in std_vector(table["_compaction_groups"]):
+                    scylla_memtables.dump_compaction_group_memtables(std_unique_ptr(cg_ptr).get())
+                return
+            except gdb.error:
+                pass
+
+            try:
+                scylla_memtables.dump_compaction_group_memtables(std_unique_ptr(table["_compaction_group"]).get())
+            except gdb.error:
+                scylla_memtables.dump_memtable_list(seastar_lw_shared_ptr(table['_memtables']).get()) # Scylla 5.1 compatibility
 
 def escape_html(s):
     return s.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
