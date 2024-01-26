@@ -206,7 +206,7 @@ from `bytes` to:
 
   - for `tablets-routing-v1` - `TupleType(LongType, LongType, ListType(TupleType(UUIDType, Int32Type)))`,
     two `LongType` represent first and last token, `ListType(TupleType(UUIDType, Int32Type))`
-    contains informations about replicas (for every replica there is a tuple with two elements
+    contains information about replicas (for every replica there is a tuple with two elements
     `UUIDType` and `Int32Type` representing host and shard ids).
 
 When the driver receives information about the tablet, it has to check if any of
@@ -217,7 +217,7 @@ tablet should replace them.
 ## Negotiate sending tablets info to the drivers
 
 This extension allows the driver to inform the database that it is aware of
-tablets and is able to intepret the tablet information sent in `custom_payload`.
+tablets and is able to interpret the tablet information sent in `custom_payload`.
 
 Having a designated flag gives the ability to skip tablet metadata generation
 (which is quite expensive) if driver is not aware of tablets. 

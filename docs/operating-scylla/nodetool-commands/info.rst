@@ -78,8 +78,8 @@ Example output:
 |           |                              |
 +-----------+------------------------------+
 | Uptime    |Node Uptime since last restart|
-| (secon    |                              |
-| ds)       |                              |
+| (seconds) |                              |
+|           |                              |
 |           |                              |
 |           |                              |
 +-----------+------------------------------+
