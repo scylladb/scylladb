@@ -1629,7 +1629,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 builder.del_transition_state()
                        .with_node(node.id)
                        .set("node_state", node_state::left);
-                auto str = ::format("finished decommissioning node {}", node.id);
+                auto str = node.rs->state == node_state::decommissioning
+                        ? ::format("finished decommissioning node {}", node.id)
+                        : ::format("finished rollback of {} after {} failure", node.id, node.rs->state);
                 co_await update_topology_state(take_guard(std::move(node)), {builder.build()}, std::move(str));
             }
                 break;
