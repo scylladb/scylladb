@@ -398,7 +398,11 @@ future<> storage_service::sync_raft_topology_nodes(mutable_token_metadata_ptr tm
         // Also ip -> id mapping is needed for address map recreation on reboot
         if (is_me(host_id)) {
             co_await _sys_ks.local().update_tokens(rs.ring.value().tokens);
-            co_await _gossiper.add_local_application_state({{ gms::application_state::STATUS, gms::versioned_value::normal(rs.ring.value().tokens) }});
+            co_await _gossiper.add_local_application_state({
+                { gms::application_state::TOKENS, gms::versioned_value::tokens(rs.ring.value().tokens) },
+                { gms::application_state::CDC_GENERATION_ID, gms::versioned_value::cdc_generation_id(_topology_state_machine._topology.current_cdc_generation_id) },
+                { gms::application_state::STATUS, gms::versioned_value::normal(rs.ring.value().tokens) }
+            });
         } else if (ip && !is_me(*ip)) {
             // In replace-with-same-ip scenario the replaced node IP will be the same
             // as ours, we shouldn't put it into system.peers.
