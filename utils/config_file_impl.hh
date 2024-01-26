@@ -135,8 +135,6 @@ void validate(boost::any& out, const std::vector<std::string>& in, std::unordere
 
 namespace utils {
 
-namespace {
-
 /*
  * Our own bpo::typed_valye.
  * Only difference is that we _don't_ apply defaults (they are already applied)
@@ -170,8 +168,6 @@ inline typed_value_ex<T>* value_ex() {
     typed_value_ex<T>* r = new typed_value_ex<T>();
     maybe_multitoken(r);
     return r;
-}
-
 }
 
 sstring hyphenate(const std::string_view&);
