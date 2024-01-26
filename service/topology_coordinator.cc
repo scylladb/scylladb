@@ -2087,7 +2087,6 @@ future<> topology_coordinator::rollback_current_topology_op(group0_guard&& guard
     // (there should be one since we are in the rollback)
     node_to_work_on node = get_node_to_work_on(std::move(guard));
     node_state state;
-    std::unordered_set<raft::server_id> exclude_nodes = parse_ignore_nodes(node.req_param);
 
     switch (node.rs->state) {
         case node_state::bootstrapping:
@@ -2098,8 +2097,6 @@ future<> topology_coordinator::rollback_current_topology_op(group0_guard&& guard
             state = node_state::left_token_ring;
             break;
         case node_state::removing:
-            // Exclude dead node from global barrier
-            exclude_nodes.emplace(node.id);
             // The node was removed already. We need to add it back. Lets do it as non voter.
             // If it ever boots again it will make itself a voter.
             co_await _group0.group0_server().modify_config({raft::config_member{{node.id, {}}, false}}, {}, &_as);
