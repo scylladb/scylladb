@@ -5,7 +5,6 @@
 #include "dht/sharder.hh"
 #include "reader_permit.hh"
 #include "utils/phased_barrier.hh"
-#include "mutation/mutation_fragment.hh"
 #include "readers/mutation_fragment_v1_stream.hh"
 
 class repair_reader {

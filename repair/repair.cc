@@ -9,22 +9,17 @@
 #include "repair.hh"
 #include "repair/row_level.hh"
 
-#include "mutation/atomic_cell_hash.hh"
-#include "dht/sharder.hh"
+#include "locator/network_topology_strategy.hh"
 #include "streaming/stream_reason.hh"
 #include "gms/inet_address.hh"
 #include "gms/gossiper.hh"
 #include "message/messaging_service.hh"
-#include "sstables/sstables.hh"
 #include "replica/database.hh"
-#include "db/config.hh"
-#include "utils/error_injection.hh"
-#include "utils/hashers.hh"
-#include "locator/network_topology_strategy.hh"
 #include "service/migration_manager.hh"
 #include "service/storage_service.hh"
+#include "sstables/sstables.hh"
 #include "partition_range_compat.hh"
-#include "gms/feature_service.hh"
+#include "utils/error_injection.hh"
 
 #include <boost/algorithm/string/predicate.hpp>
 #include <boost/algorithm/string/split.hpp>
@@ -42,10 +37,8 @@
 #include <seastar/core/sleep.hh>
 
 #include <cfloat>
-#include <algorithm>
 #include <atomic>
 
-#include "idl/position_in_partition.dist.hh"
 #include "idl/partition_checksum.dist.hh"
 
 using namespace std::chrono_literals;

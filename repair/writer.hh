@@ -3,12 +3,9 @@
 #include <seastar/core/future.hh>
 #include <seastar/core/shared_ptr.hh>
 #include "schema/schema_fwd.hh"
-#include <optional>
 #include "reader_permit.hh"
 #include "streaming/stream_reason.hh"
 #include "repair/decorated_key_with_hash.hh"
-#include "readers/queue.hh"
-#include "sstables/sstable_set.hh"
 #include "readers/upgrading_consumer.hh"
 #include <seastar/core/coroutine.hh>
 
