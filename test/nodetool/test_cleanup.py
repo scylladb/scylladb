@@ -8,7 +8,7 @@ from rest_api_mock import expected_request
 import utils
 
 
-def test_cleanup(nodetool):
+def test_cleanup(nodetool, scylla_only):
     nodetool("cleanup", expected_requests=[
         expected_request("POST", "/storage_service/cleanup_all", response=0),
     ])
