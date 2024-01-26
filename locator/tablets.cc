@@ -565,14 +565,6 @@ public:
     }
 };
 
-size_t tablet_aware_replication_strategy::parse_initial_tablets(const sstring& val) const {
-    try {
-        return std::stol(val);
-    } catch (...) {
-        throw exceptions::configuration_exception(format("\"initial_tablets\" must be numeric; found {}", val));
-    }
-}
-
 void tablet_aware_replication_strategy::validate_tablet_options(const abstract_replication_strategy& ars,
                                                                 const gms::feature_service& fs,
                                                                 const replication_strategy_config_options& opts) const {

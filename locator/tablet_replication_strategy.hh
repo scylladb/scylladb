@@ -25,7 +25,6 @@ namespace locator {
 class tablet_aware_replication_strategy : public per_table_replication_strategy {
 private:
     size_t _initial_tablets = 1;
-    size_t parse_initial_tablets(const sstring&) const;
 protected:
     void validate_tablet_options(const abstract_replication_strategy&, const gms::feature_service&, const replication_strategy_config_options&) const;
     void process_tablet_options(abstract_replication_strategy&, replication_strategy_config_options&, replication_strategy_params);
