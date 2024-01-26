@@ -15,4 +15,4 @@ jobs:
         with:
           only_warn: 1
           ignore_words_list: "ser,ue,crate"
-          skip: "./.git,./build,./tools,*.js,*.thrift,*.lock,./test"
+          skip: "./.git,./build,./tools,*.js,*.thrift,*.lock,./test,./licenses"
