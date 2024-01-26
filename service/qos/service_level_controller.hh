@@ -125,10 +125,10 @@ public:
     future<> stop();
 
     /**
-     * Chack the distributed data for changes in a constant interval and updates
+     * Check the distributed data for changes in a constant interval and updates
      * the service_levels configuration in accordance (adds, removes, or updates
      * service levels as necessairy).
-     * @param interval_f - lambda function which returns a interval in miliseconds.
+     * @param interval_f - lambda function which returns a interval in milliseconds.
                            The interval is time to check the distributed data.
      * @return a future that is resolved when the update loop stops.
      */

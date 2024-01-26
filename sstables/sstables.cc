@@ -260,7 +260,7 @@ future<> parse(const schema&, sstable_version_types, random_access_reader& in, u
 
 template <typename Tag>
 future<> parse(const schema& s, sstable_version_types v, random_access_reader& in, utils::tagged_uuid<Tag>& id) {
-    // Read directly into tha tagged_uuid `id` member
+    // Read directly into the tagged_uuid `id` member
     // This is ugly, but save an allocation or reimplementation
     // of parse(..., utils::UUID&)
     utils::UUID& uuid = *const_cast<utils::UUID*>(&id.uuid());
@@ -1957,7 +1957,7 @@ std::optional<bool> sstable::originated_on_this_node() const {
         // we don't know the local host id before it is loaded from
         // (or generated and written to) system.local, but some system
         // sstable reads must happen before the bootstrap process gets
-        // there (like in ther resharding case)
+        // there (like in the resharding case)
         return std::nullopt;
     }
 
