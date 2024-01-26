@@ -99,8 +99,8 @@ Operations that are not listed below are currently not available.
 * :doc:`drain </operating-scylla/nodetool-commands/drain/>` - Drain the node (stop accepting writes and flush all column families).
 * :doc:`enableautocompaction </operating-scylla/nodetool-commands/enbleautocompaction/>` - Enable automatic compaction of a keyspace or table.
 * :doc:`enablebackup </operating-scylla/nodetool-commands/enablebackup/>` - Enable incremental backup.
-* :doc:`enablebinary </operating-scylla/nodetool-commands/enablebinary/>` - Reenable native transport (binary protocol).
-* :doc:`enablegossip </operating-scylla/nodetool-commands/enablegossip/>` - Reenable gossip.
+* :doc:`enablebinary </operating-scylla/nodetool-commands/enablebinary/>` - Re-enable native transport (binary protocol).
+* :doc:`enablegossip </operating-scylla/nodetool-commands/enablegossip/>` - Re-enable gossip.
 * :doc:`flush </operating-scylla/nodetool-commands/flush/>` - Flush one or more column families.
 * :doc:`getendpoints <nodetool-commands/getendpoints/>` :code:`<keyspace>` :code:`<table>` :code:`<key>`- Print the end points that owns the key.
 * **getlogginglevels** - Get the runtime logging levels.
