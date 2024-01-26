@@ -741,7 +741,7 @@ private:
             auto stop_forward_service =  defer([this] { _forward_service.stop().get(); });
 
             // gropu0 client exists only on shard 0
-            service::raft_group0_client group0_client(_group0_registry.local(), _sys_ks.local());
+            service::raft_group0_client group0_client(_group0_registry.local(), _sys_ks.local(), maintenance_mode_enabled::no);
 
             _mm.start(std::ref(_mnotifier), std::ref(_feature_service), std::ref(_ms), std::ref(_proxy), std::ref(_gossiper), std::ref(group0_client), std::ref(_sys_ks)).get();
             auto stop_mm = defer([this] { _mm.stop().get(); });
@@ -925,7 +925,7 @@ private:
             auth_config.authenticator_java_name = qualified_authenticator_name;
             auth_config.role_manager_java_name = qualified_role_manager_name;
 
-            _auth_service.start(perm_cache_config, std::ref(_qp), std::ref(_mnotifier), std::ref(_mm), auth_config, db::maintenance_socket_enabled::no).get();
+            _auth_service.start(perm_cache_config, std::ref(_qp), std::ref(_mnotifier), std::ref(_mm), auth_config, maintenance_socket_enabled::no).get();
             _auth_service.invoke_on_all([this] (auth::service& auth) {
                 return auth.start(_mm.local());
             }).get();

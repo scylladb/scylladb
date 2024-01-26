@@ -26,7 +26,7 @@ static logging::logger logger("cql_server_controller");
 controller::controller(sharded<auth::service>& auth, sharded<service::migration_notifier>& mn,
         sharded<gms::gossiper>& gossiper, sharded<cql3::query_processor>& qp, sharded<service::memory_limiter>& ml,
         sharded<qos::service_level_controller>& sl_controller, sharded<service::endpoint_lifecycle_notifier>& elc_notif,
-        const db::config& cfg, scheduling_group_key cql_opcode_stats_key, db::maintenance_socket_enabled used_by_maintenance_socket)
+        const db::config& cfg, scheduling_group_key cql_opcode_stats_key, maintenance_socket_enabled used_by_maintenance_socket)
     : _ops_sem(1)
     , _auth_service(auth)
     , _mnotifier(mn)

@@ -283,7 +283,7 @@ private:
 
 public:
     std::chrono::milliseconds get_ring_delay();
-    enum class mode { NONE, STARTING, JOINING, BOOTSTRAP, NORMAL, LEAVING, DECOMMISSIONED, MOVING, DRAINING, DRAINED };
+    enum class mode { NONE, STARTING, JOINING, BOOTSTRAP, NORMAL, LEAVING, DECOMMISSIONED, MOVING, DRAINING, DRAINED, MAINTENANCE };
 private:
     mode _operation_mode = mode::NONE;
     /* Used for tracking drain progress */
@@ -785,6 +785,14 @@ public:
     future<> move_tablet(table_id, dht::token, locator::tablet_replica src, locator::tablet_replica dst);
     future<> set_tablet_balancing_enabled(bool);
 
+    // In the maintenance mode, other nodes won't be available thus we disabled joining
+    // the token ring and the token metadata won't be populated with the local node's endpoint.
+    // When a CQL query is executed it checks the `token_metadata` structure and fails if it is empty.
+    //
+    // This method initialises `token_metadata` with the local node as the only node in the token ring.
+    // It is incompatible with the `join_cluster` method.
+    future<> start_maintenance_mode();
+
 private:
     // Synchronizes the local node state (token_metadata, system.peers/system.local tables,
     // gossiper) to align it with the other raft topology nodes.
@@ -837,6 +845,7 @@ struct fmt::formatter<service::storage_service::mode> : fmt::formatter<std::stri
         case MOVING:         name = "MOVING"; break;
         case DRAINING:       name = "DRAINING"; break;
         case DRAINED:        name = "DRAINED"; break;
+        case MAINTENANCE:    name = "MAINTENANCE"; break;
         }
         return fmt::format_to(ctx.out(), "{}", name);
     }

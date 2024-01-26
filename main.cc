@@ -1246,6 +1246,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             if (snitch.local()->prefer_local()) {
                 mscfg.preferred_ips = sys_ks.local().get_preferred_ips().get0();
             }
+            mscfg.maintenance_mode = maintenance_mode_enabled{cfg->maintenance_mode()};
 
             const auto& seo = cfg->server_encryption_options();
             auto encrypt = utils::get_or_default(seo, "internode_encryption", "none");
@@ -1359,7 +1360,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // group0 client exists only on shard 0.
             // The client has to be created before `stop_raft` since during
             // destruction it has to exist until raft_gr.stop() completes.
-            service::raft_group0_client group0_client{raft_gr.local(), sys_ks.local()};
+            service::raft_group0_client group0_client{raft_gr.local(), sys_ks.local(), maintenance_mode_enabled{cfg->maintenance_mode()}};
 
             service::raft_group0 group0_service{
                     stop_signal.as_local_abort_source(), raft_gr.local(), messaging,
@@ -1686,11 +1687,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             maintenance_auth_config.authenticator_java_name = sstring{auth::allow_all_authenticator_name};
             maintenance_auth_config.role_manager_java_name = sstring{auth::maintenance_socket_role_manager_name};
 
-            maintenance_auth_service.start(perm_cache_config, std::ref(qp), std::ref(mm_notifier), std::ref(mm), maintenance_auth_config, db::maintenance_socket_enabled::yes).get();
+            maintenance_auth_service.start(perm_cache_config, std::ref(qp), std::ref(mm_notifier), std::ref(mm), maintenance_auth_config, maintenance_socket_enabled::yes).get();
 
             scheduling_group_key_config maintenance_cql_sg_stats_cfg =
-            make_scheduling_group_key_config<cql_transport::cql_sg_stats>(db::maintenance_socket_enabled::yes);
-            cql_transport::controller cql_maintenance_server_ctl(maintenance_auth_service, mm_notifier, gossiper, qp, service_memory_limiter, sl_controller, lifecycle_notifier, *cfg, scheduling_group_key_create(maintenance_cql_sg_stats_cfg).get0(), db::maintenance_socket_enabled::yes);
+            make_scheduling_group_key_config<cql_transport::cql_sg_stats>(maintenance_socket_enabled::yes);
+            cql_transport::controller cql_maintenance_server_ctl(maintenance_auth_service, mm_notifier, gossiper, qp, service_memory_limiter, sl_controller, lifecycle_notifier, *cfg, scheduling_group_key_create(maintenance_cql_sg_stats_cfg).get0(), maintenance_socket_enabled::yes);
 
             std::any stop_maintenance_auth_service;
             std::any stop_maintenance_cql;
@@ -1698,6 +1699,46 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             if (cfg->maintenance_socket() != "ignore") {
                 start_auth_service(maintenance_auth_service, stop_maintenance_auth_service, "maintenance auth service");
                 start_cql(cql_maintenance_server_ctl, stop_maintenance_cql, "maintenance native server");
+            }
+
+            snapshot_ctl.start(std::ref(db)).get();
+            auto stop_snapshot_ctl = defer_verbose_shutdown("snapshots", [&snapshot_ctl] {
+                snapshot_ctl.stop().get();
+            });
+
+            api::set_server_snapshot(ctx, snapshot_ctl).get();
+            auto stop_api_snapshots = defer_verbose_shutdown("snapshots API", [&ctx] {
+                api::unset_server_snapshot(ctx).get();
+            });
+
+            api::set_server_tasks_compaction_module(ctx, ss, snapshot_ctl).get();
+            auto stop_tasks_api = defer_verbose_shutdown("tasks API", [&ctx] {
+                api::unset_server_tasks_compaction_module(ctx).get();
+            });
+
+            //FIXME: discarded future
+            (void)api::set_server_cache(ctx);
+
+            if (cfg->maintenance_mode()) {
+                startlog.info("entering maintenance mode.");
+
+                ss.local().start_maintenance_mode().get();
+
+                seastar::set_abort_on_ebadf(cfg->abort_on_ebadf());
+                api::set_server_done(ctx).get();
+                {
+                    auto do_drain = defer_verbose_shutdown("local storage", [&ss] {
+                        // Flush all memtables and stop ongoing compactions
+                        ss.local().drain_on_shutdown().get();
+                    });
+
+                    startlog.info("Scylla version {} initialization completed (maintenance mode).", scylla_version());
+                    stop_signal.wait().get();
+                    startlog.info("Signal received; shutting down");
+                }
+                startlog.info("Scylla version {} shutdown complete.", scylla_version());
+                _exit(0);
+                return 0;
             }
 
             sys_dist_ks.start(std::ref(qp), std::ref(mm), std::ref(proxy)).get();
@@ -1779,7 +1820,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             auth_config.authenticator_java_name = qualified_authenticator_name;
             auth_config.role_manager_java_name = qualified_role_manager_name;
 
-            auth_service.start(std::move(perm_cache_config), std::ref(qp), std::ref(mm_notifier), std::ref(mm), auth_config, db::maintenance_socket_enabled::no).get();
+            auth_service.start(std::move(perm_cache_config), std::ref(qp), std::ref(mm_notifier), std::ref(mm), auth_config, maintenance_socket_enabled::no).get();
 
             std::any stop_auth_service;
             start_auth_service(auth_service, stop_auth_service, "auth service");
@@ -1787,21 +1828,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             api::set_server_authorization_cache(ctx, auth_service).get();
             auto stop_authorization_cache_api = defer_verbose_shutdown("authorization cache api", [&ctx] {
                 api::unset_server_authorization_cache(ctx).get();
-            });
-
-            snapshot_ctl.start(std::ref(db)).get();
-            auto stop_snapshot_ctl = defer_verbose_shutdown("snapshots", [&snapshot_ctl] {
-                snapshot_ctl.stop().get();
-            });
-
-            api::set_server_snapshot(ctx, snapshot_ctl).get();
-            auto stop_api_snapshots = defer_verbose_shutdown("snapshots API", [&ctx] {
-                api::unset_server_snapshot(ctx).get();
-            });
-
-            api::set_server_tasks_compaction_module(ctx, ss, snapshot_ctl).get();
-            auto stop_tasks_api = defer_verbose_shutdown("tasks API", [&ctx] {
-                api::unset_server_tasks_compaction_module(ctx).get();
             });
 
             supervisor::notify("starting batchlog manager");
@@ -1838,8 +1864,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 view_backlog_broker.stop().get();
             });
 
-            //FIXME: discarded future
-            (void)api::set_server_cache(ctx);
             startlog.info("Waiting for gossip to settle before accepting client requests...");
             gossiper.local().wait_for_gossip_to_settle().get();
             api::set_server_gossip_settle(ctx, gossiper).get();
@@ -1878,8 +1902,8 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             notify_set.notify_all(configurable::system_state::started).get();
 
-            scheduling_group_key_config cql_sg_stats_cfg = make_scheduling_group_key_config<cql_transport::cql_sg_stats>(db::maintenance_socket_enabled::no);
-            cql_transport::controller cql_server_ctl(auth_service, mm_notifier, gossiper, qp, service_memory_limiter, sl_controller, lifecycle_notifier, *cfg, scheduling_group_key_create(cql_sg_stats_cfg).get0(), db::maintenance_socket_enabled::no);
+            scheduling_group_key_config cql_sg_stats_cfg = make_scheduling_group_key_config<cql_transport::cql_sg_stats>(maintenance_socket_enabled::no);
+            cql_transport::controller cql_server_ctl(auth_service, mm_notifier, gossiper, qp, service_memory_limiter, sl_controller, lifecycle_notifier, *cfg, scheduling_group_key_create(cql_sg_stats_cfg).get0(), maintenance_socket_enabled::no);
 
             ss.local().register_protocol_server(cql_server_ctl);
 

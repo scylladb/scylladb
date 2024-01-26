@@ -128,7 +128,7 @@ service::service(
         std::unique_ptr<authorizer> z,
         std::unique_ptr<authenticator> a,
         std::unique_ptr<role_manager> r,
-        db::maintenance_socket_enabled used_by_maintenance_socket)
+        maintenance_socket_enabled used_by_maintenance_socket)
             : _loading_cache_config(std::move(c))
             , _permissions_cache(nullptr)
             , _qp(qp)
@@ -150,7 +150,7 @@ service::service(
         ::service::migration_notifier& mn,
         ::service::migration_manager& mm,
         const service_config& sc,
-        db::maintenance_socket_enabled used_by_maintenance_socket)
+        maintenance_socket_enabled used_by_maintenance_socket)
             : service(
                       std::move(c),
                       qp,

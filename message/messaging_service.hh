@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "db/config.hh"
 #include "messaging_service_fwd.hh"
 #include "msg_addr.hh"
 #include <seastar/core/seastar.hh>
@@ -22,6 +23,7 @@
 #include "streaming/stream_fwd.hh"
 #include "locator/host_id.hh"
 #include "service/session.hh"
+#include "service/maintenance_mode.hh"
 
 #include <list>
 #include <vector>
@@ -281,6 +283,7 @@ public:
         bool listen_on_broadcast_address = false;
         size_t rpc_memory_limit = 1'000'000;
         std::unordered_map<gms::inet_address, gms::inet_address> preferred_ips;
+        maintenance_mode_enabled maintenance_mode = maintenance_mode_enabled::no;
     };
 
     struct scheduling_config {

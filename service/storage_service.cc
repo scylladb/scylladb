@@ -175,7 +175,8 @@ enum class node_external_status {
     DECOMMISSIONED = 5,
     DRAINING       = 6,
     DRAINED        = 7,
-    MOVING         = 8 //deprecated
+    MOVING         = 8, //deprecated
+    MAINTENANCE    = 9
 };
 
 static node_external_status map_operation_mode(storage_service::mode m) {
@@ -190,6 +191,7 @@ static node_external_status map_operation_mode(storage_service::mode m) {
     case storage_service::mode::DRAINING: return node_external_status::DRAINING;
     case storage_service::mode::DRAINED: return node_external_status::DRAINED;
     case storage_service::mode::MOVING: return node_external_status::MOVING;
+    case storage_service::mode::MAINTENANCE: return node_external_status::MAINTENANCE;
     }
     return node_external_status::UNKNOWN;
 }
@@ -203,7 +205,7 @@ void storage_service::register_metrics() {
     namespace sm = seastar::metrics;
     _metrics.add_group("node", {
             sm::make_gauge("operation_mode", sm::description("The operation mode of the current node. UNKNOWN = 0, STARTING = 1, JOINING = 2, NORMAL = 3, "
-                    "LEAVING = 4, DECOMMISSIONED = 5, DRAINING = 6, DRAINED = 7, MOVING = 8"), [this] {
+                    "LEAVING = 4, DECOMMISSIONED = 5, DRAINING = 6, DRAINED = 7, MOVING = 8, MAINTENANCE = 9"), [this] {
                 return static_cast<std::underlying_type_t<node_external_status>>(map_operation_mode(_operation_mode));
             }),
     });
@@ -2811,6 +2813,15 @@ future<std::map<gms::inet_address, float>> storage_service::effective_ownership(
 }
 
 void storage_service::set_mode(mode m) {
+    if (m == mode::MAINTENANCE && _operation_mode != mode::NONE) {
+        // Prevent from calling `start_maintenance_mode` after `join_cluster`.
+        on_fatal_internal_error(slogger, format("Node should enter maintenance mode only from mode::NONE (current mode: {})", _operation_mode));
+    }
+    if (m == mode::STARTING && _operation_mode == mode::MAINTENANCE) {
+        // Prevent from calling `join_cluster` after `start_maintenance_mode`.
+        on_fatal_internal_error(slogger, "Node in the maintenance mode cannot enter the starting mode");
+    }
+
     if (m != _operation_mode) {
         slogger.info("entering {} mode", m);
         _operation_mode = m;
@@ -5888,6 +5899,14 @@ bool storage_service::is_repair_based_node_ops_enabled(streaming::stream_reason 
     bool global_enabled = _db.local().get_config().enable_repair_based_node_ops();
     slogger.info("enable_repair_based_node_ops={}, allowed_repair_based_node_ops={{{}}}", global_enabled, fmt::join(enabled_set, " ,"));
     return global_enabled && enabled_set.contains(reason);
+}
+
+future<> storage_service::start_maintenance_mode() {
+    set_mode(mode::MAINTENANCE);
+
+    return mutate_token_metadata([this] (mutable_token_metadata_ptr token_metadata) -> future<> {
+        return token_metadata->update_normal_tokens({ dht::token{} }, get_token_metadata_ptr()->get_topology().my_host_id());
+    }, acquire_merge_lock::yes);
 }
 
 node_ops_meta_data::node_ops_meta_data(
