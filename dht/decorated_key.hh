@@ -99,3 +99,11 @@ struct hash<dht::decorated_key> {
 };
 
 } // namespace std
+
+template <> struct fmt::formatter<dht::decorated_key> {
+    constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
+    template <typename FormatContext>
+    auto format(const dht::decorated_key& dk, FormatContext& ctx) const {
+        return fmt::format_to(ctx.out(), "{{key: {}, token: {}}}", dk._key, dk._token);
+    }
+};

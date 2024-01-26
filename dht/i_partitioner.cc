@@ -54,7 +54,7 @@ sharder::next_shard(const token& t) const {
 }
 
 std::ostream& operator<<(std::ostream& out, const decorated_key& dk) {
-    fmt::print(out, "{{key: {}, token: {}}}", dk._key, dk._token);
+    fmt::print(out, "{}", dk);
     return out;
 }
 

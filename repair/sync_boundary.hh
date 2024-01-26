@@ -29,9 +29,16 @@ struct repair_sync_boundary {
             return ret;
         }
     };
-    friend std::ostream& operator<<(std::ostream& os, const repair_sync_boundary& x) {
-        return os << "{ " << x.pk << "," <<  x.position << " }";
+};
+
+template <> struct fmt::formatter<repair_sync_boundary> {
+    constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
+    auto format(const repair_sync_boundary& boundary, fmt::format_context& ctx) const {
+        return fmt::format_to(ctx.out(), "{{ {}, {} }}", boundary.pk, boundary.position);
     }
 };
 
-
+inline std::ostream& operator<<(std::ostream& os, const repair_sync_boundary& x) {
+    fmt::print(os, "{}", x);
+    return os;
+}
