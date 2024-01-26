@@ -189,8 +189,6 @@ private:
     friend std::ostream& operator<<(std::ostream& os, const mutation& m);
 };
 
-namespace {
-
 template<consume_in_reverse reverse, FlattenedConsumerV2 Consumer>
 std::optional<stop_iteration> consume_clustering_fragments(schema_ptr s, mutation_partition& partition, Consumer& consumer, mutation_consume_cookie& cookie, is_preemptible preempt = is_preemptible::no) {
     constexpr bool crs_in_reverse = reverse == consume_in_reverse::yes;
@@ -307,8 +305,6 @@ std::optional<stop_iteration> consume_clustering_fragments(schema_ptr s, mutatio
 
     return stop;
 }
-
-} // anonymous namespace
 
 template<FlattenedConsumerV2 Consumer>
 auto mutation::consume(Consumer& consumer, consume_in_reverse reverse, mutation_consume_cookie cookie) &&
