@@ -2758,17 +2758,6 @@ future<service::topology> system_keyspace::load_topology_state() {
                 }
                 ret.req_param.emplace(host_id, service::rebuild_param{*rebuild_option});
                 break;
-            case service::node_state::left_token_ring:
-                // If replacenode fails the bootstrapping node is moved to left_token_ring state where it executes the metadata
-                // barrier. It needs to know which nodes to ignore during the barrier, so put them here into the replace_param.
-                // Note that if the replacenode does not fail and later the node is decommissioned it will move to the left_token_ring
-                // state at some point and replace_param will be created here as well (we do not remove replaced_id, and ignored_ids
-                // when we move to normal state). But this is OK because we allow to ignore nodes during topology operations only if they
-                // are permanently dead.
-                if (replaced_id) {
-                    ret.req_param.emplace(host_id, service::replace_param{*replaced_id, std::move(ignored_ids)});
-                }
-                break;
             case service::node_state::rollback_to_normal:
                 if (replaced_id) {
                     ret.req_param.emplace(host_id, service::removenode_param{std::move(ignored_ids)});
@@ -2800,10 +2789,12 @@ future<service::topology> system_keyspace::load_topology_state() {
                     "load_topology_state: found two nodes in transitioning state: {} in {} state and {} in {} state",
                     other_id, other_rs.state, host_id, nstate));
             }
+            // A decommissioning node doesn't have tokens at the end, they are
+            // removed during transition to the left_token_ring state.
             // Bootstrapping and replacing nodes don't have tokens at first,
             // they are inserted only at some point during bootstrap/replace
             if (!ring_slice
-                    && nstate != service::node_state::left_token_ring
+                    && nstate != service::node_state::decommissioning
                     && nstate != service::node_state::bootstrapping
                     && nstate != service::node_state::replacing) {
                 on_fatal_internal_error(slogger, format(
@@ -2833,11 +2824,9 @@ future<service::topology> system_keyspace::load_topology_state() {
         if (some_row.has("transition_state")) {
             ret.tstate = service::transition_state_from_string(some_row.get_as<sstring>("transition_state"));
         } else {
-            // Any remaining transition_nodes must be in left_token_ring state
-            // or rebuilding or rollback_to_normal
+            // Any remaining transition_nodes must be in rebuilding or rollback_to_normal state.
             auto it = std::find_if(ret.transition_nodes.begin(), ret.transition_nodes.end(),
-                    [] (auto& p) { return p.second.state != service::node_state::left_token_ring &&
-                                               p.second.state != service::node_state::rebuilding &&
+                    [] (auto& p) { return p.second.state != service::node_state::rebuilding &&
                                                p.second.state != service::node_state::rollback_to_normal; });
             if (it != ret.transition_nodes.end()) {
                 on_internal_error(slogger, format(

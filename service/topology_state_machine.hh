@@ -33,7 +33,6 @@ enum class node_state: uint16_t {
     replacing,           // the node replaces another dead node in the cluster and it data is being streamed to it
     rebuilding,          // the node is being rebuild and is streaming data from other replicas
     normal,              // the node does not do any streaming and serves the slice of the ring that belongs to it
-    left_token_ring,     // the node left the token ring, but not group0 yet; we wait until other nodes stop writing to it
     left,                // the node left the cluster and group0
     rollback_to_normal,  // the node rolls back failed decommission/remove node operation
 };
@@ -116,6 +115,7 @@ struct topology {
         write_both_read_old,
         write_both_read_new,
         tablet_migration,
+        left_token_ring,
     };
 
     std::optional<transition_state> tstate;
