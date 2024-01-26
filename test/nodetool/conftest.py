@@ -12,6 +12,7 @@ import subprocess
 import sys
 import requests.exceptions
 import time
+from typing import NamedTuple
 
 from rest_api_mock import expected_request
 
@@ -31,8 +32,13 @@ def pytest_addoption(parser):
                      help="Setup the 'lo' network if launched with unshare(1)")
 
 
+class ServerAddress(NamedTuple):
+    ip: str
+    port: int
+
+
 @pytest.fixture(scope="session")
-def maybe_setup_loopback_network(request):
+def server_address(request):
     # unshare(1) -rn drops us in a new network namespace in which the "lo" is
     # not up yet, so let's set it up first.
     if request.config.getoption('--run-within-unshare'):
@@ -42,19 +48,16 @@ def maybe_setup_loopback_network(request):
         except FileNotFoundError:
             args = "/sbin/ifconfig lo up".split()
             subprocess.run(args, check=True)
-    yield
+    # we use a fixed ip and port, because the network namespace is not shared
+    yield ServerAddress('127.0.0.1', 12345)
 
 
 @pytest.fixture(scope="session")
-def rest_api_mock_server(request, maybe_setup_loopback_network):
-    ip = '127.0.0.1'
-    port = 12345
-    server = (ip, port)
-
+def rest_api_mock_server(request, server_address):
     server_process = subprocess.Popen([sys.executable,
                                        os.path.join(os.path.dirname(__file__), "rest_api_mock.py"),
-                                       ip,
-                                       str(port)])
+                                       server_address.ip,
+                                       str(server_address.port)])
     # wait 5 seconds for the expected requests
     timeout = 5
     interval = 0.1
@@ -64,7 +67,7 @@ def rest_api_mock_server(request, maybe_setup_loopback_network):
             # process terminated
             raise subprocess.CalledProcessError(returncode, server_process.args)
         try:
-            rest_api_mock.get_expected_requests(server)
+            rest_api_mock.get_expected_requests(server_address)
             break
         except requests.exceptions.ConnectionError:
             time.sleep(interval)
@@ -74,7 +77,7 @@ def rest_api_mock_server(request, maybe_setup_loopback_network):
         raise subprocess.TimeoutExpired(server_process.args, timeout)
 
     try:
-        yield server
+        yield server_address
     finally:
         server_process.terminate()
         server_process.wait()
