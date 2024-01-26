@@ -26,6 +26,7 @@
 #include "repair/hash.hh"
 #include "repair/sync_boundary.hh"
 #include "tasks/types.hh"
+#include "schema/schema.hh"
 
 namespace tasks {
 namespace repair {

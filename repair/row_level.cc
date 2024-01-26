@@ -19,10 +19,8 @@
 #include "mutation_writer/multishard_writer.hh"
 #include "dht/i_partitioner.hh"
 #include "dht/sharder.hh"
-#include "utils/to_string.hh"
 #include "utils/xx_hasher.hh"
 #include "utils/UUID.hh"
-#include "utils/hash.hh"
 #include "replica/database.hh"
 #include <seastar/util/bool_class.hh>
 #include <seastar/core/metrics_registration.hh>
@@ -39,7 +37,6 @@
 #include "gms/i_endpoint_state_change_subscriber.hh"
 #include "gms/gossiper.hh"
 #include "repair/row_level.hh"
-#include "mutation/mutation_source_metadata.hh"
 #include "utils/stall_free.hh"
 #include "service/migration_manager.hh"
 #include "streaming/consumer.hh"
@@ -49,7 +46,6 @@
 #include "service/storage_proxy.hh"
 #include "service/raft/raft_address_map.hh"
 #include "db/batchlog_manager.hh"
-#include "idl/position_in_partition.dist.hh"
 #include "idl/partition_checksum.dist.hh"
 #include "readers/empty_v2.hh"
 #include "readers/evictable.hh"
