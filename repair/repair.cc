@@ -2051,7 +2051,7 @@ future<> repair_service::repair_tablets(repair_uniq_id rid, sstring keyspace_nam
             throw std::runtime_error(format("repair[{}] Table {}.{} is not a tablet table", rid.uuid(), keyspace_name, table_name));
         }
         table_id tid = t->schema()->id();
-        // FIXME: we need to wait for current tablet movement and disable future tablet movment
+        // FIXME: we need to wait for current tablet movement and disable future tablet movement
         auto erm = t->get_effective_replication_map();
         auto& tmap = erm->get_token_metadata_ptr()->tablets().get_tablet_map(tid);
         struct repair_tablet_meta {

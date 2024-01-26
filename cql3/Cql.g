@@ -2001,7 +2001,7 @@ username returns [sstring str]
     | QUOTED_NAME { add_recognition_error("Quoted strings are not supported for user names"); }
     ;
 
-// Basically the same as cident, but we need to exlude existing CQL3 types
+// Basically the same as cident, but we need to exclude existing CQL3 types
 // (which for some reason are not reserved otherwise)
 non_type_ident returns [shared_ptr<cql3::column_identifier> id]
     : t=IDENT                    { if (_reserved_type_names().contains($t.text)) { add_recognition_error("Invalid (reserved) user type name " + $t.text); } $id = ::make_shared<cql3::column_identifier>($t.text, false); }

@@ -1364,7 +1364,7 @@ public:
         auto size = align_up(buf_pos, _alignment);
         auto fill_size = size - buf_pos;
         if (fill_size > 0) {
-            // we want to fill to a sector boundry, must leave room for metadata
+            // we want to fill to a sector boundary, must leave room for metadata
             assert((fill_size - detail::sector_overhead_size) <= _buffer_ostream.size());
             _buffer_ostream.fill('\0', fill_size - detail::sector_overhead_size);
             _segment_manager->totals.bytes_slack += fill_size;
@@ -1590,7 +1590,7 @@ db::commitlog::segment_manager::list_descriptors(sstring dirname) const {
 }
 
 // #11237 - make get_segments_to_replay on-demand. Since we base the time-part of
-// descriptor ids on hightest of wall-clock and segments found on disk on init,
+// descriptor ids on highest of wall-clock and segments found on disk on init,
 // we can just scan files now and include only those representing generations before
 // the creation of this commitlog instance.
 // This _could_ give weird results iff we had a truly sharded commitlog folder
