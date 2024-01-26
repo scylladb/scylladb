@@ -59,6 +59,9 @@ class controller : public protocol_server {
     future<> subscribe_server(sharded<cql_server>& server);
     future<> unsubscribe_server(sharded<cql_server>& server);
 
+    future<> start_listening_on_tcp_sockets(sharded<cql_server>& cserver);
+    future<> start_listening_on_maintenance_socket(sharded<cql_server>& cserver);
+
     maintenance_socket_enabled _used_by_maintenance_socket;
 
 public:
