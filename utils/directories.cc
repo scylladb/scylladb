@@ -199,6 +199,17 @@ future<> directories::verify_owner_and_mode(fs::path path, recursive recursive) 
     return do_verify_owner_and_mode(std::move(path), recursive, 0);
 }
 
+future<> directories::create_and_verify_directories() {
+    // Note: creation of hints_dir and view_hints_dir is
+    //       responsibility of db::hints::directory_initializer.
+    utils::directories::set dir_set;
+    dir_set.add(get_data_file_dirs());
+    dir_set.add(get_commitlog_dir());
+    dir_set.add(get_schema_commitlog_dir());
+
+    return create_and_verify(std::move(dir_set));
+}
+
 sstring directories::get_work_dir() const {
     return to_sstring(_work_dir);
 }

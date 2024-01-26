@@ -36,6 +36,7 @@ public:
     seastar::future<> create_and_verify(set dir_set);
     static seastar::future<> verify_owner_and_mode(fs::path path, recursive r = recursive::yes);
 
+    seastar::future<> create_and_verify_directories();
     seastar::sstring get_work_dir() const;
     seastar::sstring get_commitlog_dir() const;
     seastar::sstring get_schema_commitlog_dir() const;

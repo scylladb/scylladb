@@ -723,7 +723,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 notify_set.notify_all(configurable::system_state::stopped).get();
             });
 
-            cfg->setup_directories();
             dirs.emplace(*cfg);
 
             // We're writing to a non-atomic variable here. But bool writes are atomic
@@ -969,14 +968,10 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             });
 
             supervisor::notify("creating and verifying directories");
-            utils::directories::set dir_set;
-            dir_set.add(cfg->data_file_directories());
-            dir_set.add(cfg->commitlog_directory());
-            dir_set.add(cfg->schema_commitlog_directory());
-            dirs->create_and_verify(std::move(dir_set)).get();
+            dirs->create_and_verify_directories().get();
 
-            auto hints_dir_initializer = db::hints::directory_initializer::make(*dirs, cfg->hints_directory()).get();
-            auto view_hints_dir_initializer = db::hints::directory_initializer::make(*dirs, cfg->view_hints_directory()).get();
+            auto hints_dir_initializer = db::hints::directory_initializer::make(*dirs, dirs->get_hints_dir()).get();
+            auto view_hints_dir_initializer = db::hints::directory_initializer::make(*dirs, dirs->get_view_hints_dir()).get();
             if (!hinted_handoff_enabled.is_disabled_for_all()) {
                 hints_dir_initializer.ensure_created_and_verified().get();
             }
