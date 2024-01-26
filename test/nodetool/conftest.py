@@ -48,8 +48,13 @@ def server_address(request):
         except FileNotFoundError:
             args = "/sbin/ifconfig lo up".split()
             subprocess.run(args, check=True)
-    # we use a fixed ip and port, because the network namespace is not shared
-    yield ServerAddress('127.0.0.1', 12345)
+        # we use a fixed ip and port, because the network namespace is not shared
+        ip = '127.0.0.1'
+        port = 12345
+    else:
+        ip = f"127.{random.randint(0, 255)}.{random.randint(0, 255)}.{random.randint(0, 255)}"
+        port = random.randint(10000, 65535)
+    yield ServerAddress(ip, port)
 
 
 @pytest.fixture(scope="session")
