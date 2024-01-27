@@ -58,7 +58,6 @@ namespace thrift_fn = std;
 
 using namespace ::apache::thrift;
 using namespace ::apache::thrift::protocol;
-namespace thrift_transport = ::apache::thrift::transport;
 using namespace ::apache::thrift::async;
 
 using namespace  ::cassandra;
