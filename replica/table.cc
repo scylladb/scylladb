@@ -128,9 +128,13 @@ lw_shared_ptr<sstables::sstable_set> table::make_compound_sstable_set() {
     }
     // TODO: switch to a specialized set for groups which assumes disjointness across compound sets and incrementally read from them.
     // FIXME: avoid recreation of compound_set for groups which had no change. usually, only one group will be changed at a time.
-    auto sstable_sets = boost::copy_range<std::vector<lw_shared_ptr<sstables::sstable_set>>>(compaction_groups()
-        | boost::adaptors::transformed(std::mem_fn(&compaction_group::make_compound_sstable_set)));
-    return make_lw_shared(sstables::make_compound_sstable_set(schema(), std::move(sstable_sets)));
+    auto result = sstables::make_partitioned_sstable_set(schema(), false);
+    for (auto& cg : compaction_groups()) {
+        cg.main_sstables()->for_each_sstable([&] (sstables::shared_sstable sst) {
+            result.insert(std::move(sst));
+        });
+    }
+    return make_lw_shared<sstables::sstable_set>(std::move(result));
 }
 
 lw_shared_ptr<sstables::sstable_set> table::make_maintenance_sstable_set() const {
