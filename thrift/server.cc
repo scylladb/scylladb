@@ -23,13 +23,7 @@
 #include <thrift/TProcessor.h>
 #include <thrift/protocol/TBinaryProtocol.h>
 #include <thrift/async/TAsyncProcessor.h>
-#include <iostream>
 #include <algorithm>
-#include <unordered_map>
-#include <queue>
-#include <bitset>
-#include <limits>
-#include <cctype>
 #include <vector>
 
 #ifdef THRIFT_USES_BOOST

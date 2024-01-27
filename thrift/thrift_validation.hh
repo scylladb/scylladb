@@ -12,7 +12,7 @@
 
 #include "schema/schema.hh"
 #include "bytes.hh"
-#include "Cassandra.h"
+#include "cassandra_types.h"
 
 using namespace ::cassandra;
 
