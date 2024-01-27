@@ -48,6 +48,8 @@
 #include "db/config.hh"
 #include "locator/abstract_replication_strategy.hh"
 
+#include <fmt/ostream.h>
+
 #ifdef THRIFT_USES_BOOST
 namespace thrift_fn = tcxx;
 #else
@@ -62,6 +64,8 @@ using namespace ::apache::thrift::async;
 using namespace  ::cassandra;
 
 using namespace thrift;
+
+template <> struct fmt::formatter<cassandra::ConsistencyLevel::type> : fmt::ostream_formatter {};
 
 class unimplemented_exception : public std::exception {
 public:
