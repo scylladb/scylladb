@@ -12,6 +12,13 @@
 
 #include "db/hints/sync_point.hh"
 
+namespace db {
+std::ostream& operator<<(std::ostream& out, const replay_position& p) {
+    fmt::print(out, "{}", p);
+    return out;
+}
+}
+
 namespace db::hints {
 std::ostream& operator<<(std::ostream& out, const sync_point& sp) {
     out << "{regular_per_shard_rps: " << sp.regular_per_shard_rps

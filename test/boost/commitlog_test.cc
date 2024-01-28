@@ -45,6 +45,13 @@
 
 using namespace db;
 
+namespace db {
+std::ostream& boost_test_print_type(std::ostream& os, const replay_position& p) {
+    fmt::print(os, "{}", p);
+    return os;
+}
+}
+
 static future<> cl_test(commitlog::config cfg, noncopyable_function<future<> (commitlog&)> f) {
     // enable as needed.
     // moved from static init because static init fiasco.

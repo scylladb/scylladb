@@ -2063,10 +2063,11 @@ std::ostream& operator<<(std::ostream& out, const db::commitlog::segment::cf_mar
     return out;
 }
 
-std::ostream& operator<<(std::ostream& out, const db::replay_position& p) {
-    return out << "{" << p.shard_id() << ", " << p.base_id() << ", " << p.pos << "}";
 }
 
+auto fmt::formatter<db::replay_position>::format(const db::replay_position& p,
+                                                 fmt::format_context& ctx) const -> decltype(ctx.out()) {
+    return fmt::format_to(ctx.out(), "{{{}, {}, {}}}", p.shard_id(), p.base_id(), p.pos);
 }
 
 void db::commitlog::segment_manager::discard_unused_segments() noexcept {
