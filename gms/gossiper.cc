@@ -757,11 +757,16 @@ future<> gossiper::do_status_check() {
 
         // check for dead state removal
         auto expire_time = get_expire_time_for_endpoint(endpoint);
-        const auto host_id = get_host_id(endpoint);
-        if (!is_alive && (now > expire_time)
-             && (!get_token_metadata_ptr()->is_normal_token_owner(host_id))) {
+        if (!is_alive && (now > expire_time)) {
+            const auto host_id = eps->get_host_id();
+            if (!host_id) {
+                on_internal_error_noexcept(logger, format("Endpoint {} is dead and expired, but unexpecteduly, it has no HOST_ID in endpoint state", endpoint));
+            }
+          // FIXME: indentation
+          if (!host_id || !get_token_metadata_ptr()->is_normal_token_owner(host_id)) {
             logger.debug("time is expiring for endpoint : {} ({})", endpoint, expire_time.time_since_epoch().count());
             co_await evict_from_membership(endpoint, pid);
+          }
         }
     }
 
