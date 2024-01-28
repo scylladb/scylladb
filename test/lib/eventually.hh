@@ -22,7 +22,7 @@ void eventually(noncopyable_function<void ()> f, size_t max_attempts = 17) {
             break;
         } catch (...) {
             if (++attempts < max_attempts) {
-                sleep(std::chrono::milliseconds(1 << attempts)).get0();
+                sleep(std::chrono::milliseconds(1 << attempts)).get();
             } else {
                 throw;
             }
@@ -40,7 +40,7 @@ bool eventually_true(noncopyable_function<bool ()> f) {
         }
 
         if (++attempts < max_attempts) {
-            seastar::sleep(std::chrono::milliseconds(1 << attempts)).get0();
+            seastar::sleep(std::chrono::milliseconds(1 << attempts)).get();
         } else {
             return false;
         }

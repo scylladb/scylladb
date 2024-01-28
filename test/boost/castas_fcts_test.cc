@@ -65,7 +65,7 @@ auto test_explicit_type_casting_in_avg_function() {
             "  INSERT INTO air_quality_data(sensor_id, time, co_ppm) VALUES ('my_home', '2016-08-30 07:01:05', 31); \n"
             "  INSERT INTO air_quality_data(sensor_id, time, co_ppm) VALUES ('my_home', '2016-08-30 07:01:10', 20); \n"
             "apply batch;").get();
-            auto msg = e.execute_cql(format("select avg(CAST(co_ppm AS {})) from air_quality_data;", cql_type_name<RetType>::value)).get0();
+            auto msg = e.execute_cql(format("select avg(CAST(co_ppm AS {})) from air_quality_data;", cql_type_name<RetType>::value)).get();
             assert_that(msg).is_rows().with_size(1).with_row({{data_type_for<RetType>()->decompose( RetType(17 + 18 + 19 + 20 + 30 + 31 + 20) / RetType(7) )}});
     });
 }
@@ -113,7 +113,7 @@ SEASTAR_TEST_CASE(test_decimal_to_bigint) {
         e.execute_cql("INSERT INTO test (key, value) VALUES ('k8', -1)").get();
         e.execute_cql("INSERT INTO test (key, value) VALUES ('k9', -9223372036854775808)").get();
         e.execute_cql("INSERT INTO test (key, value) VALUES ('k10', -9223372036854775809)").get();
-        auto v = e.execute_cql("SELECT key,CAST(value as bigint) from test").get0();
+        auto v = e.execute_cql("SELECT key,CAST(value as bigint) from test").get();
         assert_that(v).is_rows().with_rows_ignore_order({
             {{utf8_type->decompose("k1")}, {long_type->decompose(std::numeric_limits<int64_t>::max())}},
             {{utf8_type->decompose("k2")}, {long_type->decompose(std::numeric_limits<int64_t>::min())}},
@@ -136,7 +136,7 @@ SEASTAR_TEST_CASE(test_decimal_to_float) {
         e.execute_cql("INSERT INTO test (key, value) VALUES ('k2', 1e1)").get();
         e.execute_cql("INSERT INTO test (key, value) VALUES ('k3', 100e-1)").get();
         e.execute_cql("INSERT INTO test (key, value) VALUES ('k4', -1e1)").get();
-        auto v = e.execute_cql("SELECT key, CAST(value as float) from test").get0();
+        auto v = e.execute_cql("SELECT key, CAST(value as float) from test").get();
         assert_that(v).is_rows().with_rows_ignore_order({
             {{serialized("k1")}, {serialized(float(10))}},
             {{serialized("k2")}, {serialized(float(10))}},
@@ -157,7 +157,7 @@ SEASTAR_TEST_CASE(test_varint_to_bigint) {
         e.execute_cql("INSERT INTO test (key, value) VALUES ('k6', -1)").get();
         e.execute_cql("INSERT INTO test (key, value) VALUES ('k7', -9223372036854775808)").get();
         e.execute_cql("INSERT INTO test (key, value) VALUES ('k8', -9223372036854775809)").get();
-        auto v = e.execute_cql("SELECT key,CAST(value as bigint) from test").get0();
+        auto v = e.execute_cql("SELECT key,CAST(value as bigint) from test").get();
         assert_that(v).is_rows().with_rows_ignore_order({
             {{utf8_type->decompose("k1")}, {long_type->decompose(std::numeric_limits<int64_t>::max())}},
             {{utf8_type->decompose("k2")}, {long_type->decompose(std::numeric_limits<int64_t>::min())}},
@@ -182,7 +182,7 @@ SEASTAR_TEST_CASE(test_varint_to_int) {
         e.execute_cql("INSERT INTO test (key, value) VALUES ('k6', -1)").get();
         e.execute_cql("INSERT INTO test (key, value) VALUES ('k7', -2147483648)").get();
         e.execute_cql("INSERT INTO test (key, value) VALUES ('k8', -2147483649)").get();
-        auto v = e.execute_cql("SELECT key,CAST(value as int) from test").get0();
+        auto v = e.execute_cql("SELECT key,CAST(value as int) from test").get();
         assert_that(v).is_rows().with_rows_ignore_order({
             {{utf8_type->decompose("k1")}, {int32_type->decompose(std::numeric_limits<int32_t>::max())}},
             {{utf8_type->decompose("k2")}, {int32_type->decompose(std::numeric_limits<int32_t>::min())}},
@@ -218,7 +218,7 @@ SEASTAR_TEST_CASE(test_numeric_casts_in_selection_clause) {
                                      "CAST(f AS tinyint), "
                                      "CAST(g AS tinyint), "
                                      "CAST(h AS tinyint), "
-                                     "CAST(i AS tinyint) FROM test").get0();
+                                     "CAST(i AS tinyint) FROM test").get();
             assert_that(msg).is_rows().with_size(1).with_row({{byte_type->decompose(int8_t(1))},
                                                               {byte_type->decompose(int8_t(2))},
                                                               {byte_type->decompose(int8_t(3))},
@@ -238,7 +238,7 @@ SEASTAR_TEST_CASE(test_numeric_casts_in_selection_clause) {
                                      "CAST(f AS smallint), "
                                      "CAST(g AS smallint), "
                                      "CAST(h AS smallint), "
-                                     "CAST(i AS smallint) FROM test").get0();
+                                     "CAST(i AS smallint) FROM test").get();
             assert_that(msg).is_rows().with_size(1).with_row({{short_type->decompose(int16_t(1))},
                                                               {short_type->decompose(int16_t(2))},
                                                               {short_type->decompose(int16_t(3))},
@@ -258,7 +258,7 @@ SEASTAR_TEST_CASE(test_numeric_casts_in_selection_clause) {
                                      "CAST(f AS int), "
                                      "CAST(g AS int), "
                                      "CAST(h AS int), "
-                                     "CAST(i AS int) FROM test").get0();
+                                     "CAST(i AS int) FROM test").get();
             assert_that(msg).is_rows().with_size(1).with_row({{int32_type->decompose(int32_t(1))},
                                                               {int32_type->decompose(int32_t(2))},
                                                               {int32_type->decompose(int32_t(3))},
@@ -278,7 +278,7 @@ SEASTAR_TEST_CASE(test_numeric_casts_in_selection_clause) {
                                      "CAST(f AS bigint), "
                                      "CAST(g AS bigint), "
                                      "CAST(h AS bigint), "
-                                     "CAST(i AS bigint) FROM test").get0();
+                                     "CAST(i AS bigint) FROM test").get();
             assert_that(msg).is_rows().with_size(1).with_row({{long_type->decompose(int64_t(1))},
                                                               {long_type->decompose(int64_t(2))},
                                                               {long_type->decompose(int64_t(3))},
@@ -298,7 +298,7 @@ SEASTAR_TEST_CASE(test_numeric_casts_in_selection_clause) {
                                      "CAST(f AS float), "
                                      "CAST(g AS float), "
                                      "CAST(h AS float), "
-                                     "CAST(i AS float) FROM test").get0();
+                                     "CAST(i AS float) FROM test").get();
             // Conversions that include floating point cannot be compared with assert_that(), because result
             //   of such conversions may be slightly different from theoretical values.
             auto cmp = [&](::size_t index, float req) {
@@ -329,7 +329,7 @@ SEASTAR_TEST_CASE(test_numeric_casts_in_selection_clause) {
                                      "CAST(f AS double), "
                                      "CAST(g AS double), "
                                      "CAST(h AS double), "
-                                     "CAST(i AS double) FROM test").get0();
+                                     "CAST(i AS double) FROM test").get();
             // Conversions that include floating points cannot be compared with assert_that(), because result
             //   of such conversions may be slightly different from theoretical values.
             auto cmp = [&](::size_t index, double req) {
@@ -360,7 +360,7 @@ SEASTAR_TEST_CASE(test_numeric_casts_in_selection_clause) {
                                      "CAST(f AS decimal), "
                                      "CAST(g AS decimal), "
                                      "CAST(h AS decimal), "
-                                     "CAST(i AS decimal) FROM test").get0();
+                                     "CAST(i AS decimal) FROM test").get();
             // Conversions that include floating points cannot be compared with assert_that(), because result
             //   of such conversions may be slightly different from theoretical values.
             auto cmp = [&](::size_t index, double req) {
@@ -391,7 +391,7 @@ SEASTAR_TEST_CASE(test_numeric_casts_in_selection_clause) {
                                      "CAST(f AS ascii), "
                                      "CAST(g AS ascii), "
                                      "CAST(h AS ascii), "
-                                     "CAST(i AS ascii) FROM test").get0();
+                                     "CAST(i AS ascii) FROM test").get();
             assert_that(msg).is_rows().with_size(1).with_row({{ascii_type->decompose("1")},
                                                               {ascii_type->decompose("2")},
                                                               {ascii_type->decompose("3")},
@@ -411,7 +411,7 @@ SEASTAR_TEST_CASE(test_numeric_casts_in_selection_clause) {
                                      "CAST(f AS text), "
                                      "CAST(g AS text), "
                                      "CAST(h AS text), "
-                                     "CAST(i AS text) FROM test").get0();
+                                     "CAST(i AS text) FROM test").get();
             assert_that(msg).is_rows().with_size(1).with_row({{utf8_type->decompose("1")},
                                                               {utf8_type->decompose("2")},
                                                               {utf8_type->decompose("3")},
@@ -438,7 +438,7 @@ SEASTAR_TEST_CASE(test_integers_to_decimal_casts_in_selection_clause) {
                                  "CAST(b AS decimal), "
                                  "CAST(c AS decimal), "
                                  "CAST(d AS decimal), "
-                                 "CAST(h AS decimal) FROM test").get0();
+                                 "CAST(h AS decimal) FROM test").get();
 
         auto cmp = [&](::size_t index, auto x) {
             auto row = dynamic_cast<cql_transport::messages::result_message::rows&>(*msg).rs().result_set().rows().front();
@@ -468,7 +468,7 @@ SEASTAR_TEST_CASE(test_integers_to_decimal_casts_with_avg_in_selection_clause) {
                                  "CAST(avg(CAST(b AS decimal)) AS text), "
                                  "CAST(avg(CAST(c AS decimal)) AS text), "
                                  "CAST(avg(CAST(d AS decimal)) AS text), "
-                                 "CAST(avg(CAST(h AS decimal)) AS text) FROM test").get0();
+                                 "CAST(avg(CAST(h AS decimal)) AS text) FROM test").get();
             assert_that(msg).is_rows().with_size(1).with_row({{utf8_type->decompose("1.5")},
                                                               {utf8_type->decompose("2.5")},
                                                               {utf8_type->decompose("3.5")},
@@ -486,35 +486,35 @@ SEASTAR_TEST_CASE(test_time_casts_in_selection_clause) {
 
         e.execute_cql("INSERT INTO test (a, b, c, d) VALUES (d2177dd0-eaa2-11de-a572-001b779c76e3, '2015-05-21 11:03:02+00', '2015-05-21', '11:03:02')").get();
         {
-            auto msg = e.execute_cql("SELECT CAST(a AS timestamp), CAST(a AS date), CAST(b as date), CAST(c AS timestamp) FROM test").get0();
+            auto msg = e.execute_cql("SELECT CAST(a AS timestamp), CAST(a AS date), CAST(b as date), CAST(c AS timestamp) FROM test").get();
             assert_that(msg).is_rows().with_size(1).with_row({{timestamp_type->from_string("2009-12-17t00:26:29.805+00")},
                                                               {simple_date_type->from_string("2009-12-17")},
                                                               {simple_date_type->from_string("2015-05-21")},
                                                               {timestamp_type->from_string("2015-05-21t00:00:00+00")}});
         }
         {
-            auto msg = e.execute_cql("SELECT CAST(CAST(a AS timestamp) AS text), CAST(CAST(a AS date) AS text), CAST(CAST(b as date) AS text), CAST(CAST(c AS timestamp) AS text) FROM test").get0();
+            auto msg = e.execute_cql("SELECT CAST(CAST(a AS timestamp) AS text), CAST(CAST(a AS date) AS text), CAST(CAST(b as date) AS text), CAST(CAST(c AS timestamp) AS text) FROM test").get();
             assert_that(msg).is_rows().with_size(1).with_row({{utf8_type->from_string("2009-12-17T00:26:29.805Z")},
                                                               {utf8_type->from_string("2009-12-17")},
                                                               {utf8_type->from_string("2015-05-21")},
                                                               {utf8_type->from_string("2015-05-21T00:00:00.000Z")}});
         }
         {
-            auto msg = e.execute_cql("SELECT CAST(a AS text), CAST(b as text), CAST(c AS text), CAST(d AS text) FROM test").get0();
+            auto msg = e.execute_cql("SELECT CAST(a AS text), CAST(b as text), CAST(c AS text), CAST(d AS text) FROM test").get();
             assert_that(msg).is_rows().with_size(1).with_row({{utf8_type->from_string("d2177dd0-eaa2-11de-a572-001b779c76e3")},
                                                               {utf8_type->from_string("2015-05-21T11:03:02.000Z")},
                                                               {utf8_type->from_string("2015-05-21")},
                                                               {utf8_type->from_string("11:03:02.000000000")}});
         }
         {
-            auto msg = e.execute_cql("SELECT CAST(CAST(a AS timestamp) AS ascii), CAST(CAST(a AS date) AS ascii), CAST(CAST(b as date) AS ascii), CAST(CAST(c AS timestamp) AS ascii) FROM test").get0();
+            auto msg = e.execute_cql("SELECT CAST(CAST(a AS timestamp) AS ascii), CAST(CAST(a AS date) AS ascii), CAST(CAST(b as date) AS ascii), CAST(CAST(c AS timestamp) AS ascii) FROM test").get();
             assert_that(msg).is_rows().with_size(1).with_row({{ascii_type->from_string("2009-12-17T00:26:29.805Z")},
                                                               {ascii_type->from_string("2009-12-17")},
                                                               {ascii_type->from_string("2015-05-21")},
                                                               {ascii_type->from_string("2015-05-21T00:00:00.000Z")}});
         }
         {
-            auto msg = e.execute_cql("SELECT CAST(a AS ascii), CAST(b as ascii), CAST(c AS ascii), CAST(d AS ascii) FROM test").get0();
+            auto msg = e.execute_cql("SELECT CAST(a AS ascii), CAST(b as ascii), CAST(c AS ascii), CAST(d AS ascii) FROM test").get();
             assert_that(msg).is_rows().with_size(1).with_row({{ascii_type->from_string("d2177dd0-eaa2-11de-a572-001b779c76e3")},
                                                               {ascii_type->from_string("2015-05-21T11:03:02.000Z")},
                                                               {ascii_type->from_string("2015-05-21")},
@@ -530,13 +530,13 @@ SEASTAR_TEST_CASE(test_other_type_casts_in_selection_clause) {
                       "c boolean)").get();
         e.execute_cql("INSERT INTO test (a, b, c) VALUES ('test', '127.0.0.1', true)").get();
         {
-            auto msg = e.execute_cql("SELECT CAST(a AS text), CAST(b as text), CAST(c AS text) FROM test").get0();
+            auto msg = e.execute_cql("SELECT CAST(a AS text), CAST(b as text), CAST(c AS text) FROM test").get();
             assert_that(msg).is_rows().with_size(1).with_row({{utf8_type->from_string("test")},
                                                               {utf8_type->from_string("127.0.0.1")},
                                                               {utf8_type->from_string("true")}});
         }
         {
-            auto msg = e.execute_cql("SELECT CAST(a AS ascii), CAST(b as ascii), CAST(c AS ascii) FROM test").get0();
+            auto msg = e.execute_cql("SELECT CAST(a AS ascii), CAST(b as ascii), CAST(c AS ascii) FROM test").get();
             assert_that(msg).is_rows().with_size(1).with_row({{ascii_type->from_string("test")},
                                                               {ascii_type->from_string("127.0.0.1")},
                                                               {ascii_type->from_string("true")}});
@@ -552,31 +552,31 @@ SEASTAR_TEST_CASE(test_casts_with_revrsed_order_in_selection_clause) {
                       "primary key (a, b)) WITH CLUSTERING ORDER BY (b DESC)").get();
         e.execute_cql("INSERT INTO test (a, b, c) VALUES (1, 2, 6.3)").get();
         {
-            auto msg = e.execute_cql("SELECT CAST(a AS tinyint), CAST(b as tinyint), CAST(c AS tinyint) FROM test").get0();
+            auto msg = e.execute_cql("SELECT CAST(a AS tinyint), CAST(b as tinyint), CAST(c AS tinyint) FROM test").get();
             assert_that(msg).is_rows().with_size(1).with_row({{byte_type->from_string("1")},
                                                               {byte_type->from_string("2")},
                                                               {byte_type->from_string("6")}});
         }
         {
-            auto msg = e.execute_cql("SELECT CAST(a AS smallint), CAST(b as smallint), CAST(c AS smallint) FROM test").get0();
+            auto msg = e.execute_cql("SELECT CAST(a AS smallint), CAST(b as smallint), CAST(c AS smallint) FROM test").get();
             assert_that(msg).is_rows().with_size(1).with_row({{short_type->from_string("1")},
                                                               {short_type->from_string("2")},
                                                               {short_type->from_string("6")}});
         }
         {
-            auto msg = e.execute_cql("SELECT CAST(a AS double), CAST(b as double), CAST(c AS double) FROM test").get0();
+            auto msg = e.execute_cql("SELECT CAST(a AS double), CAST(b as double), CAST(c AS double) FROM test").get();
             assert_that(msg).is_rows().with_size(1).with_row({{double_type->from_string("1")},
                                                               {double_type->from_string("2")},
                                                               {double_type->from_string("6.3")}});
         }
         {
-            auto msg = e.execute_cql("SELECT CAST(a AS text), CAST(b as text), CAST(c AS text) FROM test").get0();
+            auto msg = e.execute_cql("SELECT CAST(a AS text), CAST(b as text), CAST(c AS text) FROM test").get();
             assert_that(msg).is_rows().with_size(1).with_row({{utf8_type->from_string("1")},
                                                               {utf8_type->from_string("2")},
                                                               {utf8_type->from_string("6.3")}});
         }
         {
-            auto msg = e.execute_cql("SELECT CAST(a AS ascii), CAST(b as ascii), CAST(c AS ascii) FROM test").get0();
+            auto msg = e.execute_cql("SELECT CAST(a AS ascii), CAST(b as ascii), CAST(c AS ascii) FROM test").get();
             assert_that(msg).is_rows().with_size(1).with_row({{ascii_type->from_string("1")},
                                                               {ascii_type->from_string("2")},
                                                               {ascii_type->from_string("6.3")}});

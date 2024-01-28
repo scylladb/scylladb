@@ -129,7 +129,7 @@ future<file> filesystem_storage::open_component(const sstable& sst, component_ty
 }
 
 void filesystem_storage::open(sstable& sst) {
-    touch_temp_dir(sst).get0();
+    touch_temp_dir(sst).get();
     auto file_path = sst.filename(component_type::TemporaryTOC);
 
     // Writing TOC content to temporary file.
@@ -142,10 +142,10 @@ void filesystem_storage::open(sstable& sst) {
                                     open_flags::wo |
                                     open_flags::create |
                                     open_flags::exclusive,
-                                    options).get0();
+                                    options).get();
     auto w = file_writer(output_stream<char>(std::move(sink)), std::move(file_path));
 
-    bool toc_exists = file_exists(sst.filename(component_type::TOC)).get0();
+    bool toc_exists = file_exists(sst.filename(component_type::TOC)).get();
     if (toc_exists) {
         // TOC will exist at this point if write_components() was called with
         // the generation of a sstable that exists.
@@ -253,7 +253,7 @@ future<> filesystem_storage::check_create_links_replay(const sstable& sst, const
                         sstlog.error("Error while linking SSTable: {} to {}: {}", src, dst, eptr);
                         return make_exception_future<>(eptr);
                     }
-                    auto same = fut.get0();
+                    auto same = fut.get();
                     if (!same) {
                         auto msg = format("Error while linking SSTable: {} to {}: File exists", src, dst);
                         sstlog.error("{}", msg);

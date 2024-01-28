@@ -73,11 +73,11 @@ future<> controller::start_server() {
         // shards - if necessary for LWT.
         smp_service_group_config c;
         c.max_nonlocal_requests = 5000;
-        _ssg = create_smp_service_group(c).get0();
+        _ssg = create_smp_service_group(c).get();
 
         rmw_operation::set_default_write_isolation(_config.alternator_write_isolation());
 
-        net::inet_address addr = utils::resolve(_config.alternator_address, family).get0();
+        net::inet_address addr = utils::resolve(_config.alternator_address, family).get();
 
         auto get_cdc_metadata = [] (cdc::generation_service& svc) { return std::ref(svc.get_cdc_metadata()); };
         auto get_timeout_in_ms = [] (const db::config& cfg) -> utils::updateable_value<uint32_t> {

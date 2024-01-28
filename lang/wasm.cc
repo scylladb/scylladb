@@ -333,8 +333,8 @@ seastar::future<bytes_opt> run_script(const db::functions::function_name& name, 
     std::exception_ptr ex;
     bytes_opt ret;
     try {
-        func_inst = ctx.cache.get(name, arg_types, ctx).get0();
-        ret = wasm::run_script(ctx, *func_inst->instance->store, *func_inst->instance->instance, *func_inst->instance->func, arg_types, params, return_type, allow_null_input).get0();
+        func_inst = ctx.cache.get(name, arg_types, ctx).get();
+        ret = wasm::run_script(ctx, *func_inst->instance->store, *func_inst->instance->instance, *func_inst->instance->func, arg_types, params, return_type, allow_null_input).get();
     } catch (const wasm::instance_corrupting_exception& e) {
         func_inst->instance = std::nullopt;
         ex = std::current_exception();

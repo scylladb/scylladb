@@ -87,13 +87,13 @@ void verify_unauthorized_then_ok(
     const auto cql_query_string = sstring(cql_query);
 
     with_user(env, user_name, [&env, &cql_query_string] {
-        BOOST_REQUIRE_THROW(env.execute_cql(cql_query_string).get0(), exceptions::unauthorized_exception);
+        BOOST_REQUIRE_THROW(env.execute_cql(cql_query_string).get(), exceptions::unauthorized_exception);
     });
 
     resolve();
 
     with_user(env, user_name, [&env, &cql_query_string] {
-        env.execute_cql(cql_query_string).get0();
+        env.execute_cql(cql_query_string).get();
     });
 }
 
@@ -108,7 +108,7 @@ SEASTAR_TEST_CASE(create_role_restrictions) {
         //
 
         verify_unauthorized_then_ok(env, alice, "CREATE ROLE lord", [&env] {
-            env.execute_cql("GRANT CREATE ON ALL ROLES TO alice").get0();
+            env.execute_cql("GRANT CREATE ON ALL ROLES TO alice").get();
         });
 
         //
@@ -116,7 +116,7 @@ SEASTAR_TEST_CASE(create_role_restrictions) {
         //
 
         verify_unauthorized_then_ok(env, bob, "CREATE ROLE emperor WITH SUPERUSER = true", [&env] {
-            env.execute_cql("ALTER USER bob SUPERUSER").get0();
+            env.execute_cql("ALTER USER bob SUPERUSER").get();
         });
     }, db_config_with_auth());
 }
@@ -127,14 +127,14 @@ SEASTAR_TEST_CASE(create_role_restrictions) {
 
 SEASTAR_TEST_CASE(alter_role_restrictions) {
     return do_with_cql_env_thread([](auto&& env) {
-        env.execute_cql("CREATE ROLE lord").get0();
+        env.execute_cql("CREATE ROLE lord").get();
 
         //
         // A user cannot alter a role without ALTER on the role.
         //
 
         verify_unauthorized_then_ok(env, alice, "ALTER ROLE lord WITH LOGIN = true", [&env] {
-            env.execute_cql("GRANT ALTER ON ROLE lord TO alice").get0();
+            env.execute_cql("GRANT ALTER ON ROLE lord TO alice").get();
         });
 
         //
@@ -142,7 +142,7 @@ SEASTAR_TEST_CASE(alter_role_restrictions) {
         //
 
         with_user(env, bob, [&env] {
-            env.execute_cql("ALTER ROLE bob WITH LOGIN = true").get0();
+            env.execute_cql("ALTER ROLE bob WITH LOGIN = true").get();
         });
 
         //
@@ -150,7 +150,7 @@ SEASTAR_TEST_CASE(alter_role_restrictions) {
         //
 
         verify_unauthorized_then_ok(env, bob, "ALTER ROLE lord WITH SUPERUSER = true", [&env] {
-            env.execute_cql("ALTER USER bob SUPERUSER").get0();
+            env.execute_cql("ALTER USER bob SUPERUSER").get();
         });
 
         //
@@ -160,7 +160,7 @@ SEASTAR_TEST_CASE(alter_role_restrictions) {
 
         with_user(env, bob, [&env] {
             BOOST_REQUIRE_THROW(
-                    env.execute_cql("ALTER ROLE bob WITH SUPERUSER = true").get0(),
+                    env.execute_cql("ALTER ROLE bob WITH SUPERUSER = true").get(),
                     exceptions::unauthorized_exception);
         });
     }, db_config_with_auth());
@@ -172,14 +172,14 @@ SEASTAR_TEST_CASE(alter_role_restrictions) {
 
 SEASTAR_TEST_CASE(drop_role_restrictions) {
     return do_with_cql_env_thread([](auto&& env) {
-        env.execute_cql("CREATE ROLE LORD").get0();
+        env.execute_cql("CREATE ROLE LORD").get();
 
         //
         // A user cannot drop a role without DROP on the role.
         //
 
         verify_unauthorized_then_ok(env, alice, "DROP ROLE lord", [&env] {
-            env.execute_cql("GRANT DROP ON ROLE lord TO alice").get0();
+            env.execute_cql("GRANT DROP ON ROLE lord TO alice").get();
         });
 
         //
@@ -187,17 +187,17 @@ SEASTAR_TEST_CASE(drop_role_restrictions) {
         //
 
         with_user(env, alice, [&env] {
-            BOOST_REQUIRE_THROW(env.execute_cql("DROP ROLE alice").get0(), exceptions::request_validation_exception);
+            BOOST_REQUIRE_THROW(env.execute_cql("DROP ROLE alice").get(), exceptions::request_validation_exception);
         });
 
         //
         // Only a superuser can drop a role that has been granted a superuser role.
         //
 
-        env.execute_cql("CREATE ROLE emperor WITH SUPERUSER = true").get0();
+        env.execute_cql("CREATE ROLE emperor WITH SUPERUSER = true").get();
 
         verify_unauthorized_then_ok(env, bob, "DROP ROLE emperor", [&env] {
-            env.execute_cql("ALTER USER bob SUPERUSER").get0();
+            env.execute_cql("ALTER USER bob SUPERUSER").get();
         });
 
     }, db_config_with_auth());
@@ -209,14 +209,14 @@ SEASTAR_TEST_CASE(drop_role_restrictions) {
 
 SEASTAR_TEST_CASE(list_roles_restrictions) {
     return do_with_cql_env_thread([](auto&& env) {
-        env.execute_cql("CREATE ROLE lord").get0();
+        env.execute_cql("CREATE ROLE lord").get();
 
         //
         // A user cannot list all roles of a role not granted to them.
         //
 
         verify_unauthorized_then_ok(env, alice, "LIST ROLES OF lord", [&env] {
-            env.execute_cql("GRANT lord TO alice").get0();
+            env.execute_cql("GRANT lord TO alice").get();
         });
     }, db_config_with_auth());
 }
@@ -227,14 +227,14 @@ SEASTAR_TEST_CASE(list_roles_restrictions) {
 
 SEASTAR_TEST_CASE(grant_role_restrictions) {
     return do_with_cql_env_thread([](auto&& env) {
-        env.execute_cql("CREATE ROLE lord").get0();
+        env.execute_cql("CREATE ROLE lord").get();
 
         //
         // A user cannot grant a role to another user without AUTHORIZE on the role being granted.
         //
 
         verify_unauthorized_then_ok(env, alice, "GRANT lord TO alice", [&env] {
-            env.execute_cql("GRANT AUTHORIZE ON ROLE lord TO alice").get0();
+            env.execute_cql("GRANT AUTHORIZE ON ROLE lord TO alice").get();
         });
     }, db_config_with_auth());
 }
@@ -247,15 +247,15 @@ SEASTAR_TEST_CASE(revoke_role_restrictions) {
     return do_with_cql_env_thread([](auto&& env) {
         create_user_if_not_exists(env, alice);
 
-        env.execute_cql("CREATE ROLE lord").get0();
-        env.execute_cql("GRANT lord TO alice").get0();
+        env.execute_cql("CREATE ROLE lord").get();
+        env.execute_cql("GRANT lord TO alice").get();
 
         //
         // A user cannot revoke a role from another user without AUTHORIZE on the role being revoked.
         //
 
         verify_unauthorized_then_ok(env, alice, "REVOKE lord FROM alice", [&env] {
-            env.execute_cql("GRANT AUTHORIZE ON ROLE lord TO alice").get0();
+            env.execute_cql("GRANT AUTHORIZE ON ROLE lord TO alice").get();
         });
     }, db_config_with_auth());
 }
@@ -275,16 +275,16 @@ static void verify_default_permissions(
         std::string_view creation_query,
         const auth::resource& r) {
     create_user_if_not_exists(env, user);
-    env.execute_cql(sstring(grant_query)).get0();
+    env.execute_cql(sstring(grant_query)).get();
 
     with_user(env, user, [&env, creation_query] {
-        env.execute_cql(sstring(creation_query)).get0();
+        env.execute_cql(sstring(creation_query)).get();
     });
 
     const auto default_permissions = auth::get_permissions(
             env.local_auth_service(),
             auth::authenticated_user(user),
-            r).get0();
+            r).get();
 
     BOOST_REQUIRE_EQUAL(
             auth::permissions::to_strings(default_permissions),

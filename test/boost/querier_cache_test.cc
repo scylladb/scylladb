@@ -216,7 +216,7 @@ public:
         const auto cache_key = make_cache_key(key);
 
         auto querier = make_querier<Querier>(range);
-        auto dk_ck = querier.consume_page(dummy_result_builder{}, row_limit, std::numeric_limits<uint32_t>::max(), gc_clock::now()).get0();
+        auto dk_ck = querier.consume_page(dummy_result_builder{}, row_limit, std::numeric_limits<uint32_t>::max(), gc_clock::now()).get();
         auto&& dk = dk_ck.first;
         auto&& ck = dk_ck.second;
         auto permit = querier.permit();
@@ -648,7 +648,7 @@ SEASTAR_THREAD_TEST_CASE(test_resources_based_cache_eviction) {
 
         BOOST_REQUIRE(env.local_db().has_schema("querier_cache", "test"));
 
-        auto insert_id = env.prepare("INSERT INTO querier_cache.test (pk, ck, value) VALUES (?, ?, ?);").get0();
+        auto insert_id = env.prepare("INSERT INTO querier_cache.test (pk, ck, value) VALUES (?, ?, ?);").get();
         auto pk = cql3::raw_value::make_value(serialized(0));
         for (int i = 0; i < 100; ++i) {
             auto ck = cql3::raw_value::make_value(serialized(i));
@@ -737,7 +737,7 @@ SEASTAR_THREAD_TEST_CASE(test_immediate_evict_on_insert) {
     test_querier_cache t;
 
     auto& sem = t.get_semaphore();
-    auto permit1 = sem.obtain_permit(t.get_schema(), get_name(), 0, db::no_timeout, {}).get0();
+    auto permit1 = sem.obtain_permit(t.get_schema(), get_name(), 0, db::no_timeout, {}).get();
 
     auto resources = permit1.consume_resources(reader_resources(sem.available_resources().count, 0));
 

@@ -794,7 +794,7 @@ static schema_ptr buffer_overflow_schema() {
 SEASTAR_TEST_CASE(buffer_overflow) {
   return test_env::do_with_async([] (test_env& env) {
     auto s = buffer_overflow_schema();
-    auto sstp = ka_sst(env, s, "test/resource/sstables/buffer_overflow", 5).get0();
+    auto sstp = ka_sst(env, s, "test/resource/sstables/buffer_overflow", 5).get();
     auto r = sstp->make_reader(s, env.make_reader_permit(), query::full_partition_range, s->full_slice());
     auto pk1 = partition_key::from_exploded(*s, { int32_type->decompose(4) });
     auto dk1 = dht::decorate_key(*s, pk1);
@@ -848,7 +848,7 @@ SEASTAR_TEST_CASE(test_non_compound_table_row_is_not_marked_as_static) {
         auto sst = make_sstable_containing(env.make_sstable(s, version), {std::move(m)});
         auto mut = with_closeable(sst->make_reader(s, env.make_reader_permit(), query::full_partition_range, s->full_slice()), [] (auto& mr) {
             return read_mutation_from_flat_mutation_reader(mr);
-        }).get0();
+        }).get();
         BOOST_REQUIRE(bool(mut));
       }
     });
@@ -874,12 +874,12 @@ SEASTAR_TEST_CASE(test_has_partition_key) {
             auto hk = sstables::sstable::make_hashed_key(*s, dk.key());
             auto mr = sst->make_reader(s, env.make_reader_permit(), query::full_partition_range, s->full_slice());
             auto close_mr = deferred_close(mr);
-            auto res =  sst->has_partition_key(hk, dk).get0();
+            auto res =  sst->has_partition_key(hk, dk).get();
             BOOST_REQUIRE(bool(res));
 
             auto dk2 = dht::decorate_key(*s, partition_key::from_nodetool_style_string(s, "xx"));
             auto hk2 = sstables::sstable::make_hashed_key(*s, dk2.key());
-            res =  sst->has_partition_key(hk2, dk2).get0();
+            res =  sst->has_partition_key(hk2, dk2).get();
             BOOST_REQUIRE(! bool(res));
         }
     });
@@ -1373,13 +1373,13 @@ SEASTAR_TEST_CASE(test_large_index_pages_do_not_cause_large_allocations) {
 
     mutation expected = *with_closeable(mt->make_flat_reader(s, env.make_reader_permit(), pr), [] (auto& mt_reader) {
         return read_mutation_from_flat_mutation_reader(mt_reader);
-    }).get0();
+    }).get();
 
     auto t0 = std::chrono::steady_clock::now();
     auto large_allocs_before = memory::stats().large_allocations();
     mutation actual = *with_closeable(sst->as_mutation_source().make_reader_v2(s, env.make_reader_permit(), pr), [] (auto& sst_reader) {
         return read_mutation_from_flat_mutation_reader(sst_reader);
-    }).get0();
+    }).get();
     auto large_allocs_after = memory::stats().large_allocations();
     auto duration = std::chrono::steady_clock::now() - t0;
 

@@ -183,13 +183,13 @@ requires requires (Iterator i, Mapper mapper, Reducer reduce) {
     *i++;
     { i != i } -> std::convertible_to<bool>;
     { mapper(*i) } -> ExceptionContainerResultFuture<>;
-    { seastar::futurize_invoke(reduce, seastar::futurize_invoke(mapper, *i).get0().value()) }
+    { seastar::futurize_invoke(reduce, seastar::futurize_invoke(mapper, *i).get().value()) }
             -> std::same_as<seastar::future<>>;
 }
 inline
 auto
 result_map_reduce(Iterator begin, Iterator end, Mapper&& mapper, Reducer&& reducer) {
-    using result_type = std::remove_reference_t<decltype(seastar::futurize_invoke(mapper, *begin).get0())>;
+    using result_type = std::remove_reference_t<decltype(seastar::futurize_invoke(mapper, *begin).get())>;
     using exception_container_type = typename result_type::error_type;
     using adapter_type = internal::result_map_reduce_unary_adapter<Reducer, exception_container_type>;
     return seastar::map_reduce(
@@ -234,15 +234,15 @@ requires requires (Iterator i, Mapper mapper, Initial initial, Reducer reduce) {
     *i++;
     { i != i } -> std::convertible_to<bool>;
     { mapper(*i) } -> ExceptionContainerResultFuture<>;
-    { reduce(std::move(initial), mapper(*i).get0().value()) }
-            -> std::convertible_to<rebind_result<Initial, std::remove_reference_t<decltype(mapper(*i).get0())>>>;
+    { reduce(std::move(initial), mapper(*i).get().value()) }
+            -> std::convertible_to<rebind_result<Initial, std::remove_reference_t<decltype(mapper(*i).get())>>>;
 }
 inline
 auto
 result_map_reduce(Iterator begin, Iterator end, Mapper&& mapper, Initial initial, Reducer reduce)
-        -> seastar::future<rebind_result<Initial, std::remove_reference_t<decltype(mapper(*begin).get0())>>> {
+        -> seastar::future<rebind_result<Initial, std::remove_reference_t<decltype(mapper(*begin).get())>>> {
 
-    using right_type = std::remove_reference_t<decltype(mapper(*begin).get0())>;
+    using right_type = std::remove_reference_t<decltype(mapper(*begin).get())>;
     using left_type = rebind_result<Initial, right_type>;
 
     return seastar::map_reduce(

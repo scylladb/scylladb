@@ -240,7 +240,7 @@ public:
                 descriptor.replacer = sstables::replacer_fn_no_op();
                 auto cdata = compaction_manager::create_compaction_data();
                 compaction_progress_monitor progress_monitor;
-                auto ret = sstables::compact_sstables(std::move(descriptor), cdata, cf->as_table_state(), progress_monitor).get0();
+                auto ret = sstables::compact_sstables(std::move(descriptor), cdata, cf->as_table_state(), progress_monitor).get();
                 auto end = perf_sstable_test_env::now();
 
                 auto partitions_per_sstable = _cfg.partitions / _cfg.sstables;

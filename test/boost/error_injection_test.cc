@@ -386,19 +386,19 @@ SEASTAR_TEST_CASE(test_inject_cql) {
             cquery_nofail(e, "insert into  error_name (name, one_shot) values ('test1', 'true')");
 
             // Check no error injections before injecting
-            auto ret0 = e.execute_cql("select enabled_injections() from error_name limit 1").get0();
+            auto ret0 = e.execute_cql("select enabled_injections() from error_name limit 1").get();
             assert_that(ret0).is_rows().with_rows({
                 {row_empty}
             });
 
             cquery_nofail(e, "select enable_injection(name, one_shot)  from error_name where name = 'test1'");
             // enabled_injections() returns a list all injections in one call, so limit 1
-            auto ret1 = e.execute_cql("select enabled_injections() from error_name limit 1").get0();
+            auto ret1 = e.execute_cql("select enabled_injections() from error_name limit 1").get();
             assert_that(ret1).is_rows().with_rows({
                 {row_test1}
             });
             utils::get_local_injector().inject("test1", [] {}); // Noop one-shot injection
-            auto ret2 = e.execute_cql("select enabled_injections() from error_name limit 1").get0();
+            auto ret2 = e.execute_cql("select enabled_injections() from error_name limit 1").get();
             assert_that(ret2).is_rows().with_rows({
                 // Empty list after one shot executed
                 {row_empty}
@@ -407,13 +407,13 @@ SEASTAR_TEST_CASE(test_inject_cql) {
             // Again (test1,one_shot=true) but disable with CQL API
             cquery_nofail(e, "select enable_injection(name, one_shot)  from error_name where name = 'test1'");
             // enabled_injections() returns a list all injections in one call, so limit 1
-            auto ret3 = e.execute_cql("select enabled_injections() from error_name limit 1").get0();
+            auto ret3 = e.execute_cql("select enabled_injections() from error_name limit 1").get();
             assert_that(ret3).is_rows().with_rows({
                 {row_test1}
             });
             // Disable
             cquery_nofail(e, "select disable_injection(name) from error_name where name = 'test1'");
-            auto ret4 = e.execute_cql("select enabled_injections() from error_name limit 1").get0();
+            auto ret4 = e.execute_cql("select enabled_injections() from error_name limit 1").get();
             assert_that(ret4).is_rows().with_rows({
                 // Empty list after one shot disabled
                 {row_empty}
@@ -422,7 +422,7 @@ SEASTAR_TEST_CASE(test_inject_cql) {
             cquery_nofail(e, "insert into  error_name (name, one_shot) values ('test2', 'false')");
             cquery_nofail(e, "select enable_injection(name, one_shot)  from error_name where name = 'test2'");
             utils::get_local_injector().inject("test2", [] {}); // Noop injection, doesn't disable
-            auto ret5 = e.execute_cql("select enabled_injections() from error_name limit 1").get0();
+            auto ret5 = e.execute_cql("select enabled_injections() from error_name limit 1").get();
             assert_that(ret5).is_rows().with_rows({
                 {row_test2}
             });

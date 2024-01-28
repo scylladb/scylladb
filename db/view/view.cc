@@ -1191,8 +1191,8 @@ future<> view_update_builder::close() noexcept {
 future<stop_iteration> view_update_builder::advance_all() {
     auto existings_f = _existings ? (*_existings)() : make_ready_future<mutation_fragment_v2_opt>();
     return when_all(_updates(), std::move(existings_f)).then([this] (auto&& fragments) mutable {
-        _update = std::move(std::get<0>(fragments).get0());
-        _existing = std::move(std::get<1>(fragments).get0());
+        _update = std::move(std::get<0>(fragments).get());
+        _existing = std::move(std::get<1>(fragments).get());
         return stop_iteration::no;
     });
 }
@@ -1819,12 +1819,12 @@ future<> view_builder::start(service::migration_manager& mm) {
             // Guard the whole startup routine with a semaphore,
             // so that it's not intercepted by `on_drop_view`, `on_create_view`
             // or `on_update_view` events.
-            auto units = get_units(_sem, 1).get0();
+            auto units = get_units(_sem, 1).get();
             // Wait for schema agreement even if we're a seed node.
             mm.wait_for_schema_agreement(_db, db::timeout_clock::time_point::max(), &_as).get();
 
-            auto built = _sys_ks.load_built_views().get0();
-            auto in_progress = _sys_ks.load_view_build_progress().get0();
+            auto built = _sys_ks.load_built_views().get();
+            auto in_progress = _sys_ks.load_view_build_progress().get();
             setup_shard_build_step(vbi, std::move(built), std::move(in_progress));
         }).then_wrapped([this] (future<>&& f) {
             // All shards need to arrive at the same decisions on whether or not to
@@ -2249,7 +2249,7 @@ future<> view_builder::do_build_step() {
     return seastar::async([this] {
         exponential_backoff_retry r(1s, 1min);
         while (!_base_to_build_step.empty() && !_as.abort_requested()) {
-            auto units = get_units(_sem, 1).get0();
+            auto units = get_units(_sem, 1).get();
             ++_stats.steps_performed;
             try {
                 execute(_current_step->second, exponential_backoff_retry(1s, 1min));
@@ -2701,7 +2701,7 @@ void delete_ghost_rows_visitor::accept_new_row(const clustering_key& ck, const q
             _proxy.get_max_result_size(partition_slice), query::tombstone_limit(_proxy.get_tombstone_limit()));
     auto timeout = db::timeout_clock::now() + _timeout_duration;
     service::storage_proxy::coordinator_query_options opts{timeout, _state.get_permit(), _state.get_client_state(), _state.get_trace_state()};
-    auto base_qr = _proxy.query(_base_schema, command, std::move(partition_ranges), db::consistency_level::ALL, opts).get0();
+    auto base_qr = _proxy.query(_base_schema, command, std::move(partition_ranges), db::consistency_level::ALL, opts).get();
     query::result& result = *base_qr.query_result;
     if (result.row_count().value_or(0) == 0) {
         mutation m(_view, *_view_pk);

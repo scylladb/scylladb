@@ -185,7 +185,7 @@ future<> server::do_accepts(int which, bool keepalive, socket_address server_add
                 maybe_stop();
                 return stop_iteration::yes;
             }
-            auto cs_sa = f_cs_sa.get0();
+            auto cs_sa = f_cs_sa.get();
             auto fd = std::move(cs_sa.connection);
             auto addr = std::move(cs_sa.remote_address);
             fd.set_nodelay(true);

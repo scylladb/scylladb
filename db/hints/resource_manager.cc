@@ -35,7 +35,7 @@ future<bool> is_mountpoint(const fs::path& path) {
         return make_ready_future<bool>(true);
     }
     return when_all(get_device_id(path), get_device_id(path.parent_path())).then([](std::tuple<future<dev_t>, future<dev_t>> ids) {
-        return std::get<0>(ids).get0() != std::get<1>(ids).get0();
+        return std::get<0>(ids).get() != std::get<1>(ids).get();
     });
 }
 

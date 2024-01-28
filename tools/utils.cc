@@ -156,7 +156,7 @@ int tool_app_template::run_async(int argc, char** argv, noncopyable_function<int
             configurable::notify_set ns;
 
             if (_cfg.db_cfg_ext) {
-                ns = configurable::init_all(*_cfg.db_cfg_ext->db_cfg, *_cfg.db_cfg_ext->extensions).get0();
+                ns = configurable::init_all(*_cfg.db_cfg_ext->db_cfg, *_cfg.db_cfg_ext->extensions).get();
             }
 
             ns.notify_all(configurable::system_state::started).get();

@@ -329,7 +329,7 @@ SEASTAR_TEST_CASE(test_unspooled_dirty_accounting_on_flush) {
         flush_reader_check.produces_partition(current_ring[1]);
         unspooled_dirty_values.push_back(mgr.unspooled_dirty_memory());
 
-        while ((*rd1)().get0()) ;
+        while ((*rd1)().get()) ;
         close_rd1.close_now();
 
         logalloc::shard_tracker().full_compaction();
@@ -447,17 +447,17 @@ SEASTAR_TEST_CASE(test_segment_migration_during_flush) {
         auto close_rd = deferred_close(rd);
 
         for (int i = 0; i < partitions; ++i) {
-            auto mfopt = rd().get0();
+            auto mfopt = rd().get();
             BOOST_REQUIRE(bool(mfopt));
             BOOST_REQUIRE(mfopt->is_partition_start());
             while (!mfopt->is_end_of_partition()) {
                 logalloc::shard_tracker().full_compaction();
-                mfopt = rd().get0();
+                mfopt = rd().get();
             }
             BOOST_REQUIRE_LE(mgr.unspooled_dirty_memory(), mgr.real_dirty_memory());
         }
 
-        BOOST_REQUIRE(!rd().get0());
+        BOOST_REQUIRE(!rd().get());
     });
 }
 
@@ -807,8 +807,8 @@ SEASTAR_TEST_CASE(test_hash_is_cached) {
         {
             auto rd = mt->make_flat_reader(s, semaphore.make_permit());
             auto close_rd = deferred_close(rd);
-            rd().get0()->as_partition_start();
-            clustering_row row = std::move(*rd().get0()).as_clustering_row();
+            rd().get()->as_partition_start();
+            clustering_row row = std::move(*rd().get()).as_clustering_row();
             BOOST_REQUIRE(!row.cells().cell_hash_for(0));
         }
 
@@ -817,16 +817,16 @@ SEASTAR_TEST_CASE(test_hash_is_cached) {
             slice.options.set<query::partition_slice::option::with_digest>();
             auto rd = mt->make_flat_reader(s, semaphore.make_permit(), query::full_partition_range, slice);
             auto close_rd = deferred_close(rd);
-            rd().get0()->as_partition_start();
-            clustering_row row = std::move(*rd().get0()).as_clustering_row();
+            rd().get()->as_partition_start();
+            clustering_row row = std::move(*rd().get()).as_clustering_row();
             BOOST_REQUIRE(row.cells().cell_hash_for(0));
         }
 
         {
             auto rd = mt->make_flat_reader(s, semaphore.make_permit());
             auto close_rd = deferred_close(rd);
-            rd().get0()->as_partition_start();
-            clustering_row row = std::move(*rd().get0()).as_clustering_row();
+            rd().get()->as_partition_start();
+            clustering_row row = std::move(*rd().get()).as_clustering_row();
             BOOST_REQUIRE(row.cells().cell_hash_for(0));
         }
 
@@ -836,8 +836,8 @@ SEASTAR_TEST_CASE(test_hash_is_cached) {
         {
             auto rd = mt->make_flat_reader(s, semaphore.make_permit());
             auto close_rd = deferred_close(rd);
-            rd().get0()->as_partition_start();
-            clustering_row row = std::move(*rd().get0()).as_clustering_row();
+            rd().get()->as_partition_start();
+            clustering_row row = std::move(*rd().get()).as_clustering_row();
             BOOST_REQUIRE(!row.cells().cell_hash_for(0));
         }
 
@@ -846,16 +846,16 @@ SEASTAR_TEST_CASE(test_hash_is_cached) {
             slice.options.set<query::partition_slice::option::with_digest>();
             auto rd = mt->make_flat_reader(s, semaphore.make_permit(), query::full_partition_range, slice);
             auto close_rd = deferred_close(rd);
-            rd().get0()->as_partition_start();
-            clustering_row row = std::move(*rd().get0()).as_clustering_row();
+            rd().get()->as_partition_start();
+            clustering_row row = std::move(*rd().get()).as_clustering_row();
             BOOST_REQUIRE(row.cells().cell_hash_for(0));
         }
 
         {
             auto rd = mt->make_flat_reader(s, semaphore.make_permit());
             auto close_rd = deferred_close(rd);
-            rd().get0()->as_partition_start();
-            clustering_row row = std::move(*rd().get0()).as_clustering_row();
+            rd().get()->as_partition_start();
+            clustering_row row = std::move(*rd().get()).as_clustering_row();
             BOOST_REQUIRE(row.cells().cell_hash_for(0));
         }
     });
@@ -1025,7 +1025,7 @@ SEASTAR_TEST_CASE(sstable_compaction_does_not_resurrect_data) {
         t.compact_all_sstables().get();
 
         // If we get additional row (1, 2, 4), that means the tombstone was purged and data was resurrected
-        assert_that(env.execute_cql(format("SELECT * FROM {}.{};", ks_name, table_name)).get0())
+        assert_that(env.execute_cql(format("SELECT * FROM {}.{};", ks_name, table_name)).get())
             .is_rows()
             .with_rows_ignore_order({
                 {serialized(1), serialized(3), serialized(3)}, 

@@ -238,7 +238,7 @@ public:
                     if (val_fut.failed()) {
                         e->loaded().set_exception(val_fut.get_exception());
                     } else {
-                        e->set_value(val_fut.get0());
+                        e->set_value(val_fut.get());
                         e->loaded().set_value();
                     }
                 });

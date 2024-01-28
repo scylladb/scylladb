@@ -136,7 +136,7 @@ static std::vector<perf_result> test_read(cql_test_env& env, test_config& cfg) {
     if (!cfg.timeout.empty()) {
         query += " using timeout " + cfg.timeout;
     }
-    auto id = env.prepare(query).get0();
+    auto id = env.prepare(query).get();
     return time_parallel([&env, &cfg, id] {
             bytes key = make_random_key(cfg);
             return env.execute_prepared(id, {{cql3::raw_value::make_value(std::move(key))}}).discard_result();
@@ -155,7 +155,7 @@ static std::vector<perf_result> test_write(cql_test_env& env, test_config& cfg) 
             "\"C3\" = 0x62bcb1dbc0ff953abc703bcb63ea954f437064c0c45366799658bd6b91d0f92908d7,"
             "\"C4\" = 0x222fcbe31ffa1e689540e1499b87fa3f9c781065fccd10e4772b4c7039c2efd0fb27 "
             "WHERE \"KEY\" = ?", usings);
-    auto id = env.prepare(query).get0();
+    auto id = env.prepare(query).get();
     return time_parallel([&env, &cfg, id] {
             bytes key = make_random_key(cfg);
             return env.execute_prepared(id, {{cql3::raw_value::make_value(std::move(key))}}).discard_result();
@@ -169,7 +169,7 @@ static std::vector<perf_result> test_delete(cql_test_env& env, test_config& cfg)
         usings += "USING TIMEOUT " + cfg.timeout;
     }
     sstring query = format("DELETE \"C0\", \"C1\", \"C2\", \"C3\", \"C4\" FROM cf {}WHERE \"KEY\" = ?", usings);
-    auto id = env.prepare(query).get0();
+    auto id = env.prepare(query).get();
     return time_parallel([&env, &cfg, id] {
             bytes key = make_random_key(cfg);
             return env.execute_prepared(id, {{cql3::raw_value::make_value(std::move(key))}}).discard_result();
@@ -188,7 +188,7 @@ static std::vector<perf_result> test_counter_update(cql_test_env& env, test_conf
             "\"C3\" = \"C3\" + 4,"
             "\"C4\" = \"C4\" + 5 "
             "WHERE \"KEY\" = ?", usings);
-    auto id = env.prepare(query).get0();
+    auto id = env.prepare(query).get();
     return time_parallel([&env, &cfg, id] {
             bytes key = make_random_key(cfg);
             return env.execute_prepared(id, {{cql3::raw_value::make_value(std::move(key))}}).discard_result();

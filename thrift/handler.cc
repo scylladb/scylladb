@@ -129,7 +129,7 @@ with_cob(thrift_fn::function<void (const T& ret)>&& cob,
         return noexcept_movable<T>::wrap(func());
     }).then_wrapped([cob = std::move(cob), exn_cob = std::move(exn_cob)] (auto&& f) {
         try {
-            cob(noexcept_movable<T>::unwrap(f.get0()));
+            cob(noexcept_movable<T>::unwrap(f.get()));
         } catch (...) {
             delayed_exception_wrapper dew(std::current_exception());
             exn_cob(&dew);

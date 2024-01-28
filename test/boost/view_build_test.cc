@@ -75,11 +75,11 @@ SEASTAR_TEST_CASE(test_builder_with_large_partition) {
                       "primary key (v, c, p)").get();
 
         f.get();
-        auto built = e.get_system_keyspace().local().load_built_views().get0();
+        auto built = e.get_system_keyspace().local().load_built_views().get();
         BOOST_REQUIRE_EQUAL(built.size(), 1);
         BOOST_REQUIRE_EQUAL(built[0].second, sstring("vcf"));
 
-        auto msg = e.execute_cql("select count(*) from vcf where v = 0").get0();
+        auto msg = e.execute_cql("select count(*) from vcf where v = 0").get();
         assert_that(msg).is_rows().with_size(1);
         assert_that(msg).is_rows().with_rows({{{long_type->decompose(1024L)}}});
     });
@@ -110,11 +110,11 @@ SEASTAR_TEST_CASE(test_builder_with_large_partition_2) {
                       "primary key (p, c)").get();
 
         f.get();
-        auto built = e.get_system_keyspace().local().load_built_views().get0();
+        auto built = e.get_system_keyspace().local().load_built_views().get();
         BOOST_REQUIRE_EQUAL(built.size(), 1);
         BOOST_REQUIRE_EQUAL(built[0].second, sstring("vcf"));
 
-        auto msg = e.execute_cql("select count(*) from vcf").get0();
+        auto msg = e.execute_cql("select count(*) from vcf").get();
         assert_that(msg).is_rows().with_size(1);
         assert_that(msg).is_rows().with_rows({{{long_type->decompose(long(nrows))}}});
     });
@@ -135,11 +135,11 @@ SEASTAR_TEST_CASE(test_builder_with_multiple_partitions) {
                       "primary key (v, c, p)").get();
 
         f.get();
-        auto built = e.get_system_keyspace().local().load_built_views().get0();
+        auto built = e.get_system_keyspace().local().load_built_views().get();
         BOOST_REQUIRE_EQUAL(built.size(), 1);
         BOOST_REQUIRE_EQUAL(built[0].second, sstring("vcf"));
 
-        auto msg = e.execute_cql("select count(*) from vcf where v = 0").get0();
+        auto msg = e.execute_cql("select count(*) from vcf where v = 0").get();
         assert_that(msg).is_rows().with_size(1);
         assert_that(msg).is_rows().with_rows({{{long_type->decompose(1024L)}}});
     });
@@ -159,11 +159,11 @@ SEASTAR_TEST_CASE(test_builder_with_multiple_partitions_of_batch_size_rows) {
                       "primary key (v, c, p)").get();
 
         f.get();
-        auto built = e.get_system_keyspace().local().load_built_views().get0();
+        auto built = e.get_system_keyspace().local().load_built_views().get();
         BOOST_REQUIRE_EQUAL(built.size(), 1);
         BOOST_REQUIRE_EQUAL(built[0].second, sstring("vcf"));
 
-        auto msg = e.execute_cql("select count(*) from vcf where v = 0").get0();
+        auto msg = e.execute_cql("select count(*) from vcf where v = 0").get();
         assert_that(msg).is_rows().with_size(1);
         assert_that(msg).is_rows().with_rows({{{long_type->decompose(1024L)}}});
     });
@@ -192,14 +192,14 @@ SEASTAR_TEST_CASE(test_builder_view_added_during_ongoing_build) {
 
         f2.get();
         f1.get();
-        auto built = e.get_system_keyspace().local().load_built_views().get0();
+        auto built = e.get_system_keyspace().local().load_built_views().get();
         BOOST_REQUIRE_EQUAL(built.size(), 2);
 
-        auto msg = e.execute_cql("select count(*) from vcf1 where v = 0").get0();
+        auto msg = e.execute_cql("select count(*) from vcf1 where v = 0").get();
         assert_that(msg).is_rows().with_size(1);
         assert_that(msg).is_rows().with_rows({{{long_type->decompose(5000L)}}});
 
-        msg = e.execute_cql("select count(*) from vcf2 where v = 0").get0();
+        msg = e.execute_cql("select count(*) from vcf2 where v = 0").get();
         assert_that(msg).is_rows().with_size(1);
         assert_that(msg).is_rows().with_rows({{{long_type->decompose(5000L)}}});
     });
@@ -250,14 +250,14 @@ SEASTAR_TEST_CASE(test_builder_across_tokens_with_large_partitions) {
 
         f2.get();
         f1.get();
-        auto built = e.get_system_keyspace().local().load_built_views().get0();
+        auto built = e.get_system_keyspace().local().load_built_views().get();
         BOOST_REQUIRE_EQUAL(built.size(), 2);
 
-        auto msg = e.execute_cql("select count(*) from vcf1 where v = 0").get0();
+        auto msg = e.execute_cql("select count(*) from vcf1 where v = 0").get();
         assert_that(msg).is_rows().with_size(1);
         assert_that(msg).is_rows().with_rows({{{long_type->decompose(4000L)}}});
 
-        msg = e.execute_cql("select count(*) from vcf2 where v = 0").get0();
+        msg = e.execute_cql("select count(*) from vcf2 where v = 0").get();
         assert_that(msg).is_rows().with_size(1);
         assert_that(msg).is_rows().with_rows({{{long_type->decompose(4000L)}}});
     });
@@ -293,14 +293,14 @@ SEASTAR_TEST_CASE(test_builder_across_tokens_with_small_partitions) {
         f2.get();
         f1.get();
 
-        auto built = e.get_system_keyspace().local().load_built_views().get0();
+        auto built = e.get_system_keyspace().local().load_built_views().get();
         BOOST_REQUIRE_EQUAL(built.size(), 2);
 
-        auto msg = e.execute_cql("select count(*) from vcf1 where v = 0").get0();
+        auto msg = e.execute_cql("select count(*) from vcf1 where v = 0").get();
         assert_that(msg).is_rows().with_size(1);
         assert_that(msg).is_rows().with_rows({{{long_type->decompose(4000L)}}});
 
-        msg = e.execute_cql("select count(*) from vcf2 where v = 0").get0();
+        msg = e.execute_cql("select count(*) from vcf2 where v = 0").get();
         assert_that(msg).is_rows().with_size(1);
         assert_that(msg).is_rows().with_rows({{{long_type->decompose(4000L)}}});
     });
@@ -323,10 +323,10 @@ SEASTAR_TEST_CASE(test_builder_with_tombstones) {
                       "primary key ((v, p), c1, c2)").get();
 
         f.get();
-        auto built = e.get_system_keyspace().local().load_built_views().get0();
+        auto built = e.get_system_keyspace().local().load_built_views().get();
         BOOST_REQUIRE_EQUAL(built.size(), 1);
 
-        auto msg = e.execute_cql("select * from vcf").get0();
+        auto msg = e.execute_cql("select * from vcf").get();
         assert_that(msg).is_rows().with_size(25);
     });
 }
@@ -368,7 +368,7 @@ SEASTAR_TEST_CASE(test_builder_with_concurrent_writes) {
 
         f.get();
         eventually([&] {
-            auto msg = e.execute_cql("select * from vcf").get0();
+            auto msg = e.execute_cql("select * from vcf").get();
             assert_that(msg).is_rows().with_size(rows);
         });
     });
@@ -394,13 +394,13 @@ SEASTAR_TEST_CASE(test_builder_with_concurrent_drop) {
         e.execute_cql("drop materialized view vcf").get();
 
         eventually([&] {
-            auto msg = e.execute_cql("select * from system.scylla_views_builds_in_progress").get0();
+            auto msg = e.execute_cql("select * from system.scylla_views_builds_in_progress").get();
             assert_that(msg).is_rows().is_empty();
-            msg = e.execute_cql("select * from system.built_views").get0();
+            msg = e.execute_cql("select * from system.built_views").get();
             assert_that(msg).is_rows().is_empty();
-            msg = e.execute_cql("select * from system.views_builds_in_progress").get0();
+            msg = e.execute_cql("select * from system.views_builds_in_progress").get();
             assert_that(msg).is_rows().is_empty();
-            msg = e.execute_cql("select * from system_distributed.view_build_status").get0();
+            msg = e.execute_cql("select * from system_distributed.view_build_status").get();
             assert_that(msg).is_rows().is_empty();
         });
     });
@@ -560,7 +560,7 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_deadlock) {
 
         auto& sem = *with_scheduling_group(e.local_db().get_streaming_scheduling_group(), [&] () {
             return &e.local_db().get_reader_concurrency_semaphore();
-        }).get0();
+        }).get();
 
         // consume all units except what is needed to admit a single reader.
         auto sponge_permit = sem.make_tracking_only_permit(s, "sponge", db::no_timeout, {});
@@ -726,7 +726,7 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_buffering) {
         void check(mutation mut) {
             // First we check that we would be able to create a reader, even
             // though the staging reader consumed all resources.
-            auto permit = _semaphore.obtain_permit(_schema, "consumer_verifier", replica::new_reader_base_cost, db::timeout_clock::now(), {}).get0();
+            auto permit = _semaphore.obtain_permit(_schema, "consumer_verifier", replica::new_reader_base_cost, db::timeout_clock::now(), {}).get();
 
             const size_t current_rows = rows_in_mut(mut);
             const auto total_rows = _partition_rows.at(mut.decorated_key());
@@ -835,7 +835,7 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_buffering) {
             return less(a.decorated_key(), b.decorated_key());
         });
 
-        auto permit = sem.obtain_permit(schema, get_name(), replica::new_reader_base_cost, db::no_timeout, {}).get0();
+        auto permit = sem.obtain_permit(schema, get_name(), replica::new_reader_base_cost, db::no_timeout, {}).get();
 
         auto mt = make_memtable(schema, muts);
         auto p = make_manually_paused_evictable_reader_v2(
@@ -875,7 +875,7 @@ SEASTAR_TEST_CASE(test_load_view_build_progress_with_values_missing) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         cquery_nofail(e, format("INSERT INTO system.{} (keyspace_name, view_name, cpu_id) VALUES ('ks', 'v', {})",
                 db::system_keyspace::v3::SCYLLA_VIEWS_BUILDS_IN_PROGRESS, this_shard_id()));
-        BOOST_REQUIRE(e.get_system_keyspace().local().load_view_build_progress().get0().empty());
+        BOOST_REQUIRE(e.get_system_keyspace().local().load_view_build_progress().get().empty());
     });
 }
 
@@ -936,7 +936,7 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_buffering_with_random_mutati
     auto stop_sem = deferred_stop(sem);
     const abort_source as;
     auto mt = make_memtable(schema, {mut});
-    auto permit = sem.obtain_permit(schema, get_name(), replica::new_reader_base_cost, db::no_timeout, {}).get0();
+    auto permit = sem.obtain_permit(schema, get_name(), replica::new_reader_base_cost, db::no_timeout, {}).get();
     auto p = make_manually_paused_evictable_reader_v2(
             mt->as_data_source(),
             schema,

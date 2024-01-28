@@ -56,7 +56,7 @@ static auto make_populate(bool evict_paused_readers, bool single_fragment_buffer
                 }
 
                 return make_foreign(mt);
-            }).get0();
+            }).get();
             remote_memtables->emplace_back(std::move(remote_mt));
         }
         keep_alive_sharder.push_back(sharder);

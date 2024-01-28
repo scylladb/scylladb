@@ -447,7 +447,7 @@ static
 void
 do_test_split_range_to_single_shard(const schema& s, const dht::sharder& sharder_, const dht::partition_range& pr) {
     for (auto shard : boost::irange(0u, sharder_.shard_count())) {
-        auto ranges = dht::split_range_to_single_shard(s, sharder_, pr, shard).get0();
+        auto ranges = dht::split_range_to_single_shard(s, sharder_, pr, shard).get();
         auto sharder = dht::ring_position_range_sharder(sharder_, pr);
         auto x = sharder.next(s);
         auto cmp = dht::ring_position_comparator(s);

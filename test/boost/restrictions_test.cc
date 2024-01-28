@@ -50,7 +50,7 @@ void require_rows(cql_test_env& e,
     cql3::cql_config cfg(cql3::cql_config::default_tag{});
     auto opts = to_options(cfg, std::move(names), std::vector(rvals.begin(), rvals.end()));
     try {
-        assert_that(e.execute_prepared_with_qo(id, std::move(opts)).get0()).is_rows().with_rows_ignore_order(expected);
+        assert_that(e.execute_prepared_with_qo(id, std::move(opts)).get()).is_rows().with_rows_ignore_order(expected);
     } catch (const std::exception& e) {
         BOOST_FAIL(format("execute_prepared failed: {}\n{}:{}: originally from here",
                           e.what(), loc.file_name(), loc.line()));
@@ -107,13 +107,13 @@ SEASTAR_THREAD_TEST_CASE(regular_col_eq) {
         require_rows(e, "select r from t where q=12 and p=2 and r=99 allow filtering", {});
         cquery_nofail(e, "insert into t(p) values (100)");
         require_rows(e, "select q from t where q=12 allow filtering", {{I(12)}});
-        auto stmt = e.prepare("select q from t where q=? allow filtering").get0();
+        auto stmt = e.prepare("select q from t where q=? allow filtering").get();
         require_rows(e, stmt, {}, {I(12)}, {{I(12)}});
         require_rows(e, stmt, {}, {I(99)}, {});
-        stmt = e.prepare("select q from t where q=:q allow filtering").get0();
+        stmt = e.prepare("select q from t where q=:q allow filtering").get();
         require_rows(e, stmt, {{"q"}}, {I(12)}, {{I(12)}});
         require_rows(e, stmt, {{"q"}}, {I(99)}, {});
-        stmt = e.prepare("select p from t where q=? and r=? allow filtering").get0();
+        stmt = e.prepare("select p from t where q=? and r=? allow filtering").get();
         require_rows(e, stmt, {}, {I(12), I(22)}, {{I(2), I(12), I(22)}});
         require_rows(e, stmt, {}, {I(11), I(21)}, {{I(1), I(11), I(21)}});
         require_rows(e, stmt, {}, {I(11), I(22)}, {});
@@ -204,7 +204,7 @@ SEASTAR_THREAD_TEST_CASE(map_entry_eq) {
         const auto m3new = my_map_type->decompose(
                 make_map_value(my_map_type, map_type_impl::native_type({{1, 111}})));
         require_rows(e, "select p from t where m[1]=111 allow filtering", {{I(3), m3new}});
-        const auto stmt = e.prepare("select p from t where m[1]=:uno and m[3]=:tres allow filtering").get0();
+        const auto stmt = e.prepare("select p from t where m[1]=:uno and m[3]=:tres allow filtering").get();
         const auto m1 = my_map_type->decompose(
                 make_map_value(my_map_type, map_type_impl::native_type({{1, 11}, {2, 12}, {3, 13}})));
         require_rows(e, stmt, {{"uno", "tres"}}, {I(11), I(13)}, {{I(1), m1}});
@@ -338,17 +338,17 @@ SEASTAR_THREAD_TEST_CASE(multi_col_eq) {
         require_rows(e, "select c2 from t where (c1,c2)=('two',11) allow filtering", {});
         require_rows(e, "select c1 from t where (c1)=('one') allow filtering", {{T("one")}});
         require_rows(e, "select c1 from t where (c1)=('x') allow filtering", {});
-        auto stmt = e.prepare("select p from t where (c1,c2)=:t allow filtering").get0();
+        auto stmt = e.prepare("select p from t where (c1,c2)=:t allow filtering").get();
         require_rows(e, stmt, {{"t"}}, {make_tuple({utf8_type, float_type}, {sstring("two"), 12.f})}, {{I(2)}});
         require_rows(e, stmt, {{"t"}}, {make_tuple({utf8_type, float_type}, {sstring("x"), 12.f})}, {});
-        stmt = e.prepare("select p from t where (c1,c2)=('two',?) allow filtering").get0();
+        stmt = e.prepare("select p from t where (c1,c2)=('two',?) allow filtering").get();
         require_rows(e, stmt, {}, {F(12)}, {{I(2)}});
         require_rows(e, stmt, {}, {F(99)}, {});
-        stmt = e.prepare("select c1 from t where (c1)=? allow filtering").get0();
+        stmt = e.prepare("select c1 from t where (c1)=? allow filtering").get();
         require_rows(e, stmt, {}, {make_tuple({utf8_type}, {sstring("one")})}, {{T("one")}});
         require_rows(e, stmt, {}, {make_tuple({utf8_type}, {sstring("two")})}, {{T("two")}});
         require_rows(e, stmt, {}, {make_tuple({utf8_type}, {sstring("three")})}, {});
-        stmt = e.prepare("select c1 from t where (c1)=(:c1) allow filtering").get0();
+        stmt = e.prepare("select c1 from t where (c1)=(:c1) allow filtering").get();
         require_rows(e, stmt, {{"c1"}}, {T("one")}, {{T("one")}});
         require_rows(e, stmt, {{"c1"}}, {T("two")}, {{T("two")}});
         require_rows(e, stmt, {{"c1"}}, {T("three")}, {});
@@ -368,16 +368,16 @@ SEASTAR_THREAD_TEST_CASE(multi_col_slice) {
         require_rows(e, "select c1 from t where (c1)>=('c') allow filtering", {{T("c")}});
         require_rows(e, "select c1 from t where (c1,c2)<=('c',13) allow filtering", {{T("a")}, {T("b")}, {T("c")}});
         require_rows(e, "select c1 from t where (c1,c2)>=('b',2) and (c1,c2)<=('b',2) allow filtering", {{T("b")}});
-        auto stmt = e.prepare("select c1 from t where (c1,c2)<? allow filtering").get0();
+        auto stmt = e.prepare("select c1 from t where (c1,c2)<? allow filtering").get();
         require_rows(e, stmt, {}, {make_tuple({utf8_type, float_type}, {sstring("a"), 12.f})}, {{T("a")}});
         require_rows(e, stmt, {}, {make_tuple({utf8_type, float_type}, {sstring("a"), 11.f})}, {});
-        stmt = e.prepare("select c1 from t where (c1,c2)<('a',:c2) allow filtering").get0();
+        stmt = e.prepare("select c1 from t where (c1,c2)<('a',:c2) allow filtering").get();
         require_rows(e, stmt, {{"c2"}}, {F(12)}, {{T("a")}});
         require_rows(e, stmt, {{"c2"}}, {F(11)}, {});
-        stmt = e.prepare("select c1 from t where (c1)>=? allow filtering").get0();
+        stmt = e.prepare("select c1 from t where (c1)>=? allow filtering").get();
         require_rows(e, stmt, {}, {make_tuple({utf8_type}, {sstring("c")})}, {{T("c")}});
         require_rows(e, stmt, {}, {make_tuple({utf8_type}, {sstring("x")})}, {});
-        stmt = e.prepare("select c1 from t where (c1)>=(:c1) allow filtering").get0();
+        stmt = e.prepare("select c1 from t where (c1)>=(:c1) allow filtering").get();
         require_rows(e, stmt, {{"c1"}}, {T("c")}, {{T("c")}});
         require_rows(e, stmt, {{"c1"}}, {T("x")}, {});
     }).get();
@@ -451,7 +451,7 @@ SEASTAR_THREAD_TEST_CASE(set_contains) {
         require_rows(e, "select p from t where st contains null allow filtering", {});
         cquery_nofail(e, "delete from t where p={4}");
         require_rows(e, "select p from t where st contains 105 allow filtering", {{SI({5}), SI({104, 105})}});
-        const auto stmt = e.prepare("select p from t where p contains :p allow filtering").get0();
+        const auto stmt = e.prepare("select p from t where p contains :p allow filtering").get();
         require_rows(e, stmt, {{"p"}}, {I(999)}, {});
         require_rows(e, stmt, {{"p"}}, {I(1)}, {{SI({1})}, {SI({1, 3})}});
         require_rows(e, stmt, {{"p"}}, {I(2)}, {{SI({2})}});
@@ -583,7 +583,7 @@ SEASTAR_THREAD_TEST_CASE(contains_key) {
         const auto s6 = int_text_map_type->decompose(
                 make_map_value(int_text_map_type, map_type_impl::native_type({{55, "bbbb"}, {66, "bbbb"}})));
         require_rows(e, "select p from t where s contains key 55 allow filtering", {{p5, s5}, {p5, s5}, {p6, s6}});
-        const auto stmt = e.prepare("select p from t where s contains key :k allow filtering").get0();
+        const auto stmt = e.prepare("select p from t where s contains key :k allow filtering").get();
         require_rows(e, stmt, {{"k"}}, {I(55)}, {{p5, s5}, {p5, s5}, {p6, s6}});
         require_rows(e, stmt, {{"k"}}, {I(999)}, {});
     }).get();
@@ -616,7 +616,7 @@ SEASTAR_THREAD_TEST_CASE(like) {
                          {{T("c2a")}, {T("c2b")}, {T("c2ba")}, {T("c2c")}});
         require_rows(e, "select * from t where ck1 like '' and ck2 like '_2a' allow filtering", {});
         require_rows(e, "select r from t where r='rb' and ck2 like 'c2_' allow filtering", {{T("rb"), T("c2b")}});
-        const auto stmt = e.prepare("select ck1 from t where ck1 like ? allow filtering").get0();
+        const auto stmt = e.prepare("select ck1 from t where ck1 like ? allow filtering").get();
         require_rows(e, stmt, {}, {T("%c")}, {{T("c1c")}});
         require_rows(e, stmt, {}, {T("%xyxyz")}, {});
     }).get();
@@ -657,7 +657,7 @@ SEASTAR_THREAD_TEST_CASE(scalar_in) {
         require_rows(e, "select s from t where s in ('34') allow filtering", {{T("34")}, {T("34")}});
         require_rows(e, "select s from t where s in ('34','35') and r=24 allow filtering",
                          {{T("34"), F(24)}, {T("34"), F(24)}});
-        const auto stmt = e.prepare("select r from t where r in ? allow filtering").get0();
+        const auto stmt = e.prepare("select r from t where r in ? allow filtering").get();
         require_rows(e, stmt, {}, {LF({99.f, 88.f, 77.f})}, {});
         require_rows(e, stmt, {}, {LF({21.f})}, {{F(21)}});
         require_rows(e, stmt, {}, {LF({21.f, 22.f, 23.f})}, {{F(21)}, {F(23)}});
@@ -743,7 +743,7 @@ SEASTAR_THREAD_TEST_CASE(multi_col_in) {
                          {{I(4), I(13), F(23), T("a")}});
         cquery_nofail(e, "delete from t where pk=4");
         require_rows(e, "select pk from t where (ck1,ck2) in ((13,23)) allow filtering", {{I(3)}});
-        auto stmt = e.prepare("select ck1 from t where (ck1,ck2) in ? allow filtering").get0();
+        auto stmt = e.prepare("select ck1 from t where (ck1,ck2) in ? allow filtering").get();
         auto bound_tuples = [] (std::vector<std::tuple<int32_t, float>> tuples) {
             const auto tuple_type = tuple_type_impl::get_instance({int32_type, float_type});
             const auto list_type = list_type_impl::get_instance(tuple_type, true);
@@ -759,21 +759,21 @@ SEASTAR_THREAD_TEST_CASE(multi_col_in) {
         require_rows(e, stmt, {}, {bound_tuples({{13, 13}, {12, 22}})}, {{I(12)}});
         require_rows(e, stmt, {}, {bound_tuples({{12, 21}})}, {});
         require_rows(e, stmt, {}, {bound_tuples({{12, 21}, {12, 21}, {13, 21}, {14, 21}})}, {});
-        stmt = e.prepare("select ck1 from t where (ck1,ck2) in (?) allow filtering").get0();
+        stmt = e.prepare("select ck1 from t where (ck1,ck2) in (?) allow filtering").get();
         auto tpl = [] (int32_t e1, float e2) {
             return make_tuple({int32_type, float_type}, {e1, e2});
         };
         require_rows(e, stmt, {}, {tpl(11, 21)}, {{I(11)}});
         require_rows(e, stmt, {}, {tpl(12, 22)}, {{I(12)}});
         require_rows(e, stmt, {}, {tpl(12, 21)}, {});
-        stmt = e.prepare("select ck1 from t where (ck1,ck2) in (:t1,:t2) allow filtering").get0();
+        stmt = e.prepare("select ck1 from t where (ck1,ck2) in (:t1,:t2) allow filtering").get();
         require_rows(e, stmt, {{"t1", "t2"}}, {tpl(11, 21), tpl(12, 22)}, {{I(11)}, {I(12)}});
         require_rows(e, stmt, {{"t1", "t2"}}, {tpl(11, 21), tpl(11, 21)}, {{I(11)}});
         require_rows(e, stmt, {{"t1", "t2"}}, {tpl(11, 21), tpl(99, 99)}, {{I(11)}});
         require_rows(e, stmt, {{"t1", "t2"}}, {tpl(9, 9), tpl(99, 99)}, {});
         // Parsing error:
-        // stmt = e.prepare("select ck1 from t where (ck1,ck2) in ((13,23),:p1)").get0();
-        stmt = e.prepare("select ck1 from t where (ck1,ck2) in ((13,23),(?,?)) allow filtering").get0();
+        // stmt = e.prepare("select ck1 from t where (ck1,ck2) in ((13,23),:p1)").get();
+        stmt = e.prepare("select ck1 from t where (ck1,ck2) in ((13,23),(?,?)) allow filtering").get();
         require_rows(e, stmt, {}, {I(0), F(0)}, {{I(13)}});
         require_rows(e, stmt, {}, {I(11), F(21)}, {{I(11)}, {I(13)}});
     }).get();
@@ -791,10 +791,10 @@ SEASTAR_THREAD_TEST_CASE(bounds) {
         require_rows(e, "select p from t where p=1 and (c) = (11)", {{I(1)}});
         require_rows(e, "select c from t where p in (1,2,3) and c > 11 and c < 13", {{I(12)}});
         require_rows(e, "select c from t where p in (1,2,3) and c >= 11 and c < 13", {{I(11)}, {I(12)}});
-        auto stmt = e.prepare("select c from t where p in (1,2,3) and c >= 11 and c < ?").get0();
+        auto stmt = e.prepare("select c from t where p in (1,2,3) and c >= 11 and c < ?").get();
         require_rows(e, stmt, {}, {I(13)}, {{I(11)}, {I(12)}});
         require_rows(e, stmt, {}, {I(10)}, {});
-        stmt = e.prepare("select c from t where p in (1,2,3) and (c) < ?").get0();
+        stmt = e.prepare("select c from t where p in (1,2,3) and (c) < ?").get();
         require_rows(e, stmt, {}, {make_tuple({int32_type}, {13})}, {{I(11)}, {I(12)}});
         require_rows(e, stmt, {}, {make_tuple({int32_type}, {11})}, {});
     }).get();
@@ -866,7 +866,7 @@ SEASTAR_THREAD_TEST_CASE(token) {
         require_rows(e, "select p from t where token(p,q) <= token(1,11) and r<102 allow filtering",
                          {{I(1), I(101)}});
         require_rows(e, "select p from t where token(p,q) = token(2,12) and r<102 allow filtering", {});
-        const auto stmt = e.prepare("select p from t where token(p,q) = token(1,?)").get0();
+        const auto stmt = e.prepare("select p from t where token(p,q) = token(1,?)").get();
         require_rows(e, stmt, {}, {I(11)}, {{I(1)}});
         require_rows(e, stmt, {}, {I(10)}, {});
 
