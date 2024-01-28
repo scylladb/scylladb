@@ -57,7 +57,7 @@ SEASTAR_THREAD_TEST_CASE(test_find_mutation_timestamp) {
             .build();
 
         auto check_stmt = [&] (const sstring& query) {
-            auto muts = e.get_modification_mutations(query).get0();
+            auto muts = e.get_modification_mutations(query).get();
             BOOST_REQUIRE(!muts.empty());
 
             for (auto& m: muts) {
@@ -417,7 +417,7 @@ static void sort_by_time(const cql_transport::messages::result_message::rows& ro
 }
 
 static auto select_log(cql_test_env& e, const sstring& table_name) {
-    auto msg = e.execute_cql(format("SELECT * FROM ks.{}", cdc::log_name(table_name))).get0();
+    auto msg = e.execute_cql(format("SELECT * FROM ks.{}", cdc::log_name(table_name))).get();
     auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(msg);
     BOOST_REQUIRE(rows);
     return rows;
@@ -447,7 +447,7 @@ SEASTAR_THREAD_TEST_CASE(test_primary_key_logging) {
             cdc::log_data_column_name("ck2"),
             cdc::log_meta_column_name("operation"),
             cdc::log_meta_column_name("ttl"),
-            cdc::log_name("tbl"))).get0();
+            cdc::log_name("tbl"))).get();
         auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(msg);
         BOOST_REQUIRE(rows);
 
@@ -696,7 +696,7 @@ SEASTAR_THREAD_TEST_CASE(test_range_deletion) {
             cdc::log_data_column_name("pk"),
             cdc::log_data_column_name("ck"),
             cdc::log_meta_column_name("operation"),
-            cdc::log_name("tbl"))).get0();
+            cdc::log_name("tbl"))).get();
         auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(msg);
         BOOST_REQUIRE(rows);
 
@@ -755,7 +755,7 @@ SEASTAR_THREAD_TEST_CASE(test_add_columns) {
 
 SEASTAR_THREAD_TEST_CASE(test_negative_ttl_fail) {
     do_with_cql_env_thread([](cql_test_env& e) {
-        BOOST_REQUIRE_EXCEPTION(e.execute_cql("CREATE TABLE ks.fail (a int PRIMARY KEY, b int) WITH cdc = {'enabled':true,'ttl':'-1'}").get0(),
+        BOOST_REQUIRE_EXCEPTION(e.execute_cql("CREATE TABLE ks.fail (a int PRIMARY KEY, b int) WITH cdc = {'enabled':true,'ttl':'-1'}").get(),
                 exceptions::configuration_exception,
                 exception_predicate::message_contains("ttl"));
     }).get();
@@ -786,7 +786,7 @@ SEASTAR_THREAD_TEST_CASE(test_ttls) {
             query += format(" FROM ks.{}", cdc::log_name(base_tbl_name));
 
             // Execute query and get the first (and only) row of results:
-            auto msg = e.execute_cql(query).get0();
+            auto msg = e.execute_cql(query).get();
             auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(msg);
             BOOST_REQUIRE(rows);
             auto results = to_bytes(*rows);
@@ -1246,13 +1246,13 @@ SEASTAR_THREAD_TEST_CASE(test_frozen_logging) {
                     keyspace_name, base_tbl_name, column_name, value_string)).get();
 
             // Expect only one row, with the same value as inserted
-            const auto base_msg = e.execute_cql(format("SELECT {} FROM {}.{}", column_name, keyspace_name, base_tbl_name)).get0();
+            const auto base_msg = e.execute_cql(format("SELECT {} FROM {}.{}", column_name, keyspace_name, base_tbl_name)).get();
             const auto base_rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(base_msg);
             BOOST_REQUIRE(base_rows);
             const auto base_bytes = to_bytes(*base_rows);
             BOOST_REQUIRE_EQUAL(base_bytes.size(), 1);
 
-            const auto log_msg = e.execute_cql(format("SELECT {} FROM {}.{}", column_name, keyspace_name, log_tbl_name)).get0();
+            const auto log_msg = e.execute_cql(format("SELECT {} FROM {}.{}", column_name, keyspace_name, log_tbl_name)).get();
             const auto log_rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(log_msg);
             BOOST_REQUIRE(log_rows);
             const auto log_bytes = to_bytes(*log_rows);
@@ -1282,7 +1282,7 @@ SEASTAR_THREAD_TEST_CASE(test_update_insert_delete_distinction) {
         cquery_nofail(e, format("DELETE FROM ks.{} WHERE pk = {} AND ck = {}", base_tbl_name, pk, ck));          // (3) a row delete
 
         const sstring query = format("SELECT \"{}\" FROM ks.{}", cdc::log_meta_column_name("operation"), cdc::log_name(base_tbl_name));
-        auto msg = e.execute_cql(query).get0();
+        auto msg = e.execute_cql(query).get();
         auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(msg);
         BOOST_REQUIRE(rows);
         auto results = to_bytes(*rows);
@@ -1311,7 +1311,7 @@ static std::vector<std::vector<data_value>> get_result(cql_test_env& e,
         return t->deserialize(*b);
     };
 
-    auto msg = e.execute_cql(query).get0();
+    auto msg = e.execute_cql(query).get();
     auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(msg);
     BOOST_REQUIRE(rows);
 
@@ -1569,7 +1569,7 @@ SEASTAR_THREAD_TEST_CASE(test_batch_with_row_delete) {
                 fmt::arg("tbl_name", base_tbl_name), fmt::arg("pk", pk), fmt::arg("ck", ck)));
 
         const sstring query = format("SELECT v1, v2, v3, v4, \"{}\" FROM ks.{}", cdc::log_meta_column_name("operation"), cdc::log_name(base_tbl_name));
-        auto msg = e.execute_cql(query).get0();
+        auto msg = e.execute_cql(query).get();
         auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(msg);
         BOOST_REQUIRE(rows);
         auto results = to_bytes(*rows);

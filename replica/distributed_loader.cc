@@ -181,7 +181,7 @@ distributed_loader::process_upload_dir(distributed<replica::database>& db, distr
     }
 
     return seastar::async(std::move(attr), [&db, &view_update_generator, &sys_dist_ks, ks = std::move(ks), cf = std::move(cf)] {
-        auto global_table = get_table_on_all_shards(db, ks, cf).get0();
+        auto global_table = get_table_on_all_shards(db, ks, cf).get();
 
         sharded<sstables::sstable_directory> directory;
         directory.start(global_table.as_sharded_parameter(),
@@ -199,7 +199,7 @@ distributed_loader::process_upload_dir(distributed<replica::database>& db, distr
         process_sstable_dir(directory, flags).get();
 
         sharded<sstables::sstable_generation_generator> sharded_gen;
-        auto highest_generation = highest_generation_seen(directory).get0();
+        auto highest_generation = highest_generation_seen(directory).get();
         sharded_gen.start(highest_generation ? highest_generation.as_int() : 0).get();
         auto stop_generator = deferred_stop(sharded_gen);
 
@@ -229,11 +229,11 @@ distributed_loader::process_upload_dir(distributed<replica::database>& db, distr
                 [] (const sstables::shared_sstable&) { return true; }).get();
 
         // Move to staging directory to avoid clashes with future uploads. Unique generation number ensures no collisions.
-        const bool use_view_update_path = db::view::check_needs_view_update_path(sys_dist_ks.local(), db.local().get_token_metadata(), *global_table, streaming::stream_reason::repair).get0();
+        const bool use_view_update_path = db::view::check_needs_view_update_path(sys_dist_ks.local(), db.local().get_token_metadata(), *global_table, streaming::stream_reason::repair).get();
 
         size_t loaded = directory.map_reduce0([&db, ks, cf, use_view_update_path, &view_update_generator] (sstables::sstable_directory& dir) {
             return make_sstables_available(dir, db, view_update_generator, use_view_update_path, ks, cf);
-        }, size_t(0), std::plus<size_t>()).get0();
+        }, size_t(0), std::plus<size_t>()).get();
 
         dblog.info("Loaded {} SSTables", loaded);
     });
@@ -242,7 +242,7 @@ distributed_loader::process_upload_dir(distributed<replica::database>& db, distr
 future<std::tuple<table_id, std::vector<std::vector<sstables::shared_sstable>>>>
 distributed_loader::get_sstables_from_upload_dir(distributed<replica::database>& db, sstring ks, sstring cf, sstables::sstable_open_config cfg) {
     return seastar::async([&db, ks = std::move(ks), cf = std::move(cf), cfg] {
-        auto global_table = get_table_on_all_shards(db, ks, cf).get0();
+        auto global_table = get_table_on_all_shards(db, ks, cf).get();
         sharded<sstables::sstable_directory> directory;
         auto table_id = global_table->schema()->id();
 
@@ -374,7 +374,7 @@ future<> table_populator::populate_subdir(sstables::sstable_state state, allow_o
     co_await distributed_loader::reshard(directory, _db, _ks, _cf, [this, state] (shard_id shard) mutable {
         auto gen = smp::submit_to(shard, [this] () {
             return _global_table->calculate_generation_for_new_table();
-        }).get0();
+        }).get();
 
         return make_sstable(*_global_table, state, gen, _highest_version);
     });

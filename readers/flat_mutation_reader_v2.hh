@@ -248,7 +248,7 @@ public:
                 auto do_stop = futurize_invoke([&consumer, mf = std::move(mf)] () mutable {
                     return consumer(std::move(mf));
                 });
-                if (do_stop.get0()) {
+                if (do_stop.get()) {
                     return;
                 }
             }

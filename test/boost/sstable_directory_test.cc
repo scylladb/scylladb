@@ -185,7 +185,7 @@ SEASTAR_TEST_CASE(sstable_directory_test_table_simple_empty_directory_scan) {
 
         with_sstable_directory(env, [] (sharded<sstables::sstable_directory>& sstdir) {
             distributed_loader_for_tests::process_sstable_dir(sstdir, {}).get();
-            auto max_generation_seen = highest_generation_seen(sstdir).get0();
+            auto max_generation_seen = highest_generation_seen(sstdir).get();
             // No generation found on empty directory.
             BOOST_REQUIRE(!max_generation_seen);
         });
@@ -457,7 +457,7 @@ SEASTAR_TEST_CASE(sstable_directory_test_table_lock_works) {
                 std::unordered_map<bool, size_t> res;
                 for (const auto& [shard, files] : sstables) {
                     for (const auto& f : files) {
-                        res[file_exists(f).get0()]++;
+                        res[file_exists(f).get()]++;
                     }
                 }
                 return res;
@@ -514,7 +514,7 @@ SEASTAR_TEST_CASE(sstable_directory_shared_sstables_reshard_correctly) {
         verify_that_all_sstables_are_local(sstdir, 0).get();
 
         sharded<sstables::sstable_generation_generator> sharded_gen;
-        auto max_generation_seen = highest_generation_seen(sstdir).get0();
+        auto max_generation_seen = highest_generation_seen(sstdir).get();
         sharded_gen.start(max_generation_seen.as_int()).get();
         auto stop_generator = deferred_stop(sharded_gen);
 
@@ -567,7 +567,7 @@ SEASTAR_TEST_CASE(sstable_directory_shared_sstables_reshard_correctly_with_owned
         verify_that_all_sstables_are_local(sstdir, 0).get();
 
         sharded<sstables::sstable_generation_generator> sharded_gen;
-        auto max_generation_seen = highest_generation_seen(sstdir).get0();
+        auto max_generation_seen = highest_generation_seen(sstdir).get();
         sharded_gen.start(max_generation_seen.as_int()).get();
         auto stop_generator = deferred_stop(sharded_gen);
 
@@ -620,7 +620,7 @@ SEASTAR_TEST_CASE(sstable_directory_shared_sstables_reshard_distributes_well_eve
         verify_that_all_sstables_are_local(sstdir, 0).get();
 
         sharded<sstables::sstable_generation_generator> sharded_gen;
-        auto max_generation_seen = highest_generation_seen(sstdir).get0();
+        auto max_generation_seen = highest_generation_seen(sstdir).get();
         sharded_gen.start(max_generation_seen.as_int()).get();
         auto stop_generator = deferred_stop(sharded_gen);
 
@@ -671,7 +671,7 @@ SEASTAR_TEST_CASE(sstable_directory_shared_sstables_reshard_respect_max_threshol
         verify_that_all_sstables_are_local(sstdir, 0).get();
 
         sharded<sstables::sstable_generation_generator> sharded_gen;
-        auto max_generation_seen = highest_generation_seen(sstdir).get0();
+        auto max_generation_seen = highest_generation_seen(sstdir).get();
         sharded_gen.start(max_generation_seen.as_int()).get();
         auto stop_generator = deferred_stop(sharded_gen);
 
@@ -793,7 +793,7 @@ SEASTAR_TEST_CASE(test_pending_log_garbage_collection) {
         // Now start atomic deletion -- create the pending deletion log for all
         // three sstables, move TOC file for one of them into temporary-TOC, and 
         // partially delete another
-        sstable_directory::create_pending_deletion_log(ssts_to_remove).get0();
+        sstable_directory::create_pending_deletion_log(ssts_to_remove).get();
         rename_file(test(ssts_to_remove[1]).filename(sstables::component_type::TOC).native(), test(ssts_to_remove[1]).filename(sstables::component_type::TemporaryTOC).native()).get();
         rename_file(test(ssts_to_remove[2]).filename(sstables::component_type::TOC).native(), test(ssts_to_remove[2]).filename(sstables::component_type::TemporaryTOC).native()).get();
         remove_file(test(ssts_to_remove[2]).filename(sstables::component_type::Data).native()).get();

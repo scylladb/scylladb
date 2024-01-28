@@ -946,7 +946,7 @@ SEASTAR_TEST_CASE(test_commitlog_replay_invalid_key){
         {
             auto paths = cl.get_active_segment_names();
             BOOST_REQUIRE(!paths.empty());
-            auto rp = db::commitlog_replayer::create_replayer(env.db(), env.get_system_keyspace()).get0();
+            auto rp = db::commitlog_replayer::create_replayer(env.db(), env.get_system_keyspace()).get();
             rp.recover(paths, db::commitlog::descriptor::FILENAME_PREFIX).get();
         }
 
@@ -959,11 +959,11 @@ SEASTAR_TEST_CASE(test_commitlog_replay_invalid_key){
             }
             auto rd = make_combined_reader(s, permit, std::move(readers));
             auto close_rd = deferred_close(rd);
-            auto mopt = read_mutation_from_flat_mutation_reader(rd).get0();
+            auto mopt = read_mutation_from_flat_mutation_reader(rd).get();
             BOOST_REQUIRE(mopt);
 
             mopt = {};
-            mopt = read_mutation_from_flat_mutation_reader(rd).get0();
+            mopt = read_mutation_from_flat_mutation_reader(rd).get();
             BOOST_REQUIRE(!mopt);
         }
     });
@@ -994,7 +994,7 @@ SEASTAR_TEST_CASE(test_commitlog_add_entry) {
                 std::set<segment_id_type> ids;
 
                 for (auto& w : writers) {
-                    auto h = log.add_entry(w.schema()->id(), w, db::timeout_clock::now() + 60s).get0();
+                    auto h = log.add_entry(w.schema()->id(), w, db::timeout_clock::now() + 60s).get();
                     ids.emplace(h.rp().id);
                     rps.emplace_back(h.rp());
                 }
@@ -1054,7 +1054,7 @@ SEASTAR_TEST_CASE(test_commitlog_add_entries) {
                     writers.emplace_back(gen.schema(), mutations.back(), fs);
                 }
 
-                auto res = log.add_entries(writers, db::timeout_clock::now() + 60s).get0();
+                auto res = log.add_entries(writers, db::timeout_clock::now() + 60s).get();
 
                 std::set<segment_id_type> ids;
                 for (auto& h : res) {

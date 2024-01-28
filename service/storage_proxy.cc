@@ -4925,7 +4925,7 @@ protected:
                 std::exception_ptr ex;
                 try {
                   if (!f.failed()) {
-                    auto v = f.get0();
+                    auto v = f.get();
                     _cf->set_hit_rate(ep, std::get<1>(v));
                     resolver->add_mutate_data(ep, std::get<0>(std::move(v)));
                     ++_proxy->get_stats().mutation_data_read_completed.get_ep_stat(get_topology(), ep);
@@ -4951,7 +4951,7 @@ protected:
                 std::exception_ptr ex;
                 try {
                   if (!f.failed()) {
-                    auto v = f.get0();
+                    auto v = f.get();
                     _cf->set_hit_rate(ep, std::get<1>(v));
                     resolver->add_data(ep, std::get<0>(std::move(v)));
                     ++_proxy->get_stats().data_read_completed.get_ep_stat(get_topology(), ep);
@@ -4978,7 +4978,7 @@ protected:
                 std::exception_ptr ex;
                 try {
                   if (!f.failed()) {
-                    auto v = f.get0();
+                    auto v = f.get();
                     _cf->set_hit_rate(ep, std::get<2>(v));
                     resolver->add_digest(ep, std::get<0>(v), std::get<1>(v), std::get<3>(std::move(v)));
                     ++_proxy->get_stats().digest_read_completed.get_ep_stat(get_topology(), ep);

@@ -116,7 +116,7 @@ void cache_hitrate_calculator::recalculate_timer() {
         if (f.failed()) {
             d = std::chrono::milliseconds(2000);
         } else {
-            d = f.get0();
+            d = f.get();
         }
         p->run_on((this_shard_id() + 1) % smp::count, d);
     });

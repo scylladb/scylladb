@@ -64,7 +64,7 @@ SEASTAR_TEST_CASE(test_set_cell) {
 
 SEASTAR_THREAD_TEST_CASE(test_system_config_table_read) {
     do_with_cql_env_thread([] (cql_test_env& env) {
-        auto res = env.execute_cql("SELECT * FROM system.config WHERE name = 'partitioner';").get0();
+        auto res = env.execute_cql("SELECT * FROM system.config WHERE name = 'partitioner';").get();
         assert_that(res).is_rows().with_size(1).with_row({
             { utf8_type->decompose(sstring("partitioner")) },
             { utf8_type->decompose(sstring("default")) },

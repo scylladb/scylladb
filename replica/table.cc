@@ -2030,7 +2030,7 @@ future<bool> table::snapshot_exists(sstring tag) {
     sstring jsondir = _config.datadir + "/snapshots/" + tag;
     return open_checked_directory(general_disk_error_handler, std::move(jsondir)).then_wrapped([] (future<file> f) {
         try {
-            f.get0();
+            f.get();
             return make_ready_future<bool>(true);
         } catch (std::system_error& e) {
             if (e.code() != std::error_code(ENOENT, std::system_category())) {
@@ -2046,7 +2046,7 @@ future<std::unordered_map<sstring, table::snapshot_details>> table::get_snapshot
         std::unordered_map<sstring, snapshot_details> all_snapshots;
         for (auto& datadir : _config.all_datadirs) {
             fs::path snapshots_dir = fs::path(datadir) / sstables::snapshots_dir;
-            auto file_exists = io_check([&snapshots_dir] { return seastar::file_exists(snapshots_dir.native()); }).get0();
+            auto file_exists = io_check([&snapshots_dir] { return seastar::file_exists(snapshots_dir.native()); }).get();
             if (!file_exists) {
                 continue;
             }
@@ -2072,7 +2072,7 @@ future<std::unordered_map<sstring, table::snapshot_details>> table::get_snapshot
                         return io_check(file_size, (fs::path(datadir) / name).native()).then_wrapped([&all_snapshots, snapshot_name, size] (auto fut) {
                             try {
                                 // File exists in the main SSTable directory. Snapshots are not contributing to size
-                                fut.get0();
+                                fut.get();
                             } catch (std::system_error& e) {
                                 if (e.code() != std::error_code(ENOENT, std::system_category())) {
                                     throw;

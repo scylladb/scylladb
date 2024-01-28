@@ -71,21 +71,21 @@ SEASTAR_THREAD_TEST_CASE(test_client_put_get_object) {
     cln->put_object(name, std::move(data)).get();
 
     testlog.info("Get object size\n");
-    size_t sz = cln->get_object_size(name).get0();
+    size_t sz = cln->get_object_size(name).get();
     BOOST_REQUIRE_EQUAL(sz, 10);
 
     testlog.info("Get object stats\n");
-    s3::stats st = cln->get_object_stats(name).get0();
+    s3::stats st = cln->get_object_stats(name).get();
     BOOST_REQUIRE_EQUAL(st.size, 10);
     // forgive timezone difference as minio server is GMT by default
     BOOST_REQUIRE(std::difftime(st.last_modified, gc_clock::to_time_t(gc_clock::now())) < 24*3600);
 
     testlog.info("Get object content\n");
-    temporary_buffer<char> res = cln->get_object_contiguous(name).get0();
+    temporary_buffer<char> res = cln->get_object_contiguous(name).get();
     BOOST_REQUIRE_EQUAL(to_sstring(std::move(res)), sstring("1234567890"));
 
     testlog.info("Get object part\n");
-    res = cln->get_object_contiguous(name, s3::range{ 1, 3 }).get0();
+    res = cln->get_object_contiguous(name, s3::range{ 1, 3 }).get();
     BOOST_REQUIRE_EQUAL(to_sstring(std::move(res)), sstring("234"));
 
     testlog.info("Delete object\n");
@@ -136,7 +136,7 @@ void do_test_client_multipart_upload(bool with_copy_upload) {
     close.close_now();
 
     testlog.info("Checking file size\n");
-    size_t sz = cln->get_object_size(name).get0();
+    size_t sz = cln->get_object_size(name).get();
     BOOST_REQUIRE_EQUAL(sz, object_size);
 
     testlog.info("Checking correctness\n");
@@ -144,7 +144,7 @@ void do_test_client_multipart_upload(bool with_copy_upload) {
         uint64_t len = tests::random::get_int(1u, chunk_size);
         uint64_t off = tests::random::get_int(object_size - len);
 
-        auto s_buf = cln->get_object_contiguous(name, s3::range{ off, len }).get0();
+        auto s_buf = cln->get_object_contiguous(name, s3::range{ off, len }).get();
         unsigned align = off % chunk_size;
         testlog.info("Got [{}:{}) chunk\n", off, len);
         testlog.info("Checking {} vs {} len {}\n", align, 0, std::min<uint64_t>(chunk_size - align, len));
@@ -188,7 +188,7 @@ SEASTAR_THREAD_TEST_CASE(test_client_multipart_upload_fallback) {
     close.close_now();
 
     testlog.info("Get object content");
-    temporary_buffer<char> res = cln->get_object_contiguous(name).get0();
+    temporary_buffer<char> res = cln->get_object_contiguous(name).get();
     BOOST_REQUIRE_EQUAL(to_sstring(std::move(res)), to_sstring(std::move(data)));
 }
 
@@ -209,12 +209,12 @@ SEASTAR_THREAD_TEST_CASE(test_client_readable_file) {
     auto close_readable_file = deferred_close(f);
 
     testlog.info("Check file size\n");
-    size_t sz = f.size().get0();
+    size_t sz = f.size().get();
     BOOST_REQUIRE_EQUAL(sz, 16);
 
     testlog.info("Check buffer read\n");
     char buffer[16];
-    sz = f.dma_read(4, buffer, 7).get0();
+    sz = f.dma_read(4, buffer, 7).get();
     BOOST_REQUIRE_EQUAL(sz, 7);
     BOOST_REQUIRE_EQUAL(sstring(buffer, 7), sstring("567890A"));
 
@@ -223,14 +223,14 @@ SEASTAR_THREAD_TEST_CASE(test_client_readable_file) {
     iovs.push_back({buffer, 3});
     iovs.push_back({buffer + 3, 2});
     iovs.push_back({buffer + 5, 4});
-    sz = f.dma_read(3, std::move(iovs)).get0();
+    sz = f.dma_read(3, std::move(iovs)).get();
     BOOST_REQUIRE_EQUAL(sz, 9);
     BOOST_REQUIRE_EQUAL(sstring(buffer, 3), sstring("456"));
     BOOST_REQUIRE_EQUAL(sstring(buffer + 3, 2), sstring("78"));
     BOOST_REQUIRE_EQUAL(sstring(buffer + 5, 4), sstring("90AB"));
 
     testlog.info("Check bulk read\n");
-    auto buf = f.dma_read_bulk<char>(5, 8).get0();
+    auto buf = f.dma_read_bulk<char>(5, 8).get();
     BOOST_REQUIRE_EQUAL(to_sstring(std::move(buf)), sstring("67890ABC"));
 }
 
@@ -254,7 +254,7 @@ SEASTAR_THREAD_TEST_CASE(test_client_readable_file_stream) {
     auto close_stream = deferred_close(in);
 
     testlog.info("Check input stream read\n");
-    auto res = seastar::util::read_entire_stream_contiguous(in).get0();
+    auto res = seastar::util::read_entire_stream_contiguous(in).get();
     BOOST_REQUIRE_EQUAL(res, sample);
 }
 
@@ -269,20 +269,20 @@ SEASTAR_THREAD_TEST_CASE(test_client_put_get_tagging) {
     auto delete_object = deferred_delete_object(client, name);
 
     {
-        auto tagset = client->get_object_tagging(name).get0();
+        auto tagset = client->get_object_tagging(name).get();
         BOOST_CHECK(tagset.empty());
     }
     {
         s3::tag_set expected_tagset{{"1", "one"}, {"2", "two"}};
         client->put_object_tagging(name, expected_tagset).get();
-        auto actual_tagset = client->get_object_tagging(name).get0();
+        auto actual_tagset = client->get_object_tagging(name).get();
         std::ranges::sort(actual_tagset);
         std::ranges::sort(expected_tagset);
         BOOST_CHECK(actual_tagset == expected_tagset);
     }
     {
         client->delete_object_tagging(name).get();
-        auto tagset = client->get_object_tagging(name).get0();
+        auto tagset = client->get_object_tagging(name).get();
         BOOST_CHECK(tagset.empty());
     }
 }

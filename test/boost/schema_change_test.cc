@@ -510,7 +510,7 @@ SEASTAR_TEST_CASE(test_merging_creates_a_table_even_if_keyspace_was_recreated) {
             {
                 auto group0_guard = mm.start_group0_operation().get();
                 const auto ts = group0_guard.write_timestamp();
-                auto muts = service::prepare_keyspace_drop_announcement(e.local_db(), "ks", ts).get0();
+                auto muts = service::prepare_keyspace_drop_announcement(e.local_db(), "ks", ts).get();
                 boost::copy(muts, std::back_inserter(all_muts));
                 mm.announce(muts, std::move(group0_guard), "").get();
             }
@@ -529,7 +529,7 @@ SEASTAR_TEST_CASE(test_merging_creates_a_table_even_if_keyspace_was_recreated) {
                 auto group0_guard = mm.start_group0_operation().get();
                 const auto ts = group0_guard.write_timestamp();
 
-                auto muts = service::prepare_new_column_family_announcement(mm.get_storage_proxy(), s0, ts).get0();
+                auto muts = service::prepare_new_column_family_announcement(mm.get_storage_proxy(), s0, ts).get();
                 boost::copy(muts, std::back_inserter(all_muts));
 
                 mm.announce(all_muts, std::move(group0_guard), "").get();
@@ -725,7 +725,7 @@ SEASTAR_TEST_CASE(test_prepared_statement_is_invalidated_by_schema_change) {
             logging::logger_registry().set_logger_level("query_processor", logging::log_level::debug);
             e.execute_cql("create keyspace tests with replication = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 };").get();
             e.execute_cql("create table tests.table1 (pk int primary key, c1 int, c2 int);").get();
-            auto id = e.prepare("select * from tests.table1;").get0();
+            auto id = e.prepare("select * from tests.table1;").get();
 
             e.execute_cql("alter table tests.table1 add s1 int;").get();
 
@@ -810,7 +810,7 @@ future<> test_schema_digest_does_not_change_with_disabled_features(sstring data_
             // with highest timestamp will win and be sent to other nodes.
             // Thus, system_distributed.* tables are officially not taken into account,
             // which makes it less likely that this test case would need to be needlessly regenerated.
-            auto actual = calculate_schema_digest(e.get_storage_proxy(), sf, std::not_fn(&is_internal_keyspace)).get0();
+            auto actual = calculate_schema_digest(e.get_storage_proxy(), sf, std::not_fn(&is_internal_keyspace)).get();
             if (regenerate) {
                 std::cout << format("        utils::UUID(\"{}\"),", actual) << "\n";
             } else {

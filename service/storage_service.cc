@@ -1688,7 +1688,7 @@ future<> storage_service::bootstrap(std::unordered_set<token>& bootstrap_tokens,
             // We don't do any other generation switches (unless we crash before complecting bootstrap).
             assert(!cdc_gen_id);
 
-            cdc_gen_id = _cdc_gens.local().legacy_make_new_generation(bootstrap_tokens, !is_first_node()).get0();
+            cdc_gen_id = _cdc_gens.local().legacy_make_new_generation(bootstrap_tokens, !is_first_node()).get();
 
             if (!bootstrap_rbno) {
                 // When is_repair_based_node_ops_enabled is true, the bootstrap node
@@ -2868,7 +2868,7 @@ future<std::unordered_map<sstring, std::vector<sstring>>> storage_service::descr
                 f.ignore_ready_future();
                 return std::pair<gms::inet_address, std::optional<table_schema_version>>(host, std::nullopt);
             }
-            return std::pair<gms::inet_address, std::optional<table_schema_version>>(host, f.get0());
+            return std::pair<gms::inet_address, std::optional<table_schema_version>>(host, f.get());
         });
     }, std::move(results), [] (auto results, auto host_and_version) {
         auto version = host_and_version.second ? host_and_version.second->to_sstring() : UNREACHABLE;
@@ -3038,7 +3038,7 @@ future<> storage_service::decommission() {
                 // For handling failure scenarios such as a group 0 member that is not a token ring member,
                 // there's `removenode`.
 
-                auto temp = tmptr->clone_after_all_left().get0();
+                auto temp = tmptr->clone_after_all_left().get();
                 auto num_tokens_after_all_left = temp.sorted_tokens().size();
                 temp.clear_gently().get();
                 if (num_tokens_after_all_left < 2) {

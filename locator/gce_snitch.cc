@@ -83,8 +83,8 @@ future<sstring> gce_snitch::gce_api_call(sstring addr, sstring cmd) {
     return seastar::async([addr = std::move(addr), cmd = std::move(cmd)] () -> sstring {
         using namespace boost::algorithm;
 
-        net::inet_address a = seastar::net::dns::resolve_name(addr, net::inet_address::family::INET).get0();
-        connected_socket sd(connect(socket_address(a, 80)).get0());
+        net::inet_address a = seastar::net::dns::resolve_name(addr, net::inet_address::family::INET).get();
+        connected_socket sd(connect(socket_address(a, 80)).get());
         input_stream<char> in(sd.input());
         output_stream<char> out(sd.output());
         auto close_in = deferred_close(in);
@@ -116,7 +116,7 @@ future<sstring> gce_snitch::gce_api_call(sstring addr, sstring cmd) {
         auto content_len = std::stoi(it->second);
 
         // Read HTTP response body
-        temporary_buffer<char> buf = in.read_exactly(content_len).get0();
+        temporary_buffer<char> buf = in.read_exactly(content_len).get();
 
         sstring res(buf.get(), buf.size());
         std::vector<std::string> splits;

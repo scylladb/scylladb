@@ -28,7 +28,7 @@ static lru cf_lru;
 
 static sstring read_to_string(cached_file::stream& s, size_t limit = std::numeric_limits<size_t>::max()) {
     sstring b;
-    while (auto buf = s.next().get0()) {
+    while (auto buf = s.next().get()) {
         b += sstring(buf.get(), buf.size());
         if (b.size() >= limit) {
             break;
@@ -38,7 +38,7 @@ static sstring read_to_string(cached_file::stream& s, size_t limit = std::numeri
 }
 
 static void read_to_void(cached_file::stream& s, size_t limit = std::numeric_limits<size_t>::max()) {
-    while (auto buf = s.next().get0()) {
+    while (auto buf = s.next().get()) {
         if (buf.size() >= limit) {
             break;
         }
@@ -49,7 +49,7 @@ static void read_to_void(cached_file::stream& s, size_t limit = std::numeric_lim
 static sstring read_to_string(file& f, size_t start, size_t len) {
     file_input_stream_options opt;
     auto in = make_file_input_stream(f, start, len, opt);
-    auto buf = in.read_exactly(len).get0();
+    auto buf = in.read_exactly(len).get();
     return sstring(buf.get(), buf.size());
 }
 
@@ -79,16 +79,16 @@ test_file make_test_file(size_t size) {
     auto contents = tests::random::get_sstring(size);
 
     auto path = dir.path() / "file";
-    file f = open_file_dma(path.c_str(), open_flags::create | open_flags::rw).get0();
+    file f = open_file_dma(path.c_str(), open_flags::create | open_flags::rw).get();
 
     testlog.debug("file contents: {}", contents);
 
-    output_stream<char> out = make_file_output_stream(f).get0();
+    output_stream<char> out = make_file_output_stream(f).get();
     auto close_out = defer([&] { out.close().get(); });
     out.write(contents.begin(), contents.size()).get();
     out.flush().get();
 
-    f = open_file_dma(path.c_str(), open_flags::ro).get0();
+    f = open_file_dma(path.c_str(), open_flags::ro).get();
 
     return test_file{
         .dir = std::move(dir),

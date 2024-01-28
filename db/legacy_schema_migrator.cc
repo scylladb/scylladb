@@ -138,10 +138,10 @@ public:
                         db::schema_tables::legacy::read_table_mutations(_sp, dst.name, cf_name, db::system_keyspace::legacy::column_families()))
                     .then([&dst, cf_name, timestamp](result_tuple&& t) {
 
-            result_set_type tables = std::get<0>(t).get0();
-            result_set_type columns = std::get<1>(t).get0();
-            result_set_type triggers = std::get<2>(t).get0();
-            db::schema_tables::legacy::schema_mutations sm = std::get<3>(t).get0();
+            result_set_type tables = std::get<0>(t).get();
+            result_set_type columns = std::get<1>(t).get();
+            result_set_type triggers = std::get<2>(t).get();
+            db::schema_tables::legacy::schema_mutations sm = std::get<3>(t).get();
 
             row_type& td = tables->one();
 

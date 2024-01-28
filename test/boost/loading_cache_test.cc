@@ -713,20 +713,20 @@ SEASTAR_THREAD_TEST_CASE(test_loading_cache_remove_leaves_no_old_entries_behind)
         BOOST_REQUIRE_EQUAL(loading_cache.find(0), nullptr);
         BOOST_REQUIRE_EQUAL(loading_cache.size(), 0);
 
-        auto ptr1 = f.get0();
+        auto ptr1 = f.get();
         BOOST_REQUIRE_EQUAL(*ptr1, "v1");
 
         BOOST_REQUIRE_EQUAL(loading_cache.find(0), nullptr);
         BOOST_REQUIRE_EQUAL(loading_cache.size(), 0);
 
-        ptr1 = loading_cache.get_ptr(0, load_v2).get0();
+        ptr1 = loading_cache.get_ptr(0, load_v2).get();
         loading_cache.remove(0);
         BOOST_REQUIRE_EQUAL(*ptr1, "v2");
 
         //
         // Test that live ptr1, removed from cache, does not prevent reload of new value
         //
-        auto ptr2 = loading_cache.get_ptr(0, load_v3).get0();
+        auto ptr2 = loading_cache.get_ptr(0, load_v3).get();
         ptr1 = nullptr;
         BOOST_REQUIRE_EQUAL(*ptr2, "v3");
     }
@@ -750,20 +750,20 @@ SEASTAR_THREAD_TEST_CASE(test_loading_cache_remove_leaves_no_old_entries_behind)
         BOOST_REQUIRE_EQUAL(loading_cache.find(0), nullptr);
         BOOST_REQUIRE_EQUAL(loading_cache.size(), 0);
 
-        auto ptr1 = f.get0();
+        auto ptr1 = f.get();
         BOOST_REQUIRE_EQUAL(*ptr1, "v1");
 
         BOOST_REQUIRE_EQUAL(loading_cache.find(0), nullptr);
         BOOST_REQUIRE_EQUAL(loading_cache.size(), 0);
 
-        ptr1 = loading_cache.get_ptr(0, load_v2).get0();
+        ptr1 = loading_cache.get_ptr(0, load_v2).get();
         loading_cache.remove_if([] (auto&& v) { return v == "v2"; });
         BOOST_REQUIRE_EQUAL(*ptr1, "v2");
 
         //
         // Test that live ptr1, removed from cache, does not prevent reload of new value
         //
-        auto ptr2 = loading_cache.get_ptr(0, load_v3).get0();
+        auto ptr2 = loading_cache.get_ptr(0, load_v3).get();
         ptr1 = nullptr;
         BOOST_REQUIRE_EQUAL(*ptr2, "v3");
         ptr2 = nullptr;
@@ -786,7 +786,7 @@ SEASTAR_TEST_CASE(test_prepared_statement_small_cache) {
         // filling "privileged section" of loading_cache.
         std::vector<cql3::prepared_cache_key_type> prepared_ids_privileged;
         for (int i = 0; i < 100; i++) {
-            auto prepared_id = e.prepare(fmt::format("SELECT * FROM tbl1 WHERE a = {}", current_uid++)).get0();
+            auto prepared_id = e.prepare(fmt::format("SELECT * FROM tbl1 WHERE a = {}", current_uid++)).get();
             e.execute_prepared(prepared_id, {}).get();
             e.execute_prepared(prepared_id, {}).get();
             prepared_ids_privileged.push_back(prepared_id);
@@ -809,7 +809,7 @@ SEASTAR_TEST_CASE(test_prepared_statement_small_cache) {
         // which will occupy "unprivileged section" of loading_cache.
         std::vector<cql3::prepared_cache_key_type> prepared_ids_unprivileged;
         for (int i = 0; i < 5; i++) {
-            auto prepared_id = e.prepare(fmt::format("SELECT * FROM tbl1 WHERE a = {}", current_uid++)).get0();
+            auto prepared_id = e.prepare(fmt::format("SELECT * FROM tbl1 WHERE a = {}", current_uid++)).get();
             e.execute_prepared(prepared_id, {}).get();
             prepared_ids_unprivileged.push_back(prepared_id);
         }
@@ -827,7 +827,7 @@ SEASTAR_TEST_CASE(test_prepared_statement_small_cache) {
 
         // Prepare 500 queries and execute them a random number of times.
         for (int i = 0; i < 500; i++) {
-            auto prepared_id = e.prepare(fmt::format("SELECT * FROM tbl1 WHERE a = {}", current_uid++)).get0();
+            auto prepared_id = e.prepare(fmt::format("SELECT * FROM tbl1 WHERE a = {}", current_uid++)).get();
             auto times = rand_int(4);
             for (int j = 0; j < times; j++) {
                 e.execute_prepared(prepared_id, {}).get();
@@ -839,7 +839,7 @@ SEASTAR_TEST_CASE(test_prepared_statement_small_cache) {
         for (int i = 0; i < 100; i++) {
             std::vector<cql3::prepared_cache_key_type> prepared_ids_batch;
             for (int j = 0; j < 5; j++) {
-                auto prepared_id = e.prepare(fmt::format("SELECT * FROM tbl1 WHERE a = {}", current_uid++)).get0();
+                auto prepared_id = e.prepare(fmt::format("SELECT * FROM tbl1 WHERE a = {}", current_uid++)).get();
                 prepared_ids_batch.push_back(prepared_id);
             }
             auto times = rand_int(4);

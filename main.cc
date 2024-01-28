@@ -541,7 +541,7 @@ static locator::host_id initialize_local_info_thread(sharded<db::system_keyspace
         gms::inet_address broadcast_address,
         gms::inet_address broadcast_rpc_address)
 {
-    auto linfo = sys_ks.local().load_local_info().get0();
+    auto linfo = sys_ks.local().load_local_info().get();
     if (linfo.cluster_name.empty()) {
         linfo.cluster_name = cfg.cluster_name();
     } else if (linfo.cluster_name != cfg.cluster_name()) {
@@ -717,7 +717,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 #endif
             auto notify_set = configurable::init_all(opts, *cfg, *ext, service_set(
                 db, ss, mm, proxy, feature_service, messaging, qp, bm
-            )).get0();
+            )).get();
 
             auto stop_configurables = defer_verbose_shutdown("configurables", [&] {
                 notify_set.notify_all(configurable::system_state::stopped).get();
@@ -791,7 +791,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             schema::set_default_partitioner(cfg->partitioner(), cfg->murmur3_partitioner_ignore_msb_bits());
             auto make_sched_group = [&] (sstring name, sstring short_name, unsigned shares) {
                 if (cfg->cpu_scheduler()) {
-                    return seastar::create_scheduling_group(name, short_name, shares).get0();
+                    return seastar::create_scheduling_group(name, short_name, shares).get();
                 } else {
                     return seastar::scheduling_group();
                 }
@@ -828,8 +828,8 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             auto preferred = cfg->listen_interface_prefer_ipv6() ? std::make_optional(net::inet_address::family::INET6) : std::nullopt;
             auto family = cfg->enable_ipv6_dns_lookup() || preferred ? std::nullopt : std::make_optional(net::inet_address::family::INET);
 
-            auto broadcast_addr = utils::resolve(cfg->broadcast_address || cfg->listen_address, family, preferred).get0();
-            auto broadcast_rpc_addr = utils::resolve(cfg->broadcast_rpc_address || cfg->rpc_address, family, preferred).get0();
+            auto broadcast_addr = utils::resolve(cfg->broadcast_address || cfg->listen_address, family, preferred).get();
+            auto broadcast_rpc_addr = utils::resolve(cfg->broadcast_rpc_address || cfg->rpc_address, family, preferred).get();
 
             ctx.api_dir = cfg->api_ui_dir();
             if (!ctx.api_dir.empty() && ctx.api_dir.back() != '/') {
@@ -843,7 +843,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             }
             const auto hinted_handoff_enabled = cfg->hinted_handoff_enabled();
 
-            auto api_addr = utils::resolve(cfg->api_address || cfg->rpc_address, family, preferred).get0();
+            auto api_addr = utils::resolve(cfg->api_address || cfg->rpc_address, family, preferred).get();
             supervisor::notify("starting API server");
             ctx.http_server.start("API").get();
             auto stop_http_server = defer_verbose_shutdown("API server", [&ctx] {
@@ -859,7 +859,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                     prometheus_server.stop().get();
                 });
 
-                auto ip = utils::resolve(cfg->prometheus_address || cfg->listen_address, family, preferred).get0();
+                auto ip = utils::resolve(cfg->prometheus_address || cfg->listen_address, family, preferred).get();
 
                 prometheus::config pctx;
                 pctx.metric_help = "Scylla server statistics";
@@ -890,7 +890,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             debug::the_snitch = &snitch;
             snitch_config snitch_cfg;
             snitch_cfg.name = cfg->endpoint_snitch();
-            snitch_cfg.listen_address = utils::resolve(cfg->listen_address, family).get0();
+            snitch_cfg.listen_address = utils::resolve(cfg->listen_address, family).get();
             snitch_cfg.broadcast_address = broadcast_addr;
             snitch.start(snitch_cfg).get();
             auto stop_snitch = defer_verbose_shutdown("snitch", [&snitch] {
@@ -1076,11 +1076,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             smp_service_group_config storage_proxy_smp_service_group_config;
             // Assuming less than 1kB per queued request, this limits storage_proxy submit_to() queues to 5MB or less
             storage_proxy_smp_service_group_config.max_nonlocal_requests = 5000;
-            spcfg.read_smp_service_group = create_smp_service_group(storage_proxy_smp_service_group_config).get0();
-            spcfg.write_smp_service_group = create_smp_service_group(storage_proxy_smp_service_group_config).get0();
-            spcfg.write_mv_smp_service_group = create_smp_service_group(storage_proxy_smp_service_group_config).get0();
-            spcfg.hints_write_smp_service_group = create_smp_service_group(storage_proxy_smp_service_group_config).get0();
-            spcfg.write_ack_smp_service_group = create_smp_service_group(storage_proxy_smp_service_group_config).get0();
+            spcfg.read_smp_service_group = create_smp_service_group(storage_proxy_smp_service_group_config).get();
+            spcfg.write_smp_service_group = create_smp_service_group(storage_proxy_smp_service_group_config).get();
+            spcfg.write_mv_smp_service_group = create_smp_service_group(storage_proxy_smp_service_group_config).get();
+            spcfg.hints_write_smp_service_group = create_smp_service_group(storage_proxy_smp_service_group_config).get();
+            spcfg.write_ack_smp_service_group = create_smp_service_group(storage_proxy_smp_service_group_config).get();
             static db::view::node_update_backlog node_backlog(smp::count, 10ms);
             scheduling_group_key_config storage_proxy_stats_cfg =
                     make_scheduling_group_key_config<service::storage_proxy_stats::stats>();
@@ -1094,7 +1094,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 reinterpret_cast<service::storage_proxy_stats::stats*>(ptr)->register_split_metrics_local();
             };
             proxy.start(std::ref(db), spcfg, std::ref(node_backlog),
-                    scheduling_group_key_create(storage_proxy_stats_cfg).get0(),
+                    scheduling_group_key_create(storage_proxy_stats_cfg).get(),
                     std::ref(feature_service), std::ref(token_metadata), std::ref(erm_factory)).get();
 
             // #293 - do not stop anything
@@ -1205,7 +1205,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
               auto paths = sch_cl->get_segments_to_replay().get();
               if (!paths.empty()) {
                   supervisor::notify("replaying schema commit log");
-                  auto rp = db::commitlog_replayer::create_replayer(db, sys_ks).get0();
+                  auto rp = db::commitlog_replayer::create_replayer(db, sys_ks).get();
                   rp.recover(paths, db::schema_tables::COMMITLOG_FILENAME_PREFIX).get();
                   supervisor::notify("replaying schema commit log - flushing memtables");
                   // The schema commitlog lives only on the null shard.
@@ -1222,7 +1222,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             sys_ks.local().build_bootstrap_info().get();
 
-            const auto listen_address = utils::resolve(cfg->listen_address, family).get0();
+            const auto listen_address = utils::resolve(cfg->listen_address, family).get();
             const auto host_id = initialize_local_info_thread(sys_ks, snitch, listen_address, *cfg, broadcast_addr, broadcast_rpc_addr);
 
           shared_token_metadata::mutate_on_all_shards(token_metadata, [host_id, endpoint = broadcast_addr] (locator::token_metadata& tm) {
@@ -1244,7 +1244,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             mscfg.listen_on_broadcast_address = cfg->listen_on_broadcast_address();
             mscfg.rpc_memory_limit = std::max<size_t>(0.08 * memory::stats().total_memory(), mscfg.rpc_memory_limit);
             if (snitch.local()->prefer_local()) {
-                mscfg.preferred_ips = sys_ks.local().get_preferred_ips().get0();
+                mscfg.preferred_ips = sys_ks.local().get_preferred_ips().get();
             }
             mscfg.maintenance_mode = maintenance_mode_enabled{cfg->maintenance_mode()};
 
@@ -1496,7 +1496,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 auto paths = cl->get_segments_to_replay().get();
                 if (!paths.empty()) {
                     supervisor::notify("replaying commit log");
-                    auto rp = db::commitlog_replayer::create_replayer(db, sys_ks).get0();
+                    auto rp = db::commitlog_replayer::create_replayer(db, sys_ks).get();
                     rp.recover(paths, db::commitlog::descriptor::FILENAME_PREFIX).get();
                     supervisor::notify("replaying commit log - flushing memtables");
                     db.invoke_on_all(&replica::database::flush_all_memtables).get();
@@ -1690,7 +1690,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             scheduling_group_key_config maintenance_cql_sg_stats_cfg =
             make_scheduling_group_key_config<cql_transport::cql_sg_stats>(maintenance_socket_enabled::yes);
-            cql_transport::controller cql_maintenance_server_ctl(maintenance_auth_service, mm_notifier, gossiper, qp, service_memory_limiter, sl_controller, lifecycle_notifier, *cfg, scheduling_group_key_create(maintenance_cql_sg_stats_cfg).get0(), maintenance_socket_enabled::yes);
+            cql_transport::controller cql_maintenance_server_ctl(maintenance_auth_service, mm_notifier, gossiper, qp, service_memory_limiter, sl_controller, lifecycle_notifier, *cfg, scheduling_group_key_create(maintenance_cql_sg_stats_cfg).get(), maintenance_socket_enabled::yes);
 
             std::any stop_maintenance_auth_service;
             std::any stop_maintenance_cql;
@@ -1902,7 +1902,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             notify_set.notify_all(configurable::system_state::started).get();
 
             scheduling_group_key_config cql_sg_stats_cfg = make_scheduling_group_key_config<cql_transport::cql_sg_stats>(maintenance_socket_enabled::no);
-            cql_transport::controller cql_server_ctl(auth_service, mm_notifier, gossiper, qp, service_memory_limiter, sl_controller, lifecycle_notifier, *cfg, scheduling_group_key_create(cql_sg_stats_cfg).get0(), maintenance_socket_enabled::no);
+            cql_transport::controller cql_server_ctl(auth_service, mm_notifier, gossiper, qp, service_memory_limiter, sl_controller, lifecycle_notifier, *cfg, scheduling_group_key_create(cql_sg_stats_cfg).get(), maintenance_socket_enabled::no);
 
             ss.local().register_protocol_server(cql_server_ctl);
 
