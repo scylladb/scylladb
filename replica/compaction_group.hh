@@ -20,6 +20,10 @@
 
 #pragma once
 
+namespace locator {
+class effective_replication_map;
+}
+
 namespace replica {
 
 using enable_backlog_tracker = bool_class<class enable_backlog_tracker_tag>;
@@ -220,6 +224,7 @@ using storage_group_vector = utils::chunked_vector<std::unique_ptr<storage_group
 class storage_group_manager {
 public:
     virtual ~storage_group_manager() {}
+    virtual future<> update_effective_replication_map(const locator::effective_replication_map& erm) = 0;
     virtual storage_group_vector make_storage_groups(compaction_group_list& list) const = 0;
     virtual std::pair<size_t, locator::tablet_range_side> storage_group_of(dht::token) const = 0;
     virtual size_t log2_storage_groups() const = 0;

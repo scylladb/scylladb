@@ -555,6 +555,7 @@ public:
         r.push_back(std::make_unique<storage_group>(std::move(cg), &list));
         return r;
     }
+    future<> update_effective_replication_map(const locator::effective_replication_map& erm) override { return make_ready_future(); }
     std::pair<size_t, locator::tablet_range_side> storage_group_of(dht::token) const override {
         return {0, locator::tablet_range_side{}};
     }
@@ -565,34 +566,33 @@ public:
 
 class tablet_storage_group_manager final : public storage_group_manager {
     replica::table& _t;
+    locator::host_id _my_host_id;
+    const locator::tablet_map* _tablet_map;
 private:
-    const locator::effective_replication_map_ptr& erm() const {
-        return _t.get_effective_replication_map();
-    }
-
     const schema_ptr& schema() const {
         return _t.schema();
     }
 
-    const locator::tablet_map& tablet_map() const {
-        // FIXME: cheaper way to retrieve tablet_map than looking up every time in tablet_metadata's map.
-        auto& tm = erm()->get_token_metadata();
-        return tm.tablets().get_tablet_map(schema()->id());
+    const locator::tablet_map& tablet_map() const noexcept {
+        return *_tablet_map;
     }
 public:
-    tablet_storage_group_manager(replica::table& t) : _t(t) {}
+    tablet_storage_group_manager(table& t, const locator::effective_replication_map& erm)
+        : _t(t)
+        , _my_host_id(erm.get_token_metadata().get_my_id())
+        , _tablet_map(&erm.get_token_metadata().tablets().get_tablet_map(schema()->id()))
+    {}
 
     storage_group_vector make_storage_groups(compaction_group_list& list) const override {
         storage_group_vector ret;
 
         auto& tmap = tablet_map();
-        auto& tm = erm()->get_token_metadata();
         ret.reserve(tmap.tablet_count());
 
         for (auto tid : tmap.tablet_ids()) {
             auto range = tmap.get_token_range(tid);
 
-            auto shard = tmap.get_shard(tid, tm.get_my_id());
+            auto shard = tmap.get_shard(tid, _my_host_id);
             if (shard && *shard == this_shard_id()) {
                 tlogger.debug("Tablet with id {} and range {} present for {}.{}", tid, range, schema()->ks_name(), schema()->cf_name());
             }
@@ -602,6 +602,9 @@ public:
         }
         return ret;
     }
+
+    future<> update_effective_replication_map(const locator::effective_replication_map& erm) override;
+
     std::pair<size_t, locator::tablet_range_side> storage_group_of(dht::token t) const override {
         auto [id, side] = tablet_map().get_tablet_id_and_range_side(t);
         return { id.value(), side };
@@ -739,7 +742,7 @@ future<> table::maybe_split_compaction_group_of(locator::tablet_id tablet_id) {
 
 std::unique_ptr<storage_group_manager> table::make_storage_group_manager() {
     if (uses_tablets()) {
-        return std::make_unique<tablet_storage_group_manager>(*this);
+        return std::make_unique<tablet_storage_group_manager>(*this, *_erm);
     }
     return std::make_unique<single_storage_group_manager>(*this);
 }
@@ -1966,6 +1969,11 @@ future<> table::handle_tablet_split_completion(size_t old_tablet_count, const lo
     return stop_fut;
 }
 
+future<> tablet_storage_group_manager::update_effective_replication_map(const locator::effective_replication_map& erm) {
+    _tablet_map = &erm.get_token_metadata().tablets().get_tablet_map(schema()->id());
+    return make_ready_future();
+}
+
 future<> table::update_effective_replication_map(locator::effective_replication_map_ptr erm) {
     auto old_erm = std::exchange(_erm, std::move(erm));
 
@@ -1983,6 +1991,10 @@ future<> table::update_effective_replication_map(locator::effective_replication_
                           _schema->ks_name(), _schema->cf_name(), old_tablet_count, new_tablet_count);
             co_await handle_tablet_split_completion(old_tablet_count, _erm->get_token_metadata().tablets().get_tablet_map(table_id));
         }
+
+        // FIXME: fold handle_tablet_split_completion into tablet_storage_group_manager
+        // update_effective_replication_map once the storage_group_vector is moved there.
+        co_await _sg_manager->update_effective_replication_map(*_erm);
     }
     if (old_erm) {
         old_erm->invalidate();
