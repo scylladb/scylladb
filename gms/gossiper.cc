@@ -752,6 +752,7 @@ future<> gossiper::do_status_check() {
             logger.info("FatClient {} has been silent for {}ms, removing from gossip", endpoint, fat_client_timeout.count());
             co_await remove_endpoint(endpoint, pid); // will put it in _just_removed_endpoints to respect quarantine delay
             co_await evict_from_membership(endpoint, pid); // can get rid of the state immediately
+            continue;
         }
 
         // check for dead state removal
