@@ -565,6 +565,7 @@ public:
 
 class tablet_storage_group_manager final : public storage_group_manager {
     replica::table& _t;
+    locator::host_id _my_host_id;
 private:
     const locator::effective_replication_map_ptr& erm() const {
         return _t.get_effective_replication_map();
@@ -580,19 +581,21 @@ private:
         return tm.tablets().get_tablet_map(schema()->id());
     }
 public:
-    tablet_storage_group_manager(replica::table& t) : _t(t) {}
+    tablet_storage_group_manager(table& t)
+        : _t(t)
+        , _my_host_id(erm()->get_token_metadata().get_my_id())
+    {}
 
     storage_group_vector make_storage_groups(compaction_group_list& list) const override {
         storage_group_vector ret;
 
         auto& tmap = tablet_map();
-        auto& tm = erm()->get_token_metadata();
         ret.reserve(tmap.tablet_count());
 
         for (auto tid : tmap.tablet_ids()) {
             auto range = tmap.get_token_range(tid);
 
-            auto shard = tmap.get_shard(tid, tm.get_my_id());
+            auto shard = tmap.get_shard(tid, _my_host_id);
             if (shard && *shard == this_shard_id()) {
                 tlogger.debug("Tablet with id {} and range {} present for {}.{}", tid, range, schema()->ks_name(), schema()->cf_name());
             }
