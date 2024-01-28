@@ -23,7 +23,7 @@ It’s recommended to have a balanced setup. If there are only 4-8 :term:`Logica
 This works in the opposite direction as well.
 ScyllaDB can be used in many types of installation environments.
 
-To see which system would best suit your workload requirements, use the `ScyllaDB Sizing Calculator <https://price-calc.gh.scylladb.com/>`_ to customize ScyllaDB for your usage.
+To see which system would best suit your workload requirements, use the `ScyllaDB Sizing Calculator <https://www.scylladb.com/product/scylla-cloud/get-pricing/>`_ to customize ScyllaDB for your usage.
 
 
 
