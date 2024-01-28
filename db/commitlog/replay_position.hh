@@ -91,9 +91,6 @@ private:
     replay_position _rp;
 };
 
-
-std::ostream& operator<<(std::ostream& out, const replay_position& s);
-
 }
 
 namespace std {
@@ -104,3 +101,8 @@ struct hash<db::replay_position> {
     }
 };
 }
+
+template <> struct fmt::formatter<db::replay_position> {
+    constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
+    auto format(const db::replay_position&, fmt::format_context& ctx) const -> decltype(ctx.out());
+};

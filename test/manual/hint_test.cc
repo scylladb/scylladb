@@ -34,6 +34,13 @@
 
 using namespace db;
 
+namespace db {
+std::ostream& boost_test_print_type(std::ostream& os, const replay_position& p) {
+    fmt::print(os, "{}", p);
+    return os;
+}
+}
+
 static future<> cl_test(commitlog::config cfg, noncopyable_function<future<> (commitlog& log)> f) {
     tmpdir tmp;
     cfg.commit_log_location = tmp.path().string();
