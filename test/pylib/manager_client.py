@@ -342,6 +342,10 @@ class ManagerClient():
         await self.client.put_json(f"/cluster/server/{server_id}/update_config",
                                    {"key": key, "value": value})
 
+    async def server_update_cmdline(self, server_id: ServerNum, cmdline_options: List[str]) -> None:
+        await self.client.put_json(f"/cluster/server/{server_id}/update_cmdline",
+                                   {"cmdline_options": cmdline_options})
+
     async def server_change_ip(self, server_id: ServerNum) -> IPAddress:
         """Change server IP address. Applicable only to a stopped server"""
         ret = await self.client.put_json(f"/cluster/server/{server_id}/change_ip", {},
