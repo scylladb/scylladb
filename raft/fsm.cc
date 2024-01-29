@@ -19,9 +19,10 @@ leader::~leader() {
 }
 
 fsm::fsm(server_id id, term_t current_term, server_id voted_for, log log,
-        index_t commit_idx, failure_detector& failure_detector, fsm_config config) :
+        index_t commit_idx, failure_detector& failure_detector, fsm_config config,
+        seastar::condition_variable& sm_events) :
         _my_id(id), _current_term(current_term), _voted_for(voted_for),
-        _log(std::move(log)), _failure_detector(failure_detector), _config(config) {
+        _log(std::move(log)), _failure_detector(failure_detector), _config(config), _sm_events(sm_events) {
     if (id == raft::server_id{}) {
         throw std::invalid_argument("raft::fsm: raft instance cannot have id zero");
     }
@@ -40,10 +41,6 @@ fsm::fsm(server_id id, term_t current_term, server_id voted_for, log log,
         reset_election_timeout();
     }
 }
-
-fsm::fsm(server_id id, term_t current_term, server_id voted_for, log log,
-        failure_detector& failure_detector, fsm_config config) :
-        fsm(id, current_term, voted_for, std::move(log), index_t{0}, failure_detector, config) {}
 
 future<semaphore_units<>> fsm::wait_for_memory_permit(seastar::abort_source* as, size_t size) {
     check_is_leader();
@@ -303,23 +300,15 @@ void fsm::become_candidate(bool is_prevote, bool is_leadership_transfer) {
     }
 }
 
-future<fsm_output> fsm::poll_output() {
-    logger.trace("fsm::poll_output() {} stable index: {} last index: {}",
+bool fsm::has_output() const {
+    logger.trace("fsm::has_output() {} stable index: {} last index: {}",
         _my_id, _log.stable_idx(), _log.last_idx());
 
-    while (true) {
-        auto diff = _log.last_idx() - _log.stable_idx();
+    auto diff = _log.last_idx() - _log.stable_idx();
 
-        if (diff > 0 || !_messages.empty() || !_observed.is_equal(*this) || _output.max_read_id_with_quorum ||
-                (is_leader() && leader_state().last_read_id_changed) || _output.snp || !_output.snps_to_drop.empty() || _output.state_changed) {
-            break;
-        }
-        co_await _sm_events.wait();
-    }
-    while (utils::get_local_injector().enter("fsm::poll_output/pause")) {
-        co_await seastar::sleep(std::chrono::milliseconds(100));
-    }
-    co_return get_output();
+    return diff > 0 || !_messages.empty() || !_observed.is_equal(*this) || _output.max_read_id_with_quorum
+        || (is_leader() && leader_state().last_read_id_changed) || _output.snp || !_output.snps_to_drop.empty()
+        || _output.state_changed;
 }
 
 fsm_output fsm::get_output() {
@@ -1029,7 +1018,7 @@ bool fsm::apply_snapshot(snapshot_descriptor snp, size_t max_trailing_entries, s
     // If the snapshot is local, _commit_idx is larger than snp.idx.
     // Otherwise snp.idx becomes the new commit index.
     _commit_idx = std::max(_commit_idx, snp.idx);
-    _output.snp.emplace(fsm_output::applied_snapshot{snp, local});
+    _output.snp.emplace(fsm_output::applied_snapshot{snp, local, max_trailing_entries});
     size_t units = _log.apply_snapshot(std::move(snp), max_trailing_entries, max_trailing_bytes);
     if (is_leader()) {
         logger.trace("apply_snapshot[{}]: signal {} available units", _my_id, units);
@@ -1142,7 +1131,6 @@ void fsm::stop() {
         // (in particular, abort waits on log_limiter_semaphore and prevent new ones).
         become_follower({});
     }
-    _sm_events.broken();
 }
 
 std::ostream& operator<<(std::ostream& os, const fsm& f) {
