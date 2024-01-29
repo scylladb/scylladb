@@ -437,6 +437,10 @@ db::system_keyspace& raft_group0_client::sys_ks() {
     return _sys_ks;
 }
 
+bool raft_group0_client::in_recovery() const {
+    return _upgrade_state == group0_upgrade_state::recovery;
+}
+
 raft_group0_client::query_result_guard::query_result_guard(utils::UUID query_id, raft_group0_client& client)
     : _query_id{query_id}, _client{&client} {
     auto [_, emplaced] = _client->_results.emplace(_query_id, std::nullopt);
