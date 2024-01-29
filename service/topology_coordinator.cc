@@ -368,7 +368,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             | boost::adaptors::filtered([&cmd, &exclude_nodes] (const std::pair<const raft::server_id, replica_state>& n) {
                 // We must send barrier_and_drain to the decommissioning node as it might be coordinating requests.
                 bool drain_decommissioning_node = cmd.cmd == raft_topology_cmd::command::barrier_and_drain
-                        && (n.second.state == node_state::decommissioning || n.second.state == node_state::left_token_ring);
+                        && n.second.state == node_state::decommissioning;
                 return !exclude_nodes.contains(n.first) && (n.second.state == node_state::normal || drain_decommissioning_node);
             })
             | boost::adaptors::map_keys;
@@ -1503,10 +1503,13 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     [[fallthrough]];
                 case node_state::decommissioning: {
                     topology_mutation_builder builder(node.guard.write_timestamp());
-                    auto next_state = node.rs->state == node_state::decommissioning
-                                        ? node_state::left_token_ring : node_state::left;
-                    builder.del_transition_state()
-                           .set_version(_topo_sm._topology.version + 1)
+                    auto next_state = node.rs->state == node_state::decommissioning ? node.rs->state : node_state::left;
+                    if (node.rs->state == node_state::decommissioning) {
+                        builder.set_transition_state(topology::transition_state::left_token_ring);
+                    } else {
+                        builder.del_transition_state();
+                    }
+                    builder.set_version(_topo_sm._topology.version + 1)
                            .with_node(node.id)
                            .del("tokens")
                            .set("node_state", next_state);
@@ -1550,6 +1553,87 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 break;
             case topology::transition_state::tablet_migration:
                 co_await handle_tablet_migration(std::move(guard), false);
+                break;
+            case topology::transition_state::left_token_ring: {
+                auto node = get_node_to_work_on(std::move(guard));
+
+                if (node.id == _raft.id()) {
+                    // Someone else needs to coordinate the rest of the decommission process,
+                    // because the decommissioning node is going to shut down in the middle of this state.
+                    rtlogger.info("coordinator is decommissioning; giving up leadership");
+                    co_await step_down_as_nonvoter();
+
+                    // Note: if we restart after this point and become a voter
+                    // and then a coordinator again, it's fine - we'll just repeat this step.
+                    // (If we're in `left` state when we try to restart we won't
+                    // be able to become a voter - we'll be banned from the cluster.)
+                }
+
+                bool barrier_failed = false;
+                // Wait until other nodes observe the new token ring and stop sending writes to this node.
+                try {
+                    node = retake_node(co_await global_token_metadata_barrier(std::move(node.guard), get_excluded_nodes(node)), node.id);
+                } catch (term_changed_error&) {
+                    throw;
+                } catch (group0_concurrent_modification&) {
+                    throw;
+                } catch (...) {
+                    rtlogger.error("transition_state::left_token_ring, "
+                                    "raft_topology_cmd::command::barrier failed, error {}",
+                                    std::current_exception());
+                    barrier_failed = true;
+                }
+
+                if (barrier_failed) {
+                    // If barrier above failed it means there may be unfinished writes to a decommissioned node.
+                    // Lets wait for the ring delay for those writes to complete and new topology to propagate
+                    // before continuing.
+                    co_await sleep_abortable(_ring_delay, _as);
+                    node = retake_node(co_await start_operation(), node.id);
+                }
+
+                topology_request_tracking_mutation_builder rtbuilder(node.rs->request_id);
+
+                rtbuilder.done();
+
+                co_await update_topology_state(take_guard(std::move(node)), {rtbuilder.build()}, "report request completion in left_token_ring sate");
+
+                // Tell the node to shut down.
+                // This is done to improve user experience when there are no failures.
+                // In the next state (`node_state::left`), the node will be banned by the rest of the cluster,
+                // so there's no guarantee that it would learn about entering that state even if it was still
+                // a member of group0, hence we use a separate direct RPC in this state to shut it down.
+                //
+                // There is the possibility that the node will never get the message
+                // and decommission will hang on that node.
+                // This is fine for the rest of the cluster - we will still remove, ban the node and continue.
+                auto node_id = node.id;
+                bool shutdown_failed = false;
+                try {
+                    node = co_await exec_direct_command(std::move(node), raft_topology_cmd::command::barrier);
+                } catch (...) {
+                    rtlogger.warn("failed to tell node {} to shut down - it may hang."
+                                 " It's safe to shut it down manually now. (Exception: {})",
+                                 node.id, std::current_exception());
+                    shutdown_failed = true;
+                }
+                if (shutdown_failed) {
+                    node = retake_node(co_await start_operation(), node_id);
+                }
+
+                // Remove the node from group0 here - in general, it won't be able to leave on its own
+                // because we'll ban it as soon as we tell it to shut down.
+                co_await remove_from_group0(node.id);
+
+                topology_mutation_builder builder(node.guard.write_timestamp());
+                builder.del_transition_state()
+                       .with_node(node.id)
+                       .set("node_state", node_state::left);
+                auto str = node.rs->state == node_state::decommissioning
+                        ? ::format("finished decommissioning node {}", node.id)
+                        : ::format("finished rollback of {} after {} failure", node.id, node.rs->state);
+                co_await update_topology_state(take_guard(std::move(node)), {builder.build()}, std::move(str));
+            }
                 break;
         }
         co_return true;
@@ -1729,82 +1813,6 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                        .del("rebuild_option");
                 rtbuilder.done();
                 co_await update_topology_state(take_guard(std::move(node)), {builder.build(), rtbuilder.build()}, "rebuilding completed");
-            }
-                break;
-            case node_state::left_token_ring: {
-                if (node.id == _raft.id()) {
-                    // Someone else needs to coordinate the rest of the decommission process,
-                    // because the decommissioning node is going to shut down in the middle of this state.
-                    rtlogger.info("coordinator is decommissioning; giving up leadership");
-                    co_await step_down_as_nonvoter();
-
-                    // Note: if we restart after this point and become a voter
-                    // and then a coordinator again, it's fine - we'll just repeat this step.
-                    // (If we're in `left` state when we try to restart we won't
-                    // be able to become a voter - we'll be banned from the cluster.)
-                }
-
-                bool barrier_failed = false;
-                // Wait until other nodes observe the new token ring and stop sending writes to this node.
-                try {
-                    node = retake_node(co_await global_token_metadata_barrier(std::move(node.guard), get_excluded_nodes(node)), node.id);
-                } catch (term_changed_error&) {
-                    throw;
-                } catch (group0_concurrent_modification&) {
-                    throw;
-                } catch (...) {
-                    rtlogger.error("node_state::left_token_ring (node: {}), "
-                                    "global_token_metadata_barrier failed, error {}",
-                                    node.id, std::current_exception());
-                    barrier_failed = true;
-                }
-
-                if (barrier_failed) {
-                    // If barrier above failed it means there may be unfinished writes to a decommissioned node.
-                    // Lets wait for the ring delay for those writes to complete and new topology to propagate
-                    // before continuing.
-                    co_await sleep_abortable(_ring_delay, _as);
-                    node = retake_node(co_await start_operation(), node.id);
-                }
-
-                topology_request_tracking_mutation_builder rtbuilder(node.rs->request_id);
-
-                rtbuilder.done();
-
-                co_await update_topology_state(take_guard(std::move(node)), {rtbuilder.build()}, "report request completion in left_token_ring state");
-
-                // Tell the node to shut down.
-                // This is done to improve user experience when there are no failures.
-                // In the next state (`node_state::left`), the node will be banned by the rest of the cluster,
-                // so there's no guarantee that it would learn about entering that state even if it was still
-                // a member of group0, hence we use a separate direct RPC in this state to shut it down.
-                //
-                // There is the possibility that the node will never get the message
-                // and decommission will hang on that node.
-                // This is fine for the rest of the cluster - we will still remove, ban the node and continue.
-                auto node_id = node.id;
-                bool shutdown_failed = false;
-                try {
-                    node = co_await exec_direct_command(std::move(node), raft_topology_cmd::command::barrier);
-                } catch (...) {
-                    rtlogger.warn("failed to tell node {} to shut down - it may hang."
-                                 " It's safe to shut it down manually now. (Exception: {})",
-                                 node.id, std::current_exception());
-                    shutdown_failed = true;
-                }
-                if (shutdown_failed) {
-                    node = retake_node(co_await start_operation(), node_id);
-                }
-
-                // Remove the node from group0 here - in general, it won't be able to leave on its own
-                // because we'll ban it as soon as we tell it to shut down.
-                co_await remove_from_group0(node.id);
-
-                topology_mutation_builder builder(node.guard.write_timestamp());
-                builder.with_node(node.id)
-                       .set("node_state", node_state::left);
-                auto str = ::format("finished decommissioning node {}", node.id);
-                co_await update_topology_state(take_guard(std::move(node)), {builder.build()}, std::move(str));
             }
                 break;
             case node_state::rollback_to_normal: {
@@ -2086,20 +2094,18 @@ future<> topology_coordinator::rollback_current_topology_op(group0_guard&& guard
     // Look for a node which operation should be aborted
     // (there should be one since we are in the rollback)
     node_to_work_on node = get_node_to_work_on(std::move(guard));
-    node_state state;
-    std::unordered_set<raft::server_id> exclude_nodes = parse_ignore_nodes(node.req_param);
+    node_state state = node.rs->state;
+    std::optional<topology::transition_state> transition_state;
 
     switch (node.rs->state) {
         case node_state::bootstrapping:
             [[fallthrough]];
         case node_state::replacing:
-            // To rollback bootstrap of replace just move a node that we tried to add to the left_token_ring state.
-            // It will be removed from the group0 by the state handler. It will also be notified to shutdown.
-            state = node_state::left_token_ring;
+            // To rollback bootstrap of replace just move the topology to left_token_ring. The node we tried to
+            // add will be removed from the group0 by the transition handler. It will also be notified to shutdown.
+            transition_state = topology::transition_state::left_token_ring;
             break;
         case node_state::removing:
-            // Exclude dead node from global barrier
-            exclude_nodes.emplace(node.id);
             // The node was removed already. We need to add it back. Lets do it as non voter.
             // If it ever boots again it will make itself a voter.
             co_await _group0.group0_server().modify_config({raft::config_member{{node.id, {}}, false}}, {}, &_as);
@@ -2114,8 +2120,16 @@ future<> topology_coordinator::rollback_current_topology_op(group0_guard&& guard
 
     topology_mutation_builder builder(node.guard.write_timestamp());
     topology_request_tracking_mutation_builder rtbuilder(node.rs->request_id);
-    builder.del_transition_state()
-           .set_version(_topo_sm._topology.version + 1)
+    std::string str;
+    if (transition_state) {
+        builder.set_transition_state(*transition_state);
+        str = fmt::format("rollback {} after {} failure, moving transition state to {} and setting cleanup flag",
+                node.id, node.rs->state, *transition_state);
+    } else {
+        builder.del_transition_state();
+        str = fmt::format("rollback {} after {} failure to state {} and setting cleanup flag", node.id, node.rs->state, state);
+    }
+    builder.set_version(_topo_sm._topology.version + 1)
            .with_node(node.id)
            .set("node_state", state);
     rtbuilder.set("error", fmt::format("Rolled back: {}", *_rollback));
@@ -2126,8 +2140,6 @@ future<> topology_coordinator::rollback_current_topology_op(group0_guard&& guard
     muts = mark_nodes_as_cleanup_needed(node, true);
     muts.emplace_back(builder.build());
     muts.emplace_back(rtbuilder.build());
-
-    auto str = fmt::format("rollback {} after {} failure to state {} and setting cleanup flag", node.id, node.rs->state, state);
 
     rtlogger.info("{}", str);
     co_await update_topology_state(std::move(node.guard), std::move(muts), str);
