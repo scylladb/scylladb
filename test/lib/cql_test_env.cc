@@ -8,6 +8,7 @@
 
 #include <boost/range/algorithm/transform.hpp>
 #include <iterator>
+#include <optional>
 #include <random>
 #include <seastar/core/thread.hh>
 #include <seastar/util/defer.hh>
@@ -62,6 +63,7 @@
 #include "repair/row_level.hh"
 #include "utils/class_registrator.hh"
 #include "utils/cross-shard-barrier.hh"
+#include "utils/directories.hh"
 #include "streaming/stream_manager.hh"
 #include "debug.hh"
 #include "db/schema_tables.hh"
@@ -170,6 +172,7 @@ private:
     sharded<service::direct_fd_pinger> _fd_pinger;
     sharded<cdc::cdc_service> _cdc;
 
+    std::optional<utils::directories> _dirs;
     service::raft_group0_client* _group0_client;
 
 private:
@@ -478,6 +481,8 @@ private:
                 create_directories((cfg->view_hints_directory() + "/" + std::to_string(i)).c_str());
             }
 
+            _dirs.emplace(*cfg);
+
             if (!cfg->max_memory_for_unlimited_query_soft_limit.is_set()) {
                 cfg->max_memory_for_unlimited_query_soft_limit.set(uint64_t(query::result_memory_limiter::unlimited_result_size));
             }
@@ -579,7 +584,7 @@ private:
             auto stop_wasm = defer([this] { _wasm.stop().get(); });
 
 
-            _db.start(std::ref(*cfg), dbcfg, std::ref(_mnotifier), std::ref(_feature_service), std::ref(_token_metadata), std::ref(_cm), std::ref(_sstm), std::ref(_wasm), std::ref(_sst_dir_semaphore), utils::cross_shard_barrier()).get();
+            _db.start(std::ref(*cfg), std::ref(*_dirs), dbcfg, std::ref(_mnotifier), std::ref(_feature_service), std::ref(_token_metadata), std::ref(_cm), std::ref(_sstm), std::ref(_wasm), std::ref(_sst_dir_semaphore), utils::cross_shard_barrier()).get();
             auto stop_db = defer([this] {
                 _db.stop().get();
             });
@@ -597,7 +602,7 @@ private:
             db::view::node_update_backlog b(smp::count, 10ms);
             scheduling_group_key_config sg_conf =
                     make_scheduling_group_key_config<service::storage_proxy_stats::stats>();
-            _proxy.start(std::ref(_db), spcfg, std::ref(b), scheduling_group_key_create(sg_conf).get0(), std::ref(_feature_service), std::ref(_token_metadata), std::ref(_erm_factory)).get();
+            _proxy.start(std::ref(_db), std::ref(*_dirs), spcfg, std::ref(b), scheduling_group_key_create(sg_conf).get0(), std::ref(_feature_service), std::ref(_token_metadata), std::ref(_erm_factory)).get();
             auto stop_proxy = defer([this] { _proxy.stop().get(); });
 
             _cql_config.start(cql3::cql_config::default_tag{}).get();

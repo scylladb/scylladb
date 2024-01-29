@@ -226,9 +226,13 @@ int main(int argc, char** argv) {
             cfg.max_flush_delay_in_ms = cfg.min_flush_delay_in_ms;
         }
 
-        db::commitlog::config cl_cfg = db::commitlog::config::from_db_config(*db_cfg, current_scheduling_group(), memory::stats().total_memory());
         tmpdir tmp;
-        cl_cfg.commit_log_location = tmp.path().string();
+        const seastar::sstring commit_log_location = tmp.path().string();
+
+	db::commitlog::config cl_cfg = db::commitlog::config::from_db_config(*db_cfg,
+                commit_log_location,
+                current_scheduling_group(),
+                memory::stats().total_memory());
 
         distributed<commitlog_service> test_commitlog;
 

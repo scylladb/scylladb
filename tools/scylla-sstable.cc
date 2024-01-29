@@ -36,6 +36,7 @@
 #include "tools/sstable_consumer.hh"
 #include "tools/utils.hh"
 #include "locator/host_id.hh"
+#include "utils/directories.hh"
 
 using namespace seastar;
 using namespace sstables;
@@ -192,7 +193,9 @@ struct schema_with_source {
     sstring obtained_from;
 };
 
-std::optional<schema_with_source> try_load_schema_from_user_provided_source(const bpo::variables_map& app_config, db::config& cfg) {
+std::optional<schema_with_source> try_load_schema_from_user_provided_source(const bpo::variables_map& app_config,
+        db::config& cfg,
+        const ::utils::directories& dirs) {
     sstring schema_source_opt;
     try {
         if (!app_config["schema-file"].defaulted()) {
@@ -221,7 +224,7 @@ std::optional<schema_with_source> try_load_schema_from_user_provided_source(cons
         }
         if (app_config.contains("scylla-yaml-file")) {
             schema_source_opt = "schema-tables";
-            const auto data_dir_path = std::filesystem::path(cfg.data_file_directories()[0]);
+            const auto data_dir_path = std::filesystem::path(dirs.get_data_file_dirs()[0]);
             return schema_with_source{.schema = tools::load_schema_from_schema_tables(cfg, data_dir_path, keyspace_name, table_name).get(),
                 .source = schema_source_opt,
                 .path = data_dir_path,
@@ -236,7 +239,9 @@ std::optional<schema_with_source> try_load_schema_from_user_provided_source(cons
     return {};
 }
 
-std::optional<schema_with_source> try_load_schema_autodetect(const bpo::variables_map& app_config, db::config& cfg) {
+std::optional<schema_with_source> try_load_schema_autodetect(const bpo::variables_map& app_config,
+                                                             db::config& cfg,
+                                                             const ::utils::directories& dirs) {
     try {
         const auto schema_file_path = std::filesystem::path(app_config["schema-file"].as<sstring>());
         return schema_with_source{.schema = tools::load_one_schema_from_file(cfg, schema_file_path).get(),
@@ -263,7 +268,7 @@ std::optional<schema_with_source> try_load_schema_autodetect(const bpo::variable
 
     try {
         const auto [keyspace_name, table_name] = get_keyspace_and_table_options(app_config);
-        const auto data_dir_path = std::filesystem::path(cfg.data_file_directories().at(0));
+        const auto data_dir_path = std::filesystem::path(dirs.get_data_file_dirs().at(0));
         return schema_with_source{.schema = tools::load_schema_from_schema_tables(cfg, data_dir_path, keyspace_name, table_name).get(),
             .source = "schema-tables",
             .path = data_dir_path,
@@ -2975,6 +2980,7 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
     return app.run_async(argc, argv, [&app] (const operation& operation, const bpo::variables_map& app_config) {
         schema_ptr schema;
         std::optional<schema_with_source> schema_with_source;
+        std::optional<::utils::directories> dirs;
 
         auto& dbcfg = *app.cfg().db_cfg_ext->db_cfg;
 
@@ -2993,7 +2999,9 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
             dbcfg.read_from_file(scylla_yaml_path, [] (const sstring& opt, const sstring& msg, std::optional<::utils::config_file::value_status> status) {
                 sst_log.debug("error processing configuration item: {} : {}", msg, opt);
             }).get();
-            dbcfg.setup_directories();
+
+            dirs.emplace(dbcfg);
+
             sst_log.debug("Successfully read scylla.yaml from {} location of {}", scylla_yaml_path_source, scylla_yaml_path);
         } else {
             dbcfg.experimental_features.set(db::experimental_features_t::all());
@@ -3012,12 +3020,12 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
 
             if (!schema_sources) {
                 sst_log.debug("No user-provided schema source, attempting to auto-detect it");
-                schema_with_source = try_load_schema_autodetect(app_config, dbcfg);
+                schema_with_source = try_load_schema_autodetect(app_config, dbcfg, *dirs);
             } else if (schema_sources == 1 || (schema_sources == 2 && app_config.contains("scylla-yaml-file"))) {
                 // We make an exception for the case where 2 schema sources are provided, but one of them is scylla-yaml file.
                 // We want to always accept the --scylla-yaml-file option.
                 sst_log.debug("Single schema source provided");
-                schema_with_source = try_load_schema_from_user_provided_source(app_config, dbcfg);
+                schema_with_source = try_load_schema_from_user_provided_source(app_config, dbcfg, *dirs);
             } else {
                 fmt::print(std::cerr, "Multiple schema sources provided, please provide exactly one of: --schema-file, --system-schema, --scylla-data-dir or --scylla-yaml-file (with the accompanying --keyspace and --table if necessary)\n");
             }

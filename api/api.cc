@@ -105,9 +105,12 @@ future<> unset_rpc_controller(http_context& ctx) {
     return ctx.http_server.set_routes([&ctx] (routes& r) { unset_rpc_controller(ctx, r); });
 }
 
-future<> set_server_storage_service(http_context& ctx, sharded<service::storage_service>& ss, service::raft_group0_client& group0_client) {
-    return register_api(ctx, "storage_service", "The storage service API", [&ss, &group0_client] (http_context& ctx, routes& r) {
-            set_storage_service(ctx, r, ss, group0_client);
+future<> set_server_storage_service(http_context& ctx,
+        const utils::directories& dirs,
+        sharded<service::storage_service>& ss,
+        service::raft_group0_client& group0_client) {
+    return register_api(ctx, "storage_service", "The storage service API", [&dirs, &ss, &group0_client] (http_context& ctx, routes& r) {
+            set_storage_service(ctx, r, ss, group0_client, dirs);
         });
 }
 

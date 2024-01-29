@@ -79,6 +79,8 @@ namespace s3 { struct endpoint_config; }
 
 namespace wasm { class manager; }
 
+namespace utils { class directories; }
+
 namespace service {
 class storage_proxy;
 class storage_service;
@@ -1418,6 +1420,7 @@ private:
     std::unique_ptr<cell_locker_stats> _cl_stats;
 
     const db::config& _cfg;
+    const utils::directories& _dirs;
 
     dirty_memory_manager _system_dirty_memory_manager;
     dirty_memory_manager _dirty_memory_manager;
@@ -1567,7 +1570,7 @@ public:
     // (keyspace/table definitions, column mappings etc.)
     future<> parse_system_tables(distributed<service::storage_proxy>&, sharded<db::system_keyspace>&);
 
-    database(const db::config&, database_config dbcfg, service::migration_notifier& mn, gms::feature_service& feat, const locator::shared_token_metadata& stm,
+    database(const db::config&, const utils::directories& dirs, database_config dbcfg, service::migration_notifier& mn, gms::feature_service& feat, const locator::shared_token_metadata& stm,
             compaction_manager& cm, sstables::storage_manager& sstm, wasm::manager& wasm, sharded<sstables::directory_semaphore>& sst_dir_sem, utils::cross_shard_barrier barrier = utils::cross_shard_barrier(utils::cross_shard_barrier::solo{}) /* for single-shard usage */);
     database(database&&) = delete;
     ~database();

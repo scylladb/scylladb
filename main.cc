@@ -723,7 +723,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 notify_set.notify_all(configurable::system_state::stopped).get();
             });
 
-            cfg->setup_directories();
+            dirs.emplace(*cfg);
 
             // We're writing to a non-atomic variable here. But bool writes are atomic
             // in all supported architectures, and the broadcast_to_all_shards().get() below
@@ -968,15 +968,10 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             });
 
             supervisor::notify("creating and verifying directories");
-            utils::directories::set dir_set;
-            dir_set.add(cfg->data_file_directories());
-            dir_set.add(cfg->commitlog_directory());
-            dir_set.add(cfg->schema_commitlog_directory());
-            dirs.emplace(cfg->developer_mode());
-            dirs->create_and_verify(std::move(dir_set)).get();
+            dirs->create_and_verify_directories().get();
 
-            auto hints_dir_initializer = db::hints::directory_initializer::make(*dirs, cfg->hints_directory()).get();
-            auto view_hints_dir_initializer = db::hints::directory_initializer::make(*dirs, cfg->view_hints_directory()).get();
+            auto hints_dir_initializer = db::hints::directory_initializer::make(*dirs, dirs->get_hints_dir()).get();
+            auto view_hints_dir_initializer = db::hints::directory_initializer::make(*dirs, dirs->get_view_hints_dir()).get();
             if (!hinted_handoff_enabled.is_disabled_for_all()) {
                 hints_dir_initializer.ensure_created_and_verified().get();
             }
@@ -1040,7 +1035,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             supervisor::notify("starting database");
             debug::the_database = &db;
-            db.start(std::ref(*cfg), dbcfg, std::ref(mm_notifier), std::ref(feature_service), std::ref(token_metadata),
+            db.start(std::ref(*cfg), std::ref(*dirs), dbcfg, std::ref(mm_notifier), std::ref(feature_service), std::ref(token_metadata),
                     std::ref(cm), std::ref(sstm), std::ref(wasm), std::ref(sst_dir_semaphore), utils::cross_shard_barrier()).get();
             auto stop_database_and_sstables = defer_verbose_shutdown("database", [&db] {
                 // #293 - do not stop anything - not even db (for real)
@@ -1093,7 +1088,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 reinterpret_cast<service::storage_proxy_stats::stats*>(ptr)->register_stats();
                 reinterpret_cast<service::storage_proxy_stats::stats*>(ptr)->register_split_metrics_local();
             };
-            proxy.start(std::ref(db), spcfg, std::ref(node_backlog),
+            proxy.start(std::ref(db), std::ref(*dirs), spcfg, std::ref(node_backlog),
                     scheduling_group_key_create(storage_proxy_stats_cfg).get0(),
                     std::ref(feature_service), std::ref(token_metadata), std::ref(erm_factory)).get();
 
@@ -1426,7 +1421,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 ss.stop().get();
             });
 
-            api::set_server_storage_service(ctx, ss, group0_client).get();
+            api::set_server_storage_service(ctx, *dirs, ss, group0_client).get();
             auto stop_ss_api = defer_verbose_shutdown("storage service API", [&ctx] {
                 api::unset_server_storage_service(ctx).get();
             });
@@ -1695,7 +1690,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             scheduling_group_key_config maintenance_cql_sg_stats_cfg =
             make_scheduling_group_key_config<cql_transport::cql_sg_stats>(maintenance_socket_enabled::yes);
-            cql_transport::controller cql_maintenance_server_ctl(maintenance_auth_service, mm_notifier, gossiper, qp, service_memory_limiter, sl_controller, lifecycle_notifier, *cfg, scheduling_group_key_create(maintenance_cql_sg_stats_cfg).get0(), maintenance_socket_enabled::yes);
+            cql_transport::controller cql_maintenance_server_ctl(maintenance_auth_service, mm_notifier, gossiper, qp, service_memory_limiter, sl_controller, lifecycle_notifier, *cfg, *dirs, scheduling_group_key_create(maintenance_cql_sg_stats_cfg).get0(), maintenance_socket_enabled::yes);
 
             std::any stop_maintenance_auth_service;
             std::any stop_maintenance_cql;
@@ -1907,7 +1902,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             notify_set.notify_all(configurable::system_state::started).get();
 
             scheduling_group_key_config cql_sg_stats_cfg = make_scheduling_group_key_config<cql_transport::cql_sg_stats>(maintenance_socket_enabled::no);
-            cql_transport::controller cql_server_ctl(auth_service, mm_notifier, gossiper, qp, service_memory_limiter, sl_controller, lifecycle_notifier, *cfg, scheduling_group_key_create(cql_sg_stats_cfg).get0(), maintenance_socket_enabled::no);
+            cql_transport::controller cql_server_ctl(auth_service, mm_notifier, gossiper, qp, service_memory_limiter, sl_controller, lifecycle_notifier, *cfg, *dirs, scheduling_group_key_create(cql_sg_stats_cfg).get0(), maintenance_socket_enabled::no);
 
             ss.local().register_protocol_server(cql_server_ctl);
 
