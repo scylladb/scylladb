@@ -18,7 +18,6 @@
 #include "readers/foreign.hh"
 #include "readers/multishard.hh"
 #include "readers/mutation_source.hh"
-#include "readers/queue.hh"
 #include "schema/schema_registry.hh"
 #include "locator/abstract_replication_strategy.hh"
 
