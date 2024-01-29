@@ -334,6 +334,13 @@ database::database(const db::config& cfg, const utils::directories& dirs, databa
         _cfg.reader_concurrency_semaphore_serialize_limit_multiplier,
         _cfg.reader_concurrency_semaphore_kill_limit_multiplier,
         reader_concurrency_semaphore::register_metrics::yes)
+    , _view_read_concurrency_sem(std::max(1, int(max_count_concurrent_reads * _cfg.materialized_views_rmw_admission_fraction())),
+        max_memory_concurrent_reads(),
+        "user (views)",
+        max_inactive_queue_length(),
+        _cfg.reader_concurrency_semaphore_serialize_limit_multiplier,
+        _cfg.reader_concurrency_semaphore_kill_limit_multiplier,
+        reader_concurrency_semaphore::register_metrics::yes)
     // No timeouts or queue length limits - a failure here can kill an entire repair.
     // Trust the caller to limit concurrency.
     , _streaming_concurrency_sem(
@@ -1249,6 +1256,7 @@ keyspace::make_column_family_config(const schema& s, const database& db) const {
     cfg.view_update_concurrency_semaphore_limit = _config.view_update_concurrency_semaphore_limit;
     cfg.data_listeners = &db.data_listeners();
     cfg.enable_compacting_data_for_streaming_and_repair = db_config.enable_compacting_data_for_streaming_and_repair();
+    cfg.materialized_views_rmw_admission = db_config.materialized_views_rmw_admission();
 
     return cfg;
 }
@@ -1672,9 +1680,9 @@ query::max_result_size database::get_unlimited_query_max_result_size() const {
     std::abort();
 }
 
-reader_concurrency_semaphore& database::get_reader_concurrency_semaphore() {
+reader_concurrency_semaphore& database::get_reader_concurrency_semaphore(bool view) {
     switch (classify_request(_dbcfg)) {
-        case request_class::user: return _read_concurrency_sem;
+        case request_class::user: return view ? _view_read_concurrency_sem : _read_concurrency_sem;
         case request_class::system: return _system_read_concurrency_sem;
         case request_class::maintenance: return _streaming_concurrency_sem;
     }
@@ -1989,7 +1997,7 @@ future<> database::do_apply(schema_ptr s, const frozen_mutation& m, tracing::tra
             co_await coroutine::return_exception(std::runtime_error("view update generator not plugged to push updates"));
         }
 
-        auto lock_f = co_await coroutine::as_future(cf.push_view_replica_updates(_view_update_generator, s, m, timeout, std::move(tr_state), get_reader_concurrency_semaphore()));
+        auto lock_f = co_await coroutine::as_future(cf.push_view_replica_updates(_view_update_generator, s, m, timeout, std::move(tr_state), get_reader_concurrency_semaphore(true)));
         if (lock_f.failed()) {
             auto ex = lock_f.get_exception();
             if (is_timeout_exception(ex)) {
@@ -2294,6 +2302,7 @@ future<> database::stop() {
     co_await _querier_cache.stop();
     dblog.info("Stopping concurrency semaphores");
     co_await _read_concurrency_sem.stop();
+    co_await _view_read_concurrency_sem.stop();
     co_await _streaming_concurrency_sem.stop();
     co_await _compaction_concurrency_sem.stop();
     co_await _system_read_concurrency_sem.stop();

@@ -420,6 +420,7 @@ public:
         uint32_t tombstone_warn_threshold{0};
         unsigned x_log2_compaction_groups{0};
         utils::updateable_value<bool> enable_compacting_data_for_streaming_and_repair;
+        utils::updateable_value<bool> materialized_views_rmw_admission;
     };
 
     struct snapshot_details {
@@ -1431,6 +1432,7 @@ private:
     drain_progress _drain_progress {};
 
     reader_concurrency_semaphore _read_concurrency_sem;
+    reader_concurrency_semaphore _view_read_concurrency_sem;
     reader_concurrency_semaphore _streaming_concurrency_sem;
     reader_concurrency_semaphore _compaction_concurrency_sem;
     reader_concurrency_semaphore _system_read_concurrency_sem;
@@ -1849,7 +1851,7 @@ public:
 
     // Get the reader concurrency semaphore, appropriate for the query class,
     // which is deduced from the current scheduling group.
-    reader_concurrency_semaphore& get_reader_concurrency_semaphore();
+    reader_concurrency_semaphore& get_reader_concurrency_semaphore(bool view = false);
 
     // Convenience method to obtain an admitted permit. See reader_concurrency_semaphore::obtain_permit().
     future<reader_permit> obtain_reader_permit(table& tbl, const char* const op_name, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_ptr);

@@ -2935,7 +2935,13 @@ future<row_locker::lock_holder> table::do_push_view_replica_updates(shared_ptr<d
     const bool need_static = db::view::needs_static_row(m.partition(), views);
     if (!need_regular && !need_static) {
         tracing::trace(tr_state, "View updates do not require read-before-write");
-        co_await generate_and_propagate_view_updates(gen, base, sem.make_tracking_only_permit(s, "push-view-updates-1", timeout, tr_state), std::move(views), std::move(m), { }, tr_state, now);
+        if (_config.materialized_views_rmw_admission()) {
+            co_await generate_and_propagate_view_updates(gen, base, co_await sem.obtain_permit(s, "push-view-updates-1",0, timeout, tr_state),
+                    std::move(views), std::move(m), { }, tr_state, now);
+        } else {
+            co_await generate_and_propagate_view_updates(gen, base, sem.make_tracking_only_permit(s, "push-view-updates-1-no-admission", timeout, tr_state),
+                    std::move(views), std::move(m), { }, tr_state, now);
+        }
         // In this case we are not doing a read-before-write, just a
         // write, so no lock is needed.
         co_return row_locker::lock_holder();
@@ -2968,7 +2974,8 @@ future<row_locker::lock_holder> table::do_push_view_replica_updates(shared_ptr<d
     co_await utils::get_local_injector().inject("table_push_view_replica_updates_timeout", timeout);
     auto lock = co_await std::move(lockf);
     auto pk = dht::partition_range::make_singular(m.decorated_key());
-    auto permit = sem.make_tracking_only_permit(base, "push-view-updates-2", timeout, tr_state);
+    auto permit = _config.materialized_views_rmw_admission() ? co_await sem.obtain_permit(base, "push-view-updates-2", 0, timeout, tr_state) : 
+            sem.make_tracking_only_permit(base, "push-view-updates-2-no-admission", timeout, tr_state);
     auto reader = source.make_reader_v2(base, permit, pk, slice, tr_state, streamed_mutation::forwarding::no, mutation_reader::forwarding::no);
     co_await this->generate_and_propagate_view_updates(gen, base, std::move(permit), std::move(views), std::move(m), std::move(reader), tr_state, now);
     tracing::trace(tr_state, "View updates for {}.{} were generated and propagated", base->ks_name(), base->cf_name());
