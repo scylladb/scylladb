@@ -198,7 +198,7 @@ const raft::server_id& raft_group0::load_my_id() {
 
 raft_server_for_group raft_group0::create_server_for_group0(raft::group_id gid, raft::server_id my_id, service::storage_service& ss, cql3::query_processor& qp,
                                                             service::migration_manager& mm, bool topology_change_enabled) {
-    auto state_machine = std::make_unique<group0_state_machine>(_client, mm, qp.proxy(), ss, _raft_gr.address_map(), topology_change_enabled);
+    auto state_machine = std::make_unique<group0_state_machine>(_client, mm, qp.proxy(), ss, _raft_gr.address_map(), _feat, topology_change_enabled);
     auto rpc = std::make_unique<group0_rpc>(_raft_gr.direct_fd(), *state_machine, _ms.local(), _raft_gr.address_map(), _raft_gr.failure_detector(), gid, my_id);
     // Keep a reference to a specific RPC class.
     auto& rpc_ref = *rpc;
@@ -620,7 +620,7 @@ future<bool> raft_group0::use_raft() {
     co_return true;
 }
 
-future<> raft_group0::setup_group0_if_exist(db::system_keyspace& sys_ks, service::storage_service& ss, cql3::query_processor& qp, service::migration_manager& mm, bool topology_change_enabled) {
+future<> raft_group0::setup_group0_if_exist(db::system_keyspace& sys_ks, service::storage_service& ss, cql3::query_processor& qp, service::migration_manager& mm) {
     if (!co_await use_raft()) {
         co_return;
     }
@@ -639,7 +639,7 @@ future<> raft_group0::setup_group0_if_exist(db::system_keyspace& sys_ks, service
     if (group0_id) {
         // Group 0 ID is present => we've already joined group 0 earlier.
         group0_log.info("setup_group0: group 0 ID present. Starting existing Raft server.");
-        co_await start_server_for_group0(group0_id, ss, qp, mm, topology_change_enabled);
+        co_await start_server_for_group0(group0_id, ss, qp, mm, false);
 
         // Start group 0 leadership monitor fiber.
         _leadership_monitor = leadership_monitor_fiber();
