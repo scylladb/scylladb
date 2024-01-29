@@ -1246,6 +1246,8 @@ api = ['api/api.cc',
        Json2Code('api/api-doc/error_injection.json'),
        'api/authorization_cache.cc',
        Json2Code('api/api-doc/authorization_cache.json'),
+       'api/raft.cc',
+       Json2Code('api/api-doc/raft.json'),
        ]
 
 alternator = [

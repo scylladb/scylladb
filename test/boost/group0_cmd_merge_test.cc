@@ -100,7 +100,7 @@ SEASTAR_TEST_CASE(test_group0_cmd_merge) {
         raft::command cmd;
         ser::serialize(cmd, group0_cmd);
         auto merges = mm.canonical_mutation_merge_count;
-        utils::get_local_injector().enable("fsm::poll_output/pause");
+        utils::get_local_injector().enable("poll_fsm_output/pause");
         auto f = when_all(
                    group0.add_entry(cmd, raft::wait_type::applied, nullptr),
                    group0.add_entry(cmd, raft::wait_type::applied, nullptr),
@@ -108,7 +108,7 @@ SEASTAR_TEST_CASE(test_group0_cmd_merge) {
         // Sleep is needed for all the entries added above to hit the log
         seastar::sleep(std::chrono::milliseconds(100)).get();
         // After unpause all entries added above will be committed and applied together
-        utils::get_local_injector().disable("fsm::poll_output/pause");
+        utils::get_local_injector().disable("poll_fsm_output/pause");
         f.get(); // Wait for apply to complete
         // Thete should be two calls to migration manager since two out of
         // three command should be merged.

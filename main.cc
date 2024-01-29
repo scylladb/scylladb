@@ -1450,6 +1450,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             supervisor::notify("starting Raft Group Registry service");
             raft_gr.invoke_on_all(&service::raft_group_registry::start).get();
 
+            api::set_server_raft(ctx, raft_gr).get();
+            auto stop_raft_api = defer_verbose_shutdown("Raft API", [&ctx] {
+                api::unset_server_raft(ctx).get();
+            });
+
             group0_client.init().get();
 
             // schema migration, if needed, is also done on shard 0
