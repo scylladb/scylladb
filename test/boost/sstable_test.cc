@@ -444,17 +444,17 @@ SEASTAR_TEST_CASE(statistics_rewrite) {
         auto generation_dir = (uncompressed_dir_copy / sstables::staging_dir).native();
         std::filesystem::create_directories(generation_dir);
 
-        auto sstp = env.reusable_sst(uncompressed_schema(), uncompressed_dir_copy.native()).get0();
+        auto sstp = env.reusable_sst(uncompressed_schema(), uncompressed_dir_copy.native()).get();
         test::create_links(*sstp, generation_dir).get();
         auto file_path = sstable::filename(generation_dir, "ks", "cf", la, generation_from_value(1), big, component_type::Data);
-        auto exists = file_exists(file_path).get0();
+        auto exists = file_exists(file_path).get();
         BOOST_REQUIRE(exists);
 
-        sstp = env.reusable_sst(uncompressed_schema(), generation_dir).get0();
+        sstp = env.reusable_sst(uncompressed_schema(), generation_dir).get();
         // mutate_sstable_level results in statistics rewrite
         sstp->mutate_sstable_level(10).get();
 
-        sstp = env.reusable_sst(uncompressed_schema(), generation_dir).get0();
+        sstp = env.reusable_sst(uncompressed_schema(), generation_dir).get();
         BOOST_REQUIRE(sstp->get_sstable_level() == 10);
     });
 }
@@ -535,17 +535,17 @@ static future<int> count_rows(test_env& env, sstable_ptr sstp, schema_ptr s, sst
         auto pr = dht::partition_range::make_singular(make_dkey(s, key.c_str()));
         auto rd = sstp->make_reader(s, env.make_reader_permit(), pr, ps);
         auto close_rd = deferred_close(rd);
-        auto mfopt = rd().get0();
+        auto mfopt = rd().get();
         if (!mfopt) {
             return 0;
         }
         int nrows = 0;
-        mfopt = rd().get0();
+        mfopt = rd().get();
         while (mfopt) {
             if (mfopt->is_clustering_row()) {
                 nrows++;
             }
-            mfopt = rd().get0();
+            mfopt = rd().get();
         }
         return nrows;
     });
@@ -557,17 +557,17 @@ static future<int> count_rows(test_env& env, sstable_ptr sstp, schema_ptr s, sst
         auto pr = dht::partition_range::make_singular(make_dkey(s, key.c_str()));
         auto rd = sstp->make_reader(s, env.make_reader_permit(), pr, s->full_slice());
         auto close_rd = deferred_close(rd);
-        auto mfopt = rd().get0();
+        auto mfopt = rd().get();
         if (!mfopt) {
             return 0;
         }
         int nrows = 0;
-        mfopt = rd().get0();
+        mfopt = rd().get();
         while (mfopt) {
             if (mfopt->is_clustering_row()) {
                 nrows++;
             }
-            mfopt = rd().get0();
+            mfopt = rd().get();
         }
         return nrows;
     });
@@ -581,17 +581,17 @@ static future<int> count_rows(test_env& env, sstable_ptr sstp, schema_ptr s, sst
         auto reader = sstp->make_reader(s, env.make_reader_permit(), query::full_partition_range, ps);
         auto close_reader = deferred_close(reader);
         int nrows = 0;
-        auto mfopt = reader().get0();
+        auto mfopt = reader().get();
         while (mfopt) {
-            mfopt = reader().get0();
+            mfopt = reader().get();
             BOOST_REQUIRE(mfopt);
             while (!mfopt->is_end_of_partition()) {
                 if (mfopt->is_clustering_row()) {
                     nrows++;
                 }
-                mfopt = reader().get0();
+                mfopt = reader().get();
             }
-            mfopt = reader().get0();
+            mfopt = reader().get();
         }
         return nrows;
     });
@@ -694,7 +694,7 @@ SEASTAR_TEST_CASE(test_skipping_in_compressed_stream) {
 
         tmpdir tmp;
         auto file_path = (tmp.path() / "test").string();
-        file f = open_file_dma(file_path, open_flags::create | open_flags::wo).get0();
+        file f = open_file_dma(file_path, open_flags::create | open_flags::wo).get();
 
         file_input_stream_options opts;
         opts.read_ahead = 0;
@@ -706,7 +706,7 @@ SEASTAR_TEST_CASE(test_skipping_in_compressed_stream) {
 
         sstables::compression c;
         // this initializes "c"
-        auto os = make_file_output_stream(f, file_output_stream_options()).get0();
+        auto os = make_file_output_stream(f, file_output_stream_options()).get();
         auto out = make_compressed_file_m_format_output_stream(std::move(os), &c, cp);
 
         // Make sure that amount of written data is a multiple of chunk_len so that we hit #2143.
@@ -722,21 +722,21 @@ SEASTAR_TEST_CASE(test_skipping_in_compressed_stream) {
         uncompressed_size += buf2.size();
         out.close().get();
 
-        auto compressed_size = seastar::file_size(file_path).get0();
+        auto compressed_size = seastar::file_size(file_path).get();
         c.update(compressed_size);
 
         auto make_is = [&] {
-            f = open_file_dma(file_path, open_flags::ro).get0();
+            f = open_file_dma(file_path, open_flags::ro).get();
             return make_compressed_file_m_format_input_stream(f, &c, 0, uncompressed_size, opts, semaphore.make_permit());
         };
 
         auto expect = [] (input_stream<char>& in, const temporary_buffer<char>& buf) {
-            auto b = in.read_exactly(buf.size()).get0();
+            auto b = in.read_exactly(buf.size()).get();
             BOOST_REQUIRE(b == buf);
         };
 
         auto expect_eof = [] (input_stream<char>& in) {
-            auto b = in.read().get0();
+            auto b = in.read().get();
             BOOST_REQUIRE(b.empty());
         };
 

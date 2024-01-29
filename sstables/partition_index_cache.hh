@@ -221,7 +221,7 @@ public:
         return futurize_invoke(loader, key).then_wrapped([this, key, ptr = std::move(ptr)] (auto&& f) mutable {
             entry& e = ptr.get_entry();
             try {
-                partition_index_page&& page = f.get0();
+                partition_index_page&& page = f.get();
                 e.promise()->set_value();
                 e.set_page(std::move(page));
                 _stats.used_bytes += e.size_in_allocator();

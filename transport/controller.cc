@@ -80,7 +80,7 @@ future<> controller::do_start_server() {
         auto keepalive = cfg.rpc_keepalive();
         smp_service_group_config cql_server_smp_service_group_config;
         cql_server_smp_service_group_config.max_nonlocal_requests = 5000;
-        auto bounce_request_smp_service_group = create_smp_service_group(cql_server_smp_service_group_config).get0();
+        auto bounce_request_smp_service_group = create_smp_service_group(cql_server_smp_service_group_config).get();
         auto get_cql_server_config = sharded_parameter([&] {
             std::optional<uint16_t> shard_aware_transport_port;
             if (cfg.native_shard_aware_transport_port.is_set()) {
@@ -114,7 +114,7 @@ future<> controller::do_start_server() {
         std::vector<listen_cfg> configs;
 
         if (!_used_by_maintenance_socket) {
-            const seastar::net::inet_address ip = utils::resolve(cfg.rpc_address, family, preferred).get0();
+            const seastar::net::inet_address ip = utils::resolve(cfg.rpc_address, family, preferred).get();
             int native_port_idx = -1, native_shard_aware_port_idx = -1;
 
             if (cfg.native_transport_port.is_set() ||

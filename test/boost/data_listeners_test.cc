@@ -91,7 +91,7 @@ results test_data_listeners(cql_test_env& e, sstring cf_name) {
             res.read += li_res.read;
             res.write += li_res.write;
             return res;
-        }).get0();
+        }).get();
 
     testlog.info("test_data_listeners: rd={} wr={}", res.read, res.write);
 

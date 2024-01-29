@@ -190,9 +190,9 @@ shared_ptr<cql_transport::messages::result_message> cquery_nofail(
         cql_test_env& env, sstring_view query, std::unique_ptr<cql3::query_options>&& qo, const seastar::compat::source_location& loc) {
     try {
         if (qo) {
-            return env.execute_cql(query, std::move(qo)).get0();
+            return env.execute_cql(query, std::move(qo)).get();
         } else {
-            return env.execute_cql(query).get0();
+            return env.execute_cql(query).get();
         }
     } catch (...) {
         BOOST_FAIL(format("query '{}' failed: {}\n{}:{}: originally from here",
@@ -232,7 +232,7 @@ void require_rows(cql_test_env& e,
                   const std::vector<std::vector<bytes_opt>>& expected,
                   const seastar::compat::source_location& loc) {
     try {
-        assert_that(e.execute_prepared(id, values).get0()).is_rows().with_rows_ignore_order(expected);
+        assert_that(e.execute_prepared(id, values).get()).is_rows().with_rows_ignore_order(expected);
     } catch (const std::exception& e) {
         BOOST_FAIL(format("execute_prepared failed: {}\n{}:{}: originally from here",
                           e.what(), loc.file_name(), loc.line()));

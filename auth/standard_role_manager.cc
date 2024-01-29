@@ -240,9 +240,9 @@ future<> standard_role_manager::start() {
         return this->create_metadata_tables_if_missing().then([this] {
             _stopped = auth::do_after_system_ready(_as, [this] {
                 return seastar::async([this] {
-                    _migration_manager.wait_for_schema_agreement(_qp.db().real_database(), db::timeout_clock::time_point::max(), &_as).get0();
+                    _migration_manager.wait_for_schema_agreement(_qp.db().real_database(), db::timeout_clock::time_point::max(), &_as).get();
 
-                    if (any_nondefault_role_row_satisfies(_qp, &has_can_login).get0()) {
+                    if (any_nondefault_role_row_satisfies(_qp, &has_can_login).get()) {
                         if (this->legacy_metadata_exists()) {
                             log.warn("Ignoring legacy user metadata since nondefault roles already exist.");
                         }
@@ -251,11 +251,11 @@ future<> standard_role_manager::start() {
                     }
 
                     if (this->legacy_metadata_exists()) {
-                        this->migrate_legacy_metadata().get0();
+                        this->migrate_legacy_metadata().get();
                         return;
                     }
 
-                    create_default_role_if_missing().get0();
+                    create_default_role_if_missing().get();
                 });
             });
         });

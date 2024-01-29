@@ -63,7 +63,7 @@ SEASTAR_THREAD_TEST_CASE(test_large_collection) {
         }
 
         flush(e);
-        assert_that(e.execute_cql("select partition_key, column_name from system.large_cells where table_name = 'tbl' allow filtering;").get0())
+        assert_that(e.execute_cql("select partition_key, column_name from system.large_cells where table_name = 'tbl' allow filtering;").get())
             .is_rows()
             .with_size(1)
             .with_row({"42", "b", "tbl"});
@@ -83,7 +83,7 @@ SEASTAR_THREAD_TEST_CASE(test_large_data) {
         e.execute_cql("insert into tbl (a, b) values (44, '" + blob + "');").get();
         flush(e);
 
-        shared_ptr<cql_transport::messages::result_message> msg = e.execute_cql("select partition_key, row_size from system.large_rows where table_name = 'tbl' allow filtering;").get0();
+        shared_ptr<cql_transport::messages::result_message> msg = e.execute_cql("select partition_key, row_size from system.large_rows where table_name = 'tbl' allow filtering;").get();
         auto res = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(msg);
         auto rows = res->rs().result_set().rows();
 
@@ -103,7 +103,7 @@ SEASTAR_THREAD_TEST_CASE(test_large_data) {
         BOOST_REQUIRE(row_size > 1024*1024 && row_size < 1025*1024);
 
         // Check that it was added to system.large_cells too
-        assert_that(e.execute_cql("select partition_key, column_name from system.large_cells where table_name = 'tbl' allow filtering;").get0())
+        assert_that(e.execute_cql("select partition_key, column_name from system.large_cells where table_name = 'tbl' allow filtering;").get())
             .is_rows()
             .with_size(1)
             .with_row({"44", "b", "tbl"});
@@ -121,10 +121,10 @@ SEASTAR_THREAD_TEST_CASE(test_large_data) {
             });
         }).get();
 
-        assert_that(e.execute_cql("select partition_key from system.large_rows where table_name = 'tbl' allow filtering;").get0())
+        assert_that(e.execute_cql("select partition_key from system.large_rows where table_name = 'tbl' allow filtering;").get())
             .is_rows()
             .is_empty();
-        assert_that(e.execute_cql("select partition_key from system.large_cells where table_name = 'tbl' allow filtering;").get0())
+        assert_that(e.execute_cql("select partition_key from system.large_cells where table_name = 'tbl' allow filtering;").get())
             .is_rows()
             .is_empty();
 
@@ -149,13 +149,13 @@ SEASTAR_TEST_CASE(test_insert_large_collection_values) {
             }).get();
             sstring long_value(std::numeric_limits<uint16_t>::max() + 10, 'x');
             e.execute_cql(format("INSERT INTO tbl (pk, l) VALUES ('Zamyatin', ['{}']);", long_value)).get();
-            assert_that(e.execute_cql("SELECT l FROM tbl WHERE pk ='Zamyatin';").get0())
+            assert_that(e.execute_cql("SELECT l FROM tbl WHERE pk ='Zamyatin';").get())
                     .is_rows().with_rows({
                             { make_list_value(list_type, list_type_impl::native_type({{long_value}})).serialize() }
                     });
             BOOST_REQUIRE_THROW(e.execute_cql(format("INSERT INTO tbl (pk, s) VALUES ('Orwell', {{'{}'}});", long_value)).get(), std::exception);
             e.execute_cql(format("INSERT INTO tbl (pk, m) VALUES ('Haksli', {{'key': '{}'}});", long_value)).get();
-            assert_that(e.execute_cql("SELECT m FROM tbl WHERE pk ='Haksli';").get0())
+            assert_that(e.execute_cql("SELECT m FROM tbl WHERE pk ='Haksli';").get())
                     .is_rows().with_rows({
                             { make_map_value(map_type, map_type_impl::native_type({{sstring("key"), long_value}})).serialize() }
                     });

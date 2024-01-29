@@ -37,7 +37,7 @@ mutation_source make_sstable_mutation_source(sstables::test_env& env, schema_ptr
 }
 
 static void consume_all(flat_mutation_reader_v2& rd) {
-    while (auto mfopt = rd().get0()) {}
+    while (auto mfopt = rd().get()) {}
 }
 
 // It is assumed that src won't change.

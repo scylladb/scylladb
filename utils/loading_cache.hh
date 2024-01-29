@@ -538,7 +538,7 @@ private:
             // will be propagated up to the user and will fail the
             // corresponding query.
             try {
-                *ts_value_ptr = f.get0();
+                *ts_value_ptr = f.get();
             } catch (std::exception& e) {
                 _logger.debug("{}: reload failed: {}", key, e.what());
             } catch (...) {

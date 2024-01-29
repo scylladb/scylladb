@@ -30,14 +30,14 @@ SEASTAR_TEST_CASE(test_column_mapping_persistence) {
 
         // Check that stored column mapping is correctly serialized and deserialized
         column_mapping cm;
-        BOOST_REQUIRE_NO_THROW(cm = db::schema_tables::get_column_mapping(e.get_system_keyspace().local(), table_id, v1).get0());
+        BOOST_REQUIRE_NO_THROW(cm = db::schema_tables::get_column_mapping(e.get_system_keyspace().local(), table_id, v1).get());
         BOOST_REQUIRE_EQUAL(orig_cm, cm);
 
         // Alter the test table and check that new column mapping is also inserted for the new schema version
         cquery_nofail(e, "alter table test ADD dummy int");
         auto altered_schema = e.local_db().find_schema("ks", "test");
         column_mapping altered_cm;
-        BOOST_REQUIRE_NO_THROW(altered_cm = db::schema_tables::get_column_mapping(e.get_system_keyspace().local(), table_id, altered_schema->version()).get0());
+        BOOST_REQUIRE_NO_THROW(altered_cm = db::schema_tables::get_column_mapping(e.get_system_keyspace().local(), table_id, altered_schema->version()).get());
         BOOST_REQUIRE_EQUAL(altered_schema->get_column_mapping(), altered_cm);
     });
 }

@@ -575,9 +575,9 @@ future<std::pair<sstring, sstring>> sstable_directory::create_pending_deletion_l
             touch_directory(pending_delete_dir).get();
             auto oflags = open_flags::wo | open_flags::create | open_flags::exclusive;
             // Create temporary pending_delete log file.
-            auto f = open_file_dma(tmp_pending_delete_log, oflags).get0();
+            auto f = open_file_dma(tmp_pending_delete_log, oflags).get();
             // Write all toc names into the log file.
-            auto out = make_file_output_stream(std::move(f), 4096).get0();
+            auto out = make_file_output_stream(std::move(f), 4096).get();
             auto close_out = deferred_close(out);
 
             for (const auto& sst : ssts) {
@@ -589,7 +589,7 @@ future<std::pair<sstring, sstring>> sstable_directory::create_pending_deletion_l
             out.flush().get();
             close_out.close_now();
 
-            auto dir_f = open_directory(pending_delete_dir).get0();
+            auto dir_f = open_directory(pending_delete_dir).get();
             auto close_dir = deferred_close(dir_f);
             // Once flushed and closed, the temporary log file can be renamed.
             rename_file(tmp_pending_delete_log, pending_delete_log).get();

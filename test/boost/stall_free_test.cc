@@ -123,7 +123,7 @@ SEASTAR_THREAD_TEST_CASE(test_clear_gently_foreign_ptr) {
             cleared_gently++;
         });
         return make_foreign<lw_shared_ptr<clear_gently_tracker<int>>>(std::move(p));
-    }).get0();
+    }).get();
 
     utils::clear_gently(p0).get();
     BOOST_CHECK(p0);

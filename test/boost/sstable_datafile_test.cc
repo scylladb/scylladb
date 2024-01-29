@@ -537,7 +537,7 @@ void test_sliced_read_row_presence(shared_sstable sst, schema_ptr s, reader_perm
     partition_key::equality pk_eq(*s);
     clustering_key::equality ck_eq(*s);
 
-    auto mfopt = reader().get0();
+    auto mfopt = reader().get();
     while (mfopt) {
         BOOST_REQUIRE(mfopt->is_partition_start());
         auto it = std::find_if(expected.begin(), expected.end(), [&] (auto&& x) {
@@ -547,7 +547,7 @@ void test_sliced_read_row_presence(shared_sstable sst, schema_ptr s, reader_perm
         auto expected_cr = std::move(it->second);
         expected.erase(it);
 
-        mfopt = reader().get0();
+        mfopt = reader().get();
         BOOST_REQUIRE(mfopt);
         while (!mfopt->is_end_of_partition()) {
             if (mfopt->is_clustering_row()) {
@@ -561,12 +561,12 @@ void test_sliced_read_row_presence(shared_sstable sst, schema_ptr s, reader_perm
                 BOOST_REQUIRE(it != expected_cr.end());
                 expected_cr.erase(it);
             }
-            mfopt = reader().get0();
+            mfopt = reader().get();
             BOOST_REQUIRE(mfopt);
         }
         BOOST_REQUIRE(expected_cr.empty());
 
-        mfopt = reader().get0();
+        mfopt = reader().get();
     }
     BOOST_REQUIRE(expected.empty());
 }
@@ -598,7 +598,7 @@ SEASTAR_TEST_CASE(test_sliced_mutation_reads) {
             .with_column("v2", set_of_ints_type);
         auto s = builder.build();
 
-        auto sst = env.reusable_sst(s, get_test_dir("sliced_mutation_reads", s), 1, version).get0();
+        auto sst = env.reusable_sst(s, get_test_dir("sliced_mutation_reads", s), 1, version).get();
 
         {
             auto ps = partition_slice_builder(*s)
@@ -693,7 +693,7 @@ SEASTAR_TEST_CASE(test_wrong_range_tombstone_order) {
         auto pkey = partition_key::from_exploded(*s, { int32_type->decompose(0) });
         auto dkey = dht::decorate_key(*s, std::move(pkey));
 
-        auto sst = env.reusable_sst(s, get_test_dir("wrong_range_tombstone_order", s), 1, version).get0();
+        auto sst = env.reusable_sst(s, get_test_dir("wrong_range_tombstone_order", s), 1, version).get();
         auto reader = sstable_reader_v2(sst, s, env.make_reader_permit());
 
         using kind = mutation_fragment_v2::kind;
@@ -760,15 +760,15 @@ SEASTAR_TEST_CASE(test_counter_read) {
             auto node1 = counter_id(utils::UUID("8379ab99-4507-4ab1-805d-ac85a863092b"));
             auto node2 = counter_id(utils::UUID("b8a6c3f3-e222-433f-9ce9-de56a8466e07"));
 
-            auto sst = env.reusable_sst(s, get_test_dir("counter_test", s), 5, version).get0();
+            auto sst = env.reusable_sst(s, get_test_dir("counter_test", s), 5, version).get();
             auto reader = sstable_reader_v2(sst, s, env.make_reader_permit());
             auto close_reader = deferred_close(reader);
 
-            auto mfopt = reader().get0();
+            auto mfopt = reader().get();
             BOOST_REQUIRE(mfopt);
             BOOST_REQUIRE(mfopt->is_partition_start());
 
-            mfopt = reader().get0();
+            mfopt = reader().get();
             BOOST_REQUIRE(mfopt);
             BOOST_REQUIRE(mfopt->is_clustering_row());
             const clustering_row* cr = &mfopt->as_clustering_row();
@@ -796,7 +796,7 @@ SEASTAR_TEST_CASE(test_counter_read) {
                 }
             });
 
-            mfopt = reader().get0();
+            mfopt = reader().get();
             BOOST_REQUIRE(mfopt);
             BOOST_REQUIRE(mfopt->is_clustering_row());
             cr = &mfopt->as_clustering_row();
@@ -809,11 +809,11 @@ SEASTAR_TEST_CASE(test_counter_read) {
                 }
             });
 
-            mfopt = reader().get0();
+            mfopt = reader().get();
             BOOST_REQUIRE(mfopt);
             BOOST_REQUIRE(mfopt->is_end_of_partition());
 
-            mfopt = reader().get0();
+            mfopt = reader().get();
             BOOST_REQUIRE(!mfopt);
           }
         });
@@ -881,7 +881,7 @@ SEASTAR_TEST_CASE(test_promoted_index_read) {
                 .with_column("ck2", int32_type, column_kind::clustering_key)
                 .with_column("v", int32_type)
                 .build();
-        auto sst = env.reusable_sst(s, get_test_dir("promoted_index_read", s), 1, version).get0();
+        auto sst = env.reusable_sst(s, get_test_dir("promoted_index_read", s), 1, version).get();
         auto pkey = partition_key::from_exploded(*s, { int32_type->decompose(0) });
         auto dkey = dht::decorate_key(*s, std::move(pkey));
 
@@ -1567,7 +1567,7 @@ SEASTAR_TEST_CASE(test_partition_skipping) {
                 .with_column("v", int32_type)
                 .build();
 
-        auto sst = env.reusable_sst(s, get_test_dir("partition_skipping",s), 1, version).get0();
+        auto sst = env.reusable_sst(s, get_test_dir("partition_skipping",s), 1, version).get();
 
         std::vector<dht::decorated_key> keys;
         for (int i = 0; i < 10; i++) {
@@ -1825,15 +1825,15 @@ static void copy_directory(fs::path src_dir, fs::path dst_dir) {
 SEASTAR_TEST_CASE(test_unknown_component) {
     return test_env::do_with_async([] (test_env& env) {
         copy_directory("test/resource/sstables/unknown_component", std::string(env.tempdir().path().string()) + "/unknown_component");
-        auto sstp = env.reusable_sst(uncompressed_schema(), env.tempdir().path().string() + "/unknown_component").get0();
+        auto sstp = env.reusable_sst(uncompressed_schema(), env.tempdir().path().string() + "/unknown_component").get();
         test::create_links(*sstp, env.tempdir().path().string()).get();
         // check that create_links() moved unknown component to new dir
-        BOOST_REQUIRE(file_exists(env.tempdir().path().string() + "/la-1-big-UNKNOWN.txt").get0());
+        BOOST_REQUIRE(file_exists(env.tempdir().path().string() + "/la-1-big-UNKNOWN.txt").get());
 
-        sstp = env.reusable_sst(uncompressed_schema(), generation_type{1}).get0();
+        sstp = env.reusable_sst(uncompressed_schema(), generation_type{1}).get();
         env.manager().delete_atomically({sstp}).get();
         // assure unknown component is deleted
-        BOOST_REQUIRE(!file_exists(env.tempdir().path().string() + "/la-1-big-UNKNOWN.txt").get0());
+        BOOST_REQUIRE(!file_exists(env.tempdir().path().string() + "/la-1-big-UNKNOWN.txt").get());
     });
 }
 
@@ -2000,7 +2000,7 @@ SEASTAR_TEST_CASE(sstable_tombstone_histogram_test) {
             }
             auto sst = make_sstable_containing(env.make_sstable(s, version), mutations);
             auto histogram = sst->get_stats_metadata().estimated_tombstone_drop_time;
-            sst = env.reusable_sst(sst).get0();
+            sst = env.reusable_sst(sst).get();
             auto histogram2 = sst->get_stats_metadata().estimated_tombstone_drop_time;
 
             // check that histogram respected limit
@@ -2017,7 +2017,7 @@ SEASTAR_TEST_CASE(sstable_bad_tombstone_histogram_test) {
                 .with_column("id", utf8_type, column_kind::partition_key)
                 .with_column("value", int32_type);
         auto s = builder.build();
-        auto sst = env.reusable_sst(s, "test/resource/sstables/bad_tombstone_histogram").get0();
+        auto sst = env.reusable_sst(s, "test/resource/sstables/bad_tombstone_histogram").get();
         auto histogram = sst->get_stats_metadata().estimated_tombstone_drop_time;
         BOOST_REQUIRE(histogram.max_bin_size == sstables::TOMBSTONE_HISTOGRAM_BIN_SIZE);
         // check that bad histogram was discarded
@@ -2051,7 +2051,7 @@ SEASTAR_TEST_CASE(sstable_owner_shards) {
             };
             auto sst = make_sstable_containing(sst_gen, std::move(muts));
             auto schema = schema_builder(s).with_sharder(smp_count, ignore_msb).build();
-            sst = env.reusable_sst(std::move(schema), sst).get0();
+            sst = env.reusable_sst(std::move(schema), sst).get();
             return sst;
         };
 
@@ -2154,7 +2154,7 @@ SEASTAR_TEST_CASE(test_wrong_counter_shard_order) {
                     .with_column("c5", counter_type)
                     .build();
 
-            auto sst = env.reusable_sst(s, get_test_dir("wrong_counter_shard_order", s), 2, version).get0();
+            auto sst = env.reusable_sst(s, get_test_dir("wrong_counter_shard_order", s), 2, version).get();
             auto reader = sstable_reader_v2(sst, s, env.make_reader_permit());
             auto close_reader = deferred_close(reader);
 
@@ -2177,32 +2177,32 @@ SEASTAR_TEST_CASE(test_wrong_counter_shard_order) {
             };
 
             {
-                auto mfopt = reader().get0();
+                auto mfopt = reader().get();
                 BOOST_REQUIRE(mfopt);
                 BOOST_REQUIRE(mfopt->is_partition_start());
-                verify_row(reader().get0(), 28545);
-                verify_row(reader().get0(), 27967);
-                verify_row(reader().get0(), 28342);
-                verify_row(reader().get0(), 28325);
-                mfopt = reader().get0();
+                verify_row(reader().get(), 28545);
+                verify_row(reader().get(), 27967);
+                verify_row(reader().get(), 28342);
+                verify_row(reader().get(), 28325);
+                mfopt = reader().get();
                 BOOST_REQUIRE(mfopt);
                 BOOST_REQUIRE(mfopt->is_end_of_partition());
             }
 
             {
-                auto mfopt = reader().get0();
+                auto mfopt = reader().get();
                 BOOST_REQUIRE(mfopt);
                 BOOST_REQUIRE(mfopt->is_partition_start());
-                verify_row(reader().get0(), 28386);
-                verify_row(reader().get0(), 28378);
-                verify_row(reader().get0(), 28129);
-                verify_row(reader().get0(), 28260);
-                mfopt = reader().get0();
+                verify_row(reader().get(), 28386);
+                verify_row(reader().get(), 28378);
+                verify_row(reader().get(), 28129);
+                verify_row(reader().get(), 28260);
+                mfopt = reader().get();
                 BOOST_REQUIRE(mfopt);
                 BOOST_REQUIRE(mfopt->is_end_of_partition());
             }
 
-            BOOST_REQUIRE(!reader().get0());
+            BOOST_REQUIRE(!reader().get());
         }
       });
 }
@@ -2261,7 +2261,7 @@ SEASTAR_TEST_CASE(test_old_format_non_compound_range_tombstone_is_read) {
                     .with_column("v", int32_type)
                     .build(schema_builder::compact_storage::yes);
 
-                auto sst = env.reusable_sst(s, get_test_dir("broken_non_compound_pi_and_range_tombstone", s), 1, version).get0();
+                auto sst = env.reusable_sst(s, get_test_dir("broken_non_compound_pi_and_range_tombstone", s), 1, version).get();
 
                 auto pk = partition_key::from_exploded(*s, { int32_type->decompose(1) });
                 auto dk = dht::decorate_key(*s, pk);
@@ -2308,7 +2308,7 @@ SEASTAR_TEST_CASE(summary_rebuild_sanity) {
         BOOST_REQUIRE(s1.entries.size() > 1);
 
         sstables::test(sst).remove_component(component_type::Summary).get();
-        sst = env.reusable_sst(sst).get0();
+        sst = env.reusable_sst(sst).get();
         summary& s2 = sstables::test(sst).get_summary();
 
         BOOST_REQUIRE(::memcmp(&s1.header, &s2.header, sizeof(summary::header)) == 0);
@@ -2514,7 +2514,7 @@ SEASTAR_TEST_CASE(test_reads_cassandra_static_compact) {
             .build(schema_builder::compact_storage::yes);
 
         // INSERT INTO ks.cf (key, c1, c2) VALUES ('a', 'abc', 'cde');
-        auto sst = env.reusable_sst(s, get_test_dir("cassandra_static_compact", s), 1, sstables::sstable::version_types::mc).get0();
+        auto sst = env.reusable_sst(s, get_test_dir("cassandra_static_compact", s), 1, sstables::sstable::version_types::mc).get();
         auto pkey = partition_key::from_exploded(*s, { utf8_type->decompose("a") });
         auto dkey = dht::decorate_key(*s, std::move(pkey));
         mutation m(s, dkey);
@@ -2593,7 +2593,7 @@ SEASTAR_TEST_CASE(test_zero_estimated_partitions) {
 
             auto sst_mr = sst->as_mutation_source().make_reader_v2(s, env.make_reader_permit(), query::full_partition_range, s->full_slice());
             auto close_mr = deferred_close(sst_mr);
-            auto sst_mut = read_mutation_from_flat_mutation_reader(sst_mr).get0();
+            auto sst_mut = read_mutation_from_flat_mutation_reader(sst_mr).get();
 
             // The real test here is that we don't assert() in
             // sstables::prepare_summary() with the write_components() call above,
@@ -3023,10 +3023,10 @@ SEASTAR_TEST_CASE(find_first_position_in_partition_from_sstable_test) {
                 BOOST_REQUIRE(sst->max_position().key() == last_position->key());
             }
 
-            auto first_position_opt = sst->find_first_position_in_partition(env.make_reader_permit(), sst->get_first_decorated_key(), false).get0();
+            auto first_position_opt = sst->find_first_position_in_partition(env.make_reader_permit(), sst->get_first_decorated_key(), false).get();
             BOOST_REQUIRE(first_position_opt);
 
-            auto last_position_opt = sst->find_first_position_in_partition(env.make_reader_permit(), sst->get_last_decorated_key(), true).get0();
+            auto last_position_opt = sst->find_first_position_in_partition(env.make_reader_permit(), sst->get_last_decorated_key(), true).get();
             BOOST_REQUIRE(last_position_opt);
 
             BOOST_REQUIRE(eq(*first_position_opt, *first_position));
@@ -3071,8 +3071,8 @@ future<> test_sstable_bytes_correctness(sstring tname, test_env_config cfg) {
             uint64_t bytes_on_disk = 0;
             auto& underlying_storage = const_cast<sstables::storage&>(sst->get_storage());
             for (auto& component_type : sstables::test(sst).get_components()) {
-                file f = underlying_storage.open_component(*sst, component_type, open_flags::ro, file_open_options{}, true).get0();
-                bytes_on_disk += f.size().get0();
+                file f = underlying_storage.open_component(*sst, component_type, open_flags::ro, file_open_options{}, true).get();
+                bytes_on_disk += f.size().get();
             }
             return bytes_on_disk;
         };
@@ -3142,7 +3142,7 @@ SEASTAR_TEST_CASE(test_sstable_set_predicate) {
 
         auto verify_reader_result = [&] (flat_mutation_reader_v2 sst_mr, bool expect_eos) {
             auto close_mr = deferred_close(sst_mr);
-            auto sst_mut = read_mutation_from_flat_mutation_reader(sst_mr).get0();
+            auto sst_mut = read_mutation_from_flat_mutation_reader(sst_mr).get();
 
             if (expect_eos) {
                 BOOST_REQUIRE(sst_mr.is_buffer_empty());

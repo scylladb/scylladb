@@ -217,7 +217,7 @@ void stream_manager::init_messaging_service_handler(abort_source& as) {
                     sslog.log(level, "[Stream #{}] Failed to handle STREAM_MUTATION_FRAGMENTS (receive and distribute phase) for ks={}, cf={}, peer={}: {}",
                             plan_id, s->ks_name(), s->cf_name(), from.addr, ex);
                 } else {
-                    received_partitions = f.get0();
+                    received_partitions = f.get();
                 }
                 if (received_partitions) {
                     sslog.info("[Stream #{}] Write to sstable for ks={}, cf={}, estimated_partitions={}, received_partitions={}",
@@ -298,7 +298,7 @@ future<> stream_session::on_initialization_complete() {
     sslog.debug("[Stream #{}] SEND PREPARE_MESSAGE to {}", plan_id(), id);
     return manager().ms().send_prepare_message(id, std::move(prepare), plan_id(), description(), get_reason(), topo_guard()).then_wrapped([this, id] (auto&& f) {
         try {
-            auto msg = f.get0();
+            auto msg = f.get();
             sslog.debug("[Stream #{}] GOT PREPARE_MESSAGE Reply from {}", this->plan_id(), this->peer);
             this->dst_cpu_id = msg.dst_cpu_id;
             for (auto& summary : msg.summaries) {

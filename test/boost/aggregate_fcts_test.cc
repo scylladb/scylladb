@@ -62,7 +62,7 @@ SEASTAR_TEST_CASE(test_aggregate_avg) {
                                  "avg(f), "
                                  "avg(g_0), "
                                  "avg(g_2), "
-                                 "avg(h) FROM test").get0();
+                                 "avg(h) FROM test").get();
 
         assert_that(msg).is_rows().with_size(1).with_row({{byte_type->decompose(int8_t(1))},
                                                           {short_type->decompose(int16_t(1))},
@@ -88,7 +88,7 @@ SEASTAR_TEST_CASE(test_aggregate_sum) {
                                  "sum(f), "
                                  "sum(g_0), "
                                  "sum(g_2), "
-                                 "sum(h) FROM test").get0();
+                                 "sum(h) FROM test").get();
 
         assert_that(msg).is_rows().with_size(1).with_row({{byte_type->decompose(int8_t(3))},
                                                           {short_type->decompose(int16_t(3))},
@@ -120,7 +120,7 @@ SEASTAR_TEST_CASE(test_aggregate_max) {
                                  "max(tm), "
                                  "max(tu), "
                                  "max(bl), "
-                                 "max(bo) FROM test").get0();
+                                 "max(bo) FROM test").get();
 
         assert_that(msg).is_rows().with_size(1).with_row({{byte_type->decompose(int8_t(2))},
                                                           {short_type->decompose(int16_t(2))},
@@ -159,7 +159,7 @@ SEASTAR_TEST_CASE(test_aggregate_min) {
                                  "min(tm), "
                                  "min(tu), "
                                  "min(bl), "
-                                 "min(bo) FROM test").get0();
+                                 "min(bo) FROM test").get();
 
         assert_that(msg).is_rows().with_size(1).with_row({{byte_type->decompose(int8_t(1))},
                                                           {short_type->decompose(int16_t(1))},
@@ -189,27 +189,27 @@ SEASTAR_TEST_CASE(test_aggregate_count) {
         e.execute_cql("INSERT INTO test(a, c, bl) VALUES (3, 3, 0x03)").get();
 
         {
-            auto msg = e.execute_cql("SELECT count(*) FROM test").get0();
+            auto msg = e.execute_cql("SELECT count(*) FROM test").get();
             assert_that(msg).is_rows().with_size(1).with_row({{long_type->decompose(int64_t(3))}});
         }
         {
-            auto msg = e.execute_cql("SELECT count(a) FROM test").get0();
+            auto msg = e.execute_cql("SELECT count(a) FROM test").get();
             assert_that(msg).is_rows().with_size(1).with_row({{long_type->decompose(int64_t(3))}});
         }
         {
-            auto msg = e.execute_cql("SELECT count(b) FROM test").get0();
+            auto msg = e.execute_cql("SELECT count(b) FROM test").get();
             assert_that(msg).is_rows().with_size(1).with_row({{long_type->decompose(int64_t(1))}});
         }
         {
-            auto msg = e.execute_cql("SELECT count(c) FROM test").get0();
+            auto msg = e.execute_cql("SELECT count(c) FROM test").get();
             assert_that(msg).is_rows().with_size(1).with_row({{long_type->decompose(int64_t(2))}});
         }
         {
-            auto msg = e.execute_cql("SELECT count(bo) FROM test").get0();
+            auto msg = e.execute_cql("SELECT count(bo) FROM test").get();
             assert_that(msg).is_rows().with_size(1).with_row({{long_type->decompose(int64_t(2))}});
         }
         {
-            auto msg = e.execute_cql("SELECT count(a), count(b), count(c), count(bl), count(bo), count(*) FROM test").get0();
+            auto msg = e.execute_cql("SELECT count(a), count(b), count(c), count(bl), count(bo), count(*) FROM test").get();
             assert_that(msg).is_rows().with_size(1).with_row({{long_type->decompose(int64_t(3))},
                                                               {long_type->decompose(int64_t(1))},
                                                               {long_type->decompose(int64_t(2))},
@@ -218,7 +218,7 @@ SEASTAR_TEST_CASE(test_aggregate_count) {
                                                               {long_type->decompose(int64_t(3))}});
         }
         {
-            auto msg = e.execute_cql("SELECT count(a), count(b), count(c), count(bo), count(*) FROM test LIMIT 1").get0();
+            auto msg = e.execute_cql("SELECT count(a), count(b), count(c), count(bo), count(*) FROM test LIMIT 1").get();
             assert_that(msg).is_rows().with_size(1).with_row({{long_type->decompose(int64_t(3))},
                                                               {long_type->decompose(int64_t(1))},
                                                               {long_type->decompose(int64_t(2))},
@@ -236,12 +236,12 @@ SEASTAR_TEST_CASE(test_reverse_type_aggregation) {
 
         {
             auto tp = db_clock::from_time_t(0) + std::chrono::milliseconds(1);
-            auto msg = e.execute_cql("SELECT min(c) FROM test").get0();
+            auto msg = e.execute_cql("SELECT min(c) FROM test").get();
             assert_that(msg).is_rows().with_size(1).with_row({{timestamp_type->decompose(tp)}});
         }
         {
             auto tp = db_clock::from_time_t(0) + std::chrono::milliseconds(2);
-            auto msg = e.execute_cql("SELECT max(c) FROM test").get0();
+            auto msg = e.execute_cql("SELECT max(c) FROM test").get();
             assert_that(msg).is_rows().with_size(1).with_row({{timestamp_type->decompose(tp)}});
         }
     });
@@ -257,14 +257,14 @@ SEASTAR_TEST_CASE(test_minmax_on_set) {
         const auto set_type_int = set_type_impl::get_instance(int32_type, true);
         const auto set_type_blob = set_type_impl::get_instance(bytes_type, true);
         {
-            const auto msg = e.execute_cql("SELECT max(s1), max(s2) FROM test;").get0();
+            const auto msg = e.execute_cql("SELECT max(s1), max(s2) FROM test;").get();
             assert_that(msg).is_rows().with_size(1).with_row({
                     set_type_int->decompose(make_set_value(set_type_int, {-1, 1})),
                     set_type_blob->decompose(make_set_value(set_type_blob, {"\x02", "\xfe"}))
             });
         }
         {
-            const auto msg = e.execute_cql("SELECT min(s1), min(s2) FROM test;").get0();
+            const auto msg = e.execute_cql("SELECT min(s1), min(s2) FROM test;").get();
             assert_that(msg).is_rows().with_size(1).with_row({
                     set_type_int->decompose(make_set_value(set_type_int, {-2, 2})),
                     set_type_blob->decompose(make_set_value(set_type_blob, {"\x01", "\xff"}))

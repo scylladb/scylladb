@@ -823,7 +823,7 @@ void database::init_schema_commitlog() {
     c.use_o_dsync = _cfg.commitlog_use_o_dsync();
     c.allow_going_over_size_limit = true; // for lower latency
 
-    _schema_commitlog = std::make_unique<db::commitlog>(db::commitlog::create_commitlog(std::move(c)).get0());
+    _schema_commitlog = std::make_unique<db::commitlog>(db::commitlog::create_commitlog(std::move(c)).get());
     _schema_commitlog->add_flush_handler([this] (db::cf_id_type id, db::replay_position pos) {
         if (!_tables_metadata.contains(id)) {
             // the CF has been removed.
@@ -2705,16 +2705,16 @@ future<> database::clear_snapshot(sstring tag, std::vector<sstring> keyspace_nam
             auto data_dir_lister = directory_lister(data_dir, lister::dir_entry_types::of<directory_entry_type::directory>(), filter);
             auto close_data_dir_lister = deferred_close(data_dir_lister);
             dblog.debug("clear_snapshot: listing data dir {} with filter={}", data_dir, ks_names_set.empty() ? "none" : fmt::format("{}", ks_names_set));
-            while (auto ks_ent = data_dir_lister.get().get0()) {
+            while (auto ks_ent = data_dir_lister.get().get()) {
                 auto ks_name = ks_ent->name;
                 auto ks_dir = data_dir / ks_name;
                 auto ks_dir_lister = directory_lister(ks_dir, lister::dir_entry_types::of<directory_entry_type::directory>(), table_filter);
                 auto close_ks_dir_lister = deferred_close(ks_dir_lister);
                 dblog.debug("clear_snapshot: listing keyspace dir {} with filter={}", ks_dir, table_name_param.empty() ? "none" : fmt::format("{}", table_name_param));
-                while (auto table_ent = ks_dir_lister.get().get0()) {
+                while (auto table_ent = ks_dir_lister.get().get()) {
                     auto table_dir = ks_dir / table_ent->name;
                     auto snapshots_dir = table_dir / sstables::snapshots_dir;
-                    auto has_snapshots = file_exists(snapshots_dir.native()).get0();
+                    auto has_snapshots = file_exists(snapshots_dir.native()).get();
                     if (has_snapshots) {
                         if (tag.empty()) {
                             dblog.info("Removing {}", snapshots_dir);
@@ -2726,7 +2726,7 @@ future<> database::clear_snapshot(sstring tag, std::vector<sstring> keyspace_nam
                             auto close_snapshots_dir_lister = deferred_close(snapshots_dir_lister);
                             dblog.debug("clear_snapshot: listing snapshots dir {} with filter={}", snapshots_dir, tag);
                             has_snapshots = false;  // unless other snapshots are found
-                            while (auto snapshot_ent = snapshots_dir_lister.get().get0()) {
+                            while (auto snapshot_ent = snapshots_dir_lister.get().get()) {
                                 if (snapshot_ent->name == tag) {
                                     auto snapshot_dir = snapshots_dir / snapshot_ent->name;
                                     dblog.info("Removing {}", snapshot_dir);

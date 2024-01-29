@@ -57,8 +57,8 @@ SEASTAR_TEST_CASE(test_index_doesnt_flood_cache_in_small_partition_workload) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         // We disable compactions because they cause confusing cache mispopulations.
         e.execute_cql("CREATE TABLE ks.t(pk blob PRIMARY KEY) WITH compaction = { 'class' : 'NullCompactionStrategy' };").get();
-        auto insert_query = e.prepare("INSERT INTO ks.t(pk) VALUES (?)").get0();
-        auto select_query = e.prepare("SELECT * FROM t WHERE pk = ?").get0();
+        auto insert_query = e.prepare("INSERT INTO ks.t(pk) VALUES (?)").get();
+        auto select_query = e.prepare("SELECT * FROM t WHERE pk = ?").get();
 
         constexpr uint64_t pk_number = 600000;
         constexpr uint64_t pk_size = 1000;
@@ -75,7 +75,7 @@ SEASTAR_TEST_CASE(test_index_doesnt_flood_cache_in_small_partition_workload) {
 
         // Populate the table.
         for (size_t i = 0; i < pk_number; ++i) {
-            e.execute_prepared(insert_query, {{cql3::raw_value::make_value(make_key(i))}}).get0();
+            e.execute_prepared(insert_query, {{cql3::raw_value::make_value(make_key(i))}}).get();
         }
         // Flushing makes reasoning easier.
         e.db().invoke_on_all(&replica::database::flush_all_memtables).get();
@@ -95,7 +95,7 @@ SEASTAR_TEST_CASE(test_index_doesnt_flood_cache_in_small_partition_workload) {
         auto get_misses = [&e] { return e.local_db().row_cache_tracker().get_stats().partition_misses; };
         uint64_t misses_before = get_misses();
         for (size_t i = 0; i < hot_subset_size; ++i) {
-            e.execute_prepared(select_query, {{cql3::raw_value::make_value(make_key(i))}}).get0();
+            e.execute_prepared(select_query, {{cql3::raw_value::make_value(make_key(i))}}).get();
             // Sanity check. If a single query is causing multiple partition misses,
             // something unexpected is happening.
             BOOST_REQUIRE_LE(get_misses() - misses_before, i + 1);
@@ -105,7 +105,7 @@ SEASTAR_TEST_CASE(test_index_doesnt_flood_cache_in_small_partition_workload) {
         // The rows we just read have a small total size. They should be perfectly cached.
         for (size_t repeat = 0; repeat < 3; ++repeat) {
             for (size_t i = 0; i < hot_subset_size; ++i) {
-                e.execute_prepared(select_query, {{cql3::raw_value::make_value(make_key(i))}}).get0();
+                e.execute_prepared(select_query, {{cql3::raw_value::make_value(make_key(i))}}).get();
                 // If the rows were perfectly cached, there were no new misses.
                 BOOST_REQUIRE_EQUAL(get_misses(), misses_before);
             }
@@ -133,8 +133,8 @@ SEASTAR_TEST_CASE(test_index_is_cached_in_big_partition_workload) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         // We disable compactions because they cause confusing cache mispopulations.
         e.execute_cql("CREATE TABLE ks.t(pk bigint, ck bigint, v blob, primary key (pk, ck)) WITH compaction = { 'class' : 'NullCompactionStrategy' };").get();
-        auto insert_query = e.prepare("INSERT INTO ks.t(pk, ck, v) VALUES (?, ?, ?)").get0();
-        auto select_query = e.prepare("SELECT * FROM t WHERE pk = ? AND ck = ?").get0();
+        auto insert_query = e.prepare("INSERT INTO ks.t(pk, ck, v) VALUES (?, ?, ?)").get();
+        auto select_query = e.prepare("SELECT * FROM t WHERE pk = ? AND ck = ?").get();
 
         constexpr uint64_t pk_number = 10;
         constexpr uint64_t ck_number = 600;
@@ -153,7 +153,7 @@ SEASTAR_TEST_CASE(test_index_is_cached_in_big_partition_workload) {
         // Populate the table.
         for (size_t pk = 0; pk < pk_number; ++pk) {
             for (size_t ck = 0; ck < ck_number; ++ck) {
-                e.execute_prepared(insert_query, {{cql3::raw_value::make_value(make_key(pk))}, {cql3::raw_value::make_value(make_key(ck))}, {cql3::raw_value::make_value(bytes(v_size, 0))}}).get0();
+                e.execute_prepared(insert_query, {{cql3::raw_value::make_value(make_key(pk))}, {cql3::raw_value::make_value(make_key(ck))}, {cql3::raw_value::make_value(bytes(v_size, 0))}}).get();
             }
         }
         // Flushing makes reasoning easier.
@@ -162,7 +162,7 @@ SEASTAR_TEST_CASE(test_index_is_cached_in_big_partition_workload) {
         // Populate the index cache.
         for (size_t ck = 0; ck < ck_number; ++ck) {
             for (size_t pk = 0; pk < pk_number; ++pk) {
-                e.execute_prepared(select_query, {{cql3::raw_value::make_value(make_key(pk))}, {cql3::raw_value::make_value(make_key(ck))}}).get0();
+                e.execute_prepared(select_query, {{cql3::raw_value::make_value(make_key(pk))}, {cql3::raw_value::make_value(make_key(ck))}}).get();
             }
         }
 
@@ -171,7 +171,7 @@ SEASTAR_TEST_CASE(test_index_is_cached_in_big_partition_workload) {
         uint64_t misses_before = get_misses();
         for (size_t ck = 0; ck < ck_number; ++ck) {
             for (size_t pk = 0; pk < pk_number; ++pk) {
-                e.execute_prepared(select_query, {{cql3::raw_value::make_value(make_key(pk))}, {cql3::raw_value::make_value(make_key(ck))}}).get0();
+                e.execute_prepared(select_query, {{cql3::raw_value::make_value(make_key(pk))}, {cql3::raw_value::make_value(make_key(ck))}}).get();
             }
         }
         BOOST_REQUIRE_EQUAL(get_misses(), misses_before);

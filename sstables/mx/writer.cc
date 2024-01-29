@@ -875,7 +875,7 @@ void writer::maybe_add_pi_block() {
 }
 
 void writer::init_file_writers() {
-    auto out = _sst._storage->make_data_or_index_sink(_sst, component_type::Data).get0();
+    auto out = _sst._storage->make_data_or_index_sink(_sst, component_type::Data).get();
 
     if (!_compression_enabled) {
         _data_writer = std::make_unique<crc32_checksummed_file_writer>(std::move(out), _sst.sstable_buffer_size, _sst.filename(component_type::Data));
@@ -887,7 +887,7 @@ void writer::init_file_writers() {
                 _schema.get_compressor_params()), _sst.filename(component_type::Data));
     }
 
-    out = _sst._storage->make_data_or_index_sink(_sst, component_type::Index).get0();
+    out = _sst._storage->make_data_or_index_sink(_sst, component_type::Index).get();
     _index_writer = std::make_unique<file_writer>(output_stream<char>(std::move(out)), _sst.filename(component_type::Index));
 }
 
@@ -967,7 +967,7 @@ void writer::maybe_record_large_partitions(const sstables::sstable& sst, const s
     auto& row_count_entry = _rows_in_partition_entry;
     size_entry.max_value = std::max(size_entry.max_value, partition_size);
     row_count_entry.max_value = std::max(row_count_entry.max_value, rows);
-    auto ret = _sst.get_large_data_handler().maybe_record_large_partitions(sst, partition_key, partition_size, rows).get0();
+    auto ret = _sst.get_large_data_handler().maybe_record_large_partitions(sst, partition_key, partition_size, rows).get();
     size_entry.above_threshold += unsigned(bool(ret.size));
     row_count_entry.above_threshold += unsigned(bool(ret.rows));
 }
@@ -978,7 +978,7 @@ void writer::maybe_record_large_rows(const sstables::sstable& sst, const sstable
     if (entry.max_value < row_size) {
         entry.max_value = row_size;
     }
-    if (_sst.get_large_data_handler().maybe_record_large_rows(sst, partition_key, clustering_key, row_size).get0()) {
+    if (_sst.get_large_data_handler().maybe_record_large_rows(sst, partition_key, clustering_key, row_size).get()) {
         entry.above_threshold++;
     };
 }
@@ -993,7 +993,7 @@ void writer::maybe_record_large_cells(const sstables::sstable& sst, const sstabl
     if (collection_elements_entry.max_value < collection_elements) {
         collection_elements_entry.max_value = collection_elements;
     }
-    if (_sst.get_large_data_handler().maybe_record_large_cells(_sst, *_partition_key, clustering_key, cdef, cell_size, collection_elements).get0()) {
+    if (_sst.get_large_data_handler().maybe_record_large_cells(_sst, *_partition_key, clustering_key, cdef, cell_size, collection_elements).get()) {
         if (cell_size > cell_size_entry.threshold) {
             cell_size_entry.above_threshold++;
         }

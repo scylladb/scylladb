@@ -23,7 +23,7 @@
 //   T val{};
 //   using traits = noexcept_movable<T>;
 //   auto f = make_ready_future<typename traits::type>(traits::wrap(std::move(val)));
-//   T val2 = traits::unwrap(f.get0());
+//   T val2 = traits::unwrap(f.get());
 //
 
 template<typename T>

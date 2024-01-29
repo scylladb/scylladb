@@ -69,8 +69,8 @@ future<sstring> azure_snitch::azure_api_call(sstring path) {
     return seastar::async([path = std::move(path)] () -> sstring {
         using namespace boost::algorithm;
 
-        net::inet_address a = seastar::net::dns::resolve_name(AZURE_SERVER_ADDR, net::inet_address::family::INET).get0();
-        connected_socket sd(connect(socket_address(a, 80)).get0());
+        net::inet_address a = seastar::net::dns::resolve_name(AZURE_SERVER_ADDR, net::inet_address::family::INET).get();
+        connected_socket sd(connect(socket_address(a, 80)).get());
         input_stream<char> in(sd.input());
         output_stream<char> out(sd.output());
         auto close_in = deferred_close(in);
@@ -102,7 +102,7 @@ future<sstring> azure_snitch::azure_api_call(sstring path) {
         auto content_len = std::stoi(it->second);
 
         // Read HTTP response body
-        temporary_buffer<char> buf = in.read_exactly(content_len).get0();
+        temporary_buffer<char> buf = in.read_exactly(content_len).get();
 
         return sstring(buf.get(), buf.size());
     });

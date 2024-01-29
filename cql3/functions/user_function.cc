@@ -55,11 +55,11 @@ bytes_opt user_function::execute(std::span<const bytes_opt> parameters) {
                 const bytes_opt& bytes = parameters[i];
                 values.push_back(bytes ? type->deserialize(*bytes) : data_value::make_null(type));
             }
-            return lua::run_script(lua::bitcode_view{ctx.bitcode}, values, return_type(), ctx.cfg).get0();
+            return lua::run_script(lua::bitcode_view{ctx.bitcode}, values, return_type(), ctx.cfg).get();
         },
         [&] (wasm::context& ctx) -> bytes_opt {
             try {
-                return wasm::run_script(name(), ctx, arg_types(), parameters, return_type(), _called_on_null_input).get0();
+                return wasm::run_script(name(), ctx, arg_types(), parameters, return_type(), _called_on_null_input).get();
             } catch (const wasm::exception& e) {
                 throw exceptions::invalid_request_exception(format("UDF error: {}", e.what()));
             }

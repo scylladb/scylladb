@@ -119,7 +119,7 @@ future<> service_level_controller::update_service_levels_from_distributed_data()
             // to be able to agreggate those failures and only report when it is critical or noteworthy.
             // one common reason for failure is because one of the nodes comes down and before this node
             // detects it the scan query done inside this call is failing.
-            service_levels = _sl_data_accessor->get_service_levels().get0();
+            service_levels = _sl_data_accessor->get_service_levels().get();
 
             service_levels_info service_levels_for_add_or_update;
             service_levels_info service_levels_for_delete;
@@ -191,7 +191,7 @@ future<std::optional<service_level_options>> service_level_controller::find_serv
     return ::map_reduce(roles.begin(), roles.end(), [&role_manager, include_names, this] (const sstring& role) {
         return role_manager.get_attribute(role, "service_level").then_wrapped([include_names, this, role] (future<std::optional<sstring>> sl_name_fut) -> std::optional<service_level_options> {
             try {
-                std::optional<sstring> sl_name = sl_name_fut.get0();
+                std::optional<sstring> sl_name = sl_name_fut.get();
                 if (!sl_name) {
                     return std::nullopt;
                 }

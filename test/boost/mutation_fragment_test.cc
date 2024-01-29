@@ -339,7 +339,7 @@ SEASTAR_TEST_CASE(test_schema_upgrader_is_equivalent_with_mutation_upgrade) {
 
                 auto reader = transform(make_flat_mutation_reader_from_mutations_v2(m1.schema(), semaphore.make_permit(), {m1}), schema_upgrader_v2(m2.schema()));
                 auto close_reader = deferred_close(reader);
-                auto from_upgrader = read_mutation_from_flat_mutation_reader(reader).get0();
+                auto from_upgrader = read_mutation_from_flat_mutation_reader(reader).get();
 
                 auto regular = m1;
                 regular.upgrade(m2.schema());

@@ -119,11 +119,11 @@ SEASTAR_THREAD_TEST_CASE(test_split_stats) {
     // instantiate group-local split_stats.
     with_scheduling_group(sg1, [&] {
         stats1.emplace("tuta", "nils", "en nils", "nilsa", true);
-    }).get0();
+    }).get();
 
     with_scheduling_group(sg2, [&] {
         stats2.emplace("tuta", "nils", "en nils", "nilsa", true);
-    }).get0();
+    }).get();
 
     // simulating the calling of storage_proxy::on_down, from gossip
     // on node dropping out. If inside a write operation, we'll pick up

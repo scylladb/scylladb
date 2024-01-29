@@ -163,7 +163,7 @@ static uint64_t aggregate_querier_cache_stat(distributed<replica::database>& db,
             auto& stats = local_db.get_querier_cache_stats();
             return stats.*stat;
         });
-    }, 0, std::plus<size_t>()).get0();
+    }, 0, std::plus<size_t>()).get();
 }
 
 static void check_cache_population(distributed<replica::database>& db, size_t queriers,
@@ -175,7 +175,7 @@ static void check_cache_population(distributed<replica::database>& db, size_t qu
             auto& stats = local_db.get_querier_cache_stats();
             tests::require_equal(stats.population, queriers);
         });
-    }).get0();
+    }).get();
 }
 
 static void require_eventually_empty_caches(distributed<replica::database>& db,
@@ -234,9 +234,9 @@ static std::vector<mutation> read_all_partitions_one_by_one(distributed<replica:
                         query::max_result_size(query::result_memory_limiter::unlimited_result_size), query::tombstone_limit::max);
                 const auto range = dht::partition_range::make_singular(pkey);
                 return make_foreign(std::make_unique<reconcilable_result>(
-                    std::get<0>(db.query_mutations(std::move(s), cmd, range, nullptr, db::no_timeout).get0())));
+                    std::get<0>(db.query_mutations(std::move(s), cmd, range, nullptr, db::no_timeout).get())));
             });
-        }).get0();
+        }).get();
 
         tests::require_equal(res->partitions().size(), 1u);
         results.emplace_back(res->partitions().front().mut().unfreeze(s));

@@ -390,7 +390,7 @@ static void test_streamed_mutation_forwarding_is_consistent_with_slicing(tests::
         }
         auto fwd_m = forwardable_reader_to_mutation(std::move(fwd_reader), position_ranges);
 
-        mutation_opt sliced_m = read_mutation_from_flat_mutation_reader(sliced_reader).get0();
+        mutation_opt sliced_m = read_mutation_from_flat_mutation_reader(sliced_reader).get();
         BOOST_REQUIRE(bool(sliced_m));
         assert_that(*sliced_m).is_equal_to(fwd_m, slice_with_ranges.row_ranges(*m.schema(), m.key()));
     }
@@ -1587,7 +1587,7 @@ void test_reader_conversions(tests::reader_concurrency_semaphore_wrapper& semaph
         {
             auto rd = ms.make_fragment_v1_stream(m.schema(), semaphore.make_permit());
             auto close_rd = deferred_close(rd);
-            match_compacted_mutation(read_mutation_from_flat_mutation_reader(rd).get0(), m_compacted, query_time);
+            match_compacted_mutation(read_mutation_from_flat_mutation_reader(rd).get(), m_compacted, query_time);
         }
     });
 }

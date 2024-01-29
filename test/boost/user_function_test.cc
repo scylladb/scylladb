@@ -64,7 +64,7 @@ SEASTAR_TEST_CASE(test_user_function_out_of_memory) {
         e.execute_cql("CREATE TABLE my_table (key text PRIMARY KEY, val int);").get();
         e.execute_cql("INSERT INTO my_table (key, val) VALUES ('foo', null);").get();
         e.execute_cql("CREATE FUNCTION my_func(val int) CALLED ON NULL INPUT RETURNS int LANGUAGE Lua AS 'a = \"foo\" while true do a = a .. a end';").get();
-        BOOST_REQUIRE_EXCEPTION(e.execute_cql("SELECT my_func(val) FROM my_table;").get0(), ire, message_equals("lua execution failed: not enough memory"));
+        BOOST_REQUIRE_EXCEPTION(e.execute_cql("SELECT my_func(val) FROM my_table;").get(), ire, message_equals("lua execution failed: not enough memory"));
     });
 }
 
@@ -74,10 +74,10 @@ SEASTAR_TEST_CASE(test_user_function_use_null) {
         e.execute_cql("INSERT INTO my_table (key, val) VALUES ('foo', null);").get();
         e.execute_cql("CREATE FUNCTION my_func1(val int) CALLED ON NULL INPUT RETURNS int LANGUAGE Lua AS 'return val + 1';").get();
         e.execute_cql("CREATE FUNCTION my_func2(val int) CALLED ON NULL INPUT RETURNS int LANGUAGE Lua AS 'return val';").get();
-        BOOST_REQUIRE_EXCEPTION(e.execute_cql("SELECT my_func1(val) FROM my_table;").get0(), ire, message_equals("lua execution failed: ?:-1: attempt to perform arithmetic on a nil value"));
-        auto res = e.execute_cql("SELECT my_func2(val) FROM my_table;").get0();
+        BOOST_REQUIRE_EXCEPTION(e.execute_cql("SELECT my_func1(val) FROM my_table;").get(), ire, message_equals("lua execution failed: ?:-1: attempt to perform arithmetic on a nil value"));
+        auto res = e.execute_cql("SELECT my_func2(val) FROM my_table;").get();
         assert_that(res).is_rows().with_rows({{std::nullopt}});
-        res = e.execute_cql("SELECT val FROM my_table;").get0();
+        res = e.execute_cql("SELECT val FROM my_table;").get();
         assert_that(res).is_rows().with_rows({{std::nullopt}});
     });
 }
@@ -87,7 +87,7 @@ SEASTAR_TEST_CASE(test_user_function_wrong_return_type) {
         e.execute_cql("CREATE TABLE my_table (key text PRIMARY KEY, val int);").get();
         e.execute_cql("INSERT INTO my_table (key, val) VALUES ('foo', null);").get();
         e.execute_cql("CREATE FUNCTION my_func(val int) CALLED ON NULL INPUT RETURNS int LANGUAGE Lua AS 'return 1.2';").get();
-        BOOST_REQUIRE_EXCEPTION(e.execute_cql("SELECT my_func(val) FROM my_table;").get0(), ire, message_equals("value is not an integer"));
+        BOOST_REQUIRE_EXCEPTION(e.execute_cql("SELECT my_func(val) FROM my_table;").get(), ire, message_equals("value is not an integer"));
     });
 }
 
@@ -96,7 +96,7 @@ SEASTAR_TEST_CASE(test_user_function_too_many_return_values) {
         e.execute_cql("CREATE TABLE my_table (key text PRIMARY KEY, val int);").get();
         e.execute_cql("INSERT INTO my_table (key, val) VALUES ('foo', null);").get();
         e.execute_cql("CREATE FUNCTION my_func(val int) CALLED ON NULL INPUT RETURNS int LANGUAGE Lua AS 'return 1,2';").get();
-        BOOST_REQUIRE_EXCEPTION(e.execute_cql("SELECT my_func(val) FROM my_table;").get0(), ire, message_equals("2 values returned, expected 1"));
+        BOOST_REQUIRE_EXCEPTION(e.execute_cql("SELECT my_func(val) FROM my_table;").get(), ire, message_equals("2 values returned, expected 1"));
     });
 }
 
@@ -105,7 +105,7 @@ SEASTAR_TEST_CASE(test_user_function_reversed_argument) {
         e.execute_cql("CREATE TABLE my_table (key text, val int, PRIMARY KEY ((key), val)) WITH CLUSTERING ORDER BY (val DESC);").get();
         e.execute_cql("INSERT INTO my_table (key, val) VALUES ('foo', 1);").get();
         e.execute_cql("CREATE FUNCTION my_func(val int) CALLED ON NULL INPUT RETURNS int LANGUAGE Lua AS 'return 2 * val';").get();
-        auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get0();
+        auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get();
         assert_that(res).is_rows().with_rows({{serialized(2)}});
     });
 }
@@ -115,7 +115,7 @@ SEASTAR_TEST_CASE(test_user_function_boolean_argument) {
         e.execute_cql("CREATE TABLE my_table (key text PRIMARY KEY, val boolean);").get();
         e.execute_cql("INSERT INTO my_table (key, val) VALUES ('foo', true);").get();
         e.execute_cql("CREATE FUNCTION my_func(val boolean) CALLED ON NULL INPUT RETURNS int LANGUAGE Lua AS 'return val and 1 or 0';").get();
-        auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get0();
+        auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get();
         assert_that(res).is_rows().with_rows({{serialized(1)}});
     });
 }
@@ -125,7 +125,7 @@ SEASTAR_TEST_CASE(test_user_function_time_argument) {
         e.execute_cql("CREATE TABLE my_table (key text PRIMARY KEY, val time);").get();
         e.execute_cql("INSERT INTO my_table (key, val) VALUES ('foo', '01:23:45.6789');").get();
         e.execute_cql("CREATE FUNCTION my_func(val time) CALLED ON NULL INPUT RETURNS bigint LANGUAGE Lua AS 'return val';").get();
-        auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get0();
+        auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get();
         assert_that(res).is_rows().with_rows({{serialized(int64_t(((60 + 23)*60 + 45)*10000 + 6789)*100000)}});
     });
 }
@@ -135,7 +135,7 @@ SEASTAR_TEST_CASE(test_user_function_timestamp_argument) {
         e.execute_cql("CREATE TABLE my_table (key text PRIMARY KEY, val timestamp);").get();
         e.execute_cql("INSERT INTO my_table (key, val) VALUES ('foo', '2011-03-02 04:05+0000');").get();
         e.execute_cql("CREATE FUNCTION my_func(val timestamp) CALLED ON NULL INPUT RETURNS bigint LANGUAGE Lua AS 'return val';").get();
-        auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get0();
+        auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get();
         assert_that(res).is_rows().with_rows({{serialized(int64_t(1299038700000))}});
     });
 }
@@ -145,7 +145,7 @@ SEASTAR_TEST_CASE(test_user_function_date_argument) {
         e.execute_cql("CREATE TABLE my_table (key text PRIMARY KEY, val date);").get();
         e.execute_cql("INSERT INTO my_table (key, val) VALUES ('foo', '2019-08-26');").get();
         e.execute_cql("CREATE FUNCTION my_func(val date) CALLED ON NULL INPUT RETURNS int LANGUAGE Lua AS 'return val - 2^31';").get();
-        auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get0();
+        auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get();
         assert_that(res).is_rows().with_rows({{serialized(18134)}});
     });
 }
@@ -155,7 +155,7 @@ SEASTAR_TEST_CASE(test_user_function_counter_argument) {
         e.execute_cql("CREATE TABLE my_table (key text PRIMARY KEY, val counter);").get();
         e.execute_cql("UPDATE my_table SET val = val + 1 WHERE key = 'foo';").get();
         e.execute_cql("CREATE FUNCTION my_func(val counter) CALLED ON NULL INPUT RETURNS int LANGUAGE Lua AS 'return val * 2';").get();
-        auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get0();
+        auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get();
         assert_that(res).is_rows().with_rows({{serialized(2)}});
     });
 }
@@ -165,7 +165,7 @@ SEASTAR_TEST_CASE(test_user_function_duration_argument) {
         e.execute_cql("CREATE TABLE my_table (key text PRIMARY KEY, val duration);").get();
         e.execute_cql("INSERT INTO my_table (key, val) VALUES ('foo', 1mo2d3ns);").get();
         e.execute_cql("CREATE FUNCTION my_func(val duration) CALLED ON NULL INPUT RETURNS int LANGUAGE Lua AS 'return 100 * val.months + 10 * val.days + val.nanoseconds';").get();
-        auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get0();
+        auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get();
         assert_that(res).is_rows().with_rows({{serialized(123)}});
     });
 }
@@ -176,7 +176,7 @@ SEASTAR_TEST_CASE(test_user_function_inet_argument) {
         e.execute_cql("INSERT INTO my_table (key, val) VALUES ('foo', '127.0.0.1');").get();
         e.execute_cql("INSERT INTO my_table (key, val) VALUES ('bar', '::1');").get();
         e.execute_cql("CREATE FUNCTION my_func(val inet) CALLED ON NULL INPUT RETURNS text LANGUAGE Lua AS 'return val';").get();
-        auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get0();
+        auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get();
         assert_that(res).is_rows().with_rows_ignore_order({{serialized("127.0.0.1")}, {serialized("::1")}});
     });
 }
@@ -186,7 +186,7 @@ SEASTAR_TEST_CASE(test_user_function_uuid_argument) {
         e.execute_cql("CREATE TABLE my_table (key text PRIMARY KEY, val uuid);").get();
         e.execute_cql("INSERT INTO my_table (key, val) VALUES ('foo', 5375ddb6-d5a5-4cce-9aa1-b10c3fea36a3);").get();
         e.execute_cql("CREATE FUNCTION my_func(val uuid) CALLED ON NULL INPUT RETURNS text LANGUAGE Lua AS 'return val';").get();
-        auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get0();
+        auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get();
         assert_that(res).is_rows().with_rows({{serialized("5375ddb6-d5a5-4cce-9aa1-b10c3fea36a3")}});
     });
 }
@@ -196,7 +196,7 @@ SEASTAR_TEST_CASE(test_user_function_utf8_argument) {
         e.execute_cql("CREATE TABLE my_table (key text PRIMARY KEY, val text);").get();
         e.execute_cql("INSERT INTO my_table (key, val) VALUES ('foo', 'bár');").get();
         e.execute_cql("CREATE FUNCTION my_func(val text) CALLED ON NULL INPUT RETURNS int LANGUAGE Lua AS 'return val:byte(2)';").get();
-        auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get0();
+        auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get();
         assert_that(res).is_rows().with_rows({{serialized(0xc3)}});
     });
 }
@@ -206,7 +206,7 @@ SEASTAR_TEST_CASE(test_user_function_blob_argument) {
         e.execute_cql("CREATE TABLE my_table (key text PRIMARY KEY, val blob);").get();
         e.execute_cql("INSERT INTO my_table (key, val) VALUES ('foo', 0x123456);").get();
         e.execute_cql("CREATE FUNCTION my_func(val blob) CALLED ON NULL INPUT RETURNS int LANGUAGE Lua AS 'return val:byte(2)';").get();
-        auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get0();
+        auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get();
         assert_that(res).is_rows().with_rows({{serialized(0x34)}});
     });
 }
@@ -216,7 +216,7 @@ SEASTAR_TEST_CASE(test_user_function_tuple_argument) {
         e.execute_cql("CREATE TABLE my_table (key text PRIMARY KEY, val tuple<int, bigint, int>);").get();
         e.execute_cql("INSERT INTO my_table (key, val) VALUES ('foo', (1, 2, 3));").get();
         e.execute_cql("CREATE FUNCTION my_func(val tuple<int, bigint, int>) CALLED ON NULL INPUT RETURNS bigint LANGUAGE Lua AS 'return val[1] + val[2] + val[3]';").get();
-        auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get0();
+        auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get();
         assert_that(res).is_rows().with_rows({{serialized(int64_t(6))}});
     });
 }
@@ -227,7 +227,7 @@ SEASTAR_TEST_CASE(test_user_function_udt_argument) {
         e.execute_cql("CREATE TABLE my_table (key text PRIMARY KEY, val frozen<my_type>);").get();
         e.execute_cql("INSERT INTO my_table (key, val) VALUES ('foo', {my_int : 42});").get();
         e.execute_cql("CREATE FUNCTION my_func(val my_type) CALLED ON NULL INPUT RETURNS int LANGUAGE Lua AS 'return val.my_int';").get();
-        auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get0();
+        auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get();
         assert_that(res).is_rows().with_rows({{serialized(42)}});
     });
 }
@@ -237,7 +237,7 @@ SEASTAR_TEST_CASE(test_user_function_set_argument) {
         e.execute_cql("CREATE TABLE my_table (key text PRIMARY KEY, val set<int>);").get();
         e.execute_cql("INSERT INTO my_table (key, val) VALUES ('foo', {1, 2, 3});").get();
         e.execute_cql("CREATE FUNCTION my_func(val set<int>) CALLED ON NULL INPUT RETURNS int LANGUAGE Lua AS 'local ret = 0; for k in pairs(val) do ret = ret + k; end return ret';").get();
-        auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get0();
+        auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get();
         assert_that(res).is_rows().with_rows({{serialized(6)}});
     });
 }
@@ -248,7 +248,7 @@ SEASTAR_TEST_CASE(test_user_function_map_argument) {
         e.execute_cql("INSERT INTO my_table (key, val) VALUES ('foo', {1 : 2, 3 : 4, 5: 6});").get();
         e.execute_cql("CREATE FUNCTION sum_keys(val map<int, int>) CALLED ON NULL INPUT RETURNS int LANGUAGE Lua AS 'local ret = 0; for k, v in pairs(val) do ret = ret + k; end return ret';").get();
         e.execute_cql("CREATE FUNCTION sum_values(val map<int, int>) CALLED ON NULL INPUT RETURNS int LANGUAGE Lua AS 'local ret = 0; for k, v in pairs(val) do ret = ret + v; end return ret';").get();
-        auto res = e.execute_cql("SELECT sum_keys(val), sum_values(val) FROM my_table;").get0();
+        auto res = e.execute_cql("SELECT sum_keys(val), sum_values(val) FROM my_table;").get();
         assert_that(res).is_rows().with_rows({{serialized(9), serialized(12)}});
     });
 }
@@ -258,7 +258,7 @@ SEASTAR_TEST_CASE(test_user_function_decimal_argument) {
         e.execute_cql("CREATE TABLE my_table (key text PRIMARY KEY, val decimal);").get();
         e.execute_cql("INSERT INTO my_table (key, val) VALUES ('foo', 3);").get();
         e.execute_cql("CREATE FUNCTION my_func(val decimal) CALLED ON NULL INPUT RETURNS bigint LANGUAGE Lua AS 'return 42';").get();
-        e.execute_cql("SELECT my_func(val) FROM my_table;").get0();
+        e.execute_cql("SELECT my_func(val) FROM my_table;").get();
     });
 }
 
@@ -268,13 +268,13 @@ SEASTAR_TEST_CASE(test_user_function_decimal_add) {
         e.execute_cql("INSERT INTO my_table (key, val1) VALUES ('foo', 1.5);").get();
 
         e.execute_cql("CREATE FUNCTION my_func(a decimal) CALLED ON NULL INPUT RETURNS decimal LANGUAGE Lua AS 'return a + 1';").get();
-        auto res = e.execute_cql("SELECT my_func(val1) FROM my_table;").get0();
+        auto res = e.execute_cql("SELECT my_func(val1) FROM my_table;").get();
         assert_that(res).is_rows().with_rows_ignore_order({
             {serialized(big_decimal(1, 25))}
         });
 
         e.execute_cql("CREATE FUNCTION my_func2(a decimal) CALLED ON NULL INPUT RETURNS double LANGUAGE Lua AS 'return 42.2 + a';").get();
-        res = e.execute_cql("SELECT my_func2(val1) FROM my_table;").get0();
+        res = e.execute_cql("SELECT my_func2(val1) FROM my_table;").get();
         assert_that(res).is_rows().with_rows_ignore_order({
             {serialized(43.7)}
         });
@@ -287,7 +287,7 @@ SEASTAR_TEST_CASE(test_user_function_decimal_sub) {
         e.execute_cql("INSERT INTO my_table (key, val1, val2) VALUES ('foo', 4, 1);").get();
 
         e.execute_cql("CREATE FUNCTION my_func(a decimal, b decimal) CALLED ON NULL INPUT RETURNS decimal LANGUAGE Lua AS 'return a - b';").get();
-        auto res = e.execute_cql("SELECT my_func(val1, val2) FROM my_table;").get0();
+        auto res = e.execute_cql("SELECT my_func(val1, val2) FROM my_table;").get();
         assert_that(res).is_rows().with_rows_ignore_order({
             {serialized(big_decimal(0, 3))}
         });
@@ -300,13 +300,13 @@ SEASTAR_TEST_CASE(test_user_function_decimal_return) {
         e.execute_cql("INSERT INTO my_table (key, val1, val2) VALUES ('foo', 42, 42.2);").get();
 
         e.execute_cql("CREATE FUNCTION my_func1(a varint) CALLED ON NULL INPUT RETURNS decimal LANGUAGE Lua AS 'return a';").get();
-        auto res = e.execute_cql("SELECT my_func1(val1) FROM my_table;").get0();
+        auto res = e.execute_cql("SELECT my_func1(val1) FROM my_table;").get();
         assert_that(res).is_rows().with_rows_ignore_order({
             {serialized(big_decimal(0, 42))}
         });
 
         e.execute_cql("CREATE FUNCTION my_func2(a decimal) CALLED ON NULL INPUT RETURNS decimal LANGUAGE Lua AS 'return a';").get();
-        res = e.execute_cql("SELECT my_func2(val2) FROM my_table;").get0();
+        res = e.execute_cql("SELECT my_func2(val2) FROM my_table;").get();
         assert_that(res).is_rows().with_rows_ignore_order({
             {serialized(big_decimal(1, 422))}
         });
@@ -316,7 +316,7 @@ SEASTAR_TEST_CASE(test_user_function_decimal_return) {
         BOOST_REQUIRE_EXCEPTION(fut.get(), ire, message_equals("value is not a decimal"));
 
         e.execute_cql("CREATE FUNCTION my_func4(a varint) CALLED ON NULL INPUT RETURNS decimal LANGUAGE Lua AS 'return \"18446744073709551616.1\"';").get();
-        res = e.execute_cql("SELECT my_func4(val1) FROM my_table;").get0();
+        res = e.execute_cql("SELECT my_func4(val1) FROM my_table;").get();
         assert_that(res).is_rows().with_rows_ignore_order({
             {serialized(big_decimal(1, boost::multiprecision::cpp_int("184467440737095516161")))}
         });
@@ -328,7 +328,7 @@ SEASTAR_TEST_CASE(test_user_function_varint_return) {
         e.execute_cql("CREATE TABLE my_table (key text PRIMARY KEY, val int);").get();
         e.execute_cql("INSERT INTO my_table (key, val) VALUES ('foo', 42);").get();
         e.execute_cql("CREATE FUNCTION my_func(a int) CALLED ON NULL INPUT RETURNS varint LANGUAGE Lua AS 'return a';").get();
-        auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get0();
+        auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get();
         assert_that(res).is_rows().with_rows_ignore_order({
             {serialized(utils::multiprecision_int(42))}
         });
@@ -340,25 +340,25 @@ SEASTAR_TEST_CASE(test_user_function_double_return) {
         e.execute_cql("CREATE TABLE my_table (key text PRIMARY KEY, val varint);").get();
         e.execute_cql("INSERT INTO my_table (key, val) VALUES ('foo', 3);").get();
         e.execute_cql("CREATE FUNCTION my_func(val varint) CALLED ON NULL INPUT RETURNS double LANGUAGE Lua AS 'return val';").get();
-        auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get0();
+        auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get();
         assert_that(res).is_rows().with_rows({{serialized(double(3))}});
 
         e.execute_cql("CREATE FUNCTION my_func2(val varint) CALLED ON NULL INPUT RETURNS double LANGUAGE Lua AS 'return 1/0';").get();
-        res = e.execute_cql("SELECT my_func2(val) FROM my_table;").get0();
+        res = e.execute_cql("SELECT my_func2(val) FROM my_table;").get();
         assert_that(res).is_rows().with_rows({{serialized(std::numeric_limits<double>::infinity())}});
 
         e.execute_cql("CREATE FUNCTION my_func3(val varint) CALLED ON NULL INPUT RETURNS double LANGUAGE Lua AS 'return -1/0';").get();
-        res = e.execute_cql("SELECT my_func3(val) FROM my_table;").get0();
+        res = e.execute_cql("SELECT my_func3(val) FROM my_table;").get();
         assert_that(res).is_rows().with_rows({{serialized(-std::numeric_limits<double>::infinity())}});
 
         e.execute_cql("CREATE FUNCTION my_func4(val varint) CALLED ON NULL INPUT RETURNS double LANGUAGE Lua AS 'return 0/0';").get();
-        res = e.execute_cql("SELECT my_func4(val) FROM my_table;").get0();
+        res = e.execute_cql("SELECT my_func4(val) FROM my_table;").get();
         assert_that(res).is_rows().with_rows({{serialized(std::nan(""))}});
 
         e.execute_cql("CREATE TABLE my_table2 (key text PRIMARY KEY, val decimal);").get();
         e.execute_cql("INSERT INTO my_table2 (key, val) VALUES ('foo', 5.1);").get();
         e.execute_cql("CREATE FUNCTION my_func5(val decimal) CALLED ON NULL INPUT RETURNS double LANGUAGE Lua AS 'return val';").get();
-        res = e.execute_cql("SELECT my_func5(val) FROM my_table2;").get0();
+        res = e.execute_cql("SELECT my_func5(val) FROM my_table2;").get();
         assert_that(res).is_rows().with_rows({{serialized(double(5.1))}});
     });
 }
@@ -369,7 +369,7 @@ SEASTAR_TEST_CASE(test_user_sum_of_udf) {
         e.execute_cql("INSERT INTO my_table (val) VALUES (1);").get();
         e.execute_cql("INSERT INTO my_table (val) VALUES (2);").get();
         e.execute_cql("CREATE FUNCTION my_func(val int) CALLED ON NULL INPUT RETURNS int LANGUAGE Lua AS 'return val';").get();
-        auto res = e.execute_cql("SELECT sum(my_func(val)) FROM my_table;").get0();
+        auto res = e.execute_cql("SELECT sum(my_func(val)) FROM my_table;").get();
         assert_that(res).is_rows().with_rows({{serialized(int32_t(3))}});
     });
 }
@@ -380,16 +380,16 @@ SEASTAR_TEST_CASE(test_user_function_tinyint_return) {
         e.execute_cql("INSERT INTO my_table (key, val1, val2, val3, val4) VALUES ('foo', 3, -1, 128, 9223372036854775808);").get();
         e.execute_cql("CREATE FUNCTION my_func(val varint) CALLED ON NULL INPUT RETURNS tinyint LANGUAGE Lua AS 'return val';").get();
 
-        auto res = e.execute_cql("SELECT my_func(val1) FROM my_table;").get0();
+        auto res = e.execute_cql("SELECT my_func(val1) FROM my_table;").get();
         assert_that(res).is_rows().with_rows({{serialized(int8_t(3))}});
 
-        res = e.execute_cql("SELECT my_func(val2) FROM my_table;").get0();
+        res = e.execute_cql("SELECT my_func(val2) FROM my_table;").get();
         assert_that(res).is_rows().with_rows({{serialized(int8_t(-1))}});
 
-        res = e.execute_cql("SELECT my_func(val3) FROM my_table;").get0();
+        res = e.execute_cql("SELECT my_func(val3) FROM my_table;").get();
         assert_that(res).is_rows().with_rows({{serialized(int8_t(-128))}});
 
-        res = e.execute_cql("SELECT my_func(val4) FROM my_table;").get0();
+        res = e.execute_cql("SELECT my_func(val4) FROM my_table;").get();
         assert_that(res).is_rows().with_rows({{serialized(int8_t(0))}});
     });
 }
@@ -399,23 +399,23 @@ SEASTAR_TEST_CASE(test_user_function_int_return) {
         e.execute_cql("CREATE TABLE my_table (key text PRIMARY KEY, val int);").get();
         e.execute_cql("INSERT INTO my_table (key, val) VALUES ('foo', 3);").get();
         e.execute_cql("CREATE FUNCTION my_func(val int) CALLED ON NULL INPUT RETURNS int LANGUAGE Lua AS 'return 2 * val';").get();
-        auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get0();
+        auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get();
         assert_that(res).is_rows().with_rows({{serialized(int32_t(6))}});
 
         e.execute_cql("CREATE OR REPLACE FUNCTION my_func(val int) CALLED ON NULL INPUT RETURNS int LANGUAGE Lua AS 'return val';").get();
-        res = e.execute_cql("SELECT my_func(val) FROM my_table;").get0();
+        res = e.execute_cql("SELECT my_func(val) FROM my_table;").get();
         assert_that(res).is_rows().with_rows({{serialized(int32_t(3))}});
 
         e.execute_cql("CREATE TABLE my_table2 (key text PRIMARY KEY, val tinyint);").get();
         e.execute_cql("INSERT INTO my_table2 (key, val) VALUES ('foo', 4);").get();
         e.execute_cql("CREATE FUNCTION my_func2(val tinyint) CALLED ON NULL INPUT RETURNS int LANGUAGE Lua AS 'return val';").get();
-        res = e.execute_cql("SELECT my_func2(val) FROM my_table2;").get0();
+        res = e.execute_cql("SELECT my_func2(val) FROM my_table2;").get();
         assert_that(res).is_rows().with_rows({{serialized(int32_t(4))}});
 
         e.execute_cql("CREATE TABLE my_table3 (key text PRIMARY KEY, val double);").get();
         e.execute_cql("INSERT INTO my_table3 (key, val) VALUES ('foo', 4);").get();
         e.execute_cql("CREATE FUNCTION my_func3(val double) CALLED ON NULL INPUT RETURNS int LANGUAGE Lua AS 'return val';").get();
-        res = e.execute_cql("SELECT my_func3(val) FROM my_table3;").get0();
+        res = e.execute_cql("SELECT my_func3(val) FROM my_table3;").get();
         assert_that(res).is_rows().with_rows({{serialized(int32_t(4))}});
 
         e.execute_cql("INSERT INTO my_table3 (key, val) VALUES ('foo', 4.2);").get();
@@ -426,7 +426,7 @@ SEASTAR_TEST_CASE(test_user_function_int_return) {
         e.execute_cql("INSERT INTO my_table4 (key, val) VALUES ('foo', 4);").get();
         e.execute_cql("INSERT INTO my_table4 (key, val) VALUES ('bar', 2147483648);").get();
         e.execute_cql("CREATE FUNCTION my_func4(val varint) CALLED ON NULL INPUT RETURNS int LANGUAGE Lua AS 'return val';").get();
-        res = e.execute_cql("SELECT my_func4(val) FROM my_table4;").get0();
+        res = e.execute_cql("SELECT my_func4(val) FROM my_table4;").get();
         assert_that(res).is_rows().with_rows_ignore_order({
             {serialized(int32_t(4))},
             {serialized(int32_t(-2147483648))}
@@ -437,11 +437,11 @@ SEASTAR_TEST_CASE(test_user_function_int_return) {
         BOOST_REQUIRE_EXCEPTION(fut.get(), ire, message_equals("value is not a number"));
 
         e.execute_cql("CREATE FUNCTION my_func6(val double) CALLED ON NULL INPUT RETURNS int LANGUAGE Lua AS 'return \"123\"';").get();
-        res = e.execute_cql("SELECT my_func6(val) FROM my_table3;").get0();
+        res = e.execute_cql("SELECT my_func6(val) FROM my_table3;").get();
         assert_that(res).is_rows().with_rows({{serialized(int32_t(123))}});
 
         e.execute_cql("CREATE FUNCTION my_func7(val double) CALLED ON NULL INPUT RETURNS int LANGUAGE Lua AS 'return \"0x123p+1\"';").get();
-        res = e.execute_cql("SELECT my_func7(val) FROM my_table3;").get0();
+        res = e.execute_cql("SELECT my_func7(val) FROM my_table3;").get();
         assert_that(res).is_rows().with_rows({{serialized(int32_t(0x246))}});
 
         e.execute_cql("CREATE FUNCTION my_func8(val double) CALLED ON NULL INPUT RETURNS int LANGUAGE Lua AS 'return false';").get();
@@ -459,11 +459,11 @@ SEASTAR_TEST_CASE(test_user_function_date_return) {
         e.execute_cql("CREATE TABLE my_table (key text PRIMARY KEY, val int);").get();
         e.execute_cql("INSERT INTO my_table (key, val) VALUES ('foo', 3);").get();
         e.execute_cql("CREATE FUNCTION my_func(val int) CALLED ON NULL INPUT RETURNS date LANGUAGE Lua AS 'return val';").get();
-        auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get0();
+        auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get();
         assert_that(res).is_rows().with_rows({{serialized(simple_date_native_type{uint32_t(3)})}});
 
         e.execute_cql("CREATE FUNCTION my_func2(val int) CALLED ON NULL INPUT RETURNS date LANGUAGE Lua AS 'return \"2019-10-01\"';").get();
-        res = e.execute_cql("SELECT my_func2(val) FROM my_table;").get0();
+        res = e.execute_cql("SELECT my_func2(val) FROM my_table;").get();
         assert_that(res).is_rows().with_rows({{serialized(simple_date_native_type{uint32_t(2147501818)})}});
 
         e.execute_cql("CREATE FUNCTION my_func3(val int) CALLED ON NULL INPUT RETURNS date LANGUAGE Lua AS 'return 4294967296';").get();
@@ -471,7 +471,7 @@ SEASTAR_TEST_CASE(test_user_function_date_return) {
         BOOST_REQUIRE_EXCEPTION(fut.get(), ire, message_equals("date value must fit in 32 bits"));
 
         e.execute_cql("CREATE FUNCTION my_func4(val int) CALLED ON NULL INPUT RETURNS date LANGUAGE Lua AS 'return {year = 2019, month = 10, day = 1}';").get();
-        res = e.execute_cql("SELECT my_func4(val) FROM my_table;").get0();
+        res = e.execute_cql("SELECT my_func4(val) FROM my_table;").get();
         assert_that(res).is_rows().with_rows({{serialized(simple_date_native_type{uint32_t(2147501818)})}});
 
         e.execute_cql("CREATE FUNCTION my_func5(val int) CALLED ON NULL INPUT RETURNS date LANGUAGE Lua AS 'return {year = 2147483648, month = 10, day = 1}';").get();
@@ -513,7 +513,7 @@ SEASTAR_TEST_CASE(test_user_function_inet_return) {
         e.execute_cql("CREATE TABLE my_table (key text PRIMARY KEY, val int);").get();
         e.execute_cql("INSERT INTO my_table (key, val) VALUES ('foo', 3);").get();
         e.execute_cql("CREATE FUNCTION my_func(val int) CALLED ON NULL INPUT RETURNS inet LANGUAGE Lua AS 'return \"1.2.3.4\"';").get();
-        auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get0();
+        auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get();
         assert_that(res).is_rows().with_rows({{serialized(seastar::net::inet_address("1.2.3.4"))}});
 
         e.execute_cql("CREATE FUNCTION my_func2(val int) CALLED ON NULL INPUT RETURNS inet LANGUAGE Lua AS 'return \"abc\"';").get();
@@ -531,7 +531,7 @@ SEASTAR_TEST_CASE(test_user_function_boolean_return) {
         e.execute_cql("CREATE TABLE my_table (key text PRIMARY KEY, val int);").get();
         e.execute_cql("INSERT INTO my_table (key, val) VALUES ('foo', 3);").get();
         e.execute_cql("CREATE FUNCTION my_func(val int) CALLED ON NULL INPUT RETURNS boolean LANGUAGE Lua AS 'return val > 4';").get();
-        auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get0();
+        auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get();
         assert_that(res).is_rows().with_rows({{serialized(false)}});
     });
 }
@@ -541,7 +541,7 @@ SEASTAR_TEST_CASE(test_user_function_ascii_return) {
         e.execute_cql("CREATE TABLE my_table (key text PRIMARY KEY, val int);").get();
         e.execute_cql("INSERT INTO my_table (key, val) VALUES ('foo', 3);").get();
         e.execute_cql("CREATE FUNCTION my_func(val int) CALLED ON NULL INPUT RETURNS ascii LANGUAGE Lua AS 'return \"foo\"';").get();
-        auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get0();
+        auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get();
         assert_that(res).is_rows().with_rows({{serialized(ascii_native_type{"foo"})}});
 
         e.execute_cql("CREATE FUNCTION my_func2(val int) CALLED ON NULL INPUT RETURNS ascii LANGUAGE Lua AS 'return \"foó\"';").get();
@@ -555,11 +555,11 @@ SEASTAR_TEST_CASE(test_user_function_utf8_return) {
         e.execute_cql("CREATE TABLE my_table (key text PRIMARY KEY, val varint);").get();
         e.execute_cql("INSERT INTO my_table (key, val) VALUES ('foo', 3);").get();
         e.execute_cql("CREATE FUNCTION my_func(val varint) CALLED ON NULL INPUT RETURNS text LANGUAGE Lua AS 'return \"foó\"';").get();
-        auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get0();
+        auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get();
         assert_that(res).is_rows().with_rows({{serialized("foó")}});
 
         e.execute_cql("CREATE FUNCTION my_func2(val varint) CALLED ON NULL INPUT RETURNS text LANGUAGE Lua AS 'return val';").get();
-        res = e.execute_cql("SELECT my_func2(val) FROM my_table;").get0();
+        res = e.execute_cql("SELECT my_func2(val) FROM my_table;").get();
         assert_that(res).is_rows().with_rows({{serialized("3")}});
 
         e.execute_cql("CREATE FUNCTION my_func3(val varint) CALLED ON NULL INPUT RETURNS text LANGUAGE Lua AS 'return \"\\xFF\"';").get();
@@ -569,7 +569,7 @@ SEASTAR_TEST_CASE(test_user_function_utf8_return) {
         e.execute_cql("CREATE TABLE my_table2 (key text PRIMARY KEY, val decimal);").get();
         e.execute_cql("INSERT INTO my_table2 (key, val) VALUES ('foo', 4.2);").get();
         e.execute_cql("CREATE FUNCTION my_func4(val decimal) CALLED ON NULL INPUT RETURNS text LANGUAGE Lua AS 'return val';").get();
-        res = e.execute_cql("SELECT my_func4(val) FROM my_table2;").get0();
+        res = e.execute_cql("SELECT my_func4(val) FROM my_table2;").get();
         assert_that(res).is_rows().with_rows({{serialized("4.2")}});
     });
 }
@@ -579,7 +579,7 @@ SEASTAR_TEST_CASE(test_user_function_blob_return) {
         e.execute_cql("CREATE TABLE my_table (key text PRIMARY KEY, val int);").get();
         e.execute_cql("INSERT INTO my_table (key, val) VALUES ('foo', 3);").get();
         e.execute_cql("CREATE FUNCTION my_func(val int) CALLED ON NULL INPUT RETURNS blob LANGUAGE Lua AS 'return \"foó\"';").get();
-        auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get0();
+        auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get();
         assert_that(res).is_rows().with_rows({{serialized(bytes("foó"))}});
     });
 }
@@ -589,7 +589,7 @@ SEASTAR_TEST_CASE(test_user_function_counter_return) {
         e.execute_cql("CREATE TABLE my_table (key text PRIMARY KEY, val int);").get();
         e.execute_cql("INSERT INTO my_table (key, val) VALUES ('foo', 3);").get();
         e.execute_cql("CREATE FUNCTION my_func(val int) CALLED ON NULL INPUT RETURNS counter LANGUAGE Lua AS 'return 42';").get();
-        auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get0();
+        auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get();
         assert_that(res).is_rows().with_rows({{serialized(int64_t(42))}});
     });
 }
@@ -599,11 +599,11 @@ SEASTAR_TEST_CASE(test_user_function_time_return) {
         e.execute_cql("CREATE TABLE my_table (key text PRIMARY KEY, val varint);").get();
         e.execute_cql("INSERT INTO my_table (key, val) VALUES ('foo', 9223372036854775807);").get();
         e.execute_cql("CREATE FUNCTION my_func(val varint) CALLED ON NULL INPUT RETURNS time LANGUAGE Lua AS 'return val';").get();
-        auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get0();
+        auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get();
         assert_that(res).is_rows().with_rows({{serialized(time_native_type{int64_t(9223372036854775807)})}});
 
         e.execute_cql("CREATE FUNCTION my_func2(val varint) CALLED ON NULL INPUT RETURNS time LANGUAGE Lua AS 'return \"08:12:54.123\"';").get();
-        res = e.execute_cql("SELECT my_func2(val) FROM my_table;").get0();
+        res = e.execute_cql("SELECT my_func2(val) FROM my_table;").get();
         assert_that(res).is_rows().with_rows({{serialized(time_native_type{int64_t(29574123000000)})}});
 
         e.execute_cql("CREATE FUNCTION my_func3(val varint) CALLED ON NULL INPUT RETURNS time LANGUAGE Lua AS 'return \"abc\"';").get();
@@ -625,17 +625,17 @@ SEASTAR_TEST_CASE(test_user_function_timestamp_return) {
         e.execute_cql("CREATE TABLE my_table (key text PRIMARY KEY, val varint);").get();
         e.execute_cql("INSERT INTO my_table (key, val) VALUES ('foo', 9223372036854775807);").get();
         e.execute_cql("CREATE FUNCTION my_func(val varint) CALLED ON NULL INPUT RETURNS timestamp LANGUAGE Lua AS 'return val';").get();
-        auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get0();
+        auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get();
         assert_that(res).is_rows().with_rows({
             {serialized(db_clock::time_point(db_clock::duration(int64_t(9223372036854775807))))}
         });
 
         e.execute_cql("CREATE FUNCTION my_func2(val varint) CALLED ON NULL INPUT RETURNS timestamp LANGUAGE Lua AS 'return \"2011-02-03 04:05:06+0000\"';").get();
-        res = e.execute_cql("SELECT my_func2(val) FROM my_table;").get0();
+        res = e.execute_cql("SELECT my_func2(val) FROM my_table;").get();
         assert_that(res).is_rows().with_rows({{serialized(db_clock::time_point(db_clock::duration(int64_t(0x12de9b1e550))))}});
 
         e.execute_cql("CREATE FUNCTION my_func5(val varint) CALLED ON NULL INPUT RETURNS timestamp LANGUAGE Lua AS 'return {year = 2011, month = 2, day = 3, hour = 4, min = 5, sec = 6 }';").get();
-        res = e.execute_cql("SELECT my_func5(val) FROM my_table;").get0();
+        res = e.execute_cql("SELECT my_func5(val) FROM my_table;").get();
         assert_that(res).is_rows().with_rows({
             {serialized(db_clock::time_point(db_clock::duration(int64_t(0x12de9b1e550))))}
         });
@@ -665,7 +665,7 @@ SEASTAR_TEST_CASE(test_user_function_uuid_return) {
         e.execute_cql("CREATE TABLE my_table (key text PRIMARY KEY, val int);").get();
         e.execute_cql("INSERT INTO my_table (key, val) VALUES ('foo', 3);").get();
         e.execute_cql("CREATE FUNCTION my_func(val int) CALLED ON NULL INPUT RETURNS uuid LANGUAGE Lua AS 'return \"982e9b0f-1df7-4425-ba04-e99d808b8940\"';").get();
-        auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get0();
+        auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get();
         assert_that(res).is_rows().with_rows({
             {serialized(utils::UUID("982e9b0f-1df7-4425-ba04-e99d808b8940"))}
         });
@@ -677,7 +677,7 @@ SEASTAR_TEST_CASE(test_user_function_timeuuid_return) {
         e.execute_cql("CREATE TABLE my_table (key text PRIMARY KEY, val int);").get();
         e.execute_cql("INSERT INTO my_table (key, val) VALUES ('foo', 3);").get();
         e.execute_cql("CREATE FUNCTION my_func(val int) CALLED ON NULL INPUT RETURNS timeuuid LANGUAGE Lua AS 'return \"d18648bc-cf83-11e9-9820-107b4493b787\"';").get();
-        auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get0();
+        auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get();
         assert_that(res).is_rows().with_rows({
             {serialized(timeuuid_native_type{utils::UUID("d18648bc-cf83-11e9-9820-107b4493b787")})}
         });
@@ -693,7 +693,7 @@ SEASTAR_TEST_CASE(test_user_function_tuple_return) {
         e.execute_cql("CREATE TABLE my_table (key text PRIMARY KEY, val int);").get();
         e.execute_cql("INSERT INTO my_table (key, val) VALUES ('foo', 3);").get();
         e.execute_cql("CREATE FUNCTION my_func(val int) CALLED ON NULL INPUT RETURNS tuple<int, double, text> LANGUAGE Lua AS 'return {1,2.4,\"foo\"}';").get();
-        auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get0();
+        auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get();
         auto tuple_type = tuple_type_impl::get_instance({int32_type, double_type, utf8_type});
         assert_that(res).is_rows().with_rows({
             {make_tuple_value(tuple_type, {1, 2.4, "foo"}).serialize()}
@@ -718,7 +718,7 @@ SEASTAR_TEST_CASE(test_user_function_list_return) {
         e.execute_cql("CREATE TABLE my_table (key text PRIMARY KEY, val int);").get();
         e.execute_cql("INSERT INTO my_table (key, val) VALUES ('foo', 3);").get();
         e.execute_cql("CREATE FUNCTION my_func(val int) CALLED ON NULL INPUT RETURNS list<int> LANGUAGE Lua AS 'return {1,2,3}';").get();
-        auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get0();
+        auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get();
         auto list_type = list_type_impl::get_instance(int32_type, false);
         assert_that(res).is_rows().with_rows({
             {make_list_value(list_type, {1, 2, 3}).serialize()}
@@ -747,7 +747,7 @@ SEASTAR_TEST_CASE(test_user_function_set_return) {
         e.execute_cql("CREATE TABLE my_table (key text PRIMARY KEY, val int);").get();
         e.execute_cql("INSERT INTO my_table (key, val) VALUES ('foo', 3);").get();
         e.execute_cql("CREATE FUNCTION my_func(val int) CALLED ON NULL INPUT RETURNS set<int> LANGUAGE Lua AS 'return {[1] = true, [42] = true}';").get();
-        auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get0();
+        auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get();
         auto set_type = set_type_impl::get_instance(int32_type, false);
         assert_that(res).is_rows().with_rows({
             {make_set_value(set_type, {1, 42}).serialize()}
@@ -766,7 +766,7 @@ SEASTAR_TEST_CASE(test_user_function_nested_types) {
         e.execute_cql("INSERT INTO my_table (key, val) VALUES ('foo', 3);").get();
         e.execute_cql("CREATE FUNCTION my_func(val int) CALLED ON NULL INPUT RETURNS map<int, frozen<set<frozen<list<frozen<tuple<text, bigint>>>>>>> LANGUAGE Lua AS  \
                       'return {[42] = {[{{\"foo\", 41}, {\"bar\", 40}}] = true, [{{\"bar\", 40}}] = true}, [39] = {}}';").get();
-        auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get0();
+        auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get();
         auto tuple_type = tuple_type_impl::get_instance({utf8_type, long_type});
         auto tuple_value1 = make_tuple_value(tuple_type, {"foo", int64_t(41)});
         auto tuple_value2 = make_tuple_value(tuple_type, {"bar", int64_t(40)});
@@ -787,7 +787,7 @@ SEASTAR_TEST_CASE(test_user_function_duration_return) {
         e.execute_cql("CREATE TABLE my_table (key text PRIMARY KEY, val int);").get();
         e.execute_cql("INSERT INTO my_table (key, val) VALUES ('foo', 3);").get();
         e.execute_cql("CREATE FUNCTION my_func(val int) CALLED ON NULL INPUT RETURNS duration LANGUAGE Lua AS 'return {months = 1, days = 2147483647, nanoseconds = 3}';").get();
-        auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get0();
+        auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get();
         assert_that(res).is_rows().with_rows({
             {serialized(cql_duration(months_counter(1), days_counter(2147483647), nanoseconds_counter(3)))}
         });
@@ -800,7 +800,7 @@ SEASTAR_TEST_CASE(test_user_function_duration_return) {
         BOOST_REQUIRE_EXCEPTION(e.execute_cql("SELECT my_func4(val) FROM my_table;").get(), ire, message_equals("9223372036854775808 nanoseconds doesn't fit in a 64 bit integer"));
 
         e.execute_cql("CREATE FUNCTION my_func5(val int) CALLED ON NULL INPUT RETURNS duration LANGUAGE Lua AS 'return \"1mo2d3ns\"';").get();
-        res = e.execute_cql("SELECT my_func5(val) FROM my_table;").get0();
+        res = e.execute_cql("SELECT my_func5(val) FROM my_table;").get();
         assert_that(res).is_rows().with_rows({
             {serialized(cql_duration(months_counter(1), days_counter(2), nanoseconds_counter(3)))}
         });
@@ -818,7 +818,7 @@ SEASTAR_TEST_CASE(test_user_function_map_return) {
         e.execute_cql("CREATE TABLE my_table (key text PRIMARY KEY, val int);").get();
         e.execute_cql("INSERT INTO my_table (key, val) VALUES ('foo', 3);").get();
         e.execute_cql("CREATE FUNCTION my_func(val int) CALLED ON NULL INPUT RETURNS map<text, int> LANGUAGE Lua AS 'return {foo = 1, bar = 2}';").get();
-        auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get0();
+        auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get();
         auto map_type = map_type_impl::get_instance(utf8_type, int32_type, false);
         assert_that(res).is_rows().with_rows({
             {make_map_value(map_type, {{"bar", 2}, {"foo", 1}}).serialize()}
@@ -843,7 +843,7 @@ SEASTAR_TEST_CASE(test_user_function_udt_return) {
         //  return my_type:new({field1 = val1, field2 = val2})
 
         e.execute_cql("CREATE FUNCTION my_func(val int) CALLED ON NULL INPUT RETURNS my_type LANGUAGE Lua AS 'return {my_int = 1, my_double = 2.5}';").get();
-        auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get0();
+        auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get();
         auto user_type =
                 user_type_impl::get_instance("ks", "my_type", {"my_int", "my_double"}, {int32_type, double_type}, false);
         assert_that(res).is_rows().with_rows({
@@ -852,15 +852,15 @@ SEASTAR_TEST_CASE(test_user_function_udt_return) {
 
         e.execute_cql("CREATE FUNCTION my_func2(val int) CALLED ON NULL INPUT RETURNS my_type LANGUAGE Lua AS 'return {my_int = 1, my_float = 2.5}';").get();
         auto fut = e.execute_cql("SELECT my_func2(val) FROM my_table;");
-        BOOST_REQUIRE_EXCEPTION(fut.get0(), ire, message_equals("invalid UDT field 'my_float'"));
+        BOOST_REQUIRE_EXCEPTION(fut.get(), ire, message_equals("invalid UDT field 'my_float'"));
 
         e.execute_cql("CREATE FUNCTION my_func3(val int) CALLED ON NULL INPUT RETURNS my_type LANGUAGE Lua AS 'return {[true] = 2.5}';").get();
         fut = e.execute_cql("SELECT my_func3(val) FROM my_table;");
-        BOOST_REQUIRE_EXCEPTION(fut.get0(), ire, message_equals("unexpected value"));
+        BOOST_REQUIRE_EXCEPTION(fut.get(), ire, message_equals("unexpected value"));
 
         e.execute_cql("CREATE FUNCTION my_func4(val int) CALLED ON NULL INPUT RETURNS my_type LANGUAGE Lua AS 'return {my_int = 1}';").get();
         fut = e.execute_cql("SELECT my_func4(val) FROM my_table;");
-        BOOST_REQUIRE_EXCEPTION(fut.get0(), ire, message_equals("key my_double missing in udt my_type"));
+        BOOST_REQUIRE_EXCEPTION(fut.get(), ire, message_equals("key my_double missing in udt my_type"));
     });
 }
 
@@ -869,7 +869,7 @@ SEASTAR_TEST_CASE(test_user_function_called_on_null) {
         e.execute_cql("CREATE TABLE my_table (key text PRIMARY KEY, val int);").get();
         e.execute_cql("INSERT INTO my_table (key, val) VALUES ('foo', null);").get();
         e.execute_cql("CREATE FUNCTION my_func(val int) CALLED ON NULL INPUT RETURNS int LANGUAGE Lua AS 'return 2';").get();
-        auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get0();
+        auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get();
         assert_that(res).is_rows().with_rows({{serialized(2)}});
     });
 }
@@ -879,7 +879,7 @@ SEASTAR_TEST_CASE(test_user_function_return_null_on_null) {
         e.execute_cql("CREATE TABLE my_table (key text PRIMARY KEY, val int);").get();
         e.execute_cql("INSERT INTO my_table (key, val) VALUES ('foo', null);").get();
         e.execute_cql("CREATE FUNCTION my_func(val int) RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE Lua AS 'return 2';").get();
-        auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get0();
+        auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get();
         assert_that(res).is_rows().with_rows({{std::nullopt}});
     });
 }
@@ -889,7 +889,7 @@ SEASTAR_TEST_CASE(test_user_function_lua_error) {
         e.execute_cql("CREATE TABLE my_table (key text PRIMARY KEY, val int);").get();
         e.execute_cql("INSERT INTO my_table (key, val) VALUES ('foo', 42);").get();
         e.execute_cql("CREATE FUNCTION my_func(val int) RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE Lua AS 'return 2 * bar';").get();
-        BOOST_REQUIRE_EXCEPTION(e.execute_cql("SELECT my_func(val) FROM my_table;").get0(), ire, message_equals("lua execution failed: ?:-1: attempt to perform arithmetic on a nil value (field 'bar')"));
+        BOOST_REQUIRE_EXCEPTION(e.execute_cql("SELECT my_func(val) FROM my_table;").get(), ire, message_equals("lua execution failed: ?:-1: attempt to perform arithmetic on a nil value (field 'bar')"));
 
     });
 }
@@ -899,7 +899,7 @@ SEASTAR_TEST_CASE(test_user_function_timeout) {
         e.execute_cql("CREATE TABLE my_table (key text PRIMARY KEY, val int);").get();
         e.execute_cql("INSERT INTO my_table (key, val) VALUES ('foo', 42);").get();
         e.execute_cql("CREATE FUNCTION my_func(val int) RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE Lua AS 'while true do end';").get();
-        BOOST_REQUIRE_EXCEPTION(e.execute_cql("SELECT my_func(val) FROM my_table;").get0(), ire, message_contains("lua execution timeout: "));
+        BOOST_REQUIRE_EXCEPTION(e.execute_cql("SELECT my_func(val) FROM my_table;").get(), ire, message_contains("lua execution timeout: "));
     });
 }
 
@@ -919,7 +919,7 @@ SEASTAR_TEST_CASE(test_user_function_bad_language) {
 
 SEASTAR_TEST_CASE(test_user_function) {
     return with_udf_enabled([] (cql_test_env& e) {
-        auto create = e.execute_cql("CREATE FUNCTION my_func(val int) RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE Lua AS 'return 2 * val';").get0();
+        auto create = e.execute_cql("CREATE FUNCTION my_func(val int) RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE Lua AS 'return 2 * val';").get();
         auto change = get_schema_change(create);
         using sc = cql_transport::event::schema_change;
         BOOST_REQUIRE(change->change == sc::change_type::CREATED);
@@ -927,7 +927,7 @@ SEASTAR_TEST_CASE(test_user_function) {
         BOOST_REQUIRE_EQUAL(change->keyspace, "ks");
         std::vector<sstring> args{"my_func", "int"};
         BOOST_REQUIRE_EQUAL(change->arguments, args);
-        auto msg = e.execute_cql("SELECT * FROM system_schema.functions;").get0();
+        auto msg = e.execute_cql("SELECT * FROM system_schema.functions;").get();
         auto str_list = list_type_impl::get_instance(utf8_type, false);
         assert_that(msg).is_rows()
             .with_rows({
@@ -947,24 +947,24 @@ SEASTAR_TEST_CASE(test_user_function) {
         e.execute_cql("INSERT INTO my_table (key, val) VALUES ('foo', 10 );").get();
         e.execute_cql("INSERT INTO my_table (key, val) VALUES ('bar', 10 );").get();
 
-        assert_that(e.execute_cql("SELECT my_func(val) FROM my_table;").get0()).is_rows().with_size(2);
+        assert_that(e.execute_cql("SELECT my_func(val) FROM my_table;").get()).is_rows().with_size(2);
 
         e.execute_cql("CREATE FUNCTION my_func2(val int) RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE Lua AS 'return 2 * val';").get();
-        assert_that(e.execute_cql("SELECT * FROM system_schema.functions;").get0())
+        assert_that(e.execute_cql("SELECT * FROM system_schema.functions;").get())
             .is_rows()
             .with_size(2);
 
         e.execute_cql("CREATE FUNCTION my_func2(val bigint) RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE Lua AS 'return 2 * val';").get();
-        assert_that(e.execute_cql("SELECT * FROM system_schema.functions;").get0())
+        assert_that(e.execute_cql("SELECT * FROM system_schema.functions;").get())
             .is_rows()
             .with_size(3);
 
         e.execute_cql("CREATE FUNCTION my_func2(val double) RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE Lua AS 'return 2 * val';").get();
-        assert_that(e.execute_cql("SELECT * FROM system_schema.functions;").get0())
+        assert_that(e.execute_cql("SELECT * FROM system_schema.functions;").get())
             .is_rows()
             .with_size(4);
 
-        msg = e.execute_cql("DROP FUNCTION my_func2(bigint);").get0();
+        msg = e.execute_cql("DROP FUNCTION my_func2(bigint);").get();
         change = get_schema_change(msg);
         BOOST_REQUIRE(change->change == sc::change_type::DROPPED);
         BOOST_REQUIRE(change->target == sc::target_type::FUNCTION);
@@ -972,7 +972,7 @@ SEASTAR_TEST_CASE(test_user_function) {
         std::vector<sstring> drop_args{"my_func2", "bigint"};
         BOOST_REQUIRE_EQUAL(change->arguments, drop_args);
 
-        assert_that(e.execute_cql("SELECT * FROM system_schema.functions;").get0())
+        assert_that(e.execute_cql("SELECT * FROM system_schema.functions;").get())
             .is_rows()
             .with_size(3);
     });
@@ -1014,10 +1014,10 @@ SEASTAR_TEST_CASE(test_user_function_mixups) {
 SEASTAR_TEST_CASE(test_user_function_errors) {
     return with_udf_enabled([] (cql_test_env& e) {
         e.execute_cql("CREATE FUNCTION my_func(a int, b float) RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE Lua AS 'return 2 * a';").get();
-        auto msg = e.execute_cql("CREATE FUNCTION IF NOT EXISTS my_func(a int, b float) RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE Lua AS 'return 2 * a';").get0();
+        auto msg = e.execute_cql("CREATE FUNCTION IF NOT EXISTS my_func(a int, b float) RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE Lua AS 'return 2 * a';").get();
         BOOST_REQUIRE(dynamic_pointer_cast<cql_transport::messages::result_message::void_message>(msg));
 
-        msg = e.execute_cql("CREATE OR REPLACE FUNCTION my_func(a int, b float) RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE Lua AS 'return 2 * a';").get0();
+        msg = e.execute_cql("CREATE OR REPLACE FUNCTION my_func(a int, b float) RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE Lua AS 'return 2 * a';").get();
         auto change = get_schema_change(msg);
         using sc = cql_transport::event::schema_change;
         BOOST_REQUIRE(change->change == sc::change_type::CREATED);
@@ -1028,7 +1028,7 @@ SEASTAR_TEST_CASE(test_user_function_errors) {
         BOOST_REQUIRE_EXCEPTION(e.execute_cql("CREATE FUNCTION my_func(a int, b float) RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE Lua AS 'return 2 * a';").get(),
                                 ire, message_equals("The function 'ks.my_func : (int, float) -> int' already exists"));
 
-        msg = e.execute_cql("DROP FUNCTION IF EXISTS no_such_func(int);").get0();
+        msg = e.execute_cql("DROP FUNCTION IF EXISTS no_such_func(int);").get();
         BOOST_REQUIRE(dynamic_pointer_cast<cql_transport::messages::result_message::void_message>(msg));
 
         BOOST_REQUIRE_EXCEPTION(e.execute_cql("DROP FUNCTION no_such_func(int);").get(), ire, message_equals("User function ks.no_such_func(int) doesn't exist"));
@@ -1054,7 +1054,7 @@ SEASTAR_TEST_CASE(test_user_function_invalid_type) {
         BOOST_REQUIRE_EXCEPTION(fut.get(), ire, message_equals("User defined argument and return types should not be frozen"));
 
         e.execute_cql("CREATE FUNCTION my_func(val my_type) RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE Lua AS 'return 2 * val';").get();
-        auto msg = e.execute_cql("SELECT * FROM system_schema.functions;").get0();
+        auto msg = e.execute_cql("SELECT * FROM system_schema.functions;").get();
         auto str_list = list_type_impl::get_instance(utf8_type, false);
         assert_that(msg).is_rows()
             .with_rows({
@@ -1081,7 +1081,7 @@ SEASTAR_TEST_CASE(test_user_function_filtering) {
                 RETURNS NULL ON NULL INPUT \
                 RETURNS int \
                 LANGUAGE Lua \
-                AS 'return 2 * val';").get0();
+                AS 'return 2 * val';").get();
         // Expect error until UDFs can be used for filtering.
         // See #5607
         BOOST_REQUIRE_EXCEPTION(e.execute_cql("SELECT val FROM my_table WHERE my_func(val) > 10;").get(),
@@ -1092,7 +1092,7 @@ SEASTAR_TEST_CASE(test_user_function_filtering) {
                 RETURNS NULL ON NULL INPUT \
                 RETURNS bigint \
                 LANGUAGE Lua \
-                AS 'return now - 60000 * ago';").get0();
+                AS 'return now - 60000 * ago';").get();
         set_abort_on_internal_error(false);
         auto reset_on_internal_abort = defer([] {
             set_abort_on_internal_error(true);

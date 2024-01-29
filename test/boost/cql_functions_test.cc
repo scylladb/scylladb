@@ -128,7 +128,7 @@ struct aggregate_function_test {
         return tbl_name;
     }
     void call_function_and_expect(const char* fname, data_type type, data_value expected) {
-        auto msg = _e.execute_cql(format("select {}(value) from {}", fname, table_name())).get0();
+        auto msg = _e.execute_cql(format("select {}(value) from {}", fname, table_name())).get();
         assert_that(msg).is_rows()
             .with_size(1)
             .with_column_types({type})
@@ -150,7 +150,7 @@ public:
                     .build();
         }).get();
 
-        auto prepared = _e.prepare(format("insert into {} (pk, ck, value) values ('key1', ?, ?)", cf_name)).get0();
+        auto prepared = _e.prepare(format("insert into {} (pk, ck, value) values ('key1', ?, ?)", cf_name)).get();
         for (int i = 0; i < (int)_sorted_values.size(); i++) {
             const auto& value = _sorted_values[i];
             BOOST_ASSERT(&*value.type() == &*_column_type);

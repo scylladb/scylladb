@@ -563,7 +563,7 @@ protected:
 
     void finish_new_sstable(compaction_writer* writer) {
         writer->writer.consume_end_of_stream();
-        writer->sst->open_data().get0();
+        writer->sst->open_data().get();
         _end_size += writer->sst->bytes_on_disk();
         _new_unused_sstables.push_back(writer->sst);
         _new_partial_sstables.erase(writer->sst);
@@ -619,7 +619,7 @@ protected:
     void stop_gc_compaction_writer(compaction_writer* c_writer) {
         c_writer->writer.consume_end_of_stream();
         auto sst = c_writer->sst;
-        sst->open_data().get0();
+        sst->open_data().get();
         _unused_garbage_collected_sstables.push_back(std::move(sst));
     }
 
@@ -1147,7 +1147,7 @@ private:
         if (!enable_garbage_collected_sstable_writer()) {
             return;
         }
-        auto permit = seastar::get_units(_replacer_lock, 1).get0();
+        auto permit = seastar::get_units(_replacer_lock, 1).get();
         // Replace exhausted sstable(s), if any, by new one(s) in the column family.
         auto not_exhausted = [s = _schema, &dk = sst->get_last_decorated_key()] (shared_sstable& sst) {
             return sst->get_last_decorated_key().tri_compare(*s, dk) > 0;

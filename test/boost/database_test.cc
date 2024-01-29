@@ -429,8 +429,8 @@ SEASTAR_THREAD_TEST_CASE(test_distributed_loader_with_pending_delete) {
     sstring pending_delete_dir = sst_dir + "/" + sstables::pending_delete_dir;
 
     auto write_file = [] (const sstring& file_name, const sstring& text) {
-        auto f = open_file_dma(file_name, open_flags::wo | open_flags::create | open_flags::truncate).get0();
-        auto os = make_file_output_stream(f, file_output_stream_options{}).get0();
+        auto f = open_file_dma(file_name, open_flags::wo | open_flags::create | open_flags::truncate).get();
+        auto os = make_file_output_stream(f, file_output_stream_options{}).get();
         os.write(text).get();
         os.flush().get();
         os.close().get();
@@ -632,7 +632,7 @@ SEASTAR_TEST_CASE(snapshot_list_okay) {
         auto& cf = e.local_db().find_column_family("ks", "cf");
         take_snapshot(e).get();
 
-        auto details = cf.get_snapshot_details().get0();
+        auto details = cf.get_snapshot_details().get();
         BOOST_REQUIRE_EQUAL(details.size(), 1);
 
         auto sd = details["test"];
@@ -644,7 +644,7 @@ SEASTAR_TEST_CASE(snapshot_list_okay) {
             return make_ready_future<>();
         }).get();
 
-        auto sd_post_deletion = cf.get_snapshot_details().get0().at("test");
+        auto sd_post_deletion = cf.get_snapshot_details().get().at("test");
 
         BOOST_REQUIRE_EQUAL(sd_post_deletion.total, sd_post_deletion.live);
         BOOST_REQUIRE_EQUAL(sd.total, sd_post_deletion.live);
@@ -657,7 +657,7 @@ SEASTAR_TEST_CASE(snapshot_list_contains_dropped_tables) {
     return do_with_some_data({"cf1", "cf2", "cf3", "cf4"}, [] (cql_test_env& e) {
         e.execute_cql("DROP TABLE ks.cf1;").get();
 
-        auto details = e.local_db().get_snapshot_details().get0();
+        auto details = e.local_db().get_snapshot_details().get();
         BOOST_REQUIRE_EQUAL(details.size(), 1);
 
         const auto& sd = details.front().details;
@@ -667,12 +667,12 @@ SEASTAR_TEST_CASE(snapshot_list_contains_dropped_tables) {
         take_snapshot(e, "ks", "cf2", "test2").get();
         take_snapshot(e, "ks", "cf3", "test3").get();
 
-        details = e.local_db().get_snapshot_details().get0();
+        details = e.local_db().get_snapshot_details().get();
         BOOST_REQUIRE_EQUAL(details.size(), 3);
 
         e.execute_cql("DROP TABLE ks.cf4;").get();
 
-        details = e.local_db().get_snapshot_details().get0();
+        details = e.local_db().get_snapshot_details().get();
         BOOST_REQUIRE_EQUAL(details.size(), 4);
 
         for (const auto& result : details) {
@@ -694,7 +694,7 @@ SEASTAR_TEST_CASE(snapshot_list_contains_dropped_tables) {
 SEASTAR_TEST_CASE(snapshot_list_inexistent) {
     return do_with_some_data({"cf"}, [] (cql_test_env& e) {
         auto& cf = e.local_db().find_column_family("ks", "cf");
-        auto details = cf.get_snapshot_details().get0();
+        auto details = cf.get_snapshot_details().get();
         BOOST_REQUIRE_EQUAL(details.size(), 0);
         return make_ready_future<>();
     });
@@ -811,14 +811,14 @@ SEASTAR_TEST_CASE(test_snapshot_ctl_details) {
         auto& cf = e.local_db().find_column_family("ks", "cf");
         take_snapshot(e).get();
 
-        auto details = cf.get_snapshot_details().get0();
+        auto details = cf.get_snapshot_details().get();
         BOOST_REQUIRE_EQUAL(details.size(), 1);
 
         auto sd = details["test"];
         BOOST_REQUIRE_EQUAL(sd.live, 0);
         BOOST_REQUIRE_GT(sd.total, 0);
 
-        auto sc_details = sc.local().get_snapshot_details().get0();
+        auto sc_details = sc.local().get_snapshot_details().get();
         BOOST_REQUIRE_EQUAL(sc_details.size(), 1);
 
         auto sc_sd_vec = sc_details["test"];
@@ -834,12 +834,12 @@ SEASTAR_TEST_CASE(test_snapshot_ctl_details) {
             return make_ready_future<>();
         }).get();
 
-        auto sd_post_deletion = cf.get_snapshot_details().get0().at("test");
+        auto sd_post_deletion = cf.get_snapshot_details().get().at("test");
 
         BOOST_REQUIRE_EQUAL(sd_post_deletion.total, sd_post_deletion.live);
         BOOST_REQUIRE_EQUAL(sd.total, sd_post_deletion.live);
 
-        sc_details = sc.local().get_snapshot_details().get0();
+        sc_details = sc.local().get_snapshot_details().get();
         auto sc_sd_post_deletion_vec = sc_details["test"];
         BOOST_REQUIRE_EQUAL(sc_sd_post_deletion_vec.size(), 1);
         const auto &sc_sd_post_deletion = sc_sd_post_deletion_vec[0];
@@ -861,14 +861,14 @@ SEASTAR_TEST_CASE(test_snapshot_ctl_true_snapshots_size) {
         auto& cf = e.local_db().find_column_family("ks", "cf");
         take_snapshot(e).get();
 
-        auto details = cf.get_snapshot_details().get0();
+        auto details = cf.get_snapshot_details().get();
         BOOST_REQUIRE_EQUAL(details.size(), 1);
 
         auto sd = details["test"];
         BOOST_REQUIRE_EQUAL(sd.live, 0);
         BOOST_REQUIRE_GT(sd.total, 0);
 
-        auto sc_live_size = sc.local().true_snapshots_size().get0();
+        auto sc_live_size = sc.local().true_snapshots_size().get();
         BOOST_REQUIRE_EQUAL(sc_live_size, sd.live);
 
         lister::scan_dir(fs::path(cf.dir()), lister::dir_entry_types::of<directory_entry_type::regular>(), [] (fs::path parent_dir, directory_entry de) {
@@ -876,12 +876,12 @@ SEASTAR_TEST_CASE(test_snapshot_ctl_true_snapshots_size) {
             return make_ready_future<>();
         }).get();
 
-        auto sd_post_deletion = cf.get_snapshot_details().get0().at("test");
+        auto sd_post_deletion = cf.get_snapshot_details().get().at("test");
 
         BOOST_REQUIRE_EQUAL(sd_post_deletion.total, sd_post_deletion.live);
         BOOST_REQUIRE_EQUAL(sd.total, sd_post_deletion.live);
 
-        sc_live_size = sc.local().true_snapshots_size().get0();
+        sc_live_size = sc.local().true_snapshots_size().get();
         BOOST_REQUIRE_EQUAL(sc_live_size, sd_post_deletion.live);
 
         return make_ready_future<>();
@@ -894,7 +894,7 @@ SEASTAR_TEST_CASE(toppartitions_cross_shard_schema_ptr) {
         e.execute_cql("CREATE TABLE ks.tab (id int PRIMARY KEY)").get();
         db::toppartitions_query tq(e.db(), {{"ks", "tab"}}, {}, 1s, 100, 100);
         tq.scatter().get();
-        auto q = e.prepare("INSERT INTO ks.tab(id) VALUES(?)").get0();
+        auto q = e.prepare("INSERT INTO ks.tab(id) VALUES(?)").get();
         // Generate many values to ensure crossing shards
         for (auto i = 0; i != 100; ++i) {
             e.execute_prepared(q, {cql3::raw_value::make_value(int32_type->decompose(i))}).get();
@@ -907,7 +907,7 @@ SEASTAR_TEST_CASE(toppartitions_cross_shard_schema_ptr) {
 SEASTAR_THREAD_TEST_CASE(read_max_size) {
     do_with_cql_env_and_compaction_groups([] (cql_test_env& e) {
         e.execute_cql("CREATE TABLE test (pk text, ck int, v text, PRIMARY KEY (pk, ck));").get();
-        auto id = e.prepare("INSERT INTO test (pk, ck, v) VALUES (?, ?, ?);").get0();
+        auto id = e.prepare("INSERT INTO test (pk, ck, v) VALUES (?, ?, ?);").get();
 
         auto& db = e.local_db();
         auto& tab = db.find_column_family("ks", "test");
@@ -963,7 +963,7 @@ SEASTAR_THREAD_TEST_CASE(read_max_size) {
                     }
                     query::read_command cmd(s->id(), s->version(), slice, query::max_result_size(max_size), query::tombstone_limit::max);
                     try {
-                        auto size = query_method(s, cmd).get0();
+                        auto size = query_method(s, cmd).get();
                         // Just to ensure we are not interpreting empty results as success.
                         BOOST_REQUIRE(size != 0);
                         if (should_throw) {
@@ -996,7 +996,7 @@ SEASTAR_THREAD_TEST_CASE(unpaged_mutation_read_global_limit) {
     cfg.dbcfg->available_memory = 2 * 1024 * 1024;
     do_with_cql_env_and_compaction_groups([] (cql_test_env& e) {
         e.execute_cql("CREATE TABLE test (pk text, ck int, v text, PRIMARY KEY (pk, ck));").get();
-        auto id = e.prepare("INSERT INTO test (pk, ck, v) VALUES (?, ?, ?);").get0();
+        auto id = e.prepare("INSERT INTO test (pk, ck, v) VALUES (?, ?, ?);").get();
 
         auto& db = e.local_db();
         auto& tab = db.find_column_family("ks", "test");
@@ -1040,7 +1040,7 @@ SEASTAR_THREAD_TEST_CASE(unpaged_mutation_read_global_limit) {
             slice.options.remove<query::partition_slice::option::allow_short_read>();
             query::read_command cmd(s->id(), s->version(), slice, query::max_result_size(max_size), query::tombstone_limit::max);
             try {
-                auto size = query_method(s, cmd).get0();
+                auto size = query_method(s, cmd).get();
                 // Just to ensure we are not interpreting empty results as success.
                 BOOST_REQUIRE(size != 0);
                 BOOST_FAIL("Expected exception, but none was thrown.");

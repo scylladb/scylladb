@@ -66,7 +66,7 @@ shared_ptr<function> make_enable_injection_function() {
         const bool one_shot = ascii_type->get_string(parameters[1].value()) == "true";
         smp::invoke_on_all([injection_name, one_shot] () mutable {
             utils::get_local_injector().enable(injection_name, one_shot);
-        }).get0();
+        }).get();
         return std::nullopt;
     });
 }
@@ -77,7 +77,7 @@ shared_ptr<function> make_disable_injection_function() {
         sstring injection_name = ascii_type->get_string(parameters[0].value());
         smp::invoke_on_all([injection_name] () mutable {
             utils::get_local_injector().disable(injection_name);
-        }).get0();
+        }).get();
         return std::nullopt;
     });
 }
@@ -99,7 +99,7 @@ shared_ptr<function> make_enabled_injections_function() {
             }).then([list_type_inst](std::vector<data_value> const& active_injections) {
                 auto list_val = make_list_value(list_type_inst, active_injections);
                 return list_type_inst->decompose(list_val);
-            }).get0();
+            }).get();
         });
 }
 

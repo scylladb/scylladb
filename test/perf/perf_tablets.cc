@@ -68,7 +68,7 @@ static future<> test_basic_operations(app_template& app) {
         std::vector<table_id> ids;
         ids.resize(nr_tables);
         for (int i = 0; i < nr_tables; ++i) {
-            ids[i] = add_table(e).get0();
+            ids[i] = add_table(e).get();
         }
 
         testlog.info("Generating tablet metadata");
@@ -116,7 +116,7 @@ static future<> test_basic_operations(app_template& app) {
         testlog.info("Saved in {:.6f} [ms]", time_to_save.count() * 1000);
 
         auto time_to_read = duration_in_seconds([&] {
-            tm2 = read_tablet_metadata(e.local_qp()).get0();
+            tm2 = read_tablet_metadata(e.local_qp()).get();
         });
         assert(tm == tm2);
 
@@ -124,7 +124,7 @@ static future<> test_basic_operations(app_template& app) {
 
         std::vector<canonical_mutation> muts;
         auto time_to_read_muts = duration_in_seconds([&] {
-            muts = replica::read_tablet_mutations(e.local_qp().proxy().get_db()).get0();
+            muts = replica::read_tablet_mutations(e.local_qp().proxy().get_db()).get();
         });
 
         testlog.info("Read mutations in {:.6f} [ms]", time_to_read_muts.count() * 1000);

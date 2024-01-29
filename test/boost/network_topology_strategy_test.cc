@@ -161,7 +161,7 @@ void full_ring_check(const std::vector<ring_point>& ring_points,
     const auto& topo = tm.get_topology();
     strategy_sanity_check(ars_ptr, tmptr, options);
 
-    auto erm = calculate_effective_replication_map(ars_ptr, tmptr).get0();
+    auto erm = calculate_effective_replication_map(ars_ptr, tmptr).get();
 
     for (auto& rp : ring_points) {
         double cur_point1 = rp.point - 0.5;
@@ -447,7 +447,7 @@ SEASTAR_THREAD_TEST_CASE(NetworkTopologyStrategy_tablets_test) {
         .with_column("v", utf8_type)
         .build();
 
-    auto tmap = tab_awr_ptr->allocate_tablets_for_new_table(s, stm.get(), 1).get0();
+    auto tmap = tab_awr_ptr->allocate_tablets_for_new_table(s, stm.get(), 1).get();
     full_ring_check(tmap, options323, ars_ptr, stm.get());
 
     ///////////////
@@ -464,7 +464,7 @@ SEASTAR_THREAD_TEST_CASE(NetworkTopologyStrategy_tablets_test) {
     tab_awr_ptr = ars_ptr->maybe_as_tablet_aware();
     BOOST_REQUIRE(tab_awr_ptr);
 
-    tmap = tab_awr_ptr->allocate_tablets_for_new_table(s, stm.get(), 1).get0();
+    tmap = tab_awr_ptr->allocate_tablets_for_new_table(s, stm.get(), 1).get();
     full_ring_check(tmap, options320, ars_ptr, stm.get());
 
     // Test the case of not enough nodes to meet RF in DC 102
@@ -480,7 +480,7 @@ SEASTAR_THREAD_TEST_CASE(NetworkTopologyStrategy_tablets_test) {
     tab_awr_ptr = ars_ptr->maybe_as_tablet_aware();
     BOOST_REQUIRE(tab_awr_ptr);
 
-    tmap = tab_awr_ptr->allocate_tablets_for_new_table(s, stm.get(), 1).get0();
+    tmap = tab_awr_ptr->allocate_tablets_for_new_table(s, stm.get(), 1).get();
     full_ring_check(tmap, options324, ars_ptr, stm.get());
 }
 
@@ -657,7 +657,7 @@ static void test_equivalence(const shared_token_metadata& stm, const locator::to
     for (size_t i = 0; i < 1000; ++i) {
         auto token = dht::token::get_random_token();
         auto expected = calculate_natural_endpoints(token, tm, topo, datacenters);
-        auto actual = nts.calculate_natural_endpoints(token, *stm.get()).get0();
+        auto actual = nts.calculate_natural_endpoints(token, *stm.get()).get();
 
         // Because the old algorithm does not put the nodes in the correct order in the case where more replicas
         // are required than there are racks in a dc, we accept different order as long as the primary

@@ -74,10 +74,10 @@ future<> create_role_statement::check_access(query_processor& qp, const service:
     state.ensure_not_anonymous();
 
     return async([this, &state] {
-        state.ensure_has_permission({auth::permission::CREATE, auth::root_role_resource()}).get0();
+        state.ensure_has_permission({auth::permission::CREATE, auth::root_role_resource()}).get();
 
         if (*_options.is_superuser) {
-            if (!auth::has_superuser(*state.get_auth_service(), *state.user()).get0()) {
+            if (!auth::has_superuser(*state.get_auth_service(), *state.user()).get()) {
                 throw exceptions::unauthorized_exception("Only superusers can create a role with superuser status.");
             }
         }
@@ -132,7 +132,7 @@ future<> alter_role_statement::check_access(query_processor& qp, const service::
         auto& as = *state.get_auth_service();
 
         const auto& user = *state.user();
-        const bool user_is_superuser = auth::has_superuser(as, user).get0();
+        const bool user_is_superuser = auth::has_superuser(as, user).get();
 
         if (_options.is_superuser) {
             if (!user_is_superuser) {
@@ -140,7 +140,7 @@ future<> alter_role_statement::check_access(query_processor& qp, const service::
             }
 
             try {
-                if (auth::has_role(as, user, _role).get0()) {
+                if (auth::has_role(as, user, _role).get()) {
                     throw exceptions::unauthorized_exception(
                         "You aren't allowed to alter your own superuser status or that of a role granted to you.");
                 }
@@ -150,7 +150,7 @@ future<> alter_role_statement::check_access(query_processor& qp, const service::
         }
 
         if (*user.name != _role) {
-            state.ensure_has_permission({auth::permission::ALTER, auth::make_role_resource(_role)}).get0();
+            state.ensure_has_permission({auth::permission::ALTER, auth::make_role_resource(_role)}).get();
         } else {
             const auto alterable_options = state.get_auth_service()->underlying_authenticator().alterable_options();
 
@@ -212,15 +212,15 @@ future<> drop_role_statement::check_access(query_processor& qp, const service::c
     state.ensure_not_anonymous();
 
     return async([this, &state] {
-        state.ensure_has_permission({auth::permission::DROP, auth::make_role_resource(_role)}).get0();
+        state.ensure_has_permission({auth::permission::DROP, auth::make_role_resource(_role)}).get();
 
         auto& as = *state.get_auth_service();
 
-        const bool user_is_superuser = auth::has_superuser(as, *state.user()).get0();
+        const bool user_is_superuser = auth::has_superuser(as, *state.user()).get();
 
         const bool role_has_superuser = [this, &as] {
             try {
-                return as.has_superuser(_role).get0();
+                return as.has_superuser(_role).get();
             } catch (const auth::nonexistant_role&) {
                 // Handled as part of `execute`.
                 return false;
@@ -261,7 +261,7 @@ future<> list_roles_statement::check_access(query_processor& qp, const service::
     state.ensure_not_anonymous();
 
     return async([this, &state] {
-        if (state.check_has_permission({auth::permission::DESCRIBE, auth::root_role_resource()}).get0()) {
+        if (state.check_has_permission({auth::permission::DESCRIBE, auth::root_role_resource()}).get()) {
             return;
         }
 
@@ -271,7 +271,7 @@ future<> list_roles_statement::check_access(query_processor& qp, const service::
 
         const auto user_has_grantee = [this, &state] {
             try {
-                return auth::has_role(*state.get_auth_service(), *state.user(), *_grantee).get0();
+                return auth::has_role(*state.get_auth_service(), *state.user(), *_grantee).get();
             } catch (const auth::nonexistant_role& e) {
                 throw exceptions::invalid_request_exception(e.what());
             }

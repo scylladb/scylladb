@@ -246,7 +246,7 @@ public:
 
     void Flush() {
         if (f.failed()) {
-            f.get0();
+            f.get();
         }
         if (_pos == 0) {
             return;

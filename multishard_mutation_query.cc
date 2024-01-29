@@ -726,7 +726,7 @@ future<page_consume_result<ResultBuilder>> read_page(
                 cmd.partition_limit, cmd.timestamp));
     if (!f.failed()) {
         // no exceptions are thrown in this block
-        auto result = std::move(f).get0();
+        auto result = std::move(f).get();
         const auto& cstats = compaction_state->stats();
         tracing::trace(trace_state, "Page stats: {} partition(s), {} static row(s) ({} live, {} dead), {} clustering row(s) ({} live, {} dead) and {} range tombstone(s)",
                 cstats.partitions,
@@ -775,7 +775,7 @@ future<typename ResultBuilder::result_type> do_query(
     if (f.failed()) {
         co_return coroutine::exception(f.get_exception());
     }
-    co_return f.get0();
+    co_return f.get();
 }
 
 template <typename ResultBuilder>

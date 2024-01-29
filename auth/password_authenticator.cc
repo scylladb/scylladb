@@ -145,9 +145,9 @@ future<> password_authenticator::start() {
 
          _stopped = do_after_system_ready(_as, [this] {
              return async([this] {
-                 _migration_manager.wait_for_schema_agreement(_qp.db().real_database(), db::timeout_clock::time_point::max(), &_as).get0();
+                 _migration_manager.wait_for_schema_agreement(_qp.db().real_database(), db::timeout_clock::time_point::max(), &_as).get();
 
-                 if (any_nondefault_role_row_satisfies(_qp, &has_salted_hash, _superuser).get0()) {
+                 if (any_nondefault_role_row_satisfies(_qp, &has_salted_hash, _superuser).get()) {
                      if (legacy_metadata_exists()) {
                          plogger.warn("Ignoring legacy authentication metadata since nondefault data already exist.");
                      }
@@ -156,11 +156,11 @@ future<> password_authenticator::start() {
                  }
 
                  if (legacy_metadata_exists()) {
-                     migrate_legacy_metadata().get0();
+                     migrate_legacy_metadata().get();
                      return;
                  }
 
-                 create_default_if_missing().get0();
+                 create_default_if_missing().get();
              });
          });
 
@@ -229,7 +229,7 @@ future<authenticated_user> password_authenticator::authenticate(
                 cql3::query_processor::cache_internal::yes);
     }).then_wrapped([=](future<::shared_ptr<cql3::untyped_result_set>> f) {
         try {
-            auto res = f.get0();
+            auto res = f.get();
             auto salted_hash = std::optional<sstring>();
             if (!res->empty()) {
                 salted_hash = res->one().get_opt<sstring>(SALTED_HASH);

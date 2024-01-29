@@ -18,17 +18,17 @@ SEASTAR_THREAD_TEST_CASE(test_check_abort_on_client_api) {
             0,
             0,
             0, false, tick_delay, rpc_config{});
-    cluster.start_all().get0();
+    cluster.start_all().get();
 
-    cluster.stop_server(0, "test crash").get0();
+    cluster.stop_server(0, "test crash").get();
 
     auto check_error = [](const raft::stopped_error& e) {
         return sstring(e.what()) == sstring("Raft instance is stopped, reason: \"test crash\"");
     };
-    BOOST_CHECK_EXCEPTION(cluster.add_entries(1, 0).get0(), raft::stopped_error, check_error);
-    BOOST_CHECK_EXCEPTION(cluster.get_server(0).modify_config({}, {to_raft_id(0)}, nullptr).get0(), raft::stopped_error, check_error);
-    BOOST_CHECK_EXCEPTION(cluster.get_server(0).read_barrier(nullptr).get0(), raft::stopped_error, check_error);
-    BOOST_CHECK_EXCEPTION(cluster.get_server(0).set_configuration({}, nullptr).get0(), raft::stopped_error, check_error);
+    BOOST_CHECK_EXCEPTION(cluster.add_entries(1, 0).get(), raft::stopped_error, check_error);
+    BOOST_CHECK_EXCEPTION(cluster.get_server(0).modify_config({}, {to_raft_id(0)}, nullptr).get(), raft::stopped_error, check_error);
+    BOOST_CHECK_EXCEPTION(cluster.get_server(0).read_barrier(nullptr).get(), raft::stopped_error, check_error);
+    BOOST_CHECK_EXCEPTION(cluster.get_server(0).set_configuration({}, nullptr).get(), raft::stopped_error, check_error);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_release_memory_if_add_entry_throws) {
@@ -52,18 +52,18 @@ SEASTAR_THREAD_TEST_CASE(test_release_memory_if_add_entry_throws) {
             0,
             0,
             0, false, tick_delay, rpc_config{});
-    cluster.start_all().get0();
+    cluster.start_all().get();
     auto stop = defer([&cluster] { cluster.stop_all().get(); });
 
     utils::get_local_injector().enable("fsm::add_entry/test-failure", true);
     auto check_error = [](const std::runtime_error& e) {
         return sstring(e.what()) == sstring("fsm::add_entry/test-failure");
     };
-    BOOST_CHECK_EXCEPTION(cluster.add_entries(1, 0).get0(), std::runtime_error, check_error);
+    BOOST_CHECK_EXCEPTION(cluster.add_entries(1, 0).get(), std::runtime_error, check_error);
 
     // we would block forever if the memory wasn't released
     // when the exception was thrown from the first add_entry
-    cluster.add_entries(1, 0).get0();
+    cluster.add_entries(1, 0).get();
     cluster.read(read_value{0, 1}).get();
 #endif
 }

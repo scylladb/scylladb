@@ -147,7 +147,7 @@ future<> view_update_generator::start() {
                     vug_logger.info("Processing {}.{}: {} in {} sstables",
                                     s->ks_name(), s->cf_name(), utils::pretty_printed_data_size(input_size), sstables.size());
 
-                    auto permit = _db.obtain_reader_permit(*t, "view_update_generator", db::no_timeout, {}).get0();
+                    auto permit = _db.obtain_reader_permit(*t, "view_update_generator", db::no_timeout, {}).get();
                     auto ms = mutation_source([this, ssts] (
                                 schema_ptr s,
                                 reader_permit permit,

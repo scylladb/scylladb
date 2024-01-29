@@ -490,7 +490,7 @@ private:
             auto notify_set = init_configurables
                 ? configurable::init_all(*cfg, init_configurables->extensions, service_set(
                     _db, _ss, _mm, _proxy, _feature_service, _ms, _qp, _batchlog_manager
-                )).get0()
+                )).get()
                 : configurable::notify_set{}
                 ;
 
@@ -597,7 +597,7 @@ private:
             db::view::node_update_backlog b(smp::count, 10ms);
             scheduling_group_key_config sg_conf =
                     make_scheduling_group_key_config<service::storage_proxy_stats::stats>();
-            _proxy.start(std::ref(_db), spcfg, std::ref(b), scheduling_group_key_create(sg_conf).get0(), std::ref(_feature_service), std::ref(_token_metadata), std::ref(_erm_factory)).get();
+            _proxy.start(std::ref(_db), spcfg, std::ref(b), scheduling_group_key_create(sg_conf).get(), std::ref(_feature_service), std::ref(_token_metadata), std::ref(_erm_factory)).get();
             auto stop_proxy = defer([this] { _proxy.stop().get(); });
 
             _cql_config.start(cql3::cql_config::default_tag{}).get();
@@ -638,7 +638,7 @@ private:
 
             auto host_id = cfg_in.host_id;
             if (!host_id) {
-                auto linfo = _sys_ks.local().load_local_info().get0();
+                auto linfo = _sys_ks.local().load_local_info().get();
                 if (!linfo.host_id) {
                     linfo.host_id = locator::host_id::create_random_id();
                 }
@@ -961,7 +961,7 @@ private:
                         _auth_service.local(),
                         testing_superuser,
                         config,
-                        auth::authentication_options()).get0();
+                        auth::authentication_options()).get();
             } catch (const auth::role_already_exists&) {
                 // The default user may already exist if this `cql_test_env` is starting with previously populated data.
             }

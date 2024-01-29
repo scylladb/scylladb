@@ -59,7 +59,7 @@ private:
     static auto call_helper(Func&& func, future<Arg> f) {
         using futurator = futurize<std::result_of_t<Func(Arg&&)>>;
         try {
-            return futurator::invoke(std::forward<Func>(func), f.get0());
+            return futurator::invoke(std::forward<Func>(func), f.get());
         } catch (...) {
             return futurator::make_exception_future(std::current_exception());
         }

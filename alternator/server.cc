@@ -117,7 +117,7 @@ public:
                  }
                  return make_ready_future<std::unique_ptr<reply>>(std::move(rep));
              }
-             auto res = resf.get0();
+             auto res = resf.get();
              std::visit(overloaded_functor {
                  [&] (const json::json_return_type& json_return_value) {
                      slogger.trace("api_handler success case");
@@ -574,7 +574,7 @@ future<> server::init(net::inet_address addr, std::optional<uint16_t> port, std:
                 } else {
                     slogger.info("Reloaded {}", files);
                 }
-            }).get0();
+            }).get();
             _https_server.listen(socket_address{addr, *https_port}, std::move(server_creds)).get();
             _enabled_servers.push_back(std::ref(_https_server));
         }

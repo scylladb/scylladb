@@ -92,7 +92,7 @@ SEASTAR_TEST_CASE(test_multishard_writer) {
                           });
                         });
                     }
-                ).get0();
+                ).get();
                 BOOST_REQUIRE_EQUAL(partitions_received, partition_nr);
                 BOOST_REQUIRE_EQUAL(shards_after, shards_before);
             }
@@ -162,7 +162,7 @@ SEASTAR_TEST_CASE(test_multishard_writer_producer_aborts) {
                           });
                         });
                     }
-                ).get0();
+                ).get();
             } catch (...) {
                 // The distribute_reader_and_consume_on_shards is expected to fail and not block forever
             }
@@ -369,7 +369,7 @@ SEASTAR_THREAD_TEST_CASE(test_timestamp_based_splitting_mutation_writer) {
         return underlying(engine, ts_dest, min_timestamp);
     };
 
-    auto muts = tests::generate_random_mutations(random_schema, ts_gen).get0();
+    auto muts = tests::generate_random_mutations(random_schema, ts_gen).get();
 
     auto classify_fn = [] (api::timestamp_type ts) {
         return int64_t(ts % 2);
@@ -403,7 +403,7 @@ static void assert_that_segregator_produces_correct_data(const bucket_map_t& buc
     }
 
     std::vector<mutation> combined_mutations;
-    while (auto m = read_mutation_from_flat_mutation_reader(reader).get0()) {
+    while (auto m = read_mutation_from_flat_mutation_reader(reader).get()) {
         m->partition().compact_for_compaction(*random_schema.schema(), always_gc, m->decorated_key(), now, tombstone_gc_state(nullptr));
         combined_mutations.emplace_back(std::move(*m));
     }
@@ -440,7 +440,7 @@ SEASTAR_THREAD_TEST_CASE(test_timestamp_based_splitting_mutation_writer_abort) {
         return underlying(engine, ts_dest, min_timestamp);
     };
 
-    auto muts = tests::generate_random_mutations(random_schema, ts_gen).get0();
+    auto muts = tests::generate_random_mutations(random_schema, ts_gen).get();
 
     auto classify_fn = [] (api::timestamp_type ts) {
         return int64_t(ts % 2);
@@ -563,7 +563,7 @@ SEASTAR_THREAD_TEST_CASE(test_token_group_based_splitting_mutation_writer) {
 
     size_t partition_count = many_partitions();
 
-    auto muts = tests::generate_random_mutations(random_schema, partition_count).get0();
+    auto muts = tests::generate_random_mutations(random_schema, partition_count).get();
 
     auto classify_fn = [] (dht::token t) -> mutation_writer::token_group_id {
         return dht::compaction_group_of(1, t);

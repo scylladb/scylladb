@@ -110,7 +110,7 @@ SEASTAR_TEST_CASE(test_like_operator_bind_marker) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         cquery_nofail(e, "create table t (s text primary key, )");
         cquery_nofail(e, "insert into t (s) values ('abc')");
-        auto stmt = e.prepare("select s from t where s like ? allow filtering").get0();
+        auto stmt = e.prepare("select s from t where s like ? allow filtering").get();
         require_rows(e, stmt, {cql3::raw_value::make_value(T("_b_"))}, {{T("abc")}});
         require_rows(e, stmt, {cql3::raw_value::make_value(T("%g"))}, {});
         require_rows(e, stmt, {cql3::raw_value::make_value(T("%c"))}, {{T("abc")}});

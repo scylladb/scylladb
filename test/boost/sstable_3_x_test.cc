@@ -2694,7 +2694,7 @@ SEASTAR_TEST_CASE(test_uncompressed_simple_load) {
 SEASTAR_TEST_CASE(test_uncompressed_simple_read_index) {
   return test_env::do_with_async([] (test_env& env) {
     sstable_assertions sst(env, UNCOMPRESSED_SIMPLE_SCHEMA, UNCOMPRESSED_SIMPLE_PATH);
-    auto vec = sst.read_index().get0();
+    auto vec = sst.read_index().get();
     BOOST_REQUIRE_EQUAL(5, vec.size());
   });
 }
@@ -2999,7 +2999,7 @@ SEASTAR_TEST_CASE(test_uncompressed_collections_read) {
 }
 
 static sstables::shared_sstable open_sstable(test_env& env, schema_ptr schema, sstring dir, sstables::generation_type generation) {
-    return env.reusable_sst(std::move(schema), dir, generation, sstables::sstable::version_types::mc).get0();
+    return env.reusable_sst(std::move(schema), dir, generation, sstables::sstable::version_types::mc).get();
 }
 
 static std::vector<sstables::shared_sstable> open_sstables(test_env& env, schema_ptr s, sstring dir, std::vector<sstables::generation_type> generations) {
@@ -3089,7 +3089,7 @@ SEASTAR_TEST_CASE(compact_deleted_row) {
      */
     mutation_opt m = with_closeable(compacted_sstable_reader(env, s, table_name, {1, 2}), [&] (flat_mutation_reader_v2& reader) {
         return read_mutation_from_flat_mutation_reader(reader);
-    }).get0();
+    }).get();
     BOOST_REQUIRE(m);
     BOOST_REQUIRE(m->key().equal(*s, partition_key::from_singular(*s, data_value(sstring("key")))));
     BOOST_REQUIRE(!m->partition().partition_tombstone());
@@ -3161,7 +3161,7 @@ SEASTAR_TEST_CASE(compact_deleted_cell) {
      */
     mutation_opt m = with_closeable(compacted_sstable_reader(env, s, table_name, {1, 2}), [&] (flat_mutation_reader_v2& reader) {
         return read_mutation_from_flat_mutation_reader(reader);
-    }).get0();
+    }).get();
     BOOST_REQUIRE(m);
     BOOST_REQUIRE(m->key().equal(*s, partition_key::from_singular(*s, data_value(sstring("key")))));
     BOOST_REQUIRE(!m->partition().partition_tombstone());
@@ -3189,7 +3189,7 @@ static void compare_sstables(const std::filesystem::path& result_path, sstring t
                                   "ks", table_name, sstables::sstable_version_types::mc, generation_from_value(1), big, file_type);
         auto result_filename =
                 sstable::filename(result_path.string(), "ks", table_name, sst->get_version(), sst->generation(), big, file_type);
-        auto eq = tests::compare_files(orig_filename, result_filename).get0();
+        auto eq = tests::compare_files(orig_filename, result_filename).get();
         BOOST_REQUIRE(eq);
     }
 }
@@ -3278,7 +3278,7 @@ static constexpr api::timestamp_type write_timestamp = 1525385507816568;
 static constexpr gc_clock::time_point write_time_point = gc_clock::time_point{} + gc_clock::duration{1525385507};
 
 static void do_validate_stats_metadata(schema_ptr s, sstable_assertions& written_sst, sstring table_name) {
-    auto orig_sst = written_sst.get_env().reusable_sst(s, get_write_test_path(table_name), 1, sstable_version_types::mc).get0();
+    auto orig_sst = written_sst.get_env().reusable_sst(s, get_write_test_path(table_name), 1, sstable_version_types::mc).get();
 
     const auto& orig_stats = orig_sst->get_stats_metadata();
     const auto& written_stats = written_sst.get_stats_metadata();
@@ -4542,7 +4542,7 @@ static std::unique_ptr<index_reader> get_index_reader(shared_sstable sst, reader
 }
 
 shared_sstable make_test_sstable(test_env& env, schema_ptr schema, const sstring& table_name) {
-    return env.reusable_sst(schema, get_read_index_test_path(table_name), sstables::generation_type{1}).get0();
+    return env.reusable_sst(schema, get_read_index_test_path(table_name), sstables::generation_type{1}).get();
 }
 
 /*

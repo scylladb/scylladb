@@ -123,8 +123,8 @@ public:
             return make_ready_future<>();
         }
         return seastar::async([this] {
-            auto f = open_file_dma(_params->output_file, open_flags::create | open_flags::wo).get0();
-            auto os = make_file_output_stream(f, file_output_stream_options{}).get0();
+            auto f = open_file_dma(_params->output_file, open_flags::create | open_flags::wo).get();
+            auto os = make_file_output_stream(f, file_output_stream_options{}).get();
 
             {
                 const auto header = "lsa_used_memory,lsa_free_memory,non_lsa_used_memory,non_lsa_free_memory,reads_memory_consumption,reads\n";

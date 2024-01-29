@@ -442,7 +442,7 @@ void hint_sender::rewind_sent_replay_position_to(db::replay_position rp) {
 
 // runs in a seastar::async context
 bool hint_sender::send_one_file(const sstring& fname) {
-    timespec last_mod = get_last_file_modification(fname).get0();
+    timespec last_mod = get_last_file_modification(fname).get();
     gc_clock::duration secs_since_file_mod = std::chrono::seconds(last_mod.tv_sec);
     lw_shared_ptr<send_one_file_ctx> ctx_ptr = make_lw_shared<send_one_file_ctx>(_last_schema_ver_to_column_mapping);
 
@@ -514,7 +514,7 @@ bool hint_sender::send_one_file(const sstring& fname) {
 
     // If we got here we are done with the current segment and we can remove it.
     with_shared(_file_update_mutex, [&fname, this] {
-        auto p = _ep_manager.get_or_load().get0();
+        auto p = _ep_manager.get_or_load().get();
         return p->delete_segments({ fname });
     }).get();
 

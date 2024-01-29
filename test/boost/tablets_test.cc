@@ -33,7 +33,7 @@ using namespace service;
 static api::timestamp_type current_timestamp(cql_test_env& e) {
     // Mutations in system.tablets got there via group0, so in order for new
     // mutations to take effect, their timestamp should be "later" than that
-    return utils::UUID_gen::micros_timestamp(e.get_system_keyspace().local().get_last_group0_state_id().get0()) + 1;
+    return utils::UUID_gen::micros_timestamp(e.get_system_keyspace().local().get_last_group0_state_id().get()) + 1;
 }
 
 static utils::UUID next_uuid() {
@@ -46,7 +46,7 @@ static utils::UUID next_uuid() {
 static
 void verify_tablet_metadata_persistence(cql_test_env& env, const tablet_metadata& tm, api::timestamp_type& ts) {
     save_tablet_metadata(env.local_db(), tm, ts++).get();
-    auto tm2 = read_tablet_metadata(env.local_qp()).get0();
+    auto tm2 = read_tablet_metadata(env.local_qp()).get();
     BOOST_REQUIRE_EQUAL(tm, tm2);
 }
 
@@ -78,12 +78,12 @@ SEASTAR_TEST_CASE(test_tablet_metadata_persistence) {
         auto h2 = host_id(utils::UUID_gen::get_time_UUID());
         auto h3 = host_id(utils::UUID_gen::get_time_UUID());
 
-        auto table1 = add_table(e).get0();
-        auto table2 = add_table(e).get0();
+        auto table1 = add_table(e).get();
+        auto table2 = add_table(e).get();
         auto ts = current_timestamp(e);
 
         {
-            tablet_metadata tm = read_tablet_metadata(e.local_qp()).get0();
+            tablet_metadata tm = read_tablet_metadata(e.local_qp()).get();
 
             // Add table1
             {
@@ -293,7 +293,7 @@ SEASTAR_TEST_CASE(test_mutation_builder) {
         auto h2 = host_id(utils::UUID_gen::get_time_UUID());
         auto h3 = host_id(utils::UUID_gen::get_time_UUID());
 
-        auto table1 = add_table(e).get0();
+        auto table1 = add_table(e).get();
         auto ts = current_timestamp(e);
 
         tablet_metadata tm;
@@ -359,7 +359,7 @@ SEASTAR_TEST_CASE(test_mutation_builder) {
                     tablet_replica {h2, 3}
             });
 
-            auto tm_from_disk = read_tablet_metadata(e.local_qp()).get0();
+            auto tm_from_disk = read_tablet_metadata(e.local_qp()).get();
             BOOST_REQUIRE_EQUAL(expected_tmap, tm_from_disk.get_tablet_map(table1));
         }
 
@@ -397,7 +397,7 @@ SEASTAR_TEST_CASE(test_mutation_builder) {
                     tablet_replica {h2, 3}
             });
 
-            auto tm_from_disk = read_tablet_metadata(e.local_qp()).get0();
+            auto tm_from_disk = read_tablet_metadata(e.local_qp()).get();
             BOOST_REQUIRE_EQUAL(expected_tmap, tm_from_disk.get_tablet_map(table1));
         }
 
@@ -429,7 +429,7 @@ SEASTAR_TEST_CASE(test_mutation_builder) {
                     }
             });
 
-            auto tm_from_disk = read_tablet_metadata(e.local_qp()).get0();
+            auto tm_from_disk = read_tablet_metadata(e.local_qp()).get();
             BOOST_REQUIRE_EQUAL(expected_tmap, tm_from_disk.get_tablet_map(table1));
         }
     }, tablet_cql_test_config());
@@ -563,7 +563,7 @@ SEASTAR_TEST_CASE(test_large_tablet_metadata) {
                 });
             }
 
-            auto id = add_table(e).get0();
+            auto id = add_table(e).get();
             tm.set_tablet_map(id, std::move(tmap));
         }
 
@@ -625,7 +625,7 @@ void apply_plan_as_in_progress(token_metadata& tm, const migration_plan& plan) {
 static
 void rebalance_tablets(tablet_allocator& talloc, shared_token_metadata& stm) {
     while (true) {
-        auto plan = talloc.balance_tablets(stm.get()).get0();
+        auto plan = talloc.balance_tablets(stm.get()).get();
         if (plan.empty()) {
             break;
         }
@@ -639,7 +639,7 @@ void rebalance_tablets(tablet_allocator& talloc, shared_token_metadata& stm) {
 static
 void rebalance_tablets_as_in_progress(tablet_allocator& talloc, shared_token_metadata& stm) {
     while (true) {
-        auto plan = talloc.balance_tablets(stm.get()).get0();
+        auto plan = talloc.balance_tablets(stm.get()).get();
         if (plan.empty()) {
             break;
         }
@@ -1217,14 +1217,14 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancer_shuffle_mode) {
 
     rebalance_tablets(e.get_tablet_allocator().local(), stm);
 
-    BOOST_REQUIRE(e.get_tablet_allocator().local().balance_tablets(stm.get()).get0().empty());
+    BOOST_REQUIRE(e.get_tablet_allocator().local().balance_tablets(stm.get()).get().empty());
 
     utils::get_local_injector().enable("tablet_allocator_shuffle");
     auto disable_injection = seastar::defer([&] {
         utils::get_local_injector().disable("tablet_allocator_shuffle");
     });
 
-    BOOST_REQUIRE(!e.get_tablet_allocator().local().balance_tablets(stm.get()).get0().empty());
+    BOOST_REQUIRE(!e.get_tablet_allocator().local().balance_tablets(stm.get()).get().empty());
   }).get();
 }
 #endif
@@ -1334,7 +1334,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancer_disabling) {
         }).get();
 
         {
-            auto plan = e.get_tablet_allocator().local().balance_tablets(stm.get()).get0();
+            auto plan = e.get_tablet_allocator().local().balance_tablets(stm.get()).get();
             BOOST_REQUIRE(!plan.empty());
         }
 
@@ -1345,7 +1345,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancer_disabling) {
         }).get();
 
         {
-            auto plan = e.get_tablet_allocator().local().balance_tablets(stm.get()).get0();
+            auto plan = e.get_tablet_allocator().local().balance_tablets(stm.get()).get();
             BOOST_REQUIRE(plan.empty());
         }
 
@@ -1355,7 +1355,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancer_disabling) {
         }).get();
 
         {
-            auto plan = e.get_tablet_allocator().local().balance_tablets(stm.get()).get0();
+            auto plan = e.get_tablet_allocator().local().balance_tablets(stm.get()).get();
             BOOST_REQUIRE(plan.empty());
         }
 
@@ -1366,7 +1366,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancer_disabling) {
         }).get();
 
         {
-            auto plan = e.get_tablet_allocator().local().balance_tablets(stm.get()).get0();
+            auto plan = e.get_tablet_allocator().local().balance_tablets(stm.get()).get();
             BOOST_REQUIRE(!plan.empty());
         }
 
@@ -1376,7 +1376,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancer_disabling) {
         }).get();
 
         {
-            auto plan = e.get_tablet_allocator().local().balance_tablets(stm.get()).get0();
+            auto plan = e.get_tablet_allocator().local().balance_tablets(stm.get()).get();
             BOOST_REQUIRE(!plan.empty());
         }
   }).get();
@@ -1552,6 +1552,6 @@ SEASTAR_THREAD_TEST_CASE(basic_tablet_storage_splitting_test) {
         BOOST_REQUIRE_EQUAL(e.db().map_reduce0([] (replica::database& db) {
             auto& table = db.find_column_family("ks", "cf");
             return make_ready_future<bool>(table.all_storage_groups_split());
-        }, bool(false), std::logical_or<bool>()).get0(), true);
+        }, bool(false), std::logical_or<bool>()).get(), true);
     }, std::move(cfg)).get();
 }
