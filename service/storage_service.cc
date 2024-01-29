@@ -1468,9 +1468,8 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
         });
     }
     
-    // TODO: Look at the group 0 upgrade state and use it to decide whether to attach or not
     if (!raft_topology_change_enabled()) {
-        co_await _feature_service.enable_features_on_join(_gossiper, _sys_ks.local());
+        co_await _feature_service.enable_features_on_join(_gossiper, _sys_ks.local(), *this);
     }
 
     set_mode(mode::JOINING);
