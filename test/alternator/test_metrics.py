@@ -262,10 +262,15 @@ def alternator_ttl_period_in_seconds(dynamodb, request):
 # up to the setting of alternator_ttl_period_in_seconds. test/alternator/run
 # sets this to 1 second, which becomes the maximum delay of this test, but
 # if it is set higher we skip this test unless --runveryslow is enabled.
+# This test fails with tablets due to #16567, so to temporarily ensure that
+# Alternator TTL is still being tested, we use the following TAGS to
+# coerce Alternator to create the test table without tablets.
+TAGS = [{'Key': 'experimental:initial_tablets', 'Value': 'none'}]
 def test_ttl_stats(dynamodb, metrics, alternator_ttl_period_in_seconds):
     print(alternator_ttl_period_in_seconds)
     with check_increases_metric(metrics, ['scylla_expiration_scan_passes', 'scylla_expiration_scan_table', 'scylla_expiration_items_deleted']):
         with new_test_table(dynamodb,
+            Tags = TAGS,
             KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }, ],
             AttributeDefinitions=[ { 'AttributeName': 'p', 'AttributeType': 'S' } ]) as table:
             # Insert one already-expired item, and then enable TTL:

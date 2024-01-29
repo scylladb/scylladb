@@ -24,6 +24,15 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 print('Scylla is: ' + run.find_scylla() + '.')
 
 extra_scylla_options = []
+remove_scylla_options = []
+
+# If the "--vnodes" option is given, drop the "tablets" experimental
+# feature (turned on in run.py) so that all tests will be run with the
+# old vnode-based replication instead of tablets. This option only has
+# temporary usefulness, and should eventually be removed.
+if '--vnodes' in sys.argv:
+    sys.argv.remove('--vnodes')
+    remove_scylla_options.append('--experimental-features=tablets')
 
 if "-h" in sys.argv or "--help" in sys.argv:
     run.run_pytest(sys.path[0], sys.argv)
@@ -59,6 +68,9 @@ def run_alternator_cmd(pid, dir):
     else:
         cmd += ['--alternator-port', '8000']
     cmd += extra_scylla_options
+
+    for i in remove_scylla_options:
+        cmd.remove(i)
 
     return (cmd, env)
 

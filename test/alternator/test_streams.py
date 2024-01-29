@@ -15,6 +15,13 @@ from contextlib import contextmanager, ExitStack
 from urllib.error import URLError
 from boto3.dynamodb.types import TypeDeserializer
 
+# All tests in this file are expected to fail with tablets due to #16317.
+# To ensure that Alternator Streams is still being tested, instead of
+# xfailing these tests, we temporarily coerce the tests below to avoid
+# using default tablets setting, even if it's available. We do this by
+# using the following tags when creating each table below:
+TAGS = [{'Key': 'experimental:initial_tablets', 'Value': 'none'}]
+
 stream_types = [ 'OLD_IMAGE', 'NEW_IMAGE', 'KEYS_ONLY', 'NEW_AND_OLD_IMAGES']
 
 def disable_stream(dynamodbstreams, table):
@@ -51,6 +58,7 @@ def create_stream_test_table(dynamodb, StreamViewType=None):
     if StreamViewType != None:
         spec = {'StreamEnabled': True, 'StreamViewType': StreamViewType}
     table = create_test_table(dynamodb, StreamSpecification=spec,
+        Tags=TAGS,
         KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' },
                     { 'AttributeName': 'c', 'KeyType': 'RANGE' }
         ],
@@ -475,6 +483,7 @@ def test_get_records_nonexistent_iterator(dynamodbstreams):
 
 def create_table_ss(dynamodb, dynamodbstreams, type):
     table = create_test_table(dynamodb,
+        Tags=TAGS,
         KeySchema=[{ 'AttributeName': 'p', 'KeyType': 'HASH' }, { 'AttributeName': 'c', 'KeyType': 'RANGE' }],
         AttributeDefinitions=[{ 'AttributeName': 'p', 'AttributeType': 'S' }, { 'AttributeName': 'c', 'AttributeType': 'S' }],
         StreamSpecification={ 'StreamEnabled': True, 'StreamViewType': type })
@@ -807,6 +816,7 @@ def test_streams_updateitem_old_image_empty_item(test_table_ss_old_image, dynamo
 @pytest.fixture(scope="function")
 def test_table_ss_old_image_and_lsi(dynamodb, dynamodbstreams):
     table = create_test_table(dynamodb,
+        Tags=TAGS,
         KeySchema=[
             {'AttributeName': 'p', 'KeyType': 'HASH'},
             {'AttributeName': 'c', 'KeyType': 'RANGE'}],
@@ -1281,6 +1291,7 @@ def test_streams_1_new_and_old_images(test_table_ss_new_and_old_images, dynamodb
 def test_table_stream_with_result(dynamodb, dynamodbstreams):
     tablename = unique_table_name()
     result = dynamodb.meta.client.create_table(TableName=tablename,
+        Tags=TAGS,
         BillingMode='PAY_PER_REQUEST',
         StreamSpecification={'StreamEnabled': True, 'StreamViewType': 'KEYS_ONLY'},
         KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' },

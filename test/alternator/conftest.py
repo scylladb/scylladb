@@ -310,3 +310,39 @@ def optional_rest_api(dynamodb):
     except:
         return None
     return url
+
+# Fixture to check once whether newly created Alternator tables use the
+# tablet feature. It is used by the xfail_tablets and skip_tablets fixtures
+# below to xfail or skip a test which is known to be failing with tablets.
+# This is a temporary measure - eventually everything in Scylla should work
+# correctly with tablets, and these fixtures can be removed.
+@pytest.fixture(scope="session")
+def has_tablets(dynamodb, test_table):
+    # We rely on some knowledge of Alternator internals:
+    # 1. For table with name X, Scylla creates a keyspace called alternator_X
+    # 2. We can read a CQL system table using the ".scylla.alternator." prefix.
+    info = dynamodb.Table('.scylla.alternator.system_schema.scylla_keyspaces')
+    try:
+        response = info.query(
+            KeyConditions={'keyspace_name': {
+                        'AttributeValueList': ['alternator_'+test_table.name],
+                        'ComparisonOperator':  'EQ'}})
+    except dynamodb.meta.client.exceptions.ResourceNotFoundException:
+        # The internal Scylla table doesn't even exist, either this isn't
+        # Scylla or it's older Scylla and doesn't use tablets.
+        return False
+    if not 'Items' in response or not response['Items']:
+        return False
+    if 'initial_tablets' in response['Items'][0] and response['Items'][0]['initial_tablets']:
+        return True
+    return False
+
+@pytest.fixture(scope="function")
+def xfail_tablets(request, has_tablets):
+    if has_tablets:
+        request.node.add_marker(pytest.mark.xfail(reason='Test expected to fail when Alternator tables use tablets'))
+
+@pytest.fixture(scope="function")
+def skip_tablets(has_tablets):
+    if has_tablets:
+        pytest.skip("Test may crash when Alternator tables use tablets")

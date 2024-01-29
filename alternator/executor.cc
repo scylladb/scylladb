@@ -8,6 +8,7 @@
 
 #include <seastar/core/sleep.hh>
 #include "alternator/executor.hh"
+#include "db/config.hh"
 #include "log.hh"
 #include "schema/schema_builder.hh"
 #include "exceptions/exceptions.hh"
@@ -4531,20 +4532,34 @@ static lw_shared_ptr<keyspace_metadata> create_keyspace_metadata(std::string_vie
                 keyspace_name, rf, endpoint_count);
     }
     auto opts = get_network_topology_options(sp, gossiper, rf);
-    std::optional<unsigned> initial_tablets;
 
-    // Tablets are not yet enabled by default on Alternator tables, because of
-    // missing support for CDC (see issue #16313). Until then, allow
-    // requesting tablets at table-creation time by supplying following tag,
-    // with an integer value. This is useful for testing Tablet support in
-    // Alternator even before it is ready for prime time.
+    // If the "tablets" experimental feature is available, we enable tablets
+    // by default on all Alternator tables. However, some Alternator features
+    // are not yet available with tablets (Streams #16313 and TTL #16567) so
+    // we allow disabling tablets at table-creation by supplying the following
+    // tags with any non-numeric value (e.g., empty string or the word "none").
+    // Supplying it with an integer value allows overriding the default choice
+    // of initial_tablets (setting the value to 0 asks for the default choice).
     // If we make this tag a permanent feature, it will get a "system:" prefix -
     // until then we give it the "experimental:" prefix to not commit to it.
     static constexpr auto INITIAL_TABLETS_TAG_KEY = "experimental:initial_tablets";
-    if (tags_map.contains(INITIAL_TABLETS_TAG_KEY)) {
-        initial_tablets = std::stol(tags_map.at(INITIAL_TABLETS_TAG_KEY));
+    std::optional<unsigned> initial_tablets;
+    if (sp.get_db().local().get_config().check_experimental(db::experimental_features_t::feature::TABLETS)) {
+        auto it = tags_map.find(INITIAL_TABLETS_TAG_KEY);
+        if (it == tags_map.end()) {
+            // No tag - ask to choose a reasonable default number of tablets
+            initial_tablets = 0;
+        } else {
+            // Tag set. If it's a valid number, use it. If not - e.g., it's
+            // empty or a word like "none", disable tablets by setting
+            // initial_tablets to a disengaged optional.
+            try {
+                initial_tablets = std::stol(tags_map.at(INITIAL_TABLETS_TAG_KEY));
+            } catch(...) {
+                initial_tablets = std::nullopt;
+            }
+        }
     }
-
     return keyspace_metadata::new_keyspace(keyspace_name, "org.apache.cassandra.locator.NetworkTopologyStrategy", std::move(opts), initial_tablets);
 }
 
