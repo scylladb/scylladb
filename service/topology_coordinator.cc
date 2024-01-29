@@ -213,6 +213,11 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
 
         for (auto& req : topo.requests) {
             auto enough_live_nodes = [&] {
+                if (req.second == topology_request::rebuild) {
+                    // For rebuild only the node itself should be alive to start it
+                    // it may still fail if down node has data for the rebuild process
+                    return !dead_nodes.contains(req.first);
+                }
                 auto exclude_nodes = get_excluded_nodes(req.first, req.second, get_request_param(req.first));
                 for (auto id : dead_nodes) {
                     if (!exclude_nodes.contains(id)) {
