@@ -551,3 +551,25 @@ async def test_tablet_cleanup(manager: ManagerClient):
 
     # Bonus: check that commitlog_cleanups doesn't have any garbage after restart.
     assert 0 == (await cql.run_async("SELECT COUNT(*) FROM system.commitlog_cleanups", host=hosts[0]))[0].count
+
+@pytest.mark.asyncio
+async def test_tablet_resharding(manager: ManagerClient):
+    cmdline = ['--smp=3']
+    config = {'experimental_features': ['consistent-topology-changes', 'tablets']}
+    servers = await manager.servers_add(1, cmdline=cmdline)
+    server = servers[0]
+
+    logger.info("Populate table")
+    cql = manager.get_cql()
+    n_tablets = 32
+    n_partitions = 1000
+    await cql.run_async(f"CREATE KEYSPACE test WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} AND tablets = {{'initial': {n_tablets}}};")
+    await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY);")
+    await asyncio.gather(*[cql.run_async(f"INSERT INTO test.test (pk) VALUES ({k});") for k in range(n_partitions)])
+
+    await manager.server_stop_gracefully(server.server_id, timeout=120)
+    await manager.server_update_cmdline(server.server_id, ['--smp=2'])
+
+    await manager.server_start(
+        server.server_id,
+        expected_error="Detected a tablet with invalid replica shard, reducing shard count with tablet-enabled tables is not yet supported. Replace the node instead.")

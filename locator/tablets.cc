@@ -389,6 +389,23 @@ size_t tablet_metadata::external_memory_usage() const {
     return result;
 }
 
+future<bool> check_tablet_replica_shards(const tablet_metadata& tm, host_id this_host) {
+    bool valid = true;
+    for (const auto& [table_id, tmap] : tm.all_tables()) {
+        co_await tmap.for_each_tablet([this_host, &valid] (locator::tablet_id tid, const tablet_info& tinfo) {
+            for (const auto& replica : tinfo.replicas) {
+                if (replica.host == this_host) {
+                    valid &= replica.shard < smp::count;
+                }
+            }
+        });
+        if (!valid) {
+            break;
+        }
+    }
+    co_return valid;
+}
+
 class tablet_effective_replication_map : public effective_replication_map {
     table_id _table;
     tablet_sharder _sharder;

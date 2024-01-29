@@ -1481,6 +1481,13 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             supervisor::notify("loading tablet metadata");
             ss.local().load_tablet_metadata().get();
 
+            // We do not support tablet re-sharding yet, see https://github.com/scylladb/scylladb/issues/16739.
+            // To avoid undefined behaviour due to violated assumptions, that
+            // each tablet has a valid shard replica, we check this assumption here, and refuse startup if violated.
+            if (!locator::check_tablet_replica_shards(ss.local().get_token_metadata_ptr()->tablets(), host_id).get()) {
+                throw std::runtime_error("Detected a tablet with invalid replica shard, reducing shard count with tablet-enabled tables is not yet supported. Replace the node instead.");
+            }
+
             supervisor::notify("loading non-system sstables");
             replica::distributed_loader::init_non_system_keyspaces(db, proxy, sys_ks).get();
 
