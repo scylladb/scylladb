@@ -10,7 +10,6 @@
 #include "schema/schema_fwd.hh"
 #include <vector>
 #include "dht/i_partitioner_fwd.hh"
-#include "mutation/mutation_fragment_fwd.hh"
 #include "readers/flat_mutation_reader_fwd.hh"
 #include "readers/flat_mutation_reader_v2.hh"
 
