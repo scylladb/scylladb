@@ -21,6 +21,11 @@ struct fsm_output {
     struct applied_snapshot {
         snapshot_descriptor snp;
         bool is_local;
+
+        // Always 0 for non-local snapshots.
+        size_t max_trailing_entries;
+
+        // FIXME: include max_trailing_bytes here and in store_snapshot_descriptor
     };
     std::optional<std::pair<term_t, server_id>> term_and_vote;
     std::vector<log_entry_ptr> log_entries;
@@ -36,14 +41,6 @@ struct fsm_output {
     std::optional<read_id> max_read_id_with_quorum;
     // Set to true if a leadership transfer was aborted since the last output
     bool abort_leadership_transfer;
-
-    // True if there is no new output
-    bool empty() const {
-        return !term_and_vote &&
-            log_entries.size() == 0 && messages.size() == 0 &&
-            committed.size() == 0 && !snp && snps_to_drop.empty() &&
-            !configuration;
-    }
 };
 
 struct fsm_config {
@@ -136,9 +133,13 @@ struct leader {
 // in-memory state machine with a catch-all API step(message)
 // method. The method handles any kind of input and performs the
 // needed state machine state transitions. To get state machine output
-// poll_output() function has to be called. This call produces an output
+// get_output() function has to be called. To check first if
+// any new output is present, call has_output(). To wait for new
+// new output events, use the sm_events condition variable passed
+// to fsm constructor; fs` signals it each time new output may appear.
+// The get_output() call produces an output
 // object, which encapsulates a list of actions that must be
-// performed until the next poll_output() call can be made. The time is
+// performed until the next get_output() call can be made. The time is
 // represented with a logical timer. The client is responsible for
 // periodically invoking tick() method, which advances the state
 // machine time and allows it to track such events as election or
@@ -226,7 +227,7 @@ private:
     std::vector<std::pair<server_id, rpc_message>> _messages;
 
     // Signaled when there is a IO event to process.
-    seastar::condition_variable _sm_events;
+    seastar::condition_variable& _sm_events;
 
     // Called when one of the replicas advances its match index
     // so it may be the case that some entries are committed now.
@@ -338,10 +339,8 @@ protected: // For testing
 
 public:
     explicit fsm(server_id id, term_t current_term, server_id voted_for, log log,
-            index_t commit_idx, failure_detector& failure_detector, fsm_config conf);
-
-    explicit fsm(server_id id, term_t current_term, server_id voted_for, log log,
-            failure_detector& failure_detector, fsm_config conf);
+            index_t commit_idx, failure_detector& failure_detector, fsm_config conf,
+            seastar::condition_variable& sm_events);
 
     bool is_leader() const {
         return std::holds_alternative<leader>(_state);
@@ -409,12 +408,9 @@ public:
     // committed to the persistent Raft log afterwards.
     template<typename T> const log_entry& add_entry(T command);
 
-    // Wait until there is, and return state machine output that
-    // needs to be handled.
-    // This includes a list of the entries that need
-    // to be logged. The logged entries are eventually
-    // discarded from the state machine after applying a snapshot.
-    future<fsm_output> poll_output();
+    // Check if there is any state machine output
+    // that `get_output()` will return.
+    bool has_output() const;
 
     // Get state machine output, if there is any. Doesn't
     // wait. It is public for use in testing.
@@ -427,7 +423,7 @@ public:
 
     // Feed one Raft RPC message into the state machine.
     // Advances the state machine state and generates output,
-    // accessible via poll_output().
+    // accessible via get_output().
     template <typename Message>
     void step(server_id from, Message&& msg);
 

@@ -298,7 +298,7 @@ BOOST_AUTO_TEST_CASE(test_vote_from_any_state) {
     server_id id1{utils::UUID(0, 1)}, id2{utils::UUID(0, 2)}, id3{utils::UUID(0, 3)};
     raft::configuration cfg = config_from_ids({id1, id2, id3});
     raft::log log{raft::snapshot_descriptor{.config = cfg}};
-    raft::fsm fsm(id1, term_t{}, server_id{}, std::move(log), fd, fsm_cfg);
+    fsm_debug fsm(id1, term_t{}, server_id{}, std::move(log), fd, fsm_cfg);
 
     // Follower
     BOOST_CHECK(fsm.is_follower());
@@ -360,7 +360,7 @@ BOOST_AUTO_TEST_CASE(test_log_replication_1) {
     server_id id1{utils::UUID(0, 1)}, id2{utils::UUID(0, 2)}, id3{utils::UUID(0, 3)};
     raft::configuration cfg = config_from_ids({id1, id2, id3});
     raft::log log{raft::snapshot_descriptor{.config = cfg}};
-    raft::fsm fsm(id1, term_t{}, server_id{}, std::move(log), trivial_failure_detector, fsm_cfg);
+    fsm_debug fsm(id1, term_t{}, server_id{}, std::move(log), trivial_failure_detector, fsm_cfg);
 
     election_timeout(fsm);
     BOOST_CHECK(fsm.is_candidate());
@@ -425,7 +425,7 @@ BOOST_AUTO_TEST_CASE(test_log_replication_2) {
     server_id id1{utils::UUID(0, 1)}, id2{utils::UUID(0, 2)}, id3{utils::UUID(0, 3)};
     raft::configuration cfg = config_from_ids({id1, id2, id3});
     raft::log log{raft::snapshot_descriptor{.config = cfg}};
-    raft::fsm fsm(id1, term_t{}, server_id{}, std::move(log), trivial_failure_detector, fsm_cfg);
+    fsm_debug fsm(id1, term_t{}, server_id{}, std::move(log), trivial_failure_detector, fsm_cfg);
 
     election_timeout(fsm);
     output = fsm.get_output();
@@ -485,7 +485,7 @@ BOOST_AUTO_TEST_CASE(test_single_node_commit) {
     server_id id1{utils::UUID(0, 1)};
     raft::configuration cfg = config_from_ids({id1});
     raft::log log{raft::snapshot_descriptor{.config = cfg}};
-    raft::fsm fsm(id1, term_t{}, server_id{}, std::move(log), trivial_failure_detector, fsm_cfg);
+    fsm_debug fsm(id1, term_t{}, server_id{}, std::move(log), trivial_failure_detector, fsm_cfg);
 
     BOOST_CHECK(fsm.is_leader());  // Single node skips candidate state
     output = fsm.get_output();
@@ -578,11 +578,11 @@ BOOST_AUTO_TEST_CASE(test_dueling_candidates) {
     server_id id1{utils::UUID(0, 1)}, id2{utils::UUID(0, 2)}, id3{utils::UUID(0, 3)};
     raft::configuration cfg = config_from_ids({id1, id2, id3});
     raft::log log1{raft::snapshot_descriptor{.config = cfg}};
-    raft::fsm fsm1(id1, term_t{}, server_id{}, std::move(log1), trivial_failure_detector, fsm_cfg);
+    fsm_debug fsm1(id1, term_t{}, server_id{}, std::move(log1), trivial_failure_detector, fsm_cfg);
     raft::log log2{raft::snapshot_descriptor{.config = cfg}};
-    raft::fsm fsm2(id2, term_t{}, server_id{}, std::move(log2), trivial_failure_detector, fsm_cfg);
+    fsm_debug fsm2(id2, term_t{}, server_id{}, std::move(log2), trivial_failure_detector, fsm_cfg);
     raft::log log3{raft::snapshot_descriptor{.config = cfg}};
-    raft::fsm fsm3(id3, term_t{}, server_id{}, std::move(log3), trivial_failure_detector, fsm_cfg);
+    fsm_debug fsm3(id3, term_t{}, server_id{}, std::move(log3), trivial_failure_detector, fsm_cfg);
 
     // fsm1 and fsm3 don't see each other
     make_candidate(fsm1);
@@ -621,11 +621,11 @@ BOOST_AUTO_TEST_CASE(test_dueling_pre_candidates) {
     server_id id1{utils::UUID(0, 1)}, id2{utils::UUID(0, 2)}, id3{utils::UUID(0, 3)};
     raft::configuration cfg = config_from_ids({id1, id2, id3});
     raft::log log1{raft::snapshot_descriptor{.config = cfg}};
-    raft::fsm fsm1(id1, term_t{}, server_id{}, std::move(log1), trivial_failure_detector, fsm_cfg_pre);
+    fsm_debug fsm1(id1, term_t{}, server_id{}, std::move(log1), trivial_failure_detector, fsm_cfg_pre);
     raft::log log2{raft::snapshot_descriptor{.config = cfg}};
-    raft::fsm fsm2(id2, term_t{}, server_id{}, std::move(log2), trivial_failure_detector, fsm_cfg_pre);
+    fsm_debug fsm2(id2, term_t{}, server_id{}, std::move(log2), trivial_failure_detector, fsm_cfg_pre);
     raft::log log3{raft::snapshot_descriptor{.config = cfg}};
-    raft::fsm fsm3(id3, term_t{}, server_id{}, std::move(log3), trivial_failure_detector, fsm_cfg_pre);
+    fsm_debug fsm3(id3, term_t{}, server_id{}, std::move(log3), trivial_failure_detector, fsm_cfg_pre);
 
     // fsm1 and fsm3 don't see each other
     make_candidate(fsm1);
@@ -667,7 +667,7 @@ BOOST_AUTO_TEST_CASE(test_single_node_pre_candidate) {
     server_id id1{utils::UUID(0, 1)};
     raft::configuration cfg = config_from_ids({id1});
     raft::log log1{raft::snapshot_descriptor{.config = cfg}};
-    raft::fsm fsm1(id1, term_t{}, server_id{}, std::move(log1), trivial_failure_detector, fsm_cfg_pre);
+    fsm_debug fsm1(id1, term_t{}, server_id{}, std::move(log1), trivial_failure_detector, fsm_cfg_pre);
 
     BOOST_CHECK(fsm1.is_leader());
 }
@@ -743,7 +743,7 @@ void handle_proposal(unsigned nodes, std::vector<int> accepting_int) {
 
     raft::configuration cfg = config_from_ids(ids);
     raft::log log1{raft::snapshot_descriptor{.config = cfg}};
-    raft::fsm fsm1(raft::server_id{utils::UUID(0, 1)}, term_t{}, server_id{}, std::move(log1),
+    fsm_debug fsm1(raft::server_id{utils::UUID(0, 1)}, term_t{}, server_id{}, std::move(log1),
             trivial_failure_detector, fsm_cfg);
 
     // promote 1 to become leader (i.e. gets votes)

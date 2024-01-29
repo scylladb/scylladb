@@ -224,6 +224,22 @@ public:
     // of two servers iff their IDs are different.
     virtual void register_metrics() = 0;
 
+    // Manually trigger snapshot creation and log truncation.
+    //
+    // Does nothing if the current apply index is less or equal to the last persisted snapshot descriptor index
+    // and returns `false`.
+    //
+    // Otherwise returns `true`; when the future resolves, it is guaranteed that the snapshot descriptor
+    // is persisted, but not that the snapshot is loaded to the state machine yet (it will be eventually).
+    //
+    // The request may be resolved by the regular snapshotting mechanisms (e.g. a snapshot
+    // is created because the Raft log grows too large). In this case there is no guarantee
+    // how many trailing entries will be left trailing behind the snapshot. However,
+    // if there are no operations running on the server concurrently with the request and all
+    // committed entries are already applied, the created snapshot is guaranteed to leave
+    // zero trailing entries.
+    virtual future<bool> trigger_snapshot(seastar::abort_source* as) = 0;
+
     // Ad hoc functions for testing
     virtual void wait_until_candidate() = 0;
     virtual future<> wait_election_done() = 0;

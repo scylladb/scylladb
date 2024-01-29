@@ -304,7 +304,7 @@ void test_election_single_node_helper(raft::fsm_config fcfg) {
     server_id id1 = id();
     raft::configuration cfg = config_from_ids({id1});
     raft::log log{raft::snapshot_descriptor{.config = cfg}};
-    raft::fsm fsm(id1, term_t{}, server_id{}, std::move(log), trivial_failure_detector, fcfg);
+    fsm_debug fsm(id1, term_t{}, server_id{}, std::move(log), trivial_failure_detector, fcfg);
 
     election_timeout(fsm);
 
@@ -529,7 +529,7 @@ BOOST_AUTO_TEST_CASE(test_election_two_nodes_prevote) {
     raft::configuration cfg = config_from_ids({id1, id2});
     raft::log log{raft::snapshot_descriptor{.config = cfg}};
 
-    raft::fsm fsm(id1, term_t{}, server_id{}, std::move(log), trivial_failure_detector, fcfg);
+    fsm_debug fsm(id1, term_t{}, server_id{}, std::move(log), trivial_failure_detector, fcfg);
 
     // Initial state is follower
     BOOST_CHECK(fsm.is_follower());
@@ -595,7 +595,7 @@ BOOST_AUTO_TEST_CASE(test_election_four_nodes_prevote) {
     raft::configuration cfg = config_from_ids({id1, id2, id3, id4});
     raft::log log{raft::snapshot_descriptor{.config = cfg}};
 
-    raft::fsm fsm(id1, term_t{}, server_id{}, std::move(log), fd, fcfg);
+    fsm_debug fsm(id1, term_t{}, server_id{}, std::move(log), fd, fcfg);
 
     // Initial state is follower
     BOOST_CHECK(fsm.is_follower());
@@ -652,7 +652,7 @@ BOOST_AUTO_TEST_CASE(test_log_matching_rule) {
     log.emplace_back(seastar::make_lw_shared<raft::log_entry>(raft::log_entry{term_t{10}, index_t{1000}}));
     log.stable_to(log.last_idx());
 
-    raft::fsm fsm(id1, term_t{10}, server_id{}, std::move(log), trivial_failure_detector, fsm_cfg);
+    fsm_debug fsm(id1, term_t{10}, server_id{}, std::move(log), trivial_failure_detector, fsm_cfg);
 
     // Initial state is follower
     BOOST_CHECK(fsm.is_follower());
@@ -929,7 +929,7 @@ BOOST_AUTO_TEST_CASE(test_leader_stepdown) {
         {server_addr_from_id(id1), true}, {server_addr_from_id(id2), true}, {server_addr_from_id(id3), false}});
     raft::log log(raft::snapshot_descriptor{.config = cfg});
 
-    raft::fsm fsm(id1, term_t{1}, /* voted for */ server_id{}, std::move(log), trivial_failure_detector, fsm_cfg);
+    fsm_debug fsm(id1, term_t{1}, /* voted for */ server_id{}, std::move(log), trivial_failure_detector, fsm_cfg);
 
     // Check that we move to candidate state on timeout_now message
     fsm.step(id2, raft::timeout_now{fsm.get_current_term()});
@@ -1034,7 +1034,7 @@ BOOST_AUTO_TEST_CASE(test_leader_stepdown) {
         {server_addr_from_id(id1), true}, {server_addr_from_id(id2), true}, {server_addr_from_id(id3), true}});
     raft::log log2(raft::snapshot_descriptor{.config = cfg});
 
-    raft::fsm fsm2(id1, term_t{1}, /* voted for */ server_id{}, std::move(log2), trivial_failure_detector, fsm_cfg);
+    fsm_debug fsm2(id1, term_t{1}, /* voted for */ server_id{}, std::move(log2), trivial_failure_detector, fsm_cfg);
 
     election_timeout(fsm2);
     // Turn to a leader
@@ -1152,7 +1152,7 @@ BOOST_AUTO_TEST_CASE(test_confchange_a_to_b) {
     // A somewhat awkward way to obtain B's log for restart
     log.emplace_back(make_lw_shared<raft::log_entry>(B.add_entry(config_from_ids({A_id}))));
     log.stable_to(log.last_idx());
-    raft::fsm B_1(B_id, B.get_current_term(), B_id, std::move(log), trivial_failure_detector, fsm_cfg);
+    fsm_debug B_1(B_id, B.get_current_term(), B_id, std::move(log), trivial_failure_detector, fsm_cfg);
     election_timeout(B_1);
     communicate(A, B_1);
     BOOST_CHECK(B_1.is_follower());
@@ -1469,7 +1469,7 @@ BOOST_AUTO_TEST_CASE(test_zero) {
 
 BOOST_AUTO_TEST_CASE(test_reordered_reject) {
     auto id1 = id();
-    raft::fsm fsm1(id1, term_t{1}, server_id{},
+    fsm_debug fsm1(id1, term_t{1}, server_id{},
             raft::log{raft::snapshot_descriptor{.config = config_from_ids({id1})}},
             trivial_failure_detector, fsm_cfg);
 
@@ -1481,7 +1481,7 @@ BOOST_AUTO_TEST_CASE(test_reordered_reject) {
     (void)fsm1.get_output();
 
     auto id2 = id();
-    raft::fsm fsm2(id2, term_t{1}, server_id{},
+    fsm_debug fsm2(id2, term_t{1}, server_id{},
             raft::log{raft::snapshot_descriptor{.config = raft::configuration{}}},
             trivial_failure_detector, fsm_cfg);
 
