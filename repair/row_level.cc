@@ -3230,7 +3230,7 @@ future<> repair_service::cleanup_history(tasks::task_id repair_id) {
 
 future<> repair_service::load_history() {
     co_await get_db().local().get_tables_metadata().parallel_for_each_table(coroutine::lambda([&] (table_id table_uuid, lw_shared_ptr<replica::table> table) -> future<> {
-        auto shard = unsigned(table_uuid.uuid().get_most_significant_bits()) % smp::count;
+        auto shard = utils::uuid_xor_to_uint32(table_uuid.uuid()) % smp::count;
         if (shard != this_shard_id()) {
             co_return;
         }
