@@ -497,6 +497,7 @@ async def test_tablet_cleanup(manager: ManagerClient):
     n_tablets = 32
     n_partitions = 1000
     await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+    await manager.servers_see_each_other(servers)
     await cql.run_async("CREATE KEYSPACE test WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} AND tablets = {{'initial': {}}};".format(n_tablets))
     await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY);")
     await asyncio.gather(*[cql.run_async(f"INSERT INTO test.test (pk) VALUES ({k});") for k in range(1000)])
@@ -531,6 +532,7 @@ async def test_tablet_cleanup(manager: ManagerClient):
     await manager.server_wipe_sstables(servers[1].server_id, "test", "test")
     await manager.server_start(servers[1].server_id)
     await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+    await manager.servers_see_each_other(servers)
     partitions_after_loss = (await cql.run_async("SELECT COUNT(*) FROM test.test"))[0].count
     assert partitions_after_loss < n_partitions
 
@@ -547,6 +549,7 @@ async def test_tablet_cleanup(manager: ManagerClient):
     await manager.server_stop(servers[0].server_id)
     await manager.server_start(servers[0].server_id)
     hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+    await manager.servers_see_each_other(servers)
     assert partitions_after_loss == (await cql.run_async("SELECT COUNT(*) FROM test.test"))[0].count
 
     # Bonus: check that commitlog_cleanups doesn't have any garbage after restart.
