@@ -621,6 +621,7 @@ public:
     std::pair<size_t, locator::tablet_range_side> storage_group_of(dht::token t) const override {
         auto [id, side] = tablet_map().get_tablet_id_and_range_side(t);
         auto idx = id.value();
+#ifndef SCYLLA_BUILD_MODE_RELEASE
         if (idx >= storage_groups().size()) {
             on_fatal_internal_error(tlogger, format("storage_group_of: index out of range: idx={} size_log2={} size={} token={}",
                                                     idx, log2_storage_groups(), storage_groups().size(), t));
@@ -630,6 +631,7 @@ public:
             on_fatal_internal_error(tlogger, format("storage_group_of: storage_group idx={} range={} does not contain token={}",
                     idx, sg.token_range(), t));
         }
+#endif
         return { idx, side };
     }
     storage_group* shard_local_storage_group_at(size_t idx) const noexcept override {
