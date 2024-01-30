@@ -17,6 +17,7 @@
 #include <limits>
 
 #include "UUID.hh"
+#include "on_internal_error.hh"
 
 namespace utils {
 
@@ -383,7 +384,11 @@ public:
         auto dmc = duration_cast<decimicroseconds>(d);
         uint64_t msb = dmc.count();
         // timeuuid time must fit in 60 bits
-        assert(!(0xf000000000000000UL & msb));
+        if ((0xf000000000000000UL & msb)) {
+            // We hope callers would try to avoid this case, but they don't
+            // always do, so assert() would be bad here - and caused #17035.
+            utils::on_internal_error("timeuuid time must fit in 60 bits");
+        }
         return ((0x00000000ffffffffL & msb) << 32 |
                (0x0000ffff00000000UL & msb) >> 16 |
                (0x0fff000000000000UL & msb) >> 48 |
