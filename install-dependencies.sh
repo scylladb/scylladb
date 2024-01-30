@@ -126,7 +126,6 @@ fedora_python3_packages=(
     python3-urwid
     python3-pyparsing
     python3-requests
-    python3-pyudev
     python3-setuptools
     python3-psutil
     python3-distro
