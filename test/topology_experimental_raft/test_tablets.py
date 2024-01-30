@@ -477,6 +477,44 @@ async def test_tablet_missing_data_repair(manager: ManagerClient):
     await manager.rolling_restart(servers, with_down=check_with_down)
 
 
+@pytest.mark.repair
+@pytest.mark.asyncio
+async def test_tablet_repair_history(manager: ManagerClient):
+    logger.info("Bootstrapping cluster")
+    servers = [await manager.server_add(), await manager.server_add(), await manager.server_add()]
+
+    rf = 3
+    tablets = 8
+
+    cql = manager.get_cql()
+    await cql.run_async("CREATE KEYSPACE test WITH replication = {{'class': 'NetworkTopologyStrategy', "
+                  "'replication_factor': {}}} AND tablets = {{'initial': {}}};".format(rf, tablets))
+    await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, c int) WITH tombstone_gc = {'mode':'repair'};")
+
+    logger.info("Populating table")
+
+    keys = range(256)
+    await asyncio.gather(*[cql.run_async(f"INSERT INTO test.test (pk, c) VALUES ({k}, {k});") for k in keys])
+
+    hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+    logging.info(f'Got hosts={hosts}');
+
+    await repair_on_node(manager, servers[0], servers)
+
+    async def check_repair_history():
+        all_rows = []
+        for host in hosts:
+            logging.info(f'Query hosts={host}');
+            rows = await cql.run_async("SELECT * from system.repair_history", host=host)
+            all_rows += rows
+        for row in all_rows:
+            logging.info(f"Got repair_history_entry={row}")
+        assert len(all_rows) == rf * tablets
+
+    await check_repair_history()
+
+    await cql.run_async("DROP KEYSPACE test;")
+
 @pytest.mark.asyncio
 async def test_tablet_cleanup(manager: ManagerClient):
     cmdline = ['--smp=2', '--commitlog-sync=batch']

@@ -2134,7 +2134,7 @@ future<> repair::tablet_repair_task_impl::run() {
         auto start_time = std::chrono::steady_clock::now();
         auto parent_data = get_repair_uniq_id().task_info;
         std::atomic<int> idx{1};
-        rs.container().invoke_on_all([&idx, id, metas = _metas, parent_data, reason = _reason] (repair_service& rs) -> future<> {
+        rs.container().invoke_on_all([&idx, id, metas = _metas, parent_data, reason = _reason, tables = _tables] (repair_service& rs) -> future<> {
             for (auto& m : metas) {
                 if (m.master_shard_id != this_shard_id()) {
                     continue;
@@ -2162,7 +2162,10 @@ future<> repair::tablet_repair_task_impl::run() {
                 auto data_centers = std::vector<sstring>();
                 auto hosts = std::vector<sstring>();
                 auto ignore_nodes = std::unordered_set<gms::inet_address>();
-                bool hints_batchlog_flushed = false;
+                auto my_address = erm->get_topology().my_address();
+                auto participants = std::list<gms::inet_address>(m.neighbors.all.begin(), m.neighbors.all.end());
+                participants.push_front(my_address);
+                bool hints_batchlog_flushed = co_await flush_hints(rs, id, rs._db.local(), m.keyspace_name, tables, ignore_nodes, participants);
                 bool small_table_optimization = false;
                 auto ranges_parallelism = std::nullopt;
 

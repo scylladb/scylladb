@@ -135,7 +135,7 @@ public:
     // stop them abruptly).
     future<> shutdown();
 
-    future<std::optional<gc_clock::time_point>> update_history(tasks::task_id repair_id, table_id table_id, dht::token_range range, gc_clock::time_point repair_time);
+    future<std::optional<gc_clock::time_point>> update_history(tasks::task_id repair_id, table_id table_id, dht::token_range range, gc_clock::time_point repair_time, bool is_tablet);
     future<> cleanup_history(tasks::task_id repair_id);
     future<> load_history();
 

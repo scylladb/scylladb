@@ -2595,6 +2595,8 @@ class row_level_repair {
 
     gc_clock::time_point _start_time;
 
+    bool _is_tablet;
+
 public:
     row_level_repair(repair::shard_repair_task_impl& shard_task,
             sstring cf_name,
@@ -2609,7 +2611,9 @@ public:
         , _all_live_peer_nodes(sort_peer_nodes(all_live_peer_nodes))
         , _small_table_optimization(small_table_optimization)
         , _seed(get_random_seed())
-        , _start_time(gc_clock::now()) {
+        , _start_time(gc_clock::now())
+        , _is_tablet(_shard_task.db.local().find_column_family(_table_id).uses_tablets())
+    {
         repair_neighbors r_neighbors = _shard_task.get_repair_neighbors(_range);
         auto& map = r_neighbors.shard_map;
         for (auto& n : _all_live_peer_nodes) {
@@ -2919,7 +2923,7 @@ private:
             co_return;
         }
         repair_service& rs = _shard_task.rs;
-        std::optional<gc_clock::time_point> repair_time_opt = co_await rs.update_history(_shard_task.global_repair_id.uuid(), _table_id, _range, _start_time);
+        std::optional<gc_clock::time_point> repair_time_opt = co_await rs.update_history(_shard_task.global_repair_id.uuid(), _table_id, _range, _start_time, _is_tablet);
         if (!repair_time_opt) {
             co_return;
         }
@@ -3195,15 +3199,16 @@ static shard_id repair_id_to_shard(tasks::task_id& repair_id) {
 }
 
 future<std::optional<gc_clock::time_point>>
-repair_service::update_history(tasks::task_id repair_id, table_id table_id, dht::token_range range, gc_clock::time_point repair_time) {
+repair_service::update_history(tasks::task_id repair_id, table_id table_id, dht::token_range range, gc_clock::time_point repair_time, bool is_tablet) {
     auto shard = repair_id_to_shard(repair_id);
-    return container().invoke_on(shard, [repair_id, table_id, range, repair_time] (repair_service& rs) mutable -> future<std::optional<gc_clock::time_point>> {
+    return container().invoke_on(shard, [repair_id, table_id, range, repair_time, is_tablet] (repair_service& rs) mutable -> future<std::optional<gc_clock::time_point>> {
         repair_history& rh = rs._finished_ranges_history[repair_id];
         if (rh.repair_time > repair_time) {
             rh.repair_time = repair_time;
         }
         auto finished_shards = ++(rh.finished_ranges[table_id][range]);
-        if (finished_shards == smp::count) {
+        // Tablet repair runs only on one shard
+        if (finished_shards == smp::count || is_tablet) {
             // All shards have finished repair the range. Send an rpc to ask peers to update system.repair_history table
             rlogger.debug("repair[{}]: Finished range {} for table {} on all shards, updating system.repair_history table, finished_shards={}",
                     repair_id, range, table_id, finished_shards);
