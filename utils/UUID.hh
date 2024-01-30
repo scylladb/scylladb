@@ -117,6 +117,10 @@ public:
     }
 };
 
+// Convert the uuid to a uint32_t using xor.
+// It is useful to get a uint32_t number from the uuid.
+uint32_t uuid_xor_to_uint32(const UUID& uuid);
+
 inline constexpr UUID null_uuid() noexcept {
     return UUID();
 }
