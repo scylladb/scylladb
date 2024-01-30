@@ -173,11 +173,6 @@ bool operator<(const msg_addr& x, const msg_addr& y) noexcept {
     }
 }
 
-std::ostream& operator<<(std::ostream& os, const msg_addr& x) {
-    fmt::print(os, "{}:{}", x.addr, x.cpu_id);
-    return os;
-}
-
 size_t msg_addr::hash::operator()(const msg_addr& id) const noexcept {
     // Ignore cpu id for now since we do not really support // shard to shard connections
     return std::hash<bytes_view>()(id.addr.bytes());
