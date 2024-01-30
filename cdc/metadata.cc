@@ -15,10 +15,6 @@
 
 extern logging::logger cdc_log;
 
-namespace cdc {
-    extern const api::timestamp_clock::duration generation_leeway;
-} // namespace cdc
-
 static api::timestamp_type to_ts(db_clock::time_point tp) {
     // This assumes that timestamp_clock and db_clock have the same epochs.
     return std::chrono::duration_cast<api::timestamp_clock::duration>(tp.time_since_epoch()).count();
@@ -73,7 +69,7 @@ bool cdc::metadata::streams_available() const {
 
 cdc::stream_id cdc::metadata::get_stream(api::timestamp_type ts, dht::token tok) {
     auto now = api::new_timestamp();
-    if (ts > now + generation_leeway.count()) {
+    if (ts > now + get_generation_leeway().count()) {
         throw exceptions::invalid_request_exception(format(
                 "cdc: attempted to get a stream \"from the future\" ({}; current server time: {})."
                 " With CDC you cannot send writes with timestamps arbitrarily into the future, because we don't"
@@ -86,14 +82,14 @@ cdc::stream_id cdc::metadata::get_stream(api::timestamp_type ts, dht::token tok)
         // Nothing protects us from that until we start using transactions for generation switching.
     }
 
-    auto it = gen_used_at(now - generation_leeway.count());
+    auto it = gen_used_at(now - get_generation_leeway().count());
 
     if (it != _gens.end()) {
         // Garbage-collect generations that will no longer be used.
         it = _gens.erase(_gens.begin(), it);
     }
 
-    if (ts <= now - generation_leeway.count()) {
+    if (ts <= now - get_generation_leeway().count()) {
         // We reject the write if `ts <= now - generation_leeway` and the write is not to the current generation, which
         // happens iff one of the following is true:
         // - the write is to no generation,
@@ -164,7 +160,7 @@ bool cdc::metadata::known_or_obsolete(db_clock::time_point tp) const {
     }
 
     // Check if the generation is obsolete.
-    return it != _gens.end() && it->first <= api::new_timestamp() - generation_leeway.count();
+    return it != _gens.end() && it->first <= api::new_timestamp() - get_generation_leeway().count();
 }
 
 bool cdc::metadata::insert(db_clock::time_point tp, topology_description&& gen) {
@@ -173,7 +169,7 @@ bool cdc::metadata::insert(db_clock::time_point tp, topology_description&& gen) 
     }
 
     auto now = api::new_timestamp();
-    auto it = gen_used_at(now - generation_leeway.count());
+    auto it = gen_used_at(now - get_generation_leeway().count());
 
     if (it != _gens.end()) {
         // Garbage-collect generations that will no longer be used.
