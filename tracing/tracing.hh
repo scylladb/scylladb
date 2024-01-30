@@ -90,8 +90,6 @@ public:
     static span_id make_span_id();
 };
 
-std::ostream& operator<<(std::ostream& os, const span_id& id);
-
 // !!!!IMPORTANT!!!!
 //
 // The enum_set based on this enum is serialized using IDL, therefore new items
@@ -661,3 +659,10 @@ inline span_id span_id::make_span_id() {
     return 1 + (tracing::get_local_tracing_instance().get_next_rand_uint64() << 1);
 }
 }
+
+template <> struct fmt::formatter<tracing::span_id> {
+    constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
+    auto format(const tracing::span_id& id, fmt::format_context& ctx) const {
+        return fmt::format_to(ctx.out(), "{}", id.get_id());
+    }
+};
