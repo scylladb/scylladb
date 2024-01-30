@@ -218,7 +218,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     // it may still fail if down node has data for the rebuild process
                     return !dead_nodes.contains(req.first);
                 }
-                auto exclude_nodes = get_excluded_nodes(req.first, req.second, get_request_param(req.first));
+                auto exclude_nodes = get_excluded_nodes(topo, req.first, req.second, get_request_param(req.first));
                 for (auto id : dead_nodes) {
                     if (!exclude_nodes.contains(id)) {
                         return false;
@@ -318,10 +318,6 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         return service::topology::parse_replaced_node(req_param);
     }
 
-    std::unordered_set<raft::server_id> parse_ignore_nodes(const std::optional<request_param>& req_param) {
-        return service::topology::parse_ignore_nodes(req_param);
-    }
-
     inet_address id2ip(locator::host_id id) {
         auto ip = _address_map.find(raft::server_id(id.uuid()));
         if (!ip) {
@@ -396,12 +392,13 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         co_return guard;
     }
 
-    std::unordered_set<raft::server_id> get_excluded_nodes(raft::server_id id, const std::optional<topology_request>& req, const std::optional<request_param>& req_param) {
-        return service::topology::get_excluded_nodes(id, req, req_param);
+    std::unordered_set<raft::server_id> get_excluded_nodes(const topology_state_machine::topology_type& topo,
+                raft::server_id id, const std::optional<topology_request>& req, const std::optional<request_param>& req_param) {
+        return topo.get_excluded_nodes(id, req, req_param);
     }
 
     std::unordered_set<raft::server_id> get_excluded_nodes(const node_to_work_on& node) {
-        return get_excluded_nodes(node.id, node.request, node.req_param);
+        return node.topology->get_excluded_nodes(node.id, node.request, node.req_param);
     }
 
     future<node_to_work_on> exec_global_command(node_to_work_on&& node, const raft_topology_cmd& cmd) {
@@ -1176,6 +1173,14 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         return std::make_pair(false, std::move(guard));
     }
 
+    void cleanup_ignored_nodes_on_left(topology_mutation_builder& builder, raft::server_id id) {
+        if (_topo_sm._topology.ignored_nodes.contains(id)) {
+            auto l = _topo_sm._topology.ignored_nodes;
+            l.erase(id);
+            builder.set_ignored_nodes(l);
+        }
+    }
+
     future<> cancel_all_requests(group0_guard guard, std::unordered_set<raft::server_id> dead_nodes) {
         std::vector<canonical_mutation> muts;
         std::vector<raft::server_id> reject_join;
@@ -1574,6 +1579,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         builder.set_transition_state(topology::transition_state::left_token_ring);
                     } else {
                         builder.del_transition_state();
+                        cleanup_ignored_nodes_on_left(builder, node.id);
                     }
                     builder.set_version(_topo_sm._topology.version + 1)
                            .with_node(node.id)
@@ -1602,6 +1608,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
 
                     // Move old node to 'left'
                     topology_mutation_builder builder2(node.guard.write_timestamp());
+                    cleanup_ignored_nodes_on_left(builder2, replaced_node_id);
                     builder2.with_node(replaced_node_id)
                             .del("tokens")
                             .set("node_state", node_state::left);
@@ -1692,6 +1699,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 co_await remove_from_group0(node.id);
 
                 topology_mutation_builder builder(node.guard.write_timestamp());
+                cleanup_ignored_nodes_on_left(builder, node.id);
                 builder.del_transition_state()
                        .with_node(node.id)
                        .set("node_state", node_state::left);

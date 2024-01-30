@@ -62,16 +62,11 @@ struct rebuild_param {
     sstring source_dc;
 };
 
-struct removenode_param {
-    std::unordered_set<raft::server_id> ignored_ids;
-};
-
 struct replace_param {
     raft::server_id replaced_id;
-    std::unordered_set<raft::server_id> ignored_ids;
 };
 
-using request_param = std::variant<join_param, rebuild_param, removenode_param, replace_param>;
+using request_param = std::variant<join_param, rebuild_param, replace_param>;
 
 enum class global_topology_request: uint16_t {
     new_cdc_generation,
@@ -174,6 +169,9 @@ struct topology {
     // When false, tablet load balancer will not try to rebalance tablets.
     bool tablet_balancing_enabled = true;
 
+    // The set of nodes that should be considered dead during topology operations
+    std::unordered_set<raft::server_id> ignored_nodes;
+
     // Find only nodes in non 'left' state
     const std::pair<const raft::server_id, replica_state>* find(raft::server_id id) const;
     // Return true if node exists in any state including 'left' one
@@ -192,8 +190,7 @@ struct topology {
 
     std::optional<request_param> get_request_param(raft::server_id) const;
     static raft::server_id parse_replaced_node(const std::optional<request_param>&);
-    static std::unordered_set<raft::server_id> parse_ignore_nodes(const std::optional<request_param>&);
-    static std::unordered_set<raft::server_id> get_excluded_nodes(raft::server_id id, const std::optional<topology_request>& req, const std::optional<request_param>& req_param);
+    std::unordered_set<raft::server_id> get_excluded_nodes(raft::server_id id, const std::optional<topology_request>& req, const std::optional<request_param>& req_param) const;
 
     // Calculates a set of features that are supported by all normal nodes but not yet enabled.
     std::set<sstring> calculate_not_yet_enabled_features() const;
