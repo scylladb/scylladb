@@ -39,7 +39,5 @@ namespace utils {
         file_lock(fs::path);
         std::unique_ptr<impl> _impl;
     };
-
-    std::ostream& operator<<(std::ostream& out, const file_lock& f);
 }
 
