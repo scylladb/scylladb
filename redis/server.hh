@@ -15,14 +15,9 @@
 #include "redis/request.hh"
 #include "redis/stats.hh"
 
-#include "auth/authenticator.hh"
 #include "auth/service.hh"
-#include "cql3/values.hh"
-#include "service/client_state.hh"
 #include "service_permit.hh"
 #include "timeout_config.hh"
-#include "utils/estimated_histogram.hh"
-#include "utils/fragmented_temporary_buffer.hh"
 #include "generic_server.hh"
 
 #include <seastar/core/seastar.hh>
