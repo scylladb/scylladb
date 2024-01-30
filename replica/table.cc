@@ -1245,6 +1245,12 @@ void table::set_metrics() {
             _view_stats.register_stats();
         }
 
+        if (uses_tablets()) {
+            _metrics.add_group("column_family", {
+                ms::make_gauge("tablet_count", ms::description("Tablet count"), _stats.tablet_count)(cf)(ks)
+            });
+        }
+
         if (!is_internal_keyspace(_schema->ks_name())) {
             _metrics.add_group("column_family", {
                     ms::make_summary("read_latency_summary", ms::description("Read latency summary"), [this] {return to_metrics_summary(_stats.reads.summary());})(cf)(ks).set_skip_when_empty(),
@@ -1273,6 +1279,12 @@ void table::set_metrics() {
                 ms::make_gauge("live_sstable", ms::description("Live sstable count"), _stats.live_sstable_count)(cf)(ks)(node_table_metrics).aggregate({seastar::metrics::shard_label}),
                 ms::make_counter("read_latency_count", ms::description("Number of reads"), [this] {return _stats.reads.histogram().count();})(cf)(ks)(node_table_metrics).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
                 ms::make_counter("write_latency_count", ms::description("Number of writes"), [this] {return _stats.writes.histogram().count();})(cf)(ks)(node_table_metrics).aggregate({seastar::metrics::shard_label}).set_skip_when_empty()
+            });
+        }
+
+        if (uses_tablets()) {
+            _metrics.add_group("column_family", {
+                ms::make_gauge("tablet_count", ms::description("Tablet count"), _stats.tablet_count)(cf)(ks).aggregate({column_family_label, keyspace_label})
             });
         }
     }
@@ -1830,6 +1842,8 @@ table::table(schema_ptr schema, config config, lw_shared_ptr<const storage_optio
     if (!_config.enable_disk_writes) {
         tlogger.warn("Writes disabled, column family no durable.");
     }
+
+    recalculate_tablet_count_stats();
     set_metrics();
 }
 
@@ -1838,6 +1852,37 @@ void table::update_effective_replication_map(locator::effective_replication_map_
     if (old_erm) {
         old_erm->invalidate();
     }
+
+    recalculate_tablet_count_stats();
+}
+
+void table::recalculate_tablet_count_stats() {
+    _stats.tablet_count = calculate_tablet_count();
+}
+
+int64_t table::calculate_tablet_count() const {
+    if (!uses_tablets()) {
+        return 0;
+    }
+
+    const auto& token_metadata = _erm->get_token_metadata();
+    const auto& tablet_map = token_metadata.tablets().get_tablet_map(_schema->id());
+    const auto this_host_id = token_metadata.get_topology().my_host_id();
+
+    int64_t new_tablet_count{0};
+
+    for (auto tablet_id : tablet_map.tablet_ids()) {
+        const std::optional<shard_id> shard_id = tablet_map.get_shard(tablet_id, this_host_id);
+        if (!shard_id.has_value()) {
+            continue;
+        }
+
+        if (*shard_id == this_shard_id()) {
+            ++new_tablet_count;
+        }
+    }
+
+    return new_tablet_count;
 }
 
 partition_presence_checker
