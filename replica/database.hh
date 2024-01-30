@@ -976,7 +976,9 @@ public:
     // a future<bool> that is resolved when offstrategy_compaction completes.
     // The future value is true iff offstrategy compaction was required.
     future<bool> perform_offstrategy_compaction(std::optional<tasks::task_info> info = std::nullopt);
-    future<> perform_cleanup_compaction(owned_ranges_ptr sorted_owned_ranges, std::optional<tasks::task_info> info = std::nullopt);
+    future<> perform_cleanup_compaction(owned_ranges_ptr sorted_owned_ranges,
+                                        std::optional<tasks::task_info> info = std::nullopt,
+                                        do_flush = do_flush::yes);
     unsigned estimate_pending_compactions() const;
 
     void set_compaction_strategy(sstables::compaction_strategy_type strategy);
