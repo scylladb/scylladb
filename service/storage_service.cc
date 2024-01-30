@@ -1408,6 +1408,12 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
     if (raft_server) { // Raft is enabled. Check if we need to bootstrap ourself using raft
         rtlogger.info("topology changes are using raft");
 
+        // Nodes that are not discovery leaders have their join request inserted
+        // on their behalf by an existing node in the cluster during the handshake.
+        // Discovery leaders on the other need to insert the join request themselves,
+        // we do that here.
+        co_await raft_initialize_discovery_leader(*raft_server, join_params);
+
         // start topology coordinator fiber
         _raft_state_monitor = raft_state_monitor_fiber(*raft_server, sys_dist_ks);
         // start cleanup fiber
@@ -1417,12 +1423,6 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
         // process may access those tables.
         supervisor::notify("starting system distributed keyspace");
         co_await sys_dist_ks.invoke_on_all(&db::system_distributed_keyspace::start);
-
-        // Nodes that are not discovery leaders have their join request inserted
-        // on their behalf by an existing node in the cluster during the handshake.
-        // Discovery leaders on the other need to insert the join request themselves,
-        // we do that here.
-        co_await raft_initialize_discovery_leader(*raft_server, join_params);
 
         sstring err;
 
