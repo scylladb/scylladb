@@ -344,6 +344,7 @@ struct table_stats {
     int64_t memtable_partition_hits = 0;
     int64_t memtable_range_tombstone_reads = 0;
     int64_t memtable_row_tombstone_reads = 0;
+    int64_t tablet_count = 0;
     mutation_application_stats memtable_app_stats;
     utils::timed_rate_moving_average_summary_and_histogram reads{256};
     utils::timed_rate_moving_average_summary_and_histogram writes{256};
@@ -1196,6 +1197,9 @@ private:
     future<> seal_active_memtable(compaction_group& cg, flush_permit&&) noexcept;
 
     void check_valid_rp(const db::replay_position&) const;
+
+    void recalculate_tablet_count_stats();
+    int64_t calculate_tablet_count() const;
 public:
     // Iterate over all partitions.  Protocol is the same as std::all_of(),
     // so that iteration can be stopped by returning false.
