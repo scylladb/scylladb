@@ -884,7 +884,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "Related information: Object permissions",
         {"AllowAllAuthorizer", "CassandraAuthorizer", "org.apache.cassandra.auth.AllowAllAuthorizer", "org.apache.cassandra.auth.CassandraAuthorizer", "com.scylladb.auth.TransitionalAuthorizer"})
     , role_manager(this, "role_manager", value_status::Used, "org.apache.cassandra.auth.CassandraRoleManager",
-        "The role-management backend, used to maintain grantts and memberships between roles."
+        "The role-management backend, used to maintain grants and memberships between roles."
         "The available role-managers are:\n"
         "* CassandraRoleManager: Stores role data in the system_auth keyspace.")
     , permissions_validity_in_ms(this, "permissions_validity_in_ms", liveness::LiveUpdate, value_status::Used, 10000,
