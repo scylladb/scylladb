@@ -18,7 +18,6 @@ struct msg_addr {
     uint32_t cpu_id;
     friend bool operator==(const msg_addr& x, const msg_addr& y) noexcept;
     friend bool operator<(const msg_addr& x, const msg_addr& y) noexcept;
-    friend std::ostream& operator<<(std::ostream& os, const msg_addr& x);
     struct hash {
         size_t operator()(const msg_addr& id) const noexcept;
     };
@@ -27,3 +26,12 @@ struct msg_addr {
 };
 
 }
+
+template <>
+struct fmt::formatter<netw::msg_addr> {
+    constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
+    template <typename FormatContext>
+    auto format(const netw::msg_addr& addr, FormatContext& ctx) const {
+        return fmt::format_to(ctx.out(), "{}:{}", addr.addr, addr.cpu_id);
+    }
+};
