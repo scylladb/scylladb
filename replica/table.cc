@@ -541,6 +541,9 @@ public:
         auto cg = std::make_unique<compaction_group>(_t, size_t(0), dht::token_range::make_open_ended_both_sides());
         _storage_groups.push_back(std::make_unique<storage_group>(std::move(cg), &_compaction_groups));
     }
+    dht::token_range get_token_range(size_t idx) const noexcept override {
+        return dht::token_range::make_open_ended_both_sides();
+    }
     std::pair<size_t, locator::tablet_range_side> storage_group_of(dht::token) const override {
         return {0, locator::tablet_range_side{}};
     }
@@ -617,6 +620,9 @@ public:
             ret.emplace_back(std::make_unique<storage_group>(std::move(cg), &_compaction_groups));
         }
         _storage_groups = std::move(ret);
+    }
+    dht::token_range get_token_range(size_t idx) const noexcept override {
+        return tablet_map().get_token_range(locator::tablet_id(idx));
     }
     std::pair<size_t, locator::tablet_range_side> storage_group_of(dht::token t) const override {
         auto [id, side] = tablet_map().get_tablet_id_and_range_side(t);

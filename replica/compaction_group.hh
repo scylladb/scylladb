@@ -249,6 +249,7 @@ public:
     }
 
     virtual void make_storage_groups() = 0;
+    virtual dht::token_range get_token_range(size_t idx) const noexcept = 0;
     virtual std::pair<size_t, locator::tablet_range_side> storage_group_of(dht::token) const = 0;
     virtual storage_group* shard_local_storage_group_at(size_t idx) const noexcept = 0;
     virtual size_t log2_storage_groups() const = 0;

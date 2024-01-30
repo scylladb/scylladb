@@ -192,8 +192,7 @@ public:
             auto idx = _sg_manager.storage_group_id_for_token(pos.token());
             auto* sg = _sg_manager.shard_local_storage_group_at(idx);
             if (!sg) {
-                sg = _sg_manager.storage_groups()[idx].get();
-                _lowest_next_token = find_lowest_next_token(dht::next_token(sg->token_range()));
+                _lowest_next_token = find_lowest_next_token(dht::next_token(_sg_manager.get_token_range(idx)));
                 auto lowest_next_position = _lowest_next_token.is_maximum()
                     ? dht::ring_position_ext::max()
                     : dht::ring_position_ext::starting_at(_lowest_next_token);
