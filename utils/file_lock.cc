@@ -62,7 +62,3 @@ future<utils::file_lock> utils::file_lock::acquire(fs::path path) {
         return make_exception_future<utils::file_lock>(std::current_exception());
     }
 }
-
-std::ostream& utils::operator<<(std::ostream& out, const file_lock& f) {
-    return out << "file lock '" << f.path() << "'";
-}
