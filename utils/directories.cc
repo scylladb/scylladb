@@ -42,12 +42,12 @@ sstring to_sstring(const fs::path& p) {
 namespace utils {
 
 static future<> disk_sanity(fs::path path, bool developer_mode) {
-    return check_direct_io_support(path.native()).then([] {
-        return make_ready_future<>();
-    }).handle_exception([path](auto ep) {
-        startlog.error("Could not access {}: {}", path, ep);
-        return make_exception_future<>(ep);
-    });
+    try {
+        co_await check_direct_io_support(path.native());
+    } catch (...) {
+        startlog.error("Coould not access {}: {}", path, std::current_exception());
+        throw;
+    }
 };
 
 static future<file_lock> touch_and_lock(fs::path path) {
