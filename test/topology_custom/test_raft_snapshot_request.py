@@ -11,6 +11,7 @@ import logging
 
 from test.pylib.manager_client import ManagerClient
 from test.pylib.util import wait_for, wait_for_cql_and_get_hosts, read_barrier
+from test.topology.util import reconnect_driver
 
 
 logger = logging.getLogger(__name__)
@@ -32,7 +33,10 @@ async def trigger_snapshot(manager: ManagerClient, group0_id: str, ip_addr) -> N
 
 @pytest.mark.asyncio
 async def test_raft_snapshot_request(manager: ManagerClient):
-    servers = await manager.servers_add(3)
+    cmdline = [
+        '--logger-log-level', 'raft=trace',
+        ]
+    servers = await manager.servers_add(3, cmdline=cmdline)
     cql = manager.get_cql()
 
     s1 = servers[0]
@@ -68,6 +72,7 @@ async def test_raft_snapshot_request(manager: ManagerClient):
     # Restarting the two servers will cause a newly elected leader to append a dummy command.
     await asyncio.gather(*(manager.server_restart(s.server_id) for s in servers[:2]))
     logger.info(f"Restarted {servers[:2]}")
+    cql = await reconnect_driver(manager)
     # Wait for one server to append the command and do a read_barrier on the other
     # to make sure both appended
     async def appended_command() -> int | None:
@@ -86,9 +91,10 @@ async def test_raft_snapshot_request(manager: ManagerClient):
         await trigger_snapshot(manager, group0_id, s.ip_addr)
         h = (await wait_for_cql_and_get_hosts(cql, [s], time.time() + 60))[0]
         snap = await get_raft_snap_id(cql, h)
-        logger.info("New snapshot ID on {s}: {snap}")
+        logger.info(f"New snapshot ID on {s}: {snap}")
     await manager.server_start(s2.server_id)
     logger.info(f"Server {s2} restarted")
+    cql = await reconnect_driver(manager)
     await wait_for_cql_and_get_hosts(cql, [s2], time.time() + 60)
     async def received_snapshot() -> str | None:
         new_s2_snap_id = await get_raft_snap_id(cql, h2)
@@ -98,4 +104,6 @@ async def test_raft_snapshot_request(manager: ManagerClient):
     new_s2_snap_id = await wait_for(received_snapshot, time.time() + 60)
     logger.info(f"{s2} received new snapshot: {new_s2_snap_id}")
     new_s2_log_size = await get_raft_log_size(cql, h2)
-    assert new_s2_log_size == 0
+    # Log size may be 1 because topology coordinator fiber may start and commit an entry
+    # after that last snapshot was created (the two events race with each other).
+    assert new_s2_log_size <= 1
