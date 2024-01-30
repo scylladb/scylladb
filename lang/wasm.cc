@@ -9,9 +9,6 @@
 #include "wasm.hh"
 #include "wasm_instance_cache.hh"
 #include "concrete_types.hh"
-#include "utils/utf8.hh"
-#include "utils/ascii.hh"
-#include "utils/date.h"
 #include "db/config.hh"
 #include <seastar/core/byteorder.hh>
 #include <seastar/core/coroutine.hh>
