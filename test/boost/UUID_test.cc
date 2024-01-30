@@ -100,6 +100,17 @@ BOOST_AUTO_TEST_CASE(test_get_time_uuid) {
     BOOST_CHECK(unix_timestamp == millis);
 }
 
+BOOST_AUTO_TEST_CASE(test_uuid_to_uint32) {
+    // (gdb) p/x 0x3123223d ^ 0x17300 ^ 0x31e31215 ^ 0x98312
+    // $2 = 0xc8c03a
+    uint64_t x = 0x173003123223d;
+    uint64_t y = 0x9831231e31215;
+    uint32_t expected_id = 0xc8c03a;
+    auto uuid = utils::UUID(x, y);
+    uint32_t id = uuid_xor_to_uint32(uuid);
+    BOOST_CHECK(id == expected_id);
+}
+
 std::strong_ordering timeuuid_legacy_tri_compare(bytes_view o1, bytes_view o2) {
     auto compare_pos = [&] (unsigned pos, int mask, std::strong_ordering ifequal) {
         auto d = (o1[pos] & mask) <=> (o2[pos] & mask);

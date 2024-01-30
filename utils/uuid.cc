@@ -62,4 +62,9 @@ UUID::UUID(sstring_view uuid) {
     }
 }
 
+uint32_t uuid_xor_to_uint32(const UUID& uuid) {
+    size_t h = std::hash<utils::UUID>{}(uuid);
+    return uint32_t(h);
+}
+
 }
