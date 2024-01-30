@@ -7,7 +7,10 @@
  */
 
 #pragma once
-#include "types/types.hh"
+#include <vector>
+#include <seastar/core/future.hh>
+#include "bytes.hh"
+#include "seastarx.hh"
 
 class service_permit;
 

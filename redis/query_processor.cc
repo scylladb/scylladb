@@ -10,7 +10,6 @@
 #include "redis/request.hh"
 #include "redis/reply.hh"
 #include "redis/command_factory.hh"
-#include "timeout_config.hh"
 #include "redis/options.hh"
 #include "service_permit.hh"
 

@@ -8,7 +8,6 @@
 
 #pragma once
 
-#include <stdexcept>
 #include "timeout_config.hh"
 #include "db/consistency_level_type.hh"
 #include <seastar/core/sstring.hh>

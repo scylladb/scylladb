@@ -7,7 +7,7 @@
  */
 
 #pragma once
-#include "types/types.hh"
+#include "bytes.hh"
 
 namespace redis {
 

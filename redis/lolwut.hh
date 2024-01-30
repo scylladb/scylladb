@@ -7,7 +7,11 @@
  */
 
 #pragma once
-#include "types/types.hh"
+
+#include <seastar/core/future.hh>
+
+#include "bytes.hh"
+#include "seastarx.hh"
 
 namespace redis {
 
