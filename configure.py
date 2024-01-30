@@ -1779,7 +1779,7 @@ libs = ' '.join([maybe_static(args.staticyamlcpp, '-lyaml-cpp'), '-latomic', '-l
                 ])
 
 if not args.staticboost:
-    user_cflags += ' -DBOOST_TEST_DYN_LINK'
+    user_cflags += ' -DBOOST_ALL_DYN_LINK'
 
 if thrift_uses_boost_share_ptr():
     user_cflags += ' -DTHRIFT_USES_BOOST'
