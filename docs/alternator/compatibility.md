@@ -314,3 +314,12 @@ they should be easy to detect. Here is a list of these unimplemented features:
   that can be used to forbid table deletion. This table option was added to
   DynamoDB in March 2023.
   <https://github.com/scylladb/scylla/issues/14482>
+
+## Service Level
+
+ScyllaDB has a service level feature. Through the service level, different workload 
+priorities can be set for each workload. The specific functionality is described at
+<https://enterprise.docs.scylladb.com/stable/using-scylla/workload-prioritization.html>.
+If you don’t need this feature, you can configure it to be turned off using the 
+parameter `--alternator-service-level` agreement to improve performance.
+See <https://github.com/scylladb/scylla/issues/17089>.

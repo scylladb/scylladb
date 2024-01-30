@@ -1062,6 +1062,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , alternator_https_port(this, "alternator_https_port", value_status::Used, 0, "Alternator API HTTPS port.")
     , alternator_address(this, "alternator_address", value_status::Used, "0.0.0.0", "Alternator API listening address.")
     , alternator_enforce_authorization(this, "alternator_enforce_authorization", value_status::Used, false, "Enforce checking the authorization header for every request in Alternator.")
+    , alternator_service_level(this, "alternator_service_level", value_status::Used, true, "Control whether use service level in Alternator")
     , alternator_write_isolation(this, "alternator_write_isolation", value_status::Used, "", "Default write isolation policy for Alternator.")
     , alternator_streams_time_window_s(this, "alternator_streams_time_window_s", value_status::Used, 10, "CDC query confidence window for alternator streams.")
     , alternator_timeout_in_ms(this, "alternator_timeout_in_ms", liveness::LiveUpdate, value_status::Used, 10000,

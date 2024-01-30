@@ -209,6 +209,14 @@ public:
         , _sl_controller(&sl_controller)
     {}
 
+    client_state(internal_tag, auth::service& auth_service, sstring username)
+        : _user(auth::authenticated_user(username))
+        , _auth_state(auth_state::READY)
+        , _is_internal(true)
+        , _is_thrift(false)
+        , _auth_service(&auth_service)
+    {}
+
     client_state(const client_state&) = delete;
     client_state(client_state&&) = default;
 
