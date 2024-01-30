@@ -7,12 +7,15 @@
 from cassandra.protocol import ConfigurationException
 from cassandra.connection import UnixSocketEndPoint
 from cassandra.policies import WhiteListRoundRobinPolicy
+
 from test.pylib.manager_client import ManagerClient
 from test.topology.conftest import cluster_con
+from test.pylib.util import wait_for_cql_and_get_hosts
 
 import pytest
 import logging
 import socket
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +91,8 @@ async def test_maintenance_mode(manager: ManagerClient):
     # Restart in normal mode to see if the changes made in maintenance mode are persisted
     await manager.server_update_config(server_a.server_id, "maintenance_mode", "false")
     await manager.server_start(server_a.server_id, wait_others=1)
+    await wait_for_cql_and_get_hosts(cql, [server_a], time.time() + 60)
+    await manager.servers_see_each_other([server_a, server_b])
 
     res = await cql.run_async(f"SELECT v FROM ks.t WHERE k = {key_on_server_a}")
     assert res[0][0] == key_on_server_a + 1
