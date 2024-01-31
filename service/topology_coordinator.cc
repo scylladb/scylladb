@@ -1574,24 +1574,24 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     [[fallthrough]];
                 case node_state::decommissioning: {
                     topology_mutation_builder builder(node.guard.write_timestamp());
-                    auto next_state = node.rs->state == node_state::decommissioning ? node.rs->state : node_state::left;
+                    node_state next_state;
+                    std::vector<canonical_mutation> muts;
+                    muts.reserve(2);
                     if (node.rs->state == node_state::decommissioning) {
+                        next_state = node.rs->state;
                         builder.set_transition_state(topology::transition_state::left_token_ring);
                     } else {
+                        next_state = node_state::left;
                         builder.del_transition_state();
                         cleanup_ignored_nodes_on_left(builder, node.id);
+                        muts.push_back(rtbuilder.build());
                     }
                     builder.set_version(_topo_sm._topology.version + 1)
                            .with_node(node.id)
                            .del("tokens")
                            .set("node_state", next_state);
                     auto str = ::format("{}: read fence completed", node.rs->state);
-                    std::vector<canonical_mutation> muts;
-                    muts.reserve(2);
                     muts.push_back(builder.build());
-                    if (next_state == node_state::left) {
-                        muts.push_back(rtbuilder.build());
-                    }
                     co_await update_topology_state(take_guard(std::move(node)), std::move(muts), std::move(str));
                 }
                     break;
