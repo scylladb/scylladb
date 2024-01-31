@@ -20,7 +20,14 @@ import util
 
 
 @pytest.fixture(scope="module")
-def test_table(cql, test_keyspace):
+def extra_logging(cql):
+    requests.post(f'{nodetool.rest_api_url(cql)}/system/logger/table', params={'level': 'debug'})
+    yield
+    requests.post(f'{nodetool.rest_api_url(cql)}/system/logger/table', params={'level': 'info'})
+
+
+@pytest.fixture(scope="module")
+def test_table(cql, test_keyspace, extra_logging):
     """ Prepares a table for the mutation dump tests to work with."""
     with util.new_test_table(cql, test_keyspace, 'pk1 int, pk2 int, ck1 int, ck2 int, v text, s text static, PRIMARY KEY ((pk1, pk2), ck1, ck2)',
                              "WITH compaction = {'class':'NullCompactionStrategy'}") as table:
