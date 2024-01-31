@@ -87,6 +87,26 @@ bool operator==(const column_mapping& lhs, const column_mapping& rhs) {
     return true;
 }
 
+const column_mapping_entry& column_mapping::column_at(column_kind kind, column_id id) const {
+    assert(kind == column_kind::regular_column || kind == column_kind::static_column);
+    return kind == column_kind::regular_column ? regular_column_at(id) : static_column_at(id);
+}
+
+const column_mapping_entry& column_mapping::static_column_at(column_id id) const {
+    if (id >= _n_static) {
+        throw std::out_of_range(format("static column id {:d} >= {:d}", id, _n_static));
+    }
+    return _columns[id];
+}
+
+const column_mapping_entry& column_mapping::regular_column_at(column_id id) const {
+    auto n_regular = _columns.size() - _n_static;
+    if (id >= n_regular) {
+        throw std::out_of_range(format("regular column id {:d} >= {:d}", id, n_regular));
+    }
+    return _columns[id + _n_static];
+}
+
 template<typename Sequence>
 std::vector<data_type>
 get_column_types(const Sequence& column_definitions) {
