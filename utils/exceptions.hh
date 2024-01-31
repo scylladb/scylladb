@@ -18,7 +18,7 @@
   #if defined(OPTIMIZED_EXCEPTION_HANDLING_AVAILABLE)
     #define USE_OPTIMIZED_EXCEPTION_HANDLING
   #else
-    #warn "Fast implementation of some of the exception handling routines is not available for this platform. Expect poor exception handling performance."
+    #warning "Fast implementation of some of the exception handling routines is not available for this platform. Expect poor exception handling performance."
   #endif
 #endif
 
