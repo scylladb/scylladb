@@ -94,7 +94,7 @@ const column_mapping_entry& column_mapping::column_at(column_kind kind, column_i
 
 const column_mapping_entry& column_mapping::static_column_at(column_id id) const {
     if (id >= _n_static) {
-        throw std::out_of_range(format("static column id {:d} >= {:d}", id, _n_static));
+        on_internal_error(dblog, format("static column id {:d} >= {:d}", id, _n_static));
     }
     return _columns[id];
 }
@@ -102,7 +102,7 @@ const column_mapping_entry& column_mapping::static_column_at(column_id id) const
 const column_mapping_entry& column_mapping::regular_column_at(column_id id) const {
     auto n_regular = _columns.size() - _n_static;
     if (id >= n_regular) {
-        throw std::out_of_range(format("regular column id {:d} >= {:d}", id, n_regular));
+        on_internal_error(dblog, format("regular column id {:d} >= {:d}", id, n_regular));
     }
     return _columns[id + _n_static];
 }
