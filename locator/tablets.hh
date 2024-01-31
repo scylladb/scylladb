@@ -235,6 +235,56 @@ enum tablet_range_side {
     right = 1,
 };
 
+// The decision of whether tablets of a given should be split, merged, or none, is made
+// by the load balancer. This decision is recorded in the tablet_map and stored in group0.
+struct resize_decision {
+    struct none {};
+    struct split {};
+    struct merge {};
+
+    using seq_number_t = int64_t;
+
+    std::variant<none, split, merge> way;
+    // The sequence number globally identifies a resize decision.
+    // It's monotonically increasing, globally.
+    // Needed to distinguish stale decision from latest one, in case coordinator
+    // revokes the current decision and signal it again later.
+    seq_number_t sequence_number = 0;
+
+    resize_decision() = default;
+    resize_decision(sstring decision, uint64_t seq_number);
+    bool split_or_merge() const {
+        return !std::holds_alternative<resize_decision::none>(way);
+    }
+    bool operator==(const resize_decision&) const;
+    sstring type_name() const;
+    seq_number_t next_sequence_number() const;
+};
+
+struct table_load_stats {
+    uint64_t size_in_bytes = 0;
+    // Stores the minimum seq number among all replicas, as coordinator wants to know if
+    // all replicas have completed splitting, which happens when they all store the
+    // seq number of the current split decision.
+    resize_decision::seq_number_t split_ready_seq_number = std::numeric_limits<resize_decision::seq_number_t>::max();
+
+    table_load_stats& operator+=(const table_load_stats& s) noexcept;
+    friend table_load_stats operator+(table_load_stats a, const table_load_stats& b) {
+        return a += b;
+    }
+};
+
+struct load_stats {
+    std::unordered_map<table_id, table_load_stats> tables;
+
+    load_stats& operator+=(const load_stats& s);
+    friend load_stats operator+(load_stats a, const load_stats& b) {
+        return a += b;
+    }
+};
+
+using load_stats_ptr = lw_shared_ptr<const load_stats>;
+
 /// Stores information about tablets of a single table.
 ///
 /// The map contains a constant number of tablets, tablet_count().
@@ -261,6 +311,7 @@ private:
     tablet_container _tablets;
     size_t _log2_tablets; // log_2(_tablets.size())
     std::unordered_map<tablet_id, tablet_transition_info> _transitions;
+    resize_decision _resize_decision;
 public:
     /// Constructs a tablet map.
     ///
@@ -349,9 +400,14 @@ public:
     size_t external_memory_usage() const;
 
     bool operator==(const tablet_map&) const = default;
+
+    bool needs_split() const;
+
+    const locator::resize_decision& resize_decision() const;
 public:
     void set_tablet(tablet_id, tablet_info);
     void set_tablet_transition_info(tablet_id, tablet_transition_info);
+    void set_resize_decision(locator::resize_decision);
     void clear_transitions();
 
     // Destroys gently.

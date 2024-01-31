@@ -576,3 +576,73 @@ async def test_tablet_resharding(manager: ManagerClient):
     await manager.server_start(
         server.server_id,
         expected_error="Detected a tablet with invalid replica shard, reducing shard count with tablet-enabled tables is not yet supported. Replace the node instead.")
+
+async def get_tablet_count(manager: ManagerClient, server: ServerInfo, keyspace_name: str, table_name: str):
+    host = manager.cql.cluster.metadata.get_host(server.ip_addr)
+
+    # read_barrier is needed to ensure that local tablet metadata on the queried node
+    # reflects the finalized tablet movement.
+    await read_barrier(manager.cql, host)
+
+    table_id = await manager.get_table_id(keyspace_name, table_name)
+    rows = await manager.cql.run_async(f"SELECT tablet_count FROM system.tablets where "
+                                       f"table_id = {table_id}", host=host)
+    return rows[0].tablet_count
+
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_tablet_split(manager: ManagerClient):
+    logger.info("Bootstrapping cluster")
+    cmdline = [
+        '--logger-log-level', 'storage_service=debug',
+        '--target-tablet-size-in-bytes', '1024',
+    ]
+    servers = [await manager.server_add(cmdline=cmdline)]
+
+    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+
+    cql = manager.get_cql()
+    await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1};")
+    await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, c int);")
+
+    # enough to trigger multiple splits with max size of 1024 bytes.
+    keys = range(256)
+    await asyncio.gather(*[cql.run_async(f"INSERT INTO test.test (pk, c) VALUES ({k}, {k});") for k in keys])
+
+    async def check():
+        logger.info("Checking table")
+        cql = manager.get_cql()
+        rows = await cql.run_async("SELECT * FROM test.test;")
+        assert len(rows) == len(keys)
+        for r in rows:
+            assert r.c == r.pk
+
+    await check()
+
+    await manager.api.flush_keyspace(servers[0].ip_addr, "test")
+
+    tablet_count = await get_tablet_count(manager, servers[0], 'test', 'test')
+    assert tablet_count == 1
+
+    logger.info("Adding new server")
+    servers.append(await manager.server_add(cmdline=cmdline))
+
+    # Increases the chance of tablet migration concurrent with split
+    await inject_error_one_shot_on(manager, "tablet_allocator_shuffle", servers)
+    await inject_error_on(manager, "tablet_load_stats_refresh_before_rebalancing", servers)
+
+    s1_log = await manager.server_open_log(servers[0].server_id)
+    s1_mark = await s1_log.mark()
+
+    # Now there's a split and migration need, so they'll potentially run concurrently.
+    await manager.api.enable_tablet_balancing(servers[0].ip_addr)
+
+    await check()
+    time.sleep(5) # Give load balancer some time to do work
+
+    await s1_log.wait_for('Detected tablet split for table', from_mark=s1_mark)
+
+    await check()
+
+    tablet_count = await get_tablet_count(manager, servers[0], 'test', 'test')
+    assert tablet_count > 1

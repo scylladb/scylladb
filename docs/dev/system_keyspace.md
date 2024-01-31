@@ -205,6 +205,8 @@ CREATE TABLE system.tablets (
     transition text,
     table_name text static,
     tablet_count int static,
+    resize_type text static,
+    resize_seq_number bigint static,
     PRIMARY KEY ((keyspace_name, table_id), last_token)
 )
 ~~~
@@ -215,6 +217,10 @@ Only tables which use tablet-based replication strategy have an entry here.
 
 `tablet_count` is the number of tablets in the map.
 `table_name` is the name of the table, provided for convenience.
+
+`resize_type` is the resize decision type that spans all tablets of a given table, which can be one of: `merge`, `split` or `none`.
+
+`resize_seq_number` is the sequence number (>= 0) of the resize decision that globally identifies it. It's monotonically increasing, incremented by one for every new decision, so a higher value means it came later in time.
 
 `last_token` is the last token owned by the tablet. The i-th tablet, where i = 0, 1, ..., `tablet_count`-1),
  owns the token range:
@@ -228,6 +234,8 @@ It's a list of tuples where the first element is `host_id` of the replica and th
 
 During tablet migration, the columns `new_replicas`, `stage` and `transition` are set to represent the transition. The
 `new_replicas` column holds what will be put in `replicas` after transition is done.
+
+During tablet splitting, the load balancer sets `resize_type` column with `split`, and sets `resize_seq_number` with the next sequence number, which is the previous value incremented by one.
 
 The `transition` column can have the following values:
   * `migration` - One tablet replica is moving from one shard to another.

@@ -182,6 +182,47 @@ When tablet is not in transition, the following invariants hold:
 1. The storage layer (database) on any node contains writes for keys which belong to the tablet only if
     that shard is one of the current tablet replicas.
 
+# Tablet splitting
+
+Each table has its resize metadata stored in group0.
+
+Resize metadata is composed of:
+  - resize_type: it's the resize decision type, and can be either of 'split', 'merge' or 'none'
+  - resize_seq_number: a sequence number that globally identifies the resize; it's monotonically increasing
+and increased by one on every new decision.
+
+In order to determine if a table needs resize, the load balancer will calculate the average tablet size
+for a given table, which can be done by dividing average table size[1] by the tablet count.
+
+[1]: The average size of a table is the total size across all DCs divided by the number of replicas across
+all DCs.
+
+A table will need split if its average size surpasses the split threshold, which is 100% of the target
+tablet size, which defaults to 5G. The reasoning is that after split we want average size to return
+to the target size. By the same reason, merge threshold is 50% of target size.
+
+The load balancer might also decide to cancel an ongoing split if it realizes that after split, a merge
+will be needed. It does that, to avoid some back-and-forth, which is wasteful. Revoking an ongoing
+decision is done by setting resize metadata with type 'none'.
+
+When the load balancer decides to split a table, it sets resize_type field in metadata with 'split' and
+sets resize_seq_number with the next sequence number, which is the current seq number -- loaded from
+tablet metadata -- increased by 1.
+
+All table replicas will listen for the need to split with a replica component named split monitor, that
+wakes up on replication map updates, checks the need for split, and if so, it will start segregating the
+storage of every tablet replica into left and right sides of the token range spanned by an individual
+tablet. When a tablet replica has completed this work, it will then communicate its ready completion
+status with the coordinator by loading (mirroring) the resize_seq_number from tablet metadata into its
+local state,  which is pulled periodically by the coordinator.
+
+When the coordinator realizes all tablet replicas have completed the splitting work, the load balancer
+emits a decision to finalize the split request. The finalization is serialized with migration, as
+doubling tablet count would interfere with the migration process. When the state machine leaves the
+migration track, then finalize can proceed and split each preexisting tablet into two in the topology
+metadata. The replicas  will react to that by remapping its compaction groups into a new set which size
+is equal to the new tablet count.
+
 # Topology guards
 
 In addition to synchronizing with data access operations (e.g. CQL requests), we need to synchronize with

@@ -1448,6 +1448,10 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
         }
 
         co_await _group0->finish_setup_after_join(*this, _qp, _migration_manager.local(), _raft_topology_change_enabled);
+
+        // Initializes monitor only after updating local topology.
+        start_tablet_split_monitor();
+
         co_return;
     }
 
@@ -2572,6 +2576,9 @@ future<> storage_service::replicate_to_all_cores(mutable_token_metadata_ptr tmpt
             for (auto it = table_erms.begin(); it != table_erms.end(); ) {
                 auto& cf = db.find_column_family(it->first);
                 cf.update_effective_replication_map(std::move(it->second));
+                if (cf.uses_tablets()) {
+                    register_tablet_split_candidate(it->first);
+                }
                 it = table_erms.erase(it);
             }
 
@@ -2596,6 +2603,8 @@ future<> storage_service::stop() {
     _listeners.clear();
     co_await _async_gate.close();
     co_await std::move(_node_ops_abort_thread);
+    _tablet_split_monitor_event.signal();
+    co_await std::move(_tablet_split_monitor);
 }
 
 future<> storage_service::wait_for_group0_stop() {
@@ -4527,6 +4536,89 @@ future<> storage_service::load_tablet_metadata() {
     }, acquire_merge_lock::no);
 }
 
+future<> storage_service::process_tablet_split_candidate(table_id table) {
+    auto all_compaction_groups_split = [&] () mutable {
+        return _db.map_reduce0([table_ = table] (replica::database& db) {
+            auto all_split = db.find_column_family(table_).all_storage_groups_split();
+            return make_ready_future<bool>(all_split);
+        }, bool{true}, std::logical_and<bool>());
+    };
+
+    auto split_all_compaction_groups = [&] () -> future<> {
+        return _db.invoke_on_all([table] (replica::database& db) -> future<> {
+            return db.find_column_family(table).split_all_storage_groups();
+        });
+    };
+
+    exponential_backoff_retry split_retry = exponential_backoff_retry(std::chrono::seconds(5), std::chrono::seconds(300));
+    bool sleep = false;
+
+    while (!_async_gate.is_closed() && !_group0_as.abort_requested()) {
+        try {
+            // Ensures that latest changes to tablet metadata, in group0, are visible
+            auto guard = co_await _group0->client().start_operation(&_group0_as);
+            auto& tmap = get_token_metadata().tablets().get_tablet_map(table);
+            if (!tmap.needs_split()) {
+                release_guard(std::move(guard));
+                break;
+            }
+
+            if (co_await all_compaction_groups_split()) {
+                slogger.info0("All compaction groups of table {} are split ready.", table);
+                release_guard(std::move(guard));
+                break;
+            } else {
+                release_guard(std::move(guard));
+                co_await split_all_compaction_groups();
+            }
+        } catch (...) {
+            slogger.error("Failed to complete splitting of table {} due to {}, retrying after {} seconds",
+                          table, std::current_exception(), split_retry.sleep_time());
+            sleep = true;
+            break;
+        }
+        if (sleep) {
+            co_await split_retry.retry(_group0_as);
+        }
+    }
+}
+
+void storage_service::register_tablet_split_candidate(table_id table) noexcept {
+    if (this_shard_id() != 0) {
+        return;
+    }
+    try {
+        if (get_token_metadata().tablets().get_tablet_map(table).needs_split()) {
+            _tablet_split_candidates.push_back(table);
+            _tablet_split_monitor_event.signal();
+        }
+    } catch (...) {
+        slogger.error("Unable to register table {} as candidate for tablet splitting, due to {}", table, std::current_exception());
+    }
+}
+
+future<> storage_service::run_tablet_split_monitor() {
+    while (!_async_gate.is_closed() && !_group0_as.abort_requested()) {
+        while (!_tablet_split_candidates.empty()) {
+            auto candidate = _tablet_split_candidates.front();
+            _tablet_split_candidates.pop_front();
+            co_await process_tablet_split_candidate(candidate);
+        }
+        co_await _tablet_split_monitor_event.when();
+    }
+}
+
+void storage_service::start_tablet_split_monitor() {
+    if (this_shard_id() != 0) {
+        return;
+    }
+    if (!_db.local().get_config().check_experimental(db::experimental_features_t::feature::TABLETS)) {
+        return;
+    }
+    slogger.info("Starting the tablet split monitor...");
+    _tablet_split_monitor = run_tablet_split_monitor();
+}
+
 future<> storage_service::snitch_reconfigured() {
     assert(this_shard_id() == 0);
     auto& snitch = _snitch.local();
@@ -5006,6 +5098,23 @@ future<> storage_service::stream_tablet(locator::global_tablet_id tablet) {
         }
         streamer->add_rx_ranges(table.schema()->ks_name(), std::move(ranges_per_endpoint));
         co_await streamer->stream_async();
+
+        // If new pending tablet replica needs splitting, streaming waits for it to complete.
+        // That's to provide a guarantee that once migration is over, the coordinator can finalize
+        // splitting under the promise that compaction groups of tablets are all split, ready
+        // for the subsequent topology change.
+        //
+        // FIXME:
+        //  We could do the splitting not in the streaming stage, but in a later stage, so that
+        //  from the tablet scheduler's perspective migrations blocked on compaction are not
+        //  participating in streaming anymore (which is true), so it could schedule more
+        //  migrations. This way compaction would run in parallel with streaming which can
+        //  reduce the delay.
+        co_await _db.invoke_on(trinfo->pending_replica.shard, [tablet] (replica::database& db) {
+            auto& table = db.find_column_family(tablet.table);
+            return table.maybe_split_compaction_group_of(tablet.tablet);
+        });
+
         co_return;
     });
 }
@@ -5121,6 +5230,79 @@ future<> storage_service::move_tablet(table_id table, dht::token token, locator:
         auto& tmap = get_token_metadata().tablets().get_tablet_map(table);
         return !tmap.get_tablet_transition_info(tmap.get_tablet_id(token));
     });
+}
+
+future<locator::load_stats> storage_service::load_stats_for_tablet_based_tables() {
+    auto holder = _async_gate.hold();
+
+    if (this_shard_id() != 0) {
+        // topology coordinator only exists in shard 0.
+        co_return co_await container().invoke_on(0, [&] (auto& ss) {
+            return ss.load_stats_for_tablet_based_tables();
+        });
+    }
+
+    using table_erms_t = std::unordered_map<table_id, const locator::effective_replication_map_ptr>;
+    // Creates a snapshot of transitions, so different shards will find their tablet replicas in the
+    // same migration stage. Important for intra-node migration.
+    const auto erms = co_await std::invoke([this] () -> future<table_erms_t> {
+        table_erms_t erms;
+        co_await _db.local().get_tables_metadata().for_each_table_gently([&] (table_id id, lw_shared_ptr<replica::table> table) mutable {
+            if (table->uses_tablets()) {
+                erms.emplace(id, table->get_effective_replication_map());
+            }
+            return make_ready_future<>();
+        });
+        co_return std::move(erms);
+    });
+
+    // Each node combines a per-table load map from all of its shards and returns it to the coordinator.
+    // So if there are 1k nodes, there will be 1k RPCs in total.
+    auto load_stats = co_await _db.map_reduce0([&erms] (replica::database& db) -> future<locator::load_stats> {
+        locator::load_stats load_stats{};
+        auto& tables_metadata = db.get_tables_metadata();
+
+        for (const auto& [id, erm] : erms) {
+            auto table = tables_metadata.get_table_if_exists(id);
+            if (!table) {
+                continue;
+            }
+
+            auto& token_metadata = erm->get_token_metadata();
+            auto& tmap = token_metadata.tablets().get_tablet_map(id);
+            auto me = locator::tablet_replica { token_metadata.get_my_id(), this_shard_id() };
+
+            // It's important to tackle the anomaly in reported size, since both leaving and
+            // pending replicas could otherwise be accounted during tablet migration.
+            // If transition hasn't reached cleanup stage, then leaving replicas are accounted.
+            // If transition is past cleanup stage, then pending replicas are accounted.
+            // This helps to reduce the discrepancy window.
+            auto tablet_filter = [&tmap, &me] (locator::global_tablet_id id) {
+                auto transition = tmap.get_tablet_transition_info(id.tablet);
+                auto& info = tmap.get_tablet_info(id.tablet);
+
+                // if tablet is not in transit, it's filtered in.
+                if (!transition) {
+                    return true;
+                }
+
+                bool is_pending = transition->pending_replica == me;
+                bool is_leaving = locator::get_leaving_replica(info, *transition) == me;
+                auto s = transition->stage;
+
+                return (!is_pending && !is_leaving)
+                       || (is_leaving && s < locator::tablet_transition_stage::cleanup)
+                       || (is_pending && s >= locator::tablet_transition_stage::cleanup);
+            };
+
+            load_stats.tables.emplace(id, table->table_load_stats(tablet_filter));
+            co_await coroutine::maybe_yield();
+        }
+
+        co_return std::move(load_stats);
+    }, locator::load_stats{}, std::plus<locator::load_stats>());
+
+    co_return std::move(load_stats);
 }
 
 future<> storage_service::set_tablet_balancing_enabled(bool enabled) {
@@ -5540,6 +5722,11 @@ void storage_service::init_messaging_service(bool raft_topology_change_enabled) 
         ser::storage_service_rpc_verbs::register_tablet_cleanup(&_messaging.local(), [handle_raft_rpc] (raft::server_id dst_id, locator::global_tablet_id tablet) {
             return handle_raft_rpc(dst_id, [tablet] (auto& ss) {
                 return ss.cleanup_tablet(tablet);
+            });
+        });
+        ser::storage_service_rpc_verbs::register_table_load_stats(&_messaging.local(), [handle_raft_rpc] (raft::server_id dst_id) {
+            return handle_raft_rpc(dst_id, [] (auto& ss) mutable {
+                return ss.load_stats_for_tablet_based_tables();
             });
         });
         ser::join_node_rpc_verbs::register_join_node_request(&_messaging.local(), [handle_raft_rpc] (raft::server_id dst_id, service::join_node_request_params params) {

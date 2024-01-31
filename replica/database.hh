@@ -537,6 +537,11 @@ private:
     bool _is_bootstrap_or_replace = false;
     sstables::shared_sstable make_sstable(sstables::sstable_state state);
 
+    // Every table replica that completes split work will load the seq number from tablet metadata into its local
+    // state. So when coordinator pull the local state of a table, it will know whether the table is ready for the
+    // current split, and not a previously revoked (stale) decision.
+    // The minimum value, which is a negative number, is not used by coordinator for first decision.
+    locator::resize_decision::seq_number_t _split_ready_seq_number = std::numeric_limits<locator::resize_decision::seq_number_t>::min();
 public:
     void deregister_metrics();
 
@@ -575,9 +580,24 @@ public:
                        const std::vector<sstables::shared_sstable>& old_sstables);
     };
 
+    // Precondition: table needs tablet splitting.
+    // Returns true if all storage of table is ready for splitting.
     bool all_storage_groups_split();
     future<> split_all_storage_groups();
+
+    // Splits compaction group of a single tablet, if and only if the underlying table has
+    // split request emitted by coordinator (found in tablet metadata).
+    // If split is required, then the compaction group of the given tablet is guaranteed to
+    // be split once it returns.
+    future<> maybe_split_compaction_group_of(locator::tablet_id);
 private:
+    // Called when coordinator executes tablet splitting, i.e. commit the new tablet map with
+    // each tablet split into two, so this replica will remap all of its compaction groups
+    // that were previously split.
+    void handle_tablet_split_completion(size_t old_tablet_count, const locator::tablet_map& new_tmap);
+
+    sstables::compaction_type_options::split split_compaction_options() const noexcept;
+
     // Select a compaction group from a given token.
     std::pair<size_t, locator::tablet_range_side> storage_group_of(dht::token token) const noexcept;
     size_t storage_group_id_for_token(dht::token token) const noexcept;
@@ -1001,6 +1021,10 @@ public:
     table_stats& get_stats() const {
         return _stats;
     }
+
+    // The tablet filter is used to not double account migrating tablets, so it's important that
+    // only one of pending or leaving replica is accounted based on current migration stage.
+    locator::table_load_stats table_load_stats(std::function<bool(locator::global_tablet_id)> tablet_filter) const noexcept;
 
     const db::view::stats& get_view_stats() const {
         return _view_stats;

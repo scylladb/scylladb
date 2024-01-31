@@ -29,6 +29,7 @@
 #include "config.hh"
 #include "extensions.hh"
 #include "log.hh"
+#include "service/tablet_allocator_fwd.hh"
 #include "utils/config_file_impl.hh"
 #include <seastar/core/metrics_api.hh>
 #include <seastar/core/relabel_config.hh>
@@ -1132,6 +1133,10 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , maximum_replication_factor_warn_threshold(this, "maximum_replication_factor_warn_threshold", liveness::LiveUpdate, value_status::Used, -1, "")
     , maximum_replication_factor_fail_threshold(this, "maximum_replication_factor_fail_threshold", liveness::LiveUpdate, value_status::Used, -1, "")
     , tablets_initial_scale_factor(this, "tablets_initial_scale_factor", value_status::Used, 1, "Calculated initial tablets are multiplied by this number")
+    , target_tablet_size_in_bytes(this, "target_tablet_size_in_bytes", liveness::LiveUpdate, value_status::Used, service::default_target_tablet_size,
+         "Allows target tablet size to be configured. Defaults to 5G (in bytes). Maintaining tablets at reasonable sizes is important to be able to " \
+         "redistribute load. A higher value means tablet migration throughput can be reduced. A lower value may cause number of tablets to increase significantly, " \
+         "potentially resulting in performance drawbacks.")
     , replication_strategy_warn_list(this, "replication_strategy_warn_list", liveness::LiveUpdate, value_status::Used, {locator::replication_strategy_type::simple}, "Controls which replication strategies to warn about when creating/altering a keyspace. Doesn't affect the pre-existing keyspaces.")
     , replication_strategy_fail_list(this, "replication_strategy_fail_list", liveness::LiveUpdate, value_status::Used, {}, "Controls which replication strategies are disallowed to be used when creating/altering a keyspace. Doesn't affect the pre-existing keyspaces.")
     , service_levels_interval(this, "service_levels_interval_ms", liveness::LiveUpdate, value_status::Used, 10000, "Controls how often service levels module polls configuration table")
