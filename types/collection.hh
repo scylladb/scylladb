@@ -10,14 +10,9 @@
 
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/sstring.hh>
-#include <vector>
 #include "types/types.hh"
 #include "collection_mutation.hh"
-#include "utils/chunked_vector.hh"
-#include "schema/schema_fwd.hh"
 #include "log.hh"
-
-#include "exceptions/exceptions.hh"
 
 namespace cql3 {
 

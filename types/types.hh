@@ -11,7 +11,6 @@
 #include <optional>
 #include <boost/functional/hash.hpp>
 #include <iosfwd>
-#include <sstream>
 #include <initializer_list>
 #include <unordered_set>
 

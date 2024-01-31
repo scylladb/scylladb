@@ -12,6 +12,7 @@
 #include "cql3/column_identifier.hh"
 #include "cql3/expr/evaluate.hh"
 #include "cql3/expr/expr-utils.hh"
+#include "exceptions/exceptions.hh"
 #include <optional>
 
 namespace cql3 {

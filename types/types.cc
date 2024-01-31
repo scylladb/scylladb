@@ -8,7 +8,6 @@
 
 #include <boost/lexical_cast.hpp>
 #include <algorithm>
-#include <cinttypes>
 #include "cql3/cql3_type.hh"
 #include "cql3/lists.hh"
 #include "cql3/maps.hh"

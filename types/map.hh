@@ -13,6 +13,7 @@
 #include <vector>
 #include <utility>
 
+#include "exceptions/exceptions.hh"
 #include "types/types.hh"
 #include "types/collection.hh"
 
