@@ -1386,16 +1386,32 @@ class ScyllaClusterManager:
     async def _cluster_rebuild_node(self, request) -> None:
         """Run rebuild node on Scylla REST API for a specified server"""
         assert self.cluster
+        data = await request.json()
         server_id = ServerNum(int(request.match_info["server_id"]))
         self.logger.info("_cluster_rebuild_node %s", server_id)
         assert server_id in self.cluster.running, "Can't rebuild not running node"
         server = self.cluster.running[server_id]
+        expected_error = data["expected_error"]
         try:
             await self.cluster.api.rebuild_node(server.ip_addr, timeout=ScyllaServer.TOPOLOGY_TIMEOUT)
         except (RuntimeError, HTTPError) as exc:
-            raise RuntimeError(
-                f"rebuild failed (server: {server}), check log at {server.log_filename},"
-                f" error: \"{exc}\"")
+            if expected_error:
+                if expected_error not in str(exc):
+                    raise RuntimeError(
+                            f"rebuild failed (server: {server}) but did not contain expected error"
+                            f"(\"{expected_error}\", check log file at {server.log_filename}, error: \"{exc}\"")
+                else:
+                    return
+            else:
+                raise RuntimeError(
+                    f"rebuild failed (server: {server}), check log at {server.log_filename},"
+                    f" error: \"{exc}\"")
+        else:
+            if expected_error:
+                raise RuntimeError(
+                    f"rebuild succeeded when it should have failed (server: {server},"
+                    f" expected_error: \"{expected_error}\"), check log file at {server.log_filename}")
+
         await self.cluster.server_stop(server_id, gracefully=True)
 
     async def _server_get_config(self, request: aiohttp.web.Request) -> dict[str, object]:

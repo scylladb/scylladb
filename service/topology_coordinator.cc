@@ -1803,15 +1803,27 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 break;
             }
             case node_state::rebuilding: {
-                node = co_await exec_direct_command(
-                        std::move(node), raft_topology_cmd::command::stream_ranges);
+                bool retake = false;
+                auto id = node.id;
                 topology_mutation_builder builder(node.guard.write_timestamp());
-                builder.del_session();
                 topology_request_tracking_mutation_builder rtbuilder(node.rs->request_id);
-                builder.with_node(node.id)
+                try {
+                    node = co_await exec_direct_command(std::move(node), raft_topology_cmd::command::stream_ranges);
+                    rtbuilder.done();
+                } catch (term_changed_error&) {
+                    throw;
+                } catch (...) {
+                    rtlogger.error("send_raft_topology_cmd(stream_ranges) failed with exception"
+                                    " (node state is rebuilding): {}", std::current_exception());
+                    rtbuilder.done("streaming failed");
+                    retake = true;
+                }
+                if (retake) {
+                    node = retake_node(co_await start_operation(), id);
+                }
+                builder.del_session().with_node(node.id)
                        .set("node_state", node_state::normal)
                        .del("rebuild_option");
-                rtbuilder.done();
                 co_await update_topology_state(take_guard(std::move(node)), {builder.build(), rtbuilder.build()}, "rebuilding completed");
             }
                 break;
