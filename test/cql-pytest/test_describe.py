@@ -835,9 +835,12 @@ def new_random_keyspace(cql):
     options["class"] = random.choice(strategies)
     options["replication_factor"] = random.randrange(1, 6)
     options_str = ", ".join([f"'{k}': '{v}'" for (k, v) in options.items()])
+    extra = ""
+    if options["class"] == "NetworkTopologyStrategy" and options["replication_factor"] != 1:
+        extra = " and tablets = { 'enabled': false }"
 
     write = random.choice(writes)
-    return new_test_keyspace(cql, f"with replication = {{{options_str}}} and durable_writes = {write}")
+    return new_test_keyspace(cql, f"with replication = {{{options_str}}} and durable_writes = {write}{extra}")
 
 # A utility function for creating random table. `udts` argument represents
 # UDTs that can be used to create the table. The function uses `new_test_table`
