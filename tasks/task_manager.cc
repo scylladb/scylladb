@@ -12,7 +12,6 @@
 #include <seastar/core/gate.hh>
 
 #include "task_manager.hh"
-#include "test_module.hh"
 
 namespace tasks {
 

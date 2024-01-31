@@ -18,7 +18,6 @@
 #include "db_clock.hh"
 #include "log.hh"
 #include "tasks/types.hh"
-#include "utils/UUID.hh"
 #include "utils/serialized_action.hh"
 #include "utils/updateable_value.hh"
 
