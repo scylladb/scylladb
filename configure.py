@@ -596,7 +596,6 @@ scylla_tests = set([
     'test/boost/user_function_test',
     'test/boost/user_types_test',
     'test/boost/utf8_test',
-    'test/boost/utils_directories_test',
     'test/boost/view_build_test',
     'test/boost/view_complex_test',
     'test/boost/view_schema_test',

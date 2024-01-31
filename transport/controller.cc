@@ -16,7 +16,6 @@
 #include "gms/gossiper.hh"
 #include "log.hh"
 #include "cql3/query_processor.hh"
-#include "utils/directories.hh"
 
 using namespace seastar;
 
@@ -27,8 +26,7 @@ static logging::logger logger("cql_server_controller");
 controller::controller(sharded<auth::service>& auth, sharded<service::migration_notifier>& mn,
         sharded<gms::gossiper>& gossiper, sharded<cql3::query_processor>& qp, sharded<service::memory_limiter>& ml,
         sharded<qos::service_level_controller>& sl_controller, sharded<service::endpoint_lifecycle_notifier>& elc_notif,
-        const db::config& cfg, const utils::directories& dirs, scheduling_group_key cql_opcode_stats_key,
-        maintenance_socket_enabled used_by_maintenance_socket)
+        const db::config& cfg, scheduling_group_key cql_opcode_stats_key, maintenance_socket_enabled used_by_maintenance_socket)
     : _ops_sem(1)
     , _auth_service(auth)
     , _mnotifier(mn)
@@ -38,7 +36,6 @@ controller::controller(sharded<auth::service>& auth, sharded<service::migration_
     , _mem_limiter(ml)
     , _sl_controller(sl_controller)
     , _config(cfg)
-    , _dirs(dirs)
     , _cql_opcode_stats_key(cql_opcode_stats_key)
     , _used_by_maintenance_socket(used_by_maintenance_socket)
 {
@@ -163,7 +160,7 @@ future<> controller::do_start_server() {
             auto socket = cfg.maintenance_socket();
 
             if (socket == "workdir") {
-                socket = _dirs.get_work_dir() + "/cql.m";
+                socket = cfg.work_directory() + "/cql.m";
             }
 
             if (socket.length() > 107) {

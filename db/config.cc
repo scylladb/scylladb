@@ -1167,6 +1167,32 @@ void db::config::add_tags_extension() {
     _extensions->add_schema_extension<db::tags_extension>(db::tags_extension::NAME);
 }
 
+void db::config::setup_directories() {
+    maybe_in_workdir(commitlog_directory, "commitlog");
+    if (!schema_commitlog_directory.is_set()) {
+        schema_commitlog_directory(commitlog_directory() + "/schema");
+    }
+    maybe_in_workdir(schema_commitlog_directory, "schema_commitlog");
+    maybe_in_workdir(data_file_directories, "data");
+    maybe_in_workdir(hints_directory, "hints");
+    maybe_in_workdir(view_hints_directory, "view_hints");
+    maybe_in_workdir(saved_caches_directory, "saved_caches");
+}
+
+void db::config::maybe_in_workdir(named_value<sstring>& to, const char* sub) {
+    if (!to.is_set()) {
+        to(work_directory() + "/" + sub);
+    }
+}
+
+void db::config::maybe_in_workdir(named_value<string_list>& tos, const char* sub) {
+    if (!tos.is_set()) {
+        string_list n;
+        n.push_back(work_directory() + "/" + sub);
+        tos(n);
+    }
+}
+
 const sstring db::config::default_tls_priority("SECURE128:-VERS-TLS1.0");
 
 template <>

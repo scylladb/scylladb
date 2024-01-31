@@ -71,8 +71,11 @@ public:
 
         const auto units = co_await seastar::get_units(_lock, 1);
         
+        utils::directories::set dir_set;
+        dir_set.add_sharded(_hints_directory);
+        
         manager_logger.debug("Creating and validating hint directories: {}", _hints_directory);
-        co_await _dirs.create_and_verify_sharded_directory(_hints_directory);
+        co_await _dirs.create_and_verify(std::move(dir_set));
         
         _state = state::created_and_validated;
     }

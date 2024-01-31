@@ -14,8 +14,6 @@
 #include "db/data_listeners.hh"
 
 namespace cql_transport { class controller; }
-namespace utils { class directories; }
-
 class thrift_controller;
 namespace db {
 class snapshot_ctl;
@@ -68,11 +66,7 @@ struct scrub_info {
 
 future<scrub_info> parse_scrub_options(http_context& ctx, sharded<db::snapshot_ctl>& snap_ctl, std::unique_ptr<http::request> req);
 
-void set_storage_service(http_context& ctx,
-        httpd::routes& r,
-        sharded<service::storage_service>& ss,
-        service::raft_group0_client&,
-        const utils::directories& dirs);
+void set_storage_service(http_context& ctx, httpd::routes& r, sharded<service::storage_service>& ss, service::raft_group0_client&);
 void unset_storage_service(http_context& ctx, httpd::routes& r);
 void set_sstables_loader(http_context& ctx, httpd::routes& r, sharded<sstables_loader>& sst_loader);
 void unset_sstables_loader(http_context& ctx, httpd::routes& r);

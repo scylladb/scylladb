@@ -140,6 +140,8 @@ public:
     /// True iff the feature is enabled.
     bool check_experimental(experimental_features_t::feature f) const;
 
+    void setup_directories();
+
     /**
      * Scans the environment variables for configuration files directory
      * definition. It's either $SCYLLA_CONF, $SCYLLA_HOME/conf or "conf" if none
@@ -498,6 +500,9 @@ private:
     log_legacy_value<seastar::log_level> default_log_level;
     log_legacy_value<std::unordered_map<sstring, seastar::log_level>> logger_log_level;
     log_legacy_value<bool> log_to_stdout, log_to_syslog;
+
+    void maybe_in_workdir(named_value<sstring>&, const char*);
+    void maybe_in_workdir(named_value<string_list>&, const char*);
 
     std::shared_ptr<db::extensions> _extensions;
 };

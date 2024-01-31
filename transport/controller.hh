@@ -29,7 +29,6 @@ namespace gms { class gossiper; }
 namespace cql3 { class query_processor; }
 namespace qos { class service_level_controller; }
 namespace db { class config; }
-namespace utils { class directories; }
 struct client_data;
 
 namespace cql_transport {
@@ -50,7 +49,6 @@ class controller : public protocol_server {
     sharded<service::memory_limiter>& _mem_limiter;
     sharded<qos::service_level_controller>& _sl_controller;
     const db::config& _config;
-    const utils::directories& _dirs;
     scheduling_group_key _cql_opcode_stats_key;
 
 
@@ -67,8 +65,7 @@ public:
     controller(sharded<auth::service>&, sharded<service::migration_notifier>&, sharded<gms::gossiper>&,
             sharded<cql3::query_processor>&, sharded<service::memory_limiter>&,
             sharded<qos::service_level_controller>&, sharded<service::endpoint_lifecycle_notifier>&,
-            const db::config& cfg, const utils::directories& dirs, scheduling_group_key cql_opcode_stats_key,
-            maintenance_socket_enabled used_by_maintenance_socket);
+            const db::config& cfg, scheduling_group_key cql_opcode_stats_key, maintenance_socket_enabled used_by_maintenance_socket);
     virtual sstring name() const override;
     virtual sstring protocol() const override;
     virtual sstring protocol_version() const override;

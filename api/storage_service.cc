@@ -14,7 +14,6 @@
 #include "api/scrub_status.hh"
 #include "db/config.hh"
 #include "db/schema_tables.hh"
-#include "utils/directories.hh"
 #include "utils/hash.hh"
 #include <optional>
 #include <sstream>
@@ -548,11 +547,7 @@ static future<json::json_return_type> describe_ring_as_json(sharded<service::sto
     co_return json::json_return_type(stream_range_as_array(co_await ss.local().describe_ring(keyspace), token_range_endpoints_to_json));
 }
 
-void set_storage_service(http_context& ctx,
-        routes& r,
-        sharded<service::storage_service>& ss,
-        service::raft_group0_client& group0_client,
-        const utils::directories& dirs) {
+void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_service>& ss, service::raft_group0_client& group0_client) {
     ss::get_commitlog.set(r, [&ctx](const_req req) {
         return ctx.db.local().commitlog()->active_config().commit_log_location;
     });
@@ -627,12 +622,12 @@ void set_storage_service(http_context& ctx,
         return ss.local().get_schema_version();
     });
 
-    ss::get_all_data_file_locations.set(r, [data_file_dirs = dirs.get_data_file_dirs()](const_req req) {
-        return container_to_vec(data_file_dirs);
+    ss::get_all_data_file_locations.set(r, [&ctx](const_req req) {
+        return container_to_vec(ctx.db.local().get_config().data_file_directories());
     });
 
-    ss::get_saved_caches_location.set(r, [saved_caches_dir = dirs.get_saved_caches_dir()](const_req req) {
-        return saved_caches_dir;
+    ss::get_saved_caches_location.set(r, [&ctx](const_req req) {
+        return ctx.db.local().get_config().saved_caches_directory();
     });
 
     ss::get_range_to_endpoint_map.set(r, [&ctx, &ss](std::unique_ptr<http::request> req) -> future<json::json_return_type> {

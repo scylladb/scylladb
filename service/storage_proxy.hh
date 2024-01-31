@@ -61,10 +61,6 @@ namespace cdc {
     class cdc_service;    
 }
 
-namespace utils {
-class directories;
-}
-
 namespace gms {
 class gossiper;
 class feature_service;
@@ -464,14 +460,8 @@ private:
         inet_address_vector_replica_set& l2) const;
 
 public:
-    storage_proxy(distributed<replica::database>& db,
-            const utils::directories& dirs,
-            config cfg,
-            db::view::node_update_backlog& max_view_update_backlog,
-            scheduling_group_key stats_key,
-            gms::feature_service& feat,
-            const locator::shared_token_metadata& stm,
-            locator::effective_replication_map_factory& erm_factory);
+    storage_proxy(distributed<replica::database>& db, config cfg, db::view::node_update_backlog& max_view_update_backlog,
+            scheduling_group_key stats_key, gms::feature_service& feat, const locator::shared_token_metadata& stm, locator::effective_replication_map_factory& erm_factory);
     ~storage_proxy();
 
     const distributed<replica::database>& get_db() const {
