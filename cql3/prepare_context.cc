@@ -11,6 +11,7 @@
 #include "cql3/prepare_context.hh"
 #include "cql3/column_identifier.hh"
 #include "cql3/column_specification.hh"
+#include "exceptions/exceptions.hh"
 
 namespace cql3 {
 
