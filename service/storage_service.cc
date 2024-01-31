@@ -16,6 +16,7 @@
 #include "service/topology_guard.hh"
 #include "service/session.hh"
 #include "dht/boot_strapper.hh"
+#include <exception>
 #include <optional>
 #include <seastar/core/distributed.hh>
 #include <seastar/util/defer.hh>
@@ -381,10 +382,6 @@ future<> storage_service::sync_raft_topology_nodes(mutable_token_metadata_ptr tm
             }
         }
 
-        // FIXME: when removing a node from the cluster through `removenode`, we should ban it early,
-        // at the beginning of the removal process (so it doesn't disrupt us in the middle of the process).
-        // The node is only included in `left_nodes` at the end of the process.
-        //
         // However if we do that, we need to also implement unbanning a node and do it if `removenode` is aborted.
         co_await _messaging.local().ban_host(locator::host_id{id.uuid()});
     };
@@ -644,6 +641,11 @@ future<> storage_service::topology_state_load() {
     if (auto gen_id = _topology_state_machine._topology.current_cdc_generation_id) {
         rtlogger.debug("topology_state_load: current CDC generation ID: {}", *gen_id);
         co_await _cdc_gens.local().handle_cdc_generation(*gen_id);
+    }
+
+    for (auto& id : _topology_state_machine._topology.ignored_nodes) {
+        // Ban all ignored nodes. We do not allow them to go back online
+        co_await _messaging.local().ban_host(locator::host_id{id.uuid()});
     }
 
     slogger.debug("topology_state_load: excluded nodes: {}", _topology_state_machine._topology.get_excluded_nodes());
@@ -5820,6 +5822,20 @@ future<join_node_request_result> storage_service::join_node_request_handler(join
                 };
             }
             co_return result;
+        }
+
+        if (params.replaced_id) {
+            try {
+                auto ip = co_await wait_for_ip(*params.replaced_id, _group0->address_map(), _group0_as);
+                if (is_me(ip) || _gossiper.is_alive(ip)) {
+                    result.result = join_node_request_result::rejected{
+                        .reason = fmt::format("tried to replace alive node {}", *params.replaced_id),
+                    };
+                    co_return result;
+                }
+            } catch (wait_for_ip_timeout& ex) {
+                rtlogger.warn("Failed to check liveness for replaced id {}. Asumming it is dead, Error: {}", *params.replaced_id, ex);
+            }
         }
 
         auto mutation = build_mutation_from_join_params(params, guard);

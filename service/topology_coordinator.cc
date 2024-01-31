@@ -1869,18 +1869,6 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     case topology_request::remove: {
                         assert(node.rs->ring);
 
-                        auto ip = id2ip(locator::host_id(node.id.uuid()));
-                        if (_gossiper.is_alive(ip)) {
-                            builder.with_node(node.id)
-                                   .del("topology_request");
-                            rtbuilder.done("the node is alive");
-                            co_await update_topology_state(take_guard(std::move(node)), {builder.build(), rtbuilder.build()},
-                                                           "reject removenode");
-                            rtlogger.warn("rejected removenode operation for node {} "
-                                         "because it is alive", node.id);
-                            break;
-                        }
-
                         builder.set_transition_state(topology::transition_state::tablet_draining)
                                .set_version(_topo_sm._topology.version + 1)
                                .with_node(node.id)
@@ -1892,6 +1880,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         }
                     case topology_request::replace: {
                         assert(!node.rs->ring);
+
                         builder.set_transition_state(topology::transition_state::join_group0)
                                .with_node(node.id)
                                .set("node_state", node_state::replacing)
@@ -1960,13 +1949,6 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             if (!_topo_sm._topology.normal_nodes.contains(replaced_id)) {
                 return join_node_response_params::rejected {
                     .reason = ::format("Cannot replace node {} because it is not in the 'normal' state", replaced_id),
-                };
-            }
-
-            auto replaced_ip = id2ip(locator::host_id(replaced_id.uuid()));
-            if (_gossiper.is_alive(replaced_ip)) {
-                return join_node_response_params::rejected {
-                    .reason = ::format("Cannot replace node {} because it is considered alive", replaced_id),
                 };
             }
         }

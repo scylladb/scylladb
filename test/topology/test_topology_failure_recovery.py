@@ -30,18 +30,6 @@ async def test_topology_streaming_failure(request, manager: ManagerClient):
     matches = [await log.grep("raft_topology - rollback.*after decommissioning failure, moving transition state to rollback to normal",
                from_mark=mark) for log, mark in zip(logs, marks)]
     assert sum(len(x) for x in matches) == 1
-    # remove failure
-    marks = [await log.mark() for log in logs]
-    await manager.server_add()
-    servers = await manager.running_servers()
-    await manager.server_stop_gracefully(servers[3].server_id)
-    await manager.api.enable_injection(servers[2].ip_addr, 'stream_ranges_fail', one_shot=True)
-    await manager.remove_node(servers[0].server_id, servers[3].server_id, expected_error="Removenode failed. See earlier errors")
-    matches = [await log.grep("raft_topology - rollback.*after removing failure, moving transition state to rollback to normal",
-               from_mark=mark) for log, mark in zip(logs, marks)]
-    assert sum(len(x) for x in matches) == 1
-    await manager.server_start(servers[3].server_id)
-    await manager.servers_see_each_other(servers)
     # bootstrap failure
     marks = [await log.mark() for log in logs]
     servers = await manager.running_servers()
@@ -74,6 +62,7 @@ async def test_topology_streaming_failure(request, manager: ManagerClient):
     marks = [await log.mark() for log in logs]
     servers = await manager.running_servers()
     await manager.server_stop_gracefully(servers[2].server_id)
+    downed_server_id = servers[2].server_id
     replace_cfg = ReplaceConfig(replaced_id = servers[2].server_id, reuse_ip_addr = False, use_host_id = True)
     s = await manager.server_add(start=False, replace_cfg=replace_cfg, config={
         'error_injections_at_startup': ['stream_ranges_fail']
@@ -82,5 +71,12 @@ async def test_topology_streaming_failure(request, manager: ManagerClient):
     servers = await manager.running_servers()
     assert s not in servers
     matches = [await log.grep("raft_topology - rollback.*after replacing failure, moving transition state to left token ring",
+               from_mark=mark) for log, mark in zip(logs, marks)]
+    assert sum(len(x) for x in matches) == 1
+    # remove failure
+    marks = [await log.mark() for log in logs]
+    await manager.api.enable_injection(servers[1].ip_addr, 'stream_ranges_fail', one_shot=True)
+    await manager.remove_node(servers[0].server_id, downed_server_id, expected_error="Removenode failed. See earlier errors")
+    matches = [await log.grep("raft_topology - rollback.*after removing failure, moving transition state to rollback to normal",
                from_mark=mark) for log, mark in zip(logs, marks)]
     assert sum(len(x) for x in matches) == 1
