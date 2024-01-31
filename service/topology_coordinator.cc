@@ -218,7 +218,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     // it may still fail if down node has data for the rebuild process
                     return !dead_nodes.contains(req.first);
                 }
-                auto exclude_nodes = get_excluded_nodes(topo, req.first, req.second, get_request_param(req.first));
+                auto exclude_nodes = get_excluded_nodes(topo, req.first, req.second);
                 for (auto id : dead_nodes) {
                     if (!exclude_nodes.contains(id)) {
                         return false;
@@ -393,12 +393,12 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     }
 
     std::unordered_set<raft::server_id> get_excluded_nodes(const topology_state_machine::topology_type& topo,
-                raft::server_id id, const std::optional<topology_request>& req, const std::optional<request_param>& req_param) {
-        return topo.get_excluded_nodes(id, req, req_param);
+                raft::server_id id, const std::optional<topology_request>& req) {
+        return topo.get_excluded_nodes(id, req);
     }
 
     std::unordered_set<raft::server_id> get_excluded_nodes(const node_to_work_on& node) {
-        return node.topology->get_excluded_nodes(node.id, node.request, node.req_param);
+        return node.topology->get_excluded_nodes(node.id, node.request);
     }
 
     future<node_to_work_on> exec_global_command(node_to_work_on&& node, const raft_topology_cmd& cmd) {

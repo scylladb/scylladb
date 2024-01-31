@@ -12,6 +12,7 @@
 #include "storage_service.hh"
 #include "compaction/task_manager_module.hh"
 #include "gc_clock.hh"
+#include "raft/raft.hh"
 #include "service/topology_guard.hh"
 #include "service/session.hh"
 #include "dht/boot_strapper.hh"
@@ -924,8 +925,8 @@ std::unordered_set<raft::server_id> storage_service::find_raft_nodes_from_hoeps(
     return ids;
 }
 
-std::vector<canonical_mutation> storage_service::build_mutation_from_join_params(const join_node_request_params& params, service::group0_guard& guard) {
-    topology_mutation_builder builder(guard.write_timestamp());
+std::unordered_set<raft::server_id> storage_service::ignored_nodes_from_join_params(const join_node_request_params& params) {
+    std::unordered_set<raft::server_id> ignored_nodes;
 
     if (!params.ignore_nodes.empty()) {
         std::list<locator::host_id_or_endpoint> ignore_nodes_params;
@@ -933,7 +934,24 @@ std::vector<canonical_mutation> storage_service::build_mutation_from_join_params
             ignore_nodes_params.emplace_back(n);
         }
 
-        builder.add_ignored_nodes(find_raft_nodes_from_hoeps(ignore_nodes_params));
+        ignored_nodes = find_raft_nodes_from_hoeps(ignore_nodes_params);
+    }
+
+    if (params.replaced_id) {
+        // insert node that should be replaced to ignore list so that other topology operations
+        // can ignore it
+        ignored_nodes.insert(*params.replaced_id);
+    }
+
+    return ignored_nodes;
+}
+
+std::vector<canonical_mutation> storage_service::build_mutation_from_join_params(const join_node_request_params& params, service::group0_guard& guard) {
+    topology_mutation_builder builder(guard.write_timestamp());
+    auto ignored_nodes = ignored_nodes_from_join_params(params);
+
+    if (!ignored_nodes.empty()) {
+        builder.add_ignored_nodes(std::move(ignored_nodes));
     }
 
     auto& node_builder = builder.with_node(params.host_id)
@@ -3538,6 +3556,9 @@ future<> storage_service::raft_removenode(locator::host_id host_id, std::list<lo
         }
 
         auto ignored_ids = find_raft_nodes_from_hoeps(ignore_nodes_params);
+        // insert node that should be removed to ignore list so that other topology operations
+        // can ignore it
+        ignored_ids.insert(id);
 
         rtlogger.info("request removenode for: {}, new ignored nodes: {}, existing ignore nodes: {}", id, ignored_ids, _topology_state_machine._topology.ignored_nodes);
         topology_mutation_builder builder(guard.write_timestamp());
@@ -3552,6 +3573,8 @@ future<> storage_service::raft_removenode(locator::host_id host_id, std::list<lo
 
         request_id = guard.new_group0_state_id();
         try {
+            // Make non voter during request submission for better HA
+            co_await _group0->make_nonvoters(ignored_ids);
             co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), &_group0_as);
         } catch (group0_concurrent_modification&) {
             rtlogger.info("removenode: concurrent operation is detected, retrying.");
@@ -5791,6 +5814,8 @@ future<join_node_request_result> storage_service::join_node_request_handler(join
         group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard,
                 format("raft topology: placing join request for {}", params.host_id));
         try {
+            // Make replaced node and ignored nodes non voters earlier for better HA
+            co_await _group0->make_nonvoters(ignored_nodes_from_join_params(params));
             co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), &_group0_as);
             break;
         } catch (group0_concurrent_modification&) {
