@@ -390,8 +390,26 @@ future<> raft_group0::start_server_for_group0(raft::group_id group0_id, service:
     // we ensure we haven't missed any IP update in the map.
     load_initial_raft_address_map();
     group0_log.info("Server {} is starting group 0 with id {}", my_id, group0_id);
-    co_await _raft_gr.start_server_for_group(create_server_for_group0(group0_id, my_id, ss, qp, mm, topology_change_enabled));
+    auto srv_for_group0 = create_server_for_group0(group0_id, my_id, ss, qp, mm, topology_change_enabled);
+    auto& persistence = srv_for_group0.persistence;
+    auto& server = *srv_for_group0.server;
+    co_await _raft_gr.start_server_for_group(std::move(srv_for_group0));
     _group0.emplace<raft::group_id>(group0_id);
+
+    // Fix for scylladb/scylladb#16683:
+    // If the snapshot index is 0, trigger creation of a new snapshot
+    // so bootstrapping nodes will receive a snapshot transfer.
+    auto snap = co_await persistence.load_snapshot_descriptor();
+    if (snap.idx == raft::index_t{0}) {
+        group0_log.info("Detected snapshot with index=0, id={}, triggering new snapshot", snap.id);
+        bool created = co_await server.trigger_snapshot(&_abort_source);
+        if (created) {
+            snap = co_await persistence.load_snapshot_descriptor();
+            group0_log.info("New snapshot created, index={} id={}", snap.idx, snap.id);
+        } else {
+            group0_log.warn("Could not create new snapshot, there are no entries applied");
+        }
+    }
 }
 
 future<> raft_group0::leadership_monitor_fiber() {
