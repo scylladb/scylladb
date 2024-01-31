@@ -230,6 +230,19 @@ public:
     host_id_set& replicas() noexcept {
         return _replicas;
     }
+
+    static void check_enough_endpoints(const token_metadata& tm, const std::unordered_map<sstring, size_t>& dc_rf) {
+        const auto& dc_endpoints = tm.get_topology().get_datacenter_endpoints();
+        auto endpoints_in = [&dc_endpoints](sstring dc) {
+            auto i = dc_endpoints.find(dc);
+            return i != dc_endpoints.end() ? i->second.size() : size_t(0);
+        };
+        for (const auto& p : dc_rf) {
+            if (p.second > endpoints_in(p.first)) {
+                throw exceptions::configuration_exception(fmt::format("Datacenter {} doesn't have enough nodes for replication_factor={}", p.first, p.second));
+            }
+        }
+    }
 };
 
 future<host_id_set>
@@ -315,6 +328,8 @@ static unsigned calculate_initial_tablets_from_topology(const schema& s, const t
 }
 
 future<tablet_map> network_topology_strategy::allocate_tablets_for_new_table(schema_ptr s, token_metadata_ptr tm, unsigned initial_scale) const {
+    natural_endpoints_tracker::check_enough_endpoints(*tm, _dc_rep_factor);
+
     auto tablet_count = get_initial_tablets();
     if (tablet_count == 0) {
         tablet_count = calculate_initial_tablets_from_topology(*s, tm->get_topology(), _dc_rep_factor) * initial_scale;
