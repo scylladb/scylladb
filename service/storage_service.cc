@@ -4756,165 +4756,165 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
             }
             break;
             case raft_topology_cmd::command::stream_ranges: {
-              co_await with_scheduling_group(_db.local().get_streaming_scheduling_group(), coroutine::lambda([&] () -> future<> {
-                const auto& rs = _topology_state_machine._topology.find(raft_server.id())->second;
-                auto tstate = _topology_state_machine._topology.tstate;
-                if (!rs.ring ||
-                    (tstate != topology::transition_state::write_both_read_old && rs.state != node_state::normal && rs.state != node_state::rebuilding)) {
-                    rtlogger.warn("got stream_ranges request while my tokens state is {} and node state is {}", tstate, rs.state);
-                    co_return;
-                }
+                co_await with_scheduling_group(_db.local().get_streaming_scheduling_group(), coroutine::lambda([&] () -> future<> {
+                    const auto& rs = _topology_state_machine._topology.find(raft_server.id())->second;
+                    auto tstate = _topology_state_machine._topology.tstate;
+                    if (!rs.ring ||
+                        (tstate != topology::transition_state::write_both_read_old && rs.state != node_state::normal && rs.state != node_state::rebuilding)) {
+                        rtlogger.warn("got stream_ranges request while my tokens state is {} and node state is {}", tstate, rs.state);
+                        co_return;
+                    }
 
-                utils::get_local_injector().inject("stream_ranges_fail",
-                                       [] { throw std::runtime_error("stream_range failed due to error injection"); });
+                    utils::get_local_injector().inject("stream_ranges_fail",
+                                           [] { throw std::runtime_error("stream_range failed due to error injection"); });
 
-                switch(rs.state) {
-                case node_state::bootstrapping:
-                case node_state::replacing: {
-                    set_mode(mode::BOOTSTRAP);
-                    // See issue #4001
-                    co_await mark_existing_views_as_built();
-                    co_await _db.invoke_on_all([] (replica::database& db) {
-                        for (auto& cf : db.get_non_system_column_families()) {
-                            cf->notify_bootstrap_or_replace_start();
-                        }
-                    });
-                    if (rs.state == node_state::bootstrapping) {
-                        if (!_topology_state_machine._topology.normal_nodes.empty()) { // stream only if there is a node in normal state
-                            co_await retrier(_bootstrap_result, coroutine::lambda([&] () -> future<> {
-                                if (is_repair_based_node_ops_enabled(streaming::stream_reason::bootstrap)) {
-                                    co_await _repair.local().bootstrap_with_repair(get_token_metadata_ptr(), rs.ring.value().tokens);
+                    switch(rs.state) {
+                    case node_state::bootstrapping:
+                    case node_state::replacing: {
+                        set_mode(mode::BOOTSTRAP);
+                        // See issue #4001
+                        co_await mark_existing_views_as_built();
+                        co_await _db.invoke_on_all([] (replica::database& db) {
+                            for (auto& cf : db.get_non_system_column_families()) {
+                                cf->notify_bootstrap_or_replace_start();
+                            }
+                        });
+                        if (rs.state == node_state::bootstrapping) {
+                            if (!_topology_state_machine._topology.normal_nodes.empty()) { // stream only if there is a node in normal state
+                                co_await retrier(_bootstrap_result, coroutine::lambda([&] () -> future<> {
+                                    if (is_repair_based_node_ops_enabled(streaming::stream_reason::bootstrap)) {
+                                        co_await _repair.local().bootstrap_with_repair(get_token_metadata_ptr(), rs.ring.value().tokens);
+                                    } else {
+                                        dht::boot_strapper bs(_db, _stream_manager, _abort_source, get_token_metadata_ptr()->get_my_id(),
+                                            locator::endpoint_dc_rack{rs.datacenter, rs.rack}, rs.ring.value().tokens, get_token_metadata_ptr());
+                                        co_await bs.bootstrap(streaming::stream_reason::bootstrap, _gossiper, _topology_state_machine._topology.session);
+                                    }
+                                }));
+                            }
+                            // Bootstrap did not complete yet, but streaming did
+                        } else {
+                            co_await retrier(_bootstrap_result, coroutine::lambda([&] () ->future<> {
+                                if (!_topology_state_machine._topology.req_param.contains(raft_server.id())) {
+                                    on_internal_error(rtlogger, ::format("Cannot find request_param for node id {}", raft_server.id()));
+                                }
+                                if (is_repair_based_node_ops_enabled(streaming::stream_reason::replace)) {
+                                    // FIXME: we should not need to translate ids to IPs here. See #6403.
+                                    std::unordered_set<gms::inet_address> ignored_ips;
+                                    for (const auto& id : std::get<replace_param>(_topology_state_machine._topology.req_param[raft_server.id()]).ignored_ids) {
+                                        auto ip = _group0->address_map().find(id);
+                                        if (!ip) {
+                                            on_fatal_internal_error(rtlogger, ::format("Cannot find a mapping from node id {} to its ip", id));
+                                        }
+                                        ignored_ips.insert(*ip);
+                                    }
+                                    co_await _repair.local().replace_with_repair(get_token_metadata_ptr(), rs.ring.value().tokens, std::move(ignored_ips));
                                 } else {
                                     dht::boot_strapper bs(_db, _stream_manager, _abort_source, get_token_metadata_ptr()->get_my_id(),
-                                        locator::endpoint_dc_rack{rs.datacenter, rs.rack}, rs.ring.value().tokens, get_token_metadata_ptr());
-                                    co_await bs.bootstrap(streaming::stream_reason::bootstrap, _gossiper, _topology_state_machine._topology.session);
+                                                          locator::endpoint_dc_rack{rs.datacenter, rs.rack}, rs.ring.value().tokens, get_token_metadata_ptr());
+                                    auto replaced_id = std::get<replace_param>(_topology_state_machine._topology.req_param[raft_server.id()]).replaced_id;
+                                    auto existing_ip = _group0->address_map().find(replaced_id);
+                                    assert(existing_ip);
+                                    co_await bs.bootstrap(streaming::stream_reason::replace, _gossiper, _topology_state_machine._topology.session, *existing_ip);
                                 }
                             }));
                         }
-                        // Bootstrap did not complete yet, but streaming did
-                    } else {
-                        co_await retrier(_bootstrap_result, coroutine::lambda([&] () ->future<> {
-                            if (!_topology_state_machine._topology.req_param.contains(raft_server.id())) {
-                                on_internal_error(rtlogger, ::format("Cannot find request_param for node id {}", raft_server.id()));
-                            }
-                            if (is_repair_based_node_ops_enabled(streaming::stream_reason::replace)) {
-                                // FIXME: we should not need to translate ids to IPs here. See #6403.
-                                std::unordered_set<gms::inet_address> ignored_ips;
-                                for (const auto& id : std::get<replace_param>(_topology_state_machine._topology.req_param[raft_server.id()]).ignored_ids) {
-                                    auto ip = _group0->address_map().find(id);
-                                    if (!ip) {
-                                        on_fatal_internal_error(rtlogger, ::format("Cannot find a mapping from node id {} to its ip", id));
-                                    }
-                                    ignored_ips.insert(*ip);
-                                }
-                                co_await _repair.local().replace_with_repair(get_token_metadata_ptr(), rs.ring.value().tokens, std::move(ignored_ips));
-                            } else {
-                                dht::boot_strapper bs(_db, _stream_manager, _abort_source, get_token_metadata_ptr()->get_my_id(),
-                                                      locator::endpoint_dc_rack{rs.datacenter, rs.rack}, rs.ring.value().tokens, get_token_metadata_ptr());
-                                auto replaced_id = std::get<replace_param>(_topology_state_machine._topology.req_param[raft_server.id()]).replaced_id;
-                                auto existing_ip = _group0->address_map().find(replaced_id);
-                                assert(existing_ip);
-                                co_await bs.bootstrap(streaming::stream_reason::replace, _gossiper, _topology_state_machine._topology.session, *existing_ip);
-                            }
-                        }));
-                    }
-                    co_await _db.invoke_on_all([] (replica::database& db) {
-                        for (auto& cf : db.get_non_system_column_families()) {
-                            cf->notify_bootstrap_or_replace_end();
-                        }
-                    });
-                    result.status = raft_topology_cmd_result::command_status::success;
-                }
-                break;
-                case node_state::decommissioning:
-                    co_await retrier(_decommission_result, coroutine::lambda([&] () { return unbootstrap(); }));
-                    result.status = raft_topology_cmd_result::command_status::success;
-                break;
-                case node_state::normal: {
-                    // If asked to stream a node in normal state it means that remove operation is running
-                    // Find the node that is been removed
-                    auto it = boost::find_if(_topology_state_machine._topology.transition_nodes, [] (auto& e) { return e.second.state == node_state::removing; });
-                    if (it == _topology_state_machine._topology.transition_nodes.end()) {
-                        rtlogger.warn("got stream_ranges request while my state is normal but cannot find a node that is been removed");
-                        break;
-                    }
-                    auto id = it->first;
-                    rtlogger.debug("streaming to remove node {}", id);
-                    const auto& am = _group0->address_map();
-                    auto ip = am.find(id); // map node id to ip
-                    assert (ip); // what to do if address is unknown?
-                    co_await retrier(_remove_result[id], coroutine::lambda([&] () {
-                        auto as = make_shared<abort_source>();
-                        auto sub = _abort_source.subscribe([as] () noexcept {
-                            if (!as->abort_requested()) {
-                                as->request_abort();
+                        co_await _db.invoke_on_all([] (replica::database& db) {
+                            for (auto& cf : db.get_non_system_column_families()) {
+                                cf->notify_bootstrap_or_replace_end();
                             }
                         });
-                        if (is_repair_based_node_ops_enabled(streaming::stream_reason::removenode)) {
-                            if (!_topology_state_machine._topology.req_param.contains(id)) {
-                                on_internal_error(rtlogger, ::format("Cannot find request_param for node id {}", id));
-                            }
-                            // FIXME: we should not need to translate ids to IPs here. See #6403.
-                            std::list<gms::inet_address> ignored_ips;
-                            for (const auto& ignored_id : std::get<removenode_param>(_topology_state_machine._topology.req_param[id]).ignored_ids) {
-                                auto ip = _group0->address_map().find(ignored_id);
-                                if (!ip) {
-                                    on_fatal_internal_error(rtlogger, ::format("Cannot find a mapping from node id {} to its ip", ignored_id));
+                        result.status = raft_topology_cmd_result::command_status::success;
+                    }
+                    break;
+                    case node_state::decommissioning:
+                        co_await retrier(_decommission_result, coroutine::lambda([&] () { return unbootstrap(); }));
+                        result.status = raft_topology_cmd_result::command_status::success;
+                    break;
+                    case node_state::normal: {
+                        // If asked to stream a node in normal state it means that remove operation is running
+                        // Find the node that is been removed
+                        auto it = boost::find_if(_topology_state_machine._topology.transition_nodes, [] (auto& e) { return e.second.state == node_state::removing; });
+                        if (it == _topology_state_machine._topology.transition_nodes.end()) {
+                            rtlogger.warn("got stream_ranges request while my state is normal but cannot find a node that is been removed");
+                            break;
+                        }
+                        auto id = it->first;
+                        rtlogger.debug("streaming to remove node {}", id);
+                        const auto& am = _group0->address_map();
+                        auto ip = am.find(id); // map node id to ip
+                        assert (ip); // what to do if address is unknown?
+                        co_await retrier(_remove_result[id], coroutine::lambda([&] () {
+                            auto as = make_shared<abort_source>();
+                            auto sub = _abort_source.subscribe([as] () noexcept {
+                                if (!as->abort_requested()) {
+                                    as->request_abort();
                                 }
-                                ignored_ips.push_back(*ip);
+                            });
+                            if (is_repair_based_node_ops_enabled(streaming::stream_reason::removenode)) {
+                                if (!_topology_state_machine._topology.req_param.contains(id)) {
+                                    on_internal_error(rtlogger, ::format("Cannot find request_param for node id {}", id));
+                                }
+                                // FIXME: we should not need to translate ids to IPs here. See #6403.
+                                std::list<gms::inet_address> ignored_ips;
+                                for (const auto& ignored_id : std::get<removenode_param>(_topology_state_machine._topology.req_param[id]).ignored_ids) {
+                                    auto ip = _group0->address_map().find(ignored_id);
+                                    if (!ip) {
+                                        on_fatal_internal_error(rtlogger, ::format("Cannot find a mapping from node id {} to its ip", ignored_id));
+                                    }
+                                    ignored_ips.push_back(*ip);
+                                }
+                                auto ops = seastar::make_shared<node_ops_info>(node_ops_id::create_random_id(), as, std::move(ignored_ips));
+                                return _repair.local().removenode_with_repair(get_token_metadata_ptr(), *ip, ops);
+                            } else {
+                                return removenode_with_stream(*ip, _topology_state_machine._topology.session, as);
                             }
-                            auto ops = seastar::make_shared<node_ops_info>(node_ops_id::create_random_id(), as, std::move(ignored_ips));
-                            return _repair.local().removenode_with_repair(get_token_metadata_ptr(), *ip, ops);
-                        } else {
-                            return removenode_with_stream(*ip, _topology_state_machine._topology.session, as);
-                        }
-                    }));
-                    result.status = raft_topology_cmd_result::command_status::success;
-                }
-                break;
-                case node_state::rebuilding: {
-                    auto source_dc = std::get<rebuild_param>(_topology_state_machine._topology.req_param[raft_server.id()]).source_dc;
-                    rtlogger.info("rebuild from dc: {}", source_dc == "" ? "(any dc)" : source_dc);
-                    co_await retrier(_rebuild_result, [&] () -> future<> {
-                        auto tmptr = get_token_metadata_ptr();
-                        if (is_repair_based_node_ops_enabled(streaming::stream_reason::rebuild)) {
-                            co_await _repair.local().rebuild_with_repair(tmptr, std::move(source_dc));
-                        } else {
-                            auto streamer = make_lw_shared<dht::range_streamer>(_db, _stream_manager, tmptr, _abort_source,
-                                    tmptr->get_my_id(), _snitch.local()->get_location(), "Rebuild", streaming::stream_reason::rebuild, _topology_state_machine._topology.session);
-                            streamer->add_source_filter(std::make_unique<dht::range_streamer::failure_detector_source_filter>(_gossiper.get_unreachable_members()));
-                            if (source_dc != "") {
-                                streamer->add_source_filter(std::make_unique<dht::range_streamer::single_datacenter_filter>(source_dc));
+                        }));
+                        result.status = raft_topology_cmd_result::command_status::success;
+                    }
+                    break;
+                    case node_state::rebuilding: {
+                        auto source_dc = std::get<rebuild_param>(_topology_state_machine._topology.req_param[raft_server.id()]).source_dc;
+                        rtlogger.info("rebuild from dc: {}", source_dc == "" ? "(any dc)" : source_dc);
+                        co_await retrier(_rebuild_result, [&] () -> future<> {
+                            auto tmptr = get_token_metadata_ptr();
+                            if (is_repair_based_node_ops_enabled(streaming::stream_reason::rebuild)) {
+                                co_await _repair.local().rebuild_with_repair(tmptr, std::move(source_dc));
+                            } else {
+                                auto streamer = make_lw_shared<dht::range_streamer>(_db, _stream_manager, tmptr, _abort_source,
+                                        tmptr->get_my_id(), _snitch.local()->get_location(), "Rebuild", streaming::stream_reason::rebuild, _topology_state_machine._topology.session);
+                                streamer->add_source_filter(std::make_unique<dht::range_streamer::failure_detector_source_filter>(_gossiper.get_unreachable_members()));
+                                if (source_dc != "") {
+                                    streamer->add_source_filter(std::make_unique<dht::range_streamer::single_datacenter_filter>(source_dc));
+                                }
+                                auto ks_erms = _db.local().get_non_local_strategy_keyspaces_erms();
+                                for (const auto& [keyspace_name, erm] : ks_erms) {
+                                    co_await streamer->add_ranges(keyspace_name, erm, get_ranges_for_endpoint(erm, get_broadcast_address()), _gossiper, false);
+                                }
+                                try {
+                                    co_await streamer->stream_async();
+                                    rtlogger.info("streaming for rebuild successful");
+                                } catch (...) {
+                                    auto ep = std::current_exception();
+                                    // This is used exclusively through JMX, so log the full trace but only throw a simple RTE
+                                    rtlogger.warn("error while rebuilding node: {}", ep);
+                                    std::rethrow_exception(std::move(ep));
+                                }
                             }
-                            auto ks_erms = _db.local().get_non_local_strategy_keyspaces_erms();
-                            for (const auto& [keyspace_name, erm] : ks_erms) {
-                                co_await streamer->add_ranges(keyspace_name, erm, get_ranges_for_endpoint(erm, get_broadcast_address()), _gossiper, false);
-                            }
-                            try {
-                                co_await streamer->stream_async();
-                                rtlogger.info("streaming for rebuild successful");
-                            } catch (...) {
-                                auto ep = std::current_exception();
-                                // This is used exclusively through JMX, so log the full trace but only throw a simple RTE
-                                rtlogger.warn("error while rebuilding node: {}", ep);
-                                std::rethrow_exception(std::move(ep));
-                            }
-                        }
-                    });
-                    _rebuild_result.reset();
-                    result.status = raft_topology_cmd_result::command_status::success;
-                }
-                break;
-                case node_state::left:
-                case node_state::none:
-                case node_state::removing:
-                case node_state::rollback_to_normal:
-                    on_fatal_internal_error(rtlogger, ::format("Node {} got streaming request in state {}. It should be either dead or not part of the cluster",
-                                     raft_server.id(), rs.state));
-                break;
-                }
-                co_return;
-              }));
+                        });
+                        _rebuild_result.reset();
+                        result.status = raft_topology_cmd_result::command_status::success;
+                    }
+                    break;
+                    case node_state::left:
+                    case node_state::none:
+                    case node_state::removing:
+                    case node_state::rollback_to_normal:
+                        on_fatal_internal_error(rtlogger, ::format("Node {} got streaming request in state {}. It should be either dead or not part of the cluster",
+                                         raft_server.id(), rs.state));
+                    break;
+                    }
+                    co_return;
+                }));
             }
             break;
             case raft_topology_cmd::command::wait_for_ip: {
