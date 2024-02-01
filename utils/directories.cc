@@ -8,9 +8,12 @@
 
 #include <seastar/core/seastar.hh>
 #include <seastar/core/coroutine.hh>
+#include <seastar/coroutine/parallel_for_each.hh>
 #include "init.hh"
 #include "supervisor.hh"
 #include "directories.hh"
+#include "sstables/exceptions.hh"
+#include "sstables/open_info.hh"
 #include "utils/disk-error-handler.hh"
 #include "utils/fmt-compat.hh"
 #include "utils/lister.hh"
@@ -76,22 +79,22 @@ directories::directories(bool developer_mode)
         : _developer_mode(developer_mode)
 { }
 
-future<> directories::create_and_verify(directories::set dir_set) {
-    return do_with(std::vector<file_lock>(), [this, dir_set = std::move(dir_set)] (std::vector<file_lock>& locks) {
-        return parallel_for_each(dir_set.get_paths(), [this, &locks] (fs::path path) {
-            return touch_and_lock(path).then([path = std::move(path), developer_mode = _developer_mode, &locks] (file_lock lock) {
-                locks.emplace_back(std::move(lock));
-                return disk_sanity(path, developer_mode).then([path = std::move(path)] {
-                    return directories::verify_owner_and_mode(path).handle_exception([](auto ep) {
-                        startlog.error("Failed owner and mode verification: {}", ep);
-                        return make_exception_future<>(ep);
-                    });
-                });
-            });
-        }).then([this, &locks] {
-            std::move(locks.begin(), locks.end(), std::back_inserter(_locks));
-        });
+future<> directories::create_and_verify(directories::set dir_set, recursive recursive) {
+    std::vector<file_lock> locks;
+    locks.reserve(dir_set.get_paths().size());
+    co_await coroutine::parallel_for_each(dir_set.get_paths(), [this, &locks, recursive] (fs::path path) -> future<> {
+        file_lock lock = co_await touch_and_lock(path);
+        locks.emplace_back(std::move(lock));
+        co_await disk_sanity(path, _developer_mode);
+        try {
+            co_await directories::verify_owner_and_mode(path, recursive);
+        } catch (...) {
+            std::exception_ptr ep = std::current_exception();
+            startlog.error("Failed owner and mode verification: {}", ep);
+            throw ep;
+        }
     });
+    std::move(locks.begin(), locks.end(), std::back_inserter(_locks));
 }
 
 template <typename... Args>
@@ -105,7 +108,9 @@ void verification_error(fs::path path, const char* fstr, Args&&... args) {
 // Verify that all files and directories are owned by current uid
 // and that files can be read and directories can be read, written, and looked up (execute)
 // No other file types may exist.
-future<> directories::do_verify_owner_and_mode(fs::path path, recursive recurse, int level) {
+// If a 'do_verify_subpath' function is provided, only the subpaths
+// that return true when called with that function will be verified.
+future<> directories::do_verify_owner_and_mode(fs::path path, recursive recurse, int level, std::function<bool(const fs::path&)> do_verify_subpath) {
     auto sd = co_await file_stat(path.string(), follow_symlink::no);
     // Under docker, we run with euid 0 and there is no reasonable way to enforce that the
     // in-container uid will have the same uid as files mounted from outside the container. So
@@ -130,8 +135,11 @@ future<> directories::do_verify_owner_and_mode(fs::path path, recursive recurse,
         if (level && !recurse) {
             co_return;
         }
-        co_await lister::scan_dir(path, {}, [recurse, level = level + 1] (fs::path dir, directory_entry de) -> future<> {
-            co_await do_verify_owner_and_mode(dir / de.name, recurse, level);
+        co_await lister::scan_dir(path, {}, [recurse, level = level + 1, &do_verify_subpath] (fs::path dir, directory_entry de) -> future<> {
+            auto subpath = dir / de.name;
+            if (!do_verify_subpath || do_verify_subpath(subpath)) {
+                co_await do_verify_owner_and_mode(std::move(subpath), recurse, level, do_verify_subpath);
+            }
         });
         break;
     }
@@ -142,6 +150,33 @@ future<> directories::do_verify_owner_and_mode(fs::path path, recursive recurse,
 
 future<> directories::verify_owner_and_mode(fs::path path, recursive recursive) {
     return do_verify_owner_and_mode(std::move(path), recursive, 0);
+}
+
+// Verify the data directory contents in a specific order so as to prevent
+// memory fragmentation in the inode/dentry cache. All the data and index files,
+// which will be held open for a longer duration are verified first and the
+// other files that will be closed immediately are verified later to ensure
+// their separation in the dentry/inode cache.
+future<> directories::verify_owner_and_mode_of_data_dir(directories::set dir_set) {
+    // verify data and index files in the first iteration and the other files in the second iteration.
+    for (auto verify_data_and_index_files : { true, false }) {
+        co_await coroutine::parallel_for_each(dir_set.get_paths(), [verify_data_and_index_files] (const auto &path) {
+            return do_verify_owner_and_mode(std::move(path), recursive::yes, 0, [verify_data_and_index_files] (const fs::path &path) {
+                component_type path_component_type;
+                try {
+                    // use parse_path to deduce the component type as using system calls
+                    // like stat/lstat will load the inode/dentry into the cache.
+                    auto descriptor_tuple = sstables::parse_path(path);
+                    path_component_type = std::get<0>(descriptor_tuple).component;
+                } catch (sstables::malformed_sstable_exception) {
+                    // path is not a SSTable component - do not filter it out
+                    return true;
+                }
+                auto data_or_index_file = (path_component_type == component_type::Data || path_component_type == component_type::Index);
+                return verify_data_and_index_files ? data_or_index_file : !data_or_index_file;
+            });
+        });
+    }
 }
 
 } // namespace utils
