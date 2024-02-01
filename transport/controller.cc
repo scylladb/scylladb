@@ -10,6 +10,7 @@
 #include <seastar/core/sharded.hh>
 #include <seastar/net/socket_defs.hh>
 #include <seastar/net/unix_address.hh>
+#include <seastar/core/file-types.hh>
 #include "transport/server.hh"
 #include "service/memory_limiter.hh"
 #include "db/config.hh"
@@ -65,9 +66,9 @@ future<> controller::start_server() {
     return do_start_server().finally([this] { _ops_sem.signal(); });
 }
 
-static future<> listen_on_all_shards(sharded<cql_server>& cserver, socket_address addr, std::shared_ptr<seastar::tls::credentials_builder> creds, bool is_shard_aware, bool keepalive) {
-    co_await cserver.invoke_on_all([addr, creds, is_shard_aware, keepalive] (cql_server& server) {
-        return server.listen(addr, creds, is_shard_aware, keepalive);
+static future<> listen_on_all_shards(sharded<cql_server>& cserver, socket_address addr, std::shared_ptr<seastar::tls::credentials_builder> creds, bool is_shard_aware, bool keepalive, std::optional<file_permissions> unix_domain_socket_permissions) {
+    co_await cserver.invoke_on_all([addr, creds, is_shard_aware, keepalive, unix_domain_socket_permissions] (cql_server& server) {
+        return server.listen(addr, creds, is_shard_aware, keepalive, unix_domain_socket_permissions);
     });
 
     logger.info("Starting listening for CQL clients on {} ({}, {})"
@@ -135,7 +136,7 @@ future<> controller::start_listening_on_tcp_sockets(sharded<cql_server>& cserver
     }
 
     return parallel_for_each(configs, [&cserver, keepalive](const listen_cfg & cfg) {
-        return listen_on_all_shards(cserver, cfg.addr, cfg.cred, cfg.is_shard_aware, keepalive);
+        return listen_on_all_shards(cserver, cfg.addr, cfg.cred, cfg.is_shard_aware, keepalive, std::nullopt);
     });
 }
 
@@ -175,7 +176,7 @@ future<> controller::start_listening_on_maintenance_socket(sharded<cql_server>& 
 
     logger.info("Setting up maintenance socket on {}", socket);
 
-    return listen_on_all_shards(cserver, addr, nullptr, false, _config.rpc_keepalive());
+    return listen_on_all_shards(cserver, addr, nullptr, false, _config.rpc_keepalive(), std::nullopt);
 }
 
 future<> controller::do_start_server() {
