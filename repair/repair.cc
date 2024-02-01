@@ -1950,7 +1950,33 @@ future<> repair_service::do_rebuild_replace_with_repair(locator::token_metadata_
                 rs.get_metrics().replace_total_ranges = nr_ranges_total;
             }).get();
         }
+        std::unordered_map<sstring, std::unordered_set<gms::inet_address>> source_dc_racks;
+        std::unordered_set<gms::inet_address> source_dc_live_nodes;
+        std::unordered_map<sstring, size_t> lost_nodes_per_rack;
+        const auto& topology = tmptr->get_topology();
+        if (!source_dc.empty()) {
+            try {
+                source_dc_racks = topology.get_datacenter_racks().at(source_dc);
+            } catch (...) {
+                rlogger.warn("{}: Could not find racks for source_dc={}: {}", op, source_dc, std::current_exception());
+                source_dc = "";
+            }
+        }
         rlogger.info("{}: started with keyspaces={}, source_dc={}, nr_ranges_total={}, ignore_nodes={}", op, ks_erms | boost::adaptors::map_keys, source_dc, nr_ranges_total, ignore_nodes);
+        if (!source_dc.empty()) {
+            topology.for_each_node([&] (const locator::node* node) {
+                if (node->dc_rack().dc != source_dc) {
+                    return;
+                }
+                const auto& rack = node->dc_rack().rack;
+                // This node is counted as "lost" since it replaces a dead node
+                if (node->is_this_node() || ignore_nodes.contains(node->endpoint())) {
+                    lost_nodes_per_rack[rack]++;
+                } else {
+                    source_dc_live_nodes.insert(node->endpoint());
+                }
+            });
+        }
         for (const auto& [keyspace_name, erm] : ks_erms) {
             size_t nr_ranges_skipped = 0;
             if (!db.has_keyspace(keyspace_name)) {
@@ -1959,23 +1985,66 @@ future<> repair_service::do_rebuild_replace_with_repair(locator::token_metadata_
             }
             auto& strat = erm->get_replication_strategy();
             dht::token_range_vector ranges = strat.get_ranges(myid, *tmptr).get0();
-            auto& topology = erm->get_token_metadata().get_topology();
             std::unordered_map<dht::token_range, repair_neighbors> range_sources;
             auto nr_tables = get_nr_tables(db, keyspace_name);
-            rlogger.info("{}: started with keyspace={}, source_dc={}, nr_ranges={}, ignore_nodes={}", op, keyspace_name, source_dc, ranges.size() * nr_tables, ignore_nodes);
+            sstring ks_source_dc;
+            // Allow repairing in the source_dc only if there are enough replicas remaining
+            if (!source_dc_live_nodes.empty()) {
+                switch (strat.get_type()) {
+                case locator::replication_strategy_type::network_topology: {
+                    const auto& nt_strat = dynamic_cast<const locator::network_topology_strategy&>(strat);
+                    ssize_t rf = nt_strat.get_replication_factor(source_dc);
+                    size_t nr_racks = source_dc_racks.size();
+                    size_t max_replicas_per_rack = (rf + nr_racks - 1) / nr_racks;
+                    size_t possibly_lost_replicas = 0;
+                    for (const auto& [rack, nr] : lost_nodes_per_rack) {
+                        possibly_lost_replicas += std::min(nr, max_replicas_per_rack);
+                    }
+                    // Can we ensure a quorum in source_dc?
+                    if (possibly_lost_replicas < rf / 2) {
+                        ks_source_dc = source_dc;
+                    } else if (reason == streaming::stream_reason::rebuild) {
+                        if (rf == 0) {
+                            throw std::runtime_error(fmt::format("Cannot rebuild with source_dc={}: Replication factor in this data center is 0."
+                                    " Use a different source_dc, or no source_dc option to consider the whole cluster for repair", source_dc));
+                        }
+                        rlogger.warn("{}: keyspace={}: Cannot ensure quorum in source_dc={}: possibly lost {} replicas out of {}: rebuilding using source_dc anyway",
+                                op, keyspace_name, source_dc, possibly_lost_replicas, rf);
+                        ks_source_dc = source_dc;
+                    } else {
+                        rlogger.warn("{}: keyspace={}: Cannot ensure quorum in source_dc={}: possibly lost {} replicas out of {}: Falling back to full-cluster repair",
+                                op, keyspace_name, source_dc, possibly_lost_replicas, rf);
+                    }
+                    break;
+                }
+                case locator::replication_strategy_type::everywhere_topology:
+                    ks_source_dc = source_dc;
+                    break;
+                case locator::replication_strategy_type::simple:
+                    // With simple strategy, we have no assurance that source_dc will contain
+                    // another replica for all token ranges.
+                    break;
+                default:
+                    break;
+                }
+            } else if (reason == streaming::stream_reason::rebuild && !source_dc.empty()) {
+                throw std::runtime_error(fmt::format("Cannot rebuild with source_dc={}: No live nodes remained in the data center."
+                        " Use a different source_dc or no source_dc option to consider the whole cluster for repair", source_dc));
+            }
+            rlogger.info("{}: started with keyspace={}, source_dc={}, nr_ranges={}, ignore_nodes={}", op, keyspace_name, ks_source_dc, ranges.size() * nr_tables, ignore_nodes);
             for (auto it = ranges.begin(); it != ranges.end();) {
                 auto& r = *it;
                 seastar::thread::maybe_yield();
                 auto end_token = r.end() ? r.end()->value() : dht::maximum_token();
                 auto neighbors = boost::copy_range<std::vector<gms::inet_address>>(strat.calculate_natural_ips(end_token, *tmptr).get0() |
-                    boost::adaptors::filtered([myip, &source_dc, &topology, &ignore_nodes] (const gms::inet_address& node) {
+                    boost::adaptors::filtered([&] (const gms::inet_address& node) {
                         if (node == myip) {
                             return false;
                         }
                         if (ignore_nodes.contains(node)) {
                             return false;
                         }
-                        return source_dc.empty() ? true : topology.get_datacenter(node) == source_dc;
+                        return ks_source_dc.empty() ? true : source_dc_live_nodes.contains(node);
                     })
                 );
                 rlogger.debug("{}: keyspace={}, range={}, neighbors={}", op, keyspace_name, r, neighbors);
