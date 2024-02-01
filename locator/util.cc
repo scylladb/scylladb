@@ -149,7 +149,6 @@ map_to_endpoints(locator::effective_replication_map_ptr erm,
 
 future<std::vector<dht::token_range_endpoints>>
 describe_ring(const replica::database& db, const gms::gossiper& gossiper, const sstring& keyspace, bool include_only_local_dc) {
-    //Token.TokenFactory tf = getPartitioner().getTokenFactory();
     auto erm = db.find_keyspace(keyspace).get_effective_replication_map();
     return map_to_endpoints(erm, gossiper, include_only_local_dc);
 }
