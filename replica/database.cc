@@ -2131,21 +2131,35 @@ database::make_keyspace_config(const keyspace_metadata& ksm) {
 
 } // namespace replica
 
-namespace db {
-
-std::ostream& operator<<(std::ostream& os, const write_type& t) {
+auto fmt::formatter<db::write_type>::format(db::write_type t,
+                                            fmt::format_context& ctx) const
+        -> decltype(ctx.out()) {
+    std::string_view name;
     switch (t) {
-        case write_type::SIMPLE: return os << "SIMPLE";
-        case write_type::BATCH: return os << "BATCH";
-        case write_type::UNLOGGED_BATCH: return os << "UNLOGGED_BATCH";
-        case write_type::COUNTER: return os << "COUNTER";
-        case write_type::BATCH_LOG: return os << "BATCH_LOG";
-        case write_type::CAS: return os << "CAS";
-        case write_type::VIEW: return os << "VIEW";
+    using enum db::write_type;
+    case SIMPLE:
+        name = "SIMPLE";
+        break;
+    case BATCH:
+        name = "BATCH";
+        break;
+    case UNLOGGED_BATCH:
+        name = "UNLOGGED_BATCH";
+        break;
+    case COUNTER:
+        name = "COUNTER";
+        break;
+    case BATCH_LOG:
+        name = "BATCH_LOG";
+        break;
+    case CAS:
+        name = "CAS";
+        break;
+    case VIEW:
+        name = "VIEW";
+        break;
     }
-    abort();
-}
-
+    return fmt::format_to(ctx.out(), "{}", name);
 }
 
 auto fmt::formatter<db::operation_type>::format(db::operation_type op_type, fmt::format_context& ctx) const -> decltype(ctx.out()) {
