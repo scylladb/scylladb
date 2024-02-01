@@ -16,6 +16,7 @@
 #include "utils/stall_free.hh"
 #include "db/config.hh"
 #include "locator/load_sketch.hh"
+#include <utility>
 
 using namespace locator;
 using namespace replica;
@@ -526,7 +527,7 @@ public:
         while (resize_load.tables_need_resize.size() && resize_plan.size() < max_new_resize_requests) {
             const auto& [table, size_desc] = resize_load.tables_need_resize.front();
 
-            if (resize_plan.size() > 0 && available_shards < size_desc.shard_count) {
+            if (resize_plan.size() > 0 && std::cmp_less(available_shards, size_desc.shard_count)) {
                 break;
             }
 
