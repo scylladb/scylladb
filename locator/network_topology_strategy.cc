@@ -55,8 +55,8 @@ network_topology_strategy::network_topology_strategy(replication_strategy_params
                 "NetworkTopologyStrategy");
         }
 
-        parse_replication_factor(val);
-        _dc_rep_factor.emplace(key, std::stol(val));
+        auto rf = parse_replication_factor(val);
+        _dc_rep_factor.emplace(key, rf);
         _datacenteres.push_back(key);
     }
 
