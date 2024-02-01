@@ -14,7 +14,6 @@ import pwd
 import grp
 import sys
 import stat
-import distro
 import logging
 import pyudev
 from pathlib import Path
