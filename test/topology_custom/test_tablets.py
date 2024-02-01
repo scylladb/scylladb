@@ -13,18 +13,6 @@ logger = logging.getLogger(__name__)
 
 
 @pytest.mark.asyncio
-async def test_tablet_change_replication_vnode_to_tablets(manager: ManagerClient):
-    cfg = {'enable_user_defined_functions': False,
-           'experimental_features': ['tablets', 'consistent-topology-changes']}
-    server = await manager.server_add(config=cfg)
-
-    cql = manager.get_cql()
-    await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'enabled': false};")
-    with pytest.raises(InvalidRequest):
-        await cql.run_async("ALTER KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1};")
-
-
-@pytest.mark.asyncio
 async def test_tablet_change_replication_strategy(manager: ManagerClient):
     cfg = {'enable_user_defined_functions': False,
            'experimental_features': ['tablets', 'consistent-topology-changes']}

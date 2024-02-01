@@ -13,8 +13,8 @@
 #############################################################################
 
 import pytest
-from util import unique_name
-from cassandra.protocol import ConfigurationException
+from util import new_test_keyspace, unique_name
+from cassandra.protocol import ConfigurationException, InvalidRequest
 
 # A fixture similar to "test_keyspace", just creates a keyspace that enables
 # tablets with initial_tablets=128
@@ -45,3 +45,11 @@ def test_create_loop_with_tablets(cql, test_keyspace_128_tablets):
     for i in range(100):
         cql.execute(f"CREATE TABLE {table} (p int PRIMARY KEY, v int)")
         cql.execute("DROP TABLE " + table)
+
+
+# Converting vnodes-based keyspace to tablets-based in not implemented yet
+def test_alter_cannot_change_vnodes_to_tablets(cql, skip_without_tablets):
+    ksdef = "WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : '1' } AND TABLETS = { 'enabled' : false }"
+    with new_test_keyspace(cql, ksdef) as keyspace:
+        with pytest.raises(InvalidRequest, match="Cannot alter replication strategy vnode/tablets flavor"):
+            cql.execute(f"ALTER KEYSPACE {keyspace} WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} AND tablets = {{'initial': 1}};")
