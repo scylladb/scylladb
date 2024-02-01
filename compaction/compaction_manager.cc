@@ -1520,8 +1520,7 @@ protected:
     }
 
     virtual future<sstables::compaction_result> rewrite_sstable(const sstables::shared_sstable sst) {
-        // FIXME: this compaction should run with maintenance priority.
-        co_await coroutine::switch_to(_cm.compaction_sg());
+        co_await coroutine::switch_to(_cm.maintenance_sg());
 
         for (;;) {
             switch_state(state::active);
