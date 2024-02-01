@@ -373,7 +373,7 @@
          "operations":[
             {
                "method":"GET",
-               "summary":"The TokenRange for a any keyspace",
+               "summary":"The TokenRange for an arbitrary keyspace",
                "type":"array",
                "items":{
                   "type":"token_range"
