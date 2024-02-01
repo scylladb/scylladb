@@ -52,6 +52,9 @@ void cql3::statements::alter_keyspace_statement::validate(query_processor& qp, c
             auto ks = qp.db().find_keyspace(_name);
             data_dictionary::storage_options current_options = ks.metadata()->get_storage_options();
             data_dictionary::storage_options new_options = _attrs->get_storage_options();
+            if (!qp.proxy().features().keyspace_storage_options && !new_options.is_local_type()) {
+                throw exceptions::invalid_request_exception("Keyspace storage options not supported in the cluster");
+            }
             if (!current_options.can_update_to(new_options)) {
                 throw exceptions::invalid_request_exception(format("Cannot alter storage options: {} to {} is not supported",
                         current_options.type_string(), new_options.type_string()));
@@ -66,10 +69,6 @@ void cql3::statements::alter_keyspace_statement::validate(query_processor& qp, c
         } catch (const std::runtime_error& e) {
             throw exceptions::invalid_request_exception(e.what());
         }
-        if (!qp.proxy().features().keyspace_storage_options
-            && _attrs->get_storage_options().type_string() != "LOCAL") {
-        throw exceptions::invalid_request_exception("Keyspace storage options not supported in the cluster");
-    }
 #if 0
         // The strategy is validated through KSMetaData.validate() in announceKeyspaceUpdate below.
         // However, for backward compatibility with thrift, this doesn't validate unexpected options yet,
