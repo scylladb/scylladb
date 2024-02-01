@@ -1935,7 +1935,7 @@ void table::handle_tablet_split_completion(size_t old_tablet_count, const locato
             table_id, new_tmap.tablet_count(), old_tablet_count*split_size));
     }
 
-    for (auto id = 0; id < _storage_groups.size(); id++) {
+    for (unsigned id = 0; id < _storage_groups.size(); id++) {
         auto& sg = _storage_groups[id];
         if (!sg) {
             continue;
@@ -1950,7 +1950,7 @@ void table::handle_tablet_split_completion(size_t old_tablet_count, const locato
         if (split_ready_groups.size() != split_size) {
             on_internal_error(tlogger, format("Found {} split ready compaction groups, but expected {} instead.", split_ready_groups.size(), split_size));
         }
-        for (auto i = 0; i < split_size; i++) {
+        for (unsigned i = 0; i < split_size; i++) {
             auto group_id = first_new_id + i;
             split_ready_groups[i]->update_id_and_range(group_id, new_tmap.get_token_range(locator::tablet_id(group_id)));
             new_storage_groups[group_id] = std::make_unique<storage_group>(std::move(split_ready_groups[i]), nullptr);
