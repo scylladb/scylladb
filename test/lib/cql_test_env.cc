@@ -76,11 +76,6 @@
 
 using namespace std::chrono_literals;
 
-namespace {
-
-
-} // anonymous namespace
-
 future<scheduling_groups> get_scheduling_groups() {
     static std::optional<scheduling_groups> _scheduling_groups;
     if (!_scheduling_groups) {
