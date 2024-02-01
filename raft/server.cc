@@ -1064,6 +1064,18 @@ future<> server_impl::io_fiber(index_t last_stable) {
     co_return;
 }
 
+static bool is_closed_error(std::exception_ptr ep) {
+    try {
+        std::rethrow_exception(ep);
+    } catch (const seastar::rpc::remote_verb_error& e) {
+        return std::string_view{e.what()} == "connection is closed";
+    } catch (const seastar::rpc::closed_error&) {
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
 void server_impl::send_snapshot(server_id dst, install_snapshot&& snp) {
     seastar::abort_source as;
     uint64_t id = _next_snapshot_transfer_id++;
@@ -1079,7 +1091,11 @@ void server_impl::send_snapshot(server_id dst, install_snapshot&& snp) {
             _snapshot_transfers.erase(dst);
             auto reply = raft::snapshot_reply{.current_term = _fsm->get_current_term(), .success = false};
             if (f.failed()) {
-                logger.error("[{}] Transferring snapshot to {} failed with: {}", _id, dst, f.get_exception());
+                auto ep = f.get_exception();
+                // Report our or remote's closed_error as WARNs instead of ERRORs.
+                // Workaround for scylladb/scylladb#12972 for ScyllaDB 5.2.
+                auto level = is_closed_error(ep) ? log_level::warn : log_level::error;
+                logger.log(level, "[{}] Transferring snapshot to {} failed with: {}", _id, dst, ep);
             } else {
                 logger.trace("[{}] Transferred snapshot to {}", _id, dst);
                 reply = f.get();
