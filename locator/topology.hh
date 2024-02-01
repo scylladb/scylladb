@@ -412,10 +412,7 @@ private:
 
     bool _sort_by_proximity = true;
 
-    // pre-calculated
     std::unordered_set<sstring> _datacenters;
-
-    void calculate_datacenters();
 
     const std::unordered_map<inet_address, const node*>& get_nodes_by_endpoint() const noexcept {
         return _nodes_by_endpoint;
