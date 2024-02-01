@@ -427,10 +427,7 @@ private:
 
     bool _sort_by_proximity = true;
 
-    // pre-calculated
     std::unordered_set<sstring> _datacenters;
-
-    void calculate_datacenters();
 
     mutable random_engine_type _random_engine;
 
