@@ -350,17 +350,24 @@ static uint32_t serialize(sstring_view input, int64_t days) {
 }
 uint32_t simple_date_type_impl::from_sstring(sstring_view s) {
     char* end;
+    errno = 0;
     auto v = std::strtoll(s.begin(), &end, 10);
-    if (end == s.begin() + s.size()) {
-        return v;
-    }
-    static const boost::regex date_re("^(-?\\d+)-(\\d+)-(\\d+)");
-    boost::match_results<sstring_view::const_iterator> dsm;
-    if (!boost::regex_match(s.begin(), s.end(), dsm, date_re)) {
+    if(end != s.end()) {
+        static const boost::regex date_re("^(-?\\d+)-(\\d+)-(\\d+)");
+        boost::match_results<sstring_view::const_iterator> dsm;
+        if (!boost::regex_match(s.begin(), s.end(), dsm, date_re)) {
         throw marshal_exception(format("Unable to coerce '{}' to a formatted date (long)", s));
+        }
+        auto t = get_simple_date_time(dsm);
+        return serialize(s, date::local_days(t).time_since_epoch().count());
     }
-    auto t = get_simple_date_time(dsm);
-    return serialize(s, date::local_days(t).time_since_epoch().count());
+    if (errno == ERANGE) {
+        throw marshal_exception(format("Unable to make unsigned int (for date) from {}", v));
+    }
+    if (v < std::numeric_limits<uint32_t>::min() || v > std::numeric_limits<uint32_t>::max()) {
+        throw marshal_exception(format("Unable to make unsigned int (for date) from {}", v));
+    }
+    return v;
 }
 
 time_type_impl::time_type_impl() : simple_type_impl{kind::time, time_type_name, {}} {}
