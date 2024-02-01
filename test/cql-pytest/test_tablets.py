@@ -90,3 +90,11 @@ def test_tablets_can_be_explicitly_disabled(cql, skip_without_tablets):
     with new_test_keyspace(cql, ksdef) as keyspace:
         res = cql.execute(f"SELECT * FROM system_schema.scylla_keyspaces WHERE keyspace_name = '{keyspace}'")
         assert len(list(res)) == 0, "tablets replication strategy turned on"
+
+
+def test_alter_changes_initial_tablets(cql, skip_without_tablets):
+    ksdef = "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1};"
+    with new_test_keyspace(cql, ksdef) as keyspace:
+        cql.execute(f"ALTER KEYSPACE {keyspace} WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} AND tablets = {{'initial': 2}};")
+        res = cql.execute(f"SELECT * FROM system_schema.scylla_keyspaces WHERE keyspace_name = '{keyspace}'").one()
+        assert res.initial_tablets == 2
