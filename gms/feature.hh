@@ -73,9 +73,6 @@ public:
     operator bool() const {
         return _enabled;
     }
-    friend inline std::ostream& operator<<(std::ostream& os, const feature& f) {
-        return os << "{ gossip feature = " << f._name << " }";
-    }
     void when_enabled(listener& callback) const {
         callback.set_connection(_s.connect(callback.get_slot()));
         if (_enabled) {
