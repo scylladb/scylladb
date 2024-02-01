@@ -216,6 +216,7 @@ if __name__ == '__main__':
     sector_size = int(open(f'/sys/dev/block/{major}:{minor}/queue/logical_block_size').read())
     # We want smaller block sizes to allow smaller commitlog writes without
     # stalling. The minimum block size for crc enabled filesystems is 1024,
+    # see https://git.kernel.org/pub/scm/fs/xfs/xfsprogs-dev.git/tree/mkfs/xfs_mkfs.c .
     # and it also cannot be smaller than the sector size.
     block_size = max(1024, sector_size)
     run('udevadm settle', shell=True, check=True)
