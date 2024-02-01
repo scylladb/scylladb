@@ -415,6 +415,41 @@
          ]
       },
       {
+         "path":"/storage_service/describe_ring/{keyspace}/{cf}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"The TokenRange(s) for a given table",
+               "type":"array",
+               "items":{
+                  "type":"token_range"
+               },
+               "nickname":"describe_ring_for_table",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"keyspace",
+                     "description":"The keyspace",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  },
+                  {
+                     "name":"cf",
+                     "description":"column family name",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
          "path":"/storage_service/ownership/{keyspace}",
          "operations":[
             {

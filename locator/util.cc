@@ -154,4 +154,15 @@ describe_ring(const replica::database& db, const gms::gossiper& gossiper, const 
     return map_to_endpoints(erm, gossiper, include_only_local_dc);
 }
 
+future<std::vector<dht::token_range_endpoints>> describe_ring_for_table(
+    const replica::database& db,
+    const gms::gossiper& gossiper,
+    std::string_view ks_name,
+    std::string_view cf_name) {
+    const auto table_id = db.find_uuid(ks_name, cf_name);
+    const auto& table = db.find_column_family(table_id);
+    auto erm = table.get_effective_replication_map();
+    return map_to_endpoints(erm, gossiper, false);
+}
+
 }

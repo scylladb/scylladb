@@ -675,6 +675,13 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         return describe_ring_as_json(ss, validate_keyspace(ctx, req->param));
     });
 
+    ss::describe_ring_for_table.set(r, [&ctx, &ss] (std::unique_ptr<http::request> req)
+                                    -> future<json::json_return_type> {
+        const auto ks_name = validate_keyspace(ctx, req->param);
+        const auto cf_name = req->param["cf"];
+        auto endpoints = co_await ss.local().describe_ring_for_table(ks_name, cf_name);
+        co_return json::json_return_type(stream_range_as_array(endpoints, token_range_endpoints_to_json));
+    });
     ss::get_load.set(r, [&ctx](std::unique_ptr<http::request> req) {
         return get_cf_stats(ctx, &replica::column_family_stats::live_disk_space_used);
     });
@@ -1502,6 +1509,7 @@ void unset_storage_service(http_context& ctx, routes& r) {
     ss::get_pending_range_to_endpoint_map.unset(r);
     ss::describe_any_ring.unset(r);
     ss::describe_ring.unset(r);
+    ss::describe_ring_for_table.unset(r);
     ss::get_load.unset(r);
     ss::get_load_map.unset(r);
     ss::get_current_generation_number.unset(r);

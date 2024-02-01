@@ -4409,6 +4409,11 @@ storage_service::describe_ring(const sstring& keyspace, bool include_only_local_
     return locator::describe_ring(_db.local(), _gossiper, keyspace, include_only_local_dc);
 }
 
+future<std::vector<storage_service::token_range_endpoints>>
+storage_service::describe_ring_for_table(std::string_view ks_name, std::string_view cf_name) const {
+    return locator::describe_ring_for_table(_db.local(), _gossiper, ks_name, cf_name);
+}
+
 future<std::unordered_map<dht::token_range, inet_address_vector_replica_set>>
 storage_service::construct_range_to_endpoint_map(
         locator::vnode_effective_replication_map_ptr erm,

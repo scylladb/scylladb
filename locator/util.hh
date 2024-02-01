@@ -20,4 +20,9 @@ namespace gms {
 
 namespace locator {
     future<std::vector<dht::token_range_endpoints>> describe_ring(const replica::database& db, const gms::gossiper& gossiper, const sstring& keyspace, bool include_only_local_dc = false);
+    future<std::vector<dht::token_range_endpoints>> describe_ring_for_table(
+        const replica::database& db,
+        const gms::gossiper& gossiper,
+        std::string_view ks_name,
+        std::string_view cf_name);
 }
