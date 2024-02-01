@@ -55,7 +55,7 @@ network_topology_strategy::network_topology_strategy(replication_strategy_params
                 "NetworkTopologyStrategy");
         }
 
-        validate_replication_factor(val);
+        parse_replication_factor(val);
         _dc_rep_factor.emplace(key, std::stol(val));
         _datacenteres.push_back(key);
     }
@@ -265,7 +265,7 @@ void network_topology_strategy::validate_options(const gms::feature_service& fs)
                 "replication_factor is an option for simple_strategy, not "
                 "network_topology_strategy");
         }
-        validate_replication_factor(c.second);
+        parse_replication_factor(c.second);
     }
 }
 

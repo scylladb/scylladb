@@ -182,14 +182,14 @@ const tablet_aware_replication_strategy* abstract_replication_strategy::maybe_as
     return dynamic_cast<const tablet_aware_replication_strategy*>(this);
 }
 
-void abstract_replication_strategy::validate_replication_factor(sstring rf)
+long abstract_replication_strategy::parse_replication_factor(sstring rf)
 {
     if (rf.empty() || std::any_of(rf.begin(), rf.end(), [] (char c) {return !isdigit(c);})) {
         throw exceptions::configuration_exception(
                 format("Replication factor must be numeric and non-negative, found '{}'", rf));
     }
     try {
-        std::stol(rf);
+        return std::stol(rf);
     } catch (...) {
         throw exceptions::configuration_exception(
             sstring("Replication factor must be numeric; found ") + rf);
