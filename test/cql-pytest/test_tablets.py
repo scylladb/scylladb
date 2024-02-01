@@ -83,3 +83,10 @@ def test_tablet_default_initialization(cql, skip_without_tablets):
                     break
             else:
                 assert False, "tablets not allocated"
+
+
+def test_tablets_can_be_explicitly_disabled(cql, skip_without_tablets):
+    ksdef = "WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND TABLETS = {'enabled': false};"
+    with new_test_keyspace(cql, ksdef) as keyspace:
+        res = cql.execute(f"SELECT * FROM system_schema.scylla_keyspaces WHERE keyspace_name = '{keyspace}'")
+        assert len(list(res)) == 0, "tablets replication strategy turned on"

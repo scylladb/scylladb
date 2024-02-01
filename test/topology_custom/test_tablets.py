@@ -13,19 +13,6 @@ logger = logging.getLogger(__name__)
 
 
 @pytest.mark.asyncio
-async def test_tablet_explicit_disabling(manager: ManagerClient):
-    cfg = {'enable_user_defined_functions': False,
-           'experimental_features': ['tablets', 'consistent-topology-changes']}
-    server = await manager.server_add(config=cfg)
-
-    cql = manager.get_cql()
-    await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'enabled': false};")
-
-    res = await cql.run_async("SELECT * FROM system_schema.scylla_keyspaces WHERE keyspace_name = 'test'")
-    assert len(res) == 0, "tablets replication strategy turned on"
-
-
-@pytest.mark.asyncio
 async def test_tablet_change_initial_tablets(manager: ManagerClient):
     cfg = {'enable_user_defined_functions': False,
            'experimental_features': ['tablets', 'consistent-topology-changes']}
