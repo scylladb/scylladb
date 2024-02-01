@@ -235,3 +235,8 @@ def xfail_tablets(request, has_tablets):
 def skip_with_tablets(has_tablets):
     if has_tablets:
         pytest.skip("Test may crash with tablets experimental feature on")
+
+@pytest.fixture(scope="function")
+def skip_without_tablets(scylla_only, has_tablets):
+    if not has_tablets:
+        pytest.skip("Test needs tablets experimental feature on")
