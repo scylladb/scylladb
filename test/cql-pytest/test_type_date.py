@@ -56,17 +56,16 @@ def test_type_date_from_int_prepared(cql, table1):
 # one that doesn't fit 32 bits, is an error. Cassandra says:
 # "Unable to make unsigned int (for date) from: '-123'".
 # Reproduces #17066.
-@pytest.mark.xfail(reason="#17066")
 def test_type_date_from_int_unprepared_underflow(cql, table1):
     p = unique_key_int()
     with pytest.raises(InvalidRequest, match="unsigned int"):
         cql.execute(f"INSERT INTO {table1} (p, d) VALUES ({p}, -123)")
 
-@pytest.mark.xfail(reason="#17066")
 def test_type_date_from_int_unprepared_overflow(cql, table1):
     p = unique_key_int()
-    with pytest.raises(InvalidRequest, match="unsigned int"):
-        cql.execute(f"INSERT INTO {table1} (p, d) VALUES ({p}, 50000000000000000)")
+    for val in ["50000000000", "50000000000000000000"]:
+        with pytest.raises(InvalidRequest, match="unsigned int"):
+            cql.execute(f"INSERT INTO {table1} (p, d) VALUES ({p}, {val})")
 
 def test_type_date_from_string_unprepared(cql, table1):
     p = unique_key_int()
