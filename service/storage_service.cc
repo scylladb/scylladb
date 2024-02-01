@@ -4947,7 +4947,7 @@ future<> storage_service::update_fence_version(token_metadata::version_t new_ver
     });
 }
 
-inet_address storage_service::host2ip(locator::host_id host) {
+inet_address storage_service::host2ip(locator::host_id host) const {
     auto ip = _group0->address_map().find(raft::server_id(host.uuid()));
     if (!ip) {
         throw std::runtime_error(::format("Cannot map host {} to ip", host));
