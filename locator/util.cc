@@ -95,19 +95,18 @@ get_range_to_address_map(locator::effective_replication_map_ptr erm) {
 }
 
 future<std::vector<dht::token_range_endpoints>>
-describe_ring(const replica::database& db, const gms::gossiper& gossiper, const sstring& keyspace, bool include_only_local_dc) {
-    std::vector<dht::token_range_endpoints> ranges;
-    //Token.TokenFactory tf = getPartitioner().getTokenFactory();
-
-    auto erm = db.find_keyspace(keyspace).get_effective_replication_map();
+map_to_endpoints(locator::effective_replication_map_ptr erm,
+                 const gms::gossiper& gossiper,
+                 bool include_only_local_dc) {
     std::unordered_map<dht::token_range, inet_address_vector_replica_set> range_to_address_map = co_await (
             include_only_local_dc
                     ? get_range_to_address_map_in_local_dc(erm)
                     : get_range_to_address_map(erm)
     );
-    auto tmptr = erm->get_token_metadata_ptr();
+    std::vector<dht::token_range_endpoints> ranges;
+    ranges.reserve(range_to_address_map.size());
     for (auto entry : range_to_address_map) {
-        const auto& topology = tmptr->get_topology();
+        const auto& topology = erm->get_token_metadata_ptr()->get_topology();
         auto range = entry.first;
         auto addresses = entry.second;
         dht::token_range_endpoints tr;
@@ -126,7 +125,7 @@ describe_ring(const replica::database& db, const gms::gossiper& gossiper, const 
             tr._endpoints.push_back(fmt::to_string(details._host));
             tr._endpoint_details.push_back(details);
         }
-        ranges.push_back(tr);
+        ranges.push_back(std::move(tr));
         co_await coroutine::maybe_yield();
     }
     // Convert to wrapping ranges
@@ -146,6 +145,13 @@ describe_ring(const replica::database& db, const gms::gossiper& gossiper, const 
         ranges.erase(right_inf);
     }
     co_return ranges;
+}
+
+future<std::vector<dht::token_range_endpoints>>
+describe_ring(const replica::database& db, const gms::gossiper& gossiper, const sstring& keyspace, bool include_only_local_dc) {
+    //Token.TokenFactory tf = getPartitioner().getTokenFactory();
+    auto erm = db.find_keyspace(keyspace).get_effective_replication_map();
+    return map_to_endpoints(erm, gossiper, include_only_local_dc);
 }
 
 }
