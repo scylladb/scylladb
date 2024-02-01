@@ -29,6 +29,11 @@ std::function<future<> (flat_mutation_reader_v2)> make_streaming_consumer(sstrin
     return [&db, &sys_dist_ks, &vug, estimated_partitions, reason, offstrategy, origin = std::move(origin), frozen_guard] (flat_mutation_reader_v2 reader) -> future<> {
         std::exception_ptr ex;
         try {
+            if (current_scheduling_group() != db.local().get_streaming_scheduling_group()) {
+                on_internal_error(sstables::sstlog, format("The stream consumer is not running in streaming group current_scheduling_group={}",
+                        current_scheduling_group().name()));
+            }
+
             auto cf = db.local().find_column_family(reader.schema()).shared_from_this();
             auto guard = service::topology_guard(*cf, frozen_guard);
             auto use_view_update_path = co_await db::view::check_needs_view_update_path(sys_dist_ks.local(), db.local().get_token_metadata(), *cf, reason);
