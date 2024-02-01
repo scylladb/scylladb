@@ -223,6 +223,12 @@ public:
     // `wait_for_raft` must've also been called earlier and returned `true`.
     future<> make_nonvoter(raft::server_id);
 
+    // Make the given servers, other than us, a non-voter in group 0.
+    //
+    // Assumes we've finished the startup procedure (`setup_group0()` finished earlier).
+    // `wait_for_raft` must've also been called earlier and returned `true`.
+    future<> make_nonvoters(const std::unordered_set<raft::server_id>&);
+
     // Remove ourselves from group 0.
     //
     // Assumes we've finished the startup procedure (`setup_group0()` finished earlier).
@@ -353,7 +359,7 @@ private:
 
     // Make the given server a non-voter in Raft group 0 configuration.
     // Retries on raft::commit_status_unknown.
-    future<> make_raft_config_nonvoter(raft::server_id);
+    future<> make_raft_config_nonvoter(const std::unordered_set<raft::server_id>&);
 
     // Load the initial Raft <-> IP address map as seen by
     // the gossiper.
