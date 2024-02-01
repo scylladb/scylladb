@@ -2680,7 +2680,7 @@ void gossiper::append_endpoint_state(std::stringstream& ss, const endpoint_state
         if (app_state == application_state::TOKENS) {
             continue;
         }
-        ss << "  " << app_state << ":" << versioned_val.version() << ":" << versioned_val.value() << "\n";
+        fmt::print(ss, "  {}:{}:{}\n", app_state, versioned_val.version(), versioned_val.value());
     }
     const auto& app_state_map = state.get_application_state_map();
     if (app_state_map.contains(application_state::TOKENS)) {

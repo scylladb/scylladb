@@ -41,14 +41,19 @@ static const std::map<application_state, sstring> application_state_names = {
 };
 
 std::ostream& operator<<(std::ostream& os, const application_state& m) {
-    auto it = application_state_names.find(m);
-    if (it != application_state_names.end()) {
-        os << application_state_names.at(m);
-    } else {
-        os << "UNKNOWN";
-    }
+    fmt::print(os, "{}", m);
     return os;
 }
 
 }
 
+auto fmt::formatter<gms::application_state>::format(gms::application_state m,
+                                                    fmt::format_context& ctx) const
+        -> decltype(ctx.out()) {
+    std::string_view name = "UNKNOWN";
+    auto it = gms::application_state_names.find(m);
+    if (it != gms::application_state_names.end()) {
+        name = it->second;
+    }
+    return fmt::format_to(ctx.out(), "{}", name);
+}
