@@ -39,6 +39,7 @@
 #include "log.hh"
 #include "release.hh"
 #include "compaction/compaction_manager.hh"
+#include "compaction/task_manager_module.hh"
 #include "sstables/sstables.hh"
 #include "replica/database.hh"
 #include "db/extensions.hh"
@@ -723,9 +724,9 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         apilog.info("force_compaction: flush={}", flush);
 
         auto& compaction_module = db.local().get_compaction_manager().get_task_manager_module();
-        std::optional<major_compaction_task_impl::flush_mode> fmopt;
+        std::optional<flush_mode> fmopt;
         if (!flush) {
-            fmopt = major_compaction_task_impl::flush_mode::skip;
+            fmopt = flush_mode::skip;
         }
         auto task = co_await compaction_module.make_and_start_task<global_major_compaction_task_impl>({}, db, fmopt);
         try {
@@ -752,9 +753,9 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         apilog.debug("force_keyspace_compaction: keyspace={} tables={}, flush={}", keyspace, table_infos, flush);
 
         auto& compaction_module = db.local().get_compaction_manager().get_task_manager_module();
-        std::optional<major_compaction_task_impl::flush_mode> fmopt;
+        std::optional<flush_mode> fmopt;
         if (!flush) {
-            fmopt = major_compaction_task_impl::flush_mode::skip;
+            fmopt = flush_mode::skip;
         }
         auto task = co_await compaction_module.make_and_start_task<major_keyspace_compaction_task_impl>({}, std::move(keyspace), tasks::task_id::create_null_id(), db, table_infos, fmopt);
         try {
@@ -785,7 +786,8 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         }
 
         auto& compaction_module = db.local().get_compaction_manager().get_task_manager_module();
-        auto task = co_await compaction_module.make_and_start_task<cleanup_keyspace_compaction_task_impl>({}, std::move(keyspace), db, table_infos);
+        auto task = co_await compaction_module.make_and_start_task<cleanup_keyspace_compaction_task_impl>(
+            {}, std::move(keyspace), db, table_infos, flush_mode::all_tables);
         try {
             co_await task->done();
         } catch (...) {
@@ -796,13 +798,28 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         co_return json::json_return_type(0);
     });
 
-    ss::cleanup_all.set(r, [&ss](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
-        co_await ss.invoke_on(0, [] (service::storage_service& ss) {
+    ss::cleanup_all.set(r, [&ctx, &ss](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
+        apilog.info("cleanup_all");
+        auto done = co_await ss.invoke_on(0, [] (service::storage_service& ss) -> future<bool> {
             if (!ss.is_topology_coordinator_enabled()) {
-                throw std::runtime_error("Cannot run cleanup through the topology coordinator because it is disabled");
+                co_return false;
             }
-            return ss.do_cluster_cleanup();
+            co_await ss.do_cluster_cleanup();
+            co_return true;
         });
+        if (done) {
+            co_return json::json_return_type(0);
+        }
+        // fall back to the local global cleanup if topology coordinator is not enabled
+        auto& db = ctx.db;
+        auto& compaction_module = db.local().get_compaction_manager().get_task_manager_module();
+        auto task = co_await compaction_module.make_and_start_task<global_cleanup_compaction_task_impl>({}, db);
+        try {
+            co_await task->done();
+        } catch (...) {
+            apilog.error("cleanup_all failed: {}", std::current_exception());
+            throw;
+        }
         co_return json::json_return_type(0);
     });
 

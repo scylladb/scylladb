@@ -173,15 +173,7 @@ void cleanup_operation(scylla_rest_client& client, const bpo::variables_map& vm)
         }
         client.post(format("/storage_service/keyspace_cleanup/{}", keyspace), std::move(params));
     } else {
-        auto res = client.post(format("/storage_service/cleanup_all"));
-        if (res.IsObject()) {
-            // If previous post returns an object instead of a simple value it means the request
-            // failed either because server does not support it yet or topology coordinator is disabled.
-            // Fall back to the old cleanup API.
-            for (const auto& keyspace : get_keyspaces(client, "non_local_strategy")) {
-                client.post(format("/storage_service/keyspace_cleanup/{}", keyspace));
-            }
-        }
+        client.post("/storage_service/cleanup_all");
     }
 }
 

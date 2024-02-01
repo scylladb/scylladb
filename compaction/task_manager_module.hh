@@ -48,14 +48,14 @@ protected:
     future<tasks::task_manager::task::progress> get_progress(const sstables::compaction_data& cdata, const sstables::compaction_progress_monitor& progress_monitor) const;
 };
 
+enum class flush_mode {
+    skip,               // Skip flushing.  Useful when application explicitly flushes all tables prior to compaction
+    compacted_tables,   // Flush only the compacted keyspace/tables
+    all_tables          // Flush all tables in the database prior to compaction
+};
+
 class major_compaction_task_impl : public compaction_task_impl {
 public:
-    enum class flush_mode {
-        skip,               // Skip flushing.  Useful when application explicitly flushes all tables prior to compaction
-        compacted_tables,   // Flush only the compacted keyspace/tables
-        all_tables          // Flush all tables in the database prior to compaction
-    };
-
     major_compaction_task_impl(tasks::task_manager::module_ptr module,
             tasks::task_id id,
             unsigned sequence_number,
@@ -75,7 +75,6 @@ public:
         return "major compaction";
     }
 
-    static sstring to_string(flush_mode);
 protected:
     flush_mode _flush_mode;
 
@@ -199,17 +198,36 @@ class cleanup_keyspace_compaction_task_impl : public cleanup_compaction_task_imp
 private:
     sharded<replica::database>& _db;
     std::vector<table_info> _table_infos;
+    const flush_mode _flush_mode;
 public:
     cleanup_keyspace_compaction_task_impl(tasks::task_manager::module_ptr module,
             std::string keyspace,
             sharded<replica::database>& db,
-            std::vector<table_info> table_infos) noexcept
+            std::vector<table_info> table_infos,
+            flush_mode mode) noexcept
         : cleanup_compaction_task_impl(module, tasks::task_id::create_random_id(), module->new_sequence_number(), "keyspace", std::move(keyspace), "", "", tasks::task_id::create_null_id())
         , _db(db)
         , _table_infos(std::move(table_infos))
+        , _flush_mode(mode)
     {}
 protected:
     virtual future<> run() override;
+};
+
+class global_cleanup_compaction_task_impl : public compaction_task_impl {
+private:
+    sharded<replica::database>& _db;
+public:
+    global_cleanup_compaction_task_impl(tasks::task_manager::module_ptr module,
+            sharded<replica::database>& db) noexcept
+        : compaction_task_impl(module, tasks::task_id::create_random_id(), module->new_sequence_number(), "global", "", "", "", tasks::task_id::create_null_id())
+        , _db(db)
+    {}
+    std::string type() const final {
+        return "global cleanup compaction";
+    }
+private:
+    future<> run() final;
 };
 
 class shard_cleanup_keyspace_compaction_task_impl : public cleanup_compaction_task_impl {
@@ -718,10 +736,7 @@ protected:
 } // namespace compaction
 
 template <>
-struct fmt::formatter<major_compaction_task_impl::flush_mode> {
+struct fmt::formatter<compaction::flush_mode> {
     constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
-    template <typename FormatContext>
-    auto format(const major_compaction_task_impl::flush_mode& fm, FormatContext& ctx) const {
-        return fmt::format_to(ctx.out(), "{}", major_compaction_task_impl::to_string(fm));
-    }
+    auto format(compaction::flush_mode, fmt::format_context& ctx) const -> decltype(ctx.out());
 };

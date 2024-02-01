@@ -1638,9 +1638,12 @@ future<bool> table::perform_offstrategy_compaction(std::optional<tasks::task_inf
     co_return performed;
 }
 
-future<> table::perform_cleanup_compaction(compaction::owned_ranges_ptr sorted_owned_ranges, std::optional<tasks::task_info> info) {
-    co_await flush();
-
+future<> table::perform_cleanup_compaction(compaction::owned_ranges_ptr sorted_owned_ranges,
+                                           std::optional<tasks::task_info> info,
+                                           do_flush do_flush) {
+    if (do_flush) {
+        co_await flush();
+    }
     if (_compaction_groups.size() == 1) {
         auto& cg = *get_compaction_group(0);
         co_return co_await get_compaction_manager().perform_cleanup(std::move(sorted_owned_ranges), cg.as_table_state(), info);
