@@ -176,7 +176,11 @@ future<> controller::start_listening_on_maintenance_socket(sharded<cql_server>& 
 
     logger.info("Setting up maintenance socket on {}", socket);
 
-    return listen_on_all_shards(cserver, addr, nullptr, false, _config.rpc_keepalive(), std::nullopt);
+    auto unix_domain_socket_permissions =
+        file_permissions::user_read | file_permissions::user_write |
+        file_permissions::group_read | file_permissions::group_write;
+
+    return listen_on_all_shards(cserver, addr, nullptr, false, _config.rpc_keepalive(), unix_domain_socket_permissions);
 }
 
 future<> controller::do_start_server() {
