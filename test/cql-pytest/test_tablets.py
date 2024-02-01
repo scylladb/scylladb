@@ -53,3 +53,16 @@ def test_alter_cannot_change_vnodes_to_tablets(cql, skip_without_tablets):
     with new_test_keyspace(cql, ksdef) as keyspace:
         with pytest.raises(InvalidRequest, match="Cannot alter replication strategy vnode/tablets flavor"):
             cql.execute(f"ALTER KEYSPACE {keyspace} WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} AND tablets = {{'initial': 1}};")
+
+
+# Converting vnodes-based keyspace to tablets-based in not implemented yet
+def test_alter_doesnt_enable_tablets(cql, skip_without_tablets):
+    ksdef = "WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};"
+    with new_test_keyspace(cql, ksdef) as keyspace:
+        cql.execute(f"ALTER KEYSPACE {keyspace} WITH replication = {{'class': 'NetworkTopologyStrategy'}};")
+
+        res = cql.execute(f"DESCRIBE KEYSPACE {keyspace}").one()
+        assert "NetworkTopologyStrategy" in res.create_statement
+
+        res = cql.execute(f"SELECT * FROM system_schema.scylla_keyspaces WHERE keyspace_name = '{keyspace}'")
+        assert len(list(res)) == 0, "tablets replication strategy turned on"
