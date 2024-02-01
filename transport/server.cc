@@ -29,7 +29,6 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/future-util.hh>
 #include <seastar/core/seastar.hh>
-#include "utils/UUID.hh"
 #include <seastar/net/byteorder.hh>
 #include <seastar/core/metrics.hh>
 #include <seastar/net/byteorder.hh>
