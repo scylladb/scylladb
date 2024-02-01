@@ -4913,7 +4913,6 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                                          raft_server.id(), rs.state));
                     break;
                     }
-                    co_return;
                 }));
             }
             break;
