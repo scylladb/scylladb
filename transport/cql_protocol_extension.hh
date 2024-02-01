@@ -10,8 +10,6 @@
 #include <seastar/core/sstring.hh>
 #include "enum_set.hh"
 
-#include <map>
-
 namespace cql_transport {
 
 /**

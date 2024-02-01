@@ -15,9 +15,6 @@
 #include <seastar/core/sstring.hh>
 #include <seastar/net/api.hh>
 
-#include <optional>
-#include <stdexcept>
-
 namespace cql_transport {
 
 class event {
