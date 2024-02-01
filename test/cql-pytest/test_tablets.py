@@ -13,7 +13,7 @@
 #############################################################################
 
 import pytest
-from util import new_test_keyspace, unique_name
+from util import new_test_keyspace, new_test_table, unique_name
 from cassandra.protocol import ConfigurationException, InvalidRequest
 
 # A fixture similar to "test_keyspace", just creates a keyspace that enables
@@ -66,3 +66,20 @@ def test_alter_doesnt_enable_tablets(cql, skip_without_tablets):
 
         res = cql.execute(f"SELECT * FROM system_schema.scylla_keyspaces WHERE keyspace_name = '{keyspace}'")
         assert len(list(res)) == 0, "tablets replication strategy turned on"
+
+
+def test_tablet_default_initialization(cql, skip_without_tablets):
+    ksdef = "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1};"
+    with new_test_keyspace(cql, ksdef) as keyspace:
+        res = cql.execute(f"SELECT * FROM system_schema.scylla_keyspaces WHERE keyspace_name = '{keyspace}'").one()
+        assert res.initial_tablets == 0, "initial_tablets not configured"
+
+        with new_test_table(cql, keyspace, "pk int PRIMARY KEY, c int") as table:
+            table = table.split('.')[1]
+            res = cql.execute("SELECT * FROM system.tablets")
+            for row in res:
+                if row.keyspace_name == keyspace and row.table_name == table:
+                    assert row.tablet_count > 0, "zero tablets allocated"
+                    break
+            else:
+                assert False, "tablets not allocated"
