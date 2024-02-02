@@ -150,7 +150,8 @@ decorated_key::less_comparator::operator()(const decorated_key& lhs, const ring_
 }
 
 std::ostream& operator<<(std::ostream& out, const ring_position_ext& pos) {
-    return out << (ring_position_view)pos;
+    fmt::print(out, "{}", (ring_position_view)pos);
+    return out;
 }
 
 std::ostream& operator<<(std::ostream& out, const ring_position& pos) {
@@ -160,15 +161,6 @@ std::ostream& operator<<(std::ostream& out, const ring_position& pos) {
     } else {
         out << ", " << ((pos.relation_to_keys() < 0) ? "start" : "end");
     }
-    return out << "}";
-}
-
-std::ostream& operator<<(std::ostream& out, ring_position_view pos) {
-    out << "{" << *pos._token;
-    if (pos._key) {
-        out << ", " << *pos._key;
-    }
-    out << ", w=" << static_cast<int>(pos._weight);
     return out << "}";
 }
 
@@ -518,4 +510,14 @@ std::optional<shard_id> is_single_shard(const dht::sharder& sharder, const schem
     return shard;
 }
 
+}
+
+auto fmt::formatter<dht::ring_position_view>::format(const dht::ring_position_view& pos, fmt::format_context& ctx) const
+    -> decltype(ctx.out()) {
+    auto out = ctx.out();
+    out = fmt::format_to(out, "{{{}", *pos._token);
+    if (pos._key) {
+        out = fmt::format_to(out, ", {}", *pos._key);
+    }
+    return fmt::format_to(out, ", w={}}}", static_cast<int>(pos._weight));
 }

@@ -257,7 +257,7 @@ public:
     // Only when key() != nullptr
     after_key is_after_key() const { return after_key(_weight == 1); }
 
-    friend std::ostream& operator<<(std::ostream&, ring_position_view);
+    friend fmt::formatter<ring_position_view>;
     friend class optimized_optional<ring_position_view>;
 };
 
@@ -493,3 +493,9 @@ public:
 std::ostream& operator<<(std::ostream& out, partition_ranges_view v);
 
 } // namespace dht
+
+template<>
+struct fmt::formatter<dht::ring_position_view> {
+    constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
+    auto format(const dht::ring_position_view&, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
