@@ -1678,6 +1678,41 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 co_await update_topology_state(take_guard(std::move(node)), {builder.build()}, std::move(str));
             }
                 break;
+            case topology::transition_state::rollback_to_normal: {
+                auto node = get_node_to_work_on(std::move(guard));
+
+                // The barrier waits for all double writes started during the operation to complete. It allowed to fail
+                // since we will fence the requests later.
+                bool barrier_failed = false;
+                try {
+                    node.guard = co_await exec_global_command(std::move(node.guard),raft_topology_cmd::command::barrier_and_drain, get_excluded_nodes(node), drop_guard_and_retake::yes);
+                } catch (term_changed_error&) {
+                    throw;
+                } catch(...) {
+                    rtlogger.warn("failed to run barrier_and_drain during rollback {}", std::current_exception());
+                    barrier_failed = true;
+                }
+
+                if (barrier_failed) {
+                    node.guard =co_await start_operation();
+                }
+
+                node = retake_node(std::move(node.guard), node.id);
+
+                topology_mutation_builder builder(node.guard.write_timestamp());
+                topology_request_tracking_mutation_builder rtbuilder(node.rs->request_id);
+                builder.set_fence_version(_topo_sm._topology.version) // fence requests in case the drain above failed
+                       .set_transition_state(topology::transition_state::tablet_migration) // in case tablet drain failed we need to complete tablet transitions
+                       .with_node(node.id)
+                       .set("node_state", node_state::normal);
+                rtbuilder.done();
+
+                auto str = fmt::format("complete rollback of {} to state normal", node.id);
+
+                rtlogger.info("{}", str);
+                co_await update_topology_state(std::move(node.guard), {builder.build(), rtbuilder.build()}, str);
+            }
+                break;
         }
         co_return true;
     };
@@ -1868,39 +1903,6 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                        .set("node_state", node_state::normal)
                        .del("rebuild_option");
                 co_await update_topology_state(take_guard(std::move(node)), {builder.build(), rtbuilder.build()}, "rebuilding completed");
-            }
-                break;
-            case node_state::rollback_to_normal: {
-                // The barrier waits for all double writes started during the operation to complete. It allowed to fail
-                // since we will fence the requests later.
-                bool barrier_failed = false;
-                try {
-                    node.guard = co_await exec_global_command(std::move(node.guard),raft_topology_cmd::command::barrier_and_drain, get_excluded_nodes(node), drop_guard_and_retake::yes);
-                } catch (term_changed_error&) {
-                    throw;
-                } catch(...) {
-                    rtlogger.warn("failed to run barrier_and_drain during rollback {}", std::current_exception());
-                    barrier_failed = true;
-                }
-
-                if (barrier_failed) {
-                    node.guard =co_await start_operation();
-                }
-
-                node = retake_node(std::move(node.guard), node.id);
-
-                topology_mutation_builder builder(node.guard.write_timestamp());
-                topology_request_tracking_mutation_builder rtbuilder(node.rs->request_id);
-                builder.set_fence_version(_topo_sm._topology.version) // fence requests in case the drain above failed
-                       .set_transition_state(topology::transition_state::tablet_migration) // in case tablet drain failed we need to complete tablet transitions
-                       .with_node(node.id)
-                       .set("node_state", node_state::normal);
-                rtbuilder.done();
-
-                auto str = fmt::format("complete rollback of {} to state normal", node.id);
-
-                rtlogger.info("{}", str);
-                co_await update_topology_state(std::move(node.guard), {builder.build(), rtbuilder.build()}, str);
             }
                 break;
             case node_state::bootstrapping:
@@ -2260,8 +2262,7 @@ future<> topology_coordinator::rollback_current_topology_op(group0_guard&& guard
     // Look for a node which operation should be aborted
     // (there should be one since we are in the rollback)
     node_to_work_on node = get_node_to_work_on(std::move(guard));
-    node_state state = node.rs->state;
-    std::optional<topology::transition_state> transition_state;
+    topology::transition_state transition_state;
 
     switch (node.rs->state) {
         case node_state::bootstrapping:
@@ -2277,8 +2278,8 @@ future<> topology_coordinator::rollback_current_topology_op(group0_guard&& guard
             co_await _group0.group0_server().modify_config({raft::config_member{{node.id, {}}, false}}, {}, &_as);
             [[fallthrough]];
         case node_state::decommissioning:
-            // to rollback decommission or remove just move a node that we tried to remove back to normal state
-            state = node_state::rollback_to_normal;
+            // To rollback decommission or remove just move the topology to rollback_to_normal.
+            transition_state = topology::transition_state::rollback_to_normal;
             break;
         default:
             on_internal_error(rtlogger, fmt::format("tried to rollback in unsupported state {}", node.rs->state));
@@ -2286,18 +2287,8 @@ future<> topology_coordinator::rollback_current_topology_op(group0_guard&& guard
 
     topology_mutation_builder builder(node.guard.write_timestamp());
     topology_request_tracking_mutation_builder rtbuilder(node.rs->request_id);
-    std::string str;
-    if (transition_state) {
-        builder.set_transition_state(*transition_state);
-        str = fmt::format("rollback {} after {} failure, moving transition state to {} and setting cleanup flag",
-                node.id, node.rs->state, *transition_state);
-    } else {
-        builder.del_transition_state();
-        str = fmt::format("rollback {} after {} failure to state {} and setting cleanup flag", node.id, node.rs->state, state);
-    }
-    builder.set_version(_topo_sm._topology.version + 1)
-           .with_node(node.id)
-           .set("node_state", state);
+    builder.set_transition_state(transition_state)
+           .set_version(_topo_sm._topology.version + 1);
     rtbuilder.set("error", fmt::format("Rolled back: {}", *_rollback));
 
     std::vector<canonical_mutation> muts;
@@ -2307,6 +2298,8 @@ future<> topology_coordinator::rollback_current_topology_op(group0_guard&& guard
     muts.emplace_back(builder.build());
     muts.emplace_back(rtbuilder.build());
 
+    std::string str = fmt::format("rollback {} after {} failure, moving transition state to {} and setting cleanup flag",
+            node.id, node.rs->state, transition_state);
     rtlogger.info("{}", str);
     co_await update_topology_state(std::move(node.guard), std::move(muts), str);
 }

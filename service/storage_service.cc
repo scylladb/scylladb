@@ -334,7 +334,6 @@ static locator::node::state to_topology_node_state(node_state ns) {
         case node_state::decommissioning: return locator::node::state::being_decommissioned;
         case node_state::removing: return locator::node::state::being_removed;
         case node_state::normal: return locator::node::state::normal;
-        case node_state::rollback_to_normal: return locator::node::state::normal;
         case node_state::left: return locator::node::state::left;
         case node_state::replacing: return locator::node::state::replacing;
         case node_state::rebuilding: return locator::node::state::normal;
@@ -463,6 +462,11 @@ future<> storage_service::sync_raft_topology_nodes(mutable_token_metadata_ptr tm
             }
             [[fallthrough]];
         case node_state::removing:
+            if (_topology_state_machine._topology.tstate == topology::transition_state::rollback_to_normal) {
+                // no need for double writes anymore since op failed
+                co_await process_normal_node(id, rs);
+                break;
+            }
             update_topology(host_id, ip, rs);
             co_await tmptr->update_normal_tokens(rs.ring.value().tokens, host_id);
             tmptr->add_leaving_endpoint(host_id);
@@ -488,10 +492,6 @@ future<> storage_service::sync_raft_topology_nodes(mutable_token_metadata_ptr tm
             break;
         case node_state::rebuilding:
             // Rebuilding node is normal
-            co_await process_normal_node(id, rs);
-            break;
-        case node_state::rollback_to_normal:
-            // no need for double writes anymore since op failed
             co_await process_normal_node(id, rs);
             break;
         default:
@@ -583,6 +583,8 @@ future<> storage_service::topology_state_load() {
                 case topology::transition_state::write_both_read_old:
                     [[fallthrough]];
                 case topology::transition_state::left_token_ring:
+                    [[fallthrough]];
+                case topology::transition_state::rollback_to_normal:
                     return read_new_t::no;
                 case topology::transition_state::write_both_read_new:
                     return read_new_t::yes;
@@ -4908,7 +4910,6 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                     case node_state::left:
                     case node_state::none:
                     case node_state::removing:
-                    case node_state::rollback_to_normal:
                         on_fatal_internal_error(rtlogger, ::format("Node {} got streaming request in state {}. It should be either dead or not part of the cluster",
                                          raft_server.id(), rs.state));
                     break;
