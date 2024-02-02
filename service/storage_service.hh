@@ -413,6 +413,8 @@ public:
 
     future<std::vector<token_range_endpoints>> describe_ring(const sstring& keyspace, bool include_only_local_dc = false) const;
 
+    future<std::vector<dht::token_range_endpoints>> describe_ring_for_table(const sstring& keyspace_name, const sstring& table_name) const;
+
     /**
      * Retrieve a map of tokens to endpoints, including the bootstrapping ones.
      *
