@@ -13,14 +13,14 @@ class GCPImagesInformationDownloader:
     def run(self, app, exception=None):  
         config = app.config
         base_url = config.scylladb_gcp_images_base_url
-        ami_bucket_directory = config.scylladb_gcp_images_bucket_directory
-        ami_download_directory = os.path.join(app.builder.srcdir, config.scylladb_gcp_images_download_directory)
+        bucket_directory = config.scylladb_gcp_images_bucket_directory
+        download_directory = os.path.join(app.builder.srcdir, config.scylladb_gcp_images_download_directory)
 
-        if os.path.exists(ami_download_directory) and os.listdir(ami_download_directory):
-            print(f"Files already exist in {ami_download_directory}. Skipping download.")
+        if os.path.exists(download_directory) and os.listdir(download_directory):
+            LOGGER.info(f"Files already exist in {download_directory}. Skipping download.")
         else:
             downloader = FileDownloader(base_url)
-            downloader.download_files(ami_bucket_directory, ami_download_directory)
+            downloader.download_files(bucket_directory, download_directory)
 
 
 class GCPImagesVersionsTemplateDirective(BaseVersionsTemplateDirective):
