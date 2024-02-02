@@ -35,11 +35,11 @@ Additionally to specific node states, there entire topology can also be in a tra
     to start using it for CDC log table writes.
 - `write_both_read_old` - one of the nodes is in a bootstrapping/decommissioning/removing/replacing state.
     Writes are going to both new and old replicas (new replicas means calculated according to modified
-token ring), reads are using old replicas.
+    token ring), reads are using old replicas.
 - `write_both_read_new` - as above, but reads are using new replicas.
 - `left_token_ring` - the decommissioning node left the token ring, but we still need to wait until other
-   nodes observe it and stop sending writes to this node. Then, we tell the node to shut down and remove
-   it from group 0. We also use this state to rollback a failed bootstrap or decommission.
+    nodes observe it and stop sending writes to this node. Then, we tell the node to shut down and remove
+    it from group 0. We also use this state to rollback a failed bootstrap or decommission.
 - `rollback_to_normal` - the decommission or removenode operation failed. Rollback the operation by
     moving the node we tried to decommission/remove back to the normal state.
 
