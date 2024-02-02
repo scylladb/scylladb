@@ -1069,7 +1069,7 @@ future<> row_cache::do_update(external_updater eu, replica::memtable& m, Updater
                             // this layer has a chance to restore invariants before deferring,
                             // in particular set _prev_snapshot_pos to the correct value.
                             if (update.run() == stop_iteration::no) {
-                                return;
+                                break;
                             }
                             update = {};
                             real_dirty_acc.unpin_memory(size_entry);
