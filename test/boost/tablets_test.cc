@@ -230,6 +230,18 @@ SEASTAR_TEST_CASE(test_tablet_metadata_persistence) {
             }
 
             verify_tablet_metadata_persistence(e, tm, ts);
+
+            // Change resize decision of table1
+            {
+                tablet_map tmap(1);
+                locator::resize_decision decision;
+                decision.way = locator::resize_decision::split{},
+                decision.sequence_number = 1;
+                tmap.set_resize_decision(decision);
+                tm.set_tablet_map(table1, std::move(tmap));
+            }
+
+            verify_tablet_metadata_persistence(e, tm, ts);
         }
     }, tablet_cql_test_config());
 }
@@ -432,6 +444,42 @@ SEASTAR_TEST_CASE(test_mutation_builder) {
             auto tm_from_disk = read_tablet_metadata(e.local_qp()).get0();
             BOOST_REQUIRE_EQUAL(expected_tmap, tm_from_disk.get_tablet_map(table1));
         }
+
+        static const auto resize_decision = locator::resize_decision("split", 1);
+
+        {
+            tablet_mutation_builder b(ts++, table1);
+            auto last_token = tm.get_tablet_map(table1).get_last_token(tid1);
+            b.set_replicas(last_token, tablet_replica_set {
+                    tablet_replica {h1, 2},
+                    tablet_replica {h2, 3},
+            });
+            b.del_transition(last_token);
+            b.set_resize_decision(resize_decision);
+            e.local_db().apply({freeze(b.build())}, db::no_timeout).get();
+        }
+
+        {
+            tablet_map expected_tmap(2);
+            tid = expected_tmap.first_tablet();
+            expected_tmap.set_tablet(tid, tablet_info {
+                    tablet_replica_set {
+                            tablet_replica {h1, 0},
+                            tablet_replica {h3, 5},
+                    }
+            });
+            tid1 = *expected_tmap.next_tablet(tid);
+            expected_tmap.set_tablet(tid1, tablet_info {
+                    tablet_replica_set {
+                            tablet_replica {h1, 2},
+                            tablet_replica {h2, 3},
+                    }
+            });
+            expected_tmap.set_resize_decision(resize_decision);
+
+            auto tm_from_disk = read_tablet_metadata(e.local_qp()).get0();
+            BOOST_REQUIRE_EQUAL(expected_tmap, tm_from_disk.get_tablet_map(table1));
+        }
     }, tablet_cql_test_config());
 }
 
@@ -601,6 +649,21 @@ SEASTAR_THREAD_TEST_CASE(test_token_ownership_splitting) {
     }
 }
 
+static
+void apply_resize_plan(token_metadata& tm, const migration_plan& plan) {
+    for (auto [table_id, resize_decision] : plan.resize_plan().resize) {
+        tablet_map& tmap = tm.tablets().get_tablet_map(table_id);
+        resize_decision.sequence_number = tmap.resize_decision().sequence_number + 1;
+        tmap.set_resize_decision(resize_decision);
+    }
+    for (auto table_id : plan.resize_plan().finalize_resize) {
+        auto& old_tmap = tm.tablets().get_tablet_map(table_id);
+        testlog.info("Setting new tablet map of size {}", old_tmap.tablet_count() * 2);
+        tablet_map tmap(old_tmap.tablet_count() * 2);
+        tm.tablets().set_tablet_map(table_id, std::move(tmap));
+    }
+}
+
 // Reflects the plan in a given token metadata as if the migrations were fully executed.
 static
 void apply_plan(token_metadata& tm, const migration_plan& plan) {
@@ -610,6 +673,7 @@ void apply_plan(token_metadata& tm, const migration_plan& plan) {
         tinfo.replicas = replace_replica(tinfo.replicas, mig.src, mig.dst);
         tmap.set_tablet(mig.tablet.tablet, tinfo);
     }
+    apply_resize_plan(tm, plan);
 }
 
 // Reflects the plan in a given token metadata as if the migrations were started but not yet executed.
@@ -620,12 +684,13 @@ void apply_plan_as_in_progress(token_metadata& tm, const migration_plan& plan) {
         auto tinfo = tmap.get_tablet_info(mig.tablet.tablet);
         tmap.set_tablet_transition_info(mig.tablet.tablet, migration_to_transition_info(tinfo, mig));
     }
+    apply_resize_plan(tm, plan);
 }
 
 static
-void rebalance_tablets(tablet_allocator& talloc, shared_token_metadata& stm) {
+void rebalance_tablets(tablet_allocator& talloc, shared_token_metadata& stm, locator::load_stats_ptr load_stats = {}) {
     while (true) {
-        auto plan = talloc.balance_tablets(stm.get()).get0();
+        auto plan = talloc.balance_tablets(stm.get(), load_stats).get0();
         if (plan.empty()) {
             break;
         }
@@ -1554,4 +1619,122 @@ SEASTAR_THREAD_TEST_CASE(basic_tablet_storage_splitting_test) {
             return make_ready_future<bool>(table.all_storage_groups_split());
         }, bool(false), std::logical_or<bool>()).get0(), true);
     }, std::move(cfg)).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_load_balancing_resize_requests) {
+    do_with_cql_env_thread([] (auto& e) {
+        inet_address ip1("192.168.0.1");
+        inet_address ip2("192.168.0.2");
+
+        auto host1 = host_id(next_uuid());
+        auto host2 = host_id(next_uuid());
+
+        auto table1 = table_id(next_uuid());
+
+        unsigned shard_count = 2;
+
+        semaphore sem(1);
+        shared_token_metadata stm([&sem] () noexcept { return get_units(sem, 1); }, locator::token_metadata::config{
+                locator::topology::config{
+                        .this_endpoint = ip1,
+                        .local_dc_rack = locator::endpoint_dc_rack::default_location
+                }
+        });
+
+        stm.mutate_token_metadata([&] (token_metadata& tm) {
+            tm.update_host_id(host1, ip1);
+            tm.update_host_id(host2, ip2);
+            tm.update_topology(host1, locator::endpoint_dc_rack::default_location, std::nullopt, shard_count);
+            tm.update_topology(host2, locator::endpoint_dc_rack::default_location, std::nullopt, shard_count);
+
+            tablet_map tmap(2);
+            for (auto tid : tmap.tablet_ids()) {
+                tmap.set_tablet(tid, tablet_info {
+                        tablet_replica_set {
+                                tablet_replica {host1, tests::random::get_int<shard_id>(0, shard_count - 1)},
+                                tablet_replica {host2, tests::random::get_int<shard_id>(0, shard_count - 1)},
+                        }
+                });
+            }
+            tablet_metadata tmeta;
+            tmeta.set_tablet_map(table1, std::move(tmap));
+            tm.set_tablets(std::move(tmeta));
+            return make_ready_future<>();
+        }).get();
+
+        auto tablet_count = [&] {
+            return stm.get()->tablets().get_tablet_map(table1).tablet_count();
+        };
+        auto resize_decision = [&] {
+            return stm.get()->tablets().get_tablet_map(table1).resize_decision();
+        };
+
+        auto do_rebalance_tablets = [&] (locator::load_stats load_stats) {
+            rebalance_tablets(e.get_tablet_allocator().local(), stm, make_lw_shared(std::move(load_stats)));
+        };
+
+        const size_t initial_tablets = tablet_count();
+        const uint64_t max_tablet_size = service::default_target_tablet_size * 2;
+        auto to_size_in_bytes = [&] (double max_tablet_size_pctg) -> uint64_t {
+            return (max_tablet_size * max_tablet_size_pctg) * tablet_count();
+        };
+
+
+        const auto initial_ready_seq_number = std::numeric_limits<locator::resize_decision::seq_number_t>::min();
+
+        // there are 2 tablets, each with avg size hitting merge threshold, so merge request is emitted
+        {
+            locator::load_stats load_stats = {
+                .tables = {
+                    { table1, table_load_stats{ .size_in_bytes = to_size_in_bytes(0.0), .split_ready_seq_number = initial_ready_seq_number }},
+                }
+            };
+
+            do_rebalance_tablets(std::move(load_stats));
+            BOOST_REQUIRE(tablet_count() == initial_tablets);
+            BOOST_REQUIRE(std::holds_alternative<locator::resize_decision::merge>(resize_decision().way));
+        }
+
+        // avg size moved above target size, so merge is cancelled
+        {
+            locator::load_stats load_stats = {
+                .tables = {
+                    { table1, table_load_stats{ .size_in_bytes = to_size_in_bytes(0.75), .split_ready_seq_number = initial_ready_seq_number }},
+                }
+            };
+
+            do_rebalance_tablets(std::move(load_stats));
+            BOOST_REQUIRE(tablet_count() == initial_tablets);
+            BOOST_REQUIRE(std::holds_alternative<locator::resize_decision::none>(resize_decision().way));
+        }
+
+        // avg size hits split threshold, and balancer emits split request
+        {
+            locator::load_stats load_stats = {
+                .tables = {
+                    { table1, table_load_stats{ .size_in_bytes = to_size_in_bytes(1.1), .split_ready_seq_number = initial_ready_seq_number }},
+                }
+            };
+
+            do_rebalance_tablets(std::move(load_stats));
+            BOOST_REQUIRE(tablet_count() == initial_tablets);
+            BOOST_REQUIRE(std::holds_alternative<locator::resize_decision::split>(resize_decision().way));
+            BOOST_REQUIRE(resize_decision().sequence_number > 0);
+        }
+
+        // replicas set their split status as ready, and load balancer finalizes split generating a new
+        // tablet map, twice as large as the previous one.
+        {
+            locator::load_stats load_stats = {
+                .tables = {
+                    { table1, table_load_stats{ .size_in_bytes = to_size_in_bytes(1.1), .split_ready_seq_number = resize_decision().sequence_number }},
+                }
+            };
+
+            do_rebalance_tablets(std::move(load_stats));
+
+            BOOST_REQUIRE(tablet_count() == initial_tablets * 2);
+            BOOST_REQUIRE(std::holds_alternative<locator::resize_decision::none>(resize_decision().way));
+        }
+    }).get();
 }

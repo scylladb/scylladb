@@ -341,6 +341,11 @@ class ScyllaServer:
         if self.cmd:
             self.cmd.send_signal(signal.SIGHUP)
 
+    def update_cmdline(self, cmdline_options: List[str]) -> None:
+        """Update the command-line options by merging the new options into the existing ones.
+           Takes effect only after the node is restarted."""
+        self.cmdline_options = merge_cmdline_options(self.cmdline_options, cmdline_options)
+
     def take_log_savepoint(self) -> None:
         """Save the server current log size when a test starts so that if
         the test fails, we can only capture the relevant lines of the log"""
@@ -992,6 +997,15 @@ class ScyllaCluster:
         self.is_dirty = True
         self.servers[server_id].update_config(key, value)
 
+    def update_cmdline(self, server_id: ServerNum, cmdline_options: List[str]) -> None:
+        """Update the command-line options of the given server by merging the new options into the existing ones.
+           The update only takes effect after restart.
+           Marks the cluster as dirty.
+           Fails if the server cannot be found."""
+        assert server_id in self.servers, f"Server {server_id} unknown"
+        self.is_dirty = True
+        self.servers[server_id].update_cmdline(cmdline_options)
+
     def setLogger(self, logger: logging.LoggerAdapter):
         """Change the logger used by the cluster.
            Called when a cluster is reused between tests so that logs during the new test
@@ -1165,6 +1179,7 @@ class ScyllaClusterManager:
         add_put('/cluster/rebuild-node/{server_id}', self._cluster_rebuild_node)
         add_get('/cluster/server/{server_id}/get_config', self._server_get_config)
         add_put('/cluster/server/{server_id}/update_config', self._server_update_config)
+        add_put('/cluster/server/{server_id}/update_cmdline', self._server_update_cmdline)
         add_put('/cluster/server/{server_id}/change_ip', self._server_change_ip)
         add_put('/cluster/server/{server_id}/change_rpc_address', self._server_change_rpc_address)
         add_get('/cluster/server/{server_id}/get_log_filename', self._server_get_log_filename)
@@ -1371,16 +1386,32 @@ class ScyllaClusterManager:
     async def _cluster_rebuild_node(self, request) -> None:
         """Run rebuild node on Scylla REST API for a specified server"""
         assert self.cluster
+        data = await request.json()
         server_id = ServerNum(int(request.match_info["server_id"]))
         self.logger.info("_cluster_rebuild_node %s", server_id)
         assert server_id in self.cluster.running, "Can't rebuild not running node"
         server = self.cluster.running[server_id]
+        expected_error = data["expected_error"]
         try:
             await self.cluster.api.rebuild_node(server.ip_addr, timeout=ScyllaServer.TOPOLOGY_TIMEOUT)
         except (RuntimeError, HTTPError) as exc:
-            raise RuntimeError(
-                f"rebuild failed (server: {server}), check log at {server.log_filename},"
-                f" error: \"{exc}\"")
+            if expected_error:
+                if expected_error not in str(exc):
+                    raise RuntimeError(
+                            f"rebuild failed (server: {server}) but did not contain expected error"
+                            f"(\"{expected_error}\", check log file at {server.log_filename}, error: \"{exc}\"")
+                else:
+                    return
+            else:
+                raise RuntimeError(
+                    f"rebuild failed (server: {server}), check log at {server.log_filename},"
+                    f" error: \"{exc}\"")
+        else:
+            if expected_error:
+                raise RuntimeError(
+                    f"rebuild succeeded when it should have failed (server: {server},"
+                    f" expected_error: \"{expected_error}\"), check log file at {server.log_filename}")
+
         await self.cluster.server_stop(server_id, gracefully=True)
 
     async def _server_get_config(self, request: aiohttp.web.Request) -> dict[str, object]:
@@ -1396,6 +1427,15 @@ class ScyllaClusterManager:
         data = await request.json()
         self.cluster.update_config(ServerNum(int(request.match_info["server_id"])),
                                    data['key'], data['value'])
+
+    async def _server_update_cmdline(self, request: aiohttp.web.Request) -> None:
+        """Update the command-line options of the given server by merging the new options into the existing ones.
+           The update only takes effect after restart.
+           Marks the cluster as dirty."""
+        assert self.cluster
+        data = await request.json()
+        self.cluster.update_cmdline(ServerNum(int(request.match_info["server_id"])),
+                                    data['cmdline_options'])
 
     async def _server_change_ip(self, request: aiohttp.web.Request) -> dict[str, object]:
         """Pass change_ip command for the given server to the cluster"""

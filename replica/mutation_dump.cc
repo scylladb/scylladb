@@ -263,8 +263,8 @@ private:
                 break;
         }
 
-        if (!ss.str().empty()) {
-            set_cell(*_schema, r, cdef, ss.str());
+        if (!ss.view().empty()) {
+            set_cell(*_schema, r, cdef, std::move(ss).str());
         }
     }
 
@@ -302,7 +302,7 @@ private:
 
         writer.writer().EndObject();
 
-        set_cell(*_schema, r, cdef, ss.str());
+        set_cell(*_schema, r, cdef, std::move(ss).str());
     }
 
     mutation_fragment_v2 transform_mutation_fragment(mutation_fragment_v2& mf, const sstring& data_source_name) {

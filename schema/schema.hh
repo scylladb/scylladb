@@ -437,23 +437,9 @@ public:
     { }
     const std::vector<column_mapping_entry>& columns() const { return _columns; }
     column_count_type n_static() const { return _n_static; }
-    const column_mapping_entry& column_at(column_kind kind, column_id id) const {
-        assert(kind == column_kind::regular_column || kind == column_kind::static_column);
-        return kind == column_kind::regular_column ? regular_column_at(id) : static_column_at(id);
-    }
-    const column_mapping_entry& static_column_at(column_id id) const {
-        if (id >= _n_static) {
-            throw std::out_of_range(format("static column id {:d} >= {:d}", id, _n_static));
-        }
-        return _columns[id];
-    }
-    const column_mapping_entry& regular_column_at(column_id id) const {
-        auto n_regular = _columns.size() - _n_static;
-        if (id >= n_regular) {
-            throw std::out_of_range(format("regular column id {:d} >= {:d}", id, n_regular));
-        }
-        return _columns[id + _n_static];
-    }
+    const column_mapping_entry& column_at(column_kind kind, column_id id) const;
+    const column_mapping_entry& static_column_at(column_id id) const;
+    const column_mapping_entry& regular_column_at(column_id id) const;
     friend std::ostream& operator<<(std::ostream& out, const column_mapping& cm);
 };
 

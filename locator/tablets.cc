@@ -222,6 +222,10 @@ void tablet_map::set_tablet_transition_info(tablet_id id, tablet_transition_info
     _transitions.insert_or_assign(id, std::move(info));
 }
 
+void tablet_map::set_resize_decision(locator::resize_decision decision) {
+    _resize_decision = std::move(decision);
+}
+
 future<> tablet_map::for_each_tablet(seastar::noncopyable_function<void(tablet_id, const tablet_info&)> func) const {
     std::optional<tablet_id> tid = first_tablet();
     for (const tablet_info& ti : tablets()) {
@@ -374,6 +378,63 @@ size_t tablet_map::external_memory_usage() const {
     return result;
 }
 
+bool resize_decision::operator==(const resize_decision& o) const {
+    return way.index() == o.way.index() && sequence_number == o.sequence_number;
+}
+
+bool tablet_map::needs_split() const {
+    return std::holds_alternative<resize_decision::split>(_resize_decision.way);
+}
+
+const locator::resize_decision& tablet_map::resize_decision() const {
+    return _resize_decision;
+}
+
+static auto to_resize_type(sstring decision) {
+    static const std::unordered_map<sstring, decltype(resize_decision::way)> string_to_type = {
+        {"none", resize_decision::none{}},
+        {"split", resize_decision::split{}},
+        {"merge", resize_decision::merge{}},
+    };
+    return string_to_type.at(decision);
+}
+
+resize_decision::resize_decision(sstring decision, uint64_t seq_number)
+    : way(to_resize_type(decision))
+    , sequence_number(seq_number) {
+}
+
+sstring resize_decision::type_name() const {
+    static const std::array<sstring, 3> index_to_string = {
+        "none",
+        "split",
+        "merge",
+    };
+    static_assert(std::variant_size_v<decltype(way)> == index_to_string.size());
+    return index_to_string[way.index()];
+}
+
+resize_decision::seq_number_t resize_decision::next_sequence_number() const {
+    // Doubt we'll ever wrap around, but just in case.
+    // Even if sequence number is bumped every second, it would take 292471208677 years
+    // for it to happen, about 21x the age of the universe, or ~11x according to the new
+    // prediction after james webb.
+    return (sequence_number == std::numeric_limits<seq_number_t>::max()) ? 0 : sequence_number + 1;
+}
+
+table_load_stats& table_load_stats::operator+=(const table_load_stats& s) noexcept {
+    size_in_bytes = size_in_bytes + s.size_in_bytes;
+    split_ready_seq_number = std::min(split_ready_seq_number, s.split_ready_seq_number);
+    return *this;
+}
+
+load_stats& load_stats::operator+=(const load_stats& s) {
+    for (auto& [id, stats] : s.tables) {
+        tables[id] += stats;
+    }
+    return *this;
+}
+
 // Estimates the external memory usage of std::unordered_map<>.
 // Does not include external memory usage of elements.
 template <typename K, typename V>
@@ -387,6 +448,23 @@ size_t tablet_metadata::external_memory_usage() const {
         result += map.external_memory_usage();
     }
     return result;
+}
+
+future<bool> check_tablet_replica_shards(const tablet_metadata& tm, host_id this_host) {
+    bool valid = true;
+    for (const auto& [table_id, tmap] : tm.all_tables()) {
+        co_await tmap.for_each_tablet([this_host, &valid] (locator::tablet_id tid, const tablet_info& tinfo) {
+            for (const auto& replica : tinfo.replicas) {
+                if (replica.host == this_host) {
+                    valid &= replica.shard < smp::count;
+                }
+            }
+        });
+        if (!valid) {
+            break;
+        }
+    }
+    co_return valid;
 }
 
 class tablet_effective_replication_map : public effective_replication_map {

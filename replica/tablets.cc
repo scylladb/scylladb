@@ -50,6 +50,8 @@ schema_ptr make_tablets_schema() {
             .with_column("stage", utf8_type)
             .with_column("transition", utf8_type)
             .with_column("session", uuid_type)
+            .with_column("resize_type", utf8_type, column_kind::static_column)
+            .with_column("resize_seq_number", long_type, column_kind::static_column)
             .with_version(db::system_keyspace::generate_schema_version(id))
             .build();
 }
@@ -80,6 +82,8 @@ tablet_map_to_mutation(const tablet_map& tablets, table_id id, const sstring& ke
     m.set_static_cell("tablet_count", data_value(int(tablets.tablet_count())), ts);
     m.set_static_cell("keyspace_name", data_value(keyspace_name), ts);
     m.set_static_cell("table_name", data_value(table_name), ts);
+    m.set_static_cell("resize_type", data_value(tablets.resize_decision().type_name()), ts);
+    m.set_static_cell("resize_seq_number", data_value(int64_t(tablets.resize_decision().sequence_number)), ts);
 
     tablet_id tid = tablets.first_tablet();
     for (auto&& tablet : tablets.tablets()) {
@@ -151,6 +155,13 @@ tablet_mutation_builder::del_transition(dht::token last_token) {
     return *this;
 }
 
+tablet_mutation_builder&
+tablet_mutation_builder::set_resize_decision(locator::resize_decision resize_decision) {
+    _m.set_static_cell("resize_type", data_value(resize_decision.type_name()), _ts);
+    _m.set_static_cell("resize_seq_number", data_value(int64_t(resize_decision.sequence_number)), _ts);
+    return *this;
+}
+
 mutation make_drop_tablet_map_mutation(table_id id, api::timestamp_type ts) {
     auto s = db::system_keyspace::tablets();
     mutation m(s, partition_key::from_single_value(*s,
@@ -208,6 +219,15 @@ future<tablet_metadata> read_tablet_metadata(cql3::query_processor& qp) {
             auto tablet_count = row.get_as<int>("tablet_count");
             auto tmap = tablet_map(tablet_count);
             current = active_tablet_map{table, tmap, tmap.first_tablet()};
+
+            // Resize decision fields are static columns, so set them only once per table.
+            if (row.has("resize_type") && row.has("resize_seq_number")) {
+                auto resize_type_name = row.get_as<sstring>("resize_type");
+                int64_t resize_seq_number = row.get_as<int64_t>("resize_seq_number");
+
+                locator::resize_decision resize_decision(std::move(resize_type_name), resize_seq_number);
+                current->map.set_resize_decision(std::move(resize_decision));
+            }
         }
 
         tablet_replica_set tablet_replicas;

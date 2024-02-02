@@ -849,6 +849,7 @@ scylla_core = (['message/messaging_service.cc',
                 'utils/rjson.cc',
                 'utils/human_readable.cc',
                 'utils/histogram_metrics_helper.cc',
+                'utils/on_internal_error.cc',
                 'utils/pretty_printers.cc',
                 'converting_mutation_partition_applier.cc',
                 'readers/combined.cc',
@@ -1246,6 +1247,8 @@ api = ['api/api.cc',
        Json2Code('api/api-doc/error_injection.json'),
        'api/authorization_cache.cc',
        Json2Code('api/api-doc/authorization_cache.json'),
+       'api/raft.cc',
+       Json2Code('api/api-doc/raft.json'),
        ]
 
 alternator = [
@@ -1464,7 +1467,7 @@ deps['test/boost/bytes_ostream_test'] = [
     "test/lib/log.cc",
 ]
 deps['test/boost/input_stream_test'] = ['test/boost/input_stream_test.cc']
-deps['test/boost/UUID_test'] = ['utils/UUID_gen.cc', 'test/boost/UUID_test.cc', 'utils/uuid.cc', 'utils/dynamic_bitset.cc', 'utils/hashers.cc']
+deps['test/boost/UUID_test'] = ['utils/UUID_gen.cc', 'test/boost/UUID_test.cc', 'utils/uuid.cc', 'utils/dynamic_bitset.cc', 'utils/hashers.cc', 'utils/on_internal_error.cc']
 deps['test/boost/murmur_hash_test'] = ['bytes.cc', 'utils/murmur_hash.cc', 'test/boost/murmur_hash_test.cc']
 deps['test/boost/allocation_strategy_test'] = ['test/boost/allocation_strategy_test.cc', 'utils/logalloc.cc', 'utils/dynamic_bitset.cc']
 deps['test/boost/log_heap_test'] = ['test/boost/log_heap_test.cc']
@@ -1776,7 +1779,7 @@ libs = ' '.join([maybe_static(args.staticyamlcpp, '-lyaml-cpp'), '-latomic', '-l
                 ])
 
 if not args.staticboost:
-    user_cflags += ' -DBOOST_TEST_DYN_LINK'
+    user_cflags += ' -DBOOST_ALL_DYN_LINK'
 
 if thrift_uses_boost_share_ptr():
     user_cflags += ' -DTHRIFT_USES_BOOST'

@@ -17,6 +17,15 @@ struct global_tablet_id final {
     locator::tablet_id tablet;
 };
 
+struct table_load_stats final {
+    uint64_t size_in_bytes;
+    int64_t split_ready_seq_number;
+};
+
+struct load_stats final {
+    std::unordered_map<::table_id, locator::table_load_stats> tables;
+};
+
 }
 
 namespace service {
@@ -54,4 +63,5 @@ verb raft_topology_cmd (raft::server_id dst_id, raft::term_t term, uint64_t cmd_
 verb [[cancellable]] raft_pull_topology_snapshot (raft::server_id dst_id, service::raft_topology_pull_params) -> service::raft_topology_snapshot;
 verb [[cancellable]] tablet_stream_data (raft::server_id dst_id, locator::global_tablet_id);
 verb [[cancellable]] tablet_cleanup (raft::server_id dst_id, locator::global_tablet_id);
+verb [[cancellable]] table_load_stats (raft::server_id dst_id) -> locator::load_stats;
 }

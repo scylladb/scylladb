@@ -10,7 +10,7 @@
 
 #pragma once
 
-#include <iostream>
+#include <fmt/core.h>
 
 namespace db {
 
@@ -20,14 +20,27 @@ enum class read_repair_decision {
   DC_LOCAL
 };
 
-inline std::ostream&  operator<<(std::ostream& out, db::read_repair_decision d) {
-    switch (d) {
-    case db::read_repair_decision::NONE: out << "NONE"; break;
-    case db::read_repair_decision::GLOBAL: out << "GLOBAL"; break;
-    case db::read_repair_decision::DC_LOCAL: out << "DC_LOCAL"; break;
-    default: out << "ERR"; break;
-    }
-    return out;
 }
 
-}
+template <> struct fmt::formatter<db::read_repair_decision> {
+    constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
+    auto format(db::read_repair_decision d, fmt::format_context& ctx) const {
+        std::string_view name;
+        switch (d) {
+        using enum db::read_repair_decision;
+        case NONE:
+            name = "NONE";
+            break;
+        case GLOBAL:
+            name = "GLOBAL";
+            break;
+        case DC_LOCAL:
+            name = "DC_LOCAL";
+            break;
+        default:
+              name = "ERR";
+              break;
+        }
+        return fmt::format_to(ctx.out(), "{}", name);
+    }
+};

@@ -326,10 +326,12 @@ class ManagerClient():
                                    timeout=ScyllaServer.TOPOLOGY_TIMEOUT)
         self._driver_update()
 
-    async def rebuild_node(self, server_id: ServerNum) -> None:
+    async def rebuild_node(self, server_id: ServerNum,
+                           expected_error: str | None = None) -> None:
         """Tell a node to rebuild with Scylla REST API"""
         logger.debug("ManagerClient rebuild %s", server_id)
-        await self.client.put_json(f"/cluster/rebuild-node/{server_id}",
+        data = {"expected_error": expected_error}
+        await self.client.put_json(f"/cluster/rebuild-node/{server_id}", data,
                                    timeout=ScyllaServer.TOPOLOGY_TIMEOUT)
         self._driver_update()
 
@@ -341,6 +343,10 @@ class ManagerClient():
     async def server_update_config(self, server_id: ServerNum, key: str, value: object) -> None:
         await self.client.put_json(f"/cluster/server/{server_id}/update_config",
                                    {"key": key, "value": value})
+
+    async def server_update_cmdline(self, server_id: ServerNum, cmdline_options: List[str]) -> None:
+        await self.client.put_json(f"/cluster/server/{server_id}/update_cmdline",
+                                   {"cmdline_options": cmdline_options})
 
     async def server_change_ip(self, server_id: ServerNum) -> IPAddress:
         """Change server IP address. Applicable only to a stopped server"""

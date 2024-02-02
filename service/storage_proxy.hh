@@ -284,7 +284,7 @@ private:
     std::unique_ptr<cancellable_write_handlers_list> _cancellable_write_handlers_list;
 
     /* This is a pointer to the shard-local part of the sharded cdc_service:
-     * storage_proxy needs access to cdc_service to augument mutations.
+     * storage_proxy needs access to cdc_service to augment mutations.
      *
      * It is a pointer and not a reference since cdc_service must be initialized after storage_proxy,
      * because it uses storage_proxy to perform pre-image queries, for one thing.

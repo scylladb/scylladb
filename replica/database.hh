@@ -344,6 +344,7 @@ struct table_stats {
     int64_t memtable_partition_hits = 0;
     int64_t memtable_range_tombstone_reads = 0;
     int64_t memtable_row_tombstone_reads = 0;
+    int64_t tablet_count = 0;
     mutation_application_stats memtable_app_stats;
     utils::timed_rate_moving_average_summary_and_histogram reads{256};
     utils::timed_rate_moving_average_summary_and_histogram writes{256};
@@ -536,6 +537,11 @@ private:
     bool _is_bootstrap_or_replace = false;
     sstables::shared_sstable make_sstable(sstables::sstable_state state);
 
+    // Every table replica that completes split work will load the seq number from tablet metadata into its local
+    // state. So when coordinator pull the local state of a table, it will know whether the table is ready for the
+    // current split, and not a previously revoked (stale) decision.
+    // The minimum value, which is a negative number, is not used by coordinator for first decision.
+    locator::resize_decision::seq_number_t _split_ready_seq_number = std::numeric_limits<locator::resize_decision::seq_number_t>::min();
 public:
     void deregister_metrics();
 
@@ -574,9 +580,24 @@ public:
                        const std::vector<sstables::shared_sstable>& old_sstables);
     };
 
+    // Precondition: table needs tablet splitting.
+    // Returns true if all storage of table is ready for splitting.
     bool all_storage_groups_split();
     future<> split_all_storage_groups();
+
+    // Splits compaction group of a single tablet, if and only if the underlying table has
+    // split request emitted by coordinator (found in tablet metadata).
+    // If split is required, then the compaction group of the given tablet is guaranteed to
+    // be split once it returns.
+    future<> maybe_split_compaction_group_of(locator::tablet_id);
 private:
+    // Called when coordinator executes tablet splitting, i.e. commit the new tablet map with
+    // each tablet split into two, so this replica will remap all of its compaction groups
+    // that were previously split.
+    void handle_tablet_split_completion(size_t old_tablet_count, const locator::tablet_map& new_tmap);
+
+    sstables::compaction_type_options::split split_compaction_options() const noexcept;
+
     // Select a compaction group from a given token.
     std::pair<size_t, locator::tablet_range_side> storage_group_of(dht::token token) const noexcept;
     size_t storage_group_id_for_token(dht::token token) const noexcept;
@@ -977,7 +998,9 @@ public:
     // a future<bool> that is resolved when offstrategy_compaction completes.
     // The future value is true iff offstrategy compaction was required.
     future<bool> perform_offstrategy_compaction(std::optional<tasks::task_info> info = std::nullopt);
-    future<> perform_cleanup_compaction(owned_ranges_ptr sorted_owned_ranges, std::optional<tasks::task_info> info = std::nullopt);
+    future<> perform_cleanup_compaction(owned_ranges_ptr sorted_owned_ranges,
+                                        std::optional<tasks::task_info> info = std::nullopt,
+                                        do_flush = do_flush::yes);
     unsigned estimate_pending_compactions() const;
 
     void set_compaction_strategy(sstables::compaction_strategy_type strategy);
@@ -1000,6 +1023,10 @@ public:
     table_stats& get_stats() const {
         return _stats;
     }
+
+    // The tablet filter is used to not double account migrating tablets, so it's important that
+    // only one of pending or leaving replica is accounted based on current migration stage.
+    locator::table_load_stats table_load_stats(std::function<bool(locator::global_tablet_id)> tablet_filter) const noexcept;
 
     const db::view::stats& get_view_stats() const {
         return _view_stats;
@@ -1173,6 +1200,9 @@ private:
     future<> seal_active_memtable(compaction_group& cg, flush_permit&&) noexcept;
 
     void check_valid_rp(const db::replay_position&) const;
+
+    void recalculate_tablet_count_stats();
+    int64_t calculate_tablet_count() const;
 public:
     // Iterate over all partitions.  Protocol is the same as std::all_of(),
     // so that iteration can be stopped by returning false.

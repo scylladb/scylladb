@@ -21,12 +21,23 @@ logger = logging.getLogger(__name__)
 
 
 async def reconnect_driver(manager: ManagerClient) -> Session:
-    """Workaround for scylladb/python-driver#170 and scylladb/python-driver#230:
-       the existing driver session may not reconnect, create a new one.
+    """Can be used as a workaround for scylladb/python-driver#295.
+
+       When restarting a node, a pre-existing session connected to the cluster
+       may reconnect to the restarted node multiple times. Even if we verify
+       that the session can perform a query on that node (e.g. like `wait_for_cql`,
+       which tries to select from system.local), the driver may again reconnect
+       after that, and following queries may fail.
+
+       The new session created by this function *should* not have this problem,
+       although (if I remember correctly) there is no 100% guarantee; still,
+       the chance of this problem appearing should be significantly decreased
+       with the new session.
     """
     logging.info(f"Reconnecting driver")
     manager.driver_close()
     await manager.driver_connect()
+    logging.info(f"Driver reconnected")
     cql = manager.cql
     assert(cql)
     return cql

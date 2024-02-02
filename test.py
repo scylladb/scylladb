@@ -245,6 +245,9 @@ class TestSuite(ABC):
         """Tests which participate in a consolidated junit report"""
         return self.tests
 
+    def boost_tests(self):
+        return []
+
     def build_test_list(self) -> List[str]:
         return [os.path.splitext(t.relative_to(self.suite_path))[0] for t in
                 self.suite_path.glob(self.pattern)]
@@ -374,6 +377,8 @@ class BoostTestSuite(UnitTestSuite):
         """Boost tests produce an own XML output, so are not included in a junit report"""
         return []
 
+    def boost_tests(self) -> Iterable['Tests']:
+        return self.tests
 
 class PythonTestSuite(TestSuite):
     """A collection of Python pytests against a single Scylla instance"""
@@ -605,9 +610,6 @@ class Test:
     @abstractmethod
     def print_summary(self) -> None:
         pass
-
-    def get_test_cases(self) -> list[ET.Element]:
-        return []
 
     def check_log(self, trim: bool) -> None:
         """Check and trim logs and xml output for tests which have it"""
@@ -1585,9 +1587,10 @@ def summarize_tests(tests):
 
 def write_consolidated_boost_junit_xml(tmpdir: str, mode: str) -> None:
     # collects all boost tests sorted by their full names
+    boost_tests = itertools.chain.from_iterable(suite.boost_tests()
+                                                for suite in TestSuite.suites.values())
     test_cases = itertools.chain.from_iterable(test.get_test_cases()
-                                               for test in TestSuite.all_tests()
-                                               if test.get_test_cases())
+                                               for test in boost_tests)
     test_cases = sorted(test_cases, key=BoostTest.test_path_of_element)
 
     xml = ET.Element("TestLog")

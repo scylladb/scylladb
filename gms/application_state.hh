@@ -10,7 +10,8 @@
 
 #pragma once
 
-#include <ostream>
+#include <iosfwd>
+#include <fmt/core.h>
 
 namespace gms {
 
@@ -43,3 +44,9 @@ enum class application_state {
 std::ostream& operator<<(std::ostream& os, const application_state& m);
 
 }
+
+template <>
+struct fmt::formatter<gms::application_state> {
+    constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
+    auto format(gms::application_state, fmt::format_context& ctx) const -> decltype(ctx.out());
+};

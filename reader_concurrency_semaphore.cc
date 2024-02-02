@@ -835,7 +835,7 @@ void maybe_dump_reader_permit_diagnostics(const reader_concurrency_semaphore& se
     rcslog.log(log_level::info, rate_limit, "{}", value_of([&] {
         std::ostringstream os;
         do_dump_reader_permit_diagnostics(os, semaphore, problem);
-        return os.str();
+        return std::move(os).str();
     }));
 }
 
@@ -1594,7 +1594,7 @@ void reader_concurrency_semaphore::broken(std::exception_ptr ex) {
 std::string reader_concurrency_semaphore::dump_diagnostics(unsigned max_lines) const {
     std::ostringstream os;
     do_dump_reader_permit_diagnostics(os, *this, "user request", max_lines);
-    return os.str();
+    return std::move(os).str();
 }
 
 void reader_concurrency_semaphore::foreach_permit(noncopyable_function<void(const reader_permit::impl&)> func) const {

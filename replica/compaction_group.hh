@@ -36,7 +36,7 @@ class compaction_group {
     table& _t;
     class table_state;
     std::unique_ptr<table_state> _table_state;
-    const size_t _group_id;
+    size_t _group_id;
     // Tokens included in this compaction_groups
     dht::token_range _token_range;
     compaction::compaction_strategy_state _compaction_strategy_state;
@@ -79,6 +79,11 @@ public:
         boost::intrusive::constant_time_size<false>>;
 
     compaction_group(table& t, size_t gid, dht::token_range token_range);
+
+    void update_id_and_range(size_t id, dht::token_range token_range) {
+        _group_id = id;
+        _token_range = std::move(token_range);
+    }
 
     size_t group_id() const noexcept {
         return _group_id;
@@ -174,21 +179,24 @@ using compaction_group_list = compaction_group::list_t;
 // by the same storage group.
 class storage_group {
     compaction_group_ptr _main_cg;
-    compaction_group_ptr _left_cg;
-    compaction_group_ptr _right_cg;
+    std::vector<compaction_group_ptr> _split_ready_groups;
 private:
     bool splitting_mode() const {
-        return bool(_left_cg) && bool(_right_cg);
+        return !_split_ready_groups.empty();
     }
+    size_t to_idx(locator::tablet_range_side) const;
 public:
-    storage_group(compaction_group_ptr cg, compaction_group_list& list);
+    storage_group(compaction_group_ptr cg, compaction_group_list* list);
 
     const dht::token_range& token_range() const noexcept;
 
     size_t memtable_count() const noexcept;
 
     compaction_group_ptr& main_compaction_group() noexcept;
+    std::vector<compaction_group_ptr> split_ready_compaction_groups() &&;
     compaction_group_ptr& select_compaction_group(locator::tablet_range_side) noexcept;
+
+    uint64_t live_disk_space_used() const noexcept;
 
     utils::small_vector<compaction_group*, 3> compaction_groups() noexcept;
 

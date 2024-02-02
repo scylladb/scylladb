@@ -391,10 +391,14 @@ future<> table_populator::populate_subdir(sstables::sstable_state state, allow_o
         return sst->get_origin() != sstables::repair_origin;
     };
 
-    co_await distributed_loader::reshape(directory, _db, sstables::reshape_mode::relaxed, _ks, _cf, [this, state] (shard_id shard) {
-        auto gen = _global_table->calculate_generation_for_new_table();
-        return make_sstable(*_global_table, state, gen, _highest_version);
-    }, eligible_for_reshape_on_boot);
+    // FIXME: Bypass reshape as it is not tablet aware, so it could mix sstables from different tablets together.
+    //  Refs: https://github.com/scylladb/scylladb/issues/16966.
+    if (!_global_table->uses_tablets()) {
+        co_await distributed_loader::reshape(directory, _db, sstables::reshape_mode::relaxed, _ks, _cf, [this, state](shard_id shard) {
+            auto gen = _global_table->calculate_generation_for_new_table();
+            return make_sstable(*_global_table, state, gen, _highest_version);
+        }, eligible_for_reshape_on_boot);
+    }
 
     co_await directory.invoke_on_all([this, &eligible_for_reshape_on_boot, do_allow_offstrategy_compaction] (sstables::sstable_directory& dir) -> future<> {
         co_await dir.do_for_each_sstable([this, &eligible_for_reshape_on_boot, do_allow_offstrategy_compaction] (sstables::shared_sstable sst) {

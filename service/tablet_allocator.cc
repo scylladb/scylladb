@@ -16,6 +16,7 @@
 #include "utils/stall_free.hh"
 #include "db/config.hh"
 #include "locator/load_sketch.hh"
+#include <utility>
 
 using namespace locator;
 using namespace replica;
@@ -41,11 +42,18 @@ struct load_balancer_node_stats {
     double load = 0;
 };
 
+struct load_balancer_cluster_stats {
+    uint64_t resizes_emitted = 0;
+    uint64_t resizes_revoked = 0;
+    uint64_t resizes_finalized = 0;
+};
+
 using dc_name = sstring;
 
 class load_balancer_stats_manager {
     std::unordered_map<dc_name, std::unique_ptr<load_balancer_dc_stats>> _dc_stats;
     std::unordered_map<host_id, std::unique_ptr<load_balancer_node_stats>> _node_stats;
+    load_balancer_cluster_stats _cluster_stats;
     seastar::metrics::label dc_label{"target_dc"};
     seastar::metrics::label node_label{"target_node"};
     seastar::metrics::metric_groups _metrics;
@@ -72,7 +80,24 @@ class load_balancer_stats_manager {
                            stats.load)(dc_lb)(node_lb)
         });
     }
+
+    void setup_metrics(load_balancer_cluster_stats& stats) {
+        namespace sm = seastar::metrics;
+        // FIXME: we can probably improve it by making it per resize type (split, merge or none).
+        _metrics.add_group("load_balancer", {
+            sm::make_counter("resizes_emitted", sm::description("number of resizes produced by the load balancer"),
+                stats.resizes_emitted),
+            sm::make_counter("resizes_revoked", sm::description("number of resizes revoked by the load balancer"),
+                stats.resizes_revoked),
+            sm::make_counter("resizes_finalized", sm::description("number of resizes finalized by the load balancer"),
+                stats.resizes_finalized)
+        });
+    }
 public:
+    load_balancer_stats_manager() {
+        setup_metrics(_cluster_stats);
+    }
+
     load_balancer_dc_stats& for_dc(const dc_name& dc) {
         auto it = _dc_stats.find(dc);
         if (it == _dc_stats.end()) {
@@ -91,6 +116,10 @@ public:
             it = _node_stats.emplace(node, std::move(stats)).first;
         }
         return *it->second;
+    }
+
+    load_balancer_cluster_stats& for_cluster() {
+        return _cluster_stats;
     }
 
     void unregister() {
@@ -226,6 +255,119 @@ class load_balancer {
         }
     };
 
+    // We have split and merge thresholds, which work respectively as (target) upper and lower
+    // bound for average size of tablets.
+    //
+    // The merge threshold is 50% of target tablet size (a midpoint between split and merge),
+    // such that after a merge, the average size is equally far from split and merge.
+    // The same applies to split. It's 100% of target size, so after split, the average is
+    // close to the target size (assuming small variations during the operation).
+    //
+    // It might happen that during a resize decision, average size changes drastically, and
+    // split or merge might get cancelled. E.g. after deleting a large partition or lots of
+    // data becoming suddenly expired.
+    // If we're splitting, we will only cancel it, if the average size dropped below the
+    // target size. That's because a merge would be required right after split completes,
+    // due to the average size dropping below the merge threshold, as tablet count doubles.
+    const uint64_t _target_tablet_size = default_target_tablet_size;
+
+    static constexpr uint64_t target_max_tablet_size(uint64_t target_tablet_size) {
+        return target_tablet_size * 2;
+    }
+    static constexpr uint64_t target_min_tablet_size(uint64_t max_tablet_size) {
+        return double(max_tablet_size / 2) * 0.5;
+    }
+
+    struct table_size_desc {
+        uint64_t target_max_tablet_size;
+        uint64_t avg_tablet_size;
+        locator::resize_decision resize_decision;
+        size_t tablet_count;
+        size_t shard_count;
+
+        uint64_t target_min_tablet_size() const noexcept {
+            return load_balancer::target_min_tablet_size(target_max_tablet_size);
+        }
+    };
+
+    struct cluster_resize_load {
+        using table_id_and_size_desc = std::pair<table_id, table_size_desc>;
+        std::vector<table_id_and_size_desc> tables_need_resize;
+        std::vector<table_id_and_size_desc> tables_being_resized;
+
+        static bool table_needs_merge(const table_size_desc& d) {
+            // FIXME: ignore merge request if tablet_count == initial_tablets.
+            return d.tablet_count > 1 && d.avg_tablet_size < d.target_min_tablet_size();
+        }
+        static bool table_needs_split(const table_size_desc& d) {
+            return d.avg_tablet_size > d.target_max_tablet_size;
+        }
+
+        bool table_needs_resize(const table_size_desc& d) const {
+            return table_needs_merge(d) || table_needs_split(d);
+        }
+
+        // Resize cancellation will account for possible oscillations caused by compaction, etc.
+        // We shouldn't rush into cancelling an ongoing resize. That will only happen if the
+        // average size is past the point it would be if either split or merge had completed.
+        // If we cancel a split, that's because average size dropped so much a merge would be
+        // required post completion, and vice-versa.
+        bool table_needs_resize_cancellation(const table_size_desc& d) const {
+            auto& way = d.resize_decision.way;
+            if (std::holds_alternative<locator::resize_decision::split>(way)) {
+                return d.avg_tablet_size < d.target_max_tablet_size / 2;
+            } else if (std::holds_alternative<locator::resize_decision::merge>(way)) {
+                return d.avg_tablet_size > d.target_min_tablet_size() * 2;
+            }
+            return false;
+        }
+
+        void update(table_id id, table_size_desc d) {
+            bool table_undergoing_resize = d.resize_decision.split_or_merge();
+
+            // Resizing tables that no longer need resize will have the resize decision revoked,
+            // therefore they must be listed as being resized.
+            if (!table_needs_resize(d) && !table_undergoing_resize) {
+                return;
+            }
+
+            auto entry = std::make_pair(id, std::move(d));
+            if (table_undergoing_resize) {
+                tables_being_resized.push_back(entry);
+            } else {
+                tables_need_resize.push_back(entry);
+            }
+        }
+
+        // Comparator that measures the weight of the need for resizing.
+        auto resize_urgency_cmp() const {
+            return [] (const table_id_and_size_desc& a, const table_id_and_size_desc& b) {
+                auto urgency = [] (const table_size_desc& d) -> double {
+                    // FIXME: only takes into account split today.
+                    return double(d.avg_tablet_size) / d.target_max_tablet_size;
+                };
+                return urgency(a.second) < urgency(b.second);
+            };
+        }
+
+        static locator::resize_decision to_resize_decision(const table_size_desc& d) {
+            locator::resize_decision decision;
+            if (table_needs_split(d)) {
+                decision.way = locator::resize_decision::split{};
+            } else if (table_needs_merge(d)) {
+                decision.way = locator::resize_decision::merge{};
+            }
+            return decision;
+        }
+
+        // Resize decisions can be revoked with an empty (none) decision, so replicas
+        // will know they're no longer required to prepare storage for the execution of
+        // topology changes.
+        static locator::resize_decision revoke_resize_decision() {
+            return locator::resize_decision{};
+        }
+    };
+
     // Per-shard limits for active tablet streaming sessions.
     //
     // There is no hard reason for these values being what they are other than
@@ -255,6 +397,7 @@ class load_balancer {
     const size_t max_read_streaming_load = 4;
 
     token_metadata_ptr _tm;
+    locator::load_stats_ptr _table_load_stats;
     load_balancer_stats_manager& _stats;
 private:
     tablet_replica_set get_replicas_for_tablet_load(const tablet_info& ti, const tablet_transition_info* trinfo) const {
@@ -289,8 +432,10 @@ private:
     }
 
 public:
-    load_balancer(token_metadata_ptr tm, load_balancer_stats_manager& stats)
-        : _tm(std::move(tm))
+    load_balancer(token_metadata_ptr tm, locator::load_stats_ptr table_load_stats, load_balancer_stats_manager& stats, uint64_t target_tablet_size)
+        : _target_tablet_size(target_tablet_size)
+        , _tm(std::move(tm))
+        , _table_load_stats(std::move(table_load_stats))
         , _stats(stats)
     { }
 
@@ -304,9 +449,130 @@ public:
             lblogger.info("Prepared {} migrations in DC {}", dc_plan.size(), dc);
             plan.merge(std::move(dc_plan));
         }
+        plan.set_resize_plan(co_await make_resize_plan());
 
-        lblogger.info("Prepared {} migrations", plan.size());
+        lblogger.info("Prepared {} migration plans, out of which there were {} tablet migration(s) and {} resize decision(s)",
+                      plan.size(), plan.tablet_migration_count(), plan.resize_decision_count());
         co_return std::move(plan);
+    }
+
+    const locator::table_load_stats* load_stats_for_table(table_id id) const {
+        if (!_table_load_stats) {
+            return nullptr;
+        }
+        auto it = _table_load_stats->tables.find(id);
+        return (it != _table_load_stats->tables.end()) ? &it->second : nullptr;
+    }
+
+    future<table_resize_plan> make_resize_plan() {
+        table_resize_plan resize_plan;
+
+        if (!_tm->tablets().balancing_enabled()) {
+            co_return std::move(resize_plan);
+        }
+
+        cluster_resize_load resize_load;
+
+        for (auto&& [table, tmap_] : _tm->tablets().all_tables()) {
+            auto& tmap = tmap_;
+
+            const auto* table_stats = load_stats_for_table(table);
+            if (!table_stats) {
+                continue;
+            }
+
+            auto avg_tablet_size = table_stats->size_in_bytes / std::max(tmap.tablet_count(), size_t(1));
+            // shard presence of a table across the cluster
+            size_t shard_count = std::accumulate(tmap.tablets().begin(), tmap.tablets().end(), size_t(0),
+                [] (size_t shard_count, const locator::tablet_info& info) {
+                    return shard_count + info.replicas.size();
+                });
+
+            table_size_desc size_desc {
+                .target_max_tablet_size = target_max_tablet_size(_target_tablet_size),
+                .avg_tablet_size = avg_tablet_size,
+                .resize_decision = tmap.resize_decision(),
+                .tablet_count = tmap.tablet_count(),
+                .shard_count = shard_count
+            };
+
+            resize_load.update(table, std::move(size_desc));
+            lblogger.info("Table {} with tablet_count={} has an average tablet size of {}", table, tmap.tablet_count(), avg_tablet_size);
+            co_await coroutine::maybe_yield();
+        }
+
+        // Emit new resize decisions
+
+        // The limit of resize requests is determined by the shard presence (count) of tables involved.
+        // If tables still have a low tablet count, the concurrency must be high in order to saturate the cluster.
+        // If a table covers the entire cluster, and needs split, concurrency will be reduced to 1.
+
+        size_t total_shard_count = std::invoke([&topo = _tm->get_topology()] {
+            size_t shard_count = 0;
+            topo.for_each_node([&] (const locator::node* node_ptr) {
+                shard_count += node_ptr->get_shard_count();
+            });
+            return shard_count;
+        });
+        size_t resizing_shard_count = std::accumulate(resize_load.tables_being_resized.begin(), resize_load.tables_being_resized.end(), size_t(0),
+             [] (size_t shard_count, const auto& table_desc) {
+                 return shard_count + table_desc.second.shard_count;
+             });
+        // Limits the amount of new resize requests to be generated in a single round, as each one is a mutation to group0.
+        constexpr size_t max_new_resize_requests = 10;
+
+        auto available_shards = std::max(ssize_t(total_shard_count) - ssize_t(resizing_shard_count), ssize_t(0));
+
+        std::make_heap(resize_load.tables_need_resize.begin(), resize_load.tables_need_resize.end(), resize_load.resize_urgency_cmp());
+        while (resize_load.tables_need_resize.size() && resize_plan.size() < max_new_resize_requests) {
+            const auto& [table, size_desc] = resize_load.tables_need_resize.front();
+
+            if (resize_plan.size() > 0 && std::cmp_less(available_shards, size_desc.shard_count)) {
+                break;
+            }
+
+            auto resize_decision = cluster_resize_load::to_resize_decision(size_desc);
+            lblogger.info("Emitting resize decision of type {} for table {} due to avg tablet size of {}",
+                          resize_decision.type_name(), table, size_desc.avg_tablet_size);
+            resize_plan.resize[table] = std::move(resize_decision);
+            _stats.for_cluster().resizes_emitted++;
+
+            std::pop_heap(resize_load.tables_need_resize.begin(), resize_load.tables_need_resize.end(), resize_load.resize_urgency_cmp());
+            resize_load.tables_need_resize.pop_back();
+
+            available_shards -= size_desc.shard_count;
+        }
+
+        // Revoke resize decision if any table no longer needs it
+        // Also communicate coordinator if any table is ready for finalizing resizing
+
+        for (const auto& [table, size_desc] : resize_load.tables_being_resized) {
+            if (resize_load.table_needs_resize_cancellation(size_desc)) {
+                resize_plan.resize[table] = cluster_resize_load::revoke_resize_decision();
+                _stats.for_cluster().resizes_revoked++;
+                lblogger.info("Revoking resize decision for table {} due to avg tablet size of {}", table, size_desc.avg_tablet_size);
+                continue;
+            }
+
+            auto& tmap = _tm->tablets().get_tablet_map(table);
+
+            const auto* table_stats = load_stats_for_table(table);
+            if (!table_stats) {
+                continue;
+            }
+
+            // If all replicas have completed split work for the current sequence number, it means that
+            // load balancer can emit finalize decision, for split to be completed.
+            if (table_stats->split_ready_seq_number == tmap.resize_decision().sequence_number) {
+                resize_plan.resize[table] = cluster_resize_load::revoke_resize_decision();
+                _stats.for_cluster().resizes_finalized++;
+                resize_plan.finalize_resize.insert(table);
+                lblogger.info("Finalizing resize decision for table {} as all replicas agree on sequence number {}",
+                              table, table_stats->split_ready_seq_number);
+            }
+        }
+
+        co_return std::move(resize_plan);
     }
 
     future<migration_plan> make_plan(dc_name dc) {
@@ -363,6 +629,7 @@ public:
 
         for (auto&& [table, tmap_] : _tm->tablets().all_tables()) {
             auto& tmap = tmap_;
+
             co_await tmap.for_each_tablet([&, table = table] (tablet_id tid, const tablet_info& ti) {
                 auto trinfo = tmap.get_tablet_transition_info(tid);
 
@@ -863,8 +1130,8 @@ public:
         _stopped = true;
     }
 
-    future<migration_plan> balance_tablets(token_metadata_ptr tm) {
-        load_balancer lb(tm, _load_balancer_stats);
+    future<migration_plan> balance_tablets(token_metadata_ptr tm, locator::load_stats_ptr table_load_stats) {
+        load_balancer lb(tm, std::move(table_load_stats), _load_balancer_stats, _db.get_config().target_tablet_size_in_bytes());
         co_return co_await lb.make_plan();
     }
 
@@ -903,6 +1170,33 @@ public:
         _load_balancer_stats.unregister();
     }
 
+    // The splitting of tablets today is completely based on the power-of-two constraint.
+    // A tablet of id X is split into 2 new tablets, which new ids are (x << 1) and
+    // (x << 1) + 1.
+    // So a tablet of id 0 is remapped into ids 0 and 1. Another of id 1 is remapped
+    // into ids 2 and 3, and so on.
+    future<tablet_map> split_tablets(token_metadata_ptr tm, table_id table) {
+        auto& tablets = tm->tablets().get_tablet_map(table);
+
+        tablet_map new_tablets(tablets.tablet_count() * 2);
+
+        for (tablet_id tid : tablets.tablet_ids()) {
+            co_await coroutine::maybe_yield();
+
+            tablet_id new_left_tid = tablet_id(tid.value() << 1);
+            tablet_id new_right_tid = tablet_id(new_left_tid.value() + 1);
+
+            auto& tablet_info = tablets.get_tablet_info(tid);
+
+            new_tablets.set_tablet(new_left_tid, tablet_info);
+            new_tablets.set_tablet(new_right_tid, tablet_info);
+        }
+
+        lblogger.info("Split tablets for table {}, increasing tablet count from {} to {}",
+                      table, tablets.tablet_count(), new_tablets.tablet_count());
+        co_return std::move(new_tablets);
+    }
+
     // FIXME: Handle materialized views.
 };
 
@@ -914,8 +1208,12 @@ future<> tablet_allocator::stop() {
     return impl().stop();
 }
 
-future<migration_plan> tablet_allocator::balance_tablets(locator::token_metadata_ptr tm) {
-    return impl().balance_tablets(tm);
+future<migration_plan> tablet_allocator::balance_tablets(locator::token_metadata_ptr tm, locator::load_stats_ptr load_stats) {
+    return impl().balance_tablets(std::move(tm), std::move(load_stats));
+}
+
+future<locator::tablet_map> tablet_allocator::split_tablets(locator::token_metadata_ptr tm, table_id table) {
+    return impl().split_tablets(std::move(tm), table);
 }
 
 tablet_allocator_impl& tablet_allocator::impl() {

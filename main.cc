@@ -969,11 +969,21 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             supervisor::notify("creating and verifying directories");
             utils::directories::set dir_set;
-            dir_set.add(cfg->data_file_directories());
             dir_set.add(cfg->commitlog_directory());
             dir_set.add(cfg->schema_commitlog_directory());
             dirs.emplace(cfg->developer_mode());
             dirs->create_and_verify(std::move(dir_set)).get();
+
+            // The data directories are handled separately to prevent memory
+            // fragmentation in the dentry/inode cache. The top-level
+            // directories are verified first, and then the contents are
+            // verified in such a way that the files that will be closed
+            // immediately are located separately from those that will remain
+            // open for a longer duration in the dentry/inode cache.
+            utils::directories::set data_dir_set;
+            data_dir_set.add(cfg->data_file_directories());
+            dirs->create_and_verify(data_dir_set, utils::directories::recursive::no).get();
+            utils::directories::verify_owner_and_mode_of_data_dir(std::move(data_dir_set)).get();
 
             auto hints_dir_initializer = db::hints::directory_initializer::make(*dirs, cfg->hints_directory()).get();
             auto view_hints_dir_initializer = db::hints::directory_initializer::make(*dirs, cfg->view_hints_directory()).get();
@@ -1450,6 +1460,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             supervisor::notify("starting Raft Group Registry service");
             raft_gr.invoke_on_all(&service::raft_group_registry::start).get();
 
+            api::set_server_raft(ctx, raft_gr).get();
+            auto stop_raft_api = defer_verbose_shutdown("Raft API", [&ctx] {
+                api::unset_server_raft(ctx).get();
+            });
+
             group0_client.init().get();
 
             // schema migration, if needed, is also done on shard 0
@@ -1480,6 +1495,13 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             supervisor::notify("loading tablet metadata");
             ss.local().load_tablet_metadata().get();
+
+            // We do not support tablet re-sharding yet, see https://github.com/scylladb/scylladb/issues/16739.
+            // To avoid undefined behaviour due to violated assumptions, that
+            // each tablet has a valid shard replica, we check this assumption here, and refuse startup if violated.
+            if (!locator::check_tablet_replica_shards(ss.local().get_token_metadata_ptr()->tablets(), host_id).get()) {
+                throw std::runtime_error("Detected a tablet with invalid replica shard, reducing shard count with tablet-enabled tables is not yet supported. Replace the node instead.");
+            }
 
             supervisor::notify("loading non-system sstables");
             replica::distributed_loader::init_non_system_keyspaces(db, proxy, sys_ks).get();

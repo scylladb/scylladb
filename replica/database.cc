@@ -1111,10 +1111,10 @@ std::vector<sstring> database::get_non_local_strategy_keyspaces() const {
 std::vector<sstring> database::get_non_local_vnode_based_strategy_keyspaces() const {
     std::vector<sstring> res;
     res.reserve(_keyspaces.size());
-    for (auto const& i : _keyspaces) {
-        auto&& rs = i.second.get_replication_strategy();
+    for (auto const& [name, ks] : _keyspaces) {
+        auto&& rs = ks.get_replication_strategy();
         if (rs.get_type() != locator::replication_strategy_type::local && rs.is_vnode_based()) {
-            res.push_back(i.first);
+            res.push_back(name);
         }
     }
     return res;
@@ -1123,10 +1123,10 @@ std::vector<sstring> database::get_non_local_vnode_based_strategy_keyspaces() co
 std::unordered_map<sstring, locator::vnode_effective_replication_map_ptr> database::get_non_local_strategy_keyspaces_erms() const {
     std::unordered_map<sstring, locator::vnode_effective_replication_map_ptr> res;
     res.reserve(_keyspaces.size());
-    for (auto const& i : _keyspaces) {
-        auto&& rs = i.second.get_replication_strategy();
+    for (auto const& [name, ks] : _keyspaces) {
+        auto&& rs = ks.get_replication_strategy();
         if (rs.get_type() != locator::replication_strategy_type::local && !rs.is_per_table()) {
-            res.emplace(i.first, i.second.get_effective_replication_map());
+            res.emplace(name, ks.get_effective_replication_map());
         }
     }
     return res;
@@ -2132,21 +2132,35 @@ database::make_keyspace_config(const keyspace_metadata& ksm) {
 
 } // namespace replica
 
-namespace db {
-
-std::ostream& operator<<(std::ostream& os, const write_type& t) {
+auto fmt::formatter<db::write_type>::format(db::write_type t,
+                                            fmt::format_context& ctx) const
+        -> decltype(ctx.out()) {
+    std::string_view name;
     switch (t) {
-        case write_type::SIMPLE: return os << "SIMPLE";
-        case write_type::BATCH: return os << "BATCH";
-        case write_type::UNLOGGED_BATCH: return os << "UNLOGGED_BATCH";
-        case write_type::COUNTER: return os << "COUNTER";
-        case write_type::BATCH_LOG: return os << "BATCH_LOG";
-        case write_type::CAS: return os << "CAS";
-        case write_type::VIEW: return os << "VIEW";
+    using enum db::write_type;
+    case SIMPLE:
+        name = "SIMPLE";
+        break;
+    case BATCH:
+        name = "BATCH";
+        break;
+    case UNLOGGED_BATCH:
+        name = "UNLOGGED_BATCH";
+        break;
+    case COUNTER:
+        name = "COUNTER";
+        break;
+    case BATCH_LOG:
+        name = "BATCH_LOG";
+        break;
+    case CAS:
+        name = "CAS";
+        break;
+    case VIEW:
+        name = "VIEW";
+        break;
     }
-    abort();
-}
-
+    return fmt::format_to(ctx.out(), "{}", name);
 }
 
 auto fmt::formatter<db::operation_type>::format(db::operation_type op_type, fmt::format_context& ctx) const -> decltype(ctx.out()) {

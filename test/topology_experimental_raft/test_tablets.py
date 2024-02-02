@@ -497,6 +497,7 @@ async def test_tablet_cleanup(manager: ManagerClient):
     n_tablets = 32
     n_partitions = 1000
     await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+    await manager.servers_see_each_other(servers)
     await cql.run_async("CREATE KEYSPACE test WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} AND tablets = {{'initial': {}}};".format(n_tablets))
     await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY);")
     await asyncio.gather(*[cql.run_async(f"INSERT INTO test.test (pk) VALUES ({k});") for k in range(1000)])
@@ -531,6 +532,7 @@ async def test_tablet_cleanup(manager: ManagerClient):
     await manager.server_wipe_sstables(servers[1].server_id, "test", "test")
     await manager.server_start(servers[1].server_id)
     await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+    await manager.servers_see_each_other(servers)
     partitions_after_loss = (await cql.run_async("SELECT COUNT(*) FROM test.test"))[0].count
     assert partitions_after_loss < n_partitions
 
@@ -547,7 +549,100 @@ async def test_tablet_cleanup(manager: ManagerClient):
     await manager.server_stop(servers[0].server_id)
     await manager.server_start(servers[0].server_id)
     hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+    await manager.servers_see_each_other(servers)
     assert partitions_after_loss == (await cql.run_async("SELECT COUNT(*) FROM test.test"))[0].count
 
     # Bonus: check that commitlog_cleanups doesn't have any garbage after restart.
     assert 0 == (await cql.run_async("SELECT COUNT(*) FROM system.commitlog_cleanups", host=hosts[0]))[0].count
+
+@pytest.mark.asyncio
+async def test_tablet_resharding(manager: ManagerClient):
+    cmdline = ['--smp=3']
+    config = {'experimental_features': ['consistent-topology-changes', 'tablets']}
+    servers = await manager.servers_add(1, cmdline=cmdline)
+    server = servers[0]
+
+    logger.info("Populate table")
+    cql = manager.get_cql()
+    n_tablets = 32
+    n_partitions = 1000
+    await cql.run_async(f"CREATE KEYSPACE test WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} AND tablets = {{'initial': {n_tablets}}};")
+    await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY);")
+    await asyncio.gather(*[cql.run_async(f"INSERT INTO test.test (pk) VALUES ({k});") for k in range(n_partitions)])
+
+    await manager.server_stop_gracefully(server.server_id, timeout=120)
+    await manager.server_update_cmdline(server.server_id, ['--smp=2'])
+
+    await manager.server_start(
+        server.server_id,
+        expected_error="Detected a tablet with invalid replica shard, reducing shard count with tablet-enabled tables is not yet supported. Replace the node instead.")
+
+async def get_tablet_count(manager: ManagerClient, server: ServerInfo, keyspace_name: str, table_name: str):
+    host = manager.cql.cluster.metadata.get_host(server.ip_addr)
+
+    # read_barrier is needed to ensure that local tablet metadata on the queried node
+    # reflects the finalized tablet movement.
+    await read_barrier(manager.cql, host)
+
+    table_id = await manager.get_table_id(keyspace_name, table_name)
+    rows = await manager.cql.run_async(f"SELECT tablet_count FROM system.tablets where "
+                                       f"table_id = {table_id}", host=host)
+    return rows[0].tablet_count
+
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_tablet_split(manager: ManagerClient):
+    logger.info("Bootstrapping cluster")
+    cmdline = [
+        '--logger-log-level', 'storage_service=debug',
+        '--target-tablet-size-in-bytes', '1024',
+    ]
+    servers = [await manager.server_add(cmdline=cmdline)]
+
+    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+
+    cql = manager.get_cql()
+    await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1};")
+    await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, c int);")
+
+    # enough to trigger multiple splits with max size of 1024 bytes.
+    keys = range(256)
+    await asyncio.gather(*[cql.run_async(f"INSERT INTO test.test (pk, c) VALUES ({k}, {k});") for k in keys])
+
+    async def check():
+        logger.info("Checking table")
+        cql = manager.get_cql()
+        rows = await cql.run_async("SELECT * FROM test.test;")
+        assert len(rows) == len(keys)
+        for r in rows:
+            assert r.c == r.pk
+
+    await check()
+
+    await manager.api.flush_keyspace(servers[0].ip_addr, "test")
+
+    tablet_count = await get_tablet_count(manager, servers[0], 'test', 'test')
+    assert tablet_count == 1
+
+    logger.info("Adding new server")
+    servers.append(await manager.server_add(cmdline=cmdline))
+
+    # Increases the chance of tablet migration concurrent with split
+    await inject_error_one_shot_on(manager, "tablet_allocator_shuffle", servers)
+    await inject_error_on(manager, "tablet_load_stats_refresh_before_rebalancing", servers)
+
+    s1_log = await manager.server_open_log(servers[0].server_id)
+    s1_mark = await s1_log.mark()
+
+    # Now there's a split and migration need, so they'll potentially run concurrently.
+    await manager.api.enable_tablet_balancing(servers[0].ip_addr)
+
+    await check()
+    time.sleep(5) # Give load balancer some time to do work
+
+    await s1_log.wait_for('Detected tablet split for table', from_mark=s1_mark)
+
+    await check()
+
+    tablet_count = await get_tablet_count(manager, servers[0], 'test', 'test')
+    assert tablet_count > 1

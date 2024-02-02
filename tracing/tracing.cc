@@ -195,8 +195,4 @@ one_session_records::one_session_records(trace_type type, std::chrono::seconds s
 {
 }
 
-std::ostream& operator<<(std::ostream& os, const span_id& id) {
-    return os << id.get_id();
 }
-}
-

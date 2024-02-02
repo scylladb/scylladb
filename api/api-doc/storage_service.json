@@ -373,7 +373,7 @@
          "operations":[
             {
                "method":"GET",
-               "summary":"The TokenRange for a any keyspace",
+               "summary":"The TokenRange for an arbitrary keyspace",
                "type":"array",
                "items":{
                   "type":"token_range"
@@ -802,7 +802,7 @@
          "operations":[
             {
                "method":"POST",
-               "summary":"Trigger a global cluster cleanup through the topology coordinator",
+               "summary":"Trigger a global cleanup",
                "type":"long",
                "nickname":"cleanup_all",
                "produces":[

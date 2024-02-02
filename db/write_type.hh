@@ -12,7 +12,7 @@
 
 #include <assert.h>
 #include <cstdint>
-#include <iosfwd>
+#include <fmt/core.h>
 
 namespace db {
 
@@ -26,8 +26,10 @@ enum class write_type : uint8_t {
     VIEW,
 };
 
-std::ostream& operator<<(std::ostream& os, const write_type& t);
-
 }
 
-
+template <>
+struct fmt::formatter<db::write_type> {
+    constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
+    auto format(db::write_type, fmt::format_context& ctx) const -> decltype(ctx.out());
+};

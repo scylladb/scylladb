@@ -43,7 +43,7 @@ public:
 //   fmt::print("{:ib}", 10'024); // prints "10Ki", IEC unit is used, without
 //                                // the " bytes" or "B" unit
 //   fmt::print("{:I}", 1024); // prints "1K", IEC unit is used, but without
-//                             // the "iB" postifx.
+//                             // the "iB" postfix.
 //   fmt::print("{:s}", 10); // prints "10 bytes", SI unit is used
 //   fmt::print("{:sb}", 10'000); // prints "10k", SI unit is used, without
 //                                // the unit postfix

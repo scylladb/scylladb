@@ -80,7 +80,7 @@ integrity_checked_file_impl::write_dma(uint64_t pos, const void* buffer, size_t 
             }
 
             auto rbuf_end = rbuf.get() + rbuf.size();
-            auto r = std::mismatch(rbuf.get(), rbuf.get() + rbuf.size(), wbuf.get(), wbuf.get() + wbuf.size());
+            auto r = std::mismatch(rbuf.get(), rbuf_end, wbuf.get(), wbuf.get() + wbuf.size());
             if (r.first != rbuf_end) {
                 auto mismatch_off = r.first - rbuf.get();
 

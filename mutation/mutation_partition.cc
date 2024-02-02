@@ -2106,7 +2106,7 @@ uint64_t mutation_querier::consume_end_of_stream() {
     // If we got no rows, but have live static columns, we should only
     // give them back IFF we did not have any CK restrictions.
     // #589
-    // If ck:s exist, and we do a restriction on them, we either have maching
+    // If ck:s exist, and we do a restriction on them, we either have matching
     // rows, or return nothing, since cql does not allow "is null".
     bool return_static_content_on_partition_with_no_rows =
         _pw.slice().options.contains(query::partition_slice::option::always_return_static_content) ||

@@ -11,13 +11,12 @@
 #include <seastar/core/do_with.hh>
 #include <seastar/core/future-util.hh>
 #include <seastar/core/metrics.hh>
+#include <seastar/core/thread.hh>
 #include <seastar/util/defer.hh>
 #include "replica/memtable.hh"
-#include <chrono>
 #include <boost/version.hpp>
 #include <sys/sdt.h>
 #include "read_context.hh"
-#include "replica/dirty_memory_manager.hh"
 #include "real_dirty_memory_accounter.hh"
 #include "readers/delegating_v2.hh"
 #include "readers/forwardable_v2.hh"

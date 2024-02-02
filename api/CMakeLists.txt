@@ -15,6 +15,7 @@ set(swagger_files
   api-doc/lsa.json
   api-doc/messaging_service.json
   api-doc/metrics.json
+  api-doc/raft.json
   api-doc/storage_proxy.json
   api-doc/storage_service.json
   api-doc/stream_manager.json
@@ -53,6 +54,7 @@ target_sources(api
     hinted_handoff.cc
     lsa.cc
     messaging_service.cc
+    raft.cc
     storage_proxy.cc
     storage_service.cc
     stream_manager.cc

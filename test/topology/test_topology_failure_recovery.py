@@ -49,7 +49,8 @@ async def test_topology_streaming_failure(request, manager: ManagerClient):
     await manager.server_start(s.server_id, expected_error="Bootstrap failed. See earlier errors")
     servers = await manager.running_servers()
     assert s not in servers
-    matches = [await log.grep("raft_topology - rollback.*after bootstrapping failure to state left_token_ring", from_mark=mark) for log, mark in zip(logs, marks)]
+    matches = [await log.grep("raft_topology - rollback.*after bootstrapping failure, moving transition state to left token ring",
+               from_mark=mark) for log, mark in zip(logs, marks)]
     assert sum(len(x) for x in matches) == 1
     # bootstrap failure in raft barrier
     marks = [await log.mark() for log in logs]
@@ -59,8 +60,14 @@ async def test_topology_streaming_failure(request, manager: ManagerClient):
     await manager.server_start(s.server_id, expected_error="Bootstrap failed. See earlier errors")
     servers = await manager.running_servers()
     assert s not in servers
-    matches = [await log.grep("raft_topology - rollback.*after bootstrapping failure to state left_token_ring", from_mark=mark) for log, mark in zip(logs, marks)]
+    matches = [await log.grep("raft_topology - rollback.*after bootstrapping failure, moving transition state to left token ring",
+               from_mark=mark) for log, mark in zip(logs, marks)]
     assert sum(len(x) for x in matches) == 1
+    # rebuild failure
+    marks = [await log.mark() for log in logs]
+    servers = await manager.running_servers()
+    await manager.api.enable_injection(servers[1].ip_addr, 'stream_ranges_fail', one_shot=True)
+    await manager.rebuild_node(servers[1].server_id, expected_error="rebuild failed:")
     # replace failure
     marks = [await log.mark() for log in logs]
     servers = await manager.running_servers()
@@ -72,5 +79,6 @@ async def test_topology_streaming_failure(request, manager: ManagerClient):
     await manager.server_start(s.server_id, expected_error="Replace failed. See earlier errors")
     servers = await manager.running_servers()
     assert s not in servers
-    matches = [await log.grep("raft_topology - rollback.*after replacing failure to state left_token_ring", from_mark=mark) for log, mark in zip(logs, marks)]
+    matches = [await log.grep("raft_topology - rollback.*after replacing failure, moving transition state to left token ring",
+               from_mark=mark) for log, mark in zip(logs, marks)]
     assert sum(len(x) for x in matches) == 1
