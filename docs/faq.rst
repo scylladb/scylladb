@@ -94,7 +94,7 @@ If you are using a time range in the query, refer to the solution in the trouble
 DESC SCHEMA shows that I am using many materialized views (MVs) when I know I only added Secondary Indexes (SI). Why are there MVs in my schema?
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-As SI is built ontop of MV, you can expect to see MV in your schema. There is nothing wrong with your system. More information on :doc:`Global Secondary Indexes </using-scylla/secondary-indexes>`.
+As SI is built on top of MV, you can expect to see MV in your schema. There is nothing wrong with your system. More information on :doc:`Global Secondary Indexes </using-scylla/secondary-indexes>`.
 
 
 Using the Java driver SimpleStatements are slow. Why does this happen?
