@@ -124,58 +124,9 @@ Example: The Next Generation
 
    There are two entries with the same base partition key, but in different streams. One of them corresponds to the write made before the generation change, the other --- to the write made after the change.
 
-After the operating CDC generation changes, all writes with timestamps greater than or equal to the new generation's timestamp will use the new stream IDs. If you try to perform a write with a timestamp that is smaller than the new generation's timestamp, the write may be rejected, depending on the node you're connected to:
+After the operating CDC generation changes, all writes with timestamps greater than or equal to the new generation's timestamp will use the new stream IDs.
 
-* if the clock of the node you're connected to reports earlier time than the generation's timestamp, it will allow the write to be performed.
-* Otherwise, the write will be rejected.
-
-Therefore, if you've configured the driver to generate timestamps for you, make sure that the clock of the machine your driver is running on is not too desynchronized with the clock of the node you're connecting to. That way you can minimize the chance of writes being rejected while a new node is being bootstrapped.
-
-Example: rejecting writes to an old generation
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-This is a continuation of the :ref:`previous example <next-gen>`; a second node was bootstrapped recently, thus a new generation superseded the previous one.
-
-#. Get the timestamp of the latest generation as an integer:
-
-   .. code-block:: cql
-
-    SELECT tounixtimestamp(time) FROM system_distributed.cdc_generation_timestamps WHERE key = 'timestamps';
-
-   result:
-
-   .. code-block:: none
-
-     system.tounixtimestamp(time)
-    ------------------------------
-                    1585152329484
-                    1585140283006
-
-    (2 rows)
-
-   Generation timestamps have millisecond resolution. Here, the latest generation's timestamp is equal to ``1585152329484`` milliseconds.
-
-#. Try to perform a write with a slightly smaller timestamp (remember that the ``USING TIMESTAMP`` clause expects a timestamp in **microseconds**):
-
-   .. code-block:: cql
-
-    INSERT INTO ks.t (pk, ck, v) VALUES (0, 0, 0) USING TIMESTAMP 1585152329483000;
-
-   result:
-
-   .. code-block:: none
-
-    InvalidRequest: Error from server: code=2200 [Invalid query] message="cdc: attempted to get a stream from an earlier generation than the currently used one. With CDC you cannot send writes with timestamps too far into the past, because that would break consistency properties (write timestamp: 2020/03/25 16:05:29, current generation started at: 2020/03/25 16:05:29)"
-
-   The write was rejected.
-
-#. Perform a write with a timestamp equal to the generation's timestamp:
-
-   .. code-block:: cql
-
-    INSERT INTO ks.t (pk, ck, v) VALUES (0, 0, 0) USING TIMESTAMP 1585152329484000;
-
-   The write succeeds.
+If the clock of the node you're connected to reports time distant from the write's timestamp, it may reject the write. If you've configured the driver to generate timestamps for you, make sure that the clock of the machine your driver is running on is not too desynchronized with the clock of the node you're connecting to. That way you can minimize the chance of writes being rejected.
 
 The first generation's timestamp
 --------------------------------
