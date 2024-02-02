@@ -97,7 +97,6 @@ get_range_to_address_map(locator::effective_replication_map_ptr erm) {
 future<std::vector<dht::token_range_endpoints>>
 describe_ring(const replica::database& db, const gms::gossiper& gossiper, const sstring& keyspace, bool include_only_local_dc) {
     std::vector<dht::token_range_endpoints> ranges;
-    //Token.TokenFactory tf = getPartitioner().getTokenFactory();
 
     auto erm = db.find_keyspace(keyspace).get_effective_replication_map();
     std::unordered_map<dht::token_range, inet_address_vector_replica_set> range_to_address_map = co_await (
