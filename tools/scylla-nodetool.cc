@@ -17,6 +17,7 @@
 #include <seastar/http/request.hh>
 #include <seastar/util/short_streams.hh>
 #include <yaml-cpp/yaml.h>
+#include <ranges>
 
 #include "api/scrub_status.hh"
 #include "db_clock.hh"
@@ -366,6 +367,42 @@ void compactionhistory_operation(scylla_rest_client& client, const bpo::variable
 
 void decommission_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     client.post("/storage_service/decommission");
+}
+
+void describering_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    const auto keyspace = vm["keyspace"].as<sstring>();
+    const auto schema_version_res = client.get("/storage_service/schema_version");
+
+    std::unordered_map<sstring, sstring> params;
+    if (vm.count("table")) {
+        auto tables = vm["table"].as<std::vector<sstring>>();
+        if (tables.size() != 1) {
+            throw std::invalid_argument(fmt::format("expected a single table parameter, got {}", tables.size()));
+        }
+        params["table"] = tables.front();
+    }
+    const auto ring_res = client.get(format("/storage_service/describe_ring/{}", keyspace), std::move(params));
+
+    fmt::print(std::cout, "Schema Version:{}\n", rjson::to_string_view(schema_version_res));
+    fmt::print(std::cout, "TokenRange: \n");
+    for (const auto& ring_info : ring_res.GetArray()) {
+        const auto start_token = rjson::to_string_view(ring_info["start_token"]);
+        const auto end_token = rjson::to_string_view(ring_info["end_token"]);
+        const auto endpoints = ring_info["endpoints"].GetArray() | std::views::transform([] (const auto& ep) { return rjson::to_string_view(ep); });
+        const auto rpc_endpoints = ring_info["rpc_endpoints"].GetArray() | std::views::transform([] (const auto& ep) { return rjson::to_string_view(ep); });
+        const auto endpoint_details = ring_info["endpoint_details"].GetArray() | std::views::transform([] (const auto& ep_details) {
+            return format("EndpointDetails(host:{}, datacenter:{}, rack:{})",
+                    rjson::to_string_view(ep_details["host"]),
+                    rjson::to_string_view(ep_details["datacenter"]),
+                    rjson::to_string_view(ep_details["rack"]));
+        });
+        fmt::print(std::cout, "\tTokenRange(start_token:{}, end_token:{}, endpoints:[{}], rpc_endpoints:[{}], endpoint_details:[{}])\n",
+                start_token,
+                end_token,
+                fmt::join(std::begin(endpoints), std::end(endpoints), ", "),
+                fmt::join(std::begin(rpc_endpoints), std::end(rpc_endpoints), ", "),
+                fmt::join(std::begin(endpoint_details), std::end(endpoint_details), ", "));
+    }
 }
 
 void disableautocompaction_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
@@ -922,6 +959,24 @@ Fore more information, see: https://opensource.docs.scylladb.com/stable/operatin
 )",
             },
             decommission_operation
+        },
+        {
+            {
+                "describering",
+                "Shows the partition ranges for the given keyspace or table",
+R"(
+For vnode (legacy) keyspaces, describering describes all tables in the keyspace.
+For tablet keyspaces, describering needs the table to describe.
+
+Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/describering.html
+)",
+                { },
+                {
+                    typed_option<sstring>("keyspace", "The keyspace to describe the ring for", 1),
+                    typed_option<std::vector<sstring>>("table", "The table to describe the ring for (for tablet keyspaces)", -1),
+                },
+            },
+            describering_operation
         },
         {
             {
