@@ -153,6 +153,28 @@ public:
         });
     }
 
+    future<> emit_ring(result_collector& result, const dht::decorated_key& dk, std::vector<dht::token_range_endpoints> ranges) {
+
+        co_await result.emit_partition_start(dk);
+        boost::sort(ranges, [] (const dht::token_range_endpoints& l, const dht::token_range_endpoints& r) {
+            return l._start_token < r._start_token;
+        });
+
+        for (dht::token_range_endpoints& range : ranges) {
+            boost::sort(range._endpoint_details, endpoint_details_cmp());
+
+            for (const dht::endpoint_details& detail : range._endpoint_details) {
+                clustering_row cr(make_clustering_key(range._start_token, detail._host));
+                set_cell(cr.cells(), "end_token", sstring(range._end_token));
+                set_cell(cr.cells(), "dc", sstring(detail._datacenter));
+                set_cell(cr.cells(), "rack", sstring(detail._rack));
+                co_await result.emit_row(std::move(cr));
+            }
+        }
+
+        co_await result.emit_partition_end();
+    }
+
     struct endpoint_details_cmp {
         bool operator()(const dht::endpoint_details& l, const dht::endpoint_details& r) const {
             return inet_addr_type->less(
@@ -189,25 +211,7 @@ public:
             }
 
             std::vector<dht::token_range_endpoints> ranges = co_await _ss.describe_ring(e.name);
-
-            co_await result.emit_partition_start(dk);
-            boost::sort(ranges, [] (const dht::token_range_endpoints& l, const dht::token_range_endpoints& r) {
-                return l._start_token < r._start_token;
-            });
-
-            for (dht::token_range_endpoints& range : ranges) {
-                boost::sort(range._endpoint_details, endpoint_details_cmp());
-
-                for (const dht::endpoint_details& detail : range._endpoint_details) {
-                    clustering_row cr(make_clustering_key(range._start_token, detail._host));
-                    set_cell(cr.cells(), "end_token", sstring(range._end_token));
-                    set_cell(cr.cells(), "dc", sstring(detail._datacenter));
-                    set_cell(cr.cells(), "rack", sstring(detail._rack));
-                    co_await result.emit_row(std::move(cr));
-                }
-            }
-
-            co_await result.emit_partition_end();
+            co_await emit_ring(result, e.key, std::move(ranges));
         }
     }
 };
