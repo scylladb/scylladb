@@ -8,7 +8,6 @@ from scylladb_common_images import FileDownloader, BaseVersionsTemplateDirective
 
 LOGGER = logging.getLogger(__name__)
 
-
 class CloudFormationProcessor:
     FILENAME_REGEX = r"^.+_(\d+\.\d+\.\d+)_(\w+)(\.yaml)?$"
 
@@ -46,7 +45,7 @@ class CloudFormationProcessor:
                 if matching_csv:
                     csv_path = os.path.join(download_directory, matching_csv)
                     self._append_to_csv(csv_path, link, architecture)
-        print("Appended cloudformation information to AWS images CSVs.")
+        LOGGER.info("Appended cloudformation information to AWS images CSVs.")
 
 
 class AMIInformationDownloader:
@@ -54,19 +53,19 @@ class AMIInformationDownloader:
     def run(self, app, exception=None):  
         config = app.config
         base_url = config.scylladb_aws_images_base_url
-        ami_bucket_directory = config.scylladb_aws_images_ami_bucket_directory
-        ami_download_directory = os.path.join(app.builder.srcdir, config.scylladb_aws_images_ami_download_directory)
+        bucket_directory = config.scylladb_aws_images_ami_bucket_directory
+        download_directory = os.path.join(app.builder.srcdir, config.scylladb_aws_images_ami_download_directory)
         cloudformation_bucket_directory = config.scylladb_aws_images_cloudformation_bucket_directory
 
-        if os.path.exists(ami_download_directory) and os.listdir(ami_download_directory):
-            print(f"Files already exist in {ami_download_directory}. Skipping download.")
+        if os.path.exists(download_directory) and os.listdir(download_directory):
+            LOGGER.info(f"Files already exist in {download_directory}. Skipping download.")
 
         else:
             downloader = FileDownloader(base_url)
-            downloader.download_files(ami_bucket_directory, ami_download_directory)
+            downloader.download_files(bucket_directory, download_directory)
             processor = CloudFormationProcessor()
             links = downloader.get_links(cloudformation_bucket_directory, "yaml")
-            processor.process_files(ami_download_directory, links)
+            processor.process_files(download_directory, links)
 
 
 class AMIVersionsTemplateDirective(BaseVersionsTemplateDirective):

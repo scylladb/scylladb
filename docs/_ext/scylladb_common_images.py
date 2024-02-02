@@ -7,6 +7,7 @@ from docutils.parsers.rst import Directive, directives
 from sphinxcontrib.datatemplates.directive import DataTemplateCSV
 from sphinx.util import logging
 
+LOGGER = logging.getLogger(__name__)
 
 class FileDownloader:
     def __init__(self, base_url, session=None):
