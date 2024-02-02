@@ -793,20 +793,16 @@ future<> storage_service::sstable_cleanup_fiber(raft::server& server, sharded<se
 
                 rtlogger.info("start cleanup");
 
-                auto keyspaces = _db.local().get_all_keyspaces();
-
-                tasks.reserve(keyspaces.size());
+                // Skip tablets tables since they do their own cleanup and system tables
+                // since they are local and not affected by range movements.
+                auto ks_erms = _db.local().get_non_local_strategy_keyspaces_erms();
+                tasks.reserve(ks_erms.size());
 
                 co_await _db.invoke_on_all([&] (replica::database& db) {
                     return db.flush_all_tables();
                 });
-                co_await coroutine::parallel_for_each(keyspaces.begin(), keyspaces.end(), [this, &tasks, &do_cleanup_ks] (const sstring& ks_name) -> future<> {
+                for (auto [ks_name, erm] : ks_erms) {
                     auto& ks = _db.local().find_keyspace(ks_name);
-                    if (ks.get_replication_strategy().is_per_table() || is_system_keyspace(ks_name)) {
-                        // Skip tablets tables since they do their own cleanup and system tables
-                        // since they are local and not affected by range movements.
-                        co_return;
-                    }
                     const auto& cf_meta_data = ks.metadata().get()->cf_meta_data();
                     std::vector<table_info> table_infos;
                     table_infos.reserve(cf_meta_data.size());
@@ -815,7 +811,7 @@ future<> storage_service::sstable_cleanup_fiber(raft::server& server, sharded<se
                     }
 
                     tasks.push_back(do_cleanup_ks(std::move(ks_name), std::move(table_infos)));
-                });
+                };
             }
 
             // Note that the guard is released while we are waiting for cleanup tasks to complete
