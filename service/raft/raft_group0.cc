@@ -90,7 +90,7 @@ static logging::logger group0_log("raft_group0");
 static logging::logger upgrade_log("raft_group0_upgrade");
 
 // TODO: change the links from master to stable/5.2 after 5.2 is released
-static const auto raft_upgrade_doc = "https://docs.scylladb.com/master/architecture/raft.html#verifying-that-the-internal-raft-upgrade-procedure-finished-successfully";
+const char* const raft_upgrade_doc = "https://docs.scylladb.com/master/architecture/raft.html#verifying-that-the-internal-raft-upgrade-procedure-finished-successfully";
 static const auto raft_manual_recovery_doc = "https://docs.scylladb.com/master/architecture/raft.html#raft-manual-recovery-procedure";
 
 // {{{ group0_rpc Maintain failure detector subscription whenever

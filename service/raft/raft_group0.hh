@@ -20,6 +20,8 @@ namespace gms { class gossiper; class feature_service; }
 
 namespace service {
 
+extern const char* const raft_upgrade_doc;
+
 class migration_manager;
 class raft_group0_client;
 class storage_service;
