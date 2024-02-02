@@ -390,8 +390,6 @@ public:
     after_key is_after_key() const { return after_key(_weight == 1); }
 
     operator ring_position_view() const { return { _token, _key ? &*_key : nullptr, _weight }; }
-
-    friend std::ostream& operator<<(std::ostream&, const ring_position_ext&);
 };
 
 std::strong_ordering ring_position_tri_compare(const schema& s, ring_position_view lh, ring_position_view rh);
@@ -498,4 +496,12 @@ template<>
 struct fmt::formatter<dht::ring_position_view> {
     constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
     auto format(const dht::ring_position_view&, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
+
+template<>
+struct fmt::formatter<dht::ring_position_ext> {
+    constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
+    auto format(const dht::ring_position_ext& pos, fmt::format_context& ctx) const {
+        return fmt::format_to(ctx.out(), "{}", (dht::ring_position_view)pos);
+    }
 };
