@@ -1597,7 +1597,7 @@ SEASTAR_THREAD_TEST_CASE(basic_tablet_storage_splitting_test) {
         e.execute_cql(
                 "CREATE TABLE cf (pk int, ck int, v int, PRIMARY KEY (pk, ck))").get();
 
-        for (int i = 0; i < smp::count * 20; i++) {
+        for (unsigned i = 0; i < smp::count * 20; i++) {
             e.execute_cql(format("INSERT INTO cf (pk, ck, v) VALUES ({}, 0, 0)", i)).get();
         }
 
