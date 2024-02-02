@@ -40,6 +40,8 @@ token ring), reads are using old replicas.
 - `left_token_ring` - the decommissioning node left the token ring, but we still need to wait until other
    nodes observe it and stop sending writes to this node. Then, we tell the node to shut down and remove
    it from group 0. We also use this state to rollback a failed bootstrap or decommission.
+- `rollback_to_normal` - the decommission or removenode operation failed. Rollback the operation by
+    moving the node we tried to decommission/remove back to the normal state.
 
 When a node bootstraps, we create new tokens for it and a new CDC generation
 and enter the `commit_cdc_generation` state. Once the generation is committed,
