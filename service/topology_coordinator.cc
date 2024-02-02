@@ -1689,7 +1689,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 } catch (term_changed_error&) {
                     throw;
                 } catch(...) {
-                    rtlogger.warn("failed to run barrier_and_drain during rollback {}", std::current_exception());
+                    rtlogger.warn("failed to run barrier_and_drain during rollback of {} after {} failure: {}",
+                            node.id, node.rs->state, std::current_exception());
                     barrier_failed = true;
                 }
 
@@ -1707,7 +1708,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                        .set("node_state", node_state::normal);
                 rtbuilder.done();
 
-                auto str = fmt::format("complete rollback of {} to state normal", node.id);
+                auto str = fmt::format("complete rollback of {} to state normal after {} failure", node.id, node.rs->state);
 
                 rtlogger.info("{}", str);
                 co_await update_topology_state(std::move(node.guard), {builder.build(), rtbuilder.build()}, str);
