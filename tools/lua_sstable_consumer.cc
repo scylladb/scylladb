@@ -77,6 +77,8 @@ void* lua_alloc(void* ud, void* ptr, size_t osize, size_t nsize) {
 
 static const luaL_Reg loadedlibs[] = {
     {"base", luaopen_base},
+    {LUA_MATHLIBNAME, luaopen_math},
+    {LUA_OSLIBNAME, luaopen_os},
     {LUA_STRLIBNAME, luaopen_string},
     {LUA_TABLIBNAME, luaopen_table},
     {NULL, NULL},
