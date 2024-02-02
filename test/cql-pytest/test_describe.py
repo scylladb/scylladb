@@ -405,7 +405,7 @@ def test_desc_cluster(scylla_only, cql, test_keyspace):
         for endpoint in endpoints:
             desc_endpoints.append((end_token, endpoint))
 
-    result = cql.execute(f"SELECT end_token, endpoint FROM system.token_ring WHERE keyspace_name='{test_keyspace}' ORDER BY start_token")
+    result = cql.execute(f"SELECT end_token, endpoint FROM system.token_ring WHERE keyspace_name='{test_keyspace}' ORDER BY table_name, start_token")
     ring_endpoints = [(r.end_token, r.endpoint) for r in result]
     
     assert sorted(desc_endpoints) == sorted(ring_endpoints)
