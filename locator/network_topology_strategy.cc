@@ -155,7 +155,6 @@ class natural_endpoints_tracker {
 
     const token_metadata& _tm;
     const topology& _tp;
-    std::unordered_map<sstring, size_t> _dc_rep_factor;
 
     //
     // We want to preserve insertion order so that the first added endpoint
@@ -165,19 +164,7 @@ class natural_endpoints_tracker {
     // tracks the racks we have already placed replicas in
     endpoint_dc_rack_set _seen_racks;
 
-    //
-    // all endpoints in each DC, so we can check when we have exhausted all
-    // the members of a DC
-    //
-    std::unordered_map<sstring, std::unordered_set<inet_address>> _all_endpoints;
-
-    //
-    // all racks in a DC so we can check when we have exhausted all racks in a
-    // DC
-    //
-    std::unordered_map<sstring, std::unordered_map<sstring, std::unordered_set<inet_address>>> _racks;
-
-    std::unordered_map<sstring_view, data_center_endpoints> _dcs;
+    std::unordered_map<sstring, data_center_endpoints> _dcs;
 
     size_t _dcs_to_fill;
 
@@ -185,30 +172,45 @@ public:
     natural_endpoints_tracker(const token_metadata& tm, const std::unordered_map<sstring, size_t>& dc_rep_factor)
         : _tm(tm)
         , _tp(_tm.get_topology())
-        , _dc_rep_factor(dc_rep_factor)
-        , _all_endpoints(_tp.get_datacenter_endpoints())
-        , _racks(_tp.get_datacenter_racks())
     {
-        // not aware of any cluster members
-        assert(!_all_endpoints.empty() && !_racks.empty());
-
-        auto size_for = [](auto& map, auto& k) {
-            auto i = map.find(k);
-            return i != map.end() ? i->second.size() : size_t(0);
-        };
-
-        // Create a data_center_endpoints object for each non-empty DC.
-        for (auto& p : _dc_rep_factor) {
-            auto& dc = p.first;
-            auto rf = p.second;
-            auto node_count = size_for(_all_endpoints, dc);
-
-            if (rf == 0 || node_count == 0) {
+        std::unordered_set<sstring_view> processed_dcs; // Used for tracking found datacenters in log_level::debug
+        for (const auto& [dc, dc_racks] : _tp.get_datacenter_racks()) {
+            auto it = dc_rep_factor.find(dc);
+            if (it == dc_rep_factor.end()) {
+                continue;
+            }
+            if (rslogger.is_enabled(log_level::debug)) {
+                processed_dcs.insert(it->first);
+            }
+            auto rf = it->second;
+            if (!rf) {
                 continue;
             }
 
-            _dcs.emplace(dc, data_center_endpoints(rf, size_for(_racks, dc), node_count, _replicas, _seen_racks));
+            size_t rack_count = 0;
+            size_t node_count = 0;
+            for (const auto& [rack, nodes] : dc_racks) {
+                if (auto n = nodes.size()) {
+                    ++rack_count;
+                    node_count += n;
+                }
+            }
+            if (!rack_count) {
+                rslogger.debug("datacenter {} with rf={} is empty", dc, rf);
+                continue;
+            }
+
+            // Create a data_center_endpoints object for each non-empty DC.
+            _dcs.emplace(dc, data_center_endpoints(rf, rack_count, node_count, _replicas, _seen_racks));
             _dcs_to_fill = _dcs.size();
+        }
+
+        if (rslogger.is_enabled(log_level::debug)) {
+            for (const auto& [dc, rf] : dc_rep_factor) {
+                if (!processed_dcs.contains(dc)) {
+                    rslogger.debug("datacenter {} with rf={} not found", dc, rf);
+                }
+            }
         }
     }
 
