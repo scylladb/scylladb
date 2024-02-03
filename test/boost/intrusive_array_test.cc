@@ -11,7 +11,6 @@
 #include <fmt/core.h>
 
 #include "utils/intrusive-array.hh"
-#include "utils/logalloc.hh"
 
 class element {
     bool _head = false;

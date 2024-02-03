@@ -13,7 +13,6 @@
 #include <numeric>
 
 #include "utils/observable.hh"
-#include "utils/updateable_value.hh"
 
 using namespace utils;
 

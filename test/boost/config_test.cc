@@ -16,7 +16,6 @@
 #include <seastar/core/future-util.hh>
 #include "db/config.hh"
 #include "utils/updateable_value.hh"
-#include <algorithm>
 
 using namespace db;
 

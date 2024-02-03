@@ -10,7 +10,6 @@
 
 #include "enum_set.hh"
 
-#include <iostream>
 #include <iterator>
 #include <unordered_set>
 

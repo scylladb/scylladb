@@ -13,17 +13,13 @@
 #include <boost/test/unit_test.hpp>
 #include <boost/multiprecision/cpp_int.hpp>
 
-#include "utils/big_decimal.hh"
-#include "exceptions/exceptions.hh"
 #include "test/lib/scylla_test_case.hh"
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/cql_assertions.hh"
 
 #include <seastar/core/future-util.hh>
-#include "transport/messages/result_message.hh"
 #include "types/set.hh"
 
-#include "db/config.hh"
 
 namespace {
 

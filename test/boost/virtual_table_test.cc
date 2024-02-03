@@ -10,12 +10,11 @@
 
 #include "test/lib/scylla_test_case.hh"
 #include <seastar/testing/thread_test_case.hh>
-#include "test/lib/test_services.hh"
 #include "test/lib/cql_test_env.hh"
-
 #include "db/virtual_table.hh"
 #include "db/system_keyspace.hh"
 #include "db/config.hh"
+#include "schema/schema_builder.hh"
 #include "test/lib/cql_assertions.hh"
 
 namespace db {

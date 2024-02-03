@@ -6,7 +6,6 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#include <stdexcept>
 #include "utils/exception_container.hh"
 
 #include "test/lib/scylla_test_case.hh"

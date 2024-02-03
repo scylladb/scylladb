@@ -13,7 +13,6 @@
 #include "db/view/view_updating_consumer.hh"
 #include "db/view/view_update_generator.hh"
 #include "db/system_keyspace.hh"
-#include "db/system_keyspace_view_types.hh"
 #include "db/config.hh"
 #include "cql3/query_options.hh"
 
@@ -25,7 +24,6 @@
 #include "test/lib/cql_assertions.hh"
 #include "test/lib/sstable_utils.hh"
 #include "schema/schema_builder.hh"
-#include "test/lib/test_services.hh"
 #include "test/lib/data_model.hh"
 #include "test/lib/log.hh"
 #include "test/lib/random_utils.hh"

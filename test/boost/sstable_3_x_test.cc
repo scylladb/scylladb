@@ -7,7 +7,6 @@
  */
 
 #include <set>
-#include <fstream>
 #include <iterator>
 
 #include <boost/test/unit_test.hpp>
@@ -20,7 +19,6 @@
 
 #include "sstables/sstables.hh"
 #include "compaction/compaction_manager.hh"
-#include "cell_locking.hh"
 #include "compress.hh"
 #include "counters.hh"
 #include "schema/schema_builder.hh"

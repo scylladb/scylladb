@@ -12,7 +12,6 @@
 
 #include <seastar/util/variant_utils.hh>
 
-#include <map>
 #include <vector>
 #include <optional>
 

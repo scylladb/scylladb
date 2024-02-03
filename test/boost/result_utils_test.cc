@@ -7,7 +7,6 @@
  */
 
 #include <vector>
-#include <stdexcept>
 #include "utils/exception_container.hh"
 #include "utils/result.hh"
 #include "utils/result_combinators.hh"

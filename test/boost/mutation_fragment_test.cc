@@ -16,13 +16,11 @@
 #include "test/lib/mutation_source_test.hh"
 #include "mutation/mutation_fragment.hh"
 #include "mutation/frozen_mutation.hh"
-#include "test/lib/test_services.hh"
 #include "schema/schema_builder.hh"
 #include "test/boost/total_order_check.hh"
 #include "schema_upgrader.hh"
 #include "readers/combined.hh"
 #include "replica/memtable.hh"
-#include "mutation/mutation_rebuilder.hh"
 
 #include "test/lib/mutation_assertions.hh"
 #include "test/lib/reader_concurrency_semaphore.hh"

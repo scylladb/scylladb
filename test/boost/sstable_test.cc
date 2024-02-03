@@ -27,7 +27,6 @@
 #include "schema/schema.hh"
 #include "compress.hh"
 #include "replica/database.hh"
-#include <memory>
 #include "test/boost/sstable_test.hh"
 #include "test/lib/tmpdir.hh"
 #include "partition_slice_builder.hh"

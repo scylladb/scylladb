@@ -7,8 +7,6 @@
  */
 
 
-#include <source_location>
-
 #include <boost/range/irange.hpp>
 #include <boost/range/adaptor/uniqued.hpp>
 
@@ -16,14 +14,12 @@
 
 #include "test/lib/scylla_test_case.hh"
 #include <seastar/testing/thread_test_case.hh>
-#include "test/lib/test_services.hh"
 #include "test/lib/mutation_source_test.hh"
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/dummy_sharder.hh"
 #include "test/lib/reader_lifecycle_policy.hh"
-#include "test/lib/log.hh"
 
-#include "dht/sharder.hh"
+
 #include "schema/schema_registry.hh"
 #include "readers/forwardable_v2.hh"
 

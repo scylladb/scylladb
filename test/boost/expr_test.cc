@@ -21,7 +21,6 @@
 #include "test/lib/expr_test_utils.hh"
 #include "cql3/expr/evaluate.hh"
 #include "cql3/expr/expr-utils.hh"
-#include "cql3/functions/aggregate_fcts.hh"
 
 using namespace cql3;
 using namespace cql3::expr;

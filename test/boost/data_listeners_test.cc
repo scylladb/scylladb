@@ -10,9 +10,7 @@
 
 #include "test/lib/scylla_test_case.hh"
 #include "test/lib/cql_test_env.hh"
-#include "test/lib/cql_assertions.hh"
 #include "test/lib/log.hh"
-#include "cql3/query_processor.hh"
 #include "readers/filtering.hh"
 
 #include "db/data_listeners.hh"

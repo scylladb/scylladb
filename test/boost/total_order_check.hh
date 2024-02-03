@@ -14,8 +14,6 @@
 #include <seastar/util/variant_utils.hh>
 #include <variant>
 #include "test/lib/log.hh"
-#include "utils/collection-concepts.hh"
-#include "utils/to_string.hh"
 
 template<typename Comparator, typename... T>
 class total_order_check {

@@ -22,7 +22,6 @@
 #include "service/tablet_allocator.hh"
 #include "locator/tablet_sharder.hh"
 #include "locator/load_sketch.hh"
-#include "locator/tablet_replication_strategy.hh"
 #include "utils/UUID_gen.hh"
 #include "utils/error_injection.hh"
 

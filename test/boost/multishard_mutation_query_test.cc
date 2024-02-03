@@ -15,7 +15,6 @@
 #include "mutation_query.hh"
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/eventually.hh"
-#include "test/lib/cql_assertions.hh"
 #include "test/lib/mutation_assertions.hh"
 #include "test/lib/log.hh"
 #include "test/lib/test_utils.hh"
@@ -28,8 +27,6 @@
 #include "db/per_partition_rate_limit_extension.hh"
 
 #include "test/lib/scylla_test_case.hh"
-
-#include <source_location>
 
 #include <boost/range/algorithm/sort.hpp>
 #include <utility>

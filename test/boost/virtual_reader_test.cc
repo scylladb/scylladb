@@ -17,17 +17,12 @@
 #include "test/lib/scylla_test_case.hh"
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/cql_assertions.hh"
-#include "test/lib/test_services.hh"
 
 #include "index/secondary_index_manager.hh"
 #include "db/size_estimates_virtual_reader.hh"
 #include "db/system_keyspace.hh"
 #include "db/view/view_builder.hh"
 #include <seastar/core/future-util.hh>
-#include "cql3/query_processor.hh"
-#include "cql3/untyped_result_set.hh"
-#include "dht/i_partitioner.hh"
-#include "transport/messages/result_message.hh"
 
 using namespace std::literals::chrono_literals;
 
