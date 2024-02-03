@@ -364,16 +364,18 @@ std::ostream& keyspace_metadata::describe(std::ostream& os) const {
 
 }
 
+template <>
+struct fmt::formatter<data_dictionary::user_types_metadata> {
+    constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
+    auto format(const data_dictionary::user_types_metadata& m, fmt::format_context& ctx) const
+        -> decltype(ctx.out()) {
+        return fmt::format_to(ctx.out(),
+                              "org.apache.cassandra.config.UTMetaData@{}",
+                              fmt::ptr(&m));
+    }
+};
+
 auto fmt::formatter<data_dictionary::keyspace_metadata>::format(const data_dictionary::keyspace_metadata& m, fmt::format_context& ctx) const -> decltype(ctx.out()) {
     return fmt::format_to(ctx.out(), "KSMetaData{{name={}, strategyClass={}, strategyOptions={{{}}}, cfMetaData={{{}}}, durable_writes={}, userTypes={}}}",
             m.name(), m.strategy_name(), fmt::join(m.strategy_options(), ", "), fmt::join(m.cf_meta_data(), ", "), m.durable_writes(), m.user_types());
-}
-
-namespace data_dictionary {
-
-std::ostream& operator<<(std::ostream& os, const user_types_metadata& m) {
-    os << "org.apache.cassandra.config.UTMetaData@" << &m;
-    return os;
-}
-
 }
