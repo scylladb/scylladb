@@ -9,7 +9,6 @@
 #define BOOST_TEST_MODULE core
 
 #include <boost/test/unit_test.hpp>
-#include <utility>
 #include "schema/caching_options.hh"
 
 BOOST_AUTO_TEST_CASE(test_caching_options) {

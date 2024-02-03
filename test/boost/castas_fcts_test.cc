@@ -23,8 +23,6 @@
 #include <seastar/core/future-util.hh>
 #include "transport/messages/result_message.hh"
 
-#include "db/config.hh"
-
 namespace {
 
 template<typename T>

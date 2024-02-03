@@ -9,14 +9,10 @@
 
 #include <seastar/core/thread.hh>
 #include "test/lib/scylla_test_case.hh"
-#include "query-result-writer.hh"
 
 #include "test/lib/cql_test_env.hh"
-#include "test/lib/mutation_source_test.hh"
-#include "test/lib/result_set_assertions.hh"
 #include "service/storage_proxy.hh"
 #include "query_ranges_to_vnodes.hh"
-#include "partition_slice_builder.hh"
 #include "schema/schema_builder.hh"
 
 // Returns random keys sorted in ring order.

@@ -14,13 +14,12 @@
 #include <seastar/core/semaphore.hh>
 #include <seastar/core/seastar.hh>
 #include <seastar/core/thread.hh>
+#include <seastar/testing/random.hh>
 
 #include "seastarx.hh"
 #include "test/lib/scylla_test_case.hh"
 #include <seastar/core/print.hh>
 #include "utils/flush_queue.hh"
-#include "log.hh"
-#include "test/lib/random_utils.hh"
 
 SEASTAR_TEST_CASE(test_queue_ordering_random_ops) {
     struct env {

@@ -11,9 +11,9 @@
 #include <boost/intrusive/parent_from_member.hpp>
 #include <algorithm>
 #include <chrono>
-#include <random>
 
 #include <seastar/core/circular_buffer.hh>
+#include <seastar/core/gate.hh>
 #include <seastar/core/print.hh>
 #include <seastar/core/thread.hh>
 #include <seastar/core/timer.hh>
@@ -24,19 +24,15 @@
 #include "test/lib/scylla_test_case.hh"
 #include <seastar/testing/thread_test_case.hh>
 #include <seastar/util/defer.hh>
-#include <deque>
-#include "utils/lsa/weak_ptr.hh"
+#ifndef SEASTAR_DEFAULT_ALLOCATOR
 #include "utils/phased_barrier.hh"
-
+#endif
 #include "utils/logalloc.hh"
 #include "replica/dirty_memory_manager.hh"
 #include "utils/managed_ref.hh"
 #include "utils/managed_bytes.hh"
-#include "utils/chunked_vector.hh"
 #include "test/lib/log.hh"
 #include "log.hh"
-#include "test/lib/random_utils.hh"
-#include "test/lib/make_random_string.hh"
 
 [[gnu::unused]]
 static auto x = [] {

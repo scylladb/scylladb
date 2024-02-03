@@ -8,13 +8,13 @@
 
 
 #include <boost/test/unit_test.hpp>
-#include "locator/gossiping_property_file_snitch.hh"
 #include "test/lib/scylla_test_case.hh"
 #include <seastar/util/std-compat.hh>
 #include <seastar/core/reactor.hh>
-#include <vector>
 #include <string>
-#include <tuple>
+#include "locator/snitch_base.hh"
+#include "gms/inet_address.hh"
+#include "seastarx.hh"
 
 namespace fs = std::filesystem;
 

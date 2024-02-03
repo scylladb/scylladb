@@ -11,7 +11,6 @@
 #include "utils/input_stream.hh"
 #include "bytes_ostream.hh"
 
-#include <random>
 #include <boost/test/unit_test.hpp>
 #include "test/lib/random_utils.hh"
 

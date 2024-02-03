@@ -10,16 +10,12 @@
 #include <boost/test/unit_test.hpp>
 #include <boost/range/adaptor/map.hpp>
 
-#include "replica/database.hh"
-#include "types/user.hh"
 #include "db/view/view_builder.hh"
 
 #include "test/lib/scylla_test_case.hh"
 #include <seastar/testing/thread_test_case.hh>
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/cql_assertions.hh"
-#include "types/set.hh"
-#include "types/list.hh"
 #include "utils/fmt-compat.hh"
 
 using namespace std::literals::chrono_literals;

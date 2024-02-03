@@ -11,17 +11,16 @@
 #include <random>
 
 #include <seastar/core/thread.hh>
+#include <seastar/testing/random.hh>
 
 #include <boost/range/algorithm/sort.hpp>
 #include <boost/range/algorithm/random_shuffle.hpp>
 
 #include "test/lib/scylla_test_case.hh"
-#include "test/lib/random_utils.hh"
 #include "schema/schema_builder.hh"
 #include "keys.hh"
 #include "mutation/mutation.hh"
 #include "mutation/frozen_mutation.hh"
-#include "mutation/mutation_partition_view.hh"
 
 std::ostream& boost_test_print_type(std::ostream& os, const counter_shard_view& csv) {
     fmt::print(os, "{}", csv);

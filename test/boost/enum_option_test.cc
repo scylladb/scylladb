@@ -10,7 +10,6 @@
 
 #include <boost/test/unit_test.hpp>
 
-#include <array>
 #include <boost/program_options.hpp>
 #include <map>
 #include <set>

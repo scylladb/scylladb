@@ -12,7 +12,6 @@
 #include <boost/range/algorithm.hpp>
 #include <boost/test/unit_test.hpp>
 #include <boost/multiprecision/cpp_int.hpp>
-#include <source_location>
 
 #include "test/lib/scylla_test_case.hh"
 #include <seastar/testing/thread_test_case.hh>
@@ -21,14 +20,11 @@
 
 #include <seastar/core/future-util.hh>
 #include "transport/messages/result_message.hh"
-#include "utils/big_decimal.hh"
-#include "types/user.hh"
 #include "types/map.hh"
 #include "types/list.hh"
 #include "types/set.hh"
 #include "db/config.hh"
 #include "compaction/compaction_manager.hh"
-#include "test/lib/exception_utils.hh"
 #include "schema/schema_builder.hh"
 
 using namespace std::literals::chrono_literals;

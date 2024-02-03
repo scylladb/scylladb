@@ -14,8 +14,6 @@
 
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/cql_assertions.hh"
-#include "test/lib/mutation_source_test.hh"
-#include "test/lib/result_set_assertions.hh"
 #include "service/migration_manager.hh"
 #include "service/storage_proxy.hh"
 #include "schema/schema_builder.hh"
@@ -28,9 +26,7 @@
 #include "test/lib/tmpdir.hh"
 #include "test/lib/exception_utils.hh"
 #include "test/lib/log.hh"
-#include "serializer_impl.hh"
 #include "cdc/cdc_extension.hh"
-#include "utils/UUID_gen.hh"
 
 static cql_test_config run_with_raft_recovery_config() {
     cql_test_config c;

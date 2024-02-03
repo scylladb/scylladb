@@ -8,7 +8,6 @@
 
 #include "replica/memtable.hh"
 #include "readers/from_fragments_v2.hh"
-#include "readers/upgrading_consumer.hh"
 #include "repair/hash.hh"
 #include "repair/row.hh"
 #include "repair/writer.hh"

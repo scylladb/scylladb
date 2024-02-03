@@ -15,7 +15,6 @@
 #include "test/lib/scylla_test_case.hh"
 #include <seastar/testing/thread_test_case.hh>
 #include <seastar/core/future-util.hh>
-#include <algorithm>
 #include "service/qos/service_level_controller.hh"
 #include "service/qos/qos_configuration_change_subscriber.hh"
 #include "auth/service.hh"

@@ -27,10 +27,8 @@
 #include "auth/password_authenticator.hh"
 #include "auth/service.hh"
 #include "auth/authenticated_user.hh"
-#include "auth/resource.hh"
 
 #include "db/config.hh"
-#include "cql3/query_processor.hh"
 
 #include "utils/fmt-compat.hh"
 

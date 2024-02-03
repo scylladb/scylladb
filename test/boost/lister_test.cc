@@ -19,7 +19,6 @@
 #include "test/lib/tmpdir.hh"
 #include "test/lib/random_utils.hh"
 #include "test/lib/test_utils.hh"
-#include "test/lib/make_random_string.hh"
 
 #include "utils/lister.hh"
 

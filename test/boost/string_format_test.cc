@@ -28,7 +28,6 @@
 
 #include <seastar/core/print.hh>
 
-#include "utils/to_string.hh"
 #include "utils/small_vector.hh"
 #include "utils/chunked_vector.hh"
 #include "bytes.hh"

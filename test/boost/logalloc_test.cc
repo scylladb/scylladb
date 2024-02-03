@@ -10,8 +10,6 @@
 #include <boost/test/unit_test.hpp>
 #include <boost/intrusive/parent_from_member.hpp>
 #include <algorithm>
-#include <chrono>
-#include <random>
 
 #include <seastar/core/circular_buffer.hh>
 #include <seastar/core/print.hh>
@@ -22,20 +20,21 @@
 #include <seastar/core/when_all.hh>
 #include <seastar/core/with_timeout.hh>
 #include "test/lib/scylla_test_case.hh"
+#include <seastar/testing/random.hh>
 #include <seastar/testing/thread_test_case.hh>
 #include <seastar/util/defer.hh>
-#include <deque>
-#include "utils/lsa/weak_ptr.hh"
-#include "utils/phased_barrier.hh"
 
 #include "utils/logalloc.hh"
 #include "utils/managed_ref.hh"
 #include "utils/managed_bytes.hh"
-#include "utils/chunked_vector.hh"
 #include "test/lib/log.hh"
-#include "log.hh"
-#include "test/lib/random_utils.hh"
+#ifndef SEASTAR_DEFAULT_ALLOCATOR
+#include "utils/chunked_vector.hh"
+#include "utils/logalloc.hh"
+#include "utils/lsa/weak_ptr.hh"
 #include "test/lib/make_random_string.hh"
+#endif
+#include "log.hh"
 
 [[gnu::unused]]
 static auto x = [] {

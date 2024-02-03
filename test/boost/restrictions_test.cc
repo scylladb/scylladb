@@ -7,7 +7,6 @@
  */
 
 #include <boost/range/adaptors.hpp>
-#include <source_location>
 #include <fmt/format.h>
 #include "test/lib/scylla_test_case.hh"
 

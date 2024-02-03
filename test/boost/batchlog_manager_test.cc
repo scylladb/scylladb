@@ -15,17 +15,15 @@
 
 #include "test/lib/scylla_test_case.hh"
 #include "test/lib/cql_test_env.hh"
-#include "test/lib/cql_assertions.hh"
 
 #include <seastar/core/future-util.hh>
 #include <seastar/core/shared_ptr.hh>
-#include "transport/messages/result_message.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/untyped_result_set.hh"
 #include "db/batchlog_manager.hh"
-#include "service/storage_proxy.hh"
-
+#include "db/commitlog/commitlog.hh"
 #include "message/messaging_service.hh"
+#include "service/storage_proxy.hh"
 
 static atomic_cell make_atomic_cell(data_type dt, bytes value) {
     return atomic_cell::make_live(*dt, 0, std::move(value));

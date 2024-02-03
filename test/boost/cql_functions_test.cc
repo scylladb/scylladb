@@ -23,7 +23,6 @@
 #include <seastar/core/future-util.hh>
 #include "transport/messages/result_message.hh"
 #include "utils/big_decimal.hh"
-#include "types/user.hh"
 #include "types/map.hh"
 #include "types/list.hh"
 #include "types/set.hh"

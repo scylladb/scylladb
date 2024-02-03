@@ -16,7 +16,6 @@
 #include "schema/schema.hh"
 #include "types/types.hh"
 #include "schema/schema_builder.hh"
-#include "utils/div_ceil.hh"
 
 #include "test/lib/simple_schema.hh"
 #include "test/lib/log.hh"

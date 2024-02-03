@@ -13,7 +13,6 @@
 #include <boost/range/algorithm.hpp>
 #include <boost/test/unit_test.hpp>
 #include <boost/multiprecision/cpp_int.hpp>
-#include <source_location>
 
 #include <seastar/net/inet_address.hh>
 
@@ -27,20 +26,17 @@
 #include <seastar/core/sleep.hh>
 #include "transport/messages/result_message.hh"
 #include "utils/big_decimal.hh"
-#include "types/user.hh"
 #include "types/map.hh"
 #include "types/list.hh"
 #include "types/set.hh"
 #include "db/config.hh"
 #include "cql3/cql_config.hh"
-#include "compaction/compaction_manager.hh"
 #include "test/lib/exception_utils.hh"
 #include "utils/rjson.hh"
 #include "utils/fmt-compat.hh"
 #include "schema/schema_builder.hh"
 #include "service/migration_manager.hh"
 #include <boost/regex.hpp>
-#include "gms/feature.hh"
 #include "service/qos/qos_common.hh"
 #include "utils/UUID_gen.hh"
 #include "tombstone_gc_extension.hh"
