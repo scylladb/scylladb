@@ -39,8 +39,7 @@ extensions = [
     "recommonmark",  # optional
     "sphinxcontrib.datatemplates",
     "scylladb_cc_properties",
-    "scylladb_aws_images",
-    "scylladb_include_flag"
+    "scylladb_aws_images"
 ]
 
 # The suffix(es) of source filenames.
