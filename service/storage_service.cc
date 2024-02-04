@@ -6065,6 +6065,19 @@ future<join_node_response_result> storage_service::join_node_response_handler(jo
     }
 }
 
+future<std::vector<canonical_mutation>> storage_service::get_system_mutations(const sstring& ks_name, const sstring& cf_name) {
+    std::vector<canonical_mutation> result;
+    auto rs = co_await db::system_keyspace::query_mutations(
+        _db, ks_name, cf_name);
+    auto s = _db.local().find_schema(ks_name, cf_name);
+    result.reserve(rs->partitions().size());
+    boost::range::transform(
+            rs->partitions(), std::back_inserter(result), [s] (const partition& p) {
+        return canonical_mutation{p.mut().unfreeze(s)};
+    });
+    co_return result;
+}
+
 node_state storage_service::get_node_state(locator::host_id id) {
     if (this_shard_id() != 0) {
         on_internal_error(rtlogger, "cannot access node state on non zero shard");
@@ -6115,14 +6128,7 @@ void storage_service::init_messaging_service(bool raft_topology_change_enabled) 
                     // FIXME: make it an rwlock, here we only need to lock for reads,
                     // might be useful if multiple nodes are trying to pull concurrently.
                     auto read_apply_mutex_holder = co_await ss._group0->client().hold_read_apply_mutex();
-                    auto rs = co_await db::system_keyspace::query_mutations(
-                        ss._db, db::system_keyspace::NAME, db::system_keyspace::TOPOLOGY);
-                    auto s = ss._db.local().find_schema(db::system_keyspace::NAME, db::system_keyspace::TOPOLOGY);
-                    topology_mutations.reserve(rs->partitions().size());
-                    boost::range::transform(
-                            rs->partitions(), std::back_inserter(topology_mutations), [s] (const partition& p) {
-                        return canonical_mutation{p.mut().unfreeze(s)};
-                    });
+                    topology_mutations = co_await ss.get_system_mutations(db::system_keyspace::NAME, db::system_keyspace::TOPOLOGY);
                 }
 
                 std::vector<canonical_mutation> cdc_generation_mutations;
@@ -6137,14 +6143,7 @@ void storage_service::init_messaging_service(bool raft_topology_change_enabled) 
                     // (garbage-collected with time) instead of just the last one, and load all of them.
                     // Alternatively, a node would wait for some time before switching to normal state.
                     auto read_apply_mutex_holder = co_await ss._group0->client().hold_read_apply_mutex();
-                    auto rs = co_await db::system_keyspace::query_mutations(
-                        ss._db, db::system_keyspace::NAME, db::system_keyspace::CDC_GENERATIONS_V3);
-                    auto s = ss._db.local().find_schema(db::system_keyspace::NAME, db::system_keyspace::CDC_GENERATIONS_V3);
-                    cdc_generation_mutations.reserve(rs->partitions().size());
-                    boost::range::transform(
-                            rs->partitions(), std::back_inserter(cdc_generation_mutations), [s] (const partition& p) {
-                        return canonical_mutation{p.mut().unfreeze(s)};
-                    });
+                    cdc_generation_mutations = co_await ss.get_system_mutations(db::system_keyspace::NAME, db::system_keyspace::CDC_GENERATIONS_V3);
                 }
 
                 std::vector<canonical_mutation> topology_requests_mutations;
@@ -6152,14 +6151,7 @@ void storage_service::init_messaging_service(bool raft_topology_change_enabled) 
                     // FIXME: make it an rwlock, here we only need to lock for reads,
                     // might be useful if multiple nodes are trying to pull concurrently.
                     auto read_apply_mutex_holder = co_await ss._group0->client().hold_read_apply_mutex();
-                    auto rs = co_await db::system_keyspace::query_mutations(
-                        ss._db, db::system_keyspace::NAME, db::system_keyspace::TOPOLOGY_REQUESTS);
-                    auto s = ss._db.local().find_schema(db::system_keyspace::NAME, db::system_keyspace::TOPOLOGY_REQUESTS);
-                    topology_requests_mutations.reserve(rs->partitions().size());
-                    boost::range::transform(
-                            rs->partitions(), std::back_inserter(topology_requests_mutations), [s] (const partition& p) {
-                        return canonical_mutation{p.mut().unfreeze(s)};
-                    });
+                    topology_requests_mutations = co_await ss.get_system_mutations(db::system_keyspace::NAME, db::system_keyspace::TOPOLOGY_REQUESTS);
                 }
 
                 co_return raft_topology_snapshot{
