@@ -448,7 +448,7 @@ public:
         migration_plan plan;
 
         // Prepare plans for each DC separately and combine them to be executed in parallel.
-        for (auto&& dc : topo.get_datacenters()) {
+        for (auto&& dc : topo.get_datacenter_names()) {
             auto dc_plan = co_await make_plan(dc);
             lblogger.info("Prepared {} migrations in DC {}", dc_plan.size(), dc);
             plan.merge(std::move(dc_plan));

@@ -277,7 +277,7 @@ public:
         return _dc_racks;
     }
 
-    const std::unordered_set<sstring>& get_datacenters() const noexcept {
+    std::unordered_set<sstring> get_datacenter_names() const noexcept {
         return _datacenters;
     }
 

@@ -234,17 +234,17 @@ SEASTAR_THREAD_TEST_CASE(test_remove_endpoint) {
 
     BOOST_REQUIRE_EQUAL(topo.get_datacenter_endpoints(), (dc_endpoints_t{{"dc1", {ep1, ep2}}}));
     BOOST_REQUIRE_EQUAL(topo.get_datacenter_racks(), (dc_racks_t{{"dc1", {{"rack1", {ep1}}, {"rack2", {ep2}}}}}));
-    BOOST_REQUIRE_EQUAL(topo.get_datacenters(), (dcs_t{"dc1"}));
+    BOOST_REQUIRE_EQUAL(topo.get_datacenter_names(), (dcs_t{"dc1"}));
 
     topo.remove_endpoint(id2);
     BOOST_REQUIRE_EQUAL(topo.get_datacenter_endpoints(), (dc_endpoints_t{{"dc1", {ep1}}}));
     BOOST_REQUIRE_EQUAL(topo.get_datacenter_racks(), (dc_racks_t{{"dc1", {{"rack1", {ep1}}}}}));
-    BOOST_REQUIRE_EQUAL(topo.get_datacenters(), (dcs_t{"dc1"}));
+    BOOST_REQUIRE_EQUAL(topo.get_datacenter_names(), (dcs_t{"dc1"}));
 
     topo.remove_endpoint(id1);
     BOOST_REQUIRE_EQUAL(topo.get_datacenter_endpoints(), (dc_endpoints_t{}));
     BOOST_REQUIRE_EQUAL(topo.get_datacenter_racks(), (dc_racks_t{}));
-    BOOST_REQUIRE_EQUAL(topo.get_datacenters(), (dcs_t{}));
+    BOOST_REQUIRE_EQUAL(topo.get_datacenter_names(), (dcs_t{}));
 }
 
 SEASTAR_THREAD_TEST_CASE(test_load_sketch) {

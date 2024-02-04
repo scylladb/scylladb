@@ -282,7 +282,7 @@ void network_topology_strategy::validate_options(const gms::feature_service& fs)
 
 std::optional<std::unordered_set<sstring>> network_topology_strategy::recognized_options(const topology& topology) const {
     // We only allow datacenter names as options
-    auto opts = topology.get_datacenters();
+    auto opts = topology.get_datacenter_names();
     opts.merge(recognized_tablet_options());
     return opts;
 }
