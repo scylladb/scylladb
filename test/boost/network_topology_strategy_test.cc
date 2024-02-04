@@ -99,7 +99,7 @@ void endpoints_check(
     const inet_address_vector_replica_set& endpoints,
     const locator::topology& topo) {
 
-    auto&& nodes_per_dc = tm->get_topology().get_datacenter_endpoints();
+    auto nodes_per_dc = tm->get_topology().get_datacenter_endpoints();
     const network_topology_strategy* nts_ptr =
             dynamic_cast<const network_topology_strategy*>(ars_ptr.get());
 

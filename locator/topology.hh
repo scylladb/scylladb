@@ -258,21 +258,21 @@ public:
      */
     bool has_endpoint(inet_address) const;
 
-    const std::unordered_map<sstring,
-                           std::unordered_set<inet_address>>&
+    std::unordered_map<sstring,
+                           std::unordered_set<inet_address>>
     get_datacenter_endpoints() const {
         return _dc_endpoints;
     }
 
-    const std::unordered_map<sstring,
-                            std::unordered_set<const node*>>&
+    std::unordered_map<sstring,
+                            std::unordered_set<const node*>>
     get_datacenter_nodes() const {
         return _dc_nodes;
     }
 
-    const std::unordered_map<sstring,
+    std::unordered_map<sstring,
                        std::unordered_map<sstring,
-                                          std::unordered_set<inet_address>>>&
+                                          std::unordered_set<inet_address>>>
     get_datacenter_racks() const {
         return _dc_racks;
     }
