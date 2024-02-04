@@ -1065,9 +1065,6 @@ void query_processor::migration_subscriber::on_update_aggregate(const sstring& k
 void query_processor::migration_subscriber::on_update_view(
         const sstring& ks_name,
         const sstring& view_name, bool columns_changed) {
-    // scylladb/scylladb#16392 - Materialized views are also tables so we need at least handle
-    // them as such when changed.
-    on_update_column_family(ks_name, view_name, columns_changed);
 }
 
 void query_processor::migration_subscriber::on_update_tablet_metadata() {
