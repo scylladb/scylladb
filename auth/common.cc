@@ -142,7 +142,12 @@ future<> announce_mutations_with_batching(
         std::function<mutations_generator(api::timestamp_type& t)> gen,
         seastar::abort_source* as) {
     // account for command's overhead, it's better to use smaller threshold than constantly bounce off the limit
-    const size_t memory_threshold = group0_client.max_command_size() * 0.75;
+    size_t memory_threshold = group0_client.max_command_size() * 0.75;
+    utils::get_local_injector().inject("auth_announce_mutations_command_max_size",
+        [&memory_threshold] {
+        memory_threshold = 1000;
+    });
+
     size_t memory_usage = 0;
     std::vector<canonical_mutation> muts;
 
