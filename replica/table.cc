@@ -19,6 +19,8 @@
 #include "replica/data_dictionary_impl.hh"
 #include "replica/compaction_group.hh"
 #include "replica/query_state.hh"
+#include "sstables/shared_sstable.hh"
+#include "sstables/sstable_set.hh"
 #include "sstables/sstables.hh"
 #include "sstables/sstables_manager.hh"
 #include "db/schema_tables.hh"
@@ -123,14 +125,7 @@ lw_shared_ptr<sstables::sstable_set> compaction_group::make_compound_sstable_set
 }
 
 lw_shared_ptr<sstables::sstable_set> table::make_compound_sstable_set() const {
-    if (auto cg = single_compaction_group_if_available()) {
-        return cg->make_compound_sstable_set();
-    }
-    // TODO: switch to a specialized set for groups which assumes disjointness across compound sets and incrementally read from them.
-    // FIXME: avoid recreation of compound_set for groups which had no change. usually, only one group will be changed at a time.
-    auto sstable_sets = boost::copy_range<std::vector<lw_shared_ptr<sstables::sstable_set>>>(compaction_groups()
-        | boost::adaptors::transformed(std::mem_fn(&compaction_group::make_compound_sstable_set)));
-    return make_lw_shared(sstables::make_compound_sstable_set(schema(), std::move(sstable_sets)));
+    return _sg_manager->make_sstable_set();
 }
 
 lw_shared_ptr<sstables::sstable_set> table::make_maintenance_sstable_set() const {
@@ -597,6 +592,10 @@ public:
     bool all_storage_groups_split() override { return true; }
     future<> split_all_storage_groups() override { return make_ready_future(); }
     future<> maybe_split_compaction_group_of(size_t idx) override { return make_ready_future(); }
+
+    lw_shared_ptr<sstables::sstable_set> make_sstable_set() const override {
+        return _compaction_groups.begin()->make_compound_sstable_set();
+    }
 };
 
 class tablet_storage_group_manager final : public storage_group_manager {
@@ -687,6 +686,14 @@ public:
     bool all_storage_groups_split() override;
     future<> split_all_storage_groups() override;
     future<> maybe_split_compaction_group_of(size_t idx) override;
+
+    lw_shared_ptr<sstables::sstable_set> make_sstable_set() const override {
+        // TODO: switch to a specialized set for groups which assumes disjointness across compound sets and incrementally read from them.
+        // FIXME: avoid recreation of compound_set for groups which had no change. usually, only one group will be changed at a time.
+        auto sstable_sets = boost::copy_range<std::vector<lw_shared_ptr<sstables::sstable_set>>>(compaction_groups()
+            | boost::adaptors::transformed(std::mem_fn(&compaction_group::make_compound_sstable_set)));
+        return make_lw_shared(sstables::make_compound_sstable_set(schema(), std::move(sstable_sets)));
+    }
 };
 
 bool table::uses_tablets() const {
@@ -757,6 +764,20 @@ future<> storage_group::split(compaction_group_list& list, sstables::compaction_
 
     co_await _main_cg->flush();
     co_await _main_cg->get_compaction_manager().perform_split_compaction(_main_cg->as_table_state(), std::move(opt));
+}
+
+lw_shared_ptr<sstables::sstable_set> storage_group::make_sstable_set() const {
+    if (!splitting_mode()) {
+        return _main_cg->make_compound_sstable_set();
+    }
+    const auto& schema = _main_cg->_t.schema();
+    std::vector<lw_shared_ptr<sstables::sstable_set>> underlying;
+    underlying.reserve(1 + _split_ready_groups.size());
+    underlying.emplace_back(_main_cg->make_compound_sstable_set());
+    for (const auto& cg : _split_ready_groups) {
+        underlying.emplace_back(cg->make_compound_sstable_set());
+    }
+    return make_lw_shared(sstables::make_compound_sstable_set(schema, std::move(underlying)));
 }
 
 bool tablet_storage_group_manager::all_storage_groups_split() {

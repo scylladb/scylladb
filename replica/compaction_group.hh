@@ -217,6 +217,9 @@ public:
     //  2) Compacts all sstables which overlap with the split point
     // Returns a future which resolves when this process is complete.
     future<> split(compaction_group_list&, sstables::compaction_type_options::split opt);
+
+    // Make an sstable set spanning all sstables in the storage_group
+    lw_shared_ptr<sstables::sstable_set> make_sstable_set() const;
 };
 
 using storage_group_vector = utils::chunked_vector<std::unique_ptr<storage_group>>;
@@ -267,6 +270,8 @@ public:
     virtual bool all_storage_groups_split() = 0;
     virtual future<> split_all_storage_groups() = 0;
     virtual future<> maybe_split_compaction_group_of(size_t idx) = 0;
+
+    virtual lw_shared_ptr<sstables::sstable_set> make_sstable_set() const = 0;
 };
 
 }
