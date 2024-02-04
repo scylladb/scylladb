@@ -49,7 +49,7 @@ class flat_reader_assertions_v2 {
     tombstone _rt;
 private:
     mutation_fragment_v2* peek_next() {
-        while (auto next = _reader.peek().get0()) {
+        while (auto next = _reader.peek().get()) {
             // There is no difference between an empty row and a row that doesn't exist.
             // While readers that emit spurious empty rows may be wasteful, it is not
             // incorrect to do so, so let's ignore them.
@@ -64,11 +64,11 @@ private:
                 auto tomb = rtc_mf.as_range_tombstone_change().tombstone();
                 auto cmp = position_in_partition::tri_compare(*_reader.schema());
                 // squash rtcs with the same pos
-                while (auto next_maybe_rtc = _reader.peek().get0()) {
+                while (auto next_maybe_rtc = _reader.peek().get()) {
                     if (next_maybe_rtc->is_range_tombstone_change() && cmp(next_maybe_rtc->position(), rtc_mf.position()) == 0) {
                         testlog.trace("Squashing {} with {}", next_maybe_rtc->as_range_tombstone_change().tombstone(), tomb);
                         tomb = next_maybe_rtc->as_range_tombstone_change().tombstone();
-                        _reader().get0();
+                        _reader().get();
                     } else {
                         break;
                     }
@@ -79,7 +79,7 @@ private:
                     continue;
                 }
                 _reader.unpop_mutation_fragment(std::move(rtc_mf));
-                next = _reader.peek().get0();
+                next = _reader.peek().get();
             }
             return next;
         }
@@ -89,7 +89,7 @@ private:
         if (!_exact) {
             peek_next();
         }
-        auto next = _reader().get0();
+        auto next = _reader().get();
         if (next) {
             testlog.trace("read_next(): {}", mutation_fragment_v2::printer(*_reader.schema(), *next));
         } else {
@@ -413,7 +413,7 @@ public:
     }
 
     flat_reader_assertions_v2& produces(const mutation& m, const std::optional<query::clustering_row_ranges>& ck_ranges = {}) {
-        auto mo = read_mutation_from_flat_mutation_reader(_reader).get0();
+        auto mo = read_mutation_from_flat_mutation_reader(_reader).get();
         if (!mo) {
             BOOST_FAIL(format("Expected {}, but got end of stream, at: {}", m, seastar::current_backtrace()));
         }
@@ -438,7 +438,7 @@ public:
 
     flat_reader_assertions_v2& produces_eos_or_empty_mutation() {
         testlog.trace("Expecting eos or empty mutation");
-        auto mo = read_mutation_from_flat_mutation_reader(_reader).get0();
+        auto mo = read_mutation_from_flat_mutation_reader(_reader).get();
         if (mo) {
             if (!mo->partition().empty()) {
                 BOOST_FAIL(format("Mutation is not empty: {}", *mo));
@@ -514,12 +514,12 @@ public:
 
     flat_reader_assertions_v2& produces_compacted(const mutation& m, gc_clock::time_point query_time,
                                                const std::optional<query::clustering_row_ranges>& ck_ranges = {}) {
-        match_compacted_mutation(read_mutation_from_flat_mutation_reader(_reader).get0(), m, query_time, ck_ranges);
+        match_compacted_mutation(read_mutation_from_flat_mutation_reader(_reader).get(), m, query_time, ck_ranges);
         return *this;
     }
 
     mutation_assertion next_mutation() {
-        auto mo = read_mutation_from_flat_mutation_reader(_reader).get0();
+        auto mo = read_mutation_from_flat_mutation_reader(_reader).get();
         BOOST_REQUIRE(bool(mo));
         return mutation_assertion(std::move(*mo));
     }

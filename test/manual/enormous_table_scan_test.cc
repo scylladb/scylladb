@@ -220,7 +220,7 @@ SEASTAR_TEST_CASE(scan_enormous_table_test) {
         do {
             qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, std::vector<cql3::raw_value>{},
                     cql3::query_options::specific_options{10000, paging_state, {}, api::new_timestamp()});
-            msg = e.execute_cql("select * from enormous_table;", std::move(qo)).get0();
+            msg = e.execute_cql("select * from enormous_table;", std::move(qo)).get();
             rows_fetched += count_rows_fetched(msg);
             paging_state = extract_paging_state(msg);
             if (rows_fetched >= fetched_rows_log_counter){
@@ -244,7 +244,7 @@ SEASTAR_TEST_CASE(count_enormous_table_test) {
         auto& db = e.local_db();
         db.find_column_family("ks", "enormous_table").set_virtual_reader(mutation_source(enormous_virtual_reader()));
 
-        auto msg = e.execute_cql("select count(*) from enormous_table").get0();
+        auto msg = e.execute_cql("select count(*) from enormous_table").get();
         assert_that(msg).is_rows().with_rows({{{long_type->decompose(int64_t(enormous_table_reader::CLUSTERING_ROW_COUNT))}}});
     });
 }

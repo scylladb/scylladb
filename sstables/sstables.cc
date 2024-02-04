@@ -1009,7 +1009,7 @@ void sstable::do_write_simple(component_type type,
 
     file_output_stream_options options;
     options.buffer_size = buffer_size;
-    auto w = make_component_file_writer(type, std::move(options)).get0();
+    auto w = make_component_file_writer(type, std::move(options)).get();
     do_write_simple(std::move(w), std::move(write_component));
 }
 
@@ -1264,7 +1264,7 @@ void sstable::rewrite_statistics() {
     file_output_stream_options options;
     options.buffer_size = sstable_buffer_size;
     auto w = make_component_file_writer(component_type::TemporaryStatistics, std::move(options),
-            open_flags::wo | open_flags::create | open_flags::truncate).get0();
+            open_flags::wo | open_flags::create | open_flags::truncate).get();
     write(_version, w, _components->statistics);
     w.close();
     // rename() guarantees atomicity when renaming a file into place.
@@ -1546,7 +1546,7 @@ sharding_metadata
 create_sharding_metadata(schema_ptr schema, const dht::sharder& sharder, const dht::decorated_key& first_key, const dht::decorated_key& last_key, shard_id shard) {
     auto prange = dht::partition_range::make(dht::ring_position(first_key), dht::ring_position(last_key));
     auto sm = sharding_metadata();
-    auto&& ranges = dht::split_range_to_single_shard(*schema, sharder, prange, shard).get0();
+    auto ranges = dht::split_range_to_single_shard(*schema, sharder, prange, shard).get();
     if (ranges.empty()) {
         auto split_ranges_all_shards = dht::split_range_to_shards(prange, *schema, sharder);
         sstlog.warn("create_sharding_metadata: range={} has no intersection with shard={} first_key={} last_key={} ranges_single_shard={} ranges_all_shards={}",

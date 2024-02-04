@@ -209,7 +209,7 @@ future<schema_ptr> schema_registry_entry::start_loading(async_schema_loader load
         }
         try {
             try {
-                load(f.get0());
+                load(f.get());
                 _registry.attach_table(*this);
             } catch (...) {
                 std::throw_with_nested(schema_version_loading_failed(_version));

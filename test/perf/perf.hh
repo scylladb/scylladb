@@ -201,7 +201,7 @@ std::vector<Res> time_parallel_ex(Func func, unsigned concurrency_per_core, int 
             exec.stop().get();
         });
         auto stats = exec.map_reduce0(std::mem_fn(&executor<Func>::run),
-                executor_shard_stats(), std::plus<executor_shard_stats>()).get0();
+                executor_shard_stats(), std::plus<executor_shard_stats>()).get();
         auto end = clk::now();
         auto duration = std::chrono::duration<double>(end - start).count();
 

@@ -481,7 +481,7 @@ future<foreign_ptr<std::unique_ptr<cql_server::response>>>
         --_server._stats.requests_serving;
 
         return utils::result_into_future<result_with_foreign_response_ptr>(utils::result_try([&] () -> result_with_foreign_response_ptr {
-            result_with_foreign_response_ptr res = f.get0();
+            result_with_foreign_response_ptr res = f.get();
             if (!res) {
                 return res;
             }
@@ -663,7 +663,7 @@ void cql_server::connection::handle_error(future<>&& f) {
 
 future<> cql_server::connection::process_request() {
     return read_frame().then_wrapped([this] (future<std::optional<cql_binary_frame_v3>>&& v) {
-        auto maybe_frame = v.get0();
+        auto maybe_frame = v.get();
         if (!maybe_frame) {
             // eof
             return make_ready_future<>();
@@ -722,7 +722,7 @@ future<> cql_server::connection::process_request() {
         auto fut = allow_shedding
                 ? get_units(_server._memory_available, mem_estimate, shedding_timeout).then_wrapped([this, length = f.length] (auto f) {
                     try {
-                        return make_ready_future<semaphore_units<>>(f.get0());
+                        return make_ready_future<semaphore_units<>>(f.get());
                     } catch (semaphore_timed_out& sto) {
                         // Cancel shedding in case no more requests are going to do that on completion
                         if (_pending_requests_gate.get_count() == 0) {
@@ -747,7 +747,7 @@ future<> cql_server::connection::process_request() {
               mem_permit_fut.ignore_ready_future();
               return make_ready_future<>();
           }
-          semaphore_units<> mem_permit = mem_permit_fut.get0();
+          semaphore_units<> mem_permit = mem_permit_fut.get();
           return this->read_and_decompress_frame(length, flags).then([this, op, stream, tracing_requested, mem_permit = make_service_permit(std::move(mem_permit))] (fragmented_temporary_buffer buf) mutable {
 
             ++_server._stats.requests_served;
@@ -782,7 +782,7 @@ future<> cql_server::connection::process_request() {
                                                   message,
                                                   tracing::trace_state_ptr()));
                     } else {
-                        write_response(response_f.get0(), std::move(mem_permit), _compression);
+                        write_response(response_f.get(), std::move(mem_permit), _compression);
                     }
                     _ready_to_respond = _ready_to_respond.finally([leave = std::move(leave)] {});
                 } catch (...) {

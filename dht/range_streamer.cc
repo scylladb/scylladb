@@ -82,7 +82,7 @@ std::unordered_map<dht::token_range, std::vector<inet_address>>
 range_streamer::get_all_ranges_with_sources_for(const sstring& keyspace_name, locator::vnode_effective_replication_map_ptr erm, dht::token_range_vector desired_ranges) {
     logger.debug("{} ks={}", __func__, keyspace_name);
 
-    auto range_addresses = erm->get_range_addresses().get0();
+    auto range_addresses = erm->get_range_addresses().get();
 
     logger.debug("keyspace={}, desired_ranges.size={}, range_addresses.size={}", keyspace_name, desired_ranges.size(), range_addresses.size());
 
@@ -122,13 +122,13 @@ range_streamer::get_all_ranges_with_strict_sources_for(const sstring& keyspace_n
     auto& strat = erm->get_replication_strategy();
 
     //Active ranges
-    auto metadata_clone = get_token_metadata().clone_only_token_map().get0();
-    auto range_addresses = strat.get_range_addresses(metadata_clone).get0();
+    auto metadata_clone = get_token_metadata().clone_only_token_map().get();
+    auto range_addresses = strat.get_range_addresses(metadata_clone).get();
 
     //Pending ranges
     metadata_clone.update_topology(_address, _dr);
     metadata_clone.update_normal_tokens(_tokens, _address).get();
-    auto pending_range_addresses  = strat.get_range_addresses(metadata_clone).get0();
+    auto pending_range_addresses  = strat.get_range_addresses(metadata_clone).get();
     metadata_clone.clear_gently().get();
 
     //Collects the source that will have its range moved to the new node

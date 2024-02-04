@@ -86,7 +86,7 @@ static mutation_partition get_partition(reader_permit permit, replica::memtable&
     auto range = dht::partition_range::make_singular(dk);
     auto reader = mt.make_flat_reader(mt.schema(), std::move(permit), range);
     auto close_reader = deferred_close(reader);
-    auto mo = read_mutation_from_flat_mutation_reader(reader).get0();
+    auto mo = read_mutation_from_flat_mutation_reader(reader).get();
     BOOST_REQUIRE(bool(mo));
     return std::move(mo->partition());
 }
@@ -451,7 +451,7 @@ SEASTAR_THREAD_TEST_CASE(test_large_collection_allocation) {
 
         auto rd = mt->make_flat_reader(schema, semaphore.make_permit());
         auto close_rd = deferred_close(rd);
-        auto res_mut_opt = read_mutation_from_flat_mutation_reader(rd).get0();
+        auto res_mut_opt = read_mutation_from_flat_mutation_reader(rd).get();
         BOOST_REQUIRE(res_mut_opt);
 
         res_mut_opt->partition().compact_for_query(*schema, res_mut_opt->decorated_key(), gc_clock::now(), {query::full_clustering_range}, true, false,
@@ -2775,7 +2775,7 @@ void run_compaction_data_stream_split_test(const schema& schema, reader_permit p
             survived_compacted_fragments_consumer(schema, query_time, get_max_purgeable),
             purged_compacted_fragments_consumer(schema, query_time, get_max_purgeable));
 
-    auto [survived_muts, purged_muts] = reader.consume(std::move(consumer)).get0();
+    auto [survived_muts, purged_muts] = reader.consume(std::move(consumer)).get();
 
     auto survived_muts_it = survived_muts.begin();
     const auto survived_muts_end = survived_muts.end();
@@ -2833,7 +2833,7 @@ SEASTAR_THREAD_TEST_CASE(test_compaction_data_stream_split) {
             return tests::expiry_info{ttl, query_time + gc_clock::duration{offset_dist(engine)}};
         };
         const auto mutations = tests::generate_random_mutations(random_schema, ts_gen, exp_gen, partition_count_dist,
-                clustering_row_count_dist).get0();
+                clustering_row_count_dist).get();
         run_compaction_data_stream_split_test(schema, semaphore.make_permit(), query_time, mutations);
     }
 
@@ -2868,7 +2868,7 @@ SEASTAR_THREAD_TEST_CASE(test_compaction_data_stream_split) {
             return tests::expiry_info{ttl, query_time + gc_clock::duration{offset_dist(engine)}};
         };
         const auto mutations = tests::generate_random_mutations(random_schema, ts_gen, all_purged_exp_gen, partition_count_dist,
-                clustering_row_count_dist).get0();
+                clustering_row_count_dist).get();
         run_compaction_data_stream_split_test(schema, semaphore.make_permit(), query_time, mutations);
     }
 
@@ -2897,7 +2897,7 @@ SEASTAR_THREAD_TEST_CASE(test_compaction_data_stream_split) {
             }
         };
         const auto mutations = tests::generate_random_mutations(random_schema, ts_gen, tests::no_expiry_expiry_generator(), partition_count_dist,
-                clustering_row_count_dist).get0();
+                clustering_row_count_dist).get();
         run_compaction_data_stream_split_test(schema, semaphore.make_permit(), query_time, mutations);
     }
 }

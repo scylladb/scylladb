@@ -87,7 +87,7 @@ SEASTAR_TEST_CASE(test_group0_cmd_merge) {
         };
         std::vector<canonical_mutation> cms;
         size_t size = 0;
-        auto muts = service::prepare_keyspace_drop_announcement(env.local_db(), "ks", api::new_timestamp()).get0();
+        auto muts = service::prepare_keyspace_drop_announcement(env.local_db(), "ks", api::new_timestamp()).get();
         // Maximum mutation size is 1/3 of commitlog segment size which we set
         // to 1M. Make one command a little bit larger than third of the max size.
         while (size < 150*1024) {

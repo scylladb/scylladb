@@ -20,14 +20,14 @@ namespace fs = std::filesystem;
 
 // Must be called from a seastar thread
 static auto copy_sst_to_tmpdir(fs::path tmp_path, test_env& env, sstables::schema_ptr schema_ptr, fs::path src_path, sstables::generation_type gen) {
-    auto sst = env.reusable_sst(schema_ptr, src_path.native(), gen).get0();
+    auto sst = env.reusable_sst(schema_ptr, src_path.native(), gen).get();
     auto dst_path = tmp_path / src_path.filename() / format("gen-{}", gen);
     recursive_touch_directory(dst_path.native()).get();
     for (auto p : sst->all_components()) {
         auto src_path = test(sst).filename(p.first);
         copy_file(src_path, dst_path / src_path.filename());
     }
-    return std::make_pair(env.reusable_sst(schema_ptr, dst_path.native(), gen).get0(), dst_path.native());
+    return std::make_pair(env.reusable_sst(schema_ptr, dst_path.native(), gen).get(), dst_path.native());
 }
 
 SEASTAR_THREAD_TEST_CASE(test_sstable_move) {
@@ -51,7 +51,7 @@ SEASTAR_THREAD_TEST_CASE(test_sstable_move) {
 
     // close  the sst and make we can load it from the new directory.
     sst->close_files().get();
-    sst = env.reusable_sst(uncompressed_schema(), cur_dir, gen).get0();
+    sst = env.reusable_sst(uncompressed_schema(), cur_dir, gen).get();
 }
 
 SEASTAR_THREAD_TEST_CASE(test_sstable_move_idempotent) {

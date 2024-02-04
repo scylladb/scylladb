@@ -109,9 +109,9 @@ int main(int argc, char **argv) {
                 try {
                     w.invoke_on_all(&worker::loop_with_error).get();
                 } catch (...) {
-                    auto ph = w.invoke_on(0, [] (auto& w) { return w.get_phase(); }).get0();
+                    auto ph = w.invoke_on(0, [] (auto& w) { return w.get_phase(); }).get();
                     for (size_t c = 1; c < smp::count; c++) {
-                        auto ph_2 = w.invoke_on(c, [] (auto& w) { return w.get_phase(); }).get0();
+                        auto ph_2 = w.invoke_on(c, [] (auto& w) { return w.get_phase(); }).get();
                         if (ph_2 != ph) {
                             fmt::print("aborted barrier passed shard through\n");
                             abort();

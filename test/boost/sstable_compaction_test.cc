@@ -976,7 +976,7 @@ SEASTAR_TEST_CASE(tombstone_purge_test) {
             for (auto&& sst : all) {
                 column_family_test(cf).add_sstable(sst).get();
             }
-            return compact_sstables(env, sstables::compaction_descriptor(to_compact), cf, sst_gen).get0().new_sstables;
+            return compact_sstables(env, sstables::compaction_descriptor(to_compact), cf, sst_gen).get().new_sstables;
         };
 
         auto next_timestamp = [] {
@@ -1266,7 +1266,7 @@ SEASTAR_TEST_CASE(test_sstable_max_local_deletion_time_2) {
                 BOOST_REQUIRE(now.time_since_epoch().count() == sst2->get_stats_metadata().max_local_deletion_time);
 
                 auto creator = sst_gen;
-                auto info = compact_sstables(env, sstables::compaction_descriptor({sst1, sst2}), cf, creator).get0();
+                auto info = compact_sstables(env, sstables::compaction_descriptor({sst1, sst2}), cf, creator).get();
                 BOOST_REQUIRE(info.new_sstables.size() == 1);
                 BOOST_REQUIRE(((now + gc_clock::duration(100)).time_since_epoch().count()) ==
                               info.new_sstables.front()->get_stats_metadata().max_local_deletion_time);
@@ -1351,7 +1351,7 @@ SEASTAR_TEST_CASE(compaction_with_fully_expired_table) {
         auto expired_sst = *expired.begin();
         BOOST_REQUIRE(expired_sst == sst);
 
-        auto ret = compact_sstables(env, sstables::compaction_descriptor(ssts), cf, sst_gen).get0();
+        auto ret = compact_sstables(env, sstables::compaction_descriptor(ssts), cf, sst_gen).get();
         BOOST_REQUIRE(ret.new_sstables.empty());
         BOOST_REQUIRE(ret.stats.end_size == 0);
     });
@@ -1557,7 +1557,7 @@ SEASTAR_TEST_CASE(time_window_strategy_size_tiered_behavior_correctness) {
         auto close_cf = deferred_stop(cf);
         auto major_compact_bucket = [&] (api::timestamp_type window_ts) {
             auto bound = time_window_compaction_strategy::get_window_lower_bound(window_size, window_ts);
-            auto ret = compact_sstables(env, sstables::compaction_descriptor(std::move(buckets[bound])), cf, sst_gen).get0();
+            auto ret = compact_sstables(env, sstables::compaction_descriptor(std::move(buckets[bound])), cf, sst_gen).get();
             BOOST_REQUIRE(ret.new_sstables.size() == 1);
             buckets[bound] = std::move(ret.new_sstables);
         };
@@ -1653,7 +1653,7 @@ SEASTAR_TEST_CASE(min_max_clustering_key_test_2) {
             check_min_max_column_names(sst2, {"9ck101"}, {"9ck298"});
 
             auto creator = sst_gen;
-            auto info = compact_sstables(env, sstables::compaction_descriptor({sst, sst2}), cf, creator).get0();
+            auto info = compact_sstables(env, sstables::compaction_descriptor({sst, sst2}), cf, creator).get();
             BOOST_REQUIRE(info.new_sstables.size() == 1);
             check_min_max_column_names(info.new_sstables.front(), {"0ck100"}, {"9ck298"});
         }
@@ -1734,7 +1734,7 @@ SEASTAR_TEST_CASE(sstable_expired_data_ratio) {
         BOOST_REQUIRE(std::fabs(run.estimate_droppable_tombstone_ratio(now, gc_state, stcs_schema) - expired) <= 0.1);
 
         auto creator = sst_gen;
-        auto info = compact_sstables(env, sstables::compaction_descriptor({ sst }), stcs_table, creator).get0();
+        auto info = compact_sstables(env, sstables::compaction_descriptor({ sst }), stcs_table, creator).get();
         BOOST_REQUIRE(info.new_sstables.size() == 1);
         BOOST_REQUIRE(info.new_sstables.front()->estimate_droppable_tombstone_ratio(now, gc_state, stcs_schema) == 0.0f);
         BOOST_REQUIRE_CLOSE(info.new_sstables.front()->data_size(), uncompacted_size*(1-expired), 5);
@@ -1809,7 +1809,7 @@ SEASTAR_TEST_CASE(compaction_correctness_with_partitioned_sstable_set) {
             auto cf = env.make_table_for_tests(s);
             auto close_cf = deferred_stop(cf);
             return compact_sstables(env, sstables::compaction_descriptor(std::move(all), 0, 0 /*std::numeric_limits<uint64_t>::max()*/),
-                cf, sst_gen).get0().new_sstables;
+                cf, sst_gen).get().new_sstables;
         };
 
         auto make_insert = [&] (const dht::decorated_key& key) {
@@ -1931,7 +1931,7 @@ SEASTAR_TEST_CASE(sstable_cleanup_correctness_test) {
             auto local_ranges = compaction::make_owned_ranges_ptr(db.get_keyspace_local_ranges(ks_name));
             auto descriptor = sstables::compaction_descriptor({sst}, compaction_descriptor::default_level,
                 compaction_descriptor::default_max_sstable_bytes, run_identifier, compaction_type_options::make_cleanup(), std::move(local_ranges));
-            auto ret = compact_sstables(env, std::move(descriptor), cf, sst_gen).get0();
+            auto ret = compact_sstables(env, std::move(descriptor), cf, sst_gen).get();
 
             BOOST_REQUIRE(ret.new_sstables.size() == 1);
             BOOST_REQUIRE(ret.new_sstables.front()->get_estimated_key_count() >= total_partitions);
@@ -1947,7 +1947,7 @@ SEASTAR_TEST_CASE(sstable_cleanup_correctness_test) {
             descriptor = sstables::compaction_descriptor({sst}, compaction_descriptor::default_level,
                                             compaction_descriptor::default_max_sstable_bytes, run_identifier,
                                             compaction_type_options::make_cleanup(), std::move(local_ranges));
-            ret = compact_sstables(env, std::move(descriptor), cf, sst_gen).get0();
+            ret = compact_sstables(env, std::move(descriptor), cf, sst_gen).get();
             BOOST_REQUIRE(ret.new_sstables.size() == 1);
             auto reader = ret.new_sstables[0]->as_mutation_source().make_reader_v2(s, env.make_reader_permit(), query::full_partition_range, s->full_slice());
             assert_that(std::move(reader))
@@ -2809,7 +2809,7 @@ SEASTAR_TEST_CASE(sstable_run_based_compaction_test) {
         cf->start();
         cf->set_compaction_strategy(sstables::compaction_strategy_type::size_tiered);
         auto compact = [&, s] (std::vector<shared_sstable> all, auto replacer) -> std::vector<shared_sstable> {
-            return compact_sstables(env, sstables::compaction_descriptor(std::move(all), 1, 0), cf, sst_gen, replacer).get0().new_sstables;
+            return compact_sstables(env, sstables::compaction_descriptor(std::move(all), 1, 0), cf, sst_gen, replacer).get().new_sstables;
         };
         auto make_insert = [&] (const dht::decorated_key& key) {
             mutation m(s, key);
@@ -2997,7 +2997,7 @@ SEASTAR_TEST_CASE(backlog_tracker_correctness_after_changing_compaction_strategy
                 cf.as_table_state().get_backlog_tracker().replace_sstables({}, {sst});
             }
 
-            auto ret = fut.get0();
+            auto ret = fut.get();
             BOOST_REQUIRE(ret.new_sstables.size() == 1);
         }
         // triggers code that iterates through registered compactions.
@@ -3072,7 +3072,7 @@ SEASTAR_TEST_CASE(purged_tombstone_consumer_sstable_test) {
             stop_iteration consume(range_tombstone_change&& rtc) { return _writer.consume(std::move(rtc)); }
 
             stop_iteration consume_end_of_partition() { return _writer.consume_end_of_partition(); }
-            void consume_end_of_stream() { _writer.consume_end_of_stream(); _sst->open_data().get0(); }
+            void consume_end_of_stream() { _writer.consume_end_of_stream(); _sst->open_data().get(); }
         };
 
         std::optional<gc_clock::time_point> gc_before;
@@ -3259,7 +3259,7 @@ SEASTAR_TEST_CASE(incremental_compaction_data_resurrection_test) {
         // since we use compacting_reader expired tombstones shouldn't be read from sstables
         // so we just check there are no live (resurrected for this test) rows in partition
         auto is_partition_dead = [&s, &cf, &env] (const dht::decorated_key& key) {
-            replica::column_family::const_mutation_partition_ptr mp = cf->find_partition(s, env.make_reader_permit(), key).get0();
+            replica::column_family::const_mutation_partition_ptr mp = cf->find_partition(s, env.make_reader_permit(), key).get();
             return mp && mp->live_row_count(*s, gc_clock::time_point::max()) == 0;
         };
 
@@ -3298,7 +3298,7 @@ SEASTAR_TEST_CASE(incremental_compaction_data_resurrection_test) {
         try {
             // The goal is to have one sstable generated for each mutation to trigger the issue.
             auto max_sstable_size = 0;
-            auto result = compact_sstables(env, sstables::compaction_descriptor(sstables, 0, max_sstable_size), cf, sst_gen, replacer).get0().new_sstables;
+            auto result = compact_sstables(env, sstables::compaction_descriptor(sstables, 0, max_sstable_size), cf, sst_gen, replacer).get().new_sstables;
             BOOST_REQUIRE_EQUAL(2, result.size());
         } catch (...) {
             // swallow exception
@@ -3358,11 +3358,11 @@ SEASTAR_TEST_CASE(twcs_major_compaction_test) {
 
         auto original_together = make_sstable_containing(sst_gen, {mut3, mut4});
 
-        auto ret = compact_sstables(env, sstables::compaction_descriptor({original_together}), cf, sst_gen, replacer_fn_no_op()).get0();
+        auto ret = compact_sstables(env, sstables::compaction_descriptor({original_together}), cf, sst_gen, replacer_fn_no_op()).get();
         BOOST_REQUIRE(ret.new_sstables.size() == 1);
 
         auto original_apart = make_sstable_containing(sst_gen, {mut1, mut2});
-        ret = compact_sstables(env, sstables::compaction_descriptor({original_apart}), cf, sst_gen, replacer_fn_no_op()).get0();
+        ret = compact_sstables(env, sstables::compaction_descriptor({original_apart}), cf, sst_gen, replacer_fn_no_op()).get();
         BOOST_REQUIRE(ret.new_sstables.size() == 2);
     });
 }
@@ -3489,7 +3489,7 @@ SEASTAR_TEST_CASE(test_bug_6472) {
         // Make sure everything we wanted expired is expired by now.
         forward_jump_clocks(std::chrono::hours(101));
 
-        auto ret = compact_sstables(env, sstables::compaction_descriptor(sstables_spanning_many_windows), cf, sst_gen, replacer_fn_no_op()).get0();
+        auto ret = compact_sstables(env, sstables::compaction_descriptor(sstables_spanning_many_windows), cf, sst_gen, replacer_fn_no_op()).get();
         BOOST_REQUIRE(ret.new_sstables.size() == 1);
     });
 }
@@ -3605,7 +3605,7 @@ SEASTAR_TEST_CASE(test_twcs_partition_estimate) {
             make_sstable(3),
         };
 
-        auto ret = compact_sstables(env, sstables::compaction_descriptor(sstables_spanning_many_windows), cf, sst_gen, replacer_fn_no_op()).get0();
+        auto ret = compact_sstables(env, sstables::compaction_descriptor(sstables_spanning_many_windows), cf, sst_gen, replacer_fn_no_op()).get();
         // The real test here is that we don't assert() in
         // sstables::prepare_summary() with the compact_sstables() call above,
         // this is only here as a sanity check.
@@ -3784,7 +3784,7 @@ SEASTAR_TEST_CASE(test_twcs_compaction_across_buckets) {
         }();
         sstables_spanning_many_windows.push_back(make_sstable_containing(sst_gen, {deletion_mut}));
 
-        auto ret = compact_sstables(env, sstables::compaction_descriptor(std::move(sstables_spanning_many_windows)), cf, sst_gen, replacer_fn_no_op(), can_purge_tombstones::no).get0();
+        auto ret = compact_sstables(env, sstables::compaction_descriptor(std::move(sstables_spanning_many_windows)), cf, sst_gen, replacer_fn_no_op(), can_purge_tombstones::no).get();
 
         BOOST_REQUIRE(ret.new_sstables.size() == 1);
         assert_that(sstable_reader(ret.new_sstables[0], s, env.make_reader_permit()))
@@ -3817,7 +3817,7 @@ SEASTAR_TEST_CASE(test_offstrategy_sstable_compaction) {
                 auto sst = make_sstable_containing(sst_gen, {mut});
                 cf->add_sstable_and_update_cache(std::move(sst), sstables::offstrategy::yes).get();
             }
-            BOOST_REQUIRE(cf->perform_offstrategy_compaction().get0());
+            BOOST_REQUIRE(cf->perform_offstrategy_compaction().get());
         }
     });
 }
@@ -4408,9 +4408,9 @@ SEASTAR_TEST_CASE(twcs_single_key_reader_through_compound_set_test) {
                                                                 tracing::trace_state_ptr(), ::streamed_mutation::forwarding::no,
                                                                 ::mutation_reader::forwarding::no);
         auto close_reader = deferred_close(reader);
-        auto mfopt = read_mutation_from_flat_mutation_reader(reader).get0();
+        auto mfopt = read_mutation_from_flat_mutation_reader(reader).get();
         BOOST_REQUIRE(mfopt);
-        mfopt = read_mutation_from_flat_mutation_reader(reader).get0();
+        mfopt = read_mutation_from_flat_mutation_reader(reader).get();
         BOOST_REQUIRE(!mfopt);
         BOOST_REQUIRE(cf.cf_stats().clustering_filter_count > 0);
     });
@@ -4747,7 +4747,7 @@ SEASTAR_TEST_CASE(test_large_partition_splitting_on_compaction) {
         // Set block size to 1, so promoted index is generated for every row written, allowing the split to happen as soon as possible.
         env.manager().set_promoted_index_block_size(1);
 
-        auto ret = compact_sstables(env, std::move(desc), cf, sst_gen, replacer_fn_no_op(), can_purge_tombstones::no).get0();
+        auto ret = compact_sstables(env, std::move(desc), cf, sst_gen, replacer_fn_no_op(), can_purge_tombstones::no).get();
 
         testlog.info("Large partition splitting on compaction created {} sstables", ret.new_sstables.size());
         BOOST_REQUIRE(ret.new_sstables.size() > 1);
@@ -4759,12 +4759,12 @@ SEASTAR_TEST_CASE(test_large_partition_splitting_on_compaction) {
         position_in_partition::tri_compare pos_tri_cmp(*s);
 
         for (auto& sst : ret.new_sstables) {
-            sst = env.reusable_sst(sst).get0();
+            sst = env.reusable_sst(sst).get();
             BOOST_REQUIRE(sst->may_have_partition_tombstones());
 
             auto reader = sstable_reader(sst, s, env.make_reader_permit());
 
-            mutation_opt m = read_mutation_from_flat_mutation_reader(reader).get0();
+            mutation_opt m = read_mutation_from_flat_mutation_reader(reader).get();
             BOOST_REQUIRE(m);
             BOOST_REQUIRE(m->decorated_key().equal(*s, pkey));
             // ASSERT that partition tobmstone is replicated to every fragment.
@@ -4799,7 +4799,7 @@ SEASTAR_TEST_CASE(test_large_partition_splitting_on_compaction) {
                 BOOST_REQUIRE(pos_tri_cmp(*previous_last_pos, current_first_pos) == 0);
             }
 
-            BOOST_REQUIRE(!(reader)().get0());
+            BOOST_REQUIRE(!(reader)().get());
 
             reader.close().get();
 
@@ -4905,7 +4905,7 @@ SEASTAR_TEST_CASE(tombstone_gc_disabled_test) {
             for (auto& sst : all) {
                 column_family_test(t).add_sstable(sst).get();
             }
-            return compact_sstables(env, sstables::compaction_descriptor(all), t, my_sst_gen).get0().new_sstables;
+            return compact_sstables(env, sstables::compaction_descriptor(all), t, my_sst_gen).get().new_sstables;
         };
 
         auto next_timestamp = [] {
@@ -4988,7 +4988,7 @@ SEASTAR_TEST_CASE(compaction_optimization_to_avoid_bloom_filter_checks) {
             }
             auto desc = sstables::compaction_descriptor(std::move(c));
             desc.enable_garbage_collection(t->get_sstable_set());
-            return compact_sstables(env, std::move(desc), t, sst_gen).get0();
+            return compact_sstables(env, std::move(desc), t, sst_gen).get();
         };
 
         auto make_insert = [&] (partition_key key) {
@@ -5296,7 +5296,7 @@ SEASTAR_TEST_CASE(produces_optimal_filter_by_estimating_correctly_partitions_per
             t->disable_auto_compaction().get();
             auto desc = sstables::compaction_descriptor(std::move(c));
             desc.max_sstable_bytes = max_size;
-            return compact_sstables(env, std::move(desc), t, sst_gen).get0();
+            return compact_sstables(env, std::move(desc), t, sst_gen).get();
         };
 
         auto make_insert = [&] (partition_key key) {
@@ -5323,7 +5323,7 @@ SEASTAR_TEST_CASE(produces_optimal_filter_by_estimating_correctly_partitions_per
         uint64_t partitions_per_sstable = keys / ret.new_sstables.size();
         auto filter = utils::i_filter::get_filter(partitions_per_sstable, s->bloom_filter_fp_chance(), utils::filter_format::m_format);
 
-        auto comp = ret.new_sstables.front()->get_open_info().get0();
+        auto comp = ret.new_sstables.front()->get_open_info().get();
 
         // Filter for SSTable generated cannot be lower than the one expected
         testlog.info("filter size: actual={}, expected>={}", comp.components->filter->memory_size(), filter->memory_size());
@@ -5383,7 +5383,7 @@ SEASTAR_TEST_CASE(splitting_compaction_test) {
         auto desc = sstables::compaction_descriptor({input});
         desc.options = compaction_type_options::make_split(classify_fn);
 
-        auto ret = compact_sstables(env, std::move(desc), t, sst_gen, replacer_fn_no_op()).get0();
+        auto ret = compact_sstables(env, std::move(desc), t, sst_gen, replacer_fn_no_op()).get();
 
         auto twcs_options = time_window_compaction_strategy_options(s->compaction_strategy_options());
         auto window_for = [&twcs_options] (api::timestamp_type timestamp) {

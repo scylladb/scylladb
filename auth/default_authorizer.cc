@@ -125,11 +125,11 @@ future<> default_authorizer::start() {
                 _migration_manager).then([this] {
             _finished = do_after_system_ready(_as, [this] {
                 return async([this] {
-                    _migration_manager.wait_for_schema_agreement(_qp.db().real_database(), db::timeout_clock::time_point::max(), &_as).get0();
+                    _migration_manager.wait_for_schema_agreement(_qp.db().real_database(), db::timeout_clock::time_point::max(), &_as).get();
 
                     if (legacy_metadata_exists()) {
-                        if (!any_granted().get0()) {
-                            migrate_legacy_metadata().get0();
+                        if (!any_granted().get()) {
+                            migrate_legacy_metadata().get();
                             return;
                         }
 
@@ -268,7 +268,7 @@ future<> default_authorizer::revoke_all(const resource& resource) const {
             {resource.name()},
             cql3::query_processor::cache_internal::no).then_wrapped([this, resource](future<::shared_ptr<cql3::untyped_result_set>> f) {
         try {
-            auto res = f.get0();
+            auto res = f.get();
             return parallel_for_each(
                     res->begin(),
                     res->end(),

@@ -1249,7 +1249,7 @@ SEASTAR_THREAD_TEST_CASE(test_foreign_reader_as_mutation_source) {
                 }
 
                 return make_foreign(mt);
-            }).get0();
+            }).get();
 
             auto reader_factory = [&env, remote_shard, remote_mt = std::move(remote_mt)] (schema_ptr s,
                     reader_permit permit,
@@ -1267,7 +1267,7 @@ SEASTAR_THREAD_TEST_CASE(test_foreign_reader_as_mutation_source) {
                             trace_state.get(),
                             fwd_sm,
                             fwd_mr)));
-                }).get0();
+                }).get();
                 return make_foreign_reader(s, std::move(permit), std::move(remote_reader), fwd_sm);
             };
 
@@ -1814,7 +1814,7 @@ SEASTAR_THREAD_TEST_CASE(test_stopping_reader_with_pending_read_ahead) {
                     std::vector<uint32_t>{0, 1})));
 
             return make_ready_future<std::tuple<control_type, reader_type>>(std::tuple(std::move(control), std::move(reader)));
-        }).get0();
+        }).get();
 
         auto& remote_control = std::get<0>(remote_control_remote_reader);
         auto& remote_reader = std::get<1>(remote_control_remote_reader);
@@ -1830,7 +1830,7 @@ SEASTAR_THREAD_TEST_CASE(test_stopping_reader_with_pending_read_ahead) {
 
         BOOST_REQUIRE(!smp::submit_to(shard_of_interest, [remote_control = remote_control.get()] {
             return remote_control->destroyed;
-        }).get0());
+        }).get());
 
         bool buffer_filled = false;
         auto destroyed_after_close = reader.close().then([&] {
@@ -1846,9 +1846,9 @@ SEASTAR_THREAD_TEST_CASE(test_stopping_reader_with_pending_read_ahead) {
         smp::submit_to(shard_of_interest, [remote_control = remote_control.get(), &buffer_filled] {
             buffer_filled = true;
             remote_control->buffer_filled.set_value();
-        }).get0();
+        }).get();
 
-        BOOST_REQUIRE(destroyed_after_close.get0());
+        BOOST_REQUIRE(destroyed_after_close.get());
 
         return make_ready_future<>();
     }).get();
@@ -2090,7 +2090,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_destroyed_with_pending
             return smp::submit_to(multishard_reader_for_read_ahead::blocked_shard,
                     [control = remote_controls.at(multishard_reader_for_read_ahead::blocked_shard).get()] {
                 return control->pending;
-            }).get0();
+            }).get();
         }));
 
         // Destroy reader.
@@ -2113,7 +2113,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_destroyed_with_pending
                     });
                 },
                 true,
-                std::logical_and<bool>()).get0();
+                std::logical_and<bool>()).get();
         }));
 
         return make_ready_future<>();
@@ -2146,7 +2146,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_fast_forwarded_with_pe
             return smp::submit_to(multishard_reader_for_read_ahead::blocked_shard,
                     [control = remote_controls.at(multishard_reader_for_read_ahead::blocked_shard).get()] {
                 return control->pending;
-            }).get0();
+            }).get();
         }));
 
         auto end_token = dht::token(pr->end()->value().token());
@@ -2170,7 +2170,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_fast_forwarded_with_pe
                     });
                 },
                 true,
-                std::logical_and<bool>()).get0();
+                std::logical_and<bool>()).get();
 
         BOOST_REQUIRE(all_shard_fast_forwarded);
 
@@ -2188,7 +2188,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_fast_forwarded_with_pe
                     });
                 },
                 true,
-                std::logical_and<bool>()).get0();
+                std::logical_and<bool>()).get();
         }));
 
         return make_ready_future<>();
@@ -2201,7 +2201,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_next_partition) {
                 " WITH REPLICATION = {'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1};").get();
         env.execute_cql("CREATE TABLE multishard_combining_reader_next_partition_ks.test (pk int, v int, PRIMARY KEY(pk));").get();
 
-        const auto insert_id = env.prepare("INSERT INTO multishard_combining_reader_next_partition_ks.test (\"pk\", \"v\") VALUES (?, ?);").get0();
+        const auto insert_id = env.prepare("INSERT INTO multishard_combining_reader_next_partition_ks.test (\"pk\", \"v\") VALUES (?, ?);").get();
 
         const auto partition_count = 1000;
 
@@ -2286,7 +2286,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_streaming_reader) {
         env.execute_cql("CREATE KEYSPACE multishard_streaming_reader_ks WITH REPLICATION = {'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1};").get();
         env.execute_cql("CREATE TABLE multishard_streaming_reader_ks.test (pk int, v int, PRIMARY KEY(pk));").get();
 
-        const auto insert_id = env.prepare("INSERT INTO multishard_streaming_reader_ks.test (\"pk\", \"v\") VALUES (?, ?);").get0();
+        const auto insert_id = env.prepare("INSERT INTO multishard_streaming_reader_ks.test (\"pk\", \"v\") VALUES (?, ?);").get();
 
         const auto partition_count = 10000;
 
@@ -2335,12 +2335,12 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_streaming_reader) {
         auto close_reference_reader = deferred_close(reference_reader);
 
         std::vector<mutation> reference_muts;
-        while (auto mut_opt = read_mutation_from_flat_mutation_reader(reference_reader).get0()) {
+        while (auto mut_opt = read_mutation_from_flat_mutation_reader(reference_reader).get()) {
             reference_muts.push_back(std::move(*mut_opt));
         }
 
         std::vector<mutation> tested_muts;
-        while (auto mut_opt = read_mutation_from_flat_mutation_reader(tested_reader).get0()) {
+        while (auto mut_opt = read_mutation_from_flat_mutation_reader(tested_reader).get()) {
             tested_muts.push_back(std::move(*mut_opt));
         }
 
@@ -2367,7 +2367,7 @@ SEASTAR_THREAD_TEST_CASE(test_queue_reader) {
         auto read_all = [] (flat_mutation_reader_v2& reader, std::vector<mutation>& muts) {
             return async([&reader, &muts] {
                 auto close_reader = deferred_close(reader);
-                while (auto mut_opt = read_mutation_from_flat_mutation_reader(reader).get0()) {
+                while (auto mut_opt = read_mutation_from_flat_mutation_reader(reader).get()) {
                     muts.emplace_back(std::move(*mut_opt));
                 }
             });
@@ -2377,7 +2377,7 @@ SEASTAR_THREAD_TEST_CASE(test_queue_reader) {
             return async([&] {
                 auto reader = make_flat_mutation_reader_from_mutations_v2(muts.front().schema(), semaphore.make_permit(), muts);
                 auto close_reader = deferred_close(reader);
-                while (auto mf_opt = reader().get0()) {
+                while (auto mf_opt = reader().get()) {
                     handle.push(std::move(*mf_opt)).get();
                 }
                 handle.push_end_of_stream();
@@ -2409,7 +2409,7 @@ SEASTAR_THREAD_TEST_CASE(test_queue_reader) {
         auto expected_reader = make_flat_mutation_reader_from_mutations_v2(expected_muts.front().schema(), semaphore.make_permit(), expected_muts);
         auto close_expected_reader = deferred_close(expected_reader);
 
-        handle.push(std::move(*expected_reader().get0())).get();
+        handle.push(std::move(*expected_reader().get())).get();
 
         BOOST_REQUIRE(!fill_buffer_fut.available());
 
@@ -2433,7 +2433,7 @@ SEASTAR_THREAD_TEST_CASE(test_queue_reader) {
 
         auto push_fut = make_ready_future<>();
         while (push_fut.available()) {
-            push_fut = handle.push(std::move(*expected_reader().get0()));
+            push_fut = handle.push(std::move(*expected_reader().get()));
         }
 
         BOOST_REQUIRE(!push_fut.available());
@@ -2473,7 +2473,7 @@ SEASTAR_THREAD_TEST_CASE(test_queue_reader) {
         auto expected_reader = make_flat_mutation_reader_from_mutations_v2(expected_muts.front().schema(), semaphore.make_permit(), expected_muts);
         auto close_expected_reader = deferred_close(expected_reader);
 
-        handle.push(std::move(*expected_reader().get0())).get();
+        handle.push(std::move(*expected_reader().get())).get();
 
         BOOST_REQUIRE(!fill_buffer_fut.available());
 
@@ -2501,7 +2501,7 @@ SEASTAR_THREAD_TEST_CASE(test_queue_reader) {
         auto expected_reader = make_flat_mutation_reader_from_mutations_v2(expected_muts.front().schema(), semaphore.make_permit(), expected_muts);
         auto close_expected_reader = deferred_close(expected_reader);
 
-        handle.push(std::move(*expected_reader().get0())).get();
+        handle.push(std::move(*expected_reader().get())).get();
 
         BOOST_REQUIRE(!fill_buffer_fut.available());
 
@@ -2852,7 +2852,7 @@ flat_mutation_reader_v2 create_evictable_reader_and_evict_after_first_buffer(
 
     rd.set_max_buffer_size(max_buffer_size);
 
-    rd.fill_buffer().get0();
+    rd.fill_buffer().get();
 
     const auto eq_cmp = position_in_partition::equal_compare(*schema);
     BOOST_REQUIRE(rd.is_buffer_full());
@@ -2913,7 +2913,7 @@ void check_evictable_reader_validation_is_triggered(
     const bool fail = !error_prefix.empty();
 
     try {
-        rd.fill_buffer().get0();
+        rd.fill_buffer().get();
     } catch (std::runtime_error& e) {
         if (fail) {
             if (error_prefix == std::string_view(e.what(), error_prefix.size())) {
@@ -4210,7 +4210,7 @@ SEASTAR_THREAD_TEST_CASE(test_clustering_combining_of_empty_readers) {
             std::make_unique<simple_position_reader_queue>(*s, std::move(rs)));
     auto close_r = deferred_close(r);
 
-    auto mf = r().get0();
+    auto mf = r().get();
     if (mf) {
         BOOST_FAIL(format("reader combined of empty readers returned fragment {}", mutation_fragment_v2::printer(*s, *mf)));
     }

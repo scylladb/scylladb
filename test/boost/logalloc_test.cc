@@ -728,7 +728,7 @@ SEASTAR_THREAD_TEST_CASE(background_reclaim) {
 
     // Set up the background reclaimer
 
-    auto background_reclaim_scheduling_group = create_scheduling_group("background_reclaim", 100).get0();
+    auto background_reclaim_scheduling_group = create_scheduling_group("background_reclaim", 100).get();
     auto kill_sched_group = defer([&] () noexcept {
         destroy_scheduling_group(background_reclaim_scheduling_group).get();
     });

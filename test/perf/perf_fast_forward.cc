@@ -756,7 +756,7 @@ public:
 
 static
 uint64_t consume_all(flat_mutation_reader_v2& rd) {
-    return rd.consume(counting_consumer()).get0();
+    return rd.consume(counting_consumer()).get();
 }
 
 static
@@ -771,7 +771,7 @@ uint64_t consume_all_with_next_partition(flat_mutation_reader_v2& rd) {
 }
 
 static void assert_partition_start(flat_mutation_reader_v2& rd) {
-    auto mfopt = rd().get0();
+    auto mfopt = rd().get();
     assert(mfopt);
     assert(mfopt->is_partition_start());
 }
@@ -1165,7 +1165,7 @@ static
 table_config read_config(cql_test_env& env, const sstring& name) {
     auto msg = std::invoke([&] {
         try {
-            return env.execute_cql(format("select n_rows, value_size from ks.config where name = '{}'", name)).get0();
+            return env.execute_cql(format("select n_rows, value_size from ks.config where name = '{}'", name)).get();
         } catch (const exceptions::invalid_request_exception& e) {
             throw std::runtime_error(fmt::format("Could not read config (exception: `{}`). Did you run --populate ?", e.what()));
         }

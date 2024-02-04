@@ -92,7 +92,7 @@ future<prepare_response> paxos_state::prepare(storage_proxy& sp, db::system_keys
                         }
                         std::optional<std::variant<foreign_ptr<lw_shared_ptr<query::result>>, query::result_digest>> data_or_digest;
                         if (!f2.failed()) {
-                            auto&& [result, hit_rate] = f2.get0();
+                            auto&& [result, hit_rate] = f2.get();
                             if (only_digest) {
                                 data_or_digest = *result->digest();
                             } else {

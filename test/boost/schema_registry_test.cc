@@ -65,7 +65,7 @@ SEASTAR_TEST_CASE(test_async_loading) {
 
         auto s1_loaded = local_schema_registry().get_or_load(s1->version(), [s1] (table_schema_version) {
             return make_ready_future<frozen_schema>(frozen_schema(s1));
-        }).get0();
+        }).get();
 
         BOOST_REQUIRE(s1_loaded);
         BOOST_REQUIRE(s1_loaded->version() == s1->version());
@@ -74,7 +74,7 @@ SEASTAR_TEST_CASE(test_async_loading) {
 
         auto s2_loaded = local_schema_registry().get_or_load(s2->version(), [s2] (table_schema_version) {
             return yield().then([s2] { return frozen_schema(s2); });
-        }).get0();
+        }).get();
 
         BOOST_REQUIRE(s2_loaded);
         BOOST_REQUIRE(s2_loaded->version() == s2->version());
@@ -223,7 +223,7 @@ SEASTAR_THREAD_TEST_CASE(test_table_is_attached) {
         s3_entered.get();
         local_schema_registry().learn(s3);
         s3_thr.unblock();
-        auto s3_s = learned_s3.get0();
+        auto s3_s = learned_s3.get();
         BOOST_REQUIRE(s3_s->maybe_table() == s0->maybe_table());
         BOOST_REQUIRE(s3->maybe_table() == s0->maybe_table());
 
@@ -240,7 +240,7 @@ SEASTAR_THREAD_TEST_CASE(test_table_is_attached) {
         s4_entered.get();
         s4 = local_schema_registry().get_or_load(s4->version(), [&, fs = frozen_schema(s4)] (table_schema_version) { return fs; });
         s4_thr.unblock();
-        auto s4_s = learned_s4.get0();
+        auto s4_s = learned_s4.get();
         BOOST_REQUIRE(s4_s->maybe_table() == s0->maybe_table());
         BOOST_REQUIRE(s4->maybe_table() == s0->maybe_table());
 

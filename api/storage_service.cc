@@ -433,7 +433,7 @@ void set_repair(http_context& ctx, routes& r, sharded<repair_service>& repair) {
                 .then_wrapped([] (future<repair_status>&& fut) {
             ss::ns_repair_async_status::return_type_wrapper res;
             try {
-                res = fut.get0();
+                res = fut.get();
             } catch(std::runtime_error& e) {
                 throw httpd::bad_param_exception(e.what());
             }
@@ -466,7 +466,7 @@ void set_repair(http_context& ctx, routes& r, sharded<repair_service>& repair) {
                 .then_wrapped([] (future<repair_status>&& fut) {
             ss::ns_repair_async_status::return_type_wrapper res;
             try {
-                res = fut.get0();
+                res = fut.get();
             } catch (std::exception& e) {
                 return make_exception_future<json::json_return_type>(httpd::bad_param_exception(e.what()));
             }
