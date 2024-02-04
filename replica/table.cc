@@ -688,11 +688,8 @@ public:
     future<> maybe_split_compaction_group_of(size_t idx) override;
 
     lw_shared_ptr<sstables::sstable_set> make_sstable_set() const override {
-        // TODO: switch to a specialized set for groups which assumes disjointness across compound sets and incrementally read from them.
         // FIXME: avoid recreation of compound_set for groups which had no change. usually, only one group will be changed at a time.
-        auto sstable_sets = boost::copy_range<std::vector<lw_shared_ptr<sstables::sstable_set>>>(compaction_groups()
-            | boost::adaptors::transformed(std::mem_fn(&compaction_group::make_compound_sstable_set)));
-        return make_lw_shared(sstables::make_compound_sstable_set(schema(), std::move(sstable_sets)));
+        return make_tablet_sstable_set(schema(), *this, *_tablet_map);
     }
 };
 
