@@ -114,6 +114,7 @@ class system_keyspace : public seastar::peering_sharded_service<system_keyspace>
     replica::database& _db;
     std::unique_ptr<local_cache> _cache;
     virtual_tables_registry _virtual_tables_registry;
+    bool _peers_table_read_fixup_done = false;
 
     static schema_ptr raft_snapshot_config();
     static schema_ptr local();
@@ -128,6 +129,15 @@ class system_keyspace : public seastar::peering_sharded_service<system_keyspace>
     static schema_ptr large_cells();
     static schema_ptr scylla_local();
     future<> force_blocking_flush(sstring cfname);
+    // This function is called when the system.peers table is read,
+    // and it fixes some types of inconsistencies that can occur
+    // due to node crashes:
+    //  * missing host_id. This is possible in the old versions of the code. Such records
+    //  are removed and the warning is written to the log.
+    //  * duplicate IPs for a given host_id. This is possible when some node changes its IP
+    //  and this node crashes after adding a new IP but before removing the old one. The
+    //  record with older timestamp is removed, the warning is written to the log.
+    future<> peers_table_read_fixup();
 public:
     static schema_ptr size_estimates();
 public:

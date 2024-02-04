@@ -1464,7 +1464,47 @@ struct local_cache {
     system_keyspace::bootstrap_state _state;
 };
 
+future<> system_keyspace::peers_table_read_fixup() {
+    assert(this_shard_id() == 0);
+    if (_peers_table_read_fixup_done) {
+        co_return;
+    }
+    _peers_table_read_fixup_done = true;
+
+    const auto cql = format("SELECT peer, host_id, WRITETIME(host_id) as ts from system.{}", PEERS);
+    std::unordered_map<utils::UUID, std::pair<net::inet_address, int64_t>> map{};
+    const auto cql_result = co_await execute_cql(cql);
+    for (const auto& row : *cql_result) {
+        const auto peer = row.get_as<net::inet_address>("peer");
+        if (!row.has("host_id")) {
+            slogger.error("Peer {} has no host_id in system.{}, the record is broken, removing it",
+                peer, system_keyspace::PEERS);
+            co_await remove_endpoint(gms::inet_address{peer});
+            continue;
+        }
+        const auto host_id = row.get_as<utils::UUID>("host_id");
+        const auto ts = row.get_as<int64_t>("ts");
+        const auto it = map.find(host_id);
+        if (it == map.end()) {
+            map.insert({host_id, {peer, ts}});
+            continue;
+        }
+        if (it->second.second >= ts) {
+            slogger.error("Peer {} with host_id {} has newer IP {} in system.{}, the record is stale, removing it",
+                peer, host_id, it->second.first, system_keyspace::PEERS);
+            co_await remove_endpoint(gms::inet_address{peer});
+        } else {
+            slogger.error("Peer {} with host_id {} has newer IP {} in system.{}, the record is stale, removing it",
+                it->second.first, host_id, peer, system_keyspace::PEERS);
+            co_await remove_endpoint(gms::inet_address{it->second.first});
+            it->second = {peer, ts};
+        }
+    }
+}
+
 future<std::unordered_map<gms::inet_address, locator::endpoint_dc_rack>> system_keyspace::load_dc_rack_info() {
+    co_await peers_table_read_fixup();
+
     const auto msg = co_await execute_cql(format("SELECT peer, data_center, rack from system.{}", PEERS));
 
     std::unordered_map<gms::inet_address, locator::endpoint_dc_rack> ret;
@@ -1733,56 +1773,42 @@ static std::vector<cdc::generation_id_v2> decode_cdc_generations_ids(const set_t
     return gen_ids_list;
 }
 
-static locator::host_id get_host_id(const gms::inet_address& peer, const cql3::untyped_result_set::row& row) {
-    locator::host_id host_id;
-    if (row.has("host_id")) {
-        host_id = locator::host_id(row.get_as<utils::UUID>("host_id"));
-    }
-    if (!host_id) {
-        slogger.warn("Peer {} has no host_id in system.{}", peer, system_keyspace::PEERS);
-    }
-    return host_id;
-}
-
 future<std::unordered_map<gms::inet_address, std::unordered_set<dht::token>>> system_keyspace::load_tokens() {
-    const sstring req = format("SELECT peer, host_id, tokens FROM system.{}", PEERS);
+    co_await peers_table_read_fixup();
+
+    const sstring req = format("SELECT peer, tokens FROM system.{}", PEERS);
     std::unordered_map<gms::inet_address, std::unordered_set<dht::token>> ret;
     const auto cql_result = co_await execute_cql(req);
     for (const auto& row : *cql_result) {
-        const auto peer = gms::inet_address(row.get_as<net::inet_address>("peer"));
-        if (!get_host_id(peer, row)) {
-            continue;
-        }
         if (row.has("tokens")) {
-            ret.emplace(peer, decode_tokens(deserialize_set_column(*peers(), row, "tokens")));
+            ret.emplace(gms::inet_address(row.get_as<net::inet_address>("peer")),
+                decode_tokens(deserialize_set_column(*peers(), row, "tokens")));
         }
     }
     co_return ret;
 }
 
 future<std::unordered_map<gms::inet_address, locator::host_id>> system_keyspace::load_host_ids() {
+    co_await peers_table_read_fixup();
+
     const sstring req = format("SELECT peer, host_id FROM system.{}", PEERS);
     std::unordered_map<gms::inet_address, locator::host_id> ret;
     const auto cql_result = co_await execute_cql(req);
     for (const auto& row : *cql_result) {
-        const auto peer = gms::inet_address(row.get_as<net::inet_address>("peer"));
-        if (auto host_id = get_host_id(peer, row)) {
-            ret.emplace(peer, host_id);
-        }
+        ret.emplace(gms::inet_address(row.get_as<net::inet_address>("peer")),
+            locator::host_id(row.get_as<utils::UUID>("host_id")));
     }
     co_return ret;
 }
 
 future<std::vector<gms::inet_address>> system_keyspace::load_peers() {
-    const auto res = co_await execute_cql(format("SELECT peer, host_id, tokens FROM system.{}", PEERS));
+    co_await peers_table_read_fixup();
+
+    const auto res = co_await execute_cql(format("SELECT peer, tokens FROM system.{}", PEERS));
     assert(res);
 
     std::vector<gms::inet_address> ret;
     for (const auto& row: *res) {
-        const auto peer = gms::inet_address(row.get_as<net::inet_address>("peer"));
-        if (!get_host_id(peer, row)) {
-            continue;
-        }
         if (!row.has("tokens")) {
             // Ignore rows that don't have tokens. Such rows may
             // be introduced by code that persists parts of peer
@@ -1790,12 +1816,14 @@ future<std::vector<gms::inet_address>> system_keyspace::load_peers() {
             // race with deleting a peer (during node removal).
             continue;
         }
-        ret.emplace_back(peer);
+        ret.emplace_back(gms::inet_address(row.get_as<net::inet_address>("peer")));
     }
     co_return ret;
 }
 
 future<std::unordered_map<gms::inet_address, sstring>> system_keyspace::load_peer_features() {
+    co_await peers_table_read_fixup();
+
     const sstring req = format("SELECT peer, supported_features FROM system.{}", PEERS);
     std::unordered_map<gms::inet_address, sstring> ret;
     const auto cql_result = co_await execute_cql(req);
@@ -1809,6 +1837,8 @@ future<std::unordered_map<gms::inet_address, sstring>> system_keyspace::load_pee
 }
 
 future<std::unordered_map<gms::inet_address, gms::inet_address>> system_keyspace::get_preferred_ips() {
+    co_await peers_table_read_fixup();
+
     const sstring req = format("SELECT peer, preferred_ip FROM system.{}", PEERS);
     std::unordered_map<gms::inet_address, gms::inet_address> res;
 
