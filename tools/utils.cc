@@ -8,6 +8,7 @@
 
 #include <seastar/core/thread.hh>
 #include <boost/algorithm/string/join.hpp>
+#include <boost/make_shared.hpp>
 #include <boost/range/adaptor/transformed.hpp>
 
 #include "db/config.hh"
@@ -15,6 +16,8 @@
 #include "tools/utils.hh"
 #include "utils/logalloc.hh"
 #include "init.hh"
+
+namespace bpo = boost::program_options;
 
 namespace tools::utils {
 
@@ -26,23 +29,73 @@ namespace {
 
 // Extract the operation from the argv.
 //
-// The operation is expected to be at argv[1].If found, it is shifted out to the
-// end (effectively removed) and the corresponding operation* is returned.
-// If not found or unrecognized an error is logged and exit() is called.
-const operation& get_selected_operation(int& ac, char**& av, const std::vector<operation>& operations) {
-    if (ac < 2) {
+// Do an initial parsing of command-line options to identify the operation
+// command-line argument.
+// If found, it is shifted out to the end (effectively removed) and the
+// corresponding operation* is returned.
+// If not found:
+// * If any of the tool_app_template::help_arguments was used, nullptr is returned, to allow the tool to produce a proper help.
+// * If no help was invoked, the application exits with return-code 1.
+// If the operation is not recognized, the application exits with return-code 100.
+// If parsing the command-line arguments fails, the application exits with return-code 2.
+const operation* get_selected_operation(int& ac, char**& av, const std::vector<operation>& operations, const std::vector<operation_option>* global_options) {
+    bpo::positional_options_description pos_opts;
+    bpo::options_description opts("scylla-tool options");
+    for (const auto& [option, help] : tool_app_template::help_arguments) {
+        opts.add_options()(option, help);
+    }
+    opts.add(boost::make_shared<bpo::option_description>("operation", bpo::value<sstring>(), "Operation"));
+    pos_opts.add("operation", 1);
+    opts.add(boost::make_shared<bpo::option_description>("operation_options", bpo::value<std::vector<sstring>>(), "Operation specific options"));
+    pos_opts.add("operation_options", -1);
+
+    if (global_options) {
+        for (const auto& go : *global_options) {
+            go.add_option(opts);
+        }
+    }
+
+    bpo::variables_map vm;
+    try {
+        bpo::store(bpo::command_line_parser(ac, av)
+                    .options(opts)
+                    .positional(pos_opts)
+                    .allow_unregistered()
+                    .run()
+            , vm);
+    } catch (bpo::error& e) {
+        fmt::print("error: {}\n\nTry --help.\n", e.what());
+        exit(2);
+    }
+
+    if (!vm.count("operation")) {
+        // We allow no operation only when help was requested.
+        for (const auto& [op, _] : tool_app_template::help_arguments) {
+            std::string option(op);
+            if (auto comma_pos = option.find(","); comma_pos != sstring::npos) {
+                option = option.substr(0, comma_pos);
+            }
+            if (vm.count(option)) {
+                return nullptr;
+            }
+        }
         fmt::print(std::cerr, "error: missing mandatory operation argument\n");
         exit(1);
     }
 
-    const char* op_name = av[1];
+    sstring op_name = vm["operation"].as<sstring>();
     if (auto found = std::ranges::find_if(operations, [op_name] (auto& op) {
             return op.matches(op_name);
         });
         found != operations.end()) {
-        std::shift_left(av + 1, av + ac, 1);
-        --ac;
-        return *found;
+        for (int i = 0; i < ac; ++i) {
+            if (op_name == av[i]) {
+                std::shift_left(av + i, av + ac, 1);
+                --ac;
+                break;
+            }
+        }
+        return &*found;
     }
 
     std::vector<std::string_view> all_operation_names;
@@ -109,10 +162,7 @@ int tool_app_template::run_async(int argc, char** argv, noncopyable_function<int
         return 2;
     }
 
-    const operation* found_op = nullptr;
-    if (std::strncmp(argv[1], "--help", 6) != 0 && std::strcmp(argv[1], "-h") != 0) {
-        found_op = &tools::utils::get_selected_operation(argc, argv, _cfg.operations);
-    }
+    const operation* found_op = tools::utils::get_selected_operation(argc, argv, _cfg.operations, _cfg.global_options);
 
     app_template::seastar_options app_cfg;
     app_cfg.name = format("scylla-{}", _cfg.name);
