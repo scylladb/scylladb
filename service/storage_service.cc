@@ -734,23 +734,23 @@ class storage_service::raft_ip_address_updater: public gms::i_endpoint_state_cha
     storage_service& _ss;
 
     future<>
-    on_endpoint_change(gms::inet_address endpoint, gms::endpoint_state_ptr ep_state) {
+    on_endpoint_change(gms::inet_address endpoint, gms::endpoint_state_ptr ep_state, const char* ev) {
         auto app_state_ptr = ep_state->get_application_state_ptr(gms::application_state::HOST_ID);
         if (!app_state_ptr) {
             co_return;
         }
         raft::server_id id(utils::UUID(app_state_ptr->value()));
-        rslog.debug("raft_ip_address_updater::on_endpoint_change() {} {}", endpoint, id);
+        rslog.debug("raft_ip_address_updater::on_endpoint_change({}) {} {}", ev, endpoint, id);
 
         const auto prev_ip = _address_map.find(id);
         _address_map.add_or_update_entry(id, endpoint, ep_state->get_heart_beat_state().get_generation());
 
         // If the host_id <-> IP mapping has changed, we need to update system tables, token_metadat and erm.
         if (_ss.raft_topology_change_enabled() && prev_ip != endpoint && _address_map.find(id) == endpoint) {
-            rslog.debug("raft_ip_address_updater::on_endpoint_change(), host_id {}, "
+            rslog.debug("raft_ip_address_updater::on_endpoint_change({}), host_id {}, "
                         "ip changed from [{}] to [{}], "
                         "waiting for group 0 read/apply mutex before reloading Raft topology state...",
-                id, prev_ip, endpoint);
+                ev, id, prev_ip, endpoint);
 
             // We're in a gossiper event handler, so gossiper is currently holding a lock
             // for the endpoint parameter of on_endpoint_change.
@@ -781,7 +781,7 @@ public:
 
     virtual future<>
     on_join(gms::inet_address endpoint, gms::endpoint_state_ptr ep_state, gms::permit_id) override {
-        return on_endpoint_change(endpoint, ep_state);
+        return on_endpoint_change(endpoint, ep_state, "on_join");
     }
 
     virtual future<>
@@ -792,7 +792,7 @@ public:
 
     virtual future<>
     on_alive(gms::inet_address endpoint, gms::endpoint_state_ptr ep_state, gms::permit_id) override {
-        return on_endpoint_change(endpoint, ep_state);
+        return on_endpoint_change(endpoint, ep_state, "on_alive");
     }
 
     virtual future<>
@@ -810,7 +810,7 @@ public:
 
     virtual future<>
     on_restart(gms::inet_address endpoint, gms::endpoint_state_ptr ep_state, gms::permit_id) override {
-        return on_endpoint_change(endpoint, ep_state);
+        return on_endpoint_change(endpoint, ep_state, "on_restart");
     }
 };
 
