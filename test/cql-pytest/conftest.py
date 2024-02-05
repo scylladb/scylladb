@@ -88,16 +88,46 @@ def cql_test_connection(cql, request):
 def this_dc(cql):
     yield cql.execute("SELECT data_center FROM system.local").one()[0]
 
+@pytest.fixture(scope="session")
+def test_keyspace_tablets(cql, this_dc, has_tablets):
+    if not is_scylla(cql) or not has_tablets:
+        pytest.skip("tablet-specific test skipped")
+        return
+
+    name = unique_name()
+    cql.execute("CREATE KEYSPACE " + name + " WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 1 } AND TABLETS = {'enabled': true}")
+    yield name
+    cql.execute("DROP KEYSPACE " + name)
+
+@pytest.fixture(scope="session")
+def test_keyspace_vnodes(cql, this_dc, has_tablets):
+    name = unique_name()
+    if has_tablets:
+        cql.execute("CREATE KEYSPACE " + name + " WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 1 } AND TABLETS = {'enabled': false}")
+    else:
+        # If tablets are not available or not enabled, we just create a regular keyspace
+        cql.execute("CREATE KEYSPACE " + name + " WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 1 }")
+    yield name
+    cql.execute("DROP KEYSPACE " + name)
+
 # "test_keyspace" fixture: Creates and returns a temporary keyspace to be
 # used in tests that need a keyspace. The keyspace is created with RF=1,
 # and automatically deleted at the end. We use scope="session" so that all
 # tests will reuse the same keyspace.
 @pytest.fixture(scope="session")
-def test_keyspace(cql, this_dc):
-    name = unique_name()
-    cql.execute("CREATE KEYSPACE " + name + " WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 1 }")
-    yield name
-    cql.execute("DROP KEYSPACE " + name)
+def test_keyspace(request, test_keyspace_vnodes, test_keyspace_tablets, cql, this_dc):
+    if hasattr(request, "param"):
+        if request.param == "vnodes":
+            yield test_keyspace_vnodes
+        elif request.param == "tablets":
+            yield test_keyspace_tablets
+        else:
+            pytest.fail(f"test_keyspace(): invalid request parameter: {request.param}")
+    else:
+        name = unique_name()
+        cql.execute("CREATE KEYSPACE " + name + " WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 1 }")
+        yield name
+        cql.execute("DROP KEYSPACE " + name)
 
 # The "scylla_only" fixture can be used by tests for Scylla-only features,
 # which do not exist on Apache Cassandra. A test using this fixture will be
@@ -225,11 +255,6 @@ def temp_workdir():
 def has_tablets(cql):
     with new_test_keyspace(cql, " WITH REPLICATION = {'class' : 'NetworkTopologyStrategy', 'replication_factor': 1}") as keyspace:
         return keyspace_has_tablets(cql, keyspace)
-
-@pytest.fixture(scope="function")
-def xfail_tablets(request, has_tablets):
-    if has_tablets:
-        request.node.add_marker(pytest.mark.xfail(reason='Test expected to fail with tablets experimental feature on'))
 
 @pytest.fixture(scope="function")
 def skip_with_tablets(has_tablets):

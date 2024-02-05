@@ -11,7 +11,7 @@ import pytest
 import random
 from pytest import fixture
 from contextlib import contextmanager
-from util import new_type, unique_name, new_test_table, new_test_keyspace, new_function, new_aggregate, new_cql
+from util import new_type, unique_name, new_test_table, new_test_keyspace, new_function, new_aggregate, new_cql, keyspace_has_tablets
 from cassandra.protocol import InvalidRequest
 import re
 
@@ -389,10 +389,17 @@ def test_desc_schema(cql, test_keyspace, random_seed):
 
 # Test that `DESC CLUSTER` contains token ranges to endpoints map
 # The test is `scylla_only` because there is no `system.token_ring` table in Cassandra
-# xfail_tablets due to https://github.com/scylladb/scylladb/issues/16483
-def test_desc_cluster(scylla_only, cql, test_keyspace, xfail_tablets):
+@pytest.mark.parametrize("test_keyspace", ["tablets", "vnodes"], indirect=True)
+def test_desc_cluster(scylla_only, cql, test_keyspace):
     cql.execute(f"USE {test_keyspace}")
     desc = cql.execute("DESC CLUSTER").one()
+
+    if keyspace_has_tablets(cql, test_keyspace):
+        # FIXME: there is no endpoint content for tablet keyspaces yet
+        # See https://github.com/scylladb/scylladb/issues/16789
+        # When run with tablets, this test currently only validates that `DESC CLUSTER` doesn't fail with tablets.
+        return
+
     desc_endpoints = []
     for (end_token, endpoints) in desc.range_ownership.items():
         for endpoint in endpoints:
@@ -535,8 +542,10 @@ def test_desc_udf_uda(cql, test_keyspace, scylla_only):
 # Example: caching = {'keys': 'ALL', 'rows_per_partition': 'ALL'}
 # Reproduces #14895
 # The test is marked scylla_only because it uses a Scylla-only property "cdc".
-# xfail_tablets due to https://github.com/scylladb/scylladb/issues/16317
-def test_whitespaces_in_table_options(cql, test_keyspace, scylla_only, xfail_tablets):
+@pytest.mark.parametrize("test_keyspace",
+                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #16317")]), "vnodes"],
+                         indirect=True)
+def test_whitespaces_in_table_options(cql, test_keyspace, scylla_only):
     regex = "\\{[^}]*[:,][^\\s][^}]*\\}" # looks for any colon or comma without space after it inside a { }
     
     with new_test_table(cql, test_keyspace, "a int primary key", "WITH cdc = {'enabled': true}") as tbl:
