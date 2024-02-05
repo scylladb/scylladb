@@ -242,15 +242,23 @@ future<> stream_transfer_task::execute() {
         // errors and make the stream successful. This allows user to
         // drop tables during node operations like decommission or
         // bootstrap.
-        if (!session->manager().db().column_family_exists(cf_id)) {
-            sslog.warn("[Stream #{}] Ignore the table with table_id {} which is dropped during streaming: {}", plan_id, cf_id, ep);
-            if (!_mutation_done_sent) {
+        //
+        // The db table metadata on different shards are not necessarily in
+        // sync, but if the table is dropped on any one of them, the exception
+        // is thrown. So we need to check on all shards.
+        return session->manager().db().container().map_reduce0(
+            [cf_id] (const replica::database& db) { return db.column_family_exists(cf_id); },
+            true, std::logical_and<bool>()).then([this, plan_id, cf_id, id, ep] (bool cf_exists) {
+                if (cf_exists) {
+                    sslog.warn("[Stream #{}] stream_transfer_task: Fail to send to {}: {}", plan_id, id, ep);
+                    std::rethrow_exception(ep);
+                }
+                sslog.warn("[Stream #{}] Ignore the table with table_id {} which is dropped during streaming: {}", plan_id, cf_id, ep);
+                if (_mutation_done_sent) {
+                    return make_ready_future();
+                }
                 return session->manager().ms().send_stream_mutation_done(id, plan_id, _ranges, cf_id, session->dst_cpu_id);
-            }
-            return make_ready_future<>();
-        }
-        sslog.warn("[Stream #{}] stream_transfer_task: Fail to send to {}: {}", plan_id, id, ep);
-        std::rethrow_exception(ep);
+            });
     });
 }
 
