@@ -213,7 +213,7 @@ class view_updates final {
     schema_ptr _base;
     base_info_ptr _base_info;
     std::unordered_map<partition_key, mutation_partition, partition_key::hashing, partition_key::equality> _updates;
-    mutable size_t _op_count = 0;
+    size_t _op_count = 0;
 public:
     explicit view_updates(view_and_base vab)
             : _view(std::move(vab.view))

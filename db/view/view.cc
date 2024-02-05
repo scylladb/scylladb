@@ -487,7 +487,7 @@ mutation_partition& view_updates::partition_for(partition_key&& key) {
 }
 
 size_t view_updates::op_count() const {
-    return _op_count++;;
+    return _op_count;
 }
 
 row_marker view_updates::compute_row_marker(const clustering_or_static_row& base_row) const {
@@ -1308,11 +1308,12 @@ void view_update_builder::generate_update(static_row&& update, const tombstone& 
 
 future<stop_iteration> view_update_builder::on_results() {
     constexpr size_t max_rows_for_view_updates = 100;
-    size_t rows_for_view_updates = std::accumulate(_view_updates.begin(), _view_updates.end(), 0, [] (size_t acc, const view_updates& vu) {
-        return acc + vu.op_count();
-    });
-    const bool stop_updates = rows_for_view_updates >= max_rows_for_view_updates;
-
+    auto should_stop_updates = [this] () -> bool {
+        size_t rows_for_view_updates = std::accumulate(_view_updates.begin(), _view_updates.end(), 0, [] (size_t acc, const view_updates& vu) {
+            return acc + vu.op_count();
+        });
+        return rows_for_view_updates >= max_rows_for_view_updates;
+    };
     if (_update && !_update->is_end_of_partition() && _existing && !_existing->is_end_of_partition()) {
         auto cmp = position_in_partition::tri_compare(*_schema)(_update->position(), _existing->position());
         if (cmp < 0) {
@@ -1335,7 +1336,7 @@ future<stop_iteration> view_update_builder::on_results() {
                               : std::nullopt;
                 generate_update(std::move(update), _update_partition_tombstone, std::move(existing), _existing_partition_tombstone);
             }
-            return stop_updates ? stop() : advance_updates();
+            return should_stop_updates() ? stop() : advance_updates();
         }
         if (cmp > 0) {
             // We have something existing but no update (which will happen either because it's a range tombstone marker in
@@ -1371,7 +1372,7 @@ future<stop_iteration> view_update_builder::on_results() {
                     generate_update(std::move(update), _update_partition_tombstone, { std::move(existing) }, _existing_partition_tombstone);
                 }
             }
-            return stop_updates ? stop () : advance_existings();
+            return should_stop_updates() ? stop () : advance_existings();
         }
         // We're updating a row that had pre-existing data
         if (_update->is_range_tombstone_change()) {
@@ -1393,8 +1394,9 @@ future<stop_iteration> view_update_builder::on_results() {
                                                   mutation_fragment_v2::printer(*_schema, *_update), mutation_fragment_v2::printer(*_schema, *_existing)));
             }
             generate_update(std::move(*_update).as_static_row(), _update_partition_tombstone, { std::move(*_existing).as_static_row() }, _existing_partition_tombstone);
+
         }
-        return stop_updates ? stop() : advance_all();
+        return should_stop_updates() ? stop() : advance_all();
     }
 
     auto tombstone = std::max(_update_partition_tombstone, _update_current_tombstone);
@@ -1409,7 +1411,7 @@ future<stop_iteration> view_update_builder::on_results() {
             auto update = static_row();
             generate_update(std::move(update), _update_partition_tombstone, { std::move(existing) }, _existing_partition_tombstone);
         }
-        return stop_updates ? stop() : advance_existings();
+        return should_stop_updates() ? stop() : advance_existings();
     }
 
     // If we have updates and it's a range tombstone, it removes nothing pre-exisiting, so we can ignore it
@@ -1430,7 +1432,7 @@ future<stop_iteration> view_update_builder::on_results() {
                           : std::nullopt;
             generate_update(std::move(*_update).as_static_row(), _update_partition_tombstone, std::move(existing), _existing_partition_tombstone);
         }
-        return stop_updates ? stop() : advance_updates();
+        return should_stop_updates() ? stop() : advance_updates();
     }
 
     return stop();
