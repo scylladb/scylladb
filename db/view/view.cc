@@ -492,32 +492,51 @@ size_t view_updates::op_count() const {
 
 row_marker view_updates::compute_row_marker(const clustering_or_static_row& base_row) const {
     /*
-     * We need to compute both the timestamp and expiration.
+     * We need to compute both the timestamp and expiration for view rows.
      *
-     * There are 3 cases:
-     *   1) There is a column that is not in the base PK but is in the view PK. In that case, as long as that column
-     *      lives, the view entry does too, but as soon as it expires (or is deleted for that matter) the entry also
-     *      should expire. So the expiration for the view is the one of that column, regardless of any other expiration.
-     *      To take an example of that case, if you have:
-     *        CREATE TABLE t (a int, b int, c int, PRIMARY KEY (a, b))
-     *        CREATE MATERIALIZED VIEW mv AS SELECT * FROM t WHERE c IS NOT NULL AND a IS NOT NULL AND b IS NOT NULL PRIMARY KEY (c, a, b)
-     *        INSERT INTO t(a, b) VALUES (0, 0) USING TTL 3;
-     *        UPDATE t SET c = 0 WHERE a = 0 AND b = 0;
-     *      then even after 3 seconds elapsed, the row will still exist (it just won't have a "row marker" anymore) and so
-     *      the MV should still have a corresponding entry.
-     *      This cell determines the liveness of the view row.
-     *   2) The columns for the base and view PKs are exactly the same, and all base columns are selected by the view.
-     *      In that case, all components (marker, deletion and cells) are the same and trivially mapped.
-     *   3) The columns for the base and view PKs are exactly the same, but some base columns are not selected in the view.
-     *      Use the max timestamp out of the base row marker and all the unselected columns - this ensures we can keep the
-     *      view row alive. Do the same thing for the expiration, if the marker is dead or will expire, and so
-     *      will all unselected columns.
+     * Below there are several distinct cases depending on how many new key
+     * columns the view has - i.e., how many of the view's key columns were
+     * regular columns in the base. base_regular_columns_in_view_pk.size():
+     *
+     * Zero new key columns:
+     *     The view rows key is composed only from base key columns, and those
+     *     cannot be changed in an update, so the view row remains alive as
+     *     long as the base row is alive. We need to return the same row
+     *     marker as the base for the view - to keep an empty view row alive
+    *      for as long as an empty base row exists.
+     *     Note that in this case, if there are *unselected* base columns, we
+     *     may need to keep an empty view row alive even without a row marker
+     *     because the base row (which has additional columns) is still alive.
+     *     For that we have the "virtual columns" feature: In the zero new
+     *     key columns case, we put unselected columns in the view as empty
+     *     columns, to keep the view row alive.
+     *
+     * One new key column:
+     *     In this case, there is a regular base column that is part of the
+     *     view key. This regular column can be added or deleted in an update,
+     *     or its expiration be set, and those can cause the view row -
+     *     including its row marker - to need to appear or disappear as well.
+     *     So the liveness of cell of this one column determines the liveness
+     *     of the view row and the row marker that we return.
+     *
+     * Two or more new key columns:
+     *     This case is explicitly NOT supported in CQL - one cannot create a
+     *     view with more than one base-regular columns in its key. In general
+     *     picking one liveness (timestamp and expiration) is not possible
+     *     if there are multiple regular base columns in the view key, as
+     *     those can have different liveness.
+     *     However, we do allow this case for Alternator - we need to allow
+     *     the case of two (but not more) because the DynamoDB API allows
+     *     creating a GSI whose two key columns (hash and range key) were
+     *     regular columns.
+     *     We can support this case in Alternator because it doesn't use
+     *     expiration (the "TTL" it does support is different), and doesn't
+     *     support user-defined timestamps. But, the two columns can still
+     *     have different timestamps - this happens if an update modifies
+     *     just one of them. In this case the timestamp of the view update
+     *     (and that of the row marker we return) is the later of these two
+     *     updated columns.
      */
-
-    // WARNING: The code assumes that if multiple regular base columns are present in the view key,
-    // they share liveness information. It's true especially in the only case currently allowed by CQL,
-    // which assumes there's up to one non-pk column in the view key. It's also true in alternator,
-    // which does not carry TTL information.
     const auto& col_ids = base_row.is_clustering_row()
             ? _base_info->base_regular_columns_in_view_pk()
             : _base_info->base_static_columns_in_view_pk();
@@ -525,7 +544,20 @@ row_marker view_updates::compute_row_marker(const clustering_or_static_row& base
         auto& def = _base->column_at(base_row.column_kind(), col_ids[0]);
         // Note: multi-cell columns can't be part of the primary key.
         auto cell = base_row.cells().cell_at(col_ids[0]).as_atomic_cell(def);
-        return cell.is_live_and_has_ttl() ? row_marker(cell.timestamp(), cell.ttl(), cell.expiry()) : row_marker(cell.timestamp());
+        auto ts = cell.timestamp();
+        if (col_ids.size() > 1){
+            // As explained above, this case only happens in Alternator,
+            // and we may need to pick a higher ts:
+            auto& second_def = _base->column_at(base_row.column_kind(), col_ids[1]);
+            auto second_cell = base_row.cells().cell_at(col_ids[1]).as_atomic_cell(second_def);
+            auto second_ts = second_cell.timestamp();
+            ts = std::max(ts, second_ts);
+            // Alternator isn't supposed to have TTL or more than two col_ids!
+            if (col_ids.size() != 2 || cell.is_live_and_has_ttl() || second_cell.is_live_and_has_ttl()) [[unlikely]] {
+                utils::on_internal_error(format("Unexpected col_ids length {} or has TTL", col_ids.size()));
+            }
+        }
+        return cell.is_live_and_has_ttl() ? row_marker(ts, cell.ttl(), cell.expiry()) : row_marker(ts);
     }
 
     return base_row.marker();
@@ -923,8 +955,22 @@ void view_updates::do_delete_old_entry(const partition_key& base_key, const clus
             // Note: multi-cell columns can't be part of the primary key.
             auto& def = _base->column_at(kind, col_ids[0]);
             auto cell = existing.cells().cell_at(col_ids[0]).as_atomic_cell(def);
+            auto ts = cell.timestamp();
+            if (col_ids.size() > 1) {
+                // This is the Alternator-only support for two regular base
+                // columns that become view key columns. See explanation in
+                // view_updates::compute_row_marker().
+                auto& second_def = _base->column_at(kind, col_ids[1]);
+                auto second_cell = existing.cells().cell_at(col_ids[1]).as_atomic_cell(second_def);
+                auto second_ts = second_cell.timestamp();
+                ts = std::max(ts, second_ts);
+                // Alternator isn't supposed to have more than two col_ids!
+                if (col_ids.size() != 2) [[unlikely]] {
+                    utils::on_internal_error(format("Unexpected col_ids length {}", col_ids.size()));
+                }
+            }
             if (cell.is_live()) {
-                r->apply(shadowable_tombstone(cell.timestamp(), now));
+                r->apply(shadowable_tombstone(ts, now));
             }
         } else {
             // "update" caused the base row to have been deleted, and !col_id
