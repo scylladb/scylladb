@@ -8,10 +8,9 @@
  * SPDX-License-Identifier: (AGPL-3.0-or-later and Apache-2.0)
  */
 
-#include <sstream>
-
 #include "exceptions.hh"
-#include "log.hh"
+#include <seastar/core/print.hh>
+#include <seastar/util/log.hh>
 
 namespace exceptions {
 
