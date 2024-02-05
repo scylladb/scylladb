@@ -820,3 +820,173 @@ def test_mv_prepared_statement_with_altered_base(cql, test_keyspace):
             cql.execute(f"ALTER TABLE {base} ADD (v2 int)")
             cql.execute(f"INSERT INTO {base} (id,v1,v2) VALUES (1,1,1)")
             assert list(cql.execute(base_query,[1])) == list(cql.execute(view_query,[1]))
+
+# A reproducer for issue #17117:
+# When a single base update generates many view updates to the same partition,
+# instead of processing the entire huge partition at once Scylla processes the
+# view updates in chunks of 100 rows each (max_rows_for_view_updates).
+# We had a bug with *range tombstones* which were mis-counted for this limit,
+# and moreover - could cause a chunk to end in the middle of a range
+# tombstone, which causes the range tombstone in this case to be lost and not
+# reach the view.
+# This test is a simple reproducer for this case. Because IN are limited
+# in size to max_clustering_key_restrictions_per_query (100), we use a
+# BATCH in this test to generate more than 100 (max_rows_for_view_updates)
+# view updates from just one mutation.
+def test_many_range_tombstone_base_update(cql, test_keyspace):
+    # This test inserts N rows and deletes all of them in one batch.
+    N = 234
+    # We need two clustering key columns in this test, so that deleting
+    # each "WHERE c1=?" will cause a *range* tombstone - which is what
+    # we want to reproduce in this test.
+    with new_test_table(cql, test_keyspace, 'p int, c1 int, c2 int, primary key (p, c1, c2)') as table:
+        # For simplicity, the view is identical to the base. This is good
+        # enough and still reproduces the bug. Remember that range tombstones
+        # on the base are not copied to the view as-is - they are translated
+        # to row tombstones in the view for the specific rows that really
+        # exist in the base table.
+        with new_materialized_view(cql, table, '*', 'p, c1, c2', 'p is not null and c1 is not null and c2 is not null') as mv:
+            insert = cql.prepare(f'INSERT INTO {table} (p, c1, c2) VALUES (?,?,?)')
+            # We need all of the rows to end up in the same view
+            # partition, so all the deletions will be in the same
+            # partition and will be divided into chunks. Hence we'll
+            # use the same partition key 42 for all rows:
+            p = 42
+            for i in range(N):
+                cql.execute(insert, [p, i, i])
+            # Remove all N rows using N *range* tombstones (deleting based
+            # on p,c1 but not c2), all in one write to the base (a batch):
+            cmd = 'BEGIN BATCH '
+            for i in range(N):
+                cmd += f'DELETE FROM {table} WHERE p={p} AND c1={i} '
+            cmd += 'APPLY BATCH;'
+            cql.execute(cmd)
+            # At this point, both base table and view tables should be
+            # empty.
+            assert [] == list(cql.execute(f'SELECT c1 FROM {table}'))
+            assert [] == list(cql.execute(f'SELECT c1 FROM {mv}'))
+
+# Another more elaborate reproducer for issue #17117, which is closer to the
+# original use where we encountered this bug. It uses IN instead of BATCH, so
+# it it is limited to deletions of max_clustering_key_restrictions_per_query
+# (100) clustering ranges, but that's enough to reproduce this bug because
+# anything more than 25 reproduced it. The view in this reproducer is also
+# a bit more interesting than in the previous test (the view is not identical
+# to the base, rather it combines several base partitions into one
+# view partition).
+def test_many_range_tombstone_base_update_2(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p1 int, p2 int, c1 int, c2 int, v1 int, v2 int, primary key ((p1,p2),c1,c2)') as table:
+        with new_materialized_view(cql, table, '*', '(v1,p2),c1,p1,c2', 'v1 is not null and p2 is not null and c1 is not null and p1 is not null and c2 is not null') as mv:
+            insert = cql.prepare(f'INSERT INTO {table} (p1,p2,c1,c2,v1,v2) VALUES (?,?,?,?,?,?)')
+            # Insert N items, with:
+            #    * p1 cycles between NP1 different values.
+            #    * c1 is unique per item.
+            #    * p2, c2, v1, and v2, are the same for all items.
+            N = 500
+            NP1 = 3
+            # fixed values:
+            p2 = 123
+            v1 = 456
+            v2 = 678
+            c2 = 987
+            for i in range(N):
+                p1 = i % NP1
+                c1 = i
+                cql.execute(insert, [p1,p2,c1,c2,v1,v2])
+            # Delete slice with prefix p1,p2,c1 for multiple c1's (any c2)
+            delete_slices = cql.prepare(f'DELETE FROM {table} WHERE p1=? AND p2=? AND c1 in ?')
+            # This test appears fail due to #17117 for any K>25 - the 26th
+            # and every multiple of 26th deletion in the batch doesn't reach
+            # the view.
+            K=80
+            for p1 in range(NP1):
+                # c1's for this p1 are i's such that i%NP1 = p1.
+                # Only take the c1's that are after N//2, to delete
+                # only the later half of the items.
+                start = N//2
+                start -= start % NP1
+                c1s = range(start + p1, N, NP1)
+                # split c1s into chunks of length K
+                chunks = []
+                for x in range(0, len(c1s), K):
+                    slice_item = slice(x, x + K, 1)
+                    chunks.append(c1s[slice_item])
+                for chunk in chunks:
+                    cql.execute(delete_slices, [p1, p2, chunk])
+            # The deletions above are pretty hard to follow, but no matter
+            # what we deleted above, it should have been deleted from
+            # both base and view. If the base and view differ, we have a bug.
+            list_base = sorted([x.c1 for x in cql.execute(f"SELECT c1 FROM {table}")])
+            list_view = sorted([x.c1 for x in cql.execute(f"SELECT c1 FROM {mv}")])
+            print("Remaining base rows: ", len(list_base))
+            print("Remaining base rows: ", len(list_view))
+            print("Only in base: ", sorted(list(set(list_base)-set(list_view))))
+            print("Only in view: ", sorted(list(set(list_view)-set(list_base))))
+            assert list_base == list_view
+
+# Test that deleting a base partion works fine, even if it produces a
+# large batch of individual view updates. After issue #8852 was fixed,
+# this large batch is no longer done together, but rather split to smaller
+# batches, and this split can be done wrongly (e.g., see issue #17117)
+# and we want to confirm that all the deletions are actually done.
+#
+# We have the related test for secondary indexes (test_secondary_index.py::
+# test_partition_deletion), but this one uses materialized views directly
+# instead of the secondary-index wrapper, and works on Cassandra as well.
+# This test also exercises a more difficult scenario, where all view
+# deletions end up in the same view partition, so the code is "tempted" to
+# keep them all in the same output mutation and needs to break up this
+# output mutation correctly (the test doesn't check that this breaking up
+# happens, but rather that if it happens - it doesn't break correctness).
+def test_base_partition_deletion(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int, c int, v int, primary key (p,c)') as table:
+        # All inserts go to the same base partition,  that we'll then delete
+        p = 1
+        v = 42
+        insert = cql.prepare(f'INSERT INTO {table} (p,c,v) VALUES ({p},?,{v})')
+        # Case where all view-row deletions go to the same view partition:
+        with new_materialized_view(cql, table, '*', 'p,v,c', 'p is not null and v is not null and c is not null') as mv:
+            N = 345
+            for i in range(N):
+                cql.execute(insert, [i])
+            # Before the deletion, all N rows should exist in the base and the
+            # view
+            allN = list(range(N))
+            assert allN == [x.c for x in cql.execute(f"SELECT c FROM {table}")]
+            assert allN == sorted([x.c for x in cql.execute(f"SELECT c FROM {mv}")])
+            cql.execute(f"DELETE FROM {table} WHERE p=1")
+            # After the deletion, all data should be gone from both base and view
+            assert [] == list(cql.execute(f"SELECT c FROM {table}"))
+            assert [] == list(cql.execute(f"SELECT c FROM {mv}"))
+
+# Same as above test, just for a range tombstone, e.g., in a composite
+# clustering key c1,c2 deleting in the base all rows with some c1.
+# Here too Scylla generates a long list of view updates (individual row
+# deletions), and if it's split into smaller batches, this needs to be
+# done correctly and no view update missed.
+# This test is related to issue #17117 - it doesn't reproduce that issue
+# (we have reproducers for it above), but it's important to confirm that
+# after fixing that issue, we don't break this case and can still split
+# a large clustering prefix deletion into multiple batches without losing
+# any view deletions.
+def test_base_clustering_prefix_deletion(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int, c1 int, c2 int, v int, primary key (p,c1,c2)') as table:
+        # All inserts go to the same base c1, that we'll then delete
+        p = 1
+        c1 = 2
+        v = 42
+        insert = cql.prepare(f'INSERT INTO {table} (p,c1,c2,v) VALUES ({p},{c1},?,{v})')
+        # Case where all view-row deletions go to the same view partition:
+        with new_materialized_view(cql, table, '*', 'p,v,c1,c2', 'p is not null and v is not null and c1 is not null and c2 is not null') as mv:
+            N = 345
+            for i in range(N):
+                cql.execute(insert, [i])
+            # Before the deletion, all N rows should exist in the base and the
+            # view
+            allN = list(range(N))
+            assert allN == [x.c2 for x in cql.execute(f"SELECT c2 FROM {table}")]
+            assert allN == sorted([x.c2 for x in cql.execute(f"SELECT c2 FROM {mv}")])
+            cql.execute(f"DELETE FROM {table} WHERE p=1")
+            # After the deletion, all data should be gone from both base and view
+            assert [] == list(cql.execute(f"SELECT c2 FROM {table}"))
+            assert [] == list(cql.execute(f"SELECT c2 FROM {mv}"))
