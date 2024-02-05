@@ -647,3 +647,117 @@ async def test_tablet_split(manager: ManagerClient):
 
     tablet_count = await get_tablet_count(manager, servers[0], 'test', 'test')
     assert tablet_count > 1
+
+async def assert_tablet_count_metric_value_for_shards(manager: ManagerClient, server: ServerInfo, expected_count_per_shard: list[int]):
+    tablet_count_metric_name = "scylla_tablets_count"
+    metrics = await manager.metrics.query(server.ip_addr)
+    for shard_id in range(0, len(expected_count_per_shard)):
+        expected_tablet_count = expected_count_per_shard[shard_id]
+        tablet_count = metrics.get(name=tablet_count_metric_name, labels=None, shard=str(shard_id))
+        assert int(tablet_count) == expected_tablet_count
+
+async def get_tablet_tokens_from_host_on_shard(manager: ManagerClient, server: ServerInfo, keyspace_name: str, table_name: str, shard: int) -> list[int]:
+    host = await manager.get_host_id(server.server_id)
+    table_tablets = await get_all_tablet_replicas(manager, server, keyspace_name, table_name)
+    tokens = []
+    for tablet_replica in table_tablets:
+        for host_id, shard_id in tablet_replica.replicas:
+            if host_id == host and shard_id == shard:
+                tokens.append(tablet_replica.last_token)
+    return tokens
+
+async def get_tablet_count_per_shard_for_host(shards_count: int, manager: ManagerClient, server: ServerInfo, full_tables: dict[str: list[str]]) -> list[int]:
+    host = await manager.get_host_id(server.server_id)
+    result = [0] * shards_count
+
+    for keyspace, tables in full_tables.items():
+        for table in tables:
+            table_tablets = await get_all_tablet_replicas(manager, server, keyspace, table)
+            for tablet_replica in table_tablets:
+                for host_id, shard_id in tablet_replica.replicas:
+                    if host_id == host:
+                        result[shard_id] += 1;
+    return result
+
+def get_shard_that_has_tablets(tablet_count_per_shard: list[int]) -> int:
+    for shard_id in range(0, len(tablet_count_per_shard)):
+        if tablet_count_per_shard[shard_id] > 0:
+            return shard_id
+    return -1
+
+@pytest.mark.asyncio
+async def test_tablet_count_metric_per_shard(manager: ManagerClient):
+    # Given two running servers
+    shards_count = 4
+    cmdline = ['--smp=4']
+    servers = await manager.servers_add(2, cmdline=cmdline)
+
+    # And given disabled load balancing
+    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+
+    # When two tables are created
+    cql = manager.get_cql()
+    await cql.run_async("CREATE KEYSPACE testing WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1};")
+    await cql.run_async("CREATE TABLE testing.mytable1 (col1 timestamp, col2 text, col3 blob, PRIMARY KEY (col1));")
+    await cql.run_async("CREATE TABLE testing.mytable2 (col1 timestamp, col2 text, col3 blob, PRIMARY KEY (col1));")
+
+    # Then tablet count metric for each shard depicts the actual state
+    tables = { "testing": ["mytable1", "mytable2"] }
+    expected_count_per_shard_for_host_0 = await get_tablet_count_per_shard_for_host(shards_count, manager, servers[0], tables)
+    await assert_tablet_count_metric_value_for_shards(manager, servers[0], expected_count_per_shard_for_host_0)
+
+    expected_count_per_shard_for_host_1 = await get_tablet_count_per_shard_for_host(shards_count, manager, servers[1], tables)
+    await assert_tablet_count_metric_value_for_shards(manager, servers[1], expected_count_per_shard_for_host_1)
+
+    # When third table is created
+    await cql.run_async("CREATE TABLE testing.mytable3 (col1 timestamp, col2 text, col3 blob, PRIMARY KEY (col1));")
+
+    # Then tablet count metric for each shard depicts the actual state
+    tables = { "testing": ["mytable1", "mytable2", "mytable3"] }
+    expected_count_per_shard_for_host_0 = await get_tablet_count_per_shard_for_host(shards_count, manager, servers[0], tables)
+    await assert_tablet_count_metric_value_for_shards(manager, servers[0], expected_count_per_shard_for_host_0)
+
+    expected_count_per_shard_for_host_1 = await get_tablet_count_per_shard_for_host(shards_count, manager, servers[1], tables)
+    await assert_tablet_count_metric_value_for_shards(manager, servers[1], expected_count_per_shard_for_host_1)
+
+    # When one of tables is dropped
+    await cql.run_async("DROP TABLE testing.mytable2;")
+
+    # Then tablet count metric for each shard depicts the actual state
+    tables = { "testing": ["mytable1", "mytable3"] }
+    expected_count_per_shard_for_host_0 = await get_tablet_count_per_shard_for_host(shards_count, manager, servers[0], tables)
+    await assert_tablet_count_metric_value_for_shards(manager, servers[0], expected_count_per_shard_for_host_0)
+
+    expected_count_per_shard_for_host_1 = await get_tablet_count_per_shard_for_host(shards_count, manager, servers[1], tables)
+    await assert_tablet_count_metric_value_for_shards(manager, servers[1], expected_count_per_shard_for_host_1)
+
+    # And when moving tablets from one of shards of host_0 to (host_1, shard_3)
+    host0_id = await manager.get_host_id(servers[0].server_id)
+    host1_id = await manager.get_host_id(servers[1].server_id)
+
+    shard_id_to_move = get_shard_that_has_tablets(expected_count_per_shard_for_host_0)
+    tokens_on_shard_to_move = {
+        "mytable1" : await get_tablet_tokens_from_host_on_shard(manager, servers[0], "testing", "mytable1", shard_id_to_move),
+        "mytable3" : await get_tablet_tokens_from_host_on_shard(manager, servers[0], "testing", "mytable3", shard_id_to_move)
+    }
+
+    count_of_tokens_on_host0_shard_to_move = len(tokens_on_shard_to_move["mytable1"]) + len(tokens_on_shard_to_move["mytable3"])
+    assert count_of_tokens_on_host0_shard_to_move > 0
+
+    for table_name, tokens in tokens_on_shard_to_move.items():
+        for token in tokens:
+            await manager.api.move_tablet(node_ip=servers[0].ip_addr, ks="testing", table=table_name, src_host=host0_id, src_shard=shard_id_to_move, dst_host=host1_id, dst_shard=3, token=token)
+
+    # And when ensuring that local tablet metadata on the queried node reflects the finalized tablet movement
+    host0 = manager.get_cql().cluster.metadata.get_host(servers[0].ip_addr)
+    host1 = manager.get_cql().cluster.metadata.get_host(servers[1].ip_addr)
+    await read_barrier(manager.get_cql(), host0)
+    await read_barrier(manager.get_cql(), host1)
+
+    # Then tablet count metric is adjusted to depict that situation on host0 - all tablets from selected shard have been moved
+    expected_count_per_shard_for_host_0[shard_id_to_move] = 0
+    await assert_tablet_count_metric_value_for_shards(manager, servers[0], expected_count_per_shard_for_host_0)
+
+    # And then tablet count metric is increased on host1 - tablets have been moved to shard_3
+    expected_count_per_shard_for_host_1[3] += count_of_tokens_on_host0_shard_to_move
+    await assert_tablet_count_metric_value_for_shards(manager, servers[1], expected_count_per_shard_for_host_1)
