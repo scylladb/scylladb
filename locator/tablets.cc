@@ -226,16 +226,7 @@ void tablet_map::set_resize_decision(locator::resize_decision decision) {
     _resize_decision = std::move(decision);
 }
 
-future<> tablet_map::for_each_tablet(seastar::noncopyable_function<void(tablet_id, const tablet_info&)> func) const {
-    std::optional<tablet_id> tid = first_tablet();
-    for (const tablet_info& ti : tablets()) {
-        co_await coroutine::maybe_yield();
-        func(*tid, ti);
-        tid = next_tablet(*tid);
-    }
-}
-
-future<> tablet_map::for_each_tablet_gently(seastar::noncopyable_function<future<>(tablet_id, const tablet_info&)> func) const {
+future<> tablet_map::for_each_tablet(seastar::noncopyable_function<future<>(tablet_id, const tablet_info&)> func) const {
     std::optional<tablet_id> tid = first_tablet();
     for (const tablet_info& ti : tablets()) {
         co_await func(*tid, ti);
@@ -461,8 +452,9 @@ size_t tablet_metadata::external_memory_usage() const {
 future<bool> check_tablet_replica_shards(const tablet_metadata& tm, host_id this_host) {
     bool valid = true;
     for (const auto& [table_id, tmap] : tm.all_tables()) {
-        co_await tmap.for_each_tablet([this_host, &valid] (locator::tablet_id tid, const tablet_info& tinfo) {
+        co_await tmap.for_each_tablet([this_host, &valid] (locator::tablet_id tid, const tablet_info& tinfo) -> future<> {
             for (const auto& replica : tinfo.replicas) {
+                co_await coroutine::maybe_yield();
                 if (replica.host == this_host) {
                     valid &= replica.shard < smp::count;
                 }

@@ -4431,7 +4431,7 @@ storage_service::describe_ring_for_table(const sstring& keyspace_name, const sst
     auto& tmap = erm->get_token_metadata_ptr()->tablets().get_tablet_map(tid);
     const auto& topology = erm->get_topology();
     std::vector<dht::token_range_endpoints> ranges;
-    co_await tmap.for_each_tablet_gently([&] (locator::tablet_id id, const locator::tablet_info& info) -> future<> {
+    co_await tmap.for_each_tablet([&] (locator::tablet_id id, const locator::tablet_info& info) -> future<> {
         auto range = tmap.get_token_range(id);
         auto& replicas = info.replicas;
         dht::token_range_endpoints tr;

@@ -74,8 +74,9 @@ public:
         co_await utils::clear_gently(_nodes);
         for (auto&& [table, tmap_] : _tm->tablets().all_tables()) {
             auto& tmap = tmap_;
-            co_await tmap.for_each_tablet([&] (tablet_id tid, const tablet_info& ti) {
+            co_await tmap.for_each_tablet([&] (tablet_id tid, const tablet_info& ti) -> future<> {
                 for (auto&& replica : get_replicas_for_tablet_load(ti, tmap.get_tablet_transition_info(tid))) {
+                    co_await coroutine::maybe_yield();
                     if (host && *host != replica.host) {
                         continue;
                     }
