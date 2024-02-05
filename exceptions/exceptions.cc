@@ -15,10 +15,6 @@
 
 namespace exceptions {
 
-std::ostream& operator<<(std::ostream& os, exception_code ec) {
-    return os << static_cast<int32_t>(ec);
-}
-
 truncate_exception::truncate_exception(std::exception_ptr ep)
     : request_execution_exception(exceptions::exception_code::TRUNCATE_ERROR, format("Error during truncate: {}", ep))
 {}
