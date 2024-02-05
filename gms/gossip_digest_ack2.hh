@@ -10,6 +10,7 @@
 
 #pragma once
 
+#include <fmt/core.h>
 #include "utils/serialization.hh"
 #include "gms/gossip_digest.hh"
 #include "gms/inet_address.hh"
@@ -39,8 +40,13 @@ public:
     const std::map<inet_address, endpoint_state>& get_endpoint_state_map() const {
         return _map;
     }
-
-    friend std::ostream& operator<<(std::ostream& os, const gossip_digest_ack2& ack2);
 };
 
 } // gms
+
+template <>
+struct fmt::formatter<gms::gossip_digest_ack2> {
+    constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
+    auto format(const gms::gossip_digest_ack2& ack2, fmt::format_context& ctx) const
+        -> decltype(ctx.out());
+};
