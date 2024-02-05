@@ -38,7 +38,8 @@ async def test_tablet_drain_failure_during_decommission(manager: ManagerClient):
 
     await manager.decommission_node(servers[2].server_id, expected_error="Decommission failed. See earlier errors")
 
-    matches = [await log.grep("raft_topology - rollback.*after decommissioning failure to state rollback_to_normal", from_mark=mark) for log, mark in zip(logs, marks)]
+    matches = [await log.grep("raft_topology - rollback.*after decommissioning failure, moving transition state to rollback to normal",
+               from_mark=mark) for log, mark in zip(logs, marks)]
     assert sum(len(x) for x in matches) == 1
 
     await cql.run_async("DROP KEYSPACE test;")

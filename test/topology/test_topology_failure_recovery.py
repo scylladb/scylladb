@@ -27,7 +27,8 @@ async def test_topology_streaming_failure(request, manager: ManagerClient):
     await manager.decommission_node(servers[2].server_id, expected_error="Decommission failed. See earlier errors")
     servers = await manager.running_servers()
     assert len(servers) == 3
-    matches = [await log.grep("raft_topology - rollback.*after decommissioning failure to state rollback_to_normal", from_mark=mark) for log, mark in zip(logs, marks)]
+    matches = [await log.grep("raft_topology - rollback.*after decommissioning failure, moving transition state to rollback to normal",
+               from_mark=mark) for log, mark in zip(logs, marks)]
     assert sum(len(x) for x in matches) == 1
     # remove failure
     marks = [await log.mark() for log in logs]
@@ -36,7 +37,8 @@ async def test_topology_streaming_failure(request, manager: ManagerClient):
     await manager.server_stop_gracefully(servers[3].server_id)
     await manager.api.enable_injection(servers[2].ip_addr, 'stream_ranges_fail', one_shot=True)
     await manager.remove_node(servers[0].server_id, servers[3].server_id, expected_error="Removenode failed. See earlier errors")
-    matches = [await log.grep("raft_topology - rollback.*after removing failure to state rollback_to_normal", from_mark=mark) for log, mark in zip(logs, marks)]
+    matches = [await log.grep("raft_topology - rollback.*after removing failure, moving transition state to rollback to normal",
+               from_mark=mark) for log, mark in zip(logs, marks)]
     assert sum(len(x) for x in matches) == 1
     await manager.server_start(servers[3].server_id)
     await manager.servers_see_each_other(servers)

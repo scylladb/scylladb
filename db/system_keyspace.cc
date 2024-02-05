@@ -2758,11 +2758,6 @@ future<service::topology> system_keyspace::load_topology_state() {
                 }
                 ret.req_param.emplace(host_id, service::rebuild_param{*rebuild_option});
                 break;
-            case service::node_state::rollback_to_normal:
-                if (replaced_id) {
-                    ret.req_param.emplace(host_id, service::removenode_param{std::move(ignored_ids)});
-                }
-                break;
             default:
                 // no parameters for other operations
                 break;
@@ -2824,14 +2819,13 @@ future<service::topology> system_keyspace::load_topology_state() {
         if (some_row.has("transition_state")) {
             ret.tstate = service::transition_state_from_string(some_row.get_as<sstring>("transition_state"));
         } else {
-            // Any remaining transition_nodes must be in rebuilding or rollback_to_normal state.
+            // Any remaining transition_nodes must be in rebuilding state.
             auto it = std::find_if(ret.transition_nodes.begin(), ret.transition_nodes.end(),
-                    [] (auto& p) { return p.second.state != service::node_state::rebuilding &&
-                                               p.second.state != service::node_state::rollback_to_normal; });
+                    [] (auto& p) { return p.second.state != service::node_state::rebuilding; });
             if (it != ret.transition_nodes.end()) {
                 on_internal_error(slogger, format(
                     "load_topology_state: topology not in transition state"
-                    " but transition node {} in state {} is present", it->first, it->second.state));
+                    " but transition node {} in rebuilding state is present", it->first));
             }
         }
 

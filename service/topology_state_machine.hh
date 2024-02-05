@@ -34,7 +34,6 @@ enum class node_state: uint16_t {
     rebuilding,          // the node is being rebuild and is streaming data from other replicas
     normal,              // the node does not do any streaming and serves the slice of the ring that belongs to it
     left,                // the node left the cluster and group0
-    rollback_to_normal,  // the node rolls back failed decommission/remove node operation
 };
 
 // The order of the requests is a priority
@@ -116,6 +115,7 @@ struct topology {
         write_both_read_new,
         tablet_migration,
         left_token_ring,
+        rollback_to_normal,
     };
 
     std::optional<transition_state> tstate;

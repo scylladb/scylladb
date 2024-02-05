@@ -169,6 +169,7 @@ static std::unordered_map<topology::transition_state, sstring> transition_state_
     {topology::transition_state::tablet_migration, "tablet migration"},
     {topology::transition_state::tablet_draining, "tablet draining"},
     {topology::transition_state::left_token_ring, "left token ring"},
+    {topology::transition_state::rollback_to_normal, "rollback to normal"},
 };
 
 std::ostream& operator<<(std::ostream& os, topology::transition_state s) {
@@ -197,7 +198,6 @@ static std::unordered_map<node_state, sstring> node_state_to_name_map = {
     {node_state::replacing, "replacing"},
     {node_state::rebuilding, "rebuilding"},
     {node_state::none, "none"},
-    {node_state::rollback_to_normal, "rollback_to_normal"},
 };
 
 std::ostream& operator<<(std::ostream& os, node_state s) {
