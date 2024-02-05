@@ -1518,3 +1518,78 @@ def test_gsi_key_type_conflict_on_update(dynamodb):
                         'KeySchema': [{ 'AttributeName': 'xyz', 'KeyType': 'HASH' }],
                         'Projection': { 'ProjectionType': 'ALL' }
                     }}])
+
+# Test similar to test_11801 and test_11801_variant2, but this test first
+# updates the range key b to a new value (like variant2) and then sets it
+# back to its original value. It reproduces issue #17119 - the last
+# modification was lost because the wrong timestamp was used.
+# The bug is specific to the case that the GSI has two non-key columns
+# as its keys, so we test it on test_table_gsi_3 which has this feature.
+def test_17119(test_table_gsi_3):
+    p = random_string()
+    a = random_string()
+    b = random_string()
+    item = {'p': p, 'a': a, 'b': b, 'd': random_string()}
+    test_table_gsi_3.put_item(Item=item)
+    assert_index_query(test_table_gsi_3, 'hello', [item],
+        KeyConditions={'a': {'AttributeValueList': [a], 'ComparisonOperator': 'EQ'},
+                       'b': {'AttributeValueList': [b], 'ComparisonOperator': 'EQ'}})
+    # Change the GSI range key b to a different value newb.
+    newb = random_string()
+    test_table_gsi_3.update_item(Key={'p':  p}, AttributeUpdates={'b': {'Value': newb, 'Action': 'PUT'}})
+    item['b'] = newb
+    assert item == test_table_gsi_3.get_item(Key={'p': p}, ConsistentRead=True)['Item']
+    # The item newb should appear in the GSI, item b should be gone:
+    assert_index_query(test_table_gsi_3, 'hello', [item],
+        KeyConditions={'a': {'AttributeValueList': [a], 'ComparisonOperator': 'EQ'},
+                       'b': {'AttributeValueList': [newb], 'ComparisonOperator': 'EQ'}})
+    assert_index_query(test_table_gsi_3, 'hello', [],
+        KeyConditions={'a': {'AttributeValueList': [a], 'ComparisonOperator': 'EQ'},
+                       'b': {'AttributeValueList': [b], 'ComparisonOperator': 'EQ'}})
+    # Change the GSI range key b back to its original value. Item newb
+    # should disappear from the GSI, and item b should reappear:
+    test_table_gsi_3.update_item(Key={'p':  p}, AttributeUpdates={'b': {'Value': b, 'Action': 'PUT'}})
+    item['b'] = b
+    assert item == test_table_gsi_3.get_item(Key={'p': p}, ConsistentRead=True)['Item']
+    assert_index_query(test_table_gsi_3, 'hello', [],
+        KeyConditions={'a': {'AttributeValueList': [a], 'ComparisonOperator': 'EQ'},
+                       'b': {'AttributeValueList': [newb], 'ComparisonOperator': 'EQ'}})
+    # This assertion failed in issue #17119:
+    assert_index_query(test_table_gsi_3, 'hello', [item],
+        KeyConditions={'a': {'AttributeValueList': [a], 'ComparisonOperator': 'EQ'},
+                       'b': {'AttributeValueList': [b], 'ComparisonOperator': 'EQ'}})
+
+# This test is like test_17119 above, just in a table with just one new
+# key column in the GSI. The bug of #17119 doesn't reproduce here, showing
+# the problem was specific to the case of two new GSI key columns.
+def test_17119a(test_table_gsi_2):
+    p = random_string()
+    x = random_string()
+    item = {'p': p, 'x': x, 'z': random_string()}
+    test_table_gsi_2.put_item(Item=item)
+    assert_index_query(test_table_gsi_2, 'hello', [item],
+        KeyConditions={'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'},
+                       'x': {'AttributeValueList': [x], 'ComparisonOperator': 'EQ'}})
+    # Change the GSI range key x to a different value.
+    newx = random_string()
+    test_table_gsi_2.update_item(Key={'p':  p}, AttributeUpdates={'x': {'Value': newx, 'Action': 'PUT'}})
+    item['x'] = newx
+    assert item == test_table_gsi_2.get_item(Key={'p': p}, ConsistentRead=True)['Item']
+    # The item newx should appear in the GSI, item x should be gone:
+    assert_index_query(test_table_gsi_2, 'hello', [item],
+        KeyConditions={'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'},
+                       'x': {'AttributeValueList': [newx], 'ComparisonOperator': 'EQ'}})
+    assert_index_query(test_table_gsi_2, 'hello', [],
+        KeyConditions={'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'},
+                       'x': {'AttributeValueList': [x], 'ComparisonOperator': 'EQ'}})
+    # Change the GSI range key x back to its original value. Item newx
+    # should disappear from the GSI, and item x should reappear:
+    test_table_gsi_2.update_item(Key={'p':  p}, AttributeUpdates={'x': {'Value': x, 'Action': 'PUT'}})
+    item['x'] = x
+    assert item == test_table_gsi_2.get_item(Key={'p': p}, ConsistentRead=True)['Item']
+    assert_index_query(test_table_gsi_2, 'hello', [],
+        KeyConditions={'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'},
+                       'x': {'AttributeValueList': [newx], 'ComparisonOperator': 'EQ'}})
+    assert_index_query(test_table_gsi_2, 'hello', [item],
+        KeyConditions={'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'},
+                       'x': {'AttributeValueList': [x], 'ComparisonOperator': 'EQ'}})
