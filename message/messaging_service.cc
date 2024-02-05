@@ -1016,8 +1016,8 @@ future<std::tuple<rpc::sink<SinkType>, rpc::source<SourceType>>>
 do_make_sink_source(messaging_verb verb, uint32_t repair_meta_id, shard_id dst_shard_id, shared_ptr<messaging_service::rpc_protocol_client_wrapper> rpc_client, std::unique_ptr<messaging_service::rpc_protocol_wrapper>& rpc) {
     using value_type = std::tuple<rpc::sink<SinkType>, rpc::source<SourceType>>;
     auto sink = co_await rpc_client->make_stream_sink<netw::serializer, SinkType>();
-    auto rpc_handler = rpc->make_client<rpc::source<SourceType> (uint32_t, shard_id, rpc::sink<SinkType>)>(verb);
-    auto source_fut = co_await coroutine::as_future(rpc_handler(*rpc_client, repair_meta_id, dst_shard_id, sink));
+    auto rpc_handler = rpc->make_client<rpc::source<SourceType> (uint32_t, rpc::sink<SinkType>, shard_id)>(verb);
+    auto source_fut = co_await coroutine::as_future(rpc_handler(*rpc_client, repair_meta_id, sink, dst_shard_id));
     if (source_fut.failed()) {
         auto ex = source_fut.get_exception();
         try {
@@ -1045,7 +1045,7 @@ rpc::sink<repair_row_on_wire_with_cmd> messaging_service::make_sink_for_repair_g
     return source.make_sink<netw::serializer, repair_row_on_wire_with_cmd>();
 }
 
-void messaging_service::register_repair_get_row_diff_with_rpc_stream(std::function<future<rpc::sink<repair_row_on_wire_with_cmd>> (const rpc::client_info& cinfo, uint32_t repair_meta_id, rpc::optional<shard_id> dst_cpu_id_opt, rpc::source<repair_hash_with_cmd> source)>&& func) {
+void messaging_service::register_repair_get_row_diff_with_rpc_stream(std::function<future<rpc::sink<repair_row_on_wire_with_cmd>> (const rpc::client_info& cinfo, uint32_t repair_meta_id, rpc::source<repair_hash_with_cmd> source, rpc::optional<shard_id> dst_cpu_id_opt)>&& func) {
     register_handler(this, messaging_verb::REPAIR_GET_ROW_DIFF_WITH_RPC_STREAM, std::move(func));
 }
 future<> messaging_service::unregister_repair_get_row_diff_with_rpc_stream() {
@@ -1067,7 +1067,7 @@ rpc::sink<repair_stream_cmd> messaging_service::make_sink_for_repair_put_row_dif
     return source.make_sink<netw::serializer, repair_stream_cmd>();
 }
 
-void messaging_service::register_repair_put_row_diff_with_rpc_stream(std::function<future<rpc::sink<repair_stream_cmd>> (const rpc::client_info& cinfo, uint32_t repair_meta_id, rpc::optional<shard_id> dst_cpu_id_opt, rpc::source<repair_row_on_wire_with_cmd> source)>&& func) {
+void messaging_service::register_repair_put_row_diff_with_rpc_stream(std::function<future<rpc::sink<repair_stream_cmd>> (const rpc::client_info& cinfo, uint32_t repair_meta_id, rpc::source<repair_row_on_wire_with_cmd> source, rpc::optional<shard_id> dst_cpu_id_opt)>&& func) {
     register_handler(this, messaging_verb::REPAIR_PUT_ROW_DIFF_WITH_RPC_STREAM, std::move(func));
 }
 future<> messaging_service::unregister_repair_put_row_diff_with_rpc_stream() {
@@ -1089,7 +1089,7 @@ rpc::sink<repair_hash_with_cmd> messaging_service::make_sink_for_repair_get_full
     return source.make_sink<netw::serializer, repair_hash_with_cmd>();
 }
 
-void messaging_service::register_repair_get_full_row_hashes_with_rpc_stream(std::function<future<rpc::sink<repair_hash_with_cmd>> (const rpc::client_info& cinfo, uint32_t repair_meta_id, rpc::optional<shard_id> dst_cpu_id_opt, rpc::source<repair_stream_cmd> source)>&& func) {
+void messaging_service::register_repair_get_full_row_hashes_with_rpc_stream(std::function<future<rpc::sink<repair_hash_with_cmd>> (const rpc::client_info& cinfo, uint32_t repair_meta_id, rpc::source<repair_stream_cmd> source, rpc::optional<shard_id> dst_cpu_id_opt)>&& func) {
     register_handler(this, messaging_verb::REPAIR_GET_FULL_ROW_HASHES_WITH_RPC_STREAM, std::move(func));
 }
 future<> messaging_service::unregister_repair_get_full_row_hashes_with_rpc_stream() {

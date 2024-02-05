@@ -2314,7 +2314,7 @@ future<repair_flush_hints_batchlog_response> repair_service::repair_flush_hints_
 future<> repair_service::init_ms_handlers() {
     auto& ms = this->_messaging;
 
-    ms.register_repair_get_row_diff_with_rpc_stream([this, &ms] (const rpc::client_info& cinfo, uint64_t repair_meta_id, rpc::optional<shard_id> dst_cpu_id_opt, rpc::source<repair_hash_with_cmd> source) {
+    ms.register_repair_get_row_diff_with_rpc_stream([this, &ms] (const rpc::client_info& cinfo, uint64_t repair_meta_id, rpc::source<repair_hash_with_cmd> source, rpc::optional<shard_id> dst_cpu_id_opt) {
         auto src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
         auto from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
         auto sink = ms.make_sink_for_repair_get_row_diff_with_rpc_stream(source);
@@ -2326,7 +2326,7 @@ future<> repair_service::init_ms_handlers() {
         });
         return make_ready_future<rpc::sink<repair_row_on_wire_with_cmd>>(sink);
     });
-    ms.register_repair_put_row_diff_with_rpc_stream([this, &ms] (const rpc::client_info& cinfo, uint64_t repair_meta_id, rpc::optional<shard_id> dst_cpu_id_opt, rpc::source<repair_row_on_wire_with_cmd> source) {
+    ms.register_repair_put_row_diff_with_rpc_stream([this, &ms] (const rpc::client_info& cinfo, uint64_t repair_meta_id, rpc::source<repair_row_on_wire_with_cmd> source, rpc::optional<shard_id> dst_cpu_id_opt) {
         auto src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
         auto from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
         auto sink = ms.make_sink_for_repair_put_row_diff_with_rpc_stream(source);
@@ -2338,7 +2338,7 @@ future<> repair_service::init_ms_handlers() {
         });
         return make_ready_future<rpc::sink<repair_stream_cmd>>(sink);
     });
-    ms.register_repair_get_full_row_hashes_with_rpc_stream([this, &ms] (const rpc::client_info& cinfo, uint64_t repair_meta_id, rpc::optional<shard_id> dst_cpu_id_opt, rpc::source<repair_stream_cmd> source) {
+    ms.register_repair_get_full_row_hashes_with_rpc_stream([this, &ms] (const rpc::client_info& cinfo, uint64_t repair_meta_id, rpc::source<repair_stream_cmd> source, rpc::optional<shard_id> dst_cpu_id_opt) {
         auto src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
         auto from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
         auto sink = ms.make_sink_for_repair_get_full_row_hashes_with_rpc_stream(source);
