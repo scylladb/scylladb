@@ -1897,8 +1897,9 @@ std::vector<view_ptr> table::affected_views(const schema_ptr& base, const mutati
 }
 
 static size_t memory_usage_of(const utils::chunked_vector<frozen_mutation_and_schema>& ms) {
-    // Overhead of sending a view mutation, in terms of data structures used by the storage_proxy.
-    constexpr size_t base_overhead_bytes = 256;
+    // Overhead of sending a view mutation, in terms of data structures used by the storage_proxy, as well as possible background tasks
+    // allocated for a remote view update.
+    constexpr size_t base_overhead_bytes = 2288;
     return boost::accumulate(ms | boost::adaptors::transformed([] (const frozen_mutation_and_schema& m) {
         return m.fm.representation().size();
     }), size_t{base_overhead_bytes * ms.size()});
