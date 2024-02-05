@@ -284,11 +284,11 @@ storage_options::s3 storage_options::s3::from_map(const std::map<sstring, sstrin
         if (auto it = values.find(option.first); it != values.end()) {
             *option.second = it->second;
         } else {
-            throw std::runtime_error(format("Missing S3 option: {}", option.first));
+            throw std::runtime_error(fmt::format("Missing S3 option: {}", option.first));
         }
     }
     if (values.size() > allowed_options.size()) {
-        throw std::runtime_error(format("Extraneous options for S3: {}; allowed: {}",
+        throw std::runtime_error(fmt::format("Extraneous options for S3: {}; allowed: {}",
             boost::algorithm::join(values | boost::adaptors::map_keys, ","),
             boost::algorithm::join(allowed_options | boost::adaptors::map_keys, ",")));
     }
@@ -311,7 +311,7 @@ storage_options::value_type storage_options::from_map(std::string_view type, std
     if (type == s3::name) {
         return s3::from_map(values);
     }
-    throw std::runtime_error(format("Unknown storage type: {}", type));
+    throw std::runtime_error(fmt::format("Unknown storage type: {}", type));
 }
 
 std::string_view storage_options::type_string() const {
@@ -327,22 +327,22 @@ bool storage_options::can_update_to(const storage_options& new_options) {
 }
 
 no_such_keyspace::no_such_keyspace(std::string_view ks_name)
-    : runtime_error{format("Can't find a keyspace {}", ks_name)}
+    : runtime_error{fmt::format("Can't find a keyspace {}", ks_name)}
 {
 }
 
 no_such_column_family::no_such_column_family(const table_id& uuid)
-    : runtime_error{format("Can't find a column family with UUID {}", uuid)}
+    : runtime_error{fmt::format("Can't find a column family with UUID {}", uuid)}
 {
 }
 
 no_such_column_family::no_such_column_family(std::string_view ks_name, std::string_view cf_name)
-    : runtime_error{format("Can't find a column family {} in keyspace {}", cf_name, ks_name)}
+    : runtime_error{fmt::format("Can't find a column family {} in keyspace {}", cf_name, ks_name)}
 {
 }
 
 no_such_column_family::no_such_column_family(std::string_view ks_name, const table_id& uuid)
-    : runtime_error{format("Can't find a column family with UUID {} in keyspace {}", uuid, ks_name)}
+    : runtime_error{fmt::format("Can't find a column family with UUID {} in keyspace {}", uuid, ks_name)}
 {
 }
 
