@@ -1170,15 +1170,9 @@ void help_operation(const tool_app_template::config& cfg, const bpo::variables_m
         // goes in.
 
         bpo::options_description opts_desc(fmt::format("scylla-{} options", app_name));
-        opts_desc.add_options()
-                ("help,h", "show help message")
-                ;
-        opts_desc.add_options()
-                ("help-seastar", "show help message about seastar options")
-                ;
-        opts_desc.add_options()
-                ("help-loggers", "print a list of logger names and exit")
-                ;
+        for (const auto& [option, help] : tool_app_template::help_arguments) {
+            opts_desc.add_options()(option, help);
+        }
         if (cfg.global_options) {
             for (const auto& go : *cfg.global_options) {
                 go.add_option(opts_desc);
