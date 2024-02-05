@@ -6,6 +6,7 @@
 
 from rest_api_mock import expected_request
 import subprocess
+import utils
 
 
 def test_jmx_compatibility_args(nodetool, scylla_only):
@@ -40,3 +41,21 @@ def test_nodetool_no_args(nodetool_path, scylla_only):
 Usage: scylla nodetool OPERATION [OPTIONS] ...
 Try `scylla nodetool --help` for more information.
 """
+
+
+def test_nodetool_api_request_failed(nodetool, scylla_only, rest_api_mock_server):
+    ip, port = rest_api_mock_server
+
+    error_messages = [
+            f"error executing POST request to http://{ip}:{port}/storage_service/compact with parameters {{}}:"
+            " remote replied with status code 500 Internal Server Error:",
+            "ERROR MESSAGE"]
+
+    utils.check_nodetool_fails_with_all(
+        nodetool,
+        ("compact",),
+        {"expected_requests": [expected_request("POST",
+                                                "/storage_service/compact",
+                                                response={"message": "ERROR MESSAGE", "code": 500},
+                                                response_status=500)]},
+        error_messages)

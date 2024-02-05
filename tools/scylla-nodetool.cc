@@ -41,6 +41,10 @@ struct operation_failed_on_scylladb : public std::runtime_error {
     using std::runtime_error::runtime_error;
 };
 
+struct api_request_failed : public std::runtime_error {
+    using std::runtime_error::runtime_error;
+};
+
 class scylla_rest_client {
     sstring _host;
     uint16_t _port;
@@ -54,15 +58,24 @@ class scylla_rest_client {
 
         nlog.trace("Making {} request to {} with parameters {}", type, url, params);
 
+
+        http::reply::status_type status = http::reply::status_type::ok;
         sstring res;
 
-        try {
-            _api_client.make_request(std::move(req), seastar::coroutine::lambda([&] (const http::reply&, input_stream<char> body) -> future<> {
-                res = co_await util::read_entire_stream_contiguous(body);
-            })).get();
-        } catch (httpd::unexpected_status_error& e) {
-            throw std::runtime_error(fmt::format("error executing {} request to {} with parameters {}: remote replied with {}", type, url, params,
-                        e.status()));
+        _api_client.make_request(std::move(req), seastar::coroutine::lambda([&] (const http::reply& r, input_stream<char> body) -> future<> {
+            status = r._status;
+            res = co_await util::read_entire_stream_contiguous(body);
+        })).get();
+
+        if (status != http::reply::status_type::ok) {
+            sstring message;
+            try {
+                message = sstring(rjson::to_string_view(rjson::parse(res)["message"]));
+            } catch (...) {
+                message = res;
+            }
+            throw api_request_failed(fmt::format("error executing {} request to {} with parameters {}: remote replied with status code {}:\n{}",
+                    type, url, params, status, message));
         }
 
         if (res.empty()) {
@@ -1426,6 +1439,9 @@ For more information, see: https://opensource.docs.scylladb.com/stable/operating
         } catch (operation_failed_on_scylladb& e) {
             fmt::print(std::cerr, "{}\n", e.what());
             return 3;
+        } catch (api_request_failed& e) {
+            fmt::print(std::cerr, "{}\n", e.what());
+            return 4;
         } catch (...) {
             fmt::print(std::cerr, "error running operation: {}\n", std::current_exception());
             return 2;
