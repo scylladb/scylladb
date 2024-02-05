@@ -857,6 +857,9 @@ private:
                 return service.set_distributed_data_accessor(std::move(service_level_data_accessor));
             }).get();
 
+            const bool raft_topology_change_enabled =
+                    cfg->check_experimental(db::experimental_features_t::feature::CONSISTENT_TOPOLOGY_CHANGES);
+
             cdc::generation_service::config cdc_config;
             cdc_config.ignore_msb_bits = cfg->murmur3_partitioner_ignore_msb_bits();
             /*
@@ -881,9 +884,6 @@ private:
             auto stop_group0_service = defer([&group0_service] {
                 group0_service.abort().get();
             });
-
-            const bool raft_topology_change_enabled =
-                    cfg->check_experimental(db::experimental_features_t::feature::CONSISTENT_TOPOLOGY_CHANGES);
 
             _ss.local().set_group0(group0_service, raft_topology_change_enabled);
 
