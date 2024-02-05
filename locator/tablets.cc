@@ -235,6 +235,14 @@ future<> tablet_map::for_each_tablet(seastar::noncopyable_function<void(tablet_i
     }
 }
 
+future<> tablet_map::for_each_tablet_gently(seastar::noncopyable_function<future<>(tablet_id, const tablet_info&)> func) const {
+    std::optional<tablet_id> tid = first_tablet();
+    for (const tablet_info& ti : tablets()) {
+        co_await func(*tid, ti);
+        tid = next_tablet(*tid);
+    }
+}
+
 void tablet_map::clear_transitions() {
     _transitions.clear();
 }
