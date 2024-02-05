@@ -5164,13 +5164,22 @@ future<> storage_service::cleanup_tablet(locator::global_tablet_id tablet) {
     });
 }
 
-future<> storage_service::move_tablet(table_id table, dht::token token, locator::tablet_replica src, locator::tablet_replica dst) {
+static bool increases_replicas_per_rack(const locator::topology& topology, const locator::tablet_info& tinfo, sstring dst_rack) {
+    std::unordered_map<sstring, size_t> m;
+    for (auto& replica: tinfo.replicas) {
+        m[topology.get_rack(replica.host)]++;
+    }
+    auto max = *boost::max_element(m | boost::adaptors::map_values);
+    return m[dst_rack] + 1 > max;
+}
+
+future<> storage_service::move_tablet(table_id table, dht::token token, locator::tablet_replica src, locator::tablet_replica dst, loosen_constraints force) {
     auto holder = _async_gate.hold();
 
     if (this_shard_id() != 0) {
         // group0 is only set on shard 0.
         co_return co_await container().invoke_on(0, [&] (auto& ss) {
-            return ss.move_tablet(table, token, src, dst);
+            return ss.move_tablet(table, token, src, dst, force);
         });
     }
 
@@ -5191,8 +5200,6 @@ future<> storage_service::move_tablet(table_id table, dht::token token, locator:
         auto last_token = tmap.get_last_token(tid);
         auto gid = locator::global_tablet_id{table, tid};
 
-        // FIXME: Validate replication strategy constraints.
-
         if (!locator::contains(tinfo.replicas, src)) {
             throw std::runtime_error(format("Tablet {} has no replica on {}", gid, src));
         }
@@ -5209,6 +5216,26 @@ future<> storage_service::move_tablet(table_id table, dht::token token, locator:
 
         if (src == dst) {
             co_return;
+        }
+
+        if (locator::contains(tinfo.replicas, dst.host)) {
+            throw std::runtime_error(format("Tablet {} has replica on {}", gid, dst.host));
+        }
+        auto src_dc_rack = get_token_metadata().get_topology().get_location(src.host);
+        auto dst_dc_rack = get_token_metadata().get_topology().get_location(dst.host);
+        if (src_dc_rack.dc != dst_dc_rack.dc) {
+            if (force) {
+                slogger.warn("Moving tablet {} between DCs ({} and {})", gid, src_dc_rack.dc, dst_dc_rack.dc);
+            } else {
+                throw std::runtime_error(format("Attempted to move tablet {} between DCs ({} and {})", gid, src_dc_rack.dc, dst_dc_rack.dc));
+            }
+        }
+        if (src_dc_rack.rack != dst_dc_rack.rack && increases_replicas_per_rack(get_token_metadata().get_topology(), tinfo, dst_dc_rack.rack)) {
+            if (force) {
+                slogger.warn("Moving tablet {} between racks ({} and {}) which reduces availability", gid, src_dc_rack.rack, dst_dc_rack.rack);
+            } else {
+                throw std::runtime_error(format("Attempted to move tablet {} between racks ({} and {}) which would reduce availability", gid, src_dc_rack.rack, dst_dc_rack.rack));
+            }
         }
 
         updates.push_back(canonical_mutation(replica::tablet_mutation_builder(guard.write_timestamp(), table)

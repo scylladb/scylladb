@@ -103,6 +103,7 @@ enum class disk_error { regular, commit };
 class node_ops_meta_data;
 
 using start_hint_manager = seastar::bool_class<class start_hint_manager_tag>;
+using loosen_constraints = seastar::bool_class<class loosen_constraints_tag>;
 
 /**
  * This abstraction contains the token/identifier of this node
@@ -797,7 +798,7 @@ public:
 
     future<> do_cluster_cleanup();
 public:
-    future<> move_tablet(table_id, dht::token, locator::tablet_replica src, locator::tablet_replica dst);
+    future<> move_tablet(table_id, dht::token, locator::tablet_replica src, locator::tablet_replica dst, loosen_constraints force = loosen_constraints::no);
     future<> set_tablet_balancing_enabled(bool);
 
     // In the maintenance mode, other nodes won't be available thus we disabled joining
