@@ -2948,6 +2948,18 @@ std::optional<service::topology_features> system_keyspace::decode_topology_featu
 
 future<cdc::topology_description>
 system_keyspace::read_cdc_generation(utils::UUID id) {
+    auto gen_desc = co_await read_cdc_generation_opt(id);
+
+    if (!gen_desc) {
+        on_internal_error(slogger, format(
+            "read_cdc_generation: data for CDC generation {} not present", id));
+    }
+
+    co_return std::move(*gen_desc);
+}
+
+future<std::optional<cdc::topology_description>>
+system_keyspace::read_cdc_generation_opt(utils::UUID id) {
     utils::chunked_vector<cdc::token_range_description> entries;
     co_await _qp.query_internal(
             format("SELECT range_end, streams, ignore_msb FROM {}.{} WHERE key = '{}' AND id = ?",
@@ -2966,9 +2978,7 @@ system_keyspace::read_cdc_generation(utils::UUID id) {
     });
 
     if (entries.empty()) {
-        // The data must be present by precondition.
-        on_internal_error(slogger, format(
-            "read_cdc_generation: data for CDC generation {} not present", id));
+        co_return std::nullopt;
     }
 
     co_return cdc::topology_description{std::move(entries)};
