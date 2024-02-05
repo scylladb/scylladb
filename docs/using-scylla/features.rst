@@ -14,5 +14,5 @@ ScyllaDB Features
    Workload Attributes <workload-attributes>
 
 `ScyllaDB Enterprise <https://enterprise.docs.scylladb.com/stable/overview.html#enterprise-only-features>`_ 
-provides additional premium features, including Encryption at Rest, 
+provides additional features, including Encryption at Rest, 
 workload prioritization, auditing, and more.
