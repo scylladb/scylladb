@@ -17,6 +17,7 @@
 #include "service/qos/raft_service_level_distributed_data_accessor.hh"
 #include "service/qos/service_level_controller.hh"
 #include "service/qos/standard_service_level_distributed_data_accessor.hh"
+#include "locator/token_metadata.hh"
 #include "service/topology_guard.hh"
 #include "service/session.hh"
 #include "dht/boot_strapper.hh"
@@ -1071,11 +1072,11 @@ std::unordered_set<raft::server_id> storage_service::find_raft_nodes_from_hoeps(
     for (const auto& hoep : hoeps) {
         std::optional<raft::server_id> id;
         if (hoep.has_host_id()) {
-            id = raft::server_id{hoep.id.uuid()};
+            id = raft::server_id{hoep.id().uuid()};
         } else {
-            id = _group0->address_map().find_by_addr(hoep.endpoint);
+            id = _group0->address_map().find_by_addr(hoep.endpoint());
             if (!id) {
-                throw std::runtime_error(::format("Cannot find a mapping to IP {}", hoep.endpoint));
+                throw std::runtime_error(::format("Cannot find a mapping to IP {}", hoep.endpoint()));
             }
         }
         if (!_topology_state_machine._topology.find(*id)) {
@@ -2003,8 +2004,8 @@ std::unordered_set<gms::inet_address> storage_service::parse_node_list(sstring c
     std::unordered_set<gms::inet_address> ignore_nodes;
     for (const sstring& n : ignore_nodes_strs) {
         try {
-            auto ep_and_id = tm.parse_host_id_and_endpoint(n);
-            ignore_nodes.insert(ep_and_id.endpoint);
+            auto hoep = locator::host_id_or_endpoint(n);
+            ignore_nodes.insert(hoep.resolve_endpoint(tm));
         } catch (...) {
             throw std::runtime_error(::format("Failed to parse node list: {}: invalid node={}: {}", ignore_nodes_strs, n, std::current_exception()));
         }
@@ -3850,8 +3851,7 @@ future<> storage_service::removenode(locator::host_id host_id, std::list<locator
             }
 
             for (auto& hoep : ignore_nodes_params) {
-                hoep.resolve(*tmptr);
-                ctl.ignore_nodes.insert(hoep.endpoint);
+                ctl.ignore_nodes.insert(hoep.resolve_endpoint(*tmptr));
             }
 
             bool removed_from_token_ring = !endpoint_opt;
