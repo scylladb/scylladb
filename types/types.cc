@@ -115,12 +115,6 @@ sstring boolean_to_string(const bool b) {
     return b ? "true" : "false";
 }
 
-sstring inet_addr_type_impl::to_sstring(const seastar::net::inet_address& addr) {
-    std::ostringstream out;
-    out << addr;
-    return out.str();
-}
-
 static const char* byte_type_name      = "org.apache.cassandra.db.marshal.ByteType";
 static const char* short_type_name     = "org.apache.cassandra.db.marshal.ShortType";
 static const char* int32_type_name     = "org.apache.cassandra.db.marshal.Int32Type";
@@ -2882,7 +2876,7 @@ struct to_string_impl_visitor {
     }
     sstring operator()(const empty_type_impl&, const void*) { return sstring(); }
     sstring operator()(const inet_addr_type_impl& a, const inet_addr_type_impl::native_type* v) {
-        return format_if_not_empty(a, v, inet_addr_type_impl::to_sstring);
+        return format_if_not_empty(a, v, [] (const seastar::net::inet_address& addr) { return fmt::to_string(addr); });
     }
     sstring operator()(const list_type_impl& l, const list_type_impl::native_type* v) {
         return format_if_not_empty(
