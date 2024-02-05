@@ -29,9 +29,9 @@ namespace {
 // The operation is expected to be at argv[1].If found, it is shifted out to the
 // end (effectively removed) and the corresponding operation* is returned.
 // If not found or unrecognized an error is logged and exit() is called.
-const operation& get_selected_operation(int& ac, char**& av, const std::vector<operation>& operations, std::string_view alias) {
+const operation& get_selected_operation(int& ac, char**& av, const std::vector<operation>& operations) {
     if (ac < 2) {
-        fmt::print(std::cerr, "error: missing mandatory {} argument\n", alias);
+        fmt::print(std::cerr, "error: missing mandatory operation argument\n");
         exit(1);
     }
 
@@ -53,7 +53,7 @@ const operation& get_selected_operation(int& ac, char**& av, const std::vector<o
         }
     }
 
-    fmt::print(std::cerr, "error: unrecognized {} argument: expected one of ({}), got {}\n", alias, all_operation_names, op_name);
+    fmt::print(std::cerr, "error: unrecognized operation argument: expected one of ({}), got {}\n", all_operation_names, op_name);
     exit(100);
 }
 
@@ -112,7 +112,7 @@ int tool_app_template::run_async(int argc, char** argv, noncopyable_function<int
 
     const operation* found_op = nullptr;
     if (std::strncmp(argv[1], "--help", 6) != 0 && std::strcmp(argv[1], "-h") != 0) {
-        found_op = &tools::utils::get_selected_operation(argc, argv, _cfg.operations, "operation");
+        found_op = &tools::utils::get_selected_operation(argc, argv, _cfg.operations);
     }
 
     app_template::seastar_options app_cfg;
