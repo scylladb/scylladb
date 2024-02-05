@@ -6,14 +6,14 @@
 
 import pytest
 import subprocess
-import typing
 
 
-def check_nodetool_fails_with(
+def _do_check_nodetool_fails_with(
         nodetool,
         nodetool_args: tuple,
         nodetool_kwargs: dict,
-        expected_errors: typing.List[str]):
+        expected_errors: list[str],
+        match_all: bool = False):
 
     with pytest.raises(subprocess.CalledProcessError) as e:
         nodetool(*nodetool_args, **nodetool_kwargs)
@@ -21,9 +21,28 @@ def check_nodetool_fails_with(
     err_lines = e.value.stderr.rstrip().split('\n')
     out_lines = e.value.stdout.rstrip().split('\n')
 
-    match = False
+    match = 0
     for expected_error in expected_errors:
         if expected_error in err_lines or expected_error in out_lines:
-            match = True
+            match += 1
 
-    assert match
+    if match_all:
+        assert match == len(expected_errors)
+    else:
+        assert match > 0
+
+
+def check_nodetool_fails_with(
+        nodetool,
+        nodetool_args: tuple,
+        nodetool_kwargs: dict,
+        expected_errors: list[str]):
+    _do_check_nodetool_fails_with(nodetool, nodetool_args, nodetool_kwargs, expected_errors, False)
+
+
+def check_nodetool_fails_with_all(
+        nodetool,
+        nodetool_args: tuple,
+        nodetool_kwargs: dict,
+        expected_errors: list[str]):
+    _do_check_nodetool_fails_with(nodetool, nodetool_args, nodetool_kwargs, expected_errors, True)
