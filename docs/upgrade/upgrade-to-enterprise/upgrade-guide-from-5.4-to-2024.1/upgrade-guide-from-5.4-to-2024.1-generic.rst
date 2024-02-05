@@ -12,7 +12,7 @@
 .. |SCYLLA_DEB_SRC_REPO| replace:: ScyllaDB deb repo (|DEBIAN_SRC_REPO|_, |UBUNTU_SRC_REPO|_)
 
 .. |SCYLLA_RPM_SRC_REPO| replace:: ScyllaDB rpm repo
-.. _SCYLLA_RPM_SRC_REPO: https://www.scylladb.com/download/?platform=centos&version=scylla-5.2
+.. _SCYLLA_RPM_SRC_REPO: https://www.scylladb.com/download/?platform=centos&version=scylla-5.4
 
 .. |DEBIAN_NEW_REPO| replace:: Debian
 .. _DEBIAN_NEW_REPO: https://www.scylladb.com/customer-portal/?product=ent&platform=debian-10&version=stable-release-2024.1
