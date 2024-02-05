@@ -276,6 +276,7 @@ public:
     named_value<bool> start_native_transport;
     named_value<uint16_t> native_transport_port;
     named_value<sstring> maintenance_socket;
+    named_value<sstring> maintenance_socket_group;
     named_value<bool> maintenance_mode;
     named_value<uint16_t> native_transport_port_ssl;
     named_value<uint16_t> native_shard_aware_transport_port;

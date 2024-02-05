@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include <grp.h>
 #include "transport/controller.hh"
 #include <seastar/core/sharded.hh>
 #include <seastar/net/socket_defs.hh>
@@ -181,7 +182,25 @@ future<> controller::start_listening_on_maintenance_socket(sharded<cql_server>& 
         file_permissions::user_read | file_permissions::user_write |
         file_permissions::group_read | file_permissions::group_write;
 
-    return listen_on_all_shards(cserver, addr, nullptr, false, _config.rpc_keepalive(), unix_domain_socket_permissions);
+    co_await listen_on_all_shards(cserver, addr, nullptr, false, _config.rpc_keepalive(), unix_domain_socket_permissions);
+
+    if (_config.maintenance_socket_group.is_set()) {
+        auto group_name = _config.maintenance_socket_group();
+        struct group *grp;
+        grp = ::getgrnam(group_name.c_str());
+        if (!grp) {
+            throw std::runtime_error(format("Group id of {} not found. Make sure the group exists.", group_name));
+        }
+
+        auto chown_result = ::chown(socket.c_str(), ::geteuid(), grp->gr_gid);
+        if (chown_result < 0) {
+            if (errno == EPERM) {
+                throw std::runtime_error(format("Failed to change group of {}: Permission denied. Make sure the user has the root privilege or is a member of the group {}.", socket, group_name));
+            } else {
+                throw std::runtime_error(format("Failed to chown {}: {} ()", socket, strerror(errno)));
+            }
+        }
+    }
 }
 
 future<> controller::do_start_server() {

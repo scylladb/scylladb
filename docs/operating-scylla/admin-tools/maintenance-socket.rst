@@ -11,10 +11,14 @@ To set up the maintenance socket, use the `maintenance-socket` option when start
 * If set to `workdir` maintenance socket will be created in `<node's workdir>/cql.m`.
 * Otherwise maintenance socket will be created in the specified path.
 
+
 The maintenance socket path has to satisfy following restrictions:
 
 * the path has to be shorter than `108` chars (due to linux limits),
 * a file or a directory cannot exists in this path.
+
+Option `maintenance-socket-group` sets the owning group of the maintenance socket. If not set, the group will be the same as the user running the scylla node.
+The user running the scylla node has to be in the group specified by `maintenance-socket-group` option or have root privileges.
 
 Connect to maintenance socket
 -----------------------------
