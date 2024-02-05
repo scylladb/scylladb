@@ -56,7 +56,9 @@ enum class exception_code : int32_t {
     RATE_LIMIT_ERROR = 0xF000
 };
 
-std::ostream& operator<<(std::ostream& os, exception_code ec);
+inline auto format_as(exception_code ec) {
+    return fmt::underlying(ec);
+}
 
 const std::unordered_map<exception_code, sstring>& exception_map();
 
