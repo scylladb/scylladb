@@ -3495,6 +3495,11 @@ std::vector<char*> massage_argv(int argc, char** argv) {
             continue;
         }
 
+        // Java JVM options, they look like -Dkey=value, or just -Dkey
+        if (argv[i][1] == 'D') {
+            continue;
+        }
+
         std::string arg = argv[i];
         std::string arg_key;
         std::optional<std::string> arg_value;
