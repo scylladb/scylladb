@@ -147,8 +147,9 @@ future<> controller::start_listening_on_maintenance_socket(sharded<cql_server>& 
         socket = _config.work_directory() + "/cql.m";
     }
 
-    if (socket.length() > 107) {
-        throw std::runtime_error(format("Maintenance socket path is too long: {}. Change it to string shorter than 108 chars.", socket));
+    auto max_socket_length = sizeof(sockaddr_un::sun_path);
+    if (socket.length() > max_socket_length - 1) {
+        throw std::runtime_error(format("Maintenance socket path is too long: {}. Change it to string shorter than {} chars.", socket, max_socket_length));
     }
 
     struct stat statbuf;
