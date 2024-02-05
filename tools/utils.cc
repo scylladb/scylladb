@@ -91,6 +91,12 @@ db_config_and_extensions::db_config_and_extensions()
 db_config_and_extensions::db_config_and_extensions(db_config_and_extensions&&) = default;
 db_config_and_extensions::~db_config_and_extensions() = default;
 
+const std::vector<std::pair<const char*, const char*>> tool_app_template::help_arguments{
+    {"help,h", "show help message"},
+    {"help-seastar", "show help message about seastar options"},
+    {"help-loggers", "print a list of logger names and exit"},
+};
+
 tool_app_template::tool_app_template(config cfg)
     : _cfg(std::move(cfg))
 {}
