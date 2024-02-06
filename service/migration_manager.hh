@@ -94,6 +94,11 @@ public:
     const migration_notifier& get_notifier() const { return _notifier; }
     service::storage_proxy& get_storage_proxy() { return _storage_proxy; }
     const service::storage_proxy& get_storage_proxy() const { return _storage_proxy; }
+    abort_source& get_abort_source() noexcept { return _as; }
+    const abort_source& get_abort_source() const noexcept { return _as; }
+    serialized_action& get_group0_barrier() noexcept { return _group0_barrier; }
+    const serialized_action& get_group0_barrier() const noexcept { return _group0_barrier; }
+    bool use_raft() const noexcept { return !_enable_schema_pulls; }
 
     // Disable schema pulls when Raft group 0 is fully responsible for managing schema.
     future<> disable_schema_pulls();
