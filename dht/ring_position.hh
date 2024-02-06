@@ -136,8 +136,6 @@ public:
 
     // "less" comparator corresponding to tri_compare()
     bool less_compare(const schema&, const ring_position&) const;
-
-    friend std::ostream& operator<<(std::ostream&, const ring_position&);
 };
 
 // Non-owning version of ring_position and ring_position_ext.
@@ -504,4 +502,10 @@ struct fmt::formatter<dht::ring_position_ext> {
     auto format(const dht::ring_position_ext& pos, fmt::format_context& ctx) const {
         return fmt::format_to(ctx.out(), "{}", (dht::ring_position_view)pos);
     }
+};
+
+template<>
+struct fmt::formatter<dht::ring_position> {
+    constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
+    auto format(const dht::ring_position& pos, fmt::format_context& ctx) const -> decltype(ctx.out());
 };
