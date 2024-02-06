@@ -110,10 +110,6 @@ sstring time_to_string(const int64_t nanoseconds_count) {
     return s;
 }
 
-sstring boolean_to_string(const bool b) {
-    return b ? "true" : "false";
-}
-
 sstring inet_addr_type_impl::to_sstring(const seastar::net::inet_address& addr) {
     std::ostringstream out;
     out << addr;
@@ -2868,7 +2864,7 @@ struct to_string_impl_visitor {
         return format_if_not_empty(b, v, [] (const bytes& v) { return to_hex(v); });
     }
     sstring operator()(const boolean_type_impl& b, const boolean_type_impl::native_type* v) {
-        return format_if_not_empty(b, v, boolean_to_string);
+        return format_if_not_empty(b, v, [] (const bool b) { return fmt::to_string(b); });
     }
     sstring operator()(const timestamp_date_base_class& d, const timestamp_date_base_class::native_type* v) {
         return format_if_not_empty(d, v, [] (const db_clock::time_point& v) { return time_point_to_string(v); });
