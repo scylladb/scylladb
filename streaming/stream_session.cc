@@ -110,8 +110,8 @@ void stream_manager::init_messaging_service_handler(abort_source& as) {
     });
     ms.register_stream_mutation_fragments([this, &as] (const rpc::client_info& cinfo, streaming::plan_id plan_id, table_schema_version schema_id, table_id cf_id, uint64_t estimated_partitions,
             rpc::optional<stream_reason> reason_opt,
-            rpc::optional<service::session_id> session,
-            rpc::source<frozen_mutation_fragment, rpc::optional<stream_mutation_fragments_cmd>> source) {
+            rpc::source<frozen_mutation_fragment, rpc::optional<stream_mutation_fragments_cmd>> source,
+            rpc::optional<service::session_id> session) {
         auto from = netw::messaging_service::get_source(cinfo);
         auto reason = reason_opt ? *reason_opt: stream_reason::unspecified;
         service::frozen_topology_guard topo_guard = session.value_or(service::default_session_id);
