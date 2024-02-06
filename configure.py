@@ -1533,13 +1533,17 @@ def get_warning_options(cxx):
     warnings = [
         '-Wall',
         '-Werror',
+        '-Wextra',
         '-Wimplicit-fallthrough',
         '-Wignored-qualifiers',
         '-Wno-mismatched-tags',  # clang-only
         '-Wno-c++11-narrowing',
         '-Wno-overloaded-virtual',
         '-Wno-unused-command-line-argument',
+        '-Wno-unused-parameter',
         '-Wno-unsupported-friend',
+        '-Wno-missing-field-initializers',
+        '-Wno-deprecated-copy',
         # https://gcc.gnu.org/bugzilla/show_bug.cgi?id=77728
         '-Wno-psabi',
         '-Wno-enum-constexpr-conversion',
