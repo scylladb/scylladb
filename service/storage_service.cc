@@ -3028,6 +3028,7 @@ future<> storage_service::raft_decommission() {
 future<> storage_service::decommission() {
     return run_with_api_lock(sstring("decommission"), [] (storage_service& ss) {
         return seastar::async([&ss] {
+            ss.check_ability_to_perform_topology_operation("decommission");
             std::exception_ptr leave_group0_ex;
             if (ss.raft_topology_change_enabled()) {
                 ss.raft_decommission().get();
@@ -3381,6 +3382,7 @@ future<> storage_service::raft_removenode(locator::host_id host_id, std::list<lo
 future<> storage_service::removenode(locator::host_id host_id, std::list<locator::host_id_or_endpoint> ignore_nodes_params) {
     return run_with_api_lock(sstring("removenode"), [host_id, ignore_nodes_params = std::move(ignore_nodes_params)] (storage_service& ss) mutable {
         return seastar::async([&ss, host_id, ignore_nodes_params = std::move(ignore_nodes_params)] () mutable {
+            ss.check_ability_to_perform_topology_operation("removenode");
             if (ss.raft_topology_change_enabled()) {
                 ss.raft_removenode(host_id, std::move(ignore_nodes_params)).get();
                 return;
@@ -3513,6 +3515,8 @@ future<> storage_service::check_and_repair_cdc_streams() {
     if (!_cdc_gens.local_is_initialized()) {
         return make_exception_future<>(std::runtime_error("CDC generation service not initialized yet"));
     }
+
+    check_ability_to_perform_topology_operation("checkAndRepairCdcStreams");
 
     if (raft_topology_change_enabled()) {
         return raft_check_and_repair_cdc_streams();
@@ -4078,6 +4082,7 @@ future<> storage_service::raft_check_and_repair_cdc_streams() {
 
 future<> storage_service::rebuild(sstring source_dc) {
     return run_with_api_lock(sstring("rebuild"), [source_dc] (storage_service& ss) -> future<> {
+        ss.check_ability_to_perform_topology_operation("rebuild");
         if (ss.raft_topology_change_enabled()) {
             co_await ss.raft_rebuild(source_dc);
         } else {
@@ -4108,6 +4113,20 @@ future<> storage_service::rebuild(sstring source_dc) {
             }
         }
     });
+}
+
+void storage_service::check_ability_to_perform_topology_operation(std::string_view operation_name) const {
+    switch (_topology_change_kind_enabled) {
+    case topology_change_kind::unknown:
+        throw std::runtime_error(format("{} is not allowed at this time - the node is still starting", operation_name));
+    case topology_change_kind::upgrading_to_raft:
+        throw std::runtime_error(format("{} is not allowed at this time - the node is still in the process"
+                " of upgrading to raft topology", operation_name));
+    case topology_change_kind::legacy:
+        return;
+    case topology_change_kind::raft:
+        return;
+    }
 }
 
 int32_t storage_service::get_exception_count() {
@@ -5381,6 +5400,13 @@ future<> storage_service::set_tablet_balancing_enabled(bool enabled) {
 future<join_node_request_result> storage_service::join_node_request_handler(join_node_request_params params) {
     join_node_request_result result;
     rtlogger.info("received request to join from host_id: {}", params.host_id);
+
+    // Sanity check. We should already be using raft topology changes because
+    // the node asked us via join_node_query about which node to use and
+    // we responded that they should use raft. We cannot go back from raft
+    // to legacy (unless we switch to recovery between handling join_node_query
+    // and join_node_request, which is extremely unlikely).
+    check_ability_to_perform_topology_operation("join");
 
     if (params.cluster_name != _db.local().get_config().cluster_name()) {
         result.result = join_node_request_result::rejected{
