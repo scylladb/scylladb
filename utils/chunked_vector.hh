@@ -71,7 +71,7 @@ class chunked_vector {
     size_t _capacity = 0;
 public:
     // Maximum number of T elements fitting in a single chunk.
-    static size_t max_chunk_capacity() {
+    static constexpr size_t max_chunk_capacity() {
         return std::max(max_contiguous_allocation / sizeof(T), size_t(1));
     }
 private:
