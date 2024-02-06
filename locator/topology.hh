@@ -73,7 +73,6 @@ public:
     node(const locator::topology* topology,
          locator::host_id id,
          inet_address endpoint,
-         endpoint_dc_rack dc_rack,
          state state,
          shard_id shard_count = 0,
          this_node is_this_node = this_node::no,
@@ -153,7 +152,6 @@ private:
     static node_holder make(const locator::topology* topology,
                             locator::host_id id,
                             inet_address endpoint,
-                            endpoint_dc_rack dc_rack,
                             state state,
                             shard_id shard_count = 0,
                             node::this_node is_this_node = this_node::no,
@@ -365,12 +363,12 @@ public:
 
 private:
     bool is_configured_this_node(const node&) const;
-    const node* add_node(node_holder node);
+    const node* add_node(node_holder node, const endpoint_dc_rack& dc_rack);
     void remove_node(const node* node);
 
     static std::string debug_format(const node*);
 
-    void index_node(const node* node);
+    void index_node(node* node, const endpoint_dc_rack& dr);
     void unindex_node(const node* node);
     node_holder pop_node(const node* node);
 

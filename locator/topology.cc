@@ -15,6 +15,7 @@
 #include "log.hh"
 #include "locator/topology.hh"
 #include "locator/production_snitch_base.hh"
+#include "locator/types.hh"
 #include "utils/stall_free.hh"
 
 struct node_printer {
@@ -48,23 +49,22 @@ thread_local const endpoint_dc_rack endpoint_dc_rack::default_location = {
     .rack = locator::production_snitch_base::default_rack,
 };
 
-node::node(const locator::topology* topology, locator::host_id id, inet_address endpoint, endpoint_dc_rack dc_rack, state state, shard_id shard_count, this_node is_this_node, node::idx_type idx)
+node::node(const locator::topology* topology, locator::host_id id, inet_address endpoint, state state, shard_id shard_count, this_node is_this_node, node::idx_type idx)
     : _topology(topology)
     , _host_id(id)
     , _endpoint(endpoint)
-    , _dc_rack(std::move(dc_rack))
     , _state(state)
     , _shard_count(std::move(shard_count))
     , _is_this_node(is_this_node)
     , _idx(idx)
 {}
 
-node_holder node::make(const locator::topology* topology, locator::host_id id, inet_address endpoint, endpoint_dc_rack dc_rack, state state, shard_id shard_count, node::this_node is_this_node, node::idx_type idx) {
-    return std::make_unique<node>(topology, std::move(id), std::move(endpoint), std::move(dc_rack), std::move(state), shard_count, is_this_node, idx);
+node_holder node::make(const locator::topology* topology, locator::host_id id, inet_address endpoint, state state, shard_id shard_count, node::this_node is_this_node, node::idx_type idx) {
+    return std::make_unique<node>(topology, std::move(id), std::move(endpoint), std::move(state), shard_count, is_this_node, idx);
 }
 
 node_holder node::clone() const {
-    return make(nullptr, host_id(), endpoint(), dc_rack(), get_state(), get_shard_count(), is_this_node());
+    return make(nullptr, host_id(), endpoint(), get_state(), get_shard_count(), is_this_node());
 }
 
 std::string node::to_string(node::state s) {
@@ -139,7 +139,7 @@ future<topology> topology::clone_gently() const {
     tlogger.debug("topology[{}]: clone_gently to {} from shard {}", fmt::ptr(this), fmt::ptr(&ret), _shard);
     for (const auto& nptr : _nodes) {
         if (nptr) {
-            ret.add_node(nptr->clone());
+            ret.add_node(nptr->clone(), nptr->dc_rack());
         }
         co_await coroutine::maybe_yield();
     }
@@ -148,10 +148,7 @@ future<topology> topology::clone_gently() const {
 }
 
 const node* topology::add_node(host_id id, const inet_address& ep, const endpoint_dc_rack& dr, node::state state, shard_id shard_count) {
-    if (dr.dc.empty() || dr.rack.empty()) {
-        on_internal_error(tlogger, "Node must have valid dc and rack");
-    }
-    return add_node(node::make(this, id, ep, dr, state, shard_count));
+    return add_node(node::make(this, id, ep, state, shard_count), dr);
 }
 
 bool topology::is_configured_this_node(const node& n) const {
@@ -164,8 +161,8 @@ bool topology::is_configured_this_node(const node& n) const {
     return false; // No selection;
 }
 
-const node* topology::add_node(node_holder nptr) {
-    const node* node = nptr.get();
+const node* topology::add_node(node_holder nptr, const endpoint_dc_rack& dr) {
+    node* node = nptr.get();
 
     if (nptr->topology() != this) {
         if (nptr->topology()) {
@@ -189,14 +186,11 @@ const node* topology::add_node(node_holder nptr) {
             }
             locator::node& n = *_nodes.back();
             n._is_this_node = node::this_node::yes;
-            if (n._dc_rack == endpoint_dc_rack::default_location) {
-                n._dc_rack = _cfg.local_dc_rack;
-            }
         }
 
         tlogger.debug("topology[{}]: add_node: {}, at {}", fmt::ptr(this), node_printer(nptr.get()), lazy_backtrace());
 
-        index_node(node);
+        index_node(node, dr);
     } catch (...) {
         pop_node(make_mutable(node));
         throw;
@@ -250,8 +244,6 @@ const node* topology::update_node(node* node, std::optional<host_id> opt_id, std
         }
         if (*opt_dr != node->dc_rack()) {
             changed = true;
-        } else {
-            opt_dr.reset();
         }
     }
     if (opt_st) {
@@ -265,6 +257,12 @@ const node* topology::update_node(node* node, std::optional<host_id> opt_id, std
         return node;
     }
 
+    // Populate opt_dr even if it is set for update.
+    // It is used for reindexing the node below.
+    if (!opt_dr) {
+        opt_dr = node->dc_rack();
+    }
+
     unindex_node(node);
     // The following block must not throw
     try {
@@ -275,9 +273,6 @@ const node* topology::update_node(node* node, std::optional<host_id> opt_id, std
         if (opt_ep) {
             mutable_node->_endpoint = *opt_ep;
         }
-        if (opt_dr) {
-            mutable_node->_dc_rack = std::move(*opt_dr);
-        }
         if (opt_st) {
             mutable_node->set_state(*opt_st);
         }
@@ -287,7 +282,7 @@ const node* topology::update_node(node* node, std::optional<host_id> opt_id, std
     } catch (...) {
         std::terminate();
     }
-    index_node(node);
+    index_node(node, *opt_dr);
     return node;
 }
 
@@ -305,7 +300,7 @@ void topology::remove_node(const node* node) {
     pop_node(node);
 }
 
-void topology::index_node(const node* node) {
+void topology::index_node(node* node, const endpoint_dc_rack& dr) {
     tlogger.trace("topology[{}]: index_node: {}, at {}", fmt::ptr(this), node_printer(node), lazy_backtrace());
 
     if (node->idx() < 0) {
@@ -344,14 +339,24 @@ void topology::index_node(const node* node) {
         }
     }
 
-    const auto& dc = node->dc_rack().dc;
-    const auto& rack = node->dc_rack().rack;
+    endpoint_dc_rack loc = dr;
+    if (dr.dc.empty() || dr.dc == production_snitch_base::default_dc) {
+        loc.dc = _cfg.local_dc_rack.dc;
+        if (dr.rack.empty() || dr.rack == production_snitch_base::default_rack) {
+            loc.rack = _cfg.local_dc_rack.rack;
+        }
+    }
     const auto& endpoint = node->endpoint();
+    // FIXME: provide storing exception safety guarantees
+    auto& dc = loc.dc;
+    auto& rack = loc.rack;
     _dc_nodes[dc].emplace(node);
     _dc_rack_nodes[dc][rack].emplace(node);
     _dc_endpoints[dc].insert(endpoint);
     _dc_racks[dc][rack].insert(endpoint);
     _datacenters.insert(dc);
+
+    node->_dc_rack = std::move(loc);
 
     if (node->is_this_node()) {
         _this_node = node;

@@ -52,7 +52,6 @@ SEASTAR_THREAD_TEST_CASE(test_add_node) {
     BOOST_REQUIRE_THROW(topo.add_node(id2, ep1, endpoint_dc_rack::default_location, node::state::normal), std::runtime_error);
     BOOST_REQUIRE_THROW(topo.add_node(id2, ep2, endpoint_dc_rack::default_location, node::state::normal), std::runtime_error);
     BOOST_REQUIRE_THROW(topo.add_node(id2, ep3, endpoint_dc_rack::default_location, node::state::normal), std::runtime_error);
-    BOOST_REQUIRE_THROW(topo.add_node(id3, ep3, endpoint_dc_rack{}, node::state::normal), std::runtime_error);
 
     nodes.insert(topo.add_node(id3, ep3, endpoint_dc_rack::default_location, node::state::normal));
 

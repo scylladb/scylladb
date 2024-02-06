@@ -888,7 +888,7 @@ SEASTAR_THREAD_TEST_CASE(test_topology_tracks_local_node) {
     BOOST_REQUIRE(!bool(n2->is_this_node()));
     BOOST_REQUIRE_EQUAL(n2->host_id(), host2);
     BOOST_REQUIRE_EQUAL(n2->endpoint(), ip2);
-    BOOST_REQUIRE(n2->dc_rack() == endpoint_dc_rack::default_location);
+    BOOST_REQUIRE(n2->dc_rack() == ip1_dc_rack);
 
     // Removing local node
 
@@ -936,7 +936,7 @@ SEASTAR_THREAD_TEST_CASE(test_topology_tracks_local_node) {
     BOOST_REQUIRE(!bool(n2->is_this_node()));
     BOOST_REQUIRE_EQUAL(n2->host_id(), host2);
     BOOST_REQUIRE_EQUAL(n2->endpoint(), ip2);
-    BOOST_REQUIRE(n2->dc_rack() == endpoint_dc_rack::default_location);
+    BOOST_REQUIRE(n2->dc_rack() == ip1_dc_rack);
 
     // get_location() should pick up endpoint_dc_rack from node info
 
