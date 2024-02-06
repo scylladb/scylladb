@@ -951,6 +951,12 @@ std::vector<canonical_mutation> storage_service::build_mutation_from_join_params
     auto ignored_nodes = ignored_nodes_from_join_params(params);
 
     if (!ignored_nodes.empty()) {
+        auto bad_id = std::find_if_not(ignored_nodes.begin(), ignored_nodes.end(), [&] (auto n) {
+            return _topology_state_machine._topology.normal_nodes.contains(n);
+        });
+        if (bad_id != ignored_nodes.end()) {
+            throw std::runtime_error(::format("replace: there is no node with id {} in normal state. Cannot ignore it.", *bad_id));
+        }
         builder.add_ignored_nodes(std::move(ignored_nodes));
     }
 
@@ -3556,6 +3562,14 @@ future<> storage_service::raft_removenode(locator::host_id host_id, std::list<lo
         }
 
         auto ignored_ids = find_raft_nodes_from_hoeps(ignore_nodes_params);
+        if (!ignored_ids.empty()) {
+            auto bad_id = std::find_if_not(ignored_ids.begin(), ignored_ids.end(), [&] (auto n) {
+                return _topology_state_machine._topology.normal_nodes.contains(n);
+            });
+            if (bad_id != ignored_ids.end()) {
+                throw std::runtime_error(::format("removenode: there is no node with id {} in normal state. Cannot ignore it.", *bad_id));
+            }
+        }
         // insert node that should be removed to ignore list so that other topology operations
         // can ignore it
         ignored_ids.insert(id);
