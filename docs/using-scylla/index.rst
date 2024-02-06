@@ -11,7 +11,6 @@ ScyllaDB for Developers
    ScyllaDB Alternator <alternator/index>
    ScyllaDB Features <features>
    ScyllaDB Drivers <drivers/index>
-   Workload Attributes <workload-attributes>
 
 
 .. panel-box::
