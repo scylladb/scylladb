@@ -593,7 +593,7 @@ private:
     // Called when coordinator executes tablet splitting, i.e. commit the new tablet map with
     // each tablet split into two, so this replica will remap all of its compaction groups
     // that were previously split.
-    void handle_tablet_split_completion(size_t old_tablet_count, const locator::tablet_map& new_tmap);
+    future<> handle_tablet_split_completion(size_t old_tablet_count, const locator::tablet_map& new_tmap);
 
     sstables::compaction_type_options::split split_compaction_options() const noexcept;
 
@@ -846,7 +846,7 @@ public:
     void set_schema(schema_ptr);
     db::commitlog* commitlog() const;
     const locator::effective_replication_map_ptr& get_effective_replication_map() const { return _erm; }
-    void update_effective_replication_map(locator::effective_replication_map_ptr);
+    future<> update_effective_replication_map(locator::effective_replication_map_ptr);
     [[gnu::always_inline]] bool uses_tablets() const;
     future<> cleanup_tablet(database&, db::system_keyspace&, locator::tablet_id);
     future<const_mutation_partition_ptr> find_partition(schema_ptr, reader_permit permit, const dht::decorated_key& key) const;

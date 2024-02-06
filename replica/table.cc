@@ -1903,7 +1903,7 @@ locator::table_load_stats table::table_load_stats(std::function<bool(locator::gl
     return stats;
 }
 
-void table::handle_tablet_split_completion(size_t old_tablet_count, const locator::tablet_map& new_tmap) {
+future<> table::handle_tablet_split_completion(size_t old_tablet_count, const locator::tablet_map& new_tmap) {
     auto table_id = _schema->id();
     storage_group_vector new_storage_groups;
     new_storage_groups.resize(new_tmap.tablet_count());
@@ -1924,6 +1924,8 @@ void table::handle_tablet_split_completion(size_t old_tablet_count, const locato
             table_id, new_tmap.tablet_count(), old_tablet_count*split_size));
     }
 
+    // Stop the released main compaction groups asynchronously
+    future<> stop_fut = make_ready_future<>();
     for (unsigned id = 0; id < _storage_groups.size(); id++) {
         auto& sg = _storage_groups[id];
         if (!sg) {
@@ -1933,6 +1935,16 @@ void table::handle_tablet_split_completion(size_t old_tablet_count, const locato
             on_internal_error(tlogger, format("Found that storage of group {} for table {} wasn't split correctly, " \
                                               "therefore groups cannot be remapped with the new tablet count.",
                                               id, table_id));
+        }
+        // Remove old main groups, they're unused, but they need to be deregistered properly
+        auto cg_ptr = std::move(sg->main_compaction_group());
+        auto f = cg_ptr->stop();
+        if (!f.available() || f.failed()) [[unlikely]] {
+            stop_fut = stop_fut.then([f = std::move(f), cg_ptr = std::move(cg_ptr)] () mutable {
+                return std::move(f).handle_exception([cg_ptr = std::move(cg_ptr)] (std::exception_ptr ex) {
+                    tlogger.warn("Failed to stop compaction group: {}.  Ignored", std::move(ex));
+                });
+            });
         }
         unsigned first_new_id = id << growth_factor;
         auto split_ready_groups = std::move(*sg).split_ready_compaction_groups();
@@ -1951,15 +1963,10 @@ void table::handle_tablet_split_completion(size_t old_tablet_count, const locato
 
     auto old_groups = std::exchange(_storage_groups, std::move(new_storage_groups));
 
-    // Remove old main groups in background, they're unused, but they need to be deregistered properly
-    (void) do_with(std::move(old_groups), _async_gate.hold(), [] (storage_group_vector& groups, gate::holder&) {
-        return do_for_each(groups, [] (std::unique_ptr<storage_group>& sg) {
-            return sg->main_compaction_group()->stop();
-        });
-    });
+    return stop_fut;
 }
 
-void table::update_effective_replication_map(locator::effective_replication_map_ptr erm) {
+future<> table::update_effective_replication_map(locator::effective_replication_map_ptr erm) {
     auto old_erm = std::exchange(_erm, std::move(erm));
 
     if (uses_tablets()) {
@@ -1974,7 +1981,7 @@ void table::update_effective_replication_map(locator::effective_replication_map_
         if (new_tablet_count > old_tablet_count) {
             tlogger.info0("Detected tablet split for table {}.{}, increasing from {} to {} tablets",
                           _schema->ks_name(), _schema->cf_name(), old_tablet_count, new_tablet_count);
-            handle_tablet_split_completion(old_tablet_count, _erm->get_token_metadata().tablets().get_tablet_map(table_id));
+            co_await handle_tablet_split_completion(old_tablet_count, _erm->get_token_metadata().tablets().get_tablet_map(table_id));
         }
     }
     if (old_erm) {
