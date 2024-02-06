@@ -1338,13 +1338,17 @@ void table::set_metrics() {
                 ms::make_counter("read_latency_count", ms::description("Number of reads"), [this] {return _stats.reads.histogram().count();})(cf)(ks)(node_table_metrics).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
                 ms::make_counter("write_latency_count", ms::description("Number of writes"), [this] {return _stats.writes.histogram().count();})(cf)(ks)(node_table_metrics).aggregate({seastar::metrics::shard_label}).set_skip_when_empty()
             });
+            if (uses_tablets()) {
+                _metrics.add_group("column_family", {
+                    ms::make_gauge("tablet_count", ms::description("Tablet count"), _stats.tablet_count)(cf)(ks).aggregate({seastar::metrics::shard_label})
+                });
+            }
         }
-
-        if (uses_tablets()) {
-            _metrics.add_group("column_family", {
-                ms::make_gauge("tablet_count", ms::description("Tablet count"), _stats.tablet_count)(cf)(ks).aggregate({column_family_label, keyspace_label})
-            });
-        }
+    }
+    if (uses_tablets()) {
+        _metrics.add_group("tablets", {
+            ms::make_gauge("count", ms::description("Tablet count"), _stats.tablet_count)(cf)(ks).aggregate({column_family_label, keyspace_label})
+        });
     }
 }
 
