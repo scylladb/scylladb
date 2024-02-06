@@ -418,6 +418,7 @@ future<> storage_service::sync_raft_topology_nodes(mutable_token_metadata_ptr tm
             info.rack = rs.rack;
             info.host_id = id.uuid();
             info.release_version = rs.release_version;
+            info.supported_features = fmt::to_string(fmt::join(rs.supported_features, ","));
             co_await _sys_ks.local().update_peer_info(*ip, info);
             if (!prev_normal.contains(id)) {
                 co_await notify_joined(*ip);
