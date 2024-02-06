@@ -869,6 +869,7 @@ private:
              * and would only slow down tests (by having them wait).
              */
             cdc_config.ring_delay = std::chrono::milliseconds(0);
+            cdc_config.raft_experimental_topology = raft_topology_change_enabled;
             _cdc_generation_service.start(std::ref(cdc_config), std::ref(_gossiper), std::ref(_sys_dist_ks), std::ref(_sys_ks), std::ref(abort_sources), std::ref(_token_metadata), std::ref(_feature_service), std::ref(_db), [raft_topology_change_enabled] { return raft_topology_change_enabled; }).get();
             auto stop_cdc_generation_service = defer([this] {
                 _cdc_generation_service.stop().get();

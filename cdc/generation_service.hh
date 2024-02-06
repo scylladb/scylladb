@@ -41,6 +41,7 @@ public:
         unsigned ignore_msb_bits;
         std::chrono::milliseconds ring_delay;
         bool dont_rewrite_streams = false;
+        bool raft_experimental_topology = false;
     };
 
 private:
