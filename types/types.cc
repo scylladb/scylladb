@@ -104,11 +104,10 @@ sstring simple_date_to_string(const uint32_t days_count) {
 }
 
 sstring time_to_string(const int64_t nanoseconds_count) {
+    std::string s;
     std::chrono::nanoseconds nanoseconds{nanoseconds_count};
-    auto time = date::make_time(nanoseconds);
-    std::ostringstream str;
-    str << time;
-    return str.str();
+    fmt::format_to(std::back_inserter(s), "{:%H:%M:%S}", nanoseconds);
+    return s;
 }
 
 sstring boolean_to_string(const bool b) {
