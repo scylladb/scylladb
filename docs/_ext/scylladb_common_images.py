@@ -74,7 +74,8 @@ class BaseVersionsTemplateDirective(Directive):
         return sorted(
             [file for file in os.listdir(download_directory) if file.endswith('.csv') and 
              self._matches_version(file, version_pattern) and not self._excluded(file, exclude_patterns)],
-            key=self._version_key
+            key=self._version_key,
+            reverse=True
         )
 
     def _process_file(self, file, relative_path_from_current_rst):
