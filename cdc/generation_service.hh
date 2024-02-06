@@ -77,12 +77,18 @@ private:
      */
     std::optional<cdc::generation_id> _gen_id;
     future<> _cdc_streams_rewrite_complete = make_ready_future<>();
+
+    /* Returns true if raft topology changes are enabled.
+     * Can only be called from shard 0.
+     */
+    std::function<bool()> _raft_topology_change_enabled;
 public:
     generation_service(config cfg, gms::gossiper&,
             sharded<db::system_distributed_keyspace>&,
             sharded<db::system_keyspace>& sys_ks,
             abort_source&, const locator::shared_token_metadata&,
-            gms::feature_service&, replica::database& db);
+            gms::feature_service&, replica::database& db,
+            std::function<bool()> raft_topology_change_enabled);
 
     future<> stop();
     ~generation_service();

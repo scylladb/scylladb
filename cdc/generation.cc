@@ -745,7 +745,8 @@ generation_service::generation_service(
             config cfg, gms::gossiper& g, sharded<db::system_distributed_keyspace>& sys_dist_ks,
             sharded<db::system_keyspace>& sys_ks,
             abort_source& abort_src, const locator::shared_token_metadata& stm, gms::feature_service& f,
-            replica::database& db)
+            replica::database& db,
+            std::function<bool()> raft_topology_change_enabled)
         : _cfg(std::move(cfg))
         , _gossiper(g)
         , _sys_dist_ks(sys_dist_ks)
@@ -754,6 +755,7 @@ generation_service::generation_service(
         , _token_metadata(stm)
         , _feature_service(f)
         , _db(db)
+        , _raft_topology_change_enabled(std::move(raft_topology_change_enabled))
 {
 }
 
@@ -806,6 +808,10 @@ future<> generation_service::on_join(gms::inet_address ep, gms::endpoint_state_p
 
 future<> generation_service::on_change(gms::inet_address ep, const gms::application_state_map& states, gms::permit_id pid) {
     assert_shard_zero(__PRETTY_FUNCTION__);
+
+    if (_raft_topology_change_enabled()) {
+        return make_ready_future<>();
+    }
 
     return on_application_state_change(ep, states, gms::application_state::CDC_GENERATION_ID, pid, [this] (gms::inet_address ep, const gms::versioned_value& v, gms::permit_id) {
         auto gen_id = gms::versioned_value::cdc_generation_id_from_string(v.value());
