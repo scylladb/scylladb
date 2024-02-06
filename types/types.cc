@@ -104,15 +104,10 @@ sstring simple_date_to_string(const uint32_t days_count) {
 }
 
 sstring time_to_string(const int64_t nanoseconds_count) {
+    std::string s;
     std::chrono::nanoseconds nanoseconds{nanoseconds_count};
-    auto time = date::make_time(nanoseconds);
-    std::ostringstream str;
-    str << time;
-    return str.str();
-}
-
-sstring boolean_to_string(const bool b) {
-    return b ? "true" : "false";
+    fmt::format_to(std::back_inserter(s), "{:%H:%M:%S}", nanoseconds);
+    return s;
 }
 
 sstring inet_addr_type_impl::to_sstring(const seastar::net::inet_address& addr) {
@@ -2869,7 +2864,7 @@ struct to_string_impl_visitor {
         return format_if_not_empty(b, v, [] (const bytes& v) { return to_hex(v); });
     }
     sstring operator()(const boolean_type_impl& b, const boolean_type_impl::native_type* v) {
-        return format_if_not_empty(b, v, boolean_to_string);
+        return format_if_not_empty(b, v, [] (const bool b) { return fmt::to_string(b); });
     }
     sstring operator()(const timestamp_date_base_class& d, const timestamp_date_base_class::native_type* v) {
         return format_if_not_empty(d, v, [] (const db_clock::time_point& v) { return time_point_to_string(v); });
