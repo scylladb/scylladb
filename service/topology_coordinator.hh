@@ -54,6 +54,11 @@ class tablet_allocator;
 
 extern logging::logger rtlogger;
 
+struct wait_for_ip_timeout : public std::runtime_error {
+        wait_for_ip_timeout(raft::server_id id, long timeout) :
+                std::runtime_error::runtime_error(format("failed to obtain an IP for {} in {}s", id, timeout)) {}
+};
+
 future<gms::inet_address> wait_for_ip(raft::server_id id, const raft_address_map& am, seastar::abort_source& as);
 
 using raft_topology_cmd_handler_type = noncopyable_function<future<raft_topology_cmd_result>(

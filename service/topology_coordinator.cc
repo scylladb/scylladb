@@ -58,8 +58,7 @@ future<inet_address> wait_for_ip(raft::server_id id, const raft_address_map& am,
         }
         if (lowres_clock::now() > deadline) {
             co_await coroutine::exception(std::make_exception_ptr(
-                std::runtime_error(format("failed to obtain an IP for {} in {}s",
-                    id, std::chrono::duration_cast<std::chrono::seconds>(timeout).count()))));
+                wait_for_ip_timeout(id, std::chrono::duration_cast<std::chrono::seconds>(timeout).count())));
         }
         static thread_local logger::rate_limit rate_limit{std::chrono::seconds(1)};
         rtlogger.log(log_level::warn, rate_limit, "cannot map {} to ip, retrying.", id);
