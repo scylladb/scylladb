@@ -149,16 +149,6 @@ decorated_key::less_comparator::operator()(const decorated_key& lhs, const ring_
     return lhs.tri_compare(*s, rhs) < 0;
 }
 
-std::ostream& operator<<(std::ostream& out, const ring_position& pos) {
-    out << "{" << pos.token();
-    if (pos.has_key()) {
-        out << ", " << *pos.key();
-    } else {
-        out << ", " << ((pos.relation_to_keys() < 0) ? "start" : "end");
-    }
-    return out << "}";
-}
-
 std::ostream& operator<<(std::ostream& out, const i_partitioner& p) {
     out << "{partitioner name = " << p.name();
     return out << "}";
@@ -515,4 +505,16 @@ auto fmt::formatter<dht::ring_position_view>::format(const dht::ring_position_vi
         out = fmt::format_to(out, ", {}", *pos._key);
     }
     return fmt::format_to(out, ", w={}}}", static_cast<int>(pos._weight));
+}
+
+auto fmt::formatter<dht::ring_position>::format(const dht::ring_position& pos, fmt::format_context& ctx) const
+    -> decltype(ctx.out()) {
+    auto out = ctx.out();
+    out = fmt::format_to(out, "{{{}", pos.token());
+    if (pos.has_key()) {
+        out = fmt::format_to(out, ", {}", *pos.key());
+    } else {
+        out = fmt::format_to(out, ", {}", (pos.relation_to_keys() < 0) ? "start" : "end");
+    }
+    return fmt::format_to(out, "}}");
 }
