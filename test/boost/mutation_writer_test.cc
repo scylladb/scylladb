@@ -563,7 +563,12 @@ SEASTAR_THREAD_TEST_CASE(test_token_group_based_splitting_mutation_writer) {
 
     size_t partition_count = many_partitions();
 
-    auto muts = tests::generate_random_mutations(random_schema, partition_count).get();
+    auto muts = tests::generate_random_mutations(
+            random_schema,
+            tests::default_timestamp_generator(),
+            tests::no_expiry_expiry_generator(),
+            std::uniform_int_distribution<size_t>(partition_count, partition_count),
+            std::uniform_int_distribution<size_t>(1, 1)).get(); // only 1 row
 
     auto classify_fn = [] (dht::token t) -> mutation_writer::token_group_id {
         return dht::compaction_group_of(1, t);
