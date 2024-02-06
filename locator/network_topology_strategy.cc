@@ -37,6 +37,7 @@ network_topology_strategy::network_topology_strategy(replication_strategy_params
     auto opts = _config_options;
     process_tablet_options(*this, opts, params);
 
+    size_t rep_factor = 0;
     for (auto& config_pair : opts) {
         auto& key = config_pair.first;
         auto& val = config_pair.second;
@@ -55,16 +56,13 @@ network_topology_strategy::network_topology_strategy(replication_strategy_params
                 "NetworkTopologyStrategy");
         }
 
-        validate_replication_factor(val);
-        _dc_rep_factor.emplace(key, std::stol(val));
+        auto rf = parse_replication_factor(val);
+        rep_factor += rf;
+        _dc_rep_factor.emplace(key, rf);
         _datacenteres.push_back(key);
     }
 
-    _rep_factor = 0;
-
-    for (auto& one_dc_rep_factor : _dc_rep_factor) {
-        _rep_factor += one_dc_rep_factor.second;
-    }
+    _rep_factor = rep_factor;
 
     rslogger.debug("Configured datacenter replicas are: {}", _dc_rep_factor);
 }
@@ -265,7 +263,7 @@ void network_topology_strategy::validate_options(const gms::feature_service& fs)
                 "replication_factor is an option for simple_strategy, not "
                 "network_topology_strategy");
         }
-        validate_replication_factor(c.second);
+        parse_replication_factor(c.second);
     }
 }
 

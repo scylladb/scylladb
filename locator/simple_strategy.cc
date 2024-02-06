@@ -23,9 +23,7 @@ simple_strategy::simple_strategy(replication_strategy_params params) :
         auto& val = config_pair.second;
 
         if (boost::iequals(key, "replication_factor")) {
-            validate_replication_factor(val);
-            _replication_factor = std::stol(val);
-
+            _replication_factor = parse_replication_factor(val);
             break;
         }
     }
@@ -70,7 +68,7 @@ void simple_strategy::validate_options(const gms::feature_service&) const {
     if (it == _config_options.end()) {
         throw exceptions::configuration_exception("SimpleStrategy requires a replication_factor strategy option.");
     }
-    validate_replication_factor(it->second);
+    parse_replication_factor(it->second);
 }
 
 std::optional<std::unordered_set<sstring>>simple_strategy::recognized_options(const topology&) const {
