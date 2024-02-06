@@ -1942,16 +1942,6 @@ def write_build_file(f,
     for mode in build_modes:
         modeval = modes[mode]
 
-        modeval.update(query_seastar_flags(f'{outdir}/{mode}/seastar/seastar.pc',
-                                           modeval['build_seastar_shared_libs'],
-                                           args.staticcxx))
-
-        extra_cxxflags = ' '.join(get_extra_cxxflags(mode, modeval, args.cxx, args.debuginfo))
-        modeval['cxxflags'] += f' {extra_cxxflags}'
-
-        modeval['per_src_extra_cxxflags']['release.cc'] = ' '.join(get_release_cxxflags(scylla_version,
-                                                                                        scylla_release))
-
         fmt_lib = 'fmt'
         f.write(textwrap.dedent('''\
             cxx_ld_flags_{mode} = {cxx_ld_flags}
@@ -2419,6 +2409,14 @@ def create_build_system(args):
 
     os.makedirs(outdir, exist_ok=True)
 
+    scylla_product, scylla_version, scylla_release = generate_version(args.date_stamp)
+
+    for mode, mode_config in build_modes.items():
+        extra_cxxflags = ' '.join(get_extra_cxxflags(mode, mode_config, args.cxx, args.debuginfo))
+        mode_config['cxxflags'] += f' {extra_cxxflags}'
+
+        mode_config['per_src_extra_cxxflags']['release.cc'] = ' '.join(get_release_cxxflags(scylla_version, scylla_release))
+
     if not args.dist_only:
         # args.buildfile builds seastar with the rules of
         # {outdir}/{mode}/seastar/build.ninja, and
@@ -2426,9 +2424,13 @@ def create_build_system(args):
         for mode, mode_config in build_modes.items():
             configure_seastar(outdir, mode, mode_config)
 
+    for mode, mode_config in build_modes.items():
+        mode_config.update(query_seastar_flags(f'{outdir}/{mode}/seastar/seastar.pc',
+                                               mode_config['build_seastar_shared_libs'],
+                                               args.staticcxx))
+
     ninja = find_ninja()
     with open(args.buildfile, 'w') as f:
-        scylla_product, scylla_version, scylla_release = generate_version(args.date_stamp)
         arch = platform.machine()
         write_build_file(f,
                          arch,
