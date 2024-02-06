@@ -1,5 +1,6 @@
 #!/bin/sh
 
+
 USAGE=$(cat <<-END
 Usage: $(basename "$0") [-h|--help] [-o|--output-dir PATH] [--date-stamp DATE] -- generate Scylla version and build information files.
 
@@ -78,7 +79,7 @@ fi
 
 # Default scylla product/version tags
 PRODUCT=scylla
-VERSION=5.5.0-dev
+VERSION=5.5.0-development
 
 if test -f version
 then
