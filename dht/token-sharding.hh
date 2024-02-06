@@ -86,12 +86,6 @@ public:
     }
 };
 
-inline std::ostream& operator<<(std::ostream& os, const sharder& sharder) {
-    os << "sharder[shard_count=" << sharder.shard_count()
-       << ", ignore_msb_bits="<< sharder.sharding_ignore_msb() << "]";
-    return os;
-}
-
 /*
  * Finds the first token in token range (`start`, `end`] that belongs to shard shard_idx.
  *
@@ -109,3 +103,12 @@ dht::token find_first_token_for_shard(
         const dht::sharder& sharder, dht::token start, dht::token end, size_t shard_idx);
 
 } //namespace dht
+
+template<>
+struct fmt::formatter<dht::sharder> {
+    constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
+    auto format(const dht::sharder& sharder, fmt::format_context& ctx) const {
+        return fmt::format_to(ctx.out(), "sharder[shard_count={}, ignore_msb_bits={}]",
+                              sharder.shard_count(), sharder.sharding_ignore_msb());
+    }
+};
