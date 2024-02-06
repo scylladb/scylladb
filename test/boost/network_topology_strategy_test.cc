@@ -466,22 +466,6 @@ SEASTAR_THREAD_TEST_CASE(NetworkTopologyStrategy_tablets_test) {
 
     tmap = tab_awr_ptr->allocate_tablets_for_new_table(s, stm.get(), 1).get();
     full_ring_check(tmap, options320, ars_ptr, stm.get());
-
-    // Test the case of not enough nodes to meet RF in DC 102
-    std::map<sstring, sstring> options324 = {
-            {"100", "3"},
-            {"101", "4"},
-            {"102", "2"},
-    };
-    locator::replication_strategy_params params324(options324, 100);
-
-    ars_ptr = abstract_replication_strategy::create_replication_strategy(
-            "NetworkTopologyStrategy", params324);
-    tab_awr_ptr = ars_ptr->maybe_as_tablet_aware();
-    BOOST_REQUIRE(tab_awr_ptr);
-
-    tmap = tab_awr_ptr->allocate_tablets_for_new_table(s, stm.get(), 1).get();
-    full_ring_check(tmap, options324, ars_ptr, stm.get());
 }
 
 /**

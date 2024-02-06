@@ -20,6 +20,7 @@
 #include <boost/range/adaptor/filtered.hpp>
 #include <boost/algorithm/string/join.hpp>
 #include <array>
+#include "replica/database.hh"
 
 namespace data_dictionary {
 
@@ -345,7 +346,7 @@ no_such_column_family::no_such_column_family(std::string_view ks_name, const tab
 {
 }
 
-std::ostream& keyspace_metadata::describe(std::ostream& os) const {
+std::ostream& keyspace_metadata::describe(replica::database& db, std::ostream& os, bool with_internals) const {
     os << "CREATE KEYSPACE " << cql3::util::maybe_quote(_name)
        << " WITH replication = {'class': " << cql3::util::single_quote(_strategy_name);
     for (const auto& opt: _strategy_options) {
@@ -357,7 +358,15 @@ std::ostream& keyspace_metadata::describe(std::ostream& os) const {
             os << ", " << cql3::util::single_quote(e.first) << ": " << cql3::util::single_quote(e.second);
         }
     }
-    os << "} AND durable_writes = " << std::boolalpha << _durable_writes << std::noboolalpha << ";";
+    os << "} AND durable_writes = " << std::boolalpha << _durable_writes << std::noboolalpha;
+    if (db.features().tablets) {
+        if (!_initial_tablets.has_value()) {
+            os << " AND tablets = {'enabled': false}";
+        } else if (_initial_tablets.value() > 0) {
+            os << " AND tablets = {'initial': " << _initial_tablets.value() << "}";
+        }
+    }
+    os << ";";
 
     return os;
 }
