@@ -80,6 +80,8 @@ async def test_replace_reuse_ip(manager: ManagerClient) -> None:
     replace_cfg = ReplaceConfig(replaced_id = servers[0].server_id, reuse_ip_addr = True, use_host_id = False)
     await manager.server_add(replace_cfg)
     await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
+    await manager.server_sees_other_server(servers[1].ip_addr, servers[0].ip_addr)
+    await manager.server_sees_other_server(servers[2].ip_addr, servers[0].ip_addr)
 
 @pytest.mark.asyncio
 async def test_replace_reuse_ip_using_host_id(manager: ManagerClient) -> None:
