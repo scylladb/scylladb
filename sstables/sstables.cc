@@ -1983,7 +1983,7 @@ void sstable::validate_originating_host_id() const {
         // we don't know the local host id before it is loaded from
         // (or generated and written to) system.local, but some system
         // sstable reads must happen before the bootstrap process gets
-        // there, so, welp
+        // there, if that's not the case, it's a sign of bug.
         auto msg = format("Unknown local host id while validating SSTable: {}", get_filename());
         if (is_system_keyspace(_schema->ks_name())) {
             sstlog.trace("{}", msg);
