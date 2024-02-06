@@ -131,7 +131,6 @@ struct varint_type_impl final : public concrete_type<utils::multiprecision_int> 
 
 struct inet_addr_type_impl final : public concrete_type<seastar::net::inet_address> {
     inet_addr_type_impl();
-    static sstring to_sstring(const seastar::net::inet_address& addr);
     static seastar::net::inet_address from_sstring(sstring_view s);
 };
 

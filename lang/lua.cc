@@ -1030,7 +1030,7 @@ struct to_lua_visitor {
 
     void operator()(const inet_addr_type_impl& t, const emptyable<seastar::net::inet_address>* v) {
         // returns a string
-        sstring s = inet_addr_type_impl::to_sstring(v->get());
+        sstring s = fmt::to_string(v->get());
         push_sstring(l, s);
     }
 
