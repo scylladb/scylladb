@@ -369,25 +369,6 @@
          ]
       },
       {
-         "path":"/storage_service/describe_ring/",
-         "operations":[
-            {
-               "method":"GET",
-               "summary":"The TokenRange for an arbitrary keyspace",
-               "type":"array",
-               "items":{
-                  "type":"token_range"
-               },
-               "nickname":"describe_any_ring",
-               "produces":[
-                  "application/json"
-               ],
-               "parameters":[
-               ]
-            }
-         ]
-      },
-      {
          "path":"/storage_service/describe_ring/{keyspace}",
          "operations":[
             {

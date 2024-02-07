@@ -429,9 +429,6 @@ def test_range_to_endpoint_map(cql, this_dc, rest_api):
         resp.raise_for_status()
 
 def test_describe_ring(cql, this_dc, rest_api):
-    resp = rest_api.send("GET", "storage_service/describe_ring")
-    resp.raise_for_status()
-
     with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 1 }}") as keyspace:
         resp = rest_api.send("GET", f"storage_service/describe_ring/{keyspace}")
         resp.raise_for_status()
