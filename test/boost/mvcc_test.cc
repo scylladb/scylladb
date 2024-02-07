@@ -35,6 +35,7 @@ using namespace std::chrono_literals;
 
 static thread_local mutation_application_stats app_stats_for_tests;
 
+static thread_local preemption_source default_preemption_source;
 
 // Reads the rest of the partition into a mutation_partition object.
 // There must be at least one entry ahead of the cursor.
@@ -197,7 +198,7 @@ void mvcc_partition::apply_to_evictable(partition_entry&& src, schema_ptr src_sc
                 src.upgrade(region(), _s, src_cleaner, no_cache_tracker);
             }
             return _e.apply_to_incomplete(*schema(), std::move(src), src_cleaner, as, region(),
-                *_container.tracker(), _container.next_phase(), _container.accounter());
+                *_container.tracker(), _container.next_phase(), _container.accounter(), default_preemption_source);
         });
         repeat([&] {
             return c.run();

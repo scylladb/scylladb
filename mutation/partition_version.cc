@@ -472,7 +472,8 @@ utils::coroutine partition_entry::apply_to_incomplete(const schema& s,
     logalloc::region& reg,
     cache_tracker& tracker,
     partition_snapshot::phase_type phase,
-    real_dirty_memory_accounter& acc)
+    real_dirty_memory_accounter& acc,
+    preemption_source& preempt_src)
 {
     // This flag controls whether this operation may defer. It is more
     // expensive to apply with deferring due to construction of snapshots and
@@ -506,7 +507,7 @@ utils::coroutine partition_entry::apply_to_incomplete(const schema& s,
     // of allocating sections, so we return here to get out of the current allocating section and
     // give the caller a chance to store the coroutine object. The code inside coroutine below
     // runs outside allocating section.
-    return utils::coroutine([&tracker, &s, &alloc, &reg, &acc, can_move, preemptible,
+    return utils::coroutine([&tracker, &s, &alloc, &reg, &acc, can_move, preemptible, &preempt_src,
             cur = partition_snapshot_row_cursor(s, *dst_snp),
             src_cur = partition_snapshot_row_cursor(s, *src_snp, can_move),
             dst_snp = std::move(dst_snp),
@@ -614,7 +615,7 @@ utils::coroutine partition_entry::apply_to_incomplete(const schema& s,
                     dst_snp->unlock();
                     return stop_iteration::yes;
                 }
-            } while (!preemptible || !need_preempt());
+            } while (!preemptible || !preempt_src.should_preempt());
             return stop_iteration::no;
         });
     });
