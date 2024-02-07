@@ -10,12 +10,6 @@ ScyllaDB FAQ
 Performance
 -----------
 
-I’m not getting the level of performance I expected. What’s wrong?
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-Lower than expected performance can be a result of many factors, from HW (storage, CPU, network) to data modeling to the application layer.
-As a first step, make sure to have |mon_root| in place. Looking at the Scylla dashboard is the best way to look for bottlenecks.
-If you need our help, please follow :doc:`How to Report a Performance Problem </troubleshooting/report-scylla-problem/>` to share data securely.
-
 Scylla is using all of my memory! Why is that? What if the server runs out of memory?
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 Scylla uses available memory to cache your data. Scylla knows how to dynamically manage memory for optimal performance; for example, if many clients connect to Scylla, it will evict some data from the cache to make room for these connections; when the connection count drops again, this memory is returned to the cache.
@@ -23,12 +17,6 @@ Scylla uses available memory to cache your data. Scylla knows how to dynamically
 Can I limit Scylla to use less CPU and memory?
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 The :code:`--smp` option (for instance, :code:`--smp 2`) will restrict Scylla to a smaller number of CPUs. It will still use 100 % of those CPUs, but at least won’t take your system out completely. An analogous option exists for memory: :code:`-m`.
-
-Do I ever need to disable the Scylla cache to use less memory?
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-It is not possible to turn off the Scylla cache. But cache problems do not arise in normal operation. Scylla can use up to 50% of memory for cache, and will dynamically evict rows from the cache if they are too large. So the only possibility of getting an out of memory error is if a single row is bigger than 50% of the memory for a shard. This is (total_machine_memory / (number_of_lcores * 2)).
-
-For a 64GB machine with 16 cores and hyperthreading enabled, you have 2GB per shard, of which the cache can use 1GB per shard. With such large rows, you will have other problems. We recommend staying with rows that are less than a few megabytes maximum size.
 
 What are some of the techniques Scylla uses to achieve its performance?
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -81,10 +69,6 @@ For example:
 * If the node ``total_mem`` is 240GB ``swap`` size should be set to 16GB.
 
 Swap can be set up in several ways. One way to set up swap is detailed in the KB Article :doc:`How to Set up a Swap Space </kb/set-up-swap>`.
-
-After upgrade from Scylla 2.1 and older, scylla_reactor_utilization metrics is at high percentage (high CPU utilization is observed). Why does this happen?
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-Scylla 2.2 enables the compaction automatic controller which was not present prior to version 2.2. What this means is that in Scylla 2.1 (and earlier) the system waits for 4 SSTables to be present in the same tier before starting a compaction. In Scylla 2.2 (and later), compactions can be controlled to not impact the workload. This means that workloads which have been considered as backlog in Scylla 2.1 and earlier, in Scylla 2.2 and later are not.
 
 My query does not return any or some of the data? What happened?
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -151,56 +135,12 @@ Check the :doc:`Operating System Support Guide </getting-started/os-support>` fo
 
 * On a docker node: :code:`$ docker exec -it Node_Z scylla --version`
 
-
-Is Scylla Apache Cassandra compatible? Is API / interface X compatible?
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-See :doc:`ScyllaDB and Apache Cassandra Compatibility </using-scylla/cassandra-compatibility>` for compatibility matrix.
-
-Which version(s) of Apache Cassandra is Scylla compatible with? Will Scylla be compatible with future Cassandra versions?
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-See :doc:`ScyllaDB and Apache Cassandra Compatibility </using-scylla/cassandra-compatibility>` for current and future Apache Cassandra release compatibility.
-
-
 I am upgrading my nodes to a version that uses a newer SSTable format, when will the nodes start using the new SSTable format?
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 The :doc:`new "mc" SSTable format</architecture/sstable/sstable3/index>` is supported in Scylla 3.0 and later.
 Scylla only starts using the newer format when every node in the cluster is capable to generate it.
 Therefore, only when all nodes in the cluster are upgraded the new format is used.
-
-
-What if I get an error when trying to use cqlsh DESCRIBE commands?
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-Apache Cassandra 4.0 includes breaking changes in the DESCRIBE command by moving its implementation from the client (cqlsh) 
-to the server. As a result, using DESCRIBE in cqlsh from Cassandra 4.0 package with Scylla will result in an error. As a remedy, 
-you can do one of the following:
-
-* Use Scylla cqlsh:
-
-    * On Linux, you can install the ``scylla-tools`` package from the official ScyllaDB repository on GitHub. 
-      The package contains cqlsh and other Apache Cassandra compatible tools for Scylla. 
-    * On Linux, Windows, or Mac, you can run a Scylla container.
-* Downgrade your cqlsh to a version based on Cassandra 3.x, which supports DESCRIBE commands.
-
-.. note::
-   The Scylla roadmap includes moving DESCRIBE to server side, similarly to Cassandra 4.0. See https://github.com/scylladb/scylla/issues/9571 for information about progress.
-
-Ubuntu
-------
-
-.. _faq-check-update-kernel:
-
-Check and update Ubuntu 14.04 kernel
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-Running Scylla on Ubuntu 14.04 requires kernel 3.15 or later
-
-* To check your kernel version: :code:`$ uname -a`
-* If your kernel is older than 3.15 then:
-
-  * Check for available kernels: :code:`$ sudo apt-cache search linux-image`
-  * Install: :code:`$ sudo apt-get install linux-image-your_version_choice`, for example *linux-image-3.16.0*
-  * restart: :code:`$ sudo reboot now`
 
 Docker
 -------
@@ -476,17 +416,6 @@ You can restrict the number of items in the IN clause with the following options
 The options can be configured on the command line, passed with ``SCYLLA_ARGS`` in ``/etc/default/scylla-server`` or ``/etc/sysconfig/scylla-server``, 
 or added to your ``scylla.yaml`` (see :doc:`Scylla Configuration<operating-scylla/admin>`).
 
-in-memory tables
-----------------
-
-Is MV and SI supported for use with in-memory tables? If so, how will it affect the total memory size limitation?
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-You can make MV table an in-memory, as you would with every other table. It effects the total memory size allocation just like any other table. Make sure before you create any kind of in-memory table that its use case warrants the creation. 
- 
-Can Scylla Enterprise in-memory tables be used without having a mirror file on disk?
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-No. In Scylla Enterprise 2018.1.7, in-memory tables are always persistent using an on-disk mirror file.
-
 Can I change the coredump mount point? 
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
@@ -508,11 +437,3 @@ For example:
 
 4. Run ``sysctl -p /etc/sysctl.d/99-scylla-coredump.conf`` 
 
-Do I need to run a tool like ``upgradesstables`` when moving to a new format?
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-Unlike Apache Cassandra, Scylla does not ship with upgradesstables, a tool that converts SSTables to newer formats. When upgrading to a new table format, Scylla can still continue to read from the old format. Having this option, ensures a smoother transition and upgrade. New writes use the new format and reads will use both formats until the old tables are removed. If you want to purge all of the old SSTables in a single step, generate a compaction with :doc:`nodetool compact </operating-scylla/nodetool-commands/compact/>` follow by :doc:`nodetool cleanup </operating-scylla/nodetool-commands/cleanup/>` to remove no longer needed token ranges that belong to that node.
- 
-
-
-.. include:: /rst_include/apache-copyrights.rst
