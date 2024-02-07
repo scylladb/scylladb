@@ -128,6 +128,7 @@ public:
 
     replica::database& db() noexcept { return _db.local(); }
     netw::messaging_service& ms() noexcept { return _ms.local(); }
+    service::migration_manager& mm() noexcept { return _mm.local(); }
 
     const std::unordered_map<plan_id, shared_ptr<stream_result_future>>& get_initiated_streams() const {
         return _initiated_streams;
