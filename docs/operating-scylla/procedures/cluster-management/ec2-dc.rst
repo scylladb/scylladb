@@ -1,8 +1,8 @@
 Create a ScyllaDB Cluster on EC2 (Single or Multi Data Center)
 ===============================================================
 
-The easiest way to run a Scylla cluster on EC2 is by using `Scylla AMI <https://www.scylladb.com/download/?platform=aws>`_, which is Ubuntu-based since ScyllaDB Enterprise 2021.1.0 and 
-ScyllaDB Open Source 4.5 (prior versions are CentOS-based). To use a different OS or your own `AMI <https://en.wikipedia.org/wiki/Amazon_Machine_Image>`_ (Amazon Machine Image) or set up a multi DC Scylla cluster,
+The easiest way to run a Scylla cluster on EC2 is by using `Scylla AMI <https://www.scylladb.com/download/?platform=aws>`_, which is Ubuntu-based.  
+To use a different OS or your own `AMI <https://en.wikipedia.org/wiki/Amazon_Machine_Image>`_ (Amazon Machine Image) or set up a multi DC Scylla cluster,
 you need to configure the Scylla cluster on your own. This page guides you through this process.
 
 A Scylla cluster on EC2 can be deployed as a single-DC cluster or a multi-DC cluster. The table below describes how to configure parameters in the ``scylla.yaml`` file for each node in your cluster for both cluster types.

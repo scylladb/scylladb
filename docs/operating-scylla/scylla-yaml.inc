@@ -118,7 +118,7 @@ For example:
 IPv6 Addresses
 --------------
 
-Starting with Scylla Open Source 3.2, Scylla Enterprise 2019.1.4, Manager 2.0, and Monitoring 3.0, you can use IPv6 addresses wherever an IPv4 address is used, including client-to-node and node-to-node communication, Scylla Manager to Scylla nodes (Scylla Manager Agent), and Monitoring to nodes.
+You can use IPv6 addresses wherever an IPv4 address is used, including client-to-node and node-to-node communication, Scylla Manager to Scylla nodes (Scylla Manager Agent), and Monitoring to nodes.
 
 For example:
 

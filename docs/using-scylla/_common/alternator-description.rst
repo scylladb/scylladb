@@ -4,4 +4,3 @@ Project Alternator is an open-source project for an Amazon DynamoDB™-compatibl
 
 DynamoDB users can keep their same client code unchanged. 
 
-Scylla Alternator is available as GA for Scylla Open Source 4.0 and Scylla Enterprise 2020.1.0

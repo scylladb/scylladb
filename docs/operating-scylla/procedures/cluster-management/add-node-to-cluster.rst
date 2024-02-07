@@ -59,17 +59,6 @@ Procedure
 
     * **seeds** - Specifies the IP address of an existing node in the cluster. The new node will use this IP to connect to the cluster and learn the cluster topology and state.
 
-   .. note:: 
-
-       In earlier versions of ScyllaDB, seed nodes assisted in gossip. Starting with Scylla Open Source 4.3 and Scylla Enterprise 2021.1, the seed concept in gossip has been removed. If you are using an earlier version of ScyllaDB, you need to configure the seeds parameter in the following way:
-   
-       * Specify the list of the current seed nodes in the cluster.
-       * Do not list the node you're adding as a seed node.
-
-       See :doc:`Scylla Seed Nodes</kb/seed-nodes>` for more information.
-
-       We recommend updating your ScyllaDB to version 4.3 or later (Open Source) or 2021.1 or later (Enterprise).
-
 #. Start the ScyllaDB node with the following command:
 
     .. include:: /rst_include/scylla-commands-start-index.rst
@@ -116,10 +105,6 @@ Procedure
        Tip 3: Run cleanup one node at a time, reducing overall cluster impact.
 
 #. Wait until the new node becomes UN (Up Normal) in the output of :doc:`nodetool status </operating-scylla/nodetool-commands/status>` on one of the old nodes. 
-
-    .. note:: 
-       If you are using ScyllaDB Open Source 4.3 or later or ScyllaDB Enterprise 2021.1 or later and configure the list of seed nodes to participate in gossip, you can now edit the ``scylla.yaml`` files to add the new node as a seed node.
-       You don't need to restart the Scylla service after modifying the seeds list in ``scylla.yaml``.
 
 #. If you are using Scylla Monitoring, update the `monitoring stack <https://monitoring.docs.scylladb.com/stable/install/monitoring_stack.html#configure-scylla-nodes-from-files>`_ to monitor it. If you are using Scylla Manager, make sure you install the `Manager Agent <https://manager.docs.scylladb.com/stable/install-scylla-manager-agent.html>`_, and Manager can access it.
 
