@@ -74,7 +74,11 @@ std::optional<request_param> topology::get_request_param(raft::server_id id) con
 };
 
 std::unordered_set<raft::server_id> topology::get_excluded_nodes() const {
-    return ignored_nodes;
+    auto result = ignored_nodes;
+    for (auto& [id, rs] : left_nodes_rs) {
+        result.insert(id);
+    }
+    return result;
 }
 
 std::set<sstring> calculate_not_yet_enabled_features(const std::set<sstring>& enabled_features, const auto& supported_features) {

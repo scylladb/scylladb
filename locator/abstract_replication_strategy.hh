@@ -210,10 +210,17 @@ public:
     /// operation which adds a replica which has the same address as the replaced replica.
     /// Use get_natural_endpoints_without_node_being_replaced() to get replicas without any pending replicas.
     /// This won't be necessary after we implement https://github.com/scylladb/scylladb/issues/6403.
+    ///
+    /// Excludes replicas which are in the left state. After replace, the replaced replica may
+    /// still be in the replica set of the tablet until tablet scheduler rebuilds the replacing replica.
+    /// The old replica will not be listed here. This is necessary to support replace-with-the-same-ip
+    /// scenario. Since we return IPs here, writes to the old replica would be incorrectly routed to the
+    /// new replica.
+    ///
+    /// The returned addresses are present in the topology object associated with this instance.
     virtual inet_address_vector_replica_set get_natural_endpoints(const token& search_token) const = 0;
 
-    /// Returns addresses of replicas for a given token.
-    /// Does not include pending replicas.
+    /// Returns a subset of replicas returned by get_natural_endpoints() without the pending replica.
     virtual inet_address_vector_replica_set get_natural_endpoints_without_node_being_replaced(const token& search_token) const = 0;
 
     /// Returns the set of pending replicas for a given token.

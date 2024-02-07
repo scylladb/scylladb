@@ -344,14 +344,20 @@ void topology::index_node(const node* node) {
         }
     }
 
-    const auto& dc = node->dc_rack().dc;
-    const auto& rack = node->dc_rack().rack;
-    const auto& endpoint = node->endpoint();
-    _dc_nodes[dc].emplace(node);
-    _dc_rack_nodes[dc][rack].emplace(node);
-    _dc_endpoints[dc].insert(endpoint);
-    _dc_racks[dc][rack].insert(endpoint);
-    _datacenters.insert(dc);
+    // We keep location of left nodes because they may still appear in tablet replica sets
+    // and algorithms expect to know which dc they belonged to. View replica pairing needs stable
+    // replica indexes.
+    // But we don't consider those nodes as members of the cluster so don't update dc registry.
+    if (!node->left()) {
+        const auto& dc = node->dc_rack().dc;
+        const auto& rack = node->dc_rack().rack;
+        const auto& endpoint = node->endpoint();
+        _dc_nodes[dc].emplace(node);
+        _dc_rack_nodes[dc][rack].emplace(node);
+        _dc_endpoints[dc].insert(endpoint);
+        _dc_racks[dc][rack].insert(endpoint);
+        _datacenters.insert(dc);
+    }
 
     if (node->is_this_node()) {
         _this_node = node;
@@ -551,7 +557,7 @@ std::weak_ordering topology::compare_endpoints(const inet_address& address, cons
 
 void topology::for_each_node(std::function<void(const node*)> func) const {
     for (const auto& np : _nodes) {
-        if (np) {
+        if (np && !np->left()) {
             func(np.get());
         }
     }

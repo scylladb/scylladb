@@ -132,6 +132,8 @@ struct topology {
     std::unordered_map<raft::server_id, replica_state> normal_nodes;
     // Nodes that are left
     std::unordered_set<raft::server_id> left_nodes;
+    // Left nodes for which we need topology information.
+    std::unordered_map<raft::server_id, replica_state> left_nodes_rs;
     // Nodes that are waiting to be joined by the topology coordinator
     std::unordered_map<raft::server_id, replica_state> new_nodes;
     // Nodes that are in the process to be added to the ring

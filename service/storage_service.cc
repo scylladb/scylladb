@@ -409,6 +409,11 @@ future<> storage_service::sync_raft_topology_nodes(mutable_token_metadata_ptr tm
             co_await remove_ip(*ip, true);
         }
 
+        locator::host_id host_id{id.uuid()};
+        if (t.left_nodes_rs.find(id) != t.left_nodes_rs.end()) {
+            update_topology(host_id, std::nullopt, t.left_nodes_rs.at(id));
+        }
+
         // However if we do that, we need to also implement unbanning a node and do it if `removenode` is aborted.
         co_await _messaging.local().ban_host(locator::host_id{id.uuid()});
     };
@@ -588,8 +593,13 @@ future<> storage_service::topology_state_load() {
     rtlogger.debug("reload raft topology state");
     std::unordered_set<raft::server_id> prev_normal = boost::copy_range<std::unordered_set<raft::server_id>>(_topology_state_machine._topology.normal_nodes | boost::adaptors::map_keys);
 
+    std::unordered_set<locator::host_id> tablet_hosts;
+    if (_db.local().get_config().check_experimental(db::experimental_features_t::feature::TABLETS)) {
+        tablet_hosts = co_await replica::read_required_hosts(_qp);
+    }
+
     // read topology state from disk and recreate token_metadata from it
-    _topology_state_machine._topology = co_await _sys_ks.local().load_topology_state();
+    _topology_state_machine._topology = co_await _sys_ks.local().load_topology_state(tablet_hosts);
 
     if (_manage_topology_change_kind_from_group0) {
         _topology_change_kind_enabled = upgrade_state_to_topology_op_kind(_topology_state_machine._topology.upgrade_state);

@@ -364,3 +364,66 @@ SEASTAR_THREAD_TEST_CASE(test_load_sketch) {
         }
     }
 }
+
+SEASTAR_THREAD_TEST_CASE(test_left_node_is_kept_outside_dc) {
+    auto id1 = host_id::create_random_id();
+    auto ep1 = gms::inet_address("127.0.0.1");
+    auto id2 = host_id::create_random_id();
+    auto ep2 = gms::inet_address("127.0.0.2");
+    auto id3 = host_id::create_random_id();
+    auto ep3 = gms::inet_address("127.0.0.3");
+
+    const auto dc_rack1 = endpoint_dc_rack {
+        .dc = "dc1",
+        .rack = "rack1"
+    };
+
+    topology::config cfg = {
+        .this_endpoint = ep1,
+        .local_dc_rack = dc_rack1
+    };
+
+    auto topo = topology(cfg);
+
+    set_abort_on_internal_error(false);
+    auto reset_on_internal_abort = seastar::defer([] {
+        set_abort_on_internal_error(true);
+    });
+
+    std::unordered_set<const locator::node*> nodes;
+
+    nodes.insert(topo.add_node(id2, ep2, dc_rack1, node::state::normal));
+    nodes.insert(topo.add_node(id3, ep3, dc_rack1, node::state::left));
+
+    topo.for_each_node([&] (const locator::node* node) {
+        BOOST_REQUIRE(node->host_id() != id3);
+    });
+
+    {
+        auto *n = topo.find_node(id3);
+        BOOST_REQUIRE(n);
+        BOOST_REQUIRE(n->get_state() == locator::node::state::left);
+    }
+
+    // left nodes are not members.
+    BOOST_REQUIRE(!topo.get_datacenter_endpoints().at(dc_rack1.dc).contains(ep3));
+
+    BOOST_REQUIRE(topo.get_datacenter(id3) == dc_rack1.dc);
+    BOOST_REQUIRE(topo.get_rack(id3) == dc_rack1.rack);
+
+    auto topo2 = topo.clone_gently().get0();
+    {
+        auto *n = topo2.find_node(id3);
+        BOOST_REQUIRE(n);
+        BOOST_REQUIRE(n->get_state() == locator::node::state::left);
+    }
+
+    // Make the DC empty of nodes
+    topo.remove_node(id1);
+    topo.remove_node(id2);
+    // Left node location is still known
+    BOOST_REQUIRE(topo.get_datacenter(id3) == dc_rack1.dc);
+    BOOST_REQUIRE(topo.get_rack(id3) == dc_rack1.rack);
+
+    topo.clear_gently().get();
+}

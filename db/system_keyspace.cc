@@ -2677,7 +2677,7 @@ static std::set<sstring> decode_features(const set_type_impl::native_type& featu
     return fset;
 }
 
-future<service::topology> system_keyspace::load_topology_state() {
+future<service::topology> system_keyspace::load_topology_state(const std::unordered_set<locator::host_id>& force_load_hosts) {
     auto rs = co_await execute_cql(
         format("SELECT * FROM system.{} WHERE key = '{}'", TOPOLOGY, TOPOLOGY));
     assert(rs);
@@ -2793,6 +2793,9 @@ future<service::topology> system_keyspace::load_topology_state() {
             }
         } else if (nstate == service::node_state::left) {
             ret.left_nodes.emplace(host_id);
+            if (force_load_hosts.contains(locator::host_id(host_id.uuid()))) {
+                map = &ret.left_nodes_rs;
+            }
         } else if (nstate == service::node_state::none) {
             map = &ret.new_nodes;
         } else {
