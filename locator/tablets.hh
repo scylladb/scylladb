@@ -375,7 +375,7 @@ public:
     }
 
     /// Calls a given function for each tablet in the map in token ownership order.
-    future<> for_each_tablet(seastar::noncopyable_function<void(tablet_id, const tablet_info&)> func) const;
+    future<> for_each_tablet(seastar::noncopyable_function<future<>(tablet_id, const tablet_info&)> func) const;
 
     const auto& transitions() const {
         return _transitions;

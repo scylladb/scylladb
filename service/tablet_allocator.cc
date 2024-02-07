@@ -630,12 +630,13 @@ public:
         for (auto&& [table, tmap_] : _tm->tablets().all_tables()) {
             auto& tmap = tmap_;
 
-            co_await tmap.for_each_tablet([&, table = table] (tablet_id tid, const tablet_info& ti) {
+            co_await tmap.for_each_tablet([&, table = table] (tablet_id tid, const tablet_info& ti) -> future<> {
                 auto trinfo = tmap.get_tablet_transition_info(tid);
 
                 // We reflect migrations in the load as if they already happened,
                 // optimistically assuming that they will succeed.
                 for (auto&& replica : get_replicas_for_tablet_load(ti, trinfo)) {
+                    co_await coroutine::maybe_yield();
                     if (nodes.contains(replica.host)) {
                         nodes[replica.host].tablet_count += 1;
                         // This invariant is assumed later.
@@ -758,7 +759,7 @@ public:
 
         for (auto&& [table, tmap_] : _tm->tablets().all_tables()) {
             auto& tmap = tmap_;
-            co_await tmap.for_each_tablet([&, table = table] (tablet_id tid, const tablet_info& ti) {
+            co_await tmap.for_each_tablet([&, table = table] (tablet_id tid, const tablet_info& ti) -> future<> {
                 auto trinfo = tmap.get_tablet_transition_info(tid);
 
                 if (is_streaming(trinfo)) {
@@ -766,6 +767,7 @@ public:
                 }
 
                 for (auto&& replica : get_replicas_for_tablet_load(ti, trinfo)) {
+                    co_await coroutine::maybe_yield();
                     if (!nodes.contains(replica.host)) {
                         continue;
                     }

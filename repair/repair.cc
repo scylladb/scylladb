@@ -2064,13 +2064,14 @@ future<> repair_service::repair_tablets(repair_uniq_id rid, sstring keyspace_nam
         std::vector<repair_tablet_meta> metas;
         auto myhostid = erm->get_token_metadata_ptr()->get_my_id();
         auto myip = erm->get_topology().my_address();
-        co_await tmap.for_each_tablet([&] (locator::tablet_id id, const locator::tablet_info& info) {
+        co_await tmap.for_each_tablet([&] (locator::tablet_id id, const locator::tablet_info& info) -> future<> {
             auto range = tmap.get_token_range(id);
             auto& replicas = info.replicas;
             bool found = false;
             shard_id master_shard_id;
             // Repair all tablets belong to this node
             for (auto& r : replicas) {
+                co_await coroutine::maybe_yield();
                 if (r.host == myhostid) {
                     master_shard_id = r.shard;
                     found = true;

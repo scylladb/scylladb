@@ -74,6 +74,15 @@ sstring validate_keyspace(http_context& ctx, const parameters& param) {
     return validate_keyspace(ctx, param["keyspace"]);
 }
 
+static void validate_table(http_context& ctx, sstring ks_name, sstring table_name) {
+    auto& db = ctx.db.local();
+    try {
+        db.find_column_family(ks_name, table_name);
+    } catch (replica::no_such_column_family& e) {
+        throw bad_param_exception(e.what());
+    }
+}
+
 locator::host_id validate_host_id(const sstring& param) {
     auto hoep = locator::host_id_or_endpoint(param, locator::host_id_or_endpoint::param_type::host_id);
     return hoep.id;
@@ -548,6 +557,10 @@ static future<json::json_return_type> describe_ring_as_json(sharded<service::sto
     co_return json::json_return_type(stream_range_as_array(co_await ss.local().describe_ring(keyspace), token_range_endpoints_to_json));
 }
 
+static future<json::json_return_type> describe_ring_as_json_for_table(const sharded<service::storage_service>& ss, sstring keyspace, sstring table) {
+    co_return json::json_return_type(stream_range_as_array(co_await ss.local().describe_ring_for_table(keyspace, table), token_range_endpoints_to_json));
+}
+
 void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_service>& ss, service::raft_group0_client& group0_client) {
     ss::get_commitlog.set(r, [&ctx](const_req req) {
         return ctx.db.local().commitlog()->active_config().commit_log_location;
@@ -673,6 +686,15 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     });
 
     ss::describe_ring.set(r, [&ctx, &ss](std::unique_ptr<http::request> req) {
+        if (!req->param.exists("keyspace")) {
+            throw bad_param_exception("The keyspace param is not provided");
+        }
+        auto keyspace = req->param["keyspace"];
+        auto table = req->get_query_param("table");
+        if (!table.empty()) {
+            validate_table(ctx, keyspace, table);
+            return describe_ring_as_json_for_table(ss, keyspace, table);
+        }
         return describe_ring_as_json(ss, validate_keyspace(ctx, req->param));
     });
 

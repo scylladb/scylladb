@@ -4410,7 +4410,50 @@ future<> storage_service::move(token new_token) {
 
 future<std::vector<storage_service::token_range_endpoints>>
 storage_service::describe_ring(const sstring& keyspace, bool include_only_local_dc) const {
-    return locator::describe_ring(_db.local(), _gossiper, keyspace, include_only_local_dc);
+    if (_db.local().find_keyspace(keyspace).get_replication_strategy().uses_tablets()) {
+        throw std::runtime_error(format("The keyspace {} has tablet table. Query describe_ring with the table parameter!", keyspace));
+    }
+    co_return co_await locator::describe_ring(_db.local(), _gossiper, keyspace, include_only_local_dc);
+}
+
+future<std::vector<dht::token_range_endpoints>>
+storage_service::describe_ring_for_table(const sstring& keyspace_name, const sstring& table_name) const {
+    slogger.debug("describe_ring for table {}.{}", keyspace_name, table_name);
+    auto& t = _db.local().find_column_family(keyspace_name, table_name);
+    if (!t.uses_tablets()) {
+        auto ranges = co_await describe_ring(keyspace_name);
+        co_return ranges;
+    }
+    table_id tid = t.schema()->id();
+    auto erm = t.get_effective_replication_map();
+    auto& tmap = erm->get_token_metadata_ptr()->tablets().get_tablet_map(tid);
+    const auto& topology = erm->get_topology();
+    std::vector<dht::token_range_endpoints> ranges;
+    co_await tmap.for_each_tablet([&] (locator::tablet_id id, const locator::tablet_info& info) -> future<> {
+        auto range = tmap.get_token_range(id);
+        auto& replicas = info.replicas;
+        dht::token_range_endpoints tr;
+        if (range.start()) {
+            tr._start_token = range.start()->value().to_sstring();
+        }
+        if (range.end()) {
+            tr._end_token = range.end()->value().to_sstring();
+        }
+        for (auto& r : replicas) {
+            co_await coroutine::maybe_yield();
+            dht::endpoint_details details;
+            auto& hostid = r.host;
+            auto endpoint = host2ip(hostid);
+            details._datacenter = topology.get_datacenter(hostid);
+            details._rack = topology.get_rack(hostid);
+            details._host = endpoint;
+            tr._rpc_endpoints.push_back(_gossiper.get_rpc_address(endpoint));
+            tr._endpoints.push_back(fmt::to_string(details._host));
+            tr._endpoint_details.push_back(std::move(details));
+        }
+        ranges.push_back(std::move(tr));
+    });
+    co_return ranges;
 }
 
 future<std::unordered_map<dht::token_range, inet_address_vector_replica_set>>
@@ -4943,7 +4986,7 @@ future<> storage_service::update_fence_version(token_metadata::version_t new_ver
     });
 }
 
-inet_address storage_service::host2ip(locator::host_id host) {
+inet_address storage_service::host2ip(locator::host_id host) const {
     auto ip = _group0->address_map().find(raft::server_id(host.uuid()));
     if (!ip) {
         throw std::runtime_error(::format("Cannot map host {} to ip", host));

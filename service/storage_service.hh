@@ -176,7 +176,7 @@ private:
                                  std::function<future<>(locator::tablet_metadata_guard&)> op);
     future<> stream_tablet(locator::global_tablet_id);
     future<> cleanup_tablet(locator::global_tablet_id);
-    inet_address host2ip(locator::host_id);
+    inet_address host2ip(locator::host_id) const;
     // Handler for table load stats RPC.
     future<locator::load_stats> load_stats_for_tablet_based_tables();
     future<> process_tablet_split_candidate(table_id);
@@ -413,6 +413,8 @@ public:
     //std::vector<sstring> describeRingJMX(const sstring& keyspace) const {
 
     future<std::vector<token_range_endpoints>> describe_ring(const sstring& keyspace, bool include_only_local_dc = false) const;
+
+    future<std::vector<dht::token_range_endpoints>> describe_ring_for_table(const sstring& keyspace_name, const sstring& table_name) const;
 
     /**
      * Retrieve a map of tokens to endpoints, including the bootstrapping ones.
