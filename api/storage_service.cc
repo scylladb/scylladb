@@ -675,16 +675,6 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         return make_ready_future<json::json_return_type>(res);
     });
 
-    ss::describe_any_ring.set(r, [&ctx, &ss](std::unique_ptr<http::request> req) {
-        // Find an arbitrary non-system keyspace.
-        auto keyspaces = ctx.db.local().get_non_local_vnode_based_strategy_keyspaces();
-        if (keyspaces.empty()) {
-            throw std::runtime_error("No keyspace provided and no non system kespace exist");
-        }
-        auto ks = keyspaces[0];
-        return describe_ring_as_json(ss, ks);
-    });
-
     ss::describe_ring.set(r, [&ctx, &ss](std::unique_ptr<http::request> req) {
         if (!req->param.exists("keyspace")) {
             throw bad_param_exception("The keyspace param is not provided");
@@ -1542,7 +1532,6 @@ void unset_storage_service(http_context& ctx, routes& r) {
     ss::get_saved_caches_location.unset(r);
     ss::get_range_to_endpoint_map.unset(r);
     ss::get_pending_range_to_endpoint_map.unset(r);
-    ss::describe_any_ring.unset(r);
     ss::describe_ring.unset(r);
     ss::get_load.unset(r);
     ss::get_load_map.unset(r);
