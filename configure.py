@@ -1535,7 +1535,6 @@ def get_warning_options(cxx):
         '-Werror',
         '-Wextra',
         '-Wimplicit-fallthrough',
-        '-Wignored-qualifiers',
         '-Wno-mismatched-tags',  # clang-only
         '-Wno-c++11-narrowing',
         '-Wno-overloaded-virtual',
