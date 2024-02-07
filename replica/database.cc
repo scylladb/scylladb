@@ -2250,6 +2250,10 @@ future<> database::shutdown() {
     co_await _stop_barrier.arrive_and_wait();
     b.cancel();
 
+    // stop compaction across all shards before closing tables
+    co_await _compaction_manager.drain();
+    co_await _stop_barrier.arrive_and_wait();
+
     // Closing a table can cause us to find a large partition. Since we want to record that, we have to close
     // system.large_partitions after the regular tables.
     co_await close_tables(database::table_kind::user);
