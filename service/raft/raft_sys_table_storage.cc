@@ -10,6 +10,7 @@
 #include "cql3/untyped_result_set.hh"
 #include "db/system_keyspace.hh"
 #include "utils/UUID.hh"
+#include "utils/error_injection.hh"
 
 #include "serializer.hh"
 #include "idl/raft_storage.dist.hh"
@@ -336,6 +337,9 @@ future<> raft_sys_table_storage::execute_with_linearization_point(std::function<
 
 future<> raft_sys_table_storage::bootstrap(raft::configuration initial_configuation, bool nontrivial_snapshot) {
     auto init_index = nontrivial_snapshot ? raft::index_t{1} : raft::index_t{0};
+    utils::get_local_injector().inject("raft_sys_table_storage::bootstrap/init_index_0", [&init_index] {
+        init_index = raft::index_t{0};
+    });
     raft::snapshot_descriptor snapshot{.idx{init_index}};
     snapshot.id = raft::snapshot_id::create_random_id();
     snapshot.config = std::move(initial_configuation);

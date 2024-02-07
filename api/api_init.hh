@@ -23,6 +23,7 @@ class load_meter;
 class storage_proxy;
 class storage_service;
 class raft_group0_client;
+class raft_group_registry;
 
 } // namespace service
 
@@ -117,5 +118,7 @@ future<> set_server_compaction_manager(http_context& ctx);
 future<> set_server_done(http_context& ctx);
 future<> set_server_task_manager(http_context& ctx, lw_shared_ptr<db::config> cfg);
 future<> set_server_task_manager_test(http_context& ctx);
+future<> set_server_raft(http_context&, sharded<service::raft_group_registry>&);
+future<> unset_server_raft(http_context&);
 
 }

@@ -1402,6 +1402,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 sst_format_listener.stop().get();
             });
 
+            std::any stop_raft_api;
             if (raft_gr.local().is_enabled()) {
                 if (!db.local().uses_schema_commitlog()) {
                     startlog.error("Bad configuration: consistent_cluster_management requires schema commit log to be enabled");
@@ -1409,6 +1410,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 }
                 supervisor::notify("starting Raft Group Registry service");
                 raft_gr.invoke_on_all(&service::raft_group_registry::start).get();
+
+                api::set_server_raft(ctx, raft_gr).get();
+                stop_raft_api = defer_verbose_shutdown("Raft API", [&ctx] {
+                    api::unset_server_raft(ctx).get();
+                });
             } else {
                 if (cfg->check_experimental(db::experimental_features_t::feature::BROADCAST_TABLES)) {
                     startlog.error("Bad configuration: RAFT feature has to be enabled if BROADCAST_TABLES is enabled");
@@ -1419,6 +1425,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                     throw bad_configuration_error();
                 }
             }
+
             group0_client.init().get();
 
             // schema migration, if needed, is also done on shard 0

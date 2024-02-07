@@ -101,6 +101,8 @@ public:
     void register_metrics() override;
     size_t max_command_size() const override;
 private:
+    seastar::condition_variable _events;
+
     std::unique_ptr<rpc> _rpc;
     std::unique_ptr<state_machine> _state_machine;
     std::unique_ptr<persistence> _persistence;
@@ -116,6 +118,8 @@ private:
     std::optional<shared_promise<>> _state_change_promise;
     // Index of the last entry applied to `_state_machine`.
     index_t _applied_idx;
+    // Index of the last persisted snapshot descriptor.
+    index_t _snapshot_desc_idx;
     std::list<active_read> _reads;
     std::multimap<index_t, awaited_index> _awaited_indexes;
 
@@ -125,13 +129,20 @@ private:
     // Signaled when apply index is changed
     condition_variable _applied_index_changed;
 
+    // Signaled when _snapshot_desc_idx is changed
+    condition_variable _snapshot_desc_idx_changed;
+
     struct stop_apply_fiber{}; // exception to send when apply fiber is needs to be stopepd
 
     struct removed_from_config{}; // sent to applier_fiber when we're not a leader and we're outside the current configuration
+
+    struct trigger_snapshot_msg{};
+
     using applier_fiber_message = std::variant<
         std::vector<log_entry_ptr>,
         snapshot_descriptor,
-        removed_from_config>;
+        removed_from_config,
+        trigger_snapshot_msg>;
     queue<applier_fiber_message> _apply_entries = queue<applier_fiber_message>(10);
 
     struct stats {
@@ -205,6 +216,16 @@ private:
     };
     absl::flat_hash_map<server_id, append_request_queue> _append_request_status;
 
+    struct server_requests {
+        bool snapshot = false;
+
+        bool empty() const {
+            return !snapshot;
+        }
+    };
+
+    server_requests _new_server_requests;
+
     // Called to commit entries (on a leader or otherwise).
     void notify_waiters(std::map<index_t, op_status>& waiters, const std::vector<log_entry_ptr>& entries);
 
@@ -216,10 +237,15 @@ private:
     // to be applied.
     void signal_applied();
 
-    // This fiber processes FSM output by doing the following steps in order:
+    // Processes FSM output by doing the following steps in order:
     //  - persist the current term and vote
     //  - persist unstable log entries on disk.
     //  - send out messages
+    future<> process_fsm_output(index_t& stable_idx, fsm_output&&);
+
+    future<> process_server_requests(server_requests&&);
+
+    // Processes new FSM outputs and server requests as they appear.
     future<> io_fiber(index_t stable_idx);
 
     // This fiber runs in the background and applies committed entries.
@@ -270,6 +296,8 @@ private:
     future<> wait_for_leader(seastar::abort_source* as);
 
     future<> wait_for_state_change(seastar::abort_source* as = nullptr) override;
+
+    virtual future<bool> trigger_snapshot(seastar::abort_source* as) override;
 
     // Get "safe to read" index from a leader
     future<read_barrier_reply> get_read_idx(server_id leader, seastar::abort_source* as);
@@ -343,12 +371,14 @@ future<> server_impl::start() {
                                      .append_request_threshold = _config.append_request_threshold,
                                      .max_log_size = _config.max_log_size,
                                      .enable_prevoting = _config.enable_prevoting
-                                 });
+                                 },
+                                 _events);
 
     _applied_idx = index_t{0};
+    _snapshot_desc_idx = index_t{0};
     if (snapshot.id) {
         co_await _state_machine->load_snapshot(snapshot.id);
-        _applied_idx = snapshot.idx;
+        _snapshot_desc_idx = _applied_idx = snapshot.idx;
     }
 
     if (!rpc_config.current.empty()) {
@@ -419,6 +449,54 @@ future<> server_impl::wait_for_state_change(seastar::abort_source* as) {
     } catch (abort_requested_exception&) {
         throw request_aborted();
     }
+}
+
+future<bool> server_impl::trigger_snapshot(seastar::abort_source* as) {
+    check_not_aborted();
+
+    if (_applied_idx <= _snapshot_desc_idx) {
+        logger.debug(
+            "[{}] trigger_snapshot: last persisted snapshot descriptor index is up-to-date"
+            ", applied index: {}, persisted snapshot descriptor index: {}, last fsm log index: {}"
+            ", last fsm snapshot index: {}", _id, _applied_idx, _snapshot_desc_idx,
+            _fsm->log_last_idx(), _fsm->log_last_snapshot_idx());
+        co_return false;
+    }
+
+    _new_server_requests.snapshot = true;
+    _events.signal();
+
+    // Wait for persisted snapshot index to catch up to this index.
+    auto awaited_idx = _applied_idx;
+
+    logger.debug("[{}] snapshot request waiting for index {}", _id, awaited_idx);
+
+    try {
+        optimized_optional<abort_source::subscription> sub;
+        if (as) {
+            as->check();
+            sub = as->subscribe([this] () noexcept { _snapshot_desc_idx_changed.broadcast(); });
+            assert(sub); // due to `check()` above
+        }
+        co_await _snapshot_desc_idx_changed.when([this, as, awaited_idx] {
+            return (as && as->abort_requested()) || awaited_idx <= _snapshot_desc_idx;
+        });
+        if (as) {
+            as->check();
+        }
+    } catch (abort_requested_exception&) {
+        throw request_aborted();
+    } catch (seastar::broken_condition_variable&) {
+        throw request_aborted();
+    }
+
+    logger.debug(
+        "[{}] snapshot request satisfied, awaited index {}, persisted snapshot descriptor index: {}"
+        ", current applied index {}, last fsm log index {}, last fsm snapshot index {}",
+        _id, awaited_idx, _snapshot_desc_idx, _applied_idx,
+        _fsm->log_last_idx(), _fsm->log_last_snapshot_idx());
+
+    co_return true;
 }
 
 future<> server_impl::wait_for_entry(entry_id eid, wait_type type, seastar::abort_source* as) {
@@ -972,144 +1050,175 @@ static rpc_config_diff diff_address_sets(const server_address_set& prev, const c
     return result;
 }
 
+future<> server_impl::process_fsm_output(index_t& last_stable, fsm_output&& batch) {
+    if (batch.term_and_vote) {
+        // Current term and vote are always persisted
+        // together. A vote may change independently of
+        // term, but it's safe to update both in this
+        // case.
+        co_await _persistence->store_term_and_vote(batch.term_and_vote->first, batch.term_and_vote->second);
+        _stats.store_term_and_vote++;
+    }
+
+    if (batch.snp) {
+        auto& [snp, is_local, max_trailing_entries] = *batch.snp;
+        logger.trace("[{}] io_fiber storing snapshot {}", _id, snp.id);
+        // Persist the snapshot
+        co_await _persistence->store_snapshot_descriptor(snp, max_trailing_entries);
+        _snapshot_desc_idx = snp.idx;
+        _snapshot_desc_idx_changed.broadcast();
+        _stats.store_snapshot++;
+        // If this is locally generated snapshot there is no need to
+        // load it.
+        if (!is_local) {
+            co_await _apply_entries.push_eventually(std::move(snp));
+        }
+    }
+
+    for (const auto& snp_id: batch.snps_to_drop) {
+        _state_machine->drop_snapshot(snp_id);
+    }
+
+    if (batch.log_entries.size()) {
+        auto& entries = batch.log_entries;
+
+        if (last_stable >= entries[0]->idx) {
+            co_await _persistence->truncate_log(entries[0]->idx);
+            _stats.truncate_persisted_log++;
+        }
+
+        utils::get_local_injector().inject("store_log_entries/test-failure",
+            [] { throw std::runtime_error("store_log_entries/test-failure"); });
+
+        // Combine saving and truncating into one call?
+        // will require persistence to keep track of last idx
+        co_await _persistence->store_log_entries(entries);
+
+        last_stable = (*entries.crbegin())->idx;
+        _stats.persisted_log_entries += entries.size();
+    }
+
+    // Update RPC server address mappings. Add servers which are joining
+    // the cluster according to the new configuration (obtained from the
+    // last_conf_idx).
+    //
+    // It should be done prior to sending the messages since the RPC
+    // module needs to know who should it send the messages to (actual
+    // network addresses of the joining servers).
+    rpc_config_diff rpc_diff;
+    if (batch.configuration) {
+        rpc_diff = diff_address_sets(get_rpc_config(), *batch.configuration);
+        for (const auto& addr: rpc_diff.joining) {
+            add_to_rpc_config(addr);
+        }
+        _rpc->on_configuration_change(rpc_diff.joining, {});
+    }
+
+     // After entries are persisted we can send messages.
+    for (auto&& m : batch.messages) {
+        try {
+            send_message(m.first, std::move(m.second));
+        } catch(...) {
+            // Not being able to send a message is not a critical error
+            logger.debug("[{}] io_fiber failed to send a message to {}: {}", _id, m.first, std::current_exception());
+        }
+    }
+
+    if (batch.configuration) {
+        for (const auto& addr: rpc_diff.leaving) {
+            abort_snapshot_transfer(addr.id);
+            remove_from_rpc_config(addr);
+        }
+        _rpc->on_configuration_change({}, rpc_diff.leaving);
+    }
+
+    // Process committed entries.
+    if (batch.committed.size()) {
+        if (_non_joint_conf_commit_promise) {
+            for (const auto& e: batch.committed) {
+                const auto* cfg = get_if<raft::configuration>(&e->data);
+                if (cfg != nullptr && !cfg->is_joint()) {
+                    std::exchange(_non_joint_conf_commit_promise, std::nullopt)->promise.set_value();
+                    break;
+                }
+            }
+        }
+        co_await _persistence->store_commit_idx(batch.committed.back()->idx);
+        _stats.queue_entries_for_apply += batch.committed.size();
+        co_await _apply_entries.push_eventually(std::move(batch.committed));
+    }
+
+    if (batch.max_read_id_with_quorum) {
+        while (!_reads.empty() && _reads.front().id <= batch.max_read_id_with_quorum) {
+            _reads.front().promise.set_value(_reads.front().idx);
+            _reads.pop_front();
+        }
+    }
+    if (!_fsm->is_leader()) {
+        if (_stepdown_promise) {
+            std::exchange(_stepdown_promise, std::nullopt)->set_value();
+        }
+        if (!_current_rpc_config.contains(_id)) {
+            // - It's important we push this after we pushed committed entries above. It
+            // will cause `applier_fiber` to drop waiters, which should be done after we
+            // notify all waiters for entries committed in this batch.
+            // - This may happen multiple times if `io_fiber` gets multiple batches when
+            // we're outside the configuration, but it should eventually (and generally
+            // quickly) stop happening (we're outside the config after all).
+            co_await _apply_entries.push_eventually(removed_from_config{});
+        }
+        // request aborts of snapshot transfers
+        abort_snapshot_transfers();
+        // abort all read barriers
+        for (auto& r : _reads) {
+            r.promise.set_value(not_a_leader{_fsm->current_leader()});
+        }
+        _reads.clear();
+    } else if (batch.abort_leadership_transfer) {
+        if (_stepdown_promise) {
+            std::exchange(_stepdown_promise, std::nullopt)->set_exception(timeout_error("Stepdown process timed out"));
+        }
+    }
+    if (_leader_promise && _fsm->current_leader()) {
+        std::exchange(_leader_promise, std::nullopt)->set_value();
+    }
+    if (_state_change_promise && batch.state_changed) {
+        std::exchange(_state_change_promise, std::nullopt)->set_value();
+    }
+}
+
+future<> server_impl::process_server_requests(server_requests&& requests) {
+    if (requests.snapshot) {
+        co_await _apply_entries.push_eventually(trigger_snapshot_msg{});
+    }
+}
+
 future<> server_impl::io_fiber(index_t last_stable) {
     logger.trace("[{}] io_fiber start", _id);
     try {
         while (true) {
-            auto batch = co_await _fsm->poll_output();
+            bool has_fsm_output = false;
+            bool has_server_request = false;
+            co_await _events.when([this, &has_fsm_output, &has_server_request] {
+                has_fsm_output = _fsm->has_output();
+                has_server_request = !_new_server_requests.empty();
+                return has_fsm_output || has_server_request;
+            });
+
+            while (utils::get_local_injector().enter("poll_fsm_output/pause")) {
+                co_await seastar::sleep(std::chrono::milliseconds(100));
+            }
+
             _stats.polls++;
 
-            if (batch.term_and_vote) {
-                // Current term and vote are always persisted
-                // together. A vote may change independently of
-                // term, but it's safe to update both in this
-                // case.
-                co_await _persistence->store_term_and_vote(batch.term_and_vote->first, batch.term_and_vote->second);
-                _stats.store_term_and_vote++;
+            if (has_fsm_output) {
+                auto batch = _fsm->get_output();
+                co_await process_fsm_output(last_stable, std::move(batch));
             }
 
-            if (batch.snp) {
-                auto& [snp, is_local] = *batch.snp;
-                logger.trace("[{}] io_fiber storing snapshot {}", _id, snp.id);
-                // Persist the snapshot
-                co_await _persistence->store_snapshot_descriptor(snp, is_local ? _config.snapshot_trailing : 0);
-                _stats.store_snapshot++;
-                // If this is locally generated snapshot there is no need to
-                // load it.
-                if (!is_local) {
-                    co_await _apply_entries.push_eventually(std::move(snp));
-                }
-            }
-
-            for (const auto& snp_id: batch.snps_to_drop) {
-                _state_machine->drop_snapshot(snp_id);
-            }
-
-            if (batch.log_entries.size()) {
-                auto& entries = batch.log_entries;
-
-                if (last_stable >= entries[0]->idx) {
-                    co_await _persistence->truncate_log(entries[0]->idx);
-                    _stats.truncate_persisted_log++;
-                }
-
-                utils::get_local_injector().inject("store_log_entries/test-failure",
-                    [] { throw std::runtime_error("store_log_entries/test-failure"); });
-
-                // Combine saving and truncating into one call?
-                // will require persistence to keep track of last idx
-                co_await _persistence->store_log_entries(entries);
-
-                last_stable = (*entries.crbegin())->idx;
-                _stats.persisted_log_entries += entries.size();
-            }
-
-            // Update RPC server address mappings. Add servers which are joining
-            // the cluster according to the new configuration (obtained from the
-            // last_conf_idx).
-            //
-            // It should be done prior to sending the messages since the RPC
-            // module needs to know who should it send the messages to (actual
-            // network addresses of the joining servers).
-            rpc_config_diff rpc_diff;
-            if (batch.configuration) {
-                rpc_diff = diff_address_sets(get_rpc_config(), *batch.configuration);
-                for (const auto& addr: rpc_diff.joining) {
-                    add_to_rpc_config(addr);
-                }
-                _rpc->on_configuration_change(rpc_diff.joining, {});
-            }
-
-             // After entries are persisted we can send messages.
-            for (auto&& m : batch.messages) {
-                try {
-                    send_message(m.first, std::move(m.second));
-                } catch(...) {
-                    // Not being able to send a message is not a critical error
-                    logger.debug("[{}] io_fiber failed to send a message to {}: {}", _id, m.first, std::current_exception());
-                }
-            }
-
-            if (batch.configuration) {
-                for (const auto& addr: rpc_diff.leaving) {
-                    abort_snapshot_transfer(addr.id);
-                    remove_from_rpc_config(addr);
-                }
-                _rpc->on_configuration_change({}, rpc_diff.leaving);
-            }
-
-            // Process committed entries.
-            if (batch.committed.size()) {
-                if (_non_joint_conf_commit_promise) {
-                    for (const auto& e: batch.committed) {
-                        const auto* cfg = get_if<raft::configuration>(&e->data);
-                        if (cfg != nullptr && !cfg->is_joint()) {
-                            std::exchange(_non_joint_conf_commit_promise, std::nullopt)->promise.set_value();
-                            break;
-                        }
-                    }
-                }
-                co_await _persistence->store_commit_idx(batch.committed.back()->idx);
-                _stats.queue_entries_for_apply += batch.committed.size();
-                co_await _apply_entries.push_eventually(std::move(batch.committed));
-            }
-
-            if (batch.max_read_id_with_quorum) {
-                while (!_reads.empty() && _reads.front().id <= batch.max_read_id_with_quorum) {
-                    _reads.front().promise.set_value(_reads.front().idx);
-                    _reads.pop_front();
-                }
-            }
-            if (!_fsm->is_leader()) {
-                if (_stepdown_promise) {
-                    std::exchange(_stepdown_promise, std::nullopt)->set_value();
-                }
-                if (!_current_rpc_config.contains(_id)) {
-                    // - It's important we push this after we pushed committed entries above. It
-                    // will cause `applier_fiber` to drop waiters, which should be done after we
-                    // notify all waiters for entries committed in this batch.
-                    // - This may happen multiple times if `io_fiber` gets multiple batches when
-                    // we're outside the configuration, but it should eventually (and generally
-                    // quickly) stop happening (we're outside the config after all).
-                    co_await _apply_entries.push_eventually(removed_from_config{});
-                }
-                // request aborts of snapshot transfers
-                abort_snapshot_transfers();
-                // abort all read barriers
-                for (auto& r : _reads) {
-                    r.promise.set_value(not_a_leader{_fsm->current_leader()});
-                }
-                _reads.clear();
-            } else if (batch.abort_leadership_transfer) {
-                if (_stepdown_promise) {
-                    std::exchange(_stepdown_promise, std::nullopt)->set_exception(timeout_error("Stepdown process timed out"));
-                }
-            }
-            if (_leader_promise && _fsm->current_leader()) {
-                std::exchange(_leader_promise, std::nullopt)->set_value();
-            }
-            if (_state_change_promise && batch.state_changed) {
-                std::exchange(_state_change_promise, std::nullopt)->set_value();
+            if (has_server_request) {
+                auto requests = std::exchange(_new_server_requests, server_requests{});
+                co_await process_server_requests(std::move(requests));
             }
         }
     } catch (seastar::broken_condition_variable&) {
@@ -1242,9 +1351,9 @@ future<> server_impl::applier_fiber() {
                    // Note that at this point (after the `co_await`), _fsm may already have applied a later snapshot.
                    // That's fine, `_fsm->apply_snapshot` will simply ignore our current attempt; we will soon receive
                    // a later snapshot from the queue.
-                   if (!_fsm->apply_snapshot(snp,
-                                             force_snapshot ? 0 : _config.snapshot_trailing,
-                                             force_snapshot ? 0 : _config.snapshot_trailing_size, true)) {
+                   auto max_trailing = force_snapshot ? 0 : _config.snapshot_trailing;
+                   auto max_trailing_bytes = force_snapshot ? 0 : _config.snapshot_trailing_size;
+                   if (!_fsm->apply_snapshot(snp, max_trailing, max_trailing_bytes, true)) {
                        logger.trace("[{}] applier fiber: while taking snapshot term={} idx={} id={},"
                               " fsm received a later snapshot at idx={}", _id, snp.term, snp.idx, snp.id, _fsm->log_last_snapshot_idx());
                    }
@@ -1266,6 +1375,23 @@ future<> server_impl::applier_fiber() {
                 // it may never know the status of entries it submitted.
                 drop_waiters();
                 co_return;
+            },
+            [this] (const trigger_snapshot_msg&) -> future<> {
+                auto applied_term = _fsm->log_term_for(_applied_idx);
+                // last truncation index <= snapshot index <= applied index
+                assert(applied_term);
+
+                snapshot_descriptor snp;
+                snp.term = *applied_term;
+                snp.idx = _applied_idx;
+                snp.config = _fsm->log_last_conf_for(_applied_idx);
+                logger.trace("[{}] taking snapshot at term={}, idx={} due to request", _id, snp.term, snp.idx);
+                snp.id = co_await _state_machine->take_snapshot();
+                if (!_fsm->apply_snapshot(snp, 0, 0, true)) {
+                    logger.trace("[{}] while taking snapshot term={} idx={} id={} due to request,"
+                           " fsm received a later snapshot at idx={}", _id, snp.term, snp.idx, snp.id, _fsm->log_last_snapshot_idx());
+                }
+                _stats.snapshots_taken++;
             }
             ), v);
 
@@ -1414,6 +1540,8 @@ future<> server_impl::abort(sstring reason) {
     _aborted = std::move(reason);
     logger.trace("[{}]: abort() called", _id);
     _fsm->stop();
+    _events.broken();
+    _snapshot_desc_idx_changed.broken();
 
     // IO and applier fibers may update waiters and start new snapshot
     // transfers, so abort them first
@@ -1470,7 +1598,7 @@ future<> server_impl::abort(sstring reason) {
     }
 
     if (_state_change_promise) {
-        _state_change_promise->set_exception(stopped_error());
+        _state_change_promise->set_exception(stopped_error(*_aborted));
     }
 
     abort_snapshot_transfers();

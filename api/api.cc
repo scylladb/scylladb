@@ -31,6 +31,7 @@
 #include "api/config.hh"
 #include "task_manager.hh"
 #include "task_manager_test.hh"
+#include "raft.hh"
 
 logging::logger apilog("api");
 
@@ -293,6 +294,18 @@ future<> set_server_task_manager_test(http_context& ctx) {
 }
 
 #endif
+
+future<> set_server_raft(http_context& ctx, sharded<service::raft_group_registry>& raft_gr) {
+    auto rb = std::make_shared<api_registry_builder>(ctx.api_doc);
+    return ctx.http_server.set_routes([rb, &ctx, &raft_gr] (routes& r) {
+        rb->register_function(r, "raft", "The Raft API");
+        set_raft(ctx, r, raft_gr);
+    });
+}
+
+future<> unset_server_raft(http_context& ctx) {
+    return ctx.http_server.set_routes([&ctx] (routes& r) { unset_raft(ctx, r); });
+}
 
 void req_params::process(const request& req) {
     // Process mandatory parameters
