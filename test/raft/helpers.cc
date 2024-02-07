@@ -94,8 +94,8 @@ communicate_impl(std::function<bool()> stop_pred, raft_routing_map& map) {
         has_traffic = false;
         for (auto e : map) {
             raft::fsm& from = *e.second;
-            bool has_output;
-            for (auto output = from.get_output(); !output.empty(); output = from.get_output()) {
+            for (bool has_output = from.has_output(); has_output; has_output = from.has_output()) {
+                auto output = from.get_output();
                 if (stop_pred()) {
                     return;
                 }

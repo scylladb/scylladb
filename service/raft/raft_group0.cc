@@ -381,8 +381,26 @@ future<> raft_group0::start_server_for_group0(raft::group_id group0_id) {
     // we ensure we haven't missed any IP update in the map.
     load_initial_raft_address_map();
     group0_log.info("Server {} is starting group 0 with id {}", my_id, group0_id);
-    co_await _raft_gr.start_server_for_group(create_server_for_group0(group0_id, my_id));
+    auto srv_for_group0 = create_server_for_group0(group0_id, my_id);
+    auto& persistence = srv_for_group0.persistence;
+    auto& server = *srv_for_group0.server;
+    co_await _raft_gr.start_server_for_group(std::move(srv_for_group0));
     _group0.emplace<raft::group_id>(group0_id);
+
+    // Fix for scylladb/scylladb#16683:
+    // If the snapshot index is 0, trigger creation of a new snapshot
+    // so bootstrapping nodes will receive a snapshot transfer.
+    auto snap = co_await persistence.load_snapshot_descriptor();
+    if (snap.idx == raft::index_t{0}) {
+        group0_log.info("Detected snapshot with index=0, id={}, triggering new snapshot", snap.id);
+        bool created = co_await server.trigger_snapshot(&_abort_source);
+        if (created) {
+            snap = co_await persistence.load_snapshot_descriptor();
+            group0_log.info("New snapshot created, index={} id={}", snap.idx, snap.id);
+        } else {
+            group0_log.warn("Could not create new snapshot, there are no entries applied");
+        }
+    }
 }
 
 future<> raft_group0::join_group0(std::vector<gms::inet_address> seeds, bool as_voter) {
@@ -418,14 +436,22 @@ future<> raft_group0::join_group0(std::vector<gms::inet_address> seeds, bool as_
         if (server == nullptr) {
             // This is the first time discovery is run. Create and start a Raft server for group 0 on this node.
             raft::configuration initial_configuration;
+            bool nontrivial_snapshot = false;
             if (g0_info.id == my_id) {
                 // We were chosen as the discovery leader.
                 // We should start a new group with this node as voter.
                 group0_log.info("Server {} chosen as discovery leader; bootstrapping group 0 from scratch", my_id);
                 initial_configuration.current.emplace(my_addr, true);
+                // Force snapshot transfer from us to subsequently joining servers.
+                // This is important for upgrade and recovery, where the group 0 state machine
+                // (schema tables in particular) is nonempty.
+                // In a fresh cluster this will trigger an empty snapshot transfer which is redundant but correct.
+                // See #14066.
+                nontrivial_snapshot = true;
             }
             // Bootstrap the initial configuration
-            co_await raft_sys_table_storage(_qp, group0_id, my_id).bootstrap(std::move(initial_configuration));
+            co_await raft_sys_table_storage(_qp, group0_id, my_id)
+                    .bootstrap(std::move(initial_configuration), nontrivial_snapshot);
             co_await start_server_for_group0(group0_id);
             server = &_raft_gr.group0();
             // FIXME if we crash now or after getting added to the config but before storing group 0 ID,

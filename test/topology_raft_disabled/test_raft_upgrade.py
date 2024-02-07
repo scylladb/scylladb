@@ -142,6 +142,11 @@ async def test_raft_upgrade_basic(manager: ManagerClient, random_tables: RandomT
     logging.info(f"group0_history entry description: '{rs[0].description}'")
     assert(table.full_name in rs[0].description)
 
+    logging.info("Booting new node")
+    await manager.server_add(config={
+        'consistent_cluster_management': True
+    })
+
 
 @pytest.mark.asyncio
 @log_run_time
@@ -297,3 +302,8 @@ async def test_recovery_after_majority_loss(manager: ManagerClient, random_table
 
     logging.info("Creating another table")
     await random_tables.add_table(ncolumns=5)
+
+    logging.info("Booting new node")
+    await manager.server_add(config={
+        'consistent_cluster_management': True
+    })

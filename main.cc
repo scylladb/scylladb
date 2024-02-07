@@ -1164,19 +1164,24 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             }).get();
             cfg->host_id = sys_ks.local().load_local_host_id().get0();
 
+            std::any stop_raft_api;
             if (raft_gr.local().is_enabled()) {
                 auto my_raft_id = raft::server_id{cfg->host_id.uuid()};
                 supervisor::notify("starting Raft Group Registry service");
                 raft_gr.invoke_on_all([my_raft_id] (service::raft_group_registry& raft_gr) {
                     return raft_gr.start(my_raft_id);
                 }).get();
+
+                api::set_server_raft(ctx, raft_gr).get();
+                stop_raft_api = defer_verbose_shutdown("Raft API", [&ctx] {
+                    api::unset_server_raft(ctx).get();
+                });
             } else {
                 if (cfg->check_experimental(db::experimental_features_t::feature::BROADCAST_TABLES)) {
                     startlog.error("Bad configuration: RAFT feature has to be enabled if BROADCAST_TABLES is enabled");
                     throw bad_configuration_error();
                 }
             }
-
 
             group0_client.init().get();
 
