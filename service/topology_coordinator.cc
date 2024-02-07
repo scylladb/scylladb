@@ -1639,7 +1639,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
 
                 rtbuilder.done();
 
-                co_await update_topology_state(take_guard(std::move(node)), {rtbuilder.build()}, "report request completion in left_token_ring sate");
+                co_await update_topology_state(take_guard(std::move(node)), {rtbuilder.build()}, "report request completion in left_token_ring state");
 
                 // Tell the node to shut down.
                 // This is done to improve user experience when there are no failures.
