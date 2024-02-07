@@ -5226,7 +5226,12 @@ future<> storage_service::move_tablet(table_id table, dht::token token, locator:
         auto guard = co_await _group0->client().start_operation(&_abort_source);
 
         while (_topology_state_machine._topology.is_busy()) {
-            rtlogger.debug("move_tablet(): topology state machine is busy");
+            const auto tstate = *_topology_state_machine._topology.tstate;
+            if (tstate == topology::transition_state::tablet_draining ||
+                tstate == topology::transition_state::tablet_migration) {
+                break;
+            }
+            rtlogger.debug("move_tablet(): topology state machine is busy: {}", tstate);
             release_guard(std::move(guard));
             co_await _topology_state_machine.event.wait();
             guard = co_await _group0->client().start_operation(&_abort_source);
@@ -5239,6 +5244,9 @@ future<> storage_service::move_tablet(table_id table, dht::token token, locator:
         auto last_token = tmap.get_last_token(tid);
         auto gid = locator::global_tablet_id{table, tid};
 
+        if (tmap.get_tablet_transition_info(tid)) {
+            throw std::runtime_error(format("Tablet {} is in transition", gid));
+        }
         if (!locator::contains(tinfo.replicas, src)) {
             throw std::runtime_error(format("Tablet {} has no replica on {}", gid, src));
         }
