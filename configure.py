@@ -1538,7 +1538,6 @@ def get_warning_options(cxx):
         '-Wno-mismatched-tags',  # clang-only
         '-Wno-c++11-narrowing',
         '-Wno-overloaded-virtual',
-        '-Wno-unused-command-line-argument',
         '-Wno-unused-parameter',
         '-Wno-unsupported-friend',
         '-Wno-missing-field-initializers',
