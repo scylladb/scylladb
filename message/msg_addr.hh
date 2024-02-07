@@ -22,6 +22,7 @@ struct msg_addr {
         size_t operator()(const msg_addr& id) const noexcept;
     };
     explicit msg_addr(gms::inet_address ip) noexcept : addr(ip), cpu_id(0) { }
+    explicit msg_addr(const sstring& addr) noexcept : addr(addr), cpu_id(0) { }
     msg_addr(gms::inet_address ip, uint32_t cpu) noexcept : addr(ip), cpu_id(cpu) { }
 };
 

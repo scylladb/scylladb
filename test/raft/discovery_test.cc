@@ -60,7 +60,7 @@ BOOST_AUTO_TEST_CASE(test_basic) {
 
     // Must supply an Internet address for self
     BOOST_CHECK_THROW(discovery(addr1, {}), std::logic_error);
-    discovery_peer addr2 = {id(), seastar::sstring("192.168.1.2")};
+    discovery_peer addr2 = {id(), gms::inet_address("192.168.1.2")};
     BOOST_CHECK_NO_THROW(discovery(addr2, {}));
     // Must supply an Internet address for each peer
     BOOST_CHECK_THROW(discovery(addr2, {addr1}), std::logic_error);
@@ -76,8 +76,8 @@ BOOST_AUTO_TEST_CASE(test_basic) {
 
 BOOST_AUTO_TEST_CASE(test_discovery) {
 
-    discovery_peer addr1 = {id(), seastar::sstring("192.168.1.1")};
-    discovery_peer addr2 = {id(), seastar::sstring("192.168.1.2")};
+    discovery_peer addr1 = {id(), gms::inet_address("192.168.1.1")};
+    discovery_peer addr2 = {id(), gms::inet_address("192.168.1.2")};
 
     discovery d1(addr1, {addr2});
     discovery d2(addr2, {addr1});
@@ -88,9 +88,9 @@ BOOST_AUTO_TEST_CASE(test_discovery) {
 
 BOOST_AUTO_TEST_CASE(test_discovery_fullmesh) {
 
-    discovery_peer addr1 = {id(), seastar::sstring("127.0.0.13")};
-    discovery_peer addr2 = {id(), seastar::sstring("127.0.0.19")};
-    discovery_peer addr3 = {id(), seastar::sstring("127.0.0.21")};
+    discovery_peer addr1 = {id(), gms::inet_address("127.0.0.13")};
+    discovery_peer addr2 = {id(), gms::inet_address("127.0.0.19")};
+    discovery_peer addr3 = {id(), gms::inet_address("127.0.0.21")};
 
     auto seeds = std::vector<discovery_peer>({addr1, addr2, addr3});
 

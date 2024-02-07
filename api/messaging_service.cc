@@ -114,7 +114,7 @@ void set_messaging_service(http_context& ctx, routes& r, sharded<netw::messaging
     }));
 
     get_version.set(r, [&ms](const_req req) {
-        return ms.local().get_raw_version(req.get_query_param("addr"));
+        return ms.local().get_raw_version(gms::inet_address(req.get_query_param("addr")));
     });
 
     get_dropped_messages_by_ver.set(r, [&ms](std::unique_ptr<request> req) {

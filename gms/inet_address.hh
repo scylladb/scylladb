@@ -26,7 +26,7 @@ private:
     net::inet_address _addr;
 public:
     inet_address() = default;
-    inet_address(int32_t ip) noexcept
+    explicit inet_address(int32_t ip) noexcept
         : inet_address(uint32_t(ip)) {
     }
     explicit inet_address(uint32_t ip) noexcept
@@ -47,7 +47,7 @@ public:
     }
 
     // throws std::invalid_argument if sstring is invalid
-    inet_address(const sstring& addr) {
+    explicit inet_address(const sstring& addr) {
         // FIXME: We need a real DNS resolver
         if (addr == "localhost") {
             _addr = net::ipv4_address("127.0.0.1");
