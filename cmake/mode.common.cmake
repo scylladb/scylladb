@@ -1,9 +1,12 @@
 set(disabled_warnings
   c++11-narrowing
+  deprecated-copy
   mismatched-tags
+  missing-field-initializers
   overloaded-virtual
   unsupported-friend
-  enum-constexpr-conversion)
+  enum-constexpr-conversion
+  unused-parameter)
 include(CheckCXXCompilerFlag)
 foreach(warning ${disabled_warnings})
   check_cxx_compiler_flag("-Wno-${warning}" _warning_supported_${warning})
