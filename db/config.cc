@@ -1219,7 +1219,7 @@ std::istream& operator>>(std::istream& is, db::seed_provider_type& s) {
 }
 
 std::ostream& operator<<(std::ostream& os, const error_injection_at_startup& eias) {
-    os << "error_injection_at_startup{name=" << eias.name << ", one_shot=" << eias.one_shot << "}";
+    fmt::print(os, "{}", eias);
     return os;
 }
 
@@ -1229,6 +1229,12 @@ std::istream& operator>>(std::istream& is, error_injection_at_startup& eias) {
     return is;
 }
 
+}
+
+auto fmt::formatter<db::error_injection_at_startup>::format(const db::error_injection_at_startup& eias, fmt::format_context& ctx) const
+    -> decltype(ctx.out()) {
+    return fmt::format_to(ctx.out(), "error_injection_at_startup{{name={}, one_short={}}}",
+                          eias.name, eias.one_shot);
 }
 
 namespace utils {

@@ -83,6 +83,11 @@ std::istream& operator>>(std::istream& is, error_injection_at_startup&);
 
 }
 
+template<>
+struct fmt::formatter<db::error_injection_at_startup> {
+    constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
+    auto format(const db::error_injection_at_startup&, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
 
 namespace utils {
 
