@@ -2186,7 +2186,7 @@ def write_build_file(f,
                     # Unoptimized parsers end up using huge amounts of stack space and overflowing their stack
                     flags += ' -O1' if modes[mode]['optimization-level'] in ['0', 'g', 's'] else ''
 
-                    if has_sanitize_address_use_after_scope:
+                    if '-DSANITIZE' in modeval['cxxflags'] and has_sanitize_address_use_after_scope:
                         flags += ' -fno-sanitize-address-use-after-scope'
                 f.write(f'  obj_cxxflags = {flags}\n')
         f.write(f'build $builddir/{mode}/gen/empty.cc: gen\n')
