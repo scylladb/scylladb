@@ -63,18 +63,18 @@ namespace ss = httpd::storage_service_json;
 namespace sp = httpd::storage_proxy_json;
 using namespace json;
 
-sstring validate_keyspace(http_context& ctx, sstring ks_name) {
+sstring validate_keyspace(const http_context& ctx, sstring ks_name) {
     if (ctx.db.local().has_keyspace(ks_name)) {
         return ks_name;
     }
     throw bad_param_exception(replica::no_such_keyspace(ks_name).what());
 }
 
-sstring validate_keyspace(http_context& ctx, const parameters& param) {
+sstring validate_keyspace(const http_context& ctx, const parameters& param) {
     return validate_keyspace(ctx, param["keyspace"]);
 }
 
-static void validate_table(http_context& ctx, sstring ks_name, sstring table_name) {
+static void validate_table(const http_context& ctx, sstring ks_name, sstring table_name) {
     auto& db = ctx.db.local();
     try {
         db.find_column_family(ks_name, table_name);
@@ -106,7 +106,7 @@ int64_t validate_int(const sstring& param) {
 // splits a request parameter assumed to hold a comma-separated list of table names
 // verify that the tables are found, otherwise a bad_param_exception exception is thrown
 // containing the description of the respective no_such_column_family error.
-std::vector<sstring> parse_tables(const sstring& ks_name, http_context& ctx, sstring value) {
+std::vector<sstring> parse_tables(const sstring& ks_name, const http_context& ctx, sstring value) {
     if (value.empty()) {
         return map_keys(ctx.db.local().find_keyspace(ks_name).metadata().get()->cf_meta_data());
     }
@@ -121,7 +121,7 @@ std::vector<sstring> parse_tables(const sstring& ks_name, http_context& ctx, sst
     return names;
 }
 
-std::vector<sstring> parse_tables(const sstring& ks_name, http_context& ctx, const std::unordered_map<sstring, sstring>& query_params, sstring param_name) {
+std::vector<sstring> parse_tables(const sstring& ks_name, const http_context& ctx, const std::unordered_map<sstring, sstring>& query_params, sstring param_name) {
     auto it = query_params.find(param_name);
     if (it == query_params.end()) {
         return {};
@@ -129,7 +129,7 @@ std::vector<sstring> parse_tables(const sstring& ks_name, http_context& ctx, con
     return parse_tables(ks_name, ctx, it->second);
 }
 
-std::vector<table_info> parse_table_infos(const sstring& ks_name, http_context& ctx, sstring value) {
+std::vector<table_info> parse_table_infos(const sstring& ks_name, const http_context& ctx, sstring value) {
     std::vector<table_info> res;
     try {
         if (value.empty()) {
@@ -154,7 +154,7 @@ std::vector<table_info> parse_table_infos(const sstring& ks_name, http_context& 
     return res;
 }
 
-std::vector<table_info> parse_table_infos(const sstring& ks_name, http_context& ctx, const std::unordered_map<sstring, sstring>& query_params, sstring param_name) {
+std::vector<table_info> parse_table_infos(const sstring& ks_name, const http_context& ctx, const std::unordered_map<sstring, sstring>& query_params, sstring param_name) {
     auto it = query_params.find(param_name);
     return parse_table_infos(ks_name, ctx, it != query_params.end() ? it->second : "");
 }
@@ -259,7 +259,7 @@ future<json::json_return_type> set_tables_tombstone_gc(http_context& ctx, const 
     });
 }
 
-future<scrub_info> parse_scrub_options(http_context& ctx, sharded<db::snapshot_ctl>& snap_ctl, std::unique_ptr<http::request> req) {
+future<scrub_info> parse_scrub_options(const http_context& ctx, sharded<db::snapshot_ctl>& snap_ctl, std::unique_ptr<http::request> req) {
     scrub_info info;
     auto rp = req_params({
         {"keyspace", {mandatory::yes}},
