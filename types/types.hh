@@ -219,6 +219,16 @@ public:
     // to explicitly call `make_null()` instead.
     data_value(std::nullptr_t) = delete;
 
+    // Do not allow construction of a data_value from pointers. The reason is
+    // that this is error prone since pointers are implicitly converted to `bool`
+    // deriving the data_value(bool) constructor.
+    // In this case, comparisons between unrelated types, like `sstring` and `something*`
+    // implicitly select operator==(const data_value&, const data_value&), as
+    // `sstring` is implicitly convertible to `data_value`, and so is `something*`
+    // via `data_value(bool)`.
+    template <typename T>
+    data_value(const T*) = delete;
+
     data_value(ascii_native_type);
     data_value(bool);
     data_value(int8_t);
