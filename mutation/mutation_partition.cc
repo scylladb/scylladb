@@ -1441,7 +1441,7 @@ uint32_t mutation_partition::do_compact(const schema& s,
         trim_rows<false>(s, row_ranges, row_callback);
     }
 
-    // #589 - Do not add extra row for statics unless we did a CK range-less query.
+    // #589 - Do not add extra row for static content unless we did a CK range-less query.
     // See comment in query
     bool return_static_content_on_partition_with_no_rows = always_return_static_content || !has_ck_selector(row_ranges);
     if (row_count == 0 && static_row_live && return_static_content_on_partition_with_no_rows) {
