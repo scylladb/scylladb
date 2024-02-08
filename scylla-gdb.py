@@ -3566,7 +3566,10 @@ class scylla_io_queues(gdb.Command):
                     try:
                         gdb.write("\tCapacity tail:       {}\n".format(std_atomic(fg['_token_bucket']['_rovers']['tail']).get()))
                         gdb.write("\tCapacity head:       {}\n".format(std_atomic(fg['_token_bucket']['_rovers']['head']).get()))
-                        gdb.write("\tCapacity ceil:       {}\n".format(std_atomic(fg['_token_bucket']['_rovers']['ceil']).get()))
+                        try:
+                            gdb.write("\tCapacity ceil:       {}\n".format(std_atomic(fg['_token_bucket']['_rovers']['ceil']).get()))
+                        except gdb.error:
+                            pass
                     except gdb.error:
                         gdb.write("\tCapacity tail:       {}\n".format(std_atomic(fg['_capacity_tail']).get()))
                         gdb.write("\tCapacity head:       {}\n".format(std_atomic(fg['_capacity_head']).get()))
