@@ -140,7 +140,7 @@ enum class sstable_state {
     upload,
 };
 
-inline sstring state_to_dir(sstable_state state) {
+inline std::string_view state_to_dir(sstable_state state) {
     switch (state) {
     case sstable_state::normal:
         return normal_dir;
@@ -178,7 +178,7 @@ inline std::ostream& operator<<(std::ostream& o, sstable_state s) {
 inline fs::path make_path(std::string_view table_dir, sstable_state state) {
     fs::path ret(table_dir);
     if (state != sstable_state::normal) {
-        ret /= state_to_dir(state).c_str();
+        ret /= state_to_dir(state);
     }
     return ret;
 }
