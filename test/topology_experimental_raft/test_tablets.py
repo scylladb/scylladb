@@ -595,6 +595,7 @@ async def test_tablet_split(manager: ManagerClient):
     logger.info("Bootstrapping cluster")
     cmdline = [
         '--logger-log-level', 'storage_service=debug',
+        '--logger-log-level', 'table=debug',
         '--target-tablet-size-in-bytes', '1024',
     ]
     servers = [await manager.server_add(cmdline=cmdline)]
