@@ -2551,7 +2551,6 @@ class row_level_repair {
     inet_address_vector_replica_set _all_live_peer_nodes;
     std::vector<std::optional<shard_id>> _all_live_peer_shards;
     bool _small_table_optimization;
-    replica::column_family& _cf;
 
     // Repair master and followers will propose a sync boundary. Each of them
     // read N bytes of rows from disk, the row with largest
@@ -2607,7 +2606,6 @@ public:
         , _range(std::move(range))
         , _all_live_peer_nodes(sort_peer_nodes(all_live_peer_nodes))
         , _small_table_optimization(small_table_optimization)
-        , _cf(_shard_task.db.local().find_column_family(_table_id))
         , _seed(get_random_seed())
         , _start_time(gc_clock::now()) {
         repair_neighbors r_neighbors = _shard_task.get_repair_neighbors(_range);
@@ -2678,9 +2676,8 @@ private:
                 rlogger.debug("Called master.get_sync_boundary for node {} sb={}, combined_csum={}, row_size={}, zero_rows={}, skipped_sync_boundary={}",
                     node, res.boundary, res.row_buf_combined_csum, res.row_buf_size, _zero_rows, _skipped_sync_boundary);
             }).handle_exception([this, node] (std::exception_ptr ep) {
-                auto s = _cf.schema();
                 rlogger.warn("repair[{}]: get_sync_boundary: got error from node={}, keyspace={}, table={}, range={}, error={}",
-                        _shard_task.global_repair_id.uuid(), node, s->ks_name(), s->cf_name(), _range, ep);
+                        _shard_task.global_repair_id.uuid(), node, _shard_task.get_keyspace(), _cf_name, _range, ep);
                 return make_exception_future<>(std::move(ep));
             });
         }).get();
@@ -2743,9 +2740,8 @@ private:
                 combined_hashes[idx]= std::move(resp);
             }).handle_exception([this, &master, idx] (std::exception_ptr ep) {
                 auto& node = master.all_nodes()[idx].node;
-                auto s = _cf.schema();
                 rlogger.warn("repair[{}]: get_combined_row_hash: got error from node={}, keyspace={}, table={}, range={}, error={}",
-                        _shard_task.global_repair_id.uuid(), node, s->ks_name(), s->cf_name(), _range, ep);
+                        _shard_task.global_repair_id.uuid(), node, _shard_task.get_keyspace(), _cf_name, _range, ep);
                 return make_exception_future<>(std::move(ep));
             });
         }).get();
@@ -2845,9 +2841,8 @@ private:
             }
             rlogger.debug("After get_row_diff node {}, hash_sets={}", master.myip(), master.working_row_hashes().get().size());
           } catch (...) {
-            auto s = _cf.schema();
             rlogger.warn("repair[{}]: get_row_diff: got error from node={}, keyspace={}, table={}, range={}, error={}",
-                    _shard_task.global_repair_id.uuid(), node, s->ks_name(), s->cf_name(), _range, std::current_exception());
+                    _shard_task.global_repair_id.uuid(), node, _shard_task.get_keyspace(), _cf_name, _range, std::current_exception());
             throw;
           }
         }
@@ -2878,9 +2873,8 @@ private:
                 return master.put_row_diff_with_rpc_stream(std::move(set_diff), needs_all_rows, _all_live_peer_nodes[idx], idx, *get_erm(), _small_table_optimization, dst_cpu_id).then([&ns] {
                     ns.state = repair_state::put_row_diff_with_rpc_stream_finished;
                 }).handle_exception([this, &node] (std::exception_ptr ep) {
-                    auto s = _cf.schema();
                     rlogger.warn("repair[{}]: put_row_diff: got error from node={}, keyspace={}, table={}, range={}, error={}",
-                            _shard_task.global_repair_id.uuid(), node, s->ks_name(), s->cf_name(), _range, ep);
+                            _shard_task.global_repair_id.uuid(), node, _shard_task.get_keyspace(), _cf_name, _range, ep);
                     return make_exception_future<>(std::move(ep));
                 });
 
@@ -2889,9 +2883,8 @@ private:
                 return master.put_row_diff(std::move(set_diff), needs_all_rows, _all_live_peer_nodes[idx], dst_cpu_id).then([&ns] {
                     ns.state = repair_state::put_row_diff_finished;
                 }).handle_exception([this, &node] (std::exception_ptr ep) {
-                    auto s = _cf.schema();
                     rlogger.warn("repair[{}]: put_row_diff: got error from node={}, keyspace={}, table={}, range={}, error={}",
-                            _shard_task.global_repair_id.uuid(), node, s->ks_name(), s->cf_name(), _range, ep);
+                            _shard_task.global_repair_id.uuid(), node, _shard_task.get_keyspace(), _cf_name, _range, ep);
                     return make_exception_future<>(std::move(ep));
                 });
             }
@@ -2952,13 +2945,14 @@ public:
             auto repair_meta_id = _shard_task.rs.get_next_repair_meta_id().get();
             auto algorithm = get_common_diff_detect_algorithm(_shard_task.messaging.local(), _all_live_peer_nodes);
             auto max_row_buf_size = get_max_row_buf_size(algorithm);
-            auto& sharder = _cf.get_effective_replication_map()->get_sharder(*(_cf.schema()));
+            auto& cf = _shard_task.db.local().find_column_family(_table_id);
+            auto& sharder = cf.get_effective_replication_map()->get_sharder(*(cf.schema()));
             auto master_node_shard_config = shard_config {
                     this_shard_id(),
                     sharder.shard_count(),
                     sharder.sharding_ignore_msb()
             };
-            auto s = _cf.schema();
+            auto s = cf.schema();
             auto schema_version = s->version();
             bool table_dropped = false;
 
@@ -2972,12 +2966,12 @@ public:
             rlogger.trace("repair[{}]: Finished to get memory budget, wanted={}, available={}, max_repair_memory={}",
                     _shard_task.global_repair_id.uuid(), wanted, mem_sem.current(), max);
 
-            auto permit = _shard_task.db.local().obtain_reader_permit(_cf, "repair-meta", db::no_timeout, {}).get();
+            auto permit = _shard_task.db.local().obtain_reader_permit(_shard_task.db.local().find_column_family(_table_id), "repair-meta", db::no_timeout, {}).get();
 
             auto compaction_time = gc_clock::now();
 
             repair_meta master(_shard_task.rs,
-                    _cf,
+                    _shard_task.db.local().find_column_family(_table_id),
                     s,
                     std::move(permit),
                     _range,
