@@ -193,52 +193,52 @@ future<> stream_transfer_task::execute() {
     auto id = netw::messaging_service::msg_addr{session->peer, session->dst_cpu_id};
     auto& sm = session->manager();
     auto table_dropped = co_await repair::with_table_drop_silenced(sm.db(), sm.mm(), cf_id, [this, &sm, cf_id, plan_id, id] (const table_id &) {
-    auto dst_cpu_id = session->dst_cpu_id;
-    sslog.debug("[Stream #{}] stream_transfer_task: cf_id={}", plan_id, cf_id);
-    sort_and_merge_ranges();
-    auto reason = session->get_reason();
-    return sm.container().invoke_on_all([plan_id, cf_id, id, dst_cpu_id, ranges=this->_ranges, reason] (stream_manager& sm) mutable {
-        auto& tbl = sm.db().find_column_family(cf_id);
-      return sm.db().obtain_reader_permit(tbl, "stream-transfer-task", db::no_timeout).then([&sm, &tbl, plan_id, cf_id, id, dst_cpu_id, ranges=std::move(ranges), reason] (reader_permit permit) mutable {
-        auto si = make_lw_shared<send_info>(sm.ms(), plan_id, tbl, std::move(permit), std::move(ranges), id, dst_cpu_id, reason, [&sm, plan_id, addr = id.addr] (size_t sz) {
-            sm.update_progress(plan_id, addr, streaming::progress_info::direction::OUT, sz);
-        });
-        return si->has_relevant_range_on_this_shard().then([&sm, si, plan_id, cf_id] (bool has_relevant_range_on_this_shard) {
-            if (!has_relevant_range_on_this_shard) {
-                sslog.debug("[Stream #{}] stream_transfer_task: cf_id={}: ignore ranges on shard={}",
-                        plan_id, cf_id, this_shard_id());
-                return make_ready_future<>();
-            }
-            return send_mutation_fragments(std::move(si));
-        }).finally([si] {
-            return si->reader.close();
-        });
-      });
-    }).then([this, plan_id, cf_id, id, &sm] {
-        sslog.debug("[Stream #{}] SEND STREAM_MUTATION_DONE to {}, cf_id={}", plan_id, id, cf_id);
-        return sm.ms().send_stream_mutation_done(id, plan_id, _ranges,
-                cf_id, session->dst_cpu_id).handle_exception([plan_id, id, cf_id] (auto ep) {
-            sslog.warn("[Stream #{}] stream_transfer_task: Fail to send STREAM_MUTATION_DONE to {}: {}", plan_id, id, ep);
+        auto dst_cpu_id = session->dst_cpu_id;
+        sslog.debug("[Stream #{}] stream_transfer_task: cf_id={}", plan_id, cf_id);
+        sort_and_merge_ranges();
+        auto reason = session->get_reason();
+        return sm.container().invoke_on_all([plan_id, cf_id, id, dst_cpu_id, ranges=this->_ranges, reason] (stream_manager& sm) mutable {
+            auto& tbl = sm.db().find_column_family(cf_id);
+            return sm.db().obtain_reader_permit(tbl, "stream-transfer-task", db::no_timeout).then([&sm, &tbl, plan_id, cf_id, id, dst_cpu_id, ranges=std::move(ranges), reason] (reader_permit permit) mutable {
+                auto si = make_lw_shared<send_info>(sm.ms(), plan_id, tbl, std::move(permit), std::move(ranges), id, dst_cpu_id, reason, [&sm, plan_id, addr = id.addr] (size_t sz) {
+                    sm.update_progress(plan_id, addr, streaming::progress_info::direction::OUT, sz);
+                });
+                return si->has_relevant_range_on_this_shard().then([&sm, si, plan_id, cf_id] (bool has_relevant_range_on_this_shard) {
+                    if (!has_relevant_range_on_this_shard) {
+                        sslog.debug("[Stream #{}] stream_transfer_task: cf_id={}: ignore ranges on shard={}",
+                                plan_id, cf_id, this_shard_id());
+                        return make_ready_future<>();
+                    }
+                    return send_mutation_fragments(std::move(si));
+                }).finally([si] {
+                    return si->reader.close();
+                });
+            });
+        }).then([this, plan_id, cf_id, id, &sm] {
+            sslog.debug("[Stream #{}] SEND STREAM_MUTATION_DONE to {}, cf_id={}", plan_id, id, cf_id);
+            return sm.ms().send_stream_mutation_done(id, plan_id, _ranges,
+                    cf_id, session->dst_cpu_id).handle_exception([plan_id, id, cf_id] (auto ep) {
+                sslog.warn("[Stream #{}] stream_transfer_task: Fail to send STREAM_MUTATION_DONE to {}: {}", plan_id, id, ep);
+                std::rethrow_exception(ep);
+            });
+        }).then([this, id, plan_id, cf_id] {
+            _mutation_done_sent = true;
+            sslog.debug("[Stream #{}] GOT STREAM_MUTATION_DONE Reply from {}", plan_id, id.addr);
+        }).handle_exception([plan_id, id] (std::exception_ptr ep) {
+            sslog.warn("[Stream #{}] stream_transfer_task: Fail to send to {}: {}", plan_id, id, ep);
             std::rethrow_exception(ep);
         });
-    }).then([this, id, plan_id, cf_id] {
-        _mutation_done_sent = true;
-        sslog.debug("[Stream #{}] GOT STREAM_MUTATION_DONE Reply from {}", plan_id, id.addr);
-    }).handle_exception([plan_id, id] (std::exception_ptr ep) {
-        sslog.warn("[Stream #{}] stream_transfer_task: Fail to send to {}: {}", plan_id, id, ep);
-        std::rethrow_exception(ep);
     });
-    });
-        // If the table is dropped during streaming, we can ignore the
-        // errors and make the stream successful. This allows user to
-        // drop tables during node operations like decommission or
-        // bootstrap.
-        if (table_dropped) {
-            sslog.warn("[Stream #{}] Ignore the table with table_id {} which is dropped during streaming", plan_id, cf_id);
-            if (!_mutation_done_sent) {
-                co_await session->manager().ms().send_stream_mutation_done(id, plan_id, _ranges, cf_id, session->dst_cpu_id);
-            }
+    // If the table is dropped during streaming, we can ignore the
+    // errors and make the stream successful. This allows user to
+    // drop tables during node operations like decommission or
+    // bootstrap.
+    if (table_dropped) {
+        sslog.warn("[Stream #{}] Ignore the table with table_id {} which is dropped during streaming", plan_id, cf_id);
+        if (!_mutation_done_sent) {
+            co_await session->manager().ms().send_stream_mutation_done(id, plan_id, _ranges, cf_id, session->dst_cpu_id);
         }
+    }
 }
 
 void stream_transfer_task::append_ranges(const dht::token_range_vector& ranges) {
