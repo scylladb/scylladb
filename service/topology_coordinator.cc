@@ -2078,6 +2078,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     future<> fence_previous_coordinator();
     future<> rollback_current_topology_op(group0_guard&& guard);
 
+    // Returns true if the coordinator should sleep after the exception.
+    bool handle_topology_coordinator_error(std::exception_ptr eptr) noexcept;
+
 public:
     topology_coordinator(
             sharded<db::system_distributed_keyspace>& sys_dist_ks, gms::gossiper& gossiper,
@@ -2324,6 +2327,26 @@ future<> topology_coordinator::rollback_current_topology_op(group0_guard&& guard
     co_await update_topology_state(std::move(node.guard), std::move(muts), str);
 }
 
+bool topology_coordinator::handle_topology_coordinator_error(std::exception_ptr eptr) noexcept {
+    try {
+        std::rethrow_exception(std::move(eptr));
+    } catch (raft::request_aborted&) {
+        rtlogger.debug("topology change coordinator fiber aborted");
+    } catch (seastar::abort_requested_exception&) {
+        rtlogger.debug("topology change coordinator fiber aborted");
+    } catch (raft::commit_status_unknown&) {
+        rtlogger.warn("topology change coordinator fiber got commit_status_unknown");
+    } catch (group0_concurrent_modification&) {
+    } catch (topology_coordinator::term_changed_error&) {
+        // Term changed. We may no longer be a leader
+        rtlogger.debug("topology change coordinator fiber notices term change {} -> {}", _term, _raft.get_current_term());
+    } catch (...) {
+        rtlogger.error("topology change coordinator fiber got error {}", std::current_exception());
+        return true;
+    }
+    return false;
+}
+
 future<> topology_coordinator::run() {
     rtlogger.info("start topology coordinator fiber");
 
@@ -2356,19 +2379,8 @@ future<> topology_coordinator::run() {
                 co_await await_event();
                 rtlogger.debug("topology coordinator fiber got an event");
             }
-        } catch (raft::request_aborted&) {
-            rtlogger.debug("topology change coordinator fiber aborted");
-        } catch (seastar::abort_requested_exception&) {
-            rtlogger.debug("topology change coordinator fiber aborted");
-        } catch (raft::commit_status_unknown&) {
-            rtlogger.warn("topology change coordinator fiber got commit_status_unknown");
-        } catch (group0_concurrent_modification&) {
-        } catch (term_changed_error&) {
-            // Term changed. We may no longer be a leader
-            rtlogger.debug("topology change coordinator fiber notices term change {} -> {}", _term, _raft.get_current_term());
         } catch (...) {
-            rtlogger.error("topology change coordinator fiber got error {}", std::current_exception());
-            sleep = true;
+            sleep = handle_topology_coordinator_error(std::current_exception());
         }
         if (sleep) {
             try {
