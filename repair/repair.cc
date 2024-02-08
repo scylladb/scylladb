@@ -17,6 +17,7 @@
 #include "gms/gossiper.hh"
 #include "service/priority_manager.hh"
 #include "message/messaging_service.hh"
+#include "repair/table_check.hh"
 #include "sstables/sstables.hh"
 #include "replica/database.hh"
 #include "db/config.hh"
@@ -669,9 +670,12 @@ future<> shard_repair_task_impl::repair_range(const dht::token_range& range, ::t
         co_return;
     }
     try {
-        co_await repair_cf_range_row_level(*this, cf, table_id, range, neighbors);
-    } catch (replica::no_such_column_family&) {
-        dropped_tables.insert(cf);
+        auto dropped = co_await repair::with_table_drop_silenced(db.local(), mm, table_id, [&] (const ::table_id& uuid) {
+            return repair_cf_range_row_level(*this, cf, table_id, range, neighbors);
+        });
+        if (dropped) {
+            dropped_tables.insert(cf);
+        }
     } catch (...) {
         nr_failed_ranges++;
         throw;
