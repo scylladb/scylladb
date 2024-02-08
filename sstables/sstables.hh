@@ -473,9 +473,9 @@ public:
     }
 
     // required since touch_directory has an optional parameter
-    auto sstable_touch_directory_io_check(sstring name) const noexcept {
+    auto sstable_touch_directory_io_check(std::filesystem::path name) const noexcept {
         return do_io_check(_write_error_handler, [name = std::move(name)] () mutable {
-            return touch_directory(std::move(name));
+            return touch_directory(name.native());
         });
     }
     future<> close_files();
