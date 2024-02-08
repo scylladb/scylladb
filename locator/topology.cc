@@ -194,7 +194,7 @@ const node* topology::add_node(node_holder nptr) {
             }
         }
 
-            tlogger.debug("topology[{}]: add_node: {}, at {}", fmt::ptr(this), nptr, lazy_backtrace());
+        tlogger.debug("topology[{}]: add_node: {}, at {}", fmt::ptr(this), nptr, lazy_backtrace());
 
         index_node(node);
     } catch (...) {
@@ -205,14 +205,14 @@ const node* topology::add_node(node_holder nptr) {
 }
 
 const node* topology::update_node(node* node, std::optional<host_id> opt_id, std::optional<inet_address> opt_ep, std::optional<endpoint_dc_rack> opt_dr, std::optional<node::state> opt_st, std::optional<shard_id> opt_shard_count) {
-        tlogger.debug("topology[{}]: update_node: {}: to: host_id={} endpoint={} dc={} rack={} state={}, at {}", fmt::ptr(this), node_printer(node),
-            opt_id ? format("{}", *opt_id) : "unchanged",
-            opt_ep ? format("{}", *opt_ep) : "unchanged",
-            opt_dr ? format("{}", opt_dr->dc) : "unchanged",
-            opt_dr ? format("{}", opt_dr->rack) : "unchanged",
-            opt_st ? format("{}", *opt_st) : "unchanged",
-            opt_shard_count ? format("{}", *opt_shard_count) : "unchanged",
-            lazy_backtrace());
+    tlogger.debug("topology[{}]: update_node: {}: to: host_id={} endpoint={} dc={} rack={} state={}, at {}", fmt::ptr(this), node_printer(node),
+        opt_id ? format("{}", *opt_id) : "unchanged",
+        opt_ep ? format("{}", *opt_ep) : "unchanged",
+        opt_dr ? format("{}", opt_dr->dc) : "unchanged",
+        opt_dr ? format("{}", opt_dr->rack) : "unchanged",
+        opt_st ? format("{}", *opt_st) : "unchanged",
+        opt_shard_count ? format("{}", *opt_shard_count) : "unchanged",
+        lazy_backtrace());
 
     bool changed = false;
     if (opt_id) {
@@ -306,7 +306,7 @@ void topology::remove_node(const node* node) {
 }
 
 void topology::index_node(const node* node) {
-        tlogger.trace("topology[{}]: index_node: {}, at {}", fmt::ptr(this), node_printer(node), lazy_backtrace());
+    tlogger.trace("topology[{}]: index_node: {}, at {}", fmt::ptr(this), node_printer(node), lazy_backtrace());
 
     if (node->idx() < 0) {
         on_internal_error(tlogger, format("topology[{}]: {}: must already have a valid idx", fmt::ptr(this), node_printer(node)));
@@ -359,7 +359,7 @@ void topology::index_node(const node* node) {
 }
 
 void topology::unindex_node(const node* node) {
-        tlogger.trace("topology[{}]: unindex_node: {}, at {}", fmt::ptr(this), node_printer(node), lazy_backtrace());
+    tlogger.trace("topology[{}]: unindex_node: {}, at {}", fmt::ptr(this), node_printer(node), lazy_backtrace());
 
     const auto& dc = node->dc_rack().dc;
     const auto& rack = node->dc_rack().rack;
@@ -403,7 +403,7 @@ void topology::unindex_node(const node* node) {
 }
 
 node_holder topology::pop_node(const node* node) {
-        tlogger.trace("topology[{}]: pop_node: {}, at {}", fmt::ptr(this), node_printer(node), lazy_backtrace());
+    tlogger.trace("topology[{}]: pop_node: {}, at {}", fmt::ptr(this), node_printer(node), lazy_backtrace());
 
     unindex_node(node);
 
@@ -455,9 +455,9 @@ const node* topology::find_node(node::idx_type idx) const noexcept {
 
 const node* topology::add_or_update_endpoint(host_id id, std::optional<inet_address> opt_ep, std::optional<endpoint_dc_rack> opt_dr, std::optional<node::state> opt_st, std::optional<shard_id> shard_count)
 {
-        tlogger.trace("topology[{}]: add_or_update_endpoint: host_id={} ep={} dc={} rack={} state={} shards={}, at {}", fmt::ptr(this),
-            id, opt_ep, opt_dr.value_or(endpoint_dc_rack{}).dc, opt_dr.value_or(endpoint_dc_rack{}).rack, opt_st.value_or(node::state::none), shard_count,
-            lazy_backtrace());
+    tlogger.trace("topology[{}]: add_or_update_endpoint: host_id={} ep={} dc={} rack={} state={} shards={}, at {}", fmt::ptr(this),
+        id, opt_ep, opt_dr.value_or(endpoint_dc_rack{}).dc, opt_dr.value_or(endpoint_dc_rack{}).rack, opt_st.value_or(node::state::none), shard_count,
+        lazy_backtrace());
 
     const auto* n = find_node(id);
     if (n) {
