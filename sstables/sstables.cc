@@ -2135,7 +2135,7 @@ sstable::make_crawling_reader(
     return kl::make_crawling_reader(shared_from_this(), std::move(schema), std::move(permit), std::move(trace_state), monitor);
 }
 
-static std::tuple<entry_descriptor, sstring, sstring> make_entry_descriptor(std::string_view sstdir, std::string_view fname, sstring* const provided_ks, sstring* const provided_cf) {
+static std::tuple<entry_descriptor, sstring, sstring> make_entry_descriptor(const std::filesystem::path& sst_path, sstring* const provided_ks, sstring* const provided_cf) {
     // examples of fname look like
     //   la-42-big-Data.db
     //   ka-42-big-Data.db
@@ -2162,6 +2162,8 @@ static std::tuple<entry_descriptor, sstring, sstring> make_entry_descriptor(std:
         cf = std::move(*provided_cf);
     }
 
+    const auto sstdir = sst_path.parent_path();
+    const auto fname = sst_path.filename();
     sstlog.debug("Make descriptor sstdir: {}; fname: {}", sstdir, fname);
     std::string s(fname);
     if (boost::regex_match(s, match, la_mx)) {
@@ -2195,11 +2197,11 @@ static std::tuple<entry_descriptor, sstring, sstring> make_entry_descriptor(std:
 }
 
 std::tuple<entry_descriptor, sstring, sstring> parse_path(const std::filesystem::path& sst_path) {
-    return make_entry_descriptor(sst_path.parent_path().native(), sst_path.filename().native(), nullptr, nullptr);
+    return make_entry_descriptor(sst_path, nullptr, nullptr);
 }
 
 entry_descriptor parse_path(const std::filesystem::path& sst_path, sstring ks, sstring cf) {
-    auto full = make_entry_descriptor(sst_path.parent_path().native(), sst_path.filename().native(), &ks, &cf);
+    auto full = make_entry_descriptor(sst_path, &ks, &cf);
     return std::get<0>(full);
 }
 
