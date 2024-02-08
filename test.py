@@ -267,8 +267,9 @@ class TestSuite(ABC):
 
             t = os.path.join(self.name, shortname)
             patterns = options.name if options.name else [t]
-            if options.skip_pattern and options.skip_pattern in t:
-                continue
+            if options.skip_patterns:
+                if any(skip_pattern in t for skip_pattern in options.skip_patterns):
+                    continue
 
             async def add_test(shortname) -> None:
                 # Add variants of the same test sequentially
@@ -1253,8 +1254,8 @@ def parse_cmd_line() -> argparse.Namespace:
                         help="Save test log output on success.")
     parser.add_argument('--list', dest="list_tests", action="store_true", default=False,
                         help="Print list of tests instead of executing them")
-    parser.add_argument('--skip', default="",
-                        dest="skip_pattern", action="store",
+    parser.add_argument('--skip',
+                        dest="skip_patterns", action="append",
                         help="Skip tests which match the provided pattern")
     parser.add_argument('--no-parallel-cases', dest="parallel_cases", action="store_false", default=True,
                         help="Do not run individual test cases in parallel")
