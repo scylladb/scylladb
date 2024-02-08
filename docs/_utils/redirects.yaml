@@ -21,6 +21,9 @@
 # remove the Open Source vs. Enterprise Matrix from the Open Source docs
 
 /stable/reference/versions-matrix-enterprise-oss.html: https://enterprise.docs.scylladb.com/stable/reference/versions-matrix-enterprise-oss.html
+# Remove the outdated Troubleshooting article
+
+/stable/troubleshooting/error-messages/create-mv.html: /stable/troubleshooting/index.html
 
 # Remove the Learn page (replaced with a link to a page in a different repo)
 
