@@ -481,7 +481,7 @@ public:
             gc_consumer.consume_end_of_partition();
         }
         if (!_empty_partition) {
-            // #589 - Do not add extra row for statics unless we did a CK range-less query.
+            // #589 - Do not add extra row for static content unless we did a CK range-less query.
             // See comment in query
             if (_rows_in_current_partition == 0 && _static_row_live &&
                     _return_static_content_on_partition_with_no_rows) {
