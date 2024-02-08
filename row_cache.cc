@@ -676,9 +676,9 @@ private:
     }
 
     future<flat_mutation_reader_v2_opt> read_from_primary() {
-        auto fro = do_read_from_primary();
+        auto reader = do_read_from_primary();
         if (!_secondary_in_progress) {
-            return make_ready_future<flat_mutation_reader_v2_opt>(std::move(fro));
+            return make_ready_future<flat_mutation_reader_v2_opt>(std::move(reader));
         }
         return _secondary_reader.fast_forward_to(std::move(_secondary_range)).then([this] {
             return read_from_secondary();
