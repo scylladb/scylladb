@@ -687,3 +687,22 @@ def test_get_effective_ownership_tablets_enabled_keyspace_and_table_params_used(
             cf = table.split('.')[1]
             resp = rest_api.send("GET", f"storage_service/ownership/{keyspace}", params={"cf": cf})
             verify_ownership(resp=resp, expected_ip=rest_api.host, expected_ownership=1.0, delta=0.001)
+
+
+def test_move_tablets_invalid_table(rest_api, skip_without_tablets):
+    """Scylla should return an HTTP error if the specified table is not found
+    """
+    # just a random UUID
+    hostid = "b1415756-49c3-4fa8-9b72-d1b867b032af"
+    resp = rest_api.send("POST", "storage_service/tablets/move",
+                         params={
+                             "ks": "non-existent-ks",
+                             "table": "non-existent-table",
+                             "src_host": hostid,
+                             "src_shard": "0",
+                             "dst_host": hostid,
+                             "dst_shard": "0",
+                             "token": "0"
+                         })
+    assert resp.status_code == requests.codes.bad_request
+    assert "Can't find a column family" in resp.json()["message"]
