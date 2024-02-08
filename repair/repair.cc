@@ -16,6 +16,7 @@
 #include "utils/fb_utilities.hh"
 #include "gms/gossiper.hh"
 #include "message/messaging_service.hh"
+#include "repair/table_check.hh"
 #include "sstables/sstables.hh"
 #include "replica/database.hh"
 #include "db/config.hh"
@@ -696,9 +697,12 @@ future<> repair::shard_repair_task_impl::repair_range(const dht::token_range& ra
         co_return;
     }
     try {
-        co_await repair_cf_range_row_level(*this, cf, table.id, range, neighbors);
-    } catch (replica::no_such_column_family&) {
-        dropped_tables.insert(cf);
+        auto dropped = co_await with_table_drop_silenced(db.local(), mm, table.id, [&] (const table_id& uuid) {
+            return repair_cf_range_row_level(*this, cf, table.id, range, neighbors);
+        });
+        if (dropped) {
+            dropped_tables.insert(cf);
+        }
     } catch (...) {
         nr_failed_ranges++;
         throw;
