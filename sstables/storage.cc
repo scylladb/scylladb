@@ -182,7 +182,7 @@ future<> filesystem_storage::touch_temp_dir(const sstable& sst) {
     }
     auto tmp = _dir / fmt::format("{}{}", sst._generation, tempdir_extension);
     sstlog.debug("Touching temp_dir={}", tmp);
-    co_await sst.sstable_touch_directory_io_check(tmp.native());
+    co_await sst.sstable_touch_directory_io_check(tmp);
     _temp_dir = std::move(tmp);
 }
 
@@ -340,11 +340,14 @@ future<> filesystem_storage::create_links(const sstable& sst, const sstring& dir
 }
 
 future<> filesystem_storage::snapshot(const sstable& sst, sstring dir, absolute_path abs) const {
-    if (!abs) {
-        dir = (_dir / dir).native();
+    std::filesystem::path snapshot_dir;
+    if (abs) {
+        snapshot_dir = dir;
+    } else {
+        snapshot_dir = _dir / dir;
     }
-    co_await sst.sstable_touch_directory_io_check(dir);
-    co_await create_links(sst, dir);
+    co_await sst.sstable_touch_directory_io_check(snapshot_dir);
+    co_await create_links(sst, snapshot_dir.native());
 }
 
 future<> filesystem_storage::move(const sstable& sst, sstring new_dir, generation_type new_generation, delayed_commit_changes* delay_commit) {
