@@ -49,8 +49,10 @@ public:
     // CQL statement text
     seastar::sstring raw_cql_statement;
 
-    // True for statements that needs guard to be taken before the execution
-    bool needs_guard = false;
+    // Returns true for statements that needs guard to be taken before the execution
+    virtual bool needs_guard(query_processor& qp) const {
+        return false;
+    }
 
     explicit cql_statement(timeout_config_selector timeout_selector) : _timeout_config_selector(timeout_selector) {}
 

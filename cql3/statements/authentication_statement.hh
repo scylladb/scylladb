@@ -28,6 +28,11 @@ public:
     future<> check_access(query_processor& qp, const service::client_state& state) const override;
 };
 
+class authentication_altering_statement : public authentication_statement {
+public:
+     virtual bool needs_guard(query_processor& qp) const override;
+};
+
 }
 
 }

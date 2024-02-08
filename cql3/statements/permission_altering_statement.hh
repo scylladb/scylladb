@@ -20,7 +20,7 @@ class role_name;
 
 namespace statements {
 
-class permission_altering_statement : public authorization_statement {
+class permission_altering_statement : public authorization_altering_statement {
 protected:
     auth::permission_set _permissions;
     mutable auth::resource _resource;
