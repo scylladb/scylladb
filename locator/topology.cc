@@ -9,6 +9,7 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/core/on_internal_error.hh>
+#include <seastar/util/lazy.hh>
 #include <utility>
 
 #include "log.hh"
@@ -33,6 +34,10 @@ struct fmt::formatter<node_printer> {
         return out;
     }
 };
+
+static auto lazy_backtrace() {
+    return seastar::value_of([] { return current_backtrace(); });
+}
 
 namespace locator {
 
@@ -190,7 +195,7 @@ const node* topology::add_node(node_holder nptr) {
         }
 
         if (tlogger.is_enabled(log_level::debug)) {
-            tlogger.debug("topology[{}]: add_node: {}, at {}", fmt::ptr(this), nptr, current_backtrace());
+            tlogger.debug("topology[{}]: add_node: {}, at {}", fmt::ptr(this), nptr, lazy_backtrace());
         }
 
         index_node(node);
@@ -210,7 +215,7 @@ const node* topology::update_node(node* node, std::optional<host_id> opt_id, std
             opt_dr ? format("{}", opt_dr->rack) : "unchanged",
             opt_st ? format("{}", *opt_st) : "unchanged",
             opt_shard_count ? format("{}", *opt_shard_count) : "unchanged",
-            current_backtrace());
+            lazy_backtrace());
     }
 
     bool changed = false;
@@ -306,7 +311,7 @@ void topology::remove_node(const node* node) {
 
 void topology::index_node(const node* node) {
     if (tlogger.is_enabled(log_level::trace)) {
-        tlogger.trace("topology[{}]: index_node: {}, at {}", fmt::ptr(this), node_printer(node), current_backtrace());
+        tlogger.trace("topology[{}]: index_node: {}, at {}", fmt::ptr(this), node_printer(node), lazy_backtrace());
     }
 
     if (node->idx() < 0) {
@@ -361,7 +366,7 @@ void topology::index_node(const node* node) {
 
 void topology::unindex_node(const node* node) {
     if (tlogger.is_enabled(log_level::trace)) {
-        tlogger.trace("topology[{}]: unindex_node: {}, at {}", fmt::ptr(this), node_printer(node), current_backtrace());
+        tlogger.trace("topology[{}]: unindex_node: {}, at {}", fmt::ptr(this), node_printer(node), lazy_backtrace());
     }
 
     const auto& dc = node->dc_rack().dc;
@@ -407,7 +412,7 @@ void topology::unindex_node(const node* node) {
 
 node_holder topology::pop_node(const node* node) {
     if (tlogger.is_enabled(log_level::trace)) {
-        tlogger.trace("topology[{}]: pop_node: {}, at {}", fmt::ptr(this), node_printer(node), current_backtrace());
+        tlogger.trace("topology[{}]: pop_node: {}, at {}", fmt::ptr(this), node_printer(node), lazy_backtrace());
     }
 
     unindex_node(node);
@@ -463,7 +468,7 @@ const node* topology::add_or_update_endpoint(host_id id, std::optional<inet_addr
     if (tlogger.is_enabled(log_level::trace)) {
         tlogger.trace("topology[{}]: add_or_update_endpoint: host_id={} ep={} dc={} rack={} state={} shards={}, at {}", fmt::ptr(this),
             id, opt_ep, opt_dr.value_or(endpoint_dc_rack{}).dc, opt_dr.value_or(endpoint_dc_rack{}).rack, opt_st.value_or(node::state::none), shard_count,
-            current_backtrace());
+            lazy_backtrace());
     }
 
     const auto* n = find_node(id);
@@ -522,7 +527,7 @@ const endpoint_dc_rack& topology::get_location(const inet_address& ep) const {
     // FIXME -- this shouldn't happen. After topology is stable and is
     // correctly populated with endpoints, this should be replaced with
     // on_internal_error()
-    tlogger.warn("Requested location for node {} not in topology. backtrace {}", ep, current_backtrace());
+    tlogger.warn("Requested location for node {} not in topology. backtrace {}", ep, lazy_backtrace());
     return endpoint_dc_rack::default_location;
 }
 
