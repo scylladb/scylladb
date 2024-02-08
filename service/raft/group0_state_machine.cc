@@ -266,7 +266,7 @@ future<> group0_state_machine::transfer_snapshot(raft::server_id from_id, raft::
     }
 
     std::optional<service::raft_topology_snapshot> topology_snp;
-    std::optional<service::raft_snapshot> auth_snp;
+    std::optional<service::raft_snapshot> raft_snp;
     if (_topology_change_enabled) {
         topology_snp = co_await ser::storage_service_rpc_verbs::send_raft_pull_topology_snapshot(&_mm._messaging, addr, as, from_id, service::raft_topology_pull_params{});
 
@@ -274,7 +274,9 @@ future<> group0_state_machine::transfer_snapshot(raft::server_id from_id, raft::
         for (const auto& schema : db::system_auth_keyspace::all_tables()) {
             tables.push_back(schema->id());
         }
-        auth_snp = co_await ser::storage_service_rpc_verbs::send_raft_pull_snapshot(
+        tables.push_back(db::system_keyspace::service_levels_v2()->id());
+
+        raft_snp = co_await ser::storage_service_rpc_verbs::send_raft_pull_snapshot(
             &_mm._messaging, addr, as, from_id, service::raft_snapshot_pull_params{std::move(tables)});
     }
 
@@ -292,8 +294,8 @@ future<> group0_state_machine::transfer_snapshot(raft::server_id from_id, raft::
         co_await _sp.get_db().local().flush(db::system_keyspace::NAME, db::system_keyspace::TOPOLOGY);
     }
 
-    if (auth_snp) {
-        co_await mutate_locally(std::move(auth_snp->mutations), _sp);
+    if (raft_snp) {
+        co_await mutate_locally(std::move(raft_snp->mutations), _sp);
     }
 
     co_await _sp.mutate_locally({std::move(history_mut)}, nullptr);
