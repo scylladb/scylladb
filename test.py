@@ -895,6 +895,10 @@ class RunTest(Test):
         logging.info("Test %s %s", self.uname, "succeeded" if self.success else "failed ")
         return self
 
+def build_pytest_k_expr(options):
+    include_expr = f'({options.pytest_include.replace(",", " or ")})' if options.pytest_include else ""
+    exclude_expr = f'not ({options.pytest_exclude.replace(",", " or ")})' if options.pytest_exclude else ""
+    return f'{include_expr} and {exclude_expr}' if include_expr and exclude_expr else f'{include_expr}{exclude_expr}'
 
 class PythonTest(Test):
     """Run a pytest collection of cases against a standalone Scylla"""
@@ -917,6 +921,9 @@ class PythonTest(Test):
             "-rs"]
         if options.markers:
             self.args.append(f"-m={options.markers}")
+        k_expr = build_pytest_k_expr(options)
+        if k_expr:
+            self.args.append(f"-k={k_expr}")
 
             # https://docs.pytest.org/en/7.1.x/reference/exit-codes.html
             no_tests_selected_exit_code = 5
@@ -1034,6 +1041,9 @@ class ToolTest(Test):
             f"--mode={self.mode}"]
         if options.markers:
             self.args.append(f"-m={options.markers}")
+        k_expr = build_pytest_k_expr(options)
+        if k_expr:
+            self.args.append(f"-k={k_expr}")
 
             # https://docs.pytest.org/en/7.1.x/reference/exit-codes.html
             no_tests_selected_exit_code = 5
@@ -1268,6 +1278,14 @@ def parse_cmd_line() -> argparse.Namespace:
                         choices=["CRITICAL", "ERROR", "WARNING", "INFO",
                                  "DEBUG"],
                         dest="log_level")
+    parser.add_argument('--pytest-include', action='store', dest='pytest_include', metavar='PYTEST_PATTERNS_TO_INCLUDE',
+                        help="Only run tests whose name match any of the patterns in this comma separated list. "
+                             "The patterns along with the ones from --pytest-exclude will be parsed to form an expression "
+                             "that will be passed to -k option of pytest. The parameter is only supported by python tests.")
+    parser.add_argument('--pytest-exclude', action='store', dest='pytest_exclude', metavar='PYTEST_PATTERNS_TO_EXCLUDE',
+                        help="Skip tests whose name match any of the patterns in this comma separated list. "
+                             "The patterns along with the ones from --pytest-include will be parsed to form an expression "
+                             "that will be passed to -k option of pytest. The parameter is only supported by python tests.")
     parser.add_argument('--markers', action='store', metavar='MARKEXPR',
                         help="Only run tests that match the given mark expression. The syntax is the same "
                              "as in pytest, for example: --markers 'mark1 and not mark2'. The parameter "
