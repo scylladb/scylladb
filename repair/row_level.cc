@@ -733,7 +733,6 @@ private:
     netw::messaging_service& _messaging;
     seastar::sharded<db::system_distributed_keyspace>& _sys_dist_ks;
     seastar::sharded<db::view::view_update_generator>& _view_update_generator;
-    replica::column_family& _cf;
     schema_ptr _schema;
     reader_permit _permit;
     dht::token_range _range;
@@ -851,7 +850,6 @@ public:
             , _messaging(rs.get_messaging())
             , _sys_dist_ks(rs.get_sys_dist_ks())
             , _view_update_generator(rs.get_view_update_generator())
-            , _cf(cf)
             , _schema(s)
             , _permit(std::move(permit))
             , _range(range)
@@ -865,7 +863,7 @@ public:
             , _reason(reason)
             , _master_node_shard_config(std::move(master_node_shard_config))
             , _remote_sharder(make_remote_sharder())
-            , _same_sharding_config(is_same_sharding_config())
+            , _same_sharding_config(is_same_sharding_config(cf))
             , _nr_peer_nodes(nr_peer_nodes)
             , _repair_writer(make_repair_writer(_schema, _permit, _reason, _db, _sys_dist_ks, _view_update_generator))
             , _sink_source_for_get_full_row_hashes(_repair_meta_id, _nr_peer_nodes,
@@ -889,7 +887,7 @@ public:
             , _row_level_repair_ptr(row_level_repair_ptr)
             , _repair_hasher(_seed, _schema)
             , _compaction_time(compaction_time)
-            , _is_tablet(_cf.uses_tablets())
+            , _is_tablet(cf.uses_tablets())
             {
             if (master) {
                 add_to_repair_meta_for_masters(*this);
@@ -1022,7 +1020,8 @@ private:
     }
 
     future<uint64_t> do_estimate_partitions_on_local_shard() {
-        return do_with(_cf.get_sstables(), uint64_t(0), [this] (lw_shared_ptr<const sstable_list>& sstables, uint64_t& partition_count) {
+        auto& cf = _db.local().find_column_family(_schema->id());
+        return do_with(cf.get_sstables(), uint64_t(0), [this] (lw_shared_ptr<const sstable_list>& sstables, uint64_t& partition_count) {
             return do_for_each(*sstables, [this, &partition_count] (const sstables::shared_sstable& sst) mutable {
                 partition_count += sst->estimated_keys_for_range(_range);
             }).then([&partition_count] {
@@ -1071,10 +1070,10 @@ private:
         return dht::sharder(_master_node_shard_config.shard_count, _master_node_shard_config.ignore_msb);
     }
 
-    bool is_same_sharding_config() {
+    bool is_same_sharding_config(replica::column_family& cf) {
         rlogger.debug("is_same_sharding_config: remote_shard={}, remote_shard_count={}, remote_ignore_msb={}",
                 _master_node_shard_config.shard, _master_node_shard_config.shard_count, _master_node_shard_config.ignore_msb);
-        auto& sharder = _cf.get_effective_replication_map()->get_sharder(*_schema);
+        auto& sharder = cf.get_effective_replication_map()->get_sharder(*_schema);
         return sharder.shard_count() == _master_node_shard_config.shard_count
                && sharder.sharding_ignore_msb() == _master_node_shard_config.ignore_msb
                && this_shard_id() == _master_node_shard_config.shard;
@@ -1139,7 +1138,7 @@ private:
         std::exception_ptr ex;
         if (!_repair_reader) {
             _repair_reader.emplace(_db,
-                _cf,
+                _db.local().find_column_family(_schema->id()),
                 _schema,
                 _permit,
                 _range,
@@ -1571,7 +1570,8 @@ public:
         // retransmission at messaging_service level, so no message will be retransmitted.
         rlogger.trace("Calling get_combined_row_hash_handler");
         return with_gate(_gate, [this, common_sync_boundary = std::move(common_sync_boundary)] () mutable {
-            _cf.update_off_strategy_trigger();
+            auto& cf = _db.local().find_column_family(_schema->id());
+            cf.update_off_strategy_trigger();
             return request_row_hashes(common_sync_boundary);
         });
     }
@@ -1692,7 +1692,8 @@ public:
     future<get_sync_boundary_response>
     get_sync_boundary_handler(std::optional<repair_sync_boundary> skipped_sync_boundary) {
         return with_gate(_gate, [this, skipped_sync_boundary = std::move(skipped_sync_boundary)] () mutable {
-            _cf.update_off_strategy_trigger();
+            auto& cf = _db.local().find_column_family(_schema->id());
+            cf.update_off_strategy_trigger();
             return get_sync_boundary(std::move(skipped_sync_boundary));
         });
     }
@@ -1970,7 +1971,8 @@ public:
     // RPC handler
     future<> put_row_diff_handler(repair_rows_on_wire rows, gms::inet_address from) {
         return with_gate(_gate, [this, rows = std::move(rows)] () mutable {
-            _cf.update_off_strategy_trigger();
+            auto& cf = _db.local().find_column_family(_schema->id());
+            cf.update_off_strategy_trigger();
             return apply_rows_on_follower(std::move(rows));
         });
     }
