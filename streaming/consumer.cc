@@ -43,14 +43,7 @@ std::function<future<> (flat_mutation_reader_v2)> make_streaming_consumer(sstrin
             // Data segregation is postponed to happen during off-strategy if latter is enabled, which
             // means partition estimation shouldn't be adjusted.
             const auto adjusted_estimated_partitions = (offstrategy) ? estimated_partitions : cs.adjust_partition_estimate(metadata, estimated_partitions, cf->schema());
-            auto make_interposer_consumer = [&cs, offstrategy] (const mutation_source_metadata& ms_meta, reader_consumer_v2 end_consumer) mutable {
-                if (offstrategy) {
-                    return end_consumer;
-                }
-                return cs.make_interposer_consumer(ms_meta, std::move(end_consumer));
-            };
-
-            auto consumer = make_interposer_consumer(metadata,
+            reader_consumer_v2 consumer =
                     [cf = std::move(cf), adjusted_estimated_partitions, use_view_update_path, &vug, origin = std::move(origin), offstrategy] (flat_mutation_reader_v2 reader) {
                 sstables::shared_sstable sst;
                 try {
@@ -79,7 +72,10 @@ std::function<future<> (flat_mutation_reader_v2)> make_streaming_consumer(sstrin
                     }
                     return vug.local().register_staging_sstable(sst, std::move(cf));
                 });
-            });
+            };
+            if (!offstrategy) {
+                consumer = cs.make_interposer_consumer(metadata, std::move(consumer));
+            }
             co_return co_await consumer(std::move(reader));
         } catch (...) {
             ex = std::current_exception();
