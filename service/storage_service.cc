@@ -370,9 +370,11 @@ future<> storage_service::sync_raft_topology_nodes(mutable_token_metadata_ptr tm
         return *used_ips;
     };
 
+    std::vector<future<>> sys_ks_futures;
+
     auto process_left_node = [&] (raft::server_id id) -> future<> {
         if (const auto ip = am.find(id)) {
-            co_await _sys_ks.local().remove_endpoint(*ip);
+            sys_ks_futures.push_back(_sys_ks.local().remove_endpoint(*ip));
 
             if (_gossiper.get_endpoint_state_ptr(*ip) && !get_used_ips().contains(*ip)) {
                 co_await _gossiper.force_remove_endpoint(*ip, gms::null_permit_id);
@@ -397,7 +399,7 @@ future<> storage_service::sync_raft_topology_nodes(mutable_token_metadata_ptr tm
         // Save tokens, not needed for raft topology management, but needed by legacy
         // Also ip -> id mapping is needed for address map recreation on reboot
         if (is_me(host_id)) {
-            co_await _sys_ks.local().update_tokens(rs.ring.value().tokens);
+            sys_ks_futures.push_back(_sys_ks.local().update_tokens(rs.ring.value().tokens));
             co_await _gossiper.add_local_application_state({
                 { gms::application_state::TOKENS, gms::versioned_value::tokens(rs.ring.value().tokens) },
                 { gms::application_state::CDC_GENERATION_ID, gms::versioned_value::cdc_generation_id(_topology_state_machine._topology.current_cdc_generation_id) },
@@ -419,7 +421,7 @@ future<> storage_service::sync_raft_topology_nodes(mutable_token_metadata_ptr tm
             info.host_id = id.uuid();
             info.release_version = rs.release_version;
             info.supported_features = fmt::to_string(fmt::join(rs.supported_features, ","));
-            co_await _sys_ks.local().update_peer_info(*ip, info);
+            sys_ks_futures.push_back(_sys_ks.local().update_peer_info(*ip, info));
             if (!prev_normal.contains(id)) {
                 co_await notify_joined(*ip);
             }
@@ -445,7 +447,7 @@ future<> storage_service::sync_raft_topology_nodes(mutable_token_metadata_ptr tm
                     // Save ip -> id mapping in peers table because we need it on restart, but do not save tokens until owned
                         db::system_keyspace::peer_info info;
                         info.host_id = id.uuid();
-                        co_await _sys_ks.local().update_peer_info(*ip, info);
+                        sys_ks_futures.push_back(_sys_ks.local().update_peer_info(*ip, info));
                 }
                 update_topology(host_id, ip, rs);
                 if (_topology_state_machine._topology.normal_nodes.empty()) {
@@ -513,24 +515,26 @@ future<> storage_service::sync_raft_topology_nodes(mutable_token_metadata_ptr tm
         } else if ((it = t.transition_nodes.find(raft_id)) != t.transition_nodes.end()) {
             co_await process_transition_node(raft_id, it->second);
         }
-        co_return;
-    }
-
-    for (const auto& id: t.left_nodes) {
-        co_await process_left_node(id);
-    }
-    for (const auto& [id, rs]: t.normal_nodes) {
-        co_await process_normal_node(id, rs);
-    }
-    for (const auto& [id, rs]: t.transition_nodes) {
-        co_await process_transition_node(id, rs);
-    }
-    for (auto id : t.get_excluded_nodes()) {
-        locator::node* n = tmptr->get_topology().find_node(locator::host_id(id.uuid()));
-        if (n) {
-            n->set_excluded(true);
+    } else {
+        sys_ks_futures.reserve(t.left_nodes.size() + t.normal_nodes.size() + t.transition_nodes.size());
+        for (const auto& id: t.left_nodes) {
+            co_await process_left_node(id);
+        }
+        for (const auto& [id, rs]: t.normal_nodes) {
+            co_await process_normal_node(id, rs);
+        }
+        for (const auto& [id, rs]: t.transition_nodes) {
+            co_await process_transition_node(id, rs);
+        }
+        for (auto id : t.get_excluded_nodes()) {
+            locator::node* n = tmptr->get_topology().find_node(locator::host_id(id.uuid()));
+            if (n) {
+                n->set_excluded(true);
+            }
         }
     }
+
+    co_await when_all_succeed(sys_ks_futures.begin(), sys_ks_futures.end()).discard_result();
 }
 
 future<> storage_service::topology_state_load() {
