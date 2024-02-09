@@ -136,9 +136,9 @@ public:
             return stop_iteration::no;
         }
         if (!_slice.options.contains<partition_slice::option::allow_short_read>()) {
-            throw std::runtime_error(fmt::format(
-                    "Tombstones processed by unpaged query exceeds limit of {} (configured via query_tombstone_page_limit)",
-                    _tombstone_limit));
+            // The read is unpaged, we cannot interrupt it early without failing it.
+            // Better let it continue.
+            return stop_iteration::no;
         }
         return stop_iteration::yes;
     }

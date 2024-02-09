@@ -346,3 +346,23 @@ def test_empty_table(cql, test_keyspace, lowered_tombstone_limit, driver_bug_1):
         assert list(cql.execute(f"SELECT * FROM {table}")) == []
         assert list(cql.execute(f"SELECT * FROM {table} WHERE pk = 0")) == []
         assert list(cql.execute(f"SELECT * FROM {table} WHERE v = 0 ALLOW FILTERING")) == []
+
+
+# Unpaged query should be not affected
+def test_unpaged_query(cql, table, lowered_tombstone_limit, driver_bug_1):
+    # Use update to avoid creating a row-marker ...
+    upsert_row_id = cql.prepare(f"UPDATE {table} SET v = ? WHERE pk = ? AND ck = ?")
+    # ... so deleting the only live cell in the row makes it empty.
+    delete_row_id = cql.prepare(f"DELETE v FROM {table} WHERE pk = ? AND ck = ?")
+
+    pk = unique_key_int()
+
+    for ck in range(0, 20):
+        cql.execute(upsert_row_id, (0, pk, ck))
+
+    for ck in range(0, 16):
+        cql.execute(delete_row_id, (pk, ck))
+
+    statement = SimpleStatement(f"SELECT * FROM {table} WHERE pk = {pk}", fetch_size=None)
+    rows = list(cql.execute(statement))
+    assert len(rows) == 4
