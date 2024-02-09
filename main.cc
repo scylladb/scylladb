@@ -1132,10 +1132,9 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             supervisor::notify("starting lifecycle notifier");
             lifecycle_notifier.start().get();
-            // storage_service references this notifier and is not stopped yet
-            // auto stop_lifecycle_notifier = defer_verbose_shutdown("lifecycle notifier", [ &lifecycle_notifier ] {
-            //     lifecycle_notifier.stop().get();
-            // });
+            auto stop_lifecycle_notifier = defer_verbose_shutdown("lifecycle notifier", [ &lifecycle_notifier ] {
+                lifecycle_notifier.stop().get();
+            });
 
             supervisor::notify("creating tracing");
             sharded<tracing::tracing>& tracing = tracing::tracing::tracing_instance();
