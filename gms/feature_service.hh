@@ -31,6 +31,7 @@ namespace gms {
 
 class gossiper;
 class feature_service;
+class i_endpoint_state_change_subscriber;
 
 struct feature_config {
     bool use_raft_cluster_features = false;
@@ -137,6 +138,7 @@ public:
     // tombstones and flags to schema tables when performing schema changes, allowing us to
     // revert to the digest method when necessary (if we must perform a schema change during RECOVERY).
     gms::feature group0_schema_versioning { *this, "GROUP0_SCHEMA_VERSIONING"sv };
+    gms::feature supports_consistent_topology_changes { *this, "SUPPORTS_CONSISTENT_TOPOLOGY_CHANGES"sv };
 
     // A feature just for use in tests. It must not be advertised unless
     // the "features_enable_test_feature" injection is enabled.
@@ -148,7 +150,7 @@ public:
     const std::unordered_map<sstring, std::reference_wrapper<feature>>& registered_features() const;
 
     static std::set<sstring> to_feature_set(sstring features_string);
-    future<> enable_features_on_join(gossiper&, db::system_keyspace&);
+    future<> enable_features_on_join(gossiper&, db::system_keyspace&, service::storage_service&);
     future<> on_system_tables_loaded(db::system_keyspace& sys_ks);
 
     // Performs the feature check.

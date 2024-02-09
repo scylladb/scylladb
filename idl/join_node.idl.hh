@@ -8,6 +8,17 @@
 
 namespace service {
 
+struct join_node_query_params {};
+
+struct join_node_query_result {
+    enum class topology_mode : uint8_t {
+        legacy = 0,
+        raft = 1,
+    };
+
+    service::join_node_query_result::topology_mode topo_mode;
+};
+
 struct join_node_request_params {
     raft::server_id host_id;
     std::optional<raft::server_id> replaced_id;
@@ -51,6 +62,7 @@ struct join_node_response_params {
 
 struct join_node_response_result {};
 
+verb join_node_query (raft::server_id dst_id, service::join_node_query_params) -> service::join_node_query_result;
 verb join_node_request (raft::server_id dst_id, service::join_node_request_params) -> service::join_node_request_result;
 verb join_node_response (raft::server_id dst_id, service::join_node_response_params) -> service::join_node_response_result;
 

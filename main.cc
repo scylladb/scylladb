@@ -1620,8 +1620,10 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             cdc_config.ignore_msb_bits = cfg->murmur3_partitioner_ignore_msb_bits();
             cdc_config.ring_delay = std::chrono::milliseconds(cfg->ring_delay_ms());
             cdc_config.dont_rewrite_streams = cfg->cdc_dont_rewrite_streams();
+            cdc_config.raft_experimental_topology = raft_topology_change_enabled;
             cdc_generation_service.start(std::move(cdc_config), std::ref(gossiper), std::ref(sys_dist_ks), std::ref(sys_ks),
-                    std::ref(stop_signal.as_sharded_abort_source()), std::ref(token_metadata), std::ref(feature_service), std::ref(db)).get();
+                    std::ref(stop_signal.as_sharded_abort_source()), std::ref(token_metadata), std::ref(feature_service), std::ref(db),
+                    [&ss] () -> bool { return ss.local().raft_topology_change_enabled(); }).get();
             auto stop_cdc_generation_service = defer_verbose_shutdown("CDC Generation Management service", [] {
                 cdc_generation_service.stop().get();
             });
@@ -1806,7 +1808,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // Need to do it before allowing incoming messaging service connections since
             // storage proxy's and migration manager's verbs may access group0.
             // This will also disable migration manager schema pulls if needed.
-            group0_service.setup_group0_if_exist(sys_ks.local(), ss.local(), qp.local(), mm.local(), raft_topology_change_enabled).get();
+            group0_service.setup_group0_if_exist(sys_ks.local(), ss.local(), qp.local(), mm.local()).get();
 
             with_scheduling_group(maintenance_scheduling_group, [&] {
                 return messaging.invoke_on_all(&netw::messaging_service::start_listen, std::ref(token_metadata));

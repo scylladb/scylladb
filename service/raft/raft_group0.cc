@@ -90,7 +90,7 @@ static logging::logger group0_log("raft_group0");
 static logging::logger upgrade_log("raft_group0_upgrade");
 
 // TODO: change the links from master to stable/5.2 after 5.2 is released
-static const auto raft_upgrade_doc = "https://docs.scylladb.com/master/architecture/raft.html#verifying-that-the-internal-raft-upgrade-procedure-finished-successfully";
+const char* const raft_upgrade_doc = "https://docs.scylladb.com/master/architecture/raft.html#verifying-that-the-internal-raft-upgrade-procedure-finished-successfully";
 static const auto raft_manual_recovery_doc = "https://docs.scylladb.com/master/architecture/raft.html#raft-manual-recovery-procedure";
 
 // {{{ group0_rpc Maintain failure detector subscription whenever
@@ -198,7 +198,7 @@ const raft::server_id& raft_group0::load_my_id() {
 
 raft_server_for_group raft_group0::create_server_for_group0(raft::group_id gid, raft::server_id my_id, service::storage_service& ss, cql3::query_processor& qp,
                                                             service::migration_manager& mm, bool topology_change_enabled) {
-    auto state_machine = std::make_unique<group0_state_machine>(_client, mm, qp.proxy(), ss, _raft_gr.address_map(), topology_change_enabled);
+    auto state_machine = std::make_unique<group0_state_machine>(_client, mm, qp.proxy(), ss, _raft_gr.address_map(), _feat, topology_change_enabled);
     auto rpc = std::make_unique<group0_rpc>(_raft_gr.direct_fd(), *state_machine, _ms.local(), _raft_gr.address_map(), _raft_gr.failure_detector(), gid, my_id);
     // Keep a reference to a specific RPC class.
     auto& rpc_ref = *rpc;
@@ -236,10 +236,13 @@ raft_server_for_group raft_group0::create_server_for_group0(raft::group_id gid, 
 }
 
 future<group0_info>
-raft_group0::discover_group0(raft::server_id my_id, const std::vector<gms::inet_address>& seeds, cql3::query_processor& qp) {
+raft_group0::discover_group0(const std::vector<gms::inet_address>& seeds, cql3::query_processor& qp) {
+    auto my_id = load_my_id();
     discovery::peer_list peers;
     for (auto& ip: seeds) {
-        peers.emplace_back(discovery_peer{raft::server_id{}, ip});
+        if (ip != _gossiper.get_broadcast_address()) {
+            peers.emplace_back(discovery_peer{raft::server_id{}, ip});
+        }
     }
     discovery_peer my_addr = {my_id, _gossiper.get_broadcast_address()};
 
@@ -448,7 +451,7 @@ future<> raft_group0::join_group0(std::vector<gms::inet_address> seeds, shared_p
     auto my_id = load_my_id();
     group0_log.info("server {} found no local group 0. Discovering...", my_id);
     while (true) {
-        auto g0_info = co_await discover_group0(my_id, seeds, qp);
+        auto g0_info = co_await discover_group0(seeds, qp);
         group0_log.info("server {} found group 0 with group id {}, leader {}", my_id, g0_info.group0_id, g0_info.id);
 
         if (server && group0_id != g0_info.group0_id) {
@@ -617,7 +620,7 @@ future<bool> raft_group0::use_raft() {
     co_return true;
 }
 
-future<> raft_group0::setup_group0_if_exist(db::system_keyspace& sys_ks, service::storage_service& ss, cql3::query_processor& qp, service::migration_manager& mm, bool topology_change_enabled) {
+future<> raft_group0::setup_group0_if_exist(db::system_keyspace& sys_ks, service::storage_service& ss, cql3::query_processor& qp, service::migration_manager& mm) {
     if (!co_await use_raft()) {
         co_return;
     }
@@ -636,7 +639,7 @@ future<> raft_group0::setup_group0_if_exist(db::system_keyspace& sys_ks, service
     if (group0_id) {
         // Group 0 ID is present => we've already joined group 0 earlier.
         group0_log.info("setup_group0: group 0 ID present. Starting existing Raft server.");
-        co_await start_server_for_group0(group0_id, ss, qp, mm, topology_change_enabled);
+        co_await start_server_for_group0(group0_id, ss, qp, mm, false);
 
         // Start group 0 leadership monitor fiber.
         _leadership_monitor = leadership_monitor_fiber();
@@ -694,9 +697,7 @@ future<> raft_group0::setup_group0(
 
     std::vector<gms::inet_address> seeds;
     for (auto& addr: initial_contact_nodes) {
-        if (addr != _gossiper.get_broadcast_address()) {
-            seeds.push_back(addr);
-        }
+        seeds.push_back(addr);
     }
 
     group0_log.info("setup_group0: joining group 0...");
@@ -1282,6 +1283,43 @@ static future<> check_remote_group0_upgrade_state_dry_run(
 
         if (!retry) {
             co_return;
+        }
+    }
+}
+
+future<> raft_group0::wait_for_all_nodes_to_finish_upgrade(abort_source& as) {
+    static constexpr auto rpc_timeout = std::chrono::seconds{5};
+    static constexpr auto max_concurrency = 10;
+
+    for (sleep_with_exponential_backoff sleep;; co_await sleep(as)) {
+        group0_members members0{_raft_gr.group0(), _raft_gr.address_map()};
+        auto current_config = members0.get_inet_addrs();
+        if (current_config.empty()) {
+            continue;
+        }
+
+        std::unordered_set<gms::inet_address> pending_nodes{current_config.begin(), current_config.end()};
+        co_await max_concurrent_for_each(current_config, max_concurrency, [&] (const gms::inet_address& node) -> future<> {
+            try {
+                upgrade_log.info("wait_for_everybody_to_finish_upgrade: `send_get_group0_upgrade_state({})`", node);
+                const auto upgrade_state = co_await with_timeout(as, rpc_timeout, std::bind_front(send_get_group0_upgrade_state, std::ref(_ms.local()), node));
+                if (upgrade_state == group0_upgrade_state::use_post_raft_procedures) {
+                    pending_nodes.erase(node);
+                }
+            } catch (abort_requested_exception&) {
+                upgrade_log.warn("wait_for_everybody_to_finish_upgrade: abort requested during `send_get_group0_upgrade_state({})`", node);
+                throw;
+            } catch (...) {
+                upgrade_log.warn(
+                        "wait_for_everybody_to_finish_upgrade: `send_get_group0_upgrade_state({})` failed: {}",
+                        node, std::current_exception());
+            }
+        });
+
+        if (pending_nodes.empty()) {
+            co_return;
+        } else {
+            upgrade_log.warn("wait_for_everybody_to_finish_upgrade: nodes {} didn't finish upgrade yet", pending_nodes);
         }
     }
 }

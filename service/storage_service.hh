@@ -349,7 +349,7 @@ public:
     future<> join_cluster(sharded<db::system_distributed_keyspace>& sys_dist_ks, sharded<service::storage_proxy>& proxy,
             sharded<gms::gossiper>& gossiper_ptr, start_hint_manager start_hm);
 
-    void set_group0(service::raft_group0&, bool raft_topology_change_enabled);
+    void set_group0(service::raft_group0&, bool raft_experimental_topology);
 
     future<> init_address_map(raft_address_map& address_map);
 
@@ -751,7 +751,48 @@ private:
     future<> wait_for_normal_state_handled_on_boot();
 
     friend class group0_state_machine;
-    bool _raft_topology_change_enabled = false;
+
+    bool _raft_experimental_topology = false;
+    enum class topology_change_kind {
+        // The node is still starting and didn't determine yet which ops kind to use
+        unknown,
+        // The node uses legacy, gossip-based topology operations
+        legacy,
+        // The node is in the process of upgrading to raft-based topology operations
+        upgrading_to_raft,
+        // The node uses raft-based topology operations
+        raft
+    };
+    // The _topology_change_kind_enabled variable is first initialized in `join_cluster`.
+    // After the node successfully joins, the control over the variable is yielded
+    // to `topology_state_load`, so that it can control it during the upgrade from gossiper
+    // based topology to raft-based topology.
+    // FIXME: This boolean flag is mostly needed because, shortly after starting
+    // a new group 0, the state of `system.topology` is empty, and updating the
+    // `_topology_change_kind_enabled` variable from group 0 state would lead
+    // to wrong results. This could be fixed by writing an initial `system.topology`
+    // state before creating the group 0 (also making sure to set the correct
+    // group 0 state id so that the timestamps of further mutations are correct).
+    bool _manage_topology_change_kind_from_group0 = false;
+    topology_change_kind _topology_change_kind_enabled = topology_change_kind::unknown;
+
+    // Throws an exception if the node is either starting and didn't determine which
+    // topology operations to use, or if it is in the process of upgrade to topology
+    // on raft. The name only serves for display purposes (i.e. it will be included
+    // in the exception, if one is thrown).
+    void check_ability_to_perform_topology_operation(std::string_view operation_name) const;
+
+    topology_change_kind upgrade_state_to_topology_op_kind(topology::upgrade_state_type upgrade_state) const;
+
+public:
+    bool raft_topology_change_enabled() const {
+        return _topology_change_kind_enabled == topology_change_kind::raft;
+    }
+    bool legacy_topology_change_enabled() const {
+        return _topology_change_kind_enabled == topology_change_kind::legacy;
+    }
+
+private:
     future<> _raft_state_monitor = make_ready_future<>();
     // This fibers monitors raft state and start/stops the topology change
     // coordinator fiber
@@ -799,6 +840,19 @@ public:
     future<> topology_transition();
 
     future<> do_cluster_cleanup();
+
+    // Starts the upgrade procedure to topology on raft.
+    // Must be called on shard 0.
+    future<> start_upgrade_to_raft_topology();
+
+    // Must be called on shard 0.
+    topology::upgrade_state_type get_topology_upgrade_state() const;
+
+private:
+    // Tracks progress of the upgrade to topology coordinator.
+    future<> _upgrade_to_topology_coordinator_fiber = make_ready_future<>();
+    future<> track_upgrade_progress_to_topology_coordinator(sharded<db::system_distributed_keyspace>& sys_dist_ks, sharded<service::storage_proxy>& proxy);
+
 public:
     future<> move_tablet(table_id, dht::token, locator::tablet_replica src, locator::tablet_replica dst, loosen_constraints force = loosen_constraints::no);
     future<> set_tablet_balancing_enabled(bool);

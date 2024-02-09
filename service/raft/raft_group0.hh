@@ -20,6 +20,8 @@ namespace gms { class gossiper; class feature_service; }
 
 namespace service {
 
+extern const char* const raft_upgrade_doc;
+
 class migration_manager;
 class raft_group0_client;
 class storage_service;
@@ -147,6 +149,15 @@ public:
     // Call before destroying the object.
     future<> abort();
 
+    // Run the discovery algorithm.
+    //
+    // Discovers an existing group 0 cluster or elects a server (called a 'leader')
+    // responsible for creating a new group 0 cluster if one doesn't exist
+    // (in particular, we may become that leader).
+    //
+    // See 'raft-in-scylla.md', 'Establishing group 0 in a fresh cluster'.
+    future<group0_info> discover_group0(const std::vector<gms::inet_address>& seeds, cql3::query_processor& qp);
+
     // Call during the startup procedure, after gossiping has started.
     //
     // If we're performing the replace operation, pass the IP and Raft ID of the replaced node
@@ -171,7 +182,7 @@ public:
     //
     // Cannot be called twice.
     //
-    future<> setup_group0_if_exist(db::system_keyspace&, service::storage_service& ss, cql3::query_processor& qp, service::migration_manager& mm, bool topology_change_enabled);
+    future<> setup_group0_if_exist(db::system_keyspace&, service::storage_service& ss, cql3::query_processor& qp, service::migration_manager& mm);
 
     // Call at the end of the startup procedure, after the node entered NORMAL state.
     // `setup_group0()` must have finished earlier.
@@ -252,6 +263,10 @@ public:
     // or when joining an old cluster which does not support JOIN_NODE RPC).
     shared_ptr<group0_handshaker> make_legacy_handshaker(bool can_vote);
 
+    // Waits until all upgrade to raft group 0 finishes and all nodes switched
+    // to use_post_raft_procedures.
+    future<> wait_for_all_nodes_to_finish_upgrade(abort_source& as);
+
     raft_group0_client& client() {
         return _client;
     }
@@ -280,16 +295,6 @@ private:
 
     raft_server_for_group create_server_for_group0(raft::group_id id, raft::server_id my_id, service::storage_service& ss, cql3::query_processor& qp,
         service::migration_manager& mm, bool topology_change_enabled);
-
-    // Run the discovery algorithm.
-    //
-    // Discovers an existing group 0 cluster or elects a server (called a 'leader')
-    // responsible for creating a new group 0 cluster if one doesn't exist
-    // (in particular, we may become that leader).
-    //
-    // See 'raft-in-scylla.md', 'Establishing group 0 in a fresh cluster'.
-    future<group0_info> discover_group0(raft::server_id my_id,
-        const std::vector<gms::inet_address>& seeds, cql3::query_processor& qp);
 
     // Creates or joins group 0 and switches schema/topology changes to use group 0.
     // Can be restarted after a crash. Does nothing if the procedure was already finished once.

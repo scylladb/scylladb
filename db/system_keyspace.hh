@@ -523,11 +523,18 @@ public:
     future<bool> group0_history_contains(utils::UUID state_id);
 
     future<service::topology> load_topology_state();
-    future<service::topology_features> load_topology_features_state();
+    future<std::optional<service::topology_features>> load_topology_features_state();
 
     // Read CDC generation data with the given UUID as key.
     // Precondition: the data is known to be present in the table (because it was committed earlier through group 0).
     future<cdc::topology_description> read_cdc_generation(utils::UUID id);
+
+    // Read CDC generation data with the given UUID as key.
+    // Unlike `read_cdc_generation`, does not require the data to be present.
+    // This method is meant to be used after switching back to legacy mode due to raft recovery,
+    // as the node will need to fetch definition of a CDC generation that was
+    // previously created in raft topology mode.
+    future<std::optional<cdc::topology_description>> read_cdc_generation_opt(utils::UUID id);
 
     // Loads the current clean-up candidate for the CDC generation data. If there is no candidate, returns std::nullopt.
     future<std::optional<cdc::generation_id_v2>> get_cdc_generations_cleanup_candidate();
@@ -569,7 +576,7 @@ public:
 
     future<service::topology_request_state> get_topology_request_state(utils::UUID id);
 private:
-    static service::topology_features decode_topology_features_state(::shared_ptr<cql3::untyped_result_set> rs);
+    static std::optional<service::topology_features> decode_topology_features_state(::shared_ptr<cql3::untyped_result_set> rs);
 
 public:
 

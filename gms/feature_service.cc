@@ -18,6 +18,7 @@
 #include "gms/gossiper.hh"
 #include "gms/i_endpoint_state_change_subscriber.hh"
 #include "utils/error_injection.hh"
+#include "service/storage_service.hh"
 
 namespace gms {
 
@@ -76,6 +77,9 @@ feature_config feature_config_from_db_config(const db::config& cfg, std::set<sst
     }
     if (!cfg.check_experimental(db::experimental_features_t::feature::KEYSPACE_STORAGE_OPTIONS)) {
         fcfg._disabled_features.insert("KEYSPACE_STORAGE_OPTIONS"s);
+    }
+    if (!cfg.check_experimental(db::experimental_features_t::feature::CONSISTENT_TOPOLOGY_CHANGES)) {
+        fcfg._disabled_features.insert("SUPPORTS_CONSISTENT_TOPOLOGY_CHANGES"s);
     }
     if (!cfg.check_experimental(db::experimental_features_t::feature::TABLETS)) {
         fcfg._disabled_features.insert("TABLETS"s);
@@ -211,12 +215,14 @@ class persistent_feature_enabler : public i_endpoint_state_change_subscriber {
     gossiper& _g;
     feature_service& _feat;
     db::system_keyspace& _sys_ks;
+    service::storage_service& _ss;
 
 public:
-    persistent_feature_enabler(gossiper& g, feature_service& f, db::system_keyspace& s)
+    persistent_feature_enabler(gossiper& g, feature_service& f, db::system_keyspace& s, service::storage_service& ss)
             : _g(g)
             , _feat(f)
             , _sys_ks(s)
+            , _ss(ss)
     {
     }
     future<> on_join(inet_address ep, endpoint_state_ptr state, gms::permit_id) override {
@@ -236,8 +242,8 @@ public:
     future<> enable_features();
 };
 
-future<> feature_service::enable_features_on_join(gossiper& g, db::system_keyspace& sys_ks) {
-    auto enabler = make_shared<persistent_feature_enabler>(g, *this, sys_ks);
+future<> feature_service::enable_features_on_join(gossiper& g, db::system_keyspace& sys_ks, service::storage_service& ss) {
+    auto enabler = make_shared<persistent_feature_enabler>(g, *this, sys_ks, ss);
     g.register_(enabler);
     return enabler->enable_features();
 }
@@ -251,12 +257,17 @@ future<> feature_service::enable_features_on_startup(db::system_keyspace& sys_ks
     std::set<sstring> persisted_features;
     std::set<sstring> persisted_unsafe_to_disable_features;
 
-    if (!_config.use_raft_cluster_features) {
-        persisted_features = co_await sys_ks.load_local_enabled_features();
-    } else {
+    bool fall_back_to_legacy = true;
+    if (_config.use_raft_cluster_features) {
         auto topo_features = co_await sys_ks.load_topology_features_state();
-        persisted_unsafe_to_disable_features = topo_features.calculate_not_yet_enabled_features();
-        persisted_features = std::move(topo_features.enabled_features);
+        if (topo_features) {
+            persisted_unsafe_to_disable_features = topo_features->calculate_not_yet_enabled_features();
+            persisted_features = std::move(topo_features->enabled_features);
+            fall_back_to_legacy = false;
+        }
+    }
+    if (fall_back_to_legacy) {
+        persisted_features = co_await sys_ks.load_local_enabled_features();
     }
 
     check_features(persisted_features, persisted_unsafe_to_disable_features);
@@ -322,6 +333,10 @@ void feature_service::check_features(const std::set<sstring>& enabled_features,
 }
 
 future<> persistent_feature_enabler::enable_features() {
+    if (_ss.raft_topology_change_enabled()) {
+        co_return;
+    }
+
     auto loaded_peer_features = co_await _sys_ks.load_peer_features();
     auto&& features = _g.get_supported_features(loaded_peer_features, gossiper::ignore_features_of_local_node::no);
 

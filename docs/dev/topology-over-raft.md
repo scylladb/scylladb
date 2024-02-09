@@ -348,12 +348,18 @@ There are also a few static columns for cluster-global properties:
 - `unpublished_cdc_generations` - the IDs of the committed yet unpublished CDC generations
 - `global_topology_request` - if set, contains one of the supported global topology requests
 - `new_cdc_generation_data_uuid` - used in `commit_cdc_generation` state, the time UUID of the generation to be committed
+- `upgrade_state` - describes the progress of the upgrade to raft-based topology.
 
 # Join procedure
 
 In topology on raft mode, new nodes need to go through a new handshake procedure
 before they can join the cluster, including joining group 0. The handshake
 happens during raft discovery and replaced the old `GROUP0_MODIFY_CONFIG`.
+
+Because the upgrade procedure to raft-based topology is not fully automatic,
+we support joining the cluster in the old way if the cluster is not upgraded yet.
+The [relevant section](#choosing-how-to-join-a-cluster) describes how a node
+decides which operation to use.
 
 Two RPC verbs are introduced:
 
@@ -410,3 +416,72 @@ In case of failures like timeouts, connection issues, etc., the topology
 coordinator keeps retrying. Eventually, it can give up and just move the new
 node to the `left` state, either due to a timeout or an operator intervention,
 but this is not implemented yet.
+
+# Choosing how to join a cluster
+
+A bootstrapping node needs to determine whether to use raft topology operations
+or not. In order to do so, group 0 discovery is performed which establishes
+whether the node is supposed to create a new cluster or join an existing one:
+
+- If the node creates a new cluster, it bootstraps in raft topology mode.
+- If the node joins an existing cluster, it learns about a node which is already
+  a part of the group 0. Such a node will already know whether the cluster
+  operates in raft topology mode or not. It then issues `JOIN_NODE_QUERY`
+  RPC which tells the new node how it should join the cluster.
+
+# Upgrade from legacy topology to raft-based topology
+
+Upgrading existing clusters to use raft-based topology operations is supported.
+The process is not fully automatic because it needs to be triggered by the administrator
+after making sure that no topology operations are running at the moment. This
+limitation might be lifted in the future, and the procedure will trigger
+automatically after making sure that it's safe to do so.
+
+From the admin's point of view, the steps are as follows:
+
+- Upgrade all nodes in the cluster to the newest version
+- Wait until the `SUPPORTS_CONSISTENT_TOPOLOGY_CHANGES` feature becomes enabled
+  and an appropriate message about the cluster being ready for upgrade is printed
+- Trigger the upgrade via `POST /storage_service/raft_topology/upgrade` HTTP route
+- Monitor progress of the upgrade via `GET /storage_service/raft_topology/upgrade`
+  or via observing the logs
+- After all nodes report `done` via the GET endpoint, the upgrade has fully finished
+
+The `upgrade_state` static column in `system.topology` serves the key role
+in coordinating the upgrade. It goes through the following states in the following
+order:
+
+- `not_upgraded` (or just null) - in this state, nodes wait for upgrade to be
+  started by the administrator. Invoking the `POST /storage_service/raft_topology/upgrade`
+  route changes the state from `not_upgraded` to `build_coordinator_state`
+
+After going out of the `not_upgraded` state, the current raft leader starts its
+topology coordinator fiber and coordinates the remaining steps:
+
+- `build_coordinator_state` - the topology coordinator reads the contents
+  of the local gossiper state and builds the initial state of `system.topology`.
+  A new CDC generation is created in and inserted to `system.cdc_generations_v3`.
+- `done` - upgrade is done and the state is fully built, the topology coordinator
+  can perform topology operations.
+
+# Raft topology recovery
+
+If a disaster happens and a majority of nodes are lost, changes to the group 0
+state are no longer possible and a manual recovery procedure needs to be performed.
+Our current procedure starts by switching all nodes to a special "recovery" mode
+in which nodes do not use raft at all. In this mode, dead nodes are supposed
+to be removed from the cluster via `nodetool removenode`. After all dead nodes
+are removed, state related to group 0 is deleted and nodes are restarted in
+regular mode, allowing the cluster to re-form group 0.
+
+Topology on raft fits into this procedure in the following way:
+
+- When nodes are restarted in recovery mode, they revert to gossiper-based
+  operations. This allows to perform `nodetool removenode` without having
+  a majority of nodes. In this mode, `system.topology` is *not* updated, so
+  it becomes outdated at the end.
+- Before disabling recovery mode on the nodes, the `system.topology` table
+  needs to be truncated on all nodes. This will cause nodes to revert to
+  legacy topology operations after exiting recovery mode.
+- After re-forming group 0, the cluster needs to be upgraded again to raft
+  topology by the administrator.

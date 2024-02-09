@@ -240,6 +240,7 @@ schema_ptr system_keyspace::topology() {
             .with_column("enabled_features", set_type_impl::get_instance(utf8_type, true), column_kind::static_column)
             .with_column("session", uuid_type, column_kind::static_column)
             .with_column("tablet_balancing_enabled", boolean_type, column_kind::static_column)
+            .with_column("upgrade_state", utf8_type, column_kind::static_column)
             .set_comment("Current state of topology change machine")
             .with_version(generate_schema_version(id))
             .build();
@@ -2663,6 +2664,12 @@ future<service::topology> system_keyspace::load_topology_state() {
     }
 
     for (auto& row : *rs) {
+        if (!row.has("host_id")) {
+            // There are no clustering rows, only the static row.
+            // Skip the whole loop, the static row is handled later.
+            break;
+        }
+
         raft::server_id host_id{row.get_as<utils::UUID>("host_id")};
         auto datacenter = row.get_as<sstring>("datacenter");
         auto rack = row.get_as<sstring>("rack");
@@ -2889,12 +2896,18 @@ future<service::topology> system_keyspace::load_topology_state() {
         } else {
             ret.tablet_balancing_enabled = true;
         }
+
+        if (some_row.has("upgrade_state")) {
+            ret.upgrade_state = service::upgrade_state_from_string(some_row.get_as<sstring>("upgrade_state"));
+        } else {
+            ret.upgrade_state = service::topology::upgrade_state_type::not_upgraded;
+        }
     }
 
     co_return ret;
 }
 
-future<service::topology_features> system_keyspace::load_topology_features_state() {
+future<std::optional<service::topology_features>> system_keyspace::load_topology_features_state() {
     auto rs = co_await execute_cql(
         format("SELECT host_id, node_state, supported_features, enabled_features FROM system.{} WHERE key = '{}'", TOPOLOGY, TOPOLOGY));
     assert(rs);
@@ -2902,14 +2915,25 @@ future<service::topology_features> system_keyspace::load_topology_features_state
     co_return decode_topology_features_state(std::move(rs));
 }
 
-service::topology_features system_keyspace::decode_topology_features_state(::shared_ptr<cql3::untyped_result_set> rs) {
+std::optional<service::topology_features> system_keyspace::decode_topology_features_state(::shared_ptr<cql3::untyped_result_set> rs) {
     service::topology_features ret;
 
     if (rs->empty()) {
-        return ret;
+        return std::nullopt;
+    }
+
+    auto& some_row = *rs->begin();
+    if (!some_row.has("enabled_features")) {
+        return std::nullopt;
     }
 
     for (auto& row : *rs) {
+        if (!row.has("host_id")) {
+            // There are no clustering rows, only the static row.
+            // Skip the whole loop, the static row is handled later.
+            break;
+        }
+
         raft::server_id host_id{row.get_as<utils::UUID>("host_id")};
         service::node_state nstate = service::node_state_from_string(row.get_as<sstring>("node_state"));
         if (row.has("supported_features") && nstate == service::node_state::normal) {
@@ -2917,16 +2941,25 @@ service::topology_features system_keyspace::decode_topology_features_state(::sha
         }
     }
 
-    auto& some_row = *rs->begin();
-    if (some_row.has("enabled_features")) {
-        ret.enabled_features = decode_features(deserialize_set_column(*topology(), some_row, "enabled_features"));
-    }
+    ret.enabled_features = decode_features(deserialize_set_column(*topology(), some_row, "enabled_features"));
 
     return ret;
 }
 
 future<cdc::topology_description>
 system_keyspace::read_cdc_generation(utils::UUID id) {
+    auto gen_desc = co_await read_cdc_generation_opt(id);
+
+    if (!gen_desc) {
+        on_internal_error(slogger, format(
+            "read_cdc_generation: data for CDC generation {} not present", id));
+    }
+
+    co_return std::move(*gen_desc);
+}
+
+future<std::optional<cdc::topology_description>>
+system_keyspace::read_cdc_generation_opt(utils::UUID id) {
     utils::chunked_vector<cdc::token_range_description> entries;
     co_await _qp.query_internal(
             format("SELECT range_end, streams, ignore_msb FROM {}.{} WHERE key = '{}' AND id = ?",
@@ -2945,9 +2978,7 @@ system_keyspace::read_cdc_generation(utils::UUID id) {
     });
 
     if (entries.empty()) {
-        // The data must be present by precondition.
-        on_internal_error(slogger, format(
-            "read_cdc_generation: data for CDC generation {} not present", id));
+        co_return std::nullopt;
     }
 
     co_return cdc::topology_description{std::move(entries)};

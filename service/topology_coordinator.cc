@@ -436,12 +436,12 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     // If there's a bootstrapping node, its tokens should be included in the new generation.
     // Pass them and a reference to the bootstrapping node's replica_state through `binfo`.
     future<std::pair<utils::UUID, utils::chunked_vector<mutation>>> prepare_new_cdc_generation_data(
-            locator::token_metadata_ptr tmptr, const group0_guard& guard, std::optional<bootstrapping_info> binfo) {
+            locator::token_metadata_ptr tmptr, const group0_guard& guard, std::optional<bootstrapping_info> binfo,
+            noncopyable_function<std::pair<size_t, uint8_t>(locator::host_id)> get_sharding_info_for_host_id) {
         auto get_sharding_info = [&] (dht::token end) -> std::pair<size_t, uint8_t> {
             if (binfo && binfo->bootstrap_tokens.contains(end)) {
                 return {binfo->rs.shard_count, binfo->rs.ignore_msb};
             } else {
-                // FIXME: token metadata should directly return host ID for given token. See #12279
                 auto ep = tmptr->get_endpoint(end);
                 if (!ep) {
                     // get_sharding_info is only called for bootstrap tokens
@@ -451,15 +451,14 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         " can't find endpoint for token {}", end));
                 }
 
-                auto ptr = _topo_sm._topology.find(raft::server_id{ep->uuid()});
-                if (!ptr) {
+                try {
+                    return get_sharding_info_for_host_id(*ep);
+                } catch (...) {
                     on_internal_error(rtlogger, ::format(
                         "make_new_cdc_generation_data: get_sharding_info:"
-                        " couldn't find node {} in topology, owner of token {}", *ep, end));
+                        " can't get sharding info for node {}, owner of token {}."
+                        " Reason: {}", *ep, end, std::current_exception()));
                 }
-
-                auto& rs = ptr->second;
-                return {rs.shard_count, rs.ignore_msb};
             }
         };
 
@@ -499,7 +498,27 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     // have tons of data, so indeed streaming/repair will take much longer (hours/days)).
     future<std::tuple<utils::UUID, group0_guard, canonical_mutation>> prepare_and_broadcast_cdc_generation_data(
             locator::token_metadata_ptr tmptr, group0_guard guard, std::optional<bootstrapping_info> binfo) {
-        auto [gen_uuid, gen_mutations] = co_await prepare_new_cdc_generation_data(tmptr, guard, binfo);
+
+        auto get_sharding_info_for_host_id = [&] (locator::host_id ep) -> std::pair<size_t, uint8_t> {
+            auto ptr = _topo_sm._topology.find(raft::server_id{ep.uuid()});
+            if (!ptr) {
+                throw std::runtime_error(::format(
+                        "raft topology: prepare_and_broadcast_cdc_generation_data: get_sharding_info_for_host_id:"
+                        " couldn't find node {} in topology", ep));
+            }
+
+            auto& rs = ptr->second;
+            return {rs.shard_count, rs.ignore_msb};
+        };
+
+        co_return co_await prepare_and_broadcast_cdc_generation_data(tmptr, std::move(guard), binfo, get_sharding_info_for_host_id);
+    }
+
+    future<std::tuple<utils::UUID, group0_guard, canonical_mutation>> prepare_and_broadcast_cdc_generation_data(
+            locator::token_metadata_ptr tmptr, group0_guard guard, std::optional<bootstrapping_info> binfo,
+            noncopyable_function<std::pair<size_t, uint8_t>(locator::host_id)> get_sharding_info_for_host_id) {
+
+        auto [gen_uuid, gen_mutations] = co_await prepare_new_cdc_generation_data(tmptr, guard, binfo, std::move(get_sharding_info_for_host_id));
 
         if (gen_mutations.empty()) {
             on_internal_error(rtlogger, "cdc_generation_data: gen_mutations is empty");
@@ -2051,6 +2070,10 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     future<locator::load_stats> refresh_tablet_load_stats();
     future<> start_tablet_load_stats_refresher();
 
+    // Precondition: the state machine upgrade state is not at upgrade_state::done.
+    future<> do_upgrade_step(group0_guard);
+    future<> build_coordinator_state(group0_guard);
+
     future<> await_event() {
         _as.check();
         co_await _topo_sm.event.when();
@@ -2058,6 +2081,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
 
     future<> fence_previous_coordinator();
     future<> rollback_current_topology_op(group0_guard&& guard);
+
+    // Returns true if the coordinator should sleep after the exception.
+    bool handle_topology_coordinator_error(std::exception_ptr eptr) noexcept;
 
 public:
     topology_coordinator(
@@ -2077,6 +2103,8 @@ public:
         , _ring_delay(ring_delay)
     {}
 
+    // Returns true if the upgrade was done, returns false if upgrade was interrupted.
+    future<bool> maybe_run_upgrade();
     future<> run();
 
     virtual void on_join_cluster(const gms::inet_address& endpoint) {}
@@ -2217,6 +2245,132 @@ future<> topology_coordinator::start_tablet_load_stats_refresher() {
     }
 }
 
+future<> topology_coordinator::do_upgrade_step(group0_guard guard) {
+    switch (_topo_sm._topology.upgrade_state) {
+    case topology::upgrade_state_type::not_upgraded:
+        on_internal_error(rtlogger, std::make_exception_ptr(std::runtime_error(
+                "topology_coordinator was started even though upgrade to raft topology was not requested yet")));
+
+    case topology::upgrade_state_type::build_coordinator_state:
+        co_await build_coordinator_state(std::move(guard));
+        co_return;
+
+    case topology::upgrade_state_type::done:
+        on_internal_error(rtlogger, std::make_exception_ptr(std::runtime_error(
+                "topology_coordinator::do_upgrade_step called after upgrade was completed")));
+    }
+}
+
+future<> topology_coordinator::build_coordinator_state(group0_guard guard) {
+    // Wait until all nodes reach use_post_raft_procedures
+    rtlogger.info("waiting for all nodes to finish upgrade to raft schema");
+    release_guard(std::move(guard));
+    co_await _group0.wait_for_all_nodes_to_finish_upgrade(_as);
+    guard = co_await start_operation();
+
+    rtlogger.info("building initial raft topology state and CDC generation");
+
+    auto get_application_state = [&] (locator::host_id host_id, gms::inet_address ep, const gms::application_state_map& epmap, gms::application_state app_state) -> sstring {
+        const auto it = epmap.find(app_state);
+        if (it == epmap.end()) {
+            throw std::runtime_error(format("failed to build initial raft topology state from gossip for node {}/{}: application state {} is missing in gossip", 
+                    host_id, ep, app_state));
+        }
+        // it's versioned_value::value(), not std::optional::value() - it does not throw
+        return it->second.value();
+    };
+
+    // Create a new CDC generation
+    auto tmptr = get_token_metadata_ptr();
+    auto get_sharding_info_for_host_id = [&] (locator::host_id host_id) -> std::pair<size_t, uint8_t> {
+        const auto ep = tmptr->get_endpoint_for_host_id_if_known(host_id);
+        if (!ep) {
+            throw std::runtime_error(format("IP of node with ID {} is not known", host_id));
+        }
+        const auto eptr = _gossiper.get_endpoint_state_ptr(*ep);
+        if (!eptr) {
+            throw std::runtime_error(format("no gossiper endpoint state for node {}/{}", host_id, *ep));
+        }
+        const auto& epmap = eptr->get_application_state_map();
+        const auto shard_count = std::stoi(get_application_state(host_id, *ep, epmap, gms::application_state::SHARD_COUNT));
+        const auto ignore_msb = std::stoi(get_application_state(host_id, *ep, epmap, gms::application_state::IGNORE_MSB_BITS));
+        return std::make_pair<size_t, uint8_t>(shard_count, ignore_msb);
+    };
+    auto [cdc_gen_uuid, guard_, mutation] = co_await prepare_and_broadcast_cdc_generation_data(tmptr, std::move(guard), std::nullopt, get_sharding_info_for_host_id);
+    guard = std::move(guard_);
+
+    topology_mutation_builder builder(guard.write_timestamp());
+
+    std::set<sstring> enabled_features;
+
+    // Build per-node state
+    for (const auto& host_id: tmptr->get_all_endpoints()) {
+        const auto ep = tmptr->get_endpoint_for_host_id_if_known(host_id);
+        if (!ep) {
+            throw std::runtime_error(format("failed to build initial raft topology state from gossip for node with ID {}, as its IP is not known", host_id));
+        }
+        const auto eptr = _gossiper.get_endpoint_state_ptr(*ep);
+        if (!eptr) {
+            throw std::runtime_error(format("failed to build initial raft topology state from gossip for node {}/{} as gossip contains no data for it", host_id, *ep));
+        }
+
+        const auto& epmap = eptr->get_application_state_map();
+
+        const auto datacenter = get_application_state(host_id, *ep, epmap, gms::application_state::DC);
+        const auto rack = get_application_state(host_id, *ep, epmap, gms::application_state::RACK);
+        const auto tokens_v = tmptr->get_tokens(host_id);
+        const std::unordered_set<dht::token> tokens(tokens_v.begin(), tokens_v.end());
+        const auto release_version = get_application_state(host_id, *ep, epmap, gms::application_state::RELEASE_VERSION);
+        const auto num_tokens = tokens.size();
+        const auto shard_count = get_application_state(host_id, *ep, epmap, gms::application_state::SHARD_COUNT);
+        const auto ignore_msb = get_application_state(host_id, *ep, epmap, gms::application_state::IGNORE_MSB_BITS);
+        const auto supported_features_s = get_application_state(host_id, *ep, epmap, gms::application_state::SUPPORTED_FEATURES);
+        const auto supported_features = gms::feature_service::to_feature_set(supported_features_s);
+
+        if (enabled_features.empty()) {
+            enabled_features = supported_features;
+        } else {
+            std::erase_if(enabled_features, [&] (const sstring& f) { return !supported_features.contains(f); });
+        }
+
+        builder.with_node(raft::server_id(host_id.uuid()))
+                .set("datacenter", datacenter)
+                .set("rack", rack)
+                .set("tokens", tokens)
+                .set("node_state", node_state::normal)
+                .set("release_version", release_version)
+                .set("num_tokens", (uint32_t)num_tokens)
+                .set("shard_count", (uint32_t)std::stoi(shard_count))
+                .set("ignore_msb", (uint32_t)std::stoi(ignore_msb))
+                .set("cleanup_status", cleanup_status::clean)
+                .set("request_id", utils::UUID())
+                .set("supported_features", supported_features);
+        
+        rtlogger.debug("node {} will contain the following parameters: "
+                "datacenter={}, rack={}, tokens={}, shard_count={}, ignore_msb={}, supported_features={}",
+                host_id, datacenter, rack, tokens, shard_count, ignore_msb, supported_features);
+    }
+
+    // Build the static columns
+    const bool add_ts_delay = true; // This is not the first generation, so add delay
+    auto cdc_gen_ts = cdc::new_generation_timestamp(add_ts_delay, _ring_delay);
+
+    const cdc::generation_id_v2 cdc_gen_id {
+        .ts = cdc_gen_ts,
+        .id = cdc_gen_uuid,
+    };
+
+    builder.set_version(topology::initial_version)
+            .set_fence_version(topology::initial_version)
+            .set_current_cdc_generation_id(cdc_gen_id)
+            .add_enabled_features(std::move(enabled_features));
+
+    // Commit
+    builder.set_upgrade_state(topology::upgrade_state_type::done);
+    auto reason = "upgrade: build the initial state";
+    co_await update_topology_state(std::move(guard), {std::move(mutation), builder.build()}, reason);
+}
+
 future<> topology_coordinator::fence_previous_coordinator() {
     // Write empty change to make sure that a guard taken by any previous coordinator cannot
     // be used to do a successful write any more. Otherwise the following can theoretically happen
@@ -2305,9 +2459,60 @@ future<> topology_coordinator::rollback_current_topology_op(group0_guard&& guard
     co_await update_topology_state(std::move(node.guard), std::move(muts), str);
 }
 
-future<> topology_coordinator::run() {
-    rtlogger.info("start topology coordinator fiber");
+bool topology_coordinator::handle_topology_coordinator_error(std::exception_ptr eptr) noexcept {
+    try {
+        std::rethrow_exception(std::move(eptr));
+    } catch (raft::request_aborted&) {
+        rtlogger.debug("topology change coordinator fiber aborted");
+    } catch (seastar::abort_requested_exception&) {
+        rtlogger.debug("topology change coordinator fiber aborted");
+    } catch (raft::commit_status_unknown&) {
+        rtlogger.warn("topology change coordinator fiber got commit_status_unknown");
+    } catch (group0_concurrent_modification&) {
+    } catch (topology_coordinator::term_changed_error&) {
+        // Term changed. We may no longer be a leader
+        rtlogger.debug("topology change coordinator fiber notices term change {} -> {}", _term, _raft.get_current_term());
+    } catch (...) {
+        rtlogger.error("topology change coordinator fiber got error {}", std::current_exception());
+        return true;
+    }
+    return false;
+}
 
+future<bool> topology_coordinator::maybe_run_upgrade() {
+    if (_topo_sm._topology.upgrade_state == topology::upgrade_state_type::done) {
+        // Upgrade was already done, nothing to do
+        co_return true;
+    }
+
+    rtlogger.info("topology coordinator fiber is upgrading the cluster to raft topology mode");
+
+    auto abort = _as.subscribe([this] () noexcept {
+        _topo_sm.event.broadcast();
+    });
+
+    while (!_as.abort_requested() && _topo_sm._topology.upgrade_state != topology::upgrade_state_type::done) {
+        bool sleep = false;
+        try {
+            auto guard = co_await start_operation();
+            co_await do_upgrade_step(std::move(guard));
+        } catch (...) {
+            sleep = handle_topology_coordinator_error(std::current_exception());
+        }
+        if (sleep) {
+            try {
+                co_await seastar::sleep_abortable(std::chrono::seconds(1), _as);
+            } catch (...) {
+                rtlogger.debug("sleep failed: {}", std::current_exception());
+            }
+        }
+        co_await coroutine::maybe_yield();
+    }
+
+    co_return !_as.abort_requested();
+}
+
+future<> topology_coordinator::run() {
     auto abort = _as.subscribe([this] () noexcept {
         _topo_sm.event.broadcast();
     });
@@ -2331,25 +2536,15 @@ future<> topology_coordinator::run() {
             }
 
             bool had_work = co_await handle_topology_transition(std::move(guard));
+
             if (!had_work) {
                 // Nothing to work on. Wait for topology change event.
                 rtlogger.debug("topology coordinator fiber has nothing to do. Sleeping.");
                 co_await await_event();
                 rtlogger.debug("topology coordinator fiber got an event");
             }
-        } catch (raft::request_aborted&) {
-            rtlogger.debug("topology change coordinator fiber aborted");
-        } catch (seastar::abort_requested_exception&) {
-            rtlogger.debug("topology change coordinator fiber aborted");
-        } catch (raft::commit_status_unknown&) {
-            rtlogger.warn("topology change coordinator fiber got commit_status_unknown");
-        } catch (group0_concurrent_modification&) {
-        } catch (term_changed_error&) {
-            // Term changed. We may no longer be a leader
-            rtlogger.debug("topology change coordinator fiber notices term change {} -> {}", _term, _raft.get_current_term());
         } catch (...) {
-            rtlogger.error("topology change coordinator fiber got error {}", std::current_exception());
-            sleep = true;
+            sleep = handle_topology_coordinator_error(std::current_exception());
         }
         if (sleep) {
             try {
@@ -2386,7 +2581,11 @@ future<> run_topology_coordinator(
     std::exception_ptr ex;
     lifecycle_notifier.register_subscriber(&coordinator);
     try {
-        co_await coordinator.run();
+        rtlogger.info("start topology coordinator fiber");
+        const bool upgrade_done = co_await coordinator.maybe_run_upgrade();
+        if (upgrade_done) {
+            co_await coordinator.run();
+        }
     } catch (...) {
         ex = std::current_exception();
     }

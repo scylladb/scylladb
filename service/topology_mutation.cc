@@ -224,6 +224,10 @@ topology_mutation_builder& topology_mutation_builder::set_global_topology_reques
     return apply_atomic("global_topology_request", ::format("{}", value));
 }
 
+topology_mutation_builder& topology_mutation_builder::set_upgrade_state(topology::upgrade_state_type value) {
+    return apply_atomic("upgrade_state", ::format("{}", value));
+}
+
 topology_mutation_builder& topology_mutation_builder::add_enabled_features(const std::set<sstring>& features) {
     return apply_set("enabled_features", collection_apply_mode::update, features | boost::adaptors::transformed([] (const auto& f) { return sstring(f); }));
 }

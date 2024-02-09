@@ -2674,6 +2674,33 @@
                ]
             }
          ]
+      },
+      {
+         "path":"/storage_service/raft_topology/upgrade",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"Trigger the upgrade to topology on raft.",
+               "type":"void",
+               "nickname":"upgrade_to_raft_topology",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            },
+            {
+               "method":"GET",
+               "summary":"Get information about the current upgrade status of topology on raft.",
+               "type":"string",
+               "nickname":"raft_topology_upgrade_status",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
       }
    ],
    "models":{

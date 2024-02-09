@@ -178,6 +178,8 @@ public:
 
     db::system_keyspace& sys_ks();
 
+    bool in_recovery() const;
+
     // for test only
     void set_history_gc_duration(gc_clock::duration d);
     semaphore& operation_mutex();

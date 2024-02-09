@@ -6,8 +6,10 @@
 """
 Test consistency of schema changes with topology changes.
 """
+import asyncio
 import logging
 import functools
+import operator
 import pytest
 import time
 from cassandra.cluster import Session  # type: ignore # pylint: disable=no-name-in-module
@@ -158,6 +160,67 @@ async def delete_upgrade_state(cql: Session, host: Host) -> None:
 async def delete_raft_data_and_upgrade_state(cql: Session, host: Host) -> None:
     await delete_raft_data(cql, host)
     await delete_upgrade_state(cql, host)
+
+
+async def wait_until_topology_upgrade_finishes(manager: ManagerClient, ip_addr: str, deadline: float):
+    async def check():
+        status = await manager.api.raft_topology_upgrade_status(ip_addr)
+        return status == "done" or None
+    await wait_for(check, deadline=deadline, period=1.0)
+
+
+async def delete_raft_topology_state(cql: Session, host: Host):
+    await cql.run_async("truncate table system.topology", host=host)
+
+
+async def check_system_topology_and_cdc_generations_v3_consistency(manager: ManagerClient, hosts: list[Host]):
+    assert len(hosts) != 0
+
+    topo_results = await asyncio.gather(*(manager.cql.run_async("SELECT * FROM system.topology", host=host) for host in hosts))
+
+    for host, topo_res in zip(hosts, topo_results):
+        logging.info(f"Dumping the state of system.topology as seen by {host}:")
+        for row in topo_res:
+            logging.info(f"  {row}")
+
+    for host, topo_res in zip(hosts, topo_results):
+        assert len(topo_res) != 0
+
+        for row in topo_res:
+            assert row.host_id is not None
+            assert row.datacenter is not None
+            assert row.ignore_msb is not None
+            assert row.node_state == "normal"
+            assert row.num_tokens is not None
+            assert row.rack is not None
+            assert row.release_version is not None
+            assert row.supported_features is not None
+            assert row.shard_count is not None
+            assert row.tokens is not None
+
+            assert len(row.tokens) == row.num_tokens
+
+        assert topo_res[0].current_cdc_generation_timestamp is not None
+        assert topo_res[0].current_cdc_generation_uuid is not None
+        assert topo_res[0].fence_version is not None
+        assert topo_res[0].upgrade_state == "done"
+
+        assert host.host_id in (row.host_id for row in topo_res)
+
+        computed_enabled_features = functools.reduce(operator.and_, (frozenset(row.supported_features) for row in topo_res))
+        assert topo_res[0].enabled_features is not None
+        enabled_features = frozenset(topo_res[0].enabled_features)
+        assert enabled_features == computed_enabled_features
+        assert "SUPPORTS_CONSISTENT_TOPOLOGY_CHANGES" in enabled_features
+
+        cdc_res = await manager.cql.run_async("SELECT * FROM system.cdc_generations_v3", host=host)
+        assert len(cdc_res) != 0
+
+        all_generations = frozenset(row.id for row in cdc_res)
+        assert topo_res[0].current_cdc_generation_uuid in all_generations
+
+        # Check that the contents fetched from the current host are the same as for other nodes
+        assert topo_results[0] == topo_res
 
 
 def log_run_time(f):
