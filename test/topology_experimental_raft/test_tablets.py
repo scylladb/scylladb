@@ -646,3 +646,41 @@ async def test_tablet_split(manager: ManagerClient):
 
     tablet_count = await get_tablet_count(manager, servers[0], 'test', 'test')
     assert tablet_count > 1
+
+@pytest.mark.asyncio
+async def test_tablet_storage_freeing(manager: ManagerClient):
+    logger.info("Start first node")
+    servers = [await manager.server_add()]
+    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+    cql = manager.get_cql()
+    await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+
+    logger.info("Create a table with two tablets and populate it with a moderate amount of data.")
+    n_tablets = 2
+    n_partitions = 1000
+    await cql.run_async("CREATE KEYSPACE test WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} AND tablets = {{'initial': {}}};".format(n_tablets))
+    await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, v text) WITH compression = {'sstable_compression': ''};")
+    insert_stmt = cql.prepare("INSERT INTO test.test (pk, v) VALUES (?, ?);")
+    payload = "a"*10000
+    await asyncio.gather(*[cql.run_async(insert_stmt, [k, payload]) for k in range(n_partitions)])
+    await manager.api.keyspace_flush(servers[0].ip_addr, "test")
+
+    logger.info("Start second node.")
+    servers.append(await manager.server_add())
+    s1_host_id = await manager.get_host_id(servers[1].server_id)
+
+    logger.info("Check the table's disk usage on first node.")
+    size_before = await manager.server_get_sstables_disk_usage(servers[0].server_id, "test", "test")
+    assert size_before > n_partitions * len(payload)
+
+    logger.info("Read system.tablets.")
+    tablet_replicas = await get_all_tablet_replicas(manager, servers[0], 'test', 'test')
+    assert len(tablet_replicas) == n_tablets
+
+    logger.info("Migrate one of the two tablets from the first node to the second node.")
+    t = tablet_replicas[0]
+    await manager.api.move_tablet(servers[0].ip_addr, "test", "test", *t.replicas[0], *(s1_host_id, 0), t.last_token)
+
+    logger.info("Verify that the table's disk usage on first node shrunk by about half.")
+    size_after = await manager.server_get_sstables_disk_usage(servers[0].server_id, "test", "test")
+    assert size_before * 0.33 < size_after < size_before * 0.66
