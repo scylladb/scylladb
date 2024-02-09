@@ -193,6 +193,8 @@ class ManagerClient():
                 if idx2 != idx:
                     await self.server_sees_other_server(servers[idx2].ip_addr, s.ip_addr)
 
+        await wait_for_cql_and_get_hosts(self.cql, servers, time() + 60)
+
     async def server_pause(self, server_id: ServerNum) -> None:
         """Pause the specified server."""
         logger.debug("ManagerClient pausing %s", server_id)
