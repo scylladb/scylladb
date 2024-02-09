@@ -730,22 +730,17 @@ future<> repair::shard_repair_task_impl::repair_range(const dht::token_range& ra
     rlogger.debug("repair[{}]: Repair {} out of {} ranges, keyspace={}, table={}, range={}, peers={}, live_peers={}",
         global_repair_id.uuid(), ranges_index, ranges_size(), _status.keyspace, table.name, range, neighbors, live_neighbors);
     co_await mm.sync_schema(db.local(), neighbors);
-    sstring cf;
-    try {
-        cf = db.local().find_column_family(table.id).schema()->cf_name();
-    } catch (replica::no_such_column_family&) {
-        co_return;
-    }
+
     // Row level repair
-    if (dropped_tables.contains(cf)) {
+    if (dropped_tables.contains(table.name)) {
         co_return;
     }
     try {
         auto dropped = co_await with_table_drop_silenced(db.local(), mm, table.id, [&] (const table_id& uuid) {
-            return repair_cf_range_row_level(*this, cf, table.id, range, neighbors, _small_table_optimization);
+            return repair_cf_range_row_level(*this, table.name, table.id, range, neighbors, _small_table_optimization);
         });
         if (dropped) {
-            dropped_tables.insert(cf);
+            dropped_tables.insert(table.name);
         }
     } catch (...) {
         nr_failed_ranges++;
