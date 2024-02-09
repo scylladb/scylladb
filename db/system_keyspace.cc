@@ -1855,18 +1855,16 @@ future<std::unordered_map<gms::inet_address, gms::inet_address>> system_keyspace
 
 namespace {
 template <typename T>
-static data_value_or_unset make_data_value_or_unset(const std::optional<T>& opt, bool& any_set) {
+static data_value_or_unset make_data_value_or_unset(const std::optional<T>& opt) {
     if (opt) {
-        any_set = true;
         return data_value(*opt);
     } else {
         return unset_value{};
     }
 };
 
-static data_value_or_unset make_data_value_or_unset(const std::optional<std::unordered_set<dht::token>>& opt, bool& any_set) {
+static data_value_or_unset make_data_value_or_unset(const std::optional<std::unordered_set<dht::token>>& opt) {
     if (opt) {
-        any_set = true;
         auto set_type = set_type_impl::get_instance(utf8_type, true);
         return make_set_value(set_type, prepare_tokens(*opt));
     } else {
@@ -1880,23 +1878,18 @@ future<> system_keyspace::update_peer_info(gms::inet_address ep, const peer_info
         on_internal_error(slogger, format("update_peer_info called for this node: {}", ep));
     }
 
-    bool any_set = false;
     data_value_list values = {
         data_value_or_unset(data_value(ep.addr())),
-        make_data_value_or_unset(info.data_center, any_set),
-        make_data_value_or_unset(info.host_id, any_set),
-        make_data_value_or_unset(info.preferred_ip, any_set),
-        make_data_value_or_unset(info.rack, any_set),
-        make_data_value_or_unset(info.release_version, any_set),
-        make_data_value_or_unset(info.rpc_address, any_set),
-        make_data_value_or_unset(info.schema_version, any_set),
-        make_data_value_or_unset(info.tokens, any_set),
-        make_data_value_or_unset(info.supported_features, any_set),
+        make_data_value_or_unset(info.data_center),
+        make_data_value_or_unset(info.host_id),
+        make_data_value_or_unset(info.preferred_ip),
+        make_data_value_or_unset(info.rack),
+        make_data_value_or_unset(info.release_version),
+        make_data_value_or_unset(info.rpc_address),
+        make_data_value_or_unset(info.schema_version),
+        make_data_value_or_unset(info.tokens),
+        make_data_value_or_unset(info.supported_features),
     };
-
-    if (!any_set) {
-        co_return;
-    }
 
     auto query = fmt::format("INSERT INTO system.{} "
             "(peer,data_center,host_id,preferred_ip,rack,release_version,rpc_address,schema_version,tokens,supported_features) VALUES"
