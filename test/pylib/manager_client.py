@@ -10,12 +10,13 @@
 """
 
 from concurrent.futures import ThreadPoolExecutor
-from typing import List, Optional, Callable, Any
+from typing import List, Optional, Callable, Any, Awaitable
 from time import time
 import logging
 from test.pylib.log_browsing import ScyllaLogFile
 from test.pylib.rest_client import UnixRESTClient, ScyllaRESTAPIClient, ScyllaMetricsClient
 from test.pylib.util import wait_for
+from test.pylib.util import wait_for_cql_and_get_hosts
 from test.pylib.internal_types import ServerNum, IPAddress, HostID, ServerInfo
 from test.pylib.scylla_cluster import ReplaceConfig, ScyllaServer
 from cassandra.cluster import Session as CassandraSession  # type: ignore # pylint: disable=no-name-in-module
@@ -165,7 +166,7 @@ class ManagerClient():
         await self.server_sees_others(server_id, wait_others, interval = wait_interval)
         self._driver_update()
 
-    async def rolling_restart(self, servers):
+    async def rolling_restart(self, servers: List[ServerInfo], with_down: Optional[Callable[[ServerInfo], Awaitable[Any]]] = None):
         for idx, s in enumerate(servers):
             await self.server_stop_gracefully(s.server_id)
 
@@ -175,6 +176,11 @@ class ManagerClient():
             for idx2 in range(len(servers)):
                 if idx2 != idx:
                     await self.server_not_sees_other_server(servers[idx2].ip_addr, s.ip_addr)
+
+            if with_down:
+                up_servers = [u for u in servers if u.server_id != s.server_id]
+                await wait_for_cql_and_get_hosts(self.cql, up_servers, time() + 60)
+                await with_down(s)
 
             await self.server_start(s.server_id)
 
