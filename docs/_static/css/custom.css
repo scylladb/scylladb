@@ -24,6 +24,10 @@
     font-weight: normal;
 }
 
+.content blockquote .std-term {
+    font-weight: bold;    
+}
+
 h3 .pre {
     font-size: 16px;
     font-weight: bold;
