@@ -275,7 +275,6 @@ public:
 public:
     struct peer_info {
         std::optional<sstring> data_center;
-        std::optional<utils::UUID> host_id;
         std::optional<net::inet_address> preferred_ip;
         std::optional<sstring> rack;
         std::optional<sstring> release_version;
@@ -285,7 +284,7 @@ public:
         std::optional<sstring> supported_features;
     };
 
-    future<> update_peer_info(gms::inet_address ep, const peer_info& info);
+    future<> update_peer_info(gms::inet_address ep, locator::host_id hid, const peer_info& info);
 
     future<> remove_endpoint(gms::inet_address ep);
 
