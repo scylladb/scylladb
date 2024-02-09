@@ -405,6 +405,40 @@ void describering_operation(scylla_rest_client& client, const bpo::variables_map
     }
 }
 
+void describecluster_operation(scylla_rest_client& client, const bpo::variables_map&) {
+    const auto cluster_name_res = client.get("/storage_service/cluster_name");
+    const auto snitch_name_res = client.get("/snitch/name");
+    // ScyllaDB does not support Dynamic Snitching, and will not.
+    // see https://github.com/scylladb/scylladb/issues/208
+    const auto dynamic_snitch = "disabled";
+    const auto partitioner_name_res = client.get("/storage_service/partitioner_name");
+    fmt::print("Cluster Information:\n"
+               "\tName: {}\n"
+               "\tSnitch: {}\n"
+               "\tDynamicEndPointSnitch: {}\n"
+               "\tPartitioner: {}\n",
+               rjson::to_string_view(cluster_name_res),
+               rjson::to_string_view(snitch_name_res),
+               dynamic_snitch,
+               rjson::to_string_view(partitioner_name_res));
+
+    const auto schema_versions = client.get("/storage_proxy/schema_versions");
+    fmt::print("\tSchema versions:\n");
+    for (auto& element : schema_versions.GetArray()) {
+        const auto& version_hosts = element.GetObject();
+        const auto schema_version = rjson::to_string_view(version_hosts["key"]);
+        std::vector<std::string_view> hosts;
+        for (auto& host : version_hosts["value"].GetArray()) {
+            hosts.push_back(rjson::to_string_view(host));
+        }
+        // Java does not quote when formatting strings in a List, while {fmt}
+        // does when formatting a sequence. so we cannot use {fmt} to format
+        // the vector<string_view> here.
+        fmt::print("\t\t{}: [{}]\n\n", schema_version, fmt::join(hosts, ", "));
+    }
+
+}
+
 void disableautocompaction_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     if (!vm.count("keyspace")) {
         for (const auto& keyspace :  get_keyspaces(client)) {
@@ -977,6 +1011,16 @@ Fore more information, see: https://opensource.docs.scylladb.com/stable/operatin
                 },
             },
             describering_operation
+        },
+        {
+            {
+                "describecluster",
+                "Print the name, snitch, partitioner and schema version of a cluster",
+R"(
+Fore more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/describecluster.html
+)",
+            },
+            describecluster_operation
         },
         {
             {
