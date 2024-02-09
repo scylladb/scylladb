@@ -453,22 +453,20 @@ async def test_tablet_missing_data_repair(manager: ManagerClient):
     await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, c int);")
 
     keys_list = [range(0, 100), range(100, 200), range(200, 300)]
+    keys_for_server = dict([(s.server_id, keys_list[idx]) for idx, s in enumerate(servers)])
     keys = range(0, 300)
 
-    for idx in range(0,3):
-        s = servers[idx].server_id
-        await manager.server_stop_gracefully(s, timeout=120)
-        logger.info(f"Stopped server {idx}");
-        logger.info(f"Insert into server {idx}");
-        await asyncio.gather(*[cql.run_async(f"INSERT INTO test.test (pk, c) VALUES ({k}, {k});") for k in keys_list[idx]])
-        await manager.server_start(s)
-        logger.info(f"Started server {idx}");
+    async def insert_with_down(down_server):
+        logger.info(f"Stopped server {down_server.server_id}")
+        logger.info(f"Insert into server {down_server.server_id}")
+        await asyncio.gather(*[cql.run_async(f"INSERT INTO test.test (pk, c) VALUES ({k}, {k});")
+                               for k in keys_for_server[down_server.server_id]])
 
-    await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+    await manager.rolling_restart(servers, with_down=insert_with_down)
 
     await repair_on_node(manager, servers[0], servers)
 
-    async def check():
+    async def check_with_down(down_node):
         logger.info("Checking table")
         query = SimpleStatement("SELECT * FROM test.test;", consistency_level=ConsistencyLevel.ONE)
         rows = await cql.run_async(query)
@@ -476,13 +474,8 @@ async def test_tablet_missing_data_repair(manager: ManagerClient):
         for r in rows:
             assert r.c == r.pk
 
-    for idx in range(0,3):
-        s = servers[idx].server_id
-        await manager.server_stop_gracefully(s, timeout=120)
-        await check()
-        await manager.server_start(s)
+    await manager.rolling_restart(servers, with_down=check_with_down)
 
-    await cql.run_async("DROP KEYSPACE test;")
 
 @pytest.mark.asyncio
 async def test_tablet_cleanup(manager: ManagerClient):
