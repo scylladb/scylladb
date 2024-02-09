@@ -202,6 +202,10 @@ class ManagerClient():
         logger.debug("ManagerClient wiping sstables on %s, keyspace=%s, table=%s", server_id, keyspace, table)
         await self.client.put_json(f"/cluster/server/{server_id}/wipe_sstables", {"keyspace": keyspace, "table": table})
 
+    async def server_get_sstables_disk_usage(self, server_id: ServerNum, keyspace: str, table: str) -> int:
+        """Get the total size of all sstable files for the given table"""
+        return await self.client.get_json(f"/cluster/server/{server_id}/sstables_disk_usage", params={"keyspace": keyspace, "table": table})
+
     def _create_server_add_data(self, replace_cfg: Optional[ReplaceConfig] = None,
                                 cmdline: Optional[List[str]] = None,
                                 config: Optional[dict[str, Any]] = None,
