@@ -2980,11 +2980,10 @@ flat_mutation_reader_v2 make_multishard_streaming_reader(distributed<replica::da
         full_slice);
 }
 
-std::ostream& operator<<(std::ostream& os, gc_clock::time_point tp) {
+auto fmt::formatter<gc_clock::time_point>::format(gc_clock::time_point tp, fmt::format_context& ctx) const
+    -> decltype(ctx.out()) {
     auto sec = std::chrono::duration_cast<std::chrono::seconds>(tp.time_since_epoch()).count();
-    std::ostream tmp(os.rdbuf());
-    tmp << std::setw(12) << sec;
-    return os;
+    return fmt::format_to(ctx.out(), "{:>12}", sec);
 }
 
 const timeout_config infinite_timeout_config = {
