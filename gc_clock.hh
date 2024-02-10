@@ -58,8 +58,6 @@ using ttl_opt = std::optional<gc_clock::duration>;
 // 20 years in seconds
 static constexpr gc_clock::duration max_ttl = gc_clock::duration{20 * 365 * 24 * 60 * 60};
 
-std::ostream& operator<<(std::ostream& os, gc_clock::time_point tp);
-
 template<>
 struct appending_hash<gc_clock::time_point> {
     template<typename Hasher>
@@ -107,3 +105,9 @@ struct serializer<gc_clock::duration> {
 };
 
 }
+
+template<>
+struct fmt::formatter<gc_clock::time_point> {
+    constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
+    auto format(gc_clock::time_point, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
