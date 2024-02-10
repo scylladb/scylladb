@@ -11,14 +11,8 @@
 
 #include <stdlib.h>
 #include <iostream>
-#include <list>
-#include <unordered_set>
 
-#include "test/lib/test_services.hh"
 #include <seastar/testing/test_case.hh>
-
-#include "test/lib/mutation_source_test.hh"
-#include "test/lib/mutation_assertions.hh"
 
 #include <seastar/core/future-util.hh>
 #include <seastar/core/do_with.hh>
@@ -29,8 +23,6 @@
 #include "test/lib/tmpdir.hh"
 #include "db/commitlog/commitlog.hh"
 #include "db/commitlog/rp_set.hh"
-#include "log.hh"
-#include "schema/schema.hh"
 
 using namespace db;
 
