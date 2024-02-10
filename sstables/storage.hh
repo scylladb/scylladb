@@ -44,7 +44,7 @@ class storage {
     virtual void change_dir_for_test(sstring nd) {
         assert(false && "Changing directory not implemented");
     }
-    virtual future<> create_links(const sstable& sst, const sstring& dir) const {
+    virtual future<> create_links(const sstable& sst, const std::filesystem::path& dir) const {
         assert(false && "Direct links creation not implemented");
     }
     virtual future<> move(const sstable& sst, sstring new_dir, generation_type generation, delayed_commit_changes* delay) {
