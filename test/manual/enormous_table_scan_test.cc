@@ -20,12 +20,8 @@
 #include <boost/range/adaptor/transformed.hpp>
 #include <boost/range/algorithm/find_if.hpp>
 
-#include "clustering_bounds_comparator.hh"
 #include "dht/i_partitioner.hh"
 #include "mutation/mutation_fragment.hh"
-#include "partition_range_compat.hh"
-#include "range.hh"
-#include "sstables/sstables.hh"
 #include "schema/schema_builder.hh"
 #include "readers/forwardable_v2.hh"
 
