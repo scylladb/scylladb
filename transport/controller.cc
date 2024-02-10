@@ -212,7 +212,9 @@ future<> controller::do_start_server() {
             });
         }).get();
 
-        set_cql_ready(true).get();
+        if (!_used_by_maintenance_socket) {
+            set_cql_ready(true).get();
+        }
 
         on_error.cancel();
         on_error_unsub.cancel();
