@@ -1134,7 +1134,7 @@ future<> storage_service::start_upgrade_to_raft_topology() {
     }
 
     if ((co_await _group0->client().get_group0_upgrade_state()).second != group0_upgrade_state::use_post_raft_procedures) {
-        throw std::runtime_error(format("Upgrade to schema-on-raft didn't complete yet. It is a prerequisite for starting "
+        throw std::runtime_error(fmt::format("Upgrade to schema-on-raft didn't complete yet. It is a prerequisite for starting "
                 "upgrade to raft topology. Refusing to continue. Consult the documentation for more details: {}",
                 raft_upgrade_doc));
     }
@@ -1146,7 +1146,7 @@ future<> storage_service::start_upgrade_to_raft_topology() {
     }
 
     if (auto unreachable = _gossiper.get_unreachable_token_owners(); !unreachable.empty()) {
-        throw std::runtime_error(format(
+        throw std::runtime_error(fmt::format(
             "Nodes {} are seen as down. All nodes must be alive in order to start the upgrade. "
             "Refusing to continue.",
             unreachable));
@@ -4317,9 +4317,9 @@ future<> storage_service::rebuild(sstring source_dc) {
 void storage_service::check_ability_to_perform_topology_operation(std::string_view operation_name) const {
     switch (_topology_change_kind_enabled) {
     case topology_change_kind::unknown:
-        throw std::runtime_error(format("{} is not allowed at this time - the node is still starting", operation_name));
+        throw std::runtime_error(fmt::format("{} is not allowed at this time - the node is still starting", operation_name));
     case topology_change_kind::upgrading_to_raft:
-        throw std::runtime_error(format("{} is not allowed at this time - the node is still in the process"
+        throw std::runtime_error(fmt::format("{} is not allowed at this time - the node is still in the process"
                 " of upgrading to raft topology", operation_name));
     case topology_change_kind::legacy:
         return;
@@ -4632,7 +4632,7 @@ future<> storage_service::move(token new_token) {
 future<std::vector<storage_service::token_range_endpoints>>
 storage_service::describe_ring(const sstring& keyspace, bool include_only_local_dc) const {
     if (_db.local().find_keyspace(keyspace).get_replication_strategy().uses_tablets()) {
-        throw std::runtime_error(format("The keyspace {} has tablet table. Query describe_ring with the table parameter!", keyspace));
+        throw std::runtime_error(fmt::format("The keyspace {} has tablet table. Query describe_ring with the table parameter!", keyspace));
     }
     co_return co_await locator::describe_ring(_db.local(), _gossiper, keyspace, include_only_local_dc);
 }
@@ -5315,18 +5315,18 @@ future<> storage_service::stream_tablet(locator::global_tablet_id tablet) {
         // Check if the request is still valid.
         // If there is mismatch, it means this streaming was canceled and the coordinator moved on.
         if (!trinfo) {
-            throw std::runtime_error(format("No transition info for tablet {}", tablet));
+            throw std::runtime_error(fmt::format("No transition info for tablet {}", tablet));
         }
         if (trinfo->stage != locator::tablet_transition_stage::streaming) {
-            throw std::runtime_error(format("Tablet {} stage is not at streaming", tablet));
+            throw std::runtime_error(fmt::format("Tablet {} stage is not at streaming", tablet));
         }
         auto topo_guard = trinfo->session_id;
         if (!trinfo->session_id) {
-            throw std::runtime_error(format("Tablet {} session is not set", tablet));
+            throw std::runtime_error(fmt::format("Tablet {} session is not set", tablet));
         }
         auto pending_replica = trinfo->pending_replica;
         if (pending_replica.host != tm->get_my_id()) {
-            throw std::runtime_error(format("Tablet {} has pending replica different than this one", tablet));
+            throw std::runtime_error(fmt::format("Tablet {} has pending replica different than this one", tablet));
         }
 
         auto& tinfo = tmap.get_tablet_info(tablet.tablet);
@@ -5335,7 +5335,7 @@ future<> storage_service::stream_tablet(locator::global_tablet_id tablet) {
         if (leaving_replica.host == tm->get_my_id()) {
             // The algorithm doesn't work with tablet migration within the same node because
             // it assumes there is only one tablet replica, picked by the sharder, on local node.
-            throw std::runtime_error(format("Cannot stream within the same node, tablet: {}, shard {} -> {}",
+            throw std::runtime_error(fmt::format("Cannot stream within the same node, tablet: {}, shard {} -> {}",
                                             tablet, leaving_replica.shard, trinfo->pending_replica.shard));
         }
 
@@ -5346,7 +5346,7 @@ future<> storage_service::stream_tablet(locator::global_tablet_id tablet) {
                 case locator::tablet_transition_kind::migration: return streaming::stream_reason::tablet_migration;
                 case locator::tablet_transition_kind::rebuild: return streaming::stream_reason::rebuild;
                 default:
-                    throw std::runtime_error(format("stream_tablet(): Invalid tablet transition: {}", trinfo->transition));
+                    throw std::runtime_error(fmt::format("stream_tablet(): Invalid tablet transition: {}", trinfo->transition));
             }
         });
 
@@ -5402,16 +5402,16 @@ future<> storage_service::cleanup_tablet(locator::global_tablet_id tablet) {
             // Check if the request is still valid.
             // If there is mismatch, it means this cleanup was canceled and the coordinator moved on.
             if (!trinfo) {
-                throw std::runtime_error(format("No transition info for tablet {}", tablet));
+                throw std::runtime_error(fmt::format("No transition info for tablet {}", tablet));
             }
             if (trinfo->stage != locator::tablet_transition_stage::cleanup) {
-                throw std::runtime_error(format("Tablet {} stage is not at cleanup", tablet));
+                throw std::runtime_error(fmt::format("Tablet {} stage is not at cleanup", tablet));
             }
 
             auto& tinfo = tmap.get_tablet_info(tablet.tablet);
             locator::tablet_replica leaving_replica = locator::get_leaving_replica(tinfo, *trinfo);
             if (leaving_replica.host != tm->get_my_id()) {
-                throw std::runtime_error(format("Tablet {} has leaving replica different than this one", tablet));
+                throw std::runtime_error(fmt::format("Tablet {} has leaving replica different than this one", tablet));
             }
             auto shard_opt = tmap.get_shard(tablet.tablet, tm->get_my_id());
             if (!shard_opt) {
@@ -5468,7 +5468,7 @@ future<> storage_service::move_tablet(table_id table, dht::token token, locator:
         auto gid = locator::global_tablet_id{table, tid};
 
         if (tmap.get_tablet_transition_info(tid)) {
-            throw std::runtime_error(format("Tablet {} is in transition", gid));
+            throw std::runtime_error(fmt::format("Tablet {} is in transition", gid));
         }
         if (!locator::contains(tinfo.replicas, src)) {
             throw std::runtime_error(format("Tablet {} has no replica on {}", gid, src));
@@ -5489,7 +5489,7 @@ future<> storage_service::move_tablet(table_id table, dht::token token, locator:
         }
 
         if (locator::contains(tinfo.replicas, dst.host)) {
-            throw std::runtime_error(format("Tablet {} has replica on {}", gid, dst.host));
+            throw std::runtime_error(fmt::format("Tablet {} has replica on {}", gid, dst.host));
         }
         auto src_dc_rack = get_token_metadata().get_topology().get_location(src.host);
         auto dst_dc_rack = get_token_metadata().get_topology().get_location(dst.host);
@@ -5497,14 +5497,14 @@ future<> storage_service::move_tablet(table_id table, dht::token token, locator:
             if (force) {
                 slogger.warn("Moving tablet {} between DCs ({} and {})", gid, src_dc_rack.dc, dst_dc_rack.dc);
             } else {
-                throw std::runtime_error(format("Attempted to move tablet {} between DCs ({} and {})", gid, src_dc_rack.dc, dst_dc_rack.dc));
+                throw std::runtime_error(fmt::format("Attempted to move tablet {} between DCs ({} and {})", gid, src_dc_rack.dc, dst_dc_rack.dc));
             }
         }
         if (src_dc_rack.rack != dst_dc_rack.rack && increases_replicas_per_rack(get_token_metadata().get_topology(), tinfo, dst_dc_rack.rack)) {
             if (force) {
                 slogger.warn("Moving tablet {} between racks ({} and {}) which reduces availability", gid, src_dc_rack.rack, dst_dc_rack.rack);
             } else {
-                throw std::runtime_error(format("Attempted to move tablet {} between racks ({} and {}) which would reduce availability", gid, src_dc_rack.rack, dst_dc_rack.rack));
+                throw std::runtime_error(fmt::format("Attempted to move tablet {} between racks ({} and {}) which would reduce availability", gid, src_dc_rack.rack, dst_dc_rack.rack));
             }
         }
 
@@ -5892,7 +5892,7 @@ future<join_node_response_result> storage_service::join_node_response_handler(jo
 
                     if (!untranslated_ids.empty()) {
                         if (lowres_clock::now() > sync_nodes_resolve_deadline) {
-                            throw std::runtime_error(format(
+                            throw std::runtime_error(fmt::format(
                                     "Failed to obtain IP addresses of nodes that should be seen"
                                     " as alive within {}s",
                                     std::chrono::duration_cast<std::chrono::seconds>(wait_for_live_nodes_timeout).count()));
