@@ -204,7 +204,7 @@ public:
     }
 
     static future<> create_links(const sstable& sst, const sstring& dir) {
-        return sst._storage->create_links(sst, dir);
+        return sst._storage->create_links(sst, std::filesystem::path(dir));
     }
 
     future<> move_to_new_dir(sstring new_dir, generation_type new_generation) {

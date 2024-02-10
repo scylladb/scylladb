@@ -47,7 +47,7 @@ private:
 
     future<> check_create_links_replay(const sstable& sst, const sstring& dst_dir, generation_type dst_gen, const std::vector<std::pair<sstables::component_type, sstring>>& comps) const;
     future<> remove_temp_dir();
-    virtual future<> create_links(const sstable& sst, const sstring& dir) const override;
+    virtual future<> create_links(const sstable& sst, const std::filesystem::path& dir) const override;
     future<> create_links_common(const sstable& sst, sstring dst_dir, generation_type dst_gen, mark_for_removal mark_for_removal) const;
     future<> touch_temp_dir(const sstable& sst);
     future<> move(const sstable& sst, sstring new_dir, generation_type generation, delayed_commit_changes* delay) override;
@@ -335,8 +335,8 @@ future<> filesystem_storage::create_links_common(const sstable& sst, sstring dst
     sstlog.trace("create_links: {} -> {} generation={}: done", sst.get_filename(), dst_dir, generation);
 }
 
-future<> filesystem_storage::create_links(const sstable& sst, const sstring& dir) const {
-    return create_links_common(sst, dir, sst._generation, mark_for_removal::no);
+future<> filesystem_storage::create_links(const sstable& sst, const std::filesystem::path& dir) const {
+    return create_links_common(sst, dir.native(), sst._generation, mark_for_removal::no);
 }
 
 future<> filesystem_storage::snapshot(const sstable& sst, sstring dir, absolute_path abs) const {
@@ -347,7 +347,7 @@ future<> filesystem_storage::snapshot(const sstable& sst, sstring dir, absolute_
         snapshot_dir = _dir / dir;
     }
     co_await sst.sstable_touch_directory_io_check(snapshot_dir);
-    co_await create_links(sst, snapshot_dir.native());
+    co_await create_links(sst, snapshot_dir);
 }
 
 future<> filesystem_storage::move(const sstable& sst, sstring new_dir, generation_type new_generation, delayed_commit_changes* delay_commit) {
