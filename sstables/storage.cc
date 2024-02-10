@@ -373,7 +373,7 @@ future<> filesystem_storage::move(const sstable& sst, sstring new_dir, generatio
 
 future<> filesystem_storage::change_state(const sstable& sst, sstable_state state, generation_type new_generation, delayed_commit_changes* delay_commit) {
     auto to = state_to_dir(state);
-    auto path = fs::path(_dir);
+    auto path = _dir;
     auto current = path.filename().native();
 
     // Moving between states means moving between basedir/state subdirectories.
