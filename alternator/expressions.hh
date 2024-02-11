@@ -60,23 +60,29 @@ enum class calculate_value_caller {
     UpdateExpression, ConditionExpression, ConditionExpressionAlone
 };
 
-inline std::ostream& operator<<(std::ostream& out, calculate_value_caller caller) {
-    switch (caller) {
-        case calculate_value_caller::UpdateExpression:
-            out << "UpdateExpression";
-            break;
-        case calculate_value_caller::ConditionExpression:
-            out << "ConditionExpression";
-            break;
-        case calculate_value_caller::ConditionExpressionAlone:
-            out << "ConditionExpression";
-            break;
-        default:
-            out << "unknown type of expression";
-            break;
-    }
-    return out;
 }
+
+template <> struct fmt::formatter<alternator::calculate_value_caller> {
+    constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
+    auto format(alternator::calculate_value_caller caller, fmt::format_context& ctx) const {
+        std::string_view name = "unknown type of expression";
+        switch (caller) {
+            using enum alternator::calculate_value_caller;
+            case UpdateExpression:
+                name = "UpdateExpression";
+                break;
+            case ConditionExpression:
+                name = "ConditionExpression";
+                break;
+            case ConditionExpressionAlone:
+                name = "ConditionExpression";
+                break;
+        }
+        return fmt::format_to(ctx.out(), "{}", name);
+    }
+};
+
+namespace alternator {
 
 rjson::value calculate_value(const parsed::value& v,
         calculate_value_caller caller,
