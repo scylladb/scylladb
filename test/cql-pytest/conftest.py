@@ -91,7 +91,7 @@ def this_dc(cql):
 @pytest.fixture(scope="session")
 def test_keyspace_tablets(cql, this_dc, has_tablets):
     if not is_scylla(cql) or not has_tablets:
-        pytest.skip("tablet-specific test skipped")
+        yield None
         return
 
     name = unique_name()
@@ -120,6 +120,8 @@ def test_keyspace(request, test_keyspace_vnodes, test_keyspace_tablets, cql, thi
         if request.param == "vnodes":
             yield test_keyspace_vnodes
         elif request.param == "tablets":
+            if not test_keyspace_tablets:
+                pytest.skip("tablet-specific test skipped")
             yield test_keyspace_tablets
         else:
             pytest.fail(f"test_keyspace(): invalid request parameter: {request.param}")
