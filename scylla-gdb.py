@@ -888,10 +888,12 @@ class managed_bytes_printer(gdb.printing.PrettyPrinter):
         def to_bytes(data, size):
             return bytes(inf.read_memory(data, size))
 
-        if self.val['_u']['small']['size'] >= 0:
-            return to_bytes(self.val['_u']['small']['data'], int(self.val['_u']['small']['size']))
+        if self.val['_inline_size'] >= 0:
+            return to_bytes(self.val['_u']['inline_data'], int(self.val['_inline_size']))
+        elif self.val['_inline_size'] == -1:
+            return to_bytes(self.val['_u']['single_chunk_ref']['ptr']['data'], int(self.val['_u']['single_chunk_ref']['size']))
         else:
-            ref = self.val['_u']['ptr']
+            ref = self.val['_u']['multi_chunk_ref']['ptr']
             chunks = list()
             while ref['ptr']:
                 chunks.append(to_bytes(ref['ptr']['data'], int(ref['ptr']['frag_size'])))

@@ -48,8 +48,7 @@ public:
     CharT* data() const { return _begin; }
     size_t size() const { return _end - _begin; }
     bool empty() const { return _begin == _end; }
-    CharT& front() { return *_begin; }
-    const CharT& front() const { return *_begin; }
+    CharT& front() const { return *_begin; }
 
     void remove_prefix(size_t n) {
         _begin += n;
