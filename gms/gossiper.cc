@@ -2217,12 +2217,7 @@ future<> gossiper::add_local_application_state(application_state_map states) {
                 co_await coroutine::return_exception(std::runtime_error(err));
             }
 
-            auto es = gossiper.get_endpoint_state_ptr(ep_addr);
-            if (!es) {
-                on_internal_error(logger, format("endpoint_state_map does not contain endpoint = {}", ep_addr));
-            }
-
-            auto local_state = *es;
+            auto local_state = *ep_state_before;
             for (auto& p : states) {
                 auto& state = p.first;
                 auto& value = p.second;
