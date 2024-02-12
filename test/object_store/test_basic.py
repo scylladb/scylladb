@@ -276,9 +276,8 @@ async def test_misconfigured_storage(manager: ManagerClient, s3_server):
                       f" REPLICATION = {replication_opts} AND STORAGE = {storage_opts};"))
 
 
-@pytest.mark.skip(reason="Rework")
 @pytest.mark.asyncio
-async def test_memtable_flush_retries(test_tempdir, s3_server, ssl):
+async def test_memtable_flush_retries(manager: ManagerClient, test_tempdir, s3_server):
     '''verify that memtable flush doesn't crash in case storage access keys are incorrect'''
 
     print('Spoof the object-store config')
@@ -288,31 +287,38 @@ async def test_memtable_flush_retries(test_tempdir, s3_server, ssl):
     orig_config = s3_server.config_file
     s3_server.config_file = local_config
 
-    with managed_cluster(test_tempdir, ssl, s3_server) as cluster:
-        print(f'Create keyspace (minio listening at {s3_server.address})')
+    cfg = {'enable_user_defined_functions': False,
+           'object_storage_config_file': str(s3_server.config_file),
+           'experimental_features': ['keyspace-storage-options']}
+    server = await manager.server_add(config=cfg)
 
-        conn = cluster.cql.connect()
-        ks, cf = create_ks_and_cf(conn, s3_server)
-        res = conn.execute(f"SELECT * FROM {ks}.{cf};")
-        rows = {x.name: x.value for x in res}
+    cql = manager.get_cql()
+    print(f'Create keyspace (minio listening at {s3_server.address})')
 
-        print(f'Flush keyspace')
-        flush = asyncio.create_task(cluster.api.flush_keyspace(cluster.ip, ks))
-        print(f'Wait few seconds')
-        await asyncio.sleep(8)
-        print(f'Restore and reload config')
-        shutil.copyfile(orig_config, s3_server.config_file)
-        cluster.reload_config()
-        print(f'Wait for flush to finish')
-        await flush
-        print(f'Check the sstables table')
-        res = conn.execute("SELECT * FROM system.sstables;")
-        ssts = "\n".join(f"{row.location} {row.generation} {row.status}" for row in res)
-        print(f'sstables:\n{ssts}')
+    ks, cf = create_ks_and_cf(cql, s3_server)
+    res = cql.execute(f"SELECT * FROM {ks}.{cf};")
+    rows = {x.name: x.value for x in res}
+
+    print(f'Flush keyspace')
+    flush = asyncio.create_task(manager.api.flush_keyspace(server.ip_addr, ks))
+    print(f'Wait few seconds')
+    await asyncio.sleep(8)
+    print(f'Restore and reload config')
+    shutil.copyfile(orig_config, s3_server.config_file)
+    # this option is not live-updateable, and is here just dur to manager client limitations
+    # the actual config is updated with the copyfile above
+    await manager.server_update_config(server.server_id, 'object_storage_config_file', str(s3_server.config_file))
+    print(f'Wait for flush to finish')
+    await flush
+    print(f'Check the sstables table')
+    res = cql.execute("SELECT * FROM system.sstables;")
+    ssts = "\n".join(f"{row.location} {row.generation} {row.status}" for row in res)
+    print(f'sstables:\n{ssts}')
 
     print('Restart scylla')
-    with managed_cluster(test_tempdir, ssl, s3_server) as cluster:
-        conn = cluster.cql.connect()
-        res = conn.execute(f"SELECT * FROM {ks}.{cf};")
-        have_res = { x.name: x.value for x in res }
-        assert have_res == dict(rows), f'Unexpected table content: {have_res}'
+    await manager.server_restart(server.server_id)
+    cql = await reconnect_driver(manager)
+
+    res = cql.execute(f"SELECT * FROM {ks}.{cf};")
+    have_res = { x.name: x.value for x in res }
+    assert have_res == dict(rows), f'Unexpected table content: {have_res}'
