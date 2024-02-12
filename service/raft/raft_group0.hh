@@ -355,10 +355,6 @@ private:
     // Retries on raft::commit_status_unknown.
     future<> make_raft_config_nonvoter(raft::server_id);
 
-    // Load the initial Raft <-> IP address map as seen by
-    // the gossiper.
-    void load_initial_raft_address_map();
-
     // Returns true if raft is enabled
     future<bool> use_raft();
 };

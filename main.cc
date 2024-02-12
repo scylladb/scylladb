@@ -1792,8 +1792,10 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // Set up group0 service earlier since it is needed by group0 setup just below
             ss.local().set_group0(group0_service, raft_topology_change_enabled);
 
+            const auto generation_number = gms::generation_type(sys_ks.local().increment_and_get_generation().get());
+
             // Load address_map from system.peers and subscribe to gossiper events to keep it updated.
-            ss.local().init_address_map(raft_address_map.local()).get();
+            ss.local().init_address_map(raft_address_map.local(), generation_number).get();
             auto cancel_address_map_subscription = defer_verbose_shutdown("storage service uninit address map", [&ss] {
                 ss.local().uninit_address_map().get();
             });
@@ -1814,7 +1816,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             }).get();
 
             with_scheduling_group(maintenance_scheduling_group, [&] {
-                return ss.local().join_cluster(sys_dist_ks, proxy, gossiper, service::start_hint_manager::yes);
+                return ss.local().join_cluster(sys_dist_ks, proxy, gossiper, service::start_hint_manager::yes, generation_number);
             }).get();
 
             sl_controller.invoke_on_all([&lifecycle_notifier] (qos::service_level_controller& controller) {

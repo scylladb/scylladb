@@ -1238,7 +1238,8 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
         std::unordered_set<gms::inet_address> loaded_endpoints,
         std::unordered_map<gms::inet_address, sstring> loaded_peer_features,
         std::chrono::milliseconds delay,
-        start_hint_manager start_hm) {
+        start_hint_manager start_hm,
+        gms::generation_type new_generation) {
     std::unordered_set<token> bootstrap_tokens;
     gms::application_state_map app_states;
     /* The timestamp of the CDC streams generation that this node has proposed when joining.
@@ -1411,9 +1412,8 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
 
     slogger.info("Starting up server gossip");
 
-    auto generation_number = gms::generation_type(co_await _sys_ks.local().increment_and_get_generation());
     auto advertise = gms::advertise_myself(!replacing_a_node_with_same_ip);
-    co_await _gossiper.start_gossiping(generation_number, app_states, advertise);
+    co_await _gossiper.start_gossiping(new_generation, app_states, advertise);
 
     if (!raft_topology_change_enabled() && should_bootstrap()) {
         // Wait for NORMAL state handlers to finish for existing nodes now, so that connection dropping
@@ -2567,10 +2567,13 @@ void storage_service::set_group0(raft_group0& group0, bool raft_experimental_top
     _raft_experimental_topology = raft_experimental_topology;
 }
 
-future<> storage_service::init_address_map(raft_address_map& address_map) {
+future<> storage_service::init_address_map(raft_address_map& address_map, gms::generation_type new_generation) {
     for (auto [ip, host] : co_await _sys_ks.local().load_host_ids()) {
         address_map.add_or_update_entry(raft::server_id(host.uuid()), ip);
     }
+    const auto& topology = get_token_metadata().get_topology();
+    address_map.add_or_update_entry(raft::server_id{topology.my_host_id().uuid()},
+        topology.my_address(), new_generation);
     _raft_ip_address_updater = make_shared<raft_ip_address_updater>(address_map, *this);
     _gossiper.register_(_raft_ip_address_updater);
 }
@@ -2584,7 +2587,7 @@ bool storage_service::is_topology_coordinator_enabled() const {
 }
 
 future<> storage_service::join_cluster(sharded<db::system_distributed_keyspace>& sys_dist_ks, sharded<service::storage_proxy>& proxy,
-        sharded<gms::gossiper>& gossiper, start_hint_manager start_hm) {
+        sharded<gms::gossiper>& gossiper, start_hint_manager start_hm, gms::generation_type new_generation) {
     assert(this_shard_id() == 0);
 
     set_mode(mode::STARTING);
@@ -2702,7 +2705,7 @@ future<> storage_service::join_cluster(sharded<db::system_distributed_keyspace>&
     }
 
     co_return co_await join_token_ring(sys_dist_ks, proxy, gossiper, std::move(initial_contact_nodes),
-            std::move(loaded_endpoints), std::move(loaded_peer_features), get_ring_delay(), start_hm);
+            std::move(loaded_endpoints), std::move(loaded_peer_features), get_ring_delay(), start_hm, new_generation);
 }
 
 future<> storage_service::replicate_to_all_cores(mutable_token_metadata_ptr tmptr) noexcept {
