@@ -325,6 +325,8 @@ def run_scylla_cmd(pid, dir):
         '--shutdown-announce-in-ms', '0',
         '--maintenance-socket', 'workdir',
         '--service-levels-interval-ms', '500',
+        # Avoid unhelpful "guardrails" warnings
+        '--minimum-replication-factor-warn-threshold', '-1',
         ], env)
 
 # Same as run_scylla_cmd, just use SSL encryption for the CQL port (same
