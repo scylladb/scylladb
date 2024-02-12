@@ -17,7 +17,7 @@ import subprocess
 import sys
 import tempfile
 import textwrap
-from distutils.spawn import find_executable
+from shutil import which
 from typing import NamedTuple
 
 outdir = 'build'
@@ -386,7 +386,7 @@ def thrift_uses_boost_share_ptr():
 
 
 def find_ninja():
-    ninja = find_executable('ninja') or find_executable('ninja-build')
+    ninja = which('ninja') or which('ninja-build')
     if ninja:
         return ninja
     print('Ninja executable (ninja or ninja-build) not found on PATH\n')
