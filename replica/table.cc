@@ -1645,48 +1645,16 @@ future<bool> table::perform_offstrategy_compaction(std::optional<tasks::task_inf
 future<> table::perform_cleanup_compaction(compaction::owned_ranges_ptr sorted_owned_ranges,
                                            std::optional<tasks::task_info> info,
                                            do_flush do_flush) {
+    if (!uses_static_sharding()) {
+        co_return;
+    }
+
     if (do_flush) {
         co_await flush();
     }
-    if (_compaction_groups.size() == 1) {
-        auto& cg = *get_compaction_group(0);
-        co_return co_await get_compaction_manager().perform_cleanup(std::move(sorted_owned_ranges), cg.as_table_state(), info);
-    }
 
-    // candidate ranges for the next compaction_group
-    std::deque<dht::token_range> candidates;
-    for (auto&& range : *sorted_owned_ranges) {
-        candidates.emplace_back(std::move(range));
-    }
-
-    auto cmp = dht::token_comparator();
-    dht::token_range_vector cg_ranges;
-    std::unordered_map<dht::token_range, compaction::owned_ranges_ptr> cg_ranges_map;
-    for (const auto& cg : _compaction_groups) {
-        const auto& cg_range = cg.token_range();
-        while (!candidates.empty()) {
-            auto range = std::move(candidates.front());
-            auto trimmed = range.intersection(cg_range, cmp);
-            if (!trimmed) {
-                assert(!cg_ranges.empty());
-                break;
-            }
-            cg_ranges.emplace_back(*trimmed);
-            candidates.pop_front();
-            if (!trimmed->contains(range, cmp)) {
-                auto remainder = range.subtract(*trimmed, cmp);
-                assert(remainder.size() == 1);
-                candidates.emplace_front(std::move(remainder[0]));
-                break;
-            }
-        }
-        cg_ranges_map[cg_range] = compaction::make_owned_ranges_ptr(std::move(cg_ranges));
-        co_await coroutine::maybe_yield();
-    }
-    co_await parallel_foreach_compaction_group([&] (compaction_group& cg) {
-        auto&& cg_ranges = std::move(cg_ranges_map.at(cg.token_range()));
-        return get_compaction_manager().perform_cleanup(std::move(cg_ranges), cg.as_table_state(), info);
-    });
+    auto& cg = *get_compaction_group(0);
+    co_return co_await get_compaction_manager().perform_cleanup(std::move(sorted_owned_ranges), cg.as_table_state(), info);
 }
 
 unsigned table::estimate_pending_compactions() const {
