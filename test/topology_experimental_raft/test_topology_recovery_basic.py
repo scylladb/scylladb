@@ -45,6 +45,7 @@ async def test_topology_recovery_basic(request, manager: ManagerClient):
     logging.info(f"Restarting hosts {hosts}")
     for srv in servers:
         await restart(manager, srv)
+    cql = await reconnect_driver(manager)
 
     logging.info("Cluster restarted, waiting until driver reconnects to every server")
     hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
