@@ -370,16 +370,37 @@ future<> storage_service::sync_raft_topology_nodes(mutable_token_metadata_ptr tm
         return *used_ips;
     };
 
+    using host_id_to_ip_map_t = std::unordered_map<locator::host_id, gms::inet_address>;
+    auto get_host_id_to_ip_map = [&, map = std::optional<host_id_to_ip_map_t>{}]() mutable -> future<const host_id_to_ip_map_t*> {
+        if (!map.has_value()) {
+            const auto ep_to_id_map = co_await _sys_ks.local().load_host_ids();
+            map.emplace();
+            map->reserve(ep_to_id_map.size());
+            for (const auto& [ep, id]: ep_to_id_map) {
+                const auto [it, inserted] = map->insert({id, ep});
+                if (!inserted) {
+                    on_internal_error(slogger, ::format("duplicate IP for host_id {}, first IP {}, second IP {}",
+                        id, it->second, ep));
+                }
+            }
+        }
+        co_return &*map;
+    };
+
     std::vector<future<>> sys_ks_futures;
+
+    auto remove_ip = [&](inet_address ip) -> future<> {
+        sys_ks_futures.push_back(_sys_ks.local().remove_endpoint(ip));
+
+        if (_gossiper.get_endpoint_state_ptr(ip) && !get_used_ips().contains(ip)) {
+            co_await _gossiper.force_remove_endpoint(ip, gms::null_permit_id);
+            co_await notify_left(ip);
+        }
+    };
 
     auto process_left_node = [&] (raft::server_id id) -> future<> {
         if (const auto ip = am.find(id)) {
-            sys_ks_futures.push_back(_sys_ks.local().remove_endpoint(*ip));
-
-            if (_gossiper.get_endpoint_state_ptr(*ip) && !get_used_ips().contains(*ip)) {
-                co_await _gossiper.force_remove_endpoint(*ip, gms::null_permit_id);
-                co_await notify_left(*ip);
-            }
+            co_await remove_ip(*ip);
         }
 
         // FIXME: when removing a node from the cluster through `removenode`, we should ban it early,
@@ -409,6 +430,11 @@ future<> storage_service::sync_raft_topology_nodes(mutable_token_metadata_ptr tm
             // In replace-with-same-ip scenario the replaced node IP will be the same
             // as ours, we shouldn't put it into system.peers.
 
+            // We need to fetch host_id_map before the update_peer_info call below,
+            // get_host_id_to_ip_map checks for duplicates and update_peer_info can
+            // add one.
+            const auto& host_id_to_ip_map = *(co_await get_host_id_to_ip_map());
+
             // Some state that is used to fill in 'peeers' table is still propagated over gossiper.
             // Populate the table with the state from the gossiper here since storage_service::on_change()
             // (which is called each time gossiper state changes) may have skipped it because the tokens
@@ -424,6 +450,10 @@ future<> storage_service::sync_raft_topology_nodes(mutable_token_metadata_ptr tm
             sys_ks_futures.push_back(_sys_ks.local().update_peer_info(*ip, info));
             if (!prev_normal.contains(id)) {
                 co_await notify_joined(*ip);
+            }
+
+            if (const auto it = host_id_to_ip_map.find(host_id); it != host_id_to_ip_map.end() && it->second != *ip) {
+                co_await remove_ip(it->second);
             }
         }
         update_topology(host_id, ip, rs);
