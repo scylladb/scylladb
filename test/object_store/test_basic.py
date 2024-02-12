@@ -201,9 +201,8 @@ async def test_basic(manager: ManagerClient, s3_server):
     assert not rows, 'Unexpected entries in registry'
 
 
-@pytest.mark.skip(reason="Rework")
 @pytest.mark.asyncio
-async def test_garbage_collect(test_tempdir, s3_server, ssl):
+async def test_garbage_collect(manager: ManagerClient, s3_server):
     '''verify ownership table is garbage-collected on boot'''
 
     def list_bucket(s3_server):
@@ -219,34 +218,40 @@ async def test_garbage_collect(test_tempdir, s3_server, ssl):
 
     sstable_entries = []
 
-    with managed_cluster(test_tempdir, ssl, s3_server) as cluster:
-        print(f'Create keyspace (minio listening at {s3_server.address})')
-        conn = cluster.cql.connect()
-        ks, cf = create_ks_and_cf(conn, s3_server)
+    cfg = {'enable_user_defined_functions': False,
+           'object_storage_config_file': str(s3_server.config_file),
+           'experimental_features': ['keyspace-storage-options']}
+    server = await manager.server_add(config=cfg)
 
-        await cluster.api.flush_keyspace(cluster.ip, ks)
-        # Mark the sstables as "removing" to simulate the problem
-        res = conn.execute("SELECT * FROM system.sstables;")
-        for row in res:
-            sstable_entries.append((row.location, row.generation))
-        print(f'Found entries: {[ str(ent[1]) for ent in sstable_entries ]}')
-        for loc, gen in sstable_entries:
-            conn.execute("UPDATE system.sstables SET status = 'removing'"
-                         f" WHERE location = '{loc}' AND generation = {gen};")
+    cql = manager.get_cql()
+
+    print(f'Create keyspace (minio listening at {s3_server.address})')
+    ks, cf = create_ks_and_cf(cql, s3_server)
+
+    await manager.api.flush_keyspace(server.ip_addr, ks)
+    # Mark the sstables as "removing" to simulate the problem
+    res = cql.execute("SELECT * FROM system.sstables;")
+    for row in res:
+        sstable_entries.append((row.location, row.generation))
+    print(f'Found entries: {[ str(ent[1]) for ent in sstable_entries ]}')
+    for loc, gen in sstable_entries:
+        cql.execute("UPDATE system.sstables SET status = 'removing'"
+                     f" WHERE location = '{loc}' AND generation = {gen};")
 
     print('Restart scylla')
-    with managed_cluster(test_tempdir, ssl, s3_server) as cluster:
-        conn = cluster.cql.connect()
-        res = conn.execute(f"SELECT * FROM {ks}.{cf};")
-        have_res = {x.name: x.value for x in res}
-        # Must be empty as no sstables should have been picked up
-        assert not have_res, f'Sstables not cleaned, got {have_res}'
-        # Make sure objects also disappeared
-        objects = list_bucket(s3_server)
-        print(f'Found objects: {[ objects ]}')
-        for o in objects:
-            for ent in sstable_entries:
-                assert not o.startswith(str(ent[1])), f'Sstable object not cleaned, found {o}'
+    await manager.server_restart(server.server_id)
+    cql = await reconnect_driver(manager)
+
+    res = cql.execute(f"SELECT * FROM {ks}.{cf};")
+    have_res = {x.name: x.value for x in res}
+    # Must be empty as no sstables should have been picked up
+    assert not have_res, f'Sstables not cleaned, got {have_res}'
+    # Make sure objects also disappeared
+    objects = list_bucket(s3_server)
+    print(f'Found objects: {[ objects ]}')
+    for o in objects:
+        for ent in sstable_entries:
+            assert not o.startswith(str(ent[1])), f'Sstable object not cleaned, found {o}'
 
 
 @pytest.mark.skip(reason="Rework")
