@@ -2733,21 +2733,34 @@ static std::optional<rjson::value> action_result(
     }, action._action);
 }
 
+}
+
 // Print an attribute_path_map_node<action> as the list of paths it contains:
-static std::ostream& operator<<(std::ostream& out, const attribute_path_map_node<parsed::update_expression::action>& h) {
+template <> struct fmt::formatter<alternator::attribute_path_map_node<alternator::parsed::update_expression::action>> {
+    constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
+    // this function recursively call into itself, so we have to forward declare it.
+    auto format(const alternator::attribute_path_map_node<alternator::parsed::update_expression::action>& h, fmt::format_context& ctx) const
+      -> decltype(ctx.out());
+};
+
+auto fmt::formatter<alternator::attribute_path_map_node<alternator::parsed::update_expression::action>>::format(const alternator::attribute_path_map_node<alternator::parsed::update_expression::action>& h, fmt::format_context& ctx) const
+    -> decltype(ctx.out()) {
+    auto out = ctx.out();
     if (h.has_value()) {
-        out << " " << h.get_value()._path;
+        out = fmt::format_to(out, " {}", h.get_value()._path);
     } else if (h.has_members()) {
         for (auto& member : h.get_members()) {
-            out << *member.second;
+            out = fmt::format_to(out, "{}", *member.second);
         }
     } else if (h.has_indexes()) {
         for (auto& index : h.get_indexes()) {
-            out << *index.second;
+            out = fmt::format_to(out, "{}", *index.second);
         }
     }
     return out;
 }
+
+namespace alternator {
 
 // Apply the hierarchy of actions in an attribute_path_map_node<action> to a
 // JSON object which uses DynamoDB's serialization conventions. The complete,
