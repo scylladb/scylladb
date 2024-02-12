@@ -452,6 +452,10 @@ future<> storage_service::sync_raft_topology_nodes(mutable_token_metadata_ptr tm
             }
 
             if (const auto it = host_id_to_ip_map.find(host_id); it != host_id_to_ip_map.end() && it->second != *ip) {
+                utils::get_local_injector().inject("crash-before-prev-ip-removed", [] {
+                    slogger.info("crash-before-prev-ip-removed hit, killing the node");
+                    _exit(1);
+                });
                 co_await remove_ip(it->second);
             }
         }
@@ -779,6 +783,7 @@ class storage_service::raft_ip_address_updater: public gms::i_endpoint_state_cha
                 {
                     co_return;
                 }
+                co_await utils::get_local_injector().inject("ip-change-raft-sync-delay", std::chrono::milliseconds(500));
                 co_await _ss.mutate_token_metadata([this, hid](mutable_token_metadata_ptr t) {
                     return _ss.sync_raft_topology_nodes(std::move(t), hid, {});
                 });
