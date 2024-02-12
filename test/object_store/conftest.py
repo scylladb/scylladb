@@ -12,6 +12,7 @@ import pathlib
 sys.path.insert(1, sys.path[0] + '/../..')
 from test.pylib.minio_server import MinioServer
 from test.pylib.cql_repl import conftest
+from test.topology.conftest import *
 
 
 def pytest_addoption(parser):
@@ -26,6 +27,15 @@ def pytest_addoption(parser):
     s3_options.addoption('--aws-secret-key')
     s3_options.addoption('--aws-region')
     s3_options.addoption('--s3-server-bucket')
+
+    parser.addoption('--manager-api', action='store', required=True,
+                     help='Manager unix socket path')
+    parser.addoption('--mode', action='store', required=True,
+                     help='Scylla build mode. Tests can use it to adjust their behavior.')
+    parser.addoption('--auth_username', action='store', default=None,
+                        help='username for authentication')
+    parser.addoption('--auth_password', action='store', default=None,
+                        help='password for authentication')
 
 
 class S3_Server:

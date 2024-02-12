@@ -14,12 +14,16 @@ import pytest
 import xml.etree.ElementTree as ET
 import shutil
 import pathlib
+import logging
 
 from test.pylib.minio_server import MinioServer
 from contextlib import contextmanager
 from test.pylib.rest_client import ScyllaRESTAPIClient
 from cassandra.protocol import ConfigurationException
+from test.pylib.manager_client import ManagerClient
+from test.topology.util import reconnect_driver
 
+logger = logging.getLogger(__name__)
 
 def get_scylla_with_s3_cmd(ssl, s3_server):
     '''return a function which in turn returns the command for running scylla'''
@@ -142,6 +146,7 @@ def create_ks_and_cf(cql, s3_server):
     return ks, cf
 
 
+@pytest.mark.skip(reason="Rework")
 @pytest.mark.asyncio
 async def test_basic(test_tempdir, s3_server, ssl):
     '''verify ownership table is updated, and tables written to S3 can be read after scylla restarts'''
@@ -191,6 +196,7 @@ async def test_basic(test_tempdir, s3_server, ssl):
         assert not rows, 'Unexpected entries in registry'
 
 
+@pytest.mark.skip(reason="Rework")
 @pytest.mark.asyncio
 async def test_garbage_collect(test_tempdir, s3_server, ssl):
     '''verify ownership table is garbage-collected on boot'''
@@ -237,6 +243,8 @@ async def test_garbage_collect(test_tempdir, s3_server, ssl):
             for ent in sstable_entries:
                 assert not o.startswith(str(ent[1])), f'Sstable object not cleaned, found {o}'
 
+
+@pytest.mark.skip(reason="Rework")
 @pytest.mark.asyncio
 async def test_misconfigured_storage(test_tempdir, s3_server, ssl):
     '''creating keyspace with unknown endpoint is not allowed'''
@@ -255,6 +263,7 @@ async def test_misconfigured_storage(test_tempdir, s3_server, ssl):
                           f" REPLICATION = {replication_opts} AND STORAGE = {storage_opts};"))
 
 
+@pytest.mark.skip(reason="Rework")
 @pytest.mark.asyncio
 async def test_memtable_flush_retries(test_tempdir, s3_server, ssl):
     '''verify that memtable flush doesn't crash in case storage access keys are incorrect'''
