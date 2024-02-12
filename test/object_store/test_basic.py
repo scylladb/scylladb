@@ -146,54 +146,59 @@ def create_ks_and_cf(cql, s3_server):
     return ks, cf
 
 
-@pytest.mark.skip(reason="Rework")
 @pytest.mark.asyncio
-async def test_basic(test_tempdir, s3_server, ssl):
+async def test_basic(manager: ManagerClient, s3_server):
     '''verify ownership table is updated, and tables written to S3 can be read after scylla restarts'''
 
-    with managed_cluster(test_tempdir, ssl, s3_server) as cluster:
-        print(f'Create keyspace (minio listening at {s3_server.address})')
-        conn = cluster.cql.connect()
-        ks, cf = create_ks_and_cf(conn, s3_server)
+    cfg = {'enable_user_defined_functions': False,
+           'object_storage_config_file': str(s3_server.config_file),
+           'experimental_features': ['keyspace-storage-options']}
+    server = await manager.server_add(config=cfg)
 
-        assert not os.path.exists(os.path.join(test_tempdir, f'data/{ks}')), "S3-backed keyspace has local directory created"
-        # Sanity check that the path is constructed correctly
-        assert os.path.exists(os.path.join(test_tempdir, 'data/system')), "Datadir is elsewhere"
+    cql = manager.get_cql()
+    workdir = await manager.server_get_workdir(server.server_id)
+    print(f'Create keyspace (minio listening at {s3_server.address})')
+    ks, cf = create_ks_and_cf(cql, s3_server)
 
-        desc = conn.execute(f"DESCRIBE KEYSPACE {ks}").one().create_statement
-        # The storage_opts wraps options with '{ <options> }' while the DESCRIBE
-        # does it like '{<options>}' so strip the corner branches and spaces for check
-        assert f"{{'type': 'S3', 'bucket': '{s3_server.bucket_name}', 'endpoint': '{s3_server.address}'}}" in desc, "DESCRIBE generates unexpected storage options"
+    assert not os.path.exists(os.path.join(workdir, f'data/{ks}')), "S3-backed keyspace has local directory created"
+    # Sanity check that the path is constructed correctly
+    assert os.path.exists(os.path.join(workdir, 'data/system')), "Datadir is elsewhere"
 
-        res = conn.execute(f"SELECT * FROM {ks}.{cf};")
-        rows = {x.name: x.value for x in res}
-        assert len(rows) > 0, 'Test table is empty'
+    desc = cql.execute(f"DESCRIBE KEYSPACE {ks}").one().create_statement
+    # The storage_opts wraps options with '{ <options> }' while the DESCRIBE
+    # does it like '{<options>}' so strip the corner branches and spaces for check
+    assert f"{{'type': 'S3', 'bucket': '{s3_server.bucket_name}', 'endpoint': '{s3_server.address}'}}" in desc, "DESCRIBE generates unexpected storage options"
 
-        await cluster.api.flush_keyspace(cluster.ip, ks)
+    res = cql.execute(f"SELECT * FROM {ks}.{cf};")
+    rows = {x.name: x.value for x in res}
+    assert len(rows) > 0, 'Test table is empty'
 
-        # Check that the ownership table is populated properly
-        res = conn.execute("SELECT * FROM system.sstables;")
-        for row in res:
-            assert row.location.startswith(test_tempdir), \
-                f'Unexpected entry location in registry: {row.location}'
-            assert row.status == 'sealed', f'Unexpected entry status in registry: {row.status}'
+    await manager.api.flush_keyspace(server.ip_addr, ks)
+
+    # Check that the ownership table is populated properly
+    res = cql.execute("SELECT * FROM system.sstables;")
+    for row in res:
+        assert row.location.startswith(workdir), \
+            f'Unexpected entry location in registry: {row.location}'
+        assert row.status == 'sealed', f'Unexpected entry status in registry: {row.status}'
 
     print('Restart scylla')
-    with managed_cluster(test_tempdir, ssl, s3_server) as cluster:
-        # Shouldn't be recreated by populator code
-        assert not os.path.exists(os.path.join(test_tempdir, f'data/{ks}')), "S3-backed keyspace has local directory resurrected"
+    await manager.server_restart(server.server_id)
+    cql = await reconnect_driver(manager)
 
-        conn = cluster.cql.connect()
-        res = conn.execute(f"SELECT * FROM {ks}.{cf};")
-        have_res = {x.name: x.value for x in res}
-        assert have_res == rows, f'Unexpected table content: {have_res}'
+    # Shouldn't be recreated by populator code
+    assert not os.path.exists(os.path.join(workdir, f'data/{ks}')), "S3-backed keyspace has local directory resurrected"
 
-        print('Drop table')
-        conn.execute(f"DROP TABLE {ks}.{cf};")
-        # Check that the ownership table is de-populated
-        res = conn.execute("SELECT * FROM system.sstables;")
-        rows = "\n".join(f"{row.location} {row.status}" for row in res)
-        assert not rows, 'Unexpected entries in registry'
+    res = cql.execute(f"SELECT * FROM {ks}.{cf};")
+    have_res = {x.name: x.value for x in res}
+    assert have_res == rows, f'Unexpected table content: {have_res}'
+
+    print('Drop table')
+    cql.execute(f"DROP TABLE {ks}.{cf};")
+    # Check that the ownership table is de-populated
+    res = cql.execute("SELECT * FROM system.sstables;")
+    rows = "\n".join(f"{row.location} {row.status}" for row in res)
+    assert not rows, 'Unexpected entries in registry'
 
 
 @pytest.mark.skip(reason="Rework")
