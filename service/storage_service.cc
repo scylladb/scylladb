@@ -673,10 +673,11 @@ future<> storage_service::topology_state_load() {
         }
     }
 
-    if (!_topology_state_machine._topology.committed_cdc_generations.empty()) {
-        auto gen_id = _topology_state_machine._topology.committed_cdc_generations.back();
-        rtlogger.debug("topology_state_load: the last committed CDC generation ID: {}", gen_id);
+    for (const auto& gen_id : _topology_state_machine._topology.committed_cdc_generations) {
         co_await _cdc_gens.local().handle_cdc_generation(gen_id);
+        if (gen_id == _topology_state_machine._topology.committed_cdc_generations.back()) {
+            rtlogger.debug("topology_state_load: the last committed CDC generation ID: {}", gen_id);
+        }
     }
 
     for (auto& id : _topology_state_machine._topology.ignored_nodes) {
