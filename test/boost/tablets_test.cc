@@ -1019,7 +1019,7 @@ SEASTAR_THREAD_TEST_CASE(test_decommission_two_racks) {
                 auto rack1 = tm->get_topology().get_rack(tinfo.replicas[0].host);
                 auto rack2 = tm->get_topology().get_rack(tinfo.replicas[1].host);
                 BOOST_REQUIRE(rack1 != rack2);
-                co_return;
+                return make_ready_future<>();
             }).get();
         }
     }).get();

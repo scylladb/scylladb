@@ -4661,7 +4661,6 @@ storage_service::describe_ring_for_table(const sstring& keyspace_name, const sst
             tr._end_token = range.end()->value().to_sstring();
         }
         for (auto& r : replicas) {
-            co_await coroutine::maybe_yield();
             dht::endpoint_details details;
             auto& hostid = r.host;
             auto endpoint = host2ip(hostid);
@@ -4673,6 +4672,7 @@ storage_service::describe_ring_for_table(const sstring& keyspace_name, const sst
             tr._endpoint_details.push_back(std::move(details));
         }
         ranges.push_back(std::move(tr));
+        return make_ready_future<>();
     });
     co_return ranges;
 }
