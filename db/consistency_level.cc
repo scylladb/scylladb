@@ -32,6 +32,11 @@ size_t quorum_for(const locator::effective_replication_map& erm) {
     return replication_factor ? (replication_factor / 2) + 1 : 0;
 }
 
+static size_t local_quorum_for(const locator::network_topology_strategy& nrs, const sstring& dc) {
+    size_t replication_factor = nrs.get_replication_factor(dc);
+    return replication_factor ? (replication_factor / 2) + 1 : 0;
+}
+
 size_t local_quorum_for(const locator::effective_replication_map& erm, const sstring& dc) {
     using namespace locator;
 
@@ -40,8 +45,7 @@ size_t local_quorum_for(const locator::effective_replication_map& erm, const sst
     if (rs.get_type() == replication_strategy_type::network_topology) {
         const network_topology_strategy* nrs =
             static_cast<const network_topology_strategy*>(&rs);
-        size_t replication_factor = nrs->get_replication_factor(dc);
-        return replication_factor ? (replication_factor / 2) + 1 : 0;
+        return local_quorum_for(*nrs, dc);
     }
 
     return quorum_for(erm);
@@ -72,7 +76,7 @@ size_t block_for_each_quorum(const locator::effective_replication_map& erm) {
         size_t n = 0;
 
         for (auto& dc : nrs->get_datacenters()) {
-            n += local_quorum_for(erm, dc);
+            n += local_quorum_for(*nrs, dc);
         }
 
         return n;
@@ -160,8 +164,11 @@ bool assure_sufficient_live_nodes_each_quorum(
     auto& rs = erm.get_replication_strategy();
 
     if (rs.get_type() == replication_strategy_type::network_topology) {
+        const locator::network_topology_strategy* nrs =
+            static_cast<const locator::network_topology_strategy*>(&rs);
+
         for (auto& entry : count_per_dc_endpoints(erm, live_endpoints, pending_endpoints)) {
-            auto dc_block_for = local_quorum_for(erm, entry.first);
+            auto dc_block_for = local_quorum_for(*nrs, entry.first);
             auto dc_live = entry.second.live;
             auto dc_pending = entry.second.pending;
 
@@ -366,8 +373,11 @@ is_sufficient_live_nodes(consistency_level cl,
         auto& rs = erm.get_replication_strategy();
 
         if (rs.get_type() == replication_strategy_type::network_topology) {
+            const locator::network_topology_strategy* nrs =
+                static_cast<const locator::network_topology_strategy*>(&rs);
+
             for (auto& entry : count_per_dc_endpoints(erm, live_endpoints)) {
-                if (entry.second.live < local_quorum_for(erm, entry.first)) {
+                if (entry.second.live < local_quorum_for(*nrs, entry.first)) {
                     return false;
                 }
             }
