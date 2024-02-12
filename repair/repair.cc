@@ -2071,7 +2071,6 @@ future<> repair_service::repair_tablets(repair_uniq_id rid, sstring keyspace_nam
             shard_id master_shard_id;
             // Repair all tablets belong to this node
             for (auto& r : replicas) {
-                co_await coroutine::maybe_yield();
                 if (r.host == myhostid) {
                     master_shard_id = r.shard;
                     found = true;
@@ -2084,6 +2083,7 @@ future<> repair_service::repair_tablets(repair_uniq_id rid, sstring keyspace_nam
             if (found) {
                 metas.push_back(repair_tablet_meta{id, range, myhostid, master_shard_id, replicas});
             }
+            return make_ready_future<>();
         });
 
         size_t nr = 0;

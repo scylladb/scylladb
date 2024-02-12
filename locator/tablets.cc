@@ -454,11 +454,11 @@ future<bool> check_tablet_replica_shards(const tablet_metadata& tm, host_id this
     for (const auto& [table_id, tmap] : tm.all_tables()) {
         co_await tmap.for_each_tablet([this_host, &valid] (locator::tablet_id tid, const tablet_info& tinfo) -> future<> {
             for (const auto& replica : tinfo.replicas) {
-                co_await coroutine::maybe_yield();
                 if (replica.host == this_host) {
                     valid &= replica.shard < smp::count;
                 }
             }
+            return make_ready_future<>();
         });
         if (!valid) {
             break;

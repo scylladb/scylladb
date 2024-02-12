@@ -76,7 +76,6 @@ public:
             auto& tmap = tmap_;
             co_await tmap.for_each_tablet([&] (tablet_id tid, const tablet_info& ti) -> future<> {
                 for (auto&& replica : get_replicas_for_tablet_load(ti, tmap.get_tablet_transition_info(tid))) {
-                    co_await coroutine::maybe_yield();
                     if (host && *host != replica.host) {
                         continue;
                     }
@@ -88,6 +87,7 @@ public:
                         n._shards[replica.shard].load += 1;
                     }
                 }
+                return make_ready_future<>();
             });
         }
         for (auto&& n : _nodes) {

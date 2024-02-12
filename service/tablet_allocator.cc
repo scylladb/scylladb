@@ -636,7 +636,6 @@ public:
                 // We reflect migrations in the load as if they already happened,
                 // optimistically assuming that they will succeed.
                 for (auto&& replica : get_replicas_for_tablet_load(ti, trinfo)) {
-                    co_await coroutine::maybe_yield();
                     if (nodes.contains(replica.host)) {
                         nodes[replica.host].tablet_count += 1;
                         // This invariant is assumed later.
@@ -646,6 +645,8 @@ public:
                         }
                     }
                 }
+
+                return make_ready_future<>();
             });
         }
 
@@ -767,7 +768,6 @@ public:
                 }
 
                 for (auto&& replica : get_replicas_for_tablet_load(ti, trinfo)) {
-                    co_await coroutine::maybe_yield();
                     if (!nodes.contains(replica.host)) {
                         continue;
                     }
@@ -781,6 +781,8 @@ public:
                         shard_load_info.candidates.emplace(global_tablet_id {table, tid});
                     }
                 }
+
+                return make_ready_future<>();
             });
         }
 
