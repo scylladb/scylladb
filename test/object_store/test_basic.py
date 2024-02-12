@@ -254,23 +254,26 @@ async def test_garbage_collect(manager: ManagerClient, s3_server):
             assert not o.startswith(str(ent[1])), f'Sstable object not cleaned, found {o}'
 
 
-@pytest.mark.skip(reason="Rework")
 @pytest.mark.asyncio
-async def test_misconfigured_storage(test_tempdir, s3_server, ssl):
+async def test_misconfigured_storage(manager: ManagerClient, s3_server):
     '''creating keyspace with unknown endpoint is not allowed'''
     # scylladb/scylladb#15074
-    with managed_cluster(test_tempdir, ssl, s3_server) as cluster:
-        print(f'Create keyspace (minio listening at {s3_server.address})')
-        replication_opts = format_tuples({'class': 'NetworkTopologyStrategy',
-                                          'replication_factor': '1'})
-        storage_opts = format_tuples(type='S3',
-                                     endpoint='unknown_endpoint',
-                                     bucket=s3_server.bucket_name)
+    cfg = {'enable_user_defined_functions': False,
+           'object_storage_config_file': str(s3_server.config_file),
+           'experimental_features': ['keyspace-storage-options']}
+    server = await manager.server_add(config=cfg)
 
-        conn = cluster.cql.connect()
-        with pytest.raises(ConfigurationException):
-            conn.execute((f"CREATE KEYSPACE test_ks WITH"
-                          f" REPLICATION = {replication_opts} AND STORAGE = {storage_opts};"))
+    cql = manager.get_cql()
+    print(f'Create keyspace (minio listening at {s3_server.address})')
+    replication_opts = format_tuples({'class': 'NetworkTopologyStrategy',
+                                      'replication_factor': '1'})
+    storage_opts = format_tuples(type='S3',
+                                 endpoint='unknown_endpoint',
+                                 bucket=s3_server.bucket_name)
+
+    with pytest.raises(ConfigurationException):
+        cql.execute((f"CREATE KEYSPACE test_ks WITH"
+                      f" REPLICATION = {replication_opts} AND STORAGE = {storage_opts};"))
 
 
 @pytest.mark.skip(reason="Rework")
