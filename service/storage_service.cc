@@ -731,7 +731,7 @@ class storage_service::raft_ip_address_updater: public gms::i_endpoint_state_cha
     storage_service& _ss;
 
     future<>
-    on_endpoint_change(gms::inet_address endpoint, gms::endpoint_state_ptr ep_state, const char* ev) {
+    on_endpoint_change(gms::inet_address endpoint, gms::endpoint_state_ptr ep_state, gms::permit_id permit_id, const char* ev) {
         auto app_state_ptr = ep_state->get_application_state_ptr(gms::application_state::HOST_ID);
         if (!app_state_ptr) {
             co_return;
@@ -741,9 +741,25 @@ class storage_service::raft_ip_address_updater: public gms::i_endpoint_state_cha
 
         const auto prev_ip = _address_map.find(id);
         _address_map.add_or_update_entry(id, endpoint, ep_state->get_heart_beat_state().get_generation());
+        if (prev_ip == endpoint) {
+            co_return;
+        }
+        if (_address_map.find(id) == prev_ip) {
+            // Address map refused to update IP for the host_id,
+            // this means prev_ip has higher generation than endpoint.
+            // We can immediately remove endpoint from gossiper
+            // since it represents and old IP (before an IP change)
+            // for the given host_id. This is not strictly
+            // necessary, but it reduces the noice circulated
+            // in gossiper messages and allows for clearer
+            // expectations of the gossiper state in tests.
+
+            co_await _ss._gossiper.force_remove_endpoint(endpoint, permit_id);
+            co_return;
+        }
 
         // If the host_id <-> IP mapping has changed, we need to update system tables, token_metadat and erm.
-        if (_ss.raft_topology_change_enabled() && prev_ip != endpoint && _address_map.find(id) == endpoint) {
+        if (_ss.raft_topology_change_enabled()) {
             rslog.debug("raft_ip_address_updater::on_endpoint_change({}), host_id {}, "
                         "ip changed from [{}] to [{}], "
                         "waiting for group 0 read/apply mutex before reloading Raft topology state...",
@@ -777,8 +793,8 @@ public:
     {}
 
     virtual future<>
-    on_join(gms::inet_address endpoint, gms::endpoint_state_ptr ep_state, gms::permit_id) override {
-        return on_endpoint_change(endpoint, ep_state, "on_join");
+    on_join(gms::inet_address endpoint, gms::endpoint_state_ptr ep_state, gms::permit_id permit_id) override {
+        return on_endpoint_change(endpoint, ep_state, permit_id, "on_join");
     }
 
     virtual future<>
@@ -788,8 +804,8 @@ public:
     }
 
     virtual future<>
-    on_alive(gms::inet_address endpoint, gms::endpoint_state_ptr ep_state, gms::permit_id) override {
-        return on_endpoint_change(endpoint, ep_state, "on_alive");
+    on_alive(gms::inet_address endpoint, gms::endpoint_state_ptr ep_state, gms::permit_id permit_id) override {
+        return on_endpoint_change(endpoint, ep_state, permit_id, "on_alive");
     }
 
     virtual future<>
@@ -806,8 +822,8 @@ public:
     }
 
     virtual future<>
-    on_restart(gms::inet_address endpoint, gms::endpoint_state_ptr ep_state, gms::permit_id) override {
-        return on_endpoint_change(endpoint, ep_state, "on_restart");
+    on_restart(gms::inet_address endpoint, gms::endpoint_state_ptr ep_state, gms::permit_id permit_id) override {
+        return on_endpoint_change(endpoint, ep_state, permit_id, "on_restart");
     }
 };
 
