@@ -201,13 +201,6 @@ topology_mutation_builder& topology_mutation_builder::del_session() {
     return del("session");
 }
 
-topology_mutation_builder& topology_mutation_builder::set_current_cdc_generation_id(
-        const cdc::generation_id_v2& value) {
-    apply_atomic("current_cdc_generation_timestamp", value.ts);
-    apply_atomic("current_cdc_generation_uuid", value.id);
-    return *this;
-}
-
 topology_mutation_builder& topology_mutation_builder::set_new_cdc_generation_data_uuid(
         const utils::UUID& value) {
     return apply_atomic("new_cdc_generation_data_uuid", value);
@@ -232,9 +225,11 @@ topology_mutation_builder& topology_mutation_builder::add_enabled_features(const
     return apply_set("enabled_features", collection_apply_mode::update, features | boost::adaptors::transformed([] (const auto& f) { return sstring(f); }));
 }
 
-topology_mutation_builder& topology_mutation_builder::add_unpublished_cdc_generation(const cdc::generation_id_v2& value) {
+topology_mutation_builder& topology_mutation_builder::add_new_committed_cdc_generation(const cdc::generation_id_v2& value) {
     auto dv = make_tuple_value(db::cdc_generation_ts_id_type, tuple_type_impl::native_type({value.ts, timeuuid_native_type{value.id}}));
-    return apply_set("unpublished_cdc_generations", collection_apply_mode::update, std::vector<data_value>{std::move(dv)});
+    apply_set("committed_cdc_generations", collection_apply_mode::update, std::vector<data_value>{dv});
+    apply_set("unpublished_cdc_generations", collection_apply_mode::update, std::vector<data_value>{std::move(dv)});
+    return *this;
 }
 
 topology_mutation_builder& topology_mutation_builder::add_ignored_nodes(const std::unordered_set<raft::server_id>& value) {

@@ -421,7 +421,7 @@ future<> storage_service::sync_raft_topology_nodes(mutable_token_metadata_ptr tm
             sys_ks_futures.push_back(_sys_ks.local().update_tokens(rs.ring.value().tokens));
             co_await _gossiper.add_local_application_state({
                 { gms::application_state::TOKENS, gms::versioned_value::tokens(rs.ring.value().tokens) },
-                { gms::application_state::CDC_GENERATION_ID, gms::versioned_value::cdc_generation_id(_topology_state_machine._topology.current_cdc_generation_id) },
+                { gms::application_state::CDC_GENERATION_ID, gms::versioned_value::cdc_generation_id(_topology_state_machine._topology.committed_cdc_generations.back()) },
                 { gms::application_state::STATUS, gms::versioned_value::normal(rs.ring.value().tokens) }
             });
         } else if (ip && !is_me(*ip)) {
@@ -673,9 +673,10 @@ future<> storage_service::topology_state_load() {
         }
     }
 
-    if (auto gen_id = _topology_state_machine._topology.current_cdc_generation_id) {
-        rtlogger.debug("topology_state_load: current CDC generation ID: {}", *gen_id);
-        co_await _cdc_gens.local().handle_cdc_generation(*gen_id);
+    if (!_topology_state_machine._topology.committed_cdc_generations.empty()) {
+        auto gen_id = _topology_state_machine._topology.committed_cdc_generations.back();
+        rtlogger.debug("topology_state_load: the last committed CDC generation ID: {}", gen_id);
+        co_await _cdc_gens.local().handle_cdc_generation(gen_id);
     }
 
     for (auto& id : _topology_state_machine._topology.ignored_nodes) {
@@ -4339,7 +4340,7 @@ future<> storage_service::raft_rebuild(sstring source_dc) {
 }
 
 future<> storage_service::raft_check_and_repair_cdc_streams() {
-    std::optional<cdc::generation_id_v2> curr_gen;
+    std::optional<cdc::generation_id_v2> last_committed_gen;
 
     while (true) {
         rtlogger.info("request check_and_repair_cdc_streams, refreshing topology");
@@ -4351,16 +4352,16 @@ future<> storage_service::raft_check_and_repair_cdc_streams() {
                 "check_and_repair_cdc_streams: a different topology request is already pending, try again later"};
         }
 
-        curr_gen = _topology_state_machine._topology.current_cdc_generation_id;
-        if (!curr_gen) {
-            slogger.error("check_and_repair_cdc_streams: no current CDC generation, requesting a new one.");
+        if (_topology_state_machine._topology.committed_cdc_generations.empty()) {
+            slogger.error("check_and_repair_cdc_streams: no committed CDC generations, requesting a new one.");
         } else {
-            auto gen = co_await _sys_ks.local().read_cdc_generation(curr_gen->id);
+            last_committed_gen = _topology_state_machine._topology.committed_cdc_generations.back();
+            auto gen = co_await _sys_ks.local().read_cdc_generation(last_committed_gen->id);
             if (cdc::is_cdc_generation_optimal(gen, get_token_metadata())) {
-                cdc_log.info("CDC generation {} does not need repair", curr_gen);
+                cdc_log.info("CDC generation {} does not need repair", last_committed_gen);
                 co_return;
             }
-            cdc_log.info("CDC generation {} needs repair, requesting a new one", curr_gen);
+            cdc_log.info("CDC generation {} needs repair, requesting a new one", last_committed_gen);
         }
 
         topology_mutation_builder builder(guard.write_timestamp());
@@ -4377,9 +4378,12 @@ future<> storage_service::raft_check_and_repair_cdc_streams() {
         break;
     }
 
-    // Wait until the current CDC generation changes.
-    co_await _topology_state_machine.event.when([this, &curr_gen] {
-        return curr_gen != _topology_state_machine._topology.current_cdc_generation_id;
+    // Wait until we commit a new CDC generation.
+    co_await _topology_state_machine.event.when([this, &last_committed_gen] {
+        auto gen = _topology_state_machine._topology.committed_cdc_generations.empty()
+                ? std::nullopt
+                : std::optional(_topology_state_machine._topology.committed_cdc_generations.back());
+        return last_committed_gen != gen;
     });
 }
 

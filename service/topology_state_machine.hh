@@ -149,8 +149,8 @@ struct topology {
     // Pending global topology request (i.e. not related to any specific node).
     std::optional<global_topology_request> global_request;
 
-    // The ID of the last introduced CDC generation.
-    std::optional<cdc::generation_id_v2> current_cdc_generation_id;
+    // The IDs of the committed CDC generations sorted by timestamps.
+    std::vector<cdc::generation_id_v2> committed_cdc_generations;
 
     // This is the time UUID used to access the data of a new CDC generation introduced
     // e.g. when a new node bootstraps, needed in `commit_cdc_generation` transition state.

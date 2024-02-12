@@ -112,15 +112,14 @@ public:
     topology_mutation_builder& set_fence_version(topology::version_t);
     topology_mutation_builder& set_session(session_id);
     topology_mutation_builder& set_tablet_balancing_enabled(bool);
-    topology_mutation_builder& set_current_cdc_generation_id(const cdc::generation_id_v2&);
     topology_mutation_builder& set_new_cdc_generation_data_uuid(const utils::UUID& value);
     topology_mutation_builder& set_unpublished_cdc_generations(const std::vector<cdc::generation_id_v2>& values);
     topology_mutation_builder& set_global_topology_request(global_topology_request);
     topology_mutation_builder& set_upgrade_state(topology::upgrade_state_type);
     topology_mutation_builder& add_enabled_features(const std::set<sstring>& value);
-    topology_mutation_builder& add_unpublished_cdc_generation(const cdc::generation_id_v2& value);
     topology_mutation_builder& add_ignored_nodes(const std::unordered_set<raft::server_id>& value);
     topology_mutation_builder& set_ignored_nodes(const std::unordered_set<raft::server_id>& value);
+    topology_mutation_builder& add_new_committed_cdc_generation(const cdc::generation_id_v2& value);
     topology_mutation_builder& del_transition_state();
     topology_mutation_builder& del_session();
     topology_mutation_builder& del_global_topology_request();

@@ -567,7 +567,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         utils::get_local_injector().inject("clean_obsolete_cdc_generations_ignore_ts", [&] {
             ts_upper_bound = candidate->ts;
         });
-        if (candidate == _topo_sm._topology.current_cdc_generation_id || candidate->ts > ts_upper_bound) {
+        if (candidate == _topo_sm._topology.committed_cdc_generations.back() || candidate->ts > ts_upper_bound) {
             co_return;
         }
 
@@ -1369,7 +1369,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 }
 
                 // We don't need to add delay to the generation timestamp if this is the first generation.
-                bool add_ts_delay = bool(_topo_sm._topology.current_cdc_generation_id);
+                bool add_ts_delay = !_topo_sm._topology.committed_cdc_generations.empty();
 
                 // Begin the race.
                 // See the large FIXME below.
@@ -1385,14 +1385,14 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     .id = *cdc_gen_uuid,
                 };
 
-                {
+                if (!_topo_sm._topology.committed_cdc_generations.empty()) {
                     // Sanity check.
                     // This could happen if the topology coordinator's clock is broken.
-                    auto curr_gen_id = _topo_sm._topology.current_cdc_generation_id;
-                    if (curr_gen_id && curr_gen_id->ts >= cdc_gen_ts) {
+                    auto last_committed_gen_id = _topo_sm._topology.committed_cdc_generations.back();
+                    if (last_committed_gen_id.ts >= cdc_gen_ts) {
                         on_internal_error(rtlogger, ::format(
                             "new CDC generation has smaller timestamp than the previous one."
-                            " Old generation ID: {}, new generation ID: {}", *curr_gen_id, cdc_gen_id));
+                            " Old generation ID: {}, new generation ID: {}", last_committed_gen_id, cdc_gen_id));
                     }
                 }
 
@@ -1419,8 +1419,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 // committed) - they won't coordinate CDC-enabled writes until they reconnect to the
                 // majority and commit.
                 topology_mutation_builder builder(guard.write_timestamp());
-                builder.set_current_cdc_generation_id(cdc_gen_id)
-                       .add_unpublished_cdc_generation(cdc_gen_id);
+                builder.add_new_committed_cdc_generation(cdc_gen_id);
                 if (_topo_sm._topology.global_request == global_topology_request::new_cdc_generation) {
                     builder.del_global_topology_request();
                     builder.del_transition_state();
@@ -2356,7 +2355,7 @@ future<> topology_coordinator::build_coordinator_state(group0_guard guard) {
 
     builder.set_version(topology::initial_version)
             .set_fence_version(topology::initial_version)
-            .set_current_cdc_generation_id(cdc_gen_id)
+            .add_new_committed_cdc_generation(cdc_gen_id)
             .add_enabled_features(std::move(enabled_features));
 
     // Commit

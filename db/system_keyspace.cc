@@ -233,8 +233,7 @@ schema_ptr system_keyspace::topology() {
             .with_column("version", long_type, column_kind::static_column)
             .with_column("fence_version", long_type, column_kind::static_column)
             .with_column("transition_state", utf8_type, column_kind::static_column)
-            .with_column("current_cdc_generation_uuid", timeuuid_type, column_kind::static_column)
-            .with_column("current_cdc_generation_timestamp", timestamp_type, column_kind::static_column)
+            .with_column("committed_cdc_generations", set_type_impl::get_instance(cdc_generation_ts_id_type, true), column_kind::static_column)
             .with_column("unpublished_cdc_generations", set_type_impl::get_instance(cdc_generation_ts_id_type, true), column_kind::static_column)
             .with_column("global_topology_request", utf8_type, column_kind::static_column)
             .with_column("enabled_features", set_type_impl::get_instance(utf8_type, true), column_kind::static_column)
@@ -2851,36 +2850,28 @@ future<service::topology> system_keyspace::load_topology_state() {
             ret.new_cdc_generation_data_uuid = some_row.get_as<utils::UUID>("new_cdc_generation_data_uuid");
         }
 
-        if (some_row.has("current_cdc_generation_uuid")) {
-            auto gen_uuid = some_row.get_as<utils::UUID>("current_cdc_generation_uuid");
-            if (!some_row.has("current_cdc_generation_timestamp")) {
-                on_internal_error(slogger, format(
-                    "load_topology_state: current CDC generation time UUID ({}) present, but timestamp missing", gen_uuid));
-            }
-            auto gen_ts = some_row.get_as<db_clock::time_point>("current_cdc_generation_timestamp");
-            ret.current_cdc_generation_id = cdc::generation_id_v2 {
-                .ts = gen_ts,
-                .id = gen_uuid
-            };
+        if (some_row.has("committed_cdc_generations")) {
+            ret.committed_cdc_generations = decode_cdc_generations_ids(deserialize_set_column(*topology(), some_row, "committed_cdc_generations"));
+        }
 
+        if (!ret.committed_cdc_generations.empty()) {
             // Sanity check for CDC generation data consistency.
-            {
+            auto gen_id = ret.committed_cdc_generations.back();
                 auto gen_rows = co_await execute_cql(
                     format("SELECT count(range_end) as cnt FROM {}.{} WHERE key = '{}' AND id = ?",
                            NAME, CDC_GENERATIONS_V3, cdc::CDC_GENERATIONS_V3_KEY),
-                    gen_uuid);
+                    gen_id.id);
                 assert(gen_rows);
                 if (gen_rows->empty()) {
                     on_internal_error(slogger, format(
-                        "load_topology_state: current CDC generation time UUID ({}) present, but data missing", gen_uuid));
+                        "load_topology_state: last committed CDC generation time UUID ({}) present, but data missing", gen_id.id));
                 }
                 auto cnt = gen_rows->one().get_as<int64_t>("cnt");
-                slogger.debug("load_topology_state: current CDC generation time UUID ({}), loaded {} ranges", gen_uuid, cnt);
-            }
+                slogger.debug("load_topology_state: last committed CDC generation time UUID ({}), loaded {} ranges", gen_id.id, cnt);
         } else {
             if (!ret.normal_nodes.empty()) {
                 on_internal_error(slogger,
-                    "load_topology_state: normal nodes present but no current CDC generation ID");
+                    "load_topology_state: normal nodes present but no committed CDC generations");
             }
         }
 
