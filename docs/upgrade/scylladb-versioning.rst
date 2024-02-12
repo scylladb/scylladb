@@ -57,5 +57,5 @@ ScyllaDB Enterprise:
     Feature Releases - Minor Versions:
     
     * 3-4 releases per year
-    * Closely follow ScyllaDB Open Source releases (see :doc:`ScyllaDB Enterprise vs. Open Source Matrix </reference/versions-matrix-enterprise-oss>`)
+    * Closely follow ScyllaDB Open Source releases (see `ScyllaDB Enterprise vs. Open Source Matrix <https://enterprise.docs.scylladb.com/stable/reference/versions-matrix-enterprise-oss.html>`_)
     * Introduce features added in ScyllaDB Open Source, as well as Enterprise-only premium features

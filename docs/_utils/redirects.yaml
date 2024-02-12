@@ -1,6 +1,11 @@
 ### a dictionary of redirections
 #old path: new path
 
+
+# remove the Open Source vs. Enterprise Matrix from the Open Source docs
+
+/stable/reference/versions-matrix-enterprise-oss.html: https://enterprise.docs.scylladb.com/stable/reference/versions-matrix-enterprise-oss.html
+
 # Remove the Learn page (replaced with a link to a page in a different repo)
 
 /stable/using-scylla/learn: https://docs.scylladb.com/stable/get-started/learn-resources/index.html
