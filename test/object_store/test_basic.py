@@ -8,7 +8,6 @@ from util import format_tuples
 import asyncio
 import os
 import requests
-import signal
 import yaml
 import pytest
 import xml.etree.ElementTree as ET
@@ -17,109 +16,12 @@ import pathlib
 import logging
 
 from test.pylib.minio_server import MinioServer
-from contextlib import contextmanager
 from test.pylib.rest_client import ScyllaRESTAPIClient
 from cassandra.protocol import ConfigurationException
 from test.pylib.manager_client import ManagerClient
 from test.topology.util import reconnect_driver
 
 logger = logging.getLogger(__name__)
-
-def get_scylla_with_s3_cmd(ssl, s3_server):
-    '''return a function which in turn returns the command for running scylla'''
-    scylla = run.find_scylla()
-    print('Scylla under test:', scylla)
-
-    def make_run_cmd(pid, d):
-        '''return the command args and environmental variables for running scylla'''
-        if ssl:
-            cmd, env = run.run_scylla_ssl_cql_cmd(pid, d)
-        else:
-            cmd, env = run.run_scylla_cmd(pid, d)
-
-        cmd += ['--object-storage-config-file', s3_server.config_file]
-        return cmd, env
-    return make_run_cmd
-
-
-def check_with_cql(ip, ssl):
-    '''return a checker which checks the readiness of scylla'''
-    def checker():
-        if ssl:
-            return run.check_ssl_cql(ip)
-        else:
-            return run.check_cql(ip)
-    return checker
-
-
-def run_with_dir(run_cmd_gen, run_dir):
-    print(f'Start scylla (dir={run_dir}')
-    mask = signal.pthread_sigmask(signal.SIG_BLOCK, {})
-    signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT, signal.SIGQUIT, signal.SIGTERM})
-    sys.stdout.flush()
-    sys.stderr.flush()
-    pid = os.fork()
-    if pid == 0:
-        # child
-        cmd, env = run_cmd_gen(os.getpid(), run_dir)
-        log = os.path.join(run_dir, 'log')
-        log_fd = os.open(log, os.O_WRONLY | os.O_CREAT | os.O_APPEND, mode=0o666)
-        # redirect stdout and stderr to the log file
-        # close and dup2 the original fds associated with stdout and stderr,
-        # pytest changes sys.stdout and sys.stderr to the its output buffers
-        # to capture them. so, if we intent to redirect the child process's
-        # stdout and stderr to the specified fd, we have to use the fd numbers
-        # *used* by the child process, not the ones used by the test.
-        outputs = [(sys.stdout, 1),
-                   (sys.stderr, 2)]
-        for output, output_fd in outputs:
-            output.flush()
-            os.close(output_fd)
-            os.dup2(log_fd, output_fd)
-        os.setsid()
-        os.execve(cmd[0], cmd, dict(os.environ, **env))
-    # parent
-    signal.pthread_sigmask(signal.SIG_SETMASK, mask)
-    return pid
-
-
-def kill_with_dir(old_pid, run_dir):
-    try:
-        print('Kill scylla')
-        os.killpg(old_pid, 2)
-        os.waitpid(old_pid, 0)
-    except ProcessLookupError:
-        pass
-    scylla_link = os.path.join(run_dir, 'test_scylla')
-    os.unlink(scylla_link)
-
-
-class Cluster:
-    def __init__(self, cql, ip: str, pid):
-        self.cql = cql
-        self.ip = ip
-        self.api = ScyllaRESTAPIClient()
-        self.pid = pid
-
-    def reload_config(self):
-        os.kill(self.pid, signal.SIGHUP)
-
-
-@contextmanager
-def managed_cluster(run_dir, ssl, s3_server):
-    # launch a one-node scylla cluster which uses the give s3_server as its
-    # object storage backend, it yields an instance of Cluster
-    # before this function returns, the cluster is teared down.
-    run_scylla_cmd = get_scylla_with_s3_cmd(ssl, s3_server)
-    pid = run_with_dir(run_scylla_cmd, run_dir)
-    ip = run.pid_to_ip(pid)
-    run.wait_for_services(pid, [check_with_cql(ip, ssl)])
-    cluster = run.get_cql_cluster(ip)
-    try:
-        yield Cluster(cluster, ip, pid)
-    finally:
-        cluster.shutdown()
-        kill_with_dir(pid, run_dir)
 
 
 def create_ks_and_cf(cql, s3_server):

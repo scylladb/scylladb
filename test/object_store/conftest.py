@@ -4,8 +4,6 @@ import os
 import sys
 import logging
 import pytest
-import shutil
-import tempfile
 import pathlib
 
 # use minio_server
@@ -68,27 +66,6 @@ class S3_Server:
 
     async def stop(self):
         pass
-
-
-@pytest.fixture(scope="function")
-def ssl(request):
-    yield request.config.getoption('--ssl')
-
-
-def _remove_all_but(tempdir, to_preserve):
-    orig_fn = os.path.join(tempdir, to_preserve)
-    # orig_fn does not exist
-    if not os.path.exists(orig_fn):
-        # it's fine if tempdir does not exist
-        shutil.rmtree(tempdir, ignore_errors=True)
-        return
-
-    with tempfile.TemporaryDirectory() as backup_tempdir:
-        backup_fn = os.path.join(backup_tempdir, to_preserve)
-        shutil.move(orig_fn, backup_fn)
-        shutil.rmtree(tempdir)
-        os.mkdir(tempdir)
-        shutil.move(backup_fn, orig_fn)
 
 
 @pytest.fixture(scope="function")
