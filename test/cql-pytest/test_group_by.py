@@ -36,6 +36,15 @@ def table1(cql, test_keyspace):
 def test_group_by_partition(cql, table1):
     assert {(0,0,0,1), (1,0,0,5)} == set(cql.execute(f'SELECT p,c1,c2,v FROM {table1} GROUP BY p'))
 
+# Adding a LIMIT should be honored.
+# Reproduces #17237 - more results than the limit were generated.
+@pytest.mark.xfail(reason="issue #17237")
+def test_group_by_partition_with_limit(cql, table1):
+    # "LIMIT 1" should return only one of the two matches (0,0,0,1) and
+    # (1,0,0,5). The partition key 1 happens to be the first one in
+    # murmur3 order, so this is what should be returned.
+    assert {(1,0,0,5)} == set(cql.execute(f'SELECT p,c1,c2,v FROM {table1} GROUP BY p LIMIT 1'))
+
 # Try the same restricting the scan to a single partition instead of a
 # whole-table scan. We should get just one row (the first row in the
 # clustering order).
