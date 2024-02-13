@@ -488,7 +488,7 @@ bool cluster_describe_statement::should_add_range_ownership(replica::database& d
     //TODO: produce range ownership for tables using tablets too
     bool uses_tablets = false;
     try {
-        uses_tablets = !ks.empty() && db.find_keyspace(ks).get_replication_strategy().uses_tablets();
+        uses_tablets = !ks.empty() && db.find_keyspace(ks).uses_tablets();
     } catch (const data_dictionary::no_such_keyspace&) {
         // ignore
     }

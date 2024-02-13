@@ -4635,7 +4635,7 @@ future<> storage_service::move(token new_token) {
 
 future<std::vector<storage_service::token_range_endpoints>>
 storage_service::describe_ring(const sstring& keyspace, bool include_only_local_dc) const {
-    if (_db.local().find_keyspace(keyspace).get_replication_strategy().uses_tablets()) {
+    if (_db.local().find_keyspace(keyspace).uses_tablets()) {
         throw std::runtime_error(fmt::format("The keyspace {} has tablet table. Query describe_ring with the table parameter!", keyspace));
     }
     co_return co_await locator::describe_ring(_db.local(), _gossiper, keyspace, include_only_local_dc);

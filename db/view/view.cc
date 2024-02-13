@@ -1710,7 +1710,7 @@ future<> view_update_generator::mutate_MV(
         // are more frequent and backward compatibility is less important.
         // TODO: Maybe allow users to set use_legacy_self_pairing explicitly
         // on a view, like we have the synchronous_updates_flag.
-        bool use_legacy_self_pairing = !ks.get_replication_strategy().uses_tablets();
+        bool use_legacy_self_pairing = !ks.uses_tablets();
         auto target_endpoint = get_view_natural_endpoint(base_ermp, view_ermp, network_topology, base_token, view_token, use_legacy_self_pairing);
         auto remote_endpoints = view_ermp->get_pending_endpoints(view_token);
         auto sem_units = pending_view_updates.split(mut.fm.representation().size());
