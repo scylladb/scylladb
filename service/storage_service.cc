@@ -6250,12 +6250,7 @@ storage_service::get_natural_endpoints(const sstring& keyspace,
     auto schema = _db.local().find_schema(keyspace, cf);
     partition_key pk = partition_key::from_nodetool_style_string(schema, key);
     dht::token token = schema->get_partitioner().get_token(*schema, pk.view());
-    return get_natural_endpoints(keyspace, token);
-}
-
-inet_address_vector_replica_set
-storage_service::get_natural_endpoints(const sstring& keyspace, const token& pos) const {
-    return _db.local().find_keyspace(keyspace).get_vnode_effective_replication_map()->get_natural_endpoints(pos);
+    return _db.local().find_keyspace(keyspace).get_vnode_effective_replication_map()->get_natural_endpoints(token);
 }
 
 future<> endpoint_lifecycle_notifier::notify_down(gms::inet_address endpoint) {
