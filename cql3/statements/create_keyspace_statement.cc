@@ -94,21 +94,42 @@ future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector
     const auto& feat = qp.proxy().features();
     ::shared_ptr<event::schema_change> ret;
     std::vector<mutation> m;
+    std::vector<sstring> warnings;
 
     try {
-        m = service::prepare_new_keyspace_announcement(qp.db().real_database(), _attrs->as_ks_metadata(_name, tm, feat), ts);
+        auto ksm = _attrs->as_ks_metadata(_name, tm, feat);
+        m = service::prepare_new_keyspace_announcement(qp.db().real_database(), ksm, ts);
 
         ret = ::make_shared<event::schema_change>(
                 event::schema_change::change_type::CREATED,
                 event::schema_change::target_type::KEYSPACE,
                 keyspace());
+
+        // If the new keyspace uses tablets, as long as there are features
+        // which aren't supported by tablets we want to warn the user that
+        // they will not be usable on the new keyspace - and suggest how a
+        // keyspace can be created without tablets (see rationale in #16807).
+        // Once all feature will become supported with tablets, we should
+        // remove this check.
+        auto rs = locator::abstract_replication_strategy::create_replication_strategy(
+            ksm->strategy_name(),
+            locator::replication_strategy_params(ksm->strategy_options(), ksm->initial_tablets()));
+        if (rs->uses_tablets()) {
+            warnings.push_back(
+                "Tables in this keyspace will be replicated using tablets, "
+                "and will not support the CDC feature (issue #16317) and LWT "
+                "may suffer from issue #5251 more often. If you want to use "
+                "CDC or LWT, please drop this keyspace and re-create it "
+                "without tablets, by adding AND TABLETS = {'enabled': false} "
+                "to the CREATE KEYSPACE statement.");
+        }
     } catch (const exceptions::already_exists_exception& e) {
         if (!_if_not_exists) {
           co_return coroutine::exception(std::current_exception());
         }
     }
 
-    co_return std::make_tuple(std::move(ret), std::move(m), std::vector<sstring>());
+    co_return std::make_tuple(std::move(ret), std::move(m), std::move(warnings));
 }
 
 std::unique_ptr<cql3::statements::prepared_statement>
