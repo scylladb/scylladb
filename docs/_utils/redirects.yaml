@@ -1,6 +1,10 @@
 ### a dictionary of redirections
 #old path: new path
 
+# Remove the outdated Troubleshooting article
+
+/stable/troubleshooting/error-messages/create-mv.html: /stable/troubleshooting/index.html
+
 # Remove the Learn page (replaced with a link to a page in a different repo)
 
 /stable/using-scylla/learn: https://docs.scylladb.com/stable/get-started/learn-resources/index.html
